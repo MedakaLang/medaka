@@ -23,11 +23,12 @@
    rkey-less `createRecord` does not propose one again; and a batch deleting a
    record that is not there is the same idempotent no-op `deleteRecord` is. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import json.{Json(..), jArray, jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
-import string.{fromUtf8, split, startsWith, toUtf8}
+import string.{split, startsWith}
 import lib.cid.{cidToString}
 import lib.dagcbor.{dagCborDecode}
 import lib.handlers.{recordServer}
@@ -58,6 +59,7 @@ import lib.store.{
   storeWithServerSecret,
 }
 import lib.tid.{Tid, tidParse, tidToString}
+import test.response_support.{bodyText}
 import test.fixture_support.{
   commitField,
   field,
@@ -68,21 +70,6 @@ import test.fixture_support.{
   testNonce,
   testSecret,
 }
-
--- | `handleBytes` over a request fixture this driver still holds as an
--- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
--- door into one: a fixture element outside the byte domain stops here rather
--- than reaching the framer.
-handleFixture : Server ->
-  RequestContext ->
-  Store ->
-  Array Int ->
-  (Store, Array Int)
-handleFixture httpServer context store request = match fromArray request
-  Some packed =>
-    let (next, response) = handleBytes httpServer context store packed
-    (next, toArray response)
-  None => panic "batch_handlers: request fixture holds a non-byte element"
 
 accountHandleText : String
 accountHandleText = "medaka.example"
@@ -102,18 +89,16 @@ createRecordNsid = "com.atproto.repo.createRecord"
 scratchCollection : String
 scratchCollection = "app.medaka.scratch"
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "batch_handlers: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "batch_handlers: malformed hex" (decode text)
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "batch_handlers: malformed TID" (tidParse text)
 
 mustRecordJson : String -> Json
-mustRecordJson text =
-  match dagCborDecode (fromArrayAssumeByteDomain (mustHex text))
-    Ok value => dagCborToLexJson value
-    Err message => panic "batch_handlers: malformed record: \{message}"
+mustRecordJson text = match dagCborDecode (mustHex text)
+  Ok value => dagCborToLexJson value
+  Err message => panic "batch_handlers: malformed record: \{message}"
 
 mustAccount : String -> Account
 mustAccount did =
@@ -146,7 +131,7 @@ testContext =
 testToken : String -> String
 testToken did =
   mintToken
-    (fromArrayAssumeByteDomain testSecret)
+    testSecret
     did
     accountHostText
     "batch_handlers-fixture-token"
@@ -165,36 +150,20 @@ authorizedStore did store = match storeWithServerSecret testSecret store
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
-procedureRequestTo : String -> String -> String -> Array Int
+procedureRequestTo : String -> String -> String -> Bytes
 procedureRequestTo nsid did body =
-  let bytes = toUtf8 body
-  toUtf8
-      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{testToken did}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+  let bytes = encodeUtf8 body
+  encodeUtf8
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{testToken did}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (B.length bytes)}\r\n\r\n"
     ++ bytes
 
-procedureRequest : String -> String -> Array Int
+procedureRequest : String -> String -> Bytes
 procedureRequest did body = procedureRequestTo applyWritesNsid did body
 
-bodyStart : Array Int -> Int -> Int
-bodyStart bytes i =
-  if i + 3 >= arrayLength bytes then
-    panic "batch_handlers: response has no body separator"
-  else if bytes[i] == 13
-    && bytes[i + 1] == 10
-    && bytes[i + 2] == 13
-    && bytes[i + 3] == 10 then
-    i + 4
-  else
-    bodyStart bytes (i + 1)
-
-responseJson : Array Int -> Json
-responseJson bytes =
-  let start = bodyStart bytes 0
-  let text =
-    fromUtf8 (arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i]))
-  match parse text
-    Ok value => value
-    Err message => panic "batch_handlers: response is not JSON: \{message}"
+responseJson : Bytes -> Json
+responseJson bytes = match parse (bodyText bytes)
+  Ok value => value
+  Err message => panic "batch_handlers: response is not JSON: \{message}"
 
 resultCidsAt : Array Json -> Int -> List String
 resultCidsAt rows i =
@@ -239,7 +208,11 @@ elementType fragment = "\{applyWritesNsid}#\{fragment}"
 writeElement : List String -> Json
 writeElement fields =
   let kind = field 0 fields
-  let (collection, rkey) = splitPath (fromUtf8 (mustHex (field 1 fields)))
+  let (collection, rkey) =
+    splitPath
+      (optionOrPanic
+        "batch_handlers: corpus path is not UTF-8"
+        (decodeUtf8 (mustHex (field 1 fields))))
   match kind
     "DELETE" => jObject [
       ("$type", JString (elementType "delete")),
@@ -296,7 +269,7 @@ rejectCell : String -> String -> String -> Server -> Store -> String -> <IO> Int
 rejectCell label expectedCode did server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
-    handleFixture server testContext store (procedureRequest did body)
+    handleBytes server testContext store (procedureRequest did body)
   let value = responseJson responseBytes
   let after = storeFingerprint next
   let code = fieldText "error" value
@@ -347,14 +320,14 @@ runBatch lines =
     authorizedStore did (storeFromRepo (mustRepo did (field 1 meta) initialRev))
   let before = storeFingerprint store
   let (applied, responseBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       store
       (procedureRequest did (batchBody did writes))
   let value = responseJson responseBytes
   let carHex = match repoExportCar (storeMustRepo applied)
-    Ok bytes => encode (fromArrayAssumeByteDomain bytes)
+    Ok bytes => encode bytes
     Err message => panic "batch_handlers: repoExportCar failed: \{message}"
   let external =
     check
@@ -410,7 +383,7 @@ runBatch lines =
 emptyBatchCell : String -> Server -> Store -> String -> <IO> Int
 emptyBatchCell did server store before =
   let (after, responseBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       store
@@ -460,7 +433,7 @@ createRecordBody did record =
 autoRkeyCell : String -> Server -> Store -> Json -> <IO> Int
 autoRkeyCell did server store record =
   let (afterBatch, batchBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       store
@@ -469,7 +442,7 @@ autoRkeyCell did server store record =
         (batchBody did [autoCreateElement record, autoCreateElement record]))
   let batchValue = responseJson batchBytes
   let (_, createBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       afterBatch
@@ -491,7 +464,7 @@ autoRkeyCell did server store record =
 absentDeleteCell : String -> Server -> Store -> String -> <IO> Int
 absentDeleteCell did server store before =
   let (after, responseBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       store

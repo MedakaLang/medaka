@@ -363,6 +363,16 @@ classify x
     limit = 100
 ```
 
+A `where` block's bindings may refer to each other in any order, recursively
+or not. They are typed in dependency order, as top-level definitions are: a
+binding its siblings only use is generalized first, so two siblings may use it
+at two types (`a = g 1` beside `b = g True`); only bindings that reach each
+other share one group. A `where` function whose type mentions a numeric
+literal's type generalizes it (`two _ = 2` may be used at `Int` and `Float`); a
+`where` value stays one shared type, so a sibling or the body fixes it
+(`scale = 100` beside `go y = y / scale` makes `scale` a `Float`), and the
+enclosing definition defaults it to `Int` if nothing does.
+
 ## Lambdas
 
 ```medaka
@@ -669,6 +679,27 @@ on one line, and when its fields do not fit it breaks inside the braces, one fie
 per line with a trailing comma, `}` back at the decl's column, and `deriving` on its
 own indented line below. A one-line variant list with an own-line `deriving` is
 therefore legal input that `fmt` never emits.
+
+**A program's own type may share a prelude type's name** (`Option`, `Result`,
+`Ordering`, `Socket`, …), as a `data`, `newtype` or `type` declaration. Inside
+the program the name means the program's type; the prelude's type is still
+reached through its own constructors and functions (`Ok`, `resultOr`), and a
+mismatch between the two names both origins. What a program cannot declare is a
+built-in type's name (`Int`, `String`, `List`, …), a prelude constructor's name
+(`data Result = Ok Int` is refused; #3471), or a prelude interface's name. Each
+of these errors is located at the declaration.
+
+```medaka
+data Result a = Good a | Bad deriving (Debug)
+
+describe : Result Int -> String
+describe r = match r
+  Good n => "good \{intToString n}"
+  Bad => "bad"
+
+fallback : Int
+fallback = resultOr 7 (Err "the prelude's Result")
+```
 
 ## Records
 

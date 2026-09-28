@@ -87,10 +87,12 @@ suites = [
   ("httpclient_test", (12, Eval)),
   ("http_test", (85, Eval)),
   ("xrpc_test", (29, Eval)),
-  ("server_core_test", (11, Eval)),
+  ("server_core_test", (14, Eval)),
   ("encodings_test", (29, Eval)),
   ("dagcbor_cid_test", (12, Eval)),
-  ("mst_test", (13, NativeSpeed)),
+  -- lowered from 13: the defensive-copy cell mutated the returned entry and
+  -- root arrays, and `Bytes` has no mutation for it to attempt
+  ("mst_test", (12, NativeSpeed)),
   -- lowered from 14: two cells fed out-of-range bytes that `Bytes` cannot
   -- represent, and were deleted rather than converted
   ("car_store_test", (12, Eval)),
@@ -98,9 +100,9 @@ suites = [
   ("field_test", (30, NativeSpeed)),
   ("scalar_test", (38, NativeSpeed)),
   -- lowered from 11: cells fed out-of-range bytes that `Bytes` cannot
-  -- represent and were deleted; the byte-array ingress cell added under F8
-  -- brings the count back to 8
-  ("sign_key_test", (8, Eval)),
+  -- represent and were deleted, and the byte-array ingress cell left with
+  -- the ingress it tested
+  ("sign_key_test", (7, Eval)),
   ("secp256k1_point_test", (8, Eval)),
   ("rfc6979_test", (4, Eval)),
   ("ecdsa_test", (2, Eval)),
@@ -108,9 +110,9 @@ suites = [
   ("jwt_test", (32, NativeSpeed)),
   ("credential_test", (20, NativeSpeed)),
   ("session_routes_test", (34, NativeCapability)),
-  ("auth_seam_test", (31, NativeCapability)),
+  ("auth_seam_test", (32, NativeCapability)),
   ("blob_routes_test", (15, NativeCapability)),
-  ("ratelimit_test", (25, Eval)),
+  ("ratelimit_test", (43, Eval)),
   ("read_buffer_test", (19, Eval)),
   ("egress_census_test", (9, Eval)),
   ("websocket_test", (43, NativeSpeed)),
@@ -227,6 +229,34 @@ exempt = [
     "did_key_all_engines_test",
     "a value-plus-mutation gate-test, not a suite: it is one `vector_runner` row plus a mutation self-test, and `test/gates.toml` runs it as `pds/test/did_key_all_engines`",
   ),
+  (
+    "read_routes_all_engines_test",
+    "a value-plus-mutation gate-test, not a suite: it is one `vector_runner` row plus a mutation self-test, and `test/gates.toml` runs it as `pds/test/read_routes_all_engines`",
+  ),
+  (
+    "protocol_all_engines_test",
+    "a value-plus-mutation gate-test, not a suite: it is one `vector_runner` row plus a mutation self-test, and `test/gates.toml` runs it as `pds/test/protocol_all_engines`",
+  ),
+  (
+    "store_persistence_test",
+    "a gate-test, not a suite: it spawns `store_persistence_main.mdk` as separate processes over data directories it builds, and `test/gates.toml` runs it as `pds/test/store_persistence`",
+  ),
+  (
+    "mst_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row plus scaling and page-cost bounds, and `test/gates.toml` runs it as `pds/test/mst_vectors`",
+  ),
+  (
+    "repo_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is nine `vector_runner` rows, and `test/gates.toml` runs it as `pds/test/repo_vectors`",
+  ),
+  (
+    "vector_provenance_test",
+    "a gate-test, not a suite: it checks the provenance ledger against the tree and its checker against synthetic ledgers, and `test/gates.toml` runs it as `pds/test/vector_provenance`",
+  ),
+  (
+    "signing_parity_test",
+    "a cross-engine gate-test, not a suite: it spawns two drivers on native and Wasm, and on eval under SIGNING_DEEP=1, and `test/gates.toml` runs it as `pds/test/signing_parity`",
+  ),
 ]
 
 exemptNames : List String
@@ -247,6 +277,7 @@ libSuites = [
   ("lib", "base58", 3),
   ("lib", "blob", 6),
   ("lib", "field", 2),
+  ("lib", "handlers", 3),
   ("lib", "httpclient", 1),
   ("lib", "multiformats", 15),
   ("lib", "resource_limits", 1),
@@ -273,7 +304,6 @@ libExempt = [
   ("dagcbor", "0 assertions"),
   ("did_key", "0 assertions"),
   ("event_log_record", "0 assertions"),
-  ("handlers", "0 assertions"),
   ("hmac_sha256", "0 assertions"),
   ("jwt", "0 assertions"),
   ("lexjson", "0 assertions"),
@@ -370,6 +400,9 @@ test "pds/lib/blob.mdk executed >= 6 assertions" =
 
 test "pds/lib/field.mdk executed >= 2 assertions" =
   libFloorExpectation "lib" "field"
+
+test "pds/lib/handlers.mdk executed >= 3 assertions" =
+  libFloorExpectation "lib" "handlers"
 
 test "pds/lib/httpclient.mdk executed >= 1 assertions" =
   libFloorExpectation "lib" "httpclient"
@@ -494,7 +527,7 @@ test "pds/test/http_test.mdk executed >= 85 assertions" =
 test "pds/test/xrpc_test.mdk executed >= 29 assertions" =
   floorExpectation "xrpc_test"
 
-test "pds/test/server_core_test.mdk executed >= 11 assertions" =
+test "pds/test/server_core_test.mdk executed >= 14 assertions" =
   floorExpectation "server_core_test"
 
 test "pds/test/encodings_test.mdk executed >= 29 assertions" =
@@ -503,7 +536,7 @@ test "pds/test/encodings_test.mdk executed >= 29 assertions" =
 test "pds/test/dagcbor_cid_test.mdk executed >= 12 assertions" =
   floorExpectation "dagcbor_cid_test"
 
-test "pds/test/mst_test.mdk executed >= 13 assertions" =
+test "pds/test/mst_test.mdk executed >= 12 assertions" =
   floorExpectation "mst_test"
 
 test "pds/test/car_store_test.mdk executed >= 12 assertions" =
@@ -518,7 +551,7 @@ test "pds/test/field_test.mdk executed >= 30 assertions" =
 test "pds/test/scalar_test.mdk executed >= 38 assertions" =
   floorExpectation "scalar_test"
 
-test "pds/test/sign_key_test.mdk executed >= 8 assertions" =
+test "pds/test/sign_key_test.mdk executed >= 7 assertions" =
   floorExpectation "sign_key_test"
 
 test "pds/test/secp256k1_point_test.mdk executed >= 8 assertions" =
@@ -542,13 +575,13 @@ test "pds/test/credential_test.mdk executed >= 20 assertions" =
 test "pds/test/session_routes_test.mdk executed >= 34 assertions" =
   floorExpectation "session_routes_test"
 
-test "pds/test/auth_seam_test.mdk executed >= 31 assertions" =
+test "pds/test/auth_seam_test.mdk executed >= 32 assertions" =
   floorExpectation "auth_seam_test"
 
 test "pds/test/blob_routes_test.mdk executed >= 15 assertions" =
   floorExpectation "blob_routes_test"
 
-test "pds/test/ratelimit_test.mdk executed >= 25 assertions" =
+test "pds/test/ratelimit_test.mdk executed >= 43 assertions" =
   floorExpectation "ratelimit_test"
 
 test "pds/test/read_buffer_test.mdk executed >= 19 assertions" =

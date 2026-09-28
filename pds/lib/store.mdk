@@ -66,13 +66,13 @@ import lib.blockstore.{
 import lib.cid.{Cid, cidToString}
 import lib.credential.{CredentialRecord}
 import lib.jwt.{serverSecretBytes}
-import lib.repo.{Repo, blockBytesChecked}
-import bytes.{encodeUtf8, fromArrayAssumeByteDomain, toArray}
+import lib.repo.{Repo}
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
 import crypto.hmac.{ctEq}
 import crypto.sha256.{sha256}
 import json.{Json}
 import map.{Map(..), get, keys, set, entries, entriesFrom}
-import string.{toUtf8}
 
 {- | One open session: the fingerprints of the access and refresh tokens it
    issued, the instant it stops verifying (seconds since the Unix epoch), past
@@ -88,7 +88,7 @@ import string.{toUtf8}
    the fingerprint of the refresh token the login issued, and it ends at an
    instant fixed when it is opened: a rotation never moves a session's expiry
    past the end of the family it rotates within. -}
-data SessionRecord = SessionRecord (Array Int) (Array Int) Int (Array Int)
+data SessionRecord = SessionRecord Bytes Bytes Int Bytes
 
 {- | A refresh token a rotation consumed: its fingerprint, its family, the
    instant it was consumed, the instant the family ends, and the refresh
@@ -103,15 +103,14 @@ data SessionRecord = SessionRecord (Array Int) (Array Int) Int (Array Int)
    session the one before it opened, so however often the token is replayed
    inside the window, at most one session a replay of it opened is open at a
    time, beside the one the rotation itself opened. -}
-data ConsumedRefresh =
-  | ConsumedRefresh (Array Int) (Array Int) Int Int (Option (Array Int))
+data ConsumedRefresh = ConsumedRefresh Bytes Bytes Int Int (Option Bytes)
 
 -- The open sessions, and the refresh tokens their families have consumed.
 data Sessions = Sessions (List SessionRecord) (List ConsumedRefresh)
 
 -- The three secret-bearing parts of a `Store`, kept as one field so the blob
 -- and repository halves are not respelled every time one of them changes.
-data Auth = Auth (Option (Array Int)) (Option CredentialRecord) Sessions
+data Auth = Auth (Option Bytes) (Option CredentialRecord) Sessions
 
 emptyAuth : Auth
 emptyAuth = Auth None None (Sessions [] [])
@@ -165,14 +164,13 @@ declaredTypeOf cid (BlobHalf _ index _ _) = match get (cidToString cid) index
 -- already carried.
 blobHalfPut : Cid ->
   Option String ->
-  Array Int ->
+  Bytes ->
   BlobHalf ->
   Result String BlobHalf
 blobHalfPut cid declared bytes (BlobHalf blocks index total version) = do
   let stored =
-    if blockStoreHas cid blocks then total else total + arrayLength bytes
-  checked <- blockBytesChecked bytes
-  next <- blockStorePut cid checked blocks
+    if blockStoreHas cid blocks then total else total + B.length bytes
+  next <- blockStorePut cid bytes blocks
   Ok
     (BlobHalf
       next
@@ -216,24 +214,19 @@ storeWithRepo repo (Store blocks _ auth prefs) =
    account's signing key, so the same "never log, serialize, or copy a
    `Store`" rule covers it. -}
 export
-storeWithServerSecret : Array Int -> Store -> Result String Store
+storeWithServerSecret : Bytes -> Store -> Result String Store
 storeWithServerSecret secret (Store blocks repo (Auth _ credential sessions) prefs) =
-  if arrayLength secret /= serverSecretBytes then
+  if B.length secret /= serverSecretBytes then
     Err "store: server session secret must be 32 bytes"
   else
-    Ok
-      (Store
-        blocks
-        repo
-        (Auth (Some (arrayCopy secret)) credential sessions)
-        prefs)
+    Ok (Store blocks repo (Auth (Some secret) credential sessions) prefs)
 
 {- | The server's session-token secret, or `None` when no session secret is
    configured — in which case no credential can be verified at all and every
    gated route refuses. -}
 export
-storeServerSecret : Store -> Option (Array Int)
-storeServerSecret (Store _ _ (Auth secret _ _) _) = map arrayCopy secret
+storeServerSecret : Store -> Option Bytes
+storeServerSecret (Store _ _ (Auth secret _ _) _) = secret
 
 {- | Successor store carrying the account's password credential. It is a THIRD
    secret-bearing part of a `Store` (with the account signing key and the
@@ -271,93 +264,58 @@ storeWithPreferences prefs (Store blocks repo auth _) =
    ask "is this token's session still open?" with the token it was handed and
    nothing else. -}
 export
-sessionFingerprint : String -> Array Int
-sessionFingerprint token = toArray (sha256 (encodeUtf8 token))
+sessionFingerprint : String -> Bytes
+sessionFingerprint token = sha256 (encodeUtf8 token)
 
-recordFamily : SessionRecord -> Array Int
+recordFamily : SessionRecord -> Bytes
 recordFamily (SessionRecord _ _ _ family) = family
 
-consumedFamily : ConsumedRefresh -> Array Int
+consumedFamily : ConsumedRefresh -> Bytes
 consumedFamily (ConsumedRefresh _ family _ _ _) = family
 
 -- The open session whose refresh token this is, while it still verifies.
-liveRefresh : Int -> Array Int -> List SessionRecord -> Option SessionRecord
+liveRefresh : Int -> Bytes -> List SessionRecord -> Option SessionRecord
 liveRefresh now wanted open =
   find
     (record => match record
-      SessionRecord _ refresh expires _ =>
-        now < expires
-          && ctEq
-            (fromArrayAssumeByteDomain wanted)
-            (fromArrayAssumeByteDomain refresh))
+      SessionRecord _ refresh expires _ => now < expires && ctEq wanted refresh)
     open
 
 -- The consumption record of this refresh token, while its family lasts.
-consumedRefresh : Int ->
-  Array Int ->
-  List ConsumedRefresh ->
-  Option ConsumedRefresh
+consumedRefresh : Int -> Bytes -> List ConsumedRefresh -> Option ConsumedRefresh
 consumedRefresh now wanted consumed =
   find
     (entry => match entry
-      ConsumedRefresh refresh _ _ ends _ =>
-        now < ends
-          && ctEq
-            (fromArrayAssumeByteDomain wanted)
-            (fromArrayAssumeByteDomain refresh))
+      ConsumedRefresh refresh _ _ ends _ => now < ends && ctEq wanted refresh)
     consumed
 
 -- The consumption record of this refresh token dropped.
-withoutConsumed : Array Int -> List ConsumedRefresh -> List ConsumedRefresh
+withoutConsumed : Bytes -> List ConsumedRefresh -> List ConsumedRefresh
 withoutConsumed wanted consumed =
   filter
     (entry => match entry
-      ConsumedRefresh refresh _ _ _ _ =>
-        not
-          (ctEq
-            (fromArrayAssumeByteDomain wanted)
-            (fromArrayAssumeByteDomain refresh)))
+      ConsumedRefresh refresh _ _ _ _ => not (ctEq wanted refresh))
     consumed
 
-hasAccess : Int -> Array Int -> List SessionRecord -> Bool
+hasAccess : Int -> Bytes -> List SessionRecord -> Bool
 hasAccess _ _ [] = False
 hasAccess now wanted ((SessionRecord access _ expires _) :: rest) =
-  now < expires
-      && ctEq
-        (fromArrayAssumeByteDomain wanted)
-        (fromArrayAssumeByteDomain access)
-    || hasAccess now wanted rest
+  now < expires && ctEq wanted access || hasAccess now wanted rest
 
-withoutRefresh : Array Int -> List SessionRecord -> List SessionRecord
+withoutRefresh : Bytes -> List SessionRecord -> List SessionRecord
 withoutRefresh wanted open =
   filter
     (record => match record
-      SessionRecord _ refresh _ _ =>
-        not
-          (ctEq
-            (fromArrayAssumeByteDomain wanted)
-            (fromArrayAssumeByteDomain refresh)))
+      SessionRecord _ refresh _ _ => not (ctEq wanted refresh))
     open
 
 -- Every session and every consumed token of one family dropped. Nothing of
 -- the family is left that a later replay could find.
-withoutFamily : Array Int -> Sessions -> Sessions
+withoutFamily : Bytes -> Sessions -> Sessions
 withoutFamily family (Sessions open consumed) =
   Sessions
-    (filter
-      (record =>
-        not
-          (ctEq
-            (fromArrayAssumeByteDomain family)
-            (fromArrayAssumeByteDomain (recordFamily record))))
-      open)
-    (filter
-      (entry =>
-        not
-          (ctEq
-            (fromArrayAssumeByteDomain family)
-            (fromArrayAssumeByteDomain (consumedFamily entry))))
-      consumed)
+    (filter (record => not (ctEq family (recordFamily record))) open)
+    (filter (entry => not (ctEq family (consumedFamily entry))) consumed)
 
 withSessions : Sessions -> Store -> Store
 withSessions sessions (Store blocks repo (Auth secret credential _) prefs) =
@@ -366,21 +324,18 @@ withSessions sessions (Store blocks repo (Auth secret credential _) prefs) =
 storeSessions : Store -> Sessions
 storeSessions (Store _ _ (Auth _ _ sessions) _) = sessions
 
-openIn : Array Int -> Array Int -> Int -> Array Int -> Sessions -> Sessions
+openIn : Bytes -> Bytes -> Int -> Bytes -> Sessions -> Sessions
 openIn access refresh expires family (Sessions open consumed) =
-  Sessions
-    (SessionRecord (arrayCopy access) (arrayCopy refresh) expires family
-      :: open)
-    consumed
+  Sessions (SessionRecord access refresh expires family :: open) consumed
 
 {- | Successor store with one more open session, the first of a new family:
    an access-token fingerprint, a refresh-token fingerprint, and the instant
    the family ends. No rotation within the family outlives that instant. -}
 export
-storeSessionOpen : Array Int -> Array Int -> Int -> Store -> Store
+storeSessionOpen : Bytes -> Bytes -> Int -> Store -> Store
 storeSessionOpen access refresh expires store =
   withSessions
-    (openIn access refresh expires (arrayCopy refresh) (storeSessions store))
+    (openIn access refresh expires refresh (storeSessions store))
     store
 
 {- | Whether this access-token fingerprint belongs to an open session at `now`.
@@ -392,7 +347,7 @@ storeSessionOpen access refresh expires store =
    A restart is not one of those: the session set is persisted and read back,
    so a token survives one. -}
 export
-storeAccessActive : Int -> Array Int -> Store -> Bool
+storeAccessActive : Int -> Bytes -> Store -> Bool
 storeAccessActive now fingerprint store = match storeSessions store
   Sessions open _ => hasAccess now fingerprint open
 
@@ -402,7 +357,7 @@ storeAccessActive now fingerprint store = match storeSessions store
    rotation itself can decide what a replay means (`storeSessionRotate`); a
    token of a revoked or closed family answers `False`. -}
 export
-storeRefreshActive : Int -> Array Int -> Store -> Bool
+storeRefreshActive : Int -> Bytes -> Store -> Bool
 storeRefreshActive now fingerprint store = match storeSessions store
   Sessions open consumed =>
     isSome (liveRefresh now fingerprint open)
@@ -435,9 +390,9 @@ public export data SessionRotation = Rotated Store | Revoked Store | NotRotated
    including the access token its legitimate holder was using. Other families
    are untouched. -}
 export
-storeSessionRotate : Array Int ->
-  Array Int ->
-  Array Int ->
+storeSessionRotate : Bytes ->
+  Bytes ->
+  Bytes ->
   Int ->
   Int ->
   Int ->
@@ -447,7 +402,7 @@ storeSessionRotate consumed access refresh expires now graceSeconds store =
   match storeSessions store
     Sessions open spent => match liveRefresh now consumed open
       Some (SessionRecord _ _ ends family) =>
-        let record = ConsumedRefresh (arrayCopy consumed) family now ends None
+        let record = ConsumedRefresh consumed family now ends None
         Rotated
           (withSessions
             (openIn
@@ -463,13 +418,7 @@ storeSessionRotate consumed access refresh expires now graceSeconds store =
             let superseded = match replayed
               Some previous => withoutRefresh previous open
               None => open
-            let entry =
-              ConsumedRefresh
-                (arrayCopy consumed)
-                family
-                at
-                ends
-                (Some (arrayCopy refresh))
+            let entry = ConsumedRefresh consumed family at ends (Some refresh)
             Rotated
               (withSessions
                 (openIn
@@ -494,16 +443,13 @@ storeSessionRotate consumed access refresh expires now graceSeconds store =
    family stops verifying, and its consumed refresh tokens are forgotten, so a
    replay inside the grace window cannot reopen what was logged out of. -}
 export
-storeSessionClose : Int -> Array Int -> Store -> Option Store
+storeSessionClose : Int -> Bytes -> Store -> Option Store
 storeSessionClose now fingerprint store = match storeSessions store
   Sessions open consumed =>
     let found =
       find
         (record => match record
-          SessionRecord _ refresh _ _ =>
-            ctEq
-              (fromArrayAssumeByteDomain fingerprint)
-              (fromArrayAssumeByteDomain refresh))
+          SessionRecord _ refresh _ _ => ctEq fingerprint refresh)
         open
     let family = match found
       Some record => Some (recordFamily record)
@@ -520,57 +466,32 @@ storeSessionClose now fingerprint store = match storeSessions store
    was consumed, the instant the family ends, and the refresh fingerprint of
    the session its latest replay opened, if any. -}
 public export data SessionRow =
-  | OpenSessionRow (Array Int) (Array Int) Int (Array Int)
-  | ConsumedRefreshRow (Array Int) (Array Int) Int Int (Option (Array Int))
+  | OpenSessionRow Bytes Bytes Int Bytes
+  | ConsumedRefreshRow Bytes Bytes Int Int (Option Bytes)
   deriving (Eq)
 
 openRow : SessionRecord -> SessionRow
 openRow (SessionRecord access refresh expires family) =
-  OpenSessionRow
-    (arrayCopy access)
-    (arrayCopy refresh)
-    expires
-    (arrayCopy family)
+  OpenSessionRow access refresh expires family
 
 consumedRow : ConsumedRefresh -> SessionRow
 consumedRow (ConsumedRefresh refresh family at ends replayed) =
-  ConsumedRefreshRow
-    (arrayCopy refresh)
-    (arrayCopy family)
-    at
-    ends
-    (map arrayCopy replayed)
+  ConsumedRefreshRow refresh family at ends replayed
 
 rowSessions : List SessionRow -> Sessions
 rowSessions [] = Sessions [] []
 rowSessions (row :: rest) = match (row, rowSessions rest)
   (OpenSessionRow access refresh expires family, Sessions open consumed) =>
-    Sessions
-      (SessionRecord
-          (arrayCopy access)
-          (arrayCopy refresh)
-          expires
-          (arrayCopy family)
-        :: open)
-      consumed
+    Sessions (SessionRecord access refresh expires family :: open) consumed
   (ConsumedRefreshRow refresh family at ends replayed, Sessions open consumed) =>
-    Sessions
-      open
-      (ConsumedRefresh
-          (arrayCopy refresh)
-          (arrayCopy family)
-          at
-          ends
-          (map arrayCopy replayed)
-        :: consumed)
+    Sessions open (ConsumedRefresh refresh family at ends replayed :: consumed)
 
 {- | Every open session and every consumed refresh token as a flat row.
 
    This is what a caller that persists sessions across a restart needs, and it
    is all of it. `SessionRecord` itself stays private: a row is admitted back
    as a session only through `storeWithSessionRows`, so the constructor is
-   still not reachable from outside this module, and the fingerprints are
-   copied on the way out as they are on the way in. -}
+   still not reachable from outside this module. -}
 export
 storeSessionRows : Store -> List SessionRow
 storeSessionRows store = match storeSessions store
@@ -620,7 +541,7 @@ storeSize (Store (BlobHalf blocks _ _ _) _ _ _) = blockStoreSize blocks
 
    Paired with `storeSize` it separates two blob halves at a fixed cost. Every
    other way of asking reads the half: `storeBlobMimeIndex` pairs up its whole
-   declared-type index and `storeBlobEntries` copies every blob's bytes, so a
+   declared-type index and `storeBlobEntries` lists every blob, so a
    caller that only needs to know whether anything moved would pay for the
    account it is asking about. It never misses a change — the insert is the
    only thing that moves this half, and it always advances this — and it may
@@ -633,9 +554,9 @@ storeBlobVersion (Store (BlobHalf _ _ _ version) _ _ _) = version
 {- | The total length of the distinct blobs the blob half holds, without
    walking one of them.
 
-   `storeBlobEntries` answers the same question by handing back a copy of
-   every blob in the account, so an upload graded against a per-account byte
-   cap would otherwise read the whole account to decide one request. -}
+   `storeBlobEntries` answers the same question by handing back every blob
+   in the account, so an upload graded against a per-account byte cap would
+   otherwise read the whole account to decide one request. -}
 export
 storeBlobBytes : Store -> Int
 storeBlobBytes (Store (BlobHalf _ _ total _) _ _ _) = total
@@ -646,18 +567,17 @@ storeHasBlob : Cid -> Store -> Bool
 storeHasBlob cid (Store (BlobHalf blocks _ _ _) _ _ _) =
   blockStoreHas cid blocks
 
--- | Look up a blob-half block, returning a defensive copy.
+-- | Look up a blob-half block.
 export
-storeGet : Cid -> Store -> Option (Array Int)
-storeGet cid (Store (BlobHalf blocks _ _ _) _ _ _) =
-  map toArray (blockStoreGet cid blocks)
+storeGet : Cid -> Store -> Option Bytes
+storeGet cid (Store (BlobHalf blocks _ _ _) _ _ _) = blockStoreGet cid blocks
 
 -- | Verify and immutably insert a blob-half block, returning the successor
 -- store. No MIME type is recorded — this is the byte-only primitive
 -- `storePutBlob` is built on, and a type already declared for these bytes is
 -- kept rather than erased. The repository half is carried through unchanged.
 export
-storePut : Cid -> Array Int -> Store -> Result String Store
+storePut : Cid -> Bytes -> Store -> Result String Store
 storePut cid bytes (Store half repo auth prefs) =
   map
     (next => Store next repo auth prefs)
@@ -668,7 +588,7 @@ storePut cid bytes (Store half repo auth prefs) =
 -- is the one place that decides whether a blob is admitted at all; this only
 -- records what it already admitted.
 export
-storePutBlob : Cid -> String -> Array Int -> Store -> Result String Store
+storePutBlob : Cid -> String -> Bytes -> Store -> Result String Store
 storePutBlob cid mimeType bytes (Store half repo auth prefs) =
   map
     (next => Store next repo auth prefs)
@@ -681,21 +601,21 @@ export
 storeBlobMimeType : Cid -> Store -> Option String
 storeBlobMimeType cid (Store half _ _ _) = declaredTypeOf cid half
 
--- | Every distinct verified block in the blob half, CID-sorted and
--- defensively copied, byte payload included. No route calls this — every
--- caller that only needs names or a byte total reaches for
--- `storeBlobCids`/`storeBlobCidTexts`/`storeBlobBytes` instead.
+-- | Every distinct verified block in the blob half, CID-sorted, byte payload
+-- included. No route calls this — every caller that only needs names or a
+-- byte total reaches for `storeBlobCids`/`storeBlobCidTexts`/`storeBlobBytes`
+-- instead.
 export
-storeBlobEntries : Store -> List (Cid, Array Int)
+storeBlobEntries : Store -> List (Cid, Bytes)
 storeBlobEntries (Store (BlobHalf blocks _ _ _) _ _ _) =
-  map ((cid, bytes) => (cid, toArray bytes)) (blockStoreEntries blocks)
+  blockStoreEntries blocks
 
 {- | Every distinct verified CID in the blob half, in canonical CID order and
    carrying no bytes — what `sync.listBlobs` pages over.
 
-   `storeBlobEntries` answers the same question, but copies every blob's bytes
-   to do it, so listing the names of an account's blobs would otherwise cost
-   the whole blob half. -}
+   `storeBlobEntries` answers the same question, but walks every blob to do
+   it, so listing the names of an account's blobs would otherwise cost the
+   whole blob half. -}
 export
 storeBlobCids : Store -> List Cid
 storeBlobCids (Store (BlobHalf blocks _ _ _) _ _ _) = blockStoreCids blocks

@@ -21,7 +21,8 @@ import http.{
   Response,
   serializeResponse,
 }
-import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes}
 import hex as Hex
 import json.{Json(..), get}
 import lib.credential.{
@@ -32,7 +33,8 @@ import lib.credential.{
 }
 import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.websocket.{handshakeAccept}
-import string.{contains, fromUtf8, splitAt, toInt, toLower, trim}
+import u8 as U8
+import string.{splitAt, toInt, toLower, trim}
 import lib.atsyntax.{validateDid, validateHandle}
 import lib.jwt.{
   Claims(..),
@@ -41,7 +43,12 @@ import lib.jwt.{
   serviceTokenLifetimeSeconds,
   verifyToken,
 }
-import lib.nsid.{sameNsidIdentity, validateNsid, nsidErrorMessage}
+import lib.nsid.{
+  lowerAsciiByte,
+  sameNsidIdentity,
+  validateNsid,
+  nsidErrorMessage,
+}
 import lib.proxy.{
   appviewRouteDid,
   appviewRouteFor,
@@ -104,7 +111,7 @@ import lib.xrpc.{
    that was never classified; `createSession` refuses on `None`. -}
 public export data RequestContext = RequestContext {
   nowSeconds : Int,
-  nonce : Array Int,
+  nonce : Bytes,
   login : Option LoginVerdict,
 }
 
@@ -119,9 +126,7 @@ public export data RequestContext = RequestContext {
    the caller's OWN session — rotating it, closing it — and a fingerprint is
    how a session is named; the bearer token itself is deliberately not handed
    on, so no handler can echo, log, or re-present it. -}
-public export data AuthOutcome =
-  | Unauthenticated
-  | Authenticated String (Array Int)
+public export data AuthOutcome = Unauthenticated | Authenticated String Bytes
 
 {- | An endpoint-agnostic pure handler with an explicit successor Store,
    receiving the request context and the auth outcome the seam already
@@ -222,7 +227,7 @@ data Credential =
   | MalformedCredential
   | ExpiredCredential
   | InvalidCredential
-  | GoodCredential String (Array Int)
+  | GoodCredential String Bytes
 
 -- What the `Authorization` header carried, before any verification.
 data Presented = NoHeader | NotBearer | Bearer String
@@ -235,14 +240,18 @@ bearerOf text =
   if toLower scheme == "bearer " then Bearer token else NotBearer
 
 -- Exactly one `Authorization` header is a credential. Two are a request whose
--- credential is ambiguous, which is not a credential.
-presentedHeader : List Header -> Int -> Option (Array Int) -> Presented
+-- credential is ambiguous, which is not a credential. A value that is not
+-- UTF-8 is not one either: a token is compared and fingerprinted, so it is
+-- refused as malformed rather than repaired into a different string.
+presentedHeader : List Header -> Int -> Option Bytes -> Presented
 presentedHeader [] 0 _ = NoHeader
-presentedHeader [] 1 (Some value) = bearerOf (fromUtf8 value)
+presentedHeader [] 1 (Some value) = match B.decodeUtf8 value
+  Some text => bearerOf text
+  None => NotBearer
 presentedHeader [] _ _ = NotBearer
 presentedHeader (header :: rest) count value =
   if headerName header == "authorization" then
-    presentedHeader rest (count + 1) (Some (toArray (headerValue header)))
+    presentedHeader rest (count + 1) (Some (headerValue header))
   else
     presentedHeader rest count value
 
@@ -259,7 +268,7 @@ audienceFor account _ = accessAudience account
 
 -- Whether the session the token belongs to is still open. A refresh route
 -- asks after the refresh half, every other route after the access half.
-sessionOpen : AuthPolicy -> Int -> Array Int -> Store -> Bool
+sessionOpen : AuthPolicy -> Int -> Bytes -> Store -> Bool
 sessionOpen RefreshRoute now fingerprint store =
   storeRefreshActive now fingerprint store
 sessionOpen _ now fingerprint store = storeAccessActive now fingerprint store
@@ -292,10 +301,9 @@ verifiedCredential account policy context store token =
   match storeServerSecret store
     None => InvalidCredential
     Some secret =>
-      -- Masked, as before: the old HMAC key path masked this secret too.
       let verified =
         verifyToken
-          (fromArrayAssumeByteDomain secret)
+          secret
           (accountDid account)
           (audienceFor account policy)
           context.nowSeconds
@@ -434,24 +442,27 @@ public export data UpgradeAdmission = UpgradeAdmission {
 -- One header's single value, or why there is not exactly one. Two
 -- `Sec-WebSocket-Key` headers are a handshake whose key is ambiguous, which
 -- is not a key — the same rule `presentedHeader` applies to `Authorization`.
-data HeaderPick = HeaderMissing | HeaderRepeated | HeaderPicked String
+data HeaderPick = HeaderMissing | HeaderRepeated | HeaderPicked Bytes
 
-pickHeader : String -> List Header -> Int -> Option (Array Int) -> HeaderPick
+pickHeader : String -> List Header -> Int -> Option Bytes -> HeaderPick
 pickHeader _ [] 0 _ = HeaderMissing
-pickHeader _ [] 1 (Some value) = HeaderPicked (fromUtf8 value)
+pickHeader _ [] 1 (Some value) = HeaderPicked value
 pickHeader _ [] _ _ = HeaderRepeated
 pickHeader wanted (header :: rest) count value =
   if headerName header == wanted then
-    pickHeader wanted rest (count + 1) (Some (toArray (headerValue header)))
+    pickHeader wanted rest (count + 1) (Some (headerValue header))
   else
     pickHeader wanted rest count value
 
 -- A repeated field is joined by commas rather than refused (RFC 9110 §5.3),
 -- and `Connection` legitimately carries a token list, so both fields are
--- tested by containment of their lowercased text rather than by equality.
+-- tested by containment of their ASCII-lowercased bytes rather than by
+-- equality. The test is on bytes, so a field that is not UTF-8 is searched as
+-- sent rather than decoded first.
 headerMentions : String -> String -> List Header -> Bool
 headerMentions wanted token headers = match pickHeader wanted headers 0 None
-  HeaderPicked value => contains token (toLower value)
+  HeaderPicked value =>
+    B.contains (B.encodeUtf8 token) (B.map lowerAsciiByte value)
   _ => False
 
 {- | Whether this request is the opening half of a WebSocket handshake (RFC
@@ -521,16 +532,23 @@ cursorOf ((QueryParam key value) :: rest) count found =
   else
     cursorOf rest count found
 
+-- A version field that is not UTF-8 names no version, so it is answered as
+-- one naming a version this server does not speak.
+speaksVersion : Bytes -> Bool
+speaksVersion value = match B.decodeUtf8 value
+  Some text => trim text == webSocketVersion
+  None => False
+
 -- The handshake's own well-formedness, once the route is known to be a
 -- registered subscription: the version, then the key.
 admitHandshake : Request -> String -> List QueryParam -> UpgradeDecision
 admitHandshake request nsid params =
   match pickHeader "sec-websocket-version" (requestHeaders request) 0 None
     HeaderPicked version =>
-      if trim version /= webSocketVersion then
-        UpgradeRefused wrongVersionResponse
-      else
+      if speaksVersion version then
         admitKey request nsid params
+      else
+        UpgradeRefused wrongVersionResponse
     HeaderMissing => UpgradeRefused wrongVersionResponse
     HeaderRepeated =>
       UpgradeRefused
@@ -544,15 +562,23 @@ admitKey request nsid params =
     HeaderRepeated =>
       UpgradeRefused
         (badHandshakeResponse "Sec-WebSocket-Key must not be repeated")
-    HeaderPicked key => match handshakeAccept (trim key)
-      Err detail => UpgradeRefused (badHandshakeResponse detail)
-      Ok accept => match cursorOf params 0 None
-        Err refusal => UpgradeRefused refusal
-        Ok cursor => UpgradeAdmitted UpgradeAdmission {
-          nsid = nsid,
-          accept = accept,
-          cursor = cursor,
-        }
+    HeaderPicked key => match B.decodeUtf8 key
+      None => UpgradeRefused (badHandshakeResponse keyNotBase64Message)
+      Some text => match handshakeAccept (trim text)
+        Err detail => UpgradeRefused (badHandshakeResponse detail)
+        Ok accept => match cursorOf params 0 None
+          Err refusal => UpgradeRefused refusal
+          Ok cursor => UpgradeAdmitted UpgradeAdmission {
+            nsid = nsid,
+            accept = accept,
+            cursor = cursor,
+          }
+
+-- A key that is not UTF-8 holds a byte outside base64's ASCII alphabet, so it
+-- is refused with the words `handshakeAccept` gives an out-of-alphabet byte.
+keyNotBase64Message : String
+keyNotBase64Message =
+  "Sec-WebSocket-Key is not base64: base64.decode: invalid character or padding"
 
 {- | Whether this request is an upgrade to a registered subscription route,
    and if so whether it may be admitted.
@@ -637,7 +663,7 @@ public export data ProxyAdmission = ProxyAdmission {
   verb : String,
   target : String,
   headers : List (String, String),
-  body : Array Int,
+  body : Bytes,
   audience : String,
   serviceAuth : ServiceAuthRequest,
 }
@@ -667,7 +693,7 @@ serviceAuthFor account context nsid audience = ServiceAuthRequest {
   iss = accountDid account,
   aud = audience,
   lxm = Some nsid,
-  jti = Hex.encode (fromArrayAssumeByteDomain context.nonce),
+  jti = Hex.encode context.nonce,
   iat = context.nowSeconds,
   exp = None,
 }
@@ -693,13 +719,13 @@ admitForward account context request nsid audience signedAudience =
   if not (forwardableProxyVerb (requestMethod request)) then
     ProxyRefused proxyMethodRefusalResponse
   else
-    let body = toArray (requestBody request)
+    let body = requestBody request
     ProxyAdmitted ProxyAdmission {
       nsid = nsid,
       verb = requestMethod request,
       target = requestTarget request,
       headers =
-        relayedRequestHeaders (arrayLength body > 0) (requestHeaders request),
+        relayedRequestHeaders (B.length body > 0) (requestHeaders request),
       body = body,
       audience = audience,
       serviceAuth = serviceAuthFor account context nsid signedAudience,
@@ -720,19 +746,27 @@ admitProxyAudience : Account ->
   Option AppviewTable ->
   Request ->
   String ->
-  String ->
+  Bytes ->
   ProxyDecision
 admitProxyAudience account context table request nsid raw =
-  match proxyServiceDid raw
+  match namedService raw
     None =>
       ProxyRefused
         (proxyRefusalResponse "atproto-proxy does not name a service DID")
-    Some service => match table
+    Some (text, service) => match table
       None => ProxyRefused (proxyRefusalResponse (proxyNoServiceMessage nsid))
       Some configured => match appviewRouteFor configured service
         None => ProxyRefused (proxyRefusalResponse proxyForeignAudienceMessage)
         Some route =>
-          admitForward account context request nsid (appviewRouteDid route) raw
+          admitForward account context request nsid (appviewRouteDid route) text
+
+-- The header's text and the bare DID it names, or `None` when it names none.
+-- A value that is not UTF-8 names no DID: it is the audience a credential
+-- would be minted for, so it is refused rather than repaired.
+namedService : Bytes -> Option (String, String)
+namedService raw = match B.decodeUtf8 raw
+  None => None
+  Some text => map (service => (text, service)) (proxyServiceDid text)
 
 {- | The refusal this caller is owed for its credential, or `None` when it
    holds one.
@@ -775,7 +809,7 @@ admitForwardable : Account ->
   Store ->
   Request ->
   String ->
-  Option String ->
+  Option Bytes ->
   ProxyDecision
 admitForwardable _ _ None _ _ _ None = NotProxied
 admitForwardable account context (Some configured) store request nsid None =
@@ -1063,7 +1097,7 @@ serviceAuthClaims account context table params = do
     iss = accountDid account,
     aud = audience,
     lxm = method,
-    jti = Hex.encode (fromArrayAssumeByteDomain context.nonce),
+    jti = Hex.encode context.nonce,
     iat = context.nowSeconds,
     exp = Some expiry,
   }

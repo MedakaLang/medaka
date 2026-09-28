@@ -315,6 +315,7 @@ import backend.wasm_preamble.{
   floatStrRuntimeLines,
   strSearchRuntimeLines,
   strCodecRuntimeLines,
+  utf8LossyRuntimeLines,
   byteBlockRuntimeLines,
   charFromCodeRuntimeLines,
   charClassRuntimeLines,
@@ -1971,6 +1972,8 @@ isNetExternW name = contains name [
   "netTryRecvBytes",
   "netTrySend",
   "netTrySendFrom",
+  "netSendBytesFrom",
+  "netTrySendBytesFrom",
 ]
 
 -- W9: arity of a str/leaf extern (the param count its emit* arm consumes).  Used to
@@ -3729,6 +3732,14 @@ emitRefProgram prog groups =
   let ioHostRt = if (progEmit prog).useIO.value then ioHostRuntimeLines else []
   let ioArgsRt =
     if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []
+  -- the UTF-8 validation every producer of outside bytes reads a $str through,
+  -- emitted exactly when one of the blocks that call it is: the byte codec,
+  -- byteBlockToString, and the IO host surface.
+  let utf8LossyRt =
+    if isEmptyList (strCodecRt ++ byteBlockRt ++ ioHostRt) then
+      []
+    else
+      utf8LossyRuntimeLines
   -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
   let fileBytesRt =
@@ -3792,6 +3803,7 @@ emitRefProgram prog groups =
       ++ hashFloatRt
       ++ randomFloatRt
       ++ strSearchRt
+      ++ utf8LossyRt
       ++ strCodecRt
       ++ byteBlockRt
       ++ charFromCodeRt
@@ -12499,8 +12511,9 @@ maxIndexAt _ d = d - 1
 
 -- the deepest switch nesting in a tree (each CTSwitch increments the emit depth by
 -- 1 for its subtrees; an arm body at a leaf is emitted at decision-depth + this).
--- The default subtree is one of those subtrees: a constructor switch emits it after
--- its br_table tower at the tower's depth, not the switch's own.
+-- A constructor switch emits its default subtree inside the same tower as its
+-- branches, one level deeper (`emitBrTableTower` at d+1); a literal switch emits
+-- both at its own depth, so counting the default one level deeper covers both.
 treeSwitchNesting : CTree -> Int
 treeSwitchNesting CTFail = 0
 treeSwitchNesting (CTLeaf _) = 0

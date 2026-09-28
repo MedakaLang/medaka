@@ -1,0 +1,12 @@
+-- #3463 review round 4: `leak` hands back a `T1 Cb` whose innermost `TA`
+-- takes a consumer of the entry's callback.  The host can pass a consumer that
+-- keeps the callback and run it, so the callback's row is reachable: charged.
+import invocation_flip_ty.{T1(..), T2(..), T3(..), T4(..)}
+
+type Cb = Unit -> <FileRead "lk/*"> Result String String
+
+leak : String -> T1 Cb
+leak _ = T1 (T2 (T3 (TB (T1 (T2 (T3 (TA (k => k (_ => readFile "lk/x")))))))))
+
+main : <IO> Unit
+main = println "invocation flip"

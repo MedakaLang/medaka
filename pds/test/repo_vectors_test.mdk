@@ -1,0 +1,263 @@
+{- | The signed repository against the official atproto answer keys: the
+   full transcript and the focused representative on native and Wasm, and
+   six further drivers that replay the same kind of corpus through the
+   handler layer, natively.
+
+   The two `repo_vectors_main.mdk` rows each require native and Wasm to
+   print the same bytes. A host without the Wasm emitter, `node` or
+   `wasm-tools` fails the row rather than skipping the Wasm arm. There is
+   no eval arm: the interpreter takes about 18 minutes on the representative
+   transcript, so its agreement with the native binary is graded nightly by
+   `pds/nightly/repo_vectors_eval_engine_test.mdk` instead.
+
+   The other rows are native only, for the same reason, and each reads its
+   own ledgered corpus: the record-write handlers and the read/sync handlers
+   replay the transcript, the applyWrites batch, the blob routes and the
+   `#commit` firehose event each have a corpus of their own, and the
+   activation events and the sync-read CAR shapes read two files of the
+   `S-oracle-answer-keys` corpus, named outright because that consumer id
+   owns four. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+gate : String
+gate = "pds/test/repo_vectors"
+
+arm : Engine -> List String -> List String -> String -> Arm
+arm e args needs final = Arm {
+  engine = e,
+  driverArgs = args,
+  countFloor = None,
+  needs = needs,
+  lastLine = Some final,
+  exactStdout = None,
+}
+
+-- A row with one native arm over one driver and one corpus.
+nativeRow : String -> Corpus -> List String -> Row
+nativeRow driver corpus needs = Row {
+  gate = gate,
+  driver = driver,
+  corpus = corpus,
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [arm NativeEngine [] needs "TOTAL: PASS"],
+  parity = False,
+}
+
+-- # The transcript, native == Wasm
+
+repoDriver : String
+repoDriver = "pds/test/repo_vectors_main.mdk"
+
+-- Both engines, the native arm graded and the Wasm arm held to its bytes.
+twoEngineRow : List String -> List String -> String -> Row
+twoEngineRow args needs final = Row {
+  gate = gate,
+  driver = repoDriver,
+  corpus = Ledgered "P1-D-REPO",
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [arm NativeEngine args needs final, arm WasmEngine args [] final],
+  parity = True,
+}
+
+transcriptRow : Row
+transcriptRow =
+  twoEngineRow
+    []
+    [
+      "external: 15/15 official-atproto transcript checks",
+      "hostile: 19/19 rejected on named routes",
+      "REPO-IDENTITY PASS mixed lookup/create rejected state=unchanged",
+      "repository-identity: 1/1 normalized key control",
+    ]
+    "TOTAL: PASS"
+
+representativeRow : Row
+representativeRow =
+  twoEngineRow
+    ["--representative"]
+    [
+      "representative-external: 6/6 official-atproto initialization/create/CAR checks",
+      "focused-rejected: 27/27 named routes",
+      "focused-controls: 8/8 valid routes",
+      "focused-export-boundary: 1/1 malformed bound MST route",
+      "OP CREATE PASS",
+      "CREATE CAR PASS order=",
+    ]
+    "REPRESENTATIVE: PASS"
+
+-- # The handler layer
+
+-- The same transcript through `handleBytes`: JSON request bytes in, JSON
+-- response bytes out, every uri/cid/commit graded against the pinned rows.
+recordHandlersRow : Row
+recordHandlersRow = nativeRow "pds/test/record_handlers_main.mdk" (Ledgered
+  "P1-D-REPO") [
+  "transcript: 4/4 handler-layer steps matched the pinned corpus",
+  "CELL swap-commit-mismatch PASS error=InvalidSwap",
+  "CELL validate-true-accepted PASS validationStatus=unknown state=advanced",
+  "cells: 4/4 (3 state-preserving rejections + 1 admitted validate flag)",
+]
+
+-- The four writes replayed and read back. `sync.getRepo`'s body must equal
+-- `repoExportCar`'s bytes and the corpus CAR row at once.
+readHandlersRow : Row
+readHandlersRow = nativeRow "pds/test/read_handlers_main.mdk" (Ledgered
+  "P1-D-REPO") [
+  "setup: 4/4 transcript writes replayed through the seam",
+  "READ sync-getRepo-car-bytes PASS",
+  "READ sync-getLatestCommit PASS",
+  "READ getRecord-deleted-medaka-a PASS error=RecordNotFound",
+  "READ wellknown-did-web-serves-account-document PASS",
+  "READ wellknown-did-key-keeps-server-document PASS",
+  "reads: 20/20 corpus-graded read routes",
+]
+
+-- N operations, ONE signed commit: the corpus is four MST edits followed by
+-- one `signCommit`, so a batch replayed as four commits fails it.
+batchRow : Row
+batchRow = nativeRow "pds/test/batch_handlers_main.mdk" (Ledgered
+  "P1-E-BATCH") [
+  "external: 4/4 official-atproto batch checks",
+  "BATCH one-commit-cid PASS",
+  "BATCH exported-car-bytes PASS",
+  "BATCH swap-commit-mismatch PASS error=InvalidSwap state=unchanged",
+  "BATCH failing-operation-aborts-batch PASS error=InvalidRequest state=unchanged",
+  "BATCH empty-batch-is-a-no-op PASS state=unchanged",
+  "cells: 3/3 state-preserving batch properties",
+]
+
+-- The CIDs and `blob` ref JSON the official `@atproto/lex-data` produced,
+-- so `uploadBlob` is graded against something outside this tree.
+blobRow : Row
+blobRow = nativeRow "pds/test/blob_handlers_main.mdk" (Ledgered "S-blob-core") [
+  "external: 3/3 official-atproto blob checks",
+  "BLOB upload-empty PASS",
+  "BLOB upload-small-text PASS",
+  "BLOB upload-image-shaped PASS",
+  "BLOB listBlobs-corpus-cids PASS",
+  "routes: 4/4 corpus-graded blob route reads",
+]
+
+-- # Firehose events
+
+-- Seven signed commits over a tree three MST layers deep. The
+-- `untouched-nodes` line tells a covering proof from a tree diff: a rule
+-- built from the changed nodes alone satisfies every other count.
+commitEventRow : Row
+commitEventRow = nativeRow "pds/test/commit_event_vectors_main.mdk" (Ledgered
+  "P1-F-COMMIT-EVENT") [
+  "prev-lookups: 9/9 op rows matched the reference previous record CID",
+  "commit-identity: 7/7 steps matched the pinned commit and data CIDs",
+  "blocks: 7/7 steps matched the reference relevant-block set",
+  "reference-car: 7/7 steps matched the official-ordered CAR root and blocks",
+  "frames: 7/7 steps byte-identical to the official-ordered event",
+  "frames-sorted: 7/7 steps byte-identical to the canonical-ordered event",
+  "prevData: 7/7 steps named the prior commit's data root",
+  "untouched-nodes: 3/7 steps shipped an MST node the write did not change",
+]
+
+-- The `#identity`, `#account` and `#sync` frames a repository's creation
+-- emits, and the genesis `#commit`'s CAR, which carries the empty MST root
+-- beside the commit.
+activationEventRow : Row
+activationEventRow = nativeRow
+  "pds/test/activation_event_vectors_main.mdk"
+  (Explicit ["pds/test/vectors/pds_sync_event_bodies_corpus.txt"])
+  [
+    "IDENTITY-WITH-HANDLE: PASS",
+    "ACCOUNT-ACTIVE: PASS",
+    "SYNC: PASS",
+    "SYNC-CAR-ROOTS: PASS",
+    "SYNC-CAR-BLOCKS: PASS",
+    "GENESIS-COMMIT-CAR-ROOTS: PASS",
+    "GENESIS-COMMIT-CAR-BLOCKS: PASS",
+  ]
+
+-- # Sync reads
+
+{- | The six `sync.getRecord` probes over a four-node MST.
+
+   This server answers a covering proof where the official route answers
+   the root-down descent path, so an answer is a superset of the
+   reference's, in another order, wherever the key sits below the root
+   (#3007). Every probe must CONTAIN the official blocks (an omission makes
+   the proof unsound) and stay BOUNDED by the size measured on this fixture
+   (containment alone never caps the answer). Set equality holds, and is
+   required, only on `setEqualProbes`. -}
+getRecordProbes : List String
+getRecordProbes = [
+  "GETRECORD-PRESENT-D0",
+  "GETRECORD-PRESENT-D1",
+  "GETRECORD-PRESENT-D2",
+  "GETRECORD-PRESENT-D3",
+  "GETRECORD-ABSENT-BELOW",
+  "GETRECORD-ABSENT-MID",
+]
+
+setEqualProbes : List String
+setEqualProbes = [
+  "GETRECORD-PRESENT-D0",
+  "GETRECORD-ABSENT-BELOW",
+  "GETRECORD-ABSENT-MID",
+]
+
+probeNeeds : String -> List String
+probeNeeds tag = [
+  "\{tag}: PASS",
+  "\{tag}-ROOT: PASS",
+  "\{tag}-BLOCKS-CONTAIN: PASS",
+  "\{tag}-BLOCKS-BOUNDED: PASS",
+]
+
+-- `FIXTURE` checks the rebuilt repository's commit against the pinned one;
+-- nothing after it means anything if it fails. `getBlocks` stays
+-- byte-identical, and its empty roots list is read from the header this
+-- server emitted, which no round trip through `lib.car` could show.
+syncReadsRow : Row
+syncReadsRow =
+  nativeRow
+    "pds/test/sync_car_shapes_main.mdk"
+    (Explicit ["pds/test/vectors/pds_sync_car_shapes_corpus.txt"])
+    (["FIXTURE: PASS"]
+      ++ flatMap probeNeeds getRecordProbes
+      ++ map (t => "\{t}-BLOCKS-EQUAL: PASS") setEqualProbes
+      ++ [
+        "GETBLOCKS-PRESENT: PASS",
+        "GETBLOCKS-PRESENT-ROOTS: PASS",
+        "GETBLOCKS-PARTLY-MISSING: PASS",
+      ])
+
+test "repo: the full official transcript, 15 checks and 19 hostile routes, native == Wasm" =
+  expectRow transcriptRow
+
+test "repo: the focused representative, 6 official checks, 27 rejections, 8 controls, native == Wasm" =
+  expectRow representativeRow
+
+test "repo: 4 handler-layer transcript steps and 4 state-preserving cells" =
+  expectRow recordHandlersRow
+
+test "repo: 20 corpus-graded read routes, getRepo byte-equal three ways" =
+  expectRow readHandlersRow
+
+test "repo: 4 official applyWrites batch checks and 3 state-preservation cells" =
+  expectRow batchRow
+
+test "repo: 3 official blob checks and 4 corpus-graded blob reads" =
+  expectRow blobRow
+
+test "repo: 7 #commit events byte-identical to the official bytes in both block orders" =
+  expectRow commitEventRow
+
+test "repo: the #identity, #account and #sync frames byte-identical to the official bodies" =
+  expectRow activationEventRow
+
+test "repo: 6 sync.getRecord probes contain the official blocks; getBlocks byte-identical" =
+  expectRow syncReadsRow

@@ -660,7 +660,7 @@ client resume "$PORT2" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
 # 9c-9f. the two sync VERIFICATION reads over a live socket, against the
 #    repository this server actually holds. The CAR bytes are graded
 #    byte-for-byte against the oracle's own answer key in
-#    pds/test/repo_vectors.sh; what these four cases add is that the routes
+#    pds/test/repo_vectors_test.mdk; what these four cases add is that the routes
 #    answer that way over the wire, under the media type a relay reads them
 #    by, on a repository built by this gate's own writes rather than by a
 #    fixture.
@@ -2015,7 +2015,7 @@ fi
 #    three together.
 #
 #    "Nothing was signed" is asserted structurally by the pure cells
-#    (`pds/test/read_routes_all_engines.sh`: a refusal carries no claim set, and
+#    (`pds/test/read_routes_all_engines_test.mdk`: a refusal carries no claim set, and
 #    the `proxy-foreign-audience` mutation proves that cell discriminates). What
 #    is added here is that no call LEFT this box — and the final read is what
 #    makes that absence mean something: it proves the stub's log was live and

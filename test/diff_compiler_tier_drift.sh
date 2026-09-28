@@ -45,7 +45,10 @@
 #   2. NAMED STEPS. A real `run:` step in .github/workflows/ci.yml (-> merge)
 #      or nightly.yml (-> nightly) that INVOKES the gate script, plus the steps
 #      of any local composite action those workflows `uses:` (#1961 — a
-#      composite action can be the only invocation site).
+#      composite action can be the only invocation site). A native spelling
+#      invokes it too: `medaka test --native <run>` for a `kind = "native"`
+#      gate, `medaka gate run <name>` for any gate (#3499). That recogniser is
+#      shared byte-for-byte with diff_compiler_ci_shard_coverage.sh.
 #   3. ONE CLOSURE STEP through the gate RUN TARGETS themselves: a gate that
 #      runs at tier T and invokes another gate script gives that one tier T
 #      too. This is the whole reason registry_keying_ratchet was mis-tiered —
@@ -71,9 +74,9 @@
 # Failing to recognise a new invocation spelling therefore makes a gate derive
 # FEWER tiers than it declares, which reds here. It cannot fail silent.
 #
-# ⚠️ A FLAG-BEARING CALL IS A TOOL CALL, NOT A RUN. `pds/nightly/repo_vectors_eval_engine.sh`
-# runs `sh pds/test/vector_provenance.sh --files-for P1-D-REPO` — it is asking
-# that gate a question, not running its checks, exactly as
+# ⚠️ A FLAG-BEARING CALL IS A TOOL CALL, NOT A RUN. A script that runs
+# `sh <gate script> --files-for <id>` is asking that gate a question, not
+# running its checks, exactly as
 # `diff_compiler_ci_shard_coverage.sh <path>` documents its own query mode.
 # Counting it would have made this gate demand `nightly` on a gate whose
 # nightly checks never run. Positional arguments do NOT disqualify a run
@@ -143,10 +146,10 @@ for e in entries:
         # `kind = "native"` (#2591): no `.sh` script to strip a stem from —
         # the gate IS its `run` module. Keyed by the FULL run path (left
         # `.mdk`-suffixed) so it stays distinguishable from a `.sh` stem
-        # everywhere below: `RES`/`runs_in()` skip it (no shell text to grep
-        # for a `.sh` invocation — its only tier source is the matrix/`shard`
-        # field, handled identically to a `.sh` entry) and the gate-script
-        # closure walk (below) skips it too (no `.sh` file to open).
+        # everywhere below: `RES` has no `.sh` pattern for it, and a workflow
+        # reaches it through the native spellings `runs_in()` also reads
+        # (`medaka test --native <run>`, `medaka gate run <name>`; #3499).
+        # The closure walk reads its module with the Medaka rule instead.
         stem = e['run']
         native_stems.add(stem)
     if stem in by_stem:
@@ -171,13 +174,22 @@ if not by_stem:
 NEUTRAL = {'MEDAKA_ROOT', 'MEDAKA', 'MEDAKA_EMITTER', 'LC_ALL',
            'GH_REPO', 'GH_TOKEN', 'GITHUB_TOKEN', 'JOBS'}
 
+# >>> shared: workflow invocation recogniser >>>
+# This block is byte-identical in test/diff_compiler_tier_drift.sh and
+# test/diff_compiler_ci_shard_coverage.sh, so the two agree on whether a
+# workflow `run:` body runs a gate by a NATIVE spelling. They do not agree on a
+# `.sh` invocation: tier_drift demands command position (`invocation_re`),
+# while shard_coverage counts any mention outside a `case` arm
+# (`_is_real_invocation`). `shared_block_drift` refuses when the copies differ,
+# and `recogniser_selftest` pins what the native rule accepts and rejects.
+
 # Command-position prefixes: what may sit between a command separator and the
-# `sh`/`bash`/`dash` that runs a gate.
+# program that runs a gate.
 # The VAR=value and timeout branches use [ \t]+ (not \s+) for their trailing
 # separator so a prefix can never absorb a newline — "rc=1" ending one
 # statement must not fuse with "bash foo.sh" starting the next just because
 # \s+ is willing to eat the line break between them (that fusion would also
-# misattribute rc=1 as an inline env assignment for F2's env folding, below).
+# misattribute rc=1 as an inline env assignment for the env folding below).
 PRE = (r'(?:(?:if|then|else|elif|do|while|until|!|not)\s+'
        r'|[A-Za-z_][A-Za-z0-9_]*=[^\s]*[ \t]+'
        r'|timeout[ \t]+[^\s]+[ \t]+'
@@ -199,6 +211,135 @@ def strip_comments(text):
     return '\n'.join(out)
 
 
+# An inline `VAR=value` command prefix (the same shape `PRE` already
+# recognizes and steps past to find the program) is an env assignment the
+# identical `env:` YAML spelling would also produce — fold it into the
+# invocation's env the same way, so the two spellings derive the same mode
+# (F2, #2181 review finding).
+INLINE_ENV_RE = re.compile(r'\b([A-Za-z_][A-Za-z0-9_]*)=([^\s]*)')
+
+
+def inline_env(pre_text):
+    return dict(INLINE_ENV_RE.findall(pre_text))
+
+
+# The two native spellings of a gate run (#3499):
+#
+#     medaka test --native <path>_test.mdk     a `kind = "native"` gate's module
+#     medaka gate run <name>                   any gate, by its registry name
+#
+# in command position only, exactly as a `.sh` run must be: after a command
+# separator and the `PRE` prefixes, with `medaka` spelled as `medaka`,
+# `./medaka`, `$ROOT/medaka`, `${{ … }}/medaka` or `$MEDAKA`, optionally
+# quoted. A comment is stripped before matching, and a `case` arm or a prose
+# mention never sits in command position.
+#
+# Trailing arguments narrow the claim, as a flag does for a `.sh`: a leading-`-`
+# argument after either spelling is a tool call rather than a run, and any
+# further argument to `gate run` is a second SELECTOR, which `medaka gate run`
+# conjoins with the name, so it may run nothing at all.
+MEDAKA_CMD = (r'["\']?(?:(?:\$\{?ROOT\}?/|\$\{\{[^}]*\}\}/|\./)?medaka'
+              r'|\$\{?MEDAKA\}?)["\']?')
+NATIVE_PATH_PREFIX = r'["\']?(?:\$\{?ROOT\}?/|\$\{\{[^}]*\}\}/|\./)?'
+NATIVE_END = r'["\']?(?=[\s;&|)]|$)'
+
+
+def native_matchers(targets):
+    """`targets` maps a key to `(module, name)`: the `_test.mdk` run path of a
+    native gate (None for a `.sh` gate) and its registry name. Returns the
+    compiled `(key, is_gate_run, regex)` triples `native_runs_in` reads."""
+    head = (r'(?:^|[\n;&|(`])\s*(?P<pre>' + PRE + r')' + MEDAKA_CMD
+            + r'[ \t]+')
+    tail = r'(?P<args>[^\n;&|]*)'
+    out = []
+    for key, (module, name) in targets.items():
+        out.append((key, True, re.compile(
+            head + r'gate[ \t]+run[ \t]+["\']?' + re.escape(name)
+            + NATIVE_END + tail)))
+        if module is not None:
+            out.append((key, False, re.compile(
+                head + r'test[ \t]+--native[ \t]+' + NATIVE_PATH_PREFIX
+                + re.escape(module) + NATIVE_END + tail)))
+    return out
+
+
+def native_runs_in(text, matchers):
+    """{key: inline-env} for every target this text RUNS by a native
+    spelling."""
+    text = strip_comments(text)
+    found = {}
+    for key, is_gate_run, rx in matchers:
+        for m in rx.finditer(text):
+            args = m.group('args').split()
+            if any(a.startswith('-') for a in args) or (is_gate_run and args):
+                continue
+            found.setdefault(key, {}).update(inline_env(m.group('pre')))
+    return found
+
+
+def shared_block_drift(root):
+    """None when both scripts carry this block byte-for-byte, else why not."""
+    open_mark = '# ' + '>>> shared: workflow invocation recogniser >>>'
+    close_mark = '# ' + '<<< shared: workflow invocation recogniser <<<'
+    blocks = {}
+    for rel in ('test/diff_compiler_tier_drift.sh',
+                'test/diff_compiler_ci_shard_coverage.sh'):
+        text = pathlib.Path(root, rel).read_text()
+        i, j = text.find(open_mark), text.find(close_mark)
+        if i < 0 or j < i:
+            return f"{rel} has no shared invocation-recogniser block"
+        blocks[rel] = text[i:j]
+    if len(set(blocks.values())) != 1:
+        return ("the shared invocation-recogniser block differs between "
+                + " and ".join(sorted(blocks)))
+    return None
+
+
+# Fixed `run:` bodies and what each must run, checked on every run of either
+# gate. The negative rows are the point: no workflow in the tree spells one, so
+# a loosened end-of-name anchor or argument rule would otherwise derive the
+# same set and stay green. The probe names are in no registry, so this table is
+# never read as an invocation of a real gate.
+SELFTEST_TARGETS = {
+    'native': ('test/recogniser_probe_test.mdk', 'recogniser_probe'),
+    'exec': (None, 'recogniser_probe_sh'),
+}
+SELFTEST_MODULE = 'test/recogniser_probe_test.mdk'
+SELFTEST_CASES = (
+    ('./medaka test --native ' + SELFTEST_MODULE, {'native': {}}),
+    ('SIGNING_DEEP=1 ./medaka test --native ' + SELFTEST_MODULE,
+     {'native': {'SIGNING_DEEP': '1'}}),
+    ('"$MEDAKA" test --native ' + SELFTEST_MODULE, {'native': {}}),
+    ('if ! ./medaka test --native ' + SELFTEST_MODULE + '; then exit 1; fi',
+     {'native': {}}),
+    ('./medaka gate run recogniser_probe', {'native': {}}),
+    ('./medaka gate run recogniser_probe_sh', {'exec': {}}),
+    ('# ./medaka test --native ' + SELFTEST_MODULE, {}),
+    ('echo ./medaka test --native ' + SELFTEST_MODULE, {}),
+    ('./medaka gate run recogniser_probe --dry-run', {}),
+    ('./medaka gate run recogniser_probe --list', {}),
+    ('./medaka test --native ' + SELFTEST_MODULE + ' --list', {}),
+    ('./medaka gate run recogniser_probe other_gate', {}),
+    ('./medaka gate run recogniser_probe_extra', {}),
+    ('./medaka test --native ' + SELFTEST_MODULE + '.orig', {}),
+    ('./medaka test --native ' + SELFTEST_MODULE + '.bak', {}),
+    ('./medaka test ' + SELFTEST_MODULE, {}),
+)
+
+
+def recogniser_selftest():
+    """One line per fixed case the recogniser misclassifies; empty when all
+    agree."""
+    matchers = native_matchers(SELFTEST_TARGETS)
+    failures = []
+    for text, want in SELFTEST_CASES:
+        got = native_runs_in(text, matchers)
+        if got != want:
+            failures.append(f"{text!r} runs {got}, expected {want}")
+    return failures
+# <<< shared: workflow invocation recogniser <<<
+
+
 def invocation_re(stem):
     return re.compile(
         r'(?:^|[\n;&|(`])\s*(?P<pre>' + PRE + r')'
@@ -209,22 +350,15 @@ def invocation_re(stem):
 
 RES = {s: invocation_re(s) for s in by_stem if s not in native_stems}
 
-# An inline `VAR=value` command prefix (the same shape `PRE` already
-# recognizes and steps past to find the `sh`/`bash`/`dash`) is an env
-# assignment the identical `env:` YAML spelling would also produce — fold it
-# into the invocation's env the same way, so the two spellings derive the
-# same mode (F2, #2181 review finding).
-INLINE_ENV_RE = re.compile(r'\b([A-Za-z_][A-Za-z0-9_]*)=([^\s]*)')
-
-
-def inline_env(pre_text):
-    return dict(INLINE_ENV_RE.findall(pre_text))
+NATIVE_MATCHERS = native_matchers(
+    {s: (s if s in native_stems else None, e['name']) for s, e in by_stem.items()})
 
 
 def runs_in(text):
     """{stem: inline-env} for every gate this text actually RUNS (see the two
     ⚠️ notes above), `inline-env` being any `VAR=value` prefix(es) on that
-    invocation's own command line."""
+    invocation's own command line — by a `.sh` path, or by either native
+    spelling from the shared recogniser."""
     found = {}
     for stem, rx in RES.items():
         for m in rx.finditer(text):
@@ -235,6 +369,8 @@ def runs_in(text):
                 found[stem].update(extra)
             else:
                 found[stem] = extra
+    for stem, extra in native_runs_in(text, NATIVE_MATCHERS).items():
+        found.setdefault(stem, {}).update(extra)
     return found
 
 
@@ -328,6 +464,20 @@ def workflow_steps(path):
                                           strip_comments(abody), aenv))
     return steps
 
+
+drift = shared_block_drift(root)
+if drift:
+    print(f"FAIL: {drift}.")
+    print("      The two scripts must agree on what a workflow step runs; copy the block")
+    print("      from one to the other.")
+    sys.exit(1)
+
+selftest = recogniser_selftest()
+if selftest:
+    print("FAIL: the shared invocation recogniser misclassifies its fixed cases:")
+    for line in selftest:
+        print(f"       {line}")
+    sys.exit(1)
 
 WORKFLOWS = (('ci.yml', 'merge'), ('nightly.yml', 'nightly'))
 

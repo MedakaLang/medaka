@@ -6,21 +6,16 @@
    The accumulation buffer's only other exercise is a live 5 MiB upload in
    `pds/test/serve_e2e.sh` (case 4d), which needs a socket, a server process
    and several seconds, and reports one bit. The arithmetic itself is pure:
-   `readBufferAppend` is `bytebuilder.emitArray`, and `readBufferBacking` is
+   `readBufferAppend` is `bytebuilder.emitBytes`, and `readBufferBacking` is
    `bytebuilder.builderParts`'s first half — this file asserts the
    growth-boundary and zero-copy properties directly against `Vector`, whose
    doubling `bytebuilder` mirrors, then again through `ReadBuffer`'s
    end-to-end wrapping, so a regression in either the stdlib API or the fold
-   onto it shows up here.
-
-   `readBufferAppend`'s byte-domain refusal is NOT asserted here: it aborts
-   the process, which would shadow every later assertion in this file.
-   `pds/test/trust_boundary_guards_test.mdk` grades it out of process, in
-   its `readbuffer-over`/`readbuffer-under`/`readbuffer-edges` cells. -}
+   onto it shows up here. -}
 
 import array.{fromList}
 import bytes as B
-import bytes.{toArray}
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import http.{
   HttpScan,
   httpScanStart,
@@ -54,7 +49,7 @@ import shell.server.{
   settleBufferedRead,
   waitingReads,
 }
-import string.{toUtf8}
+import u8 as U8
 import test.{expectAll, expectEqual, expectTrue}
 import vector.{capacity, fromArray, get, new, pushArray, rawParts}
 
@@ -115,12 +110,14 @@ liveCount = chunkCount * chunkSize
 -- Chunk `k` holds the three bytes at offsets `3k`, `3k+1`, `3k+2` of one
 -- ascending byte stream, so a mis-ordered or mis-offset `blit` shows up as a
 -- value mismatch rather than only as a length mismatch.
-chunkAt : Int -> Array Int
-chunkAt k = fromList [
-  chunkSize * k % 256,
-  (chunkSize * k + 1) % 256,
-  (chunkSize * k + 2) % 256,
-]
+chunkAt : Int -> Bytes
+chunkAt k =
+  fromU8Array
+    (fromList [
+      U8.truncate (chunkSize * k),
+      U8.truncate (chunkSize * k + 1),
+      U8.truncate (chunkSize * k + 2),
+    ])
 
 {- | One buffer, appended to `chunkCount` times. A top-level nullary binding
    is memoized, so every assertion below reads the same filled buffer and the
@@ -137,8 +134,8 @@ test "a buffer filled in small increments holds every appended byte" =
 
 test "the live bytes are the appended bytes, in order" =
   expectEqual
-    (fromList (map (i => i % 256) [0..=liveCount - 1]))
-    (toArray (readBufferLive filled))
+    (fromU8Array (fromList (map U8.truncate [0..=liveCount - 1])))
+    (readBufferLive filled)
 
 -- 4096 is the smallest doubling of 1 that holds 3000, so the backing store is
 -- larger than the live count and `readBufferLive` must not expose the excess.
@@ -162,8 +159,8 @@ test "a partly-filled store reports only its live bytes" =
 
 test "a partly-filled store's live bytes carry no spare capacity" =
   expectEqual
-    (fromList [0, 1, 2, 3, 4, 5, 6, 7, 8])
-    (toArray (readBufferLive thrice))
+    (fromU8Array (fromList [0, 1, 2, 3, 4, 5, 6, 7, 8]))
+    (readBufferLive thrice)
 
 -- # The process-wide buffer budget (#2951)
 
@@ -333,13 +330,13 @@ declaredBody = maxHttpBodyBytes
 -- | The head of a `POST` declaring `declared` body bytes. `Host` is not
 -- optional: `validateHost` refuses a head without one, and a refused head
 -- never reaches the body phase this is built to reach.
-uploadHead : Int -> Array Int
+uploadHead : Int -> Bytes
 uploadHead declared =
-  toUtf8
+  encodeUtf8
     "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: pds.test\r\nContent-Length: \{intToString declared}\r\n\r\n"
 
 headBytes : Int
-headBytes = arrayLength (uploadHead declaredBody)
+headBytes = B.length (uploadHead declaredBody)
 
 -- | How many such uploads the budget holds at once. Derived rather than
 -- written down: the arithmetic is what the cells below are about, and a
@@ -357,7 +354,7 @@ upload : Int -> Int -> (ReadBuffer, HttpScan)
 upload declared delivered =
   let buf = readBufferNew ()
   let () = readBufferAppend (uploadHead declared) buf
-  let () = readBufferAppend (arrayMakeWith delivered (_ => 97)) buf
+  let () = readBufferAppend (fromU8Array (arrayMake delivered 97)) buf
   let (_, scan) =
     scanRequestBoundaryWithin
       (readBufferBacking buf)

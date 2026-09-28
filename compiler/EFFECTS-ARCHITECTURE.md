@@ -150,6 +150,7 @@ listed here as proposed paths; presence in this table is not a delivery claim.
 | `effect_solver.mdk` | Equality/subsumption modes, scoped authority constraints, residual solving | Rows and common scope/goal contracts; no import of `typecheck.mdk` |
 | `effect_bindings.mdk` | Source-arity shape and separate body/forcing summaries | Type and row representation; explicit fresh-variable services |
 | `effect_values.mdk` | N-ary structural joins of produced alternatives | Type and row representation; explicit equality, variance and allocation services |
+| `effect_invocation.mdk` | The invocation summary: what a host can make an entry perform, read by variance (`manifest`, `check-policy`) | Type and row representation; the checked program's variance and constructor fields arrive as explicit operations (`typecheck.lastInvocationOps`) |
 | `effect_infer.mdk` | Source abstraction and authority propagation through expressions and patterns | AST plus explicit lexical facts; never look up a local by bare name in a global table |
 | `effect_check.mdk` | Declared-signature and method-effect checks | Solver and explicit checking context; same entry for supplied/default bodies |
 | `repr.mdk` | HM monotypes, schemes and type rendering | Imports effect representation; does not own a second effect algebra |

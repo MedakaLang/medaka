@@ -14,19 +14,16 @@
    it added and the signed commit block, and gets bytes back; deciding what a
    write was is the caller's job, encoding it is this module's. -}
 
-import array
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, decodeUtf8}
+import hex.{encode}
 import list.{reverse, sortBy}
 import map.{Map(..), get, has, set}
-import string.{fromUtf8}
 import lib.blockstore.{BlockStore, blockStoreGet}
 import lib.car.{carEncode}
 import lib.cid.{Cid, cidEqual, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import lib.mst.{Mst, mstCoveringProofBlocks, mstNodeBlocks}
 import lib.repo.{
-  blockBytesChecked,
-  blockRowsChecked,
   Repo,
   RepoCommit,
   repoCommitCid,
@@ -50,9 +47,9 @@ import lib.tid.{Tid, tidToString}
    null, which a relay running the inductive firehose reads as a different
    claim. -}
 public export data SyncRepoOp =
-  | SyncOpCreate (Array Int) Cid
-  | SyncOpUpdate (Array Int) Cid Cid
-  | SyncOpDelete (Array Int) Cid
+  | SyncOpCreate Bytes Cid
+  | SyncOpUpdate Bytes Cid Cid
+  | SyncOpDelete Bytes Cid
 
 {- | Everything one `#commit` body states.
 
@@ -74,19 +71,19 @@ public export data SyncCommitEvent = SyncCommitEvent {
   rev : Tid,
   since : Option Tid,
   prevData : Option Cid,
-  blocksCar : Array Int,
+  blocksCar : Bytes,
   ops : List SyncRepoOp,
 }
 
-seenCids : List (Cid, Array Int) -> Map String Bool -> Map String Bool
+seenCids : List (Cid, Bytes) -> Map String Bool -> Map String Bool
 seenCids [] index = index
 seenCids ((cid, _) :: rest) index =
   seenCids rest (set (cidToString cid) True index)
 
-missingFrom : List (Cid, Array Int) ->
+missingFrom : List (Cid, Bytes) ->
   Map String Bool ->
-  List (Cid, Array Int) ->
-  List (Cid, Array Int)
+  List (Cid, Bytes) ->
+  List (Cid, Bytes)
 missingFrom [] _ acc = reverse acc
 missingFrom ((cid, bytes) :: rest) index acc =
   if has (cidToString cid) index then
@@ -94,10 +91,10 @@ missingFrom ((cid, bytes) :: rest) index acc =
   else
     missingFrom rest index ((cid, bytes) :: acc)
 
-dedupe : List (Cid, Array Int) ->
+dedupe : List (Cid, Bytes) ->
   Map String Bool ->
-  List (Cid, Array Int) ->
-  List (Cid, Array Int)
+  List (Cid, Bytes) ->
+  List (Cid, Bytes)
 dedupe [] _ acc = reverse acc
 dedupe ((cid, bytes) :: rest) seen acc =
   let key = cidToString cid
@@ -114,7 +111,7 @@ dedupe ((cid, bytes) :: rest) seen acc =
    a map. So the order is ours to pick, and picking a total one keeps the
    emitted bytes a function of the block SET rather than of the order a
    traversal happened to visit them in. -}
-sortBlocks : List (Cid, Array Int) -> List (Cid, Array Int)
+sortBlocks : List (Cid, Bytes) -> List (Cid, Bytes)
 sortBlocks blocks =
   sortBy
     ((left, _) (right, _) => compare (cidToString left) (cidToString right))
@@ -148,11 +145,11 @@ sortBlocks blocks =
 export
 syncCommitBlocks : Option Mst ->
   Mst ->
-  List (Array Int) ->
-  List (Cid, Array Int) ->
+  List Bytes ->
+  List (Cid, Bytes) ->
   Cid ->
-  Array Int ->
-  Result String (List (Cid, Array Int))
+  Bytes ->
+  Result String (List (Cid, Bytes))
 syncCommitBlocks before after keys addedRecords commitCid commitBytes = do
   proof <- mstCoveringProofBlocks keys after
   let union =
@@ -169,7 +166,7 @@ syncCommitBlocks before after keys addedRecords commitCid commitBytes = do
    for — nothing existed to hold anything, so every post-write node is new.
    An empty tree that merely HAPPENS to equal the post-write one is still a
    prior tree and still subtracts. -}
-createdNodes : Option Mst -> Mst -> List (Cid, Array Int)
+createdNodes : Option Mst -> Mst -> List (Cid, Bytes)
 createdNodes None after = mstNodeBlocks after
 createdNodes (Some before) after =
   missingFrom (mstNodeBlocks after) (seenCids (mstNodeBlocks before) Tip) []
@@ -178,29 +175,44 @@ createdNodes (Some before) after =
    CID is the sole root, which is the one ordering constraint the lexicon
    states. -}
 export
-syncCommitCar : Cid -> List (Cid, Array Int) -> Result String (Array Int)
-syncCommitCar commitCid blocks = do
-  rows <- mapErr (message => "car: \{message}") (blockRowsChecked blocks)
-  map toArray (carEncode [commitCid] rows)
+syncCommitCar : Cid -> List (Cid, Bytes) -> Result String Bytes
+syncCommitCar commitCid blocks = carEncode [commitCid] blocks
 
-opValue : SyncRepoOp -> DagCbor
-opValue (SyncOpCreate path cid) = DcMap [
-  ("action", DcString "create"),
-  ("path", DcString (fromUtf8 path)),
-  ("cid", DcLink cid),
-]
-opValue (SyncOpUpdate path cid prev) = DcMap [
-  ("action", DcString "update"),
-  ("path", DcString (fromUtf8 path)),
-  ("cid", DcLink cid),
-  ("prev", DcLink prev),
-]
-opValue (SyncOpDelete path prev) = DcMap [
-  ("action", DcString "delete"),
-  ("path", DcString (fromUtf8 path)),
-  ("cid", DcNull),
-  ("prev", DcLink prev),
-]
+{- | An op's `path` as the DAG-CBOR text string the lexicon types it as.
+
+   A path that is not valid UTF-8 has no text-string encoding: emitting its
+   raw bytes would be an ill-formed CBOR text string, and decoding it lossily
+   would announce a path the repository does not hold. Every write path
+   rejects such a key, but an MST rebuilt from blocks is not re-validated, so
+   the refusal lives here where the text is made. -}
+opPathText : Bytes -> Result String DagCbor
+opPathText path = match decodeUtf8 path
+  Some text => Ok (DcString text)
+  None => Err "sync_event: op path \{encode path} (hex) is not valid UTF-8"
+
+opValue : SyncRepoOp -> Result String DagCbor
+opValue (SyncOpCreate path cid) = do
+  text <- opPathText path
+  Ok
+    (DcMap [("action", DcString "create"), ("path", text), ("cid", DcLink cid)])
+opValue (SyncOpUpdate path cid prev) = do
+  text <- opPathText path
+  Ok
+    (DcMap [
+      ("action", DcString "update"),
+      ("path", text),
+      ("cid", DcLink cid),
+      ("prev", DcLink prev),
+    ])
+opValue (SyncOpDelete path prev) = do
+  text <- opPathText path
+  Ok
+    (DcMap [
+      ("action", DcString "delete"),
+      ("path", text),
+      ("cid", DcNull),
+      ("prev", DcLink prev),
+    ])
 
 optionalLink : String -> Option Cid -> List (String, DagCbor)
 optionalLink _ None = []
@@ -227,32 +239,31 @@ syncCommitOpsMaxLength = 200
    can legally exceed that, so an over-long op list is reported rather than
    emitted: `tooBig` goes true and `ops` goes empty, which is exactly what
    that field means — the consumer re-fetches the missing data in a separate
-   request. `blocks` is unaffected; its own size limit is a separate bound. -}
-export
-syncCommitBody : SyncCommitEvent -> DagCbor
-syncCommitBody event =
-  -- Masked: this returns a bare value and never refused; the range check
-  -- happens where the body is encoded, in `syncCommitFrame`.
-  commitBodyWith event (fromArrayAssumeByteDomain event.blocksCar)
+   request. `blocks` is unaffected; its own size limit is a separate bound.
 
-commitBodyWith : SyncCommitEvent -> Bytes -> DagCbor
-commitBodyWith event blocksCar =
+   An emitted op whose path is not valid UTF-8 makes the body an `Err`
+   (`opPathText`). -}
+export
+syncCommitBody : SyncCommitEvent -> Result String DagCbor
+syncCommitBody event = do
   let tooBig = length event.ops > syncCommitOpsMaxLength
-  DcMap
-    ([
-        ("seq", DcInt event.seq),
-        ("rebase", DcBool False),
-        ("tooBig", DcBool tooBig),
-        ("repo", DcString event.repoDid),
-        ("commit", DcLink event.commitCid),
-        ("rev", DcString (tidToString event.rev)),
-        ("since", nullableRev event.since),
-        ("blocks", DcBytes blocksCar),
-        ("ops", DcArray (if tooBig then [] else map opValue event.ops)),
-        ("blobs", DcArray []),
-        ("time", DcString event.time),
-      ]
-      ++ optionalLink "prevData" event.prevData)
+  ops <- if tooBig then Ok [] else traverse opValue event.ops
+  Ok
+    (DcMap
+      ([
+          ("seq", DcInt event.seq),
+          ("rebase", DcBool False),
+          ("tooBig", DcBool tooBig),
+          ("repo", DcString event.repoDid),
+          ("commit", DcLink event.commitCid),
+          ("rev", DcString (tidToString event.rev)),
+          ("since", nullableRev event.since),
+          ("blocks", DcBytes event.blocksCar),
+          ("ops", DcArray ops),
+          ("blobs", DcArray []),
+          ("time", DcString event.time),
+        ]
+        ++ optionalLink "prevData" event.prevData))
 
 -- | The frame header an ordinary message carries: `op` of 1 and the message
 -- type. An error frame's header is a different shape and `syncErrorFrame`
@@ -263,17 +274,17 @@ messageHeader messageType = DcMap [("op", DcInt 1), ("t", DcString messageType)]
 {- | The complete frame: the header object followed by the body object, with
    no length prefix or separator between them — a reader decodes two CBOR
    items from the stream. -}
-frameBytes : String -> DagCbor -> Result String (Array Int)
+frameBytes : String -> DagCbor -> Result String Bytes
 frameBytes messageType bodyValue = do
   header <- dagCborEncode (messageHeader messageType)
   body <- dagCborEncode bodyValue
-  Ok (toArray header ++ toArray body)
+  Ok (header ++ body)
 
 export
-syncCommitFrame : SyncCommitEvent -> Result String (Array Int)
-syncCommitFrame event = match fromArray event.blocksCar
-  None => Err "dagcbor: byte string element outside byte range 0..255"
-  Some blocksCar => frameBytes "#commit" (commitBodyWith event blocksCar)
+syncCommitFrame : SyncCommitEvent -> Result String Bytes
+syncCommitFrame event = do
+  body <- syncCommitBody event
+  frameBytes "#commit" body
 
 {- | An event body plus its position in the stream.
 
@@ -309,11 +320,7 @@ syncIdentityBody did handle =
   DcMap [("did", DcString did), ("handle", DcString handle)]
 
 export
-syncIdentityFrame : Int ->
-  String ->
-  String ->
-  String ->
-  Result String (Array Int)
+syncIdentityFrame : Int -> String -> String -> String -> Result String Bytes
 syncIdentityFrame seq time did handle =
   frameBytes "#identity" (sequenced seq time (syncIdentityBody did handle))
 
@@ -332,7 +339,7 @@ syncAccountBody : String -> DagCbor
 syncAccountBody did = DcMap [("did", DcString did), ("active", DcBool True)]
 
 export
-syncAccountFrame : Int -> String -> String -> Result String (Array Int)
+syncAccountFrame : Int -> String -> String -> Result String Bytes
 syncAccountFrame seq time did =
   frameBytes "#account" (sequenced seq time (syncAccountBody did))
 
@@ -345,12 +352,9 @@ syncAccountFrame seq time did =
    the head to verify against and fetches the tree separately, so the frame's
    size is independent of how large the repository is. -}
 export
-syncSyncBody : String -> Tid -> Cid -> Array Int -> Result String DagCbor
+syncSyncBody : String -> Tid -> Cid -> Bytes -> Result String DagCbor
 syncSyncBody did rev commitCid commitBytes = do
-  commitBlock <- mapErr
-    (message => "car: \{message}")
-    (blockBytesChecked commitBytes)
-  car <- carEncode [commitCid] [(commitCid, commitBlock)]
+  car <- carEncode [commitCid] [(commitCid, commitBytes)]
   Ok
     (DcMap [
       ("did", DcString did),
@@ -364,8 +368,8 @@ syncSyncFrame : Int ->
   String ->
   Tid ->
   Cid ->
-  Array Int ->
-  Result String (Array Int)
+  Bytes ->
+  Result String Bytes
 syncSyncFrame seq time did rev commitCid commitBytes = do
   bodyValue <- syncSyncBody did rev commitCid commitBytes
   frameBytes "#sync" (sequenced seq time bodyValue)
@@ -380,7 +384,7 @@ syncSyncFrame seq time did rev commitCid commitBytes = do
    log still holds, so a relay learns it has a gap instead of silently
    believing it has none. -}
 export
-syncInfoFrame : String -> String -> Result String (Array Int)
+syncInfoFrame : String -> String -> Result String Bytes
 syncInfoFrame name message =
   frameBytes
     "#info"
@@ -390,51 +394,52 @@ syncInfoFrame name message =
    error. It is the last frame a stream sends — the connection closes behind
    it, so a subscriber never has to decide whether more is coming. -}
 export
-syncErrorFrame : String -> String -> Result String (Array Int)
+syncErrorFrame : String -> String -> Result String Bytes
 syncErrorFrame error message =
   let bodyValue =
     DcMap [("error", DcString error), ("message", DcString message)]
   do
     header <- dagCborEncode (DcMap [("op", DcInt (0 - 1))])
     body <- dagCborEncode bodyValue
-    Ok (toArray header ++ toArray body)
+    Ok (header ++ body)
 
-indexEntries : List (Array Int, Cid) -> Map String Cid -> Map String Cid
+-- Keyed on the path's bytes, not on any text decoding of them: two distinct
+-- keys must never share an entry, whether or not either is valid UTF-8.
+indexEntries : List (Bytes, Cid) -> Map Bytes Cid -> Map Bytes Cid
 indexEntries [] index = index
 indexEntries ((path, cid) :: rest) index =
-  indexEntries rest (set (fromUtf8 path) cid index)
+  indexEntries rest (set path cid index)
 
 -- A record present after the write is a create when the prior tree did not
 -- name its path, and an update when it did under a different CID. A path whose
 -- CID did not move is not an op at all: a batch may rewrite a record to the
 -- bytes it already held, and announcing that as an update would claim a
 -- mutation the MST cannot show.
-writesAgainst : List (Array Int, Cid) ->
-  Map String Cid ->
+writesAgainst : List (Bytes, Cid) ->
+  Map Bytes Cid ->
   List SyncRepoOp ->
   List SyncRepoOp
 writesAgainst [] _ acc = reverse acc
-writesAgainst ((path, cid) :: rest) priorIndex acc =
-  match get (fromUtf8 path) priorIndex
-    None => writesAgainst rest priorIndex (SyncOpCreate path cid :: acc)
-    Some prior =>
-      if cidEqual prior cid then
-        writesAgainst rest priorIndex acc
-      else
-        writesAgainst rest priorIndex (SyncOpUpdate path cid prior :: acc)
+writesAgainst ((path, cid) :: rest) priorIndex acc = match get path priorIndex
+  None => writesAgainst rest priorIndex (SyncOpCreate path cid :: acc)
+  Some prior =>
+    if cidEqual prior cid then
+      writesAgainst rest priorIndex acc
+    else
+      writesAgainst rest priorIndex (SyncOpUpdate path cid prior :: acc)
 
-deletesAgainst : List (Array Int, Cid) ->
-  Map String Cid ->
+deletesAgainst : List (Bytes, Cid) ->
+  Map Bytes Cid ->
   List SyncRepoOp ->
   List SyncRepoOp
 deletesAgainst [] _ acc = reverse acc
 deletesAgainst ((path, cid) :: rest) nextIndex acc =
-  if has (fromUtf8 path) nextIndex then
+  if has path nextIndex then
     deletesAgainst rest nextIndex acc
   else
     deletesAgainst rest nextIndex (SyncOpDelete path cid :: acc)
 
-opPath : SyncRepoOp -> Array Int
+opPath : SyncRepoOp -> Bytes
 opPath (SyncOpCreate path _) = path
 opPath (SyncOpUpdate path _ _) = path
 opPath (SyncOpDelete path _) = path
@@ -450,8 +455,8 @@ opRecordCid (SyncOpDelete _ _) = None
 -- it silently is worse than failing the write.
 addedRecordBlocks : List SyncRepoOp ->
   BlockStore ->
-  List (Cid, Array Int) ->
-  Result String (List (Cid, Array Int))
+  List (Cid, Bytes) ->
+  Result String (List (Cid, Bytes))
 addedRecordBlocks [] _ acc = Ok (reverse acc)
 addedRecordBlocks (op :: rest) store acc = match opRecordCid op
   None => addedRecordBlocks rest store acc
@@ -459,7 +464,7 @@ addedRecordBlocks (op :: rest) store acc = match opRecordCid op
     None =>
       Err
         "sync_event: record block \{cidToString cid} is absent from the post-write block store"
-    Some bytes => addedRecordBlocks rest store ((cid, toArray bytes) :: acc)
+    Some bytes => addedRecordBlocks rest store ((cid, bytes) :: acc)
 
 optionalCommit : Option Repo -> Option RepoCommit
 optionalCommit None = None
@@ -476,9 +481,9 @@ commitData (Some commit) = Some (repoCommitDataCid commit)
 commitBlocksFor : Option Mst ->
   Mst ->
   List SyncRepoOp ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   RepoCommit ->
-  Result String (List (Cid, Array Int))
+  Result String (List (Cid, Bytes))
 commitBlocksFor priorTree nextTree ops added commit =
   syncCommitBlocks
     priorTree

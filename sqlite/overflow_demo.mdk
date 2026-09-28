@@ -106,6 +106,7 @@ renderCell CNull = ""
 renderCell (CInt n) = intToString n
 renderCell (CInt64 x) = display x
 renderCell (CText s) = s
+renderCell (CTextRaw b) = fromUtf8 b
 renderCell (CBlob a) = encodeUpper (fromArrayAssumeByteDomain a)
 renderCell (CFloat f) = floatToString f
 

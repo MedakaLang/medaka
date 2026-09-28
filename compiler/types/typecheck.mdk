@@ -295,6 +295,7 @@ import types.effect_values.{
   ValueJoinOps(..), joinProduced, joinProducedEnvelope, producedInputTypes,
   resolveDeferredJoin
 }
+import types.effect_invocation.{InvocationOps(..), Variance(..)}
 import map as IdMap
 import map.{Map(..)}
 
@@ -465,6 +466,7 @@ import types.registry.{
 -- one function, so the caller side and the definition side of the dict-word seam
 -- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
 import types.route_key.{
+  typeTagOf,
   implRouteKeyWord,
   ifaceWordOf,
   funHeadTag,
@@ -494,17 +496,17 @@ import types.disposition.{
 -- layer answers from `tyOriginScope`, a LAST-WINS fold in which the builtin layer
 -- has the LOWEST precedence (`frontend/resolve.mdk`) — so membership alone would
 -- not stop an own/prelude/import layer from overriding a name this mint still
--- calls builtin.  What actually closes it is that `primitiveTypes` is ALSO the
--- duplicate-type seed: `duplicateErrors`'s `typeSeed = primitiveTypes ++ …`
--- (unconditionally, `programIsCore` gates only the prelude term), so NO module —
--- not even `stdlib/core.mdk` — can declare a TYPE of that name.  Measured:
--- `data List a = …`, `data Int = Foo`, `data Ref a = …` each give `Duplicate
--- type: <N>`.  The higher layers are therefore empty at these keys, which is
+-- calls builtin.  What actually closes it is that `primitiveTypes` is ALSO
+-- refused as a type name: `duplicateErrors`'
+-- `reservedClashes "built-in type" primitiveTypes` (unconditionally, whatever
+-- `programIsCore` says), so NO module — not even `stdlib/core.mdk` — can
+-- declare a TYPE of that name.  `data List a = …`, `data Int = Foo`,
+-- `data Ref a = …` each give "'<N>' is a built-in type".  The higher layers are therefore empty at these keys, which is
 -- exactly what resolve's own comment means by *"the prelude beats builtins only
 -- vacuously (they are disjoint today)"*.
 --
 -- ⚠️ "A TYPE of that name" is the load-bearing narrowing, and it needs a SECOND
--- leg.  `primitiveTypes` seeds only `typeSeed`, not `ifaceSeed` — so an
+-- leg.  `primitiveTypes` is refused only as a TYPE name, not as an interface's — so an
 -- `interface Int a where …` is ACCEPTED (measured: exit 0, no diagnostic).  It
 -- cannot reach this key anyway, because interfaces are keyed `iface:<Name>`
 -- (`ifaceKey`/`ownIfaceOrigin`) while the builtin layer holds the BARE name, and
@@ -3307,7 +3309,10 @@ data Kind = KType | KRow | KAuth EffLabel
 -- general subtyping engine: Medaka has no variance annotations
 -- (`decided_medaka_does_not_need_variance_annotations`), so this table
 -- exists to CLOSE a laundering hole, not to open a subtyping one.
-data Polarity = PCo | PContra | PInv
+-- `PPhantom` is "no occurrence yet", the bottom the variance fixpoint starts
+-- from (`declEnvPolarityEntriesFix`); it never leaves the fixpoint, which
+-- publishes a parameter with no occurrence as `PCo`.
+data Polarity = PCo | PContra | PInv | PPhantom
 
 -- Transparent type aliases (`type Foo = Int`, `type Pair a = (a, a)`).  Keyed by
 -- alias name → (params, RHS surface type).  Populated in a pre-pass by
@@ -3343,13 +3348,19 @@ collectAbstractRecordTypes ((DData { dataVis = VisAbstract, dataName = n }) :: r
 collectAbstractRecordTypes (_ :: rest) = collectAbstractRecordTypes rest
 
 -- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
--- the prelude/core decls), once, before checking begins.
+-- the prelude/core decls), once, before checking begins.  Keyed by the type
+-- word (`typeTagOf`), so a program's own type that shares an abstract export's
+-- name is not mistaken for it.
 seedAbstractRecordTypes : List Decl -> List (String, List Decl) -> Unit
 seedAbstractRecordTypes coreDecls modules =
   let abstracts =
     collectAbstractRecordTypes coreDecls
-      ++ flatMap (m => collectAbstractRecordTypes (snd m)) modules
+      ++ flatMap (m => abstractTypeWords (fst m) (snd m)) modules
   driverState.value.abstractRecordTypesRef := namesToSet abstracts omEmpty
+
+abstractTypeWords : String -> List Decl -> List String
+abstractTypeWords mid decls =
+  map (n => typeTagOf (OriginModule mid) n) (collectAbstractRecordTypes decls)
 
 -- #156 S3a: ONE record for every pending dispatch-site shape.  The four historical
 -- tuple/record shapes (return-position sites, arg-position stamps, operator sites,
@@ -4839,30 +4850,36 @@ tabKeyElem (k :: rest) key = tabKeyEq k key || tabKeyElem rest key
 -- (#1119) exists to close, reachable by reordering two declarations.  Both the
 -- write-channel (`Ref`) and the contravariant-domain shapes reproduced it.
 --
--- The fix: re-run the pass over its OWN previous output until nothing moves.
--- Each round starts from `prev ++ base`, so every decl in [ds] reads the
--- previous round's verdict for every OTHER decl in the same scope regardless of
--- declaration order, while the in-pass prepend still lets the fresher in-round
--- value win.  The motivating shapes settle on round two; the loop exits on the
--- first stable round.
+-- The fix: re-run the pass over its OWN previous output until nothing moves,
+-- starting every declaration in [ds] at "no occurrence yet" (`PPhantom`), the
+-- bottom of the order `PPhantom` < {`PCo`, `PContra`} < `PInv`.  Each round
+-- starts from `prev ++ base`, so every decl in [ds] reads the previous round's
+-- verdict for every OTHER decl in the same scope regardless of declaration
+-- order, while the in-pass prepend still lets the fresher in-round value win.
 --
--- ⚠️ THE CAP IS A DEFENSIVE FALLBACK, NOT THE EXPECTED EXIT, AND THIS MUST NOT
--- BE "SIMPLIFIED" INTO A JOIN.  `polMul` is a SIGN multiplication, not a
--- monotone lattice map (`polMul PContra PContra = PCo`), so an entry may
--- legitimately move DOWN between rounds — `data A x = MkA (B x -> Int)` over
--- `data B y = MkB (y -> Int)` reads `x` as `PContra` on round one and `PCo` on
--- round two, and `PCo` is the CORRECT answer (two flips: `x` really does occur
--- covariantly in `(x -> Int) -> Int`).  Joining successive rounds would be
--- trivially terminating and would call that `PInv` — a FALSE REJECT of an
--- ordinary program.  A mutually-recursive flip-cycle can therefore in principle
--- alternate instead of settling, so the iteration is capped at `listLen ds + 1`
--- rounds; on the cap the last round's verdict stands, which is no worse than
--- the single pass this replaces.
+-- Sign composition (`polMul`) and the join (`polJoin`) are monotone in that
+-- order, and `PPhantom` absorbs under composition, so from the bottom every
+-- round can only move an entry UP a lattice of height three: the iteration
+-- converges, and to the least fixpoint.  `data A x = MkA (B x -> Int)` over
+-- `data B y = MkB (y -> Int)` reads `x` as `PPhantom` on round one (B's slot
+-- has no occurrence yet) and `PCo` on round two: two flips, the correct
+-- answer, with no round in between that said otherwise.  Starting a
+-- not-yet-computed type at the lenient `PCo` instead is what made the old
+-- iteration non-monotone, and its cap at `listLen ds + 1` rounds left a flip
+-- cycle through several types (`T4 y = TA (y -> Unit) | TB (T1 (y -> Unit))`
+-- under T1..T3) reading an invariant slot as covariant (#3512).  The cap
+-- below is a bound the monotone iteration cannot reach; were it reached, every
+-- entry is published invariant rather than guessed.
 declEnvPolarityEntriesFix : List (TabKey, List Polarity) ->
   List Decl ->
   List (TabKey, List Polarity)
 declEnvPolarityEntriesFix base ds =
-  declEnvPolarityFixGo base ds (listLen ds + 1) (declEnvPolarityEntries base ds)
+  let first = declEnvPolarityEntries base ds
+  let bottom = map (e => (fst e, map (_ => PPhantom) (snd e))) first
+  let height = 3 * fold (n e => n + listLen (snd e)) 0 first + 3
+  map
+    (e => (fst e, map publishedPolarity (snd e)))
+    (declEnvPolarityFixGo base ds height bottom)
 
 declEnvPolarityFixGo : List (TabKey, List Polarity) ->
   List Decl ->
@@ -4871,13 +4888,19 @@ declEnvPolarityFixGo : List (TabKey, List Polarity) ->
   List (TabKey, List Polarity)
 declEnvPolarityFixGo base ds fuel prev =
   if fuel <= 0 then
-    prev
+    map (e => (fst e, map (_ => PInv) (snd e))) prev
   else
     let next = declEnvPolarityEntries (prev ++ base) ds
     if polarityEntriesEq prev next then
       prev
     else
       declEnvPolarityFixGo base ds (fuel - 1) next
+
+-- A parameter with no occurrence is phantom: nothing about it can be
+-- laundered, so the published verdict is the lenient one.
+publishedPolarity : Polarity -> Polarity
+publishedPolarity PPhantom = PCo
+publishedPolarity q = q
 
 -- POSITIONAL, not keyed: the two lists are two rounds over the SAME [ds], so
 -- `declEnvPolarityEntries`' decl-order output puts the same declaration at the
@@ -4900,6 +4923,7 @@ polarityEq : Polarity -> Polarity -> Bool
 polarityEq PCo PCo = True
 polarityEq PContra PContra = True
 polarityEq PInv PInv = True
+polarityEq PPhantom PPhantom = True
 polarityEq _ _ = False
 
 -- The population half, mirroring `declEnvKindEntries` arm for arm — including
@@ -5218,6 +5242,7 @@ deKindAbstractFixture = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deKindPrivateFixture : Decl
@@ -5231,6 +5256,7 @@ deKindPrivateFixture = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deKindNewtypeFixture : Decl
@@ -5244,6 +5270,7 @@ deKindNewtypeFixture = DNewtype {
   newtypeCtorBinders = [],
   newtypeDerives = [],
   newtypeOrigin = OriginModule "m",
+  newtypeNameLoc = None,
 }
 
 deKindFixtureDecls : List Decl
@@ -5400,6 +5427,7 @@ deNameIdxAlpha = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modA",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxSharedA : Decl
@@ -5413,6 +5441,7 @@ deNameIdxSharedA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modA",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxBeta : Decl
@@ -5426,6 +5455,7 @@ deNameIdxBeta = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modB",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxSharedB : Decl
@@ -5439,6 +5469,7 @@ deNameIdxSharedB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modB",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxModA : DeclEnvModule
@@ -5910,6 +5941,7 @@ aliasFixturePubCore = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "core",
+  tyAliasNameLoc = None,
 }
 
 aliasFixturePrivCore : Decl
@@ -5920,6 +5952,7 @@ aliasFixturePrivCore = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "core",
+  tyAliasNameLoc = None,
 }
 
 aliasFixturePubM : Decl
@@ -5930,6 +5963,7 @@ aliasFixturePubM = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "m",
+  tyAliasNameLoc = None,
 }
 
 -- PUBLIC, but wrapped in an attribute.  ⚠️ SINCE #1228/#1586 THIS ROW IS VISIBLE:
@@ -5947,6 +5981,7 @@ aliasFixtureAttribCore =
       tyAliasParamKinds = [],
       tyAliasRhs = tyConBuiltin "Int" None,
       tyAliasOrigin = OriginModule "core",
+      tyAliasNameLoc = None,
     }
 
 aliasFixtureEnv : DataEnv
@@ -6005,6 +6040,7 @@ deFieldOwnerFixtureA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deFieldOwnerFixtureB : Decl
@@ -6019,6 +6055,7 @@ deFieldOwnerFixtureB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 -- Same DECLARED NAME as fixture A ("Pt"), different module.  This is the case
@@ -6042,6 +6079,7 @@ deFieldOwnerFixtureC = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deFieldOwnerCollisionEnv : DataEnv
@@ -6090,6 +6128,7 @@ deRecordOrderFixtureA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deRecordOrderFixtureB : Decl
@@ -6104,6 +6143,7 @@ deRecordOrderFixtureB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 -- Two modules in ORDINAL order, so "P1" is declared strictly before "P2".
@@ -7528,6 +7568,7 @@ ceSameDeclIn m methods = DInterface {
   supers = [ceSuperEq],
   methods = methods,
   ifaceOrigin = OriginModule m,
+  ifaceNameLoc = None,
 }
 
 -- ordinal 0 = amod, ordinal 1 = zmod; no import edge between them, exactly as
@@ -7742,6 +7783,7 @@ ceGradedIface = DInterface {
   supers = [],
   methods = [ceGradedMethod],
   ifaceOrigin = OriginModule "gmod",
+  ifaceNameLoc = None,
 }
 
 ceGradedEnv : ClassEnv
@@ -7784,6 +7826,7 @@ ceFunctorIface = DInterface {
   supers = [],
   methods = [ceFunctorMethod],
   ifaceOrigin = OriginModule "fmod",
+  ifaceNameLoc = None,
 }
 
 ceFunctorEnv : ClassEnv
@@ -7860,6 +7903,9 @@ data DriverState = DriverState {
   -- schedule.  `None` until a preamble has run; a Module arm reading `None` is a
   -- driver that skipped its preamble, and fails loud.
   markSetsRef : Ref (Option MarkSets),
+  -- The last checked module's constructors and variance table, read by
+  -- `lastInvocationOps` — see `InvocationView`.
+  invocationViewRef : Ref InvocationView,
 }
 
 -- INITIAL construction only (NOT a per-module reset): each field reproduces its former
@@ -7894,6 +7940,7 @@ freshDriverState _ = DriverState {
   sigTyMapRef = Ref omEmpty,
   currentModuleRef = Ref "",
   markSetsRef = Ref None,
+  invocationViewRef = Ref (InvocationView [] [] []),
 }
 
 -- The single module-level cell holding the residual driver/module/group survivors.
@@ -10701,6 +10748,9 @@ resetGraphState _ =
   graphRun := freshGraphRun ()
   graphRun.value.evCounter := n
   graphRun.value.evCells := cells
+  -- The binder names survive; the quantified ids do not: they are type-variable
+  -- ids, and the fresh run restarts the counter that minted them.
+  localAbs.lasQuantified := omEmpty
   graphRun := GraphRun { graphRun.value | localAbs = localAbs }
 
 -- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
@@ -11691,6 +11741,125 @@ paramPolaritiesIn tab key
   | tabKeyEq key (tyTabKey OriginBuiltin "Array") = Some [PInv]
   | otherwise = lookupTab key tab
 
+-- ── the invocation summary's view (#3463) ─────────────────────────────────
+-- What `types/effect_invocation.mdk` reads of a checked program, as the last
+-- module `checkBodyImpl` checked saw it (the entry of a single drive):
+-- every constructor it can name, from its own environment and from the
+-- identity-keyed universe (so two same-spelled constructors both count), and
+-- its variance and kind tables, its own declarations over everything it
+-- imports.  Written once per module, right after its data environment is
+-- built; a drive's caller reads it through `lastInvocationOps`.
+data InvocationView =
+  | InvocationView (List Scheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
+
+recordInvocationView : TcEnv -> Unit
+recordInvocationView (TcEnv _ ctors _ _) =
+  let universe =
+    flatMap
+      (cands =>
+        map
+          (c => match c
+            (_, _, sch) => sch)
+          cands)
+      (IdMap.values crossRun.value.universeCtorIdentsRef.value)
+  driverState.value.invocationViewRef :=
+    InvocationView
+      (IdMap.values ctors ++ universe)
+      perRun.value.dataParamPolarityRef.value
+      perRun.value.dataParamKindsRef.value
+
+-- The summary's operations over the view of the entry the last drive checked.
+export
+lastInvocationOps : Unit -> InvocationOps
+lastInvocationOps _ = match driverState.value.invocationViewRef.value
+  InvocationView ctors pols kinds =>
+    let byHead = ctorsByHead ctors
+    InvocationOps {
+      headVariances =
+        h => match headTyconMono h
+          Some (HkDecl key) =>
+            slotVariances (paramPolaritiesIn pols key) (lookupTab key kinds)
+          _ => None,
+      appliedFields =
+        applied =>
+          let (h, args) = spineParts applied
+          flatMap
+            (c => instantiateFields args c)
+            (optionOr [] (omLookup (invocationHeadKey h) byHead)),
+      headKey = invocationHeadKey,
+    }
+
+invocationHeadKey : Mono -> String
+invocationHeadKey h = match headTyconMono h
+  Some hk => headKeyTag hk
+  None => "?"
+
+-- A slot's variance, read as invariant where its parameter is an effect row
+-- or an authority: an index is invariant (EFFECTS-SEMANTICS §6.4), whatever
+-- the variance table computed for it.
+slotVariances : Option (List Polarity) ->
+  Option (List Kind) ->
+  Option (List Variance)
+slotVariances None None = None
+slotVariances pols kinds =
+  let ps = optionOr [] pols
+  let ks = optionOr [] kinds
+  Some
+    (map
+      (i => slotVariance (nthOpt i ps) (nthOpt i ks))
+      (rangeFromCount 0 (maxI (listLen ps) (listLen ks))))
+
+slotVariance : Option Polarity -> Option Kind -> Variance
+slotVariance _ (Some KRow) = VInv
+slotVariance _ (Some (KAuth _)) = VInv
+slotVariance (Some p) _ = varianceOf p
+slotVariance None _ = VInv
+
+varianceOf : Polarity -> Variance
+varianceOf PCo = VCo
+varianceOf PContra = VContra
+varianceOf PInv = VInv
+-- never published (`publishedPolarity`); read as the phantom it means
+varianceOf PPhantom = VCo
+
+-- Every constructor under its result head: the head's arguments as the
+-- constructor declares them, and its field types.
+ctorsByHead : List Scheme -> OrdMap (List (List Mono, List Mono))
+ctorsByHead schemes =
+  fold
+    (acc sch => match sch
+      Forall _ _ _ _ _ mono =>
+        let (fieldTys, result) = arrowParts mono
+        let (h, params) = spineParts result
+        let key = invocationHeadKey h
+        omInsert key ((params, fieldTys) :: optionOr [] (omLookup key acc)) acc)
+    omEmpty
+    schemes
+
+-- A constructor's fields at an application's authority arguments: each
+-- declared authority parameter is replaced by the argument in its slot.  A
+-- type or row argument is left as the declaration's variable; the summary
+-- charges it where it lands, by the slot's variance.
+instantiateFields : List Mono -> (List Mono, List Mono) -> List Mono
+instantiateFields args (params, fieldTys) =
+  let asub = authorityParamSubst params args
+  map (substMono [] [] asub) fieldTys
+
+authorityParamSubst : List Mono -> List Mono -> List (Int, Authority)
+authorityParamSubst (p :: ps) (a :: rest) = match (normalize p, normalize a)
+  (TAuth q, TAuth actual) => match authNorm q
+    AVar cell => (authvarId cell, actual) :: authorityParamSubst ps rest
+    _ => authorityParamSubst ps rest
+  _ => authorityParamSubst ps rest
+authorityParamSubst _ _ = []
+
+arrowParts : Mono -> (List Mono, Mono)
+arrowParts m = match normalize m
+  TFun dom _ res =>
+    let (rest, result) = arrowParts res
+    (dom :: rest, result)
+  other => ([], other)
+
 -- #2110: the ATOM-GUARANTEE read, sibling of `paramPolaritiesOf`.  No builtin
 -- rows: `Ref`/`Array` have no KRow parameter, so they guarantee no atoms and a
 -- miss (`None`) already says exactly that.
@@ -11871,22 +12040,46 @@ typeMismatchReportRest a b = match !currentDoOrigin
 -- identically-rendering sides, the `__tupleN__` rigid-vs-builtin forgery at
 -- `unifyN`'s cross-population arms, is a `TRigid`: it carries no origin, so it
 -- yields `None` here and its message is untouched.  That residual is #1243.)
+-- A program's own type may shadow a prelude type (#3465), so two sides whose
+-- heads share a spelling but not an identity can also differ in shape
+-- (`Result vs Result a b`): their heads are compared as well.
 sameSpellingHint : Mono -> Mono -> Option String
 sameSpellingHint a b
-  | ppMono a /= ppMono b = None
+  | ppMono a /= ppMono b = map idConflictHelp (headIdConflict a b)
   | otherwise = map idConflictHelp (firstIdConflict a b)
 
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idConflictHelp (name, o1, o2) =
-  "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — import the one you mean rather than declaring a second type of the same name"
+  let remedy =
+    if isPreludeOrigin o1 || isPreludeOrigin o2 then
+      "a program's own type shadows the prelude's where it is declared or imported, and the prelude's constructors still build the prelude's type: build this value with the constructors of the type the position expects"
+    else
+      "import the one you mean rather than declaring a second type of the same name"
+  "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — \{remedy}"
+
+isPreludeOrigin : TyConOrigin -> Bool
+isPreludeOrigin (OriginModule m) = m == "core"
+isPreludeOrigin _ = False
 
 -- User vocabulary, never a constructor spelling (ERROR-QUALITY.md §1).  The
 -- unresolved case is unreachable from `firstIdConflict` (a conflict needs two
 -- present identities) and is answered rather than omitted so this stays total.
 originPhrase : TyConOrigin -> String
+originPhrase (OriginModule "core") = "the prelude"
+originPhrase (OriginModule "__user__") = "this program"
 originPhrase (OriginModule m) = "module '\{m}'"
 originPhrase OriginBuiltin = "the language itself"
 originPhrase OriginUnresolved = "an unknown module"
+
+-- The two sides' application heads, when they are same-spelled type
+-- constructors of different declarations.
+headIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
+headIdConflict a b = tconIdConflict (spineHead a) (spineHead b)
+
+spineHead : Mono -> Mono
+spineHead t = match normalize t
+  TApp f _ => spineHead f
+  other => other
 
 -- The FIRST head, in a parallel structural walk of the two monos, whose name
 -- agrees while its identity does not.  Parallel and shape-guarded on purpose:
@@ -11895,15 +12088,21 @@ originPhrase OriginUnresolved = "an unknown module"
 -- with its counterpart rather than reporting some unrelated head.
 firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 firstIdConflict a b = match (normalize a, normalize b)
+  (TApp f1 x1, TApp f2 x2) =>
+    orElseOpt (firstIdConflict f1 f2) (firstIdConflict x1 x2)
+  (TFun d1 _ r1, TFun d2 _ r2) =>
+    orElseOpt (firstIdConflict d1 d2) (firstIdConflict r1 r2)
+  (x, y) => tconIdConflict x y
+
+-- Two same-spelled type constructors of different declarations: the one
+-- place a conflict of identities is read off a pair of heads.
+tconIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
+tconIdConflict a b = match (normalize a, normalize b)
   (TCon n1 o1, TCon n2 o2) =>
     if n1 == n2 && not (sameTyConHead n1 o1 n2 o2) then
       Some (n1, o1, o2)
     else
       None
-  (TApp f1 x1, TApp f2 x2) =>
-    orElseOpt (firstIdConflict f1 f2) (firstIdConflict x1 x2)
-  (TFun d1 _ r1, TFun d2 _ r2) =>
-    orElseOpt (firstIdConflict d1 d2) (firstIdConflict r1 r2)
   _ => None
 
 -- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
@@ -14951,6 +15150,9 @@ data LocalAbsState = LocalAbsState {
   lasRecOccs : Ref (OrdMap (List (EvId, ScopeId))),
   -- monotone for the whole graph, so a binder name is never minted twice
   lasCounter : Ref Int,
+  -- every type variable a generalized local's scheme quantifies: no longer a
+  -- monomorphic variable, so no later numeric boundary may ground it (#3516)
+  lasQuantified : Ref (OrdMap Unit),
 }
 
 freshLocalAbsState : Unit -> LocalAbsState
@@ -14958,6 +15160,7 @@ freshLocalAbsState _ = LocalAbsState {
   lasBinders = Ref omEmpty,
   lasRecOccs = Ref omEmpty,
   lasCounter = Ref 0,
+  lasQuantified = Ref omEmpty,
 }
 
 copyLocalAbsState : LocalAbsState -> LocalAbsState
@@ -14965,6 +15168,7 @@ copyLocalAbsState st = LocalAbsState {
   lasBinders = Ref st.lasBinders.value,
   lasRecOccs = Ref st.lasRecOccs.value,
   lasCounter = Ref st.lasCounter.value,
+  lasQuantified = Ref st.lasQuantified.value,
 }
 
 freshLocalAbsName : String -> String
@@ -15056,9 +15260,23 @@ closeLocalScope (Some _) = closeScope ()
 closeLocalScope None = ()
 
 registerLocalAbsIf : String -> Option ScopeId -> Scheme -> Int -> Int -> Unit
-registerLocalAbsIf name (Some lscope) sch oblN0 callN0 =
-  registerLocalAbs name lscope sch oblN0 callN0
-registerLocalAbsIf _ None _ _ _ = ()
+registerLocalAbsIf name lscope sch oblN0 callN0 =
+  let _ = recordLocalQuantified sch
+  match lscope
+    Some scope => registerLocalAbs name scope sch oblN0 callN0
+    None => ()
+
+-- A generalized local's quantified variables stay in the enclosing binding's
+-- obligation window, but they are the scheme's now: each use instantiates them
+-- afresh, and the enclosing boundary's defaulting must reach those instances,
+-- never the scheme's own variables.  Grounding one would fix the local at one
+-- type behind every use and select one dictionary for two predicates (#3516).
+recordLocalQuantified : Scheme -> Unit
+recordLocalQuantified sch = match schemeIds sch
+  [] => ()
+  ids =>
+    let st = graphRun.value.localAbs
+    st.lasQuantified := omFromNames (map intToString ids) st.lasQuantified.value
 
 -- After a candidate local generalized: the predicates its scheme quantifies become
 -- its dictionary parameters, registered as givens of its own scope so the sites in
@@ -16302,7 +16520,9 @@ resolveFieldRecord te fname = match headTyconNameMono te
     None => match lookupRecordByMangledHead te r fname
       Some pair => Some pair
       None =>
-        if omHasKey r driverState.value.abstractRecordTypesRef.value then
+        if omHasKey
+          (receiverTypeWord te r)
+          driverState.value.abstractRecordTypesRef.value then
           let _ = pushTypeError "T-ABSTRACT-FIELD" (abstractFieldMsg r fname)
           None
         else
@@ -16376,7 +16596,22 @@ resolveFieldRecord te fname = match headTyconNameMono te
 lookupRecordForReceiver : Mono -> String -> Option RecordInfo
 lookupRecordForReceiver te r = match recordForReceiverIdent te r
   Some ri => Some ri
-  None => lookupRecordByName r
+  None => match lookupRecordByName r
+    Some ri => if recordOfOtherType te ri then None else Some ri
+    None => None
+
+-- The floor answers by the record's NAME, and a program's own type may share a
+-- prelude record's name (#3465: a program's `RField` beside the prelude's).  A
+-- receiver whose type carries an identity is never given a record of a
+-- different type; it falls to the field-owner path, which finds its own.  With
+-- no identity on either side (the flat path) the floor stands.
+recordOfOtherType : Mono -> RecordInfo -> Bool
+recordOfOtherType te (RecordInfo _ _ res _ _) = match (
+  receiverTypeIdent te,
+  receiverTypeIdent res,
+)
+  (Some (Ident _ wo wn), Some (Ident _ ro rn)) => not (wn == rn && wo == ro)
+  _ => False
 
 -- The identity half.  `universeRecordIdentsRef`'s outer key is the bare registry
 -- key — an INDEX into a candidate list, not the selector; the selector is the
@@ -16404,6 +16639,12 @@ recordForReceiverIdent te r =
 -- `headKeyIdent` (`types/registry.mdk`) is the accessor; its `None` collapses
 -- "rigid" and "no module id yet" because at a ROW lookup both mean the same
 -- thing — the derivation is written at that function.
+-- The receiver's type word (`headKeyTag`), else its bare head name.
+receiverTypeWord : Mono -> String -> String
+receiverTypeWord te r = match headTyconMono te
+  Some hk => headKeyTag hk
+  None => r
+
 receiverTypeIdent : Mono -> Option Ident
 receiverTypeIdent te = match headTyconMono te
   Some hk => headKeyIdent hk
@@ -21679,7 +21920,7 @@ checkMatchRedundant scrutTy arms =
 -- Reversing the rows is sound because `useful` is a PREDICATE OVER THE SET of
 -- matrix rows ("does some value match the query and no row?"): `specializeCon` /
 -- `specializeLit` / `defaultMatrix` are row-wise filters, and the only decision
--- that reads rows in order is `inferCol0Type`, which just needs SOME column-0
+-- that reads rows in order is `columnCtors`, which just needs SOME column-0
 -- constructor to name the column's type — and it is consulted only when `col0`
 -- is `None`, i.e. when the scrutinee type has no concrete head, in which case no
 -- arm carries a constructor pattern and there is no head constructor to find in
@@ -21807,7 +22048,7 @@ nonGuardedRows ((Arm _ _ _) :: rest) = nonGuardedRows rest
 -- ⚠️ ANSWER-PRESERVING CLASSIFICATION, and it is a REQUIRED property rather
 -- than a style choice.  `headTyconNameMono` is the gate — it decides `Some` vs
 -- `None` on exactly the `Mono` head nodes it decided them on before, so `TFun`
--- stays `None` (#1617, deliberate) and falls through to `inferCol0Type`, and a
+-- stays `None` (#1617, deliberate) and falls through to `columnCtors`, and a
 -- rigid head still produces a key that MISSES the table exactly as today's
 -- bare `Some n` missed it.  `headTyconMono` is consulted only to UPGRADE a key
 -- that is already going to be `Some`, never to change whether it is `Some`.
@@ -21964,8 +22205,33 @@ inferArmGuards env ((GBind p e) :: rest) =
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
 inferLetGroup env binds body =
   let _ = checkLetGroupBindsLocated binds  -- #799
-  let env2 = processLetGroup env binds
+  let env2 = fold processLetGroup env (letGroupComponents binds)
   infer env2 body
+
+-- A `where` block is checked one dependency component at a time, a
+-- component's dependencies first, as a module's top level is: a binding that
+-- only USES a sibling sees it generalized, rather than sharing its type
+-- variables as a member of one recursive group would, so a helper may be used
+-- at two types and keeps its own authority residual (#3487).  Members keep
+-- their source order inside a component.  A block that repeats a name stays
+-- one group: its components are not well defined.
+letGroupComponents : List LetBind -> List (List LetBind)
+letGroupComponents binds =
+  let names = map letBindNameTc binds
+  let nameSet = namesToSet names omEmpty
+  if omSize nameSet < listLen names then
+    [binds]
+  else
+    let grouped =
+      fold
+        (m (LetBind n clauses) => omInsert n (map funClausePair clauses) m)
+        omEmpty
+        binds
+    map
+      (component =>
+        let members = namesToSet component omEmpty
+        filterList (b => omHasKey (letBindNameTc b) members) binds)
+      (tarjanSCCs names (depGraphMap names grouped))
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
@@ -22358,7 +22624,7 @@ renderKindAnnAtomic k = renderKindAnn k
 -- callers for no gain.
 recordParamPolarities : TyConOrigin -> String -> List Polarity -> Unit
 recordParamPolarities o name pols =
-  let entry = (tyTabKey o name, pols)
+  let entry = (tyTabKey o name, map publishedPolarity pols)
   perRun.value.dataParamPolarityRef :=
     entry :: perRun.value.dataParamPolarityRef.value
 
@@ -22453,9 +22719,11 @@ intersectDeclAtoms (first :: rest) =
 -- registered — a forward reference, or the type itself, as in `data List a =
 -- Nil | Cons a (List a)` — reads `PCo` (`polarityAtOr None`), which is exactly
 -- today's (fully lenient) behaviour: it can only fail to tighten, never reject
--- something that used to be accepted.  That default is what makes the
--- self-recursive `List` come out `PCo`, and `declEnvPolarityEntriesFix`
--- iterates it away for everything but genuine self-recursion.
+-- something that used to be accepted.  Inside `declEnvPolarityEntriesFix`
+-- no own head misses: every declaration is seeded at `PPhantom`, so a self or
+-- forward reference reads "no occurrence yet", the join's unit, and the
+-- self-recursive `List` comes out `PCo` by convergence.  The `None` default
+-- is left to the single-pass `registerVariants` path.
 -- 🚨 THAT PARAGRAPH SCOPES TO THE UNREGISTERED-*TyCon*-HEAD MISS ONLY, AND IS
 -- NOT THE ABSTRACT-HEAD ARM (#2107).  The two were one sentence until #2107
 -- separated them: a head that is a type *parameter* (`data W f a = MkW (f a)`)
@@ -22571,18 +22839,22 @@ paramOccPolaritiesArgs tab p pol headPols i (t :: rest) =
     ++ paramOccPolaritiesArgs tab p pol headPols (i + 1) rest
 
 -- Sign composition over {+1, -1, 0} ≅ {PCo, PContra, PInv}: commutative, `PCo`
--- is the unit and `PInv` absorbs.
+-- is the unit and `PInv` absorbs; `PPhantom`, no occurrence at all, absorbs
+-- even `PInv` (an occurrence through a slot nothing fills is no occurrence).
 polMul : Polarity -> Polarity -> Polarity
+polMul PPhantom _ = PPhantom
+polMul _ PPhantom = PPhantom
 polMul PInv _ = PInv
 polMul _ PInv = PInv
 polMul PCo q = q
 polMul PContra PCo = PContra
 polMul PContra PContra = PCo
 
--- No occurrence at all (a PHANTOM parameter) is `PCo` — nothing about it can be
--- laundered, so the lenient verdict is the correct one, not a default.
+-- No occurrence at all is `PPhantom`, the join's unit; a published entry
+-- reads it as `PCo` (`publishedPolarity`) — nothing about a phantom parameter
+-- can be laundered, so the lenient verdict is the correct one, not a default.
 joinPolarities : List Polarity -> Polarity
-joinPolarities [] = PCo
+joinPolarities [] = PPhantom
 joinPolarities (q :: rest) = joinPolaritiesGo q rest
 
 joinPolaritiesGo : Polarity -> List Polarity -> Polarity
@@ -22591,6 +22863,8 @@ joinPolaritiesGo PInv _ = PInv
 joinPolaritiesGo acc (q :: rest) = joinPolaritiesGo (polJoin acc q) rest
 
 polJoin : Polarity -> Polarity -> Polarity
+polJoin PPhantom q = q
+polJoin q PPhantom = q
 polJoin PCo PCo = PCo
 polJoin PContra PContra = PContra
 polJoin _ _ = PInv
@@ -23217,7 +23491,8 @@ groupNames ((n, _) :: rest) seen = match omLookup n seen
   Some _ => groupNames rest seen
   None => n :: groupNames rest (omInsert n () seen)
 
--- process a let-group (where clauses): bind names, infer, generalize
+-- process one dependency component of a where block: bind names, infer,
+-- generalize
 processLetGroup : TcEnv -> List LetBind -> TcEnv
 processLetGroup env binds =
   let _ = enterLevel ()
@@ -23238,9 +23513,13 @@ processLetGroup env binds =
       (map (letBindGeneralizes env) (zipL binds summaries))
   let _ = flushPendingEscapes ()
   let _ = exitLevel ()
-  -- PLAN.md #11 / D4: ground ambiguous Num-only vars owned by this just-exited
-  -- where-group boundary (and not arg-reachable from any member type) before the
-  -- group generalizes.  Scoped to this group's newly added obligations.
+  -- PLAN.md #11 / D4, as a where block narrows it (#3487): ground the Num-only
+  -- vars owned by this just-exited component that no member's type mentions
+  -- (nothing can generalize them).  One a member's type does mention, even in
+  -- return position, generalizes with its constraint, so a sibling or the
+  -- enclosing body instantiates it (`two _ = 2` beside `go y = y / two ()`);
+  -- the enclosing binding's boundary decides what its uses leave ambiguous.
+  -- Scoped to this group's newly added obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
   let memberMonos = map (p => schemeMono (snd p)) placeholders
   let _ = finalizeNumBoundary NumBoundary {
@@ -23404,7 +23683,7 @@ numObligIds o = match o.oblProj
 -- These four policies preserve the existing candidate sets while making the
 -- outliving channels named data instead of positional arguments:
 --   * member: roots in one member, excluding its arguments;
---   * group: all roots, excluding arguments of any member;
+--   * group (a where component): roots no member's type mentions;
 --   * SCC: the group rule plus the existing per-member fallback;
 --   * body-local: roots absent from the boundary's explicit surviving-channel set.
 data NumBoundaryDisposition =
@@ -23444,7 +23723,7 @@ finalizeNumBoundary boundary =
           member
       _ => panic "NumBoundaryOwnedMember must carry exactly one member"
     NumBoundaryOwnedGroup _ =>
-      defaultGroupNumWith
+      defaultAbsentNumWith
         defaultOwnerPolicy
         boundary.nbSurvivingIds
         boundary.nbDefaultObls
@@ -23512,6 +23791,22 @@ defaultGroupNumWith ownerPolicy protectedIds obls monos =
     obls
     (filterList (id => not (containsI id argIds)) candidates)
 
+-- where-component defaulting: ground every unprotected Num-constrained var no
+-- member's type mentions (a var consumed inside a body, `n = length [1, 2]`).
+-- A var a member's type mentions generalizes with its constraint instead.
+defaultAbsentNumWith : Option Int ->
+  OrdMap Unit ->
+  List UObligation ->
+  List Mono ->
+  Unit
+defaultAbsentNumWith ownerPolicy protectedIds obls monos =
+  let inTypes = flatMap monoUnboundIds monos
+  let candidates = unprotectedNumCandidates protectedIds obls
+  groundNumVarsWith
+    ownerPolicy
+    obls
+    (filterList (id => not (containsI id inTypes)) candidates)
+
 unprotectedNumCandidates : OrdMap Unit -> List UObligation -> List Int
 unprotectedNumCandidates protectedIds obls =
   filterList
@@ -23562,6 +23857,28 @@ numChannelRootSet obls channels =
 -- `t _ = s [1, 2]` is consumed entirely inside the body and surfaces nowhere in
 -- `t : Option2 Int -> Int`, so nothing outside the body can ever determine it.  That
 -- var, and only that var, is what this grounds.
+-- A method body's Num variables that reach it only through a constrained
+-- callee's instantiation (a where helper generalized as `Num r => a -> r`,
+-- used as `debug (two ())`): their Num obligation is on the call and
+-- dictionary-application windows, not the body's own, exactly as at a
+-- top-level group (#23).  The body-local boundary grounds them like any other
+-- body-local root, except one a multi-parameter obligation of the body still
+-- mentions (`e` of `Index (Array a) Int e`): another parameter may fix it, and
+-- in an impl body that parameter is the impl's own head variable, still free
+-- here, so grounding it to Int would pass a head match it contradicts (#3521).
+bodyExtraNumObls : List UObligation -> Int -> Int -> List UObligation
+bodyExtraNumObls bodyObls callN0 dictN0 =
+  let calls = callUOblsWindow callN0
+  let tied = flatMap multiParamIds (bodyObls ++ calls)
+  filterList
+    (o => not (anyList (id => containsI id tied) (numObligIds o)))
+    (numCallObls calls ++ numDictObls (dictAppsSince dictN0))
+
+multiParamIds : UObligation -> List Int
+multiParamIds o = match uOblArgs o
+  args@(_ :: _ :: _) => flatMap monoUnboundIds args
+  _ => []
+
 defaultBodyLocalNumWith : Option Int -> OrdMap Unit -> List UObligation -> Unit
 defaultBodyLocalNumWith ownerPolicy protectedIds obls =
   let candidates = unprotectedNumCandidates protectedIds obls
@@ -23780,6 +24097,9 @@ numDefaultOwnerAllows (Some level) m = match normalize m
 -- Num operand monos — refs alias post-unify, grounding any grounds all).
 groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
 groundNumVarsWith _ _ [] = ()
+groundNumVarsWith ownerPolicy obls (id :: rest)
+  | omHasKey (intToString id) graphRun.value.localAbs.lasQuantified.value =
+    groundNumVarsWith ownerPolicy obls rest
 groundNumVarsWith ownerPolicy obls (id :: rest) =
   let _ = match liveNumVarGo id obls
     Some m =>
@@ -26188,15 +26508,29 @@ cohGoR _ (TEff _) (TEff _) = True
 cohGoR _ (TAuth _) (TAuth _) = True
 -- A qualifier is not part of a head's shape: coherence compares the value
 -- types under it.
-cohGoR subst (TQual a _) b = cohGoR subst (normalize a) b
-cohGoR subst a (TQual b _) = cohGoR subst a (normalize b)
+cohGoR subst (TQual a _) b = cohGo subst a b
+cohGoR subst a (TQual b _) = cohGo subst a b
 cohGoR _ _ _ = False
 
 -- bind id := m in the wildcard subst and return True
+-- A variable never binds to a type that contains it: `t := List t` has no
+-- finite solution, so the two sides share no instance, and binding it would
+-- send every later comparison through `t` round the cycle forever.
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohBind subst id m =
-  subst := (id, m) :: !subst
-  True
+  if cohOccurs subst id m then
+    False
+  else
+    subst := (id, m) :: !subst
+    True
+
+cohOccurs : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
+cohOccurs subst id m = match cohResolve subst m
+  TVar cell => tyvarId cell == id
+  TApp f a => cohOccurs subst id f || cohOccurs subst id a
+  TFun a _ b => cohOccurs subst id a || cohOccurs subst id b
+  TQual a _ => cohOccurs subst id a
+  _ => False
 
 -- ── shared one-sided matcher core (#156 S1) ────────────────────────────────
 -- cohSubsumes (Mono-space), tySubsumes (AST-space) and matchTyMono (AST head-
@@ -30123,18 +30457,37 @@ augmentWithParams headSub implTys paramMonos
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
 implHeadSubst pats concretes
   | listLen pats /= listLen concretes = None
-  | otherwise = implHeadSubstGo pats concretes (Some [])
+  | otherwise = match positionBindings pats concretes []
+    None => None
+    Some binds =>
+      if cohOverlapGo (Ref []) (repeatedBindings binds []) then
+        Some (fold (acc b => mergeOne acc (fst b) (snd b)) [] binds)
+      else
+        None
 
-implHeadSubstGo : List Ty ->
+-- Each head position matched on its own, its bindings in position order.
+positionBindings : List Ty ->
   List Mono ->
-  Option (List (String, Mono)) ->
+  List (String, Mono) ->
   Option (List (String, Mono))
-implHeadSubstGo [] [] acc = acc
-implHeadSubstGo (p :: ps) (c :: cs) None = None
-implHeadSubstGo (p :: ps) (c :: cs) (Some sofar) = match matchTyMono p c
+positionBindings [] [] acc = Some acc
+positionBindings (p :: ps) (c :: cs) acc = match matchTyMono p c
   None => None
-  Some s => implHeadSubstGo ps cs (Some (mergeSubstPreferConcrete sofar s))
-implHeadSubstGo _ _ _ = None
+  Some s => positionBindings ps cs (acc ++ s)
+positionBindings _ _ _ = None
+
+-- A variable the head repeats is one type: every later binding of it must
+-- unify with its first, all of them under one substitution of the goal's free
+-- variables (`cohOverlapGo`), so `Get (Box a) a` never matches
+-- `Get (Box Float) Int`, nor `Pick a a a` a goal whose three positions cannot
+-- be made equal together, whatever order they are visited in.
+repeatedBindings : List (String, Mono) ->
+  List (String, Mono) ->
+  List (Mono, Mono)
+repeatedBindings [] _ = []
+repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
+  Some first => (first, v) :: repeatedBindings rest seen
+  None => repeatedBindings rest ((k, v) :: seen)
 
 -- Merge two name→mono substs; on a key collision keep whichever value has a
 -- concrete head tycon (so the grounded element wins over a free result var).
@@ -32492,6 +32845,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     let env0 = registerAllData base prog0
     let _ = applyRecordScopeOverrides prog0
     applyCtorScopeOverrides prog0 env0
+  let _ = recordInvocationView dataEnv
   -- #784: reject under-determined return-only effect vars on interface methods.
   -- MUST run AFTER `dataEnv` above populated `dataParamKindsRef` — the kind-aware
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
@@ -35050,19 +35404,13 @@ allConcreteHeads (m :: rest) =
 
 -- #154 PR3: implMatches / implMatchesReceiver (flat whole-universe scans) are replaced
 -- by the keyed implMatchesU / implMatchesReceiverU above.  implHeadMatchesArgs (used by
--- both the keyed matcher and matchTyMono callers) stays: a head-arg type pattern is
+-- both the keyed matcher and matchTyMono callers) stays: each head-arg type pattern is
 -- matched against the corresponding mono via matchTyMono (a TyVar in the head is a
--- wildcard; a parametric impl `impl Eq (List a)` thus matches `List Int`).
+-- wildcard; a parametric impl `impl Eq (List a)` thus matches `List Int`), and a
+-- variable the head repeats must be bound consistently across positions
+-- (`implHeadSubst`).
 implHeadMatchesArgs : List Ty -> List Mono -> Bool
-implHeadMatchesArgs tys args
-  | listLen tys == listLen args = allHeadArgsMatch (zipL tys args)
-  | otherwise = False
-
-allHeadArgsMatch : List (Ty, Mono) -> Bool
-allHeadArgsMatch [] = True
-allHeadArgsMatch ((ty, m) :: rest) = match matchTyMono ty m
-  Some _ => allHeadArgsMatch rest
-  None => False
+implHeadMatchesArgs tys args = isSome (implHeadSubst tys args)
 
 -- register, per slot, the default body's constraint var id → `$dict_<method>_<slot>`
 -- in activeDictVars, so an in-body method ref unified to that var routes RDict.
@@ -35318,6 +35666,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- THIS method and can never touch an already-generalized outer var.
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
+  let dictN0 = goalsMark ()
   let inst = instantiateMethodBody kind params mty gscope
   let loc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
   let subject = methodBodySubject kind iface.irName mname
@@ -35456,7 +35805,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
     nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
     nbMembers = [inst.mbiExpected],
     nbSurvivingIds = survivingNumIds,
-    nbDefaultObls = addedObls,
+    nbDefaultObls = addedObls ++ bodyExtraNumObls addedObls callN0 dictN0,
     nbAmbiguityObls = addedObls,
   }
   let _ = registerMethodBodyGivens iface kind params mty inst bodyScope
@@ -38677,10 +39026,11 @@ initialEnv =
 -- declared above the type it wraps read the lenient `PCo` default and never
 -- tightened (see `declEnvPolarityEntriesFix`).  Seeding the ref with the
 -- fixpoint over THIS CALL'S OWN decl list first makes the per-decl walk
--- re-derive the already-correct value instead: a fixpoint is by definition
--- stable under one more application of the same pass, and `lookupTab`'s
--- first-match over the re-derived prepend then agrees with the seed row it
--- shadows.
+-- find the seeded row and skip the recompute (`registerVariants` recomputes
+-- only a key the table lacks).  The seeded row is the published one, with
+-- "no occurrence" read as `PCo`, so it is NOT a fixpoint of one more pass
+-- over itself: a pass reading a published phantom slot as `PCo` can tighten.
+-- That is why the skip, not a recompute, is what keeps the seed.
 --
 -- 🚨 THE FIXPOINT SCOPE IS EXACTLY THE REGISTRATION SCOPE — [ds], never `prog`
 -- reached from ambient state.  Two of this function's four call sites pass a
@@ -41398,6 +41748,7 @@ methodRowTestIface moduleId name typarams methods = DInterface {
   supers = [],
   methods = methods,
   ifaceOrigin = OriginModule moduleId,
+  ifaceNameLoc = None,
 }
 
 methodRowTestConstraint : String -> String -> List Ty -> Constraint
@@ -46865,6 +47216,7 @@ copyDriverState d = DriverState {
   sigTyMapRef = Ref d.sigTyMapRef.value,
   currentModuleRef = Ref d.currentModuleRef.value,
   markSetsRef = Ref d.markSetsRef.value,
+  invocationViewRef = Ref d.invocationViewRef.value,
 }
 
 -- The driver fields the core pass (checkBodyImpl's Module arm and what it calls)

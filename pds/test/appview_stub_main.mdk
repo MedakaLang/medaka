@@ -64,7 +64,7 @@
 import array.{make}
 import base64.{decodeUrlSafe}
 import bytes as B
-import bytes.{Bytes, encodeUtf8, toArray}
+import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import http.{
   Header,
   HttpFrame(..),
@@ -94,7 +94,8 @@ import net.{
   recvAll,
   sendAll,
 }
-import string.{drop, fromUtf8, split, startsWith, toInt, toUtf8}
+import string.{drop, split, startsWith, toInt}
+import test.response_support.{textOrHex}
 
 -- ── the claims a call arrived with ──────────────────────────────────────────
 
@@ -110,18 +111,20 @@ import string.{drop, fromUtf8, split, startsWith, toInt, toUtf8}
 -- rule-stdlib-reimpl compares declared signatures only and cannot see the
 -- difference, so it is disabled for this file rather than delegated away.
 -- lint-disable-file rule-stdlib-reimpl
-segmentBytes : String -> Result String (Array Int)
+segmentBytes : String -> Result String Bytes
 segmentBytes segment = match stringLength segment % 4
-  0 => map toArray (decodeUrlSafe segment)
-  2 => map toArray (decodeUrlSafe "\{segment}==")
-  3 => map toArray (decodeUrlSafe "\{segment}=")
+  0 => decodeUrlSafe segment
+  2 => decodeUrlSafe "\{segment}=="
+  3 => decodeUrlSafe "\{segment}="
   _ => Err "appview_stub: segment is not a valid unpadded base64url length"
 
 claimsJson : String -> Result String Json
 claimsJson token = match split "." token
   [_, claimsSeg, _] => match segmentBytes claimsSeg
     Err message => Err "appview_stub: claims segment: \{message}"
-    Ok bytes => parse (fromUtf8 bytes)
+    Ok bytes => match decodeUtf8 bytes
+      None => Err "appview_stub: claims segment is not UTF-8"
+      Some text => parse text
   _ => Err "appview_stub: bearer credential is not three segments"
 
 -- A claim that is absent reads as `<absent>` rather than failing the call: a
@@ -143,7 +146,7 @@ findHeaderValue : String -> List Header -> Option String
 findHeaderValue _ [] = None
 findHeaderValue wanted (header :: rest) =
   if headerName header == wanted then
-    Some (fromUtf8 (toArray (headerValue header)))
+    Some (textOrHex (headerValue header))
   else
     findHeaderValue wanted rest
 
@@ -248,7 +251,7 @@ observedField name request = match findHeaderValue name (requestHeaders request)
 -- show up as a short line rather than a wrong one.
 observedCall : Request -> String
 observedCall request =
-  "verb=\{requestMethod request} content-type=\{observedField "content-type" request} accept-language=\{observedField "accept-language" request} body=\{fromUtf8 (toArray (requestBody request))}"
+  "verb=\{requestMethod request} content-type=\{observedField "content-type" request} accept-language=\{observedField "accept-language" request} body=\{textOrHex (requestBody request)}"
 
 -- | Reads one call, logs what it carried, and returns the bytes that answer
 -- it — WITHOUT sending them. Split from `answerCall` so `batch` can hold a
@@ -475,7 +478,7 @@ bulkBytes status size =
     status
     "OK"
     [mustJsonHeader]
-    (B.fromArrayAssumeByteDomain (make size 120)))
+    (B.fromU8Array (make size 120)))
     Ok response => serializeResponse response
     Err message => panic "appview_stub: response error: \{message}"
 

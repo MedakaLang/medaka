@@ -138,7 +138,7 @@ The focused protocol parity gate additionally requires the local Wasm modules
 emitter, Node, and `wasm-tools` and refuses to degrade to two engines:
 
 ```sh
-MEDAKA_REQUIRE_WASM=1 sh pds/test/protocol_all_engines.sh
+./medaka test --native pds/test/protocol_all_engines_test.mdk
 ```
 
 ## Data model
@@ -172,9 +172,9 @@ socket, runtime-I/O, or async code.
 
 The buffered policy caps combined headers at 64 KiB, JSON at 150 KiB, text at
 100 KiB, and raw/blob bodies at 5 MiB, with separate bounded line, field,
-trailer, and chunk counts. `pds/test/protocol_all_engines.sh` requires exact
-eval/native/Wasm agreement on fourteen hand-authored protocol cells and runs a
-native direct-red mutation of a repaired raw-input assertion.
+trailer, and chunk counts. `pds/test/protocol_all_engines_test.mdk` requires exact
+eval/native/Wasm agreement on its hand-authored protocol cells and runs a
+native direct-red mutation of the empty reg-name port cell's expected response.
 
 `pds/lib/server_core.mdk`'s `Account` — the repository owner's DID, the owner's
 handle, and this PDS's hostname — is admitted by `pds/lib/atsyntax.mdk`'s
@@ -216,8 +216,8 @@ pinned official `@atproto/repo` that answers for the single-write transcript.
 `pds/test/record_handlers_main.mdk` replays the provenance-pinned reference
 transcript (`pds/test/vectors/repo_reference_corpus.txt`) through `handleBytes`
 end to end and compares every `uri`, record `cid`, `commit.cid`, and
-`commit.rev` against the corpus's pinned values. It runs as an arm of
-`pds/test/repo_vectors.sh`.
+`commit.rev` against the corpus's pinned values. It runs as a row of
+`pds/test/repo_vectors_test.mdk`.
 
 ### Reads, sync, and identity
 
@@ -244,8 +244,8 @@ exists, so a client that gets none knows it has seen the whole collection.
 second CAR emission. `pds/test/read_handlers_main.mdk` grades that three ways at
 once — response bytes == `repoExportCar`'s bytes == the pinned corpus `CAR` row
 (557 bytes for the reference transcript's final state) — because either
-equality alone could be satisfied by a wrong pair. It runs as an arm of
-`pds/test/repo_vectors.sh`, beside the write-side replay.
+equality alone could be satisfied by a wrong pair. It runs as a row of
+`pds/test/repo_vectors_test.mdk`, beside the write-side replay.
 
 ### The well-known route class
 
@@ -270,16 +270,16 @@ the SERVER's atproto service endpoint and carries no key.
 hosted account's DID as bare `text/plain; charset=utf-8`, with no trailing
 newline.
 
-`pds/test/read_routes_all_engines.sh` grades the repository-FREE half of all of
+`pds/test/read_routes_all_engines_test.mdk` grades the repository-FREE half of all of
 this — both well-knowns as a `did:key` account answers them, `resolveHandle` in
 full, every read's unconfigured-store `RepoNotFound` refusal, and the non-XRPC
-404 control — on eval, native, and real Wasm with a direct-red mutation,
-seventeen named cells. It is repository-free deliberately: nothing in it signs,
+404 control — as named cells on eval, native, and real Wasm, with direct-red
+mutations. It is repository-free deliberately: nothing in it signs,
 which is what makes an eval arm affordable at all (see "The Store is
 secret-bearing" for the 600s measurement). The `did:web` arm of
 `/.well-known/did.json` publishes the repository's signing key, so it is graded
 where a repository exists: `pds/test/read_handlers_main.mdk`, under
-`pds/test/repo_vectors.sh`.
+`pds/test/repo_vectors_test.mdk`.
 
 ### Blob routes
 
@@ -307,7 +307,7 @@ grades the three routes end to end against an EXTERNAL answer key: it uploads
 every row of `pds/test/vectors/blob_reference_corpus.txt` through the real
 `uploadBlob` route and compares the response's CID and whole `blob` ref JSON
 against the pinned official `@atproto/lex-data`'s own columns, then reads each
-row back through `getBlob` and `listBlobs` (run by `pds/test/repo_vectors.sh`,
+row back through `getBlob` and `listBlobs` (run by `pds/test/repo_vectors_test.mdk`,
 which takes the corpus path from the provenance ledger rather than naming it).
 `pds/test/blob_routes_test.mdk` carries the routes' remaining in-process
 behavior — the refusals, the MIME-shape rejection, and cursor pagination —
@@ -367,7 +367,7 @@ The socket shell must treat a `Store` as key material.
 The repository half is `Option`-shaped and starts `None`: `storeEmpty` is a
 store with no account configured. That is not a hedge, it is a measured
 requirement. Protocol composition (framing, routing, media negotiation) is
-tested with no account at all by `pds/test/protocol_all_engines.sh`, whose eval
+tested with no account at all by `pds/test/protocol_all_engines_test.mdk`, whose eval
 arm runs the tree-walking interpreter; one `repoInit` under that interpreter did
 not finish in 600s on this box, so making `storeEmpty` sign would have moved a
 seconds-long merge-queue gate into the >10-minute band that #2208 removed from
@@ -418,7 +418,7 @@ losing at most the one blob involved rather than refusing every later startup.
 Nothing collects an unreferenced blob (#2572 tracks that as a
 protocol-design question, not a filesystem one).
 
-`pds/test/serve_e2e.sh` and `pds/test/store_persistence.sh` extend their
+`pds/test/serve_e2e.sh` and `pds/test/store_persistence_test.mdk` extend their
 socket/restart coverage to blobs:
 upload over the socket, restart, `getBlob` returns identical bytes and MIME; a
 tampered blob file is rejected at load; an oversize blob is refused with zero
@@ -765,7 +765,7 @@ malformed method, multibase, multicodec, length, and curve cases and proves
 five disposable behavior mutations turn it red.
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA_REQUIRE_WASM=1 \
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" \
   ./medaka test --native pds/test/did_key_all_engines_test.mdk
 ```
 
@@ -775,9 +775,9 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA_REQUIRE_WASM=1 \
 `docs/design/ATPROTO-PDS-DESIGN.md` §5): **no golden is ever captured from our
 own implementation** in Phases 0–1, because on a protocol where correctness is
 defined by other people's implementations, a self-captured golden is not weak
-evidence but *anti*-evidence. The gate is `pds/test/vector_provenance.sh` — it
-runs a six-scenario self-test in a `mktemp -d` on every invocation, then checks
-the real tree. It is enrolled by name in a CI shard (`pds/test/*` is split
+evidence but *anti*-evidence. The gate is `pds/test/vector_provenance_test.mdk`
+— it runs the ledger checker against synthetic ledgers built to fail it, each in
+a scratch directory, then checks the real tree. It is enrolled by name in a CI shard (`pds/test/*` is split
 across several shards by cost — derive the current home, do not trust a shard
 name written down here: `grep -n 'pds/test' .github/workflows/ci.yml`).
 
@@ -814,11 +814,11 @@ are invisible to this enumeration by construction).
 **Run the gate locally:**
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/vector_provenance.sh
+./medaka test pds/test/vector_provenance_test.mdk
 ```
 
-No `medaka` binary needed — the gate only enumerates files, hashes them, and
-parses text.
+The gate builds natively, so it needs a built `medaka`; at run time it only
+enumerates files, hashes them, and parses text.
 
 ## Oracle
 
@@ -860,7 +860,7 @@ docker run --rm --entrypoint node \
 
 Run it from the repository root. The trailing argument pins `iat` so the minted
 token is reproducible; re-running must reproduce all three files byte-for-byte,
-which is what `pds/test/vector_provenance.sh` checks the committed digests
+which is what `pds/test/vector_provenance_test.mdk` checks the committed digests
 against.
 The extractor refuses if the image's `@atproto/pds`, `@atproto/xrpc-server`, or
 `@atproto/crypto` version differs from the one its rows were derived at, so a
@@ -924,11 +924,11 @@ Three things are specific to `pds/` and are NOT in the general policy:
 
 * **Depth is not the axis.** `.github/workflows/ci.yml` names gates one by one,
   and `test/diff_compiler_ci_shard_coverage.sh` classifies a gate by the
-  REPO-RELATIVE STEM of its `test/gates.toml` `run` field
-  (`tracked = {p[:-3] …}` over `git ls-files '*.sh'`, matched against
-  `by_stem[run[:-3]]`) — a path of any depth. What enrols a script is a
+  REPO-RELATIVE STEM of its `test/gates.toml` `run` field: the path minus
+  `.sh` for a `kind = "exec"` script, minus `_test.mdk` for a
+  `kind = "native"` module — a path of any depth. What enrols a gate is a
   `[[gate]]` row with a valid `shard`; what leaves one unreachable is the
-  absence of one. Keeping scripts directly under `pds/test/` is the convention
+  absence of one. Keeping gates directly under `pds/test/` is the convention
   every existing gate follows, but it is a convention, not a coverage
   requirement.
 * **Non-gates.** A script that proves nothing about the compiler — an oracle
@@ -943,20 +943,22 @@ Three things are specific to `pds/` and are NOT in the general policy:
   * **Split it in place** when the gate has an affordable arm. It stays under
     `pds/test/` with an ordinary `shard`, an env var gates the expensive arm,
     and `tiers` declares both runs — `["merge", "nightly/<VAR>=1"]`.
-    `pds/test/signing_parity.sh` is the instance: `SIGNING_DEEP=1`
-    selects the eval and interpreted-WasmGC arms (82% and 16% of its ~1430s),
-    leaving sampled native==Wasm parity and the whole 322-row corpus natively
-    on the merge tier for ~31s. The tree's general precedent for this shape is
-    `diff_compiler_perf_scaling` and its `nightly/PERF_DEEP=1`.
+    `pds/test/signing_parity_test.mdk` is the instance: `SIGNING_DEEP=1`
+    selects the eval and interpreted-WasmGC arms, which are nearly all of its
+    cost, leaving sampled native==Wasm parity and the whole 322-row corpus
+    natively on the merge tier. The tree's general precedent for this shape
+    is `diff_compiler_perf_scaling` and its `nightly/PERF_DEEP=1`.
   * **Move the whole gate out** when no arm is affordable, or when the
     expensive arm is better expressed as its own check. It goes to
     `pds/nightly/` with `tiers = ["nightly"]` and `shard = "other-job"`.
-    `pds/nightly/repo_vectors_eval_engine.sh` is the instance: the
-    1091.56s eval arm left `pds/test/repo_vectors.sh` and became a stronger
-    standalone differential, `cmp`ing the interpreter's bytes against native.
+    `pds/nightly/repo_vectors_eval_engine_test.mdk` is the instance: the eval
+    arm left the `pds/test/repo_vectors` gate and became a stronger standalone
+    differential, requiring the interpreter to print the native bytes.
 
-  Either way, name the script literally in a `.github/workflows/nightly.yml`
-  job — that literal repo-relative path is what
+  Either way, a `.github/workflows/nightly.yml` step must run the gate itself.
+  For a `kind = "native"` row that step is `medaka test --native <run path>`
+  or `medaka gate run <name>`, in command position; for a `kind = "exec"` row
+  it names the script's literal repo-relative path. That invocation is what
   `test/diff_compiler_ci_shard_coverage.sh` counts as covered, and the step's
   non-neutral `env:` keys are what `test/diff_compiler_tier_drift.sh` reads
   back as the registry's `nightly/<VAR>=<value>` token.

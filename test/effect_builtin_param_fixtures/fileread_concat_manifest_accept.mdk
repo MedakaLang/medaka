@@ -1,0 +1,10 @@
+-- #3496: an unsigned reader's inferred row is what the manifest publishes.
+-- `"/etc/app/" ++ name` may be any path under "/etc/app/", so the grant is
+-- the pattern "/etc/app/*", never the exact element "/etc/app/". A suffix
+-- the abstraction knows is appended exactly: `readFixed` reads one file.
+readUnder name = readFile ("/etc/app/" ++ name)
+
+readFixed _ = readFile ("/etc/app/" ++ "config.toml")
+
+main : <IO> Unit
+main = println "fileread concat manifest accept"

@@ -1,0 +1,27 @@
+-- A program's own types named like prelude types (#3465): `Socket`, `Result`
+-- and `Option` here are this file's declarations, with their own
+-- constructors, derived instances and matches, while the prelude's `Result`
+-- is still used through its own constructors.  Every engine prints the same
+-- five lines.
+data Socket = Socket Int deriving (Debug)
+
+data Result a = Good a | Bad deriving (Debug)
+
+data Option = Here Int | Gone
+
+describe : Result Int -> String
+describe r = match r
+  Good n => "good \{intToString n}"
+  Bad => "bad"
+
+size : Option -> Int
+size o = match o
+  Here n => n
+  Gone => 0
+
+main =
+  println (debug (Socket 3))
+  println (describe (Good 4))
+  println (describe Bad)
+  println (intToString (size (Here 5) + size Gone))
+  println (intToString (resultOr 7 (Err "prelude")))

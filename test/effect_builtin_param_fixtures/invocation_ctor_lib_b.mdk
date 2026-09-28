@@ -1,0 +1,2 @@
+-- #3463 review: the other module spelling a constructor `Api`, of another type.
+public export data Other = Api (Unit -> <FileRead "z/*"> Result String String)

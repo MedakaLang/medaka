@@ -22,7 +22,9 @@
    and not the `RepoNotFound` the handler would have produced, so the check
    demonstrably ran first. -}
 
-import bytes.{encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, decodeUtf8, encodeUtf8, fromU8Array}
+import u8 as U8
 import http.{
   Header,
   makeHeader,
@@ -33,7 +35,6 @@ import http.{
 }
 import json.{Json(..), get, parse}
 import list.{sort}
-import string.{fromUtf8, toUtf8}
 import test.{expectEach, expectEqual, expectNotEqual}
 import lib.handlers.{pdsRegistry, pdsServer, serverLinksEmpty}
 import lib.jwt.{mintToken}
@@ -71,21 +72,6 @@ import lib.xrpc.{
 }
 import test.response_support.{bodyText}
 
--- | `handleBytes` over a request fixture this driver still holds as an
--- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
--- door into one: a fixture element outside the byte domain stops here rather
--- than reaching the framer.
-handleFixture : Server ->
-  RequestContext ->
-  Store ->
-  Array Int ->
-  (Store, Array Int)
-handleFixture httpServer context store request = match fromArray request
-  Some packed =>
-    let (next, response) = handleBytes httpServer context store packed
-    (next, toArray response)
-  None => panic "auth_seam: request fixture holds a non-byte element"
-
 -- ── fixtures ────────────────────────────────────────────────────────────────
 
 accountDidText : String
@@ -97,11 +83,11 @@ accountHostText = "pds.example"
 {- | A fixed session secret. The seam grades a token against whatever secret
    the `Store` carries, so a fixture secret is the whole point here: entropy
    would only make the tokens below irreproducible. -}
-testSecret : Array Int
-testSecret = arrayMakeWith 32 (i => (i * 11 + 5) % 256)
+testSecret : Bytes
+testSecret = fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 11 + 5)))
 
-otherSecret : Array Int
-otherSecret = arrayMakeWith 32 (i => (i * 13 + 7) % 256)
+otherSecret : Bytes
+otherSecret = fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 13 + 7)))
 
 testInstant : Int
 testInstant = 1700000000
@@ -109,8 +95,8 @@ testInstant = 1700000000
 {- | A fixed nonce. It identifies any token a route mints while serving the
    request; no route in this file's synthetic registry mints one, so the value
    only has to be fixed. -}
-testNonce : Array Int
-testNonce = arrayMakeWith 16 (i => (i * 17 + 3) % 256)
+testNonce : Bytes
+testNonce = fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 17 + 3)))
 
 testContext : RequestContext
 testContext =
@@ -193,9 +179,9 @@ configuredStore =
 
 -- ── tokens ──────────────────────────────────────────────────────────────────
 
-tokenFor : Array Int -> String -> String -> String -> Int -> Int -> String
+tokenFor : Bytes -> String -> String -> String -> Int -> Int -> String
 tokenFor secret sub aud tokenId from until =
-  mintToken (fromArrayAssumeByteDomain secret) sub aud tokenId from until
+  mintToken secret sub aud tokenId from until
 
 goodToken : String
 goodToken =
@@ -273,23 +259,30 @@ wrongAudienceToken =
 
 -- `auth` is spliced verbatim, so a test can send a header this server would
 -- never mint (a bare token, a second Authorization line, a wrong scheme).
-postRequest : String -> String -> Array Int
-postRequest auth nsid =
-  let body = "{}"
-  toUtf8
-    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}Content-Type: application/json\r\nContent-Length: 2\r\n\r\n\{body}"
+postRequest : String -> String -> Bytes
+postRequest auth nsid = postRequestBytes (encodeUtf8 auth) nsid
 
-getRequest : String -> String -> Array Int
+-- | As `postRequest`, with `auth` given as raw wire bytes, which need not be
+-- UTF-8.
+postRequestBytes : Bytes -> String -> Bytes
+postRequestBytes auth nsid =
+  let body = "{}"
+  encodeUtf8 "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n"
+    ++ auth
+    ++ encodeUtf8
+      "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n\{body}"
+
+getRequest : String -> String -> Bytes
 getRequest auth target =
-  toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}\r\n"
+  encodeUtf8 "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}\r\n"
 
 {- | A procedure with no input at all, which is the shape a refresh route
    takes. The zero-length `Content-Length` is deliberate and is what a real
    client sends on a bodiless POST: a refresh route reached without it is a
    refresh route reached in a shape no client uses. -}
-postNoInputRequest : String -> String -> Array Int
+postNoInputRequest : String -> String -> Bytes
 postNoInputRequest auth nsid =
-  toUtf8
+  encodeUtf8
     "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}Content-Length: 0\r\n\r\n"
 
 bearer : String -> String
@@ -298,10 +291,13 @@ bearer token = "Authorization: Bearer \{token}\r\n"
 -- ── response inspection ─────────────────────────────────────────────────────
 
 -- The three status digits of "HTTP/1.1 NNN Reason".
-statusOf : Array Int -> String
-statusOf bytes = fromUtf8 (arrayMakeWith 3 (i => bytes[9 + i]))
+statusOf : Bytes -> String
+statusOf bytes =
+  optionOrPanic
+    "auth_seam: status code is not UTF-8"
+    (decodeUtf8 (B.take 3 (B.drop 9 bytes)))
 
-errorCodeOf : Array Int -> String
+errorCodeOf : Bytes -> String
 errorCodeOf bytes = match parse (bodyText bytes)
   Ok value => match get "error" value
     Some (JString code) => code
@@ -309,7 +305,7 @@ errorCodeOf bytes = match parse (bodyText bytes)
   Err _ => "<not-json>"
 
 -- | Status and atproto error code as one comparable string.
-refusal : Array Int -> String
+refusal : Bytes -> String
 refusal bytes = "\{statusOf bytes} \{errorCodeOf bytes}"
 
 -- ── the synthetic cells ─────────────────────────────────────────────────────
@@ -317,7 +313,7 @@ refusal bytes = "\{statusOf bytes} \{errorCodeOf bytes}"
 gatedWith : String -> String
 gatedWith auth =
   let (_, bytes) =
-    handleFixture
+    handleBytes
       syntheticServer
       testContext
       configuredStore
@@ -327,7 +323,7 @@ gatedWith auth =
 gatedBody : String -> String
 gatedBody auth =
   let (_, bytes) =
-    handleFixture
+    handleBytes
       syntheticServer
       testContext
       configuredStore
@@ -337,7 +333,7 @@ gatedBody auth =
 openWith : String -> String
 openWith auth =
   let (_, bytes) =
-    handleFixture
+    handleBytes
       syntheticServer
       testContext
       configuredStore
@@ -347,7 +343,7 @@ openWith auth =
 openStatusWith : String -> String
 openStatusWith auth =
   let (_, bytes) =
-    handleFixture
+    handleBytes
       syntheticServer
       testContext
       configuredStore
@@ -362,6 +358,33 @@ test "a gated route with a well-formed token reaches its handler" =
 
 test "an expired token is refused as expired, not as absent" =
   expectEqual (gatedWith (bearer expiredToken)) "401 ExpiredToken"
+
+{- A credential that is not UTF-8 is malformed, and is refused before any of
+   it is read: its expiry included. The expired token with its first
+   character re-spelled as a two-byte overlong (`C0 | c >> 6`, `80 | c & 63`)
+   is one a lenient decode reads back as the expired token itself, and so as
+   `ExpiredToken`, a claim read out of a token that could not have been
+   verified. -}
+test "an expired token whose first character is an overlong is an invalid token" =
+  let token = encodeUtf8 expiredToken
+  let first = optionOrPanic "auth_seam: empty token" (B.get 0 token)
+  let firstByte = U8.toInt first
+  let overlong = fromU8Array [|
+    U8.truncate (0xC0 + firstByte / 64),
+    U8.truncate (0x80 + firstByte % 64),
+  |]
+  let auth =
+    encodeUtf8 "Authorization: Bearer "
+      ++ overlong
+      ++ B.drop 1 token
+      ++ encodeUtf8 "\r\n"
+  let (_, bytes) =
+    handleBytes
+      syntheticServer
+      testContext
+      configuredStore
+      (postRequestBytes auth gatedNsid)
+  expectEqual "401 InvalidToken" (refusal bytes)
 
 test "a not-yet-valid token is refused" =
   expectEqual (gatedWith (bearer futureToken)) "401 InvalidToken"
@@ -402,7 +425,7 @@ test "the Bearer scheme is matched case-insensitively" =
 refreshWith : String -> String
 refreshWith auth =
   let (_, bytes) =
-    handleFixture
+    handleBytes
       syntheticServer
       testContext
       configuredStore
@@ -412,7 +435,7 @@ refreshWith auth =
 refreshBody : String -> String
 refreshBody auth =
   let (_, bytes) =
-    handleFixture
+    handleBytes
       syntheticServer
       testContext
       configuredStore
@@ -425,12 +448,12 @@ refreshBody auth =
    leaves behind, and what a restart leaves behind for every token at once. -}
 test "a token whose session is not open is refused, signature notwithstanding" =
   let (_, bytes) =
-    handleFixture
+    handleBytes
       syntheticServer
       testContext
       secretOnlyStore
       (postRequest (bearer goodToken) gatedNsid)
-  expectEqual (refusal bytes) "401 InvalidToken"
+  expectEqual "401 InvalidToken" (refusal bytes)
 
 test "a refresh route reached with the session's refresh token runs" =
   expectEqual (refreshBody (bearer goodRefreshToken)) accountDidText
@@ -446,12 +469,12 @@ test "a refresh route with no Authorization header is refused 401" =
 
 test "a gated route on a store with no session secret is refused" =
   let (_, bytes) =
-    handleFixture
+    handleBytes
       syntheticServer
       testContext
       storeEmpty
       (postRequest (bearer goodToken) gatedNsid)
-  expectEqual (refusal bytes) "401 InvalidToken"
+  expectEqual "401 InvalidToken" (refusal bytes)
 
 test "a public route answers with no credential at all" = expectEach [
   ("openStatusWith \"\" == \"200\"", expectEqual "200" (openStatusWith "")),
@@ -550,13 +573,13 @@ test "refreshSession and deleteSession take the refresh token" = expectEqual
 realPost : String -> String -> String
 realPost auth nsid =
   let (_, bytes) =
-    handleFixture pdsServerValue testContext storeEmpty (postRequest auth nsid)
+    handleBytes pdsServerValue testContext storeEmpty (postRequest auth nsid)
   refusal bytes
 
 realGet : String -> String
 realGet target =
   let (_, bytes) =
-    handleFixture pdsServerValue testContext storeEmpty (getRequest "" target)
+    handleBytes pdsServerValue testContext storeEmpty (getRequest "" target)
   statusOf bytes
 
 {- | The order proof. `createRecord` against an unconfigured store would answer

@@ -1,0 +1,8 @@
+-- #3496: interpolation follows the concatenation rule. The leading literal
+-- "/etc/app/" is extended by the interpolated name, so the read performs
+-- <FileRead "/etc/app/*"> and the exact bound does not admit it ⇒ REJECT.
+readCfg : String -> <FileRead "/etc/app/"> Result String String
+readCfg name = readFile "/etc/app/\{name}"
+
+main : <IO> Unit
+main = println "fileread interp exact reject"

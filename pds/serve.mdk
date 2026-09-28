@@ -83,7 +83,8 @@ import args.{
 }
 import array as A
 import async.{Async, liftIO, sleep, spawn}
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, fromArray}
 import fs.{isDir}
 import hex.{decode, encode}
 import io.{isPrivateMode, writeFilePrivate}
@@ -95,7 +96,6 @@ import lib.credential.{
   makeCredential,
   saltBytes,
 }
-import lib.jwt.{serverSecretBytes}
 import lib.ratelimit.{TrustedProxy(..)}
 import lib.handlers.{makeServerLinks, pdsServer}
 import lib.proxy.{AppviewRoute, makeAppviewRoute, makeAppviewTable}
@@ -110,7 +110,7 @@ import lib.repo.{
 import lib.server_core.{
   Server, accountDid, accountHostname, makeAccount, serverAccount
 }
-import lib.sign.{SecretKey, secretKeyFromByteArray}
+import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.cid.{Cid, cidToString}
 import lib.event_log_record.{eventLogRetentionSeconds}
 import lib.store.{
@@ -147,6 +147,7 @@ import shell.keygen.{
   keygenSigningKey,
   keygenSigningKeyAndTokenSecret,
   keygenTokenSecret,
+  tokenSecretBytes,
 }
 import shell.persist.{
   credentialPath,
@@ -172,6 +173,7 @@ import string.{
   drop, indexOf, lines, startsWith, stripSuffix, take, toInt, toLower, trim
 }
 import time.{Duration, millis, now}
+import u8 as U8
 
 serveSpec : ArgSpec
 serveSpec = spec "serve" [
@@ -475,13 +477,13 @@ requirePrivateMode label path = do
 
 -- Neither key reaches a diagnostic: the mode and read errors name the path,
 -- and `hex.decode`'s own messages do not echo what they were given.
-readHexBytes : String -> String -> <FileRead> Result String (Array Int)
+readHexBytes : String -> String -> <FileRead> Result String Bytes
 readHexBytes label path = do
   () <- requirePrivateMode label path
   text <- match readFile path
     Err message => Err "unreadable \{label} \{path}: \{message}"
     Ok given => Ok given
-  match map toArray (decode (trim text))
+  match decode (trim text)
     Err message => Err "\{label} \{path} is not hex: \{message}"
     Ok bytes => Ok bytes
 
@@ -499,20 +501,20 @@ sessionSecretPath dir = "\{dir}/session-secret"
 minSecretDistinctBytes : Int
 minSecretDistinctBytes = 8
 
-distinctSeen : Array Int -> Array Int -> Int -> Int -> Int
+distinctSeen : Bytes -> Array Bool -> Int -> Int -> Int
 distinctSeen bytes seen i found =
-  if i >= arrayLength bytes then
+  if i >= B.length bytes then
     found
   else
-    let byte = bytes[i]
-    if byte < 0 || byte > 255 || seen[byte] == 1 then
+    let byte = U8.toInt bytes[i]
+    if seen[byte] then
       distinctSeen bytes seen (i + 1) found
     else
-      let () = A.setInPlace byte 1 seen
+      let () = A.setInPlace byte True seen
       distinctSeen bytes seen (i + 1) (found + 1)
 
-distinctByteValues : Array Int -> Int
-distinctByteValues bytes = distinctSeen bytes (arrayMake 256 0) 0 0
+distinctByteValues : Bytes -> Int
+distinctByteValues bytes = distinctSeen bytes (arrayMake 256 False) 0 0
 
 {- | Refuse a session-token secret that is not a generated one.
 
@@ -520,7 +522,7 @@ distinctByteValues bytes = distinctSeen bytes (arrayMake 256 0) 0 0
    count of distinct bytes is a property of the value, and the value is a
    secret even while it is being refused. The message names the file and the
    remedy, which is all an operator needs. -}
-admitSessionSecret : String -> Array Int -> Result String (Array Int)
+admitSessionSecret : String -> Bytes -> Result String Bytes
 admitSessionSecret path bytes =
   if distinctByteValues bytes < minSecretDistinctBytes then
     Err
@@ -533,10 +535,10 @@ admitSessionSecret path bytes =
    `randomInt`, whose SplitMix64 generator is seeded deterministically and
    would make every session token on every deployment forgeable from a public
    constant. -}
-generateSessionSecret : String -> <FileWrite, Rand> Result String (Array Int)
+generateSessionSecret : String -> <FileWrite, Rand> Result String Bytes
 generateSessionSecret dir = do
-  let bytes = osEntropyBytes serverSecretBytes
-  let line = "\{encode (fromArrayAssumeByteDomain bytes)}\n"
+  let bytes = tokenSecretBytes ()
+  let line = "\{encode bytes}\n"
   () <- match writeFilePrivate (sessionSecretPath dir) line
     Err message =>
       Err "unwritable session secret \{sessionSecretPath dir}: \{message}"
@@ -553,7 +555,7 @@ generateSessionSecret dir = do
    needed it. -}
 suppliedSessionSecret : Args ->
   String ->
-  <FileRead> Result String (Option (Array Int))
+  <FileRead> Result String (Option Bytes)
 suppliedSessionSecret parsed dir = match flagValue "--token-secret" parsed
   Some path => map Some (readSessionSecret path)
   None =>
@@ -565,15 +567,15 @@ suppliedSessionSecret parsed dir = match flagValue "--token-secret" parsed
 -- Both arms above read a secret somebody else chose — the flag's file, or one
 -- a previous run left in the data directory — so both are graded, and the one
 -- this program generates below is graded by construction instead.
-readSessionSecret : String -> <FileRead> Result String (Array Int)
+readSessionSecret : String -> <FileRead> Result String Bytes
 readSessionSecret path = do
   bytes <- readHexBytes "session-token secret" path
   admitSessionSecret path bytes
 
 -- The WRITE half: generate the secret only when the read half found none.
 establishSessionSecret : String ->
-  Option (Array Int) ->
-  <FileWrite, Rand> Result String (Array Int)
+  Option Bytes ->
+  <FileWrite, Rand> Result String Bytes
 establishSessionSecret _ (Some bytes) = Ok bytes
 establishSessionSecret dir None = generateSessionSecret dir
 
@@ -604,6 +606,8 @@ bootstrapCredential : String ->
   String ->
   <FileWrite, Rand> Result String CredentialRecord
 bootstrapCredential dir password = do
+  -- Door (FFI), checked: `osEntropyBytes` answers the runtime's integer
+  -- array, and an element outside 0..255 aborts rather than being masked.
   let salt =
     optionOrPanic
       "makeCredential: every element must be a byte in 0..255"
@@ -726,7 +730,7 @@ genesisTid u = tidEncode (floatToInt (now u * 1000000.0)) 0
    command cannot silently discard an account's history. -}
 initRepo : String ->
   String ->
-  Array Int ->
+  Bytes ->
   <Clock, FileRead, FileWrite> Result String Repo
 initRepo dir did keyBytes = do
   genesis <- genesisTid ()
@@ -755,7 +759,7 @@ loadBlobs store dir = do
    late to answer with. `admitBlob` applies the same shape check to the upload
    path, so a value that reaches here and fails it came from a tampered file
    and belongs to no blob this server can serve. -}
-admitBlobRows : List (Cid, String, Array Int) -> Store -> Result String Store
+admitBlobRows : List (Cid, String, Bytes) -> Store -> Result String Store
 admitBlobRows [] store = Ok store
 admitBlobRows ((cid, mimeType, bytes) :: rest) store =
   if not (validMimeShape mimeType) then
@@ -772,7 +776,7 @@ loadRepo dir did secret = do
 openRepo : Bool ->
   String ->
   String ->
-  Array Int ->
+  Bytes ->
   SecretKey ->
   <Clock, FileRead, FileWrite> Result String Repo
 openRepo False dir did _ secret = loadRepo dir did secret
@@ -823,7 +827,7 @@ configure parsed = do
   let version = versionString ()
   server <- pdsServer account links version
   keyBytes <- readHexBytes "signing key" keyPath
-  secret <- secretKeyFromByteArray keyBytes
+  secret <- secretKeyFromBytes keyBytes
   -- Admitted here, beside the other flag-supplied configuration and ahead of
   -- every generated secret, for the same reason `requireTrustedBind` is: a run
   -- refused for a malformed appview DID must leave no session secret on disk

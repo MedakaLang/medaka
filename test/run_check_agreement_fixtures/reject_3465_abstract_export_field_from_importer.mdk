@@ -1,0 +1,5 @@
+-- #3465 control: the same import, with no type of the program's own, reading
+-- a field of the abstractly exported `Cfg` is still T-ABSTRACT-FIELD.
+import lib.abs3465_cfg.{mk}
+
+main = println (intToString (mk 7).a)

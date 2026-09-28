@@ -453,9 +453,9 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   row. ⚠️ Moving it means REPLACING the merge token, not adding a nightly one:
   `tiers = ["merge", "nightly"]` is a gate that runs in BOTH, which costs the
   queue exactly what it did before.
-  `pds/nightly/repo_vectors_eval_engine.sh` (#2208, "S-2-pds-pole") is that
+  `pds/nightly/repo_vectors_eval_engine_test.mdk` (#2208, "S-2-pds-pole") is that
   mechanism in use: the interpreter's agreement with the compiled engines on
-  the representative corpus used to be `pds/test/repo_vectors.sh`'s own pole
+  the representative corpus used to be the `pds/test/repo_vectors` gate's own pole
   gate at 948.9s (98.76% of that gate's own wall clock, under the SUM model
   above), so the assertion moved to nightly while native/Wasm parity on the
   same corpus — the soundness-bearing half — stayed in the queue.

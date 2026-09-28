@@ -1,0 +1,18 @@
+-- An impl body calls a constrained helper whose element type `e` only
+-- `Index (Array a) Int e` ties to the impl's own `a`. A method body must not
+-- default `e` to Int: `a` is still free there, so the head match could not
+-- see the contradiction, and an Int dictionary would run on Floats.
+data Vec a = Vec (Array a)
+
+sumAt : (Index c Int e, Num e) => c -> Int -> Int -> e
+sumAt v i j = v[i] + v[j]
+
+interface Summary t where
+  summary : t -> String
+
+impl Summary (Vec a) requires Num a, Display a where
+  summary (Vec xs) = "total=" ++ display (sumAt xs 0 1)
+
+main =
+  println (summary (Vec [|1.5, 2.25|]))
+  println (summary (Vec [|3, 4|]))

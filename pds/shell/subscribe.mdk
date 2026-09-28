@@ -3,7 +3,7 @@
 
    Everything else this server does is a request and a complete answer, and
    `pds/shell/server.mdk`'s whole shape rests on that — `applyRequest` returns
-   an `Array Int` and nothing downstream of it can express "more later". A
+   one `Bytes` answer and nothing downstream of it can express "more later". A
    subscription is the one shape that cannot be expressed that way, so it does
    not try: the socket shell hands the connection over HERE, at the last point
    the parsed request and the live socket coexist, and it never comes back.
@@ -23,10 +23,9 @@
    frames it sends are `lib.sync_event`'s bytes, wrapped by `lib.websocket`'s
    codec. What lives here is when to send them. -}
 
-import array.{sliceClamped}
 import async.{Async, liftIO}
 import bytes as B
-import bytes.{toArray}
+import bytes.{Bytes}
 import hex as Hex
 import lib.event_log_record.{EventLogEntry(..)}
 import lib.sync_event.{syncErrorFrame, syncInfoFrame}
@@ -141,10 +140,10 @@ runSubscription : String ->
   Connection * ->
   String ->
   Option Int ->
-  Array Int ->
+  Bytes ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
 runSubscription dir budget conn accept cursor pending = defer
-  opened <- sendArrayWithin budget conn (handshakeResponseBytes accept)
+  opened <- A.sendAllWithin budget conn (handshakeResponseBytes accept)
   match opened
     Err message => deferPure (Err message)
     Ok () => openStream dir budget conn cursor pending
@@ -160,7 +159,7 @@ openStream : String ->
   Duration ->
   Connection * ->
   Option Int ->
-  Array Int ->
+  Bytes ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
 openStream dir budget conn cursor pending = defer
   last <- liftIO (u => eventLogLast dir)
@@ -185,7 +184,7 @@ gradeCursor : String ->
   Duration ->
   Connection * ->
   Option Int ->
-  Array Int ->
+  Bytes ->
   Int ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
 gradeCursor dir budget conn None pending newest =
@@ -231,7 +230,7 @@ announceOutdated : String ->
   Duration ->
   Connection * ->
   Int ->
-  Array Int ->
+  Bytes ->
   List EventLogEntry ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
 announceOutdated dir budget conn wanted pending replay =
@@ -251,7 +250,7 @@ replayThenTail : String ->
   Duration ->
   Connection * ->
   Int ->
-  Array Int ->
+  Bytes ->
   List EventLogEntry ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
 replayThenTail dir budget conn wanted pending replay = defer
@@ -275,7 +274,7 @@ sendEntries : Duration ->
   Async <Clock, Net | e> (Result String Int)
 sendEntries _ _ delivered [] = deferPure (Ok delivered)
 sendEntries budget conn delivered (entry :: rest) =
-  match map toArray (Hex.decode entry.frameHex)
+  match Hex.decode entry.frameHex
     Err message =>
       deferPure
         (Err "subscribe: event \{intToString entry.seq} is not hex: \{message}")
@@ -288,24 +287,16 @@ sendEntries budget conn delivered (entry :: rest) =
 -- One atproto event-stream message, as one unfragmented binary WebSocket
 -- frame. The payload is two concatenated CBOR objects and the reader decodes
 -- both from the one message, so it may not be split across frames.
--- The frames are still built as arrays; `sendAllWithin` sends `Bytes`.
-sendArrayWithin : Duration ->
-  Connection * ->
-  Array Int ->
-  Async <Clock, Net | e> (Result String Unit)
-sendArrayWithin budget conn frame =
-  A.sendAllWithin budget conn (B.fromArrayAssumeByteDomain frame)
-
 sendPayload : Duration ->
   Connection * ->
-  Array Int ->
+  Bytes ->
   Async <Clock, Net | e> (Result String Unit)
 sendPayload budget conn payload =
-  sendArrayWithin budget conn (encodeServerFrame (Frame True Binary payload))
+  A.sendAllWithin budget conn (encodeServerFrame (Frame True Binary payload))
 
 sendPayloadThenClose : Duration ->
   Connection * ->
-  Array Int ->
+  Bytes ->
   Async <Clock, Net | e> (Result String Unit)
 sendPayloadThenClose budget conn payload = defer
   sent <- sendPayload budget conn payload
@@ -318,7 +309,7 @@ sendClose : Duration ->
   Int ->
   Async <Clock, Net | e> (Result String Unit)
 sendClose budget conn code = defer
-  _ <- sendArrayWithin budget conn (encodeServerFrame (closeFrame code ""))
+  _ <- A.sendAllWithin budget conn (encodeServerFrame (closeFrame code ""))
   deferPure (Ok ())
 
 {- | The steady state: wait a poll interval for the client to say something,
@@ -333,7 +324,7 @@ tailFrom : String ->
   Connection * ->
   Int ->
   Reassembly ->
-  Array Int ->
+  Bytes ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
 tailFrom dir budget conn lastSeq pending buffered = defer
   stopping <- liftIO (u => pdsSignalRequested ())
@@ -347,7 +338,7 @@ tailStep : String ->
   Connection * ->
   Int ->
   Reassembly ->
-  Array Int ->
+  Bytes ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
 tailStep dir budget conn lastSeq pending buffered =
   let step = clientStep pending buffered
@@ -355,7 +346,7 @@ tailStep dir budget conn lastSeq pending buffered =
     ClientFailed code => sendClose budget conn code
     ClientClosed code => sendClose budget conn code
     ClientReply next reply rest => defer
-      sent <- sendArrayWithin budget conn reply
+      sent <- A.sendAllWithin budget conn reply
       match sent
         Err message => deferPure (Err message)
         Ok () => tailFrom dir budget conn lastSeq next rest
@@ -369,7 +360,7 @@ tailStep dir budget conn lastSeq pending buffered =
           if B.isEmpty bytes then
             deferPure (Ok ())
           else
-            tailFrom dir budget conn lastSeq next (rest ++ toArray bytes)
+            tailFrom dir budget conn lastSeq next (rest ++ bytes)
         Err message =>
           if message == pollTimedOut then
             pollLog dir budget conn lastSeq next rest
@@ -381,7 +372,7 @@ pollLog : String ->
   Connection * ->
   Int ->
   Reassembly ->
-  Array Int ->
+  Bytes ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
 pollLog dir budget conn lastSeq pending buffered = defer
   last <- liftIO (u => eventLogLast dir)
@@ -398,7 +389,7 @@ deliverNew : String ->
   Connection * ->
   Int ->
   Reassembly ->
-  Array Int ->
+  Bytes ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
 deliverNew dir budget conn lastSeq pending buffered = defer
   fresh <- liftIO (u => eventLogRead dir lastSeq)
@@ -425,8 +416,8 @@ deliverNew dir budget conn lastSeq pending buffered = defer
    new data frame while something is — are errors the peer must be told about,
    and they are only visible to a reader that remembers the frame before. -}
 data ClientStep =
-  | ClientNeedMore Reassembly (Array Int)
-  | ClientReply Reassembly (Array Int) (Array Int)
+  | ClientNeedMore Reassembly Bytes
+  | ClientReply Reassembly Bytes Bytes
   | ClientClosed Int
   | ClientFailed Int
 
@@ -445,7 +436,7 @@ data Reassembly = Reassembly (Option Assembly) Int
 noReassembly : Reassembly
 noReassembly = Reassembly None 0
 
-clientStep : Reassembly -> Array Int -> ClientStep
+clientStep : Reassembly -> Bytes -> ClientStep
 clientStep pending buffered =
   match decodeFrame FromClient maxClientFrameBytes buffered 0
     NeedMore => ClientNeedMore pending buffered
@@ -460,9 +451,9 @@ clientStep pending buffered =
    been asked to concatenate them. A control frame is not charged: RFC 6455
    §5.5 lets one be interleaved inside a fragmented message, and it is no
    part of that message. -}
-clientFrame : Reassembly -> Frame -> Array Int -> ClientStep
+clientFrame : Reassembly -> Frame -> Bytes -> ClientStep
 clientFrame (Reassembly pending sofar) (Frame fin opcode payload) rest =
-  let grown = if isControl opcode then sofar else sofar + arrayLength payload
+  let grown = if isControl opcode then sofar else sofar + B.length payload
   if grown > maxClientMessageBytes then
     ClientFailed messageTooBigCloseCode
   else match assembleFrame pending (Frame fin opcode payload)
@@ -474,7 +465,7 @@ clientFrame (Reassembly pending sofar) (Frame fin opcode payload) rest =
 
 -- A control frame leaves reassembly exactly as it found it, which is why the
 -- state travels through rather than being reset.
-clientControl : Reassembly -> Frame -> Array Int -> ClientStep
+clientControl : Reassembly -> Frame -> Bytes -> ClientStep
 clientControl _ (Frame _ Close payload) _ = ClientClosed (echoCloseCode payload)
 clientControl pending (Frame _ Ping payload) rest =
   ClientReply pending (encodeServerFrame (Frame True Pong payload)) rest
@@ -487,7 +478,7 @@ clientControl pending _ rest = clientStep pending rest
    said 3001 and is answered 1000 has been told something it never said. A
    payload that does not parse is the peer breaking §5.5.1 — that is 1002,
    never the value that failed to parse and never a normal close. -}
-echoCloseCode : Array Int -> Int
+echoCloseCode : Bytes -> Int
 echoCloseCode payload = match parseClosePayload payload
   Err _ => protocolCloseCode
   Ok None => normalCloseCode
@@ -499,6 +490,6 @@ echoCloseCode payload = match parseClosePayload payload
 asCloseCode : Int -> Int
 asCloseCode code = if closeCodeOnWire code then code else protocolCloseCode
 
-afterFrame : Array Int -> Int -> Array Int
+afterFrame : Bytes -> Int -> Bytes
 afterFrame buffered consumed =
-  sliceClamped consumed (arrayLength buffered) buffered
+  B.sliceClamped consumed (B.length buffered) buffered

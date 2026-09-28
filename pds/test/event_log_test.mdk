@@ -25,12 +25,11 @@
      back byte for byte after an append, which is the property #2692's
      whole-set rewrite would fail. -}
 
-import array.{drop}
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import list.{lookup, take}
-import string.{toUtf8}
 import test.{Expectation(..), expectEach, expectEqual, expectFalse, expectTrue}
 import test_process.{scratchDir}
 import lib.cid.{cidToString}
@@ -637,7 +636,10 @@ genesis : Repo
 genesis =
   resultOrPanic
     "event_log_test: repo init failed"
-    (repoInitFromKeyBytes testDid (arrayMake 32 1) (mustTid 1000000))
+    (repoInitFromKeyBytes
+      testDid
+      (fromU8Array (arrayMake 32 1))
+      (mustTid 1000000))
 
 written : Repo
 written =
@@ -645,7 +647,7 @@ written =
     ("$type", DcString "app.bsky.feed.post"),
     ("text", DcString "hello"),
   ]
-  let path = toUtf8 "app.bsky.feed.post/self"
+  let path = encodeUtf8 "app.bsky.feed.post/self"
   match repoCreate path record (mustTid 2000000) genesis
     Ok mutation => repoMutationState mutation
     Err message => panic "event_log_test: repo write failed: \{message}"
@@ -661,7 +663,7 @@ liveFrameHex =
     Err message => panic "event_log_test: event assembly failed: \{message}"
     Ok event => match syncCommitFrame event
       Err message => panic "event_log_test: frame encoding failed: \{message}"
-      Ok bytes => encode (fromArrayAssumeByteDomain bytes)
+      Ok bytes => encode bytes
 
 writtenHead : String
 writtenHead = cidToString (repoCommitCid (repoLatestCommit written))
@@ -675,12 +677,11 @@ writtenHead = cidToString (repoCommitCid (repoLatestCommit written))
 frameHeaderValue : DagCbor
 frameHeaderValue = DcMap [("op", DcInt 1), ("t", DcString "#commit")]
 
-mustEncode : DagCbor -> Array Int
+mustEncode : DagCbor -> Bytes
 mustEncode value =
-  toArray
-    (resultOrPanic "event_log_test: header encode failed" (dagCborEncode value))
+  resultOrPanic "event_log_test: header encode failed" (dagCborEncode value)
 
-frameHeaderBytes : Array Int
+frameHeaderBytes : Bytes
 frameHeaderBytes = mustEncode frameHeaderValue
 
 bodyField : String -> DagCbor -> Option DagCbor
@@ -736,12 +737,10 @@ test "a real commit's frame is stored and read back byte for byte" =
     Err message => Fail message "the frame" "an error"
     Ok () => match eventLogRead dir 0
       Err message => Fail message "the frame" "an error"
-      Ok [stored] => match map toArray (decode stored.frameHex)
+      Ok [stored] => match decode stored.frameHex
         Err message => Fail message "hex-decodable frame bytes" "an error"
         Ok frameBytes =>
-          let bodyBytes =
-            fromArrayAssumeByteDomain
-              (drop (arrayLength frameHeaderBytes) frameBytes)
+          let bodyBytes = B.drop (B.length frameHeaderBytes) frameBytes
           match dagCborDecode bodyBytes
             Err message => Fail message "a decodable #commit body" "an error"
             Ok body => match (

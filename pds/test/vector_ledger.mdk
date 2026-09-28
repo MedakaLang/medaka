@@ -1,22 +1,19 @@
-{- | The `--files-for <consumer>` half of `pds/test/vector_provenance.sh`,
-   as a Medaka module a native (slice 2-4) test runner can call directly
-   instead of shelling out to `sh vector_provenance.sh --files-for <id>`
-   (S-the-ledger-is-a-library, #2595, #2593).
+{- | The provenance ledger, `pds/test/VECTOR-PROVENANCE.txt`, as a library:
+   a lookup for the rows one consumer owns, and a check of the whole ledger
+   against the tree.
 
-   `filesForConsumer` reads `pds/test/VECTOR-PROVENANCE.txt`, and for every
-   `[vector]` stanza whose `consumer:` value's first token matches the
-   requested id: confirms the stanza names a `file:` and a well-formed
-   `local-sha256:`, confirms that file exists under the given root, and
-   confirms its CURRENT bytes still hash to the recorded digest. It returns
-   the matching repo-relative paths, sorted.
+   `filesForConsumer` reads the ledger, and for every `[vector]` stanza
+   whose `consumer:` value's first token matches the requested id: confirms
+   the stanza names a `file:` and a well-formed `local-sha256:`, confirms
+   that file exists under the given root, and confirms its CURRENT bytes
+   still hash to the recorded digest. It returns the matching repo-relative
+   paths, sorted.
 
-   This validates only the rows the requested consumer names — not the
-   full-corpus checks `vector_provenance.sh`'s `check_corpus` also performs
-   (every file under `pds/test/` has exactly one row, no orphan/missing
-   rows, `[impl]` pin agreement, symlink rejection). That gate — unchanged,
-   still the registered CI check — remains the authority for the ledger as
-   a whole; a caller here gets a guarantee scoped to its own files, not a
-   substitute for the gate.
+   The lookup validates only the rows the requested consumer names.
+   `checkCorpus` is the whole-ledger check: every file under `pds/test/`
+   has exactly one row, no row names a missing file, every stanza is
+   well-formed, `[impl]` pins agree, and a symlink is rejected. The
+   `pds/test/vector_provenance` gate runs it on the real tree.
 
    The digest MUST come from spawning the external `sha256sum`/`shasum`
    binary, never `stdlib/crypto/sha256.mdk`: this ledger governs the corpus that
@@ -25,13 +22,16 @@
    broken SHA-256 self-certifying. -}
 
 import array.{foldWithIndex}
-import io.{runCommandOk}
-import list.{reverse, sort}
-import string.{endsWith, isDigit, lines, startsWith, toChars, trim, words}
+import io.{runVerb}
+import list.{lookup, nub, reverse, somes, sort}
+import string.{
+  endsWith, isAlpha, isDigit, lines, startsWith, stripPrefix, toChars, trim,
+  words
+}
 
 -- One `[impl]` or `[vector]` stanza: its header word and its `key: value`
--- pairs in ledger order. `[impl]` stanzas are parsed and then ignored —
--- reference-impl pin agreement is out of this module's scope (see header).
+-- pairs in ledger order. The consumer lookup parses `[impl]` stanzas and
+-- then ignores them; `checkCorpus` parses the ledger again, more strictly.
 data Stanza = Stanza { kind : String, fields : List (String, String) }
 
 export
@@ -143,8 +143,7 @@ findValue _ [] = None
 findValue key ((k, v) :: rest) = if k == key then Some v else findValue key rest
 
 -- A `[vector]` stanza whose `consumer:` value's FIRST whitespace-delimited
--- token equals `consumer` — mirrors vector_provenance.sh's `list_consumer_
--- files` awk query (`split(consumer, parts, /[ \t]+/); parts[1] == WANT`).
+-- token equals `consumer`.
 isVectorForConsumer : String -> Stanza -> Bool
 isVectorForConsumer consumer stanza =
   stanza.kind == "vector"
@@ -172,7 +171,7 @@ validateRow root stanza = match fieldValue "file" stanza
       Err
         "vector_ledger: [vector] stanza for \{file} missing required key \"local-sha256\""
     Some expected =>
-      if not (isHex64 expected) then
+      if not (isHexOf 64 expected) then
         Err
           "vector_ledger: [vector] stanza for \{file}: local-sha256 is not 64 lowercase hex: \"\{expected}\""
       else
@@ -189,26 +188,399 @@ validateRow root stanza = match fieldValue "file" stanza
               Err
                 "vector_ledger: DIGEST MISMATCH \{file}: expected local-sha256=\{expected} actual=\{actual}"
 
-isHex64 : String -> Bool
-isHex64 s =
-  stringLength s == 64
-    && foldWithIndex (acc _ c => acc && isHexChar c) True (toChars s)
+-- Exactly `n` lowercase hex digits.
+isHexOf : Int -> String -> Bool
+isHexOf n s = stringLength s == n && allChars isHexChar s
+
+allChars : (Char -> Bool) -> String -> Bool
+allChars p s = foldWithIndex (acc _ c => acc && p c) True (toChars s)
 
 isHexChar : Char -> Bool
 isHexChar c = isDigit c || c >= 'a' && c <= 'f'
 
 -- ── sha256, spawned — never stdlib/crypto/sha256.mdk (see module header) ───────
 
+export
 sha256OfFile : String -> <Exec> Result String String
-sha256OfFile path = match runCommandOk "sha256sum" [path]
-  Ok (out, _) => firstWord path out
-  Err e1 => match runCommandOk "shasum" ["-a", "256", path]
-    Ok (out, _) => firstWord path out
+sha256OfFile path = match cleanStdout "sha256sum" [path]
+  Ok out => firstWord path out
+  Err e1 => match cleanStdout "shasum" ["-a", "256", path]
+    Ok out => firstWord path out
     Err e2 =>
       Err
         "sha256sum/shasum both unavailable or failed for \{path}: \{e1}; \{e2}"
+
+-- The stdout of `cmd args`, which must exit 0 and write nothing to stderr.
+cleanStdout : String -> List String -> <Exec> Result String String
+cleanStdout cmd args = match runVerb cmd args
+  Ok (0, out, "") => Ok out
+  Ok (code, _, err) =>
+    Err "\{cmd} exited \{intToString code} with stderr \{debug err}"
+  Err e => Err e
 
 firstWord : String -> String -> Result String String
 firstWord path out = match words out
   h :: _ => Ok h
   [] => Err "sha256 helper produced no output for \{path}"
+
+-- ── The whole-ledger check ───────────────────────────────────────────────
+
+{- | The outcome of `checkCorpus`: how many files under `pds/test/` were
+   hashed, how many `[vector]` rows the ledger holds, and every finding. No
+   findings means the ledger and the tree agree. -}
+public export data CorpusCheck = CorpusCheck {
+  files : Int,
+  rows : Int,
+  findings : List String,
+}
+
+{- | Every file under `<root>/pds/test/`, except `*.sh`, `*.mdk` and the
+   ledger itself, checked against the ledger.
+
+   Each file must have exactly one `[vector]` row, and each row must name a
+   file that exists and whose current bytes hash to its `local-sha256`.
+   Every stanza must carry its required keys and no unknown ones, every
+   `impl:` a row names must be pinned by an `[impl]` stanza, and one `[impl]`
+   id pinned to two commits is a conflict. A symlink is rejected rather than
+   followed, because the provenance of a target outside the tree cannot be
+   verified. Nothing is fetched: a row's `source-url` and `source-sha256`
+   are checked for shape only. -}
+export
+checkCorpus : String -> <FileRead, Exec> CorpusCheck
+checkCorpus root =
+  let testDir = "\{root}/pds/test"
+  let ledgerPath = "\{testDir}/VECTOR-PROVENANCE.txt"
+  if not (fileExists ledgerPath) then
+    unchecked ["pds/test/ or its ledger missing under \{root}"]
+  else match (findUnder testDir "f", findUnder testDir "l")
+    (Err e, _) => unchecked [e]
+    (_, Err e) => unchecked [e]
+    (Ok found, Ok linked) => match filter (/= ledgerPath) linked
+      [] => match readFile ledgerPath
+        Err e => unchecked ["could not read \{ledgerPath}: \{e}"]
+        Ok text => match traverse (hashedAs root) (filter (/= ledgerPath) found)
+          Err e => unchecked [e]
+          Ok hashes => checkLedger hashes text
+      links => unchecked (map (symlinkFinding root) links)
+
+unchecked : List String -> CorpusCheck
+unchecked fs = CorpusCheck { files = 0, rows = 0, findings = fs }
+
+symlinkFinding : String -> String -> String
+symlinkFinding root path =
+  "SYMLINK REJECTED: \"\{relativeTo root path}\" is a symlink; the provenance of a symlink target cannot be verified — commit the real file"
+
+-- The paths of one `find -type` kind under `dir`, excluding the two source
+-- suffixes, sorted.
+findUnder : String -> String -> <Exec> Result String (List String)
+findUnder dir kind =
+  let args = [dir, "-type", kind, "!", "-name", "*.sh", "!", "-name", "*.mdk"]
+  map (out => sort (filter (/= "") (lines out))) (cleanStdout "find" args)
+
+hashedAs : String -> String -> <Exec> Result String (String, String)
+hashedAs root path = map (h => (relativeTo root path, h)) (sha256OfFile path)
+
+relativeTo : String -> String -> String
+relativeTo root path = match stripPrefix "\{root}/" path
+  Some rel => rel
+  None => path
+
+-- One stanza with the ledger line its header sits on, for a finding to
+-- point at.
+data Section = Section {
+  header : String,
+  line : Int,
+  fields : List (String, String),
+}
+
+{- | The ledger's stanzas, and the findings against lines that are neither a
+   stanza header nor a `key: value` pair.
+
+   A header is `[` letters `]`. A header other than `[impl]` or `[vector]`
+   is a finding, and the lines under it are skipped until the next header;
+   so are the lines before the first one. -}
+sectionsOf : Int -> List String -> Option Section -> (List Section, List String)
+sectionsOf _ [] cur = (optionList cur, [])
+sectionsOf n (raw :: rest) cur =
+  let t = trim raw
+  if t == "" || startsWith "#" t then
+    sectionsOf (n + 1) rest cur
+  else match headerOf t
+    Some h =>
+      let known = h == "impl" || h == "vector"
+      let next =
+        if known then
+          Some Section { header = h, line = n, fields = [] }
+        else
+          None
+      let (ss, bad) = sectionsOf (n + 1) rest next
+      let here =
+        if known then
+          []
+        else
+          ["line \{intToString n}: unknown stanza header [\{h}]"]
+      (optionList cur ++ ss, here ++ bad)
+    None => match cur
+      None => sectionsOf (n + 1) rest cur
+      Some s => match splitColon raw
+        Some kv =>
+          let grown = { s | fields = s.fields ++ [kv] }
+          sectionsOf (n + 1) rest (Some grown)
+        None =>
+          let (ss, bad) = sectionsOf (n + 1) rest cur
+          (
+            ss,
+            ["line \{intToString n}: malformed line (no key: value): \{raw}"]
+              ++ bad,
+          )
+
+optionList : Option a -> List a
+optionList None = []
+optionList (Some x) = [x]
+
+headerOf : String -> Option String
+headerOf t =
+  let inner = stringSlice 1 (stringLength t - 1) t
+  if startsWith "[" t
+    && endsWith "]" t
+    && inner /= ""
+    && allChars isAlpha inner then
+    Some inner
+  else
+    None
+
+-- A key's value, the last one when a stanza repeats the key, and "" when it
+-- is absent.
+value : String -> Section -> String
+value key s = match lookup key (reverse s.fields)
+  Some v => v
+  None => ""
+
+hasKey : String -> Section -> Bool
+hasKey key s = match lookup key s.fields
+  Some _ => True
+  None => False
+
+checkLedger : List (String, String) -> String -> CorpusCheck
+checkLedger hashes text =
+  let (sections, bad) = sectionsOf 1 (lines text) None
+  let impls = filter (s => s.header == "impl") sections
+  let vectors = filter (s => s.header == "vector") sections
+  let pinned = filter (/= "") (map (value "id") impls)
+  let named = filter (/= "") (map (value "file") vectors)
+  CorpusCheck {
+    files = length hashes,
+    rows = length vectors,
+    findings =
+      bad
+        ++ flatMap implFindings impls
+        ++ conflictFindings [] impls
+        ++ flatMap (vectorFindings hashes pinned) vectors
+        ++ duplicateFindings [] vectors
+        ++ somes (map (missingRow named) hashes),
+  }
+
+stanzaAt : String -> Section -> String
+stanzaAt what s = "[\{what}] stanza at line \{intToString s.line}"
+
+requiredFindings : String -> List String -> Section -> List String
+requiredFindings what keys s =
+  map
+    (k => "\{stanzaAt what s}: missing required key \"\{k}\"")
+    (filter (k => value k s == "") keys)
+
+unknownFindings : String -> List String -> Section -> List String
+unknownFindings what known s =
+  map
+    (k => "\{stanzaAt what s}: unknown key \"\{k}\"")
+    (filter (k => not (elem k known)) (nub (map fst s.fields)))
+
+-- `YYYY-MM-DD`, digits only; the calendar is not checked.
+isDate : String -> Bool
+isDate r =
+  stringLength r == 10
+    && allChars isDigit (stringSlice 0 4 r)
+    && stringSlice 4 5 r == "-"
+    && allChars isDigit (stringSlice 5 7 r)
+    && stringSlice 7 8 r == "-"
+    && allChars isDigit (stringSlice 8 10 r)
+
+retrievedFindings : String -> Section -> List String
+retrievedFindings what s =
+  let r = value "retrieved" s
+  if r /= "" && not (isDate r) then
+    ["\{stanzaAt what s}: retrieved is not YYYY-MM-DD: \"\{r}\""]
+  else
+    []
+
+implFindings : Section -> List String
+implFindings s =
+  let c = value "commit" s
+  requiredFindings "impl" ["id", "repo", "version", "commit", "retrieved"] s
+    ++ unknownFindings
+      "impl"
+      ["id", "repo", "version", "commit", "retrieved", "notes"]
+      s
+    ++ (if c /= "" && not (isHexOf 40 c) then
+      ["\{stanzaAt "impl" s}: commit is not 40 lowercase hex: \"\{c}\""]
+    else
+      [])
+    ++ retrievedFindings "impl" s
+
+-- An `[impl]` id pinned to a different commit than its first stanza.
+conflictFindings : List Section -> List Section -> List String
+conflictFindings _ [] = []
+conflictFindings seen (s :: rest) =
+  let pin = value "id" s
+  if pin == "" then
+    conflictFindings seen rest
+  else match find (p => value "id" p == pin) seen
+    None => conflictFindings (seen ++ [s]) rest
+    Some first =>
+      let here =
+        if value "commit" first /= value "commit" s then
+          [
+            "CONFLICTING PIN: [impl] id \"\{pin}\" pinned to different commits at line \{intToString first.line} (\{value "commit" first}) and line \{intToString s.line} (\{value "commit" s})",
+          ]
+        else
+          []
+      here ++ conflictFindings seen rest
+
+vectorKeys : List String
+vectorKeys = [
+  "file",
+  "local-sha256",
+  "kind",
+  "source-url",
+  "extraction",
+  "retrieved",
+  "consumer",
+]
+
+vectorKnownKeys : List String
+vectorKnownKeys =
+  vectorKeys
+    ++ [
+      "source",
+      "source-sha256",
+      "source-note",
+      "impl",
+      "impl-secondary",
+      "notes",
+    ]
+
+vectorFindings : List (String, String) -> List String -> Section -> List String
+vectorFindings hashes pinned s =
+  requiredFindings "vector" vectorKeys s
+    ++ unknownFindings "vector" vectorKnownKeys s
+    ++ kindFindings pinned s
+    ++ localDigestFindings s
+    ++ retrievedFindings "vector" s
+    ++ fileFindings hashes s
+
+kindFindings : List String -> Section -> List String
+kindFindings pinned s = match value "kind" s
+  "published-artifact" => publishedFindings s
+  "reference-impl" => referenceFindings pinned s
+  k => [
+    "\{stanzaAt "vector" s}: unknown kind \"\{k}\" (must be published-artifact or reference-impl)",
+  ]
+
+publishedFindings : Section -> List String
+publishedFindings s =
+  let at = stanzaAt "vector" s
+  let source =
+    if value "source" s == "" then
+      ["\{at}: kind=published-artifact requires \"source\""]
+    else
+      []
+  let digest = match value "source-sha256" s
+    "" => ["\{at}: kind=published-artifact requires \"source-sha256\""]
+    "UNAVAILABLE" =>
+      if value "source-note" s == "" then
+        ["\{at}: source-sha256=UNAVAILABLE requires \"source-note\""]
+      else
+        []
+    d =>
+      if isHexOf 64 d then
+        []
+      else
+        [
+          "\{at}: source-sha256 is not 64 lowercase hex and not UNAVAILABLE: \"\{d}\"",
+        ]
+  source ++ digest
+
+referenceFindings : List String -> Section -> List String
+referenceFindings pinned s =
+  let at = stanzaAt "vector" s
+  let named = value "impl" s
+  let secondary = value "impl-secondary" s
+  let primary =
+    if named == "" then
+      ["\{at}: kind=reference-impl requires \"impl\""]
+    else if not (elem named pinned) then
+      [
+        "UNPINNED IMPL: [vector] stanza at line \{intToString s.line} names impl \"\{named}\" but no [impl] stanza defines it",
+      ]
+    else
+      []
+  let unpinnedSecondary =
+    if hasKey "impl-secondary" s && not (elem secondary pinned) then
+      [
+        "UNPINNED SECONDARY IMPL: [vector] stanza at line \{intToString s.line} names impl-secondary \"\{secondary}\" but no [impl] stanza defines it",
+      ]
+    else
+      []
+  let sameAsPrimary =
+    if hasKey "impl-secondary" s && secondary == named then
+      ["\{at}: impl-secondary must differ from impl"]
+    else
+      []
+  primary ++ unpinnedSecondary ++ sameAsPrimary
+
+localDigestFindings : Section -> List String
+localDigestFindings s =
+  let d = value "local-sha256" s
+  if d /= "" && not (isHexOf 64 d) then
+    ["\{stanzaAt "vector" s}: local-sha256 is not 64 lowercase hex: \"\{d}\""]
+  else
+    []
+
+fileFindings : List (String, String) -> Section -> List String
+fileFindings hashes s =
+  let file = value "file" s
+  let recorded = value "local-sha256" s
+  if file == "" then
+    []
+  else match lookup file hashes
+    Some actual =>
+      if recorded /= "" && recorded /= actual then
+        [
+          "DIGEST MISMATCH: [vector] stanza at line \{intToString s.line} file \"\{file}\": expected local-sha256=\{recorded} actual=\{actual}",
+        ]
+      else
+        []
+    None => [
+      "ORPHAN ROW: [vector] stanza at line \{intToString s.line} names file \"\{file}\" which does not exist (or is excluded, e.g. .sh/.mdk)",
+    ]
+
+duplicateFindings : List Section -> List Section -> List String
+duplicateFindings _ [] = []
+duplicateFindings seen (s :: rest) =
+  let file = value "file" s
+  if file == "" then
+    duplicateFindings seen rest
+  else match find (p => value "file" p == file) seen
+    None => duplicateFindings (seen ++ [s]) rest
+    Some first =>
+      [
+          "duplicate row: [vector] stanzas at line \{intToString first.line} and line \{intToString s.line} both name file \"\{file}\"",
+        ]
+        ++ duplicateFindings seen rest
+
+missingRow : List String -> (String, String) -> Option String
+missingRow named (file, _) =
+  if elem file named then
+    None
+  else
+    Some "MISSING ROW: file \"\{file}\" has no [vector] stanza"

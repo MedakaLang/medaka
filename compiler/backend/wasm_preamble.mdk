@@ -1684,9 +1684,11 @@ randomFloatRuntimeLines = [
 --     $mdk_path_reset() then loops the arg $str's bytes calling mdk_path_push(byte).
 --   READING a string FROM the host (file contents / env value / arg): after the host
 --     caches the result bytes, the guest reads mdk_result_len() + mdk_result_byte(i)
---     per byte and rebuilds a fresh $str ($mdk_io_result_to_str).
+--     per byte and rebuilds a fresh $str ($mdk_io_result_to_str), read as UTF-8 by
+--     $mdk_u8_to_str_lossy (utf8LossyRuntimeLines).
 --   readFile  : push path, mdk_read_file() -> i32 (1=Ok, 0=Err); rebuild the result
 --     $str and wrap Ok (struct.new $C_Ok, ord 0) / Err (struct.new $C_Err, ord 1).
+--     Contents that are not UTF-8 are an Err naming the path ($mdk_str_not_utf8).
 --   fileExists: push path, mdk_file_exists() -> i32 (1/0) -> Bool i31.
 --   getEnv    : push name, mdk_get_env() -> i32 (1=Some / 0=None); rebuild $str and
 --     wrap Some (struct.new $C_Some, ord 0) / None (i31 ord 1).
@@ -1711,6 +1713,22 @@ ioHostImportLines = [
   "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"
 ]
 
+-- readFile's Err suffix for contents that are not UTF-8, the text of
+-- medaka_rt.c mdk_read_file's, as the WAT that builds it as a $u8arr.  ASCII,
+-- so one element per character.
+notUtf8SuffixWat : String
+notUtf8SuffixWat =
+  let cs = stringToChars ": not valid UTF-8 (use readFileBytes for raw bytes)"
+  "(array.new_fixed $u8arr \{intToString (arrayLength cs)}\{asciiConstsW cs (arrayLength cs) 0})"
+
+asciiConstsW : Array Char -> Int -> Int -> String
+asciiConstsW cs n i =
+  if i >= n then
+    ""
+  else
+    " (i32.const \{intToString (charCode (arrayGetUnsafe i cs))})"
+      ++ asciiConstsW cs n (i + 1)
+
 -- the IO host-surface runtime: the byte-channel marshalers + the five extern bodies.
 -- $str-dependent (every path/result is a $str) and $C_Ok/$C_Err/$C_Some/$T_List are
 -- always declared in ref-mode, so these are always in scope when emitted.
@@ -1724,49 +1742,62 @@ ioHostRuntimeLines = [
   "    (call $mdk_path_reset)",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
   "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    )",
-  "  ;; rebuild a fresh $str from the host result buffer (length + byte-at-index).",
-  "  ;; cp_count is the true UTF-8 codepoint count (count lead bytes: those whose top",
-  "  ;; two bits are NOT 0b10, i.e. (b & 0xC0) != 0x80).  A byte-length approximation",
-  "  ;; here is WRONG for any multibyte content: $mdk_str_to_chars allocates its output",
-  "  ;; $arr to cp_count and the lexer reads arrayLength as the char count, so an inflated",
-  "  ;; cp_count appends trailing NUL chars past the real codepoints -> a stray '\\0' falls",
-  "  ;; through every clause head and traps (a file with a single em-dash comment was enough).",
-  "  (func $mdk_io_result_to_str (result (ref $str))",
-  "    (local $n i32) (local $i i32) (local $buf (ref $u8arr)) (local $cpc i32) (local $b i32)",
+  "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.",
+  "  (func $mdk_io_result_bytes (result (ref $u8arr))",
+  "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
   "    (local.set $n (call $mdk_result_len))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0)) (local.set $cpc (i32.const 0))",
+  "    (local.set $i (i32.const 0))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (local.set $b (call $mdk_result_byte (local.get $i)))",
-  "      (array.set $u8arr (local.get $buf) (local.get $i) (local.get $b))",
-  "      (if (i32.ne (i32.and (local.get $b) (i32.const 192)) (i32.const 128))",
-  "        (then (local.set $cpc (i32.add (local.get $cpc) (i32.const 1)))))",
+  "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (struct.new $str (local.get $cpc) (local.get $buf)))",
+  "    (local.get $buf))",
+  "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.",
+  "  (func $mdk_io_result_to_str (result (ref $str))",
+  "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))",
+  "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII",
+  "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.",
+  "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))",
+  "    (local $pb (ref $u8arr)) (local $pl i32) (local $sfx (ref $u8arr)) (local $out (ref $u8arr))",
+  "    (local.set $pb (struct.get $str $bytes (local.get $path)))",
+  "    (local.set $pl (array.len (local.get $pb)))",
+  "    (local.set $sfx \{notUtf8SuffixWat})",
+  "    (local.set $out (array.new $u8arr (i32.const 0) (i32.add (local.get $pl) (array.len (local.get $sfx)))))",
+  "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $pb) (i32.const 0) (local.get $pl))",
+  "    (array.copy $u8arr $u8arr (local.get $out) (local.get $pl) (local.get $sfx) (i32.const 0) (array.len (local.get $sfx)))",
+  "    (struct.new $str (i32.add (struct.get $str $cp_count (local.get $path)) (array.len (local.get $sfx))) (local.get $out)))",
   "  ;; readFile : $str path -> Result String String.  1=Ok contents / 0=Err message.",
+  "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).",
   "  (func $mdk_read_file_io (param $path (ref $str)) (result (ref eq))",
-  "    (local $st i32)", "    (call $mdk_push_path (local.get $path))",
+  "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)",
+  "    (call $mdk_push_path (local.get $path))",
   "    (local.set $st (call $mdk_read_file))",
-  "    (if (result (ref eq)) (local.get $st)",
-  "      (then (struct.new $C_Ok (i32.const 0) (call $mdk_io_result_to_str)))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
+  "    (if (i32.eqz (local.get $st))",
+  "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
+  "    (local.set $buf (call $mdk_io_result_bytes))",
+  "    (local.set $c (call $mdk_utf8_valid_count (local.get $buf)))",
+  "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))",
+  "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))",
   "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1).",
   "  (func $mdk_file_exists_io (param $path (ref $str)) (result (ref eq))",
   "    (call $mdk_push_path (local.get $path))",
   "    (ref.i31 (call $mdk_file_exists)))",
   "  ;; getEnv : $str name -> Option String.  1=Some value / 0=None.",
   "  (func $mdk_get_env_io (param $name (ref $str)) (result (ref eq))",
-  "    (local $st i32)", "    (call $mdk_push_path (local.get $name))",
+  "    (local $st i32)",
+  "    (call $mdk_push_path (local.get $name))",
   "    (local.set $st (call $mdk_get_env))",
   "    (if (result (ref eq)) (local.get $st)",
   "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
-  "      (else (ref.i31 (i32.const 1)))))"
+  "      (else (ref.i31 (i32.const 1)))))",
 ]
 
 -- the `args` extern body — split out from ioHostRuntimeLines because it references
@@ -1786,7 +1817,7 @@ ioArgsRuntimeLines = [
   "      (br_if $d (i32.ge_s (local.get $j) (local.get $n)))",
   "      (array.set $u8arr (local.get $buf) (local.get $j) (call $mdk_arg_byte (local.get $idx) (local.get $j)))",
   "      (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $l)))",
-  "    (struct.new $str (local.get $n) (local.get $buf)))",
+  "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
   "  ;; args : Unit -> List String.  Fold a Cons chain right-to-left ending in Nil.",
   "  (func $mdk_args_io (result (ref eq))",
   "    (local $c i32) (local $i i32) (local $acc (ref eq))",
@@ -1920,6 +1951,101 @@ strSearchRuntimeLines = [
   "    (ref.i31 (i32.const 1)))",
 ]
 
+-- ── UTF-8 validation: bytes from outside the program into a $str ─────────────
+-- Every $str holds well-formed UTF-8, as every native String cell does.  These
+-- are the WasmGC peers of medaka_rt.c's mdk_utf8_step / mdk_utf8_valid_count /
+-- mdk_str_lossy, byte-identical on every input:
+--   $mdk_utf8_step        : the width (1..4) of the well-formed sequence at $i, or
+--     the negated width of its maximal ill-formed subpart.
+--   $mdk_utf8_valid_count : the codepoint count of a $u8arr, or -1 when any
+--     sequence in it is ill-formed.
+--   $mdk_u8_to_str_lossy  : a FRESH, unaliased $u8arr as a $str; each ill-formed
+--     subpart becomes U+FFFD (bytes ef bf bd), as `bytes.decodeUtf8Lossy` does.
+-- Emitted whenever a producer of outside bytes is: the byte codec (useStrCodec),
+-- `byteBlockToString` (useByteBlock), and the IO host surface (useIO).
+export
+utf8LossyRuntimeLines : List String
+utf8LossyRuntimeLines = [
+  "  ;; -- UTF-8 validation (byte-identical to medaka_rt.c mdk_str_lossy) --",
+  "  (func $mdk_utf8_step (param $b (ref $u8arr)) (param $i i32) (param $n i32) (result i32)",
+  "    (local $b0 i32) (local $b1 i32) (local $lo i32) (local $hi i32)",
+  "    (local.set $b0 (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "    (if (i32.lt_u (local.get $b0) (i32.const 128)) (then (return (i32.const 1))))",
+  "    (if (i32.and (i32.ge_u (local.get $b0) (i32.const 194)) (i32.le_u (local.get $b0) (i32.const 223)))",
+  "      (then",
+  "        (if (i32.lt_s (i32.add (local.get $i) (i32.const 1)) (local.get $n))",
+  "          (then (if (i32.eq (i32.and (array.get_u $u8arr (local.get $b) (i32.add (local.get $i) (i32.const 1))) (i32.const 192)) (i32.const 128))",
+  "            (then (return (i32.const 2))))))",
+  "        (return (i32.const -1))))",
+  "    (if (i32.or (i32.lt_u (local.get $b0) (i32.const 224)) (i32.gt_u (local.get $b0) (i32.const 244)))",
+  "      (then (return (i32.const -1))))",
+  "    ;; E0 and F0 bound the second byte below (overlong), ED and F4 above.",
+  "    (local.set $lo (select (i32.const 160) (select (i32.const 144) (i32.const 128) (i32.eq (local.get $b0) (i32.const 240))) (i32.eq (local.get $b0) (i32.const 224))))",
+  "    (local.set $hi (select (i32.const 159) (select (i32.const 143) (i32.const 191) (i32.eq (local.get $b0) (i32.const 244))) (i32.eq (local.get $b0) (i32.const 237))))",
+  "    (if (i32.ge_s (i32.add (local.get $i) (i32.const 1)) (local.get $n)) (then (return (i32.const -1))))",
+  "    (local.set $b1 (array.get_u $u8arr (local.get $b) (i32.add (local.get $i) (i32.const 1))))",
+  "    (if (i32.or (i32.lt_u (local.get $b1) (local.get $lo)) (i32.gt_u (local.get $b1) (local.get $hi)))",
+  "      (then (return (i32.const -1))))",
+  "    (if (i32.ge_s (i32.add (local.get $i) (i32.const 2)) (local.get $n)) (then (return (i32.const -2))))",
+  "    (if (i32.ne (i32.and (array.get_u $u8arr (local.get $b) (i32.add (local.get $i) (i32.const 2))) (i32.const 192)) (i32.const 128))",
+  "      (then (return (i32.const -2))))",
+  "    (if (i32.lt_u (local.get $b0) (i32.const 240)) (then (return (i32.const 3))))",
+  "    (if (i32.ge_s (i32.add (local.get $i) (i32.const 3)) (local.get $n)) (then (return (i32.const -3))))",
+  "    (if (i32.ne (i32.and (array.get_u $u8arr (local.get $b) (i32.add (local.get $i) (i32.const 3))) (i32.const 192)) (i32.const 128))",
+  "      (then (return (i32.const -3))))",
+  "    (i32.const 4))",
+  "  (func $mdk_utf8_valid_count (param $b (ref $u8arr)) (result i32)",
+  "    (local $n i32) (local $i i32) (local $c i32) (local $st i32)",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0)) (local.set $c (i32.const 0))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (local.set $st (call $mdk_utf8_step (local.get $b) (local.get $i) (local.get $n)))",
+  "      (if (i32.lt_s (local.get $st) (i32.const 0)) (then (return (i32.const -1))))",
+  "      (local.set $i (i32.add (local.get $i) (local.get $st)))",
+  "      (local.set $c (i32.add (local.get $c) (i32.const 1))) (br $l)))",
+  "    (local.get $c))",
+  "  (func $mdk_u8_to_str_lossy (param $b (ref $u8arr)) (result (ref $str))",
+  "    (local $n i32) (local $i i32) (local $j i32) (local $c i32) (local $st i32) (local $out i32)",
+  "    (local $buf (ref $u8arr))",
+  "    (local.set $c (call $mdk_utf8_valid_count (local.get $b)))",
+  "    (if (i32.ge_s (local.get $c) (i32.const 0))",
+  "      (then (return (struct.new $str (local.get $c) (local.get $b)))))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    ;; pass 1: the output length, 3 bytes per replacement.",
+  "    (local.set $i (i32.const 0)) (local.set $out (i32.const 0))",
+  "    (block $d1 (loop $l1",
+  "      (br_if $d1 (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (local.set $st (call $mdk_utf8_step (local.get $b) (local.get $i) (local.get $n)))",
+  "      (if (i32.gt_s (local.get $st) (i32.const 0))",
+  "        (then",
+  "          (local.set $out (i32.add (local.get $out) (local.get $st)))",
+  "          (local.set $i (i32.add (local.get $i) (local.get $st))))",
+  "        (else",
+  "          (local.set $out (i32.add (local.get $out) (i32.const 3)))",
+  "          (local.set $i (i32.sub (local.get $i) (local.get $st)))))",
+  "      (br $l1)))",
+  "    ;; pass 2: copy each well-formed sequence, U+FFFD for each subpart.",
+  "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $out)))",
+  "    (local.set $i (i32.const 0)) (local.set $j (i32.const 0)) (local.set $c (i32.const 0))",
+  "    (block $d2 (loop $l2",
+  "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (local.set $st (call $mdk_utf8_step (local.get $b) (local.get $i) (local.get $n)))",
+  "      (if (i32.gt_s (local.get $st) (i32.const 0))",
+  "        (then",
+  "          (array.copy $u8arr $u8arr (local.get $buf) (local.get $j) (local.get $b) (local.get $i) (local.get $st))",
+  "          (local.set $j (i32.add (local.get $j) (local.get $st)))",
+  "          (local.set $i (i32.add (local.get $i) (local.get $st))))",
+  "        (else",
+  "          (array.set $u8arr (local.get $buf) (local.get $j) (i32.const 239))",
+  "          (array.set $u8arr (local.get $buf) (i32.add (local.get $j) (i32.const 1)) (i32.const 191))",
+  "          (array.set $u8arr (local.get $buf) (i32.add (local.get $j) (i32.const 2)) (i32.const 189))",
+  "          (local.set $j (i32.add (local.get $j) (i32.const 3)))",
+  "          (local.set $i (i32.sub (local.get $i) (local.get $st)))))",
+  "      (local.set $c (i32.add (local.get $c) (i32.const 1))) (br $l2)))",
+  "    (struct.new $str (local.get $c) (local.get $buf)))",
+]
+
 -- ── W11b UTF-8 codec: stringToChars / stringFromChars ($str <-> Array Char) ──────
 -- Byte-identical to medaka_rt.c (mdk_string_to_chars / mdk_string_from_chars +
 -- mdk_utf8_decode / mdk_utf8_encode).  A Char is an i31 codepoint; an `Array Char` is
@@ -1948,6 +2074,8 @@ strCodecRuntimeLines = [
   "    (local.set $bo (i32.const 0)) (local.set $oi (i32.const 0))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $bo) (local.get $n)))",
+  "      ;; the output holds cp_count codepoints; never step past it.",
+  "      (br_if $d (i32.ge_s (local.get $oi) (local.get $cpc)))",
   "      (local.set $lead (array.get_u $u8arr (local.get $b) (local.get $bo)))",
   "      ;; lead-byte class → codepoint seed bits + total byte width.",
   "      (if (i32.lt_u (local.get $lead) (i32.const 128))",
@@ -1957,6 +2085,9 @@ strCodecRuntimeLines = [
   "          (else (if (i32.lt_u (local.get $lead) (i32.const 240))",
   "            (then (local.set $cp (i32.and (local.get $lead) (i32.const 15))) (local.set $w (i32.const 3)))",
   "            (else (local.set $cp (i32.and (local.get $lead) (i32.const 7))) (local.set $w (i32.const 4))))))))",
+  "      ;; a sequence never reads past the backing's end.",
+  "      (if (i32.gt_s (local.get $w) (i32.sub (local.get $n) (local.get $bo)))",
+  "        (then (local.set $w (i32.sub (local.get $n) (local.get $bo)))))",
   "      ;; fold in (w-1) continuation bytes: cp = (cp << 6) | (byte & 0x3F).",
   "      (local.set $k (i32.const 1))",
   "      (block $cd (loop $cl",
@@ -2031,21 +2162,19 @@ strCodecRuntimeLines = [
   "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    (local.get $out))",
-  "  ;; stringFromUtf8Bytes: blit the low 8 bits of each i31 Int into a $u8arr; recompute",
-  "  ;; cp_count by the non-continuation-byte rule (byte-identical to medaka_rt.c mdk_str_lit).",
+  "  ;; stringFromUtf8Bytes: blit the low 8 bits of each i31 Int into a $u8arr, read",
+  "  ;; as UTF-8 by $mdk_u8_to_str_lossy (medaka_rt.c mdk_string_from_utf8_bytes).",
   "  (func $mdk_utf8_bytes_to_str (param $a (ref $arr)) (result (ref $str))",
-  "    (local $n i32) (local $buf (ref $u8arr)) (local $i i32) (local $cpc i32) (local $byte i32)",
+  "    (local $n i32) (local $buf (ref $u8arr)) (local $i i32)",
   "    (local.set $n (array.len (local.get $a)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0)) (local.set $cpc (i32.const 0))",
+  "    (local.set $i (i32.const 0))",
   "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (local.set $byte (i32.and (i31.get_u (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))) (i32.const 255)))",
-  "      (array.set $u8arr (local.get $buf) (local.get $i) (local.get $byte))",
-  "      (if (i32.ne (i32.and (local.get $byte) (i32.const 192)) (i32.const 128))",
-  "        (then (local.set $cpc (i32.add (local.get $cpc) (i32.const 1)))))",
+  "      (array.set $u8arr (local.get $buf) (local.get $i)",
+  "        (i32.and (i31.get_u (ref.cast (ref i31) (array.get $arr (local.get $a) (local.get $i)))) (i32.const 255)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (struct.new $str (local.get $cpc) (local.get $buf)))",
+  "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
 ]
 
 -- ── the `ByteBlock` builtin's byte-block runtime ─────────────────────────────
@@ -2109,21 +2238,14 @@ byteBlockRuntimeLines = [
   "    (local.get $out))",
   "  ;; byteBlockToString: the block's bytes as a fresh $str.  The backing is COPIED",
   "  ;; because a block is mutable and a $str's bytes are shared by every reference to",
-  "  ;; it.  cp_count is recomputed by the non-continuation-byte rule, byte-identical",
-  "  ;; to $mdk_utf8_bytes_to_str and to medaka_rt.c's mdk_str_lit, so an invalid",
-  "  ;; sequence is preserved rather than rejected.",
+  "  ;; it; the copy is then read as UTF-8 by $mdk_u8_to_str_lossy, the same route as",
+  "  ;; $mdk_utf8_bytes_to_str and medaka_rt.c's mdk_byteblock_to_string.",
   "  (func $mdk_bb_to_string (param $b (ref $u8arr)) (result (ref $str))",
-  "    (local $n i32) (local $buf (ref $u8arr)) (local $i i32) (local $cpc i32)",
+  "    (local $n i32) (local $buf (ref $u8arr))",
   "    (local.set $n (array.len (local.get $b)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
   "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
-  "    (local.set $i (i32.const 0)) (local.set $cpc (i32.const 0))",
-  "    (block $d (loop $l",
-  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
-  "      (if (i32.ne (i32.and (array.get_u $u8arr (local.get $b) (local.get $i)) (i32.const 192)) (i32.const 128))",
-  "        (then (local.set $cpc (i32.add (local.get $cpc) (i32.const 1)))))",
-  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    (struct.new $str (local.get $cpc) (local.get $buf)))",
+  "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
   "  ;; byteBlockWriteStdout: write the block's bytes to stdout byte-for-byte, no",
   "  ;; encoding assumption -- unlike $mdk_print_str, there is no $str/cp_count to",
   "  ;; read, just the raw $u8arr length.",

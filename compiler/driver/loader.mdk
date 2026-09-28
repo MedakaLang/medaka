@@ -116,6 +116,41 @@ moduleIdOfPath : List String -> String -> String
 moduleIdOfPath roots path =
   slashToDot (stripSuffixStr ".mdk" (relUnderRoots roots path))
 
+-- The text of a Medaka source file, or why it could not be read: `Err None`
+-- for a file that is not valid UTF-8, `Err (Some msg)` with `readFile`'s own
+-- message for any other failure.  `readFile` words the encoding refusal for a
+-- library caller (use `readFileBytes`); a source file wants the compiler's own
+-- wording, and `--json` its own code.
+export
+readSourceE : String -> <FileRead> Result (Option String) String
+readSourceE path = match readFile path
+  Ok src => Ok src
+  Err e => if endsWith readFileNotUtf8Suffix e then Err None else Err (Some e)
+
+-- What `readFile` puts after the path when it refuses a file that is not
+-- valid UTF-8: `mdk_read_file` in runtime/medaka_rt.c, and `$mdk_str_not_utf8`
+-- in compiler/backend/wasm_preamble.mdk for the wasm runtime.  Matched rather
+-- than confirmed with `readFileBytes`, whose wasm host surface carries the
+-- file-writing imports too, which the playground's compiler does not provide.
+readFileNotUtf8Suffix : String
+readFileNotUtf8Suffix = ": not valid UTF-8 (use readFileBytes for raw bytes)"
+
+-- The message for a source file that is not valid UTF-8.
+export
+sourceNotUtf8Message : String -> String
+sourceNotUtf8Message path =
+  "\{path}: not valid UTF-8. Medaka source files must be UTF-8 text; re-save this file as UTF-8"
+
+-- `readSourceE` with the failure as the line a verb prints: the encoding
+-- refusal as an `Error:` naming the path, any other failure `readFile`'s own
+-- message, unchanged.
+export
+readSource : String -> <FileRead> Result String String
+readSource path = match readSourceE path
+  Ok src => Ok src
+  Err None => Err "Error: \{sourceNotUtf8Message path}"
+  Err (Some e) => Err e
+
 -- Walk up from `startDir` to the nearest directory containing `medaka.toml` (the
 -- project / module root).  This
 -- is what lets tooling (LSP, run) resolve nested modules whose IDs are rooted at
@@ -460,13 +495,17 @@ entryModuleIds dir prefix (name :: rest) =
         moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
   here ++ entryModuleIds dir prefix rest
 
--- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, and the two implicit
--- prelude modules are dropped.
+-- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, the two implicit
+-- prelude modules, and a `*_test.mdk` sibling (a module's tests, never an
+-- import to suggest) are dropped.
 mdkBaseName : String -> Option String
 mdkBaseName name =
   if endsWith ".mdk" name && not (startsWith "." name) then
     let base = stringSlice 0 (stringLength name - 4) name
-    if base == "core" || base == "runtime" then None else Some base
+    if base == "core" || base == "runtime" || endsWith "_test" base then
+      None
+    else
+      Some base
   else
     None
 
@@ -568,8 +607,9 @@ readModuleProgF parseFn read deps roots modId =
     None => Err (LoadMsg (stringConcat ["unknown module: ", modId]))
     Some (path, owningRoot) => match read path
       Some src => parsedModule parseFn owningRoot path src
-      None => match readFile path
-        Err e => Err (LoadMsg e)
+      None => match readSourceE path
+        Err None => Err (LoadMsg (sourceNotUtf8Message path))
+        Err (Some e) => Err (LoadMsg e)
         Ok src => parsedModule parseFn owningRoot path src
 -- unsaved editor buffer shadows disk
 

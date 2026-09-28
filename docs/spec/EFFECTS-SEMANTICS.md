@@ -327,13 +327,25 @@ is the safe default):
 | Core form | `α` |
 |---|---|
 | string literal `"s"` | the singleton authority `s` (e.g. `Prefix` pattern from `s`) |
-| `e₁ ++ e₂` (concatenation) | in `Prefix`, a justified left prefix bounds the whole; in `Set`, non-literal concatenation gives `⊤` |
-| string interpolation `"s\{e}…"` | the `++`-chain rule: the leading literal `s` is the known prefix; the first interpolated expression stops it |
+| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays. In `Set`, non-literal concatenation gives `⊤` |
+| string interpolation `"s\{e}…"` | the `++`-chain rule: the leading literal `s` is the known prefix, extended to `s*` by the first interpolated expression |
 | `let x = e₁ in …x…` | propagate `α(e₁)` to uses of `x` |
 | `if c then e₁ else e₂` | `α(e₁) ⊔ α(e₂)` (join of branch authorities) |
 | `match … { … ⇒ eᵢ }` | `⊔ᵢ α(eᵢ)` (join over arms) |
 | a value whose checked type is `τ @q` | `q`, including variables, application results and field reads |
 | application result, parameter, or field without an authority qualifier; anything else | `⊤` |
+
+**Open: extending an authority variable.** No term names the extension of a
+variable, so `p ++ x` with `p : String @κ` currently keeps `κ`. That is sound
+only when whatever `κ` stands for is a pattern, and nothing guarantees it:
+- a signature's variable, bound by an argument or a data index, admits a
+  caller's exact element: `"cfg/app.toml"` is charged for that file while the
+  read reaches `cfg/app.toml<x>`;
+- a flexible variable still unbound when `α` runs is solved afterwards, and
+  may be solved to an exact element with no caller involved.
+
+(#3501 and #3502, pinned by must_fail `3501-signature-variable-extension` and
+`3502-flexible-variable-extension`.)
 
 **The ⊤-fallback *is* the no-exfiltration guarantee.** A URL/path that is computed
 (a function result, a runtime input, an un-analyzable expression) abstracts to
@@ -404,7 +416,8 @@ proofs of containment.
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates
 `α_𝔻(argument) ⊑ κ`, where `α` reads the argument's syntax first (a literal, a
-`++` whose left operand is justified in a prefix-shaped domain, a same-body
+`++` whose left operand is justified in a prefix-shaped domain and extended by
+the suffix, a same-body
 `let`, a branch join) and otherwise the argument's checked type: the qualifier
 of a `τ @q`, else the domain's top. A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the
@@ -1050,10 +1063,50 @@ domain until process signals have a label of their own. That over-charges,
 which is safe, and the only program using them already holds that grant
 because it binds.
 
+**The invocation summary.** The host forces the entry, calls it, and may invoke
+any function value the entry hands back; a function value the host supplies is
+the host's own. So the effects charged are the forcing row joined with every
+row that sits in a position the entry controls, read off the entry's type by
+declared variance (§6.4). Starting positive at the entry's type:
+
+- an arrow in a positive position charges its row; its result keeps the
+  position and its domain flips it. An arrow in a negative position is the
+  host's, so its row is not charged.
+- an argument of a type constructor takes the constructor's variance for that
+  slot composed with the position. An invariant slot is both positive and
+  negative, so it is charged. A slot whose variance the checker cannot see is
+  read as invariant.
+- an effect index (`Async <Net> a`) in a positive position is charged.
+- a tuple's elements keep the position.
+- a data type whose constructors the entry's module can name is also
+  opened: each constructor field is read at the type's own position, so a
+  row written inside a monomorphic field is charged. Only the type's
+  authority arguments are substituted into its fields, once per distinct
+  authority arguments. A type or row argument is charged where it lands, by
+  the slot's variance, so the opening need not see it; that requires the
+  variance of every slot to be the least fixpoint of the declaration's
+  occurrences (§6.4), never a more covariant approximation. A builtin
+  type, and a type whose constructors another module
+  keeps (an abstract or private type, or any newtype declared elsewhere), is
+  read through its variance only: the host holds such a value but cannot
+  apply anything inside it, though the declaring module's own functions
+  can. Whether that route belongs to the protocol is open.
+- a slot whose parameter is an effect row or an authority is an index, and
+  an index is invariant (§6.4), so an effect index is charged in either
+  position. That over-charges an index a type only ever uses covariantly
+  where the type sits in a negative position, which is safe.
+
+`manifest` and `check-policy` share this summary
+(`compiler/types/effect_invocation.mdk`).
+
 Unresolved symbolic authority at a host boundary is conservatively top in its
 domain, or an explicit unresolved-manifest error. It must never be omitted or
 rendered as empty authority. A forcing effect cannot disappear merely because
-the entry's value type is `Unit` rather than an arrow.
+the entry's value type is `Unit` rather than an arrow. The manifest writes an
+authority still bound to a variable as the whole label, with a TOML comment
+naming the variable: ``Net = true  # unresolved: authority variable `url` ``.
+A policy entry narrower than the whole label reports it as `not proven`
+rather than refusing it silently.
 
 **The host is the handler.** Medaka has no in-language effect handler. Instead the
 **runtime platform** is the handler: it reads `M(module)` *before loading* the

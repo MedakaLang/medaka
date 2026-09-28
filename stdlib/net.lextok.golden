@@ -1,11 +1,5 @@
 NEWLINE
 IMPORT
-IDENT "array"
-DOT_LBRACE
-IDENT "setInPlace"
-RBRACE
-NEWLINE
-IMPORT
 IDENT "bytes"
 AS
 UPPER "B"
@@ -21,7 +15,11 @@ NEWLINE
 IMPORT
 IDENT "list"
 DOT_LBRACE
+IDENT "drop"
+COMMA
 IDENT "reverse"
+COMMA
+IDENT "take"
 RBRACE
 NEWLINE
 IMPORT
@@ -39,8 +37,6 @@ NEWLINE
 IMPORT
 IDENT "string"
 DOT_LBRACE
-IDENT "toUtf8"
-COMMA
 IDENT "fromUtf8"
 RBRACE
 NEWLINE
@@ -63,8 +59,6 @@ DOT_LBRACE
 IDENT "expectAll"
 COMMA
 IDENT "expectEqual"
-COMMA
-IDENT "expectTrue"
 RBRACE
 NEWLINE
 EXPORT
@@ -259,12 +253,19 @@ IDENT "send"
 IDENT "conn"
 IDENT "bs"
 EQUAL
-IDENT "netSend"
+IDENT "netSendBytesFrom"
 IDENT "conn"
 LPAREN
 UPPER "B"
 DOT
-IDENT "toArray"
+IDENT "lendByteBlockUnsafe"
+IDENT "bs"
+RPAREN
+INT 0
+LPAREN
+UPPER "B"
+DOT
+IDENT "length"
 IDENT "bs"
 RPAREN
 NEWLINE
@@ -318,54 +319,41 @@ IDENT "sendAll"
 IDENT "conn"
 IDENT "bs"
 EQUAL
-IDENT "sendArray"
-IDENT "conn"
-LPAREN
+INDENT
+LET
+IDENT "bb"
+EQUAL
 UPPER "B"
 DOT
-IDENT "toArray"
+IDENT "lendByteBlockUnsafe"
 IDENT "bs"
-RPAREN
 NEWLINE
-IDENT "sendArray"
-COLON
-UPPER "Connection"
-IDENT "h"
-ARROW
-UPPER "Array"
-UPPER "Int"
-ARROW
-LT
-UPPER "Net"
-IDENT "h"
-GT
-UPPER "Result"
-UPPER "String"
-UPPER "Unit"
-NEWLINE
-IDENT "sendArray"
-IDENT "conn"
-IDENT "bs"
+LET
+IDENT "end"
 EQUAL
+UPPER "B"
+DOT
+IDENT "length"
+IDENT "bs"
+NEWLINE
 IDENT "sendAllFrom"
 LPAREN
-IDENT "bytes"
 IDENT "off"
 FAT_ARROW
-IDENT "netSendFrom"
+IDENT "netSendBytesFrom"
 IDENT "conn"
-IDENT "bytes"
+IDENT "bb"
 IDENT "off"
+IDENT "end"
 RPAREN
-IDENT "bs"
+IDENT "end"
 INT 0
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "sendAllFrom"
 COLON
 LPAREN
-UPPER "Array"
-UPPER "Int"
-ARROW
 UPPER "Int"
 ARROW
 LT
@@ -377,7 +365,6 @@ UPPER "Int"
 RPAREN
 ARROW
 INDENT
-UPPER "Array"
 UPPER "Int"
 ARROW
 NEWLINE
@@ -394,15 +381,14 @@ DEDENT
 NEWLINE
 IDENT "sendAllFrom"
 IDENT "write"
-IDENT "bs"
+IDENT "end"
 IDENT "off"
 EQUAL
 INDENT
 IF
 IDENT "off"
 GEQ
-IDENT "arrayLength"
-IDENT "bs"
+IDENT "end"
 THEN
 INDENT
 UPPER "Ok"
@@ -413,7 +399,6 @@ DEDENT
 ELSE
 MATCH
 IDENT "write"
-IDENT "bs"
 IDENT "off"
 INDENT
 UPPER "Err"
@@ -433,139 +418,11 @@ IDENT "n"
 FAT_ARROW
 IDENT "sendAllFrom"
 IDENT "write"
-IDENT "bs"
+IDENT "end"
 LPAREN
 IDENT "off"
 PLUS
 IDENT "n"
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "testSentBytes"
-COLON
-UPPER "Array"
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "List"
-UPPER "Int"
-NEWLINE
-IDENT "testSentBytes"
-IDENT "bs"
-IDENT "i"
-IDENT "hi"
-EQUAL
-INDENT
-IF
-IDENT "i"
-GEQ
-IDENT "hi"
-THEN
-LBRACKET
-RBRACKET
-ELSE
-IDENT "arrayGetUnsafe"
-IDENT "i"
-IDENT "bs"
-CONS
-IDENT "testSentBytes"
-IDENT "bs"
-LPAREN
-IDENT "i"
-PLUS
-INT 1
-RPAREN
-IDENT "hi"
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "testRecordAlias"
-COLON
-UPPER "Ref"
-LPAREN
-UPPER "Option"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
-RPAREN
-ARROW
-INDENT
-UPPER "Ref"
-UPPER "Bool"
-ARROW
-NEWLINE
-UPPER "Array"
-UPPER "Int"
-ARROW
-NEWLINE
-UPPER "Int"
-ARROW
-NEWLINE
-UPPER "Unit"
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "testRecordAlias"
-IDENT "first"
-IDENT "aliasSeen"
-IDENT "bs"
-IDENT "call"
-EQUAL
-INDENT
-IF
-IDENT "call"
-EQ_EQ
-INT 0
-THEN
-INDENT
-IDENT "first"
-COLONEQ
-UPPER "Some"
-IDENT "bs"
-NEWLINE
-DEDENT
-ELSE
-IF
-IDENT "call"
-EQ_EQ
-INT 1
-THEN
-MATCH
-BANG
-IDENT "first"
-INDENT
-UPPER "Some"
-IDENT "original"
-FAT_ARROW
-INDENT
-LET
-UNDERSCORE
-EQUAL
-IDENT "setInPlace"
-INT 0
-INT 251
-IDENT "original"
-NEWLINE
-IDENT "aliasSeen"
-COLONEQ
-IDENT "arrayGetUnsafe"
-INT 0
-IDENT "bs"
-EQ_EQ
-INT 251
-NEWLINE
-DEDENT
-NEWLINE
-UPPER "None"
-FAT_ARROW
-LPAREN
 RPAREN
 NEWLINE
 DEDENT
@@ -592,21 +449,7 @@ UPPER "Int"
 RPAREN
 ARROW
 NEWLINE
-UPPER "Ref"
-LPAREN
-UPPER "Option"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
-RPAREN
-ARROW
-NEWLINE
-UPPER "Ref"
-UPPER "Bool"
-ARROW
-NEWLINE
-UPPER "Array"
+UPPER "List"
 UPPER "Int"
 ARROW
 NEWLINE
@@ -623,9 +466,7 @@ IDENT "testScriptedSend"
 IDENT "calls"
 IDENT "offsets"
 IDENT "sent"
-IDENT "first"
-IDENT "aliasSeen"
-IDENT "bs"
+IDENT "payload"
 IDENT "off"
 EQUAL
 INDENT
@@ -649,15 +490,6 @@ PLUSPLUS
 LBRACKET
 IDENT "off"
 RBRACKET
-NEWLINE
-LET
-UNDERSCORE
-EQUAL
-IDENT "testRecordAlias"
-IDENT "first"
-IDENT "aliasSeen"
-IDENT "bs"
-IDENT "call"
 NEWLINE
 IF
 IDENT "call"
@@ -689,8 +521,8 @@ INT 1
 THEN
 INT 3
 ELSE
-IDENT "arrayLength"
-IDENT "bs"
+IDENT "length"
+IDENT "payload"
 MINUS
 IDENT "off"
 NEWLINE
@@ -701,13 +533,12 @@ COLONEQ
 BANG
 IDENT "sent"
 PLUSPLUS
-IDENT "testSentBytes"
-IDENT "bs"
-IDENT "off"
-LPAREN
-IDENT "off"
-PLUS
+IDENT "take"
 IDENT "n"
+LPAREN
+IDENT "drop"
+IDENT "off"
+IDENT "payload"
 RPAREN
 NEWLINE
 UPPER "Ok"
@@ -717,31 +548,8 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "testScriptedObservation"
-COLON
-UPPER "Unit"
-ARROW
-INDENT
-LPAREN
-UPPER "Result"
-UPPER "String"
-UPPER "Unit"
-COMMA
-UPPER "Int"
-COMMA
-UPPER "List"
-UPPER "Int"
-COMMA
-UPPER "List"
-UPPER "Int"
-COMMA
-UPPER "Bool"
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "testScriptedObservation"
-UNDERSCORE
+TEST
+STRING "sendAll advances one offset and covers exact bytes"
 EQUAL
 INDENT
 LET
@@ -765,21 +573,8 @@ LBRACKET
 RBRACKET
 NEWLINE
 LET
-IDENT "first"
-EQUAL
-UPPER "Ref"
-UPPER "None"
-NEWLINE
-LET
-IDENT "aliasSeen"
-EQUAL
-UPPER "Ref"
-UPPER "False"
-NEWLINE
-LET
 IDENT "payload"
 EQUAL
-IDENT "arrayFromList"
 LBRACKET
 INT 10
 COMMA
@@ -801,59 +596,16 @@ NEWLINE
 LET
 IDENT "result"
 EQUAL
-INDENT
 IDENT "sendAllFrom"
 LPAREN
 IDENT "testScriptedSend"
 IDENT "calls"
 IDENT "offsets"
 IDENT "sent"
-IDENT "first"
-IDENT "aliasSeen"
-RPAREN
 IDENT "payload"
+RPAREN
+INT 8
 INT 0
-NEWLINE
-DEDENT
-NEWLINE
-LPAREN
-IDENT "result"
-COMMA
-BANG
-IDENT "calls"
-COMMA
-BANG
-IDENT "offsets"
-COMMA
-BANG
-IDENT "sent"
-COMMA
-BANG
-IDENT "aliasSeen"
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-TEST
-STRING "sendAll keeps one array while offsets cover exact bytes"
-EQUAL
-INDENT
-LET
-LPAREN
-IDENT "result"
-COMMA
-IDENT "calls"
-COMMA
-IDENT "offsets"
-COMMA
-IDENT "sent"
-COMMA
-IDENT "aliasSeen"
-RPAREN
-EQUAL
-IDENT "testScriptedObservation"
-LPAREN
-RPAREN
 NEWLINE
 IDENT "expectAll"
 LBRACKET
@@ -867,6 +619,7 @@ IDENT "result"
 COMMA
 IDENT "expectEqual"
 INT 3
+BANG
 IDENT "calls"
 COMMA
 IDENT "expectEqual"
@@ -877,30 +630,13 @@ INT 2
 COMMA
 INT 5
 RBRACKET
+BANG
 IDENT "offsets"
 COMMA
 IDENT "expectEqual"
-LBRACKET
-INT 10
-COMMA
-INT 20
-COMMA
-INT 30
-COMMA
-INT 40
-COMMA
-INT 50
-COMMA
-INT 60
-COMMA
-INT 70
-COMMA
-INT 80
-RBRACKET
+IDENT "payload"
+BANG
 IDENT "sent"
-COMMA
-IDENT "expectTrue"
-IDENT "aliasSeen"
 COMMA
 RBRACKET
 NEWLINE
@@ -919,17 +655,11 @@ LPAREN
 IDENT "sendAllFrom"
 LPAREN
 UNDERSCORE
-UNDERSCORE
 FAT_ARROW
 UPPER "Ok"
 INT 0
 RPAREN
-LPAREN
-IDENT "arrayFromList"
-LBRACKET
 INT 1
-RBRACKET
-RPAREN
 INT 0
 RPAREN
 NEWLINE
@@ -940,31 +670,21 @@ COLON
 UPPER "Ref"
 UPPER "Int"
 ARROW
-INDENT
 UPPER "Ref"
 LPAREN
 UPPER "List"
 UPPER "Int"
 RPAREN
 ARROW
-NEWLINE
-UPPER "Array"
 UPPER "Int"
 ARROW
-NEWLINE
-UPPER "Int"
-ARROW
-NEWLINE
 UPPER "Result"
 UPPER "String"
 UPPER "Int"
 NEWLINE
-DEDENT
-NEWLINE
 IDENT "testFirstErrorSend"
 IDENT "calls"
 IDENT "offsets"
-UNDERSCORE
 IDENT "off"
 EQUAL
 INDENT
@@ -1030,28 +750,14 @@ NEWLINE
 LET
 IDENT "result"
 EQUAL
-INDENT
 IDENT "sendAllFrom"
 LPAREN
 IDENT "testFirstErrorSend"
 IDENT "calls"
 IDENT "offsets"
 RPAREN
-LPAREN
-IDENT "arrayFromList"
-LBRACKET
-INT 1
-COMMA
-INT 2
-COMMA
-INT 3
-COMMA
 INT 4
-RBRACKET
-RPAREN
 INT 0
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "expectAll"
 LBRACKET
@@ -1194,10 +900,12 @@ IDENT "sendString"
 IDENT "conn"
 IDENT "s"
 EQUAL
-IDENT "sendArray"
+IDENT "sendAll"
 IDENT "conn"
 LPAREN
-IDENT "toUtf8"
+UPPER "B"
+DOT
+IDENT "encodeUtf8"
 IDENT "s"
 RPAREN
 NEWLINE

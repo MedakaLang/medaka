@@ -71,6 +71,7 @@ import lib.sqlite.{
   Db,
   openDb,
   readSchema,
+  schemaNotUtf8,
   scanTableRowsIpk,
   schemaSql,
   schemaName,
@@ -108,11 +109,41 @@ import lib.select.{
   containsInSubquery,
 }
 import list.{reverse, get, sortBy, zip}
-import string.{contains}
+import string.{contains, startsWith}
+import bytes.{fromArrayAssumeByteDomain}
+import hex.{encodeUpper}
 
 -- ---------------------------------------------------------------------------
 -- Refusal guard
 -- ---------------------------------------------------------------------------
+
+-- The schema a whole-file rewrite writes back, or the reason it cannot.  A
+-- schema entry whose name or CREATE text is not UTF-8 is refused before
+-- anything else: the rewrite writes entries back from `SchemaEntry` strings,
+-- which would rename it.
+schemaForRewrite : Db -> Result String (List SchemaEntry)
+schemaForRewrite db = do
+  notUtf8 <- schemaNotUtf8 db
+  _ <- refuseNotUtf8Schema notUtf8
+  schema <- readSchema db
+  _ <- refuseIfUnsupported schema
+  Ok schema
+
+refuseNotUtf8Schema : List (Array Int) -> Result String Unit
+refuseNotUtf8Schema [] = Ok ()
+refuseNotUtf8Schema (name :: _) =
+  Err
+    "\{schemaNotUtf8Refusal} the entry named x'\{encodeUpper (fromArrayAssumeByteDomain name)}' has a name or CREATE text that is not UTF-8, and rewriting the file would change it"
+
+-- The opening of the refusal above, which the CLI answers with a non-zero
+-- exit where every other statement error exits 0.
+schemaNotUtf8Refusal : String
+schemaNotUtf8Refusal = "cannot mutate: the schema is not UTF-8:"
+
+-- | Whether a mutation's `Err` is the refusal of a schema that is not UTF-8.
+export
+isSchemaNotUtf8Refusal : String -> Bool
+isSchemaNotUtf8Refusal e = startsWith schemaNotUtf8Refusal e
 
 -- | Scan every schema entry; return `Err` if any entry is a secondary index
 --   or a WITHOUT ROWID table.
@@ -222,8 +253,7 @@ rewriteImage : String ->
   (String -> List (Int, List Cell) -> Result String (List (Int, List Cell), Int)) ->
   Result String (Array Int, Int)
 rewriteImage verb db table f = do
-  schema <- readSchema db
-  _ <- refuseIfUnsupported schema
+  schema <- schemaForRewrite db
   specs <- collectTableSpecs db schema []
   (_, sql, pkIdx, rows) <- requireSome
     "\{verb}: table not found: \{table}"
@@ -729,8 +759,7 @@ createImage : String ->
 createImage _ ct False = buildDatabaseMultiExplicit [newSpec ct]
 createImage path ct True = do
   db <- openDb path
-  schema <- readSchema db
-  _ <- refuseIfUnsupported schema
+  schema <- schemaForRewrite db
   _ <- refuseExisting ct schema
   specs <- collectTableSpecs db schema []
   buildDatabaseMultiExplicit (specs ++ [newSpec ct])

@@ -26,7 +26,7 @@
 -- bytes rather than printed, because the bytes include invalid UTF-8 (a lone
 -- continuation byte, then a truncated three-byte lead) and what a host does
 -- with those on stdout is not what this fixture is about.  The codepoint count
--- is printed, since all three recompute it by the non-continuation-byte rule.
+-- is printed: each maximal ill-formed subpart is one U+FFFD, so it is 4.
 
 sumBytes : ByteBlock -> Int -> Int -> Int
 sumBytes b i n

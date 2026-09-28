@@ -53,8 +53,9 @@ import http.{
   Response,
 }
 import bytes as B
+import bytes.{Bytes}
 import list.{filter}
-import string.{fromUtf8, startsWith, toLower, toUtf8}
+import string.{startsWith, toLower}
 import lib.atsyntax.{stripDidFragment, validateDid}
 import lib.cors.{allowOriginHeader, printableAscii}
 import lib.nsid.{canonicalNsid, sameNsidIdentity, validateNsid}
@@ -202,23 +203,27 @@ routeWithDid (route :: rest) did =
    is ambiguous, which is not an audience — the same rule `lib.server_core`
    applies to `Authorization` and to `Sec-WebSocket-Key`, and for the same
    reason: picking either of two values a client sent is choosing on its
-   behalf. -}
+   behalf.
+
+   The value is the field's own bytes, undecoded. It names the audience a
+   credential would be minted for, so the admission that reads it decodes it
+   strictly and refuses a value that is not UTF-8 rather than repairing it. -}
 public export data ProxyHeader =
   | ProxyHeaderAbsent
   | ProxyHeaderRepeated
-  | ProxyHeaderValue String
+  | ProxyHeaderValue Bytes
 
 export
 proxyHeader : List Header -> ProxyHeader
 proxyHeader headers = proxyHeaderGo headers 0 None
 
-proxyHeaderGo : List Header -> Int -> Option (Array Int) -> ProxyHeader
+proxyHeaderGo : List Header -> Int -> Option Bytes -> ProxyHeader
 proxyHeaderGo [] 0 _ = ProxyHeaderAbsent
-proxyHeaderGo [] 1 (Some value) = ProxyHeaderValue (fromUtf8 value)
+proxyHeaderGo [] 1 (Some value) = ProxyHeaderValue value
 proxyHeaderGo [] _ _ = ProxyHeaderRepeated
 proxyHeaderGo (header :: rest) count value =
   if headerName header == "atproto-proxy" then
-    proxyHeaderGo rest (count + 1) (Some (B.toArray (headerValue header)))
+    proxyHeaderGo rest (count + 1) (Some (headerValue header))
   else
     proxyHeaderGo rest count value
 
@@ -400,15 +405,18 @@ soleField name headers =
     [only] => Some only
     _ => None
 
+-- A value that is not printable ASCII is not relayed, so the decode below
+-- only ever sees ASCII and cannot fail or change a byte.
+relayableText : Bytes -> Option String
+relayableText value =
+  if printableAscii value 0 then B.decodeUtf8 value else None
+
 pickFields : List String -> List Header -> List (String, String)
 pickFields [] _ = []
 pickFields (name :: rest) headers = match soleField name headers
-  Some header =>
-    let value = B.toArray (headerValue header)
-    if printableAscii value 0 then
-      (name, fromUtf8 value) :: pickFields rest headers
-    else
-      pickFields rest headers
+  Some header => match relayableText (headerValue header)
+    Some text => (name, text) :: pickFields rest headers
+    None => pickFields rest headers
   None => pickFields rest headers
 
 {- | The fields of `headers` a forward relays, as name/value pairs in this
@@ -417,7 +425,7 @@ pickFields (name :: rest) headers = match soleField name headers
 
    Pairs and not a `Header`: the outbound serializer has a `Header` type of its
    own (`lib.httpclient`) and this is the pure core, which knows neither of
-   them. The values are already graded printable ASCII, so `fromUtf8` here is
+   them. The values are already graded printable ASCII, so decoding them is
    exact and the shell's `makeRequestHeader` can only agree with it.
 
    A field that cannot be relayed safely is dropped and the call still goes:
@@ -503,7 +511,7 @@ proxyUpstreamFailureResponse =
    own voice. The body is relayed whole — it is the answer — and is already
    bounded by `lib.httpclient`'s own response ceilings. -}
 public export data UpstreamAnswer =
-  | UpstreamAnswer Int String (Option (Array Int)) (List (String, Array Int)) (Array Int)
+  | UpstreamAnswer Int String (Option Bytes) (List (String, Bytes)) Bytes
 
 {- | The answer fields a forward relays back, and the only ones.
 
@@ -524,25 +532,21 @@ jsonContentType =
     "proxy: internal response header error"
     (makeHeader "content-type" (B.encodeUtf8 "application/json"))
 
-relayedContentType : Option (Array Int) -> Header
+relayedContentType : Option Bytes -> Header
 relayedContentType None = jsonContentType
-relayedContentType (Some value) = match B.fromArray value
-  None => jsonContentType
-  Some packed => match makeHeader "content-type" packed
-    Ok header => header
-    Err _ => jsonContentType
+relayedContentType (Some value) = match makeHeader "content-type" value
+  Ok header => header
+  Err _ => jsonContentType
 
 -- A field the upstream sent in a shape `makeHeader` will not build is dropped,
 -- not fatal: it is negotiation the client can do without, and refusing the
 -- whole answer over it would hand an upstream a way to fail this server's
 -- reads by sending one odd byte.
-relayedFields : List (String, Array Int) -> List Header
+relayedFields : List (String, Bytes) -> List Header
 relayedFields [] = []
-relayedFields ((name, value) :: rest) = match B.fromArray value
-  None => relayedFields rest
-  Some packed => match makeHeader name packed
-    Ok header => header :: relayedFields rest
-    Err _ => relayedFields rest
+relayedFields ((name, value) :: rest) = match makeHeader name value
+  Ok header => header :: relayedFields rest
+  Err _ => relayedFields rest
 
 {- | Turn the appview's answer into this server's own response.
 
@@ -560,8 +564,6 @@ proxyUpstreamResponse : UpstreamAnswer -> Result String Response
 proxyUpstreamResponse (UpstreamAnswer status reason contentType relayed body) =
   let headers =
     allowOriginHeader :: relayedContentType contentType :: relayedFields relayed
-  match B.fromArray body
-    None => Err "http: response body element outside byte range 0..255"
-    Some packed => match makeResponse status reason headers packed
-      Ok response => Ok response
-      Err _ => makeResponse status "Upstream Response" headers packed
+  match makeResponse status reason headers body
+    Ok response => Ok response
+    Err _ => makeResponse status "Upstream Response" headers body

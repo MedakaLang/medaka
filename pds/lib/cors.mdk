@@ -33,6 +33,7 @@ import http.{
 import bytes as B
 import bytes.{Bytes, encodeUtf8}
 import list.{filter}
+import u8 as U8
 
 {- | A response field built from a name and a value this file spells out
    itself.
@@ -73,12 +74,13 @@ varyHeader = constantHeader "vary" "Access-Control-Request-Headers"
    server repeats is repeatable only when the serializer will take it, and
    one rule for that is one function. -}
 export
-printableAscii : Array Int -> Int -> Bool
+printableAscii : Bytes -> Int -> Bool
 printableAscii value i =
-  if i >= arrayLength value then
+  if i >= B.length value then
     True
   else
-    value[i] >= 32 && value[i] <= 126 && printableAscii value (i + 1)
+    let byte = U8.toInt value[i]
+    byte >= 32 && byte <= 126 && printableAscii value (i + 1)
 
 {- | What the client's `Access-Control-Request-Headers` asked for, or an empty
    value when it asked for nothing, when it asked more than once, and when it
@@ -105,7 +107,7 @@ requestedHeaders headers =
   match asked
     [only] =>
       let value = headerValue only
-      if printableAscii (B.toArray value) 0 then value else empty
+      if printableAscii value 0 then value else empty
     _ => empty
 
 -- | The `Access-Control-Allow-Headers` answer carrying no allowance at all.

@@ -339,7 +339,7 @@ checkHttpClientChunkBytes size = match H.checkHttpResponseChunkBytes size
   Ok () => Ok ()
   Err _ => Err "httpclient: chunk size exceeds 1048576-byte resource limit"
 
-{- | `pds/test/protocol_all_engines.sh` cannot drive this ceiling through an
+{- | `pds/test/protocol_all_engines_test.mdk` cannot drive this ceiling through an
    actual chunked response the way it does the others: exceeding it needs
    65537 chunk-head parses, and `pds/lib/httpclient.mdk`'s chunked decoder
    recurses once per chunk with no tail-call optimisation in the eval

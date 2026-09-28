@@ -1,0 +1,15 @@
+-- `impl Pick a a a` against three tuples no one of which is more specific
+-- than the others: `(List t, List Int)` and `(List Float, List u)` unify, but
+-- not together with `(List Bool, List Int)`, so the goal is refused whichever
+-- position is visited first.
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+main =
+  let r : (List Bool, List Int) = pick ([], [length []]) ([2.5], [])
+  let (bs, ns) = r
+  println (debug (map (b => if b then 1 else 0) bs))
+  println (debug ns)

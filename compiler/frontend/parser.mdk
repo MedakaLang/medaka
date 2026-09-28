@@ -56,6 +56,7 @@ import frontend.ast.{
   dTypeAliasUnresolved,
   dNewtypeUnresolved,
   dInterfaceUnresolved,
+  setDeclNameLoc,
   dImplUnresolved,
   constraintUnresolved,
   superUnresolved,
@@ -2721,10 +2722,13 @@ parseExtern pub = defer
 parseExternFor : Bool -> Token -> Parser Decl
 parseExternFor pub TData = defer
   expectTok TData
-  name <- upperNameP
+  named <- locatedUpperNameP
+  let name = fst named
+  let nameLoc = snd named
   ps <- tyParamsP
   t <- peekP
-  externDataEnd pub name ps t
+  d <- externDataEnd pub name ps t
+  deferPure (setDeclNameLoc nameLoc d)
 parseExternFor pub _ = defer
   name <- externName
   expectTok TColon
@@ -2749,23 +2753,39 @@ externDataEnd pub name ps _ = defer
   skipNewlines
   deferPure (externDataUnresolved pub name (map fst ps) (map snd ps))
 
+-- A declaration's upper-case name and its span, which diagnostics about the
+-- declaration (a duplicate, a reserved name) are located at.
+locatedUpperNameP : Parser (String, Loc)
+locatedUpperNameP = defer
+  s <- getPos
+  name <- upperNameP
+  q <- getPos
+  deferPure (name, locOfSpan s q)
+
 -- ── type alias / newtype / top-level let-group / attributes ──────────────
 -- `type Name a… = ty`
 parseTypeAlias : Bool -> Parser Decl
 parseTypeAlias pub = defer
   expectTok TType
-  name <- upperNameP
+  named <- locatedUpperNameP
+  let name = fst named
+  let nameLoc = snd named
   ps <- tyParamsP
   expectTok TEqual
   ty <- parseTy
   skipNewlines
-  deferPure (dTypeAliasUnresolved pub name (map fst ps) (map snd ps) ty)
+  deferPure
+    (setDeclNameLoc
+      nameLoc
+      (dTypeAliasUnresolved pub name (map fst ps) (map snd ps) ty))
 
 -- `newtype Name a… = Con ty [deriving (…)]`
 parseNewtype : Bool -> Parser Decl
 parseNewtype pub = defer
   expectTok TNewtype
-  name <- upperNameP
+  named <- locatedUpperNameP
+  let name = fst named
+  let nameLoc = snd named
   ps <- tyParamsP
   expectTok TEqual
   con <- upperNameP
@@ -2775,15 +2795,17 @@ parseNewtype pub = defer
   derives <- newtypeDerives t
   skipNewlines
   deferPure
-    (dNewtypeUnresolved
-      pub
-      name
-      (map fst ps)
-      (map snd ps)
-      con
-      binders
-      fty
-      derives)
+    (setDeclNameLoc
+      nameLoc
+      (dNewtypeUnresolved
+        pub
+        name
+        (map fst ps)
+        (map snd ps)
+        con
+        binders
+        fty
+        derives))
 
 -- top-level `let rec f a… = body` → DLetGroup with a single binding.
 -- Mutual-recursion grouping via `with` has been removed — each recursive
@@ -3169,21 +3191,25 @@ parseInterface : Bool -> Bool -> Parser Decl
 parseInterface pub isDefault = defer
   kw <- getPos
   expectTok TInterface
-  name <- upperNameP
+  named <- locatedUpperNameP
+  let name = fst named
+  let nameLoc = snd named
   ps <- tyParamsP
   supers <- ifaceSuper
   methods <- ifaceBody kw
   -- #1110: the parser has a token stream, not a module id, so it builds every
   -- type declaration identity-less; resolve acquires it (`stampDeclOrigin`).
   deferPure
-    (dInterfaceUnresolved
-      pub
-      isDefault
-      name
-      (map fst ps)
-      (map snd ps)
-      supers
-      methods)
+    (setDeclNameLoc
+      nameLoc
+      (dInterfaceUnresolved
+        pub
+        isDefault
+        name
+        (map fst ps)
+        (map snd ps)
+        supers
+        methods))
 
 -- optional `requires Iface a, …` superclass list
 ifaceSuper : Parser (List Super)
@@ -3667,7 +3693,9 @@ kindAtomEmit k = defer
 parseData : DataVis -> Parser Decl
 parseData vis = defer
   expectTok TData
-  name <- upperNameP
+  named <- locatedUpperNameP
+  let name = fst named
+  let nameLoc = snd named
   ps <- tyParamsP
   bodyAndDerives <- dataBody name
   let variants = fst bodyAndDerives
@@ -3675,14 +3703,16 @@ parseData vis = defer
   outerDerives <- derivingClause
   skipNewlines
   deferPure
-    (dDataUnresolved
-      vis
-      name
-      (map fst ps)
-      (map snd ps)
-      (map fst variants)
-      (map snd variants)
-      (combineDerives blockDerives outerDerives))
+    (setDeclNameLoc
+      nameLoc
+      (dDataUnresolved
+        vis
+        name
+        (map fst ps)
+        (map snd ps)
+        (map fst variants)
+        (map snd variants)
+        (combineDerives blockDerives outerDerives)))
 -- block form may carry `deriving (…)` INSIDE the INDENT span (own line or
 -- trailing the last constructor); that is captured by dataBody.  The inline
 -- form leaves derives empty here and the trailing derivingClause picks it up.

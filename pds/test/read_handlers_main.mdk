@@ -20,28 +20,33 @@
    shared answer is the official one). Either equality alone would be
    satisfiable by a wrong pair.
 
-   Compiled engines only, for the reason `pds/test/repo_vectors.sh`'s header
-   gives at length: the writes have to sign, and one `repoInit` under the
+   Compiled engines only, for the reason `pds/test/repo_vectors_test.mdk`'s
+   header gives: the writes have to sign, and one `repoInit` under the
    tree-walking interpreter does not complete in 600s. The repository-free
    half of this slice's surface — `resolveHandle`, every read's
    unconfigured-store refusal, and the well-knowns a `did:key` account answers
    with — is graded on all three engines by
-   `pds/test/read_routes_all_engines.sh` instead.
+   `pds/test/read_routes_all_engines_test.mdk` instead.
 
    `/.well-known/did.json` is graded in both places because its answer depends
    on the account's DID method. The document this host owes a resolver of its
    OWN `did:web` carries the repository's signing key, so that arm needs a
    repository and is graded here, against the corpus's key. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, decodeUtf8, encodeUtf8, fromU8Array}
+import crypto.sha256.{sha256}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
-import string.{fromUtf8, join, split, startsWith, stripPrefix, toUtf8}
-import lib.dagcbor.{dagCborDecode}
+import string.{join, split, startsWith, stripPrefix}
+import lib.cid.{cidForDagCbor}
+import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.lexjson.{dagCborToLexJson}
-import lib.repo.{Repo, repoExportCar, repoInitFromKeyBytes}
+import lib.mst.{mstFromEntries, mstNodeBlocks, mstRootCid}
+import lib.repo.{Repo, repoExportCar, repoFromBlocks, repoInitFromKeyBytes}
+import lib.sign.{secretKeyFromBytes, signDigest, signatureCompact}
 import lib.jwt.{mintToken}
 import lib.server_core.{
   Account,
@@ -59,7 +64,7 @@ import lib.store.{
   storeSessionOpen,
   storeWithServerSecret,
 }
-import lib.tid.{Tid, tidParse}
+import lib.tid.{Tid, tidParse, tidToString}
 import test.fixture_support.{
   fieldText, lastHex, meaningful, testNonce, testSecret
 }
@@ -70,21 +75,7 @@ import test.request_support.{
   procedureRequest,
   queryRequest,
 }
-
--- | `handleBytes` over a request fixture this driver still holds as an
--- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
--- door into one: a fixture element outside the byte domain stops here rather
--- than reaching the framer.
-handleFixture : Server ->
-  RequestContext ->
-  Store ->
-  Array Int ->
-  (Store, Array Int)
-handleFixture httpServer context store request = match fromArray request
-  Some packed =>
-    let (next, response) = handleBytes httpServer context store packed
-    (next, toArray response)
-  None => panic "read_handlers: request fixture holds a non-byte element"
+import test.response_support.{bodyText, rawBodyOf, statusLine}
 
 accountHandleText : String
 accountHandleText = "medaka.example"
@@ -95,18 +86,16 @@ accountHostText = "pds.example"
 collectionText : String
 collectionText = "app.bsky.feed.post"
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "read_handlers: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "read_handlers: malformed hex" (decode text)
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "read_handlers: malformed TID" (tidParse text)
 
 mustRecordJson : String -> Json
-mustRecordJson text =
-  match dagCborDecode (fromArrayAssumeByteDomain (mustHex text))
-    Ok value => dagCborToLexJson value
-    Err message => panic "read_handlers: malformed record: \{message}"
+mustRecordJson text = match dagCborDecode (mustHex text)
+  Ok value => dagCborToLexJson value
+  Err message => panic "read_handlers: malformed record: \{message}"
 
 mustAccount : String -> Account
 mustAccount did =
@@ -163,7 +152,7 @@ authorizedStore did store = match storeWithServerSecret testSecret store
 testToken : String -> String
 testToken did =
   mintToken
-    (fromArrayAssumeByteDomain testSecret)
+    testSecret
     did
     accountHostText
     "read_handlers-fixture-token"
@@ -174,33 +163,13 @@ testToken did =
 
 -- ── response inspection ─────────────────────────────────────────────────────
 
-headerEnd : Array Int -> Int -> Int
-headerEnd bytes i =
-  if i + 3 >= arrayLength bytes then
-    panic "read_handlers: response has no header terminator"
-  else if bytes[i] == 13
-    && bytes[i + 1] == 10
-    && bytes[i + 2] == 13
-    && bytes[i + 3] == 10 then
-    i
-  else
-    headerEnd bytes (i + 1)
-
-responseBodyBytes : Array Int -> Array Int
-responseBodyBytes bytes =
-  let start = headerEnd bytes 0 + 4
-  arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i])
-
-responseBodyText : Array Int -> String
-responseBodyText bytes = fromUtf8 (responseBodyBytes bytes)
-
-responseJson : Array Int -> Json
+responseJson : Bytes -> Json
 responseJson bytes =
   resultOrPanic
     "read_handlers: response body is not JSON"
-    (parse (responseBodyText bytes))
+    (parse (bodyText bytes))
 
-errorCode : Array Int -> String
+errorCode : Bytes -> String
 errorCode bytes = fieldText "error" (responseJson bytes)
 
 recordsOf : Json -> List Json
@@ -217,6 +186,14 @@ rkeysOf value = join "," (map (fieldText "uri") (recordsOf value))
 
 -- ── the transcript ──────────────────────────────────────────────────────────
 
+-- A corpus path names the record a read is compared against, so one that is
+-- not UTF-8 is a malformed corpus, not text to repair.
+corpusPath : String -> String
+corpusPath pathHex =
+  optionOrPanic
+    "read_handlers: corpus path is not UTF-8"
+    (decodeUtf8 (mustHex pathHex))
+
 splitPath : String -> (String, String)
 splitPath text = match split "/" text
   [collection, rkey] => (collection, rkey)
@@ -225,7 +202,7 @@ splitPath text = match split "/" text
 runStep : String -> Server -> Store -> String -> <IO> Store
 runStep did server store opLine = match split "\t" opLine
   ["OP", kind, pathHex, recordHex, _, _] =>
-    let (collection, rkey) = splitPath (fromUtf8 (mustHex pathHex))
+    let (collection, rkey) = splitPath (corpusPath pathHex)
     let (nsid, body) = match kind
       "CREATE" => (
         "com.atproto.repo.createRecord",
@@ -239,7 +216,7 @@ runStep did server store opLine = match split "\t" opLine
         ("com.atproto.repo.deleteRecord", deleteBody did collection rkey)
       _ => panic "read_handlers: unknown transcript operation \{kind}"
     let (next, responseBytes) =
-      handleFixture
+      handleBytes
         server
         testContext
         store
@@ -247,7 +224,7 @@ runStep did server store opLine = match split "\t" opLine
     if errorCode responseBytes == "<missing:error>" then
       next
     else
-      let () = println "SETUP \{kind} FAIL \{responseBodyText responseBytes}"
+      let () = println "SETUP \{kind} FAIL \{bodyText responseBytes}"
       let () = exit 1
       next
   _ => panic "read_handlers: malformed transcript row"
@@ -266,13 +243,13 @@ check label ok detail =
 readJson : Server -> Store -> String -> Json
 readJson server store target =
   let (_, responseBytes) =
-    handleFixture server testContext store (queryRequest accountHostText target)
+    handleBytes server testContext store (queryRequest accountHostText target)
   responseJson responseBytes
 
 readError : Server -> Store -> String -> String
 readError server store target =
   let (_, responseBytes) =
-    handleFixture server testContext store (queryRequest accountHostText target)
+    handleBytes server testContext store (queryRequest accountHostText target)
   errorCode responseBytes
 
 recordRoute : String -> String -> String
@@ -289,24 +266,22 @@ listRoute did suffix =
 carCell : Server -> Store -> String -> String -> <IO> Int
 carCell server store did corpusHex =
   let (_, responseBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       store
       (queryRequest accountHostText "com.atproto.sync.getRepo?did=\{did}")
-  let served = responseBodyBytes responseBytes
+  let served = rawBodyOf responseBytes
   let exported = match repoExportCar (storeMustRepo store)
     Ok bytes => bytes
     Err message => panic "read_handlers: repoExportCar failed: \{message}"
   let corpus = mustHex corpusHex
-  let servedHex = encode (fromArrayAssumeByteDomain served)
-  let ok =
-    servedHex == encode (fromArrayAssumeByteDomain exported)
-      && servedHex == encode (fromArrayAssumeByteDomain corpus)
+  let servedHex = encode served
+  let ok = servedHex == encode exported && servedHex == encode corpus
   check
     "sync-getRepo-car-bytes"
     ok
-    "served=\{intToString (arrayLength served)}B exported=\{intToString (arrayLength exported)}B corpus=\{intToString (arrayLength corpus)}B head=\{firstHex servedHex} tail=\{lastHex servedHex}"
+    "served=\{intToString (B.length served)}B exported=\{intToString (B.length exported)}B corpus=\{intToString (B.length corpus)}B head=\{firstHex servedHex} tail=\{lastHex servedHex}"
 
 firstHex : String -> String
 firstHex text = stringSlice 0 32 text
@@ -339,14 +314,13 @@ firstEntry name value = match get name value
   _ => JNull
 
 -- | The three status digits of a response, read off the status line.
-responseStatus : Array Int -> String
-responseStatus bytes =
-  stringSlice 9 12 (fromUtf8 (arrayMakeWith 12 (i => bytes[i])))
+responseStatus : Bytes -> String
+responseStatus bytes = stringSlice 0 3 (statusLine bytes)
 
-wellKnownDidJsonBytes : Server -> Store -> Array Int
+wellKnownDidJsonBytes : Server -> Store -> Bytes
 wellKnownDidJsonBytes server store =
   let (_, responseBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       store
@@ -411,6 +385,106 @@ wellKnownCells did keyServer store =
       "status=\{responseStatus bareBytes} body=\{stringify bare}"
   cellAccount + cellFallback + cellUnconfigured
 
+-- ── a stored path the listing cannot answer with ────────────────────────────
+
+-- | Record paths in the corpus collection, two of them not UTF-8, sorted
+-- between valid ones.
+unrepresentablePaths : List Bytes
+unrepresentablePaths = [
+  encodeUtf8 "\{collectionText}/aaa",
+  B.concat [encodeUtf8 "\{collectionText}/bb", fromU8Array [|255|]],
+  B.concat [encodeUtf8 "\{collectionText}/bc", fromU8Array [|254|]],
+  encodeUtf8 "\{collectionText}/ddd",
+  encodeUtf8 "\{collectionText}/eee",
+]
+
+{- | A signed repository holding `unrepresentablePaths`. No write path admits
+   a key that is not UTF-8, so it is built the way a persisted repository is
+   loaded: through `repoFromBlocks`, which does not re-validate keys. -}
+unrepresentableStore : String -> String -> Store
+unrepresentableStore did secretHex =
+  let secret =
+    resultOrPanic
+      "read_handlers: bad corpus key"
+      (secretKeyFromBytes (mustHex secretHex))
+  let records =
+    map
+      (path => (
+        path,
+        resultOrPanic
+          "read_handlers: record encoding failed"
+          (dagCborEncode
+            (DcMap [
+              ("$type", DcString collectionText),
+              ("text", DcString (encode path)),
+            ])),
+      ))
+      unrepresentablePaths
+  let tree =
+    resultOrPanic
+      "read_handlers: MST build failed"
+      (mstFromEntries
+        (map ((path, bytes) => (path, cidForDagCbor bytes)) records))
+  let fields = [
+    ("did", DcString did),
+    ("version", DcInt 3),
+    ("data", DcLink (mstRootCid tree)),
+    ("rev", DcString (tidToString (mustTid "3ke6kg3wk222b"))),
+    ("prev", DcNull),
+  ]
+  let unsigned =
+    resultOrPanic
+      "read_handlers: commit encoding failed"
+      (dagCborEncode (DcMap fields))
+  let signature =
+    resultOrPanic
+      "read_handlers: signing failed"
+      (signDigest secret (sha256 unsigned))
+  let signed =
+    resultOrPanic
+      "read_handlers: commit encoding failed"
+      (dagCborEncode
+        (DcMap (fields ++ [("sig", DcBytes (signatureCompact signature))])))
+  let commit = cidForDagCbor signed
+  let blocks =
+    (commit, signed)
+      :: mstNodeBlocks tree
+        ++ map ((_, bytes) => (cidForDagCbor bytes, bytes)) records
+  match repoFromBlocks did secret commit blocks
+    Ok repo => storeFromRepo repo
+    Err message => panic "read_handlers: repository rebuild failed: \{message}"
+
+{- | A listing window that holds a stored path with no UTF-8 `collection/rkey`
+   reading is refused, not answered around. Descending with `limit=2`, the
+   window is `eee`, `ddd`, `bc\xFE` and `bb\xFF`: passing over the last two
+   leaves nothing past the page, so the answer would carry no cursor and
+   `aaa` would be unreachable by pagination. `describeRepo` still names the
+   collection: its walk steps past such a path one key at a time, so every
+   collection with a valid path is reached. -}
+unrepresentablePathCell : String -> String -> Server -> <IO> Int
+unrepresentablePathCell did secretHex server =
+  let store = unrepresentableStore did secretHex
+  let (_, pageBytes) =
+    handleBytes
+      server
+      testContext
+      store
+      (queryRequest accountHostText (listRoute did "&limit=2"))
+  let status = responseStatus pageBytes
+  let code = errorCode pageBytes
+  let cursor = fieldText "cursor" (responseJson pageBytes)
+  let describe =
+    readJson server store "com.atproto.repo.describeRepo?repo=\{did}"
+  let collections = match get "collections" describe
+    Some value => stringify value
+    None => "<missing:collections>"
+  check
+    "listRecords-unrepresentable-path-refused"
+    (status == "500"
+      && code == "InternalServerError"
+      && collections == "[\"\{collectionText}\"]")
+    "status=\{status} error=\{code} cursor=\{cursor} collections=\{collections}"
+
 runReads : String ->
   Server ->
   Store ->
@@ -419,7 +493,7 @@ runReads : String ->
   String ->
   String ->
   String ->
-  <IO> Unit
+  <IO> Bool
 runReads did server mid final recordBCid commitCid commitRev carHex =
   let uriA = "at://\{did}/\{collectionText}/medaka-a"
   let uriB = "at://\{did}/\{collectionText}/medaka-b"
@@ -583,11 +657,7 @@ runReads did server mid final recordBCid commitCid commitRev carHex =
       + cellAscendingPage
       + cellsWellKnown
   let () = println "reads: \{intToString cells}/20 corpus-graded read routes"
-  if cells == 20 then
-    println "TOTAL: PASS"
-  else
-    let () = println "TOTAL: FAIL"
-    exit 1
+  cells == 20
 
 -- ── driver ──────────────────────────────────────────────────────────────────
 
@@ -624,15 +694,22 @@ runTranscript ["META", did, secretHex] t0 op1 op2 op3 op4 commit4 carRow =
   let s3 = runStep did server s2 op3
   let s4 = runStep did server s3 op4
   let () = println "setup: 4/4 transcript writes replayed through the seam"
-  runReads
-    did
-    server
-    s3
-    s4
-    (columnOf 4 op3)
-    (columnOf 4 commit4)
-    (columnOf 5 op4)
-    (columnOf 1 carRow)
+  let corpusReads =
+    runReads
+      did
+      server
+      s3
+      s4
+      (columnOf 4 op3)
+      (columnOf 4 commit4)
+      (columnOf 5 op4)
+      (columnOf 1 carRow)
+  let refusals = unrepresentablePathCell did secretHex server
+  if corpusReads && refusals == 1 then
+    println "TOTAL: PASS"
+  else
+    let () = println "TOTAL: FAIL"
+    exit 1
 runTranscript _ _ _ _ _ _ _ _ = panic "read_handlers: malformed META row"
 
 runRows : List String -> <IO> Unit

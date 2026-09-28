@@ -19,10 +19,10 @@
    `blobsMoved`'s comparison included — to measure. -}
 
 import bytes as B
-import bytes.{Bytes, encodeUtf8, toArray}
+import bytes.{Bytes, encodeUtf8}
 import hex.{decode}
 import json.{Json(..), jObject, stringify}
-import string.{fromUtf8, toInt, toUtf8}
+import string.{toInt}
 import lib.cid.{Cid}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.jwt.{mintToken}
@@ -47,6 +47,7 @@ import shell.blobfile.{blobFileRead}
 import shell.persist.{persistLoad}
 import shell.server.{persistTransition}
 import test.fixture_support.{testNonce, testSecret}
+import test.response_support.{firstLineText}
 
 -- ── the corpus account, matching `synth_repo_main.mdk`'s fixed identity ─────
 
@@ -80,7 +81,7 @@ loadRepo dir =
     Ok repo => repo
     Err message => panic "cost_curve: corpus repository rejected: \{message}"
 
-admitBlobs : List (Cid, String, Array Int) -> Store -> Store
+admitBlobs : List (Cid, String, Bytes) -> Store -> Store
 admitBlobs [] store = store
 admitBlobs ((cid, mimeType, bytes) :: rest) store =
   match storePutBlob cid mimeType bytes store
@@ -114,7 +115,7 @@ benchContext =
 benchToken : String
 benchToken =
   mintToken
-    (B.fromArrayAssumeByteDomain testSecret)
+    testSecret
     corpusDid
     hostText
     "cost_curve-probe-token"
@@ -153,20 +154,6 @@ createRequest =
         ),
       ]))
 
--- ── response inspection ─────────────────────────────────────────────────────
-
-statusEnd : Array Int -> Int -> Int
-statusEnd bytes i =
-  if i + 1 >= arrayLength bytes then
-    arrayLength bytes
-  else if bytes[i] == 13 && bytes[i + 1] == 10 then
-    i
-  else
-    statusEnd bytes (i + 1)
-
-statusLine : Array Int -> String
-statusLine bytes = fromUtf8 (arrayMakeWith (statusEnd bytes 0) (i => bytes[i]))
-
 -- ── the measurement ─────────────────────────────────────────────────────────
 
 {- | Answer the same request `n` times against the same store, summing each
@@ -190,7 +177,7 @@ measure label server store request reps =
   let checksum = repeatRequest server store request reps 0
   let elapsed = monotonicSec () - start
   println
-    "\{label} us=\{intToString (micros elapsed reps)} reps=\{intToString reps} bytes=\{intToString (checksum / reps)} status=\{statusLine (toArray first)}"
+    "\{label} us=\{intToString (micros elapsed reps)} reps=\{intToString reps} bytes=\{intToString (checksum / reps)} status=\{firstLineText first}"
 
 run : String -> String -> Int -> <IO, Clock, FileRead> Unit
 run dir collection reps =

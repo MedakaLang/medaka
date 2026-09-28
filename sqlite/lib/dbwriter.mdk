@@ -97,7 +97,6 @@ import bytebuilder.{
 }
 import bytes.{Bytes, fromArray}
 import list.{reverse, get, sortBy}
-import string.{toUtf8}
 import lib.header.{magicBytes}
 import lib.varint.{sqVarintBytes}
 import lib.overflow.{
@@ -107,7 +106,7 @@ import lib.overflow.{
   indexMaxLocalPayload as ovflIndexMaxLocalPayload,
 }
 import lib.recordenc.{encodeRecord}
-import lib.recordfmt.{Cell(..), cellI64}
+import lib.recordfmt.{Cell(..), cellI64, cellTextBytes}
 import lib.wideint as W
 import i64
 
@@ -1000,6 +999,7 @@ cellClassRank (CInt _) = 1
 cellClassRank (CInt64 _) = 1
 cellClassRank (CFloat _) = 1
 cellClassRank (CText _) = 2
+cellClassRank (CTextRaw _) = 2
 cellClassRank (CBlob _) = 3
 
 -- | Compare two cells in SQLite's record order.  Different storage classes
@@ -1022,11 +1022,12 @@ compareSameClass (CInt x) (CFloat y) = W.compareFloat (W.widen x) y
 compareSameClass (CFloat x) (CInt y) = W.compareRealInt x (W.widen y)
 compareSameClass (CInt64 x) (CFloat y) = W.compareFloat x y
 compareSameClass (CFloat x) (CInt64 y) = W.compareRealInt x y
-compareSameClass (CText x) (CText y) = compareBytesLex (toUtf8 x) (toUtf8 y)
 compareSameClass (CBlob x) (CBlob y) = compareBytesLex x y
-compareSameClass a b = match (cellI64 a, cellI64 b)
-  (Some x, Some y) => compare x y
-  _ => Eq
+compareSameClass a b = match (cellTextBytes a, cellTextBytes b)
+  (Some x, Some y) => compareBytesLex x y
+  _ => match (cellI64 a, cellI64 b)
+    (Some x, Some y) => compare x y
+    _ => Eq
 
 -- | Lexicographic (memcmp) comparison of two byte arrays: shorter-prefix wins a
 --   tie, exactly as SQLite's BINARY collation compares text/blob bodies.

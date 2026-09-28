@@ -21,9 +21,9 @@
    driver mirrors its exact commit shape (`unsignedValue`/`signedValue`)
    using only exported primitives. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, encodeUtf8}
 import hex.{decode}
-import string.{padLeft, toInt, toUtf8}
+import string.{padLeft, toInt}
 import lib.blob.{blobCid}
 import lib.cid.{Cid, cidForDagCbor, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
@@ -104,28 +104,18 @@ recordFor seed i = DcMap [
   ("createdAt", DcString "2026-09-14T00:00:00.000Z"),
 ]
 
-mustEncode : DagCbor -> Array Int
+mustEncode : DagCbor -> Bytes
 mustEncode value =
-  toArray
-    (resultOrPanic "synth_repo: record encoding failed" (dagCborEncode value))
-
--- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
--- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
-cidForDagCborDoor : Array Int -> Cid
-cidForDagCborDoor bytes =
-  cidForDagCbor
-    (optionOrPanic
-      "cidForDagCbor: every element must be a byte in 0..255"
-      (fromArray bytes))
+  resultOrPanic "synth_repo: record encoding failed" (dagCborEncode value)
 
 -- One row: the record's path bytes, its content CID, and its encoded bytes —
 -- built once per record so the entry (for the MST) and the block (for the
 -- store) never re-derive each other.
-buildRow : String -> Int -> Int -> Int -> (Array Int, Cid, Array Int)
+buildRow : String -> Int -> Int -> Int -> (Bytes, Cid, Bytes)
 buildRow shape seed count i =
   let path = pathFor shape count i
   let bytes = mustEncode (recordFor seed i)
-  (toUtf8 path, cidForDagCborDoor bytes, bytes)
+  (encodeUtf8 path, cidForDagCbor bytes, bytes)
 
 -- Builds descending so the ascending final list falls out of plain consing —
 -- no `++` accumulation over thousands of records.
@@ -133,26 +123,26 @@ buildRowsGo : String ->
   Int ->
   Int ->
   Int ->
-  List (Array Int, Cid, Array Int) ->
-  List (Array Int, Cid, Array Int)
+  List (Bytes, Cid, Bytes) ->
+  List (Bytes, Cid, Bytes)
 buildRowsGo shape seed count i acc =
   if i < 0 then
     acc
   else
     buildRowsGo shape seed count (i - 1) (buildRow shape seed count i :: acc)
 
-buildRows : String -> Int -> Int -> List (Array Int, Cid, Array Int)
+buildRows : String -> Int -> Int -> List (Bytes, Cid, Bytes)
 buildRows shape seed count = buildRowsGo shape seed count (count - 1) []
 
-entriesOf : List (Array Int, Cid, Array Int) -> List (Array Int, Cid)
+entriesOf : List (Bytes, Cid, Bytes) -> List (Bytes, Cid)
 entriesOf [] = []
 entriesOf ((path, cid, _) :: rest) = (path, cid) :: entriesOf rest
 
-recordBlocksOf : List (Array Int, Cid, Array Int) -> List (Cid, Array Int)
+recordBlocksOf : List (Bytes, Cid, Bytes) -> List (Cid, Bytes)
 recordBlocksOf [] = []
 recordBlocksOf ((_, cid, bytes) :: rest) = (cid, bytes) :: recordBlocksOf rest
 
-mustTree : List (Array Int, Cid) -> Mst
+mustTree : List (Bytes, Cid) -> Mst
 mustTree entries =
   resultOrPanic "synth_repo: mst build failed" (mstFromEntries entries)
 
@@ -167,14 +157,10 @@ unsignedValue did dataCid rev = DcMap [
   ("prev", DcNull),
 ]
 
-signedCommit : String -> SecretKey -> Tid -> Cid -> (Cid, Array Int)
+signedCommit : String -> SecretKey -> Tid -> Cid -> (Cid, Bytes)
 signedCommit did secret rev dataCid =
   let unsigned = mustEncode (unsignedValue did dataCid rev)
-  let digest =
-    sha256
-      (optionOrPanic
-        "sha256: every element must be a byte in 0..255"
-        (fromArray unsigned))
+  let digest = sha256 unsigned
   let signature = match signDigest secret digest
     Ok value => value
     Err message => panic "synth_repo: signing failed: \{message}"
@@ -188,13 +174,13 @@ signedCommit did secret rev dataCid =
         ("prev", DcNull),
         ("sig", DcBytes (signatureCompact signature)),
       ])
-  (cidForDagCborDoor signed, signed)
+  (cidForDagCbor signed, signed)
 
 -- ── blobs ───────────────────────────────────────────────────────────────────
 
-blobBytesFor : Int -> Int -> Array Int
+blobBytesFor : Int -> Int -> Bytes
 blobBytesFor seed j =
-  toUtf8
+  encodeUtf8
     "synth blob seed=\{intToString seed} idx=\{intToString j} payload 0123456789"
 
 mimeFor : Int -> String
@@ -202,16 +188,17 @@ mimeFor j = if isEven j then "text/plain" else "application/octet-stream"
 
 buildBlobRowsGo : Int ->
   Int ->
-  List (Cid, String, Array Int) ->
-  List (Cid, String, Array Int)
+  List (Cid, String, Bytes) ->
+  List (Cid, String, Bytes)
 buildBlobRowsGo seed j acc =
   if j < 0 then
     acc
   else
     let bytes = blobBytesFor seed j
-    buildBlobRowsGo seed (j - 1) ((blobCid bytes, mimeFor j, bytes) :: acc)
+    let cid = blobCid bytes
+    buildBlobRowsGo seed (j - 1) ((cid, mimeFor j, bytes) :: acc)
 
-buildBlobRows : Int -> Int -> List (Cid, String, Array Int)
+buildBlobRows : Int -> Int -> List (Cid, String, Bytes)
 buildBlobRows seed blobCount = buildBlobRowsGo seed (blobCount - 1) []
 
 -- ── driver ───────────────────────────────────────────────────────────────────

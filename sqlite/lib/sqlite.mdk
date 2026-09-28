@@ -34,7 +34,7 @@ import lib.btree.{
   seekTablePage,
   scanIndexPage,
 }
-import lib.recordfmt.{Cell(..), cellToString}
+import lib.recordfmt.{Cell(..), cellTextBytes, cellToString}
 import list.{reverse}
 
 -- | An open database: the parsed header plus the whole-file bytes.
@@ -123,7 +123,11 @@ usableOf db = headerPageSize (dbHeader db) - headerReserved (dbHeader db)
 -- | Read the full schema (all rows of sqlite_master on page 1).
 export
 readSchema : Db -> Result String (List SchemaEntry)
-readSchema db =
+readSchema db = flatMap (rows => traverse schemaOfRow rows) (schemaRows db)
+
+-- The rows of sqlite_master (page 1).
+schemaRows : Db -> Result String (List Row)
+schemaRows db =
   let bytes = dbBytes db
   let ps = headerPageSize (dbHeader db)
   match (decodeLeafPage
@@ -133,7 +137,28 @@ readSchema db =
     (pageBaseOf db 1)
     (hdrOffsetOf db 1))
     Err e => Err "sqlite_master: \{e}"
-    Ok rows => traverse schemaOfRow rows
+    Ok rows => Ok rows
+
+-- | The stored name bytes of every schema entry whose type, name, table name
+--   or CREATE text is not UTF-8.  `SchemaEntry` holds those as strings, which
+--   read such bytes as U+FFFD, so an entry listed here cannot be written back
+--   from its `SchemaEntry` without being renamed.
+export
+schemaNotUtf8 : Db -> Result String (List (Array Int))
+schemaNotUtf8 db = map (rows => flatMap notUtf8Entry rows) (schemaRows db)
+
+notUtf8Entry : Row -> List (Array Int)
+notUtf8Entry row = match rowCells row
+  [tc, nc, tnc, _, sqlc] =>
+    if any isRawText [tc, nc, tnc, sqlc] then
+      [optionOr [||] (cellTextBytes nc)]
+    else
+      []
+  _ => []
+
+isRawText : Cell -> Bool
+isRawText (CTextRaw _) = True
+isRawText _ = False
 
 -- Convert one sqlite_master row into a SchemaEntry.
 schemaOfRow : Row -> Result String SchemaEntry

@@ -25,23 +25,15 @@
    route is one `pathFor` arm; adding a scenario is one `scenarioRoutes` arm
    naming route labels that already have builders. -}
 
-import array.{concat, fromList, sliceClamped, sortInPlace}
+import array.{fromList, sortInPlace}
 import bytes as B
+import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import json.{Json(..), get, jObject, parse, stringify}
 import lib.blob.{blobCid}
 import lib.cid.{cidToString}
 import io.{eprintln}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
-import string.{
-  fromUtf8,
-  lines,
-  padLeft,
-  split,
-  startsWith,
-  toInt,
-  toUtf8,
-  trim,
-}
+import string.{lines, padLeft, split, startsWith, toInt, trim}
 import time.{Duration, elapsedSince, millis, monotonic, seconds, sleep}
 import test.response_support.{findHeaderEnd}
 
@@ -84,9 +76,9 @@ corpusSeed = 1
 -- `synth_repo_main`'s blob payload, byte for byte, so a blob's CID is
 -- re-derived rather than discovered. A `listBlobs` round trip before each
 -- burst would put that route's cost inside the window this measures.
-blobBytesFor : Int -> Array Int
+blobBytesFor : Int -> Bytes
 blobBytesFor j =
-  toUtf8
+  encodeUtf8
     "synth blob seed=\{intToString corpusSeed} idx=\{intToString j} payload 0123456789"
 
 blobCidText : Int -> String
@@ -202,7 +194,7 @@ planRoutes (Plan scenario _ _ _) = scenarioRoutes scenario
 
 -- | The route label and the request bytes for ordinal `i`, charged to
 -- `clientId`'s rate-limit identity.
-planRequest : Plan -> Int -> Int -> (String, Array Int)
+planRequest : Plan -> Int -> Int -> (String, Bytes)
 planRequest (Plan scenario collection recordCount blobCount) clientId i =
   let routes = scenarioRoutes scenario
   let route = routes[i % arrayLength routes]
@@ -216,13 +208,10 @@ planRequest (Plan scenario collection recordCount blobCount) clientId i =
    applies and one connection carries a whole run's requests: at 120
    connections per identity per window, a connection per request would be
    refused long before the request allowance was reached. -}
-getRequest : String -> String -> Array Int
+getRequest : String -> String -> Bytes
 getRequest xff path =
-  toUtf8
+  encodeUtf8
     "GET \{path} HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Forwarded-For: \{xff}\r\n\r\n"
-
-appendBytes : Array Int -> Array Int -> Array Int
-appendBytes left right = concat [|left, right|]
 
 statusOf : String -> Result String Int
 statusOf statusLine = match split " " statusLine
@@ -244,20 +233,18 @@ contentLengthOf (line :: rest) =
   else
     contentLengthOf rest
 
-parseHeaderBlock : Array Int -> Result String (Int, Int)
-parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)
-  [] => Err "load_client: empty response header block"
-  statusLine :: rest => do
+parseHeaderBlock : Bytes -> Result String (Int, Int)
+parseHeaderBlock headerBytes = match map lines (decodeUtf8 headerBytes)
+  None => Err "load_client: response header block is not UTF-8"
+  Some [] => Err "load_client: empty response header block"
+  Some (statusLine :: rest) => do
     status <- statusOf statusLine
     len <- contentLengthOf rest
     Ok (status, len)
 
-recvAtLeast : Connection * ->
-  Array Int ->
-  Int ->
-  <Net> Result String (Array Int)
+recvAtLeast : Connection * -> Bytes -> Int -> <Net> Result String Bytes
 recvAtLeast conn buf need =
-  if arrayLength buf >= need then
+  if B.length buf >= need then
     Ok buf
   else match recv conn 65536
     Err message => Err message
@@ -265,7 +252,7 @@ recvAtLeast conn buf need =
       if B.isEmpty chunk then
         Err "load_client: connection closed mid-response"
       else
-        recvAtLeast conn (appendBytes buf (B.toArray chunk)) need
+        recvAtLeast conn (buf ++ chunk) need
 
 {- | Reads one complete response: status, body, and bytes buffered past it.
 
@@ -274,18 +261,18 @@ recvAtLeast conn buf need =
    carrying bytes after the framed response, so it cannot frame this
    keep-alive stream. -}
 readOneResponse : Connection * ->
-  Array Int ->
-  <Net> Result String (Int, Array Int, Array Int)
+  Bytes ->
+  <Net> Result String (Int, Bytes, Bytes)
 readOneResponse conn pending = match findHeaderEnd pending 0
   Some headerEnd => do
     let bodyStart = headerEnd + 4
-    (status, len) <- parseHeaderBlock (sliceClamped 0 headerEnd pending)
+    (status, len) <- parseHeaderBlock (B.sliceClamped 0 headerEnd pending)
     let bodyEnd = bodyStart + len
     full <- recvAtLeast conn pending bodyEnd
     Ok (
       status,
-      sliceClamped bodyStart bodyEnd full,
-      sliceClamped bodyEnd (arrayLength full) full,
+      B.sliceClamped bodyStart bodyEnd full,
+      B.sliceClamped bodyEnd (B.length full) full,
     )
   None => match recv conn 65536
     Err message => Err message
@@ -293,7 +280,7 @@ readOneResponse conn pending = match findHeaderEnd pending 0
       if B.isEmpty chunk then
         Err "load_client: connection closed before response headers"
       else
-        readOneResponse conn (appendBytes pending (B.toArray chunk))
+        readOneResponse conn (pending ++ chunk)
 
 -- A request that has not answered within this is a failed request, not a slow
 -- one: the harness reports it as an error rather than letting a run hang.
@@ -319,12 +306,12 @@ microsSince start = floatToInt (elapsedSince start * 1000000.0)
    response. Returns the status, the bytes buffered past this response, and
    the elapsed microseconds. -}
 timedRequest : Connection * ->
-  Array Int ->
-  Array Int ->
-  <Clock, Net> Result String (Int, Array Int, Int)
+  Bytes ->
+  Bytes ->
+  <Clock, Net> Result String (Int, Bytes, Int)
 timedRequest conn pending request =
   let t0 = monotonic ()
-  match sendAll conn (B.fromArrayAssumeByteDomain request)
+  match sendAll conn request
     Err message => Err message
     Ok () =>
       map
@@ -333,14 +320,12 @@ timedRequest conn pending request =
 
 -- # Authenticated write workload
 
-postJsonRequest : String -> String -> String -> String -> Array Int
+postJsonRequest : String -> String -> String -> String -> Bytes
 postJsonRequest xff authorization nsid bodyText =
-  let body = toUtf8 bodyText
-  concat [|
-    toUtf8
-      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Forwarded-For: \{xff}\r\n\{authorization}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
-    body,
-  |]
+  let body = encodeUtf8 bodyText
+  encodeUtf8
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Forwarded-For: \{xff}\r\n\{authorization}Content-Type: application/json\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
+    ++ body
 
 loginBody : String -> String -> String
 loginBody did password =
@@ -350,10 +335,12 @@ loginBody did password =
       ("password", JString password),
     ])
 
-accessTokenFrom : Array Int -> String
-accessTokenFrom body = match parse (fromUtf8 body)
-  Err message => panic "load_client: login response was not JSON: \{message}"
-  Ok value => match get "accessJwt" value
+accessTokenFrom : Bytes -> String
+accessTokenFrom body = match map parse (decodeUtf8 body)
+  None => panic "load_client: login response was not UTF-8"
+  Some (Err message) =>
+    panic "load_client: login response was not JSON: \{message}"
+  Some (Ok value) => match get "accessJwt" value
     Some (JString token) => token
     _ => panic "load_client: login response had no accessJwt"
 
@@ -375,16 +362,15 @@ recordWriteBody did collection rkey =
     ])
 
 responseRoundTrip : Connection * ->
-  Array Int ->
-  Array Int ->
-  <Net> Result String (Int, Array Int, Array Int)
-responseRoundTrip conn pending request =
-  match sendAll conn (B.fromArrayAssumeByteDomain request)
-    Err message => Err message
-    Ok () => readOneResponse conn pending
+  Bytes ->
+  Bytes ->
+  <Net> Result String (Int, Bytes, Bytes)
+responseRoundTrip conn pending request = match sendAll conn request
+  Err message => Err message
+  Ok () => readOneResponse conn pending
 
 writeLoop : Connection * ->
-  Array Int ->
+  Bytes ->
   String ->
   String ->
   String ->
@@ -396,7 +382,7 @@ writeLoop : Connection * ->
   Int ->
   Int ->
   Int ->
-  <Clock, IO, Net> (Array Int, Int, Int, Int, Int, Int)
+  <Clock, IO, Net> (Bytes, Int, Int, Int, Int, Int)
 writeLoop conn pending did collection token clientId t0 budget i requests writes non200 errors =
   if elapsedSince t0 >= budget then
     (pending, requests, writes, non200, errors, i)
@@ -453,7 +439,7 @@ runWrite port collection clientId durationMs did passwordPath =
   let (loginStatus, loginBodyBytes, pending) =
     resultOrPanic
       "load_client: createSession transport failed"
-      (responseRoundTrip conn [||] loginRequest)
+      (responseRoundTrip conn empty loginRequest)
   if loginStatus /= 200 then
     panic "load_client: createSession answered \{intToString loginStatus}"
   let token = accessTokenFrom loginBodyBytes
@@ -536,7 +522,7 @@ reportRoutes target routes i samples =
    run, and a generator that quietly reconnected would take load off the
    server for the rest of the run without saying so. -}
 loadLoop : Connection * ->
-  Array Int ->
+  Bytes ->
   Plan ->
   Int ->
   Float ->
@@ -569,7 +555,7 @@ runLoad port plan clientId durationMs =
   let conn = mustConnect port
   let t0 = monotonic ()
   let (issued, non200, errors) =
-    loadLoop conn [||] plan clientId t0 (intToFloat durationMs / 1000.0) 0 0 0
+    loadLoop conn empty plan clientId t0 (intToFloat durationMs / 1000.0) 0 0 0
   let elapsed = elapsedSince t0
   let () = ignoreResult (close conn)
   println
@@ -586,17 +572,17 @@ runLoad port plan clientId durationMs =
    target shows and the control does not is therefore the loaded server's own
    queuing. -}
 sampleOne : Connection * ->
-  Array Int ->
+  Bytes ->
   String ->
   Plan ->
   Int ->
   List Sample ->
-  <Clock, Net> (Array Int, List Sample)
+  <Clock, Net> (Bytes, List Sample)
 sampleOne conn pending target plan i acc =
   let (route, request) = planRequest plan samplerClientId i
   let result = timedRequest conn pending request
   match result
-    Err _ => ([||], Sample target route 0 0 :: acc)
+    Err _ => (empty, Sample target route 0 0 :: acc)
     Ok (status, rest, micros) =>
       (rest, Sample target route micros status :: acc)
 
@@ -610,26 +596,26 @@ sampleOne conn pending target plan i acc =
    targets over a run. -}
 sampleTick : Connection * ->
   Option (Connection *) ->
-  Array Int ->
-  Array Int ->
+  Bytes ->
+  Bytes ->
   Plan ->
   Int ->
   List Sample ->
-  <Clock, IO, Net> (Array Int, Array Int, List Sample)
+  <Clock, IO, Net> (Bytes, Bytes, List Sample)
 sampleTick loaded control loadedPending controlPending plan i acc =
   if isEven i then
     let () = eprintln "tick i=\{intToString i} first=loaded"
     let (loadedRest, afterLoaded) =
       sampleOne loaded loadedPending "loaded" plan i acc
     let (controlRest, afterControl) = match control
-      None => ([||], afterLoaded)
+      None => (empty, afterLoaded)
       Some conn => sampleOne conn controlPending "control" plan i afterLoaded
     (loadedRest, controlRest, afterControl)
   else match control
     None =>
       let (loadedRest, afterLoaded) =
         sampleOne loaded loadedPending "loaded" plan i acc
-      (loadedRest, [||], afterLoaded)
+      (loadedRest, empty, afterLoaded)
     Some conn =>
       let () = eprintln "tick i=\{intToString i} first=control"
       let (controlRest, afterControl) =
@@ -640,8 +626,8 @@ sampleTick loaded control loadedPending controlPending plan i acc =
 
 sampleLoop : Connection * ->
   Option (Connection *) ->
-  Array Int ->
-  Array Int ->
+  Bytes ->
+  Bytes ->
   Plan ->
   Int ->
   Int ->
@@ -673,7 +659,7 @@ runSample port controlPort plan requests intervalMs =
     if controlPort == 0 then None else Some (mustConnect controlPort)
   let t0 = monotonic ()
   let samples =
-    sampleLoop loaded control [||] [||] plan 0 requests intervalMs []
+    sampleLoop loaded control empty empty plan 0 requests intervalMs []
   let elapsed = elapsedSince t0
   let () = ignoreResult (close loaded)
   let () = match control

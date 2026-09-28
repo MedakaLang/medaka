@@ -16,7 +16,7 @@
 -- Names are deliberately OFF the prelude (`eGt`/`eEq`/`eAnd`/...) so they never
 -- collide with `Ord`/`Eq`/`Bool` methods (`gt`/`eq`/`and`/...).
 
-import lib.recordfmt.{Cell(..), nthCell, intCell, cellI64}
+import lib.recordfmt.{Cell(..), nthCell, intCell, cellI64, textView}
 import lib.wideint as W
 import i64
 import lib.sqlite.{
@@ -34,7 +34,7 @@ import lib.btree.{Row}
 import lib.indexlookup.{seekByIndex}
 import lib.rowtype.{RowType, rtDecode}
 import list.{reverse, take, drop, sortBy, nub}
-import string.{join, fromChars, replaceAll, toInt, toFloat}
+import string.{join, fromChars, fromUtf8, replaceAll, toInt, toFloat}
 
 -- ---------------------------------------------------------------------------
 -- Untyped core
@@ -1444,6 +1444,7 @@ cellToTextOp (CInt n) = Some "\{n}"
 cellToTextOp (CInt64 x) = Some (display x)
 cellToTextOp (CFloat f) = Some "\{f}"
 cellToTextOp (CText s) = Some s
+cellToTextOp (CTextRaw b) = Some (fromUtf8 b)
 cellToTextOp (CBlob b) = Some (blobToText b)
 
 blobToText : Array Int -> String
@@ -1737,6 +1738,7 @@ coerceNumericCell (CInt n) = CInt n
 coerceNumericCell (CInt64 x) = CInt64 x
 coerceNumericCell (CFloat f) = CFloat f
 coerceNumericCell (CText s) = coerceTextNumeric s
+coerceNumericCell (CTextRaw b) = coerceTextNumeric (fromUtf8 b)
 coerceNumericCell (CBlob b) = coerceTextNumeric (blobToText b)
 coerceNumericCell CNull = CNull
 
@@ -1929,6 +1931,7 @@ cellTruthy (CInt n) = n /= 0
 cellTruthy (CInt64 _) = True
 cellTruthy (CFloat f) = f /= 0.0
 cellTruthy (CText s) = stringLength s > 0
+cellTruthy (CTextRaw b) = arrayLength b > 0
 cellTruthy (CBlob _) = True
 
 litTruthy : Literal -> Bool
@@ -1960,7 +1963,7 @@ cmpCellsTri op a b =
 
 -- A three-way ordering of two non-null cells, or None if the shapes are not comparable.
 cmpOrder : Cell -> Cell -> Option Ordering
-cmpOrder a b = match (a, b)
+cmpOrder a b = match (textView a, textView b)
   (CInt x, CInt y) => Some (compare x y)
   (CFloat x, CFloat y) => Some (compare x y)
   (CFloat x, _) => map (y => W.compareRealInt x y) (cellI64 b)
@@ -2199,6 +2202,7 @@ cellToLiteral CNull = LNull
 cellToLiteral (CInt n) = LInt n
 cellToLiteral (CInt64 x) = LInt64 x
 cellToLiteral (CText s) = LText s
+cellToLiteral (CTextRaw b) = LText (fromUtf8 b)
 cellToLiteral (CFloat f) = LFloat f
 cellToLiteral (CBlob b) = LBlob b
 
@@ -3341,6 +3345,8 @@ cellOrder : Cell -> Cell -> Ordering
 cellOrder CNull CNull = Eq
 cellOrder CNull _ = Lt
 cellOrder _ CNull = Gt
+cellOrder (CTextRaw x) b = cellOrder (textView (CTextRaw x)) b
+cellOrder a (CTextRaw y) = cellOrder a (textView (CTextRaw y))
 cellOrder (CInt x) (CInt y) = compare x y
 cellOrder (CFloat x) (CFloat y) = compare x y
 cellOrder (CInt x) (CFloat y) = W.compareFloat (W.widen x) y
@@ -3362,6 +3368,7 @@ cellTypeRank (CInt _) = 1
 cellTypeRank (CInt64 _) = 1
 cellTypeRank (CFloat _) = 1
 cellTypeRank (CText _) = 2
+cellTypeRank (CTextRaw _) = 2
 cellTypeRank (CBlob _) = 3
 
 -- Drop `offset` rows then keep at most `limit`.

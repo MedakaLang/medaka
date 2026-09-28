@@ -76,11 +76,13 @@ import http.{
   QueryParam(..),
   Response,
 }
-import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import list.{last, take}
-import string.{fromUtf8, join, split, startsWith, toInt, toLower, toUtf8}
+import string.{join, split, startsWith, toInt, toLower}
+import string.{utf8ByteLength}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
 import lib.blockstore.{blockStoreGet}
@@ -181,15 +183,6 @@ import lib.xrpc.{
   wellKnownPath,
   xrpcErrorResponse,
 }
-
--- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
--- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
-cidForDagCborDoor : Array Int -> Cid
-cidForDagCborDoor bytes =
-  cidForDagCbor
-    (optionOrPanic
-      "cidForDagCbor: every element must be a byte in 0..255"
-      (fromArray bytes))
 
 createRecordNsid : String
 createRecordNsid = "com.atproto.repo.createRecord"
@@ -317,17 +310,11 @@ contentTypeHeader value =
 
 {- | The success counterpart of `xrpcErrorResponse`: 200 with an exact body and
    one declared media type. `http`'s serializer owns all framing. -}
-bytesOkResponse : String -> Array Int -> Response
+bytesOkResponse : String -> Bytes -> Response
 bytesOkResponse contentType body =
   resultOrPanic
     "handlers: internal response construction error"
-    (makeResponse
-      200
-      "OK"
-      [contentTypeHeader contentType]
-      (optionOrPanic
-        "makeResponse: every element must be a byte in 0..255"
-        (fromArray body)))
+    (makeResponse 200 "OK" [contentTypeHeader contentType] body)
 
 nosniffHeader : Header
 nosniffHeader =
@@ -348,7 +335,7 @@ contentDispositionAttachmentHeader =
    blob otherwise executes as this origin's own content. No other
    `bytesOkResponse` call site serves attacker-influenced stored content, so
    this is scoped to `getBlob` alone. -}
-blobOkResponse : String -> Array Int -> Response
+blobOkResponse : String -> Bytes -> Response
 blobOkResponse contentType body =
   let headers = [
     contentTypeHeader contentType,
@@ -357,13 +344,7 @@ blobOkResponse contentType body =
   ]
   resultOrPanic
     "handlers: internal response construction error"
-    (makeResponse
-      200
-      "OK"
-      headers
-      (optionOrPanic
-        "makeResponse: every element must be a byte in 0..255"
-        (fromArray body)))
+    (makeResponse 200 "OK" headers body)
 
 {- | The standard XRPC success envelope: 200 with a serialized JSON body.
    `lib.xrpc` owns the matching error envelope (`xrpcErrorResponse`) but has no
@@ -371,7 +352,7 @@ blobOkResponse contentType body =
 export
 jsonOkResponse : Json -> Response
 jsonOkResponse value =
-  bytesOkResponse "application/json" (toUtf8 (stringify value))
+  bytesOkResponse "application/json" (encodeUtf8 (stringify value))
 
 -- ── request-field admission ─────────────────────────────────────────────────
 
@@ -494,17 +475,18 @@ requireRecordField name body = match get name body
 requireRecord : Json -> Result Response DagCbor
 requireRecord = requireRecordField "record"
 
-encodeRecordField : String -> DagCbor -> Result Response (Array Int)
-encodeRecordField name record = match dagCborEncode record
-  Err message =>
-    Err (invalidRequest "Request field '\{name}' cannot be encoded: \{message}")
-  Ok bytes => Ok (toArray bytes)
+encodeRecordField : String -> DagCbor -> Result Response Bytes
+encodeRecordField name record =
+  mapErr
+    (message =>
+      invalidRequest "Request field '\{name}' cannot be encoded: \{message}")
+    (dagCborEncode record)
 
-encodeRecord : DagCbor -> Result Response (Array Int)
+encodeRecord : DagCbor -> Result Response Bytes
 encodeRecord = encodeRecordField "record"
 
-recordPath : String -> String -> Array Int
-recordPath collection rkey = toUtf8 "\{collection}/\{rkey}"
+recordPath : String -> String -> Bytes
+recordPath collection rkey = encodeUtf8 "\{collection}/\{rkey}"
 
 -- ── revision derivation ─────────────────────────────────────────────────────
 
@@ -532,14 +514,14 @@ nextRevision repo = advanceTid (repoCommitTid (repoLatestCommit repo))
 currentCommitCid : Repo -> Cid
 currentCommitCid repo = repoCommitCid (repoLatestCommit repo)
 
-currentRecordCid : Array Int -> Repo -> Result Response (Option Cid)
+currentRecordCid : Bytes -> Repo -> Result Response (Option Cid)
 currentRecordCid path repo = match repoLookup path repo
   Err message => Err (invalidRequest "Repository read rejected: \{message}")
   Ok None => Ok None
   Ok (Some value) => match dagCborEncode value
     Err message =>
       Err (invalidRequest "Stored record cannot be re-encoded: \{message}")
-    Ok bytes => Ok (Some (cidForDagCborDoor (toArray bytes)))
+    Ok bytes => Ok (Some (cidForDagCbor bytes))
 
 checkSwapCommit : Json -> Repo -> Result Response Unit
 checkSwapCommit body repo = match get "swapCommit" body
@@ -560,7 +542,7 @@ checkSwapCommit body repo = match get "swapCommit" body
 {- | `swapRecord` is three-valued: absent means no check, an explicit `null`
    asserts the record is ABSENT, and a CID string asserts it is exactly that
    record. -}
-checkSwapRecord : Json -> Array Int -> Repo -> Result Response Unit
+checkSwapRecord : Json -> Bytes -> Repo -> Result Response Unit
 checkSwapRecord body path repo = match get "swapRecord" body
   None => Ok ()
   Some JNull => do
@@ -652,7 +634,7 @@ applyCreateRecord account store body = do
       account
       collection
       rkey
-      (cidForDagCborDoor bytes)
+      (cidForDagCbor bytes)
       (repoMutationCommit mutation),
   )
 
@@ -681,7 +663,7 @@ applyPutRecord account store body = do
       account
       collection
       rkey
-      (cidForDagCborDoor bytes)
+      (cidForDagCbor bytes)
       (repoMutationCommit mutation),
   )
 
@@ -770,24 +752,27 @@ batchElement did rev auto element = do
         derived <- autoRkey rev auto
         Ok (derived, auto + 1)
     bytes <- encodeRecordField "value" record
+    let key = recordPath collection rkey
     Ok (
-      RepoWriteCreate (recordPath collection rkey) record,
-      batchResult "createResult" did collection rkey (cidForDagCborDoor bytes),
+      RepoWriteCreate key record,
+      batchResult "createResult" did collection rkey (cidForDagCbor bytes),
       nextAuto,
     )
   else if kind == applyWritesType "update" then do
     rkey <- requiredString "rkey" element
     record <- requireRecordField "value" element
     bytes <- encodeRecordField "value" record
+    let key = recordPath collection rkey
     Ok (
-      RepoWriteUpdate (recordPath collection rkey) record,
-      batchResult "updateResult" did collection rkey (cidForDagCborDoor bytes),
+      RepoWriteUpdate key record,
+      batchResult "updateResult" did collection rkey (cidForDagCbor bytes),
       auto,
     )
   else if kind == applyWritesType "delete" then do
     rkey <- requiredString "rkey" element
+    let key = recordPath collection rkey
     Ok (
-      RepoWriteDelete (recordPath collection rkey),
+      RepoWriteDelete key,
       jObject [("$type", JString (applyWritesType "deleteResult"))],
       auto,
     )
@@ -877,10 +862,7 @@ finishWrite store (Ok (repo, output)) =
    record the admitted bytes and declared MIME type in the Store's blob half.
    No request field names an account; this server hosts exactly one, and the
    auth layer has already required a session before this handler ever runs. -}
-applyUploadBlob : Store ->
-  MediaType ->
-  Array Int ->
-  Result Response (Store, Json)
+applyUploadBlob : Store -> MediaType -> Bytes -> Result Response (Store, Json)
 applyUploadBlob store media bytes = do
   let mimeType = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
   let accountUsedBytes = storeBlobBytes store
@@ -1028,11 +1010,11 @@ recordUri : Account -> String -> String -> String
 recordUri account collection rkey =
   "at://\{accountDid account}/\{collection}/\{rkey}"
 
-reencodeRecord : DagCbor -> Result Response (Array Int)
-reencodeRecord value = match dagCborEncode value
-  Err message =>
-    Err (invalidRequest "Stored record cannot be re-encoded: \{message}")
-  Ok bytes => Ok (toArray bytes)
+reencodeRecord : DagCbor -> Result Response Bytes
+reencodeRecord value =
+  mapErr
+    (message => invalidRequest "Stored record cannot be re-encoded: \{message}")
+    (dagCborEncode value)
 
 recordView : Account -> String -> String -> DagCbor -> Result Response Json
 recordView account collection rkey value = do
@@ -1040,7 +1022,7 @@ recordView account collection rkey value = do
   Ok
     (jObject [
       ("uri", JString (recordUri account collection rkey)),
-      ("cid", JString (cidToString (cidForDagCborDoor bytes))),
+      ("cid", JString (cidToString (cidForDagCbor bytes))),
       ("value", dagCborToLexJson value),
     ])
 
@@ -1053,7 +1035,7 @@ recordViews account collection entries =
 
 -- ── repository reads ────────────────────────────────────────────────────────
 
-lookupRecord : Array Int -> Repo -> Result Response (Option DagCbor)
+lookupRecord : Bytes -> Repo -> Result Response (Option DagCbor)
 lookupRecord path repo =
   mapErr
     (message => invalidRequest "Repository read rejected: \{message}")
@@ -1076,33 +1058,54 @@ pageRecords repo ((rkey, cid) :: rest) = match repoDecodeEntry cid repo
     values <- pageRecords repo rest
     Ok ((rkey, value) :: values)
 
-splitRecordPath : Array Int -> Option (String, String)
-splitRecordPath path = match split "/" (fromUtf8 path)
-  [collection, rkey] => Some (collection, rkey)
-  _ => None
+{- | A stored path as its collection and record key, or `None` when it is not
+   `collection/rkey`. A path that is not UTF-8 is not one: its record key
+   would be compared against a cursor and echoed in a URI, so it is never
+   repaired into a key no record is stored under. -}
+splitRecordPath : Bytes -> Option (String, String)
+splitRecordPath path = match B.decodeUtf8 path
+  None => None
+  Some text => match split "/" text
+    [collection, rkey] => Some (collection, rkey)
+    _ => None
 
 -- | The key prefix every path in one collection carries.
-collectionPrefix : String -> Array Int
-collectionPrefix collection = toUtf8 "\{collection}/"
+collectionPrefix : String -> Bytes
+collectionPrefix collection = encodeUtf8 "\{collection}/"
 
-{- | The smallest key sorting after every key that carries `prefix`: the
-   prefix with its last byte raised by one. A collection prefix ends in the
+{- | The smallest key sorting after every key that carries `prefix`, or
+   `None` when no key does: trailing 0xFF bytes are dropped and the last byte
+   left is raised by one, which cannot wrap. A collection prefix ends in the
    '/' a record path splits on, so the raised bound falls between the last key
-   of one collection and the first key of the next. -}
-afterPrefix : Array Int -> Array Int
-afterPrefix prefix =
-  let top = arrayLength prefix - 1
-  arrayMakeWith (arrayLength prefix) (i =>
-    if i == top then prefix[i] + 1 else prefix[i])
+   of one collection and the first key of the next.
+
+   > afterPrefix (encodeUtf8 "app.bsky.feed.post/") == Some (encodeUtf8 "app.bsky.feed.post0")
+   True
+   > afterPrefix (B.fromU8Array [|97, 255, 255|]) == Some (B.fromU8Array [|98|])
+   True
+   > afterPrefix (B.fromU8Array [|255, 255|]) == None
+   True -}
+afterPrefix : Bytes -> Option Bytes
+afterPrefix prefix = raiseLastBelow (B.length prefix) prefix
+
+-- | `afterPrefix` over the first `n` bytes of `prefix`.
+raiseLastBelow : Int -> Bytes -> Option Bytes
+raiseLastBelow n prefix =
+  if n <= 0 then
+    None
+  else
+    let last = prefix[n - 1]
+    if last == 255 then
+      raiseLastBelow (n - 1) prefix
+    else
+      Some (B.concat [B.take (n - 1) prefix, B.fromU8Array [|last + 1|]])
 
 -- | The smallest key sorting strictly after `key` itself.
-afterKey : Array Int -> Array Int
-afterKey key =
-  let width = arrayLength key
-  arrayMakeWith (width + 1) (i => if i == width then 0 else key[i])
+afterKey : Bytes -> Bytes
+afterKey key = B.concat [key, B.fromU8Array [|0|]]
 
 -- | Read the one entry sorting at or after `from`, and nothing behind it.
-seekFrom : Option (Array Int) -> MstRangeQuery
+seekFrom : Option Bytes -> MstRangeQuery
 seekFrom from = MstRangeQuery {
   start = from,
   prefix = None,
@@ -1112,27 +1115,42 @@ seekFrom from = MstRangeQuery {
 
 {- | The `(rkey, block)` pairs of a range already bounded to one collection,
    in the direction that range was read in. No record is read: the pairs name
-   blocks, which is all ordering, the cursor and the limit need. A stored path
-   that is not `collection/rkey` names no record and is passed over. -}
-pageRkeys : List (Array Int, Cid) -> List (String, Cid)
-pageRkeys [] = []
+   blocks, which is all ordering, the cursor and the limit need.
+
+   A stored path that is not `collection/rkey` refuses the whole listing. The
+   range is read to a bound, so passing over such a path would shorten the
+   lookahead that decides whether a cursor is emitted, and pagination would
+   end before the records behind it. -}
+pageRkeys : List (Bytes, Cid) -> Result Response (List (String, Cid))
+pageRkeys [] = Ok []
 pageRkeys ((path, cid) :: rest) = match splitRecordPath path
-  Some (_, rkey) => (rkey, cid) :: pageRkeys rest
-  None => pageRkeys rest
+  None =>
+    Err
+      (internalError
+        "Repository listing rejected: a stored record path is not a UTF-8 collection/rkey")
+  Some (_, rkey) => do
+    tail <- pageRkeys rest
+    Ok ((rkey, cid) :: tail)
 
 {- | Every distinct collection name, ascending, at one seek apiece. Each seek
    resumes past the whole of the collection it just named, so the walk reads
    one entry per collection and steps over every record inside one — the cost
-   is the collections, not the repository. -}
-repoCollections : Repo -> Option (Array Int) -> List String -> List String
+   is the collections, not the repository.
+
+   A stored path that is not `collection/rkey` is stepped past by one key,
+   and the walk resumes right after it. Unlike a bounded `listRecords` window,
+   nothing here is counted, so such a path hides no collection that a valid
+   path names; a collection none of whose paths is valid has no name to
+   report. -}
+repoCollections : Repo -> Option Bytes -> List String -> List String
 repoCollections repo from seen = match repoEntriesRange (seekFrom from) repo
   [] => reverseOnto seen []
   (path, _) :: _ => match splitRecordPath path
     Some (collection, _) =>
-      repoCollections
-        repo
-        (Some (afterPrefix (collectionPrefix collection)))
-        (collection :: seen)
+      let named = collection :: seen
+      match afterPrefix (collectionPrefix collection)
+        Some next => repoCollections repo (Some next) named
+        None => reverseOnto named []
     None => repoCollections repo (Some (afterKey path)) seen
 
 reverseOnto : List a -> List a -> List a
@@ -1157,7 +1175,7 @@ applyGetRecord account store params = do
           "Record not found: \{recordUri account collection rkey}")
     Some value => Ok value
   bytes <- reencodeRecord value
-  let actual = cidToString (cidForDagCborDoor bytes)
+  let actual = cidToString (cidForDagCbor bytes)
   () <- match requested
     None => Ok ()
     Some wanted =>
@@ -1229,8 +1247,7 @@ lastRkey fallback (_ :: rest) = lastRkey fallback rest
    and the write endpoints apply. -}
 requireCollectionSyntax : String -> Result Response Unit
 requireCollectionSyntax collection =
-  let bytes = toUtf8 collection
-  match validateCollection bytes (arrayLength bytes)
+  match validateCollection (encodeUtf8 collection) (utf8ByteLength collection)
     Err message =>
       Err
         (invalidRequest
@@ -1253,13 +1270,13 @@ applyListRecords account store params = do
   -- read stops at that bound inside the tree, so selection reaches no further
   -- into the collection than the page it answers with.
   let query = MstRangeQuery {
-    start = map (recordPath collection) cursor,
+    start = map (rkey => recordPath collection rkey) cursor,
     prefix = Some (collectionPrefix collection),
     reverse = not ascending,
     limit = Some (limit + 2),
   }
-  let remaining =
-    dropCursorEntry cursor (pageRkeys (repoEntriesRange query repo))
+  rkeys <- pageRkeys (repoEntriesRange query repo)
+  let remaining = dropCursorEntry cursor rkeys
   let probe = take (limit + 1) remaining
   let keys = take limit probe
   page <- pageRecords repo keys
@@ -1566,7 +1583,7 @@ applyGetRepoStatus account store params = do
    answer can name blocks the reference's does not, and names them in a
    different order, while never omitting one the reference does — omission is
    the direction that would make the proof unsound, and the gate
-   (`pds/test/repo_vectors.sh`) asserts against it on every probe. The
+   (`pds/test/repo_vectors_test.mdk`) asserts against it on every probe. The
    reference's own `verifyProofs`/`verifyRecords` accept both answers
    identically, which is what makes the difference admissible (#3007). Order is
    not part of the claim.
@@ -1584,13 +1601,6 @@ applyGetRepoStatus account store params = do
    up: `com.atproto.repo.getRecord` returns the decoded value and refuses when
    there is none, because its caller wants the record. This one returns blocks
    a caller verifies for itself, so it has an answer either way. -}
--- Door, masked: `car` speaks `Bytes` blocks and this module's block lists are
--- `Array Int`. Every row passed here is read out of a `Repo`, whose blocks
--- were range-checked on the way in, so it is in range by construction.
-blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
-blockRowsToBytesDoor =
-  map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
-
 applySyncGetRecord : Account ->
   Store ->
   List QueryParam ->
@@ -1612,22 +1622,22 @@ applySyncGetRecord account store params = do
   record <- recordProofBlock found repo
   let commit = repoLatestCommit repo
   let commitCid = repoCommitCid commit
-  let blocks = (commitCid, repoCommitSignedBytes commit) :: proof ++ record
-  match carEncode [commitCid] (blockRowsToBytesDoor blocks)
+  let blocks = [(commitCid, repoCommitSignedBytes commit)] ++ proof ++ record
+  match carEncode [commitCid] blocks
     Err message => Err (invalidRequest "Record proof rejected: \{message}")
-    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" (toArray bytes))
+    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" bytes)
 
 {- | The record block itself, as the zero-or-one-element tail of the proof.
    Absent is `[]` rather than a refusal; a key the MST names whose block is
    gone is a corrupt repository, not a proof of absence. -}
-recordProofBlock : Option Cid -> Repo -> Result Response (List (Cid, Array Int))
+recordProofBlock : Option Cid -> Repo -> Result Response (List (Cid, Bytes))
 recordProofBlock None _ = Ok []
 recordProofBlock (Some cid) repo = match blockStoreGet cid (repoStore repo)
   None =>
     Err
       (internalError
         "Repository names record block '\{cidToString cid}' but does not hold it")
-  Some bytes => Ok [(cid, toArray bytes)]
+  Some bytes => Ok [(cid, bytes)]
 
 -- ── com.atproto.sync.getBlocks ──────────────────────────────────────────────
 
@@ -1661,17 +1671,16 @@ admitCids (text :: rest) seen = match cidFromString text
 -- it does not, each accumulated reversed for `partitionBlocks` to restore.
 partitionGo : List Cid ->
   Repo ->
-  (List (Cid, Array Int), List Cid) ->
-  (List (Cid, Array Int), List Cid)
+  (List (Cid, Bytes), List Cid) ->
+  (List (Cid, Bytes), List Cid)
 partitionGo [] _ found = found
 partitionGo (cid :: rest) repo (blocks, missing) =
   match blockStoreGet cid (repoStore repo)
     None => partitionGo rest repo (blocks, cid :: missing)
-    Some bytes =>
-      partitionGo rest repo ((cid, toArray bytes) :: blocks, missing)
+    Some bytes => partitionGo rest repo ((cid, bytes) :: blocks, missing)
 
 -- | The same split, both halves back in request order.
-partitionBlocks : List Cid -> Repo -> (List (Cid, Array Int), List Cid)
+partitionBlocks : List Cid -> Repo -> (List (Cid, Bytes), List Cid)
 partitionBlocks cids repo =
   let (blocks, missing) = partitionGo cids repo ([], [])
   (reverseOnto blocks [], reverseOnto missing [])
@@ -1702,9 +1711,9 @@ applySyncGetBlocks account store params = do
       Err
         (invalidRequest
           "Could not find cids: \{join "," (map cidToString absent)}")
-  match carEncodeRootless (blockRowsToBytesDoor blocks)
+  match carEncodeRootless blocks
     Err message => Err (invalidRequest "Block export rejected: \{message}")
-    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" (toArray bytes))
+    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" bytes)
 
 -- ── com.atproto.identity.resolveHandle ──────────────────────────────────────
 
@@ -1833,7 +1842,7 @@ wellKnownResponse : Account -> Store -> WellKnown -> Response
 wellKnownResponse account store WellKnownDidDocument =
   jsonOkResponse (wellKnownDidJson account store)
 wellKnownResponse account _ WellKnownAtprotoDid =
-  bytesOkResponse "text/plain; charset=utf-8" (toUtf8 (accountDid account))
+  bytesOkResponse "text/plain; charset=utf-8" (encodeUtf8 (accountDid account))
 
 -- | The health probe's body: the running build's own version stamp, in the
 -- same string `versionString` (`pds/serve.mdk`) renders for `--version` and
@@ -1892,22 +1901,20 @@ refreshGraceSeconds = 7200
    the token that replaced it — distinct values. They differ from each other in
    audience and lifetime, which is what stops either being presented as the
    other. -}
-mintSessionTokens : Account -> Array Int -> RequestContext -> (String, String)
+mintSessionTokens : Account -> Bytes -> RequestContext -> (String, String)
 mintSessionTokens account secret context =
-  let tokenId = Hex.encode (fromArrayAssumeByteDomain context.nonce)
+  let tokenId = Hex.encode context.nonce
   let issued = context.nowSeconds
-  -- Masked, as before: the old HMAC key path masked this secret too.
-  let key = fromArrayAssumeByteDomain secret
   (
     mintToken
-      key
+      secret
       (accountDid account)
       (accessAudience account)
       tokenId
       issued
       (issued + accessTokenSeconds),
     mintToken
-      key
+      secret
       (accountDid account)
       (refreshAudience account)
       tokenId
@@ -2026,7 +2033,7 @@ rehashed (Some upgraded) store = storeWithCredential upgraded store
    store so the revocation is kept. -}
 applyRefreshSession : Account ->
   RequestContext ->
-  Array Int ->
+  Bytes ->
   Store ->
   (Store, Response)
 applyRefreshSession account context presented store =
@@ -2061,7 +2068,7 @@ applyRefreshSession account context presented store =
    has not closed. The whole family is closed, so neither a sibling opened by
    a replay inside the grace window nor the replay itself outlives it. -}
 applyDeleteSession : RequestContext ->
-  Array Int ->
+  Bytes ->
   Store ->
   Result Response (Store, Json)
 applyDeleteSession context presented store =

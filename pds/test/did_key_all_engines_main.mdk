@@ -1,8 +1,8 @@
 {- | Deterministic all-engine driver for the official-PDS secp256k1
    `did:key` corpus and the public decoder's malformed-input boundary. -}
 
-import array as A
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, fromU8Array}
 import hex.{decode}
 import io.{readLines}
 import string.{split, stripPrefix, toInt, trim}
@@ -16,15 +16,9 @@ import lib.multiformats.{
   uvarintDecode,
 }
 import lib.sign.{publicKeyCompressed, publicKeyFromCompressed}
-import bytes.{Bytes}
 
-mustHex : String -> Array Int
+mustHex : String -> Bytes
 mustHex text =
-  toArray
-    (resultOrPanic "did_key_all_engines: malformed corpus hex" (decode text))
-
-mustHexBytes : String -> Bytes
-mustHexBytes text =
   resultOrPanic "did_key_all_engines: malformed corpus hex" (decode text)
 
 mustInt : String -> Int
@@ -39,7 +33,7 @@ mustStrip prefix text =
     "did_key_all_engines: expected prefix \{prefix}"
     (stripPrefix prefix text)
 
-canonicalPayload : String -> Array Int -> Bool
+canonicalPayload : String -> Bytes -> Bool
 canonicalPayload did keyBytes =
   let multibase = mustStrip "did:key:" did
   match multibaseBase58btcDecode multibase
@@ -47,10 +41,10 @@ canonicalPayload did keyBytes =
     Ok payloadBytes => match uvarintDecode payloadBytes
       Err _ => False
       Ok (codec, consumed) =>
-        let prefix = toArray (multicodecPrefix multicodecSecp256k1Pub)
+        let prefix = multicodecPrefix multicodecSecp256k1Pub
         codec == multicodecSecp256k1Pub
-          && consumed == arrayLength prefix
-          && toArray payloadBytes == prefix ++ keyBytes
+          && consumed == B.length prefix
+          && payloadBytes == prefix ++ keyBytes
 
 runRow : Int -> String -> <IO> Unit
 runRow expectedId line = match split " " (trim line)
@@ -60,8 +54,7 @@ runRow expectedId line = match split " " (trim line)
       panic "did_key_all_engines: row id \{idText} out of order"
     else
       let keyBytes = mustHex keyHex
-      let keyBlock = mustHexBytes keyHex
-      match publicKeyFromCompressed keyBlock
+      match publicKeyFromCompressed keyBytes
         Err message =>
           panic
             "did_key_all_engines: row \{idText} public key rejected: \{message}"
@@ -75,7 +68,7 @@ runRow expectedId line = match split " " (trim line)
               let recompressed = publicKeyCompressed decoded
               let ok =
                 encoded == expectedDid
-                  && recompressed == keyBlock
+                  && recompressed == keyBytes
                   && didKeyFromPublicKey decoded == expectedDid
                   && canonicalPayload expectedDid keyBytes
               if ok then
@@ -91,13 +84,8 @@ runRows (row :: rest) count =
   let () = runRow count row
   runRows rest (count + 1)
 
-payloadDid : Array Int -> String
-payloadDid payload =
-  -- Door: masked — every call site builds `payload` from already-valid
-  -- bytes (a multicodec prefix, a compressed key, or literal in-range
-  -- constants), so the domain holds by construction even where the SHAPE
-  -- is deliberately malformed for this boundary test.
-  "did:key:" ++ multibaseBase58btc (fromArrayAssumeByteDomain payload)
+payloadDid : Bytes -> String
+payloadDid payload = "did:key:" ++ multibaseBase58btc payload
 
 reject : String -> String -> <IO> Int
 reject label did = match publicKeyFromDidKey did
@@ -108,17 +96,19 @@ reject label did = match publicKeyFromDidKey did
     let () = println "MALFORMED \{label} FAIL accepted"
     0
 
-runMalformed : Array Int -> String -> <IO> Int
+-- | A 33-byte SEC1 compressed-point shape: prefix byte `first`, then 32
+-- copies of `rest`.
+sec1Shape : U8 -> U8 -> Bytes
+sec1Shape first rest = fromU8Array [|first|] ++ fromU8Array (arrayMake 32 rest)
+
+runMalformed : Bytes -> String -> <IO> Int
 runMalformed keyBytes canonicalDid =
   let didBody = mustStrip "did:key:" canonicalDid
   let base58Body = mustStrip "z" didBody
-  let prefix = toArray (multicodecPrefix multicodecSecp256k1Pub)
-  let invalidPrefix = arrayCopy keyBytes
-  let () = A.setInPlace 0 4 invalidPrefix
-  let xAtOrAboveP = arrayMake 33 255
-  let () = A.setInPlace 0 2 xAtOrAboveP
-  let nonsquareXZero = arrayMake 33 0
-  let () = A.setInPlace 0 2 nonsquareXZero
+  let prefix = multicodecPrefix multicodecSecp256k1Pub
+  let invalidPrefix = fromU8Array [|4|] ++ B.drop 1 keyBytes
+  let xAtOrAboveP = sec1Shape 2 255
+  let nonsquareXZero = sec1Shape 2 0
   let r1 = reject "wrong-method" ("did:web:" ++ didBody)
   let r2 = reject "wrong-method-case" ("DID:key:" ++ didBody)
   let r3 = reject "missing-multibase" ("did:key:" ++ base58Body)
@@ -127,13 +117,19 @@ runMalformed keyBytes canonicalDid =
   let r6 =
     reject
       "wrong-codec"
-      (payloadDid (toArray (multicodecPrefix multicodecP256Pub) ++ keyBytes))
+      (payloadDid (multicodecPrefix multicodecP256Pub ++ keyBytes))
   let r7 =
-    reject "nonminimal-codec" (payloadDid ([|0xe7, 0x81, 0x00|] ++ keyBytes))
-  let r8 = reject "empty-payload" (payloadDid [||])
-  let r9 = reject "short-payload" (payloadDid (prefix ++ A.take 32 keyBytes))
-  let r10 = reject "long-payload" (payloadDid (prefix ++ arrayMake 34 0))
-  let r11 = reject "trailing-payload" (payloadDid (prefix ++ keyBytes ++ [|0|]))
+    reject
+      "nonminimal-codec"
+      (payloadDid (fromU8Array [|0xe7, 0x81, 0x00|] ++ keyBytes))
+  let r8 = reject "empty-payload" (payloadDid empty)
+  let r9 = reject "short-payload" (payloadDid (prefix ++ B.take 32 keyBytes))
+  let r10 =
+    reject "long-payload" (payloadDid (prefix ++ fromU8Array (arrayMake 34 0)))
+  let r11 =
+    reject
+      "trailing-payload"
+      (payloadDid (prefix ++ keyBytes ++ fromU8Array [|0|]))
   let r12 = reject "invalid-sec1-prefix" (payloadDid (prefix ++ invalidPrefix))
   let r13 = reject "invalid-sec1-x" (payloadDid (prefix ++ xAtOrAboveP))
   let r14 =

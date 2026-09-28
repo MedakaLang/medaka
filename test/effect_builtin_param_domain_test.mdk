@@ -16,7 +16,7 @@ import compiler_cli_test_support.{
   runMedaka,
 }
 import string.{stripSuffix}
-import test.{Expectation, fail, pass}
+import test.{Expectation, expectAll, fail, pass}
 
 fixture : String -> <IO> String
 fixture name = fixtureIn "test/effect_builtin_param_fixtures" name
@@ -60,6 +60,32 @@ test "FileRead builtin fills a concrete path inside its Prefix bound" =
 test "FileRead builtin rejects a concrete path outside its Prefix bound" = expectCheckReject
   (fixture "fileread_hole_reject.mdk")
   ["performs <FileRead \"/etc/app/config.toml\">"]
+
+test "a concatenation extends an exact FileRead prefix to the pattern it begins" = expectCheckReject
+  (fixture "fileread_concat_exact_reject.mdk")
+  ["performs <FileRead \"/etc/app/*\">"]
+
+test "a concatenation under the pattern it begins is accepted" =
+  expectCheckAccept (fixture "fileread_concat_pattern_accept.mdk")
+
+test "an interpolation extends an exact FileRead prefix to the pattern it begins" = expectCheckReject
+  (fixture "fileread_interp_exact_reject.mdk")
+  ["performs <FileRead \"/etc/app/*\">"]
+
+test "an interpolation under the pattern it begins is accepted" =
+  expectCheckAccept (fixture "fileread_interp_pattern_accept.mdk")
+
+test "manifest grants a concatenation's pattern, never its exact prefix" =
+  expectManifest
+    "fileread_concat_manifest_accept.mdk"
+    "readUnder"
+    "[package.capabilities]\nFileRead = \"/etc/app/*\""
+
+test "manifest grants a literal concatenation exactly" =
+  expectManifest
+    "fileread_concat_manifest_accept.mdk"
+    "readFixed"
+    "[package.capabilities]\nFileRead = \"/etc/app/config.toml\""
 
 test "FileWrite builtin fills a concrete path inside its Prefix bound" =
   expectCheckAccept (fixture "filewrite_hole_accept.mdk")
@@ -255,3 +281,99 @@ test "a direct alias does not hide a nullary extern" = expectCheckReject
 test "a constrained alias does not hide a nullary extern" = expectCheckReject
   (fixture "ffi_nullary_alias_constrained_reject.mdk")
   ["Foreign declaration 'k' has no arrow in its signature"]
+
+-- #3463/#3468: the invocation summary.  An entry is charged for what the host
+-- can reach through it, read by variance; each charged entry has a control
+-- that differs in one position.
+positions : String
+positions = "invocation_positions.mdk"
+
+-- The manifest of [fn] in `positions`: the header, then [grant] when non-empty.
+expectGrant : String -> String -> <Exec, IO> Expectation
+expectGrant fn grant =
+  let header = "[package.capabilities]"
+  expectManifest positions fn (if grant == "" then
+    header
+  else
+    "\{header}\n\{grant}")
+
+test "a callback the host supplies is not charged" = expectAll [
+  expectGrant "sinkEntry" "",
+  expectGrant "takerEntry" "",
+  expectGrant "hostCallback" "",
+]
+
+test "a function the host can reach through the entry is charged" = expectAll [
+  expectGrant "returnedEntry" "FileRead = \"r/*\"",
+  expectGrant "laterEntry" "FileRead = \"l/*\"",
+  expectGrant "tupledEntry" "FileRead = \"t/*\"",
+  expectGrant "apiEntry" "FileRead = \"a/*\"",
+  expectGrant "passBack" "FileRead = \"d/*\"",
+  expectGrant "refArg" "FileRead = \"c/*\"",
+  expectManifest
+    "invocation_async_index.mdk"
+    "transform"
+    "[package.capabilities]\nFileRead = \"x/*\"",
+]
+
+test "an index slot is invariant, and an opened field reads at the head's arguments" = expectAll
+  [
+    expectGrant "rowCellEntry" "FileRead = \"e/*\"",
+    expectGrant "rdEntry" "FileRead = \"i/*\"",
+  ]
+
+test "a nested data type ends, and nine sibling readers are each instantiated" = expectAll
+  [
+    expectManifest "invocation_nested.mdk" "useW" "[package.capabilities]",
+    expectManifest
+      "invocation_nested.mdk"
+      "caps"
+      "[package.capabilities]\nFileRead = \"srv/*\"",
+  ]
+
+test "a flip cycle through four imported types is charged" =
+  expectManifest
+    "invocation_flip.mdk"
+    "leak"
+    "[package.capabilities]\nFileRead = \"lk/*\""
+
+test "a type's fields are found by its identity, not a constructor's spelling" =
+  expectManifest
+    "invocation_same_ctor.mdk"
+    "entryA"
+    "[package.capabilities]\nFileRead = \"a/*\""
+
+test "check-policy's chain follows what calling a callee performs" =
+  expectVerbExitStartsWithAndContains
+    "check-policy"
+    [fixture "invocation_chain.mdk", "--allow", "Log", "--fn", "transform"]
+    1
+    "rejected. transform requires <FileRead \"q/*\">"
+    ["reached via: transform → reader"]
+
+test "an authority the caller chooses is granted whole and says why" =
+  expectGrant
+    "readUnder"
+    "FileRead = true  # unresolved: authority variable `p`"
+
+test "check-policy accepts the sink entry and refuses its returned control" = expectAll
+  [
+    expectVerbExitStartsWith
+      "check-policy"
+      [fixture positions, "--allow", "Log", "--fn", "sinkEntry"]
+      0
+      "accepted. sinkEntry requires only pure",
+    expectVerbExitStartsWith
+      "check-policy"
+      [fixture positions, "--allow", "Log", "--fn", "returnedEntry"]
+      1
+      "rejected. returnedEntry requires <FileRead \"r/*\">",
+  ]
+
+test "check-policy names an authority a narrower entry cannot prove" =
+  expectVerbExitStartsWithAndContains
+    "check-policy"
+    [fixture positions, "--allow", "FileRead=cfg/*", "--fn", "readUnder"]
+    1
+    "rejected. readUnder requires <FileRead p>"
+    ["not proven: FileRead p (authority variable `p`)"]

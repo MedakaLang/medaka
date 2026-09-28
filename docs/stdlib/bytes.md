@@ -613,7 +613,9 @@ Writes the bytes of `b` to standard output, unchanged.
 
 The bytes need not be valid UTF-8. Nothing decodes or re-encodes them, so
 a sequence that a `String` path would reject or alter is written exactly
-as it is.
+as it is. The exception is `medaka test`'s interpreter, which captures a
+program's output as a string, so there bytes that are not UTF-8 are
+captured as U+FFFD.
 
 ## Runtime interop
 

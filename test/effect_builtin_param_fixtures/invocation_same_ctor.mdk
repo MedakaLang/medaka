@@ -1,0 +1,14 @@
+-- #3463 review: a type's fields are opened by the type's identity, not by a
+-- constructor's spelling.  Three declarations spell `Api` here (two imported,
+-- one local); `entryA` returns the first module's `Api`, whose field reads
+-- under "a/*", and is charged that whatever else is in scope.
+import invocation_ctor_lib_a as A
+import invocation_ctor_lib_b as B
+
+data Api = Api Int
+
+entryA : String -> A.Api
+entryA _ = A.mkApi ()
+
+main : <IO> Unit
+main = println "invocation same ctor"

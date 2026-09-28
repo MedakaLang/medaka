@@ -1,0 +1,16 @@
+-- #3512 control: two flips make a covariant occurrence.  `A x` holds
+-- `B x -> Int` and `B y` holds `y -> Int`, so `x` occurs in `(x -> Int) -> Int`,
+-- covariantly, and widening `A`'s argument is sound.  A fixpoint that joined
+-- its rounds instead of iterating from the bottom would call this invariant.
+data A x = MkA (B x -> Int)
+
+data B y = MkB (y -> Int)
+
+pureA : A (Unit -> Unit)
+pureA = MkA ((MkB g) => g (_ => ()))
+
+wide : A (Unit -> <IO> Unit)
+wide = pureA
+
+main = match wide
+  MkA _ => println "widened"

@@ -4,28 +4,41 @@
    `accountHostText` explicitly, since different test files name different
    literal hosts. -}
 
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
+import http.{maxHttpRequestLineBytes}
 import json.{Json(..), jObject, stringify}
-import string.{toUtf8}
+import string.{repeat}
 
 export
-pathRequest : String -> String -> Array Int
+pathRequest : String -> String -> Bytes
 pathRequest host target =
-  toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{host}\r\n\r\n"
+  encodeUtf8 "GET \{target} HTTP/1.1\r\nHost: \{host}\r\n\r\n"
 
 export
-queryRequest : String -> String -> Array Int
+queryRequest : String -> String -> Bytes
 queryRequest host target =
-  toUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{host}\r\n\r\n"
+  encodeUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{host}\r\n\r\n"
 
 -- | `token` is the caller's already-minted bearer token (each caller mints
 -- it its own way — the label and validity window are test-specific).
 export
-procedureRequest : String -> String -> String -> String -> Array Int
+procedureRequest : String -> String -> String -> String -> Bytes
 procedureRequest host token nsid body =
-  let bytes = toUtf8 body
-  toUtf8
-      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{host}\r\nAuthorization: Bearer \{token}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+  let bytes = encodeUtf8 body
+  encodeUtf8
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{host}\r\nAuthorization: Bearer \{token}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (B.length bytes)}\r\n\r\n"
     ++ bytes
+
+-- | A GET whose request line is one byte past `maxHttpRequestLineBytes`, the
+-- smallest request the framer refuses for its size rather than its shape.
+export
+resourceRequest : Bytes
+resourceRequest =
+  encodeUtf8
+    ("GET /"
+      ++ repeat maxHttpRequestLineBytes "a"
+      ++ " HTTP/1.1\r\nHost: pds.example\r\n\r\n")
 
 export
 authOf : String -> String
@@ -33,10 +46,10 @@ authOf "" = ""
 authOf token = "Authorization: Bearer \{token}\r\n"
 
 export
-postJson : String -> String -> String -> String -> Array Int
+postJson : String -> String -> String -> String -> Bytes
 postJson host token nsid bodyJson =
-  toUtf8
-    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{host}\r\n\{authOf token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength (toUtf8 bodyJson))}\r\n\r\n\{bodyJson}"
+  encodeUtf8
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{host}\r\n\{authOf token}Content-Type: application/json\r\nContent-Length: \{intToString (B.length (encodeUtf8 bodyJson))}\r\n\r\n\{bodyJson}"
 
 export
 loginJson : String -> String -> String

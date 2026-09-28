@@ -3298,6 +3298,8 @@ isNetExtern name = contains name [
   "netTryRecvBytes",
   "netTrySend",
   "netTrySendFrom",
+  "netSendBytesFrom",
+  "netTrySendBytesFrom",
 ]
 
 emitNetExtern : Emit ->
@@ -3474,6 +3476,24 @@ emitNetExtern e env "netTrySendFrom" args = match emitArgs e env args
         "  \{r} = call i64 @mdk_net_try_send_from(i64 \{fd}, i64 \{bs}, i64 \{off})"
     (r, LTCon)
   _ => panic "llvm: netTrySendFrom takes three arguments"
+emitNetExtern e env "netSendBytesFrom" args = match emitArgs e env args
+  [fd, bb, lo, hi] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_net_send_bytes_from(i64 \{fd}, i64 \{bb}, i64 \{lo}, i64 \{hi})"
+    (r, LTCon)
+  _ => panic "llvm: netSendBytesFrom takes four arguments"
+emitNetExtern e env "netTrySendBytesFrom" args = match emitArgs e env args
+  [fd, bb, lo, hi] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_net_try_send_bytes_from(i64 \{fd}, i64 \{bb}, i64 \{lo}, i64 \{hi})"
+    (r, LTCon)
+  _ => panic "llvm: netTrySendBytesFrom takes four arguments"
 emitNetExtern e _ name _ = gapE e ("unsupported net extern " ++ name)
 
 -- Tier D: RNG. The deterministic random* family uses SplitMix64 state in the C

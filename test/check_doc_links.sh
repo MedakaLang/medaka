@@ -272,8 +272,8 @@ function handleBare(fname, lineno, target,    proj) {
 # EXECUTABLE text is not a citation of that path — it is an argument, and if it
 # is wrong the script or program fails on its own. Worse, a gate self-test
 # routinely builds a SYNTHETIC tree mirroring the repo layout
-# ("$t1/pds/test/lonely.txt" in pds/test/vector_provenance.sh — 26 such
-# occurrences), and none of those paths is meant to exist here. So for a source
+# (the pds/test/ trees pds/test/vector_provenance_test.mdk writes
+# into a scratch root), and none of those paths is meant to exist here. So for a source
 # file this returns only the comment tail: after the first `#` for shell. A
 # .txt file is prose end to end and a .md file is handled by its own rules, so
 # both keep the whole line.

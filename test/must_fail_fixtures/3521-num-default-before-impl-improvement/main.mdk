@@ -1,0 +1,15 @@
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+dbl : (Get c e, Num e) => c -> e
+dbl b = get b + get b
+
+classify : Box Float -> String
+classify b = if dbl b > 4 then "big" else "small"
+
+main = println (classify (Box 1.5))

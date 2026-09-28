@@ -34,9 +34,9 @@ import http.{
   requestMethod,
   Response,
 }
-import bytes.{Bytes, encodeUtf8, toArray}
+import bytes.{Bytes, encodeUtf8}
 import json.{Json, Json(..), jObject, stringify}
-import string.{fromUtf8, toUtf8}
+import string.{stripPrefix}
 import lib.nsid.{sameNsidIdentity, validateNsid}
 
 public export data InputPolicy = NoInput | JsonInput | TextInput | RawInput
@@ -93,7 +93,7 @@ public export data XrpcCall =
   | ProcedureNoInputCall String (List QueryParam)
   | ProcedureJsonCall String (List QueryParam) Json
   | ProcedureTextCall String (List QueryParam) MediaType String
-  | ProcedureRawCall String (List QueryParam) MediaType (Array Int)
+  | ProcedureRawCall String (List QueryParam) MediaType Bytes
   | WellKnownCall WellKnown
   | HealthCall
 
@@ -306,18 +306,6 @@ unsupportedMedia = failure 415 "Unsupported Media Type" "UnsupportedMediaType"
 upgradeRequired : String -> RouteResult
 upgradeRequired = failure 426 "Upgrade Required" "UpgradeRequired"
 
-hasPrefix : Array Int -> Array Int -> Int -> Bool
-hasPrefix input prefix i =
-  if i >= arrayLength prefix then
-    True
-  else
-    i < arrayLength input
-      && input[i] == prefix[i]
-      && hasPrefix input prefix (i + 1)
-
-slice : Array Int -> Int -> Int -> Array Int
-slice input start size = arrayMakeWith size (i => input[start + i])
-
 {- | The path classification the router routes on. `NonXrpcPath` is the
    residual: every path that is neither under `/xrpc/` nor one of the two
    well-knowns nor the health probe, and it is still a 404. -}
@@ -344,27 +332,20 @@ export
 healthPath : String
 healthPath = "/xrpc/_health"
 
+-- The path is a request target `http` has proven ASCII, so the method is
+-- the rest of the string after the prefix, with nothing to decode.
 xrpcPath : String -> XrpcPath
 xrpcPath path =
-  let bytes = toUtf8 path
-  let prefix = toUtf8 "/xrpc/"
   if path == didDocumentPath then
     WellKnownPath WellKnownDidDocument
   else if path == atprotoDidPath then
     WellKnownPath WellKnownAtprotoDid
   else if path == healthPath then
     HealthPath
-  else if not (hasPrefix bytes prefix 0) then
-    NonXrpcPath
-  else if arrayLength bytes == arrayLength prefix then
-    InvalidXrpcPath
-  else
-    XrpcPath
-      (fromUtf8
-        (slice
-          bytes
-          (arrayLength prefix)
-          (arrayLength bytes - arrayLength prefix)))
+  else match stripPrefix "/xrpc/" path
+    None => NonXrpcPath
+    Some "" => InvalidXrpcPath
+    Some nsid => XrpcPath nsid
 
 -- | The one request path each well-known route class is reached at. This is
 -- the single spelling of both paths; routing and handlers share it.
@@ -526,7 +507,7 @@ decodeProcedure nsid RawInput auth params request =
       SelectedMedia media =>
         RouteCall
           auth
-          (ProcedureRawCall nsid params media (toArray (requestBody request)))
+          (ProcedureRawCall nsid params media (requestBody request))
 decodeProcedure nsid policy auth params request =
   let size = requestBodyLength request
   match inputSizeFailure policy size

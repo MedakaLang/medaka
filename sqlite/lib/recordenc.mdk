@@ -87,6 +87,7 @@ cellSerial CNull = Ok 0
 cellSerial (CFloat _) = Ok 7
 cellSerial (CBlob a) = Ok (2 * arrayLength a + 12)
 cellSerial (CText s) = Ok (2 * utf8ByteLength s + 13)
+cellSerial (CTextRaw b) = Ok (2 * arrayLength b + 13)
 cellSerial (CInt 0) = Ok 8
 cellSerial (CInt 1) = Ok 9
 cellSerial (CInt64 _) = Ok 6
@@ -124,6 +125,7 @@ cellBodyBytes (CInt n) =
     beSintBytes 8 n
 cellBodyBytes (CInt64 x) = W.bytesBE x
 cellBodyBytes (CText s) = toList (toUtf8 s)
+cellBodyBytes (CTextRaw b) = toList b
 cellBodyBytes (CBlob a) = toList a
 cellBodyBytes (CFloat f) = toList (floatToBytes64 f)
 

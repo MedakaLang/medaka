@@ -1,8 +1,8 @@
 {- | Native scaling and resource-limit probe for the Phase 1 MST/CAR gates. -}
 
-import array.{drop}
 import bytes as B
-import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, encodeUtf8}
+import u8 as U8
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
 import hex.{decode}
@@ -64,61 +64,43 @@ import lib.store.{
 import lib.tid.{Tid, tidParse, tidToString}
 import list.{reverse}
 import crypto.sha256.{sha256}
-import string.{contains, fromUtf8, toInt, toUtf8}
+import string.{contains, toInt}
 import test.fixture_support.{testNonce, testSecret}
+import test.response_support.{firstLineText}
 
-mustBytes : Result String Bytes -> Array Int
-mustBytes (Ok bytes) = toArray bytes
+mustBytes : Result String Bytes -> Bytes
+mustBytes (Ok bytes) = bytes
 mustBytes (Err message) =
   panic "performance_resource: encoding failed: \{message}"
 
--- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
--- out-of-range element panics as the old `Array Int` `cidForDagCbor` and
--- `cidForRaw` did.
-cidForDagCborDoor : Array Int -> Cid
-cidForDagCborDoor bytes =
-  cidForDagCbor
-    (optionOrPanic
-      "cidForDagCbor: every element must be a byte in 0..255"
-      (B.fromArray bytes))
+-- The MST key for `n`: its low three bytes, big-endian.
+intKey : Int -> Bytes
+intKey n = B.fromU8Array [|
+  U8.truncate (shiftRight n 16),
+  U8.truncate (shiftRight n 8),
+  U8.truncate n,
+|]
 
-cidForRawDoor : Array Int -> Cid
-cidForRawDoor bytes =
-  cidForRaw
-    (optionOrPanic
-      "cidForRaw: every element must be a byte in 0..255"
-      (B.fromArray bytes))
-
-intBytes : Int -> Array Int
-intBytes n =
-  [|bitAnd (shiftRight n 16) 255, bitAnd (shiftRight n 8) 255, bitAnd n 255|]
-
--- Door: `car`/`blockstore` speak `Bytes` blocks; this driver's own block
--- lists are still `Array Int`.
-blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
-blockRowsToBytesDoor =
-  map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
-
-carRows : Int -> Int -> List (Cid, Array Int) -> List (Cid, Array Int)
+carRows : Int -> Int -> List (Cid, Bytes) -> List (Cid, Bytes)
 carRows n i acc =
   if i >= n then
     reverse acc
   else
-    let bytes = intBytes i
-    carRows n (i + 1) ((cidForRawDoor bytes, bytes) :: acc)
+    let bytes = intKey i
+    carRows n (i + 1) ((cidForRaw bytes, bytes) :: acc)
 
-mstRows : Int -> Int -> List (Cid, Array Int) -> List (Cid, Array Int)
+mstRows : Int -> Int -> List (Cid, Bytes) -> List (Cid, Bytes)
 mstRows n i acc =
   if i >= n then
     reverse acc
   else
     let bytes = mustBytes (dagCborEncode (DcInt i))
-    mstRows n (i + 1) ((cidForDagCborDoor bytes, bytes) :: acc)
+    mstRows n (i + 1) ((cidForDagCbor bytes, bytes) :: acc)
 
 runCar : Int -> <IO> Unit
 runCar n = match carRows n 0 []
   [] => panic "performance_resource: CAR size must be positive"
-  rows@((root, _) :: _) => match carEncode [root] (blockRowsToBytesDoor rows)
+  rows@((root, _) :: _) => match carEncode [root] rows
     Ok bytes => println "CAR \{intToString n} \{intToString (B.length bytes)}"
     Err message => panic "performance_resource: CAR scaling failed: \{message}"
 
@@ -165,30 +147,27 @@ perfRev =
 -- points at a small distinct record block, built once via `mstFromEntries`
 -- rather than N calls to `mstInsert` — the simplest way to build a corpus
 -- this large in a single call, per `synth_repo_main.mdk`'s own header note.
-perfRowsGo : Int ->
-  Int ->
-  List (Array Int, Cid, Array Int) ->
-  List (Array Int, Cid, Array Int)
+perfRowsGo : Int -> Int -> List (Bytes, Cid, Bytes) -> List (Bytes, Cid, Bytes)
 perfRowsGo n i acc =
   if i >= n then
     reverse acc
   else
     let bytes = mustBytes (dagCborEncode (DcInt i))
-    perfRowsGo n (i + 1) ((intBytes i, cidForDagCborDoor bytes, bytes) :: acc)
+    perfRowsGo n (i + 1) ((intKey i, cidForDagCbor bytes, bytes) :: acc)
 
-perfRows : Int -> List (Array Int, Cid, Array Int)
+perfRows : Int -> List (Bytes, Cid, Bytes)
 perfRows n = perfRowsGo n 0 []
 
-perfEntriesOf : List (Array Int, Cid, Array Int) -> List (Array Int, Cid)
+perfEntriesOf : List (Bytes, Cid, Bytes) -> List (Bytes, Cid)
 perfEntriesOf [] = []
 perfEntriesOf ((key, cid, _) :: rest) = (key, cid) :: perfEntriesOf rest
 
-perfRecordBlocksOf : List (Array Int, Cid, Array Int) -> List (Cid, Array Int)
+perfRecordBlocksOf : List (Bytes, Cid, Bytes) -> List (Cid, Bytes)
 perfRecordBlocksOf [] = []
 perfRecordBlocksOf ((_, cid, bytes) :: rest) =
   (cid, bytes) :: perfRecordBlocksOf rest
 
-mustPerfTree : List (Array Int, Cid) -> Mst
+mustPerfTree : List (Bytes, Cid) -> Mst
 mustPerfTree entries =
   resultOrPanic
     "performance_resource: mst build failed"
@@ -205,14 +184,10 @@ perfUnsignedValue dataCid = DcMap [
   ("prev", DcNull),
 ]
 
-perfSignedCommit : Cid -> (Cid, Array Int)
+perfSignedCommit : Cid -> (Cid, Bytes)
 perfSignedCommit dataCid =
   let unsigned = mustBytes (dagCborEncode (perfUnsignedValue dataCid))
-  let digest =
-    sha256
-      (optionOrPanic
-        "sha256: every element must be a byte in 0..255"
-        (B.fromArray unsigned))
+  let digest = sha256 unsigned
   let signature = match signDigest perfSecret digest
     Ok value => value
     Err message => panic "performance_resource: signing failed: \{message}"
@@ -227,16 +202,16 @@ perfSignedCommit dataCid =
           ("prev", DcNull),
           ("sig", DcBytes (signatureCompact signature)),
         ]))
-  (cidForDagCborDoor signed, signed)
+  (cidForDagCbor signed, signed)
 
 -- The commit-plus-graph block list every route below shares: the record
 -- blocks, the MST node blocks over them, and a signed commit pointing at the
 -- tree's root.
-perfGraphBlocks : List (Array Int, Cid, Array Int) ->
+perfGraphBlocks : List (Bytes, Cid, Bytes) ->
   Mst ->
   Cid ->
-  Array Int ->
-  List (Cid, Array Int)
+  Bytes ->
+  List (Cid, Bytes)
 perfGraphBlocks rows tree commitCid signed =
   (commitCid, signed) :: mstNodeBlocks tree ++ perfRecordBlocksOf rows
 
@@ -246,7 +221,7 @@ insertAllGo n i tree =
     tree
   else
     let bytes = mustBytes (dagCborEncode (DcInt i))
-    match mstInsert (intBytes i) (cidForDagCborDoor bytes) tree
+    match mstInsert (intKey i) (cidForDagCbor bytes) tree
       Ok next => insertAllGo n (i + 1) next
       Err message => panic "performance_resource: MST insert failed: \{message}"
 
@@ -266,7 +241,7 @@ runExport n =
   let dataCid = mstRootCid tree
   let (commitCid, signed) = perfSignedCommit dataCid
   let blocks = perfGraphBlocks rows tree commitCid signed
-  match blockStoreFromBlocks (blockRowsToBytesDoor blocks)
+  match blockStoreFromBlocks blocks
     Err message =>
       panic "performance_resource: export block store failed: \{message}"
     Ok store => match repoExportGraph commitCid signed dataCid store
@@ -311,14 +286,11 @@ reject label _ (Ok _) =
   let () = println "LIMIT HOSTILE \{label} FAIL accepted"
   0
 
-repeatRows : Int ->
-  (Cid, Array Int) ->
-  List (Cid, Array Int) ->
-  List (Cid, Array Int)
+repeatRows : Int -> a -> List a -> List a
 repeatRows n row acc =
   if n <= 0 then acc else repeatRows (n - 1) row (row :: acc)
 
-prefix3 : Array Int -> Array Int -> Int
+prefix3 : Bytes -> Bytes -> Int
 prefix3 prior key =
   if prior[0] /= key[0] then
     0
@@ -329,43 +301,39 @@ prefix3 prior key =
   else
     3
 
-nodeEntries : Int ->
-  Int ->
-  Option (Array Int) ->
-  Cid ->
-  List DagCbor ->
-  List DagCbor
+nodeEntries : Int -> Int -> Option Bytes -> Cid -> List DagCbor -> List DagCbor
 nodeEntries n i prior value acc =
   if i >= n then
     reverse acc
   else
-    let key = intBytes i
+    let key = intKey i
     let prefix = match prior
       None => 0
       Some previous => prefix3 previous key
     let entry = DcMap [
       ("p", DcInt prefix),
-      ("k", DcBytes (fromArrayAssumeByteDomain (drop prefix key))),
+      ("k", DcBytes (B.drop prefix key)),
       ("v", DcLink value),
       ("t", DcNull),
     ]
     nodeEntries n (i + 1) (Some key) value (entry :: acc)
 
-framedHeader : Cid -> Array Int
+framedHeader : Cid -> Bytes
 framedHeader root =
   let header =
     mustBytes
       (dagCborEncode
         (DcMap [("roots", DcArray [DcLink root]), ("version", DcInt 1)]))
-  toArray (uvarintEncode (arrayLength header)) ++ header
+  uvarintEncode (B.length header) ++ header
 
-depthNode : Array Int -> Cid -> Option Cid -> (Cid, Array Int)
+depthNode : Bytes -> Cid -> Option Cid -> (Cid, Bytes)
 depthNode key value child =
   let left = match child
     None => DcNull
     Some cid => DcLink cid
   let bytes =
-    mustBytes
+    resultOrPanic
+      "performance_resource: encoding failed"
       (dagCborEncode
         (DcMap [
           ("l", left),
@@ -374,24 +342,27 @@ depthNode key value child =
             DcArray [
               DcMap [
                 ("p", DcInt 0),
-                ("k", DcBytes (fromArrayAssumeByteDomain key)),
+                ("k", DcBytes key),
                 ("v", DcLink value),
                 ("t", DcNull),
               ],
             ],
           ),
         ]))
-  (cidForDagCborDoor bytes, bytes)
+  (cidForDagCbor bytes, bytes)
 
-depthCid : (Cid, Array Int) -> Cid
+depthCid : (Cid, Bytes) -> Cid
 depthCid (cid, _) = cid
 
 depthRouteControls : Cid -> <IO> (Int, Int)
 depthRouteControls value =
-  let leaf = depthNode [|0x00, 0x01|] value None
-  let depth1 = depthNode [|0x00, 0x07|] value (Some (depthCid leaf))
-  let depth2 = depthNode [|0x00, 0x16|] value (Some (depthCid depth1))
-  let depth3 = depthNode [|0x00, 0x61|] value (Some (depthCid depth2))
+  let leaf = depthNode (B.fromU8Array [|0x00, 0x01|]) value None
+  let depth1 =
+    depthNode (B.fromU8Array [|0x00, 0x07|]) value (Some (depthCid leaf))
+  let depth2 =
+    depthNode (B.fromU8Array [|0x00, 0x16|]) value (Some (depthCid depth1))
+  let depth3 =
+    depthNode (B.fromU8Array [|0x00, 0x61|]) value (Some (depthCid depth2))
   let atRows = [depth2, depth1, leaf]
   let overRows = [depth3, depth2, depth1, leaf]
   let controls = sum [
@@ -419,7 +390,8 @@ runLimits =
   let tooManyCar = repeatRows (maxCarBlocks + 1) (root, rootBytes) []
   let tooManyMst = repeatRows (maxMstBlocks + 1) (root, rootBytes) []
   let tooManyEntries =
-    mustBytes
+    resultOrPanic
+      "performance_resource: encoding failed"
       (dagCborEncode
         (DcMap [
           ("l", DcNull),
@@ -438,18 +410,15 @@ runLimits =
     reject
       "car-container-over"
       "container exceeds"
-      (carDecode (fromArrayAssumeByteDomain (arrayMake (maxCarBytes + 1) 0))),
+      (carDecode (B.fromU8Array (arrayMake (maxCarBytes + 1) 0))),
     reject
       "car-section-over"
       "section exceeds"
-      (carDecode
-        (fromArrayAssumeByteDomain
-          (framedHeader root
-            ++ toArray (uvarintEncode (maxCarSectionBytes + 1))))),
+      (carDecode (framedHeader root ++ uvarintEncode (maxCarSectionBytes + 1))),
     reject
       "car-blocks-over"
       "block count exceeds"
-      (carEncode [root] (blockRowsToBytesDoor tooManyCar)),
+      (carEncode [root] tooManyCar),
     reject
       "mst-blocks-over"
       "node block count exceeds"
@@ -457,7 +426,10 @@ runLimits =
     reject
       "mst-node-bytes-over"
       "node exceeds"
-      (mstValidateNodeBytes 0 True (arrayMake (maxMstNodeBytes + 1) 0)),
+      (mstValidateNodeBytes
+        0
+        True
+        (B.fromU8Array (arrayMake (maxMstNodeBytes + 1) 0))),
     reject
       "mst-entries-over"
       "node entry count exceeds"
@@ -506,7 +478,7 @@ inboundHandle = "perfroute.example"
 inboundToken : String
 inboundToken =
   mintToken
-    (B.fromArrayAssumeByteDomain testSecret)
+    testSecret
     perfDid
     inboundHost
     "inbound-alloc-probe-token"
@@ -536,19 +508,6 @@ fillA mb i =
   else
     let () = MB.setInPlace i 0x41 mb
     fillA mb (i + 1)
-
-inboundStatusEnd : Array Int -> Int -> Int
-inboundStatusEnd bytes i =
-  if i + 1 >= arrayLength bytes then
-    arrayLength bytes
-  else if bytes[i] == 13 && bytes[i + 1] == 10 then
-    i
-  else
-    inboundStatusEnd bytes (i + 1)
-
-inboundStatusLine : Array Int -> String
-inboundStatusLine bytes =
-  fromUtf8 (arrayMakeWith (inboundStatusEnd bytes 0) (i => bytes[i]))
 
 mustInboundAccount : Unit -> Account
 mustInboundAccount _ = match makeAccount perfDid inboundHandle inboundHost
@@ -604,7 +563,7 @@ runInboundAlloc n bodyBytes =
   let checksum = repeatInbound server store request n 0
   let a1 = allocBytes ()
   println
-    "INBOUNDALLOC allocBytes=\{intToString (floatToInt (a1 - a0))} N=\{intToString n} bodyBytes=\{intToString bodyBytes} checksum=\{intToString checksum} status=\{inboundStatusLine (toArray first)}"
+    "INBOUNDALLOC allocBytes=\{intToString (floatToInt (a1 - a0))} N=\{intToString n} bodyBytes=\{intToString bodyBytes} checksum=\{intToString checksum} status=\{firstLineText first}"
 
 main : <IO, Env> Unit
 main = match args ()

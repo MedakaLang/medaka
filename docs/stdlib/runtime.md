@@ -68,7 +68,8 @@ Flushes buffered standard output.
 readLine : Unit -> <Stdin> String
 ```
 
-Reads one line from standard input, without its newline.
+Reads one line from standard input, without its newline. Bytes that are
+not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
 
 ### `readLineOpt`
 
@@ -76,7 +77,8 @@ Reads one line from standard input, without its newline.
 readLineOpt : Unit -> <Stdin> Option String
 ```
 
-Reads one line from standard input, or `None` at end of input.
+Reads one line from standard input, or `None` at end of input. Bytes
+that are not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
 
 ### `readAll`
 
@@ -84,7 +86,8 @@ Reads one line from standard input, or `None` at end of input.
 readAll : Unit -> <Stdin> String
 ```
 
-Reads all of standard input.
+Reads all of standard input. Bytes that are not valid UTF-8 read as
+U+FFFD, one per ill-formed sequence.
 
 ### `readExactly`
 
@@ -93,7 +96,9 @@ readExactly : Int -> <Stdin> Option String
 ```
 
 Reads exactly the given number of bytes from standard input, or `None`
-at end of input or on a short read.
+at end of input or on a short read. Like every string read from outside the
+program, each ill-formed UTF-8 sequence becomes U+FFFD, so the result's
+UTF-8 length can differ from the count.
 
 ## Mutable references
 
@@ -115,6 +120,8 @@ readFile : (path : String) -> <FileRead path> Result String String
 ```
 
 The contents of a file as a string, or `Err` with the host's message.
+A file that is not valid UTF-8 is an `Err` naming the path; read it with
+`readFileBytes`.
 
 ### `readFileBytes`
 
@@ -188,7 +195,9 @@ canonicalizePath : (path : String) -> <FileRead path> String
 ```
 
 The absolute path with `.`, `..`, and symbolic links resolved. The
-input, unchanged, when it cannot be resolved.
+input, unchanged, when it cannot be resolved. A resolved path whose bytes
+are not valid UTF-8 reads with U+FFFD in their place, and so may not name
+the entry it came from.
 
 ### `listDir`
 
@@ -196,7 +205,9 @@ input, unchanged, when it cannot be resolved.
 listDir : (path : String) -> <FileRead path> Result String (List String)
 ```
 
-The names of the entries in a directory.
+The names of the entries in a directory. A name whose bytes are not
+valid UTF-8 reads with U+FFFD in their place, so two such names can read
+alike and a returned name may not open the entry it came from.
 
 ### `makeDir`
 
@@ -258,7 +269,8 @@ same as a record.
 args : Unit -> <Env> List String
 ```
 
-The command-line arguments after the program name.
+The command-line arguments after the program name. Bytes that are not
+valid UTF-8 read as U+FFFD, one per ill-formed sequence.
 
 ### `getEnv`
 
@@ -267,6 +279,7 @@ getEnv : (name : String) -> <Env name> Option String
 ```
 
 The value of an environment variable, or `None` when it is unset.
+Bytes that are not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
 
 ### `executablePath`
 
@@ -274,7 +287,8 @@ The value of an environment variable, or `None` when it is unset.
 executablePath : Unit -> <Env> String
 ```
 
-The absolute path of the running executable.
+The absolute path of the running executable. Bytes that are not valid
+UTF-8 read as U+FFFD, one per ill-formed sequence.
 
 ### `runCommand`
 
@@ -285,7 +299,9 @@ runCommand : (program : String) -> List String -> <Exec program> Result String (
 Runs a program with arguments and waits for it. `Ok` carries the exit
 code, the captured standard output, and the captured standard error; a
 non-zero exit code is still `Ok`. `Err` carries the host's message when
-the program could not be started.
+the program could not be started. The captured output is read as UTF-8:
+bytes that are not valid UTF-8 read as U+FFFD, so output that is binary
+data does not come back unchanged.
 
 ### `exit`
 
@@ -546,6 +562,33 @@ netTrySendFrom : Socket h -> Array Int -> Int -> <Net h> Result String (Option I
 
 `netTrySend` starting at the given offset into the array, sending at most 64 KiB
 per call, so a loop over a large payload pays only for the bytes it sends.
+
+### `netSendBytesFrom`
+
+```
+netSendBytesFrom : Socket h -> ByteBlock -> Int -> Int -> <Net h> Result String Int
+```
+
+Sends the bytes of a block in the window between two indices, from the
+first index up to but not including the second, at most 64 KiB per call.
+The result is the number of bytes written, which may be fewer than asked
+for.
+
+A window outside the block, where the first index is negative, the second
+is less than the first, or the second is past the block's length, is
+`Err`. Unlike `netSendFrom`, which clamps its offset, the window is not
+clamped: a window outside the block is a caller's mistake, and clamping
+would hide it.
+
+### `netTrySendBytesFrom`
+
+```
+netTrySendBytesFrom : Socket h -> ByteBlock -> Int -> Int -> <Net h> Result String (Option Int)
+```
+
+`netSendBytesFrom` that returns `None` instead of blocking. `Some n` is
+the count written, which may be short. A window outside the block is `Err`,
+as for `netSendBytesFrom`.
 
 ## Time
 
@@ -1119,7 +1162,8 @@ stringFromUtf8Bytes : Array Int -> String
 ```
 
 The string encoded by an array of UTF-8 bytes. Only the low eight bits
-of each element are used.
+of each element are used, and each ill-formed sequence becomes one U+FFFD
+per maximal subpart.
 
 ### `charToStr`
 

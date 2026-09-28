@@ -107,6 +107,9 @@ import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor, ResError}
 import driver.loader.{
   LoadError(..),
   loadProgramFilesLocatedE,
+  readSource,
+  readSourceE,
+  sourceNotUtf8Message,
   dropPathTriple,
   modIdToPath,
   findProjectRoot,
@@ -718,7 +721,7 @@ runCheckCmd argv =
                   ePutStrLn
                     "medaka check: --types has no effect under --json (envelope has no scheme-dump field)"
               runCheckJsonCmd allowInternal rsrc csrc target stdlibDir
-            else match readFile target
+            else match readSource target
               Err msg => dieMsg msg
               Ok tsrc => match parseResult tsrc
                 Err e => dieMsg (ppParseError tsrc target e)
@@ -1364,14 +1367,16 @@ requireArgs sp argv = match parseArgs sp argv
 -- content it reads is discarded and `checkJsonFile` re-reads `target` for the
 -- real run with full import resolution.
 runCheckJsonCmd : Bool -> String -> String -> String -> String -> <IO> Unit
-runCheckJsonCmd allowInternal rsrc csrc target stdlibDir = match readFile target
-  Err e =>
-    let _ = println (cjFileNotFoundJson target e)
-    exit 1
-  Ok _ =>
-    let (json, hasErr) = checkJsonFile allowInternal rsrc csrc target stdlibDir
-    let _ = println json
-    if hasErr then exit 1
+runCheckJsonCmd allowInternal rsrc csrc target stdlibDir =
+  match readSourceE target
+    Err e =>
+      let _ = println (cjSourceReadJson target e)
+      exit 1
+    Ok _ =>
+      let (json, hasErr) =
+        checkJsonFile allowInternal rsrc csrc target stdlibDir
+      let _ = println json
+      if hasErr then exit 1
 
 -- #1078: `medaka build --json`'s envelope for a build-STAGE failure — the
 -- emitter/clang step itself, AFTER the front-end gate (checkJsonFile, reused
@@ -1402,9 +1407,9 @@ runBuildJsonCmd : Args ->
   BuildTarget ->
   <IO> Unit
 runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
-  match readFile input
+  match readSourceE input
     Err e =>
-      let _ = println (cjFileNotFoundJson input e)
+      let _ = println (cjSourceReadJson input e)
       exit 1
     Ok _ =>
       let rtPath = root ++ "/stdlib/runtime.mdk"
@@ -1470,9 +1475,23 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
 -- doesn't exist" (R-MODULE-LOAD).
 cjFileNotFoundJson : String -> String -> String
 cjFileNotFoundJson target err =
-  let msg = "cannot read file '\{target}': \{err}"
+  cjUnlocatedJson
+    target
+    "R-FILE-NOT-FOUND"
+    "cannot read file '\{target}': \{err}"
+
+-- The envelope for a target the entry read refused: `R-FILE-NOT-UTF8` for a
+-- file that exists but is not UTF-8 text, else `R-FILE-NOT-FOUND`.
+cjSourceReadJson : String -> Option String -> String
+cjSourceReadJson target (Some e) = cjFileNotFoundJson target e
+cjSourceReadJson target None =
+  cjUnlocatedJson target "R-FILE-NOT-UTF8" (sourceNotUtf8Message target)
+
+-- A one-diagnostic, unlocated `{"files":[...]}` envelope for `target`.
+cjUnlocatedJson : String -> String -> String -> String
+cjUnlocatedJson target code msg =
   let diagJson = jObject [
-    ("code", JString "R-FILE-NOT-FOUND"),
+    ("code", JString code),
     ("kind", JString "resolve"),
     ("message", JString msg),
     ("range", JNull),
@@ -1841,15 +1860,21 @@ fmtWriteSummaryLine 0 = "already formatted"
 fmtWriteSummaryLine 1 = "formatted 1 file"
 fmtWriteSummaryLine n = "formatted \{intToString n} files"
 
+-- The line `fmt` and the codemods print for a file they could not read: the
+-- encoding refusal carries its own path, any other failure is prefixed with it.
+sourceReadLine : String -> Option String -> String
+sourceReadLine file None = "Error: \{sourceNotUtf8Message file}"
+sourceReadLine file (Some msg) = "\{file}: \{msg}"
+
 -- Like `fmtOne` but reports to stdout/stderr and RETURNS (hadErr, changed)
 -- instead of exiting immediately, so `fmtFilesGo` can aggregate across many
 -- files (the single-file path still calls `fmtOne` directly and exits per
 -- its own original codes, unchanged). `changed` is only meaningful for
 -- `FmtWrite` — every other mode returns `False` for it.
 fmtOneReport : FmtMode -> String -> <IO> (Bool, Bool)
-fmtOneReport mode file = match readFile file
-  Err msg =>
-    let _ = ePutStrLn "\{file}: \{msg}"
+fmtOneReport mode file = match readSourceE file
+  Err e =>
+    let _ = ePutStrLn (sourceReadLine file e)
     (True, False)
   Ok src => match parseResult src
     Err e =>
@@ -1899,8 +1924,8 @@ fmtModeConflict argv =
   if writeOn then named ++ ["--write"] else named
 
 fmtOne : FmtMode -> String -> <IO> Unit
-fmtOne mode file = match readFile file
-  Err msg => dieMsg "\{file}: \{msg}"
+fmtOne mode file = match readSourceE file
+  Err e => dieMsg (sourceReadLine file e)
   -- PARSE-ERROR-LOCATION Stage 1: surface a located parse error before
   -- formatSource's panicking `parse` fires a bare `parse error`.
   Ok src => match parseResult src
@@ -2060,8 +2085,8 @@ codemodStdout : (Decl -> (Decl, Bool)) ->
   (List Decl -> List String) ->
   String ->
   <IO> Unit
-codemodStdout xf warnFn file = match readFile file
-  Err msg => dieMsg "\{file}: \{msg}"
+codemodStdout xf warnFn file = match readSourceE file
+  Err e => dieMsg (sourceReadLine file e)
   Ok src => match codemodSource xf src
     Err e => dieMsg (ppParseError src file e)
     Ok result =>
@@ -2089,9 +2114,9 @@ codemodOneReport : CodeMode ->
   (List Decl -> List String) ->
   String ->
   <IO> Bool
-codemodOneReport mode xf warnFn file = match readFile file
-  Err msg =>
-    let _ = ePutStrLn "\{file}: \{msg}"
+codemodOneReport mode xf warnFn file = match readSourceE file
+  Err e =>
+    let _ = ePutStrLn (sourceReadLine file e)
     True
   Ok src => match codemodSource xf src
     Err e =>
@@ -2421,7 +2446,7 @@ typecheckGate allowInternal root input =
   do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
-    tsrc <- readFile input
+    tsrc <- readSource input
     -- PARSE-ERROR-LOCATION Stage 1: a located parse diagnostic for the ENTRY.
     -- An IMPORTED module's parse error is located by the loader itself (#100)
     -- and rendered by moduleLoadErrText.  Neither this arm nor the loader arm
@@ -3200,7 +3225,7 @@ runTestJsonCmd engines cases filterOpt target =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
-    tsrc <- readFile target
+    tsrc <- readSource target
     let userDecls = desugar (parse tsrc)
     if filterMatchedNothing filterOpt tsrc userDecls then
       Err
@@ -3331,7 +3356,7 @@ runDocTargets (target :: _) =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
-    tsrc <- readFile target
+    tsrc <- readSource target
     Ok (putStr (runDoc rsrc csrc tsrc target roots))
   match r
     Err msg => dieMsg msg
@@ -3352,7 +3377,13 @@ runDocLibraryTargets outDir targets =
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
     _ <- ensureOutDir outDir
-    mds <- collectModuleDocs rsrc csrc stdlibDir targets
+    -- A `*_test.mdk` sibling holds a module's tests, not library surface, so
+    -- the library reference has no page for it ([P-TEST-SIBLING]).
+    mds <- collectModuleDocs
+      rsrc
+      csrc
+      stdlibDir
+      (filter (t => not (endsWith "_test.mdk" t)) targets)
     -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
     -- every module is computed and before ANY output is written, so the
     -- pages, the index and the inventory all read the same (already
@@ -3388,7 +3419,7 @@ collectModuleDocs : String ->
   List String ->
   <IO> Result String (List ModuleDoc)
 collectModuleDocs _ _ _ [] = Ok []
-collectModuleDocs rsrc csrc stdlibDir (target :: rest) = match readFile target
+collectModuleDocs rsrc csrc stdlibDir (target :: rest) = match readSource target
   Err msg => Err msg
   Ok tsrc =>
     let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
@@ -3514,7 +3545,7 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
-    tsrc <- readFile target
+    tsrc <- readSource target
     Ok (rsrc, csrc, tsrc)
   match r
     Err msg => dieMsg msg
@@ -3599,7 +3630,7 @@ runManifestArgs (ManifestArgs (Some target) fn) =
     Err msg => dieMsg msg
     Ok rsrc => match readPreludeFile corePath
       Err msg => dieMsg msg
-      Ok csrc => match readFile target
+      Ok csrc => match readSource target
         Err msg => dieMsg msg
         Ok tsrc => match parseResult tsrc
           Err e => dieMsg (ppParseError tsrc target e)
