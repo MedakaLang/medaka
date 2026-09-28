@@ -19,13 +19,16 @@
 #   dist/<m>.mdk      for every EXTRA_MODULES entry in main.js (array, list, …)
 #   guide/<chapter>.html  one page per docs/guide/*.md (OUTLINE.md excluded)
 #   guide/guide.css
+#   advanced/<chapter>.html  one page per docs/advanced/*.md
+#   advanced/guide.css
 #   stdlib/<module>.html  one page per docs/stdlib/*.md (the three design notes
 #                         build_stdlib_docs.sh excludes are not published)
 #   stdlib/guide.css
 #   _headers          Cloudflare Pages header rules (compresses /dist/*.mdk)
 #
 # Runs build_playground_wasm.sh first if dist/playground.wasm is missing.
-# Runs build_guide.sh to render the guide straight into site/guide/, and
+# Runs build_guide.sh to render the guide straight into site/guide/,
+# build_advanced_docs.sh to render the advanced topics into site/advanced/, and
 # build_stdlib_docs.sh to render the stdlib reference into site/stdlib/.
 # playground/site/ is gitignored — do NOT commit it.
 #
@@ -110,6 +113,14 @@ cp "$SCRIPT_DIR/_headers" "$SITE/"
 echo "[build_site] rendering docs/guide -> $SITE/guide ..."
 bash "$SCRIPT_DIR/build_guide.sh" "$ROOT/docs/guide" "$SITE/guide" "$SITE/dist"
 
+# ── The advanced topics (docs/advanced/*.md -> site/advanced/*.html) ─────────
+#
+# Same shape as the guide block above, same reasons: rendered straight into the
+# deploy tree, one directory below site/index.html so the renderer's default
+# --playground-url is already right, $DIST passed for the ▶-button check.
+echo "[build_site] rendering docs/advanced -> $SITE/advanced ..."
+bash "$SCRIPT_DIR/build_advanced_docs.sh" "$ROOT/docs/advanced" "$SITE/advanced" "$SITE/dist"
+
 # ── The stdlib reference (docs/stdlib/*.md -> site/stdlib/*.html) ────────────
 #
 # Same shape as the guide block above, same reasons: rendered straight into the
@@ -161,7 +172,20 @@ if [ -n "$missing_guide" ]; then
   exit 1
 fi
 
-# Third instance of the same shape, for the stdlib reference. The expected page
+# Same derived-set check for the advanced topics: every docs/advanced/*.md must
+# have rendered (the set has no exclusions), plus the stylesheet.
+missing_advanced=""
+for m in "$ROOT"/docs/advanced/*.md; do
+  b="$(basename "$m")"
+  [ -f "$SITE/advanced/${b%.md}.html" ] || missing_advanced="$missing_advanced ${b%.md}.html"
+done
+[ -f "$SITE/advanced/guide.css" ] || missing_advanced="$missing_advanced guide.css"
+if [ -n "$missing_advanced" ]; then
+  echo "FAIL: docs/advanced names these but they are not in site/advanced:$missing_advanced" >&2
+  exit 1
+fi
+
+# Fourth instance of the same shape, for the stdlib reference. The expected page
 # set is DERIVED from docs/stdlib/ minus build_stdlib_docs.sh's OWN --exclude
 # list, read back out of that script — one copy of the exclusion set, not two.
 # (test/diff_compiler_guide_render.sh derives it the same way, for the same

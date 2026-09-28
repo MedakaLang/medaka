@@ -28,6 +28,19 @@
 //   --css-name <file>  basename of the stylesheet this doc set emits and links
 //                      (default: 'guide.css'). Two doc sets rendered into the
 //                      same directory must not both claim one filename.
+//   --sibling <name>=<href>  a SIBLING doc set rendered beside this one: a link
+//                      to `../<name>/X.md` (a page of `docs/<name>/`, resolved
+//                      from the source's parent) is rewritten to `<href>/X.html`
+//                      instead of to the repository, so the guide and the
+//                      advanced topics reach each other's rendered pages. The
+//                      source page must exist; a link to a missing one still
+//                      falls through to the repository rule (and `make
+//                      docs-links` refuses it). Repeatable.
+//   --sibling-exclude <name>=<a,b>  basenames of that sibling's SOURCE pages its
+//                      own builder does not render (the guide's OUTLINE.md, the
+//                      stdlib notes). A link to one of them is not a page on the
+//                      site, so it takes the repository rule like any other
+//                      out-of-set link. Repeatable; must name a declared sibling.
 //   --dist <dir>       the directory of `.mdk` modules the playground page SHIPS
 //                      (playground/dist, staged by build_playground_wasm.sh).
 //                      Optional: given, a block importing a module that is not
@@ -273,6 +286,9 @@ function parseArgs(argv) {
     // --playground-url. The renderer knows nothing about sibling doc sets, so
     // the caller that lays them out beside each other supplies the links.
     navLinks: [],
+    // Sibling doc sets, {name, href, exclude}: see --sibling above. Empty = every
+    // out-of-set link goes to the repository, exactly as before.
+    siblings: [],
     // null = "this caller does not know the shipped-module set", which SKIPS the
     // unshipped-import conjunct rather than asserting an empty set (which would
     // call every importing block not-runnable). Same default-preserves-behavior
@@ -301,6 +317,27 @@ function parseArgs(argv) {
         opts.navLinks.push({ label: v.slice(0, eq), href: v.slice(eq + 1) });
         break;
       }
+      case '--sibling': {
+        const v = next();
+        const eq = v.indexOf('=');
+        if (eq <= 0 || eq === v.length - 1) throw new Error(`--sibling needs name=href, got: ${v}`);
+        const name = v.slice(0, eq);
+        if (name.includes('/') || name.includes('\\')) {
+          throw new Error(`--sibling name must be a bare directory name under docs/, not a path: ${name}`);
+        }
+        opts.siblings.push({ name, href: v.slice(eq + 1).replace(/\/+$/, ''), exclude: [] });
+        break;
+      }
+      case '--sibling-exclude': {
+        const v = next();
+        const eq = v.indexOf('=');
+        if (eq <= 0 || eq === v.length - 1) throw new Error(`--sibling-exclude needs name=a,b, got: ${v}`);
+        const name = v.slice(0, eq);
+        const sib = opts.siblings.find((s) => s.name === name);
+        if (!sib) throw new Error(`--sibling-exclude names \`${name}\`, which no earlier --sibling declared`);
+        sib.exclude.push(...v.slice(eq + 1).split(',').map((s) => s.trim()).filter(Boolean));
+        break;
+      }
       case '--dist': opts.distDir = resolve(next()); break;
       default: throw new Error(`unknown argument: ${a}`);
     }
@@ -320,8 +357,15 @@ function parseArgs(argv) {
 // ── the renderer ────────────────────────────────────────────────────────────
 export function renderDocSet(opts) {
   const { src, out, exclude, repoUrl, repoRoot, playgroundUrl = '../index.html',
-          cssName = 'guide.css', navLinks = [], distDir = null } = opts;
+          cssName = 'guide.css', navLinks = [], siblings = [], distDir = null } = opts;
   if (!existsSync(src)) throw new Error(`--src does not exist: ${src}`);
+
+  // A sibling doc set's SOURCE directory sits beside this one (docs/guide next
+  // to docs/advanced), so it is resolved from the source's parent, never from
+  // the repo root: pointing the renderer at a scratch copy of a doc set keeps
+  // its siblings scratch-relative too.
+  const siblingDirs = siblings.map(({ name, href, exclude = [] }) =>
+    ({ dir: resolve(src, '..', name), href, exclude: new Set(exclude) }));
 
   const shipped = shippedModules(distDir);
 
@@ -344,7 +388,7 @@ export function renderDocSet(opts) {
   const titles = new Map(pages.map((file) => [file, pageTitleOf(readFileSync(join(src, file), 'utf8'), file)]));
 
   const rendered = pages.map((file) =>
-    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped }));
+    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs }));
 
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -378,7 +422,7 @@ function pageTitleOf(markdown, file) {
   return (markdown.match(/^#\s+(.+)$/m)?.[1] ?? basename(file, '.md')).replace(/`/g, '').trim();
 }
 
-function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped }) {
+function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs = [] }) {
   const markdown = readFileSync(join(src, file), 'utf8');
   const slug = slugger();
   const toc = [];
@@ -433,7 +477,7 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titl
 
       link({ href, title, tokens }) {
         const body = this.parser.parseInline(tokens);
-        const rewritten = rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors });
+        const rewritten = rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors, siblingDirs });
         const t = title ? ` title="${escapeHtml(title)}"` : '';
         const ext = /^https?:/.test(rewritten) ? ' rel="noopener"' : '';
         return `<a href="${escapeHtml(rewritten)}"${t}${ext}>${body}</a>`;
@@ -457,12 +501,13 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titl
 
 // Rewrite one href.
 //   - in-set `.md` (optionally with a #fragment)  → the sibling `.html` page
+//   - a page of a --sibling doc set               → that set's rendered page
 //   - out-of-set repo-relative path               → repoUrl + the repo-relative path
 //   - anything else (absolute URL, bare #anchor)  → untouched
 //
 // The SOURCE `.md` files are never edited — `make docs-links` gates those, and the
 // rewrite lives entirely in the rendered output.
-function rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors }) {
+function rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors, siblingDirs = [] }) {
   if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('#') || href.startsWith('//')) {
     return href;
   }
@@ -486,11 +531,27 @@ function rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors }) {
     return path.replace(/\.md$/, '.html') + frag;
   }
 
+  const abs = resolve(dirname(join(src, file)), path);
+
+  // A page of a sibling doc set rendered beside this one (--sibling): the
+  // guide's ../advanced/effects-1-rows.md is a rendered page at
+  // ../advanced/effects-1-rows.html on the deployed site. Only a `.md` DIRECTLY
+  // inside the sibling's directory qualifies, and only if it exists and the
+  // sibling's builder renders it (--sibling-exclude) — a missing or unrendered
+  // one falls through to the repository rule below rather than becoming a
+  // plausible-looking 404 on our own site.
+  if (path.endsWith('.md')) {
+    for (const { dir, href: base, exclude } of siblingDirs) {
+      if (dirname(abs) === dir && existsSync(abs) && !exclude.has(basename(abs))) {
+        return `${base}/${basename(abs).replace(/\.md$/, '.html')}${frag}`;
+      }
+    }
+  }
+
   // Everything else relative points OUT of the doc set (../spec/SYNTAX.md,
   // ../../stdlib/core.mdk, …). Those pages are not rendered here, so a `.html`
   // rewrite would manufacture a 404; send them at the repository instead.
   if (!repoUrl) return href;
-  const abs = resolve(dirname(join(src, file)), path);
   const rel = relative(repoRoot, abs);
   if (rel.startsWith('..')) return href;   // escapes the repo — leave it alone
   return `${repoUrl}/${rel.split(/[\\/]/).join(posix.sep)}${frag}`;

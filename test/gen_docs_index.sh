@@ -129,6 +129,7 @@ emit_group() {
 TOPLEVEL_FILES="$(find docs -maxdepth 1 -name '*.md' ! -name 'README.md' | sort)"
 SPEC_FILES="$(find docs/spec -maxdepth 1 -name '*.md' | sort)"
 GUIDE_FILES="$(find docs/guide -maxdepth 1 -name '*.md' | sort)"
+ADVANCED_FILES="$(find docs/advanced -maxdepth 1 -name '*.md' | sort)"
 DESIGN_FILES="$(find docs/design -maxdepth 1 -name '*.md' | sort)"
 OPS_FILES="$(find docs/ops -maxdepth 1 -name '*.md' | sort)"
 STDLIB_FILES="$(find docs/stdlib -maxdepth 1 -name '*.md' | sort)"
@@ -173,6 +174,10 @@ HEADER
   emit_group "guide — learning path" \
     "Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's status convention (no banners) — this is prose-in-progress, read for teaching order, not ground truth." \
     $GUIDE_FILES
+
+  emit_group "advanced — one topic at a time, in depth" \
+    "The guide's sequel: each topic (effects first) is a run of chapters that starts from what the guide taught. Executable docs like the guide — every example is compiled by \`check_syntax_examples\`, and run where it declares its output." \
+    $ADVANCED_FILES
 
   emit_group "design — open/partial work" \
     "Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before touching the area; update the doc when you close it (then it moves to \`archive/design/\`)." \

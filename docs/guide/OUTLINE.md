@@ -103,6 +103,10 @@ Deliberately AFTER effects, so `do` is never mistaken for "how you do IO."
 - **Out of scope** (link, don't teach): backends, dict-passing internals,
   exhaustiveness algorithm, layout formal rules, capability platform, custom
   effects, `Async`, higher-kinded interfaces, full stdlib list, `Ref` internals.
+  The deep treatment of a feature lives in `docs/advanced/` (the Advanced Topics
+  section, its own doc set rendered beside the guide); custom effects, effect
+  variables, and the capability manifest are there, and a chapter here links to
+  the topic rather than teaching it.
 - **Gotcha callouts** where they arise: `main` must be a value (1); multi-arg
   lambdas aren't curried (3); `<-` forbidden in bare blocks (7/8); indentation
   is significant (1).

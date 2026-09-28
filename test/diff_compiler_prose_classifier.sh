@@ -88,6 +88,9 @@ printf '%s\n' \
   'docs/guide/nested/Deep Guide.md' \
   'docs/guide/notes.txt' \
   'docs/guidebook/0. Introduction.md' \
+  'docs/advanced/effects-1-rows.md' \
+  'docs/advanced/notes.txt' \
+  'docs/advancedly/x.md' \
   'LICENSE' \
   'LICENSE.txt' \
   'LICENSE.md' \

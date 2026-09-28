@@ -61,6 +61,21 @@ Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's st
 | [`OUTLINE.md`](guide/OUTLINE.md) | Medaka Guide — Outline | — |
 | [`haskell-ocaml-delta.md`](guide/haskell-ocaml-delta.md) | For Haskell and OCaml Readers | — |
 
+### advanced — one topic at a time, in depth
+
+The guide's sequel: each topic (effects first) is a run of chapters that starts from what the guide taught. Executable docs like the guide — every example is compiled by `check_syntax_examples`, and run where it declares its output.
+
+| Doc | What it is | Status |
+|-----|------------|--------|
+| [`00-about.md`](advanced/00-about.md) | Advanced Topics | — |
+| [`effects-1-rows.md`](advanced/effects-1-rows.md) | Effects I: What the Row Says | — |
+| [`effects-2-polymorphism.md`](advanced/effects-2-polymorphism.md) | Effects II: Effect Polymorphism | — |
+| [`effects-3-labels.md`](advanced/effects-3-labels.md) | Effects III: Labels, Manifests, and the Host | — |
+| [`effects-4-authority.md`](advanced/effects-4-authority.md) | Effects IV: Parameters and Authority | — |
+| [`effects-5-data.md`](advanced/effects-5-data.md) | Effects V: Authority in Data | — |
+| [`effects-6-indexed.md`](advanced/effects-6-indexed.md) | Effects VI: Effect-Indexed Types | — |
+| [`effects-7-reference.md`](advanced/effects-7-reference.md) | Effects VII: Reference and Open Edges | — |
+
 ### design — open/partial work
 
 Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before touching the area; update the doc when you close it (then it moves to `archive/design/`).

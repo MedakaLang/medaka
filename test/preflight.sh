@@ -1258,6 +1258,12 @@ while IFS= read -r f; do
     docs/guide/*.md)               add 'check_syntax_examples'
                                    add 'diff_compiler_guide_render'
                                    add 'check_doc_links' ;;
+    # docs/advanced/*.md is the guide's sibling doc set (the Advanced Topics
+    # section, rendered by playground/build_advanced_docs.sh into
+    # site/advanced/): the same three questions, the same three gates.
+    docs/advanced/*.md)            add 'check_syntax_examples'
+                                   add 'diff_compiler_guide_render'
+                                   add 'check_doc_links' ;;
     # S-reference-lands (#2249): docs/stdlib/*.md (+ index.md/inventory.json) is a
     # GENERATED tree (`./medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk`), not prose —
     # without this arm it falls through to the generic docs/*.md "nothing to run"
