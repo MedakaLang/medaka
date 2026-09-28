@@ -1,0 +1,7 @@
+-- An exact Prefix element (no trailing `*`) may be written without a `/`: it
+-- admits only itself, so "notes.txt" cannot admit "notes.txt.bak".
+readNotes : Unit -> <FileRead "notes.txt"> Result String String
+readNotes () = readFile "notes.txt"
+
+main : <IO> Unit
+main = println "exact element accept"

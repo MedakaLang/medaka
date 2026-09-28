@@ -229,7 +229,8 @@ several binders in parentheses, `String @(src | dst)`, a value within either
 authority; it is the spelling a joined authority renders as.  A qualifier or
 an index may also write literals: `String @"cfg/*"`,
 `String @("a.com/*" | p)`, `Socket ("a.com/x" | "b.com/y")`, a set of
-elements as it renders.  A qualifier's
+elements as it renders.  A `Prefix` element without a trailing `*` is exact
+and needs no `/`: `<FileRead "notes.txt">` is a legal bound.  A qualifier's
 binders must be `String` authorities of one domain shape (two Prefix labels
 are one shape), and a named argument used only in a qualifier, with no atom or
 index naming it, has no domain and is an error.  The quoted underscore

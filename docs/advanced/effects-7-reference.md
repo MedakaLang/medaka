@@ -89,9 +89,6 @@ issue; the number is the thing to search for.
   qualifier needs a label atom, and an extension is the whole domain in a
   result. [#3559](https://github.com/MedakaLang/medaka/issues/3559),
   [#3532](https://github.com/MedakaLang/medaka/issues/3532)
-- **A bare filename cannot be written as a bound**, though inference produces
-  it, so a manifest naming one does not round-trip as a policy.
-  [#3557](https://github.com/MedakaLang/medaka/issues/3557)
 - **Only a product's primary axis can name an argument.**
   [#3558](https://github.com/MedakaLang/medaka/issues/3558)
 - **There is no written syntax for a relation.** A binding whose inferred type
