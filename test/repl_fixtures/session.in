@@ -1,6 +1,8 @@
 x = 42
 y = x + 1
 [x, y]
+filter (n => n > 1) [1, 2, 3]
+max 1.5 2.5
 badname
 x + 1
 type x

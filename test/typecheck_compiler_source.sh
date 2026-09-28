@@ -531,7 +531,12 @@ echo "  ok: scopes_test.mdk only observes OriginUnresolved"
 # #2549 nominal-given classification: these two tuple patterns ELIMINATE an
 # unresolved request/given origin, keeping the answer explicitly legacy. They
 # mint no identity and must not license unresolved semantic given evidence.
-tc_originun_allowed="(OriginUnresolved, _) => givenAnswerResidual g
+# `sameIfaceOrUnresolved`'s two arms are the same elimination on the tyvar-keyed
+# rung (#3527): with an unresolved side the interfaces can only be compared by
+# spelling; with both resolved the comparison is `sameIfaceDecl`.
+tc_originun_allowed="(OriginUnresolved, _) => a.irName == b.irName
+(OriginUnresolved, _) => givenAnswerResidual g
+(_, OriginUnresolved) => a.irName == b.irName
 (_, OriginUnresolved) => givenAnswerResidual g
 OriginUnresolved => \"<unresolved>\"
 OriginUnresolved => [TkBare NsIface ir.irName]

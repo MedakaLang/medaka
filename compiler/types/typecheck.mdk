@@ -10307,15 +10307,23 @@ scalarGivenProjection binder goalIface useScope =
 
 -- Whether the tyvar-keyed binder [binder] can answer a goal of [goalIface]: its own
 -- predicate is the goal's interface or has it as a superclass.  A binder with no
--- recorded direct given, or a goal with no interface, is not constrained here.
+-- recorded direct given, or a goal with no interface, is not constrained here.  The
+-- interfaces compare by declaration identity; a goal still carrying no origin (the
+-- #1318 residual, #3534) can only be compared by spelling.
 scalarGivenAnswers : EvidenceBinderId -> IfaceRef -> ScopeId -> Bool
 scalarGivenAnswers binder goalIface useScope =
   goalIface.irName == ""
     || (match directGivenIfaceOf binder (givensForScope useScope)
       None => True
       Some declared =>
-        declared.irName == goalIface.irName
+        sameIfaceOrUnresolved declared goalIface
           || isSome (scalarGivenProjection binder goalIface useScope))
+
+sameIfaceOrUnresolved : IfaceRef -> IfaceRef -> Bool
+sameIfaceOrUnresolved a b = match (a.irOrigin, b.irOrigin)
+  (OriginUnresolved, _) => a.irName == b.irName
+  (_, OriginUnresolved) => a.irName == b.irName
+  _ => sameIfaceDecl a b
 
 directGivenIfaceOf : EvidenceBinderId -> List GivenEntry -> Option IfaceRef
 directGivenIfaceOf _ [] = None
@@ -25215,6 +25223,36 @@ activeDictVarForEncl m useScope = match peelQual m
   TApp a _ => activeDictVarForEncl a useScope
   _ => None
 
+-- The lexical active-dict lookup restricted to binders [answers] accepts: the
+-- registry keeps every binder registered for the variable, most recent first.
+activeDictVarAnswering : Mono ->
+  ScopeId ->
+  (EvidenceBinderId -> Bool) ->
+  Option EvidenceBinderId
+activeDictVarAnswering m useScope answers = match peelQual m
+  TVar cell =>
+    find
+      (b => answers b)
+      (visibleDictsFor
+        (tyvarId cell)
+        useScope
+        graphRun.value.activeDictVars.value)
+  TApp a _ => activeDictVarAnswering a useScope answers
+  _ => None
+
+visibleDictsFor : Int ->
+  ScopeId ->
+  List (Int, EvidenceBinderId) ->
+  List EvidenceBinderId
+visibleDictsFor _ _ [] = []
+visibleDictsFor id useScope ((eid, binder) :: rest)
+  | eid == id
+    && Scopes.givenVisibleFrom
+      (currentScopeStore ())
+      useScope
+      (Scopes.binderScope binder) = binder :: visibleDictsFor id useScope rest
+  | otherwise = visibleDictsFor id useScope rest
+
 firstDictForEncl : Int ->
   ScopeId ->
   List (Int, EvidenceBinderId) ->
@@ -30480,17 +30518,15 @@ entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
       -- An impl's `requires` givens are id-witnessed, so the predicate-only rungs above
       -- cannot see them; this rung matches them by predicate, as a method occurrence's
       -- does (#1154).  The tyvar-keyed registry that follows holds one entry per
-      -- `requires` predicate on the variable, so it may answer only with a binder whose
-      -- interface is the goal's or reaches it through superclasses.
+      -- `requires` predicate on the variable, so it answers with the first binder
+      -- whose interface is the goal's or reaches it through superclasses.
       None => match implReqDictVarOf (Some request) m useScope
         Some answer => Some answer
-        None => match activeDictVarForEncl m useScope
-          Some b =>
-            if scalarGivenAnswers b iface useScope then
-              Some (LegacyScalar b)
-            else
-              None
-          None => None
+        None =>
+          map
+            LegacyScalar
+            (activeDictVarAnswering m useScope (b =>
+              scalarGivenAnswers b iface useScope))
 entailAssumVar request m encl _ useScope (EKArg _) =
   activeDictVarOfEncl request m encl useScope
 entailAssumVar request m encl name useScope (EKOp isBinop inImpl) =
@@ -48640,14 +48676,31 @@ elaborateModules : List Decl ->
 -- the evidence table and dict-passes the marked trees, and that it keeps the drain's
 -- diagnostics as its residual (`DrainKeep`) instead of rolling them back.
 elaborateModules runtimeDecls coreDecls0 modulesIn =
+  match elaborateModulesWithSchemes runtimeDecls coreDecls0 modulesIn
+    (result, _, _) => result
+
+-- `elaborateModules` together with the prelude's schemes and the entry module's own
+-- schemes, from the SAME drive: a verb that both reads types and evaluates the
+-- elaborated program (`check-policy`) typechecks once.
+export
+elaborateModulesWithSchemes : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (ElabResult, List (String, Scheme), List (String, Scheme))
+elaborateModulesWithSchemes runtimeDecls coreDecls0 modulesIn =
   let g = driveGraphK GOutTrees DrainKeep None runtimeDecls coreDecls0 modulesIn
+  let (entrySchemes, _, _) = checkModulesEntryFromDiags g.gdPerMod
   (
-    g.gdCore,
-    g.gdModules,
-    map dropModSchemes g.gdPerMod,
-    g.gdResidual,
-    g.gdEvTable,
-    g.gdDispositions,
+    (
+      g.gdCore,
+      g.gdModules,
+      map dropModSchemes g.gdPerMod,
+      g.gdResidual,
+      g.gdEvTable,
+      g.gdDispositions,
+    ),
+    g.gdCoreSchemes,
+    entrySchemes,
   )
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)

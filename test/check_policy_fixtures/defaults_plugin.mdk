@@ -1,0 +1,21 @@
+-- An accepted plugin whose entry reaches interface defaults: a user default
+-- (`twice`, `wrap`) and a prelude one (`filter`).  The plugin run evaluates the
+-- elaborated program, where a default reaches its instance.
+effect Log
+extern logEvent : String -> <FFI, Log> Unit
+
+interface Tw a where
+  step : a -> a
+  pre : a -> a -> a
+  twice : a -> a
+  twice x = step (step x)
+  wrap : a -> a -> a
+  wrap x y = pre x (step y)
+
+impl Tw String where
+  step s = s ++ "!"
+  pre a b = a ++ "|" ++ b
+
+transform req =
+  let _ = logEvent req
+  wrap (twice req) (debug (filter (w => w > 2) [1, 2, 3, 4]))

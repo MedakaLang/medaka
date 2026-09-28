@@ -31,11 +31,19 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
 import types.repr.{ppScheme, Scheme(..)}
-import types.typecheck.{checkOneDiags, checkOneScheme, tcMsg}
+import types.typecheck.{
+  checkOneDiags,
+  checkOneScheme,
+  elaborateModules,
+  tcMsg,
+}
+import backend.private_mangle.{mangleCtorCollisionsPair}
 import eval.eval.{
   Value(..),
   evalOneRootEnvWith,
   testCapableExterns,
+  funNamesOf,
+  dropShadowedExp,
   ppValue,
   lookupBinding,
   force,
@@ -226,10 +234,17 @@ runPipeline combined =
         e :: _ => (map tcMsg tcErrs, [], [])
         [] =>
           let allSchemes = checkOneScheme [] preludeDecls ("__user__", combined)
-          let bindings = evalOneRootEnvWith (testCapableExterns
-            ()) preludeDecls (
+          -- Evaluate the ELABORATED program, as `run` and `test` do: an interface
+          -- default reaches an instance only through the elaboration's
+          -- disposition table, so elaboration is the last typecheck before eval.
+          let (coreE, modulesE) =
+            elaborateSession
+              runtimeDecls
+              (dropShadowedExp (funNamesOf combined) preludeDecls)
+              combined
+          let bindings = evalOneRootEnvWith (testCapableExterns ()) coreE (
             "__repl__",
-            combined,
+            flatMap snd modulesE,
           )
           ([], allSchemes, bindings)
 -- DRIVER-COLLAPSE Phase 3/4: eval via the 1-module wrapper (evalOneRootEnv
@@ -238,6 +253,14 @@ runPipeline combined =
 -- GLOBALLY and the session decls as the root module's LOCALS; the returned
 -- frame is local ∪ imports ∪ globals — the same by-name surface evalProgram
 -- exposed (so the `__repl__` lookup + `:browse`/`:env` are unchanged).
+
+elaborateSession : List Decl ->
+  List Decl ->
+  List Decl ->
+  (List Decl, List (String, List Decl))
+elaborateSession runtimeDecls preludeDecls combined =
+  match elaborateModules runtimeDecls preludeDecls [("__repl__", combined)]
+    (c, ms, _, _, _, _) => mangleCtorCollisionsPair (c, ms)
 
 combinedDecls : List Decl -> List Decl
 combinedDecls newDecls = !accumulatedRef ++ newDecls
