@@ -5,7 +5,8 @@
 
 import bytes.{encodeUtf8, fromU8Array}
 import json.{Json(..), jObject}
-import string.{contains}
+import list.{replicate}
+import string.{contains, join, repeat}
 import test.{
   Expectation,
   expectEach,
@@ -16,7 +17,7 @@ import test.{
   fail,
 }
 import lib.handlers.{recordHandler}
-import lib.nsid.{validateNsid}
+import lib.nsid.{nsidErrorMessage, validateNsid}
 import lib.repo.{
   repoCommitTid,
   repoInitFromKeyBytes,
@@ -138,6 +139,27 @@ test "shared generic NSID authority accepts uppercase while retaining lowercase 
     (
       "the lowercase spelling is still accepted",
       expectFalse (isErr (validateNsid "com.atproto.test")),
+    ),
+  ]
+
+nsidWithAuthorityOf : Int -> String
+nsidWithAuthorityOf segments =
+  join "." (replicate segments (repeat 63 "a") ++ ["name"])
+
+nsidVerdict : String -> Result String Unit
+nsidVerdict nsid = mapErr nsidErrorMessage (validateNsid nsid)
+
+test "an NSID authority is bounded only by the 317-character total" = expectEach
+  [
+    (
+      "four 63-character segments plus a name (260 characters) are accepted",
+      expectEqual (Ok ()) (nsidVerdict (nsidWithAuthorityOf 4)),
+    ),
+    (
+      "a total past 317 characters is refused",
+      expectEqual
+        (Err "collection NSID exceeds 317 characters")
+        (nsidVerdict (nsidWithAuthorityOf 5)),
     ),
   ]
 
