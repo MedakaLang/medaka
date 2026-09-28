@@ -187,6 +187,7 @@ astEffrowE : SigVars -> Ty -> EffRow
 astTypeFreshTbl : Ty -> (Mono, List (String, Mono))
 atSignature : Ty -> (Unit -> a) -> a
 atomAuthorityName : EffAtomTy -> List (String, Option Loc)
+atomBindersIn : (EffAtomTy -> List a) -> Ty -> List a
 atomOfLabel : String -> Atom
 atomOfWrittenIn : SigVars -> EffAtomTy -> Atom
 atomParamIsTop : Atom -> Bool
@@ -227,6 +228,8 @@ authorityTermAsTypeMsg : List EffParamTy -> String
 authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 authorityUsesOf : Ty -> List (String, Param)
 authvarIdOf : (String, Ref Authvar) -> Int
+axisAtomBinders : EffAtomTy -> List (String, Param)
+axisNamesArgument : List (String, EffParamTy) -> Bool
 axisProblems : List (String, Param) -> String -> Param -> List String
 bangOnBoolHelp : String
 bangOnBoolMsg : String
@@ -485,6 +488,7 @@ checkUndeterminedRetEffVars : List Decl -> Unit
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
 checkWideLiterals : List (Mono, String, Int, Int, Bool, Option Loc) -> Unit
 checkWrittenElementCap : List EffAtomTy -> Unit
+checkedAxis : List (String, Param) -> (String, EffParamTy) -> (String, Param)
 checkedFfiExternTypeNames : List Decl -> List (String, (List String, String))
 checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List String, String))
 checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List String, String))
@@ -2175,7 +2179,7 @@ predicateSuperStep : List String -> List Mono -> Super -> Option (List Mono)
 predicateTargetId : Mono -> Option Int
 preferConcrete : Mono -> Mono -> Mono
 prefixLiteralProblems : String -> String -> List String
-prefixPatternErrMsg : String -> String -> String
+prefixPatternErrMsg : String -> String
 prefixPatternOk : String -> Bool
 preludeArgPosDictNames : List Decl -> List Decl -> List String
 preludeConstrainedBodyVars : List Decl -> List (String, List String)
@@ -2703,8 +2707,6 @@ stickyTypeErrorDiagsSince : List (String, TcDiag) -> List (String, TcDiag)
 stickyTypeErrorMessages : Unit -> List String
 stmtCalleeName : Expr -> Option String
 storeDataUniverse : Unit -> Unit
-strHasSlash : String -> Bool
-strHasSlashGo : String -> Int -> Int -> Bool
 stripArrows : Mono -> Mono
 stripEff : Ty -> Ty
 stripLeadingMethodConstraints : Ty -> Ty
@@ -2913,6 +2915,7 @@ wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
 wantAuthority : Authority -> Authority -> Unit
 wantAuthorityFrom : Option String -> Bool -> Authority -> Authority -> Unit
+wantAuthorityOne : Option String -> Bool -> Authority -> Authority -> Unit
 wantAuthorityWith : Bool -> Authority -> Authority -> Unit
 wantedMatches : Wanted -> Wanted -> Bool
 wideAnnotateHelp : String -> Bool -> String
@@ -2925,6 +2928,7 @@ withDeclParamKinds : List Decl -> (Unit -> a) -> a
 withFreeAuths : List (String, Ref Authvar) -> SigVars -> SigVars
 withoutVar : Ref Authvar -> Authority -> List Authority
 writtenAxis : (String, EffParamTy) -> (String, Param)
+writtenAxisTerm : SigVars -> List (String, EffParamTy) -> (String, Param) -> (String, Authority)
 writtenBindingForce : SigVars -> Ty -> Option EffRow
 writtenDiag : TcDiag -> TcDiag
 writtenElement : Param -> EffAtomTy -> List Param

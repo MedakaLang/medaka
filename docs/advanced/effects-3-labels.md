@@ -231,8 +231,8 @@ bounded main
 
 There is no rule that `main` may only use certain labels. Bounding a program is
 the host's job, done by reading the manifest, and the type system's job ends at
-computing it truthfully. A `main` declared `<Stdout>` that calls `println` is an
-error, but only because `println` is `<IO>` and `<IO>` does not fit `<Stdout>`,
+computing it truthfully. A `main` declared `<Stdout>` may call `println`, which
+is `<Stdout>` too; one declared `<Stderr>` that calls it is an error, and
 not because of anything special about `main`.
 
 ## Foreign code

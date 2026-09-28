@@ -521,13 +521,13 @@ positionsDecls : Positions -> List DeclPos
 positionsLastContentLine : Positions -> Int
 positionsVariantLines : Positions -> List Int
 postfixTail : Expr -> ParserE <> Expr
-productAxes : ParserE <> (List (String, EffParamTy))
-productAxesMore : ParserE <> (List (String, EffParamTy))
-productAxesMoreFor : Token -> Token -> ParserE <> (List (String, EffParamTy))
-productAxis : ParserE <> (String, EffParamTy)
-productAxisVal : ParserE <> EffParamTy
-productAxisValFor : Token -> ParserE <> EffParamTy
-productParamP : ParserE <> EffParamTy
+productAxes : Bool -> ParserE <> (List (String, EffParamTy))
+productAxesMore : Bool -> ParserE <> (List (String, EffParamTy))
+productAxesMoreFor : Bool -> Token -> Token -> ParserE <> (List (String, EffParamTy))
+productAxis : Bool -> ParserE <> (String, EffParamTy)
+productAxisVal : Bool -> ParserE <> EffParamTy
+productAxisValFor : Bool -> Token -> ParserE <> EffParamTy
+productParamP : Bool -> ParserE <> EffParamTy
 programWithSpans : ParserE <> (List (Decl, Int, Int))
 propParam : ParserE <> PropParam
 rangeAfter : Expr -> Bool -> ParserE <> Expr

@@ -56,7 +56,7 @@ applied. A definition's row is the join of everything its body does.
 double : Int -> Int
 double n = n * 2
 
-shout : String -> <IO> Unit
+shout : String -> <Stdout> Unit
 shout s = println s
 
 greet name = println "hi \{name}"
@@ -81,13 +81,13 @@ hi you
 
 ```
 double : Int -> Int
-shout : String -> <IO> Unit
-greet : Display a => a -> <IO> Unit
+shout : String -> <Stdout> Unit
+greet : Display a => a -> <Stdout> Unit
 twice : (a -> <b> a) -> a -> <b> a
-main : <IO> Unit
+main : <Stdout> Unit
 ```
 
-`greet` has no signature and was inferred `<IO>` because `println` is `<IO>`.
+`greet` has no signature and was inferred `<Stdout>` because `println` is `<Stdout>`.
 `twice` was inferred with a *variable* in its row: `twice` performs whatever its
 argument performs, no more. That is effect polymorphism, and
 [the next chapter](effects-2-polymorphism.md) is about it. `main` has a row too,
@@ -113,7 +113,7 @@ main = println (double 21)
 ```
 
 ```
-error: rows.mdk:3:10: Effectful value used where <> is allowed, but it performs <IO>
+error: rows.mdk:3:10: Effectful value used where <> is allowed, but it performs <Stdout>
   |
 3 |   println "doubling"
   |           ^
@@ -195,23 +195,17 @@ clock read
 sorted and deduplicated, so `<Stderr, Stdout>` and `<Stdout, Stderr>` are the same
 row.
 
-> ⚠️ **`println` is `<IO>`, not `<Stdout>`.** The prelude declares `println` and
-> `print` with the umbrella label, so any function that calls them is charged all
-> ten labels at once. When you want a narrow row, call `putStrLn` on a string
-> instead. Narrowing the prelude's declaration is tracked as
-> [#2411](https://github.com/MedakaLang/medaka/issues/2411).
-
-A function cannot claim a narrower row than the functions it calls, so this is
-refused:
+A function cannot claim a row that leaves out what it calls. Declaring
+`say : String -> <Stderr> Unit` and defining it as `say s = println s` is refused:
 
 ```
-error: rows.mdk:2:16: Effectful value used where <Stdout> is allowed, but it performs <IO>
+error: rows.mdk:2:16: Effectful value used where <Stderr> is allowed, but it performs <Stdout>
   |
 2 | say s = println s
   |                 ^
 ```
 
-The fix is either to widen `say` to `<IO>` or to call `putStrLn`.
+The fix is to declare `say` at `<Stdout>`, or to call `ePutStrLn`.
 
 Several of these labels can carry a *parameter* that says which file, which
 variable, or which host: `readFile "cfg/app.toml"` performs

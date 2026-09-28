@@ -23,10 +23,10 @@ import string.{stripCR}
 {- | Writes a value to standard error with no trailing newline.
 
    The value is rendered with `display`, like `print`. -}
--- Same declared signature as `core.print`, different stream (stderr via
+-- The same shape as `core.print` on a different stream (`<Stderr>` via
 -- `ePutStr` vs. stdout via `putStr`) — not a real duplicate.
 export
-eprint : Display a => a -> <IO> Unit
+eprint : Display a => a -> <Stderr> Unit
 -- lint-disable-next-line rule-stdlib-reimpl
 eprint x = ePutStr (display x)
 
@@ -34,10 +34,10 @@ eprint x = ePutStr (display x)
 
    The value is rendered with `display`, like `println`. Use it for
    diagnostics and errors so they do not mix with standard output. -}
--- Same declared signature as `core.println`, different stream (stderr via
+-- The same shape as `core.println` on a different stream (`<Stderr>` via
 -- `ePutStrLn` vs. stdout via `putStrLn`) — not a real duplicate.
 export
-eprintln : Display a => a -> <IO> Unit
+eprintln : Display a => a -> <Stderr> Unit
 -- lint-disable-next-line rule-stdlib-reimpl
 eprintln x = ePutStrLn (display x)
 
@@ -50,7 +50,7 @@ eprintln x = ePutStrLn (display x)
    shown by name, so the output reads as Medaka source. Use it to trace
    values without writing a `Display` instance. -}
 export
-inspect : Debug a => a -> <IO> Unit
+inspect : Debug a => a -> <Stdout> Unit
 inspect x = putStrLn (debug x)
 
 -- # Files
@@ -75,7 +75,7 @@ splitLines s = match stringIndexOf "\n" s
    Lines are split on `\n`, with a `\r` before it removed. A trailing
    newline does not produce a final empty line. -}
 export
-readLines : String -> <IO> Result String (List String)
+readLines : (path : String) -> <FileRead path> Result String (List String)
 readLines path = map splitLines (readFile path)
 
 {- | The permission bits of a file only its owner may read or write:
@@ -179,15 +179,15 @@ getEnvOr name fallback = optionOr fallback (getEnv name)
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "optionOr" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
-(DTypeSig true "eprint" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
+(DTypeSig true "eprint" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("Stderr") None (TyCon "Unit")))))
 (DFunDef false "eprint" ((PVar "x")) (EApp (EVar "ePutStr") (EApp (EVar "display") (EVar "x"))))
-(DTypeSig true "eprintln" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
+(DTypeSig true "eprintln" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("Stderr") None (TyCon "Unit")))))
 (DFunDef false "eprintln" ((PVar "x")) (EApp (EVar "ePutStrLn") (EApp (EVar "display") (EVar "x"))))
-(DTypeSig true "inspect" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
+(DTypeSig true "inspect" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("Stdout") None (TyCon "Unit")))))
 (DFunDef false "inspect" ((PVar "x")) (EApp (EVar "putStrLn") (EApp (EVar "debug") (EVar "x"))))
 (DTypeSig false "splitLines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "splitLines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "stripCR") (EVar "s"))))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (EApp (EVar "splitLines") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
-(DTypeSig true "readLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DTypeSig true "readLines" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "readLines" ((PVar "path")) (EApp (EApp (EVar "map") (EVar "splitLines")) (EApp (EVar "readFile") (EVar "path"))))
 (DTypeSig true "ownerOnlyMode" (TyCon "Int"))
 (DFunDef false "ownerOnlyMode" () (ELit (LInt 384)))
@@ -204,15 +204,15 @@ getEnvOr name fallback = optionOr fallback (getEnv name)
 # MARK
 (DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "optionOr" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
-(DTypeSig true "eprint" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
+(DTypeSig true "eprint" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("Stderr") None (TyCon "Unit")))))
 (DFunDef false "eprint" ((PVar "x")) (EApp (EVar "ePutStr") (EApp (EMethodRef "display") (EVar "x"))))
-(DTypeSig true "eprintln" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
+(DTypeSig true "eprintln" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("Stderr") None (TyCon "Unit")))))
 (DFunDef false "eprintln" ((PVar "x")) (EApp (EVar "ePutStrLn") (EApp (EMethodRef "display") (EVar "x"))))
-(DTypeSig true "inspect" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
+(DTypeSig true "inspect" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("Stdout") None (TyCon "Unit")))))
 (DFunDef false "inspect" ((PVar "x")) (EApp (EVar "putStrLn") (EApp (EMethodRef "debug") (EVar "x"))))
 (DTypeSig false "splitLines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "splitLines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "stripCR") (EVar "s"))))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (EApp (EVar "splitLines") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
-(DTypeSig true "readLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DTypeSig true "readLines" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "readLines" ((PVar "path")) (EApp (EApp (EMethodRef "map") (EVar "splitLines")) (EApp (EVar "readFile") (EVar "path"))))
 (DTypeSig true "ownerOnlyMode" (TyCon "Int"))
 (DFunDef false "ownerOnlyMode" () (ELit (LInt 384)))

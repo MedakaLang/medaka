@@ -10,4 +10,4 @@ main =
     else println "b"
   else println "c"
 # TYPES_USER
-main : <IO> Unit
+main : <Stdout> Unit

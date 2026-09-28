@@ -121,7 +121,7 @@ main =
 2
 ```
 
-`check` prints `main : <IO, Store "cfg/x", Store "data/y"> Unit`. Each call
+`check` prints `main : <Stdout, Store "cfg/x", Store "data/y"> Unit`. Each call
 substituted its literal for the name, so the row `main` is charged with is exact.
 And the compiler holds the body of `under` to its promise:
 
@@ -185,11 +185,9 @@ main = println (countLines ())
 
 (The file does not exist where the examples are run, so the count is 0. That is
 itself the point: the effect and the failure are separate, and the row was
-checked before anything ran.) Not every library function is this precise yet.
-The `io` module's `readLines`, which reads a file and splits it, is declared
-`<IO>` rather than at its path's authority, so a function that calls it cannot
-carry a narrow bound; narrowing those helpers is tracked as
-[#3388](https://github.com/MedakaLang/medaka/issues/3388).
+checked before anything ran.) The `io` module's `readLines`, which reads a file
+and splits it, is declared the same way, `(path : String) -> <FileRead path>
+...`, so a function that calls it can carry a narrow bound.
 
 ## How the compiler reads a path
 
@@ -375,7 +373,7 @@ Stdout = true
 ```
 $ medaka manifest paths.mdk
 [package.capabilities]
-IO = true
+Stdout = true
 Store = ["cfg/*", "data/*"]
 ```
 
@@ -425,7 +423,7 @@ main =
 `same` returns its argument at the argument's own authority, so `load (same
 "cfg/x")` is charged `Store "cfg/x"`, not the whole domain. `choose` returns one
 of two arguments, and `@(a | b)` is the spelling for "within either". `check`
-prints `main : <IO, Store "cfg/x", Store "data/y"> Unit`, which is what a caller
+prints `main : <Stdout, Store "cfg/x", Store "data/y"> Unit`, which is what a caller
 would hope for.
 
 A qualifier's name needs a domain, and the only way to give it one is an atom or

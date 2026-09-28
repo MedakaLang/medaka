@@ -1,5 +1,5 @@
 # META
-source_lines=6061
+source_lines=6075
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -2191,51 +2191,65 @@ effParamP = defer
 -- atom — but atoms are comma-SEPARATED, so a label-juxtaposed upper can only be a
 -- product axis; the `= ` lookahead distinguishes it cleanly with zero collision.
 effParamDispatch : Token -> Token -> Parser EffParamTy
-effParamDispatch (TUpper _) TEqual = productParamP
+effParamDispatch (TUpper _) TEqual = productParamP True
 effParamDispatch t _ = effParamFor t
 
 -- parse `Host="…" Method={…} …` (space-separated axes; loop while peek is an
--- upper-name followed by `=`).
-productParamP : Parser EffParamTy
-productParamP = defer
-  axes <- productAxes
+-- upper-name followed by `=`).  [named]: an axis may name an argument, which
+-- only an effect atom's parameter may do.
+productParamP : Bool -> Parser EffParamTy
+productParamP named = defer
+  axes <- productAxes named
   deferPure (EPProduct axes)
 
-productAxes : Parser (List (String, EffParamTy))
-productAxes = defer
-  a <- productAxis
-  rest <- productAxesMore
+productAxes : Bool -> Parser (List (String, EffParamTy))
+productAxes named = defer
+  a <- productAxis named
+  rest <- productAxesMore named
   deferPure (a :: rest)
 
-productAxesMore : Parser (List (String, EffParamTy))
-productAxesMore = defer
+productAxesMore : Bool -> Parser (List (String, EffParamTy))
+productAxesMore named = defer
   t <- peekP
   t2 <- peek2P
-  productAxesMoreFor t t2
+  productAxesMoreFor named t t2
 
-productAxesMoreFor : Token -> Token -> Parser (List (String, EffParamTy))
-productAxesMoreFor (TUpper _) TEqual = productAxes
-productAxesMoreFor _ _ = deferPure []
+productAxesMoreFor : Bool ->
+  Token ->
+  Token ->
+  Parser (List (String, EffParamTy))
+productAxesMoreFor named (TUpper _) TEqual = productAxes named
+productAxesMoreFor _ _ _ = deferPure []
 
--- one `Axis=val` axis: val is `"…"` (Prefix) or `{a,b}` (Set).
-productAxis : Parser (String, EffParamTy)
-productAxis = defer
+-- one `Axis=val` axis: val is `"…"` (Prefix), `{a,b}` (Set), or in an atom an
+-- argument's name.
+productAxis : Bool -> Parser (String, EffParamTy)
+productAxis named = defer
   name <- upperNameP
   expectTok TEqual
-  v <- productAxisVal
+  v <- productAxisVal named
   deferPure (name, v)
 
-productAxisVal : Parser EffParamTy
-productAxisVal = defer
+productAxisVal : Bool -> Parser EffParamTy
+productAxisVal named = defer
   t <- peekP
-  productAxisValFor t
+  productAxisValFor named t
 
-productAxisValFor : Token -> Parser EffParamTy
-productAxisValFor (TString s) = defer
+productAxisValFor : Bool -> Token -> Parser EffParamTy
+productAxisValFor _ (TString s) = defer
   advance
   deferPure (EPLit s)
-productAxisValFor TLBrace = effSetLiteralP
-productAxisValFor _ = failP "expected product axis value (\"prefix\" or {set})"
+productAxisValFor _ TLBrace = effSetLiteralP
+productAxisValFor True (TIdent n) = defer
+  advance
+  deferPure (EPName n)
+productAxisValFor True _ =
+  failP "expected product axis value (\"prefix\", {set} or an argument's name)"
+productAxisValFor False (TIdent _) =
+  failP
+    "an axis of an authority term takes a \"prefix\" or a {set}; an argument names an axis only in an effect row (`<L Axis=name>`)"
+productAxisValFor False _ =
+  failP "expected product axis value (\"prefix\" or {set})"
 
 -- A parameter nothing in the signature determines would be an unchecked
 -- claim, so `_` (quoted or bare) is rejected with the three admissible forms
@@ -2409,7 +2423,7 @@ authTermP = defer
   authTermFor t t2
 
 authTermFor : Token -> Token -> Parser EffParamTy
-authTermFor (TUpper _) TEqual = productParamP
+authTermFor (TUpper _) TEqual = productParamP False
 authTermFor (t@(TString _)) _ = effParamFor t
 authTermFor (t@(TIdent _)) _ = effParamFor t
 authTermFor TLBrace _ = effSetLiteralP
@@ -6779,25 +6793,28 @@ parseResultWith src tokList offList =
 (DTypeSig false "effParamP" (TyApp (TyCon "Parser") (TyCon "EffParamTy")))
 (DFunDef false "effParamP" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "effParamDispatch") (EVar "t")) (EVar "t2")))))))
 (DTypeSig false "effParamDispatch" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy")))))
-(DFunDef false "effParamDispatch" ((PCon "TUpper" PWild) (PCon "TEqual")) (EVar "productParamP"))
+(DFunDef false "effParamDispatch" ((PCon "TUpper" PWild) (PCon "TEqual")) (EApp (EVar "productParamP") (EVar "True")))
 (DFunDef false "effParamDispatch" ((PVar "t") PWild) (EApp (EVar "effParamFor") (EVar "t")))
-(DTypeSig false "productParamP" (TyApp (TyCon "Parser") (TyCon "EffParamTy")))
-(DFunDef false "productParamP" () (EApp (EApp (EVar "deferThen") (EVar "productAxes")) (ELam ((PVar "axes")) (EApp (EVar "deferPure") (EApp (EVar "EPProduct") (EVar "axes"))))))
-(DTypeSig false "productAxes" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
-(DFunDef false "productAxes" () (EApp (EApp (EVar "deferThen") (EVar "productAxis")) (ELam ((PVar "a")) (EApp (EApp (EVar "deferThen") (EVar "productAxesMore")) (ELam ((PVar "rest")) (EApp (EVar "deferPure") (EBinOp "::" (EVar "a") (EVar "rest"))))))))
-(DTypeSig false "productAxesMore" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
-(DFunDef false "productAxesMore" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "productAxesMoreFor") (EVar "t")) (EVar "t2")))))))
-(DTypeSig false "productAxesMoreFor" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))))
-(DFunDef false "productAxesMoreFor" ((PCon "TUpper" PWild) (PCon "TEqual")) (EVar "productAxes"))
-(DFunDef false "productAxesMoreFor" (PWild PWild) (EApp (EVar "deferPure") (EListLit)))
-(DTypeSig false "productAxis" (TyApp (TyCon "Parser") (TyTuple (TyCon "String") (TyCon "EffParamTy"))))
-(DFunDef false "productAxis" () (EApp (EApp (EVar "deferThen") (EVar "upperNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "productAxisVal")) (ELam ((PVar "v")) (EApp (EVar "deferPure") (ETuple (EVar "name") (EVar "v"))))))))))
-(DTypeSig false "productAxisVal" (TyApp (TyCon "Parser") (TyCon "EffParamTy")))
-(DFunDef false "productAxisVal" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "productAxisValFor") (EVar "t")))))
-(DTypeSig false "productAxisValFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy"))))
-(DFunDef false "productAxisValFor" ((PCon "TString" (PVar "s"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EVar "EPLit") (EVar "s"))))))
-(DFunDef false "productAxisValFor" ((PCon "TLBrace")) (EVar "effSetLiteralP"))
-(DFunDef false "productAxisValFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected product axis value (\"prefix\" or {set})"))))
+(DTypeSig false "productParamP" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "EffParamTy"))))
+(DFunDef false "productParamP" ((PVar "named")) (EApp (EApp (EVar "deferThen") (EApp (EVar "productAxes") (EVar "named"))) (ELam ((PVar "axes")) (EApp (EVar "deferPure") (EApp (EVar "EPProduct") (EVar "axes"))))))
+(DTypeSig false "productAxes" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))))))
+(DFunDef false "productAxes" ((PVar "named")) (EApp (EApp (EVar "deferThen") (EApp (EVar "productAxis") (EVar "named"))) (ELam ((PVar "a")) (EApp (EApp (EVar "deferThen") (EApp (EVar "productAxesMore") (EVar "named"))) (ELam ((PVar "rest")) (EApp (EVar "deferPure") (EBinOp "::" (EVar "a") (EVar "rest"))))))))
+(DTypeSig false "productAxesMore" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))))))
+(DFunDef false "productAxesMore" ((PVar "named")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EApp (EVar "productAxesMoreFor") (EVar "named")) (EVar "t")) (EVar "t2")))))))
+(DTypeSig false "productAxesMoreFor" (TyFun (TyCon "Bool") (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))))))))
+(DFunDef false "productAxesMoreFor" ((PVar "named") (PCon "TUpper" PWild) (PCon "TEqual")) (EApp (EVar "productAxes") (EVar "named")))
+(DFunDef false "productAxesMoreFor" (PWild PWild PWild) (EApp (EVar "deferPure") (EListLit)))
+(DTypeSig false "productAxis" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
+(DFunDef false "productAxis" ((PVar "named")) (EApp (EApp (EVar "deferThen") (EVar "upperNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "productAxisVal") (EVar "named"))) (ELam ((PVar "v")) (EApp (EVar "deferPure") (ETuple (EVar "name") (EVar "v"))))))))))
+(DTypeSig false "productAxisVal" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "EffParamTy"))))
+(DFunDef false "productAxisVal" ((PVar "named")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "productAxisValFor") (EVar "named")) (EVar "t")))))
+(DTypeSig false "productAxisValFor" (TyFun (TyCon "Bool") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy")))))
+(DFunDef false "productAxisValFor" (PWild (PCon "TString" (PVar "s"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EVar "EPLit") (EVar "s"))))))
+(DFunDef false "productAxisValFor" (PWild (PCon "TLBrace")) (EVar "effSetLiteralP"))
+(DFunDef false "productAxisValFor" ((PCon "True") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EVar "EPName") (EVar "n"))))))
+(DFunDef false "productAxisValFor" ((PCon "True") PWild) (EApp (EVar "failP") (ELit (LString "expected product axis value (\"prefix\", {set} or an argument's name)"))))
+(DFunDef false "productAxisValFor" ((PCon "False") (PCon "TIdent" PWild)) (EApp (EVar "failP") (ELit (LString "an axis of an authority term takes a \"prefix\" or a {set}; an argument names an axis only in an effect row (`<L Axis=name>`)"))))
+(DFunDef false "productAxisValFor" ((PCon "False") PWild) (EApp (EVar "failP") (ELit (LString "expected product axis value (\"prefix\" or {set})"))))
 (DTypeSig false "effParamFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy"))))
 (DFunDef false "effParamFor" ((PCon "TString" (PVar "s"))) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EApp (EApp (EVar "fatalAtP") (EVar "effHoleRetiredMsg")) (EVar "pos")) (EApp (EVar "deferPure") (EApp (EVar "EPLit") (EVar "s")))))))))
 (DFunDef false "effParamFor" ((PCon "TUnderscore")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EVar "effHoleRetiredMsg")) (EVar "pos")))))
@@ -6844,7 +6861,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "authTermP" (TyApp (TyCon "Parser") (TyCon "EffParamTy")))
 (DFunDef false "authTermP" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "authTermFor") (EVar "t")) (EVar "t2")))))))
 (DTypeSig false "authTermFor" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy")))))
-(DFunDef false "authTermFor" ((PCon "TUpper" PWild) (PCon "TEqual")) (EVar "productParamP"))
+(DFunDef false "authTermFor" ((PCon "TUpper" PWild) (PCon "TEqual")) (EApp (EVar "productParamP") (EVar "False")))
 (DFunDef false "authTermFor" ((PAs "t" (PCon "TString" PWild)) PWild) (EApp (EVar "effParamFor") (EVar "t")))
 (DFunDef false "authTermFor" ((PAs "t" (PCon "TIdent" PWild)) PWild) (EApp (EVar "effParamFor") (EVar "t")))
 (DFunDef false "authTermFor" ((PCon "TLBrace") PWild) (EVar "effSetLiteralP"))
@@ -8498,25 +8515,28 @@ parseResultWith src tokList offList =
 (DTypeSig false "effParamP" (TyApp (TyCon "Parser") (TyCon "EffParamTy")))
 (DFunDef false "effParamP" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "effParamDispatch") (EVar "t")) (EVar "t2")))))))
 (DTypeSig false "effParamDispatch" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy")))))
-(DFunDef false "effParamDispatch" ((PCon "TUpper" PWild) (PCon "TEqual")) (EVar "productParamP"))
+(DFunDef false "effParamDispatch" ((PCon "TUpper" PWild) (PCon "TEqual")) (EApp (EVar "productParamP") (EVar "True")))
 (DFunDef false "effParamDispatch" ((PVar "t") PWild) (EApp (EVar "effParamFor") (EVar "t")))
-(DTypeSig false "productParamP" (TyApp (TyCon "Parser") (TyCon "EffParamTy")))
-(DFunDef false "productParamP" () (EApp (EApp (EMethodRef "deferThen") (EVar "productAxes")) (ELam ((PVar "axes")) (EApp (EMethodRef "deferPure") (EApp (EVar "EPProduct") (EVar "axes"))))))
-(DTypeSig false "productAxes" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
-(DFunDef false "productAxes" () (EApp (EApp (EMethodRef "deferThen") (EVar "productAxis")) (ELam ((PVar "a")) (EApp (EApp (EMethodRef "deferThen") (EVar "productAxesMore")) (ELam ((PVar "rest")) (EApp (EMethodRef "deferPure") (EBinOp "::" (EVar "a") (EVar "rest"))))))))
-(DTypeSig false "productAxesMore" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
-(DFunDef false "productAxesMore" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "productAxesMoreFor") (EVar "t")) (EVar "t2")))))))
-(DTypeSig false "productAxesMoreFor" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))))
-(DFunDef false "productAxesMoreFor" ((PCon "TUpper" PWild) (PCon "TEqual")) (EVar "productAxes"))
-(DFunDef false "productAxesMoreFor" (PWild PWild) (EApp (EMethodRef "deferPure") (EListLit)))
-(DTypeSig false "productAxis" (TyApp (TyCon "Parser") (TyTuple (TyCon "String") (TyCon "EffParamTy"))))
-(DFunDef false "productAxis" () (EApp (EApp (EMethodRef "deferThen") (EVar "upperNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "productAxisVal")) (ELam ((PVar "v")) (EApp (EMethodRef "deferPure") (ETuple (EVar "name") (EVar "v"))))))))))
-(DTypeSig false "productAxisVal" (TyApp (TyCon "Parser") (TyCon "EffParamTy")))
-(DFunDef false "productAxisVal" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "productAxisValFor") (EVar "t")))))
-(DTypeSig false "productAxisValFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy"))))
-(DFunDef false "productAxisValFor" ((PCon "TString" (PVar "s"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EVar "EPLit") (EVar "s"))))))
-(DFunDef false "productAxisValFor" ((PCon "TLBrace")) (EVar "effSetLiteralP"))
-(DFunDef false "productAxisValFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected product axis value (\"prefix\" or {set})"))))
+(DTypeSig false "productParamP" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "EffParamTy"))))
+(DFunDef false "productParamP" ((PVar "named")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "productAxes") (EVar "named"))) (ELam ((PVar "axes")) (EApp (EMethodRef "deferPure") (EApp (EVar "EPProduct") (EVar "axes"))))))
+(DTypeSig false "productAxes" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))))))
+(DFunDef false "productAxes" ((PVar "named")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "productAxis") (EVar "named"))) (ELam ((PVar "a")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "productAxesMore") (EVar "named"))) (ELam ((PVar "rest")) (EApp (EMethodRef "deferPure") (EBinOp "::" (EVar "a") (EVar "rest"))))))))
+(DTypeSig false "productAxesMore" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))))))
+(DFunDef false "productAxesMore" ((PVar "named")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EApp (EVar "productAxesMoreFor") (EVar "named")) (EVar "t")) (EVar "t2")))))))
+(DTypeSig false "productAxesMoreFor" (TyFun (TyCon "Bool") (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))))))))
+(DFunDef false "productAxesMoreFor" ((PVar "named") (PCon "TUpper" PWild) (PCon "TEqual")) (EApp (EVar "productAxes") (EVar "named")))
+(DFunDef false "productAxesMoreFor" (PWild PWild PWild) (EApp (EMethodRef "deferPure") (EListLit)))
+(DTypeSig false "productAxis" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
+(DFunDef false "productAxis" ((PVar "named")) (EApp (EApp (EMethodRef "deferThen") (EVar "upperNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "productAxisVal") (EVar "named"))) (ELam ((PVar "v")) (EApp (EMethodRef "deferPure") (ETuple (EVar "name") (EVar "v"))))))))))
+(DTypeSig false "productAxisVal" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "EffParamTy"))))
+(DFunDef false "productAxisVal" ((PVar "named")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "productAxisValFor") (EVar "named")) (EVar "t")))))
+(DTypeSig false "productAxisValFor" (TyFun (TyCon "Bool") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy")))))
+(DFunDef false "productAxisValFor" (PWild (PCon "TString" (PVar "s"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EVar "EPLit") (EVar "s"))))))
+(DFunDef false "productAxisValFor" (PWild (PCon "TLBrace")) (EVar "effSetLiteralP"))
+(DFunDef false "productAxisValFor" ((PCon "True") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EVar "EPName") (EVar "n"))))))
+(DFunDef false "productAxisValFor" ((PCon "True") PWild) (EApp (EVar "failP") (ELit (LString "expected product axis value (\"prefix\", {set} or an argument's name)"))))
+(DFunDef false "productAxisValFor" ((PCon "False") (PCon "TIdent" PWild)) (EApp (EVar "failP") (ELit (LString "an axis of an authority term takes a \"prefix\" or a {set}; an argument names an axis only in an effect row (`<L Axis=name>`)"))))
+(DFunDef false "productAxisValFor" ((PCon "False") PWild) (EApp (EVar "failP") (ELit (LString "expected product axis value (\"prefix\" or {set})"))))
 (DTypeSig false "effParamFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy"))))
 (DFunDef false "effParamFor" ((PCon "TString" (PVar "s"))) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EApp (EApp (EVar "fatalAtP") (EVar "effHoleRetiredMsg")) (EVar "pos")) (EApp (EMethodRef "deferPure") (EApp (EVar "EPLit") (EVar "s")))))))))
 (DFunDef false "effParamFor" ((PCon "TUnderscore")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EVar "effHoleRetiredMsg")) (EVar "pos")))))
@@ -8563,7 +8583,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "authTermP" (TyApp (TyCon "Parser") (TyCon "EffParamTy")))
 (DFunDef false "authTermP" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "authTermFor") (EVar "t")) (EVar "t2")))))))
 (DTypeSig false "authTermFor" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy")))))
-(DFunDef false "authTermFor" ((PCon "TUpper" PWild) (PCon "TEqual")) (EVar "productParamP"))
+(DFunDef false "authTermFor" ((PCon "TUpper" PWild) (PCon "TEqual")) (EApp (EVar "productParamP") (EVar "False")))
 (DFunDef false "authTermFor" ((PAs "t" (PCon "TString" PWild)) PWild) (EApp (EVar "effParamFor") (EVar "t")))
 (DFunDef false "authTermFor" ((PAs "t" (PCon "TIdent" PWild)) PWild) (EApp (EVar "effParamFor") (EVar "t")))
 (DFunDef false "authTermFor" ((PCon "TLBrace") PWild) (EVar "effSetLiteralP"))
