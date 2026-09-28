@@ -409,6 +409,12 @@ pds/tools/gen_sync_event_corpus
                                sequencer/events.js and @atproto/repo in the pinned official-PDS
                                Docker image; vector_provenance grades the artifacts, network and
                                docker required to regenerate.
+pds/tools/gen_lexicon_corpus   regenerates the Lexicon record-validation answer key (the 20
+                               knownSchemas record schemas plus reached defs as JSON, and the
+                               verdict rows) by introspecting and running the pinned official-PDS
+                               image's own validators over pds/test/vectors/lexicon_cases.jsonl
+                               (the .sh wrapper and its gen_lexicon_corpus.mjs); vector_provenance
+                               grades the artifacts, network and docker required to regenerate.
 pds/tools/gen_mst_corpus       regenerates the P1-B deterministic MST roots and canonical node
                                blocks with npm ci from the committed exact atproto lock graph; the
                                offline mst_vectors and vector_provenance gates grade the artifact.
