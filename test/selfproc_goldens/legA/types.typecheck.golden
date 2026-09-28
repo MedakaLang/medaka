@@ -81,7 +81,6 @@ allCoreFns : List String -> Bool
 allDigits : String -> Bool
 allDigitsFrom : String -> Int -> Bool
 allEVars : Expr -> List String
-allHeadArgsMatch : List (Ty, Mono) -> Bool
 allIfaceMethodNames : List Decl -> List String
 allInRange : List Int -> Int -> Bool
 allMethodParamsMentioned : List String -> Ty -> Bool
@@ -264,6 +263,7 @@ binopRouteSplit : Route -> (Route, List Route)
 binopSpanLoc : Expr -> Expr -> Option Loc
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
+bodyExtraNumObls : List UObligation -> Int -> Int -> List UObligation
 bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
 borrowedEffectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
@@ -524,6 +524,7 @@ cohIncomparableMsg : String -> List Mono -> List Mono -> String -> String -> Str
 cohIsCrossModule : String -> String -> Bool
 cohKeepFirst : Option a -> Option a -> Option a
 cohMutuallySubsumes : List Mono -> List Mono -> Bool
+cohOccurs : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohOntoFull : Option String -> Option String -> (List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, Scheme), List TcDiag, List TcDiag)
 cohOverlap : List Mono -> List Mono -> Bool
 cohOverlapGo : Ref (List (Int, Mono)) -> List (Mono, Mono) -> Bool
@@ -763,6 +764,7 @@ dedupIfacePairs : List (IfaceRef, Int) -> List (IfaceRef, Int)
 dedupLocated : List (String, Option Loc) -> List (String, Option Loc) -> List (String, Option Loc)
 dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
 dedupVecObls : List VecObl -> List VecObl
+defaultAbsentNumWith : Option Int -> Map String Unit -> List UObligation -> List Mono -> Unit
 defaultAmbiguousNumWith : Option Int -> Map String Unit -> List UObligation -> Mono -> Unit
 defaultBodyBinderNamesProbe : Unit -> List String
 defaultBodyLocalNumWith : Option Int -> Map String Unit -> List UObligation -> Unit
@@ -1364,7 +1366,6 @@ implHeadMatchesArgs : List Ty -> List Mono -> Bool
 implHeadMonos : List Ty -> (List (String, Mono), List Mono)
 implHeadParametric : Decl -> Bool
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
-implHeadSubstGo : List Ty -> List Mono -> Option (List (String, Mono)) -> Option (List (String, Mono))
 implHeadTagForIface : String -> Decl -> List String
 implHeadTagsForIface : List Decl -> String -> List String
 implKeyTc : String -> List Ty -> String
@@ -1684,6 +1685,7 @@ letBindGeneralizes : TcEnv -> (LetBind, (String, BindingSummary)) -> (Bool, Mono
 letBindName : LetBind -> String
 letBindNameTc : LetBind -> String
 letBindSites : LetBind -> List (Ref Route)
+letGroupComponents : List LetBind -> List (List LetBind)
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 letPatRename : Pat -> Expr -> Map String String -> (Pat, Map String String)
 letRecNonFunctionMsg : String -> String
@@ -1956,6 +1958,7 @@ monoUnboundVarLevels : Mono -> List (Int, Int)
 monoVecSameGiven : List Mono -> List Mono -> Bool
 monoVectorClosed : List Mono -> Bool
 monosTvarIds : List Int -> List Mono -> List Int
+multiParamIds : UObligation -> List Int
 nameNotAuthorityMsg : String -> String
 nameableIfaceMethodSet : List Decl -> Map String Unit
 nameableIfaceRows : List Decl -> List (String, List String)
@@ -2134,6 +2137,7 @@ popMarkedClause : Map String (List (List Pat, Expr)) -> Map String (List (List P
 populateEffectDomainsGraph : List Decl -> List (String, List Decl) -> Unit
 populateGo : List Decl -> Unit
 populateUnitsGo : List (String, List Decl) -> Unit
+positionBindings : List Ty -> List Mono -> List (String, Mono) -> Option (List (String, Mono))
 positionCells : List (String, Int) -> List (Int, Ref Authvar)
 positionalSigVars : List (String, Int) -> List (Int, Ref Authvar) -> SigVars
 postponePendingJoins : Int -> Unit
@@ -2305,6 +2309,7 @@ recordImplObligation : String -> Mono -> Mono
 recordInstantiatedMethodLevelSlots : List PredicateSlot -> Option Loc -> ScopeId -> Unit
 recordInvocationView : TcEnv -> Unit
 recordLocalBind : String -> Option Loc -> Mono -> Unit
+recordLocalQuantified : Scheme -> Unit
 recordLocalRecOcc : String -> EvId -> Unit
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodDictsFromSlots : List MethodPredicateSlot -> Ref (List Route) -> List (Int, Mono) -> Unit
@@ -2414,6 +2419,7 @@ renderKindAnn : KindAnn -> String
 renderKindAnnAtomic : KindAnn -> String
 renderKindArrow : List Kind -> String
 renderRouteIdentity : Route -> String
+repeatedBindings : List (String, Mono) -> List (String, Mono) -> List (Mono, Mono)
 repeatedNames : List String -> List String -> List String
 reportAmbiguousImpl : String -> Route
 reportAmbiguousImport : Map String Unit -> String -> UsePath -> Loc -> Unit

@@ -1323,6 +1323,41 @@ test "a join with a local alternative is decided before its binding generalizes"
         (outer ++ "  h f\nuse : Int\nuse = outer False 100 (n => n)\n")),
   ]
 
+-- A `where` block's bindings are checked in dependency order, as a module's
+-- top level is: a helper its siblings only use is generalized before they
+-- use it, so two siblings may use it at two types (#3487).
+test "a where helper is generalized before the siblings that use it" =
+  expectEqual
+    []
+    (errorsFor
+      "pair : (Int, Bool)\npair = (a, b)\n  where\n    g x = x\n    a = g 1\n    b = g True\n")
+
+-- A where FUNCTION whose type mentions a Num-only variable generalizes it, so
+-- two uses may pick two types; a where VALUE stays shared, so a sibling or
+-- the body fixes it, and two siblings that disagree still conflict (#3487).
+test "a where function generalizes a Num-only type; a where value is shared" = expectAll
+  [
+    expectEqual
+      []
+      (errorsFor
+        "g : Unit -> (Int, Float)\ng _ = (go 7, go 2.5)\n  where\n    two _ = 2\n    go y = y / two ()\n"),
+    expectEqual
+      []
+      (errorsFor
+        "area : Float -> Float\narea w = full\n  where\n    margin = 2\n    full = w * w + margin\n"),
+    expectEqual
+      []
+      (errorsFor
+        "norm : Float -> Float\nnorm x = go x\n  where\n    scale = 100\n    go y = y / scale\n"),
+    expectEqual
+      []
+      (errorsFor "f : Int -> Int\nf x = x + k\n  where\n    k = 2\n"),
+    expectNotEqual
+      []
+      (errorsFor
+        "bad : Unit -> Float\nbad _ = a\n  where\n    scale = 100\n    a = scale + 1.5\n    b = scale + (1 : Int)\n"),
+  ]
+
 test "a join the result's own use shapes keeps each alternative's row" = expectAll
   [
     expectEqual

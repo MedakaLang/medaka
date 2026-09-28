@@ -1,0 +1,14 @@
+-- `impl Pick a a a` binds `a` at three positions. The goal
+-- `Pick (List x) (List Int) (List U8)` is refused: the second and third
+-- positions can never be equal, whichever order the matcher visits them in.
+import u8 as U
+
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+main =
+  let r : List U8 = pick [] [300, 7]
+  println (debug (map U.toInt r))

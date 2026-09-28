@@ -1,0 +1,26 @@
+issue: 3521
+what: `dbl : (Get c e, Num e) => c -> e` used as `dbl b > 4` at `Box Float`.
+what: The use's element variable is constrained by `Get (Box Float) e`, `Num e`
+what: and `Ord e`, and the literal `4` is at `e`. The impl `Get (Box a) a` fixes
+what: `e = Float`, but numeric defaulting grounds `e` to Int first, so the goal
+what: becomes `Get (Box Float) Int`, which no impl matches.
+what: Correct verdict: ACCEPT, printing `small` (3.0 > 4 is false). Observed:
+what: refused with T-NO-IMPL at the use. Before #3506, the same program printed
+what: `big` at exit 0 (an Int dictionary on Floats); #3506 made the head match
+what: consistent, which turned that silent wrong value into this refusal.
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-NO-IMPL 12:16-12:19
+control: check-json control.mdk
+why-verb: `check-json` pins the code and range of the refusal without its prose.
+why-diag-code: THE RANGE IS LINE-SENSITIVE: `12:16-12:19` is 0-based, human line 13
+why-diag-code: (`classify b = if dbl b > 4 …`), the `dbl` call. main.mdk carries no
+why-diag-code: comment header for that reason.
+why-control: control.mdk writes the literal as `4.0`, which fixes `e = Float` by
+why-control: unification before any defaulting; it is accepted and prints `small`.
+why-control: If it breaks, impl selection on a repeated head variable broke, not
+why-control: #3521.
+why-note: The fix direction in #3521 is that a variable a multi-parameter
+why-note: constraint mentions is not a defaulting candidate. Either outcome that
+why-note: stops defaulting `e` before the impl is consulted (improvement, or an
+why-note: ambiguity report) moves this row.

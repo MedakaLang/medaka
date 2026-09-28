@@ -1,0 +1,15 @@
+-- Control: the box holds the list the use wants. Expected `3`.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+viaG b = get b
+
+total : List Int -> Int
+total xs = fold (acc x => acc + x) 0 xs
+
+main = println (total (viaG (Box [1, 2])))

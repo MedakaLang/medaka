@@ -1,0 +1,13 @@
+-- `impl Same a a` against `Same (Int, Int) (List Int, Int)`, reached through
+-- `f x = same (x, x) ([x], x)`: unifying the two bindings of `a` needs
+-- `x = List x`, which has no finite solution. The match must refuse it, and
+-- must terminate doing so.
+interface Same a b where
+  same : a -> b -> String
+
+impl Same a a where
+  same _ _ = "same"
+
+f x = same (x, x) ([x], x)
+
+main = println (f 1)

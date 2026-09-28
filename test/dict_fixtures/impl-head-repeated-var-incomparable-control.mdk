@@ -1,0 +1,13 @@
+-- Control: the three tuples unify together at `(List Bool, List Int)`.
+-- Expected `[1]`, then `[]`.
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+main =
+  let r : (List Bool, List Int) = pick ([], [length []]) ([True], [])
+  let (bs, ns) = r
+  println (debug (map (b => if b then 1 else 0) bs))
+  println (debug ns)

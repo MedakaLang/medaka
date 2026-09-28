@@ -1,0 +1,16 @@
+-- Control: the helper's signature names the element type, so it is the
+-- impl's `a`. Expected `total=3.75`, then `total=7`.
+data Vec a = Vec (Array a)
+
+sumAt : Num a => Array a -> Int -> Int -> a
+sumAt v i j = v[i] + v[j]
+
+interface Summary t where
+  summary : t -> String
+
+impl Summary (Vec a) requires Num a, Display a where
+  summary (Vec xs) = "total=" ++ display (sumAt xs 0 1)
+
+main =
+  println (summary (Vec [|1.5, 2.25|]))
+  println (summary (Vec [|3, 4|]))
