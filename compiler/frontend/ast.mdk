@@ -840,7 +840,11 @@ authTermSurface esc p =
 -- A written authority term, one or a join: `"config/*"`, `("a/*" | p)`.
 export
 authTermsSurface : (String -> String) -> List EffParamTy -> String
-authTermsSurface esc [p] = authTermSurface esc p
+authTermsSurface esc [p] = match p
+  -- A product's axes are space-separated, so as one term they are
+  -- parenthesised to read back as one argument.
+  EPProduct _ => "(" ++ authTermSurface esc p ++ ")"
+  _ => authTermSurface esc p
 authTermsSurface esc ps =
   "(" ++ join " | " (map (authTermSurface esc) ps) ++ ")"
 
@@ -987,6 +991,8 @@ kindAnnSource (KindArrow a b) = "\{kindAnnArg a} -> \{kindAnnSource b}"
 -- `kindAnnSource` is.
 export
 qualifierSource : (String -> String) -> List EffParamTy -> String
+-- `@` takes a name, a string or a parenthesised term.
+qualifierSource esc [EPSet xs] = "@(" ++ authTermsSurface esc [EPSet xs] ++ ")"
 qualifierSource esc ps = "@" ++ authTermsSurface esc ps
 
 -- The names a written authority term refers to.

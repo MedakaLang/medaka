@@ -2,7 +2,7 @@ import test.{expectAll, expectEqual, expectFalse, expectTrue}
 import list.{drop as listDrop}
 import types.effect_domain.{
   Param(..), djoin, drender, dsub, extendParam, appendParam, dantichain,
-  dmaximal, setCardCap
+  setCardCap, writtenSetProblem, dsubAny
 }
 import types.effect_rows.{atomBuiltin, atomsDiff, atomsUnion, renderAtoms}
 import types.effect_authority.{Authority(..), authSub, authJoinAll}
@@ -200,12 +200,50 @@ test "Set members and Products differing in one Set axis merge exactly" =
           (authJoinAll [AConst get, AConst otherHost])),
     ]
 
-test "past the cap a set folds to one element covering every member" =
+test "a set of any size stays exact; only a written bound is capped" =
   let many = map (i => pat "d\{intToString i}/*") [1..=setCardCap + 1]
-  let folded = dantichain many
   expectAll [
-    expectEqual (setCardCap + 1) (length (dmaximal many)),
-    expectEqual 1 (length folded),
-    expectTrue (all (m => any (f => dsub m f) folded) many),
-    expectEqual setCardCap (length (dantichain (listDrop 1 many))),
+    expectEqual (setCardCap + 1) (length (dantichain many)),
+    expectTrue (isSome (writtenSetProblem many)),
+    expectEqual None (writtenSetProblem (listDrop 1 many)),
+    expectTrue
+      (isSome
+        (writtenSetProblem
+          (map (i => PSet (Some ["V\{intToString i}"])) [1..=setCardCap + 1]))),
   ]
+
+test "a Product set is canonical in any order, and covers by its union" =
+  let t x y = PProduct [("X", PSet (Some [x])), ("Y", PSet (Some [y]))]
+  let host h m = PProduct [("Host", pat h), ("Method", PSet (Some [m]))]
+  expectAll
+    [
+      expectEqual
+        (map drender (dantichain [t "1" "1", t "2" "1", t "1" "2"]))
+        (map drender (dantichain [t "1" "2", t "1" "1", t "2" "1"])),
+      expectEqual
+        (map drender (dantichain [t "1" "1", t "2" "1", t "1" "2"]))
+        (map
+          drender
+          (dantichain
+            [
+              PProduct [
+                ("X", PSet (Some ["1", "2"])),
+                ("Y", PSet (Some ["1"])),
+              ],
+              t "1" "2",
+            ])),
+      -- GET and POST to a.com/x lie within the two bound tuples together
+      expectTrue
+        (dsubAny (PProduct [
+          ("Host", pat "a.com/x/*"),
+          ("Method", PSet (Some ["GET", "POST"])),
+        ]) [
+          host "a.com/*" "GET",
+          host "a.com/x/*" "POST",
+        ]),
+      expectFalse
+        (dsubAny (host "a.com/y/*" "POST") [
+          host "a.com/*" "GET",
+          host "a.com/x/*" "POST",
+        ]),
+    ]

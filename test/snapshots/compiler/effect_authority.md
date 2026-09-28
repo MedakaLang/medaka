@@ -1,5 +1,5 @@
 # META
-source_lines=227
+source_lines=236
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -13,7 +13,7 @@ stages=DESUGAR,MARK
 
 import types.effect_domain.{
   Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam, dantichain
+  appendParam, dantichain, dsubAny
 }
 import support.util.{joinWith, reverseL}
 import string.{trimLeft}
@@ -191,9 +191,18 @@ authSubN _ (AConst d)
   | isSubTop d = True
 authSubN (AJoin ms) hi = allSub ms hi
 authSubN _ (AConst _) = False
+-- A constant is within a set when some element covers it, or when the
+-- elements cover it together (a Product tuple, singleton by singleton).
+authSubN (AConst c) (AJoin ms) =
+  anySub (AConst c) ms || dsubAny c (constantsOf ms)
 authSubN lo (AJoin ms) = anySub lo ms
 authSubN (AVar v) (AVar w) = authvarId v == authvarId w
 authSubN _ _ = False
+
+constantsOf : List Authority -> List Param
+constantsOf [] = []
+constantsOf ((AConst p) :: ms) = p :: constantsOf ms
+constantsOf (_ :: ms) = constantsOf ms
 
 allSub : List Authority -> Authority -> Bool
 allSub [] _ = True
@@ -230,7 +239,7 @@ export
 renderAuthority : Authority -> String
 renderAuthority a = renderAuthorityWith authvarDefaultName a
 # DESUGAR
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
@@ -299,9 +308,14 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "authSubN" (PWild (PCon "AConst" (PVar "d"))) (EIf (EApp (EVar "isSubTop") (EVar "d")) (EVar "True") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "authSubN" ((PCon "AJoin" (PVar "ms")) (PVar "hi")) (EApp (EApp (EVar "allSub") (EVar "ms")) (EVar "hi")))
 (DFunDef false "authSubN" (PWild (PCon "AConst" PWild)) (EVar "False"))
+(DFunDef false "authSubN" ((PCon "AConst" (PVar "c")) (PCon "AJoin" (PVar "ms"))) (EBinOp "||" (EApp (EApp (EVar "anySub") (EApp (EVar "AConst") (EVar "c"))) (EVar "ms")) (EApp (EApp (EVar "dsubAny") (EVar "c")) (EApp (EVar "constantsOf") (EVar "ms")))))
 (DFunDef false "authSubN" ((PVar "lo") (PCon "AJoin" (PVar "ms"))) (EApp (EApp (EVar "anySub") (EVar "lo")) (EVar "ms")))
 (DFunDef false "authSubN" ((PCon "AVar" (PVar "v")) (PCon "AVar" (PVar "w"))) (EBinOp "==" (EApp (EVar "authvarId") (EVar "v")) (EApp (EVar "authvarId") (EVar "w"))))
 (DFunDef false "authSubN" (PWild PWild) (EVar "False"))
+(DTypeSig false "constantsOf" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyCon "List") (TyCon "Param"))))
+(DFunDef false "constantsOf" ((PList)) (EListLit))
+(DFunDef false "constantsOf" ((PCons (PCon "AConst" (PVar "p")) (PVar "ms"))) (EBinOp "::" (EVar "p") (EApp (EVar "constantsOf") (EVar "ms"))))
+(DFunDef false "constantsOf" ((PCons PWild (PVar "ms"))) (EApp (EVar "constantsOf") (EVar "ms")))
 (DTypeSig false "allSub" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyCon "Authority") (TyCon "Bool"))))
 (DFunDef false "allSub" ((PList) PWild) (EVar "True"))
 (DFunDef false "allSub" ((PCons (PVar "m") (PVar "ms")) (PVar "hi")) (EBinOp "&&" (EApp (EApp (EVar "authSubN") (EVar "m")) (EVar "hi")) (EApp (EApp (EVar "allSub") (EVar "ms")) (EVar "hi"))))
@@ -319,7 +333,7 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DTypeSig true "renderAuthority" (TyFun (TyCon "Authority") (TyCon "String")))
 (DFunDef false "renderAuthority" ((PVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "authvarDefaultName")) (EVar "a")))
 # MARK
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
@@ -388,9 +402,14 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "authSubN" (PWild (PCon "AConst" (PVar "d"))) (EIf (EApp (EVar "isSubTop") (EVar "d")) (EVar "True") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "authSubN" ((PCon "AJoin" (PVar "ms")) (PVar "hi")) (EApp (EApp (EVar "allSub") (EVar "ms")) (EVar "hi")))
 (DFunDef false "authSubN" (PWild (PCon "AConst" PWild)) (EVar "False"))
+(DFunDef false "authSubN" ((PCon "AConst" (PVar "c")) (PCon "AJoin" (PVar "ms"))) (EBinOp "||" (EApp (EApp (EVar "anySub") (EApp (EVar "AConst") (EVar "c"))) (EVar "ms")) (EApp (EApp (EVar "dsubAny") (EVar "c")) (EApp (EVar "constantsOf") (EVar "ms")))))
 (DFunDef false "authSubN" ((PVar "lo") (PCon "AJoin" (PVar "ms"))) (EApp (EApp (EVar "anySub") (EVar "lo")) (EVar "ms")))
 (DFunDef false "authSubN" ((PCon "AVar" (PVar "v")) (PCon "AVar" (PVar "w"))) (EBinOp "==" (EApp (EVar "authvarId") (EVar "v")) (EApp (EVar "authvarId") (EVar "w"))))
 (DFunDef false "authSubN" (PWild PWild) (EVar "False"))
+(DTypeSig false "constantsOf" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyCon "List") (TyCon "Param"))))
+(DFunDef false "constantsOf" ((PList)) (EListLit))
+(DFunDef false "constantsOf" ((PCons (PCon "AConst" (PVar "p")) (PVar "ms"))) (EBinOp "::" (EVar "p") (EApp (EVar "constantsOf") (EVar "ms"))))
+(DFunDef false "constantsOf" ((PCons PWild (PVar "ms"))) (EApp (EVar "constantsOf") (EVar "ms")))
 (DTypeSig false "allSub" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyCon "Authority") (TyCon "Bool"))))
 (DFunDef false "allSub" ((PList) PWild) (EVar "True"))
 (DFunDef false "allSub" ((PCons (PVar "m") (PVar "ms")) (PVar "hi")) (EBinOp "&&" (EApp (EApp (EVar "authSubN") (EVar "m")) (EVar "hi")) (EApp (EApp (EVar "allSub") (EVar "ms")) (EVar "hi"))))

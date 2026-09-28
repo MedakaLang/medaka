@@ -1,0 +1,11 @@
+-- A bound assembled from pieces is kept exact, never folded into their
+-- common prefix: nine patterns in an alias and nine from its argument, or
+-- seventeen in an annotation, still refuse a read of `cfg/secret`.
+type Rd (e : Effect) = Unit -> <FileRead "cfg/a/*", FileRead "cfg/b/*", FileRead "cfg/c/*", FileRead "cfg/d/*", FileRead "cfg/e/*", FileRead "cfg/f/*", FileRead "cfg/g/*", FileRead "cfg/h/*", FileRead "cfg/i/*" | e> Result String String
+
+f : Rd <FileRead "cfg/j/*", FileRead "cfg/k/*", FileRead "cfg/l/*", FileRead "cfg/m/*", FileRead "cfg/n/*", FileRead "cfg/o/*", FileRead "cfg/p/*", FileRead "cfg/q/*", FileRead "cfg/r/*">
+f _ = readFile "cfg/secret"
+
+g = ((_ => readFile "cfg/secret") : Unit -> <FileRead "cfg/a/*", FileRead "cfg/b/*", FileRead "cfg/c/*", FileRead "cfg/d/*", FileRead "cfg/e/*", FileRead "cfg/f/*", FileRead "cfg/g/*", FileRead "cfg/h/*", FileRead "cfg/i/*", FileRead "cfg/j/*", FileRead "cfg/k/*", FileRead "cfg/l/*", FileRead "cfg/m/*", FileRead "cfg/n/*", FileRead "cfg/o/*", FileRead "cfg/p/*", FileRead "cfg/q/*"> Result String String)
+
+main = println 1

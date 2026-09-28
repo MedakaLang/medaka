@@ -1012,7 +1012,7 @@ ffiCrossableTy : Ty -> Bool
 ffiExpandTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
 ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) -> List Decl -> List (String, (List String, String))
 ffiHasAtom : List EffAtomTy -> Bool
-ffiInstAtom : List (String, Ty) -> EffAtomTy -> EffAtomTy
+ffiInstAtom : List (String, Ty) -> EffAtomTy -> List EffAtomTy
 ffiInstRow : List (String, Int) -> List (String, Ty) -> List EffAtomTy -> List EffAtomTy
 ffiIsBuiltinExternName : String -> Bool
 ffiMatchAtom : EffAtomTy -> EffAtomTy -> List (String, Ty) -> Option (List (String, Ty))

@@ -1,0 +1,10 @@
+-- One 32-element bound, written in two orders: its canonical form does not
+-- depend on the order, so both orders are refused at the cap alike.
+effect P Product (X : Set, Y : Set)
+
+extern evil : Unit -> <FFI, P X={"DELETE-EVERYTHING"} Y={"b11"}> Unit
+
+f : Unit -> <FFI, P X={"a12"} Y={"b11"}, P X={"a12"} Y={"b12"}, P X={"a11"} Y={"b11"}, P X={"a13"} Y={"b12"}, P X={"a22"} Y={"b21"}, P X={"a22"} Y={"b22"}, P X={"a21"} Y={"b21"}, P X={"a23"} Y={"b22"}, P X={"a32"} Y={"b31"}, P X={"a32"} Y={"b32"}, P X={"a31"} Y={"b31"}, P X={"a33"} Y={"b32"}, P X={"a42"} Y={"b41"}, P X={"a42"} Y={"b42"}, P X={"a41"} Y={"b41"}, P X={"a43"} Y={"b42"}, P X={"a52"} Y={"b51"}, P X={"a52"} Y={"b52"}, P X={"a51"} Y={"b51"}, P X={"a53"} Y={"b52"}, P X={"a62"} Y={"b61"}, P X={"a62"} Y={"b62"}, P X={"a61"} Y={"b61"}, P X={"a63"} Y={"b62"}, P X={"a72"} Y={"b71"}, P X={"a72"} Y={"b72"}, P X={"a71"} Y={"b71"}, P X={"a73"} Y={"b72"}, P X={"a82"} Y={"b81"}, P X={"a82"} Y={"b82"}, P X={"a81"} Y={"b81"}, P X={"a83"} Y={"b82"}> Unit
+f _ = evil ()
+
+main = println 1

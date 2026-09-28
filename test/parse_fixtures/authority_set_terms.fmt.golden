@@ -6,3 +6,7 @@ openEither : Bool ->
   <Net "a.com/x", Net "b.com/y"> Result String (Socket ("a.com/x" | "b.com/y"))
 
 useSock : Socket ("a.com/*" | h) -> <Net "a.com/*", Net h> Int
+
+conv : W (X={"1"} Y={"1"}) -> Int
+
+keys : String @({"A", "B"}) -> Int

@@ -1,5 +1,5 @@
 # META
-source_lines=2502
+source_lines=2508
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -844,7 +844,11 @@ authTermSurface esc p =
 -- A written authority term, one or a join: `"config/*"`, `("a/*" | p)`.
 export
 authTermsSurface : (String -> String) -> List EffParamTy -> String
-authTermsSurface esc [p] = authTermSurface esc p
+authTermsSurface esc [p] = match p
+  -- A product's axes are space-separated, so as one term they are
+  -- parenthesised to read back as one argument.
+  EPProduct _ => "(" ++ authTermSurface esc p ++ ")"
+  _ => authTermSurface esc p
 authTermsSurface esc ps =
   "(" ++ join " | " (map (authTermSurface esc) ps) ++ ")"
 
@@ -991,6 +995,8 @@ kindAnnSource (KindArrow a b) = "\{kindAnnArg a} -> \{kindAnnSource b}"
 -- `kindAnnSource` is.
 export
 qualifierSource : (String -> String) -> List EffParamTy -> String
+-- `@` takes a name, a string or a parenthesised term.
+qualifierSource esc [EPSet xs] = "@(" ++ authTermsSurface esc [EPSet xs] ++ ")"
 qualifierSource esc ps = "@" ++ authTermsSurface esc ps
 
 -- The names a written authority term refers to.
@@ -2593,7 +2599,7 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "authTermSurface" (PWild (PCon "EPTop")) (ELit (LString "*")))
 (DFunDef false "authTermSurface" ((PVar "esc") (PVar "p")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "effParamSurface") (EVar "esc")) (EVar "p"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
 (DTypeSig true "authTermsSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
-(DFunDef false "authTermsSurface" ((PVar "esc") (PList (PVar "p"))) (EApp (EApp (EVar "authTermSurface") (EVar "esc")) (EVar "p")))
+(DFunDef false "authTermsSurface" ((PVar "esc") (PList (PVar "p"))) (EMatch (EVar "p") (arm (PCon "EPProduct" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "authTermSurface") (EVar "esc")) (EVar "p"))) (ELit (LString ")")))) (arm PWild () (EApp (EApp (EVar "authTermSurface") (EVar "esc")) (EVar "p")))))
 (DFunDef false "authTermsSurface" ((PVar "esc") (PVar "ps")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "join") (ELit (LString " | "))) (EApp (EApp (EVar "map") (EApp (EVar "authTermSurface") (EVar "esc"))) (EVar "ps")))) (ELit (LString ")"))))
 (DTypeSig true "ctorBindersSurface" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyCon "String")))
 (DFunDef false "ctorBindersSurface" ((PVar "binders")) (EApp (EApp (EVar "join") (ELit (LString " "))) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "b")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "kindAnnSource") (EApp (EVar "snd") (EVar "b"))))) (ELit (LString ")"))))) (EVar "binders"))))
@@ -2629,6 +2635,7 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "kindAnnSource" ((PCon "KindAuthority" (PVar "l") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EApp (EVar "display") (EVar "l"))) (ELit (LString ""))))
 (DFunDef false "kindAnnSource" ((PCon "KindArrow" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "kindAnnArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EVar "kindAnnSource") (EVar "b")))) (ELit (LString ""))))
 (DTypeSig true "qualifierSource" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
+(DFunDef false "qualifierSource" ((PVar "esc") (PList (PCon "EPSet" (PVar "xs")))) (EBinOp "++" (EBinOp "++" (ELit (LString "@(")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EListLit (EApp (EVar "EPSet") (EVar "xs"))))) (ELit (LString ")"))))
 (DFunDef false "qualifierSource" ((PVar "esc") (PVar "ps")) (EBinOp "++" (ELit (LString "@")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EVar "ps"))))
 (DTypeSig true "authTermNames" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "authTermNames" ((PVar "ps")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EMatch (EVar "p") (arm (PCon "EPName" (PVar "n")) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (EVar "ps")))
@@ -2993,7 +3000,7 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "authTermSurface" (PWild (PCon "EPTop")) (ELit (LString "*")))
 (DFunDef false "authTermSurface" ((PVar "esc") (PVar "p")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "effParamSurface") (EVar "esc")) (EVar "p"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
 (DTypeSig true "authTermsSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
-(DFunDef false "authTermsSurface" ((PVar "esc") (PList (PVar "p"))) (EApp (EApp (EVar "authTermSurface") (EVar "esc")) (EVar "p")))
+(DFunDef false "authTermsSurface" ((PVar "esc") (PList (PVar "p"))) (EMatch (EVar "p") (arm (PCon "EPProduct" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "authTermSurface") (EVar "esc")) (EVar "p"))) (ELit (LString ")")))) (arm PWild () (EApp (EApp (EVar "authTermSurface") (EVar "esc")) (EVar "p")))))
 (DFunDef false "authTermsSurface" ((PVar "esc") (PVar "ps")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "join") (ELit (LString " | "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "authTermSurface") (EVar "esc"))) (EVar "ps")))) (ELit (LString ")"))))
 (DTypeSig true "ctorBindersSurface" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyCon "String")))
 (DFunDef false "ctorBindersSurface" ((PVar "binders")) (EApp (EApp (EVar "join") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "b")))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "kindAnnSource") (EApp (EVar "snd") (EVar "b"))))) (ELit (LString ")"))))) (EVar "binders"))))
@@ -3029,6 +3036,7 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "kindAnnSource" ((PCon "KindAuthority" (PVar "l") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString ""))))
 (DFunDef false "kindAnnSource" ((PCon "KindArrow" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "kindAnnArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EVar "kindAnnSource") (EVar "b")))) (ELit (LString ""))))
 (DTypeSig true "qualifierSource" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
+(DFunDef false "qualifierSource" ((PVar "esc") (PList (PCon "EPSet" (PVar "xs")))) (EBinOp "++" (EBinOp "++" (ELit (LString "@(")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EListLit (EApp (EVar "EPSet") (EVar "xs"))))) (ELit (LString ")"))))
 (DFunDef false "qualifierSource" ((PVar "esc") (PVar "ps")) (EBinOp "++" (ELit (LString "@")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EVar "ps"))))
 (DTypeSig true "authTermNames" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "authTermNames" ((PVar "ps")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EMatch (EVar "p") (arm (PCon "EPName" (PVar "n")) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (EVar "ps")))

@@ -1,0 +1,10 @@
+-- A tuple outside every bound tuple is refused: POST to a.com/y is covered
+-- by neither `a.com/*` GET nor `a.com/x/*` POST.
+effect Web Product (Host : Prefix, Method : Set)
+
+extern postY : Unit -> <FFI, Web Host="a.com/y/*" Method={"POST"}> Unit
+
+h : Unit -> <FFI, Web Host="a.com/*" Method={"GET"}, Web Host="a.com/x/*" Method={"POST"}> Unit
+h _ = postY ()
+
+main = println 1

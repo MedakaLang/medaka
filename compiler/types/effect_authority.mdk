@@ -9,7 +9,7 @@
 
 import types.effect_domain.{
   Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam, dantichain
+  appendParam, dantichain, dsubAny
 }
 import support.util.{joinWith, reverseL}
 import string.{trimLeft}
@@ -187,9 +187,18 @@ authSubN _ (AConst d)
   | isSubTop d = True
 authSubN (AJoin ms) hi = allSub ms hi
 authSubN _ (AConst _) = False
+-- A constant is within a set when some element covers it, or when the
+-- elements cover it together (a Product tuple, singleton by singleton).
+authSubN (AConst c) (AJoin ms) =
+  anySub (AConst c) ms || dsubAny c (constantsOf ms)
 authSubN lo (AJoin ms) = anySub lo ms
 authSubN (AVar v) (AVar w) = authvarId v == authvarId w
 authSubN _ _ = False
+
+constantsOf : List Authority -> List Param
+constantsOf [] = []
+constantsOf ((AConst p) :: ms) = p :: constantsOf ms
+constantsOf (_ :: ms) = constantsOf ms
 
 allSub : List Authority -> Authority -> Bool
 allSub [] _ = True

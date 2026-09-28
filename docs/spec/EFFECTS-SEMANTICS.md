@@ -170,13 +170,19 @@ whose authority holds both parameters, less any member another covers.
 the antichain, otherwise the order in §2.4 is ill-defined.) A v1 atomic label
 `Foo` is exactly `Foo · {()}`.
 
-A label keeps a set exactly where its domain's join is inexact:
+A label keeps a set exactly where its domain's join is inexact, in one
+canonical form that depends only on what the elements admit, never on the
+order they were written or joined in:
 
 - Unit and Set members always merge by `⊔`, which is exact (`{A} ⊔ {B} = {A, B}`).
   These labels hold one element.
-- Two Product elements merge only when they differ in exactly one Set axis,
-  where their pointwise join is their union.
-- Prefix patterns, and Products that differ otherwise, never merge.
+- Prefix patterns never merge; the maximal ones are kept.
+- A Product element is split into its singletons, one member on each Set
+  axis. The maximal singletons are kept and regrouped along one Set axis,
+  the last by name: those equal on every other axis share that axis's
+  members. `Host="a.com/*" Method={"GET"}` beside the same host with
+  `{"POST"}` is one element with both methods; beside `Host="b.com/*"` it
+  stays two, since their pointwise join would admit POST to a.com.
 
 So `<Net "a.com/*", Net "b.com/*">` admits those two hosts and nothing else.
 Their join would be `Net` (the longest common prefix is empty), which admits
@@ -184,12 +190,13 @@ every host. Likewise `<FileRead "cfg/a/*", FileRead "cfg/b/*">` does not admit
 `cfg/secret`, which their join `cfg/*` would. The domain join is taken only
 where one element is needed.
 
-An antichain holds at most 16 members, and a Set at most 16 members. Past
-that, inference folds it by `⊔` into one element that covers every member.
-That is sound, and it bounds how far a fixpoint can grow.
+A set is never folded into a wider element. An inferred set stays exact at
+any size; its constants come from the program's literals, so a fixpoint over
+them still terminates. A bound that folded would admit more than it states.
 
-A written bound is never folded, because folding would widen what it states.
-A bound past either cap is refused (`T-EFFECT-PARAM`). That covers:
+What may be written is capped: at most 16 elements of one label, and at most
+16 members in one Set. A written bound past either cap is refused
+(`T-EFFECT-PARAM`). That covers:
 
 - a row in a signature, a data field or a type alias;
 - a qualifier or index join;
@@ -253,7 +260,8 @@ permitted). This is precisely the gate that rejects exfiltration (§4, §5).
 
 Each member of a label's antichain is an `L·p` in the order above: a
 performed atom is within a bound when some member of the bound's antichain
-covers it.
+covers it, or, for a Product, when each of its singletons is covered by some
+member, so a tuple the bound covers only together is within it.
 
 The **join** of two rows `φ₁ ⊔ φ₂` (used by inference, §3) is the label-wise
 union, with same-label authorities united as antichains (§2.2). It is the least

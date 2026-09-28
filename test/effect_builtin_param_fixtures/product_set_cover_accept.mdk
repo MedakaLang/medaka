@@ -1,0 +1,36 @@
+-- Performed Product tuples are within a bound when its tuples cover them
+-- together, whatever order the calls come in: GET and POST to a.com/x are
+-- each within one of the bound's tuples.
+effect Web Product (Host : Prefix, Method : Set)
+effect P Product (X : Set, Y : Set)
+
+extern getX : Unit -> <FFI, Web Host="a.com/x/*" Method={"GET"}> Unit
+extern postX : Unit -> <FFI, Web Host="a.com/x/*" Method={"POST"}> Unit
+
+h : Unit -> <FFI, Web Host="a.com/*" Method={"GET"}, Web Host="a.com/x/*" Method={"POST"}> Unit
+h _ =
+  let _ = getX ()
+  postX ()
+
+extern f1 : Unit -> <FFI, P X={"1"} Y={"1"}> Unit
+extern f2 : Unit -> <FFI, P X={"2"} Y={"1"}> Unit
+extern f3 : Unit -> <FFI, P X={"1"} Y={"2"}> Unit
+
+hA : Unit -> <FFI, P X={"1"} Y={"1", "2"}, P X={"2"} Y={"1"}> Unit
+hA _ =
+  let _ = f1 ()
+  let _ = f3 ()
+  f2 ()
+
+hB : Unit -> <FFI, P X={"1"} Y={"1", "2"}, P X={"2"} Y={"1"}> Unit
+hB _ =
+  let _ = f1 ()
+  let _ = f2 ()
+  f3 ()
+
+conv : W (X={"1", "2"} Y={"1"} | X={"1"} Y={"2"}) -> W (X={"1"} Y={"1"} | X={"2"} Y={"1"} | X={"1"} Y={"2"})
+conv w = w
+
+data W (p : Authority P) = W String
+
+main = println 1

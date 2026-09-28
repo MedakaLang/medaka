@@ -213,7 +213,6 @@ import types.effect_domain.{
   sortAxes,
   insertAxis,
   setCardCap,
-  dmaximal,
   writtenSetProblem,
   commonPrefixLen,
   drender,
@@ -3002,14 +3001,9 @@ effectParamProblems l (PProduct schema) (EPLit pat) =
   primaryLiteralProblems schema pat
     ++ productAxesProblems schema (productPrimaryLift schema pat)
 effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]
-effectParamProblems _ (PSet None) (EPSet xs) =
-  let n = listLen (sortUniqS xs)
-  if n > setCardCap then
-    [
-      "a set holds at most \{intToString setCardCap} members, and this one has \{intToString n}",
-    ]
-  else
-    []
+-- A set's size is a bound's business (`writtenSetProblem`), checked with the
+-- other elements its label writes.
+effectParamProblems _ (PSet None) (EPSet _) = []
 effectParamProblems l (PPrefix None) (EPSet _) =
   ["label '\{l}' takes a prefix pattern, not a set"]
 effectParamProblems l (PProduct _) (EPSet _) =
@@ -38465,7 +38459,8 @@ ffiSpineRows aliases t = match ffiSigStrip aliases t
 
 -- The catalog row with each index binder the declaration fixed replaced by
 -- what it wrote there: `<Net h>` against `Socket "a.com/*"` is
--- `<Net "a.com/*">`. An argument's binder is left as written, since the row
+-- `<Net "a.com/*">`, and against a join `Socket ("a.com/*" | "b.com/*")` one
+-- atom per term. An argument's binder is left as written, since the row
 -- rule pairs those by position.
 ffiInstRow : List (String, Int) ->
   List (String, Ty) ->
@@ -38473,15 +38468,15 @@ ffiInstRow : List (String, Int) ->
   List EffAtomTy
 ffiInstRow names sub ls =
   let free = filterList (p => isNone (lookupAssoc (fst p) names)) sub
-  map (ffiInstAtom free) ls
+  flatMap (ffiInstAtom free) ls
 
-ffiInstAtom : List (String, Ty) -> EffAtomTy -> EffAtomTy
+ffiInstAtom : List (String, Ty) -> EffAtomTy -> List EffAtomTy
 ffiInstAtom sub a = match a.eatParam
   EPName n => match lookupAssoc n sub
-    Some (TyAuth [p] _) => { a | eatParam = p }
-    Some (TyVar m) => { a | eatParam = EPName m }
-    _ => a
-  _ => a
+    Some (TyAuth ps _) => map (p => { a | eatParam = p }) ps
+    Some (TyVar m) => [{ a | eatParam = EPName m }]
+    _ => [a]
+  _ => [a]
 
 -- ── the CATALOG-ROW rule (#2163, epic #2070 R2) ─────────────────────────────
 --

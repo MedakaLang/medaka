@@ -32,6 +32,7 @@ ppMono : Mono -> String
 ppMonosShared : List Mono -> String
 ppPredArgsShared : List Mono -> String
 ppQual : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> Authority -> String
+ppQualTerm : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 ppScheme : Scheme -> String
 ppSchemeCon : List VecObl -> Scheme -> String
 ppTy : Ty -> String

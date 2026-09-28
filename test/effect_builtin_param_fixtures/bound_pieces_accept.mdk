@@ -1,0 +1,9 @@
+-- Control: the same bounds, and reads within them.
+type Rd (e : Effect) = Unit -> <FileRead "cfg/a/*", FileRead "cfg/b/*", FileRead "cfg/c/*", FileRead "cfg/d/*", FileRead "cfg/e/*", FileRead "cfg/f/*", FileRead "cfg/g/*", FileRead "cfg/h/*", FileRead "cfg/i/*" | e> Result String String
+
+f : Rd <FileRead "cfg/j/*", FileRead "cfg/k/*", FileRead "cfg/l/*", FileRead "cfg/m/*", FileRead "cfg/n/*", FileRead "cfg/o/*", FileRead "cfg/p/*", FileRead "cfg/q/*", FileRead "cfg/r/*">
+f _ = readFile "cfg/r/key"
+
+g = ((_ => readFile "cfg/q/key") : Unit -> <FileRead "cfg/a/*", FileRead "cfg/b/*", FileRead "cfg/c/*", FileRead "cfg/d/*", FileRead "cfg/e/*", FileRead "cfg/f/*", FileRead "cfg/g/*", FileRead "cfg/h/*", FileRead "cfg/i/*", FileRead "cfg/j/*", FileRead "cfg/k/*", FileRead "cfg/l/*", FileRead "cfg/m/*", FileRead "cfg/n/*", FileRead "cfg/o/*", FileRead "cfg/p/*", FileRead "cfg/q/*"> Result String String)
+
+main = println 1

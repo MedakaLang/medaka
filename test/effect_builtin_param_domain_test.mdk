@@ -480,14 +480,14 @@ test "a qualifier or an index past the cap is refused, not folded" = expectAll [
 test "a qualifier or an index literal is an element of its domain" = expectCheckReject
   (fixture "written_term_domain_reject.mdk")
   [
-    "Invalid authority in the qualifier `@{\"A\", \"B\"}`: label 'qualifier' takes a prefix pattern, not a set",
+    "Invalid authority in the qualifier `@({\"A\", \"B\"})`: label 'qualifier' takes a prefix pattern, not a set",
     "Invalid authority in the qualifier `@\"a.com\"`: pattern \"a.com\" must end in '*'",
     "Invalid effect parameter on <Net>: label 'Net' takes a prefix pattern, not a set",
   ]
 
 test "Set members split across atoms are capped as one set" = expectAll [
   expectCheckReject (fixture "written_split_cap_reject.mdk") [
-    "Invalid effect parameter on <Env>: a set holds at most 16 members, and these elements merge into one of 17",
+    "Invalid effect parameter on <Env>: a set holds at most 16 members, and this one has 17",
     "Invalid effect parameter on <Web>: a set holds at most 16 members",
   ],
   expectCheckAccept (fixture "written_split_cap_accept.mdk"),
@@ -534,3 +534,30 @@ test "a policy past the cap on one label is malformed, not widened" = expectAll
         "a bound admits at most 16 elements of one label, and this one writes 17",
       ],
   ]
+
+test "a bound assembled from pieces stays exact, never folded" = expectAll [
+  expectCheckReject (fixture "bound_pieces_reject.mdk") [
+    "performs <FileRead \"cfg/secret\">",
+  ],
+  expectCheckAccept (fixture "bound_pieces_accept.mdk"),
+]
+
+test "a bound's elements have one canonical form, in either write order" = expectAll
+  [
+    expectCheckReject (fixture "bound_order_a_reject.mdk") [
+      "a bound admits at most 16 elements of one label, and this one writes 24",
+    ],
+    expectCheckReject (fixture "bound_order_b_reject.mdk") [
+      "a bound admits at most 16 elements of one label, and this one writes 24",
+    ],
+  ]
+
+test "Product tuples the bound covers together are within it" = expectAll [
+  expectCheckAccept (fixture "product_set_cover_accept.mdk"),
+  expectCheckReject (fixture "product_set_cover_reject.mdk") [
+    "performs <Web Host=\"a.com/y/*\" Method={\"POST\"}>",
+  ],
+]
+
+test "a catalog extern redeclared at an index join charges each term" =
+  expectCheckAccept (fixture "catalog_index_join_accept.mdk")
