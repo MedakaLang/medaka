@@ -1,0 +1,194 @@
+{- | `lib.lexicon_schemas` says what `pds/test/vectors/lexicon_schemas.json`
+   says: the JSON is read here with a decoder of its own, independent of the
+   generator (`pds/tools/gen_lexicon_schemas.py`), and must equal the module's
+   data definition for definition, in order.
+
+   The decoder refuses a key it does not know, so a schema that grows a
+   constraint the data cannot carry fails here rather than being dropped. -}
+
+import json.{Json(..), get, parse}
+import string.{startsWith}
+import test.{expectEqual, expectOk}
+import lib.lexicon.{
+  LexDef(..),
+  LexFormat(..),
+  LexKey(..),
+  LexShape(..),
+  LexString(..),
+  LexType(..),
+}
+import lib.lexicon_schemas.{lexiconDefs}
+
+schemasPath : String
+schemasPath = "pds/test/vectors/lexicon_schemas.json"
+
+keysOf : Json -> List String
+keysOf (JObject pairs) = map fst (toList pairs)
+keysOf _ = []
+
+-- `value`'s keys are among `allowed`.
+onlyKeys : List String -> Json -> Result String Unit
+onlyKeys allowed value =
+  if all (key => elem key allowed) (keysOf value) then
+    Ok ()
+  else
+    Err "unexpected keys \{debug (keysOf value)}"
+
+stringAt : String -> Json -> Result String String
+stringAt name value = match get name value
+  Some (JString text) => Ok text
+  _ => Err "no string '\{name}'"
+
+optionalInt : String -> Json -> Result String (Option Int)
+optionalInt name value = match get name value
+  None => Ok None
+  Some (JInt n) => Ok (Some n)
+  Some _ => Err "'\{name}' is not an integer"
+
+optionalString : String -> Json -> Result String (Option String)
+optionalString name value = match get name value
+  None => Ok None
+  Some (JString text) => Ok (Some text)
+  Some _ => Err "'\{name}' is not a string"
+
+stringList : Json -> Result String (List String)
+stringList (JArray values) = traverse stringValue (toList values)
+stringList _ = Err "expected a list of strings"
+
+stringValue : Json -> Result String String
+stringValue (JString text) = Ok text
+stringValue _ = Err "expected a string"
+
+formatOf : String -> Result String LexFormat
+formatOf "at-identifier" = Ok FormatAtIdentifier
+formatOf "at-uri" = Ok FormatAtUri
+formatOf "cid" = Ok FormatCid
+formatOf "datetime" = Ok FormatDatetime
+formatOf "did" = Ok FormatDid
+formatOf "handle" = Ok FormatHandle
+formatOf "language" = Ok FormatLanguage
+formatOf "nsid" = Ok FormatNsid
+formatOf "record-key" = Ok FormatRecordKey
+formatOf "tid" = Ok FormatTid
+formatOf "uri" = Ok FormatUri
+formatOf other = Err "unknown format \{other}"
+
+keyOf : String -> Result String LexKey
+keyOf "any" = Ok KeyAny
+keyOf "nsid" = Ok KeyNsid
+keyOf "tid" = Ok KeyTid
+keyOf key =
+  if startsWith "literal:" key && stringLength key > 8 then
+    Ok (KeyLiteral (stringSlice 8 (stringLength key) key))
+  else
+    Err "unknown record key \{key}"
+
+shapeOf : Json -> Result String LexShape
+shapeOf value = do
+  () <- onlyKeys ["type", "required", "properties"] value
+  kind <- stringAt "type" value
+  () <- if kind == "object" then Ok () else Err "expected an object"
+  required <- match get "required" value
+    Some list => stringList list
+    None => Err "no 'required'"
+  properties <- match get "properties" value
+    Some (JObject pairs) => traverse propertyOf (toList pairs)
+    _ => Err "no 'properties'"
+  Ok (LexShape required properties)
+
+propertyOf : (String, Json) -> Result String (String, LexType)
+propertyOf (name, value) = map (fieldType => (name, fieldType)) (typeOf value)
+
+typeOf : Json -> Result String LexType
+typeOf value = do
+  kind <- stringAt "type" value
+  typeOfKind kind value
+
+typeOfKind : String -> Json -> Result String LexType
+typeOfKind "boolean" value = map (_ => LexBoolean) (onlyKeys ["type"] value)
+typeOfKind "bytes" value = map (_ => LexBytes) (onlyKeys ["type"] value)
+typeOfKind "integer" value = do
+  () <- onlyKeys ["type", "minimum"] value
+  map LexInteger (optionalInt "minimum" value)
+typeOfKind "string" value = do
+  () <- onlyKeys
+    ["type", "minLength", "maxLength", "maxGraphemes", "format", "default"]
+    value
+  minLength <- optionalInt "minLength" value
+  maxLength <- optionalInt "maxLength" value
+  maxGraphemes <- optionalInt "maxGraphemes" value
+  formatName <- optionalString "format" value
+  format <- match formatName
+    None => Ok None
+    Some name => map Some (formatOf name)
+  defaultValue <- optionalString "default" value
+  Ok
+    (LexText LexString {
+      minLength = minLength,
+      maxLength = maxLength,
+      maxGraphemes = maxGraphemes,
+      format = format,
+      defaultValue = defaultValue,
+    })
+typeOfKind "blob" value = do
+  () <- onlyKeys ["type", "accept", "maxSize"] value
+  accept <- match get "accept" value
+    None => Ok None
+    Some list => map Some (stringList list)
+  maxSize <- optionalInt "maxSize" value
+  Ok (LexBlob accept maxSize)
+typeOfKind "array" value = do
+  () <- onlyKeys ["type", "items", "maxLength"] value
+  items <- match get "items" value
+    Some itemType => typeOf itemType
+    None => Err "no 'items'"
+  maxLength <- optionalInt "maxLength" value
+  Ok (LexArray items maxLength)
+typeOfKind "ref" value = do
+  () <- onlyKeys ["type", "ref"] value
+  map LexRef (stringAt "ref" value)
+typeOfKind "union" value = do
+  () <- onlyKeys ["type", "refs", "closed"] value
+  refs <- match get "refs" value
+    Some list => stringList list
+    None => Err "no 'refs'"
+  closed <- match get "closed" value
+    Some (JBool flag) => Ok flag
+    _ => Err "no 'closed'"
+  Ok (LexUnion refs closed)
+typeOfKind "object" value = map LexObject (shapeOf value)
+typeOfKind kind _ = Err "unknown type \{kind}"
+
+defOf : (String, Json) -> Result String (String, LexDef)
+defOf (name, value) = match stringAt "type" value
+  Ok "record" => do
+    () <- onlyKeys ["type", "key", "record"] value
+    key <- stringAt "key" value
+    keyType <- keyOf key
+    shape <- match get "record" value
+      Some record => shapeOf record
+      None => Err "no 'record'"
+    Ok (name, LexRecordDef keyType shape)
+  _ => map (fieldType => (name, LexTypeDef fieldType)) (typeOf value)
+
+decodedDefs : <IO> Result String (List (String, LexDef))
+decodedDefs = match readFile schemasPath
+  Err message => Err "cannot read \{schemasPath}: \{message}"
+  Ok text => match parse text
+    Err message => Err "not JSON: \{message}"
+    Ok (JObject pairs) => traverse defOf (toList pairs)
+    Ok _ => Err "not an object"
+
+test "the schemas file decodes with no key left over" = expectOk decodedDefs
+
+test "lib.lexicon_schemas equals the schemas file, definition for definition" =
+  expectEqual decodedDefs (Ok lexiconDefs)
+
+test "the data has 53 definitions, 20 of them records" =
+  expectEqual
+    (53, 20)
+    (length lexiconDefs, length (filter isRecordDef lexiconDefs))
+
+isRecordDef : (String, LexDef) -> Bool
+isRecordDef (_, LexRecordDef _ _) = True
+isRecordDef _ = False

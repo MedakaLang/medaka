@@ -883,14 +883,14 @@ notes:         every record schema of prepare.js's knownSchemas (20) plus every 
 
 [vector]
 file:          pds/test/vectors/lexicon_record_corpus.jsonl
-local-sha256:  ee1cfa600e6e2f8496dfe6bf5e88047b1e2ee968e8afa7050a4ded803dc2307d
+local-sha256:  5ebea7d53701be759df09bf96c94a48ddea36e71cc098abdc40c9240fc1d0768
 kind:          reference-impl
 impl:          official-pds
 source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/repo/prepare.ts
 extraction:    pds/tools/gen_lexicon_corpus.sh (gen_lexicon_corpus.mjs, run in the pinned image with the tools dir and the vectors dir mounted read-only); re-running must reproduce this file byte-for-byte
 retrieved:     2026-09-28
 consumer:      S-lexicon-corpus (#3098 validate:true accepted, nothing validated; tracking #3555)
-notes:         each row {id,collection,rkey,record,verdict,message} is the pinned image's own answer: verdict/message come from RUNNING the reference's validateRecord path (schema.keySchema.safeValidate(rkey), then schema.safeValidate(record,{path:['record']}), messages wrapped exactly as repo/prepare.js does, unknown $type = `Unknown lexicon type: <t>` as with validate:true) over the inputs in lexicon_cases.jsonl after @atproto/lex-json jsonToLex. Nothing in a verdict is hand-written. The rows answer validateRecord only: prepareWrite's earlier steps (default/mismatched $type against the collection, isValidRecordKey, slur filter) are not part of this answer key.
+notes:         each row {id,collection,rkey,record,verdict,message} is the pinned image's own answer: verdict/message come from RUNNING the reference's validateRecord path (schema.keySchema.safeValidate(rkey), then schema.safeValidate(record,{path:['record']}), messages wrapped exactly as repo/prepare.js does, unknown $type = `Unknown lexicon type: <t>` as with validate:true) over the inputs in lexicon_cases.jsonl after @atproto/lex-json jsonToLex; a record jsonToLex itself throws on (an own `__proto__` key) carries the thrown message, as a request would. Nothing in a verdict is hand-written. The rows answer validateRecord only: prepareWrite's earlier steps (default/mismatched $type against the collection, isValidRecordKey, slur filter) are not part of this answer key.
 
 [vector]
 file:          pds/test/vectors/lexicon_cases.jsonl

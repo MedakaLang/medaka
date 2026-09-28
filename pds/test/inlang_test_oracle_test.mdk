@@ -69,11 +69,11 @@ engineLabel NativeSpeed = "native (speed)"
    `scalar_test`, which cost this gate several minutes of interpreter time
    per run.
 
-   `NativeCapability` (5 files): the eval arm REFUSES the file outright
-   ("reaches the extern `buildCommit` … No test was run"), so it is not a
-   timing question — every one of these reaches `buildCommit` through
-   `lib.repo`'s call graph, which the interpreter's capability policy does
-   not bind.
+   `NativeCapability`: the eval arm REFUSES the file outright ("reaches the
+   extern `buildCommit` … No test was run"), so it is not a timing question.
+   Most of these reach `buildCommit` through `lib.repo`'s call graph, and
+   the `lexicon_*` files read their vectors with `readFile`; the
+   interpreter's capability policy binds neither.
 
    `NativeSpeed` (7 files): eval completes but is materially slower —
    `field_test` 159 s vs 2.2 s, `scalar_test` and `pbkdf2_test` both past a
@@ -119,6 +119,9 @@ suites = [
   ("event_log_test", (22, NativeCapability)),
   ("sync_event_test", (7, NativeCapability)),
   ("route_policy_test", (4, Eval)),
+  ("lexicon_corpus_test", (4, NativeCapability)),
+  ("lexicon_schemas_test", (3, NativeCapability)),
+  ("lexicon_write_test", (11, NativeCapability)),
 ]
 
 {- | Exclusion ledger: file stem paired with the reason it is not run today,
@@ -306,6 +309,8 @@ libExempt = [
   ("event_log_record", "0 assertions"),
   ("hmac_sha256", "0 assertions"),
   ("jwt", "0 assertions"),
+  ("lexicon", "0 assertions"),
+  ("lexicon_schemas", "0 assertions"),
   ("lexjson", "0 assertions"),
   ("mst", "0 assertions"),
   ("nsid", "0 assertions"),
@@ -601,6 +606,15 @@ test "pds/test/sync_event_test.mdk executed >= 3 assertions" =
 
 test "pds/test/route_policy_test.mdk executed >= 4 assertions" =
   floorExpectation "route_policy_test"
+
+test "pds/test/lexicon_corpus_test.mdk executed >= 4 assertions" =
+  floorExpectation "lexicon_corpus_test"
+
+test "pds/test/lexicon_schemas_test.mdk executed >= 3 assertions" =
+  floorExpectation "lexicon_schemas_test"
+
+test "pds/test/lexicon_write_test.mdk executed >= 11 assertions" =
+  floorExpectation "lexicon_write_test"
 
 -- # Non-vacuity
 

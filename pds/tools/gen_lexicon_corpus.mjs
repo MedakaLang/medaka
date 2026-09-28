@@ -136,16 +136,30 @@ function expand(v) {
     if (ks.length === 1 && ks[0] === '$times') {
       return Array.from({ length: v.$times[1] }, () => expand(v.$times[0]))
     }
+    // defineProperty, not assignment: `r["__proto__"] = x` would set the
+    // prototype and drop the key, so the judged record would differ from the
+    // input and from the stored row.
     const r = {}
-    for (const k of ks) r[k] = expand(v[k])
+    for (const k of ks) {
+      Object.defineProperty(r, k, {
+        value: expand(v[k]), enumerable: true, writable: true, configurable: true,
+      })
+    }
     return r
   }
   return v
 }
 
 // repo/prepare.js validateRecord with validate:true.
+// jsonToLex's own refusals (e.g. `Invalid key: __proto__`) are thrown before
+// validateRecord runs; a request carrying such a record gets that refusal.
 function verdict(rkey, jsonRecord) {
-  const record = jsonToLex(jsonRecord)
+  let record
+  try {
+    record = jsonToLex(jsonRecord)
+  } catch (e) {
+    return ['error', e.message]
+  }
   const schema = knownSchemas.get(record.$type)
   if (!schema) return ['error', `Unknown lexicon type: ${record.$type}`]
   const k = schema.keySchema.safeValidate(rkey)

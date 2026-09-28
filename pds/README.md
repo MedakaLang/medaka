@@ -325,11 +325,13 @@ addressing.
   and framing itself is O(n²) under one trickling client (#2571) — those, not
   a missing auth check, are what keep this core unsafe to expose on a network
   as it stands.
-- **No lexicon validation.** The record body is admitted as atproto data, not
-  validated against a lexicon schema. `validate: true` is therefore REFUSED
-  with an explicit error rather than accepted and quietly ignored; `validate:
-  false` and an absent field both mean "store the record as given", which is
-  what happens.
+- **Lexicon validation covers the reference's twenty collections.** With
+  `validate` absent or `true`, a record in one of the twenty collections the
+  pinned reference PDS knows is graded by `pds/lib/lexicon.mdk`: `"valid"` if
+  it passes, `400 InvalidRequest` if it fails, `"unknown"` if only a grapheme
+  bound is left open (graphemes are not counted). A collection outside the
+  twenty is stored and reported `"unknown"`, where the reference refuses it.
+  `validate: false` stores the record as given and reports `"unknown"`.
 - **One account per server.** `Server` carries exactly one `Account` and
   `Store` exactly one `Repo`. A `repo` field naming anything but that account's
   DID or handle is `RepoNotFound`. `resolveHandle` resolves exactly the one

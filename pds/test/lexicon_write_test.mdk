@@ -1,0 +1,374 @@
+{- | The write routes grade a record against its lexicon, end to end through
+   `handleBytes`: request bytes in, response bytes out.
+
+   `validate` absent or `true` grades, `false` does not. A record the
+   lexicon accepts is written and reported `"valid"`; one it refuses is
+   `400 InvalidRequest` and leaves the store as it was, and in an
+   `applyWrites` batch one refused record refuses the batch. A record whose
+   only open constraint is a grapheme bound, and a collection with no
+   schema, are written and reported `"unknown"`. Every record key here is a
+   TID, which is what `app.bsky.feed.post` requires. -}
+
+import bytes.{Bytes}
+import hex.{decode}
+import json.{Json(..), get, jArray, jObject, parse, stringify}
+import string.{repeat, startsWith}
+import test.{Expectation, expectEach, expectEqual}
+import lib.handlers.{recordServer}
+import lib.jwt.{mintToken}
+import lib.repo.{repoInitFromKeyBytes}
+import lib.server_core.{
+  Account,
+  RequestContext(..),
+  Server,
+  handleBytes,
+  makeAccount,
+}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeFromRepo,
+  storeSessionOpen,
+  storeWithServerSecret,
+}
+import lib.tid.{tidParse}
+import test.fixture_support.{fieldText, storeFingerprint, testNonce, testSecret}
+import test.request_support.{procedureRequest}
+import test.response_support.{bodyText}
+
+-- The account and signing key of the Phase-1 transcript
+-- (`pds/test/vectors/repo_reference_corpus.txt`'s META row).
+accountDidText : String
+accountDidText = "did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9"
+
+secretHex : String
+secretHex = "0000000000000000000000000000000000000000000000000000000000000001"
+
+hostText : String
+hostText = "pds.example"
+
+testInstant : Int
+testInstant = 1700000000
+
+testContext : RequestContext
+testContext =
+  RequestContext { nowSeconds = testInstant, nonce = testNonce, login = None }
+
+account : Account
+account =
+  resultOrPanic
+    "lexicon_write_test: account setup failed"
+    (makeAccount accountDidText "medaka.example" hostText)
+
+server : Server
+server =
+  resultOrPanic "lexicon_write_test: server setup failed" (recordServer account)
+
+token : String
+token =
+  mintToken
+    testSecret
+    accountDidText
+    hostText
+    "lexicon_write_test-token"
+    (testInstant - 60)
+    (testInstant + 3600)
+
+-- A configured repository, and the open session `token` belongs to.
+initialStore : Store
+initialStore =
+  let secret =
+    resultOrPanic "lexicon_write_test: malformed secret" (decode secretHex)
+  let rev =
+    resultOrPanic "lexicon_write_test: malformed TID" (tidParse "3ke6kg3wk222b")
+  let repo =
+    resultOrPanic
+      "lexicon_write_test: repository init failed"
+      (repoInitFromKeyBytes accountDidText secret rev)
+  match storeWithServerSecret testSecret (storeFromRepo repo)
+    Ok store =>
+      storeSessionOpen
+        (sessionFingerprint token)
+        (sessionFingerprint "lexicon_write_test: no refresh token")
+        (testInstant + 3600)
+        store
+    Err message => panic "lexicon_write_test: session setup failed: \{message}"
+
+-- ── requests ────────────────────────────────────────────────────────────────
+
+data Answer = Answer { store : Store, body : Json }
+
+send : Store -> String -> List (String, Json) -> Answer
+send store nsid fields =
+  let (next, bytes) =
+    handleBytes
+      server
+      testContext
+      store
+      (procedureRequest hostText token nsid (stringify (jObject fields)))
+  Answer {
+    store = next,
+    body =
+      resultOrPanic
+        "lexicon_write_test: response body is not JSON"
+        (parse (bodyText bytes)),
+  }
+
+createRecord : String -> String -> Json -> List (String, Json) -> Answer
+createRecord collection rkey record flags =
+  send
+    initialStore
+    "com.atproto.repo.createRecord"
+    ([
+        ("repo", JString accountDidText),
+        ("collection", JString collection),
+        ("rkey", JString rkey),
+        ("record", record),
+      ]
+      ++ flags)
+
+putRecord : String -> String -> Json -> Answer
+putRecord collection rkey record = send
+  initialStore
+  "com.atproto.repo.putRecord"
+  [
+    ("repo", JString accountDidText),
+    ("collection", JString collection),
+    ("rkey", JString rkey),
+    ("record", record),
+  ]
+
+createElement : String -> Json -> Json
+createElement rkey record = jObject [
+  ("$type", JString "com.atproto.repo.applyWrites#create"),
+  ("collection", JString "app.bsky.feed.post"),
+  ("rkey", JString rkey),
+  ("value", record),
+]
+
+applyWrites : List Json -> List (String, Json) -> Answer
+applyWrites writes flags =
+  send
+    initialStore
+    "com.atproto.repo.applyWrites"
+    ([("repo", JString accountDidText), ("writes", jArray writes)] ++ flags)
+
+-- ── records ─────────────────────────────────────────────────────────────────
+
+postWith : String -> Json
+postWith text = jObject [
+  ("$type", JString "app.bsky.feed.post"),
+  ("text", JString text),
+  ("createdAt", JString "2024-01-01T00:00:00.000Z"),
+]
+
+post : Json
+post = postWith "hello"
+
+-- No `createdAt`, which the post lexicon requires.
+postWithoutCreatedAt : Json
+postWithoutCreatedAt = jObject [
+  ("$type", JString "app.bsky.feed.post"),
+  ("text", JString "hello"),
+]
+
+validateTrue : List (String, Json)
+validateTrue = [("validate", JBool True)]
+
+validateFalse : List (String, Json)
+validateFalse = [("validate", JBool False)]
+
+-- ── observations ────────────────────────────────────────────────────────────
+
+statusOf : Answer -> String
+statusOf answer = fieldText "validationStatus" answer.body
+
+errorOf : Answer -> String
+errorOf answer = fieldText "error" answer.body
+
+unchanged : Answer -> Bool
+unchanged answer =
+  storeFingerprint answer.store == storeFingerprint initialStore
+
+-- A refusal: the error code, whether its message begins as the reference's
+-- does, and whether the store was left as it was.
+refusal : String -> Answer -> (String, Bool, Bool)
+refusal prefix answer = (
+  errorOf answer,
+  startsWith prefix (fieldText "message" answer.body),
+  unchanged answer,
+)
+
+refused : String -> (String, Bool, Bool)
+refused _ = ("InvalidRequest", True, True)
+
+-- ── createRecord and putRecord ──────────────────────────────────────────────
+
+test "a post its lexicon accepts is written and reported valid, validate absent or true" = expectEach
+  [
+    (
+      "absent",
+      expectEqual
+        "valid"
+        (statusOf (createRecord "app.bsky.feed.post" "3ke6kg3wk2c2b" post [])),
+    ),
+    (
+      "true",
+      expectEqual
+        "valid"
+        (statusOf
+          (createRecord "app.bsky.feed.post" "3ke6kg3wk2c2b" post validateTrue)),
+    ),
+  ]
+
+test "a post its lexicon refuses is 400 InvalidRequest and writes nothing, validate absent or true" =
+  let prefix = "Invalid app.bsky.feed.post record: "
+  expectEach [
+    (
+      "absent",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (createRecord
+            "app.bsky.feed.post"
+            "3ke6kg3wk2c2b"
+            postWithoutCreatedAt
+            [])),
+    ),
+    (
+      "true",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (createRecord
+            "app.bsky.feed.post"
+            "3ke6kg3wk2c2b"
+            postWithoutCreatedAt
+            validateTrue)),
+    ),
+  ]
+
+test "a record key the lexicon refuses is 400 InvalidRequest and writes nothing" =
+  let prefix = "Invalid record key for app.bsky.feed.post: "
+  expectEqual
+    (refused prefix)
+    (refusal prefix (createRecord "app.bsky.feed.post" "not-a-tid" post []))
+
+test "a $type naming another collection is 400 InvalidRequest and writes nothing" =
+  let prefix = "Invalid $type: expected app.bsky.feed.like"
+  expectEqual
+    (refused prefix)
+    (refusal prefix (createRecord "app.bsky.feed.like" "3ke6kg3wk2c2b" post []))
+
+test "validate false writes a record its lexicon refuses and reports it unknown" =
+  let answer =
+    createRecord
+      "app.bsky.feed.post"
+      "3ke6kg3wk2c2b"
+      postWithoutCreatedAt
+      validateFalse
+  expectEqual ("<missing:error>", "unknown") (errorOf answer, statusOf answer)
+
+test "a collection with no schema is written and reported unknown, validate absent or true" =
+  let record = jObject [("$type", JString "com.example.thing"), ("n", JInt 1)]
+  expectEach [
+    (
+      "absent",
+      expectEqual
+        "unknown"
+        (statusOf (createRecord "com.example.thing" "3ke6kg3wk2c2b" record [])),
+    ),
+    (
+      "true",
+      expectEqual
+        "unknown"
+        (statusOf
+          (createRecord
+            "com.example.thing"
+            "3ke6kg3wk2c2b"
+            record
+            validateTrue)),
+    ),
+  ]
+
+{- | 301 codepoints against `text`'s 300-grapheme bound, in 301 bytes against
+   its 3000-byte one: the codepoints may or may not be 301 graphemes, so the
+   post is written, and it is not reported valid. -}
+test "a grapheme bound left open is written and reported unknown" =
+  let answer =
+    createRecord
+      "app.bsky.feed.post"
+      "3ke6kg3wk2c2b"
+      (postWith (repeat 301 "a"))
+      []
+  expectEqual ("<missing:error>", "unknown") (errorOf answer, statusOf answer)
+
+test "putRecord grades as createRecord does" =
+  let profile = jObject [
+    ("$type", JString "app.bsky.actor.profile"),
+    ("displayName", JString "Medaka"),
+  ]
+  let prefix = "Invalid record key for app.bsky.actor.profile: "
+  expectEach [
+    (
+      "a profile under self is valid",
+      expectEqual
+        "valid"
+        (statusOf (putRecord "app.bsky.actor.profile" "self" profile)),
+    ),
+    (
+      "a profile under any other key is refused",
+      expectEqual
+        (refused prefix)
+        (refusal prefix (putRecord "app.bsky.actor.profile" "other" profile)),
+    ),
+  ]
+
+-- ── applyWrites ─────────────────────────────────────────────────────────────
+
+resultStatuses : Answer -> List String
+resultStatuses answer = match get "results" answer.body
+  Some (JArray results) =>
+    map (result => fieldText "validationStatus" result) (toList results)
+  _ => []
+
+test "a batch of posts its lexicon accepts reports every result valid" =
+  let answer =
+    applyWrites
+      [createElement "3ke6kg3wk2c2b" post, createElement "3ke6kg3wk2d2b" post]
+      validateTrue
+  expectEqual ["valid", "valid"] (resultStatuses answer)
+
+{- | The refused record is the batch's LAST, so the first has already been
+   graded and turned into an operation when the refusal comes: an unchanged
+   store then says the batch is all or nothing, not that it failed early. -}
+test "one refused record refuses the whole batch and writes nothing" =
+  let prefix = "Invalid app.bsky.feed.post record: "
+  let writes = [
+    createElement "3ke6kg3wk2c2b" post,
+    createElement "3ke6kg3wk2d2b" postWithoutCreatedAt,
+  ]
+  expectEach [
+    (
+      "validate absent",
+      expectEqual (refused prefix) (refusal prefix (applyWrites writes [])),
+    ),
+    (
+      "validate true",
+      expectEqual
+        (refused prefix)
+        (refusal prefix (applyWrites writes validateTrue)),
+    ),
+  ]
+
+test "validate false writes the same batch and reports it unknown" =
+  let answer =
+    applyWrites
+      [
+        createElement "3ke6kg3wk2c2b" post,
+        createElement "3ke6kg3wk2d2b" postWithoutCreatedAt,
+      ]
+      validateFalse
+  expectEqual ["unknown", "unknown"] (resultStatuses answer)
