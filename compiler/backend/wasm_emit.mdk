@@ -1982,6 +1982,8 @@ isNetExternW name = contains name [
   "netTryRecvBytes",
   "netTrySend",
   "netTrySendFrom",
+  "netSendBytesFrom",
+  "netTrySendBytesFrom",
 ]
 
 -- W9: arity of a str/leaf extern (the param count its emit* arm consumes).  Used to

@@ -21,15 +21,14 @@
 -- compiled loopback fixture rather than doctests, which would run under the
 -- interpreter (NET-DESIGN.md §7).
 
-import array.{setInPlace}
 import bytes as B
 import bytes.{Bytes, fromArrayAssumeByteDomain}
-import list.{reverse}
+import list.{drop, reverse, take}
 import vector.{Vector, new, push, toArray}
-import string.{toUtf8, fromUtf8}
+import string.{fromUtf8}
 import time.{Duration, toMillis}
 import u8 as U8
-import test.{expectAll, expectEqual, expectTrue}
+import test.{expectAll, expectEqual}
 
 -- # Handles
 
@@ -94,7 +93,7 @@ accept lis = netTcpAccept lis
    `sendAll` is the form that sends everything. -}
 export
 send : Connection h -> Bytes -> <Net h> Result String Int
-send conn bs = netSend conn (B.toArray bs)
+send conn bs = netSendBytesFrom conn (B.lendByteBlockUnsafe bs) 0 (B.length bs)
 
 {- | Receives up to `n` bytes in one call.
 
@@ -110,98 +109,64 @@ recv conn n = map fromArrayAssumeByteDomain (netRecv conn n)
    treated as a stalled connection. -}
 export
 sendAll : Connection h -> Bytes -> <Net h> Result String Unit
-sendAll conn bs = sendArray conn (B.toArray bs)
+sendAll conn bs =
+  let bb = B.lendByteBlockUnsafe bs
+  let end = B.length bs
+  sendAllFrom (off => netSendBytesFrom conn bb off end) end 0
 
--- The send externs take an array, so the payload is unpacked once here and
--- the loop below advances an offset through that one copy.
-sendArray : Connection h -> Array Int -> <Net h> Result String Unit
-sendArray conn bs = sendAllFrom (bytes off => netSendFrom conn bytes off) bs 0
-
-sendAllFrom : (Array Int -> Int -> <e> Result String Int) ->
-  Array Int ->
+-- The loop advances an offset through the payload's own block, and the
+-- extern sends at most 64 KiB per call, so a large payload costs its own
+-- length, not its length squared.
+sendAllFrom : (Int -> <e> Result String Int) ->
+  Int ->
   Int ->
   <e> Result String Unit
-sendAllFrom write bs off =
-  if off >= arrayLength bs then
+sendAllFrom write end off =
+  if off >= end then
     Ok ()
-  else match write bs off
+  else match write off
     Err e => Err e
     Ok 0 => Err "net.sendAll: 0 bytes written (connection stalled)"
-    Ok n => sendAllFrom write bs (off + n)
-
-testSentBytes : Array Int -> Int -> Int -> List Int
-testSentBytes bs i hi =
-  if i >= hi then [] else arrayGetUnsafe i bs :: testSentBytes bs (i + 1) hi
-
-testRecordAlias : Ref (Option (Array Int)) ->
-  Ref Bool ->
-  Array Int ->
-  Int ->
-  Unit
-testRecordAlias first aliasSeen bs call =
-  if call == 0 then
-    first := Some bs
-  else if call == 1 then match !first
-    Some original =>
-      let _ = setInPlace 0 251 original
-      aliasSeen := arrayGetUnsafe 0 bs == 251
-    None => ()
+    Ok n => sendAllFrom write end (off + n)
 
 testScriptedSend : Ref Int ->
   Ref (List Int) ->
   Ref (List Int) ->
-  Ref (Option (Array Int)) ->
-  Ref Bool ->
-  Array Int ->
+  List Int ->
   Int ->
   Result String Int
-testScriptedSend calls offsets sent first aliasSeen bs off =
+testScriptedSend calls offsets sent payload off =
   let call = !calls
   calls := call + 1
   offsets := !offsets ++ [off]
-  let _ = testRecordAlias first aliasSeen bs call
   if call >= 3 then
     Err "unexpected fourth send"
   else
     let n =
-      if call == 0 then 2 else if call == 1 then 3 else arrayLength bs - off
-    sent := !sent ++ testSentBytes bs off (off + n)
+      if call == 0 then 2 else if call == 1 then 3 else length payload - off
+    sent := !sent ++ take n (drop off payload)
     Ok n
 
-testScriptedObservation : Unit ->
-  (Result String Unit, Int, List Int, List Int, Bool)
-testScriptedObservation _ =
+test "sendAll advances one offset and covers exact bytes" =
   let calls = Ref 0
   let offsets = Ref []
   let sent = Ref []
-  let first = Ref None
-  let aliasSeen = Ref False
-  let payload = arrayFromList [10, 20, 30, 40, 50, 60, 70, 80]
-  let result =
-    sendAllFrom (testScriptedSend calls offsets sent first aliasSeen) payload 0
-  (result, !calls, !offsets, !sent, !aliasSeen)
-
-test "sendAll keeps one array while offsets cover exact bytes" =
-  let (result, calls, offsets, sent, aliasSeen) = testScriptedObservation ()
+  let payload = [10, 20, 30, 40, 50, 60, 70, 80]
+  let result = sendAllFrom (testScriptedSend calls offsets sent payload) 8 0
   expectAll [
     expectEqual (Ok ()) result,
-    expectEqual 3 calls,
-    expectEqual [0, 2, 5] offsets,
-    expectEqual [10, 20, 30, 40, 50, 60, 70, 80] sent,
-    expectTrue aliasSeen,
+    expectEqual 3 !calls,
+    expectEqual [0, 2, 5] !offsets,
+    expectEqual payload !sent,
   ]
 
 test "sendAll rejects a zero-byte write exactly" =
   expectEqual
     (Err "net.sendAll: 0 bytes written (connection stalled)")
-    (sendAllFrom (_ _ => Ok 0) (arrayFromList [1]) 0)
+    (sendAllFrom (_ => Ok 0) 1 0)
 
-testFirstErrorSend : Ref Int ->
-  Ref (List Int) ->
-  Array Int ->
-  Int ->
-  Result String Int
-testFirstErrorSend calls offsets _ off =
+testFirstErrorSend : Ref Int -> Ref (List Int) -> Int -> Result String Int
+testFirstErrorSend calls offsets off =
   let call = !calls
   calls := call + 1
   offsets := !offsets ++ [off]
@@ -210,11 +175,7 @@ testFirstErrorSend calls offsets _ off =
 test "sendAll returns the first host error without another write" =
   let calls = Ref 0
   let offsets = Ref []
-  let result =
-    sendAllFrom
-      (testFirstErrorSend calls offsets)
-      (arrayFromList [1, 2, 3, 4])
-      0
+  let result = sendAllFrom (testFirstErrorSend calls offsets) 4 0
   expectAll [
     expectEqual (Err "boom") result,
     expectEqual 2 !calls,
@@ -243,7 +204,7 @@ recvAll conn = recvAllLoop conn []
 -- | Sends a string as UTF-8, every byte of it.
 export
 sendString : Connection h -> String -> <Net h> Result String Unit
-sendString conn s = sendArray conn (toUtf8 s)
+sendString conn s = sendAll conn (B.encodeUtf8 s)
 
 {- | Receives everything until the peer closes the connection, decoded as
    UTF-8.

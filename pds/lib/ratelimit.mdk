@@ -43,11 +43,12 @@
    the reward for violating the ceiling. -}
 
 import bytes as B
+import bytes.{Bytes, decodeUtf8}
 import http.{Header, headerName, headerValue, makeHeader}
 import list.{head, reverse}
 import map.{Map(..), get, has, set, size}
 import regex.{Regex, isFullMatch, mustCompile}
-import string.{fromUtf8, split, toUtf8, trim}
+import string.{split, trim}
 import lib.nsid.{sameNsidIdentity}
 import lib.resource_limits.{
   checkXffHeaderBytes,
@@ -62,6 +63,7 @@ import lib.resource_limits.{
   maxWritesPerWindow,
   rateLimitWindowSeconds,
 }
+import u8 as U8
 
 -- | Opaque: the only way to produce one is `identifyClient`/`directIdentity`,
 -- so a caller cannot manufacture an identity that bypassed trust checking.
@@ -389,33 +391,41 @@ isXffHeader h = headerName h == "x-forwarded-for"
    allowance by sending its address twice. -}
 xffLastHop : List Header -> Result String (Option String)
 xffLastHop headers = match head (reverse (filter isXffHeader headers))
-  Some nearest => lastHopToken (B.toArray (headerValue nearest))
+  Some nearest => lastHopToken (headerValue nearest)
   None => Ok None
 
 {- | The nearest field's last hop, read from the RAW header bytes.
 
    Bytes, not codepoints: `stringLength` counts codepoints, so measuring the
    decoded string admits a header of up to four times the byte ceiling
-   `maxXffHeaderBytes` names. `headerValue` is the wire form, and it is
-   measured before `fromUtf8` decodes it and before `split` allocates a
-   substring per token — both of which are the work each ceiling exists to
-   bound, so neither may run ahead of the check that bounds it.
+   `maxXffHeaderBytes` names. `headerValue` is the wire form, and both its
+   length and its token count are measured on the bytes, before `decodeUtf8`
+   decodes it and before `split` allocates a substring per token — both of
+   which are the work each ceiling exists to bound, so neither may run ahead
+   of the check that bounds it.
 
    A violated ceiling is `Err`, distinct from the `Ok None` a header this
    module simply could not read an address out of: `Ok None` is charged to
    the shared bucket, and charging a capped header there is the escape hatch
-   the cap was added to close. -}
-lastHopToken : Array Int -> Result String (Option String)
-lastHopToken bytes = match checkXffHeaderBytes (arrayLength bytes)
+   the cap was added to close. A header that is not UTF-8 is one this module
+   cannot read, so it is `Ok None`: the address becomes a bucket key, and a
+   decode that repaired or replaced bytes would charge two different headers
+   to one bucket. -}
+lastHopToken : Bytes -> Result String (Option String)
+lastHopToken bytes = match checkXffHeaderBytes (B.length bytes)
   Err message => Err message
-  Ok () =>
-    let tokens = map trim (split "," (fromUtf8 bytes))
-    match checkXffTokens (length tokens)
-      Err message => Err message
-      Ok () => match head (reverse tokens)
+  Ok () => match checkXffTokens (B.fold countComma 1 bytes)
+    Err message => Err message
+    Ok () => match decodeUtf8 bytes
+      None => Ok None
+      Some text => match head (reverse (map trim (split "," text)))
         Some candidate =>
           if isAddressToken candidate then Ok (Some candidate) else Ok None
         None => Ok None
+
+-- One more token per `,`, which is the count `split ","` produces.
+countComma : Int -> U8 -> Int
+countComma count byte = if U8.toInt byte == 44 then count + 1 else count
 
 isAddressToken : String -> Bool
 isAddressToken token = isIPv4Address token || isIPv6Address token

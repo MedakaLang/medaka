@@ -8,10 +8,10 @@
    (`pds/test/store_persistence_main.mdk`'s convention); the shell gate reads
    that line and nothing else. -}
 
-import array.{concat, sliceClamped}
 import bytes as B
-import bytes.{fromArrayAssumeByteDomain}
+import bytes.{Bytes, decodeUtf8, encodeUtf8, fromU8Array}
 import hex as Hex
+import u8 as U8
 import lib.cid.{cidForRaw, cidToString}
 import lib.credential.{
   credentialDigest,
@@ -27,23 +27,21 @@ import regex.{Regex, find, mustCompile}
 import string.{
   contains,
   fromChars,
-  fromUtf8,
   lines,
   split,
   startsWith,
   toChars,
   toInt,
-  toUtf8,
   trim,
 }
 import time.{
   Duration, elapsedSince, millis, monotonic, seconds, sleep, toMillis
 }
 import test.request_support.{deleteBody}
-import test.response_support.{closeAll, findHeaderEnd, report}
+import test.response_support.{closeAll, findHeaderEnd, report, textOrHex}
 
-hexOf : Array Int -> String
-hexOf x = Hex.encode (fromArrayAssumeByteDomain x)
+hexOf : Bytes -> String
+hexOf x = Hex.encode x
 
 -- # Small ad-hoc helpers this test driver owns
 
@@ -67,9 +65,6 @@ toHexGo n acc =
 -- HTTP chunk-size line).
 toHexString : Int -> String
 toHexString n = if n == 0 then "0" else fromChars (toHexGo n [])
-
-appendBytes : Array Int -> Array Int -> Array Int
-appendBytes left right = concat [|left, right|]
 
 statusOf : String -> Result String Int
 statusOf statusLine = match split " " statusLine
@@ -110,20 +105,18 @@ contentTypeOf (line :: rest) = match find contentTypeRe line
     [Some g] => trim g.text
     _ => ""
 
-parseHeaderBlock : Array Int -> Result String (Int, String, Int)
-parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)
-  [] => Err "serve_client: empty response header block"
-  statusLine :: rest => do
+parseHeaderBlock : Bytes -> Result String (Int, String, Int)
+parseHeaderBlock headerBytes = match map lines (decodeUtf8 headerBytes)
+  None => Err "serve_client: response header block is not UTF-8"
+  Some [] => Err "serve_client: empty response header block"
+  Some (statusLine :: rest) => do
     status <- statusOf statusLine
     len <- contentLengthOf rest
     Ok (status, contentTypeOf rest, len)
 
-recvAtLeast : Connection * ->
-  Array Int ->
-  Int ->
-  <Net> Result String (Array Int)
+recvAtLeast : Connection * -> Bytes -> Int -> <Net> Result String Bytes
 recvAtLeast conn buf need =
-  if arrayLength buf >= need then
+  if B.length buf >= need then
     Ok buf
   else match recv conn 65536
     Err message => Err message
@@ -131,29 +124,29 @@ recvAtLeast conn buf need =
       if B.isEmpty chunk then
         Err "serve_client: connection closed mid-response"
       else
-        recvAtLeast conn (appendBytes buf (B.toArray chunk)) need
+        recvAtLeast conn (buf ++ chunk) need
 
 {- | Reads one complete HTTP response starting at the front of `pending`
-   (bytes already buffered from a previous read, `[||]` for a fresh
+   (bytes already buffered from a previous read, `empty` for a fresh
    connection), receiving more as needed. Returns the status code, the
    declared media type, the body bytes, and whatever bytes were buffered past
    the end of this response — the next pipelined response's bytes, on a
    connection that has one. -}
 readTypedResponse : Connection * ->
-  Array Int ->
-  <Net> Result String (Int, String, Array Int, Array Int)
+  Bytes ->
+  <Net> Result String (Int, String, Bytes, Bytes)
 readTypedResponse conn pending = match findHeaderEnd pending 0
   Some headerEnd => do
     let bodyStart = headerEnd + 4
     (status, mediaType, len) <- parseHeaderBlock
-      (sliceClamped 0 headerEnd pending)
+      (B.sliceClamped 0 headerEnd pending)
     let need = bodyStart + len
     full <- recvAtLeast conn pending need
     Ok (
       status,
       mediaType,
-      sliceClamped bodyStart need full,
-      sliceClamped need (arrayLength full) full,
+      B.sliceClamped bodyStart need full,
+      B.sliceClamped need (B.length full) full,
     )
   None => match recv conn 4096
     Err message => Err message
@@ -161,28 +154,28 @@ readTypedResponse conn pending = match findHeaderEnd pending 0
       if B.isEmpty chunk then
         Err "serve_client: connection closed before response headers"
       else
-        readTypedResponse conn (appendBytes pending (B.toArray chunk))
+        readTypedResponse conn (pending ++ chunk)
 
 {- | Same read as `readTypedResponse`, but keeps the raw header block text
    instead of parsing only the status and content type out of it — for the
    rate-limit cases, which must assert directly on the `ratelimit-*`
    response headers no other reader keeps. -}
 readHeaderResponse : Connection * ->
-  Array Int ->
-  <Net> Result String (Int, String, Array Int, Array Int)
+  Bytes ->
+  <Net> Result String (Int, String, Bytes, Bytes)
 readHeaderResponse conn pending = match findHeaderEnd pending 0
   Some headerEnd => do
     let bodyStart = headerEnd + 4
-    let headerBlock = sliceClamped 0 headerEnd pending
-    let headerText = fromUtf8 headerBlock
+    let headerBlock = B.sliceClamped 0 headerEnd pending
+    let headerText = textOrHex headerBlock
     (status, _, len) <- parseHeaderBlock headerBlock
     let need = bodyStart + len
     full <- recvAtLeast conn pending need
     Ok (
       status,
       headerText,
-      sliceClamped bodyStart need full,
-      sliceClamped need (arrayLength full) full,
+      B.sliceClamped bodyStart need full,
+      B.sliceClamped need (B.length full) full,
     )
   None => match recv conn 4096
     Err message => Err message
@@ -190,12 +183,10 @@ readHeaderResponse conn pending = match findHeaderEnd pending 0
       if B.isEmpty chunk then
         Err "serve_client: connection closed before response headers"
       else
-        readHeaderResponse conn (appendBytes pending (B.toArray chunk))
+        readHeaderResponse conn (pending ++ chunk)
 
 -- | The same read for the cases that do not care what media type came back.
-readResponse : Connection * ->
-  Array Int ->
-  <Net> Result String (Int, Array Int, Array Int)
+readResponse : Connection * -> Bytes -> <Net> Result String (Int, Bytes, Bytes)
 readResponse conn pending =
   map
     ((status, _, body, rest) => (status, body, rest))
@@ -205,8 +196,8 @@ mustConnect : Int -> <Net> Connection *
 mustConnect port =
   resultOrPanic "serve_client: connect failed" (connect "127.0.0.1" port)
 
-mustSend : Connection * -> Array Int -> <Net> Unit
-mustSend conn bytes = match sendAll conn (fromArrayAssumeByteDomain bytes)
+mustSend : Connection * -> Bytes -> <Net> Unit
+mustSend conn bytes = match sendAll conn bytes
   Ok () => ()
   Err message => panic "serve_client: send failed: \{message}"
 
@@ -215,13 +206,13 @@ mustSend conn bytes = match sendAll conn (fromArrayAssumeByteDomain bytes)
 hostHeader : String
 hostHeader = "Host: 127.0.0.1\r\n"
 
-getRequest : String -> Array Int
-getRequest path = toUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\r\n"
+getRequest : String -> Bytes
+getRequest path = encodeUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\r\n"
 
 -- | The same GET, carrying a bearer token.
-getRequestWith : String -> String -> Array Int
+getRequestWith : String -> String -> Bytes
 getRequestWith token path =
-  toUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}\r\n"
+  encodeUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}\r\n"
 
 -- | An empty `xff` sends no header at all, so a rate-limit case run without
 -- `--trusted-proxy` on the server exercises the untrusted, single-bucket
@@ -232,19 +223,19 @@ xffHeader xff = "X-Forwarded-For: \{xff}\r\n"
 
 -- | The same GET, carrying a forwarded-for identity rather than a token —
 -- what the rate-limit cases use to tell one client identity from another.
-getRequestXff : String -> String -> Array Int
+getRequestXff : String -> String -> Bytes
 getRequestXff xff path =
-  toUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\r\n"
+  encodeUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\r\n"
 
-oneChunk : Array Int -> Array Int
-oneChunk chunkBytes = concat [|
-  toUtf8 "\{toHexString (arrayLength chunkBytes)}\r\n",
+oneChunk : Bytes -> Bytes
+oneChunk chunkBytes = B.concat [
+  encodeUtf8 "\{toHexString (B.length chunkBytes)}\r\n",
   chunkBytes,
-  toUtf8 "\r\n",
-|]
+  encodeUtf8 "\r\n",
+]
 
-finalChunk : Array Int
-finalChunk = toUtf8 "0\r\n\r\n"
+finalChunk : Bytes
+finalChunk = encodeUtf8 "0\r\n\r\n"
 
 {- | The `Authorization` header block a write carries, or the empty string.
 
@@ -259,63 +250,58 @@ authHeader token = "Authorization: Bearer \{token}\r\n"
 
 -- | A `content-length` JSON POST, the ordinary shape the three write
 -- procedures take when nothing is testing chunked transfer encoding.
-postRequest : String -> String -> String -> Array Int
+postRequest : String -> String -> String -> Bytes
 postRequest token path bodyJson =
-  let body = toUtf8 bodyJson
-  concat [|
-    toUtf8
-      "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
-    body,
-  |]
+  let body = encodeUtf8 bodyJson
+  encodeUtf8
+      "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: application/json\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
+    ++ body
 
 -- | The same content-length JSON POST as `postRequest`, carrying a
 -- forwarded-for identity instead of (or alongside) a bearer token — the
 -- write and createSession rate-limit cases use this to run two identities
 -- against the server at once.
-postRequestXff : String -> String -> String -> String -> Array Int
+postRequestXff : String -> String -> String -> String -> Bytes
 postRequestXff xff token path bodyJson =
-  let body = toUtf8 bodyJson
-  concat [|
-    toUtf8
-      "POST \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\{authHeader token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
-    body,
-  |]
+  let body = encodeUtf8 bodyJson
+  encodeUtf8
+      "POST \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\{authHeader token}Content-Type: application/json\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
+    ++ body
 
 {- | A POST with no body, which is the shape
    `com.atproto.server.{refreshSession, deleteSession}` take: they are
    `NoInput` procedures. The zero-length `Content-Length` is the shape a real
    client gives a bodiless POST, and the router admits it as the statement of
    "no body" that it is. -}
-postNoInputRequest : String -> String -> Array Int
+postNoInputRequest : String -> String -> Bytes
 postNoInputRequest token path =
-  toUtf8
+  encodeUtf8
     "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Length: 0\r\n\r\n"
 
 {- | A `content-length` POST whose body is raw bytes under a caller-chosen
    media type, which is the shape `com.atproto.repo.uploadBlob` takes: the
    `Content-Type` header IS the blob's declared MIME type, and there is no
    JSON envelope anywhere in the request. -}
-rawPostRequest : String -> String -> String -> Array Int -> Array Int
-rawPostRequest token path mimeType body = concat [|
-  toUtf8
-    "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: \{mimeType}\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
-  body,
-|]
+rawPostRequest : String -> String -> String -> Bytes -> Bytes
+rawPostRequest token path mimeType body =
+  encodeUtf8
+      "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: \{mimeType}\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
+    ++ body
 
-chunkedPostRequest : String -> String -> String -> Array Int
+chunkedPostRequest : String -> String -> String -> Bytes
 chunkedPostRequest token path bodyJson =
-  let body = toUtf8 bodyJson
-  let n = arrayLength body
+  let body = encodeUtf8 bodyJson
+  let n = B.length body
   let mid = n / 2
   let head =
-    toUtf8
+    encodeUtf8
       "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
-  concat [|
+  B.concat [
     head,
-    oneChunk (sliceClamped 0 mid body),
-    oneChunk (sliceClamped mid n body),
+    oneChunk (B.sliceClamped 0 mid body),
+    oneChunk (B.sliceClamped mid n body),
     finalChunk,
-  |]
+  ]
 
 -- # Fixture JSON
 
@@ -442,8 +428,8 @@ carMediaType = "application/vnd.ipld.car"
 rootlessCarHeaderHex : String
 rootlessCarHeaderHex = "11a265726f6f7473806776657273696f6e01"
 
-carHeaderHex : Array Int -> String
-carHeaderHex body = hexOf (sliceClamped 0 18 body)
+carHeaderHex : Bytes -> String
+carHeaderHex body = hexOf (B.sliceClamped 0 18 body)
 
 atprotoDidPath : String
 atprotoDidPath = "/.well-known/atproto-did"
@@ -457,21 +443,18 @@ healthPath = "/xrpc/_health"
 -- | One string field of a JSON response body, or a panic naming what was
 -- missing. A session response the gate cannot read is a failed gate, not a
 -- case to carry on past.
-stringField : String -> Array Int -> String
-stringField name body = match parse (fromUtf8 body)
+stringField : String -> Bytes -> String
+stringField name body = match parse (textOrHex body)
   Err message => panic "serve_client: response is not JSON: \{message}"
   Ok value => match get name value
     Some (JString text) => text
     _ =>
       panic
-        "serve_client: response has no string field '\{name}': \{fromUtf8 body}"
+        "serve_client: response has no string field '\{name}': \{textOrHex body}"
 
 -- # Cases
 
-expectStatus : String ->
-  Int ->
-  Result String (Int, Array Int, Array Int) ->
-  <IO> Unit
+expectStatus : String -> Int -> Result String (Int, Bytes, Bytes) -> <IO> Unit
 expectStatus label _ (Err message) = report label False message
 expectStatus label want (Ok (got, _, _)) =
   report
@@ -487,17 +470,17 @@ runQuery : Int -> String -> <IO, Net> Unit
 runQuery port did =
   let conn = mustConnect port
   let () = mustSend conn (getRequest atprotoDidPath)
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = expectStatus "QUERY" 200 result
   let () = match result
     Ok (_, body, _) =>
-      if trim (fromUtf8 body) == did then
+      if trim (textOrHex body) == did then
         ()
       else
         report
           "QUERY"
           False
-          "body '\{fromUtf8 body}' did not echo the hosted DID"
+          "body '\{textOrHex body}' did not echo the hosted DID"
     Err _ => ()
   ignoreResult (close conn)
 
@@ -508,7 +491,7 @@ runHealth : Int -> <IO, Net> Unit
 runHealth port =
   let conn = mustConnect port
   let () = mustSend conn (getRequest healthPath)
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = expectStatus "HEALTH" 200 result
   let () = match result
     Ok (_, body, _) =>
@@ -520,9 +503,9 @@ runHealth port =
 runPipeline : Int -> <IO, Net> Unit
 runPipeline port =
   let conn = mustConnect port
-  let both = appendBytes (getRequest atprotoDidPath) (getRequest atprotoDidPath)
+  let both = getRequest atprotoDidPath ++ getRequest atprotoDidPath
   let () = mustSend conn both
-  let first = readResponse conn [||]
+  let first = readResponse conn empty
   let () = match first
     Err message => report "PIPELINE" False "first response: \{message}"
     Ok (s1, _, rest) =>
@@ -540,7 +523,7 @@ runKeepalive : Int -> <IO, Net> Unit
 runKeepalive port =
   let conn = mustConnect port
   let () = mustSend conn (getRequest atprotoDidPath)
-  let first = readResponse conn [||]
+  let first = readResponse conn empty
   let () = match first
     Err message => report "KEEPALIVE" False "first response: \{message}"
     Ok (s1, _, rest) =>
@@ -571,11 +554,11 @@ runChunked port token did collection rkey text =
         token
         createRecordPath
         (createRecordJson did collection rkey text))
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = expectStatus "CHUNKED" 200 result
   let () = match result
     Ok (_, body, _) =>
-      let bodyText = fromUtf8 body
+      let bodyText = textOrHex body
       if contains "\"uri\"" bodyText then
         ()
       else
@@ -609,8 +592,8 @@ corsVerdict label want got headerText =
 runMalformed : Int -> <IO, Net> Unit
 runMalformed port =
   let conn = mustConnect port
-  let () = mustSend conn (toUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n")
-  let result = readHeaderResponse conn [||]
+  let () = mustSend conn (encodeUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n")
+  let result = readHeaderResponse conn empty
   let () = match result
     Err message => report "MALFORMED" False message
     Ok (status, headerText, _, _) =>
@@ -623,12 +606,11 @@ overcapFillerBytes = 6400000
 runOvercap : Int -> <IO, Net> Unit
 runOvercap port =
   let conn = mustConnect port
-  let filler = arrayMakeWith overcapFillerBytes (_ => 65)
+  let filler = fromU8Array (arrayMakeWith overcapFillerBytes (_ => 65))
   let request =
-    appendBytes
-      (toUtf8
-        "POST /xrpc/com.atproto.repo.createRecord HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nContent-Length: \{intToString overcapFillerBytes}\r\n\r\n")
-      filler
+    encodeUtf8
+        "POST /xrpc/com.atproto.repo.createRecord HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nContent-Length: \{intToString overcapFillerBytes}\r\n\r\n"
+      ++ filler
   -- The server may close its read side as soon as the buffered request passes
   -- the cap, which can break this multi-megabyte write before the 413 it has
   -- already decided on can be read back. That closure IS the rejection, so it
@@ -637,8 +619,8 @@ runOvercap port =
   --
   -- When a 413 IS read back it is graded on the allow-origin header too: this
   -- is the other `handleBytes` Err arm, and it reaches no `handle` exit either.
-  let sent = sendAll conn (fromArrayAssumeByteDomain request)
-  let result = readHeaderResponse conn [||]
+  let sent = sendAll conn request
+  let result = readHeaderResponse conn empty
   let () = match result
     Ok (got, headerText, _, _) => corsVerdict "OVERCAP" 413 got headerText
     Err message => match sent
@@ -678,11 +660,11 @@ runIdle port =
   ignoreResult (close conn)
 
 -- | Drive one route on a connection of its own and require `want`.
-checkRoute : String -> Int -> Int -> Array Int -> <IO, Net> Unit
+checkRoute : String -> Int -> Int -> Bytes -> <IO, Net> Unit
 checkRoute label port want request =
   let conn = mustConnect port
   let () = mustSend conn request
-  let () = expectStatus label want (readResponse conn [||])
+  let () = expectStatus label want (readResponse conn empty)
   ignoreResult (close conn)
 
 {- | The endpoints the other cases do not already drive, so that all eleven
@@ -693,7 +675,7 @@ checkRoute label port want request =
    `listRepos`/`getRepoStatus` run here rather than in a case of their own
    because this is the first point in the gate where the hosted repository
    has a commit (case 4's chunked write) — the repository-free shape of both
-   is already covered by `read_routes_all_engines.sh`'s cells, so what this
+   is already covered by `read_routes_all_engines_test.mdk`'s cells, so what this
    gate adds is the repo-bearing shape neither engine harness can produce.
 
    `putRecord` and `deleteRecord` do mutate, so they work on a scratch record
@@ -809,11 +791,11 @@ runResume : Int -> String -> String -> String -> String -> <IO, Net> Unit
 runResume port did collection rkey text =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getRecordPath did collection rkey))
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = expectStatus "RESUME" 200 result
   let () = match result
     Ok (_, body, _) =>
-      let bodyText = fromUtf8 body
+      let bodyText = textOrHex body
       if contains text bodyText then
         ()
       else
@@ -838,11 +820,11 @@ runUnauthorized port did collection rkey =
         ""
         createRecordPath
         (createRecordJson did collection rkey "unauthenticated write attempt"))
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = expectStatus "UNAUTHORIZED" 401 result
   let () = match result
     Ok (_, body, _) =>
-      let bodyText = fromUtf8 body
+      let bodyText = textOrHex body
       if contains "\"AuthenticationRequired\"" bodyText then
         ()
       else
@@ -869,13 +851,13 @@ runLogin port identifier password =
     mustSend
       conn
       (postRequest "" createSessionPath (createSessionJson identifier password))
-  let out = match readResponse conn [||]
+  let out = match readResponse conn empty
     Err message => panic "serve_client: createSession failed: \{message}"
     Ok (200, body, _) =>
       "\{stringField "accessJwt" body} \{stringField "refreshJwt" body}"
     Ok (status, body, _) =>
       panic
-        "serve_client: createSession answered \{intToString status}: \{fromUtf8 body}"
+        "serve_client: createSession answered \{intToString status}: \{textOrHex body}"
   let () = println out
   ignoreResult (close conn)
 
@@ -887,11 +869,11 @@ runLoginRefused port identifier password =
     mustSend
       conn
       (postRequest "" createSessionPath (createSessionJson identifier password))
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = expectStatus "LOGINREFUSED" 401 result
   let () = match result
     Ok (_, body, _) =>
-      let bodyText = fromUtf8 body
+      let bodyText = textOrHex body
       if contains "\"AuthenticationRequired\"" bodyText then
         ()
       else
@@ -909,13 +891,13 @@ runRefresh : Int -> String -> <IO, Net> Unit
 runRefresh port refreshToken =
   let conn = mustConnect port
   let () = mustSend conn (postNoInputRequest refreshToken refreshSessionPath)
-  let out = match readResponse conn [||]
+  let out = match readResponse conn empty
     Err message => panic "serve_client: refreshSession failed: \{message}"
     Ok (200, body, _) =>
       "\{stringField "accessJwt" body} \{stringField "refreshJwt" body}"
     Ok (status, body, _) =>
       panic
-        "serve_client: refreshSession answered \{intToString status}: \{fromUtf8 body}"
+        "serve_client: refreshSession answered \{intToString status}: \{textOrHex body}"
   let () = println out
   ignoreResult (close conn)
 
@@ -927,7 +909,7 @@ runRefreshGraceReplay : Int -> String -> String -> <IO, Net> Unit
 runRefreshGraceReplay port refreshToken previousAccess =
   let conn = mustConnect port
   let () = mustSend conn (postNoInputRequest refreshToken refreshSessionPath)
-  let () = match readResponse conn [||]
+  let () = match readResponse conn empty
     Err message => report "REFRESHGRACE" False message
     Ok (200, body, _) =>
       let access = stringField "accessJwt" body
@@ -947,7 +929,7 @@ runLogout : Int -> String -> <IO, Net> Unit
 runLogout port refreshToken =
   let conn = mustConnect port
   let () = mustSend conn (postNoInputRequest refreshToken deleteSessionPath)
-  let () = expectStatus "LOGOUT" 200 (readResponse conn [||])
+  let () = expectStatus "LOGOUT" 200 (readResponse conn empty)
   ignoreResult (close conn)
 
 -- | `getSession` reports the account the presented ACCESS token belongs to.
@@ -955,7 +937,7 @@ runGetSession : Int -> String -> String -> <IO, Net> Unit
 runGetSession port token did =
   let conn = mustConnect port
   let () = mustSend conn (getRequestWith token getSessionPath)
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = expectStatus "GETSESSION" 200 result
   let () = match result
     Ok (_, body, _) =>
@@ -1006,7 +988,7 @@ runPutPreferences port token want =
   let () =
     mustSend conn (postRequest token putPreferencesPath preferencesBodyJson)
   let () =
-    expectStatus "PUTPREFS\{intToString want}" want (readResponse conn [||])
+    expectStatus "PUTPREFS\{intToString want}" want (readResponse conn empty)
   ignoreResult (close conn)
 
 -- | The same call, graded on the allow-origin header instead of the body —
@@ -1017,7 +999,7 @@ runPutPreferencesCors port token want =
   let conn = mustConnect port
   let () =
     mustSend conn (postRequest token putPreferencesPath preferencesBodyJson)
-  let result = readHeaderResponse conn [||]
+  let result = readHeaderResponse conn empty
   let () = ignoreResult (close conn)
   match result
     Err message => report "PUTPREFSCORS" False message
@@ -1036,7 +1018,7 @@ runPutPreferencesInvalid port token kind =
       wrongNamespacePreferencesJson
   let conn = mustConnect port
   let () = mustSend conn (postRequest token putPreferencesPath body)
-  let () = expectStatus "PUTPREFSINVALID" 400 (readResponse conn [||])
+  let () = expectStatus "PUTPREFSINVALID" 400 (readResponse conn empty)
   ignoreResult (close conn)
 
 -- | `app.bsky.actor.getPreferences`, required to answer with exactly the
@@ -1046,7 +1028,7 @@ runGetPreferences : Int -> String -> Bool -> <IO, Net> Unit
 runGetPreferences port token expectFixture =
   let conn = mustConnect port
   let () = mustSend conn (getRequestWith token getPreferencesPath)
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = expectStatus "GETPREFS" 200 result
   let wanted =
     if expectFixture then
@@ -1055,10 +1037,10 @@ runGetPreferences port token expectFixture =
       stringify (jObject [("preferences", jArray [])])
   let () = match result
     Ok (_, body, _) =>
-      if fromUtf8 body == wanted then
+      if textOrHex body == wanted then
         ()
       else
-        report "GETPREFS" False "unexpected body: \{fromUtf8 body}"
+        report "GETPREFS" False "unexpected body: \{textOrHex body}"
     Err _ => ()
   ignoreResult (close conn)
 
@@ -1082,7 +1064,8 @@ runWriteStatus port token did collection rkey want =
         token
         createRecordPath
         (createRecordJson did collection rkey "session lifecycle probe"))
-  let () = expectStatus "WRITE\{intToString want}" want (readResponse conn [||])
+  let () =
+    expectStatus "WRITE\{intToString want}" want (readResponse conn empty)
   ignoreResult (close conn)
 
 -- # Rate-limit cases (#2612)
@@ -1098,10 +1081,7 @@ runWriteStatus port token did collection rkey want =
 -- | One request/response round trip over an existing connection, using
 -- whatever bytes `readHeaderResponse` already buffered past the previous
 -- response.
-floodStep : Connection * ->
-  Array Int ->
-  Array Int ->
-  <Net> (Int, String, Array Int, Array Int)
+floodStep : Connection * -> Bytes -> Bytes -> <Net> (Int, String, Bytes, Bytes)
 floodStep conn pending requestBytes =
   let () = mustSend conn requestBytes
   match readHeaderResponse conn pending
@@ -1112,18 +1092,15 @@ floodStep conn pending requestBytes =
 -- built from its 1-based index, so a write case can hand every request a
 -- distinct record key — and reports only the LAST response, the one that
 -- observes the class's ceiling if `count` exceeds it.
-floodLoop : Connection * ->
-  Int ->
-  (Int -> Array Int) ->
-  <Net> (Int, String, Array Int)
-floodLoop conn count buildRequest = floodLoopGo conn count buildRequest 1 [||]
+floodLoop : Connection * -> Int -> (Int -> Bytes) -> <Net> (Int, String, Bytes)
+floodLoop conn count buildRequest = floodLoopGo conn count buildRequest 1 empty
 
 floodLoopGo : Connection * ->
   Int ->
-  (Int -> Array Int) ->
+  (Int -> Bytes) ->
   Int ->
-  Array Int ->
-  <Net> (Int, String, Array Int)
+  Bytes ->
+  <Net> (Int, String, Bytes)
 floodLoopGo conn count buildRequest i pending =
   let (status, headerText, body, rest) = floodStep conn pending (buildRequest i)
   if i >= count then
@@ -1134,18 +1111,14 @@ floodLoopGo conn count buildRequest i pending =
 -- | The connections-class case needs a NEW connection each time — that class
 -- is charged once per connection, on its first request, never on a reused
 -- one — so it cannot share `floodLoop`'s single-connection shape.
-floodConnections : Int -> String -> Int -> <Net> (Int, String, Array Int)
+floodConnections : Int -> String -> Int -> <Net> (Int, String, Bytes)
 floodConnections port xff count = floodConnectionsGo port xff count 1
 
-floodConnectionsGo : Int ->
-  String ->
-  Int ->
-  Int ->
-  <Net> (Int, String, Array Int)
+floodConnectionsGo : Int -> String -> Int -> Int -> <Net> (Int, String, Bytes)
 floodConnectionsGo port xff count i =
   let conn = mustConnect port
   let (status, headerText, body, _) =
-    floodStep conn [||] (getRequestXff xff atprotoDidPath)
+    floodStep conn empty (getRequestXff xff atprotoDidPath)
   let () = ignoreResult (close conn)
   if i >= count then
     (status, headerText, body)
@@ -1156,7 +1129,7 @@ floodConnectionsGo port xff count i =
 -- also carry all three `RateLimit-*` headers and the `RateLimitExceeded`
 -- error name; any other expected status is graded on the status alone,
 -- since that is what a second, still-served identity actually gets back.
-reportRateLimit : String -> Int -> Int -> String -> Array Int -> <IO> Unit
+reportRateLimit : String -> Int -> Int -> String -> Bytes -> <IO> Unit
 reportRateLimit label want status headerText body =
   if status /= want then
     report
@@ -1164,7 +1137,7 @@ reportRateLimit label want status headerText body =
       False
       "want status \{intToString want}, got \{intToString status}"
   else if want == 429 then
-    let bodyText = fromUtf8 body
+    let bodyText = textOrHex body
     let headersPresent =
       contains "ratelimit-limit:" headerText
         && contains "ratelimit-remaining:" headerText
@@ -1211,20 +1184,20 @@ runRateLimitRepo port xff count want did =
 
    Each goes on a fresh connection because neither response is keep-alive:
    the server closes after answering a request it could not parse. -}
-malformedRequest : String -> Array Int
+malformedRequest : String -> Bytes
 malformedRequest "framed" =
-  toUtf8 "GET /xrpc/x HTTP/1.1\r\n\{hostHeader}Content-Length: abc\r\n\r\n"
-malformedRequest "unframed" = toUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n"
+  encodeUtf8 "GET /xrpc/x HTTP/1.1\r\n\{hostHeader}Content-Length: abc\r\n\r\n"
+malformedRequest "unframed" = encodeUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n"
 malformedRequest shape = panic "serve_client: unknown malformed shape \{shape}"
 
-floodMalformed : Int -> String -> Int -> <Net> (Int, String, Array Int)
+floodMalformed : Int -> String -> Int -> <Net> (Int, String, Bytes)
 floodMalformed port shape count = floodMalformedGo port shape count 1
 
-floodMalformedGo : Int -> String -> Int -> Int -> <Net> (Int, String, Array Int)
+floodMalformedGo : Int -> String -> Int -> Int -> <Net> (Int, String, Bytes)
 floodMalformedGo port shape count i =
   let conn = mustConnect port
   let (status, headerText, body, _) =
-    floodStep conn [||] (malformedRequest shape)
+    floodStep conn empty (malformedRequest shape)
   let () = ignoreResult (close conn)
   if i >= count then
     (status, headerText, body)
@@ -1288,9 +1261,9 @@ runRateLimitSession port xff count want identifier password =
    request line and one unfinished header field, with no `\r\n\r\n` after
    it. It is the cheapest state a caller can hold a connection open in — one
    packet, and then nothing at all, forever. -}
-unterminatedHeaders : Array Int
+unterminatedHeaders : Bytes
 unterminatedHeaders =
-  toUtf8 "GET \{atprotoDidPath} HTTP/1.1\r\n\{hostHeader}X-Never-Finished: "
+  encodeUtf8 "GET \{atprotoDidPath} HTTP/1.1\r\n\{hostHeader}X-Never-Finished: "
 
 {- | Open `count` connections, send each the same unterminated header
    section, and hand every one of them back still open.
@@ -1307,7 +1280,7 @@ holdUnframedGo port count held =
     held
   else
     let conn = mustConnect port
-    let _ = sendAll conn (fromArrayAssumeByteDomain unterminatedHeaders)
+    let _ = sendAll conn unterminatedHeaders
     holdUnframedGo port (count - 1) (conn :: held)
 
 -- | How long one probe waits for its own answer, and how long the retry
@@ -1329,8 +1302,8 @@ probeOnce port = match connect "127.0.0.1" port
   Err _ => None
   Ok conn =>
     let _ = setTimeout conn probeReadCeiling
-    let _ = sendAll conn (fromArrayAssumeByteDomain (getRequest atprotoDidPath))
-    let result = readResponse conn [||]
+    let _ = sendAll conn (getRequest atprotoDidPath)
+    let result = readResponse conn empty
     let () = ignoreResult (close conn)
     match result
       Ok (status, _, _) => Some status
@@ -1390,9 +1363,9 @@ runUnframedFlood port sockets budgetSeconds =
    `bodyProgressTimeout` (5 s) and whose whole-request budget is
    `requestTimeout` (60 s). No dribbling is needed: this shape makes no
    progress at all, which is exactly what the body budget grades. -}
-declaredBodyNeverSent : Array Int
+declaredBodyNeverSent : Bytes
 declaredBodyNeverSent =
-  toUtf8
+  encodeUtf8
     "POST \{createSessionPath} HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nContent-Length: 1048576\r\n\r\n"
 
 holdBodyStall : Int -> Int -> <Net> List (Connection *)
@@ -1404,7 +1377,7 @@ holdBodyStallGo port count held =
     held
   else
     let conn = mustConnect port
-    let _ = sendAll conn (fromArrayAssumeByteDomain declaredBodyNeverSent)
+    let _ = sendAll conn declaredBodyNeverSent
     holdBodyStallGo port (count - 1) (conn :: held)
 
 {- | #2815: a stranger holds `sockets` connections open, each having terminated
@@ -1465,9 +1438,9 @@ proxyHeaderField : String -> String
 proxyHeaderField service =
   if service == "" then "" else "atproto-proxy: \{service}\r\n"
 
-proxyRequest : String -> String -> String -> String -> Array Int
+proxyRequest : String -> String -> String -> String -> Bytes
 proxyRequest xff token service path =
-  toUtf8
+  encodeUtf8
     "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\{authHeader token}\{proxyHeaderField service}\r\n"
 
 {- | The content negotiation a proxied write carries. Fixed here rather than
@@ -1484,9 +1457,9 @@ proxyWriteLanguage = "de-DE"
    that dropped either would still answer this client with the upstream's own
    reply, so neither is gradeable here — they are gradeable at the STUB, which
    logs what it received; what this builder owes is to send them. -}
-proxyWriteRequest : String -> String -> String -> String -> Array Int
+proxyWriteRequest : String -> String -> String -> String -> Bytes
 proxyWriteRequest token service path body =
-  toUtf8
+  encodeUtf8
     "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}\{proxyHeaderField service}accept-language: \{proxyWriteLanguage}\r\ncontent-type: application/json\r\ncontent-length: \{intToString (stringLength body)}\r\n\r\n\{body}"
 
 {- | Drive one proxied write and grade what came back, response FIELDS
@@ -1509,12 +1482,12 @@ runProxyWrite : Int ->
 runProxyWrite port token service path body want marker field =
   let conn = mustConnect port
   let () = mustSend conn (proxyWriteRequest token service path body)
-  let result = readHeaderResponse conn [||]
+  let result = readHeaderResponse conn empty
   let () = ignoreResult (close conn)
   match result
     Err message => report "PROXYWRITE" False message
     Ok (status, headerText, responseBody, _) =>
-      let bodyText = fromUtf8 responseBody
+      let bodyText = textOrHex responseBody
       if status /= want then
         report
           "PROXYWRITE"
@@ -1551,12 +1524,12 @@ runProxyRead : Int ->
 runProxyRead port token service path want marker =
   let conn = mustConnect port
   let () = mustSend conn (proxyRequest "" token service path)
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = ignoreResult (close conn)
   match result
     Err message => report "PROXYREAD" False message
     Ok (status, body, _) =>
-      let bodyText = fromUtf8 body
+      let bodyText = textOrHex body
       if status /= want then
         report
           "PROXYREAD"
@@ -1604,12 +1577,12 @@ closeProxyCalls (conn :: rest) =
 -- admission queue issues, which are the only two a case here has a claim about.
 data FanoutAnswer = FanoutServed | FanoutRefused | FanoutUnexpected Int
 
-gradeFanout : Int -> Result String (Int, Array Int, Array Int) -> FanoutAnswer
+gradeFanout : Int -> Result String (Int, Bytes, Bytes) -> FanoutAnswer
 gradeFanout _ (Err _) = FanoutUnexpected 0
 gradeFanout upstream (Ok (status, body, _)) =
   if status == upstream then
     FanoutServed
-  else if status == 503 && contains "ProxyLimitExceeded" (fromUtf8 body) then
+  else if status == 503 && contains "ProxyLimitExceeded" (textOrHex body) then
     FanoutRefused
   else
     FanoutUnexpected status
@@ -1631,7 +1604,7 @@ countFanout : Int ->
 countFanout _ [] served refused unexpected odd =
   (served, refused, unexpected, odd)
 countFanout upstream (conn :: rest) served refused unexpected odd =
-  let answer = gradeFanout upstream (readResponse conn [||])
+  let answer = gradeFanout upstream (readResponse conn empty)
   let () = ignoreResult (close conn)
   match answer
     FanoutServed =>
@@ -1689,12 +1662,12 @@ timedProxyRead port token service path =
   let conn = mustConnect port
   let () = mustSend conn (proxyRequest "" token service path)
   let t0 = monotonic ()
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let elapsed = elapsedSince t0
   let () = ignoreResult (close conn)
   match result
     Err message => (0, "read failed: \{message}", elapsed)
-    Ok (status, body, _) => (status, fromUtf8 body, elapsed)
+    Ok (status, body, _) => (status, textOrHex body, elapsed)
 
 probeRefusals : Int ->
   String ->
@@ -1759,7 +1732,7 @@ runProxyReadCors : Int -> String -> String -> String -> Int -> <IO, Net> Unit
 runProxyReadCors port token service path want =
   let conn = mustConnect port
   let () = mustSend conn (proxyRequest "" token service path)
-  let result = readHeaderResponse conn [||]
+  let result = readHeaderResponse conn empty
   let () = ignoreResult (close conn)
   match result
     Err message => report "PROXYREADCORS" False message
@@ -1775,26 +1748,28 @@ runProxyReadCors port token service path want =
    `validFieldValue` (which takes TAB and everything above 127) and both
    refused by `validResponseValue` (`32..126`), which is the exact gap that
    used to panic `lib.cors` and take the whole server process with it. -}
-requestedHeadersBytes : String -> Array Int
-requestedHeadersBytes "none" = [||]
-requestedHeadersBytes "tab" = concat [|toUtf8 "a", [|9|], toUtf8 "b"|]
-requestedHeadersBytes "high" = concat [|toUtf8 "a", [|195|], toUtf8 "b"|]
-requestedHeadersBytes named = toUtf8 named
+requestedHeadersBytes : String -> Bytes
+requestedHeadersBytes "none" = empty
+requestedHeadersBytes "tab" =
+  B.concat [encodeUtf8 "a", fromU8Array [|9|], encodeUtf8 "b"]
+requestedHeadersBytes "high" =
+  B.concat [encodeUtf8 "a", fromU8Array [|195|], encodeUtf8 "b"]
+requestedHeadersBytes named = encodeUtf8 named
 
 -- | An `OPTIONS` preflight, with the named `Access-Control-Request-Headers`
 -- value or none at all when the name is `none`.
-preflightRequest : String -> String -> Array Int
+preflightRequest : String -> String -> Bytes
 preflightRequest path named =
   let value = requestedHeadersBytes named
-  if arrayLength value == 0 then
-    toUtf8 "OPTIONS \{path} HTTP/1.1\r\n\{hostHeader}\r\n"
+  if B.length value == 0 then
+    encodeUtf8 "OPTIONS \{path} HTTP/1.1\r\n\{hostHeader}\r\n"
   else
-    concat [|
-      toUtf8 "OPTIONS \{path} HTTP/1.1\r\n\{hostHeader}",
-      toUtf8 "Access-Control-Request-Headers: ",
+    B.concat [
+      encodeUtf8 "OPTIONS \{path} HTTP/1.1\r\n\{hostHeader}",
+      encodeUtf8 "Access-Control-Request-Headers: ",
       value,
-      toUtf8 "\r\n\r\n",
-    |]
+      encodeUtf8 "\r\n\r\n",
+    ]
 
 -- | The five headers `cors@2.8.6`'s defaults produce, minus the one whose
 -- value this case is asserting itself.
@@ -1838,7 +1813,7 @@ runPreflight port path named want wantAllowed =
   let allowed = wantedAllowHeaders wantAllowed
   let conn = mustConnect port
   let () = mustSend conn (preflightRequest path named)
-  let result = readHeaderResponse conn [||]
+  let result = readHeaderResponse conn empty
   let () = ignoreResult (close conn)
   let wantedField = "access-control-allow-headers: \{allowed}\r\n"
   match result
@@ -1881,7 +1856,7 @@ runCorsGet : String -> Int -> String -> String -> Int -> <IO, Net> Unit
 runCorsGet label port token path want =
   let conn = mustConnect port
   let () = mustSend conn (getRequestWith token path)
-  let result = readHeaderResponse conn [||]
+  let result = readHeaderResponse conn empty
   let () = ignoreResult (close conn)
   match result
     Err message => report label False message
@@ -1907,7 +1882,7 @@ runServiceAuth port token audience nsid stubPort =
     xrpcPath "com.atproto.server.getServiceAuth?aud=\{audience}&lxm=\{nsid}"
   let conn = mustConnect port
   let () = mustSend conn (getRequestWith token path)
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = ignoreResult (close conn)
   match result
     Err message => report "SERVICEAUTH" False message
@@ -1916,18 +1891,18 @@ runServiceAuth port token audience nsid stubPort =
         report
           "SERVICEAUTH"
           False
-          "want status 200, got \{intToString status}: \{fromUtf8 body}"
+          "want status 200, got \{intToString status}: \{textOrHex body}"
       else
         let minted = stringField "token" body
         let stub = mustConnect stubPort
         let () = mustSend stub (getRequestWith minted (xrpcPath nsid))
-        let echoed = readResponse stub [||]
+        let echoed = readResponse stub empty
         let () = ignoreResult (close stub)
         match echoed
           Err message =>
             report "SERVICEAUTH" False "the service did not answer: \{message}"
           Ok (echoStatus, echoBody, _) =>
-            let echoText = fromUtf8 echoBody
+            let echoText = textOrHex echoBody
             if not (contains "\"aud\":\"\{audience}\"" echoText)
               || not (contains "\"lxm\":\"\{nsid}\"" echoText) then
               report
@@ -1999,7 +1974,7 @@ sendLoginXff port xff identifier password =
         (createSessionJson identifier password))
   conn
 
-statusOnly : Result String (Int, Array Int, Array Int) -> Int
+statusOnly : Result String (Int, Bytes, Bytes) -> Int
 statusOnly (Ok (status, _, _)) = status
 statusOnly (Err _) = 0
 
@@ -2010,7 +1985,7 @@ timedGetRecord port did collection rkey =
   let conn = mustConnect port
   let t0 = monotonic ()
   let () = mustSend conn (getRequest (getRecordPath did collection rkey))
-  let status = statusOnly (readResponse conn [||])
+  let status = statusOnly (readResponse conn empty)
   let elapsed = elapsedSince t0
   let () = ignoreResult (close conn)
   (status, elapsed)
@@ -2041,7 +2016,7 @@ runKdfYield port identifier password did collection rkey =
   let login = sendLogin port identifier password
   let () = sleep derivationHeadStart
   let (readStatus, readSeconds) = timedGetRecord port did collection rkey
-  let loginStatus = statusOnly (readResponse login [||])
+  let loginStatus = statusOnly (readResponse login empty)
   let loginSeconds = elapsedSince t0
   let () = ignoreResult (close login)
   report
@@ -2065,8 +2040,8 @@ runLoginRace : Int -> String -> String -> <IO, Net> Unit
 runLoginRace port identifier password =
   let first = sendLogin port identifier password
   let second = sendLogin port identifier password
-  let firstResult = readResponse first [||]
-  let secondResult = readResponse second [||]
+  let firstResult = readResponse first empty
+  let secondResult = readResponse second empty
   let () = ignoreResult (close first)
   let () = ignoreResult (close second)
   let results = [firstResult, secondResult]
@@ -2076,16 +2051,16 @@ runLoginRace port identifier password =
       && length (filter isAuthRefusal results) == 1)
     "statuses \{intToString (statusOnly firstResult)} and \{intToString (statusOnly secondResult)} (wanted one 200 and one 401 AuthenticationRequired)"
 
-isAuthRefusal : Result String (Int, Array Int, Array Int) -> Bool
+isAuthRefusal : Result String (Int, Bytes, Bytes) -> Bool
 isAuthRefusal (Ok (401, body, _)) =
-  contains "\"AuthenticationRequired\"" (fromUtf8 body)
+  contains "\"AuthenticationRequired\"" (textOrHex body)
 isAuthRefusal _ = False
 
 -- | Whether a response is the derivation ceiling's refusal: the rate-limit
 -- refusal's status and error code, with the ceiling's own message.
-isCeilingRefusal : Result String (Int, Array Int, Array Int) -> Bool
+isCeilingRefusal : Result String (Int, Bytes, Bytes) -> Bool
 isCeilingRefusal (Ok (429, body, _)) =
-  let text = fromUtf8 body
+  let text = textOrHex body
   contains "\"RateLimitExceeded\"" text && contains "password derivations" text
 isCeilingRefusal _ = False
 
@@ -2107,7 +2082,7 @@ runKdfFlood port identifier password count did collection rkey =
   let logins = map (_ => sendLogin port identifier password) [1..=count]
   let () = sleep derivationHeadStart
   let (readStatus, readSeconds) = timedGetRecord port did collection rkey
-  let results = map (conn => readResponse conn [||]) logins
+  let results = map (conn => readResponse conn empty) logins
   let floodSeconds = elapsedSince t0
   let () = closeAll logins
   let refused = length (filter isCeilingRefusal results)
@@ -2144,9 +2119,9 @@ runKdfFloodOwnerLockout port attackerXff identifier wrongPassword count ownerXff
       [1..=count]
   let () = sleep derivationHeadStart
   let ownerLogin = sendLoginXff port ownerXff identifier ownerPassword
-  let ownerResult = readResponse ownerLogin [||]
+  let ownerResult = readResponse ownerLogin empty
   let () = ignoreResult (close ownerLogin)
-  let results = map (conn => readResponse conn [||]) logins
+  let results = map (conn => readResponse conn empty) logins
   let () = closeAll logins
   let refused = length (filter isCeilingRefusal results)
   let derived = length (filter isAuthRefusal results)
@@ -2358,13 +2333,15 @@ runUploadBlob : Int -> String -> String -> String -> <IO, Net> Unit
 runUploadBlob port token mimeType text =
   let conn = mustConnect port
   let () =
-    mustSend conn (rawPostRequest token uploadBlobPath mimeType (toUtf8 text))
-  let out = match readResponse conn [||]
+    mustSend
+      conn
+      (rawPostRequest token uploadBlobPath mimeType (encodeUtf8 text))
+  let out = match readResponse conn empty
     Err message => panic "serve_client: uploadBlob failed: \{message}"
     Ok (200, body, _) => blobRefCidText body
     Ok (status, body, _) =>
       panic
-        "serve_client: uploadBlob answered \{intToString status}: \{fromUtf8 body}"
+        "serve_client: uploadBlob answered \{intToString status}: \{textOrHex body}"
   let () = println out
   ignoreResult (close conn)
 
@@ -2381,18 +2358,14 @@ runRepoDigest : Int -> String -> <IO, Net> Unit
 runRepoDigest port did =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getRepoPath did))
-  let out = match readResponse conn [||]
+  let out = match readResponse conn empty
     Err message => panic "serve_client: getRepo failed: \{message}"
     Ok (200, body, _) =>
-      let digest =
-        sha256
-          (optionOrPanic
-            "sha256: every element must be a byte in 0..255"
-            (B.fromArray body))
-      "\{intToString (arrayLength body)} \{Hex.encode digest}"
+      let digest = sha256 body
+      "\{intToString (B.length body)} \{Hex.encode digest}"
     Ok (status, body, _) =>
       panic
-        "serve_client: getRepo answered \{intToString status}: \{fromUtf8 body}"
+        "serve_client: getRepo answered \{intToString status}: \{textOrHex body}"
   let () = println out
   ignoreResult (close conn)
 
@@ -2422,19 +2395,19 @@ slowUploadGap = seconds 3
    shorter blob. -}
 runSlowUpload : Int -> String -> String -> <IO, Net, Clock> Unit
 runSlowUpload port token mimeType =
-  let body = arrayMakeWith slowUploadBytes (i => 65 + i % 26)
-  -- Door: masked — every element is `65 + i % 26`, in range by construction.
-  let wanted = cidToString (cidForRaw (fromArrayAssumeByteDomain body))
+  let body =
+    fromU8Array (arrayMakeWith slowUploadBytes (i => U8.truncate (65 + i % 26)))
+  let wanted = cidToString (cidForRaw body)
   let conn = mustConnect port
   let () =
     mustSend
       conn
-      (toUtf8
+      (encodeUtf8
         "POST \{uploadBlobPath} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Type: \{mimeType}\r\nContent-Length: \{intToString slowUploadBytes}\r\n\r\n")
   let t0 = monotonic ()
   let () = sendInPieces conn body 0 (slowUploadBytes / slowUploadPieces)
   let elapsed = elapsedSince t0
-  let () = match readResponse conn [||]
+  let () = match readResponse conn empty
     Err message =>
       report
         "SLOWUPLOAD"
@@ -2450,18 +2423,18 @@ runSlowUpload port token mimeType =
 
 -- | Sends `body` from `offset` onward in `piece`-byte pieces, pausing
 -- `slowUploadGap` before every piece after the first.
-sendInPieces : Connection * -> Array Int -> Int -> Int -> <Net, Clock> Unit
+sendInPieces : Connection * -> Bytes -> Int -> Int -> <Net, Clock> Unit
 sendInPieces conn body offset piece =
-  if offset >= arrayLength body then
+  if offset >= B.length body then
     ()
   else
     let () = if offset == 0 then () else sleep slowUploadGap
-    let () = mustSend conn (sliceClamped offset (offset + piece) body)
+    let () = mustSend conn (B.sliceClamped offset (offset + piece) body)
     sendInPieces conn body (offset + piece) piece
 
 -- | The `ref.$link` CID of an `uploadBlob` response's `blob` value.
-blobRefCidText : Array Int -> String
-blobRefCidText body = match parse (fromUtf8 body)
+blobRefCidText : Bytes -> String
+blobRefCidText body = match parse (textOrHex body)
   Err message =>
     panic "serve_client: uploadBlob response is not JSON: \{message}"
   Ok value => match andThen (get "blob" value) (get "ref")
@@ -2469,10 +2442,10 @@ blobRefCidText body = match parse (fromUtf8 body)
       Some (JString text) => text
       _ =>
         panic
-          "serve_client: uploadBlob response has no 'blob.ref.$link': \{fromUtf8 body}"
+          "serve_client: uploadBlob response has no 'blob.ref.$link': \{textOrHex body}"
     None =>
       panic
-        "serve_client: uploadBlob response has no 'blob.ref': \{fromUtf8 body}"
+        "serve_client: uploadBlob response has no 'blob.ref': \{textOrHex body}"
 
 {- | Fetch one blob back and grade all three things a restart can lose: the
    status, the DECLARED media type (which content addressing does not carry,
@@ -2481,14 +2454,14 @@ runGetBlob : Int -> String -> String -> String -> String -> <IO, Net> Unit
 runGetBlob port did cid mimeType text =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getBlobPath did cid))
-  let () = match readTypedResponse conn [||]
+  let () = match readTypedResponse conn empty
     Err message => report "GETBLOB" False message
     Ok (status, mediaType, body, _) =>
-      let bodyText = fromUtf8 body
+      let bodyText = textOrHex body
       report
         "GETBLOB"
         (status == 200 && mediaType == mimeType && bodyText == text)
-        "status \{intToString status}, type '\{mediaType}' (wanted '\{mimeType}'), \{intToString (arrayLength body)} byte(s)"
+        "status \{intToString status}, type '\{mediaType}' (wanted '\{mimeType}'), \{intToString (B.length body)} byte(s)"
   ignoreResult (close conn)
 
 {- | Fetch a blob back and grade that `getBlob` refuses to serve it as a live
@@ -2501,7 +2474,7 @@ runGetBlobNotLive : Int -> String -> String -> <IO, Net> Unit
 runGetBlobNotLive port did cid =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getBlobPath did cid))
-  let () = match readHeaderResponse conn [||]
+  let () = match readHeaderResponse conn empty
     Err message => report "GETBLOBNOTLIVE" False message
     Ok (status, headerText, _, _) =>
       report
@@ -2522,11 +2495,11 @@ runGetBlobMissing : Int -> String -> String -> <IO, Net> Unit
 runGetBlobMissing port did cid =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getBlobPath did cid))
-  let result = readResponse conn [||]
+  let result = readResponse conn empty
   let () = expectStatus "GETBLOBMISSING" 400 result
   let () = match result
     Ok (_, body, _) =>
-      let bodyText = fromUtf8 body
+      let bodyText = textOrHex body
       if contains "\"BlobNotFound\"" bodyText then
         ()
       else
@@ -2546,12 +2519,12 @@ latestCommitCid : Int -> String -> <IO, Net> String
 latestCommitCid port did =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getLatestCommitPath did))
-  let out = match readResponse conn [||]
+  let out = match readResponse conn empty
     Err message => panic "serve_client: getLatestCommit failed: \{message}"
     Ok (200, body, _) => stringField "cid" body
     Ok (status, body, _) =>
       panic
-        "serve_client: getLatestCommit answered \{intToString status}: \{fromUtf8 body}"
+        "serve_client: getLatestCommit answered \{intToString status}: \{textOrHex body}"
   let () = ignoreResult (close conn)
   out
 
@@ -2571,7 +2544,7 @@ runSyncGetRecord : Int -> String -> String -> String -> String -> <IO, Net> Unit
 runSyncGetRecord port did collection rkey text =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (syncGetRecordPath did collection rkey))
-  let () = match readTypedResponse conn [||]
+  let () = match readTypedResponse conn empty
     Err message => report "SYNCGETRECORD" False message
     Ok (status, mediaType, body, _) =>
       let bodyHex = hexOf body
@@ -2580,8 +2553,8 @@ runSyncGetRecord port did collection rkey text =
         (status == 200
           && contains carMediaType mediaType
           && carHeaderHex body /= rootlessCarHeaderHex
-          && contains (hexOf (toUtf8 text)) bodyHex)
-        "status \{intToString status}, type '\{mediaType}', \{intToString (arrayLength body)} byte(s)"
+          && contains (hexOf (encodeUtf8 text)) bodyHex)
+        "status \{intToString status}, type '\{mediaType}', \{intToString (B.length body)} byte(s)"
   ignoreResult (close conn)
 
 {- | `com.atproto.sync.getRecord` for a key this repository does NOT hold.
@@ -2600,7 +2573,7 @@ runSyncGetRecordAbsent : Int ->
 runSyncGetRecordAbsent port did collection rkey text =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (syncGetRecordPath did collection rkey))
-  let () = match readTypedResponse conn [||]
+  let () = match readTypedResponse conn empty
     Err message => report "SYNCGETRECORDABSENT" False message
     Ok (status, mediaType, body, _) =>
       let bodyHex = hexOf body
@@ -2609,8 +2582,8 @@ runSyncGetRecordAbsent port did collection rkey text =
         (status == 200
           && contains carMediaType mediaType
           && carHeaderHex body /= rootlessCarHeaderHex
-          && not (contains (hexOf (toUtf8 text)) bodyHex))
-        "status \{intToString status}, type '\{mediaType}', \{intToString (arrayLength body)} byte(s)"
+          && not (contains (hexOf (encodeUtf8 text)) bodyHex))
+        "status \{intToString status}, type '\{mediaType}', \{intToString (B.length body)} byte(s)"
   ignoreResult (close conn)
 
 {- | `com.atproto.sync.getBlocks` for one block the store holds — the commit
@@ -2626,7 +2599,7 @@ runSyncGetBlocks port did text =
   let cid = latestCommitCid port did
   let conn = mustConnect port
   let () = mustSend conn (getRequest (syncGetBlocksPath did [cid]))
-  let () = match readTypedResponse conn [||]
+  let () = match readTypedResponse conn empty
     Err message => report "SYNCGETBLOCKS" False message
     Ok (status, mediaType, body, _) =>
       let bodyHex = hexOf body
@@ -2635,9 +2608,9 @@ runSyncGetBlocks port did text =
         (status == 200
           && contains carMediaType mediaType
           && carHeaderHex body == rootlessCarHeaderHex
-          && arrayLength body > 18
-          && not (contains (hexOf (toUtf8 text)) bodyHex))
-        "status \{intToString status}, type '\{mediaType}', \{intToString (arrayLength body)} byte(s), roots=[]"
+          && B.length body > 18
+          && not (contains (hexOf (encodeUtf8 text)) bodyHex))
+        "status \{intToString status}, type '\{mediaType}', \{intToString (B.length body)} byte(s), roots=[]"
   ignoreResult (close conn)
 
 {- | `com.atproto.sync.getBlocks` for a set the store holds only part of: the
@@ -2656,10 +2629,10 @@ runSyncGetBlocksMissing port did firstMissing secondMissing =
     mustSend
       conn
       (getRequest (syncGetBlocksPath did [cid, firstMissing, secondMissing]))
-  let () = match readResponse conn [||]
+  let () = match readResponse conn empty
     Err message => report "SYNCGETBLOCKSMISSING" False message
     Ok (status, body, _) =>
-      let bodyText = fromUtf8 body
+      let bodyText = textOrHex body
       report
         "SYNCGETBLOCKSMISSING"
         (status == 400

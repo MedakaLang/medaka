@@ -1,0 +1,220 @@
+{- | ECDSA signing values agree across eval, native and WasmGC (#1700
+   step 3). Native timing is audited by `constant_time_signing`; this gate
+   makes no timing claim.
+
+   Two tests, each split on the engine (#1962). The merge half is cheap:
+   the sampled driver's native and Wasm bytes must be identical and carry
+   all four witnesses, and the whole 322-row corpus must pass natively. The
+   deep half, run when `SIGNING_DEEP=1`, adds the two interpreted arms:
+   the sampled driver under `medaka run`, and the full corpus under WasmGC,
+   each byte-identical to native. Those two engines are nearly all of the
+   deep half's cost; the corpus itself is seconds natively. The nightly
+   `pds-signing-parity` job in `.github/workflows/nightly.yml` sets it.
+
+   Both Wasm arms are required: a host without the Wasm emitter, `node` or
+   `wasm-tools` fails this gate rather than skipping the arm.
+
+   Runs under `medaka test --native`: every arm spawns a subprocess. -}
+
+import test.vector_runner.{
+  Arm(..),
+  Engine(..),
+  buildNative,
+  buildSeconds,
+  gradedSpawn,
+  inScratch,
+  medakaEnv,
+  runSeconds,
+  runWasm,
+  spawn,
+  spawnFindings,
+  wasmBuildEnv,
+}
+import io.{getEnvOr}
+import test.{Expectation, expectNoFindings}
+import test_process.{medakaBin, medakaRoot}
+
+gate : String
+gate = "pds/test/signing_parity"
+
+sampleDriver : String
+sampleDriver = "pds/test/constant_time_signing_main.mdk"
+
+fullDriver : String
+fullDriver = "pds/test/ecdsa_vectors_main.mdk"
+
+-- The signing corpus, then Wycheproof's P1363 and Bitcoin files: the order
+-- `ecdsa_vectors_main` reads its arguments in.
+corpus : List String
+corpus = [
+  "pds/test/vectors/prehashed_signing_corpus.txt",
+  "pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt",
+  "pds/test/vectors/wycheproof_secp256k1_sha256_bitcoin.txt",
+]
+
+deep : <IO> Bool
+deep = getEnvOr "SIGNING_DEEP" "0" == "1"
+
+-- # Spawning
+
+-- An interpreted arm: the sampled driver under `medaka run`, or the full
+-- corpus under WasmGC. The nightly job's own timeout is 40 minutes.
+interpretedSeconds : Int
+interpretedSeconds = 2400
+
+under : String -> <IO> String
+under rel = "\{medakaRoot}/\{rel}"
+
+-- # Grading
+
+witnessArm : Arm
+witnessArm = Arm {
+  engine = NativeEngine,
+  driverArgs = [],
+  countFloor = None,
+  needs = [
+    "candidate-1:computations=2:c0.valid=0:",
+    "exhaustion:computations=2:c0.valid=0:",
+    "high-s:compact=reject:verify:reject",
+    "malformed:reject",
+  ],
+  lastLine = None,
+  exactStdout = None,
+}
+
+corpusArm : Arm
+corpusArm = Arm {
+  engine = NativeEngine,
+  driverArgs = [],
+  countFloor = None,
+  needs = [
+    "PROBE candidate-1-selection: PASS computations=2",
+    "PROBE two-candidate-exhaustion: PASS computations=2",
+    "WITNESS high-S ",
+    "WITNESS malformed ",
+  ],
+  lastLine = Some "TOTAL: PASS",
+  exactStdout = None,
+}
+
+-- `other` must print exactly what native printed.
+sameAs : String -> String -> (String, List String) -> List String
+sameAs _ _ (_, fs@(_ :: _)) = fs
+sameAs label native (out, [])
+  | out == native = []
+  | otherwise = [
+    "\{label}: output differs from native — the engines disagree about a value no substring names",
+  ]
+
+-- # The sampled driver
+
+sampleFindings : String -> <Exec, IO> List String
+sampleFindings scratch = match nativeSample scratch
+  (native, []) =>
+    wasmSample scratch native ++ (if deep then evalSample native else [])
+  (_, fs) => fs
+
+nativeSample : String -> <Exec, IO> (String, List String)
+nativeSample scratch =
+  let label = "\{gate} (native sample)"
+  let bin = "\{scratch}/sample"
+  let args = ["build", under sampleDriver, "-o", bin]
+  match (spawnFindings
+    label
+    "medaka build"
+    (spawn buildSeconds medakaEnv medakaBin args))
+    (_, []) =>
+      gradedSpawn
+        label
+        witnessArm
+        (spawnFindings label "the built sample" (spawn runSeconds [] bin []))
+    (_, fs) => ("", fs)
+
+wasmSample : String -> String -> <Exec, IO> List String
+wasmSample scratch native =
+  let label = "\{gate} (wasm sample)"
+  let wasm = "\{scratch}/sample.wasm"
+  let args = ["build", "--target", "wasm", under sampleDriver, "-o", wasm]
+  match (spawnFindings
+    label
+    "medaka build --target wasm"
+    (spawn buildSeconds wasmBuildEnv medakaBin args))
+    (_, []) =>
+      sameAs
+        label
+        native
+        (gradedSpawn
+          label
+          witnessArm
+          (spawnFindings
+            label
+            "node test/wasm/run.js"
+            (runWasm runSeconds wasm [])))
+    (_, fs) => fs
+
+evalSample : String -> <Exec, IO> List String
+evalSample native =
+  let label = "\{gate} (eval sample)"
+  let args = ["run", under sampleDriver]
+  sameAs
+    label
+    native
+    (gradedSpawn
+      label
+      witnessArm
+      (spawnFindings
+        label
+        "medaka run"
+        (spawn interpretedSeconds medakaEnv medakaBin args)))
+
+-- # The full corpus
+
+corpusFindings : String -> <Exec, IO> List String
+corpusFindings scratch = match nativeCorpus scratch
+  (native, []) => if deep then wasmCorpus scratch native else []
+  (_, fs) => fs
+
+nativeCorpus : String -> <Exec, IO> (String, List String)
+nativeCorpus scratch =
+  let label = "\{gate} (native corpus)"
+  let bin = "\{scratch}/corpus"
+  match buildNative label (under fullDriver) bin
+    [] =>
+      gradedSpawn
+        label
+        corpusArm
+        (spawnFindings
+          label
+          "the built corpus driver"
+          (spawn runSeconds [] bin (map under corpus)))
+    fs => ("", fs)
+
+wasmCorpus : String -> String -> <Exec, IO> List String
+wasmCorpus scratch native =
+  let label = "\{gate} (wasm corpus)"
+  let wasm = "\{scratch}/corpus.wasm"
+  let args = ["build", "--target", "wasm", under fullDriver, "-o", wasm]
+  match (spawnFindings
+    label
+    "medaka build --target wasm"
+    (spawn buildSeconds wasmBuildEnv medakaBin args))
+    (_, []) =>
+      sameAs
+        label
+        native
+        (gradedSpawn
+          label
+          corpusArm
+          (spawnFindings
+            label
+            "node test/wasm/run.js"
+            (runWasm interpretedSeconds wasm (map under corpus))))
+    (_, fs) => fs
+
+-- # The tests
+
+test "signing parity: the sampled driver prints the same bytes on native and Wasm (and eval, under SIGNING_DEEP=1), with all four witnesses" =
+  expectNoFindings gate (inScratch sampleFindings)
+
+test "signing parity: the full ECDSA corpus passes natively (and prints the same bytes on Wasm, under SIGNING_DEEP=1)" =
+  expectNoFindings gate (inScratch corpusFindings)

@@ -3,17 +3,87 @@
    of response bytes, checking a header is present, and the two test-only
    builders that hand-craft an expected wire response. -}
 
+import bytes as B
+import bytes.{Bytes, decodeUtf8, encodeUtf8}
+import hex as Hex
 import json.{Json(..), get, parse}
 import net.{Connection, close}
-import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
+import string.{contains, drop, indexOf, split, startsWith, toInt, trim}
 import lib.credential.{
   LoginCheck, LoginVerdict, loginCheckAdvance, loginCheckVerdict
 }
 
-headText : Array Int -> String
-headText bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
-  Some at => fromUtf8 (arrayMakeWith at (i => bytes[i]))
-  None => fromUtf8 bytes
+headerTerminator : Bytes
+headerTerminator = encodeUtf8 "\r\n\r\n"
+
+-- | A response's bytes as text. The response is one the server serialized
+-- from text, so bytes that are not UTF-8 are a finding, not something to
+-- repair before comparing.
+export
+responseText : Bytes -> String
+responseText bytes =
+  optionOrPanic "response_support: response is not UTF-8" (decodeUtf8 bytes)
+
+{- | Bytes as text for a report line or a comparison: the text itself, or
+   its hex when it is not UTF-8, so two different byte strings never read
+   alike. Text that itself begins `<hex:` is given as hex too; otherwise the
+   text `<hex:ff>` and the single byte 0xFF would read the same.
+
+   > textOrHex (encodeUtf8 "ok")
+   "ok"
+   > textOrHex (B.fromU8Array [|255|])
+   "<hex:ff>"
+   > textOrHex (encodeUtf8 "<hex:ff>")
+   "<hex:3c6865783a66663e>" -}
+export
+textOrHex : Bytes -> String
+textOrHex bytes = match decodeUtf8 bytes
+  Some text => if startsWith "<hex:" text then asHex bytes else text
+  None => asHex bytes
+
+asHex : Bytes -> String
+asHex bytes = "<hex:\{Hex.encode bytes}>"
+
+{- | The value of the `content-length` field in a message head (everything
+   before the blank line), found in the head's bytes: `None` when the head
+   has no such field or its value is not a number. The name is matched as
+   the lowercase spelling this project's serializers emit, and the rest of
+   the head need not be UTF-8.
+
+   > headContentLength (encodeUtf8 "POST / HTTP/1.1\r\ncontent-length: 12")
+   Some 12
+   > headContentLength (B.concat [encodeUtf8 "HTTP/1.1 200 OK\r\nx: ", B.fromU8Array [|255|], encodeUtf8 "\r\ncontent-length: 3\r\ny: z"])
+   Some 3
+   > headContentLength (encodeUtf8 "GET / HTTP/1.1\r\nhost: a")
+   None -}
+export
+headContentLength : Bytes -> Option Int
+headContentLength head = match B.indexOf contentLengthField head
+  None => None
+  Some at =>
+    let from = at + B.length contentLengthField
+    let end = match B.indexOfWithin from (B.length head) crlf head
+      Some e => e
+      None => B.length head
+    match decodeUtf8 (B.sliceClamped from end head)
+      Some value => toInt (trim value)
+      None => None
+
+contentLengthField : Bytes
+contentLengthField = encodeUtf8 "\r\ncontent-length:"
+
+crlf : Bytes
+crlf = encodeUtf8 "\r\n"
+
+headBytes : Bytes -> Bytes
+headBytes bytes = match B.indexOf headerTerminator bytes
+  Some at => B.take at bytes
+  None => bytes
+
+-- | The status line and header fields, everything before the blank line.
+export
+headText : Bytes -> String
+headText bytes = responseText (headBytes bytes)
 
 export
 statusLineOf : String -> String
@@ -28,63 +98,72 @@ bodyOf text = match indexOf "\r\n\r\n" text
   None => ""
 
 export
-rawBodyOf : Array Int -> Array Int
-rawBodyOf bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
-  Some at =>
-    let start = at + 4
-    arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i])
-  None => [||]
+rawBodyOf : Bytes -> Bytes
+rawBodyOf bytes = match B.indexOf headerTerminator bytes
+  Some at => B.drop (at + 4) bytes
+  None => empty
 
--- | The response's UTF-8 text body, from a byte array response (mirrors
--- `bodyOf`, which takes an already-decoded response).
+-- | The response's UTF-8 text body (mirrors `bodyOf`, which takes an
+-- already-decoded response).
 export
-bodyText : Array Int -> String
-bodyText bytes =
-  let start = bodyStart bytes 0
-  fromUtf8 (arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i]))
-
-bodyStart : Array Int -> Int -> Int
-bodyStart bytes i =
-  if i + 3 >= arrayLength bytes then
-    panic "response_support: response has no header terminator"
-  else if bytes[i] == 13
-    && bytes[i + 1] == 10
-    && bytes[i + 2] == 13
-    && bytes[i + 3] == 10 then
-    i + 4
-  else
-    bodyStart bytes (i + 1)
+bodyText : Bytes -> String
+bodyText bytes = match B.indexOf headerTerminator bytes
+  Some at => responseText (B.drop (at + 4) bytes)
+  None => panic "response_support: response has no header terminator"
 
 export
-hasContentType : String -> Array Int -> Bool
+hasContentType : String -> Bytes -> Bool
 hasContentType value bytes =
   contains "content-type: \{value}\r\n" (headText bytes)
 
+-- | The index at which the first `\r\n\r\n` at or after `from` starts.
 export
-findHeaderEnd : Array Int -> Int -> Option Int
-findHeaderEnd buf i =
-  if i + 4 > arrayLength buf then
-    None
-  else if buf[i] == 13
-    && buf[i + 1] == 10
-    && buf[i + 2] == 13
-    && buf[i + 3] == 10 then
-    Some i
-  else
-    findHeaderEnd buf (i + 1)
+findHeaderEnd : Bytes -> Int -> Option Int
+findHeaderEnd buf from =
+  B.indexOfWithin from (B.length buf) headerTerminator buf
+
+-- | The status line's code and reason, read from the head alone, so a body
+-- that is not text is no obstacle.
+export
+statusLine : Bytes -> String
+statusLine bytes = statusLineOf (headText bytes)
+
+-- | The whole first line, up to the first CRLF or the end, as `textOrHex`
+-- gives it: `HTTP/1.1 200 OK` for a response.
+export
+firstLineText : Bytes -> String
+firstLineText bytes = match B.indexOf (encodeUtf8 "\r\n") bytes
+  Some at => textOrHex (B.take at bytes)
+  None => textOrHex bytes
+
+-- | The response body parsed as JSON, or `None` when it is not UTF-8 JSON.
+export
+jsonBody : Bytes -> Option Json
+jsonBody bytes = match map parse (decodeUtf8 (rawBodyOf bytes))
+  Some (Ok body) => Some body
+  _ => None
+
+-- | The `cids` array of a `listBlobs` response, or `[]` when there is none.
+export
+listedCids : Bytes -> List String
+listedCids bytes = match map (get "cids") (jsonBody bytes)
+  Some (Some (JArray entries)) => stringEntries (toList entries)
+  _ => []
+
+stringEntries : List Json -> List String
+stringEntries [] = []
+stringEntries ((JString value) :: rest) = value :: stringEntries rest
+stringEntries (_ :: rest) = stringEntries rest
 
 -- The status line and, for a refusal, atproto's error code: the two things a
--- client can act on.
+-- client can act on. A body that is not UTF-8 JSON carries no error code.
 export
-outcome : Array Int -> String
+outcome : Bytes -> String
 outcome bytes =
-  let text = fromUtf8 bytes
-  let status = match parse (bodyOf text)
-    Ok body => match get "error" body
-      Some (JString code) => code
-      _ => ""
-    Err _ => ""
-  if status == "" then statusLineOf text else "\{statusLineOf text} \{status}"
+  let status = statusLine bytes
+  match stringField "error" bytes
+    "" => status
+    code => "\{status} \{code}"
 
 export
 settled : LoginCheck -> LoginVerdict
@@ -93,26 +172,25 @@ settled check = match loginCheckVerdict check
   None => settled (loginCheckAdvance 256 check)
 
 export
-expectedTextResponse : Int -> String -> String -> Array Int
+expectedTextResponse : Int -> String -> String -> Bytes
 expectedTextResponse status reason body =
-  toUtf8
-    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: text/plain\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
+  encodeUtf8
+    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: text/plain\r\ncontent-length: \{intToString (B.length (encodeUtf8 body))}\r\n\r\n\{body}"
 
 export
-expectedError : Int -> String -> String -> String -> Array Int
+expectedError : Int -> String -> String -> String -> Bytes
 expectedError status reason code message =
   let body = "{\"error\":\"\{code}\",\"message\":\"\{message}\"}"
-  toUtf8
-    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: application/json\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
+  encodeUtf8
+    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: application/json\r\ncontent-length: \{intToString (B.length (encodeUtf8 body))}\r\n\r\n\{body}"
 
--- | One string field of a response body, or `""` if absent.
+-- | One string field of a response body, or `""` if absent or the body is
+-- not UTF-8 JSON.
 export
-stringField : String -> Array Int -> String
-stringField name bytes = match parse (bodyOf (fromUtf8 bytes))
-  Ok body => match get name body
-    Some (JString value) => value
-    _ => ""
-  Err _ => ""
+stringField : String -> Bytes -> String
+stringField name bytes = match map (get name) (jsonBody bytes)
+  Some (Some (JString value)) => value
+  _ => ""
 
 ignoreResult : Result a b -> Unit
 ignoreResult (Ok _) = ()

@@ -547,6 +547,33 @@ netTrySendFrom : Socket h -> Array Int -> Int -> <Net h> Result String (Option I
 `netTrySend` starting at the given offset into the array, sending at most 64 KiB
 per call, so a loop over a large payload pays only for the bytes it sends.
 
+### `netSendBytesFrom`
+
+```
+netSendBytesFrom : Socket h -> ByteBlock -> Int -> Int -> <Net h> Result String Int
+```
+
+Sends the bytes of a block in the window between two indices, from the
+first index up to but not including the second, at most 64 KiB per call.
+The result is the number of bytes written, which may be fewer than asked
+for.
+
+A window outside the block, where the first index is negative, the second
+is less than the first, or the second is past the block's length, is
+`Err`. Unlike `netSendFrom`, which clamps its offset, the window is not
+clamped: a window outside the block is a caller's mistake, and clamping
+would hide it.
+
+### `netTrySendBytesFrom`
+
+```
+netTrySendBytesFrom : Socket h -> ByteBlock -> Int -> Int -> <Net h> Result String (Option Int)
+```
+
+`netSendBytesFrom` that returns `None` instead of blocking. `Some n` is
+the count written, which may be short. A window outside the block is `Err`,
+as for `netSendBytesFrom`.
+
 ## Time
 
 ### `wallTimeSec`

@@ -19,12 +19,10 @@
    requirement of RFC 6455 §5.1/§5.2/§5.5, not a byte string anyone
    publishes — so each names the clause it enforces. -}
 
-import array.{blit, fill, make, setInPlace}
 import bytes as B
 import bytes.{Bytes, encodeUtf8, fromU8Array}
 import list.{replicate}
 import mut_bytes as MB
-import string.{fromUtf8, toUtf8}
 import test.{
   expectEach,
   expectEqual,
@@ -60,7 +58,7 @@ repeatedBytes pattern n = B.concat (replicate n pattern)
 
 -- A decode that is expected to succeed, reduced to the four things every
 -- assertion below asks about.
-decodedAs : DecodeResult -> Option (Bool, Opcode, Array Int, Int)
+decodedAs : DecodeResult -> Option (Bool, Opcode, Bytes, Int)
 decodedAs (Decoded (Frame fin opcode payload) consumed) =
   Some (fin, opcode, payload, consumed)
 decodedAs NeedMore = None
@@ -81,6 +79,13 @@ eventRejectedWith code (EventRejected c _) = c == code
 eventRejectedWith _ EventPartial = False
 eventRejectedWith _ (EventMessage _ _) = False
 eventRejectedWith _ (EventControl _) = False
+
+-- `n` copies of one byte, for a payload whose length is what is under test.
+filled : Int -> Int -> Bytes
+filled n byte =
+  let mb = MB.make n
+  MB.fill (U8.truncate byte) mb
+  MB.freeze mb
 
 -- The largest payload the decode assertions below will allocate for. Every
 -- "declared length" case is graded against this number, not against the
@@ -225,34 +230,34 @@ test "a Sec-WebSocket-Key that is not base64 at all is refused" =
 
 -- # Frame encoding — RFC 6455 §5.7
 
-hello : Array Int
-hello = toUtf8 "Hello"
+hello : Bytes
+hello = encodeUtf8 "Hello"
 
 -- The masking key of §5.7's two masked examples.
-sampleMaskKey : Array Int
-sampleMaskKey = [|0x37, 0xfa, 0x21, 0x3d|]
+sampleMaskKey : Bytes
+sampleMaskKey = fromU8Array [|0x37, 0xfa, 0x21, 0x3d|]
 
 test "§5.7: a single-frame unmasked text message" =
   expectEqual
-    [|0x81, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|]
+    (fromU8Array [|0x81, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|])
     (encodeServerFrame (Frame True Text hello))
 
 test "§5.7: a single-frame masked text message" =
   expectEqual
-    [|0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|]
+    maskedHelloWire
     (encodeClientFrame sampleMaskKey (Frame True Text hello))
 
 test "§5.7: a fragmented unmasked text message, both frames" =
-  let first = encodeServerFrame (Frame False Text (toUtf8 "Hel"))
-  let second = encodeServerFrame (Frame True Continuation (toUtf8 "lo"))
+  let first = encodeServerFrame (Frame False Text (encodeUtf8 "Hel"))
+  let second = encodeServerFrame (Frame True Continuation (encodeUtf8 "lo"))
   expectEach [
     (
       "the opening frame is a non-final text frame carrying \"Hel\"",
-      expectEqual [|0x01, 0x03, 0x48, 0x65, 0x6c|] first,
+      expectEqual (fromU8Array [|0x01, 0x03, 0x48, 0x65, 0x6c|]) first,
     ),
     (
       "the closing frame is a final continuation frame carrying \"lo\"",
-      expectEqual [|0x80, 0x02, 0x6c, 0x6f|] second,
+      expectEqual (fromU8Array [|0x80, 0x02, 0x6c, 0x6f|]) second,
     ),
   ]
 
@@ -262,12 +267,26 @@ test "§5.7: an unmasked Ping request and a masked Pong response" =
   expectEach [
     (
       "the server's Ping goes out unmasked",
-      expectEqual [|0x89, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|] ping,
+      expectEqual
+        (fromU8Array [|0x89, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|])
+        ping,
     ),
     (
       "the client's Pong goes out masked with the sample key",
       expectEqual
-        [|0x8a, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|]
+        (fromU8Array [|
+          0x8a,
+          0x85,
+          0x37,
+          0xfa,
+          0x21,
+          0x3d,
+          0x7f,
+          0x9f,
+          0x4d,
+          0x51,
+          0x58,
+        |])
         pong,
     ),
   ]
@@ -275,59 +294,79 @@ test "§5.7: an unmasked Ping request and a masked Pong response" =
 -- The two extended-length examples state a header and leave the payload
 -- unspecified, so these grade the header and the total length.
 test "§5.7: 256 bytes of binary in one unmasked frame uses the 16-bit length" =
-  let body = make 256 0x61
+  let body = filled 256 0x61
   let wire = encodeServerFrame (Frame True Binary body)
   expectEach [
     (
       "the frame is a 4-byte header plus the payload",
-      expectEqual (4 + 256) (arrayLength wire),
+      expectEqual (4 + 256) (B.length wire),
     ),
-    ("the first byte marks a final binary frame", expectEqual 0x82 wire[0]),
+    (
+      "the first byte marks a final binary frame",
+      expectEqual 0x82 (U8.toInt wire[0]),
+    ),
     (
       "the second byte selects the 16-bit length form",
-      expectEqual 0x7e wire[1],
+      expectEqual 0x7e (U8.toInt wire[1]),
     ),
     (
       "the 16-bit length's high byte carries the 0x01 of 256",
-      expectEqual 0x01 wire[2],
+      expectEqual 0x01 (U8.toInt wire[2]),
     ),
-    ("the 16-bit length's low byte is zero", expectEqual 0x00 wire[3]),
+    (
+      "the 16-bit length's low byte is zero",
+      expectEqual 0x00 (U8.toInt wire[3]),
+    ),
   ]
 
 test "§5.7: 64KiB of binary in one unmasked frame uses the 64-bit length" =
-  let body = make 65536 0x62
+  let body = filled 65536 0x62
   let wire = encodeServerFrame (Frame True Binary body)
   expectEach [
     (
       "the frame is a 10-byte header plus the payload",
-      expectEqual (10 + 65536) (arrayLength wire),
+      expectEqual (10 + 65536) (B.length wire),
     ),
-    ("the first byte marks a final binary frame", expectEqual 0x82 wire[0]),
+    (
+      "the first byte marks a final binary frame",
+      expectEqual 0x82 (U8.toInt wire[0]),
+    ),
     (
       "the second byte selects the 64-bit length form",
-      expectEqual 0x7f wire[1],
+      expectEqual 0x7f (U8.toInt wire[1]),
     ),
-    ("the 64-bit length's byte 1 is zero", expectEqual 0x00 wire[2]),
-    ("the 64-bit length's byte 2 is zero", expectEqual 0x00 wire[3]),
-    ("the 64-bit length's byte 3 is zero", expectEqual 0x00 wire[4]),
-    ("the 64-bit length's byte 4 is zero", expectEqual 0x00 wire[5]),
-    ("the 64-bit length's byte 5 is zero", expectEqual 0x00 wire[6]),
+    ("the 64-bit length's byte 1 is zero", expectEqual 0x00 (U8.toInt wire[2])),
+    ("the 64-bit length's byte 2 is zero", expectEqual 0x00 (U8.toInt wire[3])),
+    ("the 64-bit length's byte 3 is zero", expectEqual 0x00 (U8.toInt wire[4])),
+    ("the 64-bit length's byte 4 is zero", expectEqual 0x00 (U8.toInt wire[5])),
+    ("the 64-bit length's byte 5 is zero", expectEqual 0x00 (U8.toInt wire[6])),
     (
       "the 64-bit length's byte 6 carries the 0x01 of 65536",
-      expectEqual 0x01 wire[7],
+      expectEqual 0x01 (U8.toInt wire[7]),
     ),
-    ("the 64-bit length's byte 7 is zero", expectEqual 0x00 wire[8]),
-    ("the 64-bit length's byte 8 is zero", expectEqual 0x00 wire[9]),
+    ("the 64-bit length's byte 7 is zero", expectEqual 0x00 (U8.toInt wire[8])),
+    ("the 64-bit length's byte 8 is zero", expectEqual 0x00 (U8.toInt wire[9])),
   ]
 
 -- # Frame decoding — RFC 6455 §5.7's own bytes, read back
 
-maskedHelloWire : Array Int
-maskedHelloWire =
-  [|0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|]
+maskedHelloWire : Bytes
+maskedHelloWire = fromU8Array [|
+  0x81,
+  0x85,
+  0x37,
+  0xfa,
+  0x21,
+  0x3d,
+  0x7f,
+  0x9f,
+  0x4d,
+  0x51,
+  0x58,
+|]
 
-unmaskedHelloWire : Array Int
-unmaskedHelloWire = [|0x81, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|]
+unmaskedHelloWire : Bytes
+unmaskedHelloWire = fromU8Array [|0x81, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|]
 
 test "§5.7's masked text frame decodes to an unmasked \"Hello\"" =
   match decodedAs (decodeFrame FromClient maxPayload maskedHelloWire 0)
@@ -335,7 +374,7 @@ test "§5.7's masked text frame decodes to an unmasked \"Hello\"" =
     Some (fin, opcode, payload, consumed) => expectEach [
       ("the frame is final", expectTrue fin),
       ("opcode == Text", expectEqual Text opcode),
-      ("fromUtf8 payload == \"Hello\"", expectEqual "Hello" (fromUtf8 payload)),
+      ("payload == \"Hello\"", expectEqual hello payload),
       ("consumed == 11", expectEqual 11 consumed),
     ]
 
@@ -345,12 +384,12 @@ test "§5.7's unmasked text frame decodes on the server-to-client side" =
     Some (fin, opcode, payload, consumed) => expectEach [
       ("the frame is final", expectTrue fin),
       ("opcode == Text", expectEqual Text opcode),
-      ("fromUtf8 payload == \"Hello\"", expectEqual "Hello" (fromUtf8 payload)),
+      ("payload == \"Hello\"", expectEqual hello payload),
       ("consumed == 7", expectEqual 7 consumed),
     ]
 
 test "a second frame in the same buffer decodes at the reported offset" =
-  let buffer = [|
+  let buffer = fromU8Array [|
     0x89,
     0x05,
     0x48,
@@ -374,14 +413,11 @@ test "a second frame in the same buffer decodes at the reported offset" =
         Some (_, second, payload, _) => expectEach [
           ("first == Ping", expectEqual Ping first),
           ("second == Text", expectEqual Text second),
-          (
-            "fromUtf8 payload == \"Hello\"",
-            expectEqual "Hello" (fromUtf8 payload),
-          ),
+          ("payload == \"Hello\"", expectEqual hello payload),
         ]
 
 test "a 16-bit-length frame this module encoded decodes back to its payload" =
-  let body = make 300 0x61
+  let body = filled 300 0x61
   let wire = encodeServerFrame (Frame True Binary body)
   match decodedAs (decodeFrame FromServer maxPayload wire 0)
     None => fail "the 16-bit-length frame failed to decode"
@@ -389,36 +425,35 @@ test "a 16-bit-length frame this module encoded decodes back to its payload" =
       ("the frame is final", expectTrue fin),
       ("opcode == Binary", expectEqual Binary opcode),
       ("payload == body", expectEqual body payload),
-      ("consumed == arrayLength wire", expectEqual (arrayLength wire) consumed),
+      ("consumed == B.length wire", expectEqual (B.length wire) consumed),
     ]
 
 -- # Fragmentation — RFC 6455 §5.4
 
 test "§5.7's two fragments reassemble into one \"Hello\" message" =
   let (afterFirst, firstEvent) =
-    assembleFrame None (Frame False Text (toUtf8 "Hel"))
+    assembleFrame None (Frame False Text (encodeUtf8 "Hel"))
   let (afterSecond, secondEvent) =
-    assembleFrame afterFirst (Frame True Continuation (toUtf8 "lo"))
+    assembleFrame afterFirst (Frame True Continuation (encodeUtf8 "lo"))
   match (firstEvent, secondEvent, afterSecond)
-    (EventPartial, EventMessage Text payload, None) =>
-      expectEqual "Hello" (fromUtf8 payload)
+    (EventPartial, EventMessage Text payload, None) => expectEqual hello payload
     _ =>
       fail
         "expected EventPartial then EventMessage Text with no assembly left open"
 
 test "an unfragmented data frame is delivered without opening an assembly" =
   match assembleFrame None (Frame True Text hello)
-    (None, EventMessage Text payload) => expectEqual "Hello" (fromUtf8 payload)
+    (None, EventMessage Text payload) => expectEqual hello payload
     _ => fail "expected an EventMessage Text with no assembly left open"
 
 test "a control frame interleaved in a fragmented message leaves it open" =
-  let (afterFirst, _) = assembleFrame None (Frame False Text (toUtf8 "Hel"))
-  let (afterPing, pingEvent) = assembleFrame afterFirst (Frame True Ping [||])
+  let (afterFirst, _) = assembleFrame None (Frame False Text (encodeUtf8 "Hel"))
+  let (afterPing, pingEvent) =
+    assembleFrame afterFirst (Frame True Ping (encodeUtf8 ""))
   let (_, finalEvent) =
-    assembleFrame afterPing (Frame True Continuation (toUtf8 "lo"))
+    assembleFrame afterPing (Frame True Continuation (encodeUtf8 "lo"))
   match (pingEvent, finalEvent)
-    (EventControl _, EventMessage Text payload) =>
-      expectEqual "Hello" (fromUtf8 payload)
+    (EventControl _, EventMessage Text payload) => expectEqual hello payload
     _ =>
       fail
         "expected an EventControl for the ping and EventMessage Text for the reassembled body"
@@ -428,7 +463,7 @@ test "a continuation frame with nothing open is refused with 1002 (§5.4)" =
   expectTrue (eventRejectedWith 1002 event)
 
 test "a new data frame while a fragmented message is open is refused (§5.4)" =
-  let (afterFirst, _) = assembleFrame None (Frame False Text (toUtf8 "Hel"))
+  let (afterFirst, _) = assembleFrame None (Frame False Text (encodeUtf8 "Hel"))
   let (_, event) = assembleFrame afterFirst (Frame True Text hello)
   expectTrue (eventRejectedWith 1002 event)
 
@@ -446,78 +481,81 @@ test "a set RSV bit is refused with 1002 (§5.2)" =
   expectTrue
     (rejectedWith
       1002
-      (decodeFrame FromServer maxPayload [|0xc1, 0x01, 0x41|] 0))
+      (decodeFrame FromServer maxPayload (fromU8Array [|0xc1, 0x01, 0x41|]) 0))
 
 test "a reserved opcode is refused with 1002 (§5.2)" =
   expectTrue
     (rejectedWith
       1002
-      (decodeFrame FromServer maxPayload [|0x83, 0x01, 0x41|] 0))
+      (decodeFrame FromServer maxPayload (fromU8Array [|0x83, 0x01, 0x41|]) 0))
 
 test "a control frame declaring over 125 bytes is refused with 1002 (§5.5)" =
   expectTrue
     (rejectedWith
       1002
-      (decodeFrame FromServer maxPayload [|0x89, 0x7e, 0x01, 0x00|] 0))
+      (decodeFrame
+        FromServer
+        maxPayload
+        (fromU8Array [|0x89, 0x7e, 0x01, 0x00|])
+        0))
 
 test "a fragmented control frame is refused with 1002 (§5.5)" =
   expectTrue
     (rejectedWith
       1002
-      (decodeFrame FromServer maxPayload [|0x09, 0x01, 0x41|] 0))
+      (decodeFrame FromServer maxPayload (fromU8Array [|0x09, 0x01, 0x41|]) 0))
 
 test "a 64-bit length with the most significant bit set is refused (§5.2)" =
-  let wire = make 10 0x00
-  setInPlace 0 0x82 wire
-  setInPlace 1 0x7f wire
-  setInPlace 2 0x80 wire
+  let wire = fromU8Array [|0x82, 0x7f, 0x80, 0, 0, 0, 0, 0, 0, 0|]
   expectTrue (rejectedWith 1002 (decodeFrame FromServer maxPayload wire 0))
 
 test "a non-minimally encoded length is refused with 1002 (§5.2)" =
   expectTrue
     (rejectedWith
       1002
-      (decodeFrame FromServer maxPayload [|0x82, 0x7e, 0x00, 0x05, 0x41|] 0))
+      (decodeFrame
+        FromServer
+        maxPayload
+        (fromU8Array [|0x82, 0x7e, 0x00, 0x05, 0x41|])
+        0))
 
 -- The two assertions that matter most: NOTHING is ever allocated to the size
 -- an attacker declared. A terabyte declared in a ten-byte frame is refused
 -- before any allocation, and a length merely larger than the bytes in hand
 -- asks for more bytes rather than allocating for the promise.
 test "a terabyte declared in a 10-byte frame is refused with 1009, not allocated" =
-  let wire = make 10 0x00
-  setInPlace 0 0x82 wire
-  setInPlace 1 0x7f wire
-  setInPlace 3 0x01 wire
+  let wire = fromU8Array [|0x82, 0x7f, 0, 0x01, 0, 0, 0, 0, 0, 0|]
   expectTrue (rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0))
 
 -- #2905: a 64-bit length from 2^62 up to 2^63 - 1 is past `Int`, and read as
 -- an `Int` it wrapped to a negative number that the minimal-encoding check
 -- then reported as a 1002. It is an oversized length, so it is a 1009.
 test "a 64-bit length of 2^62 is refused as too big (1009), not as malformed" =
-  let wire = make 10 0x00
-  setInPlace 0 0x82 wire
-  setInPlace 1 0x7f wire
-  setInPlace 2 0x40 wire
+  let wire = fromU8Array [|0x82, 0x7f, 0x40, 0, 0, 0, 0, 0, 0, 0|]
   expectTrue (rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0))
 
 test "a 64-bit length of 2^63 - 1 is refused as too big (1009)" =
-  let wire = make 10 0xff
-  setInPlace 0 0x82 wire
-  setInPlace 1 0x7f wire
-  setInPlace 2 0x7f wire
+  let wire =
+    fromU8Array [|0x82, 0x7f, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff|]
   expectTrue (rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0))
 
 test "a declared length beyond the bytes in hand needs more, never allocates" =
   expectTrue
     (isNeedMore
-      (decodeFrame FromServer maxPayload [|0x81, 0x64, 0x48, 0x65, 0x6c|] 0))
+      (decodeFrame
+        FromServer
+        maxPayload
+        (fromU8Array [|0x81, 0x64, 0x48, 0x65, 0x6c|])
+        0))
 
 test "a truncated two-byte header needs more bytes" =
-  expectTrue (isNeedMore (decodeFrame FromServer maxPayload [|0x81|] 0))
+  expectTrue
+    (isNeedMore (decodeFrame FromServer maxPayload (fromU8Array [|0x81|]) 0))
 
 test "a 16-bit length field with only one of its two bytes needs more" =
   expectTrue
-    (isNeedMore (decodeFrame FromServer maxPayload [|0x82, 0x7e, 0x01|] 0))
+    (isNeedMore
+      (decodeFrame FromServer maxPayload (fromU8Array [|0x82, 0x7e, 0x01|]) 0))
 
 -- # The close handshake — RFC 6455 §5.5.1, §7.4
 
@@ -528,7 +566,7 @@ test "a close frame carries its status code big-endian, then the reason" =
       ("opcode == Close", expectEqual Close opcode),
       (
         "payload == big-endian code + reason",
-        expectEqual [|0x03, 0xe8, 0x62, 0x79, 0x65|] payload,
+        expectEqual (fromU8Array [|0x03, 0xe8, 0x62, 0x79, 0x65|]) payload,
       ),
     ]
 
@@ -537,49 +575,41 @@ test "a close payload parses back to its code and reason" =
     (opt => match opt
       Some (code, reason) => expectEach [
         ("code == 1000", expectEqual 1000 code),
-        ("fromUtf8 reason == \"bye\"", expectEqual "bye" (fromUtf8 reason)),
+        ("reason == \"bye\"", expectEqual (encodeUtf8 "bye") reason),
       ]
       None => fail "expected a close status, not the no-status case")
-    (parseClosePayload [|0x03, 0xe8, 0x62, 0x79, 0x65|])
+    (parseClosePayload (fromU8Array [|0x03, 0xe8, 0x62, 0x79, 0x65|]))
 
 test "an empty close payload is no status, not a zero status (§5.5.1)" =
-  expectOkThen expectNone (parseClosePayload [||])
+  expectOkThen expectNone (parseClosePayload (encodeUtf8 ""))
 
 test "a one-byte close payload is a violation, not half a code (§5.5.1)" =
-  expectErrContains "1 byte" (parseClosePayload [|0x03|])
+  expectErrContains "1 byte" (parseClosePayload (fromU8Array [|0x03|]))
 
 test "close code 1005 may not appear on the wire (§7.4.1)" =
   expectErrContains
     "may not appear on the wire"
-    (parseClosePayload [|0x03, 0xed|])
+    (parseClosePayload (fromU8Array [|0x03, 0xed|]))
 
 test "a private-range close code 4000 is accepted (§7.4.2)" =
   expectOkThen
     (opt => match opt
       Some (code, _) => expectEqual 4000 code
       None => fail "expected a close status, not the no-status case")
-    (parseClosePayload [|0x0f, 0xa0|])
+    (parseClosePayload (fromU8Array [|0x0f, 0xa0|]))
 
--- A masked payload is unmasked into a FRESH array; the read buffer a caller
--- may still be holding must not have been rewritten under it.
+-- A masked payload is unmasked into a FRESH byte string; the read buffer a
+-- caller may still be holding must not have been rewritten under it.
 test "decoding does not mutate the caller's read buffer" =
-  let wire = make 11 0x00
-  blit
-    [|0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|]
-    0
-    wire
-    0
-    11
-  let before = arrayCopy wire
+  let wire = maskedHelloWire
+  let before = MB.freeze (MB.thaw wire)
   let _ = decodeFrame FromClient maxPayload wire 0
   expectEqual before wire
 
--- `fill` is imported for this one assertion: a payload built by mutation is
--- the cheapest way to state "the length form, not the contents, is what is
--- under test" without a 65536-element literal.
+-- A payload built by `filled` states "the length form, not the contents, is
+-- what is under test" without a 126-element literal.
 test "an all-ones 126-byte payload round-trips through the 16-bit length form" =
-  let body = make 126 0
-  fill 0xff body
+  let body = filled 126 0xff
   let wire = encodeServerFrame (Frame True Binary body)
   match decodedAs (decodeFrame FromServer maxPayload wire 0)
     Some (_, _, payload, _) => expectEqual body payload

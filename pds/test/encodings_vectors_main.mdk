@@ -13,7 +13,9 @@
 
 import string.{lines, split, trim, startsWith, stripPrefix, toInt}
 import path.{basename}
-import bytes.{Bytes, concat, encodeUtf8, fromU8Array, toArray}
+import bytes as B
+import u8 as U8
+import bytes.{Bytes, concat, encodeUtf8, fromU8Array}
 import hex.{encode, decode}
 import lib.base58.{base58btcAlphabet, base58btcEncode, base58btcDecode}
 import lib.multiformats.{
@@ -38,18 +40,8 @@ quotedContent line = match split "\"" line
   _ => panic "encodings_vectors: expected a quoted field in: \{line}"
 
 -- Big-endian bytes -> Int (used to parse a multicodec table `code` field).
-bytesToIntBE : Array Int -> Int
-bytesToIntBE bytes = bytesToIntBEGo bytes 0 0
-
-bytesToIntBEGo : Array Int -> Int -> Int -> Int
-bytesToIntBEGo bytes i acc =
-  if i >= arrayLength bytes then
-    acc
-  else
-    bytesToIntBEGo bytes (i + 1) (acc * 256 + bytes[i])
-
-mustDecodeHex : String -> Array Int
-mustDecodeHex s = toArray (mustDecodeHexBytes s)
+bytesToIntBE : Bytes -> Int
+bytesToIntBE bytes = B.fold (acc byte => acc * 256 + U8.toInt byte) 0 bytes
 
 mustDecodeHexBytes : String -> Bytes
 mustDecodeHexBytes s =
@@ -62,7 +54,7 @@ hexFieldToInt raw =
   let stripped = match stripPrefix "0x" s
     Some rest => rest
     None => s
-  bytesToIntBE (mustDecodeHex stripped)
+  bytesToIntBE (mustDecodeHexBytes stripped)
 
 -- The trimmed field at CSV column `col` (0-based, comma-separated).
 csvField : Int -> String -> String

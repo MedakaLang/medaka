@@ -19,10 +19,10 @@
    this call reaches asks for. -}
 
 import async.{Async}
+import bytes.{Bytes, encodeUtf8}
 import json.{jObject, Json(..), stringify}
 import lib.httpclient.{makeRequestHeader, serializeRequest}
 import shell.egress.{egressAddress, egressConnect}
-import string.{toUtf8}
 
 -- | The loopback port of the reverse proxy fronting the real relay.
 export data RelayTarget = RelayTarget Int
@@ -36,11 +36,11 @@ relayPort (RelayTarget port) = port
 
 -- | `{"hostname": <own hostname>}` — the reference implementation's exact
 -- body shape (`pds/test/vectors/pds_service_auth_shape_corpus.txt`).
-requestCrawlBody : String -> Array Int
+requestCrawlBody : String -> Bytes
 requestCrawlBody hostname =
-  toUtf8 (stringify (jObject [("hostname", JString hostname)]))
+  encodeUtf8 (stringify (jObject [("hostname", JString hostname)]))
 
-requestCrawlBytes : RelayTarget -> String -> Result String (Array Int)
+requestCrawlBytes : RelayTarget -> String -> Result String Bytes
 requestCrawlBytes target hostname = do
   contentType <- makeRequestHeader "content-type" "application/json"
   serializeRequest

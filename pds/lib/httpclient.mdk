@@ -3,8 +3,7 @@
    inbound response parser. Response framing, chunk decoding, and decoded
    resource ceilings all live in that shared owner. -}
 
-import array.{forEachWithIndex}
-import bytebuilder.{Builder, buildArray, emitBytes, emitU8, newBuilder}
+import bytebuilder.{Builder, buildBytes, emitBytes, newBuilder}
 import bytes as B
 import bytes.{Bytes, encodeUtf8}
 import http as H
@@ -17,20 +16,24 @@ import http.{
   isTokenByte,
 }
 import mut_bytes.{MutBytes}
-import string.{stripPrefix, toUtf8}
+import string.{stripPrefix}
+import u8 as U8
 
 -- # Request bytes
 
-validTargetByte : Array Int -> Int -> Int -> Bool -> Bool
+byteAt : Bytes -> Int -> Int
+byteAt input i = U8.toInt input[i]
+
+validTargetByte : Bytes -> Int -> Int -> Bool -> Bool
 validTargetByte input pos end query =
   if pos >= end then
     True
   else
-    let byte = input[pos]
+    let byte = byteAt input pos
     if byte == 37 then
       pos + 2 < end
-        && isSome (H.hexDigit input[pos + 1])
-        && isSome (H.hexDigit input[pos + 2])
+        && isSome (H.hexDigit (byteAt input (pos + 1)))
+        && isSome (H.hexDigit (byteAt input (pos + 2)))
         && validTargetByte input (pos + 3) end query
     else
       let unreserved =
@@ -61,30 +64,29 @@ validTargetByte input pos end query =
       else
         False
 
-validAsciiValue : Array Int -> Int -> Int -> Bool
+validAsciiValue : Bytes -> Int -> Int -> Bool
 validAsciiValue input i end =
   if i >= end then
     True
   else
-    let byte = input[i]
+    let byte = byteAt input i
     byte >= 32 && byte <= 126 && validAsciiValue input (i + 1) end
 
-emitRequestBytes : Array Int -> Builder -> Unit
-emitRequestBytes bytes out =
-  forEachWithIndex (_ byte => emitU8 (fromInt byte) out) bytes
-
 emitRequestText : String -> Builder -> Unit
-emitRequestText text out = emitRequestBytes (toUtf8 text) out
+emitRequestText text out = emitBytes (encodeUtf8 text) out
+
+allTokenBytes : Bytes -> Bool
+allTokenBytes bytes = B.all (byte => isTokenByte (U8.toInt byte)) bytes
 
 -- # Headers
 
 -- | The value of the first field named `name` (already lowercase), if any.
 export
-findHeader : String -> List Header -> Option (Array Int)
+findHeader : String -> List Header -> Option Bytes
 findHeader _ [] = None
 findHeader wanted (header :: rest) =
   if headerName header == wanted then
-    Some (B.toArray (headerValue header))
+    Some (headerValue header)
   else
     findHeader wanted rest
 
@@ -121,15 +123,15 @@ hasReservedRequestField (header :: rest) =
 export
 makeRequestHeader : String -> String -> Result String Header
 makeRequestHeader name value =
-  let nameBytes = toUtf8 name
-  if arrayLength nameBytes == 0 || not (all isTokenByte nameBytes) then
+  let nameBytes = encodeUtf8 name
+  if B.length nameBytes == 0 || not (allTokenBytes nameBytes) then
     Err "httpclient: invalid request header field name"
   else
-    let valueBytes = toUtf8 value
-    if not (validAsciiValue valueBytes 0 (arrayLength valueBytes)) then
+    let valueBytes = encodeUtf8 value
+    if not (validAsciiValue valueBytes 0 (B.length valueBytes)) then
       Err "httpclient: control or non-ASCII byte in request header field value"
     else
-      H.makeHeader name (encodeUtf8 value)
+      H.makeHeader name valueBytes
 
 emitHeaders : List Header -> Builder -> Unit
 emitHeaders [] _ = ()
@@ -147,33 +149,31 @@ emitHeaders (header :: rest) out =
    caller cannot supply `Host`, `Content-Length` or `Transfer-Encoding`
    itself.
 
-   > serializeRequest "GET" "/xrpc/com.example.get" "127.0.0.1:8080" [] [||]
-   Ok [|71, 69, 84, 32, 47, 120, 114, 112, 99, 47, 99, 111, 109, 46, 101, 120, 97, 109, 112, 108, 101, 46, 103, 101, 116, 32, 72, 84, 84, 80, 47, 49, 46, 49, 13, 10, 104, 111, 115, 116, 58, 32, 49, 50, 55, 46, 48, 46, 48, 46, 49, 58, 56, 48, 56, 48, 13, 10, 99, 111, 110, 116, 101, 110, 116, 45, 108, 101, 110, 103, 116, 104, 58, 32, 48, 13, 10, 13, 10|] -}
+   > map B.decodeUtf8 (serializeRequest "GET" "/xrpc/com.example.get" "127.0.0.1:8080" [] (encodeUtf8 ""))
+   Ok Some "GET /xrpc/com.example.get HTTP/1.1\r\nhost: 127.0.0.1:8080\r\ncontent-length: 0\r\n\r\n" -}
 export
 serializeRequest : String ->
   String ->
   String ->
   List Header ->
-  Array Int ->
-  Result String (Array Int)
+  Bytes ->
+  Result String Bytes
 serializeRequest method target host headers body =
-  let methodBytes = toUtf8 method
-  let targetBytes = toUtf8 target
-  let hostBytes = toUtf8 host
-  if arrayLength methodBytes == 0 || not (all isTokenByte methodBytes) then
+  let methodBytes = encodeUtf8 method
+  let targetBytes = encodeUtf8 target
+  let hostBytes = encodeUtf8 host
+  if B.length methodBytes == 0 || not (allTokenBytes methodBytes) then
     Err "httpclient: invalid request method token"
-  else if arrayLength targetBytes == 0
-    || targetBytes[0] /= 47
-    || not (validTargetByte targetBytes 0 (arrayLength targetBytes) False) then
+  else if B.length targetBytes == 0
+    || byteAt targetBytes 0 /= 47
+    || not (validTargetByte targetBytes 0 (B.length targetBytes) False) then
     Err
       "httpclient: request target must be an origin-form ASCII target without a fragment"
-  else if arrayLength hostBytes == 0
-    || not (validAsciiValue hostBytes 0 (arrayLength hostBytes)) then
+  else if B.length hostBytes == 0
+    || not (validAsciiValue hostBytes 0 (B.length hostBytes)) then
     Err "httpclient: invalid Host value"
   else if hasReservedRequestField headers then
     Err "httpclient: request framing fields are reserved"
-  else if not (all (byte => byte >= 0 && byte <= 255) body) then
-    Err "httpclient: request body element outside byte range 0..255"
   else
     let out = newBuilder ()
     emitRequestText method out
@@ -185,10 +185,10 @@ serializeRequest method target host headers body =
     emitRequestText "\r\n" out
     emitHeaders headers out
     emitRequestText "content-length: " out
-    emitRequestText (intToString (arrayLength body)) out
+    emitRequestText (intToString (B.length body)) out
     emitRequestText "\r\n\r\n" out
-    emitRequestBytes body out
-    Ok (buildArray out)
+    emitBytes body out
+    Ok (buildBytes out)
 
 -- # Response compatibility
 

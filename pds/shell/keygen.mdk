@@ -11,7 +11,7 @@
    two public values derived from it, and no other output; the failure paths
    name the file and the rule and never the value. -}
 
-import bytes.{fromArrayAssumeByteDomain}
+import bytes.{Bytes, fromArrayAssumeByteDomain}
 import hex.{encode}
 import io.{writeFilePrivate}
 import lib.did_key.{didKeyFromPublicKey}
@@ -28,19 +28,27 @@ import lib.sign.{
 keygenAttempts : Int
 keygenAttempts = 8
 
-{- | Door, checked: `lib.sign` admits `Bytes` and this module's candidates
-   are `Array Int`. An element outside 0..255 gets `secretKeyFromBytes`'s own
-   refusal, which is what the `Array Int` ingress this replaces answered.
+{- | Door (FFI), checked: `osEntropyBytes` answers the runtime's integer
+   array and a candidate scalar is `Bytes`. An element outside 0..255 gets
+   `secretKeyFromBytes`'s own refusal, so a broken entropy source is refused
+   the way an out-of-range scalar is.
 
    The candidate is a secret scalar, so the range check reads every element
    and branches once on the aggregate: an early-exit scan would let the
    position of the first bad element decide how many elements are read. -}
-secretKeyDoor : Array Int -> Result String SecretKey
+secretKeyDoor : Array Int -> Result String Bytes
 secretKeyDoor raw =
   if outOfByteRange raw 0 0 == 0 then
-    secretKeyFromBytes (fromArrayAssumeByteDomain raw)
+    Ok (fromArrayAssumeByteDomain raw)
   else
     Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
+
+-- A candidate admitted as a key, through `secretKeyDoor` and then the same
+-- `secretKeyFromBytes` the server admits `--key` with.
+admitCandidate : Array Int -> Result String Bytes
+admitCandidate raw = do
+  bytes <- secretKeyDoor raw
+  map (_ => bytes) (secretKeyFromBytes bytes)
 
 -- Zero exactly when every element of `raw` from `i` on is a byte: shifted
 -- right by 8, a byte is 0, a larger value is positive, and a negative value
@@ -62,16 +70,26 @@ outOfByteRange raw i acc =
    would make every key this ever generated derivable from a public constant.
    No candidate, admitted or rejected, reaches the failure message. -}
 export
-keygenSecretBytes : Int -> <Rand> Result String (Array Int)
+keygenSecretBytes : Int -> <Rand> Result String Bytes
 keygenSecretBytes attempts =
   if attempts < 1 then
     Err
       "the entropy source produced no scalar in 1..n-1; refusing to write a key"
-  else
-    let candidate = osEntropyBytes signingKeyBytes
-    match secretKeyDoor candidate
-      Err _ => keygenSecretBytes (attempts - 1)
-      Ok _ => Ok candidate
+  else match admitCandidate (osEntropyBytes signingKeyBytes)
+    Err _ => keygenSecretBytes (attempts - 1)
+    Ok bytes => Ok bytes
+
+{- | A fresh session-token secret, drawn from `osEntropyBytes` for the reason
+   `keygenSecretBytes` gives. Exported so `pds/serve.mdk`'s first-run
+   generation draws it through this same door.
+
+   Door (FFI), masked: `osEntropyBytes` is the runtime's integer-array
+   extern, and every element it returns is a byte by construction. The
+   secret is never scanned, so no step here branches on its value. -}
+export
+tokenSecretBytes : Unit -> <Rand> Bytes
+tokenSecretBytes () =
+  fromArrayAssumeByteDomain (osEntropyBytes serverSecretBytes)
 
 -- | How many bytes a secp256k1 secret scalar is.
 signingKeyBytes : Int
@@ -86,9 +104,9 @@ signingKeyBytes = 32
    `pds/test/secp256k1_public_key_main.mdk` can grade it against the official
    corpora rather than against this program's own output. -}
 export
-keygenSummary : Array Int -> Result String (String, String)
+keygenSummary : Bytes -> Result String (String, String)
 keygenSummary bytes = do
-  secret <- secretKeyDoor bytes
+  secret <- secretKeyFromBytes bytes
   let publicKey = publicKeyForSecret secret
   Ok (
     encode (publicKeyCompressed publicKey),
@@ -120,14 +138,13 @@ keygenRefusePath label path =
 -- is re-applied here so no write path can bypass it, whatever the caller did.
 keygenWrite : String ->
   String ->
-  Array Int ->
+  Bytes ->
   <FileRead, FileWrite> Result String Unit
 keygenWrite label path bytes = match keygenRefusePath label path
   Err message => Err message
-  Ok () =>
-    match writeFilePrivate path "\{encode (fromArrayAssumeByteDomain bytes)}\n"
-      Err message => Err "unwritable \{label} \{path}: \{message}"
-      Ok () => Ok ()
+  Ok () => match writeFilePrivate path "\{encode bytes}\n"
+    Err message => Err "unwritable \{label} \{path}: \{message}"
+    Ok () => Ok ()
 
 -- | Generate the signing key `--key` names, and report the two public values
 -- that identify it. The scalar itself goes to the file and nowhere else.
@@ -148,10 +165,7 @@ export
 keygenTokenSecret : String ->
   <FileRead, FileWrite, Rand, Stdout> Result String Unit
 keygenTokenSecret path = do
-  () <- keygenWrite
-    "session-token secret"
-    path
-    (osEntropyBytes serverSecretBytes)
+  () <- keygenWrite "session-token secret" path (tokenSecretBytes ())
   let () = putStrLn "keygen: wrote session-token secret \{path} (mode 0600)"
   Ok ()
 
@@ -168,7 +182,7 @@ keygenSigningKeyAndTokenSecret : String ->
 keygenSigningKeyAndTokenSecret keyPath secretPath = do
   keyBytes <- keygenSecretBytes keygenAttempts
   (publicHex, did) <- keygenSummary keyBytes
-  let secretBytes = osEntropyBytes serverSecretBytes
+  let secretBytes = tokenSecretBytes ()
   () <- keygenWrite "signing key" keyPath keyBytes
   match keygenWrite "session-token secret" secretPath secretBytes
     Err message => match removeFile keyPath

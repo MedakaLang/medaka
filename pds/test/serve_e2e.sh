@@ -2015,7 +2015,7 @@ fi
 #    three together.
 #
 #    "Nothing was signed" is asserted structurally by the pure cells
-#    (`pds/test/read_routes_all_engines.sh`: a refusal carries no claim set, and
+#    (`pds/test/read_routes_all_engines_test.mdk`: a refusal carries no claim set, and
 #    the `proxy-foreign-audience` mutation proves that cell discriminates). What
 #    is added here is that no call LEFT this box — and the final read is what
 #    makes that absence mean something: it proves the stub's log was live and

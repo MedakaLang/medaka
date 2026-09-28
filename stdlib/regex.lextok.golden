@@ -8,6 +8,17 @@ IDENT "sliceBytes"
 RBRACE
 NEWLINE
 IMPORT
+IDENT "bytes"
+DOT_LBRACE
+UPPER "Bytes"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "bytes"
+AS
+UPPER "B"
+NEWLINE
+IMPORT
 IDENT "list"
 DOT_LBRACE
 IDENT "get"
@@ -30,6 +41,11 @@ IDENT "sliceClamped"
 COMMA
 IDENT "toChars"
 RBRACE
+NEWLINE
+IMPORT
+IDENT "u8"
+AS
+UPPER "U8"
 NEWLINE
 EXPORT
 DATA
@@ -5818,7 +5834,6 @@ DEDENT
 NEWLINE
 IDENT "clampWindow"
 COLON
-UPPER "Array"
 UPPER "Int"
 ARROW
 UPPER "Int"
@@ -5832,17 +5847,11 @@ UPPER "Int"
 RPAREN
 NEWLINE
 IDENT "clampWindow"
-IDENT "codes"
+IDENT "n"
 IDENT "start"
 IDENT "end"
 EQUAL
 INDENT
-LET
-IDENT "n"
-EQUAL
-IDENT "arrayLength"
-IDENT "codes"
-NEWLINE
 LET
 IDENT "hi"
 EQUAL
@@ -5867,6 +5876,114 @@ IDENT "hi"
 RPAREN
 NEWLINE
 DEDENT
+NEWLINE
+IDENT "windowCodes"
+COLON
+UPPER "Bytes"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "Array"
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "windowCodes"
+IDENT "bytes"
+IDENT "start"
+IDENT "end"
+EQUAL
+INDENT
+LET
+LPAREN
+IDENT "lo"
+COMMA
+IDENT "hi"
+RPAREN
+EQUAL
+IDENT "clampWindow"
+LPAREN
+UPPER "B"
+DOT
+IDENT "length"
+IDENT "bytes"
+RPAREN
+IDENT "start"
+IDENT "end"
+NEWLINE
+LPAREN
+IDENT "lo"
+COMMA
+IDENT "arrayMakeWith"
+LPAREN
+IDENT "hi"
+MINUS
+IDENT "lo"
+RPAREN
+LPAREN
+IDENT "i"
+FAT_ARROW
+UPPER "U8"
+DOT
+IDENT "toInt"
+IDENT "bytes"
+LBRACKET_TIGHT
+IDENT "lo"
+PLUS
+IDENT "i"
+RBRACKET
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "shiftSlots"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Array"
+UPPER "Int"
+ARROW
+UPPER "Array"
+UPPER "Int"
+NEWLINE
+IDENT "shiftSlots"
+IDENT "lo"
+IDENT "slots"
+EQUAL
+IDENT "arrayMakeWith"
+LPAREN
+IDENT "arrayLength"
+IDENT "slots"
+RPAREN
+LPAREN
+IDENT "i"
+FAT_ARROW
+INDENT
+LET
+IDENT "slot"
+EQUAL
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "slots"
+NEWLINE
+IF
+IDENT "slot"
+LT
+INT 0
+THEN
+IDENT "slot"
+ELSE
+IDENT "slot"
+PLUS
+IDENT "lo"
+NEWLINE
+DEDENT
+RPAREN
 NEWLINE
 IDENT "findSteps"
 COLON
@@ -6956,8 +7073,7 @@ IDENT "isFullMatchBytes"
 COLON
 UPPER "Regex"
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "Int"
 ARROW
@@ -6974,12 +7090,12 @@ EQUAL
 INDENT
 LET
 LPAREN
-IDENT "lo"
+UNDERSCORE
 COMMA
-IDENT "hi"
+IDENT "codes"
 RPAREN
 EQUAL
-IDENT "clampWindow"
+IDENT "windowCodes"
 IDENT "bytes"
 IDENT "start"
 IDENT "end"
@@ -6987,13 +7103,14 @@ NEWLINE
 MATCH
 IDENT "searchWindow"
 IDENT "re"
-IDENT "bytes"
+IDENT "codes"
 LPAREN
-IDENT "lo"
+INT 0
 COMMA
-IDENT "hi"
+IDENT "arrayLength"
+IDENT "codes"
 RPAREN
-IDENT "lo"
+INT 0
 UPPER "True"
 UPPER "True"
 LPAREN
@@ -7020,8 +7137,7 @@ IDENT "findBytes"
 COLON
 UPPER "Regex"
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "Int"
 ARROW
@@ -7041,16 +7157,19 @@ LET
 LPAREN
 IDENT "lo"
 COMMA
-IDENT "hi"
+IDENT "codes"
 RPAREN
 EQUAL
-IDENT "clampWindow"
+IDENT "windowCodes"
 IDENT "bytes"
 IDENT "start"
 IDENT "end"
 NEWLINE
 IDENT "map"
 LPAREN
+IDENT "slots"
+FAT_ARROW
+INDENT
 IDENT "mkMatchWith"
 LPAREN
 IDENT "from"
@@ -7059,23 +7178,39 @@ FAT_ARROW
 IDENT "fromUtf8"
 LPAREN
 IDENT "sliceBytes"
+LPAREN
 IDENT "from"
+MINUS
+IDENT "lo"
+RPAREN
+LPAREN
 IDENT "to"
-IDENT "bytes"
+MINUS
+IDENT "lo"
+RPAREN
+IDENT "codes"
 RPAREN
 RPAREN
 IDENT "re"
+LPAREN
+IDENT "shiftSlots"
+IDENT "lo"
+IDENT "slots"
+RPAREN
+NEWLINE
+DEDENT
 RPAREN
 LPAREN
 IDENT "searchWindow"
 IDENT "re"
-IDENT "bytes"
+IDENT "codes"
 LPAREN
-IDENT "lo"
+INT 0
 COMMA
-IDENT "hi"
+IDENT "arrayLength"
+IDENT "codes"
 RPAREN
-IDENT "lo"
+INT 0
 UPPER "False"
 UPPER "False"
 LPAREN

@@ -1,9 +1,9 @@
 {- | P1-D official repository transcript and named rejection driver. -}
 
-import array as A
-import bytes.{
-  Bytes, encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, toArray
-}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromU8Array}
+import mut_bytes as MB
+import u8 as U8
 import hex.{decode}
 import io.{readLines}
 import string.{contains, join, repeat, split, toInt}
@@ -213,14 +213,15 @@ acceptLaterFailure label _ (Ok _) =
   let () = println "CONTROL \{label} FAIL missing-later-rejection"
   0
 
--- `changed` holds `path`'s bytes with at most one lowered by 32, so every
--- element is still a byte.
+-- `path` with its first byte upper-cased when it is an ASCII lowercase letter.
 uppercaseFirst : Bytes -> Bytes
 uppercaseFirst path =
-  let changed = toArray path
-  let byte = changed[0]
-  let () = if byte >= 97 && byte <= 122 then A.setInPlace 0 (byte - 32) changed
-  fromArrayAssumeByteDomain changed
+  let changed = MB.thaw path
+  let byte = U8.toInt changed[0]
+  let () =
+    if byte >= 97 && byte <= 122 then
+      MB.setInPlace 0 (U8.truncate (byte - 32)) changed
+  MB.freeze changed
 
 repoIdentityControl : Repo -> Bytes -> DagCbor -> <IO> Int
 repoIdentityControl repo lowerPath record =
@@ -295,7 +296,7 @@ malformedBoundExport =
           DcArray [
             DcMap [
               ("p", DcInt 0),
-              ("k", DcBytes (fromArrayAssumeByteDomain [||])),
+              ("k", DcBytes empty),
               ("v", DcLink recordCid),
               ("t", DcNull),
             ],
@@ -345,20 +346,12 @@ runHostile did secret repo path presentRecord =
   let badVersion = mustEncode (DcMap (setField "version" (DcInt 2) fields))
   let badSig =
     mustEncode
-      (DcMap
-        (setField
-          "sig"
-          (DcBytes (fromArrayAssumeByteDomain (arrayMake 64 0)))
-          fields))
-  -- Flipping the low bit of a byte leaves a byte.
+      (DcMap (setField "sig" (DcBytes (fromU8Array (arrayMake 64 0))) fields))
   let tampered =
-    let bytes = toArray signed
-    let () =
-      A.setInPlace
-        (arrayLength bytes - 1)
-        (bitXor bytes[arrayLength bytes - 1] 1)
-        bytes
-    fromArrayAssumeByteDomain bytes
+    let bytes = MB.thaw signed
+    let last = MB.length bytes - 1
+    let () = MB.setInPlace last (U8.bitXor bytes[last] 1) bytes
+    MB.freeze bytes
   sum [
     rejectContains "tid-alphabet" "alphabet" (tidParse "3ke6kg3wk2220"),
     rejectContains "tid-length" "13" (tidParse "3ke6kg3wk222"),

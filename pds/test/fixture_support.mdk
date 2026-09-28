@@ -26,12 +26,13 @@ altTestSecret : Bytes
 altTestSecret = B.fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 7 + 1)))
 
 export
-testNonce : Array Int
-testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
+testNonce : Bytes
+testNonce = B.fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 11 + 5)))
 
 export
-nonceAt : Int -> Array Int
-nonceAt seed = arrayMakeWith 16 (i => (i * 31 + seed) % 256)
+nonceAt : Int -> Bytes
+nonceAt seed =
+  B.fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 31 + seed)))
 
 export
 contextAt : Int -> Int -> RequestContext
@@ -41,13 +42,6 @@ contextAt instant seed =
 export
 meaningful : String -> Bool
 meaningful line = line /= "" && not (startsWith "#" line)
-
-export
-appendBytes : Array Int -> Array Int -> Array Int
-appendBytes left right =
-  let leftSize = arrayLength left
-  arrayMakeWith (leftSize + arrayLength right) (i =>
-    if i < leftSize then left[i] else right[i - leftSize])
 
 export
 lastHex : String -> String
