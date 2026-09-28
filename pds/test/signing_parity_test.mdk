@@ -20,16 +20,17 @@ import test.vector_runner.{
   Arm(..),
   Engine(..),
   buildNative,
-  freshScratch,
-  outputFindings,
-  reap,
+  buildSeconds,
+  gradedSpawn,
+  inScratch,
+  medakaEnv,
   runSeconds,
+  runWasm,
   spawn,
   spawnFindings,
+  wasmBuildEnv,
 }
 import io.{getEnvOr}
-import list.{last}
-import string.{contains, join, lines}
 import test.{Expectation, expectNoFindings}
 import test_process.{medakaBin, medakaRoot}
 
@@ -56,82 +57,13 @@ deep = getEnvOr "SIGNING_DEEP" "0" == "1"
 
 -- # Spawning
 
-buildSeconds : Int
-buildSeconds = 900
-
 -- An interpreted arm: the sampled driver under `medaka run`, or the full
 -- corpus under WasmGC. The nightly job's own timeout is 40 minutes.
 interpretedSeconds : Int
 interpretedSeconds = 2400
 
-wasmEmitter : <IO> String
-wasmEmitter =
-  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
-
--- `MEDAKA_STRICT=1` turns a stale compiler into a failure rather than a
--- warning on stderr.
-medakaEnv : <IO> List String
-medakaEnv = [
-  "MEDAKA_ROOT=\{medakaRoot}",
-  "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
-  "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
-  "MEDAKA_STRICT=1",
-]
-
 under : String -> <IO> String
 under rel = "\{medakaRoot}/\{rel}"
-
--- `node test/wasm/run.js` takes the program's arguments as one
--- space-separated environment variable.
-runWasm : Int ->
-  String ->
-  List String ->
-  <Exec, IO> Result String (Int, String, String)
-runWasm secs wasm args =
-  spawn
-    secs
-    ["MDK_ARGS=\{join " " args}"]
-    "node"
-    [under "test/wasm/run.js", wasm]
-
--- # The sampled driver's compile warning
-
-{- | Compiling the sampled driver writes one warning to stderr: its
-   `import bytes.{…, length}` is shadowed by `Foldable.length`. Its builds and
-   its `medaka run` are therefore graded on exit status plus this pin, and
-   everything else they write to stderr goes ungraded. Its compiled runs
-   write nothing to stderr and are graded in full.
-
-   The driver's bytes are pinned by `pds/test/constant_time_signing.sh`, so
-   the warning is not this gate's to fix. The pin drains itself: a compile
-   that stops writing the warning fails here until `compileWarning` is
-   removed and those spawns are graded like the others. -}
-compileWarning : String
-compileWarning = "imported 'length : Bytes -> Int' is shadowed"
-
-warnedSpawn : String ->
-  String ->
-  Result String (Int, String, String) ->
-  (String, List String)
-warnedSpawn label what (Err e) =
-  ("", ["\{label}: could not spawn \{what}: \{e}"])
-warnedSpawn label what (Ok (code, out, err))
-  | code /= 0 = (
-    "",
-    ["\{label}: \{what} exited \{intToString code}: \{debug (lastOf err)}"],
-  )
-  | not (contains compileWarning err) = (
-    out,
-    [
-      "\{label}: \{what} no longer writes the pinned compile warning; drop `compileWarning` from \{gate}_test.mdk",
-    ],
-  )
-  | otherwise = (out, [])
-
-lastOf : String -> String
-lastOf text = match last (filter (/= "") (lines text))
-  None => ""
-  Some l => l
 
 -- # Grading
 
@@ -147,6 +79,7 @@ witnessArm = Arm {
     "malformed:reject",
   ],
   lastLine = None,
+  exactStdout = None,
 }
 
 corpusArm : Arm
@@ -161,13 +94,8 @@ corpusArm = Arm {
     "WITNESS malformed ",
   ],
   lastLine = Some "TOTAL: PASS",
+  exactStdout = None,
 }
-
--- A spawn's stdout and findings, with `arm`'s substrings and last line
--- graded only when the spawn itself ran clean.
-graded : String -> Arm -> (String, List String) -> (String, List String)
-graded label arm (out, []) = (out, outputFindings label arm [] out)
-graded _ _ spawned = spawned
 
 -- `other` must print exactly what native printed.
 sameAs : String -> String -> (String, List String) -> List String
@@ -191,12 +119,12 @@ nativeSample scratch =
   let label = "\{gate} (native sample)"
   let bin = "\{scratch}/sample"
   let args = ["build", under sampleDriver, "-o", bin]
-  match (warnedSpawn
+  match (spawnFindings
     label
     "medaka build"
     (spawn buildSeconds medakaEnv medakaBin args))
     (_, []) =>
-      graded
+      gradedSpawn
         label
         witnessArm
         (spawnFindings label "the built sample" (spawn runSeconds [] bin []))
@@ -207,15 +135,15 @@ wasmSample scratch native =
   let label = "\{gate} (wasm sample)"
   let wasm = "\{scratch}/sample.wasm"
   let args = ["build", "--target", "wasm", under sampleDriver, "-o", wasm]
-  match (warnedSpawn
+  match (spawnFindings
     label
     "medaka build --target wasm"
-    (spawn buildSeconds medakaEnv medakaBin args))
+    (spawn buildSeconds wasmBuildEnv medakaBin args))
     (_, []) =>
       sameAs
         label
         native
-        (graded
+        (gradedSpawn
           label
           witnessArm
           (spawnFindings
@@ -231,10 +159,10 @@ evalSample native =
   sameAs
     label
     native
-    (graded
+    (gradedSpawn
       label
       witnessArm
-      (warnedSpawn
+      (spawnFindings
         label
         "medaka run"
         (spawn interpretedSeconds medakaEnv medakaBin args)))
@@ -252,7 +180,7 @@ nativeCorpus scratch =
   let bin = "\{scratch}/corpus"
   match buildNative label (under fullDriver) bin
     [] =>
-      graded
+      gradedSpawn
         label
         corpusArm
         (spawnFindings
@@ -269,12 +197,12 @@ wasmCorpus scratch native =
   match (spawnFindings
     label
     "medaka build --target wasm"
-    (spawn buildSeconds medakaEnv medakaBin args))
+    (spawn buildSeconds wasmBuildEnv medakaBin args))
     (_, []) =>
       sameAs
         label
         native
-        (graded
+        (gradedSpawn
           label
           corpusArm
           (spawnFindings
@@ -284,12 +212,6 @@ wasmCorpus scratch native =
     (_, fs) => fs
 
 -- # The tests
-
-inScratch : (String -> <Exec, IO> List String) ->
-  <Exec, IO> Result String (List String)
-inScratch check = match freshScratch ()
-  Err e => Err "could not make a scratch directory: \{e}"
-  Ok scratch => Ok (reap scratch (check scratch))
 
 test "signing parity: the sampled driver prints the same bytes on native and Wasm (and eval, under SIGNING_DEEP=1), with all four witnesses" =
   expectNoFindings gate (inScratch sampleFindings)

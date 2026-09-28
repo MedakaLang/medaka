@@ -4,8 +4,8 @@
    handler layer, natively.
 
    The two `repo_vectors_main.mdk` rows each require native and Wasm to
-   print the same bytes. The Wasm arm is skipped on a host without the Wasm
-   emitter, `node` or `wasm-tools`, unless `MEDAKA_REQUIRE_WASM=1`. There is
+   print the same bytes. A host without the Wasm emitter, `node` or
+   `wasm-tools` fails the row rather than skipping the Wasm arm. There is
    no eval arm: the interpreter takes about 18 minutes on the representative
    transcript, so its agreement with the native binary is graded nightly by
    `pds/nightly/repo_vectors_eval_engine_test.mdk` instead.
@@ -33,6 +33,7 @@ arm e args needs final = Arm {
   countFloor = None,
   needs = needs,
   lastLine = Some final,
+  exactStdout = None,
 }
 
 -- A row with one native arm over one driver and one corpus.

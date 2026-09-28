@@ -115,19 +115,22 @@ validateNsid nsid =
   let bytes = encodeUtf8 nsid
   validateNsidPrefix bytes (B.length bytes)
 
-foldAuthorityByte : Int -> Int
-foldAuthorityByte byte = if byte >= 65 && byte <= 90 then byte + 32 else byte
+-- | `byte` lowered when it is an ASCII capital letter, and unchanged
+-- otherwise.
+export
+lowerAsciiByte : U8 -> U8
+lowerAsciiByte byte = if byte >= 65 && byte <= 90 then byte + 32 else byte
 
 sameIdentityBytes : Bytes -> Bytes -> Int -> Int -> Bool
 sameIdentityBytes left right authorityEnd i =
   if i >= B.length left then
     True
   else
-    let leftByte = byteAt left i
-    let rightByte = byteAt right i
+    let leftByte = left[i]
+    let rightByte = right[i]
     let same =
       if i < authorityEnd then
-        foldAuthorityByte leftByte == foldAuthorityByte rightByte
+        lowerAsciiByte leftByte == lowerAsciiByte rightByte
       else
         leftByte == rightByte
     same && sameIdentityBytes left right authorityEnd (i + 1)
@@ -176,10 +179,7 @@ canonicalNsid nsid =
   let folded =
     B.fromU8Array
       (arrayMakeWith (B.length bytes) (i =>
-        if i < authorityEnd then
-          U8.truncate (foldAuthorityByte (byteAt bytes i))
-        else
-          bytes[i]))
+        if i < authorityEnd then lowerAsciiByte bytes[i] else bytes[i]))
   match decodeUtf8 folded
     Some canonical => canonical
     None => nsid

@@ -38,25 +38,10 @@ import json.{Json(..), get, jObject, parse, stringify}
 import net.{
   Connection, Listener, accept, close, listen, listenPort, recv, sendAll
 }
-import string.{drop, lines, startsWith, toInt, trim}
-import test.response_support.{findHeaderEnd, textOrHex}
+import string.{toInt}
+import test.response_support.{findHeaderEnd, headContentLength}
 
 -- ── framing: read until the head, then until the declared body arrives ─────
-
--- `serializeRequest` always emits `content-length: N` in lowercase as the
--- last framing header it controls, so a plain line search suffices — this
--- driver need not parse arbitrary header casing the way a real server must.
-declaredContentLength : String -> Int
-declaredContentLength headText = findContentLength (lines headText)
-
-findContentLength : List String -> Int
-findContentLength [] = 0
-findContentLength (line :: rest) =
-  if startsWith "content-length:" line then match toInt (trim (drop 15 line))
-    Some n => n
-    None => 0
-  else
-    findContentLength rest
 
 recvFrame : Connection * -> Bytes -> <Net> Result String Bytes
 recvFrame conn buffer = match findHeaderEnd buffer 0
@@ -68,8 +53,14 @@ recvFrame conn buffer = match findHeaderEnd buffer 0
       else
         recvFrame conn (buffer ++ chunk)
   Some at =>
-    let need = at + 4 + declaredContentLength (textOrHex (B.take at buffer))
-    recvBody conn buffer need
+    -- `serializeRequest` always emits `content-length: N` in lowercase, so a
+    -- plain search of the head's bytes suffices — this driver need not parse
+    -- arbitrary header casing the way a real server must. A head with no
+    -- such field declares no body.
+    let declared = match headContentLength (B.take at buffer)
+      Some n => n
+      None => 0
+    recvBody conn buffer (at + 4 + declared)
 
 recvBody : Connection * -> Bytes -> Int -> <Net> Result String Bytes
 recvBody conn buffer need =

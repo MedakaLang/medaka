@@ -23,14 +23,14 @@
 
    The value test requires every engine to print exactly `transcript`,
    which is hand-authored: each line is the answer the route is defined to
-   give. Native and Wasm must print eval's bytes. The Wasm arm is skipped on
-   a host without the Wasm emitter, `node` or `wasm-tools`, unless
-   `MEDAKA_REQUIRE_WASM=1`.
+   give. Native and Wasm must print eval's bytes. A host without the Wasm
+   emitter, `node` or `wasm-tools` fails the row rather than skipping the
+   Wasm arm.
 
    The mutation test copies `pds/` into a scratch tree, breaks one line of
    the driver at a time, and requires the natively built mutant to fail with
    that mutation's own witness line. Native only, for the reason
-   `did_key_all_engines_test` gives. -}
+   `test.vector_runner`'s `MutationTest` gives. -}
 
 import test.vector_runner.{
   Bound(..),

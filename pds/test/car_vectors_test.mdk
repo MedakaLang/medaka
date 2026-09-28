@@ -3,9 +3,9 @@
    scaling bound, native only.
 
    The value row grades the one ledgered official-atproto CAR corpus on all
-   three engines and requires their stdout to be byte-identical. The Wasm
-   arm is skipped on a host without the Wasm emitter, `node` or
-   `wasm-tools`, unless `MEDAKA_REQUIRE_WASM=1`.
+   three engines and requires their stdout to be byte-identical. A host
+   without the Wasm emitter, `node` or `wasm-tools` fails the row rather
+   than skipping the Wasm arm.
 
    The resource test builds `performance_resource_main.mdk` once, checks
    the `limits` controls, then times one encode of a 1000-block and a
@@ -84,6 +84,7 @@ arm e needs = Arm {
   countFloor = None,
   needs = needs,
   lastLine = Some "TOTAL: PASS",
+  exactStdout = None,
 }
 
 row : Row
@@ -107,6 +108,7 @@ limitsArm = Arm {
   countFloor = None,
   needs = ["limits: 7/7 adjacent controls; 7/7 hostile routes"],
   lastLine = Some "LIMITS: PASS",
+  exactStdout = None,
 }
 
 -- The bound a 2000-block encode must meet, in seconds, and against the
