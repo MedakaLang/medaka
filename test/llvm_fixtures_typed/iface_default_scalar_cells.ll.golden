@@ -366,34 +366,44 @@ else2:
   ret i64 1
 }
 
-; mdk-module $dm_ordered_zZ_5f
-define i64 @mdk_$dm_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed(i64 %arg0, i64 %arg1, i64 %arg2) {
-entry:
-  %t0 = call i64 @mdk_disp_keyOf_0_1(i64 %arg0, i64 %arg1)
-  %t1 = call i64 @mdk_disp_keyOf_0_1(i64 %arg0, i64 %arg2)
-  %t2 = call i64 @mdk_value_lt(i64 %t0, i64 %t1)
-  ret i64 %t2
-}
-
 ; mdk-module impl:Float_ordered
 define i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Float_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t0 = call i64 @mdk_$dm_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed(i64 %arg0, i64 %arg1, i64 %arg2)
-  ret i64 %t0
+  %t0 = call i64 @mdk_impl_Float_keyOf(i64 %arg1)
+  %t1 = call i64 @mdk_impl_Float_keyOf(i64 %arg2)
+  %t2 = inttoptr i64 %t0 to ptr
+  %t3 = getelementptr i8, ptr %t2, i64 8
+  %t4 = load double, ptr %t3
+  %t5 = inttoptr i64 %t1 to ptr
+  %t6 = getelementptr i8, ptr %t5, i64 8
+  %t7 = load double, ptr %t6
+  %t8 = fcmp olt double %t4, %t7
+  %t9 = zext i1 %t8 to i64
+  %t10 = shl i64 %t9, 1
+  %t11 = or i64 %t10, 1
+  ret i64 %t11
 }
 
 ; mdk-module impl:String_ordered
 define i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_String_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t0 = call i64 @mdk_$dm_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed(i64 %arg0, i64 %arg1, i64 %arg2)
-  ret i64 %t0
+  %t0 = call i64 @mdk_impl_String_keyOf(i64 %arg1)
+  %t1 = call i64 @mdk_impl_String_keyOf(i64 %arg2)
+  %t2 = call i64 @mdk_string_compare_raw(i64 %t0, i64 %t1)
+  %t3 = icmp slt i64 %t2, 0
+  %t4 = zext i1 %t3 to i64
+  %t5 = shl i64 %t4, 1
+  %t6 = or i64 %t5, 1
+  ret i64 %t6
 }
 
 ; mdk-module impl:Int_ordered
 define i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Int_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t0 = call i64 @mdk_$dm_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed(i64 %arg0, i64 %arg1, i64 %arg2)
-  ret i64 %t0
+  %t0 = call i64 @mdk_impl_Int_keyOf(i64 %arg1)
+  %t1 = call i64 @mdk_impl_Int_keyOf(i64 %arg2)
+  %t2 = call i64 @mdk_value_lt(i64 %t0, i64 %t1)
+  ret i64 %t2
 }
 
 ; mdk-module impl:Float_keyOf
@@ -436,36 +446,3 @@ entry:
 @mdk_dc.program.8 = internal constant [1 x i64] [i64 193460240]
 ; mdk-module program
 @mdk_dc.program.9 = internal constant [2 x i64] [i64 -3522267172021662167, i64 ptrtoint (ptr @mdk_dc.program.8 to i64)]
-; mdk-module program
-define i64 @mdk_disp_keyOf_0_1(i64 %dict, i64 %arg0) {
-entry:
-  %t0 = inttoptr i64 %dict to ptr
-  %t1 = load i64, ptr %t0
-  %t2 = alloca i64
-  %t4 = icmp eq i64 %t1, 1173816999876653108
-  br i1 %t4, label %dispyes5, label %dispnext5
-dispyes5:
-  %t6 = call i64 @mdk_impl_Float_keyOf(i64 %arg0)
-  store i64 %t6, ptr %t2
-  br label %dispend3
-dispnext5:
-  %t7 = icmp eq i64 %t1, 1842472865616454229
-  br i1 %t7, label %dispyes8, label %dispnext8
-dispyes8:
-  %t9 = call i64 @mdk_impl_String_keyOf(i64 %arg0)
-  store i64 %t9, ptr %t2
-  br label %dispend3
-dispnext8:
-  %t10 = icmp eq i64 %t1, -3522267172021662167
-  br i1 %t10, label %dispyes11, label %dispnext11
-dispyes11:
-  %t12 = call i64 @mdk_impl_Int_keyOf(i64 %arg0)
-  store i64 %t12, ptr %t2
-  br label %dispend3
-dispnext11:
-  call void @mdk_dispatch_no_impl()
-  unreachable
-dispend3:
-  %t13 = load i64, ptr %t2
-  ret i64 %t13
-}

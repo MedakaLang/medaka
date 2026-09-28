@@ -79,9 +79,9 @@ dispositionKey inst method =
   "\{instIdMid inst}#\{intToString (instIdSeq inst)}@\{method}"
 
 -- What a pass needs to give one instance an entry for an inherited default, named
--- the way every engine already names the instance.  The entry is a forwarder to the
--- interface's one shared default body; the instance's dictionary reaches that body
--- as its receiver argument, so nothing about the instance's dictionary is kept here.
+-- the way every engine already names the instance.  The entry is the default's body
+-- specialized to the instance; the instance's dictionary reaches it as its receiver
+-- argument, so nothing about the instance's dictionary is kept here.
 public export data InstanceShape = InstanceShape {
   -- the canonical route word (`route_key.implRouteKeyWord` of the impl's own
   -- interface origin and type arguments, no method): the key its supplied

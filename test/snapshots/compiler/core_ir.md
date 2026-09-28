@@ -1,5 +1,5 @@
 # META
-source_lines=247
+source_lines=248
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -229,12 +229,13 @@ public export data CClause = CClause (List Pat) CExpr
 --     entry per `InheritedDefault` row of the disposition table
 --     (`types/disposition.mdk`): the interface word (`route_key.ifaceWordOf`,
 --     the same word the instance's key carries in its first field), the
---     instance's head tag and canonical key, the dispatch positions, and a
---     forwarder to the interface's one shared default body (a `CBind`,
---     `core_ir_lower.sharedDefaultName`).  Its parameters are the default's
---     method-level dictionaries, then the RECEIVER -- the dictionary that selected
---     this entry, which every engine passes where a supplied method takes its
---     instance's `requires` -- then the value arguments.  It dispatches exactly like
+--     instance's head tag and canonical key, the dispatch positions, and the
+--     default's body specialized to the instance (`core_ir_lower.specializeRow`:
+--     a call on the receiver to another method of the interface goes straight to
+--     the instance's own entry).  Its parameters are the default's method-level
+--     dictionaries, then the RECEIVER -- the dictionary that selected this entry,
+--     which every engine passes where a supplied method takes its instance's
+--     `requires` -- then the value arguments.  It dispatches exactly like
 --     the instance's own `CImplTagged` entries; an engine never chooses between two
 --     defaults, because every inherited slot has its own entry.
 public export data CImplEntry = CImplEntry String Int CImplBody

@@ -1,5 +1,5 @@
 # META
-source_lines=4890
+source_lines=4891
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -167,8 +167,8 @@ public export data Value (e : Effect) =
   -- itself a VDict), so a recursive instance (def : List (List Int)) unfolds
   -- level by level — the inner return-position `def` reads its element dict from
   -- the forwarded requires rather than failing arg-tag dispatch.  The second list
-  -- is the dictionary's direct superinterface dicts, in declaration order, which a
-  -- projection (`RProj`) reads by index.
+  -- is the dictionary's direct superinterface dicts, in declaration order.  A
+  -- projection (`RProj`) indexes the supers, then the requires, as one sequence.
   | VDict String (List (Value e)) (List (Value e))
 
 -- an environment is a stack of frames; each frame maps names to mutable cells
@@ -1365,7 +1365,8 @@ applyValues v (x :: rest) = applyValues (apply v x) rest
 -- build the runtime dictionary for one route: RKey builds a structured VDict
 -- carrying the impl's own requires dicts and its supers recursively (Phase 83/84
 -- #5); RDict/RDictFwd forward the enclosing dict param in full; RProj reads a
--- super out of the dictionary its inner route denotes; RNone is a no-op dict.
+-- super (or, past the supers, a `requires` dictionary) out of the dictionary its
+-- inner route denotes; RNone is a no-op dict.
 export
 dictOfRoute : EvalEnv (Value e) -> Route -> <e> Value e
 dictOfRoute env (RKey key reqs sups) =
@@ -1392,9 +1393,9 @@ dictOfRoute _ (RScalar _) =
 -- the super dictionary at [path] (direct-super indices, outermost first)
 projectDict : Value e -> List Int -> Value e
 projectDict d [] = d
-projectDict (VDict _ _ sups) (i :: rest) = match drop i sups
+projectDict (VDict _ reqs sups) (i :: rest) = match drop i (sups ++ reqs)
   s :: _ => projectDict s rest
-  [] => panic "dictionary projection past its superinterfaces"
+  [] => panic "dictionary projection past its fields"
 projectDict _ _ = panic "dictionary projection of a non-dictionary"
 
 -- narrow a method VMulti by a route, returning the narrowed value and any
@@ -5395,7 +5396,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig false "projectDict" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "projectDict" ((PVar "d") (PList)) (EVar "d"))
-(DFunDef false "projectDict" ((PCon "VDict" PWild PWild (PVar "sups")) (PCons (PVar "i") (PVar "rest"))) (EMatch (EApp (EApp (EVar "drop") (EVar "i")) (EVar "sups")) (arm (PCons (PVar "s") PWild) () (EApp (EApp (EVar "projectDict") (EVar "s")) (EVar "rest"))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "dictionary projection past its superinterfaces"))))))
+(DFunDef false "projectDict" ((PCon "VDict" PWild (PVar "reqs") (PVar "sups")) (PCons (PVar "i") (PVar "rest"))) (EMatch (EApp (EApp (EVar "drop") (EVar "i")) (EBinOp "++" (EVar "sups") (EVar "reqs"))) (arm (PCons (PVar "s") PWild) () (EApp (EApp (EVar "projectDict") (EVar "s")) (EVar "rest"))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "dictionary projection past its fields"))))))
 (DFunDef false "projectDict" (PWild PWild) (EApp (EVar "panic") (ELit (LString "dictionary projection of a non-dictionary"))))
 (DTypeSig true "methodAtNarrow" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "Route") (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "methodAtNarrow" (PWild PWild (PVar "v") (PCon "RNone")) (ETuple (EVar "v") (EListLit)))
@@ -7041,7 +7042,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig false "projectDict" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "projectDict" ((PVar "d") (PList)) (EVar "d"))
-(DFunDef false "projectDict" ((PCon "VDict" PWild PWild (PVar "sups")) (PCons (PVar "i") (PVar "rest"))) (EMatch (EApp (EApp (EVar "drop") (EVar "i")) (EVar "sups")) (arm (PCons (PVar "s") PWild) () (EApp (EApp (EVar "projectDict") (EVar "s")) (EVar "rest"))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "dictionary projection past its superinterfaces"))))))
+(DFunDef false "projectDict" ((PCon "VDict" PWild (PVar "reqs") (PVar "sups")) (PCons (PVar "i") (PVar "rest"))) (EMatch (EApp (EApp (EVar "drop") (EVar "i")) (EBinOp "++" (EVar "sups") (EVar "reqs"))) (arm (PCons (PVar "s") PWild) () (EApp (EApp (EVar "projectDict") (EVar "s")) (EVar "rest"))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "dictionary projection past its fields"))))))
 (DFunDef false "projectDict" (PWild PWild) (EApp (EVar "panic") (ELit (LString "dictionary projection of a non-dictionary"))))
 (DTypeSig true "methodAtNarrow" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "Route") (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "methodAtNarrow" (PWild PWild (PVar "v") (PCon "RNone")) (ETuple (EVar "v") (EListLit)))
