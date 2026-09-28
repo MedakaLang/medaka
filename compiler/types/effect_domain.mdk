@@ -134,13 +134,18 @@ djoinN p _ = p
 --   * Prefix patterns are the maximal ones: a pattern another covers is
 --     dropped, and the rest stay separate, so `"a.com/*"` beside
 --     `"b.com/*"` admits those two hosts and nothing else.
---   * Products are regrouped along one Set axis, the last by name: every
---     other Set axis is split into single members, tuples equal on all the
---     other axes share one set of that axis's members, and a member another
---     tuple covers is dropped. `Host="a.com/*" Method={"GET"}` beside the
---     same host with `{"POST"}` is one tuple with both; beside
+--   * Products: a tuple another covers is dropped, and the rest are grouped
+--     along one Set axis, the last by name among them: tuples written equal
+--     on every other axis share one set of that axis's members, less those a
+--     covering group already holds. `Host="a.com/*" Method={"GET"}` beside
+--     the same host with `{"POST"}` is one tuple with both; beside
 --     `Host="b.com/*"` it stays two, since their pointwise join would admit
---     POST to a.com.
+--     POST to a.com. The form depends on the elements, not their order; two
+--     spellings of one set may differ (`X={"1","2"}` against `X={"1"}` and
+--     `X={"2"}`), which coverage in both directions still finds equal.
+--   * Elements of different domains have no join: an authority that mixes
+--     them is the whole domain, never one of its elements with the others
+--     dropped.
 -- Nothing is folded wider: a set of any size stays exact. Only a written
 -- bound is held to `setCardCap` (`writtenSetProblem`), and only a value's
 -- abstraction is widened past it (`authWidenValue`).
@@ -148,7 +153,7 @@ export
 dantichain : List Param -> List Param
 dantichain ps =
   let cs = map canonParam ps
-  if anyList isSubTop cs then
+  if anyList isSubTop cs || not (sameShape cs) then
     [subTopOf (headParam cs)]
   else match cs
     (PSet _) :: _ => [PSet (Some (sortUniqS (flatMap setMembers cs)))]
@@ -282,20 +287,26 @@ axisChoices keep ((n, PSet (Some xs)) :: rest) =
     flatMap (x => map ((n, PSet (Some [x])) :: _) tails) xs
 axisChoices keep ((n, p) :: rest) = map ((n, p) :: _) (axisChoices keep rest)
 
--- Products regrouped along the last Set axis by name (see `dantichain`).
+-- Products grouped along the last Set axis by name (see `dantichain`).
 canonProducts : List Param -> List Param
-canonProducts ps = match lastSetAxis ps
-  None => maximalOf ps
-  Some axis =>
-    let parts = flatMap (splitAround axis) ps
-    let groups = fold (acc p => addGroup axis p acc) [] parts
-    flatMap (rebuildGroup axis groups) groups
+canonProducts ps =
+  let kept = maximalOf ps
+  match lastSetAxis kept
+    None => kept
+    Some axis =>
+      let groups = fold (acc p => addGroup axis p acc) [] kept
+      flatMap (rebuildGroup axis groups) groups
 
--- A tuple's other axes, split into single members, each with the whole
--- set on [axis].
-splitAround : String -> Param -> List Param
-splitAround axis (PProduct ax) = map productNorm (axisChoices axis ax)
-splitAround _ p = [p]
+-- All elements are of one domain: Prefix, Set, Product or Unit.
+sameShape : List Param -> Bool
+sameShape [] = True
+sameShape (p :: ps) = allList (q => shapeOf q == shapeOf p) ps
+
+shapeOf : Param -> Int
+shapeOf PUnit = 0
+shapeOf (PPrefix _) = 1
+shapeOf (PSet _) = 2
+shapeOf (PProduct _) = 3
 
 -- A group: its other axes (as a key that cannot collide, and as axes), and
 -- its members on the regroup axis, `None` for the whole axis.
@@ -359,7 +370,7 @@ rebuildGroup axis gs (PGroup key others members) =
     None => [productNorm others]
     Some xs =>
       let taken = flatMap (g => optionOr [] (groupMembersOf g)) coverers
-      match filterList (x => not (contains x taken)) xs
+      match filterList (x => not (contains x taken)) (sortUniqS xs)
         [] => []
         left => [productNorm ((axis, PSet (Some left)) :: others)]
 

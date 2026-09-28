@@ -1,4 +1,5 @@
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import support.util.{allList}
 import list.{drop as listDrop}
 import types.effect_domain.{
   Param(..), djoin, drender, dsub, extendParam, appendParam, dantichain,
@@ -212,26 +213,27 @@ test "a set of any size stays exact; only a written bound is capped" =
           (map (i => PSet (Some ["V\{intToString i}"])) [1..=setCardCap + 1]))),
   ]
 
-test "a Product set is canonical in any order, and covers by its union" =
+test "a Product set's form is independent of order, and covers by its union" =
   let t x y = PProduct [("X", PSet (Some [x])), ("Y", PSet (Some [y]))]
   let host h m = PProduct [("Host", pat h), ("Method", PSet (Some [m]))]
+  let split = [t "1" "1", t "2" "1", t "1" "2"]
+  let joined = [
+    PProduct [("X", PSet (Some ["1", "2"])), ("Y", PSet (Some ["1"]))],
+    t "1" "2",
+  ]
   expectAll
     [
       expectEqual
-        (map drender (dantichain [t "1" "1", t "2" "1", t "1" "2"]))
+        (map drender (dantichain split))
         (map drender (dantichain [t "1" "2", t "1" "1", t "2" "1"])),
+      -- two spellings of one set cover each other
+      expectTrue
+        (allList (e => dsubAny e (dantichain joined)) (dantichain split)),
+      expectTrue
+        (allList (e => dsubAny e (dantichain split)) (dantichain joined)),
       expectEqual
-        (map drender (dantichain [t "1" "1", t "2" "1", t "1" "2"]))
-        (map
-          drender
-          (dantichain
-            [
-              PProduct [
-                ("X", PSet (Some ["1", "2"])),
-                ("Y", PSet (Some ["1"])),
-              ],
-              t "1" "2",
-            ])),
+        (map drender (dantichain (dantichain joined)))
+        (map drender (dantichain joined)),
       -- GET and POST to a.com/x lie within the two bound tuples together
       expectTrue
         (dsubAny (PProduct [
@@ -247,3 +249,15 @@ test "a Product set is canonical in any order, and covers by its union" =
           host "a.com/x/*" "POST",
         ]),
     ]
+
+test "elements of different domains are the whole domain, never one of them" = expectAll
+  [
+    expectEqual
+      [drender (PSet None)]
+      (map drender (dantichain [PSet (Some ["SECRET"]), pat "HO*"])),
+    expectEqual
+      [drender (PPrefix None)]
+      (map
+        drender
+        (dantichain [pat "evil*", PProduct [("Host", pat "a.com/x")]])),
+  ]

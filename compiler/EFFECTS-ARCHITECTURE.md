@@ -550,8 +550,8 @@ What landed, in the order the decision record prescribed:
 8. **Prefix sets and exact elements.** A row keeps same-label constants in a
    canonical antichain (`dantichain`, `types/effect_domain.mdk`) instead of
    joining them: Set members as one union, Prefix patterns as the maximal
-   ones, Products split into singletons and regrouped along one Set axis
-   (#3464). A set is never folded, so no bound widens; only a written bound is
+   ones, Products grouped as written along one Set axis; elements of
+   different domains are the whole domain (#3464). A set is never folded, so no bound widens; only a written bound is
    capped at 16 elements (`writtenSetProblem`). The one widening is α's: a
    value's authority past 16 elements folds by the domain join
    (`authWidenValue`, called only from `joinBranches`), whose longest common

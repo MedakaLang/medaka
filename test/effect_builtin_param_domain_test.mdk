@@ -576,3 +576,15 @@ test "the written cap counts written elements, whatever the axes are named" =
 
 test "a literal containing a quote never merges two tuples" =
   expectCheckReject (fixture "product_quote_literal_reject.mdk") ["performs"]
+
+test "elements of different domains joined are the whole domain" = expectAll [
+  expectCheckReject (fixture "mixed_domain_join_reject.mdk") ["performs <Env>"],
+  expectCheckAccept (fixture "mixed_domain_join_accept.mdk"),
+]
+
+test "a covered tuple does not change how a Product bound groups" = expectCheckReject
+  (fixture "product_covered_cap_reject.mdk")
+  ["a set holds at most 16 members, and this one has 18"]
+
+test "a Product bound with many Set axes is kept as written" =
+  expectCheckAccept (fixture "product_many_axes_accept.mdk")

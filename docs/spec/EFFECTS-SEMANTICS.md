@@ -171,18 +171,24 @@ the antichain, otherwise the order in §2.4 is ill-defined.) A v1 atomic label
 `Foo` is exactly `Foo · {()}`.
 
 A label keeps a set exactly where its domain's join is inexact, in one
-canonical form that depends only on what the elements admit, never on the
-order they were written or joined in:
+normal form that depends only on the elements, never on the order they were
+written or joined in:
 
 - Unit and Set members always merge by `⊔`, which is exact (`{A} ⊔ {B} = {A, B}`).
   These labels hold one element.
 - Prefix patterns never merge; the maximal ones are kept.
-- Products are regrouped along one Set axis, the last by name: every other
-  Set axis is split into single members, tuples equal on all the other axes
-  share one set of that axis's members, and a member another tuple covers
-  is dropped. `Host="a.com/*" Method={"GET"}` beside the same host with
-  `{"POST"}` is one element with both methods; beside `Host="b.com/*"` it
-  stays two, since their pointwise join would admit POST to a.com.
+- Products: a tuple another covers is dropped, and the rest are grouped along
+  one Set axis, the last by name among them. Tuples written equal on every
+  other axis share one set of that axis's members, less those a covering
+  group already holds. `Host="a.com/*" Method={"GET"}` beside the same host
+  with `{"POST"}` is one element with both methods; beside `Host="b.com/*"`
+  it stays two, since their pointwise join would admit POST to a.com. Two
+  spellings of one set can keep different forms (`X={"1", "2"}` against
+  `X={"1"}` and `X={"2"}`); they are equal as authorities, since each covers
+  the other.
+- Elements of different domains have no join. An authority that mixes them,
+  such as a qualifier's Prefix literal joined into a Set label, is the label's
+  whole domain, never one element with the others dropped.
 
 So `<Net "a.com/*", Net "b.com/*">` admits those two hosts and nothing else.
 Their join would be `Net` (the longest common prefix is empty), which admits
@@ -194,9 +200,9 @@ than it states. The one widening is the abstraction of a value (§4): α may
 over-approximate what a string denotes. When a value's authority, the join of
 its branches, would hold more than 16 elements, α folds it by `⊔` into one
 element that covers them all. A value is never a bound, so this widens
-nothing a signature wrote. It keeps the cost of a chain of optional appends
-linear instead of exponential. Every other set stays exact at any size: rows,
-solutions, policies and manifests.
+nothing a signature wrote. It keeps each value's set small; without it, a
+chain of optional appends holds exponentially many elements. Every other set
+stays exact at any size: rows, solutions, policies and manifests.
 
 What may be written in source is capped: at most 16 elements of one label, as
 written, and at most 16 members in one Set. A written bound past either cap
