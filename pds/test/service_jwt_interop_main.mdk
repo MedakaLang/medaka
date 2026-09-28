@@ -24,7 +24,6 @@
    itself graded against an external value rather than against
    `lib.did_key`'s own output. -}
 
-import bytes.{toArray}
 import string.{join}
 import hex.{decode}
 import lib.did_key.{didKeyFromPublicKey}

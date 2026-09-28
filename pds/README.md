@@ -173,8 +173,8 @@ socket, runtime-I/O, or async code.
 The buffered policy caps combined headers at 64 KiB, JSON at 150 KiB, text at
 100 KiB, and raw/blob bodies at 5 MiB, with separate bounded line, field,
 trailer, and chunk counts. `pds/test/protocol_all_engines_test.mdk` requires exact
-eval/native/Wasm agreement on fourteen hand-authored protocol cells and runs a
-native direct-red mutation of a repaired raw-input assertion.
+eval/native/Wasm agreement on 25 hand-authored protocol cells and runs a
+native direct-red mutation of the empty reg-name port cell's expected response.
 
 `pds/lib/server_core.mdk`'s `Account` — the repository owner's DID, the owner's
 handle, and this PDS's hostname — is admitted by `pds/lib/atsyntax.mdk`'s
@@ -274,7 +274,7 @@ newline.
 this — both well-knowns as a `did:key` account answers them, `resolveHandle` in
 full, every read's unconfigured-store `RepoNotFound` refusal, and the non-XRPC
 404 control — on eval, native, and real Wasm with a direct-red mutation,
-seventeen named cells. It is repository-free deliberately: nothing in it signs,
+64 named cells. It is repository-free deliberately: nothing in it signs,
 which is what makes an eval arm affordable at all (see "The Store is
 secret-bearing" for the 600s measurement). The `did:web` arm of
 `/.well-known/did.json` publishes the repository's signing key, so it is graded

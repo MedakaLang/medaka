@@ -1,8 +1,7 @@
 {- | Native scaling and resource-limit probe for the Phase 1 MST/CAR gates. -}
 
-import array.{drop}
 import bytes as B
-import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, encodeUtf8}
 import u8 as U8
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
@@ -65,19 +64,16 @@ import lib.store.{
 import lib.tid.{Tid, tidParse, tidToString}
 import list.{reverse}
 import crypto.sha256.{sha256}
-import string.{contains, fromUtf8, toInt, toUtf8}
+import string.{contains, toInt}
 import test.fixture_support.{testNonce, testSecret}
+import test.response_support.{firstLineText}
 
 mustBytes : Result String Bytes -> Bytes
 mustBytes (Ok bytes) = bytes
 mustBytes (Err message) =
   panic "performance_resource: encoding failed: \{message}"
 
-intBytes : Int -> Array Int
-intBytes n =
-  [|bitAnd (shiftRight n 16) 255, bitAnd (shiftRight n 8) 255, bitAnd n 255|]
-
--- The MST key `intBytes` spells: the same three big-endian bytes.
+-- The MST key for `n`: its low three bytes, big-endian.
 intKey : Int -> Bytes
 intKey n = B.fromU8Array [|
   U8.truncate (shiftRight n 16),
@@ -294,7 +290,7 @@ repeatRows : Int -> a -> List a -> List a
 repeatRows n row acc =
   if n <= 0 then acc else repeatRows (n - 1) row (row :: acc)
 
-prefix3 : Array Int -> Array Int -> Int
+prefix3 : Bytes -> Bytes -> Int
 prefix3 prior key =
   if prior[0] /= key[0] then
     0
@@ -305,36 +301,30 @@ prefix3 prior key =
   else
     3
 
-nodeEntries : Int ->
-  Int ->
-  Option (Array Int) ->
-  Cid ->
-  List DagCbor ->
-  List DagCbor
+nodeEntries : Int -> Int -> Option Bytes -> Cid -> List DagCbor -> List DagCbor
 nodeEntries n i prior value acc =
   if i >= n then
     reverse acc
   else
-    let key = intBytes i
+    let key = intKey i
     let prefix = match prior
       None => 0
       Some previous => prefix3 previous key
     let entry = DcMap [
       ("p", DcInt prefix),
-      ("k", DcBytes (fromArrayAssumeByteDomain (drop prefix key))),
+      ("k", DcBytes (B.drop prefix key)),
       ("v", DcLink value),
       ("t", DcNull),
     ]
     nodeEntries n (i + 1) (Some key) value (entry :: acc)
 
-framedHeader : Cid -> Array Int
+framedHeader : Cid -> Bytes
 framedHeader root =
   let header =
-    toArray
-      (mustBytes
-        (dagCborEncode
-          (DcMap [("roots", DcArray [DcLink root]), ("version", DcInt 1)])))
-  toArray (uvarintEncode (arrayLength header)) ++ header
+    mustBytes
+      (dagCborEncode
+        (DcMap [("roots", DcArray [DcLink root]), ("version", DcInt 1)]))
+  uvarintEncode (B.length header) ++ header
 
 depthNode : Bytes -> Cid -> Option Cid -> (Cid, Bytes)
 depthNode key value child =
@@ -420,14 +410,11 @@ runLimits =
     reject
       "car-container-over"
       "container exceeds"
-      (carDecode (fromArrayAssumeByteDomain (arrayMake (maxCarBytes + 1) 0))),
+      (carDecode (B.fromU8Array (arrayMake (maxCarBytes + 1) 0))),
     reject
       "car-section-over"
       "section exceeds"
-      (carDecode
-        (fromArrayAssumeByteDomain
-          (framedHeader root
-            ++ toArray (uvarintEncode (maxCarSectionBytes + 1))))),
+      (carDecode (framedHeader root ++ uvarintEncode (maxCarSectionBytes + 1))),
     reject
       "car-blocks-over"
       "block count exceeds"
@@ -442,7 +429,7 @@ runLimits =
       (mstValidateNodeBytes
         0
         True
-        (fromArrayAssumeByteDomain (arrayMake (maxMstNodeBytes + 1) 0))),
+        (B.fromU8Array (arrayMake (maxMstNodeBytes + 1) 0))),
     reject
       "mst-entries-over"
       "node entry count exceeds"
@@ -522,19 +509,6 @@ fillA mb i =
     let () = MB.setInPlace i 0x41 mb
     fillA mb (i + 1)
 
-inboundStatusEnd : Array Int -> Int -> Int
-inboundStatusEnd bytes i =
-  if i + 1 >= arrayLength bytes then
-    arrayLength bytes
-  else if bytes[i] == 13 && bytes[i + 1] == 10 then
-    i
-  else
-    inboundStatusEnd bytes (i + 1)
-
-inboundStatusLine : Array Int -> String
-inboundStatusLine bytes =
-  fromUtf8 (arrayMakeWith (inboundStatusEnd bytes 0) (i => bytes[i]))
-
 mustInboundAccount : Unit -> Account
 mustInboundAccount _ = match makeAccount perfDid inboundHandle inboundHost
   Ok account => account
@@ -589,7 +563,7 @@ runInboundAlloc n bodyBytes =
   let checksum = repeatInbound server store request n 0
   let a1 = allocBytes ()
   println
-    "INBOUNDALLOC allocBytes=\{intToString (floatToInt (a1 - a0))} N=\{intToString n} bodyBytes=\{intToString bodyBytes} checksum=\{intToString checksum} status=\{inboundStatusLine (toArray first)}"
+    "INBOUNDALLOC allocBytes=\{intToString (floatToInt (a1 - a0))} N=\{intToString n} bodyBytes=\{intToString bodyBytes} checksum=\{intToString checksum} status=\{firstLineText first}"
 
 main : <IO, Env> Unit
 main = match args ()

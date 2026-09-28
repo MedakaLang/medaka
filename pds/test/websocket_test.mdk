@@ -602,9 +602,9 @@ test "a private-range close code 4000 is accepted (§7.4.2)" =
 -- caller may still be holding must not have been rewritten under it.
 test "decoding does not mutate the caller's read buffer" =
   let wire = maskedHelloWire
-  let before = B.toArray wire
+  let before = MB.freeze (MB.thaw wire)
   let _ = decodeFrame FromClient maxPayload wire 0
-  expectEqual before (B.toArray wire)
+  expectEqual before wire
 
 -- A payload built by `filled` states "the length form, not the contents, is
 -- what is under test" without a 126-element literal.

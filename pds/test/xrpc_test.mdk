@@ -1,6 +1,7 @@
 {- | Focused structural XRPC registry, routing, and canonical-error tests. -}
 
-import bytes.{encodeUtf8, fromArray, fromU8Array, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import http.{
   maxJsonBodyBytes,
   maxRawBodyBytes,
@@ -13,9 +14,7 @@ import http.{
   serializeResponse,
 }
 import json.{stringify}
-import string.{toUtf8}
 import test.{expectEach, expectEqual, expectFalse, expectTrue, fail, pass}
-import test.fixture_support.{appendBytes}
 import lib.nsid.{validateNsid}
 import lib.xrpc.{
   AuthPolicy(..),
@@ -38,27 +37,21 @@ import lib.xrpc.{
   xrpcFailureStatus,
 }
 
--- The framer reads a packed `Bytes`; this driver's fixtures are still
--- `Array Int`, and `fromArray` is the only door between them. A fixture
--- element outside the byte domain stops here rather than reaching the parser.
-mustRequest : Array Int -> Request
-mustRequest bytes = match fromArray bytes
-  Some packed =>
-    resultOrPanic "xrpc_test: request setup failed" (parseRequest packed)
-  None => panic "xrpc_test: request fixture holds a non-byte element"
+mustRequest : Bytes -> Request
+mustRequest bytes =
+  resultOrPanic "xrpc_test: request setup failed" (parseRequest bytes)
 
 noBodyRequest : String -> String -> Request
 noBodyRequest method target =
   mustRequest
-    (toUtf8 "\{method} \{target} HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+    (encodeUtf8 "\{method} \{target} HTTP/1.1\r\nHost: pds.example\r\n\r\n")
 
-bodyRequest : String -> String -> String -> Array Int -> Request
+bodyRequest : String -> String -> String -> Bytes -> Request
 bodyRequest method target headers body =
   mustRequest
-    (appendBytes
-      (toUtf8
-        "\{method} \{target} HTTP/1.1\r\nHost: pds.example\r\n\{headers}Content-Length: \{intToString (arrayLength body)}\r\n\r\n")
-      body)
+    (encodeUtf8
+        "\{method} \{target} HTTP/1.1\r\nHost: pds.example\r\n\{headers}Content-Length: \{intToString (B.length body)}\r\n\r\n"
+      ++ body)
 
 mustEndpoint : Result String Endpoint -> Endpoint
 mustEndpoint (Ok endpoint) = endpoint
@@ -100,20 +93,19 @@ reasonFor 415 = "Unsupported Media Type"
 reasonFor 426 = "Upgrade Required"
 reasonFor _ = "Unexpected"
 
-expectedFailure : Int -> String -> String -> Array Int
+expectedFailure : Int -> String -> String -> Bytes
 expectedFailure status code message =
-  let body = toUtf8 "{\"error\":\"\{code}\",\"message\":\"\{message}\"}"
-  appendBytes
-    (toUtf8
-      "HTTP/1.1 \{intToString status} \{reasonFor status}\r\ncontent-type: application/json\r\ncontent-length: \{intToString (arrayLength body)}\r\n\r\n")
-    body
+  let body = encodeUtf8 "{\"error\":\"\{code}\",\"message\":\"\{message}\"}"
+  encodeUtf8
+      "HTTP/1.1 \{intToString status} \{reasonFor status}\r\ncontent-type: application/json\r\ncontent-length: \{intToString (B.length body)}\r\n\r\n"
+    ++ body
 
 failureValueMatches : Int -> String -> String -> XrpcFailure -> Bool
 failureValueMatches status code message failed =
   xrpcFailureStatus failed == status
     && xrpcFailureError failed == code
     && xrpcFailureMessage failed == message
-    && toArray (serializeResponse (xrpcFailureResponse failed))
+    && serializeResponse (xrpcFailureResponse failed)
       == expectedFailure status code message
 
 failureMatches : Int -> String -> String -> Request -> Bool
@@ -320,7 +312,7 @@ test "query rejects a non-empty framed body" =
         "GET"
         "/xrpc/com.atproto.server.describeServer"
         "Content-Type: application/json\r\n"
-        (toUtf8 "{}")))
+        (encodeUtf8 "{}")))
 
 test "query admits zero-length framing and Content-Type" =
   match (routeRequest
@@ -329,7 +321,7 @@ test "query admits zero-length framing and Content-Type" =
       "GET"
       "/xrpc/com.atproto.server.describeServer"
       "Content-Type: application/json\r\n"
-      [||]))
+      empty))
     RouteCall _ (QueryCall "com.atproto.server.describeServer" []) => pass
     _ => fail "expected a RouteCall to a QueryCall with no query params"
 
@@ -345,7 +337,7 @@ test "no-input procedure produces a typed call" =
 test "no-input procedure admits a zero-length Content-Length" =
   match (routeRequest
     registry
-    (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" [||]))
+    (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" empty))
     RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) => pass
     _ => fail "expected a RouteCall to a ProcedureNoInputCall"
 
@@ -356,7 +348,7 @@ test "no-input procedure admits a Content-Type over a zero-length body" =
       "POST"
       "/xrpc/com.example.nobody.ping"
       "Content-Type: application/json\r\n"
-      [||]))
+      empty))
     RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) => pass
     _ => fail "expected a RouteCall to a ProcedureNoInputCall"
 
@@ -366,7 +358,7 @@ test "no-input procedure rejects a body that carries bytes" =
       400
       "InvalidRequest"
       "This procedure does not accept request body framing"
-      (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" (toUtf8 "{}")))
+      (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" (encodeUtf8 "{}")))
 
 test "no-input procedure rejects a chunked transfer coding" =
   expectTrue
@@ -375,7 +367,7 @@ test "no-input procedure rejects a chunked transfer coding" =
       "InvalidRequest"
       "This procedure does not accept request body framing"
       (mustRequest
-        (toUtf8
+        (encodeUtf8
           "POST /xrpc/com.example.nobody.ping HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")))
 
 test "JSON procedure produces a typed parsed call" =
@@ -384,7 +376,7 @@ test "JSON procedure produces a typed parsed call" =
       "POST"
       "/xrpc/com.atproto.repo.applyWrites"
       "Content-Type: application/json; charset=utf-8\r\n"
-      (toUtf8 "{\"ok\":true}")
+      (encodeUtf8 "{\"ok\":true}")
   match routeRequest registry request
     RouteCall _ (ProcedureJsonCall nsid [] value) => expectEach [
       (
@@ -404,7 +396,7 @@ test "text procedure produces a typed UTF-8 call" =
       "POST"
       "/xrpc/com.example.text.echo"
       "Content-Type: text/plain; charset=utf-8\r\n"
-      (toUtf8 "héllo")
+      (encodeUtf8 "héllo")
   match routeRequest registry request
     RouteCall _ (ProcedureTextCall nsid [] media text) => expectEach [
       (
@@ -426,18 +418,19 @@ test "wildcard raw procedure preserves text JSON and opaque media with exact byt
       "POST"
       "/xrpc/com.atproto.repo.uploadBlob"
       "Content-Type: text/plain\r\n"
-      (toUtf8 "hello")
+      (encodeUtf8 "hello")
   let jsonRequest =
     bodyRequest
       "POST"
       "/xrpc/com.atproto.repo.uploadBlob"
       "Content-Type: application/json\r\n"
-      (toUtf8 "{nope}")
-  let opaqueRequest = bodyRequest
-    "POST"
-    "/xrpc/com.atproto.repo.uploadBlob"
-    "Content-Type: image/png\r\n"
-    [|0, 128, 255|]
+      (encodeUtf8 "{nope}")
+  let opaqueRequest =
+    bodyRequest
+      "POST"
+      "/xrpc/com.atproto.repo.uploadBlob"
+      "Content-Type: image/png\r\n"
+      (fromU8Array [|0, 128, 255|])
   match (
     routeRequest registry textRequest,
     routeRequest registry jsonRequest,
@@ -502,7 +495,7 @@ test "procedure query parameters preserve repeated names empty values and order"
       "POST"
       "/xrpc/com.atproto.repo.applyWrites?dryRun=true&dryRun=&flag"
       "Content-Type: application/json\r\n"
-      (toUtf8 "{}")
+      (encodeUtf8 "{}")
   match routeRequest registry request
     RouteCall _ (ProcedureJsonCall nsid [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue] _) => expectEach
       [
@@ -542,7 +535,7 @@ test "missing duplicate and malformed body media classify as 415" = expectEach [
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           ""
-          (toUtf8 "{}"))),
+          (encodeUtf8 "{}"))),
   ),
   (
     "a body with two Content-Type headers is refused",
@@ -555,7 +548,7 @@ test "missing duplicate and malformed body media classify as 415" = expectEach [
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           "Content-Type: application/json\r\nContent-Type: application/json\r\n"
-          (toUtf8 "{}"))),
+          (encodeUtf8 "{}"))),
   ),
   (
     "a body with a malformed Content-Type is refused",
@@ -568,7 +561,7 @@ test "missing duplicate and malformed body media classify as 415" = expectEach [
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           "Content-Type: application\r\n"
-          (toUtf8 "{}"))),
+          (encodeUtf8 "{}"))),
   ),
 ]
 
@@ -584,7 +577,7 @@ test "wrong JSON and text media classify as 415" = expectEach [
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           "Content-Type: text/plain\r\n"
-          (toUtf8 "{}"))),
+          (encodeUtf8 "{}"))),
   ),
   (
     "JSON sent to a text endpoint is refused",
@@ -597,7 +590,7 @@ test "wrong JSON and text media classify as 415" = expectEach [
           "POST"
           "/xrpc/com.example.text.echo"
           "Content-Type: application/json\r\n"
-          (toUtf8 "{}"))),
+          (encodeUtf8 "{}"))),
   ),
 ]
 
@@ -613,7 +606,7 @@ test "invalid JSON syntax and UTF-8 classify as 400" = expectEach [
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           "Content-Type: application/json\r\n"
-          (toUtf8 "{nope}"))),
+          (encodeUtf8 "{nope}"))),
   ),
   (
     "a body that is not valid UTF-8 is refused",
@@ -626,7 +619,7 @@ test "invalid JSON syntax and UTF-8 classify as 400" = expectEach [
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           "Content-Type: application/json\r\n"
-          [|0xc0, 0xaf|])),
+          (fromU8Array [|0xc0, 0xaf|]))),
   ),
 ]
 
@@ -640,7 +633,7 @@ test "invalid text UTF-8 classifies as 400" =
         "POST"
         "/xrpc/com.example.text.echo"
         "Content-Type: text/plain\r\n"
-        [|0xed, 0xa0, 0x80|]))
+        (fromU8Array [|0xed, 0xa0, 0x80|])))
 
 test "JSON input ceiling accepts at and returns exact 413 over" =
   expectTrue

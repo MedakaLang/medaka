@@ -1,20 +1,22 @@
 {- | Pure Store and end-to-end HTTP/XRPC composition tests. -}
 
-import bytes.{
-  Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain, fromU8Array
-}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromArray, fromU8Array}
 import http.{
   Header,
   HttpParseFailure(..),
+  Request,
   makeHeader,
   makeResponse,
-  maxHttpRequestLineBytes,
   parseRequest,
   parseRequestClassified,
   Response,
+  responseBody,
+  responseStatus,
   serializeResponse,
 }
-import string.{repeat, toUtf8}
+import json.{Json(..), get, parse}
+import u8 as U8
 import test.{
   expectAll,
   expectEach,
@@ -25,18 +27,35 @@ import test.{
   pass,
 }
 import lib.cid.{cidForRaw}
+import lib.jwt.{mintToken}
+import lib.proxy.{AppviewTable, makeAppviewRoute, makeAppviewTable}
 import lib.server_core.{
   Account,
+  ProxyDecision(..),
   RequestContext(..),
   Handler,
   Server,
+  UpgradeDecision(..),
+  accessAudience,
+  classifyProxy,
+  classifyUpgrade,
   handle,
   handleBytes,
   makeAccount,
   makeServer,
 }
-import lib.store.{Store, storeEmpty, storeGet, storePut, storeSize}
-import test.fixture_support.{testNonce}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeEmpty,
+  storeGet,
+  storePut,
+  storeSessionOpen,
+  storeSize,
+  storeWithServerSecret,
+}
+import test.fixture_support.{testNonce, testSecret}
+import test.request_support.{resourceRequest}
 import test.response_support.{expectedError, expectedTextResponse}
 import lib.xrpc.{
   AuthPolicy(..),
@@ -47,6 +66,7 @@ import lib.xrpc.{
   makeRegistry,
   procedureEndpoint,
   queryEndpoint,
+  subscriptionEndpoint,
 }
 
 mustHeader : String -> String -> Header
@@ -150,22 +170,17 @@ unknownRequest =
   encodeUtf8
     "GET /xrpc/com.example.query.unknown HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
-resourceRequest : Bytes
-resourceRequest =
-  encodeUtf8
-    ("GET /"
-      ++ repeat maxHttpRequestLineBytes "a"
-      ++ " HTTP/1.1\r\nHost: pds.example\r\n\r\n")
-
 -- The same bytes as `fixedQuery`, with one element outside 0..255 appended.
 -- RFC 9112 s2.1 defines an HTTP message as a sequence of octets, so this is
 -- not an HTTP message at all. `Bytes` carries that property by construction
 -- and `fromArray` is its sole door, which is where the refusal belongs.
 outOfDomainQuery : Array Int
-outOfDomainQuery =
-  toUtf8
-      "GET /xrpc/com.example.query.fixed HTTP/1.1\r\nHost: pds.example\r\n\r\n"
-    ++ [|256|]
+outOfDomainQuery = B.toArray fixedQueryPlain ++ [|256|]
+
+fixedQueryPlain : Bytes
+fixedQueryPlain =
+  encodeUtf8
+    "GET /xrpc/com.example.query.fixed HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
 {- | The door refuses, and the control shows what it is refusing.
 
@@ -177,11 +192,7 @@ outOfDomainQuery =
 test "an out-of-domain request array is refused at the door, not framed" = expectAll
   [
     expectTrue (isNone (fromArray outOfDomainQuery)),
-    expectTrue
-      (isSome
-        (fromArray
-          (toUtf8
-            "GET /xrpc/com.example.query.fixed HTTP/1.1\r\nHost: pds.example\r\n\r\n"))),
+    expectTrue (isSome (fromArray (B.toArray fixedQueryPlain))),
   ]
 
 test "Store starts empty and delegates verified immutable insertion" =
@@ -220,7 +231,7 @@ test "direct configured handle preserves Store for a fixed query" =
         (
           "the response is the exact fixed-query wire form",
           expectEqual
-            (fromArrayAssumeByteDomain (expectedTextResponse 200 "OK" "fixed"))
+            (expectedTextResponse 200 "OK" "fixed")
             (serializeResponse response),
         ),
       ])
@@ -241,10 +252,7 @@ test "fixed raw request returns successor Store and exact response bytes" =
     ),
     (
       "the response is the exact 201 Created wire form",
-      expectEqual
-        (fromArrayAssumeByteDomain
-          (expectedTextResponse 201 "Created" "stored"))
-        bytes,
+      expectEqual (expectedTextResponse 201 "Created" "stored") bytes,
     ),
   ]
 
@@ -263,10 +271,7 @@ test "chunked raw request returns successor Store and exact response bytes" =
     ),
     (
       "the response is the exact 201 Created wire form",
-      expectEqual
-        (fromArrayAssumeByteDomain
-          (expectedTextResponse 201 "Created" "stored"))
-        bytes,
+      expectEqual (expectedTextResponse 201 "Created" "stored") bytes,
     ),
   ]
 
@@ -278,12 +283,11 @@ test "malformed framing returns exact 400 and preserves Store" =
     (
       "the response is the exact 400 Bad Request wire form",
       expectEqual
-        (fromArrayAssumeByteDomain
-          (expectedError
-            400
-            "Bad Request"
-            "InvalidRequest"
-            "Malformed HTTP request"))
+        (expectedError
+          400
+          "Bad Request"
+          "InvalidRequest"
+          "Malformed HTTP request")
         bytes,
     ),
   ]
@@ -295,12 +299,11 @@ test "unknown route returns exact 404 and preserves Store" =
     (
       "the response is the exact 404 Not Found wire form",
       expectEqual
-        (fromArrayAssumeByteDomain
-          (expectedError
-            404
-            "Not Found"
-            "NotFound"
-            "Unknown XRPC method: com.example.query.unknown"))
+        (expectedError
+          404
+          "Not Found"
+          "NotFound"
+          "Unknown XRPC method: com.example.query.unknown")
         bytes,
     ),
   ]
@@ -312,12 +315,163 @@ test "resource excess returns exact 413 and preserves Store" =
     (
       "the response is the exact 413 Payload Too Large wire form",
       expectEqual
-        (fromArrayAssumeByteDomain
-          (expectedError
-            413
-            "Payload Too Large"
-            "PayloadTooLarge"
-            "HTTP request exceeds resource limits"))
+        (expectedError
+          413
+          "Payload Too Large"
+          "PayloadTooLarge"
+          "HTTP request exceeds resource limits")
         bytes,
+    ),
+  ]
+
+-- # Header values that are not UTF-8
+
+{- The handshake and proxy seams read a header's raw bytes and decode them
+   strictly: a value that is not UTF-8 is refused, never repaired into the
+   text it resembles. Each refusal below sits beside a control that differs
+   from it only in the offending bytes, so the refusal is about those bytes.
+
+   The overlong forms are the ones a lenient decode reads as ASCII: `C1 A4`
+   as `d`, the first character of the handshake key, and `C0 A0` as a
+   space, which `trim` would then strip. -}
+
+-- `server` with a subscription route to upgrade to. Neither registry holds
+-- an `app.bsky.*` method, so a request for one is the proxy's to classify.
+seamServer : Server
+seamServer =
+  makeServer
+    account
+    (mustRegistry
+      (makeRegistry [
+        mustEndpoint
+          (subscriptionEndpoint "com.atproto.sync.subscribeRepos" PublicRoute),
+      ]))
+    handler
+
+raw : List Int -> Bytes
+raw xs = fromU8Array (arrayFromList (map U8.truncate xs))
+
+headerLine : String -> Bytes -> Bytes
+headerLine name value =
+  B.concat [encodeUtf8 "\{name}: ", value, encodeUtf8 "\r\n"]
+
+getWith : String -> List Bytes -> Request
+getWith target headerLines =
+  resultOrPanic
+    "server_core_test: request setup failed"
+    (parseRequest
+      (B.concat
+        ([encodeUtf8 "GET \{target} HTTP/1.1\r\nHost: pds.example\r\n"]
+          ++ headerLines
+          ++ [encodeUtf8 "\r\n"])))
+
+-- | A refusal's status and atproto error code, as one comparable string.
+refusalOf : Response -> String
+refusalOf response =
+  let code = match map parse (B.decodeUtf8 (responseBody response))
+    Some (Ok body) => match get "error" body
+      Some (JString value) => value
+      _ => "<no-error-field>"
+    _ => "<not-json>"
+  "\{intToString (responseStatus response)} \{code}"
+
+upgradeOutcome : UpgradeDecision -> String
+upgradeOutcome NotAnUpgrade = "not-an-upgrade"
+upgradeOutcome (UpgradeRefused response) = refusalOf response
+upgradeOutcome (UpgradeAdmitted _) = "admitted"
+
+goodKey : Bytes
+goodKey = encodeUtf8 "dGhlIHNhbXBsZSBub25jZQ=="
+
+upgradeWith : Bytes -> Bytes -> String
+upgradeWith version key =
+  let request = getWith "/xrpc/com.atproto.sync.subscribeRepos" [
+    headerLine "upgrade" (encodeUtf8 "websocket"),
+    headerLine "connection" (encodeUtf8 "Upgrade"),
+    headerLine "sec-websocket-version" version,
+    headerLine "sec-websocket-key" key,
+  ]
+  upgradeOutcome (classifyUpgrade seamServer testContext storeEmpty request)
+
+test "a WebSocket key whose first character is an overlong is refused 400" = expectEach
+  [
+    ("control", expectEqual "admitted" (upgradeWith (encodeUtf8 "13") goodKey)),
+    (
+      "overlong first character",
+      expectEqual
+        "400 InvalidRequest"
+        (upgradeWith (encodeUtf8 "13") (raw [0xC1, 0xA4] ++ B.drop 1 goodKey)),
+    ),
+  ]
+
+test "a WebSocket version of 13 and an overlong space is refused 426" = expectEach
+  [
+    ("control", expectEqual "admitted" (upgradeWith (encodeUtf8 "13") goodKey)),
+    (
+      "13 then C0 A0",
+      expectEqual
+        "426 UnsupportedWebSocketVersion"
+        (upgradeWith (encodeUtf8 "13" ++ raw [0xC0, 0xA0]) goodKey),
+    ),
+  ]
+
+liveToken : String
+liveToken =
+  mintToken
+    testSecret
+    "did:plc:medakaservertest"
+    (accessAudience account)
+    "server_core_test"
+    1699999000
+    1700003600
+
+sessionStore : Store
+sessionStore =
+  storeSessionOpen
+    (sessionFingerprint liveToken)
+    (sessionFingerprint "server_core_test-refresh")
+    1700090000
+    (resultOrPanic
+      "server_core_test: session secret setup failed"
+      (storeWithServerSecret testSecret storeEmpty))
+
+appviewTable : Option AppviewTable
+appviewTable =
+  let route =
+    resultOrPanic
+      "server_core_test: appview route setup failed"
+      (makeAppviewRoute "did:web:api.bsky.app" 2584)
+  Some
+    (resultOrPanic
+      "server_core_test: appview table setup failed"
+      (makeAppviewTable route []))
+
+proxyOutcome : ProxyDecision -> String
+proxyOutcome NotProxied = "not-proxied"
+proxyOutcome (ProxyRefused response) = refusalOf response
+proxyOutcome (ProxyAdmitted admission) =
+  "admitted aud=\{admission.serviceAuth.aud}"
+
+proxiedWith : Bytes -> String
+proxiedWith header =
+  let request = getWith "/xrpc/app.bsky.feed.getTimeline" [
+    headerLine "authorization" (encodeUtf8 "Bearer \{liveToken}"),
+    headerLine "atproto-proxy" header,
+  ]
+  proxyOutcome
+    (classifyProxy seamServer testContext appviewTable sessionStore request)
+
+test "an atproto-proxy service fragment ending in 0xFF is refused 400" =
+  let service = encodeUtf8 "did:web:api.bsky.app#bsky_appview"
+  expectEach [
+    (
+      "control",
+      expectEqual
+        "admitted aud=did:web:api.bsky.app#bsky_appview"
+        (proxiedWith service),
+    ),
+    (
+      "fragment then 0xFF",
+      expectEqual "400 InvalidRequest" (proxiedWith (service ++ raw [0xFF])),
     ),
   ]

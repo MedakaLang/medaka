@@ -15,22 +15,17 @@
    `did_key_all_engines_test` gives. -}
 
 import test.vector_runner.{
-  Arm(..),
   Bound(..),
   Corpus(..),
   Engine(..),
+  Mutation(..),
+  MutationTest(..),
   Row(..),
-  buildNative,
+  expectMutations,
   expectRow,
-  freshScratch,
-  reap,
-  runSeconds,
-  spawn,
+  transcriptArm,
 }
-import list.{somes}
-import string.{contains, countOccurrences, replace, unlines}
-import test.{Expectation, expectNoFindings}
-import test_process.{medakaRoot}
+import test.{Expectation}
 
 gate : String
 gate = "pds/test/protocol_all_engines"
@@ -70,18 +65,6 @@ transcript = [
   "TOTAL: PASS",
 ]
 
--- Each line on its own, so a red run names the cell that moved, and then
--- the whole transcript as one needle. With `lastLine`, that needle leaves
--- only output printed before the first cell ungraded.
-arm : Engine -> Arm
-arm e = Arm {
-  engine = e,
-  driverArgs = [],
-  countFloor = None,
-  needs = transcript ++ [unlines transcript],
-  lastLine = Some "TOTAL: PASS",
-}
-
 -- The driver reads no corpus: every cell's request and answer is written
 -- into it.
 row : Row
@@ -92,7 +75,7 @@ row = Row {
   corpusCount = Exactly 0,
   sourceShapes = [],
   oracle = None,
-  arms = [arm EvalEngine, arm NativeEngine, arm WasmEngine],
+  arms = map (transcriptArm transcript) [EvalEngine, NativeEngine, WasmEngine],
   parity = True,
 }
 
@@ -110,76 +93,23 @@ mutant = "if response == expectedTextResponse 201 \"Created\" \"fixed\""
 witness : String
 witness = "protocol_all_engines: empty reg-name port mismatch"
 
--- The findings against the mutation, run in the scratch tree `tree`, where
--- `original` is the live driver's text.
-mutationFindings : String -> String -> <Exec, FileWrite, IO> List String
-mutationFindings tree original =
-  let label = "\{gate} (mutation empty-port-assertion)"
-  let anchors = countOccurrences anchor original
-  if anchors /= 1 then
-    [
-      "\{label}: the anchor occurs \{intToString anchors} times in \{driver}, expected once: \{debug anchor}",
-    ]
-  else
-    let target = "\{tree}/\{driver}"
-    let found = match writeFile target (replace anchor mutant original)
-      Err e => ["\{label}: could not write the mutant: \{e}"]
-      Ok _ => mutantFindings tree label
-    match writeFile target original
-      Err e => found ++ ["\{label}: could not restore \{driver}: \{e}"]
-      Ok _ => found
-
--- The mutant must build, then fail, and fail with the witness.
-mutantFindings : String -> String -> <Exec, IO> List String
-mutantFindings tree label =
-  let bin = "\{tree}/mutant"
-  match buildNative label "\{tree}/\{driver}" bin
-    [] => match spawn runSeconds [] bin []
-      Err e => ["\{label}: could not spawn the mutant: \{e}"]
-      Ok (0, _, _) => ["\{label}: the mutant passed; the cells cannot see it"]
-      Ok (_, out, err) =>
-        if contains witness (out ++ err) then
-          []
-        else
-          [
-            "\{label}: the mutant failed without its witness \{debug witness}, so for an unrelated reason",
-          ]
-    fs => fs
-
--- The scratch copy must end byte-identical to the driver as it was before
--- the mutation, and so must the live driver.
-restoredFindings : String -> String -> <FileRead, IO> List String
-restoredFindings pristine tree =
-  somes
-    (map (restoredFinding pristine) [
-      ("the mutation tree's copy", "\{tree}/\{driver}"),
-      ("the live copy", "\{medakaRoot}/\{driver}"),
-    ])
-
-restoredFinding : String -> (String, String) -> <FileRead> Option String
-restoredFinding pristine (what, path) = match readFile path
-  Ok text =>
-    if text == pristine then
-      None
-    else
-      Some "\{gate}: \{what} of \{driver} was left modified"
-  Err e => Some "\{gate}: could not read \{what} of \{driver} back: \{e}"
-
-allMutationFindings : String -> <Exec, FileRead, FileWrite, IO> List String
-allMutationFindings tree = match readFile "\{medakaRoot}/\{driver}"
-  Err e => ["\{gate}: could not read \{driver}: \{e}"]
-  Ok pristine =>
-    match spawn runSeconds [] "cp" ["-R", "\{medakaRoot}/pds", "\{tree}/pds"]
-      Ok (0, _, _) =>
-        mutationFindings tree pristine ++ restoredFindings pristine tree
-      Ok (code, _, err) =>
-        ["\{gate}: copying pds/ exited \{intToString code}: \{err}"]
-      Err e => ["\{gate}: could not copy pds/: \{e}"]
+mutationTest : MutationTest
+mutationTest = MutationTest {
+  gate = gate,
+  driver = driver,
+  args = [],
+  mutations = [
+    Mutation {
+      name = "empty-port-assertion",
+      file = driver,
+      anchor = anchor,
+      mutant = mutant,
+      witness = witness,
+    },
+  ],
+}
 
 test "protocol: 25 hand-authored cells, eval == native == Wasm" = expectRow row
 
-test "protocol: breaking one cell's expectation turns the gate red with its witness" = expectNoFindings
-  gate
-  (match freshScratch ()
-    Err e => Err "could not make a scratch directory: \{e}"
-    Ok tree => Ok (reap tree (allMutationFindings tree)))
+test "protocol: breaking one cell's expectation turns the gate red with its witness" =
+  expectMutations mutationTest

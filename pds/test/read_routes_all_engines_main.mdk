@@ -46,14 +46,12 @@
    corpus it claims to copy — which is why this driver takes that corpus as its
    one argument. -}
 
-import bytes.{Bytes, decodeUtf8Lossy, fromArray, fromU8Array, toArray}
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import u8 as U8
 import http.{Request, parseRequest, serializeResponse}
 import io.{readLines}
 import json.{Json(..), jObject, get, parse}
-import string.{
-  contains, fromUtf8, join, split, startsWith, toLower, toUtf8, trim
-}
+import string.{contains, join, split, startsWith, toLower, trim}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.jwt.{ServiceAuthRequest, mintToken, serverSecretBytes}
 import lib.proxy.{
@@ -89,22 +87,9 @@ import lib.store.{
 }
 import test.fixture_support.{testNonce}
 import test.request_support.{pathRequest}
-import test.response_support.{hasContentType}
-
--- | `handleBytes` over a request fixture this driver still holds as an
--- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
--- door into one: a fixture element outside the byte domain stops here rather
--- than reaching the framer.
-handleFixture : Server ->
-  RequestContext ->
-  Store ->
-  Array Int ->
-  (Store, Array Int)
-handleFixture httpServer context store request = match fromArray request
-  Some packed =>
-    let (next, response) = handleBytes httpServer context store packed
-    (next, toArray response)
-  None => panic "read_routes: request fixture holds a non-byte element"
+import test.response_support.{
+  bodyText, hasContentType, headText, jsonBody, textOrHex
+}
 
 accountDidText : String
 accountDidText = "did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9"
@@ -143,83 +128,63 @@ testContext =
 -- ── request framing ─────────────────────────────────────────────────────────
 
 -- A read route takes no request body, and one that carries bytes is refused.
-getWithBody : String -> Array Int
+getWithBody : String -> Bytes
 getWithBody target =
-  toUtf8
+  encodeUtf8
     "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
 
 {- | A zero-length `Content-Length` and a `Content-Type` over it, which is not
    a body: RFC 9110 §8.6 makes a zero length the statement that there is
    none, and it is the shape an HTTP client gives a bodiless request. -}
-getWithZeroLengthFraming : String -> Array Int
+getWithZeroLengthFraming : String -> Bytes
 getWithZeroLengthFraming target =
-  toUtf8
+  encodeUtf8
     "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n"
 
-postRequest : String -> Array Int
+postRequest : String -> Bytes
 postRequest target =
-  toUtf8
+  encodeUtf8
     "POST \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
 
 -- | A CORS preflight, carrying the one request header a browser's own
 -- preflight always asks about so the reflection can be graded.
-optionsRequest : String -> String -> Array Int
+optionsRequest : String -> String -> Bytes
 optionsRequest target requestedHeaders =
-  toUtf8
+  encodeUtf8
     "OPTIONS \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nAccess-Control-Request-Headers: \{requestedHeaders}\r\n\r\n"
 
 -- | The same preflight, asking TWICE with two different values — the shape a
 -- browser never sends and only a hand-built client can.
-optionsRequestRepeated : String -> String -> String -> Array Int
+optionsRequestRepeated : String -> String -> String -> Bytes
 optionsRequestRepeated target first second =
-  toUtf8
+  encodeUtf8
     "OPTIONS \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nAccess-Control-Request-Headers: \{first}\r\nAccess-Control-Request-Headers: \{second}\r\n\r\n"
 
 -- ── response inspection ─────────────────────────────────────────────────────
 
-headerEnd : Array Int -> Int -> Int
-headerEnd bytes i =
-  if i + 3 >= arrayLength bytes then
-    panic "read_routes: response has no header terminator"
-  else if bytes[i] == 13
-    && bytes[i + 1] == 10
-    && bytes[i + 2] == 13
-    && bytes[i + 3] == 10 then
-    i
-  else
-    headerEnd bytes (i + 1)
-
-headText : Array Int -> String
-headText bytes = fromUtf8 (arrayMakeWith (headerEnd bytes 0) (i => bytes[i]))
-
-bodyText : Array Int -> String
-bodyText bytes =
-  let start = headerEnd bytes 0 + 4
-  fromUtf8 (arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i]))
-
-statusText : Array Int -> String
+statusText : Bytes -> String
 statusText bytes = match split " " (headText bytes)
   _ :: code :: _ => code
   _ => "<no-status>"
 
-errorCode : Array Int -> String
-errorCode bytes = match parse (bodyText bytes)
-  Ok value => match get "error" value
+errorCode : Bytes -> String
+errorCode bytes = match jsonBody bytes
+  Some value => match get "error" value
     Some (JString code) => code
     _ => "<no-error-field>"
-  Err _ => "<unparseable-body>"
+  None => "<unparseable-body>"
 
 -- The proxy cells grade the refusal MESSAGE as well as the code, because every
 -- refusal this seam can raise carries the same 400 `InvalidRequest`: the
 -- message is the only thing that says whether a request was refused for the
 -- audience it named or for the method it asked for, and those are different
 -- claims about what was not signed.
-errorMessage : Array Int -> String
-errorMessage bytes = match parse (bodyText bytes)
-  Ok value => match get "message" value
+errorMessage : Bytes -> String
+errorMessage bytes = match jsonBody bytes
+  Some value => match get "message" value
     Some (JString text) => text
     _ => "<no-message-field>"
-  Err _ => "<unparseable-body>"
+  None => "<unparseable-body>"
 
 -- ── cells ───────────────────────────────────────────────────────────────────
 
@@ -242,9 +207,9 @@ check label ok detail =
     let () = println "CELL \{label} FAIL \{detail}"
     0
 
-okCell : String -> Array Int -> String -> String -> <IO> Int
+okCell : String -> Bytes -> String -> String -> <IO> Int
 okCell label request contentType expectedBody =
-  let (next, response) = handleFixture mustServer testContext storeEmpty request
+  let (next, response) = handleBytes mustServer testContext storeEmpty request
   let status = statusText response
   let ok =
     status == "200"
@@ -256,9 +221,9 @@ okCell label request contentType expectedBody =
     ok
     "status=\{status} media=\{contentType} body=\{bodyText response} state=unchanged"
 
-failCell : String -> Array Int -> String -> String -> <IO> Int
+failCell : String -> Bytes -> String -> String -> <IO> Int
 failCell label request expectedStatus expectedCode =
-  let (next, response) = handleFixture mustServer testContext storeEmpty request
+  let (next, response) = handleBytes mustServer testContext storeEmpty request
   let status = statusText response
   let code = errorCode response
   let ok = status == expectedStatus && code == expectedCode && storeIsEmpty next
@@ -270,7 +235,7 @@ failCell label request expectedStatus expectedCode =
 preflightCell : String -> String -> String -> <IO> Int
 preflightCell label target requestedHeaders =
   let (next, response) =
-    handleFixture
+    handleBytes
       mustServer
       testContext
       storeEmpty
@@ -303,11 +268,7 @@ preflightCell label target requestedHeaders =
 preflightDroppedCell : String -> String -> <IO> Int
 preflightDroppedCell label target =
   let (next, response) =
-    handleFixture
-      mustServer
-      testContext
-      storeEmpty
-      (optionsRequest target "a\tb")
+    handleBytes mustServer testContext storeEmpty (optionsRequest target "a\tb")
   let status = statusText response
   let head = headText response
   let ok =
@@ -329,7 +290,7 @@ preflightDroppedCell label target =
 preflightRepeatedCell : String -> String -> <IO> Int
 preflightRepeatedCell label target =
   let (next, response) =
-    handleFixture
+    handleBytes
       mustServer
       testContext
       storeEmpty
@@ -350,9 +311,9 @@ preflightRepeatedCell label target =
 -- | Any non-preflight response: the allow-origin header this server puts on
 -- everything, and NONE of the preflight-only headers or the credentialed
 -- form it must never send.
-originOnlyCell : String -> Array Int -> String -> <IO> Int
+originOnlyCell : String -> Bytes -> String -> <IO> Int
 originOnlyCell label request expectedStatus =
-  let (next, response) = handleFixture mustServer testContext storeEmpty request
+  let (next, response) = handleBytes mustServer testContext storeEmpty request
   let status = statusText response
   let head = headText response
   let ok =
@@ -469,9 +430,9 @@ proxyAuthField = "Authorization: Bearer \{proxyAccessToken}\r\n"
 noPolicy : Option AppviewTable
 noPolicy = None
 
-proxyRequest : String -> String -> String -> Array Int
+proxyRequest : String -> String -> String -> Bytes
 proxyRequest verb header target =
-  toUtf8
+  encodeUtf8
     "\{verb} \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{header}\r\n\r\n"
 
 {- | A forwarded write: a POST carrying a body, the two inbound fields a
@@ -481,9 +442,9 @@ proxyRequest verb header target =
    copy test: the relayed list is printed in full by `proxyOutcome`, so a seam
    that carried `x-medaka-not-relayed` along would fail here even though every
    field the client asked to be relayed did arrive. -}
-proxyPostRequest : String -> String -> Array Int
+proxyPostRequest : String -> String -> Bytes
 proxyPostRequest target body =
-  toUtf8
+  encodeUtf8
     "POST \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{configuredAppviewDid}\r\naccept-language: en-GB\r\nx-medaka-not-relayed: 1\r\ncontent-type: application/json\r\ncontent-length: \{intToString (stringLength body)}\r\n\r\n\{body}"
 
 {- | A call that names NO audience, made by the logged-in account.
@@ -492,42 +453,40 @@ proxyPostRequest target body =
    where to, so the header-absent arm needs the same credential the header-
    bearing one does; this is `proxyRequest` with the `atproto-proxy` field and
    nothing else removed. -}
-proxyRequestNoHeader : String -> Array Int
+proxyRequestNoHeader : String -> Bytes
 proxyRequestNoHeader target =
-  toUtf8
+  encodeUtf8
     "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}\r\n"
 
 {- | The same request `proxy-admitted-timeline` sends, with the caller's own
    credential left out. An anonymous caller asking this server to forward under
    the ACCOUNT's identity is the confused deputy in its plainest form, so it is
    refused before the audience it named is even looked at. -}
-proxyRequestUnauthenticated : String -> Array Int
+proxyRequestUnauthenticated : String -> Bytes
 proxyRequestUnauthenticated target =
-  toUtf8
+  encodeUtf8
     "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\natproto-proxy: \{configuredAppviewDid}\r\n\r\n"
 
 -- Field names are case-insensitive on the wire, so the seam must find the
 -- header under the spelling a client chose rather than the one it expects.
-proxyMixedCaseRequest : String -> Array Int
+proxyMixedCaseRequest : String -> Bytes
 proxyMixedCaseRequest target =
-  toUtf8
+  encodeUtf8
     "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}Atproto-Proxy: \{configuredAppviewDid}\r\n\r\n"
 
 -- Two fields, the first naming the configured appview and the second naming
 -- somewhere else. A seam that took the first would be proxying a request whose
 -- audience the client left ambiguous.
-proxyRepeatedRequest : String -> Array Int
+proxyRepeatedRequest : String -> Bytes
 proxyRepeatedRequest target =
-  toUtf8
+  encodeUtf8
     "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{configuredAppviewDid}\r\natproto-proxy: \{foreignServiceDid}\r\n\r\n"
 
-mustRequest : Array Int -> Request
-mustRequest bytes = match fromArray bytes
-  None => panic "read_routes: proxy cell request holds a non-byte element"
-  Some packed => match parseRequest packed
-    Ok request => request
-    Err message =>
-      panic "read_routes: proxy cell request did not frame: \{message}"
+mustRequest : Bytes -> Request
+mustRequest bytes = match parseRequest bytes
+  Ok request => request
+  Err message =>
+    panic "read_routes: proxy cell request did not frame: \{message}"
 
 lxmText : Option String -> String
 lxmText None = "<absent>"
@@ -573,12 +532,12 @@ routeText (Some table) did = match appviewRouteFor table did
 proxyOutcome : Option AppviewTable -> ProxyDecision -> String
 proxyOutcome _ NotProxied = "decision=not-proxied signed=none"
 proxyOutcome _ (ProxyRefused response) =
-  let bytes = toArray (serializeResponse response)
+  let bytes = serializeResponse response
   "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
 proxyOutcome table (ProxyAdmitted admission) =
-  "decision=admitted verb=\{admission.verb} target=\{admission.target} audience=\{admission.audience} \{claimText admission.serviceAuth} relayed=[\{relayedText admission.headers}] body=\{decodeUtf8Lossy admission.body} port=\{routeText table admission.audience}"
+  "decision=admitted verb=\{admission.verb} target=\{admission.target} audience=\{admission.audience} \{claimText admission.serviceAuth} relayed=[\{relayedText admission.headers}] body=\{textOrHex admission.body} port=\{routeText table admission.audience}"
 
-proxyCell : String -> Option AppviewTable -> Array Int -> String -> <IO> Int
+proxyCell : String -> Option AppviewTable -> Bytes -> String -> <IO> Int
 proxyCell label policy bytes expected =
   let decision =
     classifyProxy
@@ -983,16 +942,12 @@ serviceClaimText claims = "\{claimText claims} exp=\{expiryText claims.exp}"
 serviceAuthOutcome : ServiceAuthDecision -> String
 serviceAuthOutcome NotServiceAuth = "decision=not-service-auth signed=none"
 serviceAuthOutcome (ServiceAuthRefused response) =
-  let bytes = toArray (serializeResponse response)
+  let bytes = serializeResponse response
   "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
 serviceAuthOutcome (ServiceAuthMinted claims) =
   "decision=minted \{serviceClaimText claims}"
 
-serviceAuthCell : String ->
-  Option AppviewTable ->
-  Array Int ->
-  String ->
-  <IO> Int
+serviceAuthCell : String -> Option AppviewTable -> Bytes -> String -> <IO> Int
 serviceAuthCell label policy bytes expected =
   let decision =
     classifyServiceAuth

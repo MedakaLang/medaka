@@ -31,19 +31,30 @@
    spawns through the same exported pieces: `freshScratch` and `reap` for
    its directory, `buildNative`, `spawn`, `spawnFindings` and
    `outputFindings` for its spawns, so it grades exit status, stderr and
-   stdout exactly as a row does.
+   stdout exactly as a row does. A mutation self-test is a `MutationTest`
+   value, graded by `expectMutations`.
 
    Runs under `medaka test --native`: every row spawns a subprocess, and the
    interpreter binds no subprocess extern. -}
 
 import test.vector_ledger.{filesForConsumer, validatePaths}
 import io.{getEnvOr}
-import list.{get, last, reverse, somes}
+import list.{get, last, nub, reverse, somes}
 import path.{stem}
 import string.{
-  contains, indexOf, join, lines, take, toInt, trim, unlines, words
+  contains,
+  countOccurrences,
+  indexOf,
+  join,
+  lines,
+  replace,
+  take,
+  toInt,
+  trim,
+  unlines,
+  words,
 }
-import test.{Expectation, fail, pass}
+import test.{Expectation, expectNoFindings, fail, pass}
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
 -- # The row
@@ -739,3 +750,163 @@ expectRow r = match gradeRow r
 
 indent : String -> String
 indent f = "  \{f}"
+
+-- # Mutation self-tests
+
+{- | A transcript arm: `engine` must print every line of `transcript` and
+   then the whole of it as one needle, ending on `TOTAL: PASS`.
+
+   Each line on its own names the cell that moved in a red run. With
+   `lastLine`, the whole-transcript needle leaves only output printed before
+   the first cell ungraded. -}
+export
+transcriptArm : List String -> Engine -> Arm
+transcriptArm transcript e = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = transcript ++ [unlines transcript],
+  lastLine = Some "TOTAL: PASS",
+}
+
+{- | One deliberate break: in repo-relative `file`, the single occurrence of
+   `anchor` becomes `mutant`, and the built driver must then fail with
+   `witness` somewhere in its output. -}
+public export data Mutation = Mutation {
+  name : String,
+  file : String,
+  anchor : String,
+  mutant : String,
+  witness : String,
+}
+
+{- | A gate's mutation self-test: each of `mutations` is applied in turn to a
+   scratch copy of `pds/`, and `driver`, built natively from that copy and
+   run with `args`, must fail with the mutation's witness.
+
+   Native only: eval and native share the typechecker ([D-RUN-VS-BUILD] in
+   AGENTS.md), and a native build turns each check from minutes into
+   seconds. -}
+public export data MutationTest = MutationTest {
+  gate : String,
+  driver : String,
+  args : List String,
+  mutations : List Mutation,
+}
+
+{- | The findings against one mutation, run in the scratch tree `tree`. The
+   mutated file is put back afterwards, whatever the outcome, so the next
+   mutation starts from an unbroken tree. -}
+export
+mutationFindings : MutationTest ->
+  String ->
+  Mutation ->
+  <Exec, FileRead, FileWrite, IO> List String
+mutationFindings t tree m =
+  let label = "\{t.gate} (mutation \{m.name})"
+  match readFile "\{medakaRoot}/\{m.file}"
+    Err e => ["\{label}: could not read \{m.file}: \{e}"]
+    Ok original =>
+      let anchors = countOccurrences m.anchor original
+      if anchors /= 1 then
+        [
+          "\{label}: the anchor occurs \{intToString anchors} times in \{m.file}, expected once: \{debug m.anchor}",
+        ]
+      else
+        let target = "\{tree}/\{m.file}"
+        let found = match writeFile target (replace m.anchor m.mutant original)
+          Err e => ["\{label}: could not write the mutant: \{e}"]
+          Ok _ => mutantFindings t tree label m
+        match writeFile target original
+          Err e => found ++ ["\{label}: could not restore \{m.file}: \{e}"]
+          Ok _ => found
+
+-- | The mutant must build, then fail, and fail with its own witness.
+export
+mutantFindings : MutationTest ->
+  String ->
+  String ->
+  Mutation ->
+  <Exec, IO> List String
+mutantFindings t tree label m =
+  let bin = "\{tree}/mutant"
+  match buildNative label "\{tree}/\{t.driver}" bin
+    [] => match spawn runSeconds [] bin t.args
+      Err e => ["\{label}: could not spawn the mutant: \{e}"]
+      Ok (0, _, _) => ["\{label}: the mutant passed; the gate cannot see it"]
+      Ok (_, out, err) =>
+        if contains m.witness (out ++ err) then
+          []
+        else
+          [
+            "\{label}: the mutant failed without its witness \{debug m.witness}, so for an unrelated reason",
+          ]
+    fs => fs
+
+{- | Every mutated file, in the scratch tree and in the live tree, must end
+   byte-identical to its text before the first mutation. A scratch copy left
+   modified means a later mutation graded a doubly-broken tree; a live copy
+   left modified means the test broke the checkout it ran in. `pristine`
+   pairs each repo-relative file with that text. -}
+export
+restoredFindings : MutationTest ->
+  String ->
+  List (String, String) ->
+  <FileRead, IO> List String
+restoredFindings t tree pristine =
+  somes
+    (flatMap
+      ((rel, text) => [
+        restoredFinding t "the mutation tree's copy" "\{tree}/\{rel}" rel text,
+        restoredFinding t "the live copy" "\{medakaRoot}/\{rel}" rel text,
+      ])
+      pristine)
+
+-- | `None` when the file at `path` still reads `text`; otherwise the finding
+-- naming `what` copy of `rel` was left modified.
+export
+restoredFinding : MutationTest ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <FileRead> Option String
+restoredFinding t what path rel text = match readFile path
+  Ok now =>
+    if now == text then
+      None
+    else
+      Some "\{t.gate}: \{what} of \{rel} was left modified"
+  Err e => Some "\{t.gate}: could not read \{what} of \{rel} back: \{e}"
+
+pristineOf : List String -> <FileRead, IO> Result String (List (String, String))
+pristineOf [] = Ok []
+pristineOf (rel :: rest) = match readFile "\{medakaRoot}/\{rel}"
+  Err e => Err "could not read \{rel}: \{e}"
+  Ok text => map ((rel, text) :: _) (pristineOf rest)
+
+-- | Every mutation of `t`, run in the scratch tree `tree`, then the
+-- restoration check over every file a mutation touched.
+export
+allMutationFindings : MutationTest ->
+  String ->
+  <Exec, FileRead, FileWrite, IO> List String
+allMutationFindings t tree =
+  match pristineOf (nub (map (m => m.file) t.mutations))
+    Err e => ["\{t.gate}: \{e}"]
+    Ok pristine =>
+      match spawn runSeconds [] "cp" ["-R", "\{medakaRoot}/pds", "\{tree}/pds"]
+        Ok (0, _, _) =>
+          flatMap (mutationFindings t tree) t.mutations
+            ++ restoredFindings t tree pristine
+        Ok (code, _, err) =>
+          ["\{t.gate}: copying pds/ exited \{intToString code}: \{err}"]
+        Err e => ["\{t.gate}: could not copy pds/: \{e}"]
+
+-- | The mutation self-test's verdict, for a `test "…"` block in its own
+-- module, in a scratch directory it makes and removes.
+export
+expectMutations : MutationTest -> <Exec, FileRead, FileWrite, IO> Expectation
+expectMutations t = expectNoFindings t.gate (match freshScratch ()
+  Err e => Err "could not make a scratch directory: \{e}"
+  Ok tree => Ok (reap tree (allMutationFindings t tree)))

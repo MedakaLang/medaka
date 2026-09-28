@@ -4,18 +4,17 @@
    pinned XRPC error envelope. They are intentionally not captured from an
    engine. -}
 
-import bytes.{Bytes, encodeUtf8, fromArray, toArray}
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import http.{
   Header,
   makeHeader,
   makeResponse,
-  maxHttpRequestLineBytes,
   mediaTypeSubtype,
   mediaTypeType,
   QueryParam(..),
   Response,
 }
-import string.{repeat, toUtf8}
+import string.{repeat}
 import lib.cid.{cidForRaw}
 import lib.httpclient as HC
 import lib.httpclient.{HttpClientParseFailure(..)}
@@ -46,23 +45,9 @@ import lib.xrpc.{
   procedureEndpoint,
   queryEndpoint,
 }
-import test.fixture_support.{appendBytes, testNonce}
+import test.fixture_support.{testNonce}
+import test.request_support.{resourceRequest}
 import test.response_support.{expectedError, expectedTextResponse}
-
--- | `handleBytes` over a request fixture this driver still holds as an
--- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
--- door into one: a fixture element outside the byte domain stops here rather
--- than reaching the framer.
-handleFixture : Server ->
-  RequestContext ->
-  Store ->
-  Array Int ->
-  (Store, Array Int)
-handleFixture httpServer context store request = match fromArray request
-  Some packed =>
-    let (next, response) = handleBytes httpServer context store packed
-    (next, toArray response)
-  None => panic "protocol_all_engines: request fixture holds a non-byte element"
 
 mustHeader : String -> String -> Header
 mustHeader name value =
@@ -133,7 +118,7 @@ handler _ _ store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
     (store, mustResponse 200 "OK" "raw-json")
   else if mediaType == "application"
     && mediaSubtype == "octet-stream"
-    && toArray bytes == [|0, 128, 255|] then
+    && bytes == fromU8Array [|0, 128, 255|] then
     (store, mustResponse 200 "OK" "raw-opaque")
   else
     panic "protocol_all_engines: raw media/body preservation mismatch"
@@ -178,86 +163,80 @@ seededStore = match storePut (cidForRaw seedBytes) seedBytes storeEmpty
 seedPreserved : Store -> Bool
 seedPreserved store = storeGet (cidForRaw seedBytes) store == Some seedBytes
 
-fixedQuery : Array Int
+fixedQuery : Bytes
 fixedQuery =
-  toUtf8
+  encodeUtf8
     "GET /xrpc/com.example.query.fixed?one=1&one=2 HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
-chunkedPut : Array Int
+chunkedPut : Bytes
 chunkedPut =
-  toUtf8
+  encodeUtf8
     "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n2\r\nbc\r\n0\r\n\r\n"
 
-malformedRequest : Array Int
+malformedRequest : Bytes
 malformedRequest =
-  toUtf8
+  encodeUtf8
     "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
 
-lowercaseVersionRequest : Array Int
+lowercaseVersionRequest : Bytes
 lowercaseVersionRequest =
-  toUtf8
+  encodeUtf8
     "POST /xrpc/com.example.block.put http/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nContent-Length: 1\r\n\r\nx"
 
-invalidHostRequest : Array Int
+invalidHostRequest : Bytes
 invalidHostRequest =
-  toUtf8
+  encodeUtf8
     "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: bad host\r\nContent-Type: application/octet-stream\r\nContent-Length: 1\r\n\r\nx"
 
-invalidTargetRequest : Array Int
+invalidTargetRequest : Bytes
 invalidTargetRequest =
-  toUtf8
+  encodeUtf8
     "GET /xrpc/com.example.query.fixed?value={bad} HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
-rawTextRequest : Array Int
+rawTextRequest : Bytes
 rawTextRequest =
-  toUtf8
+  encodeUtf8
     "POST /xrpc/com.example.raw.echo HTTP/1.1\r\nHost: pds.example\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhello"
 
-rawJsonRequest : Array Int
+rawJsonRequest : Bytes
 rawJsonRequest =
-  toUtf8
+  encodeUtf8
     "POST /xrpc/com.example.raw.echo HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/json\r\nContent-Length: 6\r\n\r\n{nope}"
 
-rawOpaqueRequest : Array Int
-rawOpaqueRequest = appendBytes (toUtf8
-  "POST /xrpc/com.example.raw.echo HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\n\r\n") [|
-  0, 128, 255
-|]
+rawOpaqueRequest : Bytes
+rawOpaqueRequest =
+  encodeUtf8
+      "POST /xrpc/com.example.raw.echo HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\n\r\n"
+    ++ fromU8Array [|0, 128, 255|]
 
-procedureParamsRequest : Array Int
+procedureParamsRequest : Bytes
 procedureParamsRequest =
-  toUtf8
+  encodeUtf8
     "POST /xrpc/com.example.params.check?dryRun=true&dryRun=&flag HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
-uppercaseAuthorityRequest : Array Int
+uppercaseAuthorityRequest : Bytes
 uppercaseAuthorityRequest =
-  toUtf8
+  encodeUtf8
     "GET /xrpc/com.example.query.caseFixed HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
-emptyRegPortRequest : Array Int
+emptyRegPortRequest : Bytes
 emptyRegPortRequest =
-  toUtf8
+  encodeUtf8
     "GET /xrpc/com.example.query.fixed HTTP/1.1\r\nHost: example.com:\r\n\r\n"
 
-emptyIpPortRequest : Array Int
+emptyIpPortRequest : Bytes
 emptyIpPortRequest =
-  toUtf8 "GET /xrpc/com.example.query.fixed HTTP/1.1\r\nHost: [::1]:\r\n\r\n"
+  encodeUtf8
+    "GET /xrpc/com.example.query.fixed HTTP/1.1\r\nHost: [::1]:\r\n\r\n"
 
-unknownRequest : Array Int
+unknownRequest : Bytes
 unknownRequest =
-  toUtf8
+  encodeUtf8
     "GET /xrpc/com.example.query.unknown HTTP/1.1\r\nHost: pds.example\r\n\r\n"
-
-resourceRequest : Array Int
-resourceRequest =
-  toUtf8
-    ("GET /"
-      ++ repeat maxHttpRequestLineBytes "a"
-      ++ " HTTP/1.1\r\nHost: pds.example\r\n\r\n")
 
 checkFixedQuery : <IO> Unit
 checkFixedQuery =
-  let (next, response) = handleFixture server testContext seededStore fixedQuery
+  let (next, response) = handleBytes server testContext seededStore fixedQuery
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "fixed" then
@@ -268,7 +247,7 @@ checkFixedQuery =
 checkChunkedUpdate : <IO> Unit
 checkChunkedUpdate =
   let expectedBody = encodeUtf8 "abc"
-  let (next, response) = handleFixture server testContext seededStore chunkedPut
+  let (next, response) = handleBytes server testContext seededStore chunkedPut
   if storeSize next == 2
     && seedPreserved next
     && storeGet (cidForRaw expectedBody) next == Some expectedBody
@@ -280,7 +259,7 @@ checkChunkedUpdate =
 checkMalformed : <IO> Unit
 checkMalformed =
   let (next, response) =
-    handleFixture server testContext seededStore malformedRequest
+    handleBytes server testContext seededStore malformedRequest
   if storeSize next == 1
     && seedPreserved next
     && response
@@ -293,9 +272,9 @@ checkMalformed =
   else
     panic "protocol_all_engines: malformed framing mismatch"
 
-malformedIsUnchanged : Array Int -> Bool
+malformedIsUnchanged : Bytes -> Bool
 malformedIsUnchanged request =
-  let (next, response) = handleFixture server testContext seededStore request
+  let (next, response) = handleBytes server testContext seededStore request
   storeSize next == 1
     && seedPreserved next
     && response
@@ -330,7 +309,7 @@ checkInvalidTarget =
 checkRawText : <IO> Unit
 checkRawText =
   let (next, response) =
-    handleFixture server testContext seededStore rawTextRequest
+    handleBytes server testContext seededStore rawTextRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "raw-text" then
@@ -341,7 +320,7 @@ checkRawText =
 checkRawJson : <IO> Unit
 checkRawJson =
   let (next, response) =
-    handleFixture server testContext seededStore rawJsonRequest
+    handleBytes server testContext seededStore rawJsonRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "raw-json" then
@@ -353,7 +332,7 @@ checkRawJson =
 checkRawOpaque : <IO> Unit
 checkRawOpaque =
   let (next, response) =
-    handleFixture server testContext seededStore rawOpaqueRequest
+    handleBytes server testContext seededStore rawOpaqueRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "raw-opaque" then
@@ -365,7 +344,7 @@ checkRawOpaque =
 checkProcedureParams : <IO> Unit
 checkProcedureParams =
   let (next, response) =
-    handleFixture server testContext seededStore procedureParamsRequest
+    handleBytes server testContext seededStore procedureParamsRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "params-ordered" then
@@ -377,7 +356,7 @@ checkProcedureParams =
 checkUppercaseAuthority : <IO> Unit
 checkUppercaseAuthority =
   let (next, response) =
-    handleFixture server testContext seededStore uppercaseAuthorityRequest
+    handleBytes server testContext seededStore uppercaseAuthorityRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "authority-case" then
@@ -406,7 +385,7 @@ checkAuthorityDuplicateIdentity =
 checkEmptyRegPort : <IO> Unit
 checkEmptyRegPort =
   let (next, response) =
-    handleFixture server testContext seededStore emptyRegPortRequest
+    handleBytes server testContext seededStore emptyRegPortRequest
   if response == expectedTextResponse 200 "OK" "fixed"
     && storeSize next == 1
     && seedPreserved next then
@@ -417,7 +396,7 @@ checkEmptyRegPort =
 checkEmptyIpPort : <IO> Unit
 checkEmptyIpPort =
   let (next, response) =
-    handleFixture server testContext seededStore emptyIpPortRequest
+    handleBytes server testContext seededStore emptyIpPortRequest
   if seedPreserved next
     && response == expectedTextResponse 200 "OK" "fixed"
     && storeSize next == 1 then
@@ -428,7 +407,7 @@ checkEmptyIpPort =
 checkUnknown : <IO> Unit
 checkUnknown =
   let (next, response) =
-    handleFixture server testContext seededStore unknownRequest
+    handleBytes server testContext seededStore unknownRequest
   if storeSize next == 1
     && seedPreserved next
     && response
@@ -444,7 +423,7 @@ checkUnknown =
 checkResource : <IO> Unit
 checkResource =
   let (next, response) =
-    handleFixture server testContext seededStore resourceRequest
+    handleBytes server testContext seededStore resourceRequest
   if storeSize next == 1
     && seedPreserved next
     && response
