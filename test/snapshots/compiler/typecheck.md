@@ -1,5 +1,5 @@
 # META
-source_lines=51189
+source_lines=51152
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -770,79 +770,6 @@ decodeSetParam s =
     sortUniqS (filterList (/= "") (splitOnComma (stringSlice 1 (n - 1) s)))
   else
     sortUniqS (filterList (/= "") (splitOnComma s))
-
--- WS-4: a PRODUCT written param is carried in the `Option String` carrier as a
--- structured SENTINEL string the parser's `effParamFor` product clause builds:
---
---   @P{Host="idp.example.com/*";Method={GET,POST}}
---
--- Grammar (internal wire form, NOT user syntax — that is §4 of WS-4-DESIGN.md):
---   @P{                         -- product sentinel prefix
---     <Axis>=<val>              -- one or more axes, ';'-separated
---   }                           -- closing brace
--- where <val> is either `"…"` (a Prefix sub-param) or `{a,b}` (a Set sub-param).
--- A PLAIN string with NO `@P{` sentinel is the §3 "host-axis lift": a bare
--- `<Net "a.com/*">` under a Product-registered Net means Host=a.com/*, Method=⊤.
--- (A *third* nested level would make this encoding fiddly — WS-4 is the natural
--- stopping point for the carrier hack; widen the AST carrier THEN, not piecemeal.)
-export
-decodeProductParam : String -> Param
-decodeProductParam s =
-  let n = stringLength s
-  if n >= 4 && stringSlice 0 3 s == "@P{" && stringSlice (n - 1) n s == "}" then
-    productNorm (map decodeAxis (splitOnSemi (stringSlice 3 (n - 1) s)))
-  else
-    PProduct []
-
--- decode one `Axis=val` axis spec.  val = `"…"` ⇒ Prefix; `{a,b}` ⇒ Set.
-decodeAxis : String -> (String, Param)
-decodeAxis spec = match splitOnFirstEqStr spec
-  None => (spec, PUnit)  -- malformed (no '='): treated as ⊤ ⇒ dropped by productNorm
-  Some i =>
-    let name = stringSlice 0 i spec
-    let rhs = stringSlice (i + 1) (stringLength spec) spec
-    (name, decodeAxisVal rhs)
-
-decodeAxisVal : String -> Param
-decodeAxisVal rhs =
-  let n = stringLength rhs
-  if n >= 2
-    && stringSlice 0 1 rhs == "{"
-    && stringSlice (n - 1) n rhs == "}" then
-    PSet (Some (decodeSetParam rhs))
-  else if n >= 2
-    && stringSlice 0 1 rhs == "\""
-    && stringSlice (n - 1) n rhs == "\"" then
-    PPrefix (Some (stringSlice 1 (n - 1) rhs))
-  else
-    PPrefix (Some rhs)
-
--- index of the first '=' in a string, or None.
-splitOnFirstEqStr : String -> Option Int
-splitOnFirstEqStr s = splitOnFirstEqGo s 0 (stringLength s)
-
-splitOnFirstEqGo : String -> Int -> Int -> Option Int
-splitOnFirstEqGo s i n =
-  if i >= n then
-    None
-  else if stringSlice i (i + 1) s == "=" then
-    Some i
-  else
-    splitOnFirstEqGo s (i + 1) n
-
--- split a string on ';' (product-axis separator).
-splitOnSemi : String -> List String
-splitOnSemi s = splitOnSemiGo s 0 0 []
-
-splitOnSemiGo : String -> Int -> Int -> List String -> List String
-splitOnSemiGo s start i acc =
-  let n = stringLength s
-  if i >= n then
-    reverseL (stringSlice start n s :: acc)
-  else if stringSlice i (i + 1) s == ";" then
-    splitOnSemiGo s (i + 1) (i + 1) (stringSlice start i s :: acc)
-  else
-    splitOnSemiGo s start (i + 1) acc
 
 -- split a string on ',' (Set-element separator; authority tokens contain none)
 splitOnComma : String -> List String
@@ -1743,14 +1670,17 @@ checkEffectParamsDecl : Decl -> Unit
 checkEffectParamsDecl (DTypeSig _ _ t) = checkEffectParamsTy t
 checkEffectParamsDecl (DExtern _ _ t) = checkEffectParamsTy t
 checkEffectParamsDecl (DAttrib _ d) = checkEffectParamsDecl d
-checkEffectParamsDecl (DData { dataCtors = ctors }) =
-  fold
-    (_ v => match v
-      Variant _ payload => checkEffectParamsTys (payloadAstTypes payload))
-    ()
-    ctors
-checkEffectParamsDecl (DTypeAlias { tyAliasRhs = rhs }) =
-  checkEffectParamsTy rhs
+checkEffectParamsDecl (DData { dataParams = ps, dataParamKinds = ks, dataCtors = ctors }) =
+  let fields =
+    flatMap
+      (v => match v
+        Variant _ payload => payloadAstTypes payload)
+      ctors
+  let _ = checkEffectParamsTys fields
+  checkDeclAuthorityDomains ps ks fields
+checkEffectParamsDecl (DTypeAlias { tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) =
+  let _ = checkEffectParamsTy rhs
+  checkDeclAuthorityDomains ps ks [rhs]
 checkEffectParamsDecl (DInterface { methods = ms }) =
   fold
     (_ m => match m
@@ -1758,6 +1688,32 @@ checkEffectParamsDecl (DInterface { methods = ms }) =
     ()
     ms
 checkEffectParamsDecl _ = ()
+
+-- A declaration's `Authority L` parameter has L's domain, so each use of it
+-- in the declaration, at an atom or an index slot, must be of that domain,
+-- as a signature's binder must (`reportBinderDomains`).
+checkDeclAuthorityDomains : List String ->
+  List (Option KindAnn) ->
+  List Ty ->
+  Unit
+checkDeclAuthorityDomains _ _ [] = ()
+checkDeclAuthorityDomains ps ks (t :: ts) =
+  let declared = flatMap declaredAuthority (zipParamKinds ps ks)
+  let names = map fst declared
+  let uses =
+    filterList (u => contains (fst u) names) (flatMap authorityUsesOf (t :: ts))
+  if isEmptyL uses then () else reportBinderDomains t (declared ++ uses)
+
+declaredAuthority : (String, Option KindAnn) -> List (String, Param)
+declaredAuthority (p, Some (KindAuthority l o _)) =
+  [(p, dtopFor (EffLabel l o))]
+declaredAuthority _ = []
+
+zipParamKinds : List String ->
+  List (Option KindAnn) ->
+  List (String, Option KindAnn)
+zipParamKinds (p :: ps) (k :: ks) = (p, k) :: zipParamKinds ps ks
+zipParamKinds _ _ = []
 
 -- #784 (Option A): reject an interface method whose signature has a free effect
 -- tail var in RETURN position but in NO ROW-KINDED argument position — it is
@@ -3017,7 +2973,8 @@ effectParamProblems l (PProduct _) (EPSet _) =
   ["label '\{l}' takes named axes (`Host=… Method=…`), not a bare set"]
 effectParamProblems l _ (EPSet _) = [atomicLabelParamText l]
 effectParamProblems _ (PProduct schema) (EPProduct axes) =
-  productAxesProblems schema (PProduct (map writtenAxis axes))
+  map repeatedAxisText (repeatedNames (map fst axes) [])
+    ++ productAxesProblems schema (PProduct (map writtenAxis axes))
 effectParamProblems l PUnit (EPProduct _) = [atomicLabelParamText l]
 effectParamProblems l _ (EPProduct _) =
   ["label '\{l}' is not a product domain and takes no axes"]
@@ -3085,7 +3042,7 @@ binderTypeMsg n ty =
 
 binderDomainMsg : String -> String
 binderDomainMsg n =
-  "Authority '\{n}' is used at labels from different domains (a path prefix and a name set are different kinds of authority). One authority has one domain: name a second binder for the other label"
+  "Authority '\{n}' is used at labels from different domains (a path prefix, a name set and each Product schema are different kinds of authority). One authority has one domain: name a second binder for the other label"
 
 atomicLabelParamText : String -> String
 atomicLabelParamText l =
@@ -3108,6 +3065,12 @@ productAxesProblems : List (String, Param) -> Param -> List String
 productAxesProblems schema (PProduct axes) =
   flatMap (a => axisProblems schema (fst a) (snd a)) axes
 productAxesProblems _ _ = []
+
+-- One element of a Product has one value on each axis; two values are two
+-- elements, written as two.
+repeatedAxisText : String -> String
+repeatedAxisText name =
+  "axis '\{name}' is written twice; one element names each axis once, so write each value as its own element"
 
 -- The names that occur more than once, each once, in first-occurrence order.
 repeatedNames : List String -> List String -> List String
@@ -13087,7 +13050,7 @@ binderNoDomainMsg n =
 
 joinDomainMsg : List String -> String
 joinDomainMsg ns =
-  "The joined qualifier \{qualifierSource escStr (map EPName ns)} joins authorities from different domains (a path prefix and a name set are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"
+  "The joined qualifier \{qualifierSource escStr (map EPName ns)} joins authorities from different domains (a path prefix, a name set and each Product schema are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"
 
 -- First occurrence of each name, keeping its span.
 dedupLocated : List (String, Option Loc) ->
@@ -51289,20 +51252,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "writtenAxis" ((PTuple (PVar "name") PWild)) (ETuple (EVar "name") (EVar "PUnit")))
 (DTypeSig true "decodeSetParam" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "decodeSetParam" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "}")))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EVar "splitOnComma") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s"))))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EVar "splitOnComma") (EVar "s"))))))))
-(DTypeSig true "decodeProductParam" (TyFun (TyCon "String") (TyCon "Param")))
-(DFunDef false "decodeProductParam" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 3))) (EVar "s")) (ELit (LString "@P{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "}")))) (EApp (EVar "productNorm") (EApp (EApp (EVar "map") (EVar "decodeAxis")) (EApp (EVar "splitOnSemi") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s"))))) (EApp (EVar "PProduct") (EListLit))))))
-(DTypeSig false "decodeAxis" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Param"))))
-(DFunDef false "decodeAxis" ((PVar "spec")) (EMatch (EApp (EVar "splitOnFirstEqStr") (EVar "spec")) (arm (PCon "None") () (ETuple (EVar "spec") (EVar "PUnit"))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "name") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "spec"))) (DoLet false false (PVar "rhs") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "spec"))) (EVar "spec"))) (DoExpr (ETuple (EVar "name") (EApp (EVar "decodeAxisVal") (EVar "rhs"))))))))
-(DTypeSig false "decodeAxisVal" (TyFun (TyCon "String") (TyCon "Param")))
-(DFunDef false "decodeAxisVal" ((PVar "rhs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "rhs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rhs")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "rhs")) (ELit (LString "}")))) (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "decodeSetParam") (EVar "rhs")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rhs")) (ELit (LString "\"")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "rhs")) (ELit (LString "\"")))) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rhs")))) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "rhs"))))))))
-(DTypeSig false "splitOnFirstEqStr" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "splitOnFirstEqStr" ((PVar "s")) (EApp (EApp (EApp (EVar "splitOnFirstEqGo") (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))))
-(DTypeSig false "splitOnFirstEqGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "splitOnFirstEqGo" ((PVar "s") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")) (ELit (LString "="))) (EApp (EVar "Some") (EVar "i")) (EApp (EApp (EApp (EVar "splitOnFirstEqGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
-(DTypeSig false "splitOnSemi" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "splitOnSemi" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "splitOnSemiGo") (EVar "s")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
-(DTypeSig false "splitOnSemiGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "splitOnSemiGo" ((PVar "s") (PVar "start") (PVar "i") (PVar "acc")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "n")) (EVar "s")) (EVar "acc"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")) (ELit (LString ";"))) (EApp (EApp (EApp (EApp (EVar "splitOnSemiGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "i")) (EVar "s")) (EVar "acc"))) (EApp (EApp (EApp (EApp (EVar "splitOnSemiGo") (EVar "s")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")))))))
 (DTypeSig false "splitOnComma" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "splitOnComma" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "splitOnCommaGo") (EVar "s")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
 (DTypeSig false "splitOnCommaGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -51490,10 +51439,19 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkEffectParamsDecl" ((PCon "DTypeSig" PWild PWild (PVar "t"))) (EApp (EVar "checkEffectParamsTy") (EVar "t")))
 (DFunDef false "checkEffectParamsDecl" ((PCon "DExtern" PWild PWild (PVar "t"))) (EApp (EVar "checkEffectParamsTy") (EVar "t")))
 (DFunDef false "checkEffectParamsDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "checkEffectParamsDecl") (EVar "d")))
-(DFunDef false "checkEffectParamsDecl" ((PRec "DData" ((rf "dataCtors" (PVar "ctors"))) false)) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "v")) (EMatch (EVar "v") (arm (PCon "Variant" PWild (PVar "payload")) () (EApp (EVar "checkEffectParamsTys") (EApp (EVar "payloadAstTypes") (EVar "payload"))))))) (ELit LUnit)) (EVar "ctors")))
-(DFunDef false "checkEffectParamsDecl" ((PRec "DTypeAlias" ((rf "tyAliasRhs" (PVar "rhs"))) false)) (EApp (EVar "checkEffectParamsTy") (EVar "rhs")))
+(DFunDef false "checkEffectParamsDecl" ((PRec "DData" ((rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "ctors"))) false)) (EBlock (DoLet false false (PVar "fields") (EApp (EApp (EVar "flatMap") (ELam ((PVar "v")) (EMatch (EVar "v") (arm (PCon "Variant" PWild (PVar "payload")) () (EApp (EVar "payloadAstTypes") (EVar "payload")))))) (EVar "ctors"))) (DoLet false false PWild (EApp (EVar "checkEffectParamsTys") (EVar "fields"))) (DoExpr (EApp (EApp (EApp (EVar "checkDeclAuthorityDomains") (EVar "ps")) (EVar "ks")) (EVar "fields")))))
+(DFunDef false "checkEffectParamsDecl" ((PRec "DTypeAlias" ((rf "tyAliasParams" (PVar "ps")) (rf "tyAliasParamKinds" (PVar "ks")) (rf "tyAliasRhs" (PVar "rhs"))) false)) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectParamsTy") (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EVar "checkDeclAuthorityDomains") (EVar "ps")) (EVar "ks")) (EListLit (EVar "rhs"))))))
 (DFunDef false "checkEffectParamsDecl" ((PRec "DInterface" ((rf "methods" (PVar "ms"))) false)) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" PWild (PVar "t") PWild PWild) () (EApp (EVar "checkEffectParamsTy") (EVar "t")))))) (ELit LUnit)) (EVar "ms")))
 (DFunDef false "checkEffectParamsDecl" (PWild) (ELit LUnit))
+(DTypeSig false "checkDeclAuthorityDomains" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))
+(DFunDef false "checkDeclAuthorityDomains" (PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkDeclAuthorityDomains" ((PVar "ps") (PVar "ks") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "flatMap") (EVar "declaredAuthority")) (EApp (EApp (EVar "zipParamKinds") (EVar "ps")) (EVar "ks")))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "declared"))) (DoLet false false (PVar "uses") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EApp (EApp (EVar "contains") (EApp (EVar "fst") (EVar "u"))) (EVar "names")))) (EApp (EApp (EVar "flatMap") (EVar "authorityUsesOf")) (EBinOp "::" (EVar "t") (EVar "ts"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "uses")) (ELit LUnit) (EApp (EApp (EVar "reportBinderDomains") (EVar "t")) (EBinOp "++" (EVar "declared") (EVar "uses")))))))
+(DTypeSig false "declaredAuthority" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))
+(DFunDef false "declaredAuthority" ((PTuple (PVar "p") (PCon "Some" (PCon "KindAuthority" (PVar "l") (PVar "o") PWild)))) (EListLit (ETuple (EVar "p") (EApp (EVar "dtopFor") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))))))
+(DFunDef false "declaredAuthority" (PWild) (EListLit))
+(DTypeSig false "zipParamKinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "KindAnn")))))))
+(DFunDef false "zipParamKinds" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "k") (PVar "ks"))) (EBinOp "::" (ETuple (EVar "p") (EVar "k")) (EApp (EApp (EVar "zipParamKinds") (EVar "ps")) (EVar "ks"))))
+(DFunDef false "zipParamKinds" (PWild PWild) (EListLit))
 (DTypeSig false "checkUndeterminedRetEffVars" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "checkUndeterminedRetEffVars" ((PList)) (ELit LUnit))
 (DFunDef false "checkUndeterminedRetEffVars" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVarsDecl") (EVar "d"))) (DoExpr (EApp (EVar "checkUndeterminedRetEffVars") (EVar "rest")))))
@@ -51745,7 +51703,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' takes a prefix pattern, not a set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PProduct" PWild) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' takes named axes (`Host=… Method=…`), not a bare set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPSet" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
-(DFunDef false "effectParamProblems" (PWild (PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EVar "PProduct") (EApp (EApp (EVar "map") (EVar "writtenAxis")) (EVar "axes")))))
+(DFunDef false "effectParamProblems" (PWild (PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "repeatedAxisText")) (EApp (EApp (EVar "repeatedNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "axes"))) (EListLit))) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EVar "PProduct") (EApp (EApp (EVar "map") (EVar "writtenAxis")) (EVar "axes"))))))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PUnit") (PCon "EPProduct" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPProduct" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' is not a product domain and takes no axes")))))
 (DTypeSig true "decodeWrittenParam" (TyFun (TyCon "EffLabel") (TyFun (TyCon "EffParamTy") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Param")))))
@@ -51762,7 +51720,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "binderTypeMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "binderTypeMsg" ((PVar "n") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Named argument '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' has type `"))) (EApp (EVar "display") (EVar "ty"))) (ELit (LString "`, but an effect atom names it as an authority: only a `String` argument can determine an effect's parameter. Give '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' the type `String`, or write the label bare for any authority"))))
 (DTypeSig false "binderDomainMsg" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "binderDomainMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "Authority '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is used at labels from different domains (a path prefix and a name set are different kinds of authority). One authority has one domain: name a second binder for the other label"))))
+(DFunDef false "binderDomainMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "Authority '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is used at labels from different domains (a path prefix, a name set and each Product schema are different kinds of authority). One authority has one domain: name a second binder for the other label"))))
 (DTypeSig false "atomicLabelParamText" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "atomicLabelParamText" ((PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' is atomic and takes no parameter (declare it `effect "))) (EApp (EVar "display") (EVar "l"))) (ELit (LString " Prefix` to parameterize)"))))
 (DTypeSig false "primaryLiteralProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -51771,6 +51729,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "productAxesProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "productAxesProblems" ((PVar "schema") (PCon "PProduct" (PVar "axes"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EVar "axisProblems") (EVar "schema")) (EApp (EVar "fst") (EVar "a"))) (EApp (EVar "snd") (EVar "a"))))) (EVar "axes")))
 (DFunDef false "productAxesProblems" (PWild PWild) (EListLit))
+(DTypeSig false "repeatedAxisText" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "repeatedAxisText" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "axis '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is written twice; one element names each axis once, so write each value as its own element"))))
 (DTypeSig false "repeatedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "repeatedNames" ((PList) PWild) (EListLit))
 (DFunDef false "repeatedNames" ((PCons (PVar "n") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "seen")) (EApp (EApp (EVar "repeatedNames") (EVar "rest")) (EVar "seen")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rest")) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "repeatedNames") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "seen")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "repeatedNames") (EVar "rest")) (EVar "seen")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -53299,7 +53259,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "binderNoDomainMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "binderNoDomainMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "The qualifier names '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "', but no effect atom or index in this signature names '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Name the label it bounds, `<FileRead "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ">`, or index a handle by it, `Handle "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`, or drop the qualifier"))))
 (DTypeSig false "joinDomainMsg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "joinDomainMsg" ((PVar "ns")) (EBinOp "++" (EBinOp "++" (ELit (LString "The joined qualifier ")) (EApp (EVar "display") (EApp (EApp (EVar "qualifierSource") (EVar "escStr")) (EApp (EApp (EVar "map") (EVar "EPName")) (EVar "ns"))))) (ELit (LString " joins authorities from different domains (a path prefix and a name set are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"))))
+(DFunDef false "joinDomainMsg" ((PVar "ns")) (EBinOp "++" (EBinOp "++" (ELit (LString "The joined qualifier ")) (EApp (EVar "display") (EApp (EApp (EVar "qualifierSource") (EVar "escStr")) (EApp (EApp (EVar "map") (EVar "EPName")) (EVar "ns"))))) (ELit (LString " joins authorities from different domains (a path prefix, a name set and each Product schema are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"))))
 (DTypeSig false "dedupLocated" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "dedupLocated" ((PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "dedupLocated" ((PCons (PTuple (PVar "n") (PVar "l")) (PVar "rest")) (PVar "acc")) (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "acc"))) (EApp (EApp (EVar "dedupLocated") (EVar "rest")) (EVar "acc")) (EApp (EApp (EVar "dedupLocated") (EVar "rest")) (EBinOp "::" (ETuple (EVar "n") (EVar "l")) (EVar "acc")))))
@@ -59480,20 +59440,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "writtenAxis" ((PTuple (PVar "name") PWild)) (ETuple (EVar "name") (EVar "PUnit")))
 (DTypeSig true "decodeSetParam" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "decodeSetParam" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "}")))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EVar "splitOnComma") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s"))))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EVar "splitOnComma") (EVar "s"))))))))
-(DTypeSig true "decodeProductParam" (TyFun (TyCon "String") (TyCon "Param")))
-(DFunDef false "decodeProductParam" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 3))) (EVar "s")) (ELit (LString "@P{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "}")))) (EApp (EVar "productNorm") (EApp (EApp (EMethodRef "map") (EVar "decodeAxis")) (EApp (EVar "splitOnSemi") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s"))))) (EApp (EVar "PProduct") (EListLit))))))
-(DTypeSig false "decodeAxis" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Param"))))
-(DFunDef false "decodeAxis" ((PVar "spec")) (EMatch (EApp (EVar "splitOnFirstEqStr") (EVar "spec")) (arm (PCon "None") () (ETuple (EVar "spec") (EVar "PUnit"))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "name") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "spec"))) (DoLet false false (PVar "rhs") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "spec"))) (EVar "spec"))) (DoExpr (ETuple (EVar "name") (EApp (EVar "decodeAxisVal") (EVar "rhs"))))))))
-(DTypeSig false "decodeAxisVal" (TyFun (TyCon "String") (TyCon "Param")))
-(DFunDef false "decodeAxisVal" ((PVar "rhs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "rhs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rhs")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "rhs")) (ELit (LString "}")))) (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "decodeSetParam") (EVar "rhs")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rhs")) (ELit (LString "\"")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "rhs")) (ELit (LString "\"")))) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rhs")))) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "rhs"))))))))
-(DTypeSig false "splitOnFirstEqStr" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "splitOnFirstEqStr" ((PVar "s")) (EApp (EApp (EApp (EVar "splitOnFirstEqGo") (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))))
-(DTypeSig false "splitOnFirstEqGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "splitOnFirstEqGo" ((PVar "s") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")) (ELit (LString "="))) (EApp (EVar "Some") (EVar "i")) (EApp (EApp (EApp (EVar "splitOnFirstEqGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
-(DTypeSig false "splitOnSemi" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "splitOnSemi" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "splitOnSemiGo") (EVar "s")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
-(DTypeSig false "splitOnSemiGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "splitOnSemiGo" ((PVar "s") (PVar "start") (PVar "i") (PVar "acc")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "n")) (EVar "s")) (EVar "acc"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")) (ELit (LString ";"))) (EApp (EApp (EApp (EApp (EVar "splitOnSemiGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "i")) (EVar "s")) (EVar "acc"))) (EApp (EApp (EApp (EApp (EVar "splitOnSemiGo") (EVar "s")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")))))))
 (DTypeSig false "splitOnComma" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "splitOnComma" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "splitOnCommaGo") (EVar "s")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
 (DTypeSig false "splitOnCommaGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -59681,10 +59627,19 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkEffectParamsDecl" ((PCon "DTypeSig" PWild PWild (PVar "t"))) (EApp (EVar "checkEffectParamsTy") (EVar "t")))
 (DFunDef false "checkEffectParamsDecl" ((PCon "DExtern" PWild PWild (PVar "t"))) (EApp (EVar "checkEffectParamsTy") (EVar "t")))
 (DFunDef false "checkEffectParamsDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "checkEffectParamsDecl") (EVar "d")))
-(DFunDef false "checkEffectParamsDecl" ((PRec "DData" ((rf "dataCtors" (PVar "ctors"))) false)) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "v")) (EMatch (EVar "v") (arm (PCon "Variant" PWild (PVar "payload")) () (EApp (EVar "checkEffectParamsTys") (EApp (EVar "payloadAstTypes") (EVar "payload"))))))) (ELit LUnit)) (EVar "ctors")))
-(DFunDef false "checkEffectParamsDecl" ((PRec "DTypeAlias" ((rf "tyAliasRhs" (PVar "rhs"))) false)) (EApp (EVar "checkEffectParamsTy") (EVar "rhs")))
+(DFunDef false "checkEffectParamsDecl" ((PRec "DData" ((rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "ctors"))) false)) (EBlock (DoLet false false (PVar "fields") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "v")) (EMatch (EVar "v") (arm (PCon "Variant" PWild (PVar "payload")) () (EApp (EVar "payloadAstTypes") (EVar "payload")))))) (EVar "ctors"))) (DoLet false false PWild (EApp (EVar "checkEffectParamsTys") (EVar "fields"))) (DoExpr (EApp (EApp (EApp (EVar "checkDeclAuthorityDomains") (EVar "ps")) (EVar "ks")) (EVar "fields")))))
+(DFunDef false "checkEffectParamsDecl" ((PRec "DTypeAlias" ((rf "tyAliasParams" (PVar "ps")) (rf "tyAliasParamKinds" (PVar "ks")) (rf "tyAliasRhs" (PVar "rhs"))) false)) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectParamsTy") (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EVar "checkDeclAuthorityDomains") (EVar "ps")) (EVar "ks")) (EListLit (EVar "rhs"))))))
 (DFunDef false "checkEffectParamsDecl" ((PRec "DInterface" ((rf "methods" (PVar "ms"))) false)) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" PWild (PVar "t") PWild PWild) () (EApp (EVar "checkEffectParamsTy") (EVar "t")))))) (ELit LUnit)) (EVar "ms")))
 (DFunDef false "checkEffectParamsDecl" (PWild) (ELit LUnit))
+(DTypeSig false "checkDeclAuthorityDomains" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))
+(DFunDef false "checkDeclAuthorityDomains" (PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkDeclAuthorityDomains" ((PVar "ps") (PVar "ks") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EDictApp "flatMap") (EVar "declaredAuthority")) (EApp (EApp (EVar "zipParamKinds") (EVar "ps")) (EVar "ks")))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "declared"))) (DoLet false false (PVar "uses") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EApp (EApp (EVar "contains") (EApp (EVar "fst") (EVar "u"))) (EVar "names")))) (EApp (EApp (EDictApp "flatMap") (EVar "authorityUsesOf")) (EBinOp "::" (EVar "t") (EVar "ts"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "uses")) (ELit LUnit) (EApp (EApp (EVar "reportBinderDomains") (EVar "t")) (EBinOp "++" (EVar "declared") (EVar "uses")))))))
+(DTypeSig false "declaredAuthority" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))
+(DFunDef false "declaredAuthority" ((PTuple (PVar "p") (PCon "Some" (PCon "KindAuthority" (PVar "l") (PVar "o") PWild)))) (EListLit (ETuple (EVar "p") (EApp (EVar "dtopFor") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))))))
+(DFunDef false "declaredAuthority" (PWild) (EListLit))
+(DTypeSig false "zipParamKinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "KindAnn")))))))
+(DFunDef false "zipParamKinds" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "k") (PVar "ks"))) (EBinOp "::" (ETuple (EVar "p") (EVar "k")) (EApp (EApp (EVar "zipParamKinds") (EVar "ps")) (EVar "ks"))))
+(DFunDef false "zipParamKinds" (PWild PWild) (EListLit))
 (DTypeSig false "checkUndeterminedRetEffVars" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "checkUndeterminedRetEffVars" ((PList)) (ELit LUnit))
 (DFunDef false "checkUndeterminedRetEffVars" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVarsDecl") (EVar "d"))) (DoExpr (EApp (EVar "checkUndeterminedRetEffVars") (EVar "rest")))))
@@ -59936,7 +59891,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' takes a prefix pattern, not a set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PProduct" PWild) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' takes named axes (`Host=… Method=…`), not a bare set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPSet" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
-(DFunDef false "effectParamProblems" (PWild (PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EVar "PProduct") (EApp (EApp (EMethodRef "map") (EVar "writtenAxis")) (EVar "axes")))))
+(DFunDef false "effectParamProblems" (PWild (PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "repeatedAxisText")) (EApp (EApp (EVar "repeatedNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "axes"))) (EListLit))) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EVar "PProduct") (EApp (EApp (EMethodRef "map") (EVar "writtenAxis")) (EVar "axes"))))))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PUnit") (PCon "EPProduct" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPProduct" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' is not a product domain and takes no axes")))))
 (DTypeSig true "decodeWrittenParam" (TyFun (TyCon "EffLabel") (TyFun (TyCon "EffParamTy") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Param")))))
@@ -59953,7 +59908,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "binderTypeMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "binderTypeMsg" ((PVar "n") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Named argument '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' has type `"))) (EApp (EMethodRef "display") (EVar "ty"))) (ELit (LString "`, but an effect atom names it as an authority: only a `String` argument can determine an effect's parameter. Give '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' the type `String`, or write the label bare for any authority"))))
 (DTypeSig false "binderDomainMsg" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "binderDomainMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "Authority '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is used at labels from different domains (a path prefix and a name set are different kinds of authority). One authority has one domain: name a second binder for the other label"))))
+(DFunDef false "binderDomainMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "Authority '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is used at labels from different domains (a path prefix, a name set and each Product schema are different kinds of authority). One authority has one domain: name a second binder for the other label"))))
 (DTypeSig false "atomicLabelParamText" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "atomicLabelParamText" ((PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' is atomic and takes no parameter (declare it `effect "))) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString " Prefix` to parameterize)"))))
 (DTypeSig false "primaryLiteralProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -59962,6 +59917,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "productAxesProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "productAxesProblems" ((PVar "schema") (PCon "PProduct" (PVar "axes"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EVar "axisProblems") (EVar "schema")) (EApp (EVar "fst") (EVar "a"))) (EApp (EVar "snd") (EVar "a"))))) (EVar "axes")))
 (DFunDef false "productAxesProblems" (PWild PWild) (EListLit))
+(DTypeSig false "repeatedAxisText" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "repeatedAxisText" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "axis '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is written twice; one element names each axis once, so write each value as its own element"))))
 (DTypeSig false "repeatedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "repeatedNames" ((PList) PWild) (EListLit))
 (DFunDef false "repeatedNames" ((PCons (PVar "n") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "seen")) (EApp (EApp (EVar "repeatedNames") (EVar "rest")) (EVar "seen")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rest")) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "repeatedNames") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "seen")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "repeatedNames") (EVar "rest")) (EVar "seen")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -61490,7 +61447,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "binderNoDomainMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "binderNoDomainMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "The qualifier names '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "', but no effect atom or index in this signature names '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Name the label it bounds, `<FileRead "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ">`, or index a handle by it, `Handle "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`, or drop the qualifier"))))
 (DTypeSig false "joinDomainMsg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "joinDomainMsg" ((PVar "ns")) (EBinOp "++" (EBinOp "++" (ELit (LString "The joined qualifier ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "qualifierSource") (EVar "escStr")) (EApp (EApp (EMethodRef "map") (EVar "EPName")) (EVar "ns"))))) (ELit (LString " joins authorities from different domains (a path prefix and a name set are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"))))
+(DFunDef false "joinDomainMsg" ((PVar "ns")) (EBinOp "++" (EBinOp "++" (ELit (LString "The joined qualifier ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "qualifierSource") (EVar "escStr")) (EApp (EApp (EMethodRef "map") (EVar "EPName")) (EVar "ns"))))) (ELit (LString " joins authorities from different domains (a path prefix, a name set and each Product schema are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"))))
 (DTypeSig false "dedupLocated" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "dedupLocated" ((PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "dedupLocated" ((PCons (PTuple (PVar "n") (PVar "l")) (PVar "rest")) (PVar "acc")) (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "acc"))) (EApp (EApp (EVar "dedupLocated") (EVar "rest")) (EVar "acc")) (EApp (EApp (EVar "dedupLocated") (EVar "rest")) (EBinOp "::" (ETuple (EVar "n") (EVar "l")) (EVar "acc")))))

@@ -1,0 +1,15 @@
+-- A declaration's `Authority L` parameter is of L's domain, so each use of it
+-- in the declaration must be too: T indexes Web2's H2 by a Web1 authority,
+-- and B names a Keys authority at a Dir atom.
+effect Web1 Product (Host : Prefix, Method : Set)
+effect Web2 Product (Method : Set, Host : Prefix)
+effect Dir Prefix
+effect Keys Set
+
+data H2 (p : Authority Web2) = H2 (String @p)
+
+type T (p : Authority Web1) = H2 p
+
+type B (p : Authority Keys) = Unit -> <Dir p> Unit
+
+main = println 1

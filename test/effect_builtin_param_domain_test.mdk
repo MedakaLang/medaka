@@ -629,3 +629,18 @@ test "a binder at two Product labels needs one schema" = expectAll [
   ],
   expectCheckAccept (fixture "product_binder_one_schema_accept.mdk"),
 ]
+
+test "a written Product names each axis once" = expectAll [
+  expectCheckReject (fixture "product_repeated_axis_reject.mdk") [
+    "axis 'Host' is written twice",
+  ],
+  expectCheckAccept (fixture "product_repeated_axis_accept.mdk"),
+]
+
+test "a declaration's authority parameter is used at its own domain" = expectAll
+  [
+    expectCheckReject (fixture "decl_authority_domain_reject.mdk") [
+      "Authority 'p' is used at labels from different domains",
+    ],
+    expectCheckAccept (fixture "decl_authority_domain_accept.mdk"),
+  ]

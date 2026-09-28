@@ -1,0 +1,13 @@
+-- Control: each parameter used at its own label's domain, and at a second
+-- label that declares the same schema.
+effect Web2 Product (Method : Set, Host : Prefix)
+effect Api Product (Method : Set, Host : Prefix)
+effect Dir Prefix
+
+data H2 (p : Authority Web2) = H2 (String @p)
+
+type T (p : Authority Api) = H2 p
+
+type B (p : Authority Dir) = Unit -> <Dir p> Unit
+
+main = println 1

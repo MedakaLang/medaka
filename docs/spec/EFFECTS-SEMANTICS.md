@@ -475,9 +475,9 @@ written product may name only declared axes; a Product declared without axes
 is ill-formed. Missing axes mean top. Every element of a Product domain
 carries the schema, whether it is read off the label, a variable, or a
 constant a signature writes, so the domain is the schema itself: two Product
-labels are one domain only when they declare the same axes, of the same
-domains, in the same order, whatever the axes are named. Domain mismatches
-are errors, never proofs of containment.
+labels are one domain only when they declare the same axes (the same names,
+of the same domains) in the same order. A written product names each axis
+at most once. Domain mismatches are errors, never proofs of containment.
 
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates

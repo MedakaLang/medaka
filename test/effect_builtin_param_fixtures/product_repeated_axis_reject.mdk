@@ -1,0 +1,12 @@
+-- One element of a Product has one value on each axis. An extern that writes
+-- Host twice in one element is refused, never read as one of the two: read
+-- as its first, the row would drop b.com and `f` would pass a bound that
+-- names only a.com.
+effect Web1 Product (Host : Prefix, Method : Set)
+
+extern req : Unit -> <FFI, Web1 Host="a.com/*" Host="b.com/*"> Unit
+
+f : Unit -> <FFI, Web1 Host="a.com/*"> Unit
+f _ = req ()
+
+main = println 1

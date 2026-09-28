@@ -380,6 +380,7 @@ checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit
 checkCoherence : ImplEnv -> Int -> Bool -> Unit
 checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> ModuleBindings
+checkDeclAuthorityDomains : List String -> List (Option KindAnn) -> List Ty -> Unit
 checkDeclaredKinds : List Decl -> Unit
 checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsGo : List Decl -> List Decl -> Unit
@@ -736,6 +737,7 @@ declRefNames : Decl -> List String
 declTopFnNames : List Decl -> List String
 declareRemedy : String -> String -> String
 declaredArgEffNames : Ty -> List String
+declaredAuthority : (String, Option KindAnn) -> List (String, Param)
 declaredConstraintFor : String -> CDeclared
 declaredConstraintIds : String -> List Int
 declaredCrossModuleObls : String -> Option (List VecObl)
@@ -754,9 +756,6 @@ declaredPredicateSlots : List (IfaceRef, List Mono) -> List (List Mono) -> List 
 declaredSchemeOblsFor : List (String, Ty, List (String, Mono)) -> String -> List Int -> List VecObl
 declaresCtorNamed : List Decl -> String -> Bool
 declaresStandalone : String -> List Decl -> Bool
-decodeAxis : String -> (String, Param)
-decodeAxisVal : String -> Param
-decodeProductParam : String -> Param
 decodeSetParam : String -> List String
 decodeWrittenParam : EffLabel -> EffParamTy -> Result String Param
 dedupBinders : List (String, Param) -> List (String, Param) -> List (String, Param)
@@ -2425,6 +2424,7 @@ renderKindAnn : KindAnn -> String
 renderKindAnnAtomic : KindAnn -> String
 renderKindArrow : List Kind -> String
 renderRouteIdentity : Route -> String
+repeatedAxisText : String -> String
 repeatedBindings : List (String, Mono) -> List (String, Mono) -> List (Mono, Mono)
 repeatedNames : List String -> List String -> List String
 reportAmbiguousImpl : String -> Route
@@ -2676,10 +2676,6 @@ spineHead : Mono -> Mono
 spineHeadMono : Mono -> Mono
 splitOnComma : String -> List String
 splitOnCommaGo : String -> Int -> Int -> List String -> List String
-splitOnFirstEqGo : String -> Int -> Int -> Option Int
-splitOnFirstEqStr : String -> Option Int
-splitOnSemi : String -> List String
-splitOnSemiGo : String -> Int -> Int -> List String -> List String
 stampCtxOf : String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
 stampGroupClauses : ModuleMarking -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 stampMethodArities : List (Ref (Option Int)) -> Int -> Unit
@@ -2933,4 +2929,5 @@ xmodVecObl : CSlot -> List Mono -> VecObl
 zipBindFrom : List Mono -> List Mono -> Unit
 zipKinds : List (List Kind) -> List (List Kind) -> List (List Kind, List Kind)
 zipMethodSlotSubst : List Int -> List Int -> List Mono -> List (Int, Mono)
+zipParamKinds : List String -> List (Option KindAnn) -> List (String, Option KindAnn)
 zipSlotVecs : List CSlot -> List (List Mono) -> List (CSlot, List Mono)
