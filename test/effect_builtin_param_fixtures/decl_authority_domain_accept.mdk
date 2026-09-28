@@ -1,5 +1,5 @@
--- Control: each parameter used at its own label's domain, and at a second
--- label that declares the same schema.
+-- Control: each parameter or binder used at its own label's domain, or at a
+-- second label that declares the same schema.
 effect Web2 Product (Method : Set, Host : Prefix)
 effect Api Product (Method : Set, Host : Prefix)
 effect Dir Prefix
@@ -9,5 +9,11 @@ data H2 (p : Authority Web2) = H2 (String @p)
 type T (p : Authority Api) = H2 p
 
 type B (p : Authority Dir) = Unit -> <Dir p> Unit
+
+data E = E (q : Authority Dir) (Unit -> <FFI, Dir q> Unit)
+
+newtype N (p : Authority Dir) = N (Unit -> <Dir p> Unit)
+
+newtype M = M (Unit -> <FFI, Web2 Host="a.com/*", Web2 Host="b.com/*"> Unit)
 
 main = println 1

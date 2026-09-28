@@ -1666,17 +1666,15 @@ checkEffectParamsDecl : Decl -> Unit
 checkEffectParamsDecl (DTypeSig _ _ t) = checkEffectParamsTy t
 checkEffectParamsDecl (DExtern _ _ t) = checkEffectParamsTy t
 checkEffectParamsDecl (DAttrib _ d) = checkEffectParamsDecl d
-checkEffectParamsDecl (DData { dataParams = ps, dataParamKinds = ks, dataCtors = ctors }) =
-  let fields =
-    flatMap
-      (v => match v
-        Variant _ payload => payloadAstTypes payload)
-      ctors
-  let _ = checkEffectParamsTys fields
-  checkDeclAuthorityDomains ps ks fields
-checkEffectParamsDecl (DTypeAlias { tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) =
-  let _ = checkEffectParamsTy rhs
-  checkDeclAuthorityDomains ps ks [rhs]
+checkEffectParamsDecl (DData { dataCtors = ctors }) =
+  fold
+    (_ v => match v
+      Variant _ payload => checkEffectParamsTys (payloadAstTypes payload))
+    ()
+    ctors
+checkEffectParamsDecl (DTypeAlias { tyAliasRhs = rhs }) =
+  checkEffectParamsTy rhs
+checkEffectParamsDecl (DNewtype { newtypeFieldTy = t }) = checkEffectParamsTy t
 checkEffectParamsDecl (DInterface { methods = ms }) =
   fold
     (_ m => match m
@@ -1685,16 +1683,45 @@ checkEffectParamsDecl (DInterface { methods = ms }) =
     ms
 checkEffectParamsDecl _ = ()
 
--- A declaration's `Authority L` parameter has L's domain, so each use of it
--- in the declaration, at an atom or an index slot, must be of that domain,
--- as a signature's binder must (`reportBinderDomains`).
-checkDeclAuthorityDomains : List String ->
-  List (Option KindAnn) ->
+-- A declaration's `Authority L` parameter, or a constructor's existential
+-- `(q : Authority L)` binder, has L's domain, so each use of it in the
+-- declaration, at an atom or an index slot, must be of that domain, as a
+-- signature's binder must (`reportBinderDomains`). Runs after
+-- `registerAllData`: an index slot's domain is read from the kind table.
+checkDeclAuthorityUses : List Decl -> Unit
+checkDeclAuthorityUses ds = fold (_ d => checkDeclAuthorityUsesDecl d) () ds
+
+checkDeclAuthorityUsesDecl : Decl -> Unit
+checkDeclAuthorityUsesDecl (DAttrib _ d) = checkDeclAuthorityUsesDecl d
+checkDeclAuthorityUsesDecl (DData { dataParams = ps, dataParamKinds = ks, dataCtors = ctors, dataCtorBinders = bss }) =
+  let heads = flatMap declaredAuthority (zipParamKinds ps ks)
+  fold
+    (_ cb => match cb
+      (Variant _ payload, bs) =>
+        checkDeclAuthorityDomains heads bs (payloadAstTypes payload))
+    ()
+    (zipCtorBinders ctors bss)
+checkDeclAuthorityUsesDecl (DTypeAlias { tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) = checkDeclAuthorityDomains
+  (flatMap declaredAuthority (zipParamKinds ps ks))
+  []
+  [rhs]
+checkDeclAuthorityUsesDecl (DNewtype { newtypeParams = ps, newtypeParamKinds = ks, newtypeCtorBinders = bs, newtypeFieldTy = t }) = checkDeclAuthorityDomains
+  (flatMap declaredAuthority (zipParamKinds ps ks))
+  bs
+  [t]
+checkDeclAuthorityUsesDecl _ = ()
+
+-- The head's authorities less those a constructor binder of the same name
+-- shadows, with the binder's; then each use in [fields] against them.
+checkDeclAuthorityDomains : List (String, Param) ->
+  List (String, KindAnn) ->
   List Ty ->
   Unit
 checkDeclAuthorityDomains _ _ [] = ()
-checkDeclAuthorityDomains ps ks (t :: ts) =
-  let declared = flatMap declaredAuthority (zipParamKinds ps ks)
+checkDeclAuthorityDomains heads bs (t :: ts) =
+  let own = flatMap (b => declaredAuthority (fst b, Some (snd b))) bs
+  let shadowed = map fst bs
+  let declared = own ++ filterList (h => not (contains (fst h) shadowed)) heads
   let names = map fst declared
   let uses =
     filterList (u => contains (fst u) names) (flatMap authorityUsesOf (t :: ts))
@@ -1704,6 +1731,15 @@ declaredAuthority : (String, Option KindAnn) -> List (String, Param)
 declaredAuthority (p, Some (KindAuthority l o _)) =
   [(p, dtopFor (EffLabel l o))]
 declaredAuthority _ = []
+
+-- Each constructor with its existential binders; a declaration without the
+-- binder list (every constructor binds none) pairs each with none.
+zipCtorBinders : List Variant ->
+  List (List (String, KindAnn)) ->
+  List (Variant, List (String, KindAnn))
+zipCtorBinders [] _ = []
+zipCtorBinders (v :: vs) (b :: bs) = (v, b) :: zipCtorBinders vs bs
+zipCtorBinders (v :: vs) [] = (v, []) :: zipCtorBinders vs []
 
 zipParamKinds : List String ->
   List (Option KindAnn) ->
@@ -33186,6 +33222,9 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- EFFECTS-SEMANTICS §6.4/§6.5: declared-kind consistency.  Same placement — the
   -- slot-kind reads consult the table `dataEnv` just populated.
   let _ = checkDeclaredKinds prog
+  -- One authority, one domain, for a declaration's `Authority` parameters.
+  -- Same placement: an index slot's domain is read from that table.
+  let _ = checkDeclAuthorityUses prog
   -- #822: instance-head kind check for graded interfaces.  Same placement rationale
   -- as the line above for the HEAD-constructor half, which still reads
   -- `dataParamKindsRef` that `dataEnv` above has just populated.

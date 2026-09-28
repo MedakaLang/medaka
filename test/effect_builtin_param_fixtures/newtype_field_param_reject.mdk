@@ -1,0 +1,9 @@
+-- A newtype's field is validated as a data field is: an axis written twice.
+effect Web1 Product (Host : Prefix, Method : Set)
+effect Web2 Product (Method : Set, Host : Prefix)
+effect Dir Prefix
+effect Keys Set
+
+newtype M = M (Unit -> <FFI, Web1 Host="a.com/*" Host="b.com/*"> Unit)
+
+main = println 1

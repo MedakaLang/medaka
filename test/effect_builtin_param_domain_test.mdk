@@ -639,8 +639,21 @@ test "a written Product names each axis once" = expectAll [
 
 test "a declaration's authority parameter is used at its own domain" = expectAll
   [
-    expectCheckReject (fixture "decl_authority_domain_reject.mdk") [
+    expectCheckRejectLine (fixture "decl_authority_index_reject.mdk") [
+      "decl_authority_index_reject.mdk:8:",
       "Authority 'p' is used at labels from different domains",
+    ],
+    expectCheckReject (fixture "decl_authority_atom_reject.mdk") [
+      "Authority 'p' is used at labels from different domains",
+    ],
+    expectCheckReject (fixture "decl_authority_existential_reject.mdk") [
+      "Authority 'q' is used at labels from different domains",
+    ],
+    expectCheckReject (fixture "decl_authority_newtype_reject.mdk") [
+      "Authority 'p' is used at labels from different domains",
+    ],
+    expectCheckReject (fixture "newtype_field_param_reject.mdk") [
+      "axis 'Host' is written twice",
     ],
     expectCheckAccept (fixture "decl_authority_domain_accept.mdk"),
   ]

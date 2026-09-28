@@ -380,7 +380,9 @@ checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit
 checkCoherence : ImplEnv -> Int -> Bool -> Unit
 checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> ModuleBindings
-checkDeclAuthorityDomains : List String -> List (Option KindAnn) -> List Ty -> Unit
+checkDeclAuthorityDomains : List (String, Param) -> List (String, KindAnn) -> List Ty -> Unit
+checkDeclAuthorityUses : List Decl -> Unit
+checkDeclAuthorityUsesDecl : Decl -> Unit
 checkDeclaredKinds : List Decl -> Unit
 checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsGo : List Decl -> List Decl -> Unit
@@ -2927,6 +2929,7 @@ writtenTermProblems : String -> Param -> List EffParamTy -> List String
 xmodOblArgId : Mono -> List Int
 xmodVecObl : CSlot -> List Mono -> VecObl
 zipBindFrom : List Mono -> List Mono -> Unit
+zipCtorBinders : List Variant -> List (List (String, KindAnn)) -> List (Variant, List (String, KindAnn))
 zipKinds : List (List Kind) -> List (List Kind) -> List (List Kind, List Kind)
 zipMethodSlotSubst : List Int -> List Int -> List Mono -> List (Int, Mono)
 zipParamKinds : List String -> List (Option KindAnn) -> List (String, Option KindAnn)
