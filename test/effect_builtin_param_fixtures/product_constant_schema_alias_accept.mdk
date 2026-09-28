@@ -1,0 +1,17 @@
+-- Control: the alias route admits a value that already carries U's qualifier,
+-- read out of H's field.
+effect Web2 Product (Method : Set, Host : Prefix)
+
+extern req2 : (u : String) -> <FFI, Web2 u> Unit
+
+type U (p : Authority Web2) = String @p
+
+data H (p : Authority Web2) = H (String @p)
+
+f : U (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+f k = req2 k
+
+g : H (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+g (H s) = f s
+
+main = println 1

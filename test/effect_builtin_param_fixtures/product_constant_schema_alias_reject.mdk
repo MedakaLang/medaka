@@ -1,0 +1,15 @@
+-- The same through an alias qualifier: U's index is a Product constant, so a
+-- literal at `String @p` is not lifted into the axis the constant writes.
+effect Web2 Product (Method : Set, Host : Prefix)
+
+extern req2 : (u : String) -> <FFI, Web2 u> Unit
+
+type U (p : Authority Web2) = String @p
+
+f : U (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+f k = req2 k
+
+g : Unit -> <FFI, Web2 Host="a.com/*"> Unit
+g _ = f "a.com/x"
+
+main = println 1

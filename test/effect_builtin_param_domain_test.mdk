@@ -600,3 +600,15 @@ test "a linked authority variable keeps its label's declared schema" = expectAll
     ],
     expectCheckAccept (fixture "product_linked_schema_accept.mdk"),
   ]
+
+test "a Product constant names no primary axis, by instantiation or alias" = expectAll
+  [
+    expectCheckReject (fixture "product_constant_schema_inst_reject.mdk") [
+      "Binding 'g' reaches the whole domain",
+    ],
+    expectCheckAccept (fixture "product_constant_schema_inst_accept.mdk"),
+    expectCheckReject (fixture "product_constant_schema_alias_reject.mdk") [
+      "Binding 'g' reaches the whole domain",
+    ],
+    expectCheckAccept (fixture "product_constant_schema_alias_accept.mdk"),
+  ]

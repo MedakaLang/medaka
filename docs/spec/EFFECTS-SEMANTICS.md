@@ -472,8 +472,11 @@ domains retain their declared axis schema, `effect L Product (Host : Prefix,
 Method : Set)`: the axes are declared in order and the first is the primary
 axis an unqualified string argument or a bare written literal lifts into; a
 written product may name only declared axes; a Product declared without axes
-is ill-formed. Missing axes mean top. Domain mismatches are errors, never
-proofs of containment.
+is ill-formed. The schema belongs to the label, or to a variable that carries
+the label's domain, never to a product constant: a constant writes only the
+axes it names, so a literal checked against a slot known only from a
+constant lifts to the whole domain. Missing axes mean top. Domain mismatches
+are errors, never proofs of containment.
 
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates

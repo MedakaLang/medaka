@@ -93,6 +93,12 @@ mapConstants f a = match authNorm a
 -- solution when nothing bounds it below) has no domain of its own.
 export
 authDomainTop : Authority -> Param
+-- A Product constant knows only the axes it writes, not its label's
+-- declared schema: which axes exist and which is primary. So its domain is
+-- the Product top with no schema, and nothing is lifted into an axis on its
+-- word; only a label, or a variable that keeps its label's domain, names the
+-- primary axis.
+authDomainTop (AConst (PProduct _)) = PProduct []
 authDomainTop (AConst p) = subTopOf p
 authDomainTop (AVar cell) = authvarDomain cell
 -- A join's domain is a variable's when it has one: a variable carries its
