@@ -1264,9 +1264,9 @@ if grep -Fq 'recordArithSite :' "$predicate_slot_src"; then
   exit 1
 fi
 
-# Every numeric boundary supplies one explicit descriptor. All eight boundaries name
-# their ambiguity owner; method bodies capture it inside their own balanced inference
-# window. SCC defaulting remains explicitly unrestricted while its ambiguity channel owns
+# Every numeric boundary supplies one explicit descriptor. All seven boundaries name
+# their ambiguity owner; the one method-body driver captures it inside its own balanced
+# inference window. SCC defaulting remains explicitly unrestricted while its ambiguity channel owns
 # the just-exited level.
 numeric_boundaries='blockRecLet blockLet NumBoundaryOwnedMember
 blockLet inferRecordCreate NumBoundaryOwnedMember
@@ -1274,8 +1274,7 @@ inferRecLet registerLocalScheme NumBoundaryOwnedMember
 inferLetSimple inferLetBody NumBoundaryOwnedMember
 processLetGroup inferLetBinds NumBoundaryOwnedGroup
 processSCC sccSchemes NumBoundaryOwnedScc
-inferDefaultMethod instantiateNamedMonos NumBoundaryOwnedMethodBody
-inferImplMethodBody implBodyLoc NumBoundaryOwnedMethodBody'
+inferMethodBody openMethodBodyScope NumBoundaryOwnedMethodBody'
 printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
   require_typecheck_arm "$reader" "$next" 'finalizeNumBoundary'
   require_typecheck_arm "$reader" "$next" 'NumBoundary {'

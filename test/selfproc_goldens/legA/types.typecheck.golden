@@ -378,7 +378,6 @@ checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> M
 checkDeclaredKinds : List Decl -> Unit
 checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsGo : List Decl -> List Decl -> Unit
-checkDefaultMethodRigidity : String -> List String -> String -> Ty -> List (String, Mono) -> List (Int, Mono) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkDeferredMatches : List (Mono, List Arm, Option Loc) -> Unit
 checkDomainAxes : Option Loc -> String -> Option String -> List (String, String) -> Unit
 checkEffVarAtoms : String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
@@ -405,7 +404,6 @@ checkImplEffVarRigidity : String -> List (String, List Kind) -> Ty -> List (Stri
 checkImplHeadIndices : Ty -> Unit
 checkImplHeadNumIds : String -> List (String, Mono) -> List Require -> Map String Unit -> Option Loc -> List Int -> Unit
 checkImplHeadNumObligations : String -> List (String, Mono) -> List Require -> Map String Unit -> List UObligation -> Unit
-checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> List String -> Option Loc -> Unit
 checkIndexLiterals : List (Kind, Ty) -> Unit
 checkIndexOnlyEffVarsOpen : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkIndexOnlyGo : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
@@ -418,7 +416,9 @@ checkLetRecDecls : List Decl -> Unit
 checkMatchChecks : Mono -> List Arm -> Unit
 checkMatchExhaustive : Mono -> List Arm -> Unit
 checkMatchRedundant : Mono -> List Arm -> Unit
-checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool, List (String, List Kind), List String) -> Option Loc -> Unit
+checkMethodBodyAgainst : TcEnv -> IfaceRef -> MethodBodyKind -> String -> Ty -> List (String, List Kind) -> MethodBodyInstance -> (Map Int Unit, Map Int Unit) -> Option Loc -> List Pat -> Expr -> MethodBodyCheck
+checkMethodEffVarRigidity : String -> List Mono -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> List String -> Option Loc -> Unit
+checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkMissingFields : String -> List String -> Map String Unit -> Unit
 checkModuleFull : List (String, Scheme) -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 checkModuleFullDiags : String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl, List TcDiag, List TcDiag)
@@ -1143,6 +1143,7 @@ funClausePair : FunClause -> (List Pat, Expr)
 funClauseSites : FunClause -> List (Ref Route)
 funDefs : List Decl -> List (String, (List Pat, Expr))
 funDomain : Mono -> Mono
+gatesBodyCascade : MethodBodyKind -> Bool
 genBindingRestricted : Map Int Unit -> List AuthResidual -> Bool -> EffRow -> Mono -> Scheme
 generalizableAuthvars : List (Ref Authvar) -> List Int
 generalizableEffvar : Ref Effvar -> List Int
@@ -1430,7 +1431,6 @@ inferDeclaredDictAt : EvId -> CDeclared -> (Mono, List (Int, Mono)) -> Mono
 inferDefaultBodies : TcEnv -> List Decl -> Unit
 inferDefaultBodiesIfEnabled : TcEnv -> List Decl -> Unit
 inferDefaultMethod : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
-inferDefaultMethodBody : String -> String -> Option Loc -> TcEnv -> Mono -> EffRow -> List Pat -> Expr -> Mono
 inferDefaultMethods : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
 inferDefinerShadowApp : TcEnv -> String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Expr -> Expr -> Mono
 inferDefinerShadowAppAt : TcEnv -> String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Expr -> List Expr -> Expr -> Expr -> Mono
@@ -1448,7 +1448,6 @@ inferHeadAnnot : TcEnv -> Expr -> Ty -> Mono
 inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
 inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List Decl -> Unit
 inferImplMethod : TcEnv -> ClassEnv -> Int -> IfaceRef -> List (String, Mono) -> List Mono -> List Require -> ScopedImplMethod -> Unit
-inferImplMethodBody : TcEnv -> ClassEnv -> Int -> IfaceRef -> List (String, Mono) -> List Mono -> List Require -> ImplMethod -> Unit
 inferImplMethods : TcEnv -> ClassEnv -> Int -> IfaceRef -> List (String, Mono) -> List Mono -> List Require -> List ScopedImplMethod -> Unit
 inferInfix : TcEnv -> String -> Expr -> Expr -> Mono
 inferIntLitPat : Int -> (Mono, List (String, Scheme))
@@ -1468,6 +1467,7 @@ inferMemberClauses : TcEnv -> Option Mono -> BindingSummary -> List (List Pat, E
 inferMembers : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List ScopedMember -> Unit
 inferMethodAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono
 inferMethodAtCell : TcEnv -> String -> EvCell -> Mono
+inferMethodBody : TcEnv -> IfaceRef -> MethodBodyKind -> (List String, Ty, List (String, List Kind)) -> String -> List Pat -> Expr -> Unit
 inferMethodCandidateAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
@@ -1554,6 +1554,7 @@ instanceSuperEvidence : IfaceRef -> List Mono -> List SuperEvidence
 instantiate : Scheme -> Mono
 instantiateCtorPattern : Scheme -> Mono
 instantiateLegacyVarTracked : String -> Int -> Scheme -> MethodTrackedInstantiation
+instantiateMethodBody : MethodBodyKind -> List String -> Ty -> List (String, List Kind) -> MethodBodyInstance
 instantiateMethodPredicateArgument : MethodInstantiationSubst -> Option Mono -> Option Mono
 instantiateMethodPredicateSlot : MethodPredicateSlot -> List (Int, Mono) -> Option PredicateSlot
 instantiateMethodPredicateSlots : List MethodPredicateSlot -> List (Int, Mono) -> List PredicateSlot
@@ -1762,6 +1763,10 @@ mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
 mergeOne : List (String, Mono) -> String -> Mono -> List (String, Mono)
 mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (String, Mono)
 methodArgs : Ty -> List Ty
+methodBodyHeadMonos : MethodBodyKind -> List Mono
+methodBodyLaunderMsg : MethodBodyKind -> String -> String -> List Atom -> String
+methodBodyOwnTyparams : MethodBodyKind -> List String -> List String
+methodBodySubject : MethodBodyKind -> String -> String -> String
 methodCandAdmitted : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 methodCandImported : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 methodCellDicts : EvCell -> List (List Route)
@@ -2022,6 +2027,7 @@ openGoalCommitMsg : String -> List Mono -> List KeyEntry -> String
 openGoalCommitWarnCode : String
 openLocalScope : String -> ScopeId
 openLocalScopeIf : String -> Option ScopeId
+openMethodBodyScope : IfaceRef -> String -> MethodBodyKind -> ScopeId
 openRow : Unit -> EffRow
 openRowHint : List Atom -> String
 openScope : ScopeId -> Unit
@@ -2350,6 +2356,7 @@ registerLocalAbsIf : String -> Option ScopeId -> Scheme -> Int -> Int -> Unit
 registerLocalGroupAbs : TcEnv -> Int -> Int -> List (LetBind, Option ScopeId) -> Unit
 registerLocalScheme : String -> Scheme -> Int -> Int -> Int -> Unit
 registerMember : String -> ScopeId -> List (IfaceRef, List Mono) -> List (List Mono) -> Unit
+registerMethodBodyGivens : IfaceRef -> MethodBodyKind -> List String -> Ty -> MethodBodyInstance -> ScopeId -> Unit
 registerMethodDictSlots : ScopeId -> Int -> List Int -> List (Int, Mono) -> Unit
 registerMethodIfaceParamsAll : List Decl -> Unit
 registerMethodIfaceParamsDecl : Decl -> Unit
