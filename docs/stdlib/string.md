@@ -193,8 +193,9 @@ Only the low eight bits of each element are used. Each ill-formed sequence
 (a stray continuation byte, a truncated sequence, an overlong form, a
 surrogate, anything above U+10FFFF) becomes one U+FFFD replacement
 character per maximal subpart, as `bytes.decodeUtf8Lossy` does, so
-`fromUtf8 (toUtf8 s)` is `s` for every string but `toUtf8 (fromUtf8 b)` is
-`b` only when `b` is valid UTF-8. Keep bytes that are not text in `Bytes`.
+`fromUtf8 (toUtf8 s)` is `s` for every string, but `toUtf8 (fromUtf8 bytes)`
+is `bytes` only when `bytes` is valid UTF-8. Keep bytes that are not text in
+a `bytes.Bytes`.
 
 ```medaka
 > fromUtf8 (toUtf8 "héllo→")
