@@ -589,8 +589,6 @@ test "a covered tuple does not change how a Product bound groups" = expectCheckR
 test "a Product bound with many Set axes is kept as written" =
   expectCheckAccept (fixture "product_many_axes_accept.mdk")
 
-test "a join of elements whose axes differ in shape is the whole axis" =
-  expectCheckReject (fixture "product_axis_shape_reject.mdk") ["performs"]
-
-test "a string qualifier lifts into a Product label's primary axis" =
-  expectCheckAccept (fixture "qualifier_product_lift_accept.mdk")
+test "a Product qualifier needs a binder to name its label" = expectCheckReject
+  (fixture "qualifier_product_needs_binder_reject.mdk")
+  ["Invalid authority in the qualifier"]

@@ -252,6 +252,13 @@ test "a Product set's form is independent of order, and covers by its union" =
 
 test "elements of different domains are the whole domain, never one of them" = expectAll
   [
+    -- two Products whose Host axes differ in shape join to the whole axis
+    expectEqual
+      (drender
+        (djoin
+          (PProduct [("Host", pat "a.com/*")])
+          (PProduct [("Host", PSet (Some ["s"]))])))
+      (drender (PProduct [])),
     expectEqual
       [drender (PSet None)]
       (map drender (dantichain [PSet (Some ["SECRET"]), pat "HO*"])),

@@ -9,7 +9,7 @@
 
 import types.effect_domain.{
   Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam, dantichain, dsubAny, djoinN, setCardCap, productPrimaryLift
+  appendParam, dantichain, dsubAny, djoinN, setCardCap
 }
 import support.util.{joinWith, reverseL, listLen}
 import string.{trimLeft}
@@ -80,19 +80,6 @@ export
 authAppend : Param -> String -> Authority -> Authority
 authAppend top suffix a = mapConstants (appendParam top suffix) a
 
--- An authority read in the domain whose top is [top]: a string pattern read
--- by a Product label lifts into its primary axis, as a literal does
--- (`productPrimaryLift`), so `String @"a.com/*"` is usable where a Product
--- label takes it.
-export
-authLiftInto : Param -> Authority -> Authority
-authLiftInto (PProduct schema) a = mapConstants (liftPrimary schema) a
-authLiftInto _ a = a
-
-liftPrimary : List (String, Param) -> Param -> Param
-liftPrimary schema (PPrefix (Some s)) = productPrimaryLift schema s
-liftPrimary _ p = p
-
 mapConstants : (Param -> Param) -> Authority -> Authority
 mapConstants f a = match authNorm a
   AConst p => AConst (f p)
@@ -106,8 +93,18 @@ export
 authDomainTop : Authority -> Param
 authDomainTop (AConst p) = subTopOf p
 authDomainTop (AVar cell) = authvarDomain cell
-authDomainTop (AJoin (m :: _)) = authDomainTop m
-authDomainTop (AJoin []) = PUnit
+-- A join's domain is a variable's when it has one: a variable carries its
+-- label's declared schema, while a constant knows only the axes it writes.
+authDomainTop (AJoin ms) = match filterVars ms
+  v :: _ => authDomainTop v
+  [] => match ms
+    m :: _ => authDomainTop m
+    [] => PUnit
+
+filterVars : List Authority -> List Authority
+filterVars [] = []
+filterVars ((AVar c) :: ms) = AVar c :: filterVars ms
+filterVars (_ :: ms) = filterVars ms
 
 -- Canonical form: links followed, joins flattened, constants kept as the
 -- domain's antichain ahead of the variables, variables deduplicated by

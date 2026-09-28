@@ -5,8 +5,7 @@ import types.effect_domain.{
   Param(..), canonParam, productNorm, subTopOf, productPrimaryLift
 }
 import types.effect_authority.{
-  Authority(..), authJoin, authTop, authExtend, authAppend, authWidenValue,
-  authLiftInto
+  Authority(..), authJoin, authTop, authExtend, authAppend, authWidenValue
 }
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
@@ -61,7 +60,7 @@ public export data AlphaBinder = ALet Expr | AParam | AOpaque
 export
 typeAuthority : Param -> Mono -> Authority
 typeAuthority top ty = match normalize ty
-  TQual _ q => authLiftInto top q
+  TQual _ q => q
   _ => authTop top
 
 alphaSyntax : Param ->
@@ -184,13 +183,13 @@ varAuthority : Param ->
 varAuthority top vt lets x = match letInScope x lets
   Some (ALet rhs, older) => alphaSyntax top vt older rhs
   Some (AOpaque, _) => None
-  Some (AParam, _) => typedAuthority top vt x
-  None => typedAuthority top vt x
+  Some (AParam, _) => typedAuthority vt x
+  None => typedAuthority vt x
 
-typedAuthority : Param -> (String -> Option Mono) -> String -> Option Authority
-typedAuthority top vt x = match vt x
+typedAuthority : (String -> Option Mono) -> String -> Option Authority
+typedAuthority vt x = match vt x
   Some ty => match normalize ty
-    TQual _ q => Some (authLiftInto top q)
+    TQual _ q => Some q
     _ => None
   None => None
 

@@ -460,7 +460,8 @@ index may also write literals, `String @("a.com/*" | p)`,
 `Socket ("a.com/x" | "b.com/y")`, the spelling a set renders as (§2.2).
 A literal in a qualifier is an element of its names' domain. When the
 qualifier names none, the literal's shape gives the domain: a string is a
-Prefix pattern, a set is a Set element, and axes are a Product element.
+Prefix pattern and a set is a Set element. Axes need a binder to name their
+label, since only a label declares a Product's axes and which is primary.
 
 Each authority has exactly one domain. A binder used by two compatible Prefix
 labels shares a variable; incompatible-domain uses are ill-formed, and so is a

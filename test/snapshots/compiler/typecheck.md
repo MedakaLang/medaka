@@ -1,5 +1,5 @@
 # META
-source_lines=51184
+source_lines=51178
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -13398,17 +13398,11 @@ qualifyByTerms etbl ps loc t =
             (map AVar cells ++ map (p => AConst (writtenParam top p)) lits))
 
 -- The domain a qualifier that names no binder is written in, read from its
--- literals' shape: a set is a Set domain's element, axes a Product's, and a
--- string a Prefix pattern (a string's own domain).
+-- literals' shape: a set is a Set domain's element, and anything else a
+-- Prefix pattern (a string's own domain). Product axes have no schema to
+-- read without a binder, so a Product literal needs one to name its label.
 literalDomainTop : List EffParamTy -> Param
 literalDomainTop ((EPSet _) :: _) = PSet None
-literalDomainTop ((EPProduct axes) :: _) =
-  PProduct
-    (map
-      (a => match snd a
-        EPSet _ => (fst a, PSet None)
-        _ => (fst a, PPrefix None))
-      axes)
 literalDomainTop _ = PPrefix None
 
 -- The problems of a written authority term's literals, as elements of the
@@ -53416,7 +53410,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "qualifyByTerms" ((PVar "etbl") (PVar "ps") (PVar "loc") (PVar "t")) (EBlock (DoLet false false (PVar "names") (EApp (EVar "authTermNames") (EVar "ps"))) (DoLet false false (PVar "lits") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isEPName") (EVar "p"))))) (EVar "ps"))) (DoExpr (EMatch (EVar "lits") (arm (PList) () (EApp (EApp (EApp (EVar "qualifyByAll") (EVar "etbl")) (EVar "names")) (EVar "t"))) (arm PWild () (EBlock (DoLet false false (PVar "cells") (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "etbl") "svAuths")) (arm (PCon "Some" (PVar "cell")) () (EListLit (EVar "cell"))) (arm (PCon "None") () (EListLit))))) (EVar "names"))) (DoExpr (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "cells")) (EApp (EVar "listLen") (EVar "names"))) (EVar "t") (EBlock (DoLet false false (PVar "top") (EMatch (EVar "cells") (arm (PCons (PVar "cell") PWild) () (EApp (EVar "authvarDomain") (EVar "cell"))) (arm (PList) () (EApp (EVar "literalDomainTop") (EVar "lits"))))) (DoLet false false (PVar "src") (EApp (EApp (EVar "qualifierSource") (EVar "escStr")) (EVar "ps"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "why")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-PARAM"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Invalid authority in the qualifier `")) (EApp (EVar "display") (EVar "src"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString "")))))) (ELit LUnit)) (EApp (EApp (EApp (EVar "writtenTermProblems") (ELit (LString "qualifier"))) (EVar "top")) (EVar "lits")))) (DoExpr (EApp (EApp (EVar "TQual") (EVar "t")) (EApp (EVar "authJoinAll") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "AVar")) (EVar "cells")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "AConst") (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "p"))))) (EVar "lits")))))))))))))))
 (DTypeSig false "literalDomainTop" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "Param")))
 (DFunDef false "literalDomainTop" ((PCons (PCon "EPSet" PWild) PWild)) (EApp (EVar "PSet") (EVar "None")))
-(DFunDef false "literalDomainTop" ((PCons (PCon "EPProduct" (PVar "axes")) PWild)) (EApp (EVar "PProduct") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EMatch (EApp (EVar "snd") (EVar "a")) (arm (PCon "EPSet" PWild) () (ETuple (EApp (EVar "fst") (EVar "a")) (EApp (EVar "PSet") (EVar "None")))) (arm PWild () (ETuple (EApp (EVar "fst") (EVar "a")) (EApp (EVar "PPrefix") (EVar "None"))))))) (EVar "axes"))))
 (DFunDef false "literalDomainTop" (PWild) (EApp (EVar "PPrefix") (EVar "None")))
 (DTypeSig false "writtenTermProblems" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "writtenTermProblems" ((PVar "l") (PVar "top") (PVar "lits")) (EBlock (DoLet false false (PVar "each") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "effectParamProblems") (EVar "l")) (EVar "top"))) (EVar "lits"))) (DoExpr (EMatch (EVar "each") (arm (PList) () (EMatch (EApp (EVar "writtenSetProblem") (EApp (EApp (EVar "map") (EApp (EVar "writtenParam") (EVar "top"))) (EVar "lits"))) (arm (PCon "Some" (PVar "why")) () (EListLit (EVar "why"))) (arm (PCon "None") () (EListLit)))) (arm PWild () (EVar "each"))))))
@@ -61607,7 +61600,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "qualifyByTerms" ((PVar "etbl") (PVar "ps") (PVar "loc") (PVar "t")) (EBlock (DoLet false false (PVar "names") (EApp (EVar "authTermNames") (EVar "ps"))) (DoLet false false (PVar "lits") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isEPName") (EVar "p"))))) (EVar "ps"))) (DoExpr (EMatch (EVar "lits") (arm (PList) () (EApp (EApp (EApp (EVar "qualifyByAll") (EVar "etbl")) (EVar "names")) (EVar "t"))) (arm PWild () (EBlock (DoLet false false (PVar "cells") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "etbl") "svAuths")) (arm (PCon "Some" (PVar "cell")) () (EListLit (EVar "cell"))) (arm (PCon "None") () (EListLit))))) (EVar "names"))) (DoExpr (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "cells")) (EApp (EVar "listLen") (EVar "names"))) (EVar "t") (EBlock (DoLet false false (PVar "top") (EMatch (EVar "cells") (arm (PCons (PVar "cell") PWild) () (EApp (EVar "authvarDomain") (EVar "cell"))) (arm (PList) () (EApp (EVar "literalDomainTop") (EVar "lits"))))) (DoLet false false (PVar "src") (EApp (EApp (EVar "qualifierSource") (EVar "escStr")) (EVar "ps"))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "why")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-PARAM"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Invalid authority in the qualifier `")) (EApp (EMethodRef "display") (EVar "src"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString "")))))) (ELit LUnit)) (EApp (EApp (EApp (EVar "writtenTermProblems") (ELit (LString "qualifier"))) (EVar "top")) (EVar "lits")))) (DoExpr (EApp (EApp (EVar "TQual") (EVar "t")) (EApp (EVar "authJoinAll") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "AVar")) (EVar "cells")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "AConst") (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "p"))))) (EVar "lits")))))))))))))))
 (DTypeSig false "literalDomainTop" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "Param")))
 (DFunDef false "literalDomainTop" ((PCons (PCon "EPSet" PWild) PWild)) (EApp (EVar "PSet") (EVar "None")))
-(DFunDef false "literalDomainTop" ((PCons (PCon "EPProduct" (PVar "axes")) PWild)) (EApp (EVar "PProduct") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EMatch (EApp (EVar "snd") (EVar "a")) (arm (PCon "EPSet" PWild) () (ETuple (EApp (EVar "fst") (EVar "a")) (EApp (EVar "PSet") (EVar "None")))) (arm PWild () (ETuple (EApp (EVar "fst") (EVar "a")) (EApp (EVar "PPrefix") (EVar "None"))))))) (EVar "axes"))))
 (DFunDef false "literalDomainTop" (PWild) (EApp (EVar "PPrefix") (EVar "None")))
 (DTypeSig false "writtenTermProblems" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "writtenTermProblems" ((PVar "l") (PVar "top") (PVar "lits")) (EBlock (DoLet false false (PVar "each") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "effectParamProblems") (EVar "l")) (EVar "top"))) (EVar "lits"))) (DoExpr (EMatch (EVar "each") (arm (PList) () (EMatch (EApp (EVar "writtenSetProblem") (EApp (EApp (EMethodRef "map") (EApp (EVar "writtenParam") (EVar "top"))) (EVar "lits"))) (arm (PCon "Some" (PVar "why")) () (EListLit (EVar "why"))) (arm (PCon "None") () (EListLit)))) (arm PWild () (EVar "each"))))))

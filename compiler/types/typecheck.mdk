@@ -13394,17 +13394,11 @@ qualifyByTerms etbl ps loc t =
             (map AVar cells ++ map (p => AConst (writtenParam top p)) lits))
 
 -- The domain a qualifier that names no binder is written in, read from its
--- literals' shape: a set is a Set domain's element, axes a Product's, and a
--- string a Prefix pattern (a string's own domain).
+-- literals' shape: a set is a Set domain's element, and anything else a
+-- Prefix pattern (a string's own domain). Product axes have no schema to
+-- read without a binder, so a Product literal needs one to name its label.
 literalDomainTop : List EffParamTy -> Param
 literalDomainTop ((EPSet _) :: _) = PSet None
-literalDomainTop ((EPProduct axes) :: _) =
-  PProduct
-    (map
-      (a => match snd a
-        EPSet _ => (fst a, PSet None)
-        _ => (fst a, PPrefix None))
-      axes)
 literalDomainTop _ = PPrefix None
 
 -- The problems of a written authority term's literals, as elements of the
