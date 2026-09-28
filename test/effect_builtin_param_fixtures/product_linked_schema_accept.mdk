@@ -1,0 +1,15 @@
+-- Control: a literal read at H's index lifts into the declared first axis,
+-- Method, and is within an index that names that method.
+effect Web2 Product (Method : Set, Host : Prefix)
+
+extern req2 : (u : String) -> <FFI, Web2 u> Unit
+
+data H (p : Authority Web2) = H (String @p)
+
+apply : H p -> String @p -> <FFI, Web2 p> Unit
+apply _ s = req2 s
+
+g : H (Method={"GET"}) -> <FFI, Web2 Method={"GET"}> Unit
+g h = apply h "GET"
+
+main = println 1

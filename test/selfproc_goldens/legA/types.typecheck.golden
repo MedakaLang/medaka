@@ -1614,6 +1614,8 @@ isDirectInterfaceDecl : Decl -> Bool
 isDoLoweredAndThenCallee : Expr -> Bool
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
 isEPName : EffParamTy -> Bool
+isEPProduct : EffParamTy -> Bool
+isEPSet : EffParamTy -> Bool
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
 isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLetrecGroup : List String -> Bool

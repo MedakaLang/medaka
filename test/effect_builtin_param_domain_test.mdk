@@ -592,3 +592,11 @@ test "a Product bound with many Set axes is kept as written" =
 test "a Product qualifier needs a binder to name its label" = expectCheckReject
   (fixture "qualifier_product_needs_binder_reject.mdk")
   ["Invalid authority in the qualifier"]
+
+test "a linked authority variable keeps its label's declared schema" = expectAll
+  [
+    expectCheckReject (fixture "product_linked_schema_reject.mdk") [
+      "reaches Method={\"a.com/x\"}", "performs <Web2 Method={\"a.com/x\"}>"
+    ],
+    expectCheckAccept (fixture "product_linked_schema_accept.mdk"),
+  ]

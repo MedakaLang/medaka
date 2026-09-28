@@ -11598,7 +11598,7 @@ mentionsEscaped q =
 -- which reads as the written bound it is.
 solvedUpper : Option Authority -> Bool
 solvedUpper (Some (AVar cell)) = match !cell
-  ALink _ _ =>
+  ALink _ _ _ =>
     not (IdMap.has (authvarId cell) perRun.value.indexSubstitutedRef.value)
   AUnbound _ _ _ _ => False
 solvedUpper _ = False
@@ -12568,7 +12568,7 @@ lowerAuthLevels level q =
     (_ cell => match !cell
       AUnbound id lvl top name =>
         if lvl > level then cell := AUnbound id level top name
-      ALink _ _ => ())
+      ALink _ _ _ => ())
     ()
     (authVars q)
 
@@ -13379,6 +13379,13 @@ qualifyByTerms etbl ps loc t =
           cell :: _ => authvarDomain cell
           [] => literalDomainTop lits
         let src = qualifierSource escStr ps
+        let problems =
+          if isEmptyL cells && anyList isEPProduct lits then
+            [
+              "a qualifier written as axes needs a binder to name its label, which declares the axes and which is primary: `(p : String) -> <Web p> … String @(p | Host=\"…\")`",
+            ]
+          else
+            writtenTermProblems "qualifier" top lits
         let _ =
           fold
             (_ why =>
@@ -13387,7 +13394,7 @@ qualifyByTerms etbl ps loc t =
                 loc
                 "Invalid authority in the qualifier `\{src}`: \{why}")
             ()
-            (writtenTermProblems "qualifier" top lits)
+            problems
         TQual
           t
           (authJoinAll
@@ -13398,8 +13405,11 @@ qualifyByTerms etbl ps loc t =
 -- Prefix pattern (a string's own domain). Product axes have no schema to
 -- read without a binder, so a Product literal needs one to name its label.
 literalDomainTop : List EffParamTy -> Param
-literalDomainTop ((EPSet _) :: _) = PSet None
-literalDomainTop _ = PPrefix None
+literalDomainTop lits = if allList isEPSet lits then PSet None else PPrefix None
+
+isEPSet : EffParamTy -> Bool
+isEPSet (EPSet _) = True
+isEPSet _ = False
 
 -- The problems of a written authority term's literals, as elements of the
 -- domain whose top is [top]: each literal as an atom's parameter is checked,
@@ -13413,6 +13423,10 @@ writtenTermProblems l top lits =
       Some why => [why]
       None => []
     _ => each
+
+isEPProduct : EffParamTy -> Bool
+isEPProduct (EPProduct _) = True
+isEPProduct _ = False
 
 isEPName : EffParamTy -> Bool
 isEPName (EPName _) = True
@@ -22302,7 +22316,7 @@ openExistentialScope opened =
 raiseAuthvarLevel : Int -> Ref Authvar -> Unit
 raiseAuthvarLevel level cell = match !cell
   AUnbound id _ top name => cell := AUnbound id level top name
-  ALink _ _ => ()
+  ALink _ _ _ => ()
 
 -- A cell in the scope's value, or lowered below the scope's level, escaped
 -- (`T-AUTHORITY-ESCAPE`): the value cannot carry an authority nothing outside
