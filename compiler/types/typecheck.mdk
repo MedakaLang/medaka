@@ -49907,8 +49907,8 @@ elabModuleStamp mid seedVars accData implDecls prog =
 -- byte-identical).
 
 -- G7: fill each foldMap-style method occurrence's methRoutes from the monos its
--- `Monoid m` constraint resolved to AT THE CALL SITE (List vs String), so
--- emitDefaultRKey threads the right per-call dict word into the shared default body.
+-- `Monoid m` constraint resolved to at the call site (List vs String), so the
+-- default's entry receives the right per-call method dictionary.
 -- Independent of the body-side dict routing (the emitter restamps the body's
 -- cross-interface `empty` to its `$dict_<method>_<slot>` param directly).
 -- ARGSTAMP-UNIFY Phase 4: run unconditionally on every path (single elaboration
