@@ -17,6 +17,50 @@
 # Paths are relative to the repo root, matching every consumer above.
 
 [[entry]]
+file = "pds/serve.mdk"
+count = 0
+
+[[entry]]
+file = "pds/shell/blobfile.mdk"
+count = 0
+
+[[entry]]
+file = "pds/shell/blockfile.mdk"
+count = 0
+
+[[entry]]
+file = "pds/shell/crawl.mdk"
+count = 0
+
+[[entry]]
+file = "pds/shell/egress.mdk"
+count = 0
+
+[[entry]]
+file = "pds/shell/keygen.mdk"
+count = 3
+
+[[entry]]
+file = "pds/shell/persist.mdk"
+count = 0
+
+[[entry]]
+file = "pds/shell/server.mdk"
+count = 0
+
+[[entry]]
+file = "pds/shell/subscribe.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/repo.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/httpclient.mdk"
+count = 0
+
+[[entry]]
 file = "pds/lib/handlers.mdk"
 count = 0
 
@@ -57,16 +101,8 @@ file = "pds/lib/websocket.mdk"
 count = 0
 
 [[entry]]
-file = "pds/lib/httpclient.mdk"
-count = 0
-
-[[entry]]
 file = "pds/lib/accesslog.mdk"
 count = 0
-
-[[entry]]
-file = "pds/lib/repo.mdk"
-count = 6
 
 [[entry]]
 file = "pds/lib/store.mdk"
@@ -115,10 +151,6 @@ count = 0
 [[entry]]
 file = "pds/lib/cid.mdk"
 count = 0
-
-[[entry]]
-file = "pds/shell/server.mdk"
-count = 4
 
 [[entry]]
 file = "gzip/lib/deflate.mdk"

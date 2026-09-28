@@ -51,11 +51,11 @@
    can produce. -}
 
 import bytes as B
-import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
-import string.{repeat, take, toUtf8}
+import string.{repeat, take}
 import lib.blob.{admitBlob, blobCid}
 import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode}
@@ -69,8 +69,6 @@ import lib.event_log_record.{
 }
 import lib.repo.{
   Repo,
-  blockBytesChecked,
-  blockRowsChecked,
   repoCommitCid,
   repoCreate,
   repoExportBlocks,
@@ -214,14 +212,9 @@ summary label repo =
       "\{label} car \{intToString (B.length car)} \{encode (sha256 car)} \{roots}"
   ()
 
--- `persistSave` writes `Array Int` rows; `toArray` is total.
-blocksOf : Repo -> List (Cid, Array Int)
+blocksOf : Repo -> List (Cid, Bytes)
 blocksOf repo =
-  map
-    ((cid, bytes) => (cid, toArray bytes))
-    (resultOrPanic
-      "store_persistence: block export failed"
-      (repoExportBlocks repo))
+  resultOrPanic "store_persistence: block export failed" (repoExportBlocks repo)
 
 runSave : String -> <IO, FileRead, FileWrite> Unit
 runSave dir =
@@ -247,10 +240,7 @@ runCrashSaveOld dir =
 
 reload : String -> <FileRead> Result String Repo
 reload dir = do
-  (head, rows) <- persistLoad dir
-  blocks <- mapErr
-    (message => "repo: invalid persisted blocks: \{message}")
-    (blockRowsChecked rows)
+  (head, blocks) <- persistLoad dir
   repoFromBlocks accountDid mustSecret head blocks
 
 runLoad : String -> <IO, FileRead> Unit
@@ -272,33 +262,27 @@ runReject dir = match reload dir
 
 -- ── the blob half ───────────────────────────────────────────────────────────
 
-blobBytes : String -> Array Int
-blobBytes text = toUtf8 text
+blobBytes : String -> Bytes
+blobBytes text = encodeUtf8 text
 
 {- | The blobs the `blob-save` route persists: two, with DIFFERENT declared
    MIME types, because the type is the part content addressing does not carry
    and is therefore the part a restart can lose silently. -}
-blobFixtures : List (Cid, String, Array Int)
+blobFixtures : List (Cid, String, Bytes)
 blobFixtures =
   let first = blobBytes "store_persistence blob fixture one"
   let second = blobBytes "store_persistence blob fixture two, a different type"
   [
-    (blobCid (fromArrayAssumeByteDomain first), "text/plain", first),
-    (
-      blobCid (fromArrayAssumeByteDomain second),
-      "application/octet-stream",
-      second,
-    ),
+    (blobCid first, "text/plain", first),
+    (blobCid second, "application/octet-stream", second),
   ]
 
-blobSummary : String -> (Cid, String, Array Int) -> <IO> Unit
+blobSummary : String -> (Cid, String, Bytes) -> <IO> Unit
 blobSummary label (cid, mimeType, bytes) =
   println
-    "\{label} blob \{cidToString cid} \{mimeType} \{intToString (arrayLength bytes)} \{encode (sha256 (optionOrPanic "sha256: every element must be a byte in 0..255" (fromArray bytes)))}"
+    "\{label} blob \{cidToString cid} \{mimeType} \{intToString (B.length bytes)} \{encode (sha256 bytes)}"
 
-findBlob : Cid ->
-  List (Cid, String, Array Int) ->
-  Option (Cid, String, Array Int)
+findBlob : Cid -> List (Cid, String, Bytes) -> Option (Cid, String, Bytes)
 findBlob _ [] = None
 findBlob wanted ((cid, mimeType, bytes) :: rest) =
   if cidEqual wanted cid then
@@ -306,7 +290,7 @@ findBlob wanted ((cid, mimeType, bytes) :: rest) =
   else
     findBlob wanted rest
 
-printBlobs : String -> List (Cid, String, Array Int) -> <IO> Unit
+printBlobs : String -> List (Cid, String, Bytes) -> <IO> Unit
 printBlobs _ [] = ()
 printBlobs label (row :: rest) =
   let () = blobSummary label row
@@ -322,18 +306,16 @@ runBlobSave dir = match blobFileWrite dir blobFixtures
 
 -- The rows are unverified disk bytes until this runs, exactly as the
 -- repository's are until `repoFromBlocks` runs.
-verifiedBlobs : String ->
-  <FileRead> Result String (List (Cid, String, Array Int))
+verifiedBlobs : String -> <FileRead> Result String (List (Cid, String, Bytes))
 verifiedBlobs dir = do
   rows <- blobFileRead dir
-  _ <- blockStoreFromBlocks
-    (map ((cid, _, bytes) => (cid, fromArrayAssumeByteDomain bytes)) rows)
+  _ <- blockStoreFromBlocks (map ((cid, _, bytes) => (cid, bytes)) rows)
   Ok rows
 
 -- Each fixture is reported in FIXTURE order, not disk order (`blobFileRead`
 -- promises none), so the gate can compare the two summaries line for line.
-reportBlobs : List (Cid, String, Array Int) ->
-  List (Cid, String, Array Int) ->
+reportBlobs : List (Cid, String, Bytes) ->
+  List (Cid, String, Bytes) ->
   <IO> Unit
 reportBlobs _ [] = ()
 reportBlobs loaded ((cid, _, _) :: rest) = match findBlob cid loaded
@@ -653,13 +635,10 @@ frameFor (Some _) = "a1"
 
 -- ── both halves of one transition, in one process ───────────────────────────
 
-putBlobs : List (Cid, String, Array Int) -> Store -> Store
+putBlobs : List (Cid, String, Bytes) -> Store -> Store
 putBlobs [] store = store
 putBlobs ((cid, mimeType, bytes) :: rest) store =
-  let stored = do
-    checked <- blockBytesChecked bytes
-    storePutBlob cid mimeType checked store
-  match stored
+  match storePutBlob cid mimeType bytes store
     Err message => panic "store_persistence: blob fixture rejected: \{message}"
     Ok next => putBlobs rest next
 
@@ -697,16 +676,16 @@ churnCount = 100
 
 -- A blob big enough that rewriting the account would dwarf rewriting one
 -- blob, and distinct per index so that every row is a distinct CID.
-churnBytes : Int -> Array Int
+churnBytes : Int -> Bytes
 churnBytes index =
-  toUtf8 "\{repeat 35 "store-persistence-churn-blob-"}\{intToString index}"
+  encodeUtf8 "\{repeat 35 "store-persistence-churn-blob-"}\{intToString index}"
 
-churnRow : Int -> (Cid, String, Array Int)
+churnRow : Int -> (Cid, String, Bytes)
 churnRow index =
   let bytes = churnBytes index
-  (blobCid (fromArrayAssumeByteDomain bytes), "application/octet-stream", bytes)
+  (blobCid bytes, "application/octet-stream", bytes)
 
-churnRows : Int -> Int -> List (Cid, String, Array Int)
+churnRows : Int -> Int -> List (Cid, String, Bytes)
 churnRows index limit =
   if index > limit then [] else churnRow index :: churnRows (index + 1) limit
 
@@ -734,10 +713,10 @@ runBlobChurnSeed dir =
       let () = println "BLOB-CHURN-SEED count \{intToString (churnCount - 1)}"
       println "BLOB-CHURN-SEED: PASS"
 
-reportChurnAdd : (Cid, String, Array Int) -> <IO> Unit
+reportChurnAdd : (Cid, String, Bytes) -> <IO> Unit
 reportChurnAdd (cid, mimeType, bytes) =
   let () = println "BLOB-CHURN-ADD cid \{cidToString cid}"
-  let () = println "BLOB-CHURN-ADD size \{intToString (arrayLength bytes)}"
+  let () = println "BLOB-CHURN-ADD size \{intToString (B.length bytes)}"
   let () = println "BLOB-CHURN-ADD mime \{mimeType}"
   println "BLOB-CHURN-ADD: PASS"
 
@@ -762,8 +741,8 @@ runBlobChurnAdd dir =
 -- The bytes both retype routes upload. One blob, uploaded twice, so that the
 -- second upload leaves the block count where it was and the declared type is
 -- the only thing about the blob half that moved.
-retypeBytes : Array Int
-retypeBytes = toUtf8 "store-persistence-retype-blob"
+retypeBytes : Bytes
+retypeBytes = encodeUtf8 "store-persistence-retype-blob"
 
 retypeFirstType : String
 retypeFirstType = "text/plain"
@@ -771,9 +750,8 @@ retypeFirstType = "text/plain"
 retypeSecondType : String
 retypeSecondType = "application/json"
 
-retypeRow : String -> (Cid, String, Array Int)
-retypeRow mimeType =
-  (blobCid (fromArrayAssumeByteDomain retypeBytes), mimeType, retypeBytes)
+retypeRow : String -> (Cid, String, Bytes)
+retypeRow mimeType = (blobCid retypeBytes, mimeType, retypeBytes)
 
 runBlobRetypeSeed : String -> <IO, FileRead, FileWrite> Unit
 runBlobRetypeSeed dir =
@@ -783,8 +761,7 @@ runBlobRetypeSeed dir =
     Err message => panic "store_persistence: retype seed failed: \{message}"
     Ok () =>
       let () =
-        println
-          "BLOB-RETYPE-SEED cid \{cidToString (blobCid (fromArrayAssumeByteDomain retypeBytes))}"
+        println "BLOB-RETYPE-SEED cid \{cidToString (blobCid retypeBytes)}"
       let () = println "BLOB-RETYPE-SEED mime \{retypeFirstType}"
       println "BLOB-RETYPE-SEED: PASS"
 

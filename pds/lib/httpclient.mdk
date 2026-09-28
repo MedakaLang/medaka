@@ -149,8 +149,8 @@ emitHeaders (header :: rest) out =
    caller cannot supply `Host`, `Content-Length` or `Transfer-Encoding`
    itself.
 
-   > map B.toArray (serializeRequest "GET" "/xrpc/com.example.get" "127.0.0.1:8080" [] (encodeUtf8 ""))
-   Ok [|71, 69, 84, 32, 47, 120, 114, 112, 99, 47, 99, 111, 109, 46, 101, 120, 97, 109, 112, 108, 101, 46, 103, 101, 116, 32, 72, 84, 84, 80, 47, 49, 46, 49, 13, 10, 104, 111, 115, 116, 58, 32, 49, 50, 55, 46, 48, 46, 48, 46, 49, 58, 56, 48, 56, 48, 13, 10, 99, 111, 110, 116, 101, 110, 116, 45, 108, 101, 110, 103, 116, 104, 58, 32, 48, 13, 10, 13, 10|] -}
+   > map B.decodeUtf8 (serializeRequest "GET" "/xrpc/com.example.get" "127.0.0.1:8080" [] (encodeUtf8 ""))
+   Ok Some "GET /xrpc/com.example.get HTTP/1.1\r\nhost: 127.0.0.1:8080\r\ncontent-length: 0\r\n\r\n" -}
 export
 serializeRequest : String ->
   String ->

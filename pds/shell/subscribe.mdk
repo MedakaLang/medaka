@@ -3,7 +3,7 @@
 
    Everything else this server does is a request and a complete answer, and
    `pds/shell/server.mdk`'s whole shape rests on that — `applyRequest` returns
-   an `Array Int` and nothing downstream of it can express "more later". A
+   one `Bytes` answer and nothing downstream of it can express "more later". A
    subscription is the one shape that cannot be expressed that way, so it does
    not try: the socket shell hands the connection over HERE, at the last point
    the parsed request and the live socket coexist, and it never comes back.
