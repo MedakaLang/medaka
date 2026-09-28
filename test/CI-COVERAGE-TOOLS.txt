@@ -424,7 +424,7 @@ pds/tools/gen_lexicon_schemas  renders that answer key's schemas as pds/lib/lexi
                                (the .sh wrapper and its gen_lexicon_schemas.py; `--check`
                                compares instead of writing); pds/test/lexicon_schemas_test.mdk
                                grades the committed module against the JSON, offline.
-pds/tools/gen_mst_corpus      regenerates the P1-B deterministic MST roots and canonical node
+pds/tools/gen_mst_corpus       regenerates the P1-B deterministic MST roots and canonical node
                                blocks with npm ci from the committed exact atproto lock graph; the
                                offline mst_vectors and vector_provenance gates grade the artifact.
 pds/tools/gen_car_corpus       regenerates the P1-C canonical CARv1 fixture with the pinned

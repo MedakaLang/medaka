@@ -406,8 +406,9 @@ microsecond. Four properties follow:
   clock until it catches up; strict increase wins.
 - A repository whose revision was minted by any earlier rule, including the
   one that advanced every write by one microsecond from the initializing
-  `Tid`, is followed by a clock-based revision on its next write, with no
-  special case.
+  `Tid`, is followed by a clock-based revision on its next write once the
+  clock is past the prior revision (otherwise the +1 µs successor continues),
+  with no special case.
 
 The clock id is always the one the repository was initialized with. The
 reference transcript is replayed at the instant its repository was initialized

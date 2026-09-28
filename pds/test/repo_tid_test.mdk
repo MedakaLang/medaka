@@ -83,6 +83,23 @@ test "TID monotonic next preserves a newer proposal" =
     (map tidToString (tidNext prior 1700000000000100 11))
     (map tidToString (tidEncode 1700000000000100 11))
 
+test "TID monotonic next falls back to the successor when the proposal cannot be encoded" =
+  let prior = mustTid 1700000000000000 7
+  expectEach [
+    (
+      "before 1970",
+      expectEqual
+        (map tidToString (tidEncode 1700000000000001 9))
+        (map tidToString (tidNext prior (0 - 1) 9)),
+    ),
+    (
+      "past 2^53 microseconds",
+      expectEqual
+        (map tidToString (tidEncode 1700000000000001 9))
+        (map tidToString (tidNext prior 9007199254740992 9)),
+    ),
+  ]
+
 test "TID parser rejects length alphabet high bit and range" = expectEach [
   (
     "a 12-character TID is rejected for its length",

@@ -89,9 +89,9 @@ validateName bytes start end =
 
 -- | Validate the first `end` bytes as one NSID. The prefix form
 -- lets repository paths validate their collection without copying the rkey.
--- The only length limit is 317 in total; the authority is bounded by that
--- alone (`interop_nsid_valid.txt` holds a valid NSID with a 283-character
--- authority).
+-- The total is capped at 317 and the authority has no separate cap
+-- (`interop_nsid_valid.txt` holds a valid NSID with a 283-character
+-- authority); each segment (1-63) and the name (1-63) are still bounded.
 export
 validateNsidPrefix : Bytes -> Int -> Result NsidError Unit
 validateNsidPrefix bytes end =

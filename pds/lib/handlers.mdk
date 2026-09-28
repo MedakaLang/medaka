@@ -86,18 +86,26 @@
    the record and its key with `lib.lexicon`, as the reference PDS does, unless
    the request says `validate: false`. An absent `validate` grades exactly as
    `true` does. A record the validator refuses is answered
-   `400 InvalidRequest`, in the reference's wording, and nothing is written; in
-   a batch, one refused record refuses the whole batch. A record it accepts is
-   reported `validationStatus: "valid"`, and one it could not decide in full
-   (a grapheme bound, see `lib.lexicon`) `"unknown"`.
+   `400 InvalidRequest`, and nothing is written; in a batch, one refused
+   record refuses the whole batch. The message shares the reference's
+   `Invalid <collection> record:` prefix and no more: it omits the reference's
+   `(got …)` clause, and a record-key refusal is worded differently. A record
+   it accepts is reported `validationStatus: "valid"`, and one it could not
+   decide in full (a grapheme bound, or a record with no `$type`, see
+   `lib.lexicon`) `"unknown"`.
+
+   Three choices are the implementing sprint's own and not yet confirmed:
+   validation applies when `validate` is unset, as in the reference; the wire
+   error name is `InvalidRequest`; and a verdict that is neither valid nor
+   invalid is reported `"unknown"`.
 
    One difference from the reference is deliberate: a collection outside the
    twenty the reference knows is stored and reported `"unknown"` under
    `validate: true` too, where the reference refuses it. The official app is
    newer than the pinned reference and writes record types that version does
-   not know; refusing them would refuse the app (`docs/ops/PDS-LAUNCH-PLAN.md`,
-   ruling R5). `validate: false` stores the record ungraded and reports
-   `"unknown"`, where the reference omits the field. -}
+   not know; refusing them would refuse the app. `validate: false` stores the
+   record ungraded and reports `"unknown"`, where the reference omits the
+   field. -}
 
 import http.{
   Header,

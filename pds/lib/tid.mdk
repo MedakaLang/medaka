@@ -96,12 +96,11 @@ tidCompare left right = compare (tidToString left) (tidToString right)
 export
 tidNext : Tid -> Int -> Int -> Result String Tid
 tidNext prior proposedMicros proposedClockId =
+  let successor =
+    if tidMicros prior == tidTimestampMax then
+      Err "tid: monotonic successor exceeds the representable range"
+    else
+      tidEncode (tidMicros prior + 1) proposedClockId
   match tidEncode proposedMicros proposedClockId
-    Err message => Err message
-    Ok proposed =>
-      if tidCompare proposed prior == Gt then
-        Ok proposed
-      else if tidMicros prior == tidTimestampMax then
-        Err "tid: monotonic successor exceeds the representable range"
-      else
-        tidEncode (tidMicros prior + 1) proposedClockId
+    Ok proposed if tidCompare proposed prior == Gt => Ok proposed
+    _ => successor
