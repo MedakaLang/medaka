@@ -34,11 +34,16 @@ impl Walk (Box a) requires Walk a where
   done (Box v) = done v
   toI (Box v) = toI v
 
+-- the length of a list, in constant stack in this program's own code
+size : List Int -> Int -> Int
+size [] n = n
+size (_ :: rest) n = size rest (n + 1)
+
 -- Every depth is past wasm's stack without a constant-stack self call (it overflows
 -- before 200000 frames); `path` at 10000000 is also past native's.
 main = (
   count (3000000 : Int) 0,
-  length (path (10000000 : Int)),
+  size (path (10000000 : Int)) 0,
   count (Box (3000000 : Int)) 0,
-  length (path (Box (3000000 : Int))),
+  size (path (Box (3000000 : Int))) 0,
 )

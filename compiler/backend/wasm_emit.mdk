@@ -9593,11 +9593,14 @@ implSelfReturnCall prog env name iface siteArity route methRoutes implRoutes app
             -- and the value arguments fill it
             let dictRoutes =
               staticEntryDictRoutesW entry route methRoutes implRoutes
-            if implEntryKeyW entry == key
-              && listLen dictRoutes + listLen args == arity then
-              let dictWords = flatMap (routeWitness prog env 0) dictRoutes
-              let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
-              Some (dictWords ++ argInstrs ++ ["return_call $" ++ fnName])
+            let saturated = listLen dictRoutes + listLen args == arity
+            if implEntryKeyW entry == key then
+              if saturated then
+                let dictWords = flatMap (routeWitness prog env 0) dictRoutes
+                let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
+                Some (dictWords ++ argInstrs ++ ["return_call $" ++ fnName])
+              else
+                None
             else
               None
           None => None
