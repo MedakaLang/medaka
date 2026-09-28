@@ -590,6 +590,75 @@ test "malformed TEXT: an unrelated INSERT or UPDATE leaves its bytes, and the CL
     Ok lines =>
       expectEqualLines (join "\n" malformedExpectedLines) (join "\n" lines)
 
+-- # schema text that is not UTF-8
+--
+-- A table name or CREATE text is an identity, and the rewrite writes schema
+-- entries back from strings, which would read such bytes as U+FFFD and so
+-- rename the table.  A write to a database holding one must refuse with a
+-- non-zero exit and leave the file byte-identical; a database whose schema is
+-- all UTF-8 still writes.  The seed goes through `sh`, since an argument
+-- string cannot carry the raw byte.
+
+data SchemaNotUtf8Run = SchemaNotUtf8Run {
+  code : Int,
+  output : String,
+  unchanged : Bool,
+  names : List String,
+  cleanRows : List String,
+}
+
+schemaNotUtf8Result : <Exec, FileRead, IO> Result String SchemaNotUtf8Run
+schemaNotUtf8Result = match rowScratch "dml-schema-not-utf8"
+  Err e => Err e
+  Ok prefix =>
+    let db = "\{prefix}.db"
+    let clean = "\{prefix}-clean.db"
+    let cli = "\{prefix}-cli"
+    let out = runSchemaNotUtf8 db clean cli
+    let _ = runVerb "rm" ["-rf", db, clean, cli]
+    out
+
+runSchemaNotUtf8 : String ->
+  String ->
+  String ->
+  <Exec, FileRead, IO> Result String SchemaNotUtf8Run
+runSchemaNotUtf8 db clean cli = do
+  _ <- buildBin [] "sqlite/main.mdk" cli
+  _ <- spawnOut queryTimeoutSeconds "sh" [
+    "-c",
+    "printf 'CREATE TABLE t(a TEXT);\\nCREATE TABLE \"n\\377\"(c TEXT);\\n' | sqlite3 \"$0\"",
+    db,
+  ]
+  before <- readFileBytes db
+  (code, out, err) <- spawnRaw queryTimeoutSeconds cli [
+    db, "INSERT INTO t VALUES ('x')"
+  ]
+  after <- readFileBytes db
+  names <- sqlite3Query db "SELECT hex(name) FROM sqlite_master ORDER BY rowid;"
+  _ <- seedDb clean [SeedSql "CREATE TABLE t(a TEXT);"]
+  _ <- spawnOut queryTimeoutSeconds cli [clean, "INSERT INTO t VALUES ('x')"]
+  rows <- sqlite3Query clean "SELECT a FROM t;"
+  Ok SchemaNotUtf8Run {
+    code = code,
+    output = out ++ err,
+    unchanged = before == after,
+    names = outLines names,
+    cleanRows = outLines rows,
+  }
+
+test "schema that is not UTF-8: a write refuses with exit 1 and leaves the file byte-identical" =
+  match schemaNotUtf8Result
+    Err e => Fail e "the row did not run" "the row did not run"
+    Ok r => expectAll [
+      expectEqual 1 r.code,
+      expectTextContainsAll
+        ["error: cannot mutate: the schema is not UTF-8:", "x'6EFF'"]
+        r.output,
+      byteUnchanged r.unchanged,
+      expectEqual ["74", "6EFF"] r.names,
+      expectEqual ["x"] r.cleanRows,
+    ]
+
 -- # dml
 --
 -- `sqlite/test/dml_oracle.sh`'s six sections. See the module header for why

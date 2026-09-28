@@ -37,6 +37,8 @@
 --
 -- A bad statement, an unsupported construct, or a constraint violation prints one
 -- `error: <message>` line and exits 0 — never a panic, never a partial write.
+-- The one exception exits 1: a write refused because a schema entry's name or
+-- CREATE text is not UTF-8, which leaves the file byte-identical.
 -- (`lib.mutate` builds the whole new image in memory and only then writes it, so
 -- a refused statement cannot leave a half-written database behind.)
 --
@@ -66,6 +68,7 @@ import lib.sqlite.{
 import lib.btree.{Row, rowRowid, rowCells}
 import lib.recordfmt.{Cell(..), cellToString}
 import lib.sqlexec.{execSql, outRows}
+import lib.mutate.{isSchemaNotUtf8Refusal}
 import bytes as B
 import list.{intersperse}
 import string.{toUpper, words}
@@ -132,7 +135,12 @@ notATableName _ = True
 -- Run one statement and print its rows (nothing, for a non-SELECT).
 runSql : String -> String -> <IO, FileRead, FileWrite> Unit
 runSql path sql = match execSql path sql
-  Err e => println "error: \{e}"
+  Err e =>
+    let _ = println "error: \{e}"
+    -- A schema that is not UTF-8 is not a mistake in the statement: no
+    -- statement can write this file without renaming the entry, so the
+    -- refusal also fails the process.
+    if isSchemaNotUtf8Refusal e then exit 1
   Ok out => printCellRows (outRows out)
 
 printCellRows : List (List Cell) -> <IO> Unit
