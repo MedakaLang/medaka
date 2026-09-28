@@ -480,7 +480,7 @@ test "a qualifier or an index past the cap is refused, not folded" = expectAll [
 test "a qualifier or an index literal is an element of its domain" = expectCheckReject
   (fixture "written_term_domain_reject.mdk")
   [
-    "Invalid authority in the qualifier `@\"a.com\"`: pattern \"a.com\" must end in '*'",
+    "Invalid authority in the qualifier `@\"\"`: pattern is empty",
     "Invalid effect parameter on <Net>: label 'Net' takes a prefix pattern, not a set",
   ]
 
@@ -496,8 +496,7 @@ test "rows in a data field or a type alias are validated as bounds" = expectAll
   [
     expectCheckReject (fixture "data_alias_bound_reject.mdk") [
       "a bound admits at most 16 elements of one label",
-      "pattern \"a.com\" must end in '*'",
-      "pattern \"b.com\" must end in '*'",
+      "pattern is empty",
     ],
     expectCheckAccept (fixture "data_alias_bound_accept.mdk"),
   ]

@@ -64,23 +64,33 @@ does not admit `"cfg/app.toml.bak"`; `"cfg/app.toml*"` does. Two patterns are
 never merged into a wider one: `<Store "cfg/a/*", Store "cfg/b/*">` admits both
 subtrees and nothing else, not `"cfg/*"`.
 
-There is one restriction on what may be written, and it exists for hosts. A
-written element has to contain a `/` or end in `*`, so that `"a.com"` cannot be
-written as a pattern that would also admit `a.com.evil.com`:
+An exact element needs no `/`, because it admits only itself. The one thing
+that may not be written is the empty string, which would be the prefix of
+everything. So a bare filename is a legal bound:
+
+```medaka
+countNotes : Unit -> <FileRead "notes.txt"> Result String String
+countNotes () = readFile "notes.txt"
+
+main : <IO> Unit
+main = println "ok"
+```
+
+```medaka-expect
+ok
+```
+
+`medaka manifest` prints that element as it is, and the same text is a legal
+`--allow` entry, so a manifest always round-trips through `check-policy`:
 
 ```
-error: authority.mdk:3:22: Invalid effect parameter on <FileRead>: pattern "notes.txt" must end in '*' or contain a '/' delimiter (a bare prefix would admit a sibling host/path)
-  |
-3 | countLines : Unit -> <FileRead "notes.txt"> Int
-  |                       ^
-```
+$ medaka manifest notes.mdk --fn countNotes
+[package.capabilities]
+FileRead = "notes.txt"
 
-> ⚠️ **A bare filename cannot be written as a bound.** Inference charges
-> `readFile "notes.txt"` with `<FileRead "notes.txt">`, and that exact element is
-> refused in a signature and in a `check-policy` allow list alike, so the only
-> writable bounds for it are `"notes.txt*"` and the bare label. Tracked as
-> [#3557](https://github.com/MedakaLang/medaka/issues/3557); until then, keep
-> files under a directory.
+$ medaka check-policy notes.mdk --allow FileRead=notes.txt --fn countNotes
+accepted. countNotes requires only <FileRead "notes.txt">
+```
 
 ## Named arguments
 

@@ -795,24 +795,12 @@ atomsOfWritten ls = atomsOfWrittenIn emptySigVars ls
 atomsOfWrittenIn : SigVars -> List EffAtomTy -> List Atom
 atomsOfWrittenIn sv ls = atomsNorm (map (atomOfWrittenIn sv) ls)
 
--- the delimiter footgun guard (design §2.5 / fork (b)): a written Prefix pattern
--- must end in `*` or contain a `/` delimiter; a bare prefix is ambiguous.
+-- A written Prefix element is any non-empty string.  A trailing `*` makes it a
+-- pattern; without one it is an exact element and admits only itself, so no
+-- delimiter is needed to keep a sibling host or path out.  The empty string is
+-- the prefix of everything and would silently mean the whole domain.
 prefixPatternOk : String -> Bool
-prefixPatternOk s =
-  let n = stringLength s
-  n > 0 && (stringSlice (n - 1) n s == "*" || strHasSlash s)
-
-strHasSlash : String -> Bool
-strHasSlash s = strHasSlashGo s 0 (stringLength s)
-
-strHasSlashGo : String -> Int -> Int -> Bool
-strHasSlashGo s i n =
-  if i >= n then
-    False
-  else if stringSlice i (i + 1) s == "/" then
-    True
-  else
-    strHasSlashGo s (i + 1) n
+prefixPatternOk s = stringLength s > 0
 
 -- ── global inference state ────────────────────────────────────────────────
 
@@ -1653,12 +1641,11 @@ effectLeakMsg bound extras =
 effectParamMsg : String -> String -> String
 effectParamMsg label why = "Invalid effect parameter on <\{label}>: \{why}"
 
--- Runtime B1 dedup: the shared "must end in '*' or contain a '/'…" rationale for
--- a bare prefix param, parameterized by the noun (`pattern` for a top-level
--- Prefix param, `Host pattern` for a product's Host axis).
-prefixPatternErrMsg : String -> String -> String
-prefixPatternErrMsg noun pat =
-  "\{noun} \"\{pat}\" must end in '*' or contain a '/' delimiter (a bare prefix would admit a sibling host/path)"
+-- The refusal for an empty Prefix element, parameterized by the noun (`pattern`
+-- for a top-level Prefix param, `<axis> pattern` for a product axis).
+prefixPatternErrMsg : String -> String
+prefixPatternErrMsg noun =
+  "\{noun} is empty; name the element, or write \"*\" for every one"
 
 -- validate every written effect param in a program's type annotations against
 -- the registry: a Prefix label's pattern must pass prefixPatternOk; an atomic
@@ -2976,8 +2963,7 @@ writtenElement top a = match a.eatParam
   p => [writtenParam top p]
 
 -- A written parameter must be an element of its label's domain: a Prefix
--- label takes one delimiter-terminated pattern (an FFI library name is
--- exempt from the delimiter rule), a Set label takes a set or a single
+-- label takes one non-empty pattern or exact element, a Set label takes a set or a single
 -- member, a Product label takes its axes or a bare host pattern, and an
 -- atomic label takes nothing.  A named authority is checked at its binder.
 -- The rule is `effectParamProblems`; this reports each problem at the atom.
@@ -3034,18 +3020,10 @@ decodeWrittenParam label p =
     [] => Ok (writtenParam top p)
     m :: _ => Err (effectParamMsg (effLabelName label) m)
 
--- #2103: the delimiter footgun guard (`prefixPatternOk`) exists because a
--- BARE host/path prefix is ambiguous — "example.com" would silently admit
--- "example.com.evil.net", and "/etc/pass" would admit "/etc/passwd", so a
--- written Net/FileRead/FileWrite/Exec pattern must say `*` or carry a `/`.
--- An FFI parameter names a LIBRARY, and library names have neither
--- delimiter structure nor a sibling-extension hazard: `<FFI "libcurl">`
--- read as a prefix is exactly what the author meant, and demanding
--- `<FFI "libcurl*">` was pure ceremony (the two are already the SAME set —
--- `prefixConcrete` strips a trailing `*`, so `dsub` cannot tell them
--- apart).  So FFI accepts any NON-EMPTY string verbatim; the empty pattern
--- is still rejected, since `<FFI "">` names no library and, being the
--- prefix of everything, would silently mean ⊤.
+-- An FFI parameter names a LIBRARY, not a host or path.  `<FFI "libcurl">`
+-- read as a prefix is what the author meant, and `prefixConcrete` strips a
+-- trailing `*`, so `dsub` cannot tell the two spellings apart.  FFI keeps its
+-- own empty-string message, which names a library.
 prefixLiteralProblems : String -> String -> List String
 prefixLiteralProblems l pat =
   if l == "FFI" then
@@ -3056,7 +3034,7 @@ prefixLiteralProblems l pat =
   else if prefixPatternOk pat then
     []
   else
-    [prefixPatternErrMsg "pattern" pat]
+    [prefixPatternErrMsg "pattern"]
 
 -- A binder an effect atom names must have a type the domain can abstract
 -- (a `String`, in this increment), and every label naming it must draw
@@ -3095,14 +3073,11 @@ atomicLabelParamText l =
 -- the lift canonicalises it, and an empty pattern canonicalises to the top.
 primaryLiteralProblems : List (String, Param) -> String -> List String
 primaryLiteralProblems ((name, PPrefix _) :: _) pat =
-  if prefixPatternOk pat then
-    []
-  else
-    [prefixPatternErrMsg "\{name} pattern" pat]
+  if prefixPatternOk pat then [] else [prefixPatternErrMsg "\{name} pattern"]
 primaryLiteralProblems _ _ = []
 
 -- A written product's axes against the label's declared schema: every axis
--- must be declared, a Prefix axis takes a delimiter-terminated pattern, a Set
+-- must be declared, a Prefix axis takes a non-empty pattern or exact element, a Set
 -- axis a set.
 productAxesProblems : List (String, Param) -> Param -> List String
 productAxesProblems schema (PProduct axes) =
@@ -3133,7 +3108,7 @@ axisProblems schema name p = match lookupAxis name schema
       if prefixPatternOk pat then
         []
       else
-        [prefixPatternErrMsg "\{name} pattern" pat]
+        [prefixPatternErrMsg "\{name} pattern"]
     PPrefix None => []
     _ => ["axis '\{name}' takes a prefix pattern, not a set"]
   Some (PSet _) => match p

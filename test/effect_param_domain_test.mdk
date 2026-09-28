@@ -28,6 +28,9 @@ test "Env rejects a joined Set outside the declared bound" = expectCheckReject
   (fixture "env_join_reject.mdk")
   ["performs <Env {\"A\", \"B\"}>"]
 
+test "FileRead takes an exact bare filename as a bound" =
+  expectCheckAccept (fixture "fileread_exact_accept.mdk")
+
 test "Exec fills a concrete path inside the declared Prefix bound" =
   expectCheckAccept (fixture "exec_hole_accept.mdk")
 

@@ -238,7 +238,9 @@ matching is unsound for authority** — `"a.com"` is a string-prefix of
 The domain therefore requires every pattern to terminate at a **structural
 delimiter**: a path/host boundary (`/`) or an explicit trailing `*`. `Net "a.com/*"`
 matches `a.com/...` but **not** `a.com.evil.com/...`. A pattern lacking a delimiter
-is rejected at declaration/annotation time. Full scheme/host/port/path structure is
+is rejected at declaration/annotation time. An exact element (no trailing `*`) needs
+no delimiter, because it admits only itself: `Net "a.com"` does not admit
+`a.com.evil.com`. The empty string is rejected. Full scheme/host/port/path structure is
 the `Product` domain; `Prefix` is its sound, coarse one-axis approximation. Only
 trailing-`*` wildcards are admitted — general globs/regex break decidability of
 `⊑` and are rejected.
