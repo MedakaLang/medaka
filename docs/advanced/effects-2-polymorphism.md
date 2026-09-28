@@ -207,7 +207,7 @@ just `f x` and performs `f`'s row right there.
 The prelude's combinators all carry effect variables, so this works throughout:
 `map`, `filter`, `any`, `all`, `find`, `count`, `option`, `result`, `flip`,
 `compose`, `forEach`, `flatMap`, and the rest thread their callbacks' rows to their
-own. A `do` block does too, since it desugars to `flatMap`, which is why a
+own. A `do` block does too, since it desugars to `andThen`, which is why a
 `Result`-returning function can print in the middle of a chain:
 
 ```medaka

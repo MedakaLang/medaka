@@ -43,8 +43,9 @@ Three new things are in that program. The signature of `load` names its argument
 label at whatever path the caller passes. `readConfig` bounds its row with a
 literal, `<Store "cfg/*">`, and its body is checked against it: `"cfg/app.toml"`
 lies within `"cfg/*"`, so it is accepted. `readAll` writes the label bare, which
-means the whole domain, any path at all, and `readBoth` writes two atoms of the
-same label, which admits either.
+means the whole domain, any path at all, and `readBoth` writes two *atoms* of the
+same label (an atom is one label with one parameter, the unit a row is made of),
+which admits either.
 
 Reading a path the bound does not admit is refused with the same message as any
 other escape, now with parameters in it:
@@ -95,8 +96,8 @@ accepted. countNotes requires only <FileRead "notes.txt">
 ## Named arguments
 
 `(path : String) -> <Store path> Int` is the signature of an operation whose
-authority is decided by its caller. Inside such a function, the body may use the
-named argument, but it may not reach anything else:
+authority is decided by its caller. Inside such a function, the body may forward
+the named argument to another operation, but it may not reach anything else:
 
 ```medaka
 effect Store Prefix
@@ -168,11 +169,11 @@ So a program that reads one file is charged with that one file, with nothing
 written by the programmer:
 
 ```medaka
-import io.{readLines}
+import string.{lines}
 
-countLines : Unit -> <FileRead "notes/*", IO> Int
+countLines : Unit -> <FileRead "notes/*"> Int
 countLines () = match readFile "notes/today.txt"
-  Ok text => length (readLines text)
+  Ok text => length (lines text)
   Err _ => 0
 
 main = println (countLines ())
@@ -184,10 +185,11 @@ main = println (countLines ())
 
 (The file does not exist where the examples are run, so the count is 0. That is
 itself the point: the effect and the failure are separate, and the row was
-checked before anything ran.) The `IO` in `countLines`'s row is there because
-`readLines`, the line splitter from the `io` module, is declared `<IO>`; with
-`readFile` alone the bound `<FileRead "notes/*">` suffices. Narrowing the `io`
-helpers is tracked as [#3388](https://github.com/MedakaLang/medaka/issues/3388).
+checked before anything ran.) Not every library function is this precise yet.
+The `io` module's `readLines`, which reads a file and splits it, is declared
+`<IO>` rather than at its path's authority, so a function that calls it cannot
+carry a narrow bound; narrowing those helpers is tracked as
+[#3388](https://github.com/MedakaLang/medaka/issues/3388).
 
 ## How the compiler reads a path
 
@@ -232,7 +234,8 @@ main =
 - A **`let`-bound** name is whatever it was bound to, in the scope it was bound in.
 - An **`if` or `match`** is the join of its branches, one element per branch.
 - **Anything else** is the whole domain. A parameter of unknown origin, a function
-  result, a field of a record: the compiler cannot know what string it holds, so
+  result, a field of a record, unless its type carries an authority of its own
+  (the qualified values below): the compiler cannot know what string it holds, so
   it assumes any string.
 
 The last rule is the one that matters for security. A path that arrives at
@@ -245,14 +248,20 @@ error: authority.mdk:7:23: Effectful value used where <Store "cfg/*"> is allowed
   |                        ^
 ```
 
-So a function bounded to `"cfg/*"` cannot be talked into reading a path chosen by
-its caller. There is no separate check for "computed destinations"; the rule
-that unknown means everything, and everything fits nothing narrower than the bare
-label, is that check. The price is that the abstraction is conservative. It never
-under-approximates (that would be a hole), but it can over-approximate, refusing a
-program a human can see is fine. When that happens, the remedy is to name the
-argument in the signature, as `under` does above, and let the caller supply the
-authority.
+So a function bounded to `"cfg/*"` cannot be talked into reading a path its
+caller chose outright. There is no separate check for "computed destinations";
+the rule that unknown means everything, and everything fits nothing narrower
+than the bare label, is that check. The price is that the abstraction is
+conservative. It can over-approximate, refusing a program a human can see is
+fine, and when that happens the remedy is to name the argument in the signature,
+as `under` does above, and let the caller supply the authority.
+
+> ⚠️ **A prefix is a prefix of the string, not of the file.** `"cfg/" ++ name` is
+> within `"cfg/*"` for every `name`, including `"../secret.txt"`, and the runtime
+> resolves the `..`. So a `<FileRead "cfg/*">` bound, and the manifest it produces,
+> can today be walked out of by a caller-supplied suffix. Tracked as
+> [#3564](https://github.com/MedakaLang/medaka/issues/3564); until it is closed,
+> treat a path bound as documentation of intent, not as a sandbox.
 
 ## Sets and products
 
@@ -352,7 +361,9 @@ names both axes, extending an axis argument (`host ++ "/x"`) gives that axis's
 whole domain, as extending any named argument does.
 
 In a manifest a product renders as a table, and a label that holds several
-elements renders as an array:
+elements renders as an array. The first transcript is the `Http` program above;
+the second is the "How the compiler reads a path" program, whose `main` reaches
+both subtrees:
 
 ```
 $ medaka manifest product.mdk
@@ -362,7 +373,7 @@ Stdout = true
 ```
 
 ```
-$ medaka manifest authority.mdk
+$ medaka manifest paths.mdk
 [package.capabilities]
 IO = true
 Store = ["cfg/*", "data/*"]

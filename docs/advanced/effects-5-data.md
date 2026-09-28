@@ -195,10 +195,10 @@ Only a clause or an arm can open an existential, because those have an end, and
 the opened authority may not be used past it. A `let` pattern has no such end:
 
 ```
-error: data.mdk:15:20: This pattern opens the existential authority 'p', which only a `match` arm or a function clause can scope: the arm or clause ends where the authority's uses must end. Match on the value, or take it as a clause parameter, and use it inside
+error: data.mdk:15:22: This pattern opens the existential authority 'p', which only a `match` arm or a function clause can scope: the arm or clause ends where the authority's uses must end. Match on the value, or take it as a clause parameter, and use it inside
   |
 15 |   let (AnyHandle h) = any
-  |                     ^
+  |                       ^
 ```
 
 ## Exporting an indexed type

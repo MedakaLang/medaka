@@ -120,11 +120,12 @@ error: rows.mdk:3:10: Effectful value used where <> is allowed, but it performs 
 ```
 
 `<>` is the empty row, the spelling of "pure". The message names the row the
-signature allows and the row the expression performs. This check is the whole
-reason to write rows on top-level definitions: a signature is a promise the
-compiler holds the body to, transitively. If `double` called a helper that called
-a helper that printed, the same error would appear, at the call in `double`'s body
-that lets the effect in.
+signature allows and the row the expression performs. This is the *escape check*,
+the name this topic uses for the comparison of a body's inferred row against its
+declared bound, and it is the whole reason to write rows on top-level definitions:
+a signature is a promise the compiler holds the body to, transitively. If `double`
+called a helper that called a helper that printed, the same error would appear,
+at the call in `double`'s body that lets the effect in.
 
 The other direction is always fine. A pure function may be declared with a row, a
 `<Stdout>` function may be declared `<IO>`, and a function declared `<Clock, IO>`
@@ -151,11 +152,14 @@ vocabulary:
 | `Rand` | `randomInt`, `randomBool`, `randomFloat`, `randomChar`, `setSeed`, `osEntropyBytes` |
 | `FFI` | any `extern` you declare yourself |
 
-`IO` is not on the list because it is not a label of its own. It is a shorthand for
-all ten labels above at once, so a row of `<IO>` admits any of them, and a row that
-performs `<Stdout>` fits a bound of `<IO>`. Two things it does not cover: `FFI`,
-which has to be named explicitly because it leaves the language, and any label you
-declare yourself ([chapter 3](effects-3-labels.md)).
+`IO` is not on the list because it stands above it. A bound of `<IO>` admits all
+ten labels, so a row that performs `<Stdout>` fits `<IO>`. Two things it does not
+cover: `FFI`, which has to be named explicitly because it leaves the language, and
+any label you declare yourself ([chapter 3](effects-3-labels.md)). The other
+direction is not symmetric today: a function that performs `<IO>` fits only a
+bound that says `IO`, not one that spells out the ten labels, so `IO` behaves as a
+label of its own rather than as an abbreviation
+([#3565](https://github.com/MedakaLang/medaka/issues/3565)).
 
 Narrow labels let a signature say which part of the world a function touches:
 

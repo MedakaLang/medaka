@@ -10,6 +10,9 @@
 //   node playground/guide_render_test.mjs --src docs/stdlib \
 //        --exclude STDLIB.md,FP-STDLIB-DESIGN.md,P1-STDLIB-DESIGN.md \
 //        --title 'The Medaka Standard Library'          # the stdlib reference
+//   … --sibling guide=../guide --sibling-exclude guide=OUTLINE.md
+//                                                      # the builder's sibling
+//                                                      # pairs, graded by check 14
 //
 // `--exclude`/`--title` exist because the properties below are doc-set-agnostic
 // but the ARGUMENTS are not: the guide drops OUTLINE.md, the stdlib reference
@@ -50,6 +53,11 @@
 //  12. the doc set's OWN `index.md`, where it has one, IS the emitted
 //      `index.html` — byte for byte, not overwritten by the synthetic
 //      chapter-list index; where it has none, the synthetic index is present
+//  14. every link into a `--sibling` doc set names a page that set renders
+//      (a source `.md` exists and is not in its `--sibling-exclude` list), and
+//      on a synthetic pair of doc sets an existing page is rewritten to its
+//      `.html` while a missing page, an excluded page and an undeclared
+//      directory are left for the repository rule
 
 import { readdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
@@ -92,7 +100,14 @@ for (let i = 2; i < process.argv.length; i++) {
     const v = process.argv[++i];
     const eq = v.indexOf('=');
     if (eq <= 0 || eq === v.length - 1) { console.error(`--sibling needs name=href, got: ${v}`); process.exit(2); }
-    siblings.push({ name: v.slice(0, eq), href: v.slice(eq + 1).replace(/\/+$/, '') });
+    siblings.push({ name: v.slice(0, eq), href: v.slice(eq + 1).replace(/\/+$/, ''), exclude: [] });
+  }
+  else if (process.argv[i] === '--sibling-exclude') {
+    const v = process.argv[++i];
+    const eq = v.indexOf('=');
+    const sib = eq > 0 ? siblings.find((s) => s.name === v.slice(0, eq)) : null;
+    if (!sib) { console.error(`--sibling-exclude needs name=a,b naming an earlier --sibling, got: ${v}`); process.exit(2); }
+    sib.exclude.push(...v.slice(eq + 1).split(',').map((s) => s.trim()).filter(Boolean));
   }
   else { console.error(`unknown argument: ${process.argv[i]}`); process.exit(2); }
 }
@@ -396,42 +411,47 @@ try {
   let siblingLinks = 0;
   for (const page of pages) {
     const html = readFileSync(join(out, page.outFile), 'utf8');
-    for (const { name, href } of siblings) {
+    for (const { name, href, exclude } of siblings) {
       const esc = href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       for (const m of html.matchAll(new RegExp(`href="${esc}/([^"/#]+)\\.html(#[^"]*)?"`, 'g'))) {
         siblingLinks++;
         const source = resolve(src, '..', name, `${m[1]}.md`);
         check(existsSync(source), `${page.outFile}: sibling link ${href}/${m[1]}.html has a source page docs/${name}/${m[1]}.md`);
+        check(!exclude.includes(`${m[1]}.md`),
+          `${page.outFile}: sibling link ${href}/${m[1]}.html names a page the sibling's builder renders (not in its exclude list)`);
       }
     }
   }
   if (siblings.length > 0) {
-    note(`${siblingLinks} sibling doc-set link(s) each name a page with a source behind it`);
+    note(`${siblingLinks} sibling doc-set link(s) each name a rendered page with a source behind it`);
   }
   // The positive and negative controls, on a synthetic pair of doc sets, so the
   // assertion does not depend on the graded corpus happening to contain a
   // cross-set link: an existing sibling page IS rewritten to its .html, and a
-  // missing one is NOT (it takes the repository rule, or stays put with no
-  // repo URL), never a fabricated .html.
+  // missing or excluded one is NOT (it takes the repository rule, or stays put
+  // with no repo URL), never a fabricated .html.
   const sibRoot = join(scratch, 'sib');
   mkdirSync(join(sibRoot, 'a'), { recursive: true });
   mkdirSync(join(sibRoot, 'b'), { recursive: true });
   writeFileSync(join(sibRoot, 'b', 'x.md'), '# X\n\n## S\n\nsibling page, long enough to count as a page body for check five in spirit.\n');
+  writeFileSync(join(sibRoot, 'b', 'PLAN.md'), '# Plan\n\n## S\n\nthe sibling planning doc its builder excludes.\n');
   writeFileSync(join(sibRoot, 'a', 'y.md'),
-    '# Y\n\n## S\n\n[there](../b/x.md#s) and [nowhere](../b/missing.md) and [spec](../c/z.md).\n');
+    '# Y\n\n## S\n\n[there](../b/x.md#s) and [nowhere](../b/missing.md) and [plan](../b/PLAN.md) and [spec](../c/z.md).\n');
   const sibOut = join(scratch, 'sibout');
   renderDocSet({
     src: join(sibRoot, 'a'), out: sibOut, exclude: [], title: 'Sib', repoUrl: '', repoRoot: sibRoot,
-    siblings: [{ name: 'b', href: '../b' }],
+    siblings: [{ name: 'b', href: '../b', exclude: ['PLAN.md'] }],
   });
   const sibHtml = readFileSync(join(sibOut, 'y.html'), 'utf8');
   check(sibHtml.includes('href="../b/x.html#s"'),
     'sibling control: a link to an existing sibling page is rewritten to its rendered .html (fragment kept)');
   check(sibHtml.includes('href="../b/missing.md"'),
     'sibling control: a link to a MISSING sibling page is not rewritten to a fabricated .html');
+  check(sibHtml.includes('href="../b/PLAN.md"'),
+    'sibling control: a link to a sibling page its builder EXCLUDES is not rewritten to a fabricated .html');
   check(sibHtml.includes('href="../c/z.md"'),
     'sibling control: a link into an undeclared directory is untouched');
-  note('sibling doc-set rewriting: existing page rewritten, missing page and undeclared set left alone');
+  note('sibling doc-set rewriting: existing page rewritten; missing page, excluded page and undeclared set left alone');
 
   // ── 7. an unknown fence label must be REFUSED ─────────────────────────────
   const bad = join(scratch, 'badfence');

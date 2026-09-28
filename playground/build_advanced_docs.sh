@@ -42,5 +42,7 @@ exec node "$SCRIPT_DIR/render_docs.mjs" \
   --nav-link "Stdlib=../stdlib/index.html" \
   --nav-link "GitHub=https://github.com/MedakaLang/medaka" \
   --sibling "guide=../guide" \
+  --sibling-exclude "guide=OUTLINE.md" \
   --sibling "stdlib=../stdlib" \
+  --sibling-exclude "stdlib=STDLIB.md,FP-STDLIB-DESIGN.md,P1-STDLIB-DESIGN.md" \
   "${DIST_ARGS[@]+"${DIST_ARGS[@]}"}"

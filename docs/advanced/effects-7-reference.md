@@ -69,7 +69,8 @@ The first words of each message, and where the rule behind it is explained.
 | `Binding '…' reaches … where its declared bound admits only …` | a constructor or existential exceeds a literal bound | [V](effects-5-data.md) |
 | `The qualifier names '…', but no effect atom or index in this signature names '…'` | a qualifier with no domain | [IV](effects-4-authority.md) |
 | `'…' needs "…" to lie within "…" here` | a use violates a relation the binding's inferred type carries | [IV](effects-4-authority.md) |
-| `Authority index mismatch` | an index is invariant | [V](effects-5-data.md) |
+| `Authority index mismatch` | an authority index is invariant | [V](effects-5-data.md) |
+| `Effect index mismatch` | an effect index is invariant | [VI](effects-6-indexed.md) |
 | `This pattern opens the existential authority '…'` | only a clause or arm can open one | [V](effects-5-data.md) |
 | `Constructor '…' of public type '…' carries its authority parameter '…' in no field` | a `public export data` constructor that proves nothing | [V](effects-5-data.md) |
 | `Type parameter … is used as an effect row … but its head does not declare it one` | `(e : Effect)` is missing | [VI](effects-6-indexed.md) |
@@ -80,13 +81,20 @@ These are the places where the current compiler does not yet express something
 the design intends, or where it is stricter than it needs to be. Each has an
 issue; the number is the thing to search for.
 
+- **A path bound is a string prefix, and `..` escapes it.** `"cfg/" ++ name`
+  lies within `"cfg/*"` for `name = "../secret.txt"`, and the runtime resolves
+  the `..`, so the manifest's `cfg/*` is not a sandbox.
+  [#3564](https://github.com/MedakaLang/medaka/issues/3564)
 - **A pure helper cannot return a value at a named argument's authority.** The
   qualifier needs a label atom. [#3559](https://github.com/MedakaLang/medaka/issues/3559),
   [#3532](https://github.com/MedakaLang/medaka/issues/3532)
 - **There is no written syntax for a relation.** A binding whose inferred type
-  carries `(a <= d) =>` must stay unsigned. Design notes in the specification;
-  no issue yet beyond the residual-scheme work under
-  [#3462](https://github.com/MedakaLang/medaka/issues/3462).
+  carries a context such as `(a <= d) =>` (the relation the compiler kept, see
+  chapter IV) must stay unsigned.
+  [#3566](https://github.com/MedakaLang/medaka/issues/3566)
+- **`IO` is a label above the ten, not their abbreviation.** A performed `<IO>`
+  does not fit a bound or a policy that spells the ten labels out.
+  [#3565](https://github.com/MedakaLang/medaka/issues/3565)
 - **A relation cannot be shared by a recursive group.** Two mutually recursive
   functions over a captured handle are refused where one function would be
   accepted. [#3482](https://github.com/MedakaLang/medaka/issues/3482)
@@ -96,7 +104,8 @@ issue; the number is the thing to search for.
   [#3388](https://github.com/MedakaLang/medaka/issues/3388)
 - **`check-policy`'s sample run assumes `String -> String`.**
   [#3329](https://github.com/MedakaLang/medaka/issues/3329)
-- **`check` prints effect and type variables from one alphabet.**
+- **`check` prints effect and type variables from one alphabet.** The issue's
+  title describes an older symptom, since fixed; the naming is what remains.
   [#2583](https://github.com/MedakaLang/medaka/issues/2583)
 - **A discarded arithmetic statement reports `No impl of Num for Unit`.**
   [#3560](https://github.com/MedakaLang/medaka/issues/3560)
@@ -104,9 +113,9 @@ issue; the number is the thing to search for.
 ## Further reading
 
 - [`docs/spec/EFFECTS-SEMANTICS.md`](../spec/EFFECTS-SEMANTICS.md): the
-  specification this topic is an introduction to. It is written as a target the
-  implementation is audited against, so where it and the compiler disagree, the
-  disagreement is a finding, not a description.
+  specification this topic is an introduction to. It describes the intended
+  system rather than the current binary, so where it says more than this topic
+  does, check the claim against `medaka check` before relying on it.
 - [`docs/spec/SYNTAX.md`](../spec/SYNTAX.md): the accepted spellings, including
   the ones this topic did not need.
 - [`docs/design/CAPABILITY-EFFECTS.md`](../design/CAPABILITY-EFFECTS.md) and

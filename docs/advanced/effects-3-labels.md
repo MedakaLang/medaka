@@ -34,8 +34,9 @@ and from then on every caller is charged with it. `check` prints
 `main : <Audit, Stdout> Unit`.
 
 In a real system the function behind a label is usually a host import, an `extern`
-the platform provides (`extern kvGet : String -> <KV> String`), and the label is
-the platform's name for that capability. But nothing about a label depends on
+the platform provides (`extern kvGet : String -> <FFI, KV> String`, with the
+`FFI` every foreign declaration must carry, see below), and the label is the
+platform's name for that capability. But nothing about a label depends on
 that. `Audit` above is pure Medaka, and it still tracks: a function that calls
 `audit` without declaring `Audit` is refused,
 
@@ -133,11 +134,13 @@ Audit = true
 Stdout = true
 ```
 
-The point of the manifest is that it cannot lie. It is not a declaration the
-author wrote; it is the join of the rows of every primitive the entry can reach,
-and the escape check has already refused every attempt to hide one. Adding a
-dependency that quietly opens a network connection changes the manifest, and a
-manifest checked into a repository would show the change in review.
+The point of the manifest is that the author did not write it. It is the join of
+the rows of every primitive the entry can reach, and the escape check has already
+refused every attempt to hide a label. Adding a dependency that quietly opens a
+network connection changes the manifest, and a manifest checked into a repository
+would show the change in review. What it can still get wrong is a *parameter*:
+[chapter 4](effects-4-authority.md) shows two places where a path bound is
+narrower than what the program reaches, each with an open issue.
 
 ## Checking a policy
 
@@ -175,11 +178,12 @@ handling X-Forwarded-For: 192.168.1.1
    transform "X-Forwarded-For: 192.168.1.1" = ok
 ```
 
-> ⚠️ **The sample run assumes a `String -> String` entry.** `check-policy` on a
-> function of any other shape reports the verdict correctly but then fails while
-> trying to apply it to the sample string, so an accepted module can still exit 1.
-> Use `medaka manifest` to inspect an entry of another shape; the sample run is
-> tracked as [#3329](https://github.com/MedakaLang/medaka/issues/3329).
+> ⚠️ **The sample run assumes a `String -> String` entry.** An accepted entry of
+> any other shape can exit 1 with a runtime error and no verdict printed at all,
+> because the sample run comes before the `accepted.` line and applies the entry
+> to a string. A rejection is always printed. Use `medaka manifest` to inspect an
+> entry of another shape; the sample run is tracked as
+> [#3329](https://github.com/MedakaLang/medaka/issues/3329).
 
 Together the two commands are the whole story of "effects as capabilities". The
 compiler computes what a module needs. The host decides what it is willing to
@@ -207,8 +211,9 @@ print, so the manifest says `Stdout`. The rule is by position: an arrow the entr
 *hands out* (its result, a field of a record it returns, an element of a list it
 returns) is charged; an arrow the entry *takes* (a callback parameter) is the
 host's own function and is not. The same reading applies through data the entry
-returns, and a slot whose variance the compiler cannot see is charged as if it
-were both.
+returns: a type parameter the data only produces counts as handed out, one it
+only consumes counts as taken, and a slot the compiler cannot classify either way
+is charged as if it were both.
 
 ## `main` is the grant root
 
@@ -242,8 +247,9 @@ error: ffi.mdk:1:14: Foreign declaration 'cAbs' does not name the 'FFI' effect i
   |               ^
 ```
 
-The parameter names the library, as a statement about where the call goes rather
-than something the compiler enforces:
+The parameter names the library. The compiler checks it like any other parameter,
+so a function bounded to `<FFI "libc">` cannot call a `<FFI "libm">` extern; what
+it cannot check is where the call really goes, since the linker decides that:
 
 ```medaka
 extern cSqrt : Float -> <FFI "libm"> Float

@@ -62,5 +62,6 @@ exec node "$SCRIPT_DIR/render_docs.mjs" \
   --nav-link "Advanced=../advanced/index.html" \
   --nav-link "GitHub=https://github.com/MedakaLang/medaka" \
   --sibling "guide=../guide" \
+  --sibling-exclude "guide=OUTLINE.md" \
   --sibling "advanced=../advanced" \
   "${DIST_ARGS[@]+"${DIST_ARGS[@]}"}"
