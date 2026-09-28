@@ -1612,7 +1612,7 @@ table = [
   Row {
     entry = "b1-xmod-default-inherited-tag/main.mdk",
     label =
-      "ARCH B-2 (B-2.2-b1): `keyForSite`s NO-ROW arm. A CROSS-MODULE method-less impl inherits the interface default -- `fillImplDefaults` is same-module only, so the impl has no method entry, the candidate scan cannot see it, and `optionOr tag` supplies the `<TAG>` of `@mdk_default_sz_Box`. Its SAME-MODULE twin in the same program takes the ordinary tagged route. ⚠️ THE VALUE CANNOT DISCRIMINATE (both arms answer 42 and both exit 0 even with a wrong symbol, until the link fails) -- section 3 carries it",
+      "ARCH B-2 (B-2.2-b1): a CROSS-MODULE method-less impl inherits the interface default. The disposition table publishes an `InheritedDefault` row for it regardless of module, so `keyForSite` selects it and stamps its canonical dictionary word (`rowRouteKey`), the same as a same-module impl. Its SAME-MODULE twin in the same program takes the identical route.",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",

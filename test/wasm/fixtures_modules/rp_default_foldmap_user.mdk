@@ -1,8 +1,8 @@
 -- #24-PEER (default path): a user type `Bag` impls the REAL prelude `Foldable`
--- WITHOUT overriding `foldMap`.  Because the impl is NOT co-located with the
--- `Foldable` DInterface (which lives in core.mdk), desugar's fillImplDefaults does
--- NOT specialize `foldMap` into a concrete `$mdk_impl_Bag_foldMap`; the call uses
--- Bag's per-instance body of the interface default (an `InheritedDefault` row),
+-- WITHOUT overriding `foldMap`.  `foldMap` is inferred once over the interface's
+-- receiver given and shared by every inheriting instance; `Bag`'s disposition row
+-- is `InheritedDefault`, so the call reaches that shared body through `Bag`'s own
+-- entry rather than a per-instance specialization of `$mdk_impl_Bag_foldMap`,
 -- emitted as an impl entry under `defaultFnNameW` (interface, method, instance).
 --
 -- `foldMap f = fold (acc x => acc ++ f x) empty` is point-free in the container AND
