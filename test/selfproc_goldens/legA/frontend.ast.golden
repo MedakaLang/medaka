@@ -17,6 +17,7 @@ effAtomBare : String -> EffAtomTy
 effAtomSurface : (String -> String) -> EffAtomTy -> String
 effAtomWith : String -> EffParamTy -> EffAtomTy
 effAxisSurface : (String -> String) -> EffParamTy -> String
+effParamNames : EffParamTy -> List String
 effParamSurface : (String -> String) -> EffParamTy -> String
 effSetSurface : (String -> String) -> List String -> String
 effectDeclUnstamped : Bool -> String -> Option String -> List (String, String) -> Option Loc -> Decl

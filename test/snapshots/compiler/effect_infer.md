@@ -1,5 +1,5 @@
 # META
-source_lines=233
+source_lines=234
 stages=DESUGAR,MARK
 # SOURCE
 -- Scoped effect collection. A capture observes performed rows without solving
@@ -156,10 +156,11 @@ literalAuthority (PSet _) s = AConst (PSet (Some [s]))
 literalAuthority (PProduct schema) s = AConst (productPrimaryLift schema s)
 literalAuthority top _ = authTop top
 
--- In a prefix-shaped domain a justified left prefix bounds the whole: a
--- suffix the abstraction knows exactly is appended (`authAppend`), any other
--- extends the left operand to the pattern it begins (`authExtend`). In the
--- Set domain appending changes the member, so the result is top.
+-- In a prefix-shaped domain a justified constant left prefix bounds the
+-- whole: a suffix the abstraction knows exactly is appended (`authAppend`),
+-- any other extends the left operand to the pattern it begins (`authExtend`).
+-- A left operand that is an authority variable extends to its domain's top.
+-- In the Set domain appending changes the member, so the result is top.
 concatAuthority : Param ->
   (String -> Option Mono) ->
   List (String, AlphaBinder) ->
