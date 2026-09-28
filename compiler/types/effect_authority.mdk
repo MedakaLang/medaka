@@ -9,7 +9,7 @@
 
 import types.effect_domain.{
   Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam, dantichain, dsubAny, djoinN, setCardCap
+  appendParam, dantichain, dsubAny, djoinN, setCardCap, productPrimaryLift
 }
 import support.util.{joinWith, reverseL, listLen}
 import string.{trimLeft}
@@ -79,6 +79,19 @@ authExtend top a = mapConstants (extendParam top) a
 export
 authAppend : Param -> String -> Authority -> Authority
 authAppend top suffix a = mapConstants (appendParam top suffix) a
+
+-- An authority read in the domain whose top is [top]: a string pattern read
+-- by a Product label lifts into its primary axis, as a literal does
+-- (`productPrimaryLift`), so `String @"a.com/*"` is usable where a Product
+-- label takes it.
+export
+authLiftInto : Param -> Authority -> Authority
+authLiftInto (PProduct schema) a = mapConstants (liftPrimary schema) a
+authLiftInto _ a = a
+
+liftPrimary : List (String, Param) -> Param -> Param
+liftPrimary schema (PPrefix (Some s)) = productPrimaryLift schema s
+liftPrimary _ p = p
 
 mapConstants : (Param -> Param) -> Authority -> Authority
 mapConstants f a = match authNorm a

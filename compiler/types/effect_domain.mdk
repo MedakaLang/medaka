@@ -125,7 +125,9 @@ djoinN (PSet (Some a)) (PSet (Some b)) =
   if listLen u > setCardCap then PSet None else PSet (Some u)
 djoinN (PProduct ax) (PProduct bx) =
   productNorm (map (joinAxis ax bx) (axisUnion ax bx))
-djoinN p _ = p
+-- Elements of different shapes (a Prefix against a Set, on a label or one
+-- of a Product's axes) have no join but the whole domain.
+djoinN p _ = subTopOf p
 
 -- The elements a join of constants denotes, in one canonical form that
 -- depends only on what they admit, never on the order they were written or

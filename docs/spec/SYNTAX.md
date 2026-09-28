@@ -302,8 +302,8 @@ effect Http Product (Host : Prefix, Method : Set)  -- a Product declares its axe
 A row atom whose authority is a symbolic join, or a set of elements, prints
 as one atom per operand, `<FileWrite src, FileWrite dst>` or
 `<Net "a.com/*", Net "b.com/*">`, which is also how it is written: the parser
-gathers same-label atoms into one, and a row keeps at most 16 elements per
-label.
+gathers same-label atoms into one. A row written in source keeps at most 16
+elements per label; an inferred row prints exactly, at any size.
 
 ## Function definitions
 

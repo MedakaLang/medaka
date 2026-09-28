@@ -1,5 +1,5 @@
 # META
-source_lines=255
+source_lines=268
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -13,7 +13,7 @@ stages=DESUGAR,MARK
 
 import types.effect_domain.{
   Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam, dantichain, dsubAny, djoinN, setCardCap
+  appendParam, dantichain, dsubAny, djoinN, setCardCap, productPrimaryLift
 }
 import support.util.{joinWith, reverseL, listLen}
 import string.{trimLeft}
@@ -83,6 +83,19 @@ authExtend top a = mapConstants (extendParam top) a
 export
 authAppend : Param -> String -> Authority -> Authority
 authAppend top suffix a = mapConstants (appendParam top suffix) a
+
+-- An authority read in the domain whose top is [top]: a string pattern read
+-- by a Product label lifts into its primary axis, as a literal does
+-- (`productPrimaryLift`), so `String @"a.com/*"` is usable where a Product
+-- label takes it.
+export
+authLiftInto : Param -> Authority -> Authority
+authLiftInto (PProduct schema) a = mapConstants (liftPrimary schema) a
+authLiftInto _ a = a
+
+liftPrimary : List (String, Param) -> Param -> Param
+liftPrimary schema (PPrefix (Some s)) = productPrimaryLift schema s
+liftPrimary _ p = p
 
 mapConstants : (Param -> Param) -> Authority -> Authority
 mapConstants f a = match authNorm a
@@ -258,7 +271,7 @@ export
 renderAuthority : Authority -> String
 renderAuthority a = renderAuthorityWith authvarDefaultName a
 # DESUGAR
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productPrimaryLift" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "listLen" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
@@ -285,6 +298,12 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "authExtend" ((PVar "top") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "extendParam") (EVar "top"))) (EVar "a")))
 (DTypeSig true "authAppend" (TyFun (TyCon "Param") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority")))))
 (DFunDef false "authAppend" ((PVar "top") (PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EApp (EVar "appendParam") (EVar "top")) (EVar "suffix"))) (EVar "a")))
+(DTypeSig true "authLiftInto" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "authLiftInto" ((PCon "PProduct" (PVar "schema")) (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "liftPrimary") (EVar "schema"))) (EVar "a")))
+(DFunDef false "authLiftInto" (PWild (PVar "a")) (EVar "a"))
+(DTypeSig false "liftPrimary" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "Param") (TyCon "Param"))))
+(DFunDef false "liftPrimary" ((PVar "schema") (PCon "PPrefix" (PCon "Some" (PVar "s")))) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "s")))
+(DFunDef false "liftPrimary" (PWild (PVar "p")) (EVar "p"))
 (DTypeSig false "mapConstants" (TyFun (TyFun (TyCon "Param") (TyCon "Param")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
 (DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PVar "v") () (EVar "v"))))
 (DTypeSig true "authDomainTop" (TyFun (TyCon "Authority") (TyCon "Param")))
@@ -357,7 +376,7 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DTypeSig true "renderAuthority" (TyFun (TyCon "Authority") (TyCon "String")))
 (DFunDef false "renderAuthority" ((PVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "authvarDefaultName")) (EVar "a")))
 # MARK
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productPrimaryLift" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "listLen" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
@@ -384,6 +403,12 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "authExtend" ((PVar "top") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "extendParam") (EVar "top"))) (EVar "a")))
 (DTypeSig true "authAppend" (TyFun (TyCon "Param") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority")))))
 (DFunDef false "authAppend" ((PVar "top") (PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EApp (EVar "appendParam") (EVar "top")) (EVar "suffix"))) (EVar "a")))
+(DTypeSig true "authLiftInto" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "authLiftInto" ((PCon "PProduct" (PVar "schema")) (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "liftPrimary") (EVar "schema"))) (EVar "a")))
+(DFunDef false "authLiftInto" (PWild (PVar "a")) (EVar "a"))
+(DTypeSig false "liftPrimary" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "Param") (TyCon "Param"))))
+(DFunDef false "liftPrimary" ((PVar "schema") (PCon "PPrefix" (PCon "Some" (PVar "s")))) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "s")))
+(DFunDef false "liftPrimary" (PWild (PVar "p")) (EVar "p"))
 (DTypeSig false "mapConstants" (TyFun (TyFun (TyCon "Param") (TyCon "Param")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
 (DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PVar "v") () (EVar "v"))))
 (DTypeSig true "authDomainTop" (TyFun (TyCon "Authority") (TyCon "Param")))

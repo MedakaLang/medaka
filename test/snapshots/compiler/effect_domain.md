@@ -1,5 +1,5 @@
 # META
-source_lines=564
+source_lines=566
 stages=DESUGAR,MARK
 # SOURCE
 -- Concrete authority domains: the lattice each effect label's parameter is
@@ -129,7 +129,9 @@ djoinN (PSet (Some a)) (PSet (Some b)) =
   if listLen u > setCardCap then PSet None else PSet (Some u)
 djoinN (PProduct ax) (PProduct bx) =
   productNorm (map (joinAxis ax bx) (axisUnion ax bx))
-djoinN p _ = p
+-- Elements of different shapes (a Prefix against a Set, on a label or one
+-- of a Product's axes) have no join but the whole domain.
+djoinN p _ = subTopOf p
 
 -- The elements a join of constants denotes, in one canonical form that
 -- depends only on what they admit, never on the order they were written or
@@ -603,7 +605,7 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DFunDef false "djoinN" (PWild (PCon "PSet" (PCon "None"))) (EApp (EVar "PSet") (EVar "None")))
 (DFunDef false "djoinN" ((PCon "PSet" (PCon "Some" (PVar "a"))) (PCon "PSet" (PCon "Some" (PVar "b")))) (EBlock (DoLet false false (PVar "u") (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "a") (EVar "b")))) (DoExpr (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "u")) (EVar "setCardCap")) (EApp (EVar "PSet") (EVar "None")) (EApp (EVar "PSet") (EApp (EVar "Some") (EVar "u")))))))
 (DFunDef false "djoinN" ((PCon "PProduct" (PVar "ax")) (PCon "PProduct" (PVar "bx"))) (EApp (EVar "productNorm") (EApp (EApp (EVar "map") (EApp (EApp (EVar "joinAxis") (EVar "ax")) (EVar "bx"))) (EApp (EApp (EVar "axisUnion") (EVar "ax")) (EVar "bx")))))
-(DFunDef false "djoinN" ((PVar "p") PWild) (EVar "p"))
+(DFunDef false "djoinN" ((PVar "p") PWild) (EApp (EVar "subTopOf") (EVar "p")))
 (DTypeSig true "dantichain" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
 (DFunDef false "dantichain" ((PVar "ps")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "map") (EVar "canonParam")) (EVar "ps"))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EVar "anyList") (EVar "isSubTop")) (EVar "cs")) (EApp (EVar "not") (EApp (EVar "sameShape") (EVar "cs")))) (EListLit (EApp (EVar "subTopOf") (EApp (EVar "headParam") (EVar "cs")))) (EMatch (EVar "cs") (arm (PCons (PCon "PSet" PWild) PWild) () (EListLit (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "flatMap") (EVar "setMembers")) (EVar "cs"))))))) (arm (PCons (PCon "PPrefix" PWild) PWild) () (EApp (EVar "sortParams") (EApp (EVar "maximalPrefixes") (EVar "cs")))) (arm (PCons (PCon "PProduct" PWild) PWild) () (EApp (EVar "sortParams") (EApp (EVar "canonProducts") (EVar "cs")))) (arm (PList) () (EListLit)) (arm PWild () (EApp (EVar "sortParams") (EApp (EVar "maximalOf") (EVar "cs")))))))))
 (DTypeSig true "writtenSetProblem" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "Option") (TyCon "String"))))
@@ -809,7 +811,7 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DFunDef false "djoinN" (PWild (PCon "PSet" (PCon "None"))) (EApp (EVar "PSet") (EVar "None")))
 (DFunDef false "djoinN" ((PCon "PSet" (PCon "Some" (PVar "a"))) (PCon "PSet" (PCon "Some" (PVar "b")))) (EBlock (DoLet false false (PVar "u") (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "a") (EVar "b")))) (DoExpr (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "u")) (EVar "setCardCap")) (EApp (EVar "PSet") (EVar "None")) (EApp (EVar "PSet") (EApp (EVar "Some") (EVar "u")))))))
 (DFunDef false "djoinN" ((PCon "PProduct" (PVar "ax")) (PCon "PProduct" (PVar "bx"))) (EApp (EVar "productNorm") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "joinAxis") (EVar "ax")) (EVar "bx"))) (EApp (EApp (EVar "axisUnion") (EVar "ax")) (EVar "bx")))))
-(DFunDef false "djoinN" ((PVar "p") PWild) (EVar "p"))
+(DFunDef false "djoinN" ((PVar "p") PWild) (EApp (EVar "subTopOf") (EVar "p")))
 (DTypeSig true "dantichain" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
 (DFunDef false "dantichain" ((PVar "ps")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EMethodRef "map") (EVar "canonParam")) (EVar "ps"))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EVar "anyList") (EVar "isSubTop")) (EVar "cs")) (EApp (EVar "not") (EApp (EVar "sameShape") (EVar "cs")))) (EListLit (EApp (EVar "subTopOf") (EApp (EVar "headParam") (EVar "cs")))) (EMatch (EVar "cs") (arm (PCons (PCon "PSet" PWild) PWild) () (EListLit (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EApp (EApp (EDictApp "flatMap") (EVar "setMembers")) (EVar "cs"))))))) (arm (PCons (PCon "PPrefix" PWild) PWild) () (EApp (EVar "sortParams") (EApp (EVar "maximalPrefixes") (EVar "cs")))) (arm (PCons (PCon "PProduct" PWild) PWild) () (EApp (EVar "sortParams") (EApp (EVar "canonProducts") (EVar "cs")))) (arm (PList) () (EListLit)) (arm PWild () (EApp (EVar "sortParams") (EApp (EVar "maximalOf") (EVar "cs")))))))))
 (DTypeSig true "writtenSetProblem" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "Option") (TyCon "String"))))
