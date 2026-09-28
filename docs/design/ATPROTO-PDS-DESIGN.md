@@ -167,7 +167,7 @@ SEPARATE `--data` directory, and a server started on the restored copy whose
 `getRepo` export byte-matches the original's, serves both blobs under their
 declared media types, and accepts a new signed write.
 
-The dedicated `pds/test/protocol_all_engines.sh` gate grades fixed query routing,
+The dedicated `pds/test/protocol_all_engines_test.mdk` gate grades fixed query routing,
 chunked state update, malformed framing, unknown routing, and resource rejection on
 eval, native, and real Wasm. Its expected cells are hand-authored rather than captured
 from an engine, and its native mutation control proves the state-update assertion can

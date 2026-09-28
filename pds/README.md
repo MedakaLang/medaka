@@ -138,7 +138,7 @@ The focused protocol parity gate additionally requires the local Wasm modules
 emitter, Node, and `wasm-tools` and refuses to degrade to two engines:
 
 ```sh
-MEDAKA_REQUIRE_WASM=1 sh pds/test/protocol_all_engines.sh
+MEDAKA_REQUIRE_WASM=1 ./medaka test --native pds/test/protocol_all_engines_test.mdk
 ```
 
 ## Data model
@@ -172,7 +172,7 @@ socket, runtime-I/O, or async code.
 
 The buffered policy caps combined headers at 64 KiB, JSON at 150 KiB, text at
 100 KiB, and raw/blob bodies at 5 MiB, with separate bounded line, field,
-trailer, and chunk counts. `pds/test/protocol_all_engines.sh` requires exact
+trailer, and chunk counts. `pds/test/protocol_all_engines_test.mdk` requires exact
 eval/native/Wasm agreement on fourteen hand-authored protocol cells and runs a
 native direct-red mutation of a repaired raw-input assertion.
 
@@ -270,7 +270,7 @@ the SERVER's atproto service endpoint and carries no key.
 hosted account's DID as bare `text/plain; charset=utf-8`, with no trailing
 newline.
 
-`pds/test/read_routes_all_engines.sh` grades the repository-FREE half of all of
+`pds/test/read_routes_all_engines_test.mdk` grades the repository-FREE half of all of
 this — both well-knowns as a `did:key` account answers them, `resolveHandle` in
 full, every read's unconfigured-store `RepoNotFound` refusal, and the non-XRPC
 404 control — on eval, native, and real Wasm with a direct-red mutation,
@@ -367,7 +367,7 @@ The socket shell must treat a `Store` as key material.
 The repository half is `Option`-shaped and starts `None`: `storeEmpty` is a
 store with no account configured. That is not a hedge, it is a measured
 requirement. Protocol composition (framing, routing, media negotiation) is
-tested with no account at all by `pds/test/protocol_all_engines.sh`, whose eval
+tested with no account at all by `pds/test/protocol_all_engines_test.mdk`, whose eval
 arm runs the tree-walking interpreter; one `repoInit` under that interpreter did
 not finish in 600s on this box, so making `storeEmpty` sign would have moved a
 seconds-long merge-queue gate into the >10-minute band that #2208 removed from

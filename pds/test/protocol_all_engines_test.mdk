@@ -1,0 +1,185 @@
+{- | The PDS protocol core, RFC 9112 framing and XRPC dispatch, as 25
+   hand-authored cells on eval, native and Wasm, and a mutation self-test
+   showing the gate can fail.
+
+   The value test requires every engine to print exactly `transcript`. Each
+   line is specified from RFC 9112 framing and the pinned XRPC error
+   envelope, not captured from an engine. Native and Wasm must print eval's
+   bytes. The Wasm arm is skipped on a host without the Wasm emitter, `node`
+   or `wasm-tools`, unless `MEDAKA_REQUIRE_WASM=1`.
+
+   The mutation test grades the driver's own assertions: it copies `pds/`
+   into a scratch tree, rewrites the expected response of the empty
+   reg-name port cell, and requires the natively built mutant to panic with
+   that cell's mismatch. Native only, for the reason
+   `did_key_all_engines_test` gives. -}
+
+import test.vector_runner.{
+  Arm(..),
+  Bound(..),
+  Corpus(..),
+  Engine(..),
+  Row(..),
+  buildNative,
+  expectRow,
+  freshScratch,
+  reap,
+  runSeconds,
+  spawn,
+}
+import list.{somes}
+import string.{contains, countOccurrences, replace, unlines}
+import test.{Expectation, expectNoFindings}
+import test_process.{medakaRoot}
+
+gate : String
+gate = "pds/test/protocol_all_engines"
+
+driver : String
+driver = "pds/test/protocol_all_engines_main.mdk"
+
+-- # The transcript
+
+transcript : List String
+transcript = [
+  "CELL fixed-query PASS status=200 state=unchanged",
+  "CELL chunked-update PASS status=201 state=1->2 body=abc",
+  "CELL malformed-unchanged PASS status=400 state=unchanged",
+  "CELL malformed-lowercase-version PASS status=400 state=unchanged no-dispatch",
+  "CELL malformed-host PASS status=400 state=unchanged no-dispatch",
+  "CELL malformed-target PASS status=400 state=unchanged no-dispatch",
+  "CELL raw-text PASS media=text/plain bytes=exact state=unchanged",
+  "CELL raw-json PASS media=application/json bytes=exact state=unchanged",
+  "CELL raw-opaque PASS media=application/octet-stream bytes=exact state=unchanged",
+  "CELL procedure-params PASS repeated=true empty=true order=preserved state=unchanged",
+  "CELL uppercase-authority-lookup PASS returned=Com.Example.query.caseFixed state=unchanged",
+  "CELL authority-duplicate-identity PASS folded-authority=true method-case=distinct",
+  "CELL host-empty-reg-port PASS status=200 state=unchanged",
+  "CELL host-empty-ip-port PASS status=200 state=unchanged",
+  "CELL unknown-unchanged PASS status=404 state=unchanged",
+  "CELL resource-unchanged PASS status=413 state=unchanged",
+  "CELL client-fixed-length PASS status=200 body=hello",
+  "CELL client-chunked PASS chunks=2 body=foobar trailer=done",
+  "CELL client-status-line-limit PASS refused",
+  "CELL client-header-bytes-limit PASS refused",
+  "CELL client-header-fields-limit PASS refused",
+  "CELL client-chunk-size-limit PASS refused",
+  "CELL client-body-bytes-limit PASS refused",
+  "CELL client-malformed-status-line PASS refused",
+  "CELL client-malformed-header PASS refused",
+  "TOTAL: PASS",
+]
+
+-- Each line on its own, so a red run names the cell that moved, and then
+-- the whole transcript as one needle. With `lastLine`, that needle leaves
+-- only output printed before the first cell ungraded.
+arm : Engine -> Arm
+arm e = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = transcript ++ [unlines transcript],
+  lastLine = Some "TOTAL: PASS",
+}
+
+-- The driver reads no corpus: every cell's request and answer is written
+-- into it.
+row : Row
+row = Row {
+  gate = gate,
+  driver = driver,
+  corpus = Explicit [],
+  corpusCount = Exactly 0,
+  sourceShapes = [],
+  oracle = None,
+  arms = [arm EvalEngine, arm NativeEngine, arm WasmEngine],
+  parity = True,
+}
+
+-- # The mutation
+
+-- The empty reg-name port cell is told to expect a 201 where the route
+-- answers 200. The anchor stops before the `&&` that follows it, so
+-- `medaka fmt` reflowing the condition does not move it.
+anchor : String
+anchor = "if response == expectedTextResponse 200 \"OK\" \"fixed\""
+
+mutant : String
+mutant = "if response == expectedTextResponse 201 \"Created\" \"fixed\""
+
+witness : String
+witness = "protocol_all_engines: empty reg-name port mismatch"
+
+-- The findings against the mutation, run in the scratch tree `tree`, where
+-- `original` is the live driver's text.
+mutationFindings : String -> String -> <Exec, FileWrite, IO> List String
+mutationFindings tree original =
+  let label = "\{gate} (mutation empty-port-assertion)"
+  let anchors = countOccurrences anchor original
+  if anchors /= 1 then
+    [
+      "\{label}: the anchor occurs \{intToString anchors} times in \{driver}, expected once: \{debug anchor}",
+    ]
+  else
+    let target = "\{tree}/\{driver}"
+    let found = match writeFile target (replace anchor mutant original)
+      Err e => ["\{label}: could not write the mutant: \{e}"]
+      Ok _ => mutantFindings tree label
+    match writeFile target original
+      Err e => found ++ ["\{label}: could not restore \{driver}: \{e}"]
+      Ok _ => found
+
+-- The mutant must build, then fail, and fail with the witness.
+mutantFindings : String -> String -> <Exec, IO> List String
+mutantFindings tree label =
+  let bin = "\{tree}/mutant"
+  match buildNative label "\{tree}/\{driver}" bin
+    [] => match spawn runSeconds [] bin []
+      Err e => ["\{label}: could not spawn the mutant: \{e}"]
+      Ok (0, _, _) => ["\{label}: the mutant passed; the cells cannot see it"]
+      Ok (_, out, err) =>
+        if contains witness (out ++ err) then
+          []
+        else
+          [
+            "\{label}: the mutant failed without its witness \{debug witness}, so for an unrelated reason",
+          ]
+    fs => fs
+
+-- The scratch copy must end byte-identical to the driver as it was before
+-- the mutation, and so must the live driver.
+restoredFindings : String -> String -> <FileRead, IO> List String
+restoredFindings pristine tree =
+  somes
+    (map (restoredFinding pristine) [
+      ("the mutation tree's copy", "\{tree}/\{driver}"),
+      ("the live copy", "\{medakaRoot}/\{driver}"),
+    ])
+
+restoredFinding : String -> (String, String) -> <FileRead> Option String
+restoredFinding pristine (what, path) = match readFile path
+  Ok text =>
+    if text == pristine then
+      None
+    else
+      Some "\{gate}: \{what} of \{driver} was left modified"
+  Err e => Some "\{gate}: could not read \{what} of \{driver} back: \{e}"
+
+allMutationFindings : String -> <Exec, FileRead, FileWrite, IO> List String
+allMutationFindings tree = match readFile "\{medakaRoot}/\{driver}"
+  Err e => ["\{gate}: could not read \{driver}: \{e}"]
+  Ok pristine =>
+    match spawn runSeconds [] "cp" ["-R", "\{medakaRoot}/pds", "\{tree}/pds"]
+      Ok (0, _, _) =>
+        mutationFindings tree pristine ++ restoredFindings pristine tree
+      Ok (code, _, err) =>
+        ["\{gate}: copying pds/ exited \{intToString code}: \{err}"]
+      Err e => ["\{gate}: could not copy pds/: \{e}"]
+
+test "protocol: 25 hand-authored cells, eval == native == Wasm" = expectRow row
+
+test "protocol: breaking one cell's expectation turns the gate red with its witness" = expectNoFindings
+  gate
+  (match freshScratch ()
+    Err e => Err "could not make a scratch directory: \{e}"
+    Ok tree => Ok (reap tree (allMutationFindings tree)))

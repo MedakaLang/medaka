@@ -26,7 +26,7 @@
    half of this slice's surface — `resolveHandle`, every read's
    unconfigured-store refusal, and the well-knowns a `did:key` account answers
    with — is graded on all three engines by
-   `pds/test/read_routes_all_engines.sh` instead.
+   `pds/test/read_routes_all_engines_test.mdk` instead.
 
    `/.well-known/did.json` is graded in both places because its answer depends
    on the account's DID method. The document this host owes a resolver of its
