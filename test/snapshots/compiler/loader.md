@@ -1,5 +1,5 @@
 # META
-source_lines=1442
+source_lines=1446
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -499,13 +499,17 @@ entryModuleIds dir prefix (name :: rest) =
         moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
   here ++ entryModuleIds dir prefix rest
 
--- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, and the two implicit
--- prelude modules are dropped.
+-- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, the two implicit
+-- prelude modules, and a `*_test.mdk` sibling (a module's tests, never an
+-- import to suggest) are dropped.
 mdkBaseName : String -> Option String
 mdkBaseName name =
   if endsWith ".mdk" name && not (startsWith "." name) then
     let base = stringSlice 0 (stringLength name - 4) name
-    if base == "core" || base == "runtime" then None else Some base
+    if base == "core" || base == "runtime" || endsWith "_test" base then
+      None
+    else
+      Some base
   else
     None
 
@@ -1550,7 +1554,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "entryModuleIds" (PWild PWild (PList)) (EListLit))
 (DFunDef false "entryModuleIds" ((PVar "dir") (PVar "prefix") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EApp (EVar "mdkBaseName") (EVar "name")) (arm (PCon "Some" (PVar "base")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "base"))) (ELit (LString ""))))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")) (EListLit) (EApp (EApp (EVar "moduleIdsUnder") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ".")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EVar "entryModuleIds") (EVar "dir")) (EVar "prefix")) (EVar "rest"))))))
 (DTypeSig false "mdkBaseName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "mdkBaseName" ((PVar "name")) (EIf (EBinOp "&&" (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 4)))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "base") (ELit (LString "core"))) (EBinOp "==" (EVar "base") (ELit (LString "runtime")))) (EVar "None") (EApp (EVar "Some") (EVar "base"))))) (EVar "None")))
+(DFunDef false "mdkBaseName" ((PVar "name")) (EIf (EBinOp "&&" (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 4)))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "base") (ELit (LString "core"))) (EBinOp "==" (EVar "base") (ELit (LString "runtime")))) (EApp (EApp (EVar "endsWith") (ELit (LString "_test"))) (EVar "base"))) (EVar "None") (EApp (EVar "Some") (EVar "base"))))) (EVar "None")))
 (DTypeSig true "availableModulesText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "availableModulesText" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModuleIds") (EVar "stdlibDir")) (arm (PList) () (ELit (LString ""))) (arm (PVar "ids") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "available modules: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ids")))))))
 (DTypeSig true "availableModulesHint" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
@@ -1774,7 +1778,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "entryModuleIds" (PWild PWild (PList)) (EListLit))
 (DFunDef false "entryModuleIds" ((PVar "dir") (PVar "prefix") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EApp (EVar "mdkBaseName") (EVar "name")) (arm (PCon "Some" (PVar "base")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ""))))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")) (EListLit) (EApp (EApp (EVar "moduleIdsUnder") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ".")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EVar "entryModuleIds") (EVar "dir")) (EVar "prefix")) (EVar "rest"))))))
 (DTypeSig false "mdkBaseName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "mdkBaseName" ((PVar "name")) (EIf (EBinOp "&&" (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 4)))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "base") (ELit (LString "core"))) (EBinOp "==" (EVar "base") (ELit (LString "runtime")))) (EVar "None") (EApp (EVar "Some") (EVar "base"))))) (EVar "None")))
+(DFunDef false "mdkBaseName" ((PVar "name")) (EIf (EBinOp "&&" (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 4)))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "base") (ELit (LString "core"))) (EBinOp "==" (EVar "base") (ELit (LString "runtime")))) (EApp (EApp (EVar "endsWith") (ELit (LString "_test"))) (EVar "base"))) (EVar "None") (EApp (EVar "Some") (EVar "base"))))) (EVar "None")))
 (DTypeSig true "availableModulesText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "availableModulesText" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModuleIds") (EVar "stdlibDir")) (arm (PList) () (ELit (LString ""))) (arm (PVar "ids") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "available modules: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ids")))))))
 (DTypeSig true "availableModulesHint" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))

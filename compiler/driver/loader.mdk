@@ -495,13 +495,17 @@ entryModuleIds dir prefix (name :: rest) =
         moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
   here ++ entryModuleIds dir prefix rest
 
--- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, and the two implicit
--- prelude modules are dropped.
+-- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, the two implicit
+-- prelude modules, and a `*_test.mdk` sibling (a module's tests, never an
+-- import to suggest) are dropped.
 mdkBaseName : String -> Option String
 mdkBaseName name =
   if endsWith ".mdk" name && not (startsWith "." name) then
     let base = stringSlice 0 (stringLength name - 4) name
-    if base == "core" || base == "runtime" then None else Some base
+    if base == "core" || base == "runtime" || endsWith "_test" base then
+      None
+    else
+      Some base
   else
     None
 

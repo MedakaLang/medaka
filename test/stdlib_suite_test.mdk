@@ -379,12 +379,17 @@ test "stdlib/byteparser.mdk executed >= 33 assertions" =
 
 test "stdlib/bytes.mdk executed >= 87 assertions" = floorExpectation "bytes"
 
+test "stdlib/bytes_test.mdk executed >= 5 assertions" =
+  floorExpectation "bytes_test"
+
 test "stdlib/core.mdk executed >= 123 assertions" = floorExpectation "core"
 
 test "stdlib/crypto/hmac.mdk executed >= 12 assertions" =
   floorExpectation "crypto/hmac"
 
 test "stdlib/fs.mdk executed >= 8 assertions" = floorExpectation "fs"
+
+test "stdlib/fs_test.mdk executed >= 1 assertions" = floorExpectation "fs_test"
 
 test "stdlib/hash_map.mdk executed >= 24 assertions" =
   floorExpectation "hash_map"

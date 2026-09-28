@@ -52,8 +52,10 @@ import compiler_cli_test_support.{
   fatalOutcomeSweep,
   rosterAgreement,
 }
+import io.{runVerb}
+import string.{trim}
 import test.{Expectation, expectEach, expectEqual, fail}
-import test_process.{medakaRoot, scratchDir}
+import test_process.{medakaRoot}
 
 corpus : <IO> String
 corpus = "\{medakaRoot}/test/run_stdout_flush_fixtures"
@@ -135,7 +137,19 @@ orderRow dir (name, ending, code) =
           [(a.runCode, a.runOut), (a.binCode, a.binOut)],
       )
 
+-- A directory of this test's own.  Not `test_process.scratchDir`: that is one
+-- value for the whole process, and the fixture sweep above removes it when it
+-- finishes.
+orderDir : Unit -> <Exec> Result String String
+orderDir _ = match runVerb "mktemp" ["-d"]
+  Err e => Err e
+  Ok (0, out, _) => Ok (trim out)
+  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
+
 test "run and build+exec print text and writeStdoutBytes in program order on every exit" =
-  match scratchDir
+  match orderDir ()
     Err e => fail "no scratch directory: \{e}"
-    Ok dir => expectEach (map (orderRow dir) orderRows)
+    Ok dir =>
+      let result = expectEach (map (orderRow dir) orderRows)
+      let _ = runVerb "rm" ["-rf", dir]
+      result
