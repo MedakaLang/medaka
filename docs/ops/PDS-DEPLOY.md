@@ -244,6 +244,13 @@ rollback does not come up. Before restarting onto a stamp built from before
 that change, delete the file (`rm <data>/sessions`); every client is logged
 out and signs in again with the password, and nothing else is lost.
 
+The same step applies one format later. A build that remembers superseded
+refresh tokens (#3357) writes a `superseded` row for each session a grace
+replay closed, and a build from before it refuses a file holding one, with
+`persist: sessions file has an invalid fingerprint: hex.decode: invalid hex
+digit`. A file holding no such row still reads on either side. The remedy
+is the same `rm <data>/sessions`.
+
 🚨 **`systemctl is-active` is NOT a readiness signal, and checking too early
 will tell you a working rollback failed.** The unit is `Type=simple`, so
 systemd reports `active` the instant it forks. This server needs **~4–5

@@ -570,10 +570,13 @@ holds at most one per replayed token, not one per replay: a consumed token's rec
 names the session its latest replay opened, and the next replay of the same token
 closes that session as it opens its own. A client retrying a refresh in a burst is
 left holding the first rotation's pair and the last replay's pair, and every pair in
-between stops verifying; the family's rows grow with the rotations it has taken, never
-with how often one consumed token is presented. Consumed tokens and ended families are
-pruned whenever the session set is written, so the set stays bounded by the families
-still inside their ninety days.
+between stops verifying. The refresh token of each session a replay closed is
+remembered as superseded: it opens nothing, and `refreshSession` refuses it without
+revoking anything, but it still names its family, so `deleteSession` presented with it
+ends the family like any other token of it. The family's rows therefore grow with the
+rotations it has taken and with the replays that closed a session. Consumed and
+superseded tokens and ended families are pruned whenever the session set is written,
+so the set stays bounded by the families still inside their ninety days.
 
 **Sessions are persisted, and a restart does not close them.** The open session set
 is written to `<data>/sessions` and read back at startup, so a token issued before a
@@ -596,7 +599,9 @@ dropped at load rather than readmitted. What the file holds is also not a bearer
 token: a row is SHA-256 fingerprints (`sessionFingerprint`) and instants, so the file
 cannot be replayed against the server that wrote it. An open session's row carries its
 family, and each consumed refresh token has a row of its own, carrying the refresh
-fingerprint of the session its latest grace replay opened once one has. A row of three fields —
+fingerprint of the session its latest grace replay opened once one has. Each
+superseded refresh token has a row of its own too, carrying its family and the instant
+its session would have expired. A row of three fields —
 the format written before families existed — is still admitted, as a family of its own
 named by its refresh fingerprint and ending at its own expiry, so an upgrade does not
 refuse to start on the file its predecessor left.
