@@ -1,0 +1,7 @@
+-- Control: a Set qualifier joined with a member of the same domain.
+readA : Bool -> String @({"HOME"}) -> <Env {"HOME", "SECRET"}> Option String
+readA c k =
+  let n = if c then k else "SECRET"
+  getEnv n
+
+main = println 1

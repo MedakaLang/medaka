@@ -1,20 +1,21 @@
 # META
-source_lines=219
+source_lines=266
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
 -- term is a concrete element of the label's domain, a scoped authority
--- variable, or a symbolic join of terms. A join stays symbolic while any
--- operand is a variable; concrete operands fold through the domain join.
+-- variable, or a join of terms. A join's constants are kept as the domain's
+-- antichain (`dantichain`), so a join of two Prefix patterns is the set of
+-- both, never their common prefix; its variables stay symbolic.
 -- Coverage is decided only where it is provable now: a variable covers itself
 -- and is covered by top, a join is covered when every operand is and covers
 -- when any operand does. Anything else is not proven, never assumed.
 
 import types.effect_domain.{
-  Param(..), djoin, dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam
+  Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
+  appendParam, dantichain, dsubAny, djoinN, setCardCap
 }
-import support.util.{joinWith}
+import support.util.{joinWith, reverseL, listLen}
 import string.{trimLeft}
 import map as M
 import map.{Map(..)}
@@ -26,22 +27,24 @@ public export data Authority =
 
 -- id, inference level, the domain's top, and the source binder's name when
 -- the variable came from a written signature. Identity belongs to the cell
--- and survives linking, as an effect variable's does.
+-- and survives linking, as an effect variable's does, and so does the
+-- domain: a linked variable still has its label's declared schema, never
+-- the axes of the constant it was linked to.
 public export data Authvar =
   | AUnbound Int Int Param (Option String)
-  | ALink Int Authority
+  | ALink Int Param Authority
 
 export
 authvarId : Ref Authvar -> Int
 authvarId cell = match !cell
   AUnbound id _ _ _ => id
-  ALink id _ => id
+  ALink id _ _ => id
 
 export
 authvarLevel : Ref Authvar -> Int
 authvarLevel cell = match !cell
   AUnbound _ level _ _ => level
-  ALink _ a => authLevelOf a
+  ALink _ _ a => authLevelOf a
 
 authLevelOf : Authority -> Int
 authLevelOf (AVar cell) = authvarLevel cell
@@ -52,17 +55,17 @@ export
 authvarDomain : Ref Authvar -> Param
 authvarDomain cell = match !cell
   AUnbound _ _ top _ => top
-  ALink _ a => authDomainTop a
+  ALink _ top _ => top
 
 export
 authvarName : Ref Authvar -> Option String
 authvarName cell = match !cell
   AUnbound _ _ _ name => name
-  ALink _ _ => None
+  ALink _ _ _ => None
 
 export
 linkAuthvar : Ref Authvar -> Authority -> Unit
-linkAuthvar cell a = cell := ALink (authvarId cell) a
+linkAuthvar cell a = cell := ALink (authvarId cell) (authvarDomain cell) a
 
 export
 authTop : Param -> Authority
@@ -76,12 +79,12 @@ authTop top = AConst (subTopOf top)
 -- flexible one may be solved to one later. Pinned by must_fail
 -- `3501-signature-variable-extension` and `3502-flexible-variable-extension`.
 export
-authExtend : Param -> Authority -> Authority
-authExtend top a = mapConstants (extendParam top) a
+authExtend : Authority -> Authority
+authExtend a = mapConstants extendParam a
 
 export
-authAppend : Param -> String -> Authority -> Authority
-authAppend top suffix a = mapConstants (appendParam top suffix) a
+authAppend : String -> Authority -> Authority
+authAppend suffix a = mapConstants (appendParam suffix) a
 
 mapConstants : (Param -> Param) -> Authority -> Authority
 mapConstants f a = match authNorm a
@@ -96,45 +99,65 @@ export
 authDomainTop : Authority -> Param
 authDomainTop (AConst p) = subTopOf p
 authDomainTop (AVar cell) = authvarDomain cell
-authDomainTop (AJoin (m :: _)) = authDomainTop m
-authDomainTop (AJoin []) = PUnit
+-- A join's domain is a variable's when it has one, else its first member's.
+authDomainTop (AJoin ms) = match filterVars ms
+  v :: _ => authDomainTop v
+  [] => match ms
+    m :: _ => authDomainTop m
+    [] => PUnit
 
--- Canonical form: links followed, joins flattened, constants folded into at
--- most one operand, variables deduplicated by identity, a top constant
--- absorbing everything, and a one-operand join collapsed.
+filterVars : List Authority -> List Authority
+filterVars [] = []
+filterVars ((AVar c) :: ms) = AVar c :: filterVars ms
+filterVars (_ :: ms) = filterVars ms
+
+-- Canonical form: links followed, joins flattened, constants kept as the
+-- domain's antichain ahead of the variables, variables deduplicated by
+-- identity, a top constant absorbing everything, and a one-operand join
+-- collapsed.
 export
 authNorm : Authority -> Authority
 authNorm a =
-  let (const, vars) = collect [a] None Tip
-  match const
-    Some c => if isSubTop c then AConst c else assemble (Some c) vars
-    None => assemble None vars
+  let (consts, vars) = collect [a] [] Tip
+  match dantichain consts
+    [c] => if isSubTop c then AConst c else assemble [c] vars
+    cs => assemble cs vars
 
 collect : List Authority ->
-  Option Param ->
+  List Param ->
   Map Int (Ref Authvar) ->
-  (Option Param, Map Int (Ref Authvar))
-collect [] const vars = (const, vars)
-collect ((AConst p) :: rest) const vars =
-  collect rest (Some (foldConst const (canonParam p))) vars
-collect ((AVar cell) :: rest) const vars = match !cell
-  ALink _ target => collect (target :: rest) const vars
-  AUnbound id _ _ _ => collect rest const (M.set id cell vars)
-collect ((AJoin ms) :: rest) const vars = collect (ms ++ rest) const vars
+  (List Param, Map Int (Ref Authvar))
+collect [] consts vars = (consts, vars)
+collect ((AConst p) :: rest) consts vars = collect rest (p :: consts) vars
+collect ((AVar cell) :: rest) consts vars = match !cell
+  ALink _ _ target => collect (target :: rest) consts vars
+  AUnbound id _ _ _ => collect rest consts (M.set id cell vars)
+collect ((AJoin ms) :: rest) consts vars = collect (ms ++ rest) consts vars
 
-foldConst : Option Param -> Param -> Param
-foldConst None p = p
-foldConst (Some c) p = djoin c p
+assemble : List Param -> Map Int (Ref Authvar) -> Authority
+assemble consts vars = match map AConst consts ++ map AVar (M.values vars)
+  [] => AJoin []
+  [m] => m
+  ms => AJoin ms
 
-assemble : Option Param -> Map Int (Ref Authvar) -> Authority
-assemble const vars =
-  let members = map AVar (M.values vars)
-  match (const, members)
-    (None, []) => AJoin []
-    (None, [m]) => m
-    (None, ms) => AJoin ms
-    (Some c, []) => AConst c
-    (Some c, ms) => AJoin (AConst c :: ms)
+-- A value's abstraction may over-approximate it, so a value whose authority
+-- would hold more than `setCardCap` constants is folded by the domain join
+-- into one element that covers them all; its variables are kept. Only the
+-- abstraction α calls this: a bound is never a value's abstraction, so no
+-- bound is ever folded.
+export
+authWidenValue : Authority -> Authority
+authWidenValue a =
+  let (consts, vars) = collect [a] [] Tip
+  let cs = dantichain consts
+  if listLen cs > setCardCap then
+    assemble [fold djoinN (headOr cs) cs] vars
+  else
+    authNorm a
+
+headOr : List Param -> Param
+headOr (p :: _) = p
+headOr [] = PUnit
 
 export
 authJoin : Authority -> Authority -> Authority
@@ -144,12 +167,27 @@ export
 authJoinAll : List Authority -> Authority
 authJoinAll ms = authNorm (AJoin ms)
 
--- The concrete element a term denotes, when it has no variable left.
+-- The concrete element a term denotes, when it is one constant.
 export
 authConst : Authority -> Option Param
 authConst a = match authNorm a
   AConst p => Some p
   _ => None
+
+-- The constants a term denotes, when it has no variable left: one for a
+-- single element, the antichain's members for a set, none for the empty
+-- authority.
+export
+authConsts : Authority -> Option (List Param)
+authConsts a = match authNorm a
+  AConst p => Some [p]
+  AJoin ms => allConsts ms []
+  _ => None
+
+allConsts : List Authority -> List Param -> Option (List Param)
+allConsts [] acc = Some (reverseL acc)
+allConsts ((AConst p) :: ms) acc = allConsts ms (p :: acc)
+allConsts _ _ = None
 
 export
 authIsTop : Authority -> Bool
@@ -161,7 +199,7 @@ authIsTop a = match authNorm a
 export
 authVars : Authority -> List (Ref Authvar)
 authVars a =
-  let (_, vars) = collect [a] None Tip
+  let (_, vars) = collect [a] [] Tip
   M.values vars
 
 export
@@ -181,11 +219,20 @@ authSubN (AJoin []) _ = True
 authSubN (AConst c) (AConst d) = dsub c d
 authSubN _ (AConst d)
   | isSubTop d = True
-authSubN _ (AConst _) = False
 authSubN (AJoin ms) hi = allSub ms hi
+authSubN _ (AConst _) = False
+-- A constant is within a set when some element covers it, or when the
+-- elements cover it together (a Product tuple, singleton by singleton).
+authSubN (AConst c) (AJoin ms) =
+  anySub (AConst c) ms || dsubAny c (constantsOf ms)
 authSubN lo (AJoin ms) = anySub lo ms
 authSubN (AVar v) (AVar w) = authvarId v == authvarId w
 authSubN _ _ = False
+
+constantsOf : List Authority -> List Param
+constantsOf [] = []
+constantsOf ((AConst p) :: ms) = p :: constantsOf ms
+constantsOf (_ :: ms) = constantsOf ms
 
 allSub : List Authority -> Authority -> Bool
 allSub [] _ = True
@@ -222,62 +269,73 @@ export
 renderAuthority : Authority -> String
 renderAuthority a = renderAuthorityWith authvarDefaultName a
 # DESUGAR
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "djoin" false) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "listLen" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DData Public "Authority" () ((variant "AConst" (ConPos (TyCon "Param"))) (variant "AVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Authvar")))) (variant "AJoin" (ConPos (TyApp (TyCon "List") (TyCon "Authority"))))) ())
-(DData Public "Authvar" () ((variant "AUnbound" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Param") (TyApp (TyCon "Option") (TyCon "String")))) (variant "ALink" (ConPos (TyCon "Int") (TyCon "Authority")))) ())
+(DData Public "Authvar" () ((variant "AUnbound" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Param") (TyApp (TyCon "Option") (TyCon "String")))) (variant "ALink" (ConPos (TyCon "Int") (TyCon "Param") (TyCon "Authority")))) ())
 (DTypeSig true "authvarId" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Int")))
-(DFunDef false "authvarId" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EVar "id")) (arm (PCon "ALink" (PVar "id") PWild) () (EVar "id"))))
+(DFunDef false "authvarId" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EVar "id")) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EVar "id"))))
 (DTypeSig true "authvarLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Int")))
-(DFunDef false "authvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild (PVar "level") PWild PWild) () (EVar "level")) (arm (PCon "ALink" PWild (PVar "a")) () (EApp (EVar "authLevelOf") (EVar "a")))))
+(DFunDef false "authvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild (PVar "level") PWild PWild) () (EVar "level")) (arm (PCon "ALink" PWild PWild (PVar "a")) () (EApp (EVar "authLevelOf") (EVar "a")))))
 (DTypeSig false "authLevelOf" (TyFun (TyCon "Authority") (TyCon "Int")))
 (DFunDef false "authLevelOf" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarLevel") (EVar "cell")))
 (DFunDef false "authLevelOf" ((PCon "AJoin" (PVar "ms"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "m")) (EApp (EApp (EVar "max") (EVar "acc")) (EApp (EVar "authLevelOf") (EVar "m"))))) (ELit (LInt 0))) (EVar "ms")))
 (DFunDef false "authLevelOf" (PWild) (ELit (LInt 0)))
 (DTypeSig true "authvarDomain" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Param")))
-(DFunDef false "authvarDomain" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild (PVar "top") PWild) () (EVar "top")) (arm (PCon "ALink" PWild (PVar "a")) () (EApp (EVar "authDomainTop") (EVar "a")))))
+(DFunDef false "authvarDomain" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild (PVar "top") PWild) () (EVar "top")) (arm (PCon "ALink" PWild (PVar "top") PWild) () (EVar "top"))))
 (DTypeSig true "authvarName" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "authvarName" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "name")) () (EVar "name")) (arm (PCon "ALink" PWild PWild) () (EVar "None"))))
+(DFunDef false "authvarName" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "name")) () (EVar "name")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "None"))))
 (DTypeSig true "linkAuthvar" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyCon "Unit"))))
-(DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "a"))))
+(DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell"))) (EVar "a"))))
 (DTypeSig true "authTop" (TyFun (TyCon "Param") (TyCon "Authority")))
 (DFunDef false "authTop" ((PVar "top")) (EApp (EVar "AConst") (EApp (EVar "subTopOf") (EVar "top"))))
-(DTypeSig true "authExtend" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
-(DFunDef false "authExtend" ((PVar "top") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "extendParam") (EVar "top"))) (EVar "a")))
-(DTypeSig true "authAppend" (TyFun (TyCon "Param") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority")))))
-(DFunDef false "authAppend" ((PVar "top") (PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EApp (EVar "appendParam") (EVar "top")) (EVar "suffix"))) (EVar "a")))
+(DTypeSig true "authExtend" (TyFun (TyCon "Authority") (TyCon "Authority")))
+(DFunDef false "authExtend" ((PVar "a")) (EApp (EApp (EVar "mapConstants") (EVar "extendParam")) (EVar "a")))
+(DTypeSig true "authAppend" (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "authAppend" ((PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "appendParam") (EVar "suffix"))) (EVar "a")))
 (DTypeSig false "mapConstants" (TyFun (TyFun (TyCon "Param") (TyCon "Param")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
 (DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PVar "v") () (EVar "v"))))
 (DTypeSig true "authDomainTop" (TyFun (TyCon "Authority") (TyCon "Param")))
 (DFunDef false "authDomainTop" ((PCon "AConst" (PVar "p"))) (EApp (EVar "subTopOf") (EVar "p")))
 (DFunDef false "authDomainTop" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell")))
-(DFunDef false "authDomainTop" ((PCon "AJoin" (PCons (PVar "m") PWild))) (EApp (EVar "authDomainTop") (EVar "m")))
-(DFunDef false "authDomainTop" ((PCon "AJoin" (PList))) (EVar "PUnit"))
+(DFunDef false "authDomainTop" ((PCon "AJoin" (PVar "ms"))) (EMatch (EApp (EVar "filterVars") (EVar "ms")) (arm (PCons (PVar "v") PWild) () (EApp (EVar "authDomainTop") (EVar "v"))) (arm (PList) () (EMatch (EVar "ms") (arm (PCons (PVar "m") PWild) () (EApp (EVar "authDomainTop") (EVar "m"))) (arm (PList) () (EVar "PUnit"))))))
+(DTypeSig false "filterVars" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyCon "List") (TyCon "Authority"))))
+(DFunDef false "filterVars" ((PList)) (EListLit))
+(DFunDef false "filterVars" ((PCons (PCon "AVar" (PVar "c")) (PVar "ms"))) (EBinOp "::" (EApp (EVar "AVar") (EVar "c")) (EApp (EVar "filterVars") (EVar "ms"))))
+(DFunDef false "filterVars" ((PCons PWild (PVar "ms"))) (EApp (EVar "filterVars") (EVar "ms")))
 (DTypeSig true "authNorm" (TyFun (TyCon "Authority") (TyCon "Authority")))
-(DFunDef false "authNorm" ((PVar "a")) (EBlock (DoLet false false (PTuple (PVar "const") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EVar "None")) (EVar "Tip"))) (DoExpr (EMatch (EVar "const") (arm (PCon "Some" (PVar "c")) () (EIf (EApp (EVar "isSubTop") (EVar "c")) (EApp (EVar "AConst") (EVar "c")) (EApp (EApp (EVar "assemble") (EApp (EVar "Some") (EVar "c"))) (EVar "vars")))) (arm (PCon "None") () (EApp (EApp (EVar "assemble") (EVar "None")) (EVar "vars")))))))
-(DTypeSig false "collect" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyApp (TyCon "Option") (TyCon "Param")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyTuple (TyApp (TyCon "Option") (TyCon "Param")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))))))))
-(DFunDef false "collect" ((PList) (PVar "const") (PVar "vars")) (ETuple (EVar "const") (EVar "vars")))
-(DFunDef false "collect" ((PCons (PCon "AConst" (PVar "p")) (PVar "rest")) (PVar "const") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EVar "foldConst") (EVar "const")) (EApp (EVar "canonParam") (EVar "p"))))) (EVar "vars")))
-(DFunDef false "collect" ((PCons (PCon "AVar" (PVar "cell")) (PVar "rest")) (PVar "const") (PVar "vars")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild (PVar "target")) () (EApp (EApp (EApp (EVar "collect") (EBinOp "::" (EVar "target") (EVar "rest"))) (EVar "const")) (EVar "vars"))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EApp (EApp (EApp (EVar "collect") (EVar "rest")) (EVar "const")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "vars"))))))
-(DFunDef false "collect" ((PCons (PCon "AJoin" (PVar "ms")) (PVar "rest")) (PVar "const") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EBinOp "++" (EVar "ms") (EVar "rest"))) (EVar "const")) (EVar "vars")))
-(DTypeSig false "foldConst" (TyFun (TyApp (TyCon "Option") (TyCon "Param")) (TyFun (TyCon "Param") (TyCon "Param"))))
-(DFunDef false "foldConst" ((PCon "None") (PVar "p")) (EVar "p"))
-(DFunDef false "foldConst" ((PCon "Some" (PVar "c")) (PVar "p")) (EApp (EApp (EVar "djoin") (EVar "c")) (EVar "p")))
-(DTypeSig false "assemble" (TyFun (TyApp (TyCon "Option") (TyCon "Param")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "Authority"))))
-(DFunDef false "assemble" ((PVar "const") (PVar "vars")) (EBlock (DoLet false false (PVar "members") (EApp (EApp (EVar "map") (EVar "AVar")) (EApp (EVar "M.values") (EVar "vars")))) (DoExpr (EMatch (ETuple (EVar "const") (EVar "members")) (arm (PTuple (PCon "None") (PList)) () (EApp (EVar "AJoin") (EListLit))) (arm (PTuple (PCon "None") (PList (PVar "m"))) () (EVar "m")) (arm (PTuple (PCon "None") (PVar "ms")) () (EApp (EVar "AJoin") (EVar "ms"))) (arm (PTuple (PCon "Some" (PVar "c")) (PList)) () (EApp (EVar "AConst") (EVar "c"))) (arm (PTuple (PCon "Some" (PVar "c")) (PVar "ms")) () (EApp (EVar "AJoin") (EBinOp "::" (EApp (EVar "AConst") (EVar "c")) (EVar "ms"))))))))
+(DFunDef false "authNorm" ((PVar "a")) (EBlock (DoLet false false (PTuple (PVar "consts") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EListLit)) (EVar "Tip"))) (DoExpr (EMatch (EApp (EVar "dantichain") (EVar "consts")) (arm (PList (PVar "c")) () (EIf (EApp (EVar "isSubTop") (EVar "c")) (EApp (EVar "AConst") (EVar "c")) (EApp (EApp (EVar "assemble") (EListLit (EVar "c"))) (EVar "vars")))) (arm (PVar "cs") () (EApp (EApp (EVar "assemble") (EVar "cs")) (EVar "vars")))))))
+(DTypeSig false "collect" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyTuple (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))))))))
+(DFunDef false "collect" ((PList) (PVar "consts") (PVar "vars")) (ETuple (EVar "consts") (EVar "vars")))
+(DFunDef false "collect" ((PCons (PCon "AConst" (PVar "p")) (PVar "rest")) (PVar "consts") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EVar "rest")) (EBinOp "::" (EVar "p") (EVar "consts"))) (EVar "vars")))
+(DFunDef false "collect" ((PCons (PCon "AVar" (PVar "cell")) (PVar "rest")) (PVar "consts") (PVar "vars")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EApp (EApp (EVar "collect") (EBinOp "::" (EVar "target") (EVar "rest"))) (EVar "consts")) (EVar "vars"))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EApp (EApp (EApp (EVar "collect") (EVar "rest")) (EVar "consts")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "vars"))))))
+(DFunDef false "collect" ((PCons (PCon "AJoin" (PVar "ms")) (PVar "rest")) (PVar "consts") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EBinOp "++" (EVar "ms") (EVar "rest"))) (EVar "consts")) (EVar "vars")))
+(DTypeSig false "assemble" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "Authority"))))
+(DFunDef false "assemble" ((PVar "consts") (PVar "vars")) (EMatch (EBinOp "++" (EApp (EApp (EVar "map") (EVar "AConst")) (EVar "consts")) (EApp (EApp (EVar "map") (EVar "AVar")) (EApp (EVar "M.values") (EVar "vars")))) (arm (PList) () (EApp (EVar "AJoin") (EListLit))) (arm (PList (PVar "m")) () (EVar "m")) (arm (PVar "ms") () (EApp (EVar "AJoin") (EVar "ms")))))
+(DTypeSig true "authWidenValue" (TyFun (TyCon "Authority") (TyCon "Authority")))
+(DFunDef false "authWidenValue" ((PVar "a")) (EBlock (DoLet false false (PTuple (PVar "consts") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EListLit)) (EVar "Tip"))) (DoLet false false (PVar "cs") (EApp (EVar "dantichain") (EVar "consts"))) (DoExpr (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "cs")) (EVar "setCardCap")) (EApp (EApp (EVar "assemble") (EListLit (EApp (EApp (EApp (EVar "fold") (EVar "djoinN")) (EApp (EVar "headOr") (EVar "cs"))) (EVar "cs")))) (EVar "vars")) (EApp (EVar "authNorm") (EVar "a"))))))
+(DTypeSig false "headOr" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Param")))
+(DFunDef false "headOr" ((PCons (PVar "p") PWild)) (EVar "p"))
+(DFunDef false "headOr" ((PList)) (EVar "PUnit"))
 (DTypeSig true "authJoin" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Authority"))))
 (DFunDef false "authJoin" ((PVar "a") (PVar "b")) (EApp (EVar "authNorm") (EApp (EVar "AJoin") (EListLit (EVar "a") (EVar "b")))))
 (DTypeSig true "authJoinAll" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyCon "Authority")))
 (DFunDef false "authJoinAll" ((PVar "ms")) (EApp (EVar "authNorm") (EApp (EVar "AJoin") (EVar "ms"))))
 (DTypeSig true "authConst" (TyFun (TyCon "Authority") (TyApp (TyCon "Option") (TyCon "Param"))))
 (DFunDef false "authConst" ((PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "Some") (EVar "p"))) (arm PWild () (EVar "None"))))
+(DTypeSig true "authConsts" (TyFun (TyCon "Authority") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Param")))))
+(DFunDef false "authConsts" ((PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "Some") (EListLit (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EVar "allConsts") (EVar "ms")) (EListLit))) (arm PWild () (EVar "None"))))
+(DTypeSig false "allConsts" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Param"))))))
+(DFunDef false "allConsts" ((PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverseL") (EVar "acc"))))
+(DFunDef false "allConsts" ((PCons (PCon "AConst" (PVar "p")) (PVar "ms")) (PVar "acc")) (EApp (EApp (EVar "allConsts") (EVar "ms")) (EBinOp "::" (EVar "p") (EVar "acc"))))
+(DFunDef false "allConsts" (PWild PWild) (EVar "None"))
 (DTypeSig true "authIsTop" (TyFun (TyCon "Authority") (TyCon "Bool")))
 (DFunDef false "authIsTop" ((PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "isSubTop") (EVar "p"))) (arm PWild () (EVar "False"))))
 (DTypeSig true "authVars" (TyFun (TyCon "Authority") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar")))))
-(DFunDef false "authVars" ((PVar "a")) (EBlock (DoLet false false (PTuple PWild (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EVar "None")) (EVar "Tip"))) (DoExpr (EApp (EVar "M.values") (EVar "vars")))))
+(DFunDef false "authVars" ((PVar "a")) (EBlock (DoLet false false (PTuple PWild (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EListLit)) (EVar "Tip"))) (DoExpr (EApp (EVar "M.values") (EVar "vars")))))
 (DTypeSig true "authHasVars" (TyFun (TyCon "Authority") (TyCon "Bool")))
 (DFunDef false "authHasVars" ((PVar "a")) (EMatch (EApp (EVar "authVars") (EVar "a")) (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig true "authSub" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
@@ -286,11 +344,16 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "authSubN" ((PCon "AJoin" (PList)) PWild) (EVar "True"))
 (DFunDef false "authSubN" ((PCon "AConst" (PVar "c")) (PCon "AConst" (PVar "d"))) (EApp (EApp (EVar "dsub") (EVar "c")) (EVar "d")))
 (DFunDef false "authSubN" (PWild (PCon "AConst" (PVar "d"))) (EIf (EApp (EVar "isSubTop") (EVar "d")) (EVar "True") (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "authSubN" (PWild (PCon "AConst" PWild)) (EVar "False"))
 (DFunDef false "authSubN" ((PCon "AJoin" (PVar "ms")) (PVar "hi")) (EApp (EApp (EVar "allSub") (EVar "ms")) (EVar "hi")))
+(DFunDef false "authSubN" (PWild (PCon "AConst" PWild)) (EVar "False"))
+(DFunDef false "authSubN" ((PCon "AConst" (PVar "c")) (PCon "AJoin" (PVar "ms"))) (EBinOp "||" (EApp (EApp (EVar "anySub") (EApp (EVar "AConst") (EVar "c"))) (EVar "ms")) (EApp (EApp (EVar "dsubAny") (EVar "c")) (EApp (EVar "constantsOf") (EVar "ms")))))
 (DFunDef false "authSubN" ((PVar "lo") (PCon "AJoin" (PVar "ms"))) (EApp (EApp (EVar "anySub") (EVar "lo")) (EVar "ms")))
 (DFunDef false "authSubN" ((PCon "AVar" (PVar "v")) (PCon "AVar" (PVar "w"))) (EBinOp "==" (EApp (EVar "authvarId") (EVar "v")) (EApp (EVar "authvarId") (EVar "w"))))
 (DFunDef false "authSubN" (PWild PWild) (EVar "False"))
+(DTypeSig false "constantsOf" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyCon "List") (TyCon "Param"))))
+(DFunDef false "constantsOf" ((PList)) (EListLit))
+(DFunDef false "constantsOf" ((PCons (PCon "AConst" (PVar "p")) (PVar "ms"))) (EBinOp "::" (EVar "p") (EApp (EVar "constantsOf") (EVar "ms"))))
+(DFunDef false "constantsOf" ((PCons PWild (PVar "ms"))) (EApp (EVar "constantsOf") (EVar "ms")))
 (DTypeSig false "allSub" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyCon "Authority") (TyCon "Bool"))))
 (DFunDef false "allSub" ((PList) PWild) (EVar "True"))
 (DFunDef false "allSub" ((PCons (PVar "m") (PVar "ms")) (PVar "hi")) (EBinOp "&&" (EApp (EApp (EVar "authSubN") (EVar "m")) (EVar "hi")) (EApp (EApp (EVar "allSub") (EVar "ms")) (EVar "hi"))))
@@ -308,62 +371,73 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DTypeSig true "renderAuthority" (TyFun (TyCon "Authority") (TyCon "String")))
 (DFunDef false "renderAuthority" ((PVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "authvarDefaultName")) (EVar "a")))
 # MARK
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "djoin" false) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "listLen" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DData Public "Authority" () ((variant "AConst" (ConPos (TyCon "Param"))) (variant "AVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Authvar")))) (variant "AJoin" (ConPos (TyApp (TyCon "List") (TyCon "Authority"))))) ())
-(DData Public "Authvar" () ((variant "AUnbound" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Param") (TyApp (TyCon "Option") (TyCon "String")))) (variant "ALink" (ConPos (TyCon "Int") (TyCon "Authority")))) ())
+(DData Public "Authvar" () ((variant "AUnbound" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Param") (TyApp (TyCon "Option") (TyCon "String")))) (variant "ALink" (ConPos (TyCon "Int") (TyCon "Param") (TyCon "Authority")))) ())
 (DTypeSig true "authvarId" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Int")))
-(DFunDef false "authvarId" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EVar "id")) (arm (PCon "ALink" (PVar "id") PWild) () (EVar "id"))))
+(DFunDef false "authvarId" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EVar "id")) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EVar "id"))))
 (DTypeSig true "authvarLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Int")))
-(DFunDef false "authvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild (PVar "level") PWild PWild) () (EVar "level")) (arm (PCon "ALink" PWild (PVar "a")) () (EApp (EVar "authLevelOf") (EVar "a")))))
+(DFunDef false "authvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild (PVar "level") PWild PWild) () (EVar "level")) (arm (PCon "ALink" PWild PWild (PVar "a")) () (EApp (EVar "authLevelOf") (EVar "a")))))
 (DTypeSig false "authLevelOf" (TyFun (TyCon "Authority") (TyCon "Int")))
 (DFunDef false "authLevelOf" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarLevel") (EVar "cell")))
 (DFunDef false "authLevelOf" ((PCon "AJoin" (PVar "ms"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "m")) (EApp (EApp (EMethodRef "max") (EVar "acc")) (EApp (EVar "authLevelOf") (EVar "m"))))) (ELit (LInt 0))) (EVar "ms")))
 (DFunDef false "authLevelOf" (PWild) (ELit (LInt 0)))
 (DTypeSig true "authvarDomain" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Param")))
-(DFunDef false "authvarDomain" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild (PVar "top") PWild) () (EVar "top")) (arm (PCon "ALink" PWild (PVar "a")) () (EApp (EVar "authDomainTop") (EVar "a")))))
+(DFunDef false "authvarDomain" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild (PVar "top") PWild) () (EVar "top")) (arm (PCon "ALink" PWild (PVar "top") PWild) () (EVar "top"))))
 (DTypeSig true "authvarName" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "authvarName" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "name")) () (EVar "name")) (arm (PCon "ALink" PWild PWild) () (EVar "None"))))
+(DFunDef false "authvarName" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "name")) () (EVar "name")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "None"))))
 (DTypeSig true "linkAuthvar" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyCon "Unit"))))
-(DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "a"))))
+(DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell"))) (EVar "a"))))
 (DTypeSig true "authTop" (TyFun (TyCon "Param") (TyCon "Authority")))
 (DFunDef false "authTop" ((PVar "top")) (EApp (EVar "AConst") (EApp (EVar "subTopOf") (EVar "top"))))
-(DTypeSig true "authExtend" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
-(DFunDef false "authExtend" ((PVar "top") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "extendParam") (EVar "top"))) (EVar "a")))
-(DTypeSig true "authAppend" (TyFun (TyCon "Param") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority")))))
-(DFunDef false "authAppend" ((PVar "top") (PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EApp (EVar "appendParam") (EVar "top")) (EVar "suffix"))) (EVar "a")))
+(DTypeSig true "authExtend" (TyFun (TyCon "Authority") (TyCon "Authority")))
+(DFunDef false "authExtend" ((PVar "a")) (EApp (EApp (EVar "mapConstants") (EVar "extendParam")) (EVar "a")))
+(DTypeSig true "authAppend" (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "authAppend" ((PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "appendParam") (EVar "suffix"))) (EVar "a")))
 (DTypeSig false "mapConstants" (TyFun (TyFun (TyCon "Param") (TyCon "Param")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
 (DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PVar "v") () (EVar "v"))))
 (DTypeSig true "authDomainTop" (TyFun (TyCon "Authority") (TyCon "Param")))
 (DFunDef false "authDomainTop" ((PCon "AConst" (PVar "p"))) (EApp (EVar "subTopOf") (EVar "p")))
 (DFunDef false "authDomainTop" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell")))
-(DFunDef false "authDomainTop" ((PCon "AJoin" (PCons (PVar "m") PWild))) (EApp (EVar "authDomainTop") (EVar "m")))
-(DFunDef false "authDomainTop" ((PCon "AJoin" (PList))) (EVar "PUnit"))
+(DFunDef false "authDomainTop" ((PCon "AJoin" (PVar "ms"))) (EMatch (EApp (EVar "filterVars") (EVar "ms")) (arm (PCons (PVar "v") PWild) () (EApp (EVar "authDomainTop") (EVar "v"))) (arm (PList) () (EMatch (EVar "ms") (arm (PCons (PVar "m") PWild) () (EApp (EVar "authDomainTop") (EVar "m"))) (arm (PList) () (EVar "PUnit"))))))
+(DTypeSig false "filterVars" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyCon "List") (TyCon "Authority"))))
+(DFunDef false "filterVars" ((PList)) (EListLit))
+(DFunDef false "filterVars" ((PCons (PCon "AVar" (PVar "c")) (PVar "ms"))) (EBinOp "::" (EApp (EVar "AVar") (EVar "c")) (EApp (EVar "filterVars") (EVar "ms"))))
+(DFunDef false "filterVars" ((PCons PWild (PVar "ms"))) (EApp (EVar "filterVars") (EVar "ms")))
 (DTypeSig true "authNorm" (TyFun (TyCon "Authority") (TyCon "Authority")))
-(DFunDef false "authNorm" ((PVar "a")) (EBlock (DoLet false false (PTuple (PVar "const") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EVar "None")) (EVar "Tip"))) (DoExpr (EMatch (EVar "const") (arm (PCon "Some" (PVar "c")) () (EIf (EApp (EVar "isSubTop") (EVar "c")) (EApp (EVar "AConst") (EVar "c")) (EApp (EApp (EVar "assemble") (EApp (EVar "Some") (EVar "c"))) (EVar "vars")))) (arm (PCon "None") () (EApp (EApp (EVar "assemble") (EVar "None")) (EVar "vars")))))))
-(DTypeSig false "collect" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyApp (TyCon "Option") (TyCon "Param")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyTuple (TyApp (TyCon "Option") (TyCon "Param")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))))))))
-(DFunDef false "collect" ((PList) (PVar "const") (PVar "vars")) (ETuple (EVar "const") (EVar "vars")))
-(DFunDef false "collect" ((PCons (PCon "AConst" (PVar "p")) (PVar "rest")) (PVar "const") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EVar "foldConst") (EVar "const")) (EApp (EVar "canonParam") (EVar "p"))))) (EVar "vars")))
-(DFunDef false "collect" ((PCons (PCon "AVar" (PVar "cell")) (PVar "rest")) (PVar "const") (PVar "vars")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild (PVar "target")) () (EApp (EApp (EApp (EVar "collect") (EBinOp "::" (EVar "target") (EVar "rest"))) (EVar "const")) (EVar "vars"))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EApp (EApp (EApp (EVar "collect") (EVar "rest")) (EVar "const")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "vars"))))))
-(DFunDef false "collect" ((PCons (PCon "AJoin" (PVar "ms")) (PVar "rest")) (PVar "const") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EBinOp "++" (EVar "ms") (EVar "rest"))) (EVar "const")) (EVar "vars")))
-(DTypeSig false "foldConst" (TyFun (TyApp (TyCon "Option") (TyCon "Param")) (TyFun (TyCon "Param") (TyCon "Param"))))
-(DFunDef false "foldConst" ((PCon "None") (PVar "p")) (EVar "p"))
-(DFunDef false "foldConst" ((PCon "Some" (PVar "c")) (PVar "p")) (EApp (EApp (EVar "djoin") (EVar "c")) (EVar "p")))
-(DTypeSig false "assemble" (TyFun (TyApp (TyCon "Option") (TyCon "Param")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "Authority"))))
-(DFunDef false "assemble" ((PVar "const") (PVar "vars")) (EBlock (DoLet false false (PVar "members") (EApp (EApp (EMethodRef "map") (EVar "AVar")) (EApp (EVar "M.values") (EVar "vars")))) (DoExpr (EMatch (ETuple (EVar "const") (EVar "members")) (arm (PTuple (PCon "None") (PList)) () (EApp (EVar "AJoin") (EListLit))) (arm (PTuple (PCon "None") (PList (PVar "m"))) () (EVar "m")) (arm (PTuple (PCon "None") (PVar "ms")) () (EApp (EVar "AJoin") (EVar "ms"))) (arm (PTuple (PCon "Some" (PVar "c")) (PList)) () (EApp (EVar "AConst") (EVar "c"))) (arm (PTuple (PCon "Some" (PVar "c")) (PVar "ms")) () (EApp (EVar "AJoin") (EBinOp "::" (EApp (EVar "AConst") (EVar "c")) (EVar "ms"))))))))
+(DFunDef false "authNorm" ((PVar "a")) (EBlock (DoLet false false (PTuple (PVar "consts") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EListLit)) (EVar "Tip"))) (DoExpr (EMatch (EApp (EVar "dantichain") (EVar "consts")) (arm (PList (PVar "c")) () (EIf (EApp (EVar "isSubTop") (EVar "c")) (EApp (EVar "AConst") (EVar "c")) (EApp (EApp (EVar "assemble") (EListLit (EVar "c"))) (EVar "vars")))) (arm (PVar "cs") () (EApp (EApp (EVar "assemble") (EVar "cs")) (EVar "vars")))))))
+(DTypeSig false "collect" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyTuple (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))))))))
+(DFunDef false "collect" ((PList) (PVar "consts") (PVar "vars")) (ETuple (EVar "consts") (EVar "vars")))
+(DFunDef false "collect" ((PCons (PCon "AConst" (PVar "p")) (PVar "rest")) (PVar "consts") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EVar "rest")) (EBinOp "::" (EVar "p") (EVar "consts"))) (EVar "vars")))
+(DFunDef false "collect" ((PCons (PCon "AVar" (PVar "cell")) (PVar "rest")) (PVar "consts") (PVar "vars")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EApp (EApp (EVar "collect") (EBinOp "::" (EVar "target") (EVar "rest"))) (EVar "consts")) (EVar "vars"))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EApp (EApp (EApp (EVar "collect") (EVar "rest")) (EVar "consts")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "vars"))))))
+(DFunDef false "collect" ((PCons (PCon "AJoin" (PVar "ms")) (PVar "rest")) (PVar "consts") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EBinOp "++" (EVar "ms") (EVar "rest"))) (EVar "consts")) (EVar "vars")))
+(DTypeSig false "assemble" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "Authority"))))
+(DFunDef false "assemble" ((PVar "consts") (PVar "vars")) (EMatch (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "AConst")) (EVar "consts")) (EApp (EApp (EMethodRef "map") (EVar "AVar")) (EApp (EVar "M.values") (EVar "vars")))) (arm (PList) () (EApp (EVar "AJoin") (EListLit))) (arm (PList (PVar "m")) () (EVar "m")) (arm (PVar "ms") () (EApp (EVar "AJoin") (EVar "ms")))))
+(DTypeSig true "authWidenValue" (TyFun (TyCon "Authority") (TyCon "Authority")))
+(DFunDef false "authWidenValue" ((PVar "a")) (EBlock (DoLet false false (PTuple (PVar "consts") (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EListLit)) (EVar "Tip"))) (DoLet false false (PVar "cs") (EApp (EVar "dantichain") (EVar "consts"))) (DoExpr (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "cs")) (EVar "setCardCap")) (EApp (EApp (EVar "assemble") (EListLit (EApp (EApp (EApp (EMethodRef "fold") (EVar "djoinN")) (EApp (EVar "headOr") (EVar "cs"))) (EVar "cs")))) (EVar "vars")) (EApp (EVar "authNorm") (EVar "a"))))))
+(DTypeSig false "headOr" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Param")))
+(DFunDef false "headOr" ((PCons (PVar "p") PWild)) (EVar "p"))
+(DFunDef false "headOr" ((PList)) (EVar "PUnit"))
 (DTypeSig true "authJoin" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Authority"))))
 (DFunDef false "authJoin" ((PVar "a") (PVar "b")) (EApp (EVar "authNorm") (EApp (EVar "AJoin") (EListLit (EVar "a") (EVar "b")))))
 (DTypeSig true "authJoinAll" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyCon "Authority")))
 (DFunDef false "authJoinAll" ((PVar "ms")) (EApp (EVar "authNorm") (EApp (EVar "AJoin") (EVar "ms"))))
 (DTypeSig true "authConst" (TyFun (TyCon "Authority") (TyApp (TyCon "Option") (TyCon "Param"))))
 (DFunDef false "authConst" ((PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "Some") (EVar "p"))) (arm PWild () (EVar "None"))))
+(DTypeSig true "authConsts" (TyFun (TyCon "Authority") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Param")))))
+(DFunDef false "authConsts" ((PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "Some") (EListLit (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EVar "allConsts") (EVar "ms")) (EListLit))) (arm PWild () (EVar "None"))))
+(DTypeSig false "allConsts" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Param"))))))
+(DFunDef false "allConsts" ((PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverseL") (EVar "acc"))))
+(DFunDef false "allConsts" ((PCons (PCon "AConst" (PVar "p")) (PVar "ms")) (PVar "acc")) (EApp (EApp (EVar "allConsts") (EVar "ms")) (EBinOp "::" (EVar "p") (EVar "acc"))))
+(DFunDef false "allConsts" (PWild PWild) (EVar "None"))
 (DTypeSig true "authIsTop" (TyFun (TyCon "Authority") (TyCon "Bool")))
 (DFunDef false "authIsTop" ((PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "isSubTop") (EVar "p"))) (arm PWild () (EVar "False"))))
 (DTypeSig true "authVars" (TyFun (TyCon "Authority") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar")))))
-(DFunDef false "authVars" ((PVar "a")) (EBlock (DoLet false false (PTuple PWild (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EVar "None")) (EVar "Tip"))) (DoExpr (EApp (EVar "M.values") (EVar "vars")))))
+(DFunDef false "authVars" ((PVar "a")) (EBlock (DoLet false false (PTuple PWild (PVar "vars")) (EApp (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EListLit)) (EVar "Tip"))) (DoExpr (EApp (EVar "M.values") (EVar "vars")))))
 (DTypeSig true "authHasVars" (TyFun (TyCon "Authority") (TyCon "Bool")))
 (DFunDef false "authHasVars" ((PVar "a")) (EMatch (EApp (EVar "authVars") (EVar "a")) (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig true "authSub" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
@@ -372,11 +446,16 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "authSubN" ((PCon "AJoin" (PList)) PWild) (EVar "True"))
 (DFunDef false "authSubN" ((PCon "AConst" (PVar "c")) (PCon "AConst" (PVar "d"))) (EApp (EApp (EVar "dsub") (EVar "c")) (EVar "d")))
 (DFunDef false "authSubN" (PWild (PCon "AConst" (PVar "d"))) (EIf (EApp (EVar "isSubTop") (EVar "d")) (EVar "True") (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "authSubN" (PWild (PCon "AConst" PWild)) (EVar "False"))
 (DFunDef false "authSubN" ((PCon "AJoin" (PVar "ms")) (PVar "hi")) (EApp (EApp (EVar "allSub") (EVar "ms")) (EVar "hi")))
+(DFunDef false "authSubN" (PWild (PCon "AConst" PWild)) (EVar "False"))
+(DFunDef false "authSubN" ((PCon "AConst" (PVar "c")) (PCon "AJoin" (PVar "ms"))) (EBinOp "||" (EApp (EApp (EVar "anySub") (EApp (EVar "AConst") (EVar "c"))) (EVar "ms")) (EApp (EApp (EVar "dsubAny") (EVar "c")) (EApp (EVar "constantsOf") (EVar "ms")))))
 (DFunDef false "authSubN" ((PVar "lo") (PCon "AJoin" (PVar "ms"))) (EApp (EApp (EVar "anySub") (EVar "lo")) (EVar "ms")))
 (DFunDef false "authSubN" ((PCon "AVar" (PVar "v")) (PCon "AVar" (PVar "w"))) (EBinOp "==" (EApp (EVar "authvarId") (EVar "v")) (EApp (EVar "authvarId") (EVar "w"))))
 (DFunDef false "authSubN" (PWild PWild) (EVar "False"))
+(DTypeSig false "constantsOf" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyCon "List") (TyCon "Param"))))
+(DFunDef false "constantsOf" ((PList)) (EListLit))
+(DFunDef false "constantsOf" ((PCons (PCon "AConst" (PVar "p")) (PVar "ms"))) (EBinOp "::" (EVar "p") (EApp (EVar "constantsOf") (EVar "ms"))))
+(DFunDef false "constantsOf" ((PCons PWild (PVar "ms"))) (EApp (EVar "constantsOf") (EVar "ms")))
 (DTypeSig false "allSub" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyCon "Authority") (TyCon "Bool"))))
 (DFunDef false "allSub" ((PList) PWild) (EVar "True"))
 (DFunDef false "allSub" ((PCons (PVar "m") (PVar "ms")) (PVar "hi")) (EBinOp "&&" (EApp (EApp (EVar "authSubN") (EVar "m")) (EVar "hi")) (EApp (EApp (EVar "allSub") (EVar "ms")) (EVar "hi"))))

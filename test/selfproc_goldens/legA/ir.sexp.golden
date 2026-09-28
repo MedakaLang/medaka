@@ -28,6 +28,7 @@ patSexp : Pat -> String
 payloadSexp : ConPayload -> String
 programToSexp : List Decl -> String
 propParamSexp : PropParam -> String
+qualTermSexp : EffParamTy -> String
 recPatFieldSexp : RecPatField -> String
 requireSexp : Require -> String
 sectionSexp : Section -> String

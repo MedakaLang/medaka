@@ -1,4 +1,5 @@
-joined : Bool -> <FFI, Net "a.com*"> Unit
+joined : Bool -> <FFI, Net "a.com.evil/x", Net "a.com/x"> Unit
 main : <IO> Unit
 visit : (host : String) -> <FFI, Net host> Unit
-written : Bool -> <FFI, Net "a.com*"> Unit
+wider : Bool -> <FFI, Net "a.com*"> Unit
+written : Bool -> <FFI, Net "a.com.evil/x", Net "a.com/x"> Unit

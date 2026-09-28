@@ -1,0 +1,18 @@
+-- A qualified value extended by `++` at a constant index: the suffix
+-- extends the first axis, Method, already the top, so Host="a.com/*" stays
+-- and the call is within U's index.
+effect Web2 Product (Method : Set, Host : Prefix)
+
+extern req2 : (u : String) -> <FFI, Web2 u> Unit
+
+data H (p : Authority Web2) = H (String @p)
+
+type U (p : Authority Web2) = String @p
+
+f : U (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+f k = req2 k
+
+g : H (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+g (H s) = f (s ++ "x")
+
+main = println 1

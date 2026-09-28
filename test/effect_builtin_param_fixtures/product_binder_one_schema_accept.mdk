@@ -1,0 +1,14 @@
+-- Control: two Product labels that declare the same schema are one domain,
+-- so one binder may name the authority at both.
+effect Web2 Product (Method : Set, Host : Prefix)
+effect Api Product (Method : Set, Host : Prefix)
+
+extern req2 : (u : String) -> <FFI, Web2 u> Unit
+extern reqA : (u : String) -> <FFI, Api u> Unit
+
+both : (u : String) -> <FFI, Web2 u, Api u> Unit
+both u =
+  let _ = req2 u
+  reqA u
+
+main = println 1

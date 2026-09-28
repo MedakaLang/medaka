@@ -1,0 +1,13 @@
+-- A catalog extern redeclared at an index join of a literal and a variable:
+-- the built-in sends on `Socket h`, so at `("a.com/*" | h)` it performs
+-- `Net "a.com/*"` as well as `Net h`. A declared `<Net h>` covers only the
+-- variable's part, so the redeclaration narrows the built-in's row and is
+-- refused; accepted, it would charge a call on an a.com socket nothing.
+extern netSend : Socket ("a.com/*" | h) -> Array Int -> <Net h> Result String Int
+
+g : Socket "a.com/*" -> <Net "b.com/*"> Unit
+g s =
+  let _ = netSend s (arrayMake 1 0)
+  ()
+
+main = println 1

@@ -1,0 +1,10 @@
+-- Control: the two hosts written as two elements of the row, and a bound
+-- that names both.
+effect Web1 Product (Host : Prefix, Method : Set)
+
+extern req : Unit -> <FFI, Web1 Host="a.com/*", Web1 Host="b.com/*"> Unit
+
+f : Unit -> <FFI, Web1 Host="a.com/*", Web1 Host="b.com/*"> Unit
+f _ = req ()
+
+main = println 1

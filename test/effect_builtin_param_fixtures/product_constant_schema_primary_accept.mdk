@@ -1,0 +1,15 @@
+-- Control: a literal at a constant index is admitted when it lies within
+-- the index on the first declared axis, Method.
+effect Web2 Product (Method : Set, Host : Prefix)
+
+extern req2 : (u : String) -> <FFI, Web2 u> Unit
+
+type U (p : Authority Web2) = String @p
+
+f : U (Method={"a.com/x"}) -> <FFI, Web2 Method={"a.com/x"}> Unit
+f k = req2 k
+
+g : Unit -> <FFI, Web2 Method={"a.com/x"}> Unit
+g _ = f "a.com/x"
+
+main = println 1

@@ -1,0 +1,14 @@
+-- Set members written across atoms merge into one set, and a set holds at
+-- most sixteen members; seventeen would be read as any member. The same
+-- holds for Products that differ in one Set axis.
+effect Web Product (Host : Prefix, Method : Set)
+
+extern delA : Unit -> <FFI, Web Host="a.com/*" Method={"DELETE"}> Unit
+
+f : Unit -> <Env {"V01"}, Env {"V02"}, Env {"V03"}, Env {"V04"}, Env {"V05"}, Env {"V06"}, Env {"V07"}, Env {"V08"}, Env {"V09"}, Env {"V10"}, Env {"V11"}, Env {"V12"}, Env {"V13"}, Env {"V14"}, Env {"V15"}, Env {"V16"}, Env {"V17"}> Option String
+f _ = getEnv "SECRET_TOKEN"
+
+g : Unit -> <FFI, Web Host="a.com/*" Method={"M01"}, Web Host="a.com/*" Method={"M02"}, Web Host="a.com/*" Method={"M03"}, Web Host="a.com/*" Method={"M04"}, Web Host="a.com/*" Method={"M05"}, Web Host="a.com/*" Method={"M06"}, Web Host="a.com/*" Method={"M07"}, Web Host="a.com/*" Method={"M08"}, Web Host="a.com/*" Method={"M09"}, Web Host="a.com/*" Method={"M10"}, Web Host="a.com/*" Method={"M11"}, Web Host="a.com/*" Method={"M12"}, Web Host="a.com/*" Method={"M13"}, Web Host="a.com/*" Method={"M14"}, Web Host="a.com/*" Method={"M15"}, Web Host="a.com/*" Method={"M16"}, Web Host="a.com/*" Method={"M17"}> Unit
+g _ = delA ()
+
+main = println 1

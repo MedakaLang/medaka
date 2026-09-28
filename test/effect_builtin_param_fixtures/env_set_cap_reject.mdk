@@ -1,0 +1,5 @@
+-- A Set literal of seventeen members exceeds the cap.
+f : Unit -> <Env {"VA", "VB", "VC", "VD", "VE", "VF", "VG", "VH", "VI", "VJ", "VK", "VL", "VM", "VN", "VO", "VP", "VQ"}> Unit
+f _ = ()
+
+main = println 1

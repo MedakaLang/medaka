@@ -1,0 +1,7 @@
+-- A qualifier that names no binder is in the domain its literal's shape
+-- gives: a set is a Set bound, so the displayed `String @({"HOME", "PATH"})`
+-- can be written back, and an argument within it is accepted.
+readE : String @({"HOME", "PATH"}) -> <Env> Option String
+readE k = getEnv k
+
+main = println 1

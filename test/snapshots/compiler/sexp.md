@@ -1,5 +1,5 @@
 # META
-source_lines=390
+source_lines=397
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -100,11 +100,11 @@ tySexp (TyEffect labels tail t) =
   node "TyEffect" [slist (map effAtomSexp labels), tailSexp tail, tySexp t]
 tySexp (TyRow labels tail _) =
   node "TyRow" [slist (map effAtomSexp labels), tailSexp tail]
-tySexp (TyAuth p _) = node "TyAuth" [effParamSexp p]
+tySexp (TyAuth ps _) = node "TyAuth" (map effParamSexp ps)
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 tySexp (TyNamed n t) = node "TyNamed" [escStr n, tySexp t]
-tySexp (TyQual t ns _) = node "TyQual" (tySexp t :: map escStr ns)
+tySexp (TyQual t ps _) = node "TyQual" (tySexp t :: map qualTermSexp ps)
 
 constraintSexp : Constraint -> String
 constraintSexp (Constraint { constraintHead = iface, constraintArgs = args }) =
@@ -129,6 +129,13 @@ effAtomSexp : EffAtomTy -> String
 effAtomSexp a = match a.eatParam
   EPTop => escStr a.eatLabel
   p => node "atom" [escStr a.eatLabel, effParamSexp p]
+
+-- A qualifier's names keep the bare spelling they always had, so a literal
+-- term is tagged to stay distinct from one.
+qualTermSexp : EffParamTy -> String
+qualTermSexp (EPName n) = escStr n
+qualTermSexp (EPLit s) = node "lit" [escStr s]
+qualTermSexp p = effParamSexp p
 
 effParamSexp : EffParamTy -> String
 effParamSexp EPTop = "None"
@@ -435,10 +442,10 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "tySexp" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "node") (ELit (LString "TyTuple"))) (EApp (EApp (EVar "map") (EVar "tySexp")) (EVar "ts"))))
 (DFunDef false "tySexp" ((PCon "TyEffect" (PVar "labels") (PVar "tail") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyEffect"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyRow" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyRow"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")))))
-(DFunDef false "tySexp" ((PCon "TyAuth" (PVar "p") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyAuth"))) (EListLit (EApp (EVar "effParamSexp") (EVar "p")))))
+(DFunDef false "tySexp" ((PCon "TyAuth" (PVar "ps") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyAuth"))) (EApp (EApp (EVar "map") (EVar "effParamSexp")) (EVar "ps"))))
 (DFunDef false "tySexp" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyConstrained"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "constraintSexp")) (EVar "cs"))) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
-(DFunDef false "tySexp" ((PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyQual"))) (EBinOp "::" (EApp (EVar "tySexp") (EVar "t")) (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "ns")))))
+(DFunDef false "tySexp" ((PCon "TyQual" (PVar "t") (PVar "ps") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyQual"))) (EBinOp "::" (EApp (EVar "tySexp") (EVar "t")) (EApp (EApp (EVar "map") (EVar "qualTermSexp")) (EVar "ps")))))
 (DTypeSig false "constraintSexp" (TyFun (TyCon "Constraint") (TyCon "String")))
 (DFunDef false "constraintSexp" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "node") (ELit (LString "cstr"))) (EBinOp "::" (EApp (EVar "escStr") (EVar "iface")) (EApp (EApp (EVar "map") (EVar "tySexp")) (EVar "args")))))
 (DTypeSig true "tailSexp" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -450,6 +457,10 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "optStrSexp" ((PCon "None")) (ELit (LString "None")))
 (DTypeSig false "effAtomSexp" (TyFun (TyCon "EffAtomTy") (TyCon "String")))
 (DFunDef false "effAtomSexp" ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPTop") () (EApp (EVar "escStr") (EFieldAccess (EVar "a") "eatLabel"))) (arm (PVar "p") () (EApp (EApp (EVar "node") (ELit (LString "atom"))) (EListLit (EApp (EVar "escStr") (EFieldAccess (EVar "a") "eatLabel")) (EApp (EVar "effParamSexp") (EVar "p")))))))
+(DTypeSig false "qualTermSexp" (TyFun (TyCon "EffParamTy") (TyCon "String")))
+(DFunDef false "qualTermSexp" ((PCon "EPName" (PVar "n"))) (EApp (EVar "escStr") (EVar "n")))
+(DFunDef false "qualTermSexp" ((PCon "EPLit" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "lit"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
+(DFunDef false "qualTermSexp" ((PVar "p")) (EApp (EVar "effParamSexp") (EVar "p")))
 (DTypeSig false "effParamSexp" (TyFun (TyCon "EffParamTy") (TyCon "String")))
 (DFunDef false "effParamSexp" ((PCon "EPTop")) (ELit (LString "None")))
 (DFunDef false "effParamSexp" ((PCon "EPLit" (PVar "s"))) (EApp (EVar "escStr") (EVar "s")))
@@ -628,10 +639,10 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "tySexp" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "node") (ELit (LString "TyTuple"))) (EApp (EApp (EMethodRef "map") (EVar "tySexp")) (EVar "ts"))))
 (DFunDef false "tySexp" ((PCon "TyEffect" (PVar "labels") (PVar "tail") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyEffect"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyRow" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyRow"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")))))
-(DFunDef false "tySexp" ((PCon "TyAuth" (PVar "p") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyAuth"))) (EListLit (EApp (EVar "effParamSexp") (EVar "p")))))
+(DFunDef false "tySexp" ((PCon "TyAuth" (PVar "ps") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyAuth"))) (EApp (EApp (EMethodRef "map") (EVar "effParamSexp")) (EVar "ps"))))
 (DFunDef false "tySexp" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyConstrained"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "constraintSexp")) (EVar "cs"))) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
-(DFunDef false "tySexp" ((PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyQual"))) (EBinOp "::" (EApp (EVar "tySexp") (EVar "t")) (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "ns")))))
+(DFunDef false "tySexp" ((PCon "TyQual" (PVar "t") (PVar "ps") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyQual"))) (EBinOp "::" (EApp (EVar "tySexp") (EVar "t")) (EApp (EApp (EMethodRef "map") (EVar "qualTermSexp")) (EVar "ps")))))
 (DTypeSig false "constraintSexp" (TyFun (TyCon "Constraint") (TyCon "String")))
 (DFunDef false "constraintSexp" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "node") (ELit (LString "cstr"))) (EBinOp "::" (EApp (EVar "escStr") (EVar "iface")) (EApp (EApp (EMethodRef "map") (EVar "tySexp")) (EVar "args")))))
 (DTypeSig true "tailSexp" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -643,6 +654,10 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "optStrSexp" ((PCon "None")) (ELit (LString "None")))
 (DTypeSig false "effAtomSexp" (TyFun (TyCon "EffAtomTy") (TyCon "String")))
 (DFunDef false "effAtomSexp" ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPTop") () (EApp (EVar "escStr") (EFieldAccess (EVar "a") "eatLabel"))) (arm (PVar "p") () (EApp (EApp (EVar "node") (ELit (LString "atom"))) (EListLit (EApp (EVar "escStr") (EFieldAccess (EVar "a") "eatLabel")) (EApp (EVar "effParamSexp") (EVar "p")))))))
+(DTypeSig false "qualTermSexp" (TyFun (TyCon "EffParamTy") (TyCon "String")))
+(DFunDef false "qualTermSexp" ((PCon "EPName" (PVar "n"))) (EApp (EVar "escStr") (EVar "n")))
+(DFunDef false "qualTermSexp" ((PCon "EPLit" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "lit"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
+(DFunDef false "qualTermSexp" ((PVar "p")) (EApp (EVar "effParamSexp") (EVar "p")))
 (DTypeSig false "effParamSexp" (TyFun (TyCon "EffParamTy") (TyCon "String")))
 (DFunDef false "effParamSexp" ((PCon "EPTop")) (ELit (LString "None")))
 (DFunDef false "effParamSexp" ((PCon "EPLit" (PVar "s"))) (EApp (EVar "escStr") (EVar "s")))

@@ -1,0 +1,24 @@
+-- Two Product labels whose axes share names are two domains. A value
+-- qualified in Web1 is no element of Web2: at Web2 its string is a Method, so
+-- reading Web1's Host as Web2's would admit it by an axis name. Both `g` (a
+-- literal lifted as Web1's Host by `pick`) and `h` (the value itself) are the
+-- whole of Web2.
+effect Web1 Product (Host : Prefix, Method : Set)
+effect Web2 Product (Method : Set, Host : Prefix)
+
+extern req2 : (u : String) -> <FFI, Web2 u> Unit
+
+data H1 (p : Authority Web1) = H1 (String @p)
+
+data H2 (p : Authority Web2) = H2 (String @p)
+
+pick : Bool -> a -> a -> a
+pick b x y = if b then x else y
+
+g : H1 (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+g (H1 s) = req2 (pick False s "a.com/x")
+
+h : H1 (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+h (H1 s) = req2 s
+
+main = println 1

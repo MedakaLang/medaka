@@ -1,0 +1,9 @@
+-- POST to a.com lies in the pointwise join of the bound but in neither tuple.
+effect Web Product (Host : Prefix, Method : Set)
+
+extern postA : Unit -> <FFI, Web Host="a.com/*" Method={"POST"}> Unit
+
+sneak : Unit -> <FFI, Web Host="a.com/*" Method={"GET"}, Web Host="b.com/*" Method={"POST"}> Unit
+sneak _ = postA ()
+
+main = println 1

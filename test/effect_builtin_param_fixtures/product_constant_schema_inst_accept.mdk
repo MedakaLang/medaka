@@ -1,0 +1,21 @@
+-- Control: the same instantiation route, passing a value that already carries
+-- the index's qualifier (read out of H) rather than a literal, is admitted.
+effect Web2 Product (Method : Set, Host : Prefix)
+
+extern req2 : (u : String) -> <FFI, Web2 u> Unit
+
+data H (p : Authority Web2) = H (String @p)
+
+apply : H p -> String @p -> <FFI, Web2 p> Unit
+apply _ s = req2 s
+
+idH : H (Host="a.com/*") -> H (Host="a.com/*")
+idH h = h
+
+pair h2 h = (apply h2, apply (idH h))
+
+g : H (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+g h = match (h, pair h h)
+  (H s, (_, f2)) => f2 s
+
+main = println 1

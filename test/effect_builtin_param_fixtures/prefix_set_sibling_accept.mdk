@@ -1,0 +1,5 @@
+-- Control: a read under one of the two directories.
+readCfg : Unit -> <FileRead "cfg/a/*", FileRead "cfg/b/*"> Result String String
+readCfg _ = readFile "cfg/b/key"
+
+main = println 1

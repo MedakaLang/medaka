@@ -1,0 +1,12 @@
+-- A declaration's `Authority L` parameter is of L's domain: T indexes Web2's
+-- H2 by a Web1 authority. Refused at T, whichever is declared first.
+effect Web1 Product (Host : Prefix, Method : Set)
+effect Web2 Product (Method : Set, Host : Prefix)
+effect Dir Prefix
+effect Keys Set
+
+type T (p : Authority Web1) = H2 p
+
+data H2 (p : Authority Web2) = H2 (String @p)
+
+main = println 1

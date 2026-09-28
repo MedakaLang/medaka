@@ -1,0 +1,11 @@
+-- A qualifier written as Product axes with no binder has no label to say
+-- which axes exist or which is primary, so it is refused. A binder names the
+-- label: `(p : String) -> <Web p> … String @(p | Host="a.com/*")`.
+effect Web Product (Host : Prefix, Method : Set)
+
+extern req : (u : String) -> <FFI, Web u> Unit
+
+sendW : String @(Host="a.com/x*") -> <FFI, Web Host="a.com/*"> Unit
+sendW k = req k
+
+main = println 1

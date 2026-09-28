@@ -1,0 +1,5 @@
+-- Control: sixteen patterns, at the cap.
+f : Unit -> <FileRead "a/*", FileRead "b/*", FileRead "c/*", FileRead "d/*", FileRead "e/*", FileRead "f/*", FileRead "g/*", FileRead "h/*", FileRead "i/*", FileRead "j/*", FileRead "k/*", FileRead "l/*", FileRead "m/*", FileRead "n/*", FileRead "o/*", FileRead "p/*"> Unit
+f _ = ()
+
+main = println 1

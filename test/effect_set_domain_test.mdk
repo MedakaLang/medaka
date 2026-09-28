@@ -36,9 +36,11 @@ test "a body row outside the declared bound is rejected, naming the row" = expec
   (fixture "set_subset_reject.mdk")
   ["performs <FFI, Foo {\"a\", \"b\"}>"]
 
-test "a union past the cardinality cap saturates to the top row" =
+test "an inferred union past the cardinality cap stays exact" =
   expectCheckAccept (fixture "set_cap_saturate.mdk")
 
-test "a saturated bound still rejects a body performing the top row" = expectCheckReject
+test "an exact union past the cap is still refused by a narrower bound" = expectCheckReject
   (fixture "set_cap_saturate_ctrl.mdk")
-  ["performs <FFI, Foo>"]
+  [
+    "performs <FFI, Foo {\"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\", \"h\", \"i\", \"j\", \"k\", \"l\", \"m\", \"n\", \"o\", \"p\", \"q\", \"r\"}>",
+  ]

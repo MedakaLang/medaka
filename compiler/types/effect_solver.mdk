@@ -750,14 +750,14 @@ ownedFlexibleAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 ownedFlexibleAuth scope rigid cell = match !cell
   AUnbound id level _ _ =>
     level >= scope.essLevel && id > scope.essEffvarFloor && not (M.has id rigid)
-  ALink _ _ => False
+  ALink _ _ _ => False
 
 outerFlexibleAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 outerFlexibleAuth scope rigid cell = match !cell
   AUnbound id level _ _ =>
     (level < scope.essLevel || id <= scope.essEffvarFloor)
       && not (M.has id rigid)
-  ALink _ _ => False
+  ALink _ _ _ => False
 
 -- A declaration universal is rigid wherever it was minted: a contract's
 -- variables are allocated before the body's scope opens, and an obligation
@@ -765,7 +765,7 @@ outerFlexibleAuth scope rigid cell = match !cell
 localRigidAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 localRigidAuth _ rigid cell = match !cell
   AUnbound id _ _ _ => M.has id rigid
-  ALink _ _ => False
+  ALink _ _ _ => False
 
 -- A binder of the closing group: a variable a member's type mentions that no
 -- monomorphic member hands outward, and that is either one of the group's
@@ -787,7 +787,7 @@ binderAuth scope rigid outward roles cell = match roles.rlTyped
         && not (M.has id outward)
         && (M.has id rigid && level >= scope.essLevel
           || ownedFlexibleAuth scope rigid cell)
-    ALink _ _ => False
+    ALink _ _ _ => False
   None => localRigidAuth scope rigid cell
 
 -- Every owned flexible variable takes the join of its lower bounds, its
@@ -832,7 +832,7 @@ outsideAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 outsideAuth scope outward cell = match !cell
   AUnbound id level _ _ =>
     M.has id outward || level < scope.essLevel || id <= scope.essEffvarFloor
-  ALink _ _ => False
+  ALink _ _ _ => False
 
 -- Solve the scope's owned variables, keeping residual-eligible ones open.
 -- Local variables go first, with every quantifiable one held back, so a local
@@ -1084,7 +1084,7 @@ bottomUnbounded owned wanteds =
 isUnboundAuth : Ref Authvar -> Bool
 isUnboundAuth cell = match !cell
   AUnbound _ _ _ _ => True
-  ALink _ _ => False
+  ALink _ _ _ => False
 
 lowersOf : Int -> Map Int (Ref Authvar, List Authority) -> List Authority
 lowersOf id m = match M.get id m

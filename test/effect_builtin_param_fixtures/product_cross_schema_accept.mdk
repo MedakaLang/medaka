@@ -1,0 +1,21 @@
+-- Control: the same flows from a value qualified in Web2 itself are within
+-- its index.
+effect Web1 Product (Host : Prefix, Method : Set)
+effect Web2 Product (Method : Set, Host : Prefix)
+
+extern req2 : (u : String) -> <FFI, Web2 u> Unit
+
+data H1 (p : Authority Web1) = H1 (String @p)
+
+data H2 (p : Authority Web2) = H2 (String @p)
+
+pick : Bool -> a -> a -> a
+pick b x y = if b then x else y
+
+g : H2 (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+g (H2 s) = req2 (pick False s s)
+
+h : H2 (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+h (H2 s) = req2 s
+
+main = println 1

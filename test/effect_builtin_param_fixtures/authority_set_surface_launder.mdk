@@ -1,0 +1,7 @@
+-- A caller passes a host outside a literal qualifier's set.
+dialBoth : String @("a.com/*" | "b.com/*") -> <Net "a.com/*", Net "b.com/*"> Unit
+dialBoth h =
+  let _ = netResolve h
+  ()
+
+main = dialBoth "evil.net/x"

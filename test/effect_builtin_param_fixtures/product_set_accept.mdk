@@ -1,0 +1,13 @@
+-- Two product elements differing in their Host stay a set of two tuples:
+-- a pointwise join would admit POST to a.com.
+effect Web Product (Host : Prefix, Method : Set)
+
+extern getA : Unit -> <FFI, Web Host="a.com/*" Method={"GET"}> Unit
+extern postB : Unit -> <FFI, Web Host="b.com/*" Method={"POST"}> Unit
+
+both : Unit -> <FFI, Web Host="a.com/*" Method={"GET"}, Web Host="b.com/*" Method={"POST"}> Unit
+both _ =
+  let _ = getA ()
+  postB ()
+
+main = println 1

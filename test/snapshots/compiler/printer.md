@@ -1,5 +1,5 @@
 # META
-source_lines=2659
+source_lines=2661
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -79,6 +79,7 @@ import frontend.ast.{
   Variant(..),
   Decl(..),
   Attr(..),
+  authTermsSurface,
 }
 import support.util.{
   u64HalvesHex, i64HalvesLiteral, zipL, joinWith, listLen, allList, isEmptyL,
@@ -996,7 +997,7 @@ printType (TyRow [] (a :: b :: rest) _) =
   Cat (text "(") (Cat (text (joinWith " | " (a :: b :: rest))) (text ")"))
 printType (TyRow es tail _) =
   Cat (text "<") (Cat (effectInside es tail) (text ">"))
-printType (TyAuth p _) = text (authTermSurface escStringLit p)
+printType (TyAuth ps _) = text (authTermsSurface escStringLit ps)
 printType (TyConstrained cs t) =
   Cat (constraintsDoc cs) (Cat (text " => ") (printType t))
 printType (TyNamed n t) =
@@ -1006,7 +1007,7 @@ printType (TyNamed n t) =
 -- `Result String @a` qualifies the whole application, so an application
 -- needs no parentheses under the qualifier.
 printType (TyQual t ns _) =
-  Cat (printTypeAppLhs t) (text " \{qualifierSource ns}")
+  Cat (printTypeAppLhs t) (text " \{qualifierSource escStringLit ns}")
 
 constraintsDoc : List Constraint -> Doc
 constraintsDoc [c] = printConstraint c
@@ -2601,9 +2602,10 @@ ppTyPrec p (TyEffect effs tail t) =
 ppTyPrec _ (TyRow [] (a :: b :: rest) _) =
   "(\{joinWith " | " (a :: b :: rest)})"
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
-ppTyPrec _ (TyAuth p _) = authTermSurface escStringLit p
+ppTyPrec _ (TyAuth ps _) = authTermsSurface escStringLit ps
 ppTyPrec _ (TyNamed n t) = "(\{n} : \{ppTyPrec 0 t})"
-ppTyPrec _ (TyQual t ns _) = "\{ppTyPrec 2 t} \{qualifierSource ns}"
+ppTyPrec _ (TyQual t ns _) =
+  "\{ppTyPrec 2 t} \{qualifierSource escStringLit ns}"
 ppTyPrec _ (TyConstrained cs t) =
   let csStr = match cs
     [c] => ppConstr c
@@ -2662,7 +2664,7 @@ effAxesDoc axes =
       (text (joinWith ", " (map (a => "\{fst a} : \{snd a}") axes)))
       (text ")"))
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -3044,10 +3046,10 @@ effAxesDoc axes =
 (DFunDef false "printType" ((PCon "TyEffect" (PVar "es") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PVar "inside") (EApp (EApp (EVar "effectInside") (EVar "es")) (EVar "tail"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "<")))) (EApp (EApp (EVar "Cat") (EVar "inside")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "> ")))) (EApp (EVar "printRowResult") (EVar "t"))))))))
 (DFunDef false "printType" ((PCon "TyRow" (PList) (PCons (PVar "a") (PCons (PVar "b") (PVar "rest"))) PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EBinOp "::" (EVar "a") (EBinOp "::" (EVar "b") (EVar "rest")))))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DFunDef false "printType" ((PCon "TyRow" (PVar "es") (PVar "tail") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "<")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "effectInside") (EVar "es")) (EVar "tail"))) (EApp (EVar "text") (ELit (LString ">"))))))
-(DFunDef false "printType" ((PCon "TyAuth" (PVar "p") PWild)) (EApp (EVar "text") (EApp (EApp (EVar "authTermSurface") (EVar "escStringLit")) (EVar "p"))))
+(DFunDef false "printType" ((PCon "TyAuth" (PVar "ps") PWild)) (EApp (EVar "text") (EApp (EApp (EVar "authTermsSurface") (EVar "escStringLit")) (EVar "ps"))))
 (DFunDef false "printType" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "Cat") (EApp (EVar "constraintsDoc") (EVar "cs"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " => ")))) (EApp (EVar "printType") (EVar "t")))))
 (DFunDef false "printType" ((PCon "TyNamed" (PVar "n") (PVar "t"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printType") (EVar "t"))) (EApp (EVar "text") (ELit (LString ")"))))))))
-(DFunDef false "printType" ((PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "printTypeAppLhs") (EVar "t"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString " ")) (EApp (EVar "display") (EApp (EVar "qualifierSource") (EVar "ns")))) (ELit (LString ""))))))
+(DFunDef false "printType" ((PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "printTypeAppLhs") (EVar "t"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString " ")) (EApp (EVar "display") (EApp (EApp (EVar "qualifierSource") (EVar "escStringLit")) (EVar "ns")))) (ELit (LString ""))))))
 (DTypeSig false "constraintsDoc" (TyFun (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Doc")))
 (DFunDef false "constraintsDoc" ((PList (PVar "c"))) (EApp (EVar "printConstraint") (EVar "c")))
 (DFunDef false "constraintsDoc" ((PVar "cs")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EVar "map") (EVar "printConstraint")) (EVar "cs")))) (EApp (EVar "text") (ELit (LString ")"))))))
@@ -3579,9 +3581,9 @@ effAxesDoc axes =
 (DFunDef false "ppTyPrec" ((PVar "p") (PCon "TyEffect" (PVar "effs") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PVar "inside") (EApp (EApp (EVar "ppEffInside") (EVar "effs")) (EVar "tail"))) (DoLet false false (PVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EVar "inside"))) (ELit (LString "> "))) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (ELit (LInt 1))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))))
 (DFunDef false "ppTyPrec" (PWild (PCon "TyRow" (PList) (PCons (PVar "a") (PCons (PVar "b") (PVar "rest"))) PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EBinOp "::" (EVar "a") (EBinOp "::" (EVar "b") (EVar "rest")))))) (ELit (LString ")"))))
 (DFunDef false "ppTyPrec" (PWild (PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "ppEffInside") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
-(DFunDef false "ppTyPrec" (PWild (PCon "TyAuth" (PVar "p") PWild)) (EApp (EApp (EVar "authTermSurface") (EVar "escStringLit")) (EVar "p")))
+(DFunDef false "ppTyPrec" (PWild (PCon "TyAuth" (PVar "ps") PWild)) (EApp (EApp (EVar "authTermsSurface") (EVar "escStringLit")) (EVar "ps")))
 (DFunDef false "ppTyPrec" (PWild (PCon "TyNamed" (PVar "n") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))) (ELit (LString ")"))))
-(DFunDef false "ppTyPrec" (PWild (PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 2))) (EVar "t")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "qualifierSource") (EVar "ns")))) (ELit (LString ""))))
+(DFunDef false "ppTyPrec" (PWild (PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 2))) (EVar "t")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "qualifierSource") (EVar "escStringLit")) (EVar "ns")))) (ELit (LString ""))))
 (DFunDef false "ppTyPrec" (PWild (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "csStr") (EMatch (EVar "cs") (arm (PList (PVar "c")) () (EApp (EVar "ppConstr") (EVar "c"))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppConstr")) (EVar "cs")))) (ELit (LString ")")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "csStr"))) (ELit (LString " => "))) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))) (ELit (LString ""))))))
 (DTypeSig false "ppEffInside" (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "ppEffInside" ((PVar "effs") (PList)) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppEffAtom")) (EVar "effs"))))
@@ -3609,7 +3611,7 @@ effAxesDoc axes =
 (DFunDef false "effAxesDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "effAxesDoc" ((PVar "axes")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " (")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "snd") (EVar "a")))) (ELit (LString ""))))) (EVar "axes"))))) (EApp (EVar "text") (ELit (LString ")"))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -3991,10 +3993,10 @@ effAxesDoc axes =
 (DFunDef false "printType" ((PCon "TyEffect" (PVar "es") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PVar "inside") (EApp (EApp (EVar "effectInside") (EVar "es")) (EVar "tail"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "<")))) (EApp (EApp (EVar "Cat") (EVar "inside")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "> ")))) (EApp (EVar "printRowResult") (EVar "t"))))))))
 (DFunDef false "printType" ((PCon "TyRow" (PList) (PCons (PVar "a") (PCons (PVar "b") (PVar "rest"))) PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EBinOp "::" (EVar "a") (EBinOp "::" (EVar "b") (EVar "rest")))))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DFunDef false "printType" ((PCon "TyRow" (PVar "es") (PVar "tail") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "<")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "effectInside") (EVar "es")) (EVar "tail"))) (EApp (EVar "text") (ELit (LString ">"))))))
-(DFunDef false "printType" ((PCon "TyAuth" (PVar "p") PWild)) (EApp (EVar "text") (EApp (EApp (EVar "authTermSurface") (EVar "escStringLit")) (EVar "p"))))
+(DFunDef false "printType" ((PCon "TyAuth" (PVar "ps") PWild)) (EApp (EVar "text") (EApp (EApp (EVar "authTermsSurface") (EVar "escStringLit")) (EVar "ps"))))
 (DFunDef false "printType" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "Cat") (EApp (EVar "constraintsDoc") (EVar "cs"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " => ")))) (EApp (EVar "printType") (EVar "t")))))
 (DFunDef false "printType" ((PCon "TyNamed" (PVar "n") (PVar "t"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printType") (EVar "t"))) (EApp (EVar "text") (ELit (LString ")"))))))))
-(DFunDef false "printType" ((PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "printTypeAppLhs") (EVar "t"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString " ")) (EApp (EMethodRef "display") (EApp (EVar "qualifierSource") (EVar "ns")))) (ELit (LString ""))))))
+(DFunDef false "printType" ((PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "printTypeAppLhs") (EVar "t"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString " ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "qualifierSource") (EVar "escStringLit")) (EVar "ns")))) (ELit (LString ""))))))
 (DTypeSig false "constraintsDoc" (TyFun (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Doc")))
 (DFunDef false "constraintsDoc" ((PList (PVar "c"))) (EApp (EVar "printConstraint") (EVar "c")))
 (DFunDef false "constraintsDoc" ((PVar "cs")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EMethodRef "map") (EVar "printConstraint")) (EVar "cs")))) (EApp (EVar "text") (ELit (LString ")"))))))
@@ -4526,9 +4528,9 @@ effAxesDoc axes =
 (DFunDef false "ppTyPrec" ((PVar "p") (PCon "TyEffect" (PVar "effs") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PVar "inside") (EApp (EApp (EVar "ppEffInside") (EVar "effs")) (EVar "tail"))) (DoLet false false (PVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EVar "inside"))) (ELit (LString "> "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (ELit (LInt 1))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))))
 (DFunDef false "ppTyPrec" (PWild (PCon "TyRow" (PList) (PCons (PVar "a") (PCons (PVar "b") (PVar "rest"))) PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EBinOp "::" (EVar "a") (EBinOp "::" (EVar "b") (EVar "rest")))))) (ELit (LString ")"))))
 (DFunDef false "ppTyPrec" (PWild (PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppEffInside") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
-(DFunDef false "ppTyPrec" (PWild (PCon "TyAuth" (PVar "p") PWild)) (EApp (EApp (EVar "authTermSurface") (EVar "escStringLit")) (EVar "p")))
+(DFunDef false "ppTyPrec" (PWild (PCon "TyAuth" (PVar "ps") PWild)) (EApp (EApp (EVar "authTermsSurface") (EVar "escStringLit")) (EVar "ps")))
 (DFunDef false "ppTyPrec" (PWild (PCon "TyNamed" (PVar "n") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))) (ELit (LString ")"))))
-(DFunDef false "ppTyPrec" (PWild (PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 2))) (EVar "t")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "qualifierSource") (EVar "ns")))) (ELit (LString ""))))
+(DFunDef false "ppTyPrec" (PWild (PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 2))) (EVar "t")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "qualifierSource") (EVar "escStringLit")) (EVar "ns")))) (ELit (LString ""))))
 (DFunDef false "ppTyPrec" (PWild (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "csStr") (EMatch (EVar "cs") (arm (PList (PVar "c")) () (EApp (EVar "ppConstr") (EVar "c"))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppConstr")) (EVar "cs")))) (ELit (LString ")")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "csStr"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))) (ELit (LString ""))))))
 (DTypeSig false "ppEffInside" (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "ppEffInside" ((PVar "effs") (PList)) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppEffAtom")) (EVar "effs"))))

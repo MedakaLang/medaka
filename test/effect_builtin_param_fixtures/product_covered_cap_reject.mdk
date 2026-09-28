@@ -1,0 +1,11 @@
+-- Two tuples on one host merge into a set of 18 members, past the cap, and
+-- a covered tuple written beside them does not change the grouping.
+effect P Product (H : Prefix, X : Set, Y : Set)
+
+extern ex : Unit -> <FFI, P H="a/b" X={"a1"}> Unit
+
+
+g : Unit -> <FFI, P H="a/*" X={"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9"}, P H="a/*" X={"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"}, P H="a/b" X={"a1"} Y={"y"}> Unit
+g _ = ex ()
+
+main = println 1

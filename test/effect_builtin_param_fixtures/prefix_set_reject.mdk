@@ -1,0 +1,8 @@
+-- A bound of two hosts admits those hosts only: their join would be every
+-- host, so a dial of a third is refused.
+probe : Unit -> <Net "a.com/*", Net "b.com/*"> Unit
+probe _ =
+  let _ = netResolve "evil.net"
+  ()
+
+main = println 1

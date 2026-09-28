@@ -1,0 +1,4 @@
+-- A runtime extern redeclared at an index join charges one atom per term.
+extern netClose : Socket ("a.com/*" | "b.com/*") -> <Net "a.com/*", Net "b.com/*"> Result String Unit
+
+main = println 1

@@ -322,13 +322,15 @@ test "an index slot is invariant, and an opened field reads at the head's argume
     expectGrant "rdEntry" "FileRead = \"i/*\"",
   ]
 
+-- Each reader keeps its own directory: nine prefixes are a set under the cap,
+-- never their common `srv/*`.
 test "a nested data type ends, and nine sibling readers are each instantiated" = expectAll
   [
     expectManifest "invocation_nested.mdk" "useW" "[package.capabilities]",
     expectManifest
       "invocation_nested.mdk"
       "caps"
-      "[package.capabilities]\nFileRead = \"srv/*\"",
+      "[package.capabilities]\nFileRead = [\"srv/a/*\", \"srv/b/*\", \"srv/c/*\", \"srv/d/*\", \"srv/e/*\", \"srv/f/*\", \"srv/g/*\", \"srv/h/*\", \"srv/i/*\"]",
   ]
 
 test "a flip cycle through four imported types is charged" =
@@ -377,3 +379,289 @@ test "check-policy names an authority a narrower entry cannot prove" =
     1
     "rejected. readUnder requires <FileRead p>"
     ["not proven: FileRead p (authority variable `p`)"]
+
+-- #3464: a written row keeps a set of elements per label.
+test "a bound of two hosts refuses a third, and admits each of the two" = expectAll
+  [
+    expectCheckReject (fixture "prefix_set_reject.mdk") [
+      "performs <Net \"evil.net\">",
+    ],
+    expectCheckAccept (fixture "prefix_set_accept.mdk"),
+  ]
+
+test "two sibling directories do not admit their common parent" = expectAll [
+  expectCheckReject (fixture "prefix_set_sibling_reject.mdk") [
+    "performs <FileRead \"cfg/secret/key\">",
+  ],
+  expectCheckAccept (fixture "prefix_set_sibling_accept.mdk"),
+]
+
+test "an authority variable solves to the set of its lower bounds" = expectAll [
+  expectCheckAccept (fixture "prefix_set_variable_accept.mdk"),
+  expectCheckReject (fixture "prefix_set_variable_launder.mdk") [
+    "performs <Net \"a.com/x\", Net \"evil.net/y\">",
+  ],
+]
+
+test "a written bound past the cap is refused, not folded" = expectAll [
+  expectCheckReject (fixture "prefix_set_cap_reject.mdk") [
+    "a bound admits at most 16 elements of one label, and this one writes 17",
+  ],
+  expectCheckAccept (fixture "prefix_set_cap_accept.mdk"),
+  expectCheckReject (fixture "env_set_cap_reject.mdk") [
+    "a set holds at most 16 members, and this one has 17",
+  ],
+]
+
+test "a set is written in an index and a qualifier as it prints" = expectAll [
+  expectCheckAccept (fixture "authority_set_surface_accept.mdk"),
+  expectCheckReject (fixture "authority_set_surface_launder.mdk") [
+    "reaches \"evil.net/x\" where its declared bound admits only (\"a.com/*\" | \"b.com/*\")",
+  ],
+]
+
+test "Product elements differing beyond one Set axis stay a set of tuples" = expectAll
+  [
+    expectCheckAccept (fixture "product_set_accept.mdk"),
+    expectCheckReject (fixture "product_set_reject.mdk") [
+      "performs <Web Host=\"a.com/*\" Method={\"POST\"}>",
+    ],
+  ]
+
+test "the manifest renders a set as an array of its elements" = expectAll [
+  expectManifest
+    "prefix_set_accept.mdk"
+    "both"
+    "[package.capabilities]\nNet = [\"a.com/x\", \"b.com/y\"]",
+  expectManifest
+    "product_set_accept.mdk"
+    "both"
+    "[package.capabilities]\nFFI = true\nWeb = [{ host = \"a.com/*\", method = [\"GET\"] }, { host = \"b.com/*\", method = [\"POST\"] }]",
+]
+
+test "check-policy reads every entry of a label, in either order" = expectAll [
+  expectVerbExitStartsWith
+    "check-policy"
+    [
+      fixture "prefix_set_accept.mdk",
+      "--allow",
+      "Net=a.com/*,Net=b.com/*",
+      "--fn",
+      "both",
+    ]
+    0
+    "accepted",
+  expectVerbExitStartsWith
+    "check-policy"
+    [
+      fixture "prefix_set_accept.mdk",
+      "--allow",
+      "Net=b.com/*,Net=a.com/*",
+      "--fn",
+      "both",
+    ]
+    0
+    "accepted",
+  expectVerbExitStartsWith
+    "check-policy"
+    [fixture "prefix_set_accept.mdk", "--allow", "Net=a.com/*", "--fn", "both"]
+    1
+    "rejected",
+]
+
+test "a qualifier or an index past the cap is refused, not folded" = expectAll [
+  expectCheckReject (fixture "written_term_cap_reject.mdk") [
+    "Invalid authority in the qualifier",
+    "a bound admits at most 16 elements of one label, and this one writes 17",
+  ],
+  expectCheckAccept (fixture "written_term_cap_accept.mdk"),
+]
+
+test "a qualifier or an index literal is an element of its domain" = expectCheckReject
+  (fixture "written_term_domain_reject.mdk")
+  [
+    "Invalid authority in the qualifier `@\"a.com\"`: pattern \"a.com\" must end in '*'",
+    "Invalid effect parameter on <Net>: label 'Net' takes a prefix pattern, not a set",
+  ]
+
+test "Set members split across atoms are capped as one set" = expectAll [
+  expectCheckReject (fixture "written_split_cap_reject.mdk") [
+    "Invalid effect parameter on <Env>: a set holds at most 16 members, and this one has 17",
+    "Invalid effect parameter on <Web>: a bound admits at most 16 elements of one label, and this one writes 17",
+  ],
+  expectCheckAccept (fixture "written_split_cap_accept.mdk"),
+]
+
+test "rows in a data field or a type alias are validated as bounds" = expectAll
+  [
+    expectCheckReject (fixture "data_alias_bound_reject.mdk") [
+      "a bound admits at most 16 elements of one label",
+      "pattern \"a.com\" must end in '*'",
+      "pattern \"b.com\" must end in '*'",
+    ],
+    expectCheckAccept (fixture "data_alias_bound_accept.mdk"),
+  ]
+
+test "the same Product elements in any order are one set" =
+  expectCheckAccept (fixture "product_set_order_accept.mdk")
+
+test "a policy's entries for one label are read exactly, however many" = expectAll
+  [
+    expectVerbExitStartsWith
+      "check-policy"
+      [
+        fixture "policy_cap_accept.mdk",
+        "--allow",
+        "FileRead=cfg/a/*,FileRead=cfg/b/*,FileRead=cfg/c/*,FileRead=cfg/d/*,FileRead=cfg/e/*,FileRead=cfg/f/*,FileRead=cfg/g/*,FileRead=cfg/h/*,FileRead=cfg/i/*,FileRead=cfg/j/*,FileRead=cfg/k/*,FileRead=cfg/l/*,FileRead=cfg/m/*,FileRead=cfg/n/*,FileRead=cfg/o/*,FileRead=cfg/q/*,FileRead=cfg/secret/*",
+        "--fn",
+        "readSecret",
+      ]
+      0
+      "accepted",
+    expectVerbExitStartsWith
+      "check-policy"
+      [
+        fixture "policy_cap_accept.mdk",
+        "--allow",
+        "FileRead=cfg/a/*,FileRead=cfg/b/*,FileRead=cfg/c/*,FileRead=cfg/d/*,FileRead=cfg/e/*,FileRead=cfg/f/*,FileRead=cfg/g/*,FileRead=cfg/h/*,FileRead=cfg/i/*,FileRead=cfg/j/*,FileRead=cfg/k/*,FileRead=cfg/l/*,FileRead=cfg/m/*,FileRead=cfg/n/*,FileRead=cfg/o/*,FileRead=cfg/p/*,FileRead=cfg/q/*",
+        "--fn",
+        "readSecret",
+      ]
+      1
+      "rejected",
+  ]
+
+test "a bound assembled from pieces stays exact, never folded" = expectAll [
+  expectCheckReject (fixture "bound_pieces_reject.mdk") [
+    "performs <FileRead \"cfg/secret\">",
+  ],
+  expectCheckAccept (fixture "bound_pieces_accept.mdk"),
+]
+
+test "a bound's elements have one canonical form, in either write order" = expectAll
+  [
+    expectCheckReject (fixture "bound_order_a_reject.mdk") [
+      "a bound admits at most 16 elements of one label, and this one writes 32",
+    ],
+    expectCheckReject (fixture "bound_order_b_reject.mdk") [
+      "a bound admits at most 16 elements of one label, and this one writes 32",
+    ],
+  ]
+
+test "Product tuples the bound covers together are within it" = expectAll [
+  expectCheckAccept (fixture "product_set_cover_accept.mdk"),
+  expectCheckReject (fixture "product_set_cover_reject.mdk") [
+    "performs <Web Host=\"a.com/y/*\" Method={\"POST\"}>",
+  ],
+]
+
+test "a catalog extern redeclared at an index join charges each term" =
+  expectCheckAccept (fixture "catalog_index_join_accept.mdk")
+
+test "a Set qualifier naming no binder is a Set bound" = expectAll [
+  expectCheckAccept (fixture "qualifier_literal_domain_accept.mdk"),
+  expectCheckReject (fixture "qualifier_literal_domain_launder.mdk") [
+    "reaches {\"SECRET\"}",
+  ],
+]
+
+test "a value's abstraction is widened past the cap, never a bound" = expectAll
+  [
+    expectCheckAccept (fixture "value_widen_accept.mdk"),
+    expectCheckReject (fixture "value_widen_launder.mdk") ["performs <Net"],
+  ]
+
+test "the written cap counts written elements, whatever the axes are named" =
+  expectCheckAccept (fixture "written_cap_axis_names_accept.mdk")
+
+test "a literal containing a quote never merges two tuples" =
+  expectCheckReject (fixture "product_quote_literal_reject.mdk") ["performs"]
+
+test "elements of different domains joined are the whole domain" = expectAll [
+  expectCheckReject (fixture "mixed_domain_join_reject.mdk") ["performs <Env>"],
+  expectCheckAccept (fixture "mixed_domain_join_accept.mdk"),
+]
+
+test "a covered tuple does not change how a Product bound groups" = expectCheckReject
+  (fixture "product_covered_cap_reject.mdk")
+  ["a set holds at most 16 members, and this one has 18"]
+
+test "a Product bound with many Set axes is kept as written" =
+  expectCheckAccept (fixture "product_many_axes_accept.mdk")
+
+test "a Product qualifier needs a binder to name its label" = expectCheckReject
+  (fixture "qualifier_product_needs_binder_reject.mdk")
+  ["Invalid authority in the qualifier"]
+
+test "a linked authority variable keeps its label's declared schema" = expectAll
+  [
+    expectCheckReject (fixture "product_linked_schema_reject.mdk") [
+      "reaches Method={\"a.com/x\"}", "performs <Web2 Method={\"a.com/x\"}>"
+    ],
+    expectCheckAccept (fixture "product_linked_schema_accept.mdk"),
+  ]
+
+test "a Product constant carries its schema, by instantiation or alias" = expectAll
+  [
+    expectCheckReject (fixture "product_constant_schema_inst_reject.mdk") [
+      "Binding 'g' reaches Method={\"a.com/x\"}",
+    ],
+    expectCheckAccept (fixture "product_constant_schema_inst_accept.mdk"),
+    expectCheckReject (fixture "product_constant_schema_alias_reject.mdk") [
+      "Binding 'g' reaches Method={\"a.com/x\"}",
+    ],
+    expectCheckAccept (fixture "product_constant_schema_alias_accept.mdk"),
+    expectCheckAccept (fixture "product_constant_schema_primary_accept.mdk"),
+    expectCheckAccept (fixture "product_constant_concat_accept.mdk"),
+  ]
+
+test "two Product schemas are two domains, whatever their axes are named" = expectAll
+  [
+    expectCheckReject (fixture "product_cross_schema_reject.mdk") [
+      "is allowed, but it performs <Web2>",
+    ],
+    expectCheckAccept (fixture "product_cross_schema_accept.mdk"),
+  ]
+
+test "a binder at two Product labels needs one schema" = expectAll [
+  expectCheckReject (fixture "product_binder_two_schemas_reject.mdk") [
+    "Authority 'u' is used at labels from different domains",
+  ],
+  expectCheckAccept (fixture "product_binder_one_schema_accept.mdk"),
+]
+
+test "a written Product names each axis once" = expectAll [
+  expectCheckReject (fixture "product_repeated_axis_reject.mdk") [
+    "axis 'Host' is written twice",
+  ],
+  expectCheckAccept (fixture "product_repeated_axis_accept.mdk"),
+]
+
+test "a declaration's authority parameter is used at its own domain" = expectAll
+  [
+    expectCheckRejectLine (fixture "decl_authority_index_reject.mdk") [
+      "decl_authority_index_reject.mdk:8:",
+      "Authority 'p' is used at labels from different domains",
+    ],
+    expectCheckReject (fixture "decl_authority_atom_reject.mdk") [
+      "Authority 'p' is used at labels from different domains",
+    ],
+    expectCheckReject (fixture "decl_authority_existential_reject.mdk") [
+      "Authority 'q' is used at labels from different domains",
+    ],
+    expectCheckReject (fixture "decl_authority_newtype_reject.mdk") [
+      "Authority 'p' is used at labels from different domains",
+    ],
+    expectCheckReject (fixture "newtype_field_param_reject.mdk") [
+      "axis 'Host' is written twice",
+    ],
+    expectCheckAccept (fixture "decl_authority_domain_accept.mdk"),
+  ]
+
+test "a catalog redeclaration at an index join covers every term" = expectAll [
+  expectCheckReject (fixture "catalog_index_var_join_reject.mdk") [
+    "redeclares a built-in runtime name with a NARROWER effect row",
+    "does not cover <Net \"a.com/*\"",
+  ],
+  expectCheckAccept (fixture "catalog_index_var_join_accept.mdk"),
+]

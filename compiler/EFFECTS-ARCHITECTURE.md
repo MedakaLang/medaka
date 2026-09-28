@@ -547,9 +547,16 @@ What landed, in the order the decision record prescribed:
    `net_async`, `test` and `test_process` declare named arrows wherever the body
    forwards or prefix-extends the argument; `rename` carries both paths. The
    effect-parameter fixture corpora declare named externs.
-8. **Prefix join and exact elements.** Two prefixes join to their longest
-   common prefix spelled `lcp*`, written syntax a signature accepts (#3391); an
-   element without a trailing `*` is exact and admits only itself.
+8. **Prefix sets and exact elements.** A row keeps same-label constants in a
+   canonical antichain (`dantichain`, `types/effect_domain.mdk`) instead of
+   joining them: Set members as one union, Prefix patterns as the maximal
+   ones, Products grouped as written along one Set axis; elements of
+   different domains are the whole domain (#3464). A set is never folded, so no bound widens; only a written bound is
+   capped at 16 elements (`writtenSetProblem`). The one widening is α's: a
+   value's authority past 16 elements folds by the domain join
+   (`authWidenValue`, called only from `joinBranches`), whose longest common
+   prefix is spelled `lcp*` (#3391). An element without a trailing `*` is
+   exact and admits only itself.
 9. **Catalog redeclaration.** A user `extern` redeclaring a catalog name is
    checked against the catalog's row with one authority variable per argument
    position, so a binder covers the catalog's only when it names the same

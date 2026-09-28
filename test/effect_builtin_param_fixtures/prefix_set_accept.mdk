@@ -1,0 +1,14 @@
+-- Control: each host of the bound, dialled once.
+probe : Unit -> <Net "a.com/*", Net "b.com/*"> Unit
+probe _ =
+  let _ = netResolve "a.com/x"
+  let _ = netResolve "b.com/y"
+  ()
+
+both : Unit -> <Net "a.com/x", Net "b.com/y"> Unit
+both _ =
+  let _ = netResolve "a.com/x"
+  let _ = netResolve "b.com/y"
+  ()
+
+main = println 1

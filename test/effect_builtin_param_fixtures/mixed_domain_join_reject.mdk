@@ -1,0 +1,10 @@
+-- A qualifier's Prefix literal joined with a Set label's member has no join:
+-- the value's authority is the whole Env domain, so the bound refuses it.
+-- Keeping only the Set member would admit a read of HOME under a bound that
+-- names only SECRET.
+readA : Bool -> String @"HO*" -> <Env {"SECRET"}> Option String
+readA c k =
+  let n = if c then k else "SECRET"
+  getEnv n
+
+main = println (debug (readA True "HOME"))

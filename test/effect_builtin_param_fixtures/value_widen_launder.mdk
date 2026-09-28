@@ -1,0 +1,25 @@
+-- The same chain with one branch to another host: widening the value can
+-- only admit more, so the bound still refuses it.
+data Opts = Opts
+  { a : Bool, b : Bool, c : Bool, d : Bool, e : Bool
+  , f : Bool, g : Bool, h : Bool, i : Bool, j : Bool, k : Bool
+  }
+
+query : Opts -> <Net "api.example.com/*"> Unit
+query o =
+  let u0 = "api.example.com/v1/search?x=1"
+  let u1 = if o.a then u0 ++ "&a=1" else u0
+  let u2 = if o.b then u1 ++ "&b=1" else u1
+  let u3 = if o.c then u2 ++ "&c=1" else u2
+  let u4 = if o.d then u3 ++ "&d=1" else u3
+  let u5 = if o.e then u4 ++ "&e=1" else u4
+  let u6 = if o.f then u5 ++ "&f=1" else u5
+  let u7 = if o.g then u6 ++ "&g=1" else u6
+  let u8 = if o.h then u7 ++ "&h=1" else u7
+  let u9 = if o.i then u8 ++ "&i=1" else u8
+  let u10 = if o.j then u9 ++ "&j=1" else u9
+  let u11 = if o.k then "evil.net/x" else u10
+  let _ = netResolve u11
+  ()
+
+main = println 1

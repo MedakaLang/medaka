@@ -9,6 +9,7 @@ afterPublicFor : Int -> Token -> ParserE <> Decl
 aliasName : ParserE <> String
 aliasNameFor : Token -> ParserE <> String
 allChainLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List (List Int)
+allNames : List EffParamTy -> List String -> Option (List String)
 allVariantLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List Int
 annotTail : Expr -> ParserE <> Expr
 anyField : List KvItem -> Bool
@@ -32,6 +33,10 @@ assignFromLhs : Expr -> Expr -> ParserE <> DoStmt
 assignTail : Expr -> ParserE <> Expr
 assignTailRaw : Expr -> ParserE <> Expr
 attrArg : String -> Token -> ParserE <> Attr
+authJoinTail : ParserE <> (List EffParamTy)
+authJoinTailFor : Token -> ParserE <> (List EffParamTy)
+authTermFor : Token -> Token -> ParserE <> EffParamTy
+authTermP : ParserE <> EffParamTy
 backtickInfixMsg : String
 bareMinusSection : ParserE <> Expr
 benchRemovedMsg : String
@@ -345,6 +350,7 @@ mkRec : String -> (List RecPatField, Bool) -> Pat
 mkRow : (List EffAtomTy, List String) -> Loc -> Ty
 namedArgNeedsArrowMsg : String
 namedImplRemovedMsg : String
+namesOrAuthJoin : String -> List EffParamTy -> Option Loc -> Ty
 negIntPat : ParserE <> Pat
 negIntRng : Lit -> ParserE <> Pat
 negLitArg : Bool -> ParserE <> Expr
@@ -481,10 +487,12 @@ parseTyAtom : ParserE <> Ty
 parseTyAtomNestGo : Array Token -> Int -> PR Ty
 parseTyAtomNestRun : Array Token -> Int -> Int -> PR Ty
 parseTyAtomRaw : ParserE <> Ty
+parseTyAuthJoin : Int -> ParserE <> Ty
 parseTyAuthLit : ParserE <> Ty
 parseTyAuthTop : ParserE <> Ty
 parseTyFun : ParserE <> Ty
 parseTyParen : ParserE <> Ty
+parseTyParenAt : Int -> Token -> Token -> ParserE <> Ty
 parseTyParenBody : Token -> ParserE <> Ty
 parseTyParenIdent : Token -> ParserE <> Ty
 parseTyParenTuple : ParserE <> Ty
@@ -522,8 +530,6 @@ productAxisValFor : Token -> ParserE <> EffParamTy
 productParamP : ParserE <> EffParamTy
 programWithSpans : ParserE <> (List (Decl, Int, Int))
 propParam : ParserE <> PropParam
-qualJoinTail : ParserE <> (List String)
-qualJoinTailFor : Token -> ParserE <> (List String)
 rangeAfter : Expr -> Bool -> ParserE <> Expr
 recordFieldExpr : ParserE <> (List String, Expr)
 recordFieldExprRest : List String -> Token -> ParserE <> (List String, Expr)

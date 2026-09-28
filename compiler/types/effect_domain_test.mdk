@@ -1,8 +1,12 @@
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import support.util.{allList}
+import list.{drop as listDrop}
 import types.effect_domain.{
-  Param(..), djoin, drender, dsub, extendParam, appendParam
+  Param(..), djoin, drender, dsub, extendParam, appendParam, dantichain,
+  setCardCap, writtenSetProblem, dsubAny, productPrimaryLift
 }
 import types.effect_rows.{atomBuiltin, atomsDiff, atomsUnion, renderAtoms}
+import types.effect_authority.{Authority(..), authSub, authJoinAll}
 
 test "prefix coverage is directed and respects the host boundary" = expectAll [
   expectTrue
@@ -43,7 +47,7 @@ test "set coverage includes every possible authority" =
 test "a missing product axis is unconstrained rather than empty" =
   let host = PPrefix (Some "good.example/*")
   let readOnly = PProduct [("Host", host), ("Method", PSet (Some ["GET"]))]
-  let anyMethod = PProduct [("Host", host)]
+  let anyMethod = PProduct [("Host", host), ("Method", PSet None)]
   expectAll [
     expectTrue (dsub readOnly anyMethod),
     expectFalse (dsub anyMethod readOnly),
@@ -82,18 +86,17 @@ test "larger rows use the canonical label index without changing order" =
     expectEqual "B, F" (renderAtoms remaining),
   ]
 
-test "an extension keeps a pattern, extends an exact element, tops a Set member" =
-  let schema = PProduct [("Host", PPrefix None), ("Method", PSet None)]
-  expectAll [
+test "an extension keeps a pattern, extends an exact element, tops a Set member" = expectAll
+  [
     expectEqual
       (drender (PPrefix (Some "cfg/*")))
-      (drender (extendParam (PPrefix None) (PPrefix (Some "cfg/")))),
+      (drender (extendParam (PPrefix (Some "cfg/")))),
     expectEqual
       (drender (PPrefix (Some "cfg/*")))
-      (drender (extendParam (PPrefix None) (PPrefix (Some "cfg/*")))),
+      (drender (extendParam (PPrefix (Some "cfg/*")))),
     expectEqual
       (drender (PSet None))
-      (drender (extendParam (PSet None) (PSet (Some ["GET"])))),
+      (drender (extendParam (PSet (Some ["GET"])))),
     expectEqual
       (drender
         (PProduct [
@@ -102,15 +105,191 @@ test "an extension keeps a pattern, extends an exact element, tops a Set member"
         ]))
       (drender
         (extendParam
-          schema
           (PProduct [
             ("Host", PPrefix (Some "a.com/")),
             ("Method", PSet (Some ["GET"])),
           ]))),
     expectEqual
       (drender (PPrefix (Some "cfg/app.toml")))
-      (drender (appendParam (PPrefix None) ".toml" (PPrefix (Some "cfg/app")))),
+      (drender (appendParam ".toml" (PPrefix (Some "cfg/app")))),
     expectEqual
       (drender (PPrefix (Some "cfg/*")))
-      (drender (appendParam (PPrefix None) ".toml" (PPrefix (Some "cfg/*")))),
+      (drender (appendParam ".toml" (PPrefix (Some "cfg/*")))),
   ]
+
+pat : String -> Param
+pat s = PPrefix (Some s)
+
+test "a written Prefix row keeps the set of its patterns, never their join" =
+  let both =
+    atomsUnion
+      [atomBuiltin "FileRead" (pat "cfg/*")]
+      [atomBuiltin "FileRead" (pat "tmp/*")]
+  let siblings =
+    atomsUnion
+      [atomBuiltin "FileRead" (pat "cfg/a/*")]
+      [atomBuiltin "FileRead" (pat "cfg/b/*")]
+  expectAll
+    [
+      expectEqual "FileRead \"cfg/*\", FileRead \"tmp/*\"" (renderAtoms both),
+      -- the join of two siblings would be `cfg/*`, admitting cfg/secret
+      expectEqual
+        "FileRead \"cfg/a/*\", FileRead \"cfg/b/*\""
+        (renderAtoms siblings),
+      expectEqual
+        "FileRead \"cfg/secret\""
+        (renderAtoms
+          (atomsDiff [atomBuiltin "FileRead" (pat "cfg/secret")] siblings)),
+      expectEqual
+        ""
+        (renderAtoms
+          (atomsDiff [atomBuiltin "FileRead" (pat "cfg/b/key")] siblings)),
+      -- a member another covers is dropped
+      expectEqual
+        "FileRead \"cfg/*\""
+        (renderAtoms
+          (atomsUnion
+            [atomBuiltin "FileRead" (pat "cfg/app.toml")]
+            [atomBuiltin "FileRead" (pat "cfg/*")])),
+    ]
+
+test "a set is covered when each member is covered by some element" = expectAll
+  [
+    expectTrue
+      (authSub
+        (authJoinAll [AConst (pat "a.com/x"), AConst (pat "a.com/y")])
+        (AConst (pat "a.com/*"))),
+    expectFalse
+      (authSub
+        (authJoinAll [AConst (pat "a.com/x"), AConst (pat "b.com/y")])
+        (AConst (pat "a.com/*"))),
+    expectTrue
+      (authSub
+        (AConst (pat "b.com/y"))
+        (authJoinAll [AConst (pat "a.com/*"), AConst (pat "b.com/*")])),
+    expectFalse
+      (authSub
+        (AConst (pat "evil.net/y"))
+        (authJoinAll [AConst (pat "a.com/*"), AConst (pat "b.com/*")])),
+  ]
+
+test "Set members and Products differing in one Set axis merge exactly" =
+  let get = PProduct [("Host", pat "a.com/*"), ("Method", PSet (Some ["GET"]))]
+  let post =
+    PProduct [("Host", pat "a.com/*"), ("Method", PSet (Some ["POST"]))]
+  let otherHost =
+    PProduct [("Host", pat "b.com/*"), ("Method", PSet (Some ["POST"]))]
+  expectAll
+    [
+      expectEqual
+        [" {\"HOME\", \"PATH\"}"]
+        (map drender (dantichain [PSet (Some ["PATH"]), PSet (Some ["HOME"])])),
+      expectEqual
+        [" Host=\"a.com/*\" Method={\"GET\", \"POST\"}"]
+        (map drender (dantichain [get, post])),
+      -- a pointwise join would admit (a.com, POST); the set does not
+      expectEqual 2 (length (dantichain [get, otherHost])),
+      expectFalse
+        (authSub
+          (AConst
+            (PProduct [
+              ("Host", pat "a.com/*"),
+              ("Method", PSet (Some ["POST"])),
+            ]))
+          (authJoinAll [AConst get, AConst otherHost])),
+    ]
+
+test "a set of any size stays exact; only a written bound is capped" =
+  let many = map (i => pat "d\{intToString i}/*") [1..=setCardCap + 1]
+  expectAll [
+    expectEqual (setCardCap + 1) (length (dantichain many)),
+    expectTrue (isSome (writtenSetProblem many)),
+    expectEqual None (writtenSetProblem (listDrop 1 many)),
+    expectTrue
+      (isSome
+        (writtenSetProblem
+          (map (i => PSet (Some ["V\{intToString i}"])) [1..=setCardCap + 1]))),
+  ]
+
+test "a Product set's form is independent of order, and covers by its union" =
+  let t x y = PProduct [("X", PSet (Some [x])), ("Y", PSet (Some [y]))]
+  let host h m = PProduct [("Host", pat h), ("Method", PSet (Some [m]))]
+  let split = [t "1" "1", t "2" "1", t "1" "2"]
+  let joined = [
+    PProduct [("X", PSet (Some ["1", "2"])), ("Y", PSet (Some ["1"]))],
+    t "1" "2",
+  ]
+  expectAll
+    [
+      expectEqual
+        (map drender (dantichain split))
+        (map drender (dantichain [t "1" "2", t "1" "1", t "2" "1"])),
+      -- two spellings of one set cover each other
+      expectTrue
+        (allList (e => dsubAny e (dantichain joined)) (dantichain split)),
+      expectTrue
+        (allList (e => dsubAny e (dantichain split)) (dantichain joined)),
+      expectEqual
+        (map drender (dantichain (dantichain joined)))
+        (map drender (dantichain joined)),
+      -- GET and POST to a.com/x lie within the two bound tuples together
+      expectTrue
+        (dsubAny (PProduct [
+          ("Host", pat "a.com/x/*"),
+          ("Method", PSet (Some ["GET", "POST"])),
+        ]) [
+          host "a.com/*" "GET",
+          host "a.com/x/*" "POST",
+        ]),
+      expectFalse
+        (dsubAny (host "a.com/y/*" "POST") [
+          host "a.com/*" "GET",
+          host "a.com/x/*" "POST",
+        ]),
+    ]
+
+test "elements of different domains are the whole domain, never one of them" = expectAll
+  [
+    -- two Products whose Host axes differ in shape are two domains
+    expectEqual
+      (drender
+        (djoin
+          (PProduct [("Host", pat "a.com/*")])
+          (PProduct [("Host", PSet (Some ["s"]))])))
+      (drender (PProduct [])),
+    expectEqual
+      [drender (PSet None)]
+      (map drender (dantichain [PSet (Some ["SECRET"]), pat "HO*"])),
+    expectEqual
+      [drender (PPrefix None)]
+      (map
+        drender
+        (dantichain [pat "evil*", PProduct [("Host", pat "a.com/x")]])),
+  ]
+
+test "a Product carries its schema: axes of one name in two schemas are two domains" =
+  let web1 = [("Host", PPrefix None), ("Method", PSet None)]
+  let web2 = [("Method", PSet None), ("Host", PPrefix None)]
+  let lifted1 = productPrimaryLift web1 "a.com/x"
+  let bound2 = PProduct [("Method", PSet None), ("Host", pat "a.com/*")]
+  expectAll
+    [
+      -- a literal lifts into the first declared axis, the others at their top
+      expectEqual
+        (drender (PProduct [("Host", pat "a.com/x")]))
+        (drender lifted1),
+      expectEqual
+        (drender (PProduct [("Method", PSet (Some ["a.com/x"]))]))
+        (drender (productPrimaryLift web2 "a.com/x")),
+      -- Web1's Host is not Web2's: no containment, and the join is the top
+      expectFalse (dsub lifted1 bound2),
+      expectTrue
+        (dsub
+          (PProduct [("Method", PSet None), ("Host", pat "a.com/x")])
+          bound2),
+      expectEqual "" (drender (djoin lifted1 bound2)),
+      -- an extension extends the element's own first axis
+      expectEqual
+        (drender (PProduct [("Host", pat "a.com/x*")]))
+        (drender (extendParam lifted1)),
+    ]

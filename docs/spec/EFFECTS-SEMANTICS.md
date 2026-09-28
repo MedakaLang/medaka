@@ -148,7 +148,7 @@ realize a prefix of it — see the audit):
 | Domain | Elements | `⊑` | `⊔` | `⊓` |
 |---|---|---|---|---|
 | **`Unit`** | `()` only | trivial | `()` | `()` |
-| **`Prefix`** | a delimiter-terminated string pattern, or `⊤` | structural prefix-containment (§2.3) | longest common prefix, saturating to `⊤` | the more specific, or `⊥` if neither contains the other |
+| **`Prefix`** | a delimiter-terminated string pattern, or `⊤` | structural prefix-containment (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
 | **`Set`** | a finite set of strings, or `⊤` | `⊆` | `∪` (saturating to `⊤` past a cardinality cap) | `∩` |
 | **`Product`** | a tuple of sub-domains, e.g. `Net = Host(Prefix) × Method(Set)` | pointwise | pointwise | pointwise (⊥ if any component ⊥) |
 
@@ -162,11 +162,61 @@ the manifest extractor.** That domain-parametricity is the whole point.
 ### 2.2 Rows as domain-indexed maps
 
 Canonically, a row's atom set is a finite **partial map** from labels to
-parameters, `ā : L ⇀ P` with `ā(L) ∈ 𝔻_L`. Two syntactic atoms on the same label
-are **never two members** — they collapse to one by `⊔` in `𝔻_L`. (Distinctness
-holds *across* labels only; within a label the canonical form is the join,
-otherwise the order in §2.4 is ill-defined.) A v1 atomic label `Foo` is exactly
-`Foo · ()`.
+authorities, `ā : L ⇀ A_L`. An authority of `L` is a finite **antichain** of
+elements of `𝔻_L`: a set in which no member covers another. The label admits
+what any member admits. Two syntactic atoms on the same label are one atom
+whose authority holds both parameters, less any member another covers.
+(Distinctness holds *across* labels only; within a label the canonical form is
+the antichain, otherwise the order in §2.4 is ill-defined.) A v1 atomic label
+`Foo` is exactly `Foo · {()}`.
+
+A label keeps a set exactly where its domain's join is inexact, in one
+normal form that depends only on the elements, never on the order they were
+written or joined in:
+
+- Unit and Set members always merge by `⊔`, which is exact (`{A} ⊔ {B} = {A, B}`).
+  These labels hold one element.
+- Prefix patterns never merge; the maximal ones are kept.
+- Products: a tuple another covers is dropped, and the rest are grouped along
+  one Set axis, the last by name among them. Tuples written equal on every
+  other axis share one set of that axis's members, less those a covering
+  group already holds. `Host="a.com/*" Method={"GET"}` beside the same host
+  with `{"POST"}` is one element with both methods; beside `Host="b.com/*"`
+  it stays two, since their pointwise join would admit POST to a.com. Two
+  spellings of one set can keep different forms (`X={"1", "2"}` against
+  `X={"1"}` and `X={"2"}`); they are equal as authorities, since each covers
+  the other.
+- Elements of different domains have no join. An authority that mixes them,
+  such as a qualifier's Prefix literal joined into a Set label, is the label's
+  whole domain, never one element with the others dropped.
+
+So `<Net "a.com/*", Net "b.com/*">` admits those two hosts and nothing else.
+Their join would be `Net` (the longest common prefix is empty), which admits
+every host. Likewise `<FileRead "cfg/a/*", FileRead "cfg/b/*">` does not admit
+`cfg/secret`, which their join `cfg/*` would.
+
+A set is never folded into a wider element, so no bound ever admits more
+than it states. The one widening is the abstraction of a value (§4): α may
+over-approximate what a string denotes. When a value's authority, the join of
+its branches, would hold more than 16 elements, α folds it by `⊔` into one
+element that covers them all. A value is never a bound, so this widens
+nothing a signature wrote. It keeps each value's set small; without it, a
+chain of optional appends holds exponentially many elements. Every other set
+stays exact at any size: rows, solutions, policies and manifests.
+
+What may be written in source is capped: at most 16 elements of one label, as
+written, and at most 16 members in one Set. A written bound past either cap
+is refused (`T-EFFECT-PARAM`). That covers:
+
+- a row in a signature (a top-level or interface method signature), a data
+  field or a type alias;
+- a qualifier or index join;
+- a Set literal;
+- Set members written across atoms that merge into one set.
+
+Each element written in those places is also validated against its domain.
+A policy's entries are not capped: they are read exactly, so a manifest of
+any size is accepted back as a policy.
 
 ### 2.3 The `Prefix` domain and the delimiter discipline
 
@@ -219,8 +269,14 @@ permitted iff `φ₁ ≤ φ₂`. The **direction matters for security**: `<Net "
 "a.com/*">` (a ⊤/any-host capability is *not* usable where only `a.com` is
 permitted). This is precisely the gate that rejects exfiltration (§4, §5).
 
+Each member of a label's antichain is an `L·p` in the order above: a
+performed atom is within a bound when some member of the bound's antichain
+covers it, or, for a Product, when each of its singletons is covered by some
+member, so a tuple the bound covers only together is within it.
+
 The **join** of two rows `φ₁ ⊔ φ₂` (used by inference, §3) is the label-wise
-union with same-label params joined by `⊔_{𝔻_L}`; it is the least row `≥` both.
+union, with same-label authorities united as antichains (§2.2). It is the least
+row `≥` both.
 
 ---
 
@@ -399,7 +455,13 @@ is read in the scope it was bound in, never against a later rebinding. A binder 
 A qualifier is written with a spaced `@`: `String @p`. A joined qualifier
 `String @(a | b)` is bounded by the join `a ⊔ b`: a value within either
 authority, the type of a branch that returns one of two named arguments. Its
-names must be binders of one domain (`T-AUTHORITY-DOMAIN`).
+names must be binders of one domain (`T-AUTHORITY-DOMAIN`). A qualifier or an
+index may also write literals, `String @("a.com/*" | p)`,
+`Socket ("a.com/x" | "b.com/y")`, the spelling a set renders as (§2.2).
+A literal in a qualifier is an element of its names' domain. When the
+qualifier names none, the literal's shape gives the domain: a string is a
+Prefix pattern and a set is a Set element. Axes need a binder to name their
+label, since only a label declares a Product's axes and which is primary.
 
 Each authority has exactly one domain. A binder used by two compatible Prefix
 labels shares a variable; incompatible-domain uses are ill-formed, and so is a
@@ -410,8 +472,12 @@ domains retain their declared axis schema, `effect L Product (Host : Prefix,
 Method : Set)`: the axes are declared in order and the first is the primary
 axis an unqualified string argument or a bare written literal lifts into; a
 written product may name only declared axes; a Product declared without axes
-is ill-formed. Missing axes mean top. Domain mismatches are errors, never
-proofs of containment.
+is ill-formed. Missing axes mean top. Every element of a Product domain
+carries the schema, whether it is read off the label, a variable, or a
+constant a signature writes, so the domain is the schema itself: two Product
+labels are one domain only when they declare the same axes (the same names,
+of the same domains) in the same order. A written product names each axis
+at most once. Domain mismatches are errors, never proofs of containment.
 
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates
@@ -419,7 +485,9 @@ Checking an argument against `τ @κ` checks its underlying type and generates
 `++` whose left operand is justified in a prefix-shaped domain and extended by
 the suffix, a same-body
 `let`, a branch join) and otherwise the argument's checked type: the qualifier
-of a `τ @q`, else the domain's top. A flexible `κ` accumulates lower bounds by
+of a `τ @q` when `q` is an element of the domain, else the domain's top (a
+qualifier of another domain, such as another schema's Product, bounds
+nothing here). A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the
 least solution, variables bounded by each other collapsing to one representative
 first. A variable the owning scope decides that nothing bounds below (no
@@ -1053,7 +1121,10 @@ by the host's declared invocation protocol (calling a function or running an
 effect-indexed entry computation), unfiltered,
 with each label's verified parameter rendered (`drender`). For
 `Net "idp.example.com/*"` the manifest records `idp.example.com/*` as the sole
-permitted outbound authority. A `Net` authority names an endpoint the program
+permitted outbound authority. A label that holds a set (§2.2) records an
+array of its elements: `Net = ["a.com/*", "b.com/*"]`, or an array of inline
+tables for a Product. A policy may give a label several entries, which admit
+together what any one admits. A `Net` authority names an endpoint the program
 may dial or bind; a socket accepted through a bound endpoint is exercised at
 that endpoint's authority, and waiting for a descriptor to become ready is a
 timed wait (`Clock`), not an operation on an endpoint. The one exception is
@@ -1089,8 +1160,10 @@ declared variance (§6.4). Starting positive at the entry's type:
   type, and a type whose constructors another module
   keeps (an abstract or private type, or any newtype declared elsewhere), is
   read through its variance only: the host holds such a value but cannot
-  apply anything inside it, though the declaring module's own functions
-  can. Whether that route belongs to the protocol is open.
+  apply anything inside it. The declaring module's own functions can, but
+  running a value through one is a call of that function, charged when the
+  host makes it, not an effect of invoking the entry, so the protocol does
+  not open such a type.
 - a slot whose parameter is an effect row or an authority is an index, and
   an index is invariant (§6.4), so an effect index is charged in either
   position. That over-charges an index a type only ever uses covariantly

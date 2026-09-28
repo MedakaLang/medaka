@@ -2362,13 +2362,19 @@ tyQualTailFor ty TAt (TIdent n) = defer
   advance
   advance
   q <- getPos
-  deferPure (TyQual ty [n] (Some (locOfSpan s q)))
+  deferPure (TyQual ty [EPName n] (Some (locOfSpan s q)))
+tyQualTailFor ty TAt (TString _) = defer
+  s <- getPos
+  advance
+  p <- authTermP
+  q <- getPos
+  deferPure (TyQual ty [p] (Some (locOfSpan s q)))
 tyQualTailFor ty TAt TLParen = defer
   s <- getPos
   advance
   advance
-  first <- identNameP
-  rest <- qualJoinTail
+  first <- authTermP
+  rest <- authJoinTail
   expectTok TRParen
   q <- getPos
   deferPure (TyQual ty (first :: rest) (Some (locOfSpan s q)))
@@ -2377,21 +2383,49 @@ tyQualTailFor _ TAsAt (TIdent n) = defer
   fatalAtP
     "an authority qualifier is written with a space before the `@`: `String @\{n}`"
     pos
+tyQualTailFor _ TAsAt (TString s) = defer
+  pos <- getPos
+  fatalAtP
+    "an authority qualifier is written with a space before the `@`: `String @\"\{s}\"`"
+    pos
+tyQualTailFor _ TAsAt TLParen = defer
+  pos <- getPos
+  fatalAtP
+    "an authority qualifier is written with a space before the `@`: `String @(…)`"
+    pos
 tyQualTailFor ty _ _ = deferPure ty
 
--- The `| name` operands after a joined qualifier's first name.
-qualJoinTail : Parser (List String)
-qualJoinTail = defer
+-- One term of a written authority join, in a qualifier (`@(a | "b/*")`) or
+-- an index (`Handle ("a/*" | p)`): a name, or a domain literal spelled as an
+-- atom's parameter is (a pattern, a set, a product's axes).
+authTermP : Parser EffParamTy
+authTermP = defer
   t <- peekP
-  qualJoinTailFor t
+  t2 <- peek2P
+  authTermFor t t2
 
-qualJoinTailFor : Token -> Parser (List String)
-qualJoinTailFor TPipe = defer
+authTermFor : Token -> Token -> Parser EffParamTy
+authTermFor (TUpper _) TEqual = productParamP
+authTermFor (t@(TString _)) _ = effParamFor t
+authTermFor (t@(TIdent _)) _ = effParamFor t
+authTermFor TLBrace _ = effSetLiteralP
+authTermFor _ _ =
+  failP
+    "expected an authority term: a name, a \"pattern\", a {set} or Axis=… axes"
+
+-- The `| term` operands after a join's first term.
+authJoinTail : Parser (List EffParamTy)
+authJoinTail = defer
+  t <- peekP
+  authJoinTailFor t
+
+authJoinTailFor : Token -> Parser (List EffParamTy)
+authJoinTailFor TPipe = defer
   advance
-  n <- identNameP
-  rest <- qualJoinTail
-  deferPure (n :: rest)
-qualJoinTailFor _ = deferPure []
+  p <- authTermP
+  rest <- authJoinTail
+  deferPure (p :: rest)
+authJoinTailFor _ = deferPure []
 
 tyApplyAll : Ty -> List Ty -> Ty
 tyApplyAll head [] = head
@@ -2452,14 +2486,24 @@ parseTyAuthTop = defer
   s <- getPos
   expectTok TStar
   q <- getPos
-  deferPure (TyAuth EPTop (Some (locOfSpan s q)))
+  deferPure (TyAuth [EPTop] (Some (locOfSpan s q)))
 
 parseTyAuthLit : Parser Ty
 parseTyAuthLit = defer
   s <- getPos
   p <- effParamP
   q <- getPos
-  deferPure (TyAuth p (Some (locOfSpan s q)))
+  deferPure (TyAuth [p] (Some (locOfSpan s q)))
+
+-- A parenthesised authority join in an index slot whose first term is a
+-- literal: `("a.com/*" | "b.com/*")`, `("cfg/*" | p)`.
+parseTyAuthJoin : Int -> Parser Ty
+parseTyAuthJoin s = defer
+  first <- authTermP
+  rest <- authJoinTail
+  expectTok TRParen
+  q <- getPos
+  deferPure (TyAuth (first :: rest) (Some (locOfSpan s q)))
 
 -- `M.Map` in type position: a module alias qualifies a TYPE name, not only a
 -- value (#2412).  The grammar has no notion of a qualified name, so the two
@@ -2513,9 +2557,19 @@ tyTupleOrSingle ts = TyTuple ts
 
 parseTyParen : Parser Ty
 parseTyParen = defer
+  s <- getPos
   expectTok TLParen
   t <- peekP
-  parseTyParenBody t
+  t2 <- peek2P
+  parseTyParenAt s t t2
+
+-- `(` then a string, a set or `Axis=` starts an authority join; anything
+-- else is the type grammar below.
+parseTyParenAt : Int -> Token -> Token -> Parser Ty
+parseTyParenAt s (TString _) _ = parseTyAuthJoin s
+parseTyParenAt s TLBrace _ = parseTyAuthJoin s
+parseTyParenAt s (TUpper _) TEqual = parseTyAuthJoin s
+parseTyParenAt _ t _ = parseTyParenBody t
 
 -- A leading comma right after `(` can only be the bare tuple type constructor
 -- `(,)`/`(,,)`/… (arities 2–5) — a normal parenthesized/tuple type always starts
@@ -2540,14 +2594,26 @@ parseTyParenIdent TColon = defer
   t <- parseTy
   expectTok TRParen
   deferPure (TyNamed n t)
+-- `(a | b)` of names only stays a row join, as an `Effect` slot reads it; a
+-- literal among the terms makes it an authority join.
 parseTyParenIdent TPipe = defer
   s <- getPos
   v <- identNameP
-  rest <- pipeTail
+  rest <- authJoinTail
   expectTok TRParen
   q <- getPos
-  deferPure (TyRow [] (v :: rest) (Some (locOfSpan s q)))
+  deferPure (namesOrAuthJoin v rest (Some (locOfSpan s q)))
 parseTyParenIdent _ = parseTyParenTuple
+
+namesOrAuthJoin : String -> List EffParamTy -> Option Loc -> Ty
+namesOrAuthJoin v rest loc = match allNames rest []
+  Some names => TyRow [] (v :: names) loc
+  None => TyAuth (EPName v :: rest) loc
+
+allNames : List EffParamTy -> List String -> Option (List String)
+allNames [] acc = Some (reverseL acc)
+allNames ((EPName n) :: rest) acc = allNames rest (n :: acc)
+allNames _ _ = None
 
 parseTyParenTuple : Parser Ty
 parseTyParenTuple = defer

@@ -1,0 +1,10 @@
+-- A constructor's existential binder is of its declared domain too: E's `q`
+-- is a Keys authority named at a Dir atom.
+effect Web1 Product (Host : Prefix, Method : Set)
+effect Web2 Product (Method : Set, Host : Prefix)
+effect Dir Prefix
+effect Keys Set
+
+data E = E (q : Authority Keys) (Unit -> <FFI, Dir q> Unit)
+
+main = println 1

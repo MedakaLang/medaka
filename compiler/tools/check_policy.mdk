@@ -1,6 +1,7 @@
-import types.effect_domain.{canonParam, drender, Param(..)}
+import types.effect_domain.{canonParam, drender, isSubTop, Param(..)}
 import types.effect_authority.{
-  Authority(..), authSub, authVars, authHasVars, authvarDefaultName, authJoinAll
+  Authority(..), authSub, authVars, authHasVars, authvarDefaultName,
+  authJoinAll, authConsts
 }
 import types.effect_invocation.{invocationSummary}
 import types.effect_rows.{
@@ -9,7 +10,6 @@ import types.effect_rows.{
   atomKey,
   atomLabel,
   atomAuth,
-  atomConst,
   atomsUnion,
   renderAtom,
   Atom(..),
@@ -129,7 +129,8 @@ filterNonEmpty (x :: xs) =
 -- compared with (`decodeWrittenParam`), by the same rules as a source atom: a
 -- bare pattern on a Product label lifts into its first axis, and an entry the
 -- domain does not admit (`Method=GET` on a Set axis) is refused, never read
--- as the whole domain.  One entry per label (first wins via lookup order).
+-- as the whole domain.  A label may have several entries; together they admit
+-- what any one of them admits, as a row's atoms of one label do.
 parsePolicy : String -> Result String (List (String, EffParamTy))
 parsePolicy s = allOk (map parsePolicyTok (splitComma s))
 
@@ -444,15 +445,21 @@ policyProblems effs policy =
 data Permit = Permitted | Forbidden | Malformed String
 
 -- Permitted iff the label is in the policy AND the inferred authority is
--- provably within the policy's, the entry decoded in the domain of the
--- atom's own label: an authority still symbolic at the manifest boundary is
--- not proven and is not permitted, and an entry the domain does not admit
--- permits nothing.
+-- provably within what the label's entries admit together, each entry decoded
+-- in the domain of the atom's own label: an authority still symbolic at the
+-- manifest boundary is not proven and is not permitted, and an entry the
+-- domain does not admit permits nothing.
 permitOf : Atom -> List (String, EffParamTy) -> Permit
-permitOf a policy = match policyEntryFor a policy
-  None => Forbidden
-  Some written => match decodeWrittenParam (atomLabelOf a) written
-    Ok pp => if authSub (atomAuth a) (AConst pp) then Permitted else Forbidden
+permitOf a policy = match policyEntriesFor a policy
+  [] => Forbidden
+  written => match allOk (map (decodeWrittenParam (atomLabelOf a)) written)
+    -- The entries are read exactly, however many there are: a set is never
+    -- folded, so a manifest of any size is accepted back as a policy.
+    Ok pps =>
+      if authSub (atomAuth a) (authJoinAll (map AConst pps)) then
+        Permitted
+      else
+        Forbidden
     Err m => Malformed m
 
 -- An atom whose authority is still a variable at the host boundary, refused
@@ -462,14 +469,14 @@ notProvenLines : List Atom -> List (String, EffParamTy) -> List String
 notProvenLines effs policy =
   flatMap
     (a => match (authHasVars (atomAuth a), permitOf a policy)
-      (True, Forbidden) => match policyEntryFor a policy
-        Some _ =>
+      (True, Forbidden) => match policyEntriesFor a policy
+        _ :: _ =>
           let unresolved =
             Atom
               (atomLabelOf a)
               (authJoinAll (map AVar (authVars (atomAuth a))))
           ["   not proven: \{renderAtom unresolved} (\{unresolvedWhy a})\n"]
-        None => []
+        [] => []
       _ => [])
     effs
 
@@ -483,12 +490,16 @@ unresolvedWhy a =
     [one] => "authority variable \{one}"
     _ => "authority variables \{joinWith ", " names}"
 
--- The entry for an atom: its qualified key first, then its bare label.
-policyEntryFor : Atom -> List (String, EffParamTy) -> Option EffParamTy
-policyEntryFor a policy =
-  match lookupAssoc (policySpelling (qualifiedKey a)) policy
-    Some e => Some e
-    None => lookupAssoc (atomLabel a) policy
+-- The entries for an atom: those under its qualified key, else those under
+-- its bare label.
+policyEntriesFor : Atom -> List (String, EffParamTy) -> List EffParamTy
+policyEntriesFor a policy =
+  match entriesUnder (policySpelling (qualifiedKey a)) policy
+    [] => entriesUnder (atomLabel a) policy
+    es => es
+
+entriesUnder : String -> List (String, EffParamTy) -> List EffParamTy
+entriesUnder key policy = map snd (filterList (e => fst e == key) policy)
 
 -- A policy token spells a qualified key without the TOML quotes.
 policySpelling : String -> String
@@ -690,29 +701,38 @@ listIsEmpty _ = False
 -- Render one atom as a TOML key-value line.
 -- PPrefix (Some s) → 'Label = "s"'
 -- PUnit / PPrefix None → 'Label = true'
+-- A set of elements (`Net "a.com/*", Net "b.com/*"`) is an array of the
+-- elements' values, `Net = ["a.com/*", "b.com/*"]`; a Set label's single
+-- element is itself an array of members.
 -- An authority left symbolic at the host boundary is reported conservatively
 -- as the bare grant (`Label = true`), never omitted, with a TOML comment
 -- naming the variables that left it unresolved.
 atomToToml : (Atom -> String) -> Atom -> String
 atomToToml keyOf a =
   let label = keyOf a
-  match atomConst a
-    Some p => match canonParam p
-      PPrefix (Some s) => "\{label} = \"\{s}\""
-      PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
-      PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table
-      _ => label ++ " = true"
-    None =>
+  match authConsts (atomAuth a)
+    Some [p] => "\{label} = \{paramToml p}"
+    Some (ps@(_ :: _ :: _)) =>
+      "\{label} = [\{joinWith ", " (map paramToml ps)}]"
+    _ =>
       if authHasVars (atomAuth a) then
         "\{label} = true  # unresolved: \{unresolvedWhy a}"
       else
         label ++ " = true"
 
+paramToml : Param -> String
+paramToml p = match canonParam p
+  PPrefix (Some s) => "\"\{s}\""
+  PSet (Some xs) => "[\{joinWith ", " (map quoteTok xs)}]"
+  PProduct ax if not (isSubTop (PProduct ax)) => "{ \{productTomlInline ax} }"  -- WS-4 inline table
+  _ => "true"
+
 -- WS-4: render a product's axes as a TOML inline-table body: a Prefix axis →
 -- `host = "…"`, a Set axis → `method = ["GET", "POST"]` (TOML keys lowercased
 -- by convention).  Comma-joined.
 productTomlInline : List (String, Param) -> String
-productTomlInline ax = joinWith ", " (map axisToToml ax)
+productTomlInline ax =
+  joinWith ", " (map axisToToml (filterList (a => not (isSubTop (snd a))) ax))
 
 axisToToml : (String, Param) -> String
 axisToToml (name, PPrefix (Some s)) = "\{lowerFirst name} = \"\{s}\""
@@ -824,21 +844,28 @@ runManifest preludeKey rtD coreD modsD fnName =
 -- Render the manifest as --allow tokens for round-trip through check-policy.
 -- PPrefix (Some s) → "Label=s"
 -- PUnit / PPrefix None → "Label"
+-- A set of elements is one token per element.
 -- Returns a comma-joined string suitable for --allow.
 export
 manifestToAllowStr : List Atom -> String
 manifestToAllowStr atoms =
-  let toks = map atomToAllowTok atoms
+  let toks = flatMap atomToAllowToks atoms
   joinWith "," toks
 
-atomToAllowTok : Atom -> String
-atomToAllowTok a =
+atomToAllowToks : Atom -> List String
+atomToAllowToks a =
   let label = atomLabel a
-  match atomConst a
-    Some (PPrefix (Some s)) => "\{label}=\{s}"
-    Some (PSet (Some xs)) => "\{label}={\{joinWith "," xs}}"
-    Some (PProduct ax) => "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form
-    _ => label
+  match authConsts (atomAuth a)
+    Some (ps@(_ :: _)) => map (paramAllowTok label) ps
+    _ => [label]
+
+paramAllowTok : String -> Param -> String
+paramAllowTok label p = match canonParam p
+  PPrefix (Some s) => "\{label}=\{s}"
+  PSet (Some xs) => "\{label}={\{joinWith "," xs}}"
+  PProduct ax if not (isSubTop (PProduct ax)) =>
+    "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form
+  _ => label
 
 -- WS-4: render product axes as a policy `--allow` rhs `Host="…";Method={…}` —
 -- `;`-separated so it round-trips through `parsePolicyTok`/`splitComma` (the

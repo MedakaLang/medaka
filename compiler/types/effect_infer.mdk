@@ -2,10 +2,11 @@
 -- them; inference allowances and signature constraints belong to the checker.
 import types.effect_rows.{EffRow(..), Effvar, collectRows}
 import types.effect_domain.{
-  Param(..), canonParam, productNorm, subTopOf, productPrimaryLift
+  Param(..), canonParam, productNorm, subTopOf, productPrimaryLift, domainKey
 }
 import types.effect_authority.{
-  Authority(..), authJoin, authTop, authExtend, authAppend
+  Authority(..), authJoin, authTop, authExtend, authAppend, authWidenValue,
+  authDomainTop
 }
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
@@ -56,12 +57,24 @@ alphaOf top varType lets e ty = match alphaSyntax top varType lets e
 -- value nothing can see (the domain's top).
 public export data AlphaBinder = ALet Expr | AParam | AOpaque
 
--- The qualifier a checked type carries, else the domain's top.
+-- The qualifier a checked type carries, else the domain's top. A qualifier
+-- of another domain (a Product of another schema, a Prefix read at a Set) is
+-- no element of this one, so it too is the top. The empty authority has no
+-- domain and is an element of every one.
 export
 typeAuthority : Param -> Mono -> Authority
 typeAuthority top ty = match normalize ty
-  TQual _ q => q
+  TQual _ q => qualifierIn top q
   _ => authTop top
+
+qualifierIn : Param -> Authority -> Authority
+qualifierIn top q = if inDomain top q then q else authTop top
+
+inDomain : Param -> Authority -> Bool
+inDomain PUnit _ = True
+inDomain top q = match authDomainTop q
+  PUnit => True
+  d => domainKey d == domainKey top
 
 alphaSyntax : Param ->
   (String -> Option Mono) ->
@@ -150,15 +163,15 @@ concatAuthority : Param ->
   Expr ->
   Option Authority
 concatAuthority (top@(PPrefix _)) vt lets a b =
-  mapOption (suffixed top b) (alphaSyntax top vt lets a)
+  mapOption (suffixed b) (alphaSyntax top vt lets a)
 concatAuthority (top@(PProduct _)) vt lets a b =
-  mapOption (suffixed top b) (alphaSyntax top vt lets a)
+  mapOption (suffixed b) (alphaSyntax top vt lets a)
 concatAuthority _ _ _ _ _ = None
 
-suffixed : Param -> Expr -> Authority -> Authority
-suffixed top b left = match exactString b
-  Some s => authAppend top s left
-  None => authExtend top left
+suffixed : Expr -> Authority -> Authority
+suffixed b left = match exactString b
+  Some s => authAppend s left
+  None => authExtend left
 
 -- The string an expression denotes exactly: a literal, or a concatenation of
 -- two such.
@@ -183,13 +196,13 @@ varAuthority : Param ->
 varAuthority top vt lets x = match letInScope x lets
   Some (ALet rhs, older) => alphaSyntax top vt older rhs
   Some (AOpaque, _) => None
-  Some (AParam, _) => typedAuthority vt x
-  None => typedAuthority vt x
+  Some (AParam, _) => typedAuthority top vt x
+  None => typedAuthority top vt x
 
-typedAuthority : (String -> Option Mono) -> String -> Option Authority
-typedAuthority vt x = match vt x
+typedAuthority : Param -> (String -> Option Mono) -> String -> Option Authority
+typedAuthority top vt x = match vt x
   Some ty => match normalize ty
-    TQual _ q => Some q
+    TQual _ q => Some (qualifierIn top q)
     _ => None
   None => None
 
@@ -202,12 +215,13 @@ letInScope _ [] = None
 letInScope x ((n, e) :: rest) =
   if n == x then Some (e, rest) else letInScope x rest
 
--- Every branch must be known for the join to say more than the top.
+-- Every branch must be known for the join to say more than the top. The
+-- join is a value's, so past the cap it is widened (`authWidenValue`).
 joinBranches : List (Option Authority) -> Option Authority
 joinBranches [] = None
 joinBranches [q] = q
 joinBranches (q :: rest) = match (q, joinBranches rest)
-  (Some a, Some b) => Some (authJoin a b)
+  (Some a, Some b) => Some (authWidenValue (authJoin a b))
   _ => None
 
 collectBinds : List LetBind ->

@@ -710,11 +710,12 @@ public export data Ty =
   -- An explicit authority qualifier `String @p`: the value's domain-directed
   -- abstraction is bounded by the authority `p` names.  `p` must be bound by a
   -- `TyNamed` to its left (or a data parameter); resolve checks that.  A
-  -- joined qualifier `String @(a | b)` names several binders and is bounded by
-  -- their join, so the names are a list of one or more.  The span is the
-  -- qualifier's own, from the `@`, so a diagnostic about a name it writes
-  -- points there; `None` for a qualifier a tool synthesises.
-  | TyQual Ty (List String) (Option Loc)
+  -- joined qualifier `String @(a | "b.com/*")` writes several terms, names
+  -- (`EPName`) and domain literals, and is bounded by their join, so the terms
+  -- are a list of one or more.  The span is the qualifier's own, from the `@`,
+  -- so a diagnostic about a term it writes points there; `None` for a
+  -- qualifier a tool synthesises.
+  | TyQual Ty (List EffParamTy) (Option Loc)
   -- A row/grade written BARE in a type-ARGUMENT slot (#997), e.g. the
   -- `<Stdout>` of `Async <Stdout> Unit`.  Distinct from `TyEffect` — which
   -- always WRAPS an inner type (`<Stdout> Unit` meaning "Unit, performing
@@ -726,11 +727,13 @@ public export data Ty =
   | TyRow (List EffAtomTy) (List String) (Option Loc)
   -- An authority term written in an `Authority`-kinded type-ARGUMENT slot:
   -- the top `*` (`Handle *`), a domain literal (`Handle "config/*"`), a set
-  -- or a product, spelled exactly as an atom's parameter is.  A bare name in
-  -- that slot is a `TyVar`; the slot's declared kind is what makes it an
-  -- authority binder rather than a type variable, as an `Effect` slot does
-  -- for a row.  Never appears outside such a slot: elaboration diagnoses it.
-  | TyAuth EffParamTy (Option Loc)
+  -- or a product, spelled exactly as an atom's parameter is, or a join of
+  -- terms, `Handle ("a/*" | p)`, whose names are `EPName`s.  A bare name in
+  -- that slot is a `TyVar`, and a join of names only is a `TyRow`; the slot's
+  -- declared kind is what makes either an authority rather than a type
+  -- variable or a row, as an `Effect` slot does for a row.  Never appears
+  -- outside such a slot: elaboration diagnoses it.
+  | TyAuth (List EffParamTy) (Option Loc)
 
 -- One written effect atom: a label, the identity of the `effect` declaration
 -- it names (acquired by resolve, `OriginBuiltin` for the language's own
@@ -833,6 +836,17 @@ authTermSurface _ EPTop = "*"
 authTermSurface esc p =
   let s = effParamSurface esc p
   stringSlice 1 (stringLength s) s
+
+-- A written authority term, one or a join: `"config/*"`, `("a/*" | p)`.
+export
+authTermsSurface : (String -> String) -> List EffParamTy -> String
+authTermsSurface esc [p] = match p
+  -- A product's axes are space-separated, so as one term they are
+  -- parenthesised to read back as one argument.
+  EPProduct _ => "(" ++ authTermSurface esc p ++ ")"
+  _ => authTermSurface esc p
+authTermsSurface esc ps =
+  "(" ++ join " | " (map (authTermSurface esc) ps) ++ ")"
 
 -- A constructor's existential binders as written, space-separated:
 -- `(p : Authority FileRead) (q : Authority Env)`.
@@ -972,13 +986,24 @@ kindAnnSource KindEffect = "Effect"
 kindAnnSource (KindAuthority l _ _) = "Authority \{l}"
 kindAnnSource (KindArrow a b) = "\{kindAnnArg a} -> \{kindAnnSource b}"
 
--- The source spelling of a qualifier's names, `@p` or the joined `@(a | b)`,
+-- The source spelling of a qualifier's terms, `@p` or the joined `@(a | "b/*")`,
 -- shared by every tool that renders a `TyQual` for the reason
 -- `kindAnnSource` is.
 export
-qualifierSource : List String -> String
-qualifierSource [n] = "@\{n}"
-qualifierSource ns = "@(" ++ join " | " ns ++ ")"
+qualifierSource : (String -> String) -> List EffParamTy -> String
+-- `@` takes a name, a string or a parenthesised term.
+qualifierSource esc [EPSet xs] = "@(" ++ authTermsSurface esc [EPSet xs] ++ ")"
+qualifierSource esc ps = "@" ++ authTermsSurface esc ps
+
+-- The names a written authority term refers to.
+export
+authTermNames : List EffParamTy -> List String
+authTermNames ps =
+  flatMap
+    (p => match p
+      EPName n => [n]
+      _ => [])
+    ps
 
 -- The arrow associates right, so only a LEFT operand that is itself an arrow
 -- needs parentheses: `Effect -> Type -> Type` prints bare, and `(Type ->

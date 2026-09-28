@@ -1,0 +1,10 @@
+-- The same Product elements written in two orders are one set: an index
+-- is invariant, so the two must be equal.
+effect P Product (X : Set, Y : Set)
+
+data W (p : Authority P) = W String
+
+conv : W (X={"1"} Y={"1"} | X={"2"} Y={"1"} | X={"1"} Y={"2"}) -> W (X={"2"} Y={"1"} | X={"1"} Y={"2"} | X={"1"} Y={"1"})
+conv w = w
+
+main = println 1

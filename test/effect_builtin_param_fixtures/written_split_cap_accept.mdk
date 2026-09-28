@@ -1,0 +1,12 @@
+-- Control: sixteen members, and a use of one of them.
+effect Web Product (Host : Prefix, Method : Set)
+
+extern getM01 : Unit -> <FFI, Web Host="a.com/*" Method={"M01"}> Unit
+
+f : Unit -> <Env {"V01"}, Env {"V02"}, Env {"V03"}, Env {"V04"}, Env {"V05"}, Env {"V06"}, Env {"V07"}, Env {"V08"}, Env {"V09"}, Env {"V10"}, Env {"V11"}, Env {"V12"}, Env {"V13"}, Env {"V14"}, Env {"V15"}, Env {"V16"}> Option String
+f _ = getEnv "V03"
+
+g : Unit -> <FFI, Web Host="a.com/*" Method={"M01"}, Web Host="a.com/*" Method={"M02"}, Web Host="a.com/*" Method={"M03"}, Web Host="a.com/*" Method={"M04"}, Web Host="a.com/*" Method={"M05"}, Web Host="a.com/*" Method={"M06"}, Web Host="a.com/*" Method={"M07"}, Web Host="a.com/*" Method={"M08"}, Web Host="a.com/*" Method={"M09"}, Web Host="a.com/*" Method={"M10"}, Web Host="a.com/*" Method={"M11"}, Web Host="a.com/*" Method={"M12"}, Web Host="a.com/*" Method={"M13"}, Web Host="a.com/*" Method={"M14"}, Web Host="a.com/*" Method={"M15"}, Web Host="a.com/*" Method={"M16"}> Unit
+g _ = getM01 ()
+
+main = println 1

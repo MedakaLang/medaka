@@ -1,4 +1,6 @@
+authTermNames : List EffParamTy -> List String
 authTermSurface : (String -> String) -> EffParamTy -> String
+authTermsSurface : (String -> String) -> List EffParamTy -> String
 constraintUnresolved : String -> List Ty -> Constraint
 ctorBindersSource : List (String, KindAnn) -> String
 ctorBindersSurface : List (String, KindAnn) -> String
@@ -71,7 +73,7 @@ negateLiteral : Int -> Int
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 patBoundNames : Pat -> List String
 qualifiedLocal : String -> String -> String
-qualifierSource : List String -> String
+qualifierSource : (String -> String) -> List EffParamTy -> String
 recPatFieldNames : RecPatField -> List String
 requireUnresolved : String -> List Ty -> Require
 sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool
