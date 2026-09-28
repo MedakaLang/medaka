@@ -61,6 +61,7 @@ import ir.core_ir.{
 import types.disposition.{
   DispositionTable,
   InstanceShape(..),
+  ifaceSuperCount,
   inheritorsOf,
   installedDispositions,
   installedDispositionsOpt,
@@ -688,10 +689,14 @@ lowerTypedProgram prog = lowerProgramWith (Some (installedDispositions ())) prog
 lowerProgramWith : Option DispositionTable -> List Decl -> CProgram
 lowerProgramWith dispositions prog =
   CProgram
-    (lowerGroups prog ++ lowerSharedDefaults dispositions prog)
+    (lowerGroups prog)
     (ctorArities prog)
     (buildCtorToType prog)
-    (lowerImplsWith (installDispatchTables prog) dispositions prog)
+    (lowerImplsWith
+      (installDispatchTables prog)
+      (instanceReqCounts prog)
+      dispositions
+      prog)
 
 -- #1970: which backend(s) a `lowerProgramEmit` caller is about to feed the result
 -- to — the discriminator `dictWitnessTagGuard` needs to narrow its wasm 30-bit
@@ -1846,13 +1851,15 @@ checkDictTagsInjective space hash ((m, w, owner) :: rest) seen =
 -- module's impls against it.
 export
 lowerImplsWith : List ((String, String, String), List Int) ->
+  OrdMap Int ->
   Option DispositionTable ->
   List Decl ->
   List CImplEntry
-lowerImplsWith disp dispositions prog =
-  flatMap (lowerDeclImpl disp dispositions) prog
+lowerImplsWith disp reqCounts dispositions prog =
+  flatMap (lowerDeclImpl disp reqCounts dispositions) prog
 
 lowerDeclImpl : List ((String, String, String), List Int) ->
+  OrdMap Int ->
   Option DispositionTable ->
   Decl ->
   List CImplEntry
@@ -1863,23 +1870,23 @@ lowerDeclImpl : List ((String, String, String), List Int) ->
 -- from the program's impl set.  Native then had an impl-less interface-with-default
 -- and SIGSEGV'd through #948's arm-less dispatcher; eval's `declImplEntries` has the
 -- same shape and silently answered from the interface default instead.
-lowerDeclImpl disp dt (DAttrib _ d) = lowerDeclImpl disp dt d
+lowerDeclImpl disp reqCounts dt (DAttrib _ d) =
+  lowerDeclImpl disp reqCounts dt d
 -- B-2.2-e: `implOrigin` is bound here purely to reach `lowerImplMethod`'s route
 -- word (the definition side of the identity-bearing key `keyForSite` stamps at the
 -- call site).  Matched arm-for-arm by `eval.declImplEntries`, which threads the
 -- same field for the same reason.
-lowerDeclImpl disp _ (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+lowerDeclImpl disp _ _ (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
   map (lowerImplMethod disp o ifaceName typeArgs) methods
--- An interface lowers one forwarder entry for each default per instance the table
--- says inherits it — lowered HERE, beside the interface's other code and its shared
--- default bodies (`lowerSharedDefaults`), because the body is the interface module's
--- (its names resolve there).  Every inherited slot therefore has its own entry, and
--- no engine is left to choose a default.  The interface word is read straight off `DInterface.ifaceOrigin`
+-- An interface lowers one entry for each default per instance the table says
+-- inherits it — lowered HERE, beside the interface's other code, because the body
+-- is the interface module's (its names resolve there).  Every inherited slot
+-- therefore has its own entry, and no engine is left to choose a default.  The interface word is read straight off `DInterface.ifaceOrigin`
 -- (resolve stamps it in `elaborateModules`' preamble — `stampGraphTyOrigins`), the
 -- same spelling the table's producer keys the slot by.
-lowerDeclImpl disp (Some dt) (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
-  flatMap (lowerInheritedDefault disp dt o ifaceName) methods
-lowerDeclImpl _ _ _ = []
+lowerDeclImpl disp reqCounts (Some dt) (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+  flatMap (lowerInheritedDefault disp reqCounts dt o ifaceName) methods
+lowerDeclImpl _ _ _ _ = []
 
 lowerImplMethod : List ((String, String, String), List Int) ->
   TyConOrigin ->
@@ -1902,102 +1909,225 @@ lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
     (CImplTagged tag key ifaceName positions pats (lower body))
 
 lowerInheritedDefault : List ((String, String, String), List Int) ->
+  OrdMap Int ->
   DispositionTable ->
   TyConOrigin ->
   String ->
   IfaceMethod ->
   List CImplEntry
-lowerInheritedDefault _ _ _ _ (IfaceMethod _ _ None _) = []
-lowerInheritedDefault disp dt o ifaceName (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
+lowerInheritedDefault _ _ _ _ _ (IfaceMethod _ _ None _) = []
+lowerInheritedDefault disp reqCounts dt o ifaceName (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
   let ifaceWord = ifaceWordOf o ifaceName
   let positions =
     lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
-  let valueCount =
-    listLen pats - leadingDictParams pats + listLen (lamParams body)
+  let nMethodDicts = leadingDictParams pats
+  let receiver = "$dict_\{mname}_\{intToString nMethodDicts}"
+  let params =
+    take nMethodDicts pats
+      ++ [PVar receiver (Loc "" 0 0 0 0)]
+      ++ drop nMethodDicts pats
+      ++ lamParams body
+  let lowered = lower (underLam body)
+  let spec =
+    shape => DefaultRow {
+      drSelf = defaultReceiverDict mname,
+      drReceiver = receiver,
+      drIface = ifaceWord,
+      drWord = shape.isWord,
+      drSupers = receiverFields receiver 0 (ifaceSuperCount ifaceWord dt),
+      drReqs =
+        receiverFields
+          receiver
+          (ifaceSuperCount ifaceWord dt)
+          (optionOr 0 (omLookup shape.isWord reqCounts)),
+    }
   map
-    (inheritedDefaultEntry ifaceWord mname positions pats valueCount)
+    (shape =>
+      CImplEntry
+        mname
+        (tyvarsInArgs shape.isTys)
+        (CImplDefault
+          ifaceWord
+          (optionOr noneHeadTag (headTyconHead shape.isTys))
+          shape.isWord
+          positions
+          params
+          (specializeRow (spec shape) lowered)))
     (inheritorsOf ifaceWord mname dt)
 
--- One inheriting instance's entry for a default: a forwarder to the interface's one
--- shared body (`sharedDefaultName`).  It takes the default's method-level
--- dictionaries, then the RECEIVER -- the dictionary of the instance whose slot it
+-- One inheriting instance's entry for a default is the default's body lowered once
+-- and specialized to that instance.  The entry takes the default's method-level
+-- dictionaries, then its RECEIVER -- the dictionary of the instance whose slot it
 -- fills, handed over by whichever call selected this entry -- then the default's
--- value arguments.  The receiver sits where a supplied method's first `requires`
--- dictionary sits and is named like one, so every engine's count of an entry's
--- leading dictionaries covers it; an engine differs only in passing the selecting
--- dictionary itself there rather than the dictionary's `requires`.
-inheritedDefaultEntry : String ->
-  String ->
-  List Int ->
-  List Pat ->
-  Int ->
-  InstanceShape ->
-  CImplEntry
-inheritedDefaultEntry ifaceWord mname positions pats valueCount shape =
-  let nMethodDicts = leadingDictParams pats
-  let methodNames = map patName (take nMethodDicts pats)
-  let receiver = "$dict_\{mname}_\{intToString nMethodDicts}"
-  let valueNames = map (i => "$dv_\{intToString i}") (range 0 valueCount)
-  let params = methodNames ++ [receiver] ++ valueNames
-  CImplEntry
-    mname
-    (tyvarsInArgs shape.isTys)
-    (CImplDefault
-      ifaceWord
-      (optionOr noneHeadTag (headTyconHead shape.isTys))
-      shape.isWord
-      positions
-      (map (n => PVar n (Loc "" 0 0 0 0)) params)
-      (applyNamed (CVar (sharedDefaultName ifaceWord mname) AGlobal) params))
+-- value patterns (and, for a point-free default, its lambda's).  The receiver sits
+-- where a supplied method's first `requires` dictionary sits and is named like one,
+-- so every engine's count of an entry's leading dictionaries covers it; an engine
+-- differs only in passing the selecting dictionary itself there rather than the
+-- dictionary's `requires`.
+--
+-- The entry is reached only through its instance's word, so the receiver IS that
+-- instance's dictionary: a call in the body to a method of the same interface on the
+-- receiver goes straight to the instance's own entry for it (supplied or inherited),
+-- its `requires` read out of the receiver.  Everything else, a superclass call in
+-- particular, still reads the receiver, so it answers with the dictionary the caller
+-- built.
+data DefaultRow = DefaultRow {
+  -- the receiver name the body's evidence was rendered to (`defaultReceiverDict`)
+  drSelf : String,
+  -- the entry's receiver parameter
+  drReceiver : String,
+  -- the interface's word, which a sibling call carries
+  drIface : String,
+  -- the inheriting instance's word
+  drWord : String,
+  -- the receiver's super dictionaries, then its `requires`, as projections of it
+  drSupers : List Route,
+  drReqs : List Route,
+}
 
--- the interface's one body for the default of [method], shared by every inheritor
--- of the interface with word [ifaceWord]
+-- projections [from, from + n) of the dictionary named [recv]: a dictionary stores
+-- its supers, then its `requires`
+receiverFields : String -> Int -> Int -> List Route
+receiverFields recv from n =
+  map (i => RProj (RDict recv) [i]) (range from (from + n))
+
+specializeRow : DefaultRow -> CExpr -> CExpr
+specializeRow row (CMethod name iface arity route implRoutes methRoutes) =
+  if iface == row.drIface && isReceiverRoute row route then
+    CMethod
+      name
+      iface
+      arity
+      (RKey row.drWord [] row.drSupers)
+      row.drReqs
+      (map (renameReceiver row) methRoutes)
+  else
+    CMethod
+      name
+      iface
+      arity
+      (renameReceiver row route)
+      (map (renameReceiver row) implRoutes)
+      (map (renameReceiver row) methRoutes)
+specializeRow row (CDict name routes) =
+  CDict name (map (renameReceiver row) routes)
+specializeRow row (CVar x addr) =
+  if x == row.drSelf then CVar row.drReceiver addr else CVar x addr
+specializeRow _ (CLit l) = CLit l
+specializeRow row (CApp f x) = CApp (specializeRow row f) (specializeRow row x)
+specializeRow row (CLam pats body) = CLam pats (specializeRow row body)
+specializeRow row (CLet r pat e1 e2) =
+  CLet r pat (specializeRow row e1) (specializeRow row e2)
+specializeRow row (CLetGroup binds body) =
+  CLetGroup (map (specializeBind row) binds) (specializeRow row body)
+specializeRow row (CMatch scrut arms) =
+  CMatch (specializeRow row scrut) (map (specializeArm row) arms)
+specializeRow row (CDecision scrut arms tree) =
+  CDecision (specializeRow row scrut) (map (specializeArm row) arms) tree
+specializeRow row (CIf c t e) =
+  CIf (specializeRow row c) (specializeRow row t) (specializeRow row e)
+specializeRow row (CBinPrim op l r tag) =
+  CBinPrim op (specializeRow row l) (specializeRow row r) tag
+specializeRow row (CUnOp op x) = CUnOp op (specializeRow row x)
+specializeRow row (CTuple es) = CTuple (map (specializeRow row) es)
+specializeRow row (CList es) = CList (map (specializeRow row) es)
+specializeRow row (CRecord name fields) =
+  CRecord name (map (specializeField row) fields)
+specializeRow row (CFieldAccess ex f n) =
+  CFieldAccess (specializeRow row ex) f n
+specializeRow row (CRecordUpdate name base fields) =
+  CRecordUpdate name (specializeRow row base) (map (specializeField row) fields)
+specializeRow row (CVariantUpdate con base fields) =
+  CVariantUpdate con (specializeRow row base) (map (specializeField row) fields)
+specializeRow row (CArray es) = CArray (map (specializeRow row) es)
+specializeRow row (CRangeList lo hi incl) =
+  CRangeList (specializeRow row lo) (specializeRow row hi) incl
+specializeRow row (CRangeArray lo hi incl) =
+  CRangeArray (specializeRow row lo) (specializeRow row hi) incl
+specializeRow row (CIndex a i) =
+  CIndex (specializeRow row a) (specializeRow row i)
+specializeRow row (CSlice a lo hi incl) =
+  CSlice
+    (specializeRow row a)
+    (specializeRow row lo)
+    (specializeRow row hi)
+    incl
+specializeRow row (CStringIndex a i) =
+  CStringIndex (specializeRow row a) (specializeRow row i)
+specializeRow row (CStringSlice a lo hi incl) =
+  CStringSlice
+    (specializeRow row a)
+    (specializeRow row lo)
+    (specializeRow row hi)
+    incl
+specializeRow row (CListIndex a i) =
+  CListIndex (specializeRow row a) (specializeRow row i)
+specializeRow row (CListSlice a lo hi incl) =
+  CListSlice
+    (specializeRow row a)
+    (specializeRow row lo)
+    (specializeRow row hi)
+    incl
+specializeRow row (CBlock stmts) = CBlock (map (specializeStmt row) stmts)
+
+specializeBind : DefaultRow -> CBind -> CBind
+specializeBind row (CBind n clauses) =
+  CBind n (map (specializeClause row) clauses)
+
+specializeClause : DefaultRow -> CClause -> CClause
+specializeClause row (CClause pats body) = CClause pats (specializeRow row body)
+
+specializeArm : DefaultRow -> CArm -> CArm
+specializeArm row (CArm pat guards body) =
+  CArm pat (map (specializeGuard row) guards) (specializeRow row body)
+
+specializeGuard : DefaultRow -> CGuard -> CGuard
+specializeGuard row (CGBool e) = CGBool (specializeRow row e)
+specializeGuard row (CGBind p e) = CGBind p (specializeRow row e)
+
+specializeStmt : DefaultRow -> CStmt -> CStmt
+specializeStmt row (CSExpr e) = CSExpr (specializeRow row e)
+specializeStmt row (CSLet r pat e) = CSLet r pat (specializeRow row e)
+specializeStmt row (CSAssign x e) = CSAssign x (specializeRow row e)
+
+specializeField : DefaultRow -> CField -> CField
+specializeField row (CField k e) = CField k (specializeRow row e)
+
+-- the receiver itself, not a projection of it
+isReceiverRoute : DefaultRow -> Route -> Bool
+isReceiverRoute row (RDict d) = d == row.drSelf
+isReceiverRoute row (RDictFwd d) = d == row.drSelf
+isReceiverRoute _ _ = False
+
+renameReceiver : DefaultRow -> Route -> Route
+renameReceiver row (RDict d) =
+  RDict (if d == row.drSelf then row.drReceiver else d)
+renameReceiver row (RDictFwd d) =
+  RDictFwd (if d == row.drSelf then row.drReceiver else d)
+renameReceiver row (RKey k reqs sups) =
+  RKey k (map (renameReceiver row) reqs) (map (renameReceiver row) sups)
+renameReceiver row (RProj r path) = RProj (renameReceiver row r) path
+renameReceiver row (RLocal sym dicts) =
+  RLocal sym (map (renameReceiver row) dicts)
+renameReceiver _ RNone = RNone
+renameReceiver _ (RScalar t) = RScalar t
+
+-- Each instance's `requires` count, keyed by its word: the length of the segment its
+-- dictionary stores after its supers.  Built from every module's impls, because an
+-- instance can inherit a default declared in another module.
 export
-sharedDefaultName : String -> String -> String
-sharedDefaultName ifaceWord method = "$dm_\{method}_\{injectiveIdent ifaceWord}"
+instanceReqCounts : List Decl -> OrdMap Int
+instanceReqCounts decls = instanceReqCountsGo decls omEmpty
 
-applyNamed : CExpr -> List String -> CExpr
-applyNamed f [] = f
-applyNamed f (n :: rest) = applyNamed (CApp f (CVar n AGlobal)) rest
-
-patName : Pat -> String
-patName (PVar n _) = n
-patName _ = panic "a dictionary parameter is always a variable pattern"
-
--- The shared body of every interface default, one per (interface word, method),
--- lowered ONCE from the body inferred once: its method-level dictionaries, then its
--- receiver (`ast.defaultReceiverDict`, which the body's sibling and superclass calls
--- read as a given), then its own value patterns -- and, for a point-free default
--- (`loud = x => …`), its lambda's, so every forwarder call is saturated.  Every default gets one whether or
--- not this program inherits it, so an interface's bodies depend on its own module
--- alone (the prelude object carries the prelude's).  A program lowered without a
--- disposition table has no inherited entries to forward to one.
-export
-lowerSharedDefaults : Option DispositionTable -> List Decl -> List CBind
-lowerSharedDefaults None _ = []
-lowerSharedDefaults (Some _) prog = flatMap sharedDefaultsOf prog
-
-sharedDefaultsOf : Decl -> List CBind
-sharedDefaultsOf (DAttrib _ d) = sharedDefaultsOf d
-sharedDefaultsOf (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
-  flatMap (sharedDefaultOf (ifaceWordOf o ifaceName)) methods
-sharedDefaultsOf _ = []
-
-sharedDefaultOf : String -> IfaceMethod -> List CBind
-sharedDefaultOf _ (IfaceMethod _ _ None _) = []
-sharedDefaultOf ifaceWord (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
-  let nMethodDicts = leadingDictParams pats
-  let receiver = PVar (defaultReceiverDict mname) (Loc "" 0 0 0 0)
-  [
-    CBind (sharedDefaultName ifaceWord mname) [
-      CClause
-        (take nMethodDicts pats
-          ++ [receiver]
-          ++ drop nMethodDicts pats
-          ++ lamParams body)
-        (lower (underLam body)),
-    ],
-  ]
+instanceReqCountsGo : List Decl -> OrdMap Int -> OrdMap Int
+instanceReqCountsGo [] acc = acc
+instanceReqCountsGo ((DAttrib _ d) :: rest) acc =
+  instanceReqCountsGo (d :: rest) acc
+instanceReqCountsGo ((DImpl { iface, tys, reqs, implOrigin, ... }) :: rest) acc =
+  instanceReqCountsGo
+    rest
+    (omInsert (implRouteKeyWord implOrigin iface tys None) (listLen reqs) acc)
+instanceReqCountsGo (_ :: rest) acc = instanceReqCountsGo rest acc
 
 -- a default body's leading lambda parameters, and the body under them
 lamParams : Expr -> List Pat

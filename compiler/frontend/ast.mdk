@@ -155,10 +155,10 @@ ifaceIdMatches a b = a /= "" && a == b
 
 -- The dictionary name an interface default body's RECEIVER evidence renders to: a
 -- sibling or superclass call inside `method`'s default routes `RDict`/`RDictFwd` (or
--- a projection of it) to it.  It is a real parameter of the one shared default body
--- (`core_ir_lower.sharedDefaultName`, eval's `sharedDefaultValue`), bound to the
--- dictionary of whichever instance the call selected, so the body is inferred and
--- lowered once and selects nothing.  `$` keeps it out of every user namespace.
+-- a projection of it) to it.  It is a real parameter of the default's body (each
+-- inheriting instance's entry in `core_ir_lower.lowerInheritedDefault`, eval's
+-- `sharedDefaultValue`), bound to the dictionary of whichever instance the call
+-- selected, so the body is inferred once and selects nothing.  `$` keeps it out of every user namespace.
 export
 defaultReceiverDict : String -> String
 defaultReceiverDict method = "$self_\{method}"
@@ -1082,6 +1082,9 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 -- RProj = the dictionary a route denotes, projected along a path of direct-super
 --   indices (DICT-SEMANTICS §3 `super`).  A dictionary stores its supers before its
 --   requires, so an index names the same slot whichever instance the dictionary is.
+--   An index past the supers names a `requires` dictionary, which only a projection
+--   of a dictionary whose instance is known may use (an inherited default's body
+--   specialized to its instance, `core_ir_lower.specializeRow`).
 -- RLocal = NOT a method dispatch (Phase 112 / TYPECHECK-AUDIT C5): at this call
 --   site the interface has no impl for the concrete receiver, but an explicitly-
 --   imported/local standalone function shadows the method name, so eval ignores

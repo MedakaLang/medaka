@@ -239,9 +239,11 @@ import support.util.{
 import ir.core_ir_lower.{ifaceMethodArityKey, ifaceWordOfKey}
 import backend.trmc_analysis.{
   SelfRef(..),
+  methodSelf,
   trmcEligible,
   isCtorTail,
   isSelfSatApp,
+  isSelfHead,
   consTailArgs,
   ctorTailName,
   ctorTailIsCons,
@@ -5138,7 +5140,7 @@ emitMethodRef prog env d name iface siteArity (route@(RKey tag _ _)) implRoutes 
       args
 emitMethodRef prog env d name iface siteArity (route@(RDict dpar)) implRoutes methRoutes args =
   if listLen args == siteArity then
-    emitMethodDispatchRef prog env d name iface siteArity dpar args
+    emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args
   else
     emitMethodValueRef
         prog
@@ -5154,7 +5156,7 @@ emitMethodRef prog env d name iface siteArity (route@(RDict dpar)) implRoutes me
       ++ ["call $__mdk_apply"]
 emitMethodRef prog env d name iface siteArity (route@(RDictFwd dpar)) implRoutes methRoutes args =
   if listLen args == siteArity then
-    emitMethodDispatchRef prog env d name iface siteArity dpar args
+    emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args
   else
     emitMethodValueRef
         prog
@@ -5183,6 +5185,7 @@ emitMethodRef prog env d name iface siteArity (route@(RProj r path)) implRoutes 
         iface
         siteArity
         local
+        methRoutes
         args
   else
     emitMethodValueRef
@@ -5306,21 +5309,25 @@ routeKeyWordW : Route -> String
 routeKeyWordW (RKey word _ _) = word
 routeKeyWordW _ = ""
 
--- an inherited default's per-instance entry (a forwarder to the shared body)
+-- an inherited default's per-instance entry
 isInheritedEntryW : CImplEntry -> Bool
 isInheritedEntryW (CImplEntry _ _ (CImplDefault _ _ _ _ _ _)) = True
 isInheritedEntryW _ = False
 
--- The dictionaries a dispatch arm loads for its entry after the method-level ones:
--- an inherited default receives the dictionary that selected it; a supplied method
--- its `requires` -- the entry's own leading `$dict_*` count -- which follow the
--- dictionary's super segment.
-armDictLoadsW : CImplEntry -> String -> List String
-armDictLoadsW ent dpar =
+-- A dispatch site's method-level dictionaries: the instructions that push their
+-- witnesses, and how many there are.
+data MethodDictsW = MethodDictsW { mdInstrs : List String, mdCount : Int }
+
+-- The dictionaries a dispatch arm loads for its entry after the [nMeth] method-level
+-- ones: an inherited default receives the dictionary that selected it; a supplied
+-- method its `requires` -- the rest of the entry's own leading `$dict_*` count --
+-- which follow the dictionary's super segment (llvm_emit's `emitDispatchArmBody`).
+armDictLoadsW : CImplEntry -> String -> Int -> List String
+armDictLoadsW ent dpar nMeth =
   if isInheritedEntryW ent then
     ["local.get $" ++ gname dpar]
   else
-    let reqDicts = implLeadingDictCountOfEntryW ent
+    let reqDicts = maxI 0 (implLeadingDictCountOfEntryW ent - nMeth)
     let supers = entrySuperCountW ent
     flatMap (loadReqDict dpar) (rangeList supers (supers + reqDicts))
 
@@ -5335,15 +5342,18 @@ emitMethodDispatchRef : Prog ->
   String ->
   Int ->
   String ->
+  List Route ->
   List CExpr ->
   List String
-emitMethodDispatchRef prog env d name iface siteArity dpar args =
+emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args =
   -- the occurrence's interface's candidates (#1265, #1619), and (#1852, LOCKSTEP with
   -- llvm_emit's `narrowImplsByArity`) only those whose own declared arity is the
   -- arity this site supplies.
   let impls =
     narrowImplsByArityW prog name (methodImpls prog name iface) siteArity
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
+  -- every arm passes the site's method-level dictionaries ahead of its own
+  let methInstrs = flatMap (routeWitness prog env d) methRoutes
   -- the dict tag is read repeatedly; stash it in the scratch local for this depth.
   let tagRead = readDictParam prog env dpar
   let blk = "$disp_\{name}_\{intToString d}"
@@ -5357,6 +5367,7 @@ emitMethodDispatchRef prog env d name iface siteArity dpar args =
       blk
       tagRead
       dpar
+      MethodDictsW { mdInstrs = methInstrs, mdCount = listLen methRoutes }
       argInstrs
       (listLen args)
       0
@@ -5424,26 +5435,29 @@ emitDispatchChain : Prog ->
   String ->
   List String ->
   String ->
+  MethodDictsW ->
   List String ->
   Int ->
   Int ->
   List String
-emitDispatchChain _ _ [] _ _ _ _ _ _ = []
-emitDispatchChain prog name (arm :: rest) blk tagRead dpar argInstrs nArgs idt =
+emitDispatchChain _ _ [] _ _ _ _ _ _ _ = []
+emitDispatchChain prog name (arm :: rest) blk tagRead dpar meth argInstrs nArgs idt =
   -- W5: a `requires`-bearing impl (e.g. `Debug (a,b) requires Debug a, Debug b`) compiles
   -- to a fn whose leading params are the forwarded `requires` dicts BEFORE the method args.
   -- The dispatch site holds the dict param ($dpar): when this impl is constrained, the dict
   -- reaching this arm is a $dictcell whose field-1 $dictarr carries those nested req dicts in
   -- order (built by routeWitness).  Load field 0..reqDicts-1 and prepend them as the impl fn's
   -- leading dict args, mirroring llvm_emit's loadReqDicts (fields 1..n of the boxed cell).
-  let reqLoads = armDictLoadsW (armEntryW arm) dpar
+  let reqLoads = armDictLoadsW (armEntryW arm) dpar meth.mdCount
+  let callSeq =
+    if meth.mdCount > 0 then
+      ["call $" ++ armFnSymW arm]
+    else
+      dispatchCallSeqW prog arm name nArgs
   indentBy idt (dispatchKeyTestW arm tagRead ++ ["if"])
     ++ indentBy
       (idt + 1)
-      (reqLoads
-        ++ argInstrs
-        ++ dispatchCallSeqW prog arm name nArgs
-        ++ ["br " ++ blk])
+      (meth.mdInstrs ++ reqLoads ++ argInstrs ++ callSeq ++ ["br " ++ blk])
     ++ indentBy idt ["else"]
     ++ emitDispatchChain
       prog
@@ -5452,6 +5466,7 @@ emitDispatchChain prog name (arm :: rest) blk tagRead dpar argInstrs nArgs idt =
       blk
       tagRead
       dpar
+      meth
       argInstrs
       nArgs
       (idt + 1)
@@ -9068,8 +9083,10 @@ wTrmcImplTry : Prog ->
   List CClause ->
   Option (List String)
 wTrmcImplTry prog method key fnName arity clauses =
-  let self = SelfByMethod method key
   let pairs = map clauseToPair clauses
+  let self = methodSelf method key (match pairs
+    (ps, _) :: _ => ps
+    [] => [])
   if arity > 0
     && dictUniformClauses clauses
     && trmcEligible
@@ -9568,12 +9585,17 @@ implSelfReturnCall prog env name iface siteArity route methRoutes implRoutes app
     ImplSelfOff => None
     ImplSelfOn method _ key fnName arity =>
       if name == method
-        && isSelfSatApp (SelfByMethod method key) arity app then match route
+        && isSelfHead (SelfByMethod method key 0) (appHead app) then match route
         RKey rtag _ _ => match implForWSite prog name iface rtag siteArity
           Some entry =>
-            if implEntryKeyW entry == key then
-              let dictWords =
-                flatMap (routeWitness prog env 0) (methRoutes ++ implRoutes)
+            -- the define's arity counts its leading dictionaries (an inherited
+            -- default's receiver among them), so the call is saturated when those
+            -- and the value arguments fill it
+            let dictRoutes =
+              staticEntryDictRoutesW entry route methRoutes implRoutes
+            if implEntryKeyW entry == key
+              && listLen dictRoutes + listLen args == arity then
+              let dictWords = flatMap (routeWitness prog env 0) dictRoutes
               let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
               Some (dictWords ++ argInstrs ++ ["return_call $" ++ fnName])
             else
