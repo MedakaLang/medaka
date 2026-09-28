@@ -189,12 +189,15 @@ in the source as *"deliberately NOT done here"* and then never scheduled.
   `KeyBuckets` (route stamping), now both complete and still independently
   maintained. A-3's job is to make K's `IE` the one environment both read. A second
   implementation that happens to agree is exactly the state this gap describes.
-- **G-7 / #1020 (Shape 1b).** "What is this instance's method table?" is answered in four places:
+- **G-7 / #1020 — CLOSED, drained by the disposition table (#1112/#3509, S2 2026-09-27).**
+  "What is this instance's method table?" used to be answered in four places:
   `fillImplDefaults` (same-module only, `desugar.mdk:851`), `eval.mdk`'s untagged
   `defaultEntry` (`:1888`), LLVM's `emitDefaultDispatchChain`, and wasm's absent peer.
-  `lowerDeclImpl` (`core_ir_lower.mdk:1267`) emits one entry per method *defined*, so a
-  cross-module default-only impl lowers to zero entries and each engine must invent the
-  arm privately. Same shape, no complete reference implementation.
+  `fillImplDefaults` is deleted; every accepted `(instance, method)` now has exactly one
+  `Supplied`/`InheritedDefault` row in `compiler/types/disposition.mdk`'s table, which every
+  engine's default lookup and dispatcher arm set reads instead of synthesizing its own
+  answer — the "same shape, no complete reference implementation" gap this row named is
+  the one reference table.
 - **G-10 / #1161 (Shape 1b).** "What predicate does this binding's `=>` context state?" is answered
   by **three** producers in `compiler/types/typecheck.mdk`, each with its own loss rule
   and **none** complete: `constraintTyVars` (`:16040-16042`) keeps one entry per *type
@@ -2004,6 +2007,13 @@ fork — together with the `pickMostSpecificEntry` sequencing constraint (land w
 after F-3).
 
 ### G-7 — #1020 is partially misclassified as engine-realization
+
+**IMPLEMENTED (#1112/#3509, S2 2026-09-27): the remedy this section proposes — a per-method
+DISPOSITION table, not a filled-in method table — is what landed.**
+`compiler/types/disposition.mdk` publishes exactly one `Supplied`/`InheritedDefault` row per
+accepted (instance, method); `fillImplDefaults` is deleted rather than made whole-graph. The
+analysis below is kept as the record of why a completed method TABLE was rejected in favor of
+a disposition.
 
 §4 and §8 list **#1020** among the defects "architecture cannot drain", with the capture
 ban holding "until the ENGINE fix lands". The wasm symptom is indeed an engine defect —

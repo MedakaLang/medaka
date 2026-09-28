@@ -213,7 +213,7 @@ Core. That distinction is not represented in their types.
 | Method/source arity | the `methodArityOfInput`/`Iface`/`Entry`/`Tag`/`Route` family (split from one function 2026-08-21 to 08-27) | the `methodArityOfW`/`InputW`/`IfaceW`/`EntryW`/`TagW` family | arrow-spine table from `core_ir_lower` plus the impl clause's own pattern count (#1034) |
 | Exact/PAP/over-application | `emitApp`/`emitOverApp` plus `emitPapClosure`/`emitMethodPap`/`emitCtorPap` families | closure arity plus `$mdk_apply` branches | none |
 | Record field slot | `Emit.recByName`/`recByLabel`/`recFields` | record-name and label indexes built into `WasmEmitInput` | record-name strings on some nodes; ordinals nowhere |
-| Dispatch arm/default | `implEntryRouteWords`, dispatch/default chain synthesis | `implEntryRouteKeyW`, dispatch chains, incomplete default synthesis | `Route` plus incomplete `CImplEntry` set |
+| Dispatch arm/default | one `icmp` per arm keyed on the canonical row key (`implEntryKey`), dispatch/default chain synthesis | `findByKeyW`, dispatch chains, incomplete default synthesis | `Route` plus incomplete `CImplEntry` set |
 | Closure captures/layout | LLVM free-variable and allocation paths | Wasm closure-use scan and lifted functions | none |
 | Global forcing | native realization of shared classification | Wasm realization of shared classification | `emit_support.eagerReachMap` / `lazyGlobalNames` |
 | Tail/TRMC realization | `musttail`, destination cells, dispatch-group inlining | `return_call`, typed destination structs | `trmc_analysis` eligibility/groups |

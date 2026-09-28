@@ -439,12 +439,12 @@ NOT yet cover:
     (which file's impl blocks to reorder is not derivable the same way).
     Directories don't match the `*.mdk` glob at all, so they are excluded by
     construction rather than by an exclusion list.
-  * §2 -- the dictionary RECORD SHAPE itself (a `supers` field vs a flat
-    impl-key). Only its observable consequences are pinned; asserting the
-    representation needs the Core-IR dump probe. ⚠️ This exclusion is about the
-    `{methods, supers}` LAYOUT only -- §2's method-level-constraint exception is
-    behaviourally observable and IS covered, by
-    s2-method-level-constraint-abstract.
+  * §2 -- the dictionary RECORD SHAPE itself (`word`/`reqs`/`supers` as real
+    fields, landed #993/#679). This section pins only its observable
+    consequences; asserting the representation directly is
+    `diff_compiler_dict_semantics_ir.sh`'s job, not this one's. §2's
+    method-level-constraint exception is behaviourally observable and IS
+    covered here, by s2-method-level-constraint-abstract.
   * §3 W2 -- instance-resolution termination (the Paterson/coverage-style
     condition). No fixture drives a diverging instance context. ⚠️ Per §11's own
     W2 row there is no static check to gate anyway -- what exists is a dynamic

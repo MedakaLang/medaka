@@ -330,13 +330,13 @@ arguments** — GHC's `EvDFunApp dfun tys evs`, where the context evidence is pa
 and never re-resolved. **D-EV-DEF** (`docs/spec/DICT-SEMANTICS.md:215-224`) already specifies
 that shape. **Landed since this finding was written**: a given's super is now an
 evidence-DAG projection (`ProjectedGiven`/`SuperclassEvidence`, `givenEvidenceBinder`,
-`compiler/types/typecheck.mdk:10176-10182`, `:36572`, `:36750`), never a fresh given and
-never a second `entail` — not under the `entailSuper`/`SupersPath` names this finding
-predicted, but the re-resolution it flagged is gone. The appended dict slots
-`expandSupersVecs` (`:15472-15473`) still exist — their VALUE is the projection
-(owner ruling D4, 2026-09-26: keep the flat calling convention as projection's
-lowering); un-widening that arity is a named follow-on under #993/#679, not this
-package. #1125/#1127 are both DRAINED-BY "B-1 + B-2, both required", with B-2 closed.
+`compiler/types/typecheck.mdk`), never a fresh given and never a second `entail` — not
+under the `entailSuper`/`SupersPath` names this finding predicted, but the re-resolution
+it flagged is gone. **B-1's un-widening also landed** (#993/#679, S1): `expandSupersVecs`/
+`expandSupersTable` are deleted, and the dict/route representation itself now carries
+supers as a real field (`VDict word reqs supers`, `RKey word reqs supers`) rather than an
+appended flat slot — a super is read back by `RProj` projecting that field. #1125/#1127
+are both DRAINED-BY "B-1 + B-2, both required", with B-2 closed.
 
 ### SA-6. #1288 is a deduplication inside typecheck, not a relocation
 
@@ -2712,22 +2712,21 @@ orders merges, and the plan does not pretend otherwise.
   >
   > Identity landed in the **word**, not in the **key**.
   >
-  **Three live failing shapes name the gap, all still OPEN:** **#1182** (two
-  interfaces declaring the same method name — `impl` block order decides which
-  runs), **#1620** (the same collision inside ONE file), **#1619** (a
-  cross-module interface default silently hijacked by a same-spelled interface).
-  Phase 4b — the `keyForSite` selector re-key — is **deferred and owned by
-  #1182**, and `implEntryRouteWords`' superset-OR is **still live** in
-  `compiler/backend/llvm_emit.mdk`.
+  **Three failing shapes named the gap, now all CLOSED:** **#1182** (two
+  interfaces declaring the same method name — `impl` block order decided which
+  ran; fixed by selector-identity-2), **#1620** (the same collision inside ONE
+  file), **#1619** (a cross-module interface default silently hijacked by a
+  same-spelled interface). Phase 4b — the `keyForSite` selector re-key — landed
+  under #1182, and `implEntryRouteWords`/its superset-OR arm is **deleted**
+  (#1403 X-E.C, S3 2026-09-27): a dict word is now always the identity-qualified
+  canonical row key, and each LLVM/Wasm dispatcher arm matches one word.
 
-  **Conjunct 1 is therefore still unmet and is the head of the remaining spine**
-  (`#1351 ∧ #1450 → #1182`, per the 2026-08-17 re-derivation on epic #1122),
-  carried by sprint **selector-identity (#1832)**, whose §8 exit criterion is
-  explicitly *"C4/I2 conjunct 1 asked a FIFTH time, and measured, not
-  asserted"*. ⚠️ **Read every "B-2 landed" marker in this document as conjunct 2
-  only.** A planner who reads B-2 as having settled dispatch identity will scope
-  #1832's work as already done — which is the exact misrouting this row's
-  staleness caused before (#1660).
+  **Conjunct 1's own tracking issue, #1832 (sprint selector-identity), is now
+  CLOSED**, and #1113 (B-2) is CLOSED too — this paragraph's "still unmet"/"word,
+  not key" framing predates both closures and is not re-verified here (out of
+  this docs slice's scope, which is #679/#993/#1403/#992). A reader relying on
+  Conjunct 1's status should re-derive it from #1832's and #1113's closing
+  comments, not from this paragraph.
 - **B-3 ⊕ (#991, #994) + the deferral policy.** Obligation storage completion
   and lockstep-pair fusion — mechanical, byte-identical bars, independent of
   Stage A. **Scope extension:** one *written* obligation-deferral policy

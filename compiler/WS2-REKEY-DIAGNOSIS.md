@@ -169,8 +169,9 @@ A correct landing therefore must:
    - `scopeArities :8869` already consumes the qual ref; keep its per-scope
      re-set (`dictPassModulesScoped :8838`) as an **identity lookup**, not deleted
      (it still provides import-scoping).
-   - **`expandSupersTable :2676`** rewrites the bare refs wholesale — must be
-     re-keyed in lockstep or super-slot expansion desyncs the call vs define side.
+   - **`expandSupersTable` is now DELETED (#993/#679)** — supers are a real field
+     of the dict/route representation, projected via `RProj`, not a flat
+     bare-ref rewrite step; this bullet's re-keying concern no longer applies.
 5. **`dictParamName` STAYS BARE** — `$dict_<fn>_<slot>` is body-local and
    `(encl,slot)`-unique; qualifying it would churn the emitted IR and force a seed
    re-mint for zero gain. Confirmed: leaving it bare is what keeps fixpoint safe.
