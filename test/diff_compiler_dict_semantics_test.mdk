@@ -2534,6 +2534,18 @@ table = [
     pinned = "123|[4, 4, 5, 5]|3|True\n",
     codes = [],
   },
+  Row {
+    entry = "s2-default-requires-structured-head.mdk",
+    label =
+      "#3538: an inherited default dispatching on a structure over the interface parameter (`shL : List a -> ...`), at a `requires`-bearing instance, one- and two-parameter. The call's element dictionaries are the instance's `requires` at the interface parameter (`Sh Int` for `Sh (List Int)`), not at the argument; the last cell is a supplied method passing a sibling method as a value, whose lifted closure builds its dictionary from the enclosing one",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned =
+      "[\"Ls1\", \"Ls2s3\"]|[\"Mc1\", \"Mc2c3\"]|[\"s1\", \"s2\"]|LLs1Ls2s3|BLs1\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -2545,7 +2557,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 219
+tableRows = 220
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

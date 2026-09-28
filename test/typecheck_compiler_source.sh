@@ -1425,7 +1425,7 @@ if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
 fi
 
 operator_owner_required='stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
-argImplDictRoutesForEncl encl useScope dictName tag m goals,
+argImplDictRoutesForEncl encl useScope dictName tag subject goals,
 entailInst name m encl useScope tag (EKOp isBinop _) =
 (stampOpRouteVal isBinop encl useScope name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do

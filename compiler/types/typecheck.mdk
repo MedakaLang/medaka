@@ -30674,9 +30674,16 @@ entailInst name m encl useScope tag (EKArg fullMono) =
       name
     else
       innerDefaultMethod name
+  -- The selected impl's head is matched against the interface's first parameter,
+  -- not the discriminating argument: `shL : List a -> …` dispatches on a `List a`
+  -- argument, and at `a = List Int` matching `impl Sh (List b)` against that argument
+  -- would bind `b` to `List Int` where the instance's `b` is `Int`.
+  let subject = match goals
+    g :: _ => g
+    [] => m
   (
     RKey routeKey [] (selectedCallSupers name selected encl useScope goals),
-    argImplDictRoutesForEncl encl useScope dictName tag m goals,
+    argImplDictRoutesForEncl encl useScope dictName tag subject goals,
   )
 entailInst name m encl useScope tag (EKOp isBinop _) =
   (stampOpRouteVal isBinop encl useScope name m tag, [])

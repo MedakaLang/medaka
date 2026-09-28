@@ -7433,7 +7433,11 @@ emitMethodValue e env name iface siteArity route implRoutes methRoutes =
   if isDynamicMethodRoute route || arity <= 0 then
     emitMethod e env name iface siteArity route implRoutes methRoutes []
   else
-    let capNames = methValDictNames route
+    -- the lifted body builds the site's impl and method dictionaries too, and
+    -- either may read an enclosing dictionary parameter
+    let capNames =
+      dedupS
+        (methValDictNames route ++ routeDictNames [] (implRoutes ++ methRoutes))
     let capWords = capDictWords e env capNames
     let lamName = "mdk_methval_\{name}\{mangleScoped e}"
     let _ =

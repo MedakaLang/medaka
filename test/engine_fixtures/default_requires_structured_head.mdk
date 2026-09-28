@@ -1,0 +1,54 @@
+-- #3538: an inherited default whose dispatching argument is a structure over the
+-- interface parameter (`shL : List a -> ...`), called at an instance whose head
+-- carries `requires`.  At `a = List Int` the call owes the default `Sh (List Int)`'s
+-- own `requires`, `Sh Int`, read off the interface parameter; reading it off the
+-- argument (`List (List Int)`) hands over `Sh (List Int)` instead, one level too
+-- deep.  The last lines pass a sibling method as a VALUE from inside bodies whose
+-- dictionary is a parameter, so the lifted closure builds its dictionary out of
+-- the enclosing one.  Every value below is hand-derived from the source.
+interface Sh a where
+  sh : a -> String
+  shL : List a -> List String
+  shL xs = map sh xs
+
+impl Sh Int where
+  sh n = "s" ++ intToString n
+
+impl Sh (List a) requires Sh a where
+  sh xs = "L" ++ concatS (map sh xs)
+
+data Box a = Box a
+
+impl Sh (Box a) requires Sh a where
+  sh (Box x) = "B" ++ concatS (map sh [[x]])
+
+interface Conv a b where
+  conv : a -> b
+  convL : List a -> List b
+  convL xs = map conv xs
+
+impl Conv Int String where
+  conv n = "c" ++ intToString n
+
+impl Conv (List a) String requires Conv a String where
+  conv xs = "M" ++ concatS (map conv xs)
+
+concatS : List String -> String
+concatS [] = ""
+concatS (x :: xs) = x ++ concatS xs
+
+main : <IO> Unit
+main =
+  -- the default at Sh (List Int): [sh [1], sh [2, 3]] = ["Ls1", "Ls2s3"]
+  println (debug (shL [[1], [2, 3]]))
+  -- the two-parameter twin at Conv (List Int) String: ["Mc1", "Mc2c3"]
+  let multi = convL [[1], [2, 3]] : List String
+  println (debug multi)
+  -- one level deeper, at Sh (List (List Int)): ["LLs1", "LLs2s3"]
+  println (debug (shL [[[1]], [[2, 3]]]))
+  -- CONTROL: the default at a head with no `requires`: ["s1", "s2"]
+  println (debug (shL [1, 2]))
+  -- CONTROL: the supplied method at the same instance: "L" ++ "Ls1" ++ "Ls2s3"
+  println (sh [[1], [2, 3]])
+  -- a supplied method passing `sh` as a value at Sh (List a): "B" ++ "Ls1"
+  println (sh (Box 1))
