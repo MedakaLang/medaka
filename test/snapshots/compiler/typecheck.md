@@ -1,5 +1,5 @@
 # META
-source_lines=51192
+source_lines=51189
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -208,11 +208,10 @@ import types.effect_domain.{
   subTopOf,
   lookupAxis,
   productPrimaryLift,
-  axisUnion,
+  productOver,
   productNorm,
   isSubTop,
-  sortAxes,
-  insertAxis,
+  domainKey,
   setCardCap,
   writtenSetProblem,
   commonPrefixLen,
@@ -750,7 +749,8 @@ writtenParam (PPrefix None) (EPLit s) = canonParam (PPrefix (Some s))
 writtenParam (PSet None) (EPLit s) = PSet (Some [s])
 writtenParam (PSet None) (EPSet xs) = PSet (Some (sortUniqS xs))
 writtenParam (PProduct schema) (EPLit s) = productPrimaryLift schema s
-writtenParam (PProduct _) (EPProduct axes) = productNorm (map writtenAxis axes)
+writtenParam (PProduct schema) (EPProduct axes) =
+  productOver schema (map writtenAxis axes)
 writtenParam top _ = top
 
 writtenAxis : (String, EffParamTy) -> (String, Param)
@@ -3017,7 +3017,7 @@ effectParamProblems l (PProduct _) (EPSet _) =
   ["label '\{l}' takes named axes (`Host=… Method=…`), not a bare set"]
 effectParamProblems l _ (EPSet _) = [atomicLabelParamText l]
 effectParamProblems _ (PProduct schema) (EPProduct axes) =
-  productAxesProblems schema (productNorm (map writtenAxis axes))
+  productAxesProblems schema (PProduct (map writtenAxis axes))
 effectParamProblems l PUnit (EPProduct _) = [atomicLabelParamText l]
 effectParamProblems l _ (EPProduct _) =
   ["label '\{l}' is not a product domain and takes no axes"]
@@ -3075,12 +3075,9 @@ isStringTy : Ty -> Bool
 isStringTy (TyCon { tyConName = n }) = n == "String"
 isStringTy _ = False
 
+-- Two Products are one domain only when their schemas agree.
 sameDomainTop : Param -> Param -> Bool
-sameDomainTop (PPrefix _) (PPrefix _) = True
-sameDomainTop (PSet _) (PSet _) = True
-sameDomainTop (PProduct _) (PProduct _) = True
-sameDomainTop PUnit PUnit = True
-sameDomainTop _ _ = False
+sameDomainTop p q = domainKey p == domainKey q
 
 binderTypeMsg : String -> String -> String
 binderTypeMsg n ty =
@@ -38731,7 +38728,7 @@ atomParamIsTop a = match atomConst a
 paramIsTopDomain : Param -> Bool
 paramIsTopDomain (PPrefix None) = True
 paramIsTopDomain (PSet None) = True
-paramIsTopDomain (PProduct []) = True
+paramIsTopDomain (p@(PProduct _)) = isSubTop p
 paramIsTopDomain _ = False
 
 -- ── the RESERVED-NAMESPACE rule (S0-4, review round of `ffi-lower-and-link`) ─
@@ -51198,7 +51195,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("frontend" "ast") ((mem "defaultReceiverDict" false) (mem "qualifierSource" false) (mem "Lit" true) (mem "negateLiteral" false) (mem "isU64Head" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false) (mem "isFixedIntHead" false) (mem "taggedFixedRange" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "Attr" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "authTermSurface" false) (mem "authTermsSurface" false) (mem "authTermNames" false) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "ifaceIdentity" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "ppAuthority" false) (mem "normalize" false) (mem "ppScheme" false) (mem "tupleSpine" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "VecObl" true) (mem "assignName" false) (mem "commaStr" false) (mem "effStr" false) (mem "letters" false) (mem "lookupAssocI" false) (mem "nameOf" false) (mem "normalizeLink" false) (mem "ppApp" false) (mem "ppConName" false) (mem "ppConstraint" false) (mem "ppConstraints" false) (mem "ppEach" false) (mem "ppEachShared" false) (mem "ppEffArg" false) (mem "ppEffArgFmt" false) (mem "ppEffAtomTy" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppFun" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppSchemeCon" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "ppTyFunArg" false) (mem "ppVar" false) (mem "renderConstraintCtx" false) (mem "spineParts" false) (mem "tupleHeadTagTc" false) (mem "tupleTagArity" false) (mem "tupleTagArityGo" false) (mem "wrapIf" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false))))
-(DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "subTopOf" false) (mem "lookupAxis" false) (mem "productPrimaryLift" false) (mem "axisUnion" false) (mem "productNorm" false) (mem "isSubTop" false) (mem "sortAxes" false) (mem "insertAxis" false) (mem "setCardCap" false) (mem "writtenSetProblem" false) (mem "commonPrefixLen" false) (mem "drender" false) (mem "drenderN" false) (mem "quoteStr" false) (mem "renderProductLit" false) (mem "renderAxis" false) (mem "renderAxisVal" false) (mem "prefixConcrete" false) (mem "dsub" false) (mem "Param" true))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "subTopOf" false) (mem "lookupAxis" false) (mem "productPrimaryLift" false) (mem "productOver" false) (mem "productNorm" false) (mem "isSubTop" false) (mem "domainKey" false) (mem "setCardCap" false) (mem "writtenSetProblem" false) (mem "commonPrefixLen" false) (mem "drender" false) (mem "drenderN" false) (mem "quoteStr" false) (mem "renderProductLit" false) (mem "renderAxis" false) (mem "renderAxisVal" false) (mem "prefixConcrete" false) (mem "dsub" false) (mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarLevel" false) (mem "authvarDomain" false) (mem "authvarName" false) (mem "authConst" false) (mem "authIsTop" false) (mem "authJoin" false) (mem "authJoinAll" false) (mem "authSub" false) (mem "authVars" false) (mem "authNorm" false) (mem "authTop" false) (mem "authDomainTop" false) (mem "authHasVars" false) (mem "linkAuthvar" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "Atom" true) (mem "effLabelName" false) (mem "labelKey" false) (mem "builtinLabel" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomBuiltin" false) (mem "atomWith" false) (mem "renderAtom" false) (mem "renderAtoms" false) (mem "atomInsert" false) (mem "atomsNorm" false) (mem "atomsUnion" false) (mem "atomsDiff" false) (mem "findAtom" false) (mem "collectRows" false) (mem "joinRows" false) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "rowFlat" false) (mem "rowHasSummary" false) (mem "rowFlatMembers" false) (mem "dedupCells" false) (mem "linkRow" false) (mem "EffRow" true) (mem "Effvar" true))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "recordEffect" false) (mem "captureEffects" false) (mem "alphaOf" false) (mem "typeAuthority" false) (mem "AlphaBinder" true))))
@@ -51284,7 +51281,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "writtenParam" ((PCon "PSet" (PCon "None")) (PCon "EPLit" (PVar "s"))) (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "s")))))
 (DFunDef false "writtenParam" ((PCon "PSet" (PCon "None")) (PCon "EPSet" (PVar "xs"))) (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EVar "xs")))))
 (DFunDef false "writtenParam" ((PCon "PProduct" (PVar "schema")) (PCon "EPLit" (PVar "s"))) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "s")))
-(DFunDef false "writtenParam" ((PCon "PProduct" PWild) (PCon "EPProduct" (PVar "axes"))) (EApp (EVar "productNorm") (EApp (EApp (EVar "map") (EVar "writtenAxis")) (EVar "axes"))))
+(DFunDef false "writtenParam" ((PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "productOver") (EVar "schema")) (EApp (EApp (EVar "map") (EVar "writtenAxis")) (EVar "axes"))))
 (DFunDef false "writtenParam" ((PVar "top") PWild) (EVar "top"))
 (DTypeSig false "writtenAxis" (TyFun (TyTuple (TyCon "String") (TyCon "EffParamTy")) (TyTuple (TyCon "String") (TyCon "Param"))))
 (DFunDef false "writtenAxis" ((PTuple (PVar "name") (PCon "EPLit" (PVar "s")))) (ETuple (EVar "name") (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
@@ -51748,7 +51745,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' takes a prefix pattern, not a set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PProduct" PWild) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' takes named axes (`Host=… Method=…`), not a bare set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPSet" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
-(DFunDef false "effectParamProblems" (PWild (PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EVar "productNorm") (EApp (EApp (EVar "map") (EVar "writtenAxis")) (EVar "axes")))))
+(DFunDef false "effectParamProblems" (PWild (PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EVar "PProduct") (EApp (EApp (EVar "map") (EVar "writtenAxis")) (EVar "axes")))))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PUnit") (PCon "EPProduct" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPProduct" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' is not a product domain and takes no axes")))))
 (DTypeSig true "decodeWrittenParam" (TyFun (TyCon "EffLabel") (TyFun (TyCon "EffParamTy") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Param")))))
@@ -51761,11 +51758,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "isStringTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EBinOp "==" (EVar "n") (ELit (LString "String"))))
 (DFunDef false "isStringTy" (PWild) (EVar "False"))
 (DTypeSig false "sameDomainTop" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Bool"))))
-(DFunDef false "sameDomainTop" ((PCon "PPrefix" PWild) (PCon "PPrefix" PWild)) (EVar "True"))
-(DFunDef false "sameDomainTop" ((PCon "PSet" PWild) (PCon "PSet" PWild)) (EVar "True"))
-(DFunDef false "sameDomainTop" ((PCon "PProduct" PWild) (PCon "PProduct" PWild)) (EVar "True"))
-(DFunDef false "sameDomainTop" ((PCon "PUnit") (PCon "PUnit")) (EVar "True"))
-(DFunDef false "sameDomainTop" (PWild PWild) (EVar "False"))
+(DFunDef false "sameDomainTop" ((PVar "p") (PVar "q")) (EBinOp "==" (EApp (EVar "domainKey") (EVar "p")) (EApp (EVar "domainKey") (EVar "q"))))
 (DTypeSig false "binderTypeMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "binderTypeMsg" ((PVar "n") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Named argument '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' has type `"))) (EApp (EVar "display") (EVar "ty"))) (ELit (LString "`, but an effect atom names it as an authority: only a `String` argument can determine an effect's parameter. Give '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' the type `String`, or write the label bare for any authority"))))
 (DTypeSig false "binderDomainMsg" (TyFun (TyCon "String") (TyCon "String")))
@@ -57625,7 +57618,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "paramIsTopDomain" (TyFun (TyCon "Param") (TyCon "Bool")))
 (DFunDef false "paramIsTopDomain" ((PCon "PPrefix" (PCon "None"))) (EVar "True"))
 (DFunDef false "paramIsTopDomain" ((PCon "PSet" (PCon "None"))) (EVar "True"))
-(DFunDef false "paramIsTopDomain" ((PCon "PProduct" (PList))) (EVar "True"))
+(DFunDef false "paramIsTopDomain" ((PAs "p" (PCon "PProduct" PWild))) (EApp (EVar "isSubTop") (EVar "p")))
 (DFunDef false "paramIsTopDomain" (PWild) (EVar "False"))
 (DTypeSig false "ffiCheckExternsReserved" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "ffiCheckExternsReserved" ((PCon "False") PWild) (ELit LUnit))
@@ -59393,7 +59386,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("frontend" "ast") ((mem "defaultReceiverDict" false) (mem "qualifierSource" false) (mem "Lit" true) (mem "negateLiteral" false) (mem "isU64Head" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false) (mem "isFixedIntHead" false) (mem "taggedFixedRange" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "Attr" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "authTermSurface" false) (mem "authTermsSurface" false) (mem "authTermNames" false) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "ifaceIdentity" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "ppAuthority" false) (mem "normalize" false) (mem "ppScheme" false) (mem "tupleSpine" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "VecObl" true) (mem "assignName" false) (mem "commaStr" false) (mem "effStr" false) (mem "letters" false) (mem "lookupAssocI" false) (mem "nameOf" false) (mem "normalizeLink" false) (mem "ppApp" false) (mem "ppConName" false) (mem "ppConstraint" false) (mem "ppConstraints" false) (mem "ppEach" false) (mem "ppEachShared" false) (mem "ppEffArg" false) (mem "ppEffArgFmt" false) (mem "ppEffAtomTy" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppFun" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppSchemeCon" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "ppTyFunArg" false) (mem "ppVar" false) (mem "renderConstraintCtx" false) (mem "spineParts" false) (mem "tupleHeadTagTc" false) (mem "tupleTagArity" false) (mem "tupleTagArityGo" false) (mem "wrapIf" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false))))
-(DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "subTopOf" false) (mem "lookupAxis" false) (mem "productPrimaryLift" false) (mem "axisUnion" false) (mem "productNorm" false) (mem "isSubTop" false) (mem "sortAxes" false) (mem "insertAxis" false) (mem "setCardCap" false) (mem "writtenSetProblem" false) (mem "commonPrefixLen" false) (mem "drender" false) (mem "drenderN" false) (mem "quoteStr" false) (mem "renderProductLit" false) (mem "renderAxis" false) (mem "renderAxisVal" false) (mem "prefixConcrete" false) (mem "dsub" false) (mem "Param" true))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "subTopOf" false) (mem "lookupAxis" false) (mem "productPrimaryLift" false) (mem "productOver" false) (mem "productNorm" false) (mem "isSubTop" false) (mem "domainKey" false) (mem "setCardCap" false) (mem "writtenSetProblem" false) (mem "commonPrefixLen" false) (mem "drender" false) (mem "drenderN" false) (mem "quoteStr" false) (mem "renderProductLit" false) (mem "renderAxis" false) (mem "renderAxisVal" false) (mem "prefixConcrete" false) (mem "dsub" false) (mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarLevel" false) (mem "authvarDomain" false) (mem "authvarName" false) (mem "authConst" false) (mem "authIsTop" false) (mem "authJoin" false) (mem "authJoinAll" false) (mem "authSub" false) (mem "authVars" false) (mem "authNorm" false) (mem "authTop" false) (mem "authDomainTop" false) (mem "authHasVars" false) (mem "linkAuthvar" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "Atom" true) (mem "effLabelName" false) (mem "labelKey" false) (mem "builtinLabel" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomBuiltin" false) (mem "atomWith" false) (mem "renderAtom" false) (mem "renderAtoms" false) (mem "atomInsert" false) (mem "atomsNorm" false) (mem "atomsUnion" false) (mem "atomsDiff" false) (mem "findAtom" false) (mem "collectRows" false) (mem "joinRows" false) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "rowFlat" false) (mem "rowHasSummary" false) (mem "rowFlatMembers" false) (mem "dedupCells" false) (mem "linkRow" false) (mem "EffRow" true) (mem "Effvar" true))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "recordEffect" false) (mem "captureEffects" false) (mem "alphaOf" false) (mem "typeAuthority" false) (mem "AlphaBinder" true))))
@@ -59479,7 +59472,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "writtenParam" ((PCon "PSet" (PCon "None")) (PCon "EPLit" (PVar "s"))) (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "s")))))
 (DFunDef false "writtenParam" ((PCon "PSet" (PCon "None")) (PCon "EPSet" (PVar "xs"))) (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EVar "xs")))))
 (DFunDef false "writtenParam" ((PCon "PProduct" (PVar "schema")) (PCon "EPLit" (PVar "s"))) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "s")))
-(DFunDef false "writtenParam" ((PCon "PProduct" PWild) (PCon "EPProduct" (PVar "axes"))) (EApp (EVar "productNorm") (EApp (EApp (EMethodRef "map") (EVar "writtenAxis")) (EVar "axes"))))
+(DFunDef false "writtenParam" ((PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "productOver") (EVar "schema")) (EApp (EApp (EMethodRef "map") (EVar "writtenAxis")) (EVar "axes"))))
 (DFunDef false "writtenParam" ((PVar "top") PWild) (EVar "top"))
 (DTypeSig false "writtenAxis" (TyFun (TyTuple (TyCon "String") (TyCon "EffParamTy")) (TyTuple (TyCon "String") (TyCon "Param"))))
 (DFunDef false "writtenAxis" ((PTuple (PVar "name") (PCon "EPLit" (PVar "s")))) (ETuple (EVar "name") (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
@@ -59943,7 +59936,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' takes a prefix pattern, not a set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PProduct" PWild) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' takes named axes (`Host=… Method=…`), not a bare set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPSet" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
-(DFunDef false "effectParamProblems" (PWild (PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EVar "productNorm") (EApp (EApp (EMethodRef "map") (EVar "writtenAxis")) (EVar "axes")))))
+(DFunDef false "effectParamProblems" (PWild (PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EVar "PProduct") (EApp (EApp (EMethodRef "map") (EVar "writtenAxis")) (EVar "axes")))))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PUnit") (PCon "EPProduct" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPProduct" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' is not a product domain and takes no axes")))))
 (DTypeSig true "decodeWrittenParam" (TyFun (TyCon "EffLabel") (TyFun (TyCon "EffParamTy") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Param")))))
@@ -59956,11 +59949,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "isStringTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EBinOp "==" (EVar "n") (ELit (LString "String"))))
 (DFunDef false "isStringTy" (PWild) (EVar "False"))
 (DTypeSig false "sameDomainTop" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Bool"))))
-(DFunDef false "sameDomainTop" ((PCon "PPrefix" PWild) (PCon "PPrefix" PWild)) (EVar "True"))
-(DFunDef false "sameDomainTop" ((PCon "PSet" PWild) (PCon "PSet" PWild)) (EVar "True"))
-(DFunDef false "sameDomainTop" ((PCon "PProduct" PWild) (PCon "PProduct" PWild)) (EVar "True"))
-(DFunDef false "sameDomainTop" ((PCon "PUnit") (PCon "PUnit")) (EVar "True"))
-(DFunDef false "sameDomainTop" (PWild PWild) (EVar "False"))
+(DFunDef false "sameDomainTop" ((PVar "p") (PVar "q")) (EBinOp "==" (EApp (EVar "domainKey") (EVar "p")) (EApp (EVar "domainKey") (EVar "q"))))
 (DTypeSig false "binderTypeMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "binderTypeMsg" ((PVar "n") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Named argument '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' has type `"))) (EApp (EMethodRef "display") (EVar "ty"))) (ELit (LString "`, but an effect atom names it as an authority: only a `String` argument can determine an effect's parameter. Give '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' the type `String`, or write the label bare for any authority"))))
 (DTypeSig false "binderDomainMsg" (TyFun (TyCon "String") (TyCon "String")))
@@ -65820,7 +65809,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "paramIsTopDomain" (TyFun (TyCon "Param") (TyCon "Bool")))
 (DFunDef false "paramIsTopDomain" ((PCon "PPrefix" (PCon "None"))) (EVar "True"))
 (DFunDef false "paramIsTopDomain" ((PCon "PSet" (PCon "None"))) (EVar "True"))
-(DFunDef false "paramIsTopDomain" ((PCon "PProduct" (PList))) (EVar "True"))
+(DFunDef false "paramIsTopDomain" ((PAs "p" (PCon "PProduct" PWild))) (EApp (EVar "isSubTop") (EVar "p")))
 (DFunDef false "paramIsTopDomain" (PWild) (EVar "False"))
 (DTypeSig false "ffiCheckExternsReserved" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "ffiCheckExternsReserved" ((PCon "False") PWild) (ELit LUnit))

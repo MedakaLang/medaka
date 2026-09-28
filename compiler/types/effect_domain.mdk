@@ -7,6 +7,11 @@ import support.util.{
   anyList, reverseL, lenKey
 }
 
+-- A Product element lists every axis of its label's declared schema, in
+-- declaration order, each at its own value or its top. The element carries
+-- its domain: its first axis is the one a bare string lifts into, and two
+-- Products are elements of one domain only when their schemas agree
+-- (`domainKey`).
 public export data Param =
   | PUnit
   | PPrefix (Option String)
@@ -25,11 +30,7 @@ canonParam (PPrefix (Some s)) =
 canonParam (PProduct ax) = productNorm ax
 canonParam p = p
 
--- A Product's top keeps its declared axis SCHEMA (each axis at its own top,
--- in declaration order), so a domain top read off a label or a variable can
--- say which axis a bare literal lifts into and which axes a written product
--- may name.  A VALUE normalises the top axes away (`productNorm`), so
--- `PProduct []` and a schema top are the same element of the order.
+-- A Product's top is its schema with every axis at its own top.
 export
 subTopOf : Param -> Param
 subTopOf (PPrefix _) = PPrefix None
@@ -43,51 +44,52 @@ subTopOf _ = PUnit
 export
 productPrimaryLift : List (String, Param) -> String -> Param
 productPrimaryLift [] _ = PProduct []
-productPrimaryLift ((name, top) :: _) s = match top
-  PPrefix _ => productNorm [(name, canonParam (PPrefix (Some s)))]
-  PSet _ => productNorm [(name, PSet (Some [s]))]
-  _ => PProduct []
+productPrimaryLift ((name, top) :: rest) s =
+  let others = map (a => (fst a, subTopOf (snd a))) rest
+  match top
+    PPrefix _ => productNorm ((name, PPrefix (Some s)) :: others)
+    PSet _ => productNorm ((name, PSet (Some [s])) :: others)
+    _ => subTopOf (PProduct ((name, top) :: rest))
+
+-- A written product as an element of [schema]: every declared axis, in
+-- declaration order, at the value written for it or at its top.
+export
+productOver : List (String, Param) -> List (String, Param) -> Param
+productOver schema written = productNorm (map (axisOver written) schema)
+
+axisOver : List (String, Param) -> (String, Param) -> (String, Param)
+axisOver written (name, top) = match lookupAxis name written
+  Some PUnit => (name, subTopOf top)
+  Some v => (name, v)
+  None => (name, subTopOf top)
 
 -- The element a value denotes once an unknown suffix is appended to it. A
 -- pattern already admits every extension; an exact element becomes the
 -- pattern it begins; a Set member becomes an unknown member, the top. In a
--- Product only the primary axis, the one a string lifts into, is extended.
+-- Product only the primary axis, its first, the one a string lifts into, is
+-- extended.
 export
-extendParam : Param -> Param -> Param
-extendParam top p = match canonParam p
+extendParam : Param -> Param
+extendParam p = match canonParam p
   PPrefix (Some s) =>
     if isPrefixPattern s then PPrefix (Some s) else PPrefix (Some (s ++ "*"))
-  PProduct ax => match top
-    PProduct ((name, _) :: _) => productNorm (map (extendAxis name) ax)
-    _ => PProduct []
+  PProduct ((name, v) :: rest) => productNorm ((name, extendParam v) :: rest)
   q => subTopOf q
-
-extendAxis : String -> (String, Param) -> (String, Param)
-extendAxis primary (name, p) =
-  if name == primary then (name, extendParam (subTopOf p) p) else (name, p)
 
 -- The element a value denotes once a known suffix is appended: an exact
 -- element grows by the suffix, a pattern already admits it, and a Set member
 -- becomes an unknown member.
 export
-appendParam : Param -> String -> Param -> Param
-appendParam top suffix p = match canonParam p
+appendParam : String -> Param -> Param
+appendParam suffix p = match canonParam p
   PPrefix (Some s) =>
     if isPrefixPattern s then
       PPrefix (Some s)
     else
       canonParam (PPrefix (Some (s ++ suffix)))
-  PProduct ax => match top
-    PProduct ((name, _) :: _) => productNorm (map (appendAxis suffix name) ax)
-    _ => PProduct []
+  PProduct ((name, v) :: rest) =>
+    productNorm ((name, appendParam suffix v) :: rest)
   q => subTopOf q
-
-appendAxis : String -> String -> (String, Param) -> (String, Param)
-appendAxis suffix primary (name, p) =
-  if name == primary then
-    (name, appendParam (subTopOf p) suffix p)
-  else
-    (name, p)
 
 export
 lookupAxis : String -> List (String, Param) -> Option Param
@@ -123,10 +125,14 @@ djoinN _ (PSet None) = PSet None
 djoinN (PSet (Some a)) (PSet (Some b)) =
   let u = sortUniqS (a ++ b)
   if listLen u > setCardCap then PSet None else PSet (Some u)
-djoinN (PProduct ax) (PProduct bx) =
-  productNorm (map (joinAxis ax bx) (axisUnion ax bx))
--- Elements of different shapes (a Prefix against a Set, on a label or one
--- of a Product's axes) have no join but the whole domain.
+djoinN (p@(PProduct ax)) (q@(PProduct bx)) =
+  if domainKey p == domainKey q then
+    productNorm (map (joinAxis bx) ax)
+  else
+    subTopOf p
+-- Elements of different domains (a Prefix against a Set, on a label or one
+-- of a Product's axes, or Products of two schemas) have no join but the
+-- whole domain.
 djoinN p _ = subTopOf p
 
 -- The elements a join of constants denotes, in one canonical form that
@@ -299,20 +305,28 @@ canonProducts ps =
       let groups = fold (acc p => addGroup axis p acc) [] kept
       flatMap (rebuildGroup axis groups) groups
 
--- All elements are of one domain: Prefix, Set, Product or Unit.
+-- All elements are of one domain.
 sameShape : List Param -> Bool
 sameShape [] = True
-sameShape (p :: ps) = allList (q => shapeOf q == shapeOf p) ps
+sameShape (p :: ps) = allList (q => domainKey q == domainKey p) ps
 
-shapeOf : Param -> Int
-shapeOf PUnit = 0
-shapeOf (PPrefix _) = 1
-shapeOf (PSet _) = 2
-shapeOf (PProduct _) = 3
+-- The domain an element belongs to: its shape, and for a Product its schema,
+-- the axes in order with each axis's domain.
+export
+domainKey : Param -> String
+domainKey PUnit = "u"
+domainKey (PPrefix _) = "p"
+domainKey (PSet _) = "s"
+domainKey (PProduct ax) =
+  "x("
+    ++ joinWith ";" (map (a => lenKey (fst a) ++ domainKey (snd a)) ax)
+    ++ ")"
 
--- A group: its other axes (as a key that cannot collide, and as axes), and
--- its members on the regroup axis, `None` for the whole axis.
-data PGroup = PGroup String (List (String, Param)) (Option (List String))
+-- A group: its other axes (as a key that cannot collide, and as axes), its
+-- members on the regroup axis, `None` for the whole axis, and the axes of
+-- its first tuple, in schema order, that it is rebuilt in.
+data PGroup =
+  | PGroup String (List (String, Param)) (Option (List String)) (List (String, Param))
 
 addGroup : String -> Param -> List PGroup -> List PGroup
 addGroup axis p gs =
@@ -320,12 +334,20 @@ addGroup axis p gs =
   let key = axesKey others
   let members = axisMembers axis p
   match gs
-    [] => [PGroup key others members]
-    (PGroup k o ms) :: rest =>
+    [] => [PGroup key others members (productAxes p)]
+    (PGroup k o ms t) :: rest =>
       if k == key then
-        PGroup k o (unionMembers ms members) :: rest
+        PGroup k o (unionMembers ms members) t :: rest
       else
-        PGroup k o ms :: addGroup axis p rest
+        PGroup k o ms t :: addGroup axis p rest
+
+productAxes : Param -> List (String, Param)
+productAxes (PProduct ax) = ax
+productAxes _ = []
+
+-- [axes] with the axis [name] set to [v], in place.
+withAxis : String -> Param -> List (String, Param) -> List (String, Param)
+withAxis name v axes = map (a => if fst a == name then (name, v) else a) axes
 
 otherAxes : String -> Param -> List (String, Param)
 otherAxes axis (PProduct ax) = filterList (a => fst a /= axis) ax
@@ -360,24 +382,25 @@ paramKey PUnit = "u"
 -- other axes cover this one's covers each member they share, and the whole
 -- group if its members are the whole axis.
 rebuildGroup : String -> List PGroup -> PGroup -> List Param
-rebuildGroup axis gs (PGroup key others members) =
+rebuildGroup axis gs (PGroup key others members template) =
   let coverers =
     filterList
       (g => match g
-        PGroup k o _ => k /= key && dsubN (productNorm others) (productNorm o))
+        PGroup k o _ _ =>
+          k /= key && dsubN (productNorm others) (productNorm o))
       gs
   if anyList (g => groupMembersOf g == None) coverers then
     []
   else match members
-    None => [productNorm others]
+    None => [productNorm (withAxis axis (PSet None) template)]
     Some xs =>
       let taken = flatMap (g => optionOr [] (groupMembersOf g)) coverers
       match filterList (x => not (contains x taken)) (sortUniqS xs)
         [] => []
-        left => [productNorm ((axis, PSet (Some left)) :: others)]
+        left => [productNorm (withAxis axis (PSet (Some left)) template)]
 
 groupMembersOf : PGroup -> Option (List String)
-groupMembersOf (PGroup _ _ ms) = ms
+groupMembersOf (PGroup _ _ ms _) = ms
 
 lastSetAxis : List Param -> Option String
 lastSetAxis ps = match sortUniqS (flatMap setAxisNames ps)
@@ -428,25 +451,17 @@ mergeBy _ xs [] = xs
 mergeBy le (x :: xs) (y :: ys) =
   if le x y then x :: mergeBy le xs (y :: ys) else y :: mergeBy le (x :: xs) ys
 
-export
-joinAxis : List (String, Param) ->
-  List (String, Param) ->
-  String ->
-  (String, Param)
-joinAxis ax bx name = match (lookupAxis name ax, lookupAxis name bx)
-  (Some pa, Some pb) => (name, djoinN pa pb)
-  (Some pa, None) => (name, djoinN pa (subTopOf pa))
-  (None, Some pb) => (name, djoinN (subTopOf pb) pb)
-  (None, None) => (name, PUnit)
+-- One axis of a join of two elements of one schema.
+joinAxis : List (String, Param) -> (String, Param) -> (String, Param)
+joinAxis bx (name, pa) = match lookupAxis name bx
+  Some pb => (name, djoinN pa pb)
+  None => (name, subTopOf pa)
 
-export
-axisUnion : List (String, Param) -> List (String, Param) -> List String
-axisUnion ax bx = sortUniqS (map fst ax ++ map fst bx)
-
+-- A Product with each axis's value canonical, in place: the axes stay the
+-- schema's, tops included.
 export
 productNorm : List (String, Param) -> Param
-productNorm axes =
-  PProduct (sortAxes (filterList (p => not (isSubTop (snd p))) axes))
+productNorm axes = PProduct (map (a => (fst a, canonParam (snd a))) axes)
 
 export
 isSubTop : Param -> Bool
@@ -455,18 +470,6 @@ isSubTop (PSet None) = True
 isSubTop (PProduct ax) = allList (a => isSubTop (snd a)) ax
 isSubTop PUnit = True
 isSubTop _ = False
-
-export
-sortAxes : List (String, Param) -> List (String, Param)
-sortAxes [] = []
-sortAxes (x :: xs) = insertAxis x (sortAxes xs)
-
-export
-insertAxis : (String, Param) -> List (String, Param) -> List (String, Param)
-insertAxis x [] = [x]
-insertAxis x (y :: ys) = match stringCompare (fst x) (fst y)
-  Gt => y :: insertAxis x ys
-  _ => x :: y :: ys
 
 export
 setCardCap : Int
@@ -493,16 +496,19 @@ drenderN (PPrefix None) = ""
 drenderN (PPrefix (Some s)) = " \"" ++ s ++ "\""
 drenderN (PSet None) = ""
 drenderN (PSet (Some xs)) = " {" ++ joinWith ", " (map quoteStr xs) ++ "}"
-drenderN (PProduct []) = ""
-drenderN (PProduct ax) = " " ++ renderProductLit ax
+drenderN (PProduct ax) = match renderProductLit ax
+  "" => ""
+  r => " " ++ r
 
 export
 quoteStr : String -> String
 quoteStr s = "\"" ++ s ++ "\""
 
+-- A Product's axes as written: a top axis is spelled by leaving it out.
 export
 renderProductLit : List (String, Param) -> String
-renderProductLit ax = joinWith " " (map renderAxis ax)
+renderProductLit ax =
+  joinWith " " (map renderAxis (filterList (a => not (isSubTop (snd a))) ax))
 
 export
 renderAxis : (String, Param) -> String
@@ -538,7 +544,8 @@ dsubN _ (PSet None) = True
 dsubN (PSet (Some a)) (PSet (Some b)) = subsetStr a b
 dsubN (PSet None) (PSet (Some _)) = False
 dsubN _ (PProduct []) = True
-dsubN (PProduct ax) (PProduct bx) = allList (axisSub ax) bx
+dsubN (p@(PProduct ax)) (q@(PProduct bx)) =
+  domainKey p == domainKey q && allList (axisSub ax) bx
 dsubN _ _ = False
 
 -- A pattern ends in `*` and admits every element it is a prefix of; any

@@ -3,7 +3,7 @@ import support.util.{allList}
 import list.{drop as listDrop}
 import types.effect_domain.{
   Param(..), djoin, drender, dsub, extendParam, appendParam, dantichain,
-  setCardCap, writtenSetProblem, dsubAny
+  setCardCap, writtenSetProblem, dsubAny, productPrimaryLift
 }
 import types.effect_rows.{atomBuiltin, atomsDiff, atomsUnion, renderAtoms}
 import types.effect_authority.{Authority(..), authSub, authJoinAll}
@@ -47,7 +47,7 @@ test "set coverage includes every possible authority" =
 test "a missing product axis is unconstrained rather than empty" =
   let host = PPrefix (Some "good.example/*")
   let readOnly = PProduct [("Host", host), ("Method", PSet (Some ["GET"]))]
-  let anyMethod = PProduct [("Host", host)]
+  let anyMethod = PProduct [("Host", host), ("Method", PSet None)]
   expectAll [
     expectTrue (dsub readOnly anyMethod),
     expectFalse (dsub anyMethod readOnly),
@@ -86,18 +86,17 @@ test "larger rows use the canonical label index without changing order" =
     expectEqual "B, F" (renderAtoms remaining),
   ]
 
-test "an extension keeps a pattern, extends an exact element, tops a Set member" =
-  let schema = PProduct [("Host", PPrefix None), ("Method", PSet None)]
-  expectAll [
+test "an extension keeps a pattern, extends an exact element, tops a Set member" = expectAll
+  [
     expectEqual
       (drender (PPrefix (Some "cfg/*")))
-      (drender (extendParam (PPrefix None) (PPrefix (Some "cfg/")))),
+      (drender (extendParam (PPrefix (Some "cfg/")))),
     expectEqual
       (drender (PPrefix (Some "cfg/*")))
-      (drender (extendParam (PPrefix None) (PPrefix (Some "cfg/*")))),
+      (drender (extendParam (PPrefix (Some "cfg/*")))),
     expectEqual
       (drender (PSet None))
-      (drender (extendParam (PSet None) (PSet (Some ["GET"])))),
+      (drender (extendParam (PSet (Some ["GET"])))),
     expectEqual
       (drender
         (PProduct [
@@ -106,17 +105,16 @@ test "an extension keeps a pattern, extends an exact element, tops a Set member"
         ]))
       (drender
         (extendParam
-          schema
           (PProduct [
             ("Host", PPrefix (Some "a.com/")),
             ("Method", PSet (Some ["GET"])),
           ]))),
     expectEqual
       (drender (PPrefix (Some "cfg/app.toml")))
-      (drender (appendParam (PPrefix None) ".toml" (PPrefix (Some "cfg/app")))),
+      (drender (appendParam ".toml" (PPrefix (Some "cfg/app")))),
     expectEqual
       (drender (PPrefix (Some "cfg/*")))
-      (drender (appendParam (PPrefix None) ".toml" (PPrefix (Some "cfg/*")))),
+      (drender (appendParam ".toml" (PPrefix (Some "cfg/*")))),
   ]
 
 pat : String -> Param
@@ -252,7 +250,7 @@ test "a Product set's form is independent of order, and covers by its union" =
 
 test "elements of different domains are the whole domain, never one of them" = expectAll
   [
-    -- two Products whose Host axes differ in shape join to the whole axis
+    -- two Products whose Host axes differ in shape are two domains
     expectEqual
       (drender
         (djoin
@@ -268,3 +266,30 @@ test "elements of different domains are the whole domain, never one of them" = e
         drender
         (dantichain [pat "evil*", PProduct [("Host", pat "a.com/x")]])),
   ]
+
+test "a Product carries its schema: axes of one name in two schemas are two domains" =
+  let web1 = [("Host", PPrefix None), ("Method", PSet None)]
+  let web2 = [("Method", PSet None), ("Host", PPrefix None)]
+  let lifted1 = productPrimaryLift web1 "a.com/x"
+  let bound2 = PProduct [("Method", PSet None), ("Host", pat "a.com/*")]
+  expectAll
+    [
+      -- a literal lifts into the first declared axis, the others at their top
+      expectEqual
+        (drender (PProduct [("Host", pat "a.com/x")]))
+        (drender lifted1),
+      expectEqual
+        (drender (PProduct [("Method", PSet (Some ["a.com/x"]))]))
+        (drender (productPrimaryLift web2 "a.com/x")),
+      -- Web1's Host is not Web2's: no containment, and the join is the top
+      expectFalse (dsub lifted1 bound2),
+      expectTrue
+        (dsub
+          (PProduct [("Method", PSet None), ("Host", pat "a.com/x")])
+          bound2),
+      expectEqual "" (drender (djoin lifted1 bound2)),
+      -- an extension extends the element's own first axis
+      expectEqual
+        (drender (PProduct [("Host", pat "a.com/x*")]))
+        (drender (extendParam lifted1)),
+    ]

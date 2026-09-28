@@ -1,4 +1,4 @@
-import types.effect_domain.{canonParam, drender, Param(..)}
+import types.effect_domain.{canonParam, drender, isSubTop, Param(..)}
 import types.effect_authority.{
   Authority(..), authSub, authVars, authHasVars, authvarDefaultName,
   authJoinAll, authConsts
@@ -717,14 +717,15 @@ paramToml : Param -> String
 paramToml p = match canonParam p
   PPrefix (Some s) => "\"\{s}\""
   PSet (Some xs) => "[\{joinWith ", " (map quoteTok xs)}]"
-  PProduct ax => "{ \{productTomlInline ax} }"  -- WS-4 inline table
+  PProduct ax if not (isSubTop (PProduct ax)) => "{ \{productTomlInline ax} }"  -- WS-4 inline table
   _ => "true"
 
 -- WS-4: render a product's axes as a TOML inline-table body: a Prefix axis →
 -- `host = "…"`, a Set axis → `method = ["GET", "POST"]` (TOML keys lowercased
 -- by convention).  Comma-joined.
 productTomlInline : List (String, Param) -> String
-productTomlInline ax = joinWith ", " (map axisToToml ax)
+productTomlInline ax =
+  joinWith ", " (map axisToToml (filterList (a => not (isSubTop (snd a))) ax))
 
 axisToToml : (String, Param) -> String
 axisToToml (name, PPrefix (Some s)) = "\{lowerFirst name} = \"\{s}\""
@@ -855,8 +856,8 @@ paramAllowTok : String -> Param -> String
 paramAllowTok label p = match canonParam p
   PPrefix (Some s) => "\{label}=\{s}"
   PSet (Some xs) => "\{label}={\{joinWith "," xs}}"
-  PProduct [] => label
-  PProduct ax => "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form
+  PProduct ax if not (isSubTop (PProduct ax)) =>
+    "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form
   _ => label
 
 -- WS-4: render product axes as a policy `--allow` rhs `Host="…";Method={…}` —

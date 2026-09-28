@@ -1,0 +1,15 @@
+-- One authority has one domain. Web2 and Web3 are Products of two schemas
+-- (their first axes differ), so a binder used at both is ill-formed, as a
+-- binder used at a Product and a Prefix label is.
+effect Web2 Product (Method : Set, Host : Prefix)
+effect Web3 Product (Host : Prefix, Port : Set)
+
+extern req2 : (u : String) -> <FFI, Web2 u> Unit
+extern req3 : (u : String) -> <FFI, Web3 u> Unit
+
+both : (u : String) -> <FFI, Web2 u, Web3 u> Unit
+both u =
+  let _ = req2 u
+  req3 u
+
+main = println 1

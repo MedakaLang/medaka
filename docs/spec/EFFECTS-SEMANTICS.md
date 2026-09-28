@@ -472,10 +472,11 @@ domains retain their declared axis schema, `effect L Product (Host : Prefix,
 Method : Set)`: the axes are declared in order and the first is the primary
 axis an unqualified string argument or a bare written literal lifts into; a
 written product may name only declared axes; a Product declared without axes
-is ill-formed. The schema belongs to the label, or to a variable that carries
-the label's domain, never to a product constant: a constant writes only the
-axes it names, so a literal checked against a slot known only from a
-constant lifts to the whole domain. Missing axes mean top. Domain mismatches
+is ill-formed. Missing axes mean top. Every element of a Product domain
+carries the schema, whether it is read off the label, a variable, or a
+constant a signature writes, so the domain is the schema itself: two Product
+labels are one domain only when they declare the same axes, of the same
+domains, in the same order, whatever the axes are named. Domain mismatches
 are errors, never proofs of containment.
 
 At a call, instantiation freshens all quantified variables with one substitution.
@@ -484,7 +485,9 @@ Checking an argument against `τ @κ` checks its underlying type and generates
 `++` whose left operand is justified in a prefix-shaped domain and extended by
 the suffix, a same-body
 `let`, a branch join) and otherwise the argument's checked type: the qualifier
-of a `τ @q`, else the domain's top. A flexible `κ` accumulates lower bounds by
+of a `τ @q` when `q` is an element of the domain, else the domain's top (a
+qualifier of another domain, such as another schema's Product, bounds
+nothing here). A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the
 least solution, variables bounded by each other collapsing to one representative
 first. A variable the owning scope decides that nothing bounds below (no

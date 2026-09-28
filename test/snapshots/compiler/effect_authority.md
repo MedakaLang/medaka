@@ -1,5 +1,5 @@
 # META
-source_lines=273
+source_lines=266
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -79,12 +79,12 @@ authTop top = AConst (subTopOf top)
 -- flexible one may be solved to one later. Pinned by must_fail
 -- `3501-signature-variable-extension` and `3502-flexible-variable-extension`.
 export
-authExtend : Param -> Authority -> Authority
-authExtend top a = mapConstants (extendParam top) a
+authExtend : Authority -> Authority
+authExtend a = mapConstants extendParam a
 
 export
-authAppend : Param -> String -> Authority -> Authority
-authAppend top suffix a = mapConstants (appendParam top suffix) a
+authAppend : String -> Authority -> Authority
+authAppend suffix a = mapConstants (appendParam suffix) a
 
 mapConstants : (Param -> Param) -> Authority -> Authority
 mapConstants f a = match authNorm a
@@ -97,16 +97,9 @@ mapConstants f a = match authNorm a
 -- solution when nothing bounds it below) has no domain of its own.
 export
 authDomainTop : Authority -> Param
--- A Product constant knows only the axes it writes, not its label's
--- declared schema: which axes exist and which is primary. So its domain is
--- the Product top with no schema, and nothing is lifted into an axis on its
--- word; only a label, or a variable that keeps its label's domain, names the
--- primary axis.
-authDomainTop (AConst (PProduct _)) = PProduct []
 authDomainTop (AConst p) = subTopOf p
 authDomainTop (AVar cell) = authvarDomain cell
--- A join's domain is a variable's when it has one: a variable carries its
--- label's declared schema, while a constant knows only the axes it writes.
+-- A join's domain is a variable's when it has one, else its first member's.
 authDomainTop (AJoin ms) = match filterVars ms
   v :: _ => authDomainTop v
   [] => match ms
@@ -299,14 +292,13 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell"))) (EVar "a"))))
 (DTypeSig true "authTop" (TyFun (TyCon "Param") (TyCon "Authority")))
 (DFunDef false "authTop" ((PVar "top")) (EApp (EVar "AConst") (EApp (EVar "subTopOf") (EVar "top"))))
-(DTypeSig true "authExtend" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
-(DFunDef false "authExtend" ((PVar "top") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "extendParam") (EVar "top"))) (EVar "a")))
-(DTypeSig true "authAppend" (TyFun (TyCon "Param") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority")))))
-(DFunDef false "authAppend" ((PVar "top") (PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EApp (EVar "appendParam") (EVar "top")) (EVar "suffix"))) (EVar "a")))
+(DTypeSig true "authExtend" (TyFun (TyCon "Authority") (TyCon "Authority")))
+(DFunDef false "authExtend" ((PVar "a")) (EApp (EApp (EVar "mapConstants") (EVar "extendParam")) (EVar "a")))
+(DTypeSig true "authAppend" (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "authAppend" ((PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "appendParam") (EVar "suffix"))) (EVar "a")))
 (DTypeSig false "mapConstants" (TyFun (TyFun (TyCon "Param") (TyCon "Param")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
 (DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PVar "v") () (EVar "v"))))
 (DTypeSig true "authDomainTop" (TyFun (TyCon "Authority") (TyCon "Param")))
-(DFunDef false "authDomainTop" ((PCon "AConst" (PCon "PProduct" PWild))) (EApp (EVar "PProduct") (EListLit)))
 (DFunDef false "authDomainTop" ((PCon "AConst" (PVar "p"))) (EApp (EVar "subTopOf") (EVar "p")))
 (DFunDef false "authDomainTop" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell")))
 (DFunDef false "authDomainTop" ((PCon "AJoin" (PVar "ms"))) (EMatch (EApp (EVar "filterVars") (EVar "ms")) (arm (PCons (PVar "v") PWild) () (EApp (EVar "authDomainTop") (EVar "v"))) (arm (PList) () (EMatch (EVar "ms") (arm (PCons (PVar "m") PWild) () (EApp (EVar "authDomainTop") (EVar "m"))) (arm (PList) () (EVar "PUnit"))))))
@@ -402,14 +394,13 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell"))) (EVar "a"))))
 (DTypeSig true "authTop" (TyFun (TyCon "Param") (TyCon "Authority")))
 (DFunDef false "authTop" ((PVar "top")) (EApp (EVar "AConst") (EApp (EVar "subTopOf") (EVar "top"))))
-(DTypeSig true "authExtend" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
-(DFunDef false "authExtend" ((PVar "top") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "extendParam") (EVar "top"))) (EVar "a")))
-(DTypeSig true "authAppend" (TyFun (TyCon "Param") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority")))))
-(DFunDef false "authAppend" ((PVar "top") (PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EApp (EVar "appendParam") (EVar "top")) (EVar "suffix"))) (EVar "a")))
+(DTypeSig true "authExtend" (TyFun (TyCon "Authority") (TyCon "Authority")))
+(DFunDef false "authExtend" ((PVar "a")) (EApp (EApp (EVar "mapConstants") (EVar "extendParam")) (EVar "a")))
+(DTypeSig true "authAppend" (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "authAppend" ((PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "appendParam") (EVar "suffix"))) (EVar "a")))
 (DTypeSig false "mapConstants" (TyFun (TyFun (TyCon "Param") (TyCon "Param")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
 (DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PVar "v") () (EVar "v"))))
 (DTypeSig true "authDomainTop" (TyFun (TyCon "Authority") (TyCon "Param")))
-(DFunDef false "authDomainTop" ((PCon "AConst" (PCon "PProduct" PWild))) (EApp (EVar "PProduct") (EListLit)))
 (DFunDef false "authDomainTop" ((PCon "AConst" (PVar "p"))) (EApp (EVar "subTopOf") (EVar "p")))
 (DFunDef false "authDomainTop" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell")))
 (DFunDef false "authDomainTop" ((PCon "AJoin" (PVar "ms"))) (EMatch (EApp (EVar "filterVars") (EVar "ms")) (arm (PCons (PVar "v") PWild) () (EApp (EVar "authDomainTop") (EVar "v"))) (arm (PList) () (EMatch (EVar "ms") (arm (PCons (PVar "m") PWild) () (EApp (EVar "authDomainTop") (EVar "m"))) (arm (PList) () (EVar "PUnit"))))))

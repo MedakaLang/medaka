@@ -1,5 +1,5 @@
--- The same through an alias qualifier: U's index is a Product constant, so a
--- literal at `String @p` is not lifted into the axis the constant writes.
+-- The same through an alias qualifier: a literal at U's constant index lifts
+-- into Web2's first axis, Method, not the axis the constant writes.
 effect Web2 Product (Method : Set, Host : Prefix)
 
 extern req2 : (u : String) -> <FFI, Web2 u> Unit

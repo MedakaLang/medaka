@@ -204,11 +204,10 @@ import types.effect_domain.{
   subTopOf,
   lookupAxis,
   productPrimaryLift,
-  axisUnion,
+  productOver,
   productNorm,
   isSubTop,
-  sortAxes,
-  insertAxis,
+  domainKey,
   setCardCap,
   writtenSetProblem,
   commonPrefixLen,
@@ -746,7 +745,8 @@ writtenParam (PPrefix None) (EPLit s) = canonParam (PPrefix (Some s))
 writtenParam (PSet None) (EPLit s) = PSet (Some [s])
 writtenParam (PSet None) (EPSet xs) = PSet (Some (sortUniqS xs))
 writtenParam (PProduct schema) (EPLit s) = productPrimaryLift schema s
-writtenParam (PProduct _) (EPProduct axes) = productNorm (map writtenAxis axes)
+writtenParam (PProduct schema) (EPProduct axes) =
+  productOver schema (map writtenAxis axes)
 writtenParam top _ = top
 
 writtenAxis : (String, EffParamTy) -> (String, Param)
@@ -3013,7 +3013,7 @@ effectParamProblems l (PProduct _) (EPSet _) =
   ["label '\{l}' takes named axes (`Host=… Method=…`), not a bare set"]
 effectParamProblems l _ (EPSet _) = [atomicLabelParamText l]
 effectParamProblems _ (PProduct schema) (EPProduct axes) =
-  productAxesProblems schema (productNorm (map writtenAxis axes))
+  productAxesProblems schema (PProduct (map writtenAxis axes))
 effectParamProblems l PUnit (EPProduct _) = [atomicLabelParamText l]
 effectParamProblems l _ (EPProduct _) =
   ["label '\{l}' is not a product domain and takes no axes"]
@@ -3071,12 +3071,9 @@ isStringTy : Ty -> Bool
 isStringTy (TyCon { tyConName = n }) = n == "String"
 isStringTy _ = False
 
+-- Two Products are one domain only when their schemas agree.
 sameDomainTop : Param -> Param -> Bool
-sameDomainTop (PPrefix _) (PPrefix _) = True
-sameDomainTop (PSet _) (PSet _) = True
-sameDomainTop (PProduct _) (PProduct _) = True
-sameDomainTop PUnit PUnit = True
-sameDomainTop _ _ = False
+sameDomainTop p q = domainKey p == domainKey q
 
 binderTypeMsg : String -> String -> String
 binderTypeMsg n ty =
@@ -38727,7 +38724,7 @@ atomParamIsTop a = match atomConst a
 paramIsTopDomain : Param -> Bool
 paramIsTopDomain (PPrefix None) = True
 paramIsTopDomain (PSet None) = True
-paramIsTopDomain (PProduct []) = True
+paramIsTopDomain (p@(PProduct _)) = isSubTop p
 paramIsTopDomain _ = False
 
 -- ── the RESERVED-NAMESPACE rule (S0-4, review round of `ffi-lower-and-link`) ─

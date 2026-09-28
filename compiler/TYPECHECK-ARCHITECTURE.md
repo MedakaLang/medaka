@@ -336,7 +336,7 @@ nothing — their sizes come from the declaration inventory, not from banner spa
 |---|---|---|---|
 | Refinement-domain lattice | `dtopFor`, `dsubN`, `djoin`/`djoinN`, `drenderN` | ~200 lines | EFFECTS §2.1 |
 | Effect-label domain registry | `effectDomains` (`DriverState`) | ~49 lines | EFFECTS §2.2 |
-| **Axis-product lattice** | `productNorm`, `sortAxes`, `insertAxis`, `isSubTop`, `lookupAxis` | ~100 lines | EFFECTS §2 |
+| **Axis-product lattice** | `productNorm`, `domainKey`, `isSubTop`, `lookupAxis` | ~100 lines | EFFECTS §2 |
 | **Capability written-syntax decoder** | `atomOfWritten`, `decodeSetParam`, `decodeProductParam`, `decodeAxis` + hand-rolled splitters | ~150 lines | EFFECTS §2.3 |
 | **`IO` widening union alias (Stage 3)** | `decodeSetParam` region | 149 lines / 15 decls ⚠️banner-span | EFFECTS §3.2 |
 | **Known-literal-prefix analysis α (Stage 2b)** | `alpha`, `kpLcp` | 102 lines / 10 decls ⚠️banner-span | EFFECTS §2.4 |

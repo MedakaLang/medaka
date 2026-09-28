@@ -1,7 +1,7 @@
--- A Product constant writes only some of its label's axes, so it cannot say
--- which axis is primary. Instantiating `apply` at H's constant index must not
--- read the axis the constant writes (Host) as the place a literal lands: the
--- literal is refused, not admitted as a Host pattern.
+-- A Product constant carries its label's schema. Instantiating `apply` at
+-- H's constant index, a literal lifts into Web2's first axis, Method, not the
+-- axis the constant writes (Host): `g` performs Method={"a.com/x"}, outside
+-- its bound.
 effect Web2 Product (Method : Set, Host : Prefix)
 
 extern req2 : (u : String) -> <FFI, Web2 u> Unit

@@ -601,14 +601,31 @@ test "a linked authority variable keeps its label's declared schema" = expectAll
     expectCheckAccept (fixture "product_linked_schema_accept.mdk"),
   ]
 
-test "a Product constant names no primary axis, by instantiation or alias" = expectAll
+test "a Product constant carries its schema, by instantiation or alias" = expectAll
   [
     expectCheckReject (fixture "product_constant_schema_inst_reject.mdk") [
-      "Binding 'g' reaches the whole domain",
+      "Binding 'g' reaches Method={\"a.com/x\"}",
     ],
     expectCheckAccept (fixture "product_constant_schema_inst_accept.mdk"),
     expectCheckReject (fixture "product_constant_schema_alias_reject.mdk") [
-      "Binding 'g' reaches the whole domain",
+      "Binding 'g' reaches Method={\"a.com/x\"}",
     ],
     expectCheckAccept (fixture "product_constant_schema_alias_accept.mdk"),
+    expectCheckAccept (fixture "product_constant_schema_primary_accept.mdk"),
+    expectCheckAccept (fixture "product_constant_concat_accept.mdk"),
   ]
+
+test "two Product schemas are two domains, whatever their axes are named" = expectAll
+  [
+    expectCheckReject (fixture "product_cross_schema_reject.mdk") [
+      "is allowed, but it performs <Web2>",
+    ],
+    expectCheckAccept (fixture "product_cross_schema_accept.mdk"),
+  ]
+
+test "a binder at two Product labels needs one schema" = expectAll [
+  expectCheckReject (fixture "product_binder_two_schemas_reject.mdk") [
+    "Authority 'u' is used at labels from different domains",
+  ],
+  expectCheckAccept (fixture "product_binder_one_schema_accept.mdk"),
+]

@@ -75,12 +75,12 @@ authTop top = AConst (subTopOf top)
 -- flexible one may be solved to one later. Pinned by must_fail
 -- `3501-signature-variable-extension` and `3502-flexible-variable-extension`.
 export
-authExtend : Param -> Authority -> Authority
-authExtend top a = mapConstants (extendParam top) a
+authExtend : Authority -> Authority
+authExtend a = mapConstants extendParam a
 
 export
-authAppend : Param -> String -> Authority -> Authority
-authAppend top suffix a = mapConstants (appendParam top suffix) a
+authAppend : String -> Authority -> Authority
+authAppend suffix a = mapConstants (appendParam suffix) a
 
 mapConstants : (Param -> Param) -> Authority -> Authority
 mapConstants f a = match authNorm a
@@ -93,16 +93,9 @@ mapConstants f a = match authNorm a
 -- solution when nothing bounds it below) has no domain of its own.
 export
 authDomainTop : Authority -> Param
--- A Product constant knows only the axes it writes, not its label's
--- declared schema: which axes exist and which is primary. So its domain is
--- the Product top with no schema, and nothing is lifted into an axis on its
--- word; only a label, or a variable that keeps its label's domain, names the
--- primary axis.
-authDomainTop (AConst (PProduct _)) = PProduct []
 authDomainTop (AConst p) = subTopOf p
 authDomainTop (AVar cell) = authvarDomain cell
--- A join's domain is a variable's when it has one: a variable carries its
--- label's declared schema, while a constant knows only the axes it writes.
+-- A join's domain is a variable's when it has one, else its first member's.
 authDomainTop (AJoin ms) = match filterVars ms
   v :: _ => authDomainTop v
   [] => match ms
