@@ -561,6 +561,7 @@ collectProducedSummary : List EffRow -> EffRow
 collectRowEffvarIds : List Mono -> List Int
 collectTyIds : List Mono -> List Int
 collectValueAllowance : List EffRow -> EffRow
+commitImprovement : Map String Unit -> List (Mono, Mono) -> Unit
 composeOp : Mono -> Mono -> Bool -> Mono
 computeMangledShadowMap : List Decl -> List (String, List Decl) -> List (String, String)
 concreteAtom : Atom -> Bool
@@ -1283,8 +1284,10 @@ ieRowInheritsDefault : ImplRow -> String -> Bool
 ieRowInst : ImplRow -> InstRef
 ieRowMethodNames : ImplRow -> List String
 ieRowOfEntry : ImplEnv -> Option KeyEntry -> Option ImplRow
+ieRowOfIface : IfaceRef -> ImplRow -> Bool
 ieRowOrd : ImplRow -> Int
 ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)
+ieRowTys : ImplRow -> List Ty
 ieRowWithSeq : List ImplRow -> Int -> Option ImplRow
 ieRowsAll : ImplEnv -> List ImplRow
 ieRowsOwnedBy : Int -> ImplEnv -> List ImplRow
@@ -1406,6 +1409,9 @@ importerReachIndex : List (String, List Decl) -> Map String (Map String Unit)
 importerShadowDomain : TcEnv -> String -> Option Mono
 importerShadowDomainAt : TcEnv -> String -> Int -> Option Mono
 importerShadowOnEmitPath : String -> Ref Route -> Bool
+improveByUniqueImpl : Map String Unit -> List UObligation -> Unit
+improveGoal : Map String Unit -> IfaceRef -> List Mono -> Unit
+improvementPool : List Mono -> List ImplRow
 indexEagerMsg : String -> String -> String
 indexOfId : Int -> List Int -> Option Int
 indexOfIdGo : Int -> Int -> List Int -> Option Int
@@ -1946,6 +1952,7 @@ monoTyvarId : Mono -> Int
 monoTyvarIds : Mono -> List Int
 monoUnboundIds : Mono -> List Int
 monoUnboundVarLevels : Mono -> List (Int, Int)
+monoVarCells : Mono -> List (Ref Tyvar)
 monoVecSameGiven : List Mono -> List Mono -> Bool
 monoVectorClosed : List Mono -> Bool
 monosTvarIds : List Int -> List Mono -> List Int
@@ -2410,6 +2417,7 @@ renderKindAnnAtomic : KindAnn -> String
 renderKindArrow : List Kind -> String
 renderRouteIdentity : Route -> String
 repeatedBindings : List (String, Mono) -> List (String, Mono) -> List (Mono, Mono)
+repeatedGoalPairs : List Ty -> List Mono -> List (Mono, Mono)
 repeatedNames : List String -> List String -> List String
 reportAmbiguousImpl : String -> Route
 reportAmbiguousImport : Map String Unit -> String -> UsePath -> Loc -> Unit
@@ -2527,6 +2535,8 @@ rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
 rowFreeAuthvars : EffRow -> List Int
 rowFreeEffvars : EffRow -> List Int
 rowHasRigid : EffRow -> Bool
+rowHeadMatches : List Mono -> ImplRow -> Bool
+rowHeadUnifies : List Mono -> ImplRow -> Bool
 rowInto : Bool -> EffRow -> EffRow -> Unit
 rowKindMismatchMsg : List EffAtomTy -> List String -> String
 rowOfMembers : List Atom -> List (Ref Effvar) -> EffRow
@@ -2623,6 +2633,7 @@ sigConstraintsOf : Ty -> List Constraint
 sigNamesToSet : List (String, Ty) -> Map String Unit -> Map String Unit
 sigOverExpansiveMsg : String -> Ty -> String
 sigPredicateSlot : (IfaceRef, List String) -> PredicateSlot
+sigStandIn : Ref Tyvar -> String
 sigToScheme : Ty -> Scheme
 sigToSchemeTvs : Ty -> (Scheme, List (String, Mono))
 sigToSchemeTvsIn : List (String, List Kind) -> Ty -> (Scheme, List (String, Mono))
@@ -2855,6 +2866,7 @@ unopMethodApp : String -> Expr -> Ref Route -> Expr
 unprotectedNumCandidates : Map String Unit -> List UObligation -> List Int
 unquantifiedAuthIds : Scheme -> Map Int Unit
 unreachableArmWarning : String
+unrigidSig : List (String, Mono) -> Mono -> Mono
 unroutedGroundReqs : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 unroutedResidual : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 updateAuthority : String -> List (String, Mono) -> List String -> Int -> Option (Ref Authvar) -> Authority

@@ -540,6 +540,69 @@ contract the body must satisfy, not a floor it can raise" (§4): the method
 signature is a contract the impl must meet **at every instantiation the caller
 may choose**, not just one the impl finds convenient.
 
+### Improvement by the one matching instance
+
+`inst`'s matcher `φ` binds the **instance's** variables. It can also answer a
+goal that still carries free metavariables, where the instance head repeats a
+variable: `impl Pick a a a` matches `Pick (List t) (List Int) (List Int)` only if
+`t = Int`, because the three bindings of `a` must be one type (#3521). Matching
+alone leaves `t` free, and a goal still open at the selection point names no
+instance (§6.2 T4). Improvement is the step that commits `t`.
+
+**Rule.** Let `π = C τ̄` be a goal with a free metavariable. Let `U` be the
+instances of `C` in `IE` whose heads **unify** with `π`, both sides' variables
+free. If `U = {I}`, and `I`'s head matches `π` with each repeated variable's
+bindings unified jointly (the #3521 matcher), then that unifier is applied to
+`π`'s metavariables. Otherwise nothing is committed:
+
+- `|U| = 0`: no instance can answer the goal, and the missing-instance
+  rejection or deferral follows exactly as it would have.
+- `|U| ≥ 2`: an overlap. This covers a second instance that only a later
+  binding of a goal variable would make match, such as a numeric literal not yet
+  defaulted. Committing there would decide the overlap by the order the
+  variables happen to be solved in, so the goal is left undetermined.
+- `U = {I}`, but `I`'s head does not match `π`, because `I` has a type
+  constructor where `π` has a variable. Committing there would be unification
+  against the instance head, not improvement: the only instance
+  `impl Show (List Int)` never fixes `Show (List t)` to `t = Int`. Only a
+  repeated head variable commits anything.
+- The commit would bind a variable of the group's own declared signature. A
+  signature variable is rigid, and the check that a body is not less general
+  than its signature has already run, so such a goal is left as it is. A fresh
+  variable may still be bound *to* a signature variable: `g : a -> List a` with
+  `g y = pick [y] []` fixes `pick`'s `t = a`.
+
+Uniqueness is counted over unifying heads, not matching ones, because a
+one-sided match undercounts. At `Pick (List t) (List n) (List Int)`, with `n` a
+literal's variable, `impl Pick a (List Int) a` does not match yet but will once
+`n` defaults. Committing `t` through `impl Pick a a a` alone then leaves a goal
+both instances match. Pinned by
+`test/dict_fixtures/impl-improvement-overlap-no-commit.mdk`.
+
+**When.** At a top-level binding group's close, over the obligations the group
+recorded, **before** §6.3's numeric defaulting and before the group
+generalizes (`improveByUniqueImpl`, called from `processSCC`). Before
+defaulting, so that `Get (Box Float) e` against the only instance
+`Get (Box a) a` fixes `e = Float` before a literal at `e` could default it to
+`Int` (`test/dict_fixtures/impl-improvement-before-num-default.mdk`). Before
+generalization, so that a binding's scheme is built from the improved type
+rather than having a quantified variable bound after the fact
+(`wrap y = pick [y] []` generalizes to `a -> List a`;
+`test/dict_fixtures/impl-improvement-unique-instance.mdk`). A local `let`
+defaults at its own boundary first. Its obligations still reach the enclosing
+group's close, but a variable already defaulted there is no longer free.
+
+⚠️ **Not yet applied inside a method body.** An `impl` body is inferred outside
+every binding group, so its obligations never reach a group's close. The same
+`pick [] [3, 7]` inside an `impl` method still leaves `t` open, and `build` has
+no instance to emit. Improving there needs the impl head's own variables held
+rigid, as a signature's are here.
+
+This is a separate step from the older head-tycon grounding
+(`groundMultiParamObligations`, gap #44). That step runs at module end and
+commits on the one instance whose first head constructor is the goal's,
+ignoring instances headed by a variable. It is unchanged.
+
 ---
 
 ## 4. Elaboration: typing-with-translation

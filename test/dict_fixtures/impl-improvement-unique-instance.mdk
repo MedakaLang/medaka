@@ -1,0 +1,32 @@
+-- §3 improvement: `impl Pick a a a` is the only instance, so the goal
+-- `Pick (List t) (List Int) (List Int)` fixes `t = Int`, and `mk` at `t`
+-- selects `impl Mk Int`, not `impl Mk Bool`.
+-- Hand-derived: `pick` returns its second argument, so `s` is `[mk]` = [42]
+-- and `r` is [3, 7]; `s ++ r` is [42, 3, 7].
+-- `wrap`'s goal `Pick (List a) (List t) c` is improved before `wrap`
+-- generalizes, to `wrap : a -> List a`, so both uses check; each prints [].
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+interface Mk a where
+  mk : a
+
+impl Mk Int where
+  mk = 42
+
+impl Mk Bool where
+  mk = True
+
+wrap y = pick [y] []
+
+main =
+  let r : List Int = pick [mk] [3, 7]
+  let s : List Int = pick [3, 7] [mk]
+  let _ = println (debug (s ++ r))
+  let ns : List Int = wrap 1
+  let bs : List Bool = wrap True
+  let _ = println (debug ns)
+  println (debug bs)

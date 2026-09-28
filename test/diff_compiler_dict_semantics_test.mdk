@@ -2549,7 +2549,7 @@ table = [
   Row {
     entry = "impl-head-repeated-var-three-positions.mdk",
     label =
-      "§3 one matcher for the whole head vector: `impl Pick a a a` never matches `Pick (List x) (List Int) (List U8)`, whichever position binds `a` first. Was accepted, printing a U8 list holding 300",
+      "§3 one matcher for the whole head vector: `impl Pick a a a` never matches `Pick (List x) (List Int) (List U8)`, whichever position binds `a` first. Was accepted, printing a U8 list holding 300. The Int list is a bound `List Int`: a literal list there is fixed to `List U8` by §3 improvement before defaulting, and is then refused as out of range (L-INT-OVERFLOW), which is a different goal",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -2679,6 +2679,39 @@ table = [
     codes = [],
   },
   Row {
+    entry = "impl-improvement-unique-instance.mdk",
+    label =
+      "§3 improvement: `impl Pick a a a` is the only instance unifying with `Pick (List t) (List Int) (List Int)`, so `t = Int` is committed and `mk` at `t` selects `impl Mk Int`; `wrap` is improved before it generalizes, to `a -> List a`. Hand-derived: [42] ++ [3, 7], then [] twice. Before improvement `mk`'s goal stayed `Mk t` and `pick`'s stamp was the bare head word, which the build could not emit",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[42, 3, 7]\n[]\n[]\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-improvement-overlap-no-commit.mdk",
+    label =
+      "§3 improvement never fires under overlap: `Pick a a a` and `Pick a (List Int) a` both unify with the goal, so `t` stays undetermined (§6.2 T4, #3535) and the build has no instance to emit, as before improvement existed. `T-AMBIGUOUS-INSTANCE` absent is the discriminator: a uniqueness count over one-sided matches committed `t = Int` at the group's close, where the literals were not yet defaulted, and then rejected the program as ambiguous. Both bodies return their first argument, so run prints [] under either impl order",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "W-INCOMPARABLE-IMPLS", Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "impl-improvement-before-num-default.mdk",
+    label =
+      "§3 improvement runs before §6.3 defaulting: `Get (Box Float) e` against the only instance `Get (Box a) a` fixes `e = Float` before the literal `4` could default `e` to Int. Hand-derived: 3.0 > 4 is false, \"small\". Drained from the must-fail pin 3521-num-default-before-impl-improvement, which was refused with T-NO-IMPL at `Get (Box Float) Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "small\n",
+    codes = [],
+  },
+  Row {
     entry = "impl-heads-cycle-no-overlap.mdk",
     label =
       "§4 coherence: `Tri a (List a) a` and `Tri b b b` share an instance only if `a = List a`, so they do not overlap; the check terminates (it looped on main). Hand-derived: `tri 1 [1] 1` is the first impl, `one`; `tri True True True` the second, `two`",
@@ -2700,7 +2733,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 233
+tableRows = 236
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

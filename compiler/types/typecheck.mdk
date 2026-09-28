@@ -34870,6 +34870,125 @@ implTysIfMatch iface tag (DImpl { iface = ifn, tys, ... })
   | otherwise = []
 implTysIfMatch _ _ _ = []
 
+-- Impl-based improvement (DICT-SEMANTICS §3 "Improvement by the one matching
+-- instance"): when the head matcher (`implHeadSubst`) accepts a goal by binding
+-- the goal's own free variables through a repeated head variable, and that
+-- instance is the only one of the interface whose head unifies with the goal,
+-- the binding is committed, so selection sees the goal the instance determined.
+-- `Pick (List t) (List Int) (List Int)` against the only instance `impl Pick a a a`
+-- fixes `t = Int`.  A second instance that unifies with the goal (an overlap,
+-- including one a later binding of a goal variable would make match) or none
+-- leaves the goal as it is.
+--
+-- It runs at a top-level binding group's close (`processSCC`), before that group's
+-- Num defaulting and generalization, and not inside `groundMultiParamObligations`:
+-- that pass runs at module end, after both, and it commits on the one impl whose
+-- first head tycon is the goal's, ignoring impls headed by a variable, so it does
+-- not answer "exactly one instance can match this goal".
+--
+-- [sigIds] are the group's declared-signature variables still free at its close.
+-- The commit never binds one: they take part as constants, and a goal that would
+-- need one bound is left as it is, for `checkSigsTooGeneral` has already run.
+improveByUniqueImpl : OrdMap Unit -> List UObligation -> Unit
+improveByUniqueImpl _ [] = ()
+improveByUniqueImpl sigIds (o :: rest) =
+  let _ = improveGoal sigIds o.pred.iface (map normalize (uOblArgs o))
+  improveByUniqueImpl sigIds rest
+
+improveGoal : OrdMap Unit -> IfaceRef -> List Mono -> Unit
+improveGoal sigIds iface args
+  | isEmptyL args || monoVectorClosed args = ()
+  | otherwise =
+    let rows = filterList (ieRowOfIface iface) (improvementPool args)
+    match filterList (rowHeadMatches args) rows
+      [row] => match repeatedGoalPairs (ieRowTys row) args
+        [] => ()
+        pairs =>
+          if listLen (filterList (rowHeadUnifies args) rows) == 1 then
+            commitImprovement sigIds pairs
+      _ => ()
+
+-- Solve [pairs] in a scratch substitution with every signature variable held
+-- rigid, then bind each variable that substitution solved, in the direction it
+-- solved it: `unify (TVar cell) m` links `cell`, so a fresh variable is linked
+-- to a signature variable and never the other way round.
+commitImprovement : OrdMap Unit -> List (Mono, Mono) -> Unit
+commitImprovement sigIds pairs =
+  let cells = flatMap (p => monoVarCells (fst p) ++ monoVarCells (snd p)) pairs
+  let sigCells =
+    filterList (c => isSome (omLookup (intToString (tyvarId c)) sigIds)) cells
+  let toRigid = map (c => (tyvarId c, TRigid (sigStandIn c))) sigCells
+  let fromRigid = map (c => (sigStandIn c, TVar c)) sigCells
+  let scratch = Ref []
+  let rigidPairs =
+    map
+      (p => (substMono toRigid [] [] (fst p), substMono toRigid [] [] (snd p)))
+      pairs
+  let cellsById = map (c => (tyvarId c, c)) cells
+  if cohOverlapGo scratch rigidPairs then
+    fold
+      (_ binding => match lookupAssocI (fst binding) cellsById
+        Some cell => unify (TVar cell) (unrigidSig fromRigid (snd binding))
+        None => ())
+      ()
+      (reverseL !scratch)
+
+-- A name no type or type variable can spell, standing in for a signature variable.
+sigStandIn : Ref Tyvar -> String
+sigStandIn cell = "%sig\{intToString (tyvarId cell)}"
+
+unrigidSig : List (String, Mono) -> Mono -> Mono
+unrigidSig back t = match normalize t
+  TRigid n => optionOr (TRigid n) (lookupAssoc n back)
+  TApp a b => TApp (unrigidSig back a) (unrigidSig back b)
+  TFun a eff b => TFun (unrigidSig back a) eff (unrigidSig back b)
+  TQual a q => TQual (unrigidSig back a) q
+  other => other
+
+monoVarCells : Mono -> List (Ref Tyvar)
+monoVarCells t = match normalize t
+  TVar cell => [cell]
+  TApp a b => monoVarCells a ++ monoVarCells b
+  TFun a _ b => monoVarCells a ++ monoVarCells b
+  TQual a _ => monoVarCells a
+  _ => []
+
+-- Every row that can unify with [args]: the graph-global `IE` rows route selection
+-- reads (`ieSelectRowByIface`).  A goal whose first position has a head constructor
+-- is unified only by rows filed under that head or under none; a multi-position
+-- goal whose first position is a variable, by any row.  A one-position goal that
+-- is a bare variable binds no repeated head variable, so it gets no candidates.
+improvementPool : List Mono -> List ImplRow
+improvementPool args =
+  let env = perRun.value.bodyImplEnvRef.value
+  match goalHeadCon args
+    Some hk => ieHeadRows (Some hk) env ++ ieHeadRows None env
+    None => if listLen args > 1 then ieRowsAll env else []
+
+ieRowOfIface : IfaceRef -> ImplRow -> Bool
+ieRowOfIface iface (ImplRow _ _ ir _ _ _) = ieRowIfaceMatches ir iface
+
+ieRowTys : ImplRow -> List Ty
+ieRowTys (ImplRow _ _ _ tys _ _) = tys
+
+rowHeadMatches : List Mono -> ImplRow -> Bool
+rowHeadMatches args row = isSome (implHeadSubst (ieRowTys row) args)
+
+-- Coherence's overlap question (`cohOverlap`), asked of the row's head, freshened,
+-- and the goal: both sides' variables are wildcards, nothing is committed.
+rowHeadUnifies : List Mono -> ImplRow -> Bool
+rowHeadUnifies args row =
+  let tys = ieRowTys row
+  let tvs = freshTvMap (dedup (flatMap tyVarNames tys))
+  cohOverlap (map (fromAstType tvs) tys) args
+
+-- The pairs a repeated head variable binds, each of which the matcher found
+-- unifiable in its scratch `cohOverlapGo`.
+repeatedGoalPairs : List Ty -> List Mono -> List (Mono, Mono)
+repeatedGoalPairs tys args = match positionBindings tys args []
+  Some binds => repeatedBindings binds []
+  None => []
+
 -- substitute interface-typaram NAMES → impl type PATTERNS inside a declared Ty.
 --
 -- #1110 (was a residual, DRAINED by the stamping PR).  The `TyCon` arm used to
@@ -39590,6 +39709,8 @@ processSCC env sigs grouped0 members =
   -- group's already-generalized var is never touched.
   let protectedSigIds = sccProtectedSignatureIds sigTvMaps
   let addedObls = wWindow perRun.value.implObls oblN0
+  let _ = improveByUniqueImpl protectedSigIds addedObls
+  let _ = improveByUniqueImpl protectedSigIds (callUOblsWindow callN0)
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
   -- not pendingImplObligations).  See numCallObls/numDictObls.  The synthetic entries
