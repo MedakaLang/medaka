@@ -70,6 +70,7 @@ import frontend.ast.{
   authTermSurface,
   authTermsSurface,
   authTermNames,
+  effParamNames,
   TyConOrigin(..),
   Ns(..),
   Ident(..),
@@ -230,10 +231,12 @@ import types.effect_domain.{
 import types.effect_authority.{
   Authority(..),
   Authvar(..),
+  authSplit,
   authvarId,
   authvarLevel,
   authvarDomain,
   authvarName,
+  authvarOnAxis,
   authConst,
   authIsTop,
   authJoin,
@@ -741,11 +744,29 @@ atomsEscape a b = atomsDiff a (expandIoInBound b)
 atomOfWrittenIn : SigVars -> EffAtomTy -> Atom
 atomOfWrittenIn sv a =
   let l = EffLabel a.eatLabel a.eatOrigin
-  match a.eatParam
-    EPName n => match lookupAssoc n sv.svAuths
+  match (a.eatParam, dtopFor l)
+    (EPName n, top) => match lookupAssoc n sv.svAuths
       Some cell => Atom l (AVar cell)
-      None => atomWith l (dtopFor l)
-    p => atomWith l (writtenParam (dtopFor l) p)
+      None => atomWith l top
+    (EPProduct axes, PProduct schema) if axisNamesArgument axes =>
+      Atom l (AProduct (map (writtenAxisTerm sv axes) schema))
+    (p, top) => atomWith l (writtenParam top p)
+
+-- One axis of a product that names an argument: the named argument's
+-- variable, whose domain is that axis's; a written value; or the axis's top
+-- where the atom leaves it out.
+writtenAxisTerm : SigVars ->
+  List (String, EffParamTy) ->
+  (String, Param) ->
+  (String, Authority)
+writtenAxisTerm sv written (name, top) = match lookupAssoc name written
+  Some (EPName n) => match lookupAssoc n sv.svAuths
+    Some cell => (name, AVar cell)
+    None => (name, authTop top)
+  Some p => match writtenAxis (name, p)
+    (_, PUnit) => (name, authTop top)
+    (_, v) => (name, AConst (canonParam v))
+  None => (name, authTop top)
 
 writtenParam : Param -> EffParamTy -> Param
 writtenParam top EPTop = top
@@ -756,6 +777,14 @@ writtenParam (PProduct schema) (EPLit s) = productPrimaryLift schema s
 writtenParam (PProduct schema) (EPProduct axes) =
   productOver schema (map writtenAxis axes)
 writtenParam top _ = top
+
+-- An axis as the schema check reads it: a named argument stands for any
+-- value of its axis, and its binder is checked where it is bound.
+checkedAxis : List (String, Param) -> (String, EffParamTy) -> (String, Param)
+checkedAxis schema (name, EPName _) = match lookupAxis name schema
+  Some top => (name, subTopOf top)
+  None => (name, PUnit)
+checkedAxis _ a = writtenAxis a
 
 writtenAxis : (String, EffParamTy) -> (String, Param)
 writtenAxis (name, EPLit s) = (name, PPrefix (Some s))
@@ -2960,6 +2989,7 @@ checkWrittenElementCap (a :: rest) =
 writtenElement : Param -> EffAtomTy -> List Param
 writtenElement top a = match a.eatParam
   EPName _ => []
+  EPProduct axes if axisNamesArgument axes => []
   p => [writtenParam top p]
 
 -- A written parameter must be an element of its label's domain: a Prefix
@@ -3003,7 +3033,7 @@ effectParamProblems l (PProduct _) (EPSet _) =
 effectParamProblems l _ (EPSet _) = [atomicLabelParamText l]
 effectParamProblems _ (PProduct schema) (EPProduct axes) =
   map repeatedAxisText (repeatedNames (map fst axes) [])
-    ++ productAxesProblems schema (PProduct (map writtenAxis axes))
+    ++ productAxesProblems schema (PProduct (map (checkedAxis schema) axes))
 effectParamProblems l PUnit (EPProduct _) = [atomicLabelParamText l]
 effectParamProblems l _ (EPProduct _) =
   ["label '\{l}' is not a product domain and takes no axes"]
@@ -3137,6 +3167,8 @@ substAuth [] q = q
 substAuth asub q = match authNorm q
   AVar cell => optionOr (AVar cell) (lookupAssocI (authvarId cell) asub)
   AJoin ms => authJoinAll (map (substAuth asub) ms)
+  AProduct axes =>
+    authNorm (AProduct (map (a => (fst a, substAuth asub (snd a))) axes))
   c => c
 
 substMember : List (Int, Ref Effvar) -> Ref Effvar -> Ref Effvar
@@ -11485,8 +11517,17 @@ wantAuthorityWith exact lower upper = wantAuthorityFrom None exact lower upper
 
 -- [origin]: the binding whose scheme carried this obligation as a residual,
 -- when it is one re-emitted at a use of that binding.
+-- Against a Product tuple that holds variables the obligation is one per axis
+-- (`authSplit`), so a variable on an axis is solved from its own axis.
 wantAuthorityFrom : Option String -> Bool -> Authority -> Authority -> Unit
-wantAuthorityFrom origin exact lower upper
+wantAuthorityFrom origin exact lower upper =
+  fold
+    (_ pair => wantAuthorityOne origin exact (fst pair) (snd pair))
+    ()
+    (authSplit lower upper)
+
+wantAuthorityOne : Option String -> Bool -> Authority -> Authority -> Unit
+wantAuthorityOne origin exact lower upper
   | EffectSolver.hasSummaryScope perRun.value.effectSummaries =
     EffectSolver.recordAuthorityFrom
       perRun.value.effectSummaries
@@ -11661,7 +11702,7 @@ solvedUpper : Option Authority -> Bool
 solvedUpper (Some (AVar cell)) = match !cell
   ALink _ _ _ =>
     not (IdMap.has (authvarId cell) perRun.value.indexSubstitutedRef.value)
-  AUnbound _ _ _ _ => False
+  AUnbound _ _ _ _ _ => False
 solvedUpper _ = False
 
 -- ── #1119 D-2: the per-parameter VARIANCE gate (#1098, #1121) ─────────────
@@ -12531,7 +12572,10 @@ freshAuthSubstFor ids body force =
 -- current level, like an instantiated row tail.
 freshInferenceAuthvar : Option (Ref Authvar) -> Ref Authvar
 freshInferenceAuthvar (Some source) =
-  freshAuthvar (authvarDomain source) (authvarName source)
+  freshAuthvarOn
+    (authvarOnAxis source)
+    (authvarDomain source)
+    (authvarName source)
 freshInferenceAuthvar None = freshAuthvar PUnit None
 
 -- Every unbound authority cell reachable in a type: the qualifiers and the
@@ -12627,8 +12671,8 @@ lowerAuthLevels _ (AConst _) = ()
 lowerAuthLevels level q =
   fold
     (_ cell => match !cell
-      AUnbound id lvl top name =>
-        if lvl > level then cell := AUnbound id level top name
+      AUnbound id lvl top name axis =>
+        if lvl > level then cell := AUnbound id level top name axis
       ALink _ _ _ => ())
     ()
     (authVars q)
@@ -13028,11 +13072,12 @@ sigVarsForWith ty rowNames auths =
   let named = namedArgTypes ty
   let authNames = map fst auths
   let _ = reportBinderDomains ty (namedAtomBinders ty ++ auths)
+  let axisNames = map fst (atomBindersIn axisAtomBinders ty)
   let sv = SigVars {
     svRows = freshEffMap rowNames,
     svAuths =
       map
-        freshAuthBinder
+        (b => freshAuthBinder (contains (fst b) axisNames) b)
         (filterList
           (b => authorityBinderBound named authNames (fst b))
           (dedupBinders (namedAtomBinders ty ++ auths) [])),
@@ -13193,9 +13238,7 @@ authorityNamesWritten (TyNamed _ t) = authorityNamesWritten t
 authorityNamesWritten _ = []
 
 atomAuthorityName : EffAtomTy -> List (String, Option Loc)
-atomAuthorityName a = match a.eatParam
-  EPName n => [(n, a.eatLoc)]
-  _ => []
+atomAuthorityName a = map (b => (fst b, a.eatLoc)) (namedAtomBinder a)
 
 -- The type-variable names a signature quantifies as ORDINARY type variables:
 -- everything written bare that is neither a row argument nor an authority
@@ -13210,12 +13253,17 @@ namedArgTypes (TyFun _ b) = namedArgTypes b
 namedArgTypes (TyConstrained _ t) = namedArgTypes t
 namedArgTypes _ = []
 
-freshAuthBinder : (String, Param) -> (String, Ref Authvar)
-freshAuthBinder (n, top) = (n, freshAuthvar top (Some n))
+-- [onAxis]: the signature names this binder at a Product's axis.
+freshAuthBinder : Bool -> (String, Param) -> (String, Ref Authvar)
+freshAuthBinder onAxis (n, top) = (n, freshAuthvarOn onAxis top (Some n))
 
 freshAuthvar : Param -> Option String -> Ref Authvar
-freshAuthvar top name =
-  Ref (AUnbound (newEffvarId ()) perRun.value.currentLevel.value top name)
+freshAuthvar top name = freshAuthvarOn False top name
+
+freshAuthvarOn : Bool -> Param -> Option String -> Ref Authvar
+freshAuthvarOn onAxis top name =
+  Ref
+    (AUnbound (newEffvarId ()) perRun.value.currentLevel.value top name onAxis)
 
 authvarIdOf : (String, Ref Authvar) -> Int
 authvarIdOf (_, cell) = authvarId cell
@@ -13264,22 +13312,44 @@ dedupBinders ((n, top) :: rest) acc =
     dedupBinders rest ((n, top) :: acc)
 
 namedAtomBinders : Ty -> List (String, Param)
-namedAtomBinders (TyVar _) = []
-namedAtomBinders (TyCon { tyConName = _ }) = []
-namedAtomBinders (TyApp a b) = namedAtomBinders a ++ namedAtomBinders b
-namedAtomBinders (TyFun a b) = namedAtomBinders a ++ namedAtomBinders b
-namedAtomBinders (TyTuple ts) = flatMap namedAtomBinders ts
-namedAtomBinders (TyEffect atoms _ t) =
-  flatMap namedAtomBinder atoms ++ namedAtomBinders t
-namedAtomBinders (TyRow atoms _ _) = flatMap namedAtomBinder atoms
-namedAtomBinders (TyAuth _ _) = []
-namedAtomBinders (TyConstrained _ t) = namedAtomBinders t
-namedAtomBinders (TyNamed _ t) = namedAtomBinders t
-namedAtomBinders (TyQual t _ _) = namedAtomBinders t
+namedAtomBinders ty = atomBindersIn namedAtomBinder ty
 
+-- What [readAtom] reads off every effect atom a written type holds.
+atomBindersIn : (EffAtomTy -> List a) -> Ty -> List a
+atomBindersIn _ (TyVar _) = []
+atomBindersIn _ (TyCon { tyConName = _ }) = []
+atomBindersIn readAtom (TyApp a b) =
+  atomBindersIn readAtom a ++ atomBindersIn readAtom b
+atomBindersIn readAtom (TyFun a b) =
+  atomBindersIn readAtom a ++ atomBindersIn readAtom b
+atomBindersIn readAtom (TyTuple ts) = flatMap (atomBindersIn readAtom) ts
+atomBindersIn readAtom (TyEffect atoms _ t) =
+  flatMap readAtom atoms ++ atomBindersIn readAtom t
+atomBindersIn readAtom (TyRow atoms _ _) = flatMap readAtom atoms
+atomBindersIn _ (TyAuth _ _) = []
+atomBindersIn readAtom (TyConstrained _ t) = atomBindersIn readAtom t
+atomBindersIn readAtom (TyNamed _ t) = atomBindersIn readAtom t
+atomBindersIn readAtom (TyQual t _ _) = atomBindersIn readAtom t
+
+-- The names an atom's parameter binds, each with its domain: the label's for
+-- the whole parameter, and for a product's axis that axis's own. An axis the
+-- schema does not declare binds nothing; it is reported as unknown.
 namedAtomBinder : EffAtomTy -> List (String, Param)
 namedAtomBinder a = match a.eatParam
   EPName n => [(n, dtopFor (EffLabel a.eatLabel a.eatOrigin))]
+  _ => axisAtomBinders a
+
+axisAtomBinders : EffAtomTy -> List (String, Param)
+axisAtomBinders a = match (
+  a.eatParam,
+  dtopFor (EffLabel a.eatLabel a.eatOrigin),
+)
+  (EPProduct axes, PProduct schema) =>
+    flatMap
+      (ax => match (snd ax, lookupAxis (fst ax) schema)
+        (EPName n, Some top) => [(n, subTopOf top)]
+        _ => [])
+      axes
   _ => []
 
 effvarIdOf : (String, Ref Effvar) -> Int
@@ -13492,6 +13562,10 @@ isEPProduct _ = False
 isEPName : EffParamTy -> Bool
 isEPName (EPName _) = True
 isEPName _ = False
+
+-- A written product one of whose axes names an argument.
+axisNamesArgument : List (String, EffParamTy) -> Bool
+axisNamesArgument axes = anyList (a => isEPName (snd a)) axes
 
 -- A qualifier's names are bounded by the join of their authorities.  A name
 -- that is not an authority binder here is reported by
@@ -22259,7 +22333,7 @@ openExistentialScope opened =
 
 raiseAuthvarLevel : Int -> Ref Authvar -> Unit
 raiseAuthvarLevel level cell = match !cell
-  AUnbound id _ top name => cell := AUnbound id level top name
+  AUnbound id _ top name axis => cell := AUnbound id level top name axis
   ALink _ _ _ => ()
 
 -- A cell in the scope's value, or lowered below the scope's level, escaped
@@ -26473,7 +26547,7 @@ implHeadMonos tys =
   let auths = dedupBinders (flatMap authArgBindersIn tys) []
   let tvMap =
     freshTvMap (removeAllS (map fst auths) (dedup (flatMap tyVarNames tys)))
-  let etbl = sigVarsWithAuths (map freshAuthBinder auths) emptySigVars
+  let etbl = sigVarsWithAuths (map (freshAuthBinder False) auths) emptySigVars
   (tvMap, map (fromAstTypeE etbl tvMap) tys)
 
 -- An instance is chosen by its head's type constructor and the index is
@@ -38532,9 +38606,7 @@ freeAuthorityNames : List String -> List EffAtomTy -> List String
 freeAuthorityNames bound ls =
   sortUniqS
     (flatMap
-      (a => match a.eatParam
-        EPName x => if contains x bound then [] else [x]
-        _ => [])
+      (a => filterList (x => not (contains x bound)) (effParamNames a.eatParam))
       ls)
 
 withFreeAuths : List (String, Ref Authvar) -> SigVars -> SigVars

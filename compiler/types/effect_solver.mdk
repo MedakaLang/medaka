@@ -6,7 +6,7 @@ import map as M
 import map.{Map(..)}
 import types.effect_authority.{
   renderAuthority, Authority(..), Authvar(..), authvarId, authvarLevel,
-  authNorm, authSub, authVars, authJoinAll, linkAuthvar, authIsTop
+  authNorm, authSub, authVars, authJoinAll, linkAuthvar, authIsTop, authSplit
 }
 import types.effect_rows.{
   Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
@@ -581,7 +581,8 @@ firstEscapingKey [] lowerAtoms upperAtoms escape exact =
 
 -- An escaping atom whose label the upper row carries with a symbolic
 -- authority is an authority obligation, not a missing label: record
--- `lower ⊑ upper` for the authority pass and keep only the genuine escapes.
+-- `lower ⊑ upper` for the authority pass (one obligation per axis against a
+-- Product tuple, `authSplit`) and keep only the genuine escapes.
 -- In an exact (index) relation the obligation is one half of an equality.
 authorityEscapes : SummaryScope c ->
   c ->
@@ -596,15 +597,17 @@ authorityEscapes scope context exact upper (x :: rest) =
     Some y =>
       if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
         scope.essAuthorities :=
-          AuthWanted {
-              awLower = atomAuth x,
-              awUpper = atomAuth y,
-              awContext = context,
-              awLabel = Some (atomKey x),
-              awExact = exact,
-              awResidualOf = None,
-            }
-            :: scope.essAuthorities.value
+          map
+              (pair => AuthWanted {
+                awLower = fst pair,
+                awUpper = snd pair,
+                awContext = context,
+                awLabel = Some (atomKey x),
+                awExact = exact,
+                awResidualOf = None,
+              })
+              (authSplit (atomAuth x) (atomAuth y))
+            ++ scope.essAuthorities.value
         others
       else
         x :: others
@@ -748,13 +751,13 @@ closeSummaryScope solver protected rigidAuths roles retained borrowed escape mak
 -- scope's level and after its floor, and not a declaration universal.
 ownedFlexibleAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 ownedFlexibleAuth scope rigid cell = match !cell
-  AUnbound id level _ _ =>
+  AUnbound id level _ _ _ =>
     level >= scope.essLevel && id > scope.essEffvarFloor && not (M.has id rigid)
   ALink _ _ _ => False
 
 outerFlexibleAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 outerFlexibleAuth scope rigid cell = match !cell
-  AUnbound id level _ _ =>
+  AUnbound id level _ _ _ =>
     (level < scope.essLevel || id <= scope.essEffvarFloor)
       && not (M.has id rigid)
   ALink _ _ _ => False
@@ -764,7 +767,7 @@ outerFlexibleAuth scope rigid cell = match !cell
 -- over one is decided by the scope that saw it, never handed outward.
 localRigidAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 localRigidAuth _ rigid cell = match !cell
-  AUnbound id _ _ _ => M.has id rigid
+  AUnbound id _ _ _ _ => M.has id rigid
   ALink _ _ _ => False
 
 -- A binder of the closing group: a variable a member's type mentions that no
@@ -782,7 +785,7 @@ binderAuth : SummaryScope c ->
   Bool
 binderAuth scope rigid outward roles cell = match roles.rlTyped
   Some typed => match !cell
-    AUnbound id level _ _ =>
+    AUnbound id level _ _ _ =>
       M.has id typed
         && not (M.has id outward)
         && (M.has id rigid && level >= scope.essLevel
@@ -830,7 +833,7 @@ withoutRigid rigid outward =
 -- may mention it as it stands, as a scheme mentions its environment.
 outsideAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 outsideAuth scope outward cell = match !cell
-  AUnbound id level _ _ =>
+  AUnbound id level _ _ _ =>
     M.has id outward || level < scope.essLevel || id <= scope.essEffvarFloor
   ALink _ _ _ => False
 
@@ -1083,7 +1086,7 @@ bottomUnbounded owned wanteds =
 
 isUnboundAuth : Ref Authvar -> Bool
 isUnboundAuth cell = match !cell
-  AUnbound _ _ _ _ => True
+  AUnbound _ _ _ _ _ => True
   ALink _ _ _ => False
 
 lowersOf : Int -> Map Int (Ref Authvar, List Authority) -> List Authority

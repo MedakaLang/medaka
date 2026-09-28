@@ -300,6 +300,12 @@ effect Http Product (Host : Prefix, Method : Set)  -- a Product declares its axe
 -- names them; a Product without axes, or axes on another domain, is refused
 ```
 
+Any axis of a product may name an argument written to its left, as a whole
+parameter may: `(host : String) -> (method : String) -> <Http Host=host
+Method=method> Int`.  Each such argument is an authority of that axis's own
+domain (`host` a Prefix element, `method` a Set element).  Only an effect
+atom's axes take a name; an axis in a qualifier or an index takes a literal.
+
 A row atom whose authority is a symbolic join, or a set of elements, prints
 as one atom per operand, `<FileWrite src, FileWrite dst>` or
 `<Net "a.com/*", Net "b.com/*">`, which is also how it is written: the parser

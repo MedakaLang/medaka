@@ -89,8 +89,6 @@ issue; the number is the thing to search for.
   qualifier needs a label atom, and an extension is the whole domain in a
   result. [#3559](https://github.com/MedakaLang/medaka/issues/3559),
   [#3532](https://github.com/MedakaLang/medaka/issues/3532)
-- **Only a product's primary axis can name an argument.**
-  [#3558](https://github.com/MedakaLang/medaka/issues/3558)
 - **There is no written syntax for a relation.** A binding whose inferred type
   carries `(a <= d) =>` must stay unsigned. Design notes in the specification;
   no issue yet beyond the residual-scheme work under

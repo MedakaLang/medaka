@@ -286,11 +286,46 @@ mention is the whole of that axis. A written product may pin several:
 `<Http Host="api.example.com/*" Method={"GET"}>`. Comparison is pointwise, so a
 row that says nothing about `Method` does not fit a bound that restricts it.
 
-> ⚠️ **Only the primary axis can name an argument.** `<Http Host=host Method=m>`
-> is a parse error; a written axis must be a literal. So a Medaka function can
-> pin `Method` only in a literal bound, and an operation whose method is decided
-> by its caller charges the whole `Method` axis. Tracked as
-> [#3558](https://github.com/MedakaLang/medaka/issues/3558).
+Any axis can name an argument, so an operation whose method its caller decides
+says so in its signature:
+
+```medaka
+effect Http Product (Host : Prefix, Method : Set)
+
+request : (host : String) ->
+  (method : String) ->
+  <Http Host=host Method=method> Int
+request _ _ = 200
+
+getItems : Unit -> <Http Host="api.example.com/*" Method={"GET"}> Int
+getItems () = request "api.example.com/v1/items" "GET"
+
+main = putStrLn "\{getItems ()}"
+```
+
+```medaka-expect
+200
+```
+
+Each argument is charged on its own axis, in that axis's domain: `host` is a
+`Prefix` element and `method` a `Set` element. A literal `"GET"` is the
+one-member set `{"GET"}`, which fits the bound. A method that arrives at runtime
+is the whole `Method` axis, and it does not fit. Here `getAny` has the bound
+`getItems` has, and takes its method as a `String` argument `m`:
+
+```
+error: method.mdk:7:46: Effectful value used where <Http Host="api.example.com/*" Method={"GET"}> is allowed, but it performs <Http Host="api.example.com/v1/items">
+  |
+7 | getAny m = request "api.example.com/v1/items" m
+  |                                               ^
+```
+
+The performed row leaves `Method` out because the whole axis is its value.
+Arguments passed in the wrong order are charged on the axes they land on, so
+`request "GET" "api.example.com/v1/items"` performs `Host="GET"` and a method
+named `"api.example.com/v1/items"`, and neither fits. Inside a function that
+names both axes, extending an axis argument (`host ++ "/x"`) gives that axis's
+whole domain, never a narrower value derived from the argument.
 
 In a manifest a product renders as a table, and a label that holds several
 elements renders as an array:
