@@ -236,7 +236,6 @@ import types.effect_authority.{
   authvarLevel,
   authvarDomain,
   authvarName,
-  authvarOnAxis,
   authConst,
   authIsTop,
   authJoin,
@@ -11676,7 +11675,7 @@ boundFailureMsg name lower lo hi upper written =
   if mentionsOpened upper then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is the authority of the value this arm or clause opened, which nothing but that value and what derives from it is known to lie within. Relate the operation to the opened value, or widen the declared row to the label bare"
   else if authHasVars upper then
-    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is an authority the caller chooses, so a body may forward the named argument or narrow it, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare"
+    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from; an extension of it is the whole domain. Perform the operation on the named argument and build any extended value at the call site, or widen the declared row to the label bare"
   else if solvedUpper written then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is not a written bound but what this binding's other uses of the same authority determined together. Make every use lie within one bound, or write the bound the binding means"
   else
@@ -11702,7 +11701,7 @@ solvedUpper : Option Authority -> Bool
 solvedUpper (Some (AVar cell)) = match !cell
   ALink _ _ _ =>
     not (IdMap.has (authvarId cell) perRun.value.indexSubstitutedRef.value)
-  AUnbound _ _ _ _ _ => False
+  AUnbound _ _ _ _ => False
 solvedUpper _ = False
 
 -- ── #1119 D-2: the per-parameter VARIANCE gate (#1098, #1121) ─────────────
@@ -12572,10 +12571,7 @@ freshAuthSubstFor ids body force =
 -- current level, like an instantiated row tail.
 freshInferenceAuthvar : Option (Ref Authvar) -> Ref Authvar
 freshInferenceAuthvar (Some source) =
-  freshAuthvarOn
-    (authvarOnAxis source)
-    (authvarDomain source)
-    (authvarName source)
+  freshAuthvar (authvarDomain source) (authvarName source)
 freshInferenceAuthvar None = freshAuthvar PUnit None
 
 -- Every unbound authority cell reachable in a type: the qualifiers and the
@@ -12671,8 +12667,8 @@ lowerAuthLevels _ (AConst _) = ()
 lowerAuthLevels level q =
   fold
     (_ cell => match !cell
-      AUnbound id lvl top name axis =>
-        if lvl > level then cell := AUnbound id level top name axis
+      AUnbound id lvl top name =>
+        if lvl > level then cell := AUnbound id level top name
       ALink _ _ _ => ())
     ()
     (authVars q)
@@ -13072,12 +13068,11 @@ sigVarsForWith ty rowNames auths =
   let named = namedArgTypes ty
   let authNames = map fst auths
   let _ = reportBinderDomains ty (namedAtomBinders ty ++ auths)
-  let axisNames = map fst (atomBindersIn axisAtomBinders ty)
   let sv = SigVars {
     svRows = freshEffMap rowNames,
     svAuths =
       map
-        (b => freshAuthBinder (contains (fst b) axisNames) b)
+        freshAuthBinder
         (filterList
           (b => authorityBinderBound named authNames (fst b))
           (dedupBinders (namedAtomBinders ty ++ auths) [])),
@@ -13253,17 +13248,12 @@ namedArgTypes (TyFun _ b) = namedArgTypes b
 namedArgTypes (TyConstrained _ t) = namedArgTypes t
 namedArgTypes _ = []
 
--- [onAxis]: the signature names this binder at a Product's axis.
-freshAuthBinder : Bool -> (String, Param) -> (String, Ref Authvar)
-freshAuthBinder onAxis (n, top) = (n, freshAuthvarOn onAxis top (Some n))
+freshAuthBinder : (String, Param) -> (String, Ref Authvar)
+freshAuthBinder (n, top) = (n, freshAuthvar top (Some n))
 
 freshAuthvar : Param -> Option String -> Ref Authvar
-freshAuthvar top name = freshAuthvarOn False top name
-
-freshAuthvarOn : Bool -> Param -> Option String -> Ref Authvar
-freshAuthvarOn onAxis top name =
-  Ref
-    (AUnbound (newEffvarId ()) perRun.value.currentLevel.value top name onAxis)
+freshAuthvar top name =
+  Ref (AUnbound (newEffvarId ()) perRun.value.currentLevel.value top name)
 
 authvarIdOf : (String, Ref Authvar) -> Int
 authvarIdOf (_, cell) = authvarId cell
@@ -22333,7 +22323,7 @@ openExistentialScope opened =
 
 raiseAuthvarLevel : Int -> Ref Authvar -> Unit
 raiseAuthvarLevel level cell = match !cell
-  AUnbound id _ top name axis => cell := AUnbound id level top name axis
+  AUnbound id _ top name => cell := AUnbound id level top name
   ALink _ _ _ => ()
 
 -- A cell in the scope's value, or lowered below the scope's level, escaped
@@ -26547,7 +26537,7 @@ implHeadMonos tys =
   let auths = dedupBinders (flatMap authArgBindersIn tys) []
   let tvMap =
     freshTvMap (removeAllS (map fst auths) (dedup (flatMap tyVarNames tys)))
-  let etbl = sigVarsWithAuths (map (freshAuthBinder False) auths) emptySigVars
+  let etbl = sigVarsWithAuths (map freshAuthBinder auths) emptySigVars
   (tvMap, map (fromAstTypeE etbl tvMap) tys)
 
 -- An instance is chosen by its head's type constructor and the index is

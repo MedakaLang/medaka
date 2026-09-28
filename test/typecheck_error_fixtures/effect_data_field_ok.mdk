@@ -12,13 +12,13 @@ data Conf (p : Authority FileRead) = Conf { path : String @p, retries : Int }
 cfg : Unit -> Handle "config/*"
 cfg _ = Handle "config/app.toml"
 
--- a named arrow produces a handle at its argument's authority, forwarded or
--- narrowed
+-- a named arrow produces a handle at its argument's authority, forwarded; a
+-- caller builds an extended path before it passes it
 open : (path : String) -> Handle path
 open path = Handle path
 
-openSub : (path : String) -> Handle path
-openSub path = Handle (path ++ "/x")
+openSub : String -> Handle "config/*"
+openSub name = open ("config/" ++ name)
 
 -- matching recovers the declared qualifier, so the field may be read at it
 readIt : Handle p -> <FileRead p> Result String String

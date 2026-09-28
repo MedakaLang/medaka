@@ -2,7 +2,8 @@
 -- implements it, supplied or default, and stays rigid when the body reaches
 -- the effect through a module binding the value restriction keeps
 -- monomorphic: the obligation is decided at the body, never solved later
--- as if the contract's variable were flexible.
+-- as if the contract's variable were flexible. A default body that extends
+-- its named parameter reaches the whole domain.
 interface Loader a where
   load : a -> (p : String) -> <FileRead p> Result String String
 
@@ -20,6 +21,12 @@ interface Reader a where
 data Y = Y
 
 impl Reader Y where
+
+interface Opener a where
+  openUnder : a -> (p : String) -> <FileRead p> Result String String
+  openUnder _ p = readFile (p ++ "/x")
+
+impl Opener Y where
 
 cfg : Unit -> <FileRead "config/*"> Result String String
 cfg _ = load X "config/a"

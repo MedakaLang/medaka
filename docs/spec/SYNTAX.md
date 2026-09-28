@@ -219,9 +219,15 @@ extern load : (path : String) -> <FFI, Store path> Int
 extern move : (src : String) ->
   (dst : String) ->
   <FFI, Store src, Store dst> Unit
-under : (path : String) -> <FFI, Store path> Int  -- may read path or narrow it, nothing else
-under path = load (path ++ "/x")
+under : (path : String) -> <FFI, Store path> Int  -- may read path, nothing else
+under path = load path
+config : String -> <FFI, Store "cfg/*"> Int  -- the caller extends the path
+config name = under ("cfg/" ++ name)
 ```
+
+An extension of a named argument (`path ++ "/x"`) is the label's whole domain,
+since the caller may pass an exact element that admits only itself: forward the
+argument and build the longer path at the call site, as `config` does.
 
 A qualified value type is written with a spaced `@`: `String @path` names the
 argument's authority on a value derived from it.  A joined qualifier names
