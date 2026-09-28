@@ -239,7 +239,7 @@ elements.
 ### `println`
 
 ```
-println : Display a => a -> <IO> Unit
+println : Display a => a -> <Stdout> Unit
 println x
 ```
 
@@ -252,7 +252,7 @@ and a `map.Map` prints as `Map { 1 => 10 }`. For the `debug` rendering, use
 ### `print`
 
 ```
-print : Display a => a -> <IO> Unit
+print : Display a => a -> <Stdout> Unit
 print x
 ```
 

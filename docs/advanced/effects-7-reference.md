@@ -98,10 +98,6 @@ issue; the number is the thing to search for.
 - **A relation cannot be shared by a recursive group.** Two mutually recursive
   functions over a captured handle are refused where one function would be
   accepted. [#3482](https://github.com/MedakaLang/medaka/issues/3482)
-- **`println` is `<IO>`.** The prelude's printers and several `io` helpers claim
-  the umbrella label where they perform one, which pulls every caller's row up.
-  [#2411](https://github.com/MedakaLang/medaka/issues/2411),
-  [#3388](https://github.com/MedakaLang/medaka/issues/3388)
 - **`check-policy`'s sample run assumes `String -> String`.**
   [#3329](https://github.com/MedakaLang/medaka/issues/3329)
 - **`check` prints effect and type variables from one alphabet.** The issue's

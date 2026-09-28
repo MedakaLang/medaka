@@ -56,9 +56,9 @@ it. The four functions show the four ways an index is written:
 - `Handle *` in `anyAt`, the **whole domain**, the index of a handle opened at a
   path the compiler could not read.
 
-`check` prints `main : <IO, Store> Unit`, because `anyAt "whatever"` is a
+`check` prints `main : <Stdout, Store> Unit`, because `anyAt "whatever"` is a
 `Handle *` and reading it charges the whole domain. Drop that line and the row
-becomes `<IO, Store "cfg/*">`.
+becomes `<Stdout, Store "cfg/*">`.
 
 ## The constructor is the proof
 

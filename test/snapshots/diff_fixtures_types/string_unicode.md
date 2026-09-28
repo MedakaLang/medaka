@@ -16,4 +16,4 @@ main = println shout
 # TYPES_USER
 greeting : String
 shout : String
-main : <IO> Unit
+main : <Stdout> Unit

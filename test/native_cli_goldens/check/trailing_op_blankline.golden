@@ -1,2 +1,2 @@
-main : <IO> Unit
+main : <Stdout> Unit
 r : Int
