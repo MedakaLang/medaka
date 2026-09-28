@@ -26,9 +26,9 @@ import test.vector_runner.{
   Arm(..),
   Engine(..),
   buildNative,
-  freshScratch,
-  outputFindings,
-  reap,
+  gradedSpawn,
+  inScratch,
+  medakaEnv,
   runSeconds,
   spawn,
   spawnFindings,
@@ -50,15 +50,6 @@ consumer = "P1-D-REPO"
 evalSeconds : Int
 evalSeconds = 2400
 
--- `MEDAKA_STRICT=1` turns a stale compiler into a failure rather than a
--- warning on stderr.
-medakaEnv : <IO> List String
-medakaEnv = [
-  "MEDAKA_ROOT=\{medakaRoot}",
-  "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
-  "MEDAKA_STRICT=1",
-]
-
 arm : Engine -> List String -> Arm
 arm e needs = Arm {
   engine = e,
@@ -66,6 +57,7 @@ arm e needs = Arm {
   countFloor = None,
   needs = needs,
   lastLine = Some "REPRESENTATIVE: PASS",
+  exactStdout = None,
 }
 
 nativeArm : Arm
@@ -79,12 +71,6 @@ evalArm = arm EvalEngine [
   "OP CREATE PASS",
   "CREATE CAR PASS order=",
 ]
-
--- A spawn's stdout and findings, with `a`'s substrings and last line graded
--- only when the spawn itself ran clean.
-graded : String -> Arm -> (String, List String) -> (String, List String)
-graded label a (out, []) = (out, outputFindings label a [] out)
-graded _ _ spawned = spawned
 
 -- The one ledgered file `consumer` owns, as an absolute path.
 corpusPath : <Exec, FileRead, IO> Result String String
@@ -101,7 +87,7 @@ nativeRun scratch corpus =
   let bin = "\{scratch}/repo_vectors_main"
   match buildNative label "\{medakaRoot}/\{driver}" bin
     [] =>
-      graded
+      gradedSpawn
         label
         nativeArm
         (spawnFindings
@@ -114,7 +100,7 @@ evalRun : String -> String -> <Exec, IO> List String
 evalRun corpus native =
   let label = "\{gate} (eval)"
   let args = ["run", "\{medakaRoot}/\{driver}", corpus, "--representative"]
-  match (graded
+  match (gradedSpawn
     label
     evalArm
     (spawnFindings
@@ -137,8 +123,5 @@ findings scratch = match corpusPath
     (native, []) => evalRun corpus native
     (_, fs) => fs
 
-test "repo: the eval interpreter prints the native binary's bytes on the representative transcript" = expectNoFindings
-  gate
-  (match freshScratch ()
-    Err e => Err "could not make a scratch directory: \{e}"
-    Ok scratch => Ok (reap scratch (findings scratch)))
+test "repo: the eval interpreter prints the native binary's bytes on the representative transcript" =
+  expectNoFindings gate (inScratch findings)

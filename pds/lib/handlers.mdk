@@ -1060,8 +1060,8 @@ pageRecords repo ((rkey, cid) :: rest) = match repoDecodeEntry cid repo
 
 {- | A stored path as its collection and record key, or `None` when it is not
    `collection/rkey`. A path that is not UTF-8 is not one: its record key
-   would be compared against a cursor and echoed in a URI, so it is passed
-   over rather than repaired into a key no record is stored under. -}
+   would be compared against a cursor and echoed in a URI, so it is never
+   repaired into a key no record is stored under. -}
 splitRecordPath : Bytes -> Option (String, String)
 splitRecordPath path = match B.decodeUtf8 path
   None => None
@@ -1073,14 +1073,32 @@ splitRecordPath path = match B.decodeUtf8 path
 collectionPrefix : String -> Bytes
 collectionPrefix collection = encodeUtf8 "\{collection}/"
 
-{- | The smallest key sorting after every key that carries `prefix`: the
-   prefix with its last byte raised by one. A collection prefix ends in the
+{- | The smallest key sorting after every key that carries `prefix`, or
+   `None` when no key does: trailing 0xFF bytes are dropped and the last byte
+   left is raised by one, which cannot wrap. A collection prefix ends in the
    '/' a record path splits on, so the raised bound falls between the last key
-   of one collection and the first key of the next. -}
-afterPrefix : Bytes -> Bytes
-afterPrefix prefix =
-  let top = B.length prefix - 1
-  B.concat [B.take top prefix, B.map (+ 1) (B.drop top prefix)]
+   of one collection and the first key of the next.
+
+   > afterPrefix (encodeUtf8 "app.bsky.feed.post/") == Some (encodeUtf8 "app.bsky.feed.post0")
+   True
+   > afterPrefix (B.fromU8Array [|97, 255, 255|]) == Some (B.fromU8Array [|98|])
+   True
+   > afterPrefix (B.fromU8Array [|255, 255|]) == None
+   True -}
+afterPrefix : Bytes -> Option Bytes
+afterPrefix prefix = raiseLastBelow (B.length prefix) prefix
+
+-- | `afterPrefix` over the first `n` bytes of `prefix`.
+raiseLastBelow : Int -> Bytes -> Option Bytes
+raiseLastBelow n prefix =
+  if n <= 0 then
+    None
+  else
+    let last = prefix[n - 1]
+    if last == 255 then
+      raiseLastBelow (n - 1) prefix
+    else
+      Some (B.concat [B.take (n - 1) prefix, B.fromU8Array [|last + 1|]])
 
 -- | The smallest key sorting strictly after `key` itself.
 afterKey : Bytes -> Bytes
@@ -1097,27 +1115,42 @@ seekFrom from = MstRangeQuery {
 
 {- | The `(rkey, block)` pairs of a range already bounded to one collection,
    in the direction that range was read in. No record is read: the pairs name
-   blocks, which is all ordering, the cursor and the limit need. A stored path
-   that is not `collection/rkey` names no record and is passed over. -}
-pageRkeys : List (Bytes, Cid) -> List (String, Cid)
-pageRkeys [] = []
+   blocks, which is all ordering, the cursor and the limit need.
+
+   A stored path that is not `collection/rkey` refuses the whole listing. The
+   range is read to a bound, so passing over such a path would shorten the
+   lookahead that decides whether a cursor is emitted, and pagination would
+   end before the records behind it. -}
+pageRkeys : List (Bytes, Cid) -> Result Response (List (String, Cid))
+pageRkeys [] = Ok []
 pageRkeys ((path, cid) :: rest) = match splitRecordPath path
-  Some (_, rkey) => (rkey, cid) :: pageRkeys rest
-  None => pageRkeys rest
+  None =>
+    Err
+      (internalError
+        "Repository listing rejected: a stored record path is not a UTF-8 collection/rkey")
+  Some (_, rkey) => do
+    tail <- pageRkeys rest
+    Ok ((rkey, cid) :: tail)
 
 {- | Every distinct collection name, ascending, at one seek apiece. Each seek
    resumes past the whole of the collection it just named, so the walk reads
    one entry per collection and steps over every record inside one — the cost
-   is the collections, not the repository. -}
+   is the collections, not the repository.
+
+   A stored path that is not `collection/rkey` is stepped past by one key,
+   and the walk resumes right after it. Unlike a bounded `listRecords` window,
+   nothing here is counted, so such a path hides no collection that a valid
+   path names; a collection none of whose paths is valid has no name to
+   report. -}
 repoCollections : Repo -> Option Bytes -> List String -> List String
 repoCollections repo from seen = match repoEntriesRange (seekFrom from) repo
   [] => reverseOnto seen []
   (path, _) :: _ => match splitRecordPath path
     Some (collection, _) =>
-      repoCollections
-        repo
-        (Some (afterPrefix (collectionPrefix collection)))
-        (collection :: seen)
+      let named = collection :: seen
+      match afterPrefix (collectionPrefix collection)
+        Some next => repoCollections repo (Some next) named
+        None => reverseOnto named []
     None => repoCollections repo (Some (afterKey path)) seen
 
 reverseOnto : List a -> List a -> List a
@@ -1242,8 +1275,8 @@ applyListRecords account store params = do
     reverse = not ascending,
     limit = Some (limit + 2),
   }
-  let remaining =
-    dropCursorEntry cursor (pageRkeys (repoEntriesRange query repo))
+  rkeys <- pageRkeys (repoEntriesRange query repo)
+  let remaining = dropCursorEntry cursor rkeys
   let probe = take (limit + 1) remaining
   let keys = take limit probe
   page <- pageRecords repo keys

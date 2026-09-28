@@ -56,6 +56,7 @@ row = Row {
         "Wycheproof Bitcoin: 68 accepts / 6 rejects; 74 unique tcIds; public verification: 74/74",
       ],
       lastLine = Some "TOTAL: PASS",
+      exactStdout = None,
     },
   ],
   parity = False,

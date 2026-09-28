@@ -43,7 +43,12 @@ import lib.jwt.{
   serviceTokenLifetimeSeconds,
   verifyToken,
 }
-import lib.nsid.{sameNsidIdentity, validateNsid, nsidErrorMessage}
+import lib.nsid.{
+  lowerAsciiByte,
+  sameNsidIdentity,
+  validateNsid,
+  nsidErrorMessage,
+}
 import lib.proxy.{
   appviewRouteDid,
   appviewRouteFor,
@@ -448,9 +453,6 @@ pickHeader wanted (header :: rest) count value =
     pickHeader wanted rest (count + 1) (Some (headerValue header))
   else
     pickHeader wanted rest count value
-
-lowerAsciiByte : U8 -> U8
-lowerAsciiByte byte = if byte >= 65 && byte <= 90 then byte + 32 else byte
 
 -- A repeated field is joined by commas rather than refused (RFC 9110 §5.3),
 -- and `Connection` legitimately carries a token list, so both fields are

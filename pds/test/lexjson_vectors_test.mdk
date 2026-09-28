@@ -27,6 +27,7 @@ row = Row {
         "malformed: 3/3 rejected",
       ],
       lastLine = Some "TOTAL: PASS",
+      exactStdout = None,
     },
   ],
   parity = False,

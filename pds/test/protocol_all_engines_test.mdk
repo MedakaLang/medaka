@@ -1,18 +1,18 @@
-{- | The PDS protocol core, RFC 9112 framing and XRPC dispatch, as 25
+{- | The PDS protocol core, RFC 9112 framing and XRPC dispatch, as
    hand-authored cells on eval, native and Wasm, and a mutation self-test
    showing the gate can fail.
 
    The value test requires every engine to print exactly `transcript`. Each
    line is specified from RFC 9112 framing and the pinned XRPC error
    envelope, not captured from an engine. Native and Wasm must print eval's
-   bytes. The Wasm arm is skipped on a host without the Wasm emitter, `node`
-   or `wasm-tools`, unless `MEDAKA_REQUIRE_WASM=1`.
+   bytes. A host without the Wasm emitter, `node` or `wasm-tools` fails the
+   row rather than skipping the Wasm arm.
 
    The mutation test grades the driver's own assertions: it copies `pds/`
    into a scratch tree, rewrites the expected response of the empty
    reg-name port cell, and requires the natively built mutant to panic with
    that cell's mismatch. Native only, for the reason
-   `did_key_all_engines_test` gives. -}
+   `test.vector_runner`'s `MutationTest` gives. -}
 
 import test.vector_runner.{
   Bound(..),

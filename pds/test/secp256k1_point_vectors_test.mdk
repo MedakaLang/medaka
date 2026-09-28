@@ -45,6 +45,7 @@ evalSample = Row {
         "counted: 3/3 rows ok",
       ],
       lastLine = Some "TOTAL: PASS",
+      exactStdout = None,
     },
   ],
   parity = False,
@@ -66,6 +67,7 @@ nativeFull = Row {
       needs =
         ["row 17 raw-ladder canonical-infinity", "counted: 25/25 rows ok"],
       lastLine = Some "TOTAL: PASS",
+      exactStdout = None,
     },
   ],
   parity = False,

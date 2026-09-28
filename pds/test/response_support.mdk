@@ -8,7 +8,7 @@ import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import hex as Hex
 import json.{Json(..), get, parse}
 import net.{Connection, close}
-import string.{contains, drop, indexOf, split}
+import string.{contains, drop, indexOf, split, startsWith, toInt, trim}
 import lib.credential.{
   LoginCheck, LoginVerdict, loginCheckAdvance, loginCheckVerdict
 }
@@ -24,13 +24,56 @@ responseText : Bytes -> String
 responseText bytes =
   optionOrPanic "response_support: response is not UTF-8" (decodeUtf8 bytes)
 
--- | Bytes as text for a report line or a comparison: the text itself, or its
--- hex when it is not UTF-8, so two different byte strings never read alike.
+{- | Bytes as text for a report line or a comparison: the text itself, or
+   its hex when it is not UTF-8, so two different byte strings never read
+   alike. Text that itself begins `<hex:` is given as hex too; otherwise the
+   text `<hex:ff>` and the single byte 0xFF would read the same.
+
+   > textOrHex (encodeUtf8 "ok")
+   "ok"
+   > textOrHex (B.fromU8Array [|255|])
+   "<hex:ff>"
+   > textOrHex (encodeUtf8 "<hex:ff>")
+   "<hex:3c6865783a66663e>" -}
 export
 textOrHex : Bytes -> String
 textOrHex bytes = match decodeUtf8 bytes
-  Some text => text
-  None => "<hex:\{Hex.encode bytes}>"
+  Some text => if startsWith "<hex:" text then asHex bytes else text
+  None => asHex bytes
+
+asHex : Bytes -> String
+asHex bytes = "<hex:\{Hex.encode bytes}>"
+
+{- | The value of the `content-length` field in a message head (everything
+   before the blank line), found in the head's bytes: `None` when the head
+   has no such field or its value is not a number. The name is matched as
+   the lowercase spelling this project's serializers emit, and the rest of
+   the head need not be UTF-8.
+
+   > headContentLength (encodeUtf8 "POST / HTTP/1.1\r\ncontent-length: 12")
+   Some 12
+   > headContentLength (B.concat [encodeUtf8 "HTTP/1.1 200 OK\r\nx: ", B.fromU8Array [|255|], encodeUtf8 "\r\ncontent-length: 3\r\ny: z"])
+   Some 3
+   > headContentLength (encodeUtf8 "GET / HTTP/1.1\r\nhost: a")
+   None -}
+export
+headContentLength : Bytes -> Option Int
+headContentLength head = match B.indexOf contentLengthField head
+  None => None
+  Some at =>
+    let from = at + B.length contentLengthField
+    let end = match B.indexOfWithin from (B.length head) crlf head
+      Some e => e
+      None => B.length head
+    match decodeUtf8 (B.sliceClamped from end head)
+      Some value => toInt (trim value)
+      None => None
+
+contentLengthField : Bytes
+contentLengthField = encodeUtf8 "\r\ncontent-length:"
+
+crlf : Bytes
+crlf = encodeUtf8 "\r\n"
 
 headBytes : Bytes -> Bytes
 headBytes bytes = match B.indexOf headerTerminator bytes

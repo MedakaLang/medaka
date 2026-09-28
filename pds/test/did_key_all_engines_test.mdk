@@ -2,9 +2,9 @@
    native and Wasm, and a mutation self-test showing the gate can fail.
 
    The value test grades the 16 external rows and the 14 named malformed
-   cells on eval, and requires native and Wasm to print the same bytes. The
-   Wasm arm is skipped on a host without the Wasm emitter, `node` or
-   `wasm-tools`, unless `MEDAKA_REQUIRE_WASM=1`.
+   cells on eval, and requires native and Wasm to print the same bytes. A
+   host without the Wasm emitter, `node` or `wasm-tools` fails the row
+   rather than skipping the Wasm arm.
 
    The mutation test copies `pds/` into a scratch tree, breaks one line of
    the implementation or the driver at a time, and requires the driver,
@@ -12,9 +12,8 @@
    line. A mutant that passes means the corpus cannot see the defect; one
    that fails without its witness means it failed for an unrelated reason.
    Every mutation only changes runtime behaviour, so a mutant that does not
-   build is itself a finding. Native only: eval and native share the
-   typechecker ([D-RUN-VS-BUILD] in AGENTS.md), and a native build turns
-   each check from minutes into seconds. -}
+   build is itself a finding. Native only, for the reason
+   `test.vector_runner`'s `MutationTest` gives. -}
 
 import test.vector_runner.{
   Arm(..),
@@ -64,6 +63,7 @@ arm e needs = Arm {
   countFloor = None,
   needs = needs,
   lastLine = Some "TOTAL: PASS",
+  exactStdout = None,
 }
 
 row : Row

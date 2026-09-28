@@ -729,7 +729,7 @@ toolchain = []
 
 # Two unrelated sections (#2592, #2595), the same pair as
 # pds/test/did_key_all_engines. One is a three-engine value differential over
-# 25 hand-authored cells. The other is a MUTATION self-test that rewrites one
+# hand-authored cells. The other is a MUTATION self-test that rewrites one
 # assertion in pds/test/protocol_all_engines_main.mdk and requires the rebuilt
 # driver to panic with a named witness — this gate's own assertions as the
 # subject, and the inverse of the exit-0/clean-stderr contract
@@ -750,7 +750,7 @@ corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
 # The same pair of sections as pds/test/protocol_all_engines: a three-engine
-# value differential over 64 hand-authored cells, and a mutation self-test that
+# value differential over hand-authored cells, and a mutation self-test that
 # rewrites one line of pds/test/read_routes_all_engines_main.mdk at a time and
 # requires the rebuilt driver to fail with that mutation's named witness.
 [[gate]]

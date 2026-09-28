@@ -277,6 +277,7 @@ libSuites = [
   ("lib", "base58", 3),
   ("lib", "blob", 6),
   ("lib", "field", 2),
+  ("lib", "handlers", 3),
   ("lib", "httpclient", 1),
   ("lib", "multiformats", 15),
   ("lib", "resource_limits", 1),
@@ -303,7 +304,6 @@ libExempt = [
   ("dagcbor", "0 assertions"),
   ("did_key", "0 assertions"),
   ("event_log_record", "0 assertions"),
-  ("handlers", "0 assertions"),
   ("hmac_sha256", "0 assertions"),
   ("jwt", "0 assertions"),
   ("lexjson", "0 assertions"),
@@ -400,6 +400,9 @@ test "pds/lib/blob.mdk executed >= 6 assertions" =
 
 test "pds/lib/field.mdk executed >= 2 assertions" =
   libFloorExpectation "lib" "field"
+
+test "pds/lib/handlers.mdk executed >= 3 assertions" =
+  libFloorExpectation "lib" "handlers"
 
 test "pds/lib/httpclient.mdk executed >= 1 assertions" =
   libFloorExpectation "lib" "httpclient"
