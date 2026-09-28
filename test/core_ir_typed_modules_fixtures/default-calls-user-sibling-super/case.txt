@@ -1,0 +1,26 @@
+CASE: user interface defaults whose bodies call the interface's other methods.
+      `Greet Cat` inherits both `greet` and `twice`; `Greet Dog` supplies `greet`
+      and inherits only `twice`. `greet`'s default calls a supplied sibling
+      (`hello`) and a superclass method (`Named.name`); `twice`'s default calls a
+      sibling that is itself inherited at Cat and supplied at Dog.
+OWNS: nothing. Regression guard for inherited defaults on the typed Core-IR
+      evaluator (`cevalModules`), at a concrete type and through a dictionary
+      parameter (`viaDict`).
+
+── HOW THE EXPECTED VALUE WAS ESTABLISHED ────────────────────────────────────
+
+Derived from the semantics before any arm was run:
+
+  greet Cat  = hello Cat ++ ", " ++ name Cat ++ "!"   = "hi, cat!"
+  twice Cat  = greet Cat ++ " " ++ greet Cat           = "hi, cat! hi, cat!"
+  greet Dog  = "WOOF"  (supplied)
+  twice Dog  = greet Dog ++ " " ++ greet Dog           = "WOOF WOOF"
+  viaDict x  = twice x, the same instance chosen through the dictionary
+
+  -> hi, cat! hi, cat!|WOOF WOOF|hi, cat! hi, cat!|WOOF WOOF
+
+── UNTYPED ARMS ───────────────────────────────────────────────────────────────
+
+The untyped module drivers carry no default mechanism (only elaboration knows
+which instance inherits which default), so the entry is pinned
+(`main_single.untyped.txt`) to what they print, not ledgered.

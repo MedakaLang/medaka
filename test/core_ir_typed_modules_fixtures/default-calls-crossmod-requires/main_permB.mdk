@@ -1,0 +1,15 @@
+-- PERMUTATION B: `box` imported before `shape`.  Identical to main_permA.mdk
+-- except for the order of the two imports, so it must print the same answer.
+import box.{Box(..)}
+import shape.{Show2, showTwice}
+
+pair : Show2 a => a -> String
+pair x = showTwice x
+
+main =
+  putStrLn
+    (showTwice (Box (7 : Int))
+      ++ "|"
+      ++ showTwice (Box (Box (1 : Int)))
+      ++ "|"
+      ++ pair (Box (2 : Int)))

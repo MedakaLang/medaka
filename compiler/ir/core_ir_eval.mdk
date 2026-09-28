@@ -41,7 +41,7 @@ import ir.core_ir.{
   CTBranch(..),
   CHead(..),
 }
-import ir.core_ir_lower.{lowerGroups, lowerImplsWith}
+import ir.core_ir_lower.{lowerGroups, lowerImplsWith, lowerSharedDefaults}
 import types.disposition.{DispositionTable, installedDispositionsOpt}
 import support.util.{isEmptyL, dedup, contains, filterList}
 import backend.private_mangle.{mangleCtorCollisions}
@@ -622,8 +622,11 @@ cevalModules preludeDecls0 modules0 =
   ffiExternNamesRef := externDeclNamesOfDecls allDecls
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
-  let preludeGroups = lowerGroups preludeDecls
   let dispositions = installedDispositionsOpt ()
+  -- a module's groups include its interfaces' shared default bodies, which its
+  -- inheriting instances' entries forward to (`lowerProgramWith` binds them alike)
+  let preludeGroups =
+    lowerGroups preludeDecls ++ lowerSharedDefaults dispositions preludeDecls
   let preludeImpls = lowerImplsWith disp dispositions preludeDecls
   -- S1-PRELUDE (a), #1497/#1492 — the Core-IR half of the evalModules/cevalModules
   -- lockstep pair; the mechanism and the frame-count caveat are written out once, on
@@ -676,7 +679,7 @@ cBuildModInfos : List ((String, String, String), List Int) ->
   List (CModInfo (Value e))
 cBuildModInfos _ _ _ _ _ [] = []
 cBuildModInfos disp dispositions globalCells coreExports exportsMap ((mid, decls) :: rest) =
-  let cbinds = lowerGroups decls
+  let cbinds = lowerGroups decls ++ lowerSharedDefaults dispositions decls
   let cimpls = lowerImplsWith disp dispositions decls
   -- P0-9 (Core-IR port of the eval.mdk fix): each module's OWN constructors ALSO
   -- live in its LOCAL frame — they stay in the shared global too (see

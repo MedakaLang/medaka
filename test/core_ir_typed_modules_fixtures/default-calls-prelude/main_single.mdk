@@ -1,0 +1,11 @@
+-- Calls three prelude interface defaults that `core.mdk`'s instances inherit:
+-- `Filterable.filter` at List (a point-free default), and `Ord.max` / `Ord.min`
+-- at Float and String (each instance supplies only `compare`).
+main =
+  let kept = filter (x => x > 2) [1, 2, 3, 4]
+  putStrLn
+    (debug kept
+      ++ "|"
+      ++ debug (max (1.5 : Float) 2.5)
+      ++ "|"
+      ++ debug (min "b" "a"))

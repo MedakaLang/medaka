@@ -1,0 +1,16 @@
+-- PERMUTATION A: `shape` imported before `box`.  `Show2 (Box a)` lives in `box`
+-- and inherits `showTwice` from `shape`'s interface, whose default body calls
+-- the instance's own `show2`, which needs the instance's `requires Show2 a`.
+import shape.{Show2, showTwice}
+import box.{Box(..)}
+
+pair : Show2 a => a -> String
+pair x = showTwice x
+
+main =
+  putStrLn
+    (showTwice (Box (7 : Int))
+      ++ "|"
+      ++ showTwice (Box (Box (1 : Int)))
+      ++ "|"
+      ++ pair (Box (2 : Int)))

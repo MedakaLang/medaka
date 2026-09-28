@@ -1972,6 +1972,7 @@ patName _ = panic "a dictionary parameter is always a variable pattern"
 -- not this program inherits it, so an interface's bodies depend on its own module
 -- alone (the prelude object carries the prelude's).  A program lowered without a
 -- disposition table has no inherited entries to forward to one.
+export
 lowerSharedDefaults : Option DispositionTable -> List Decl -> List CBind
 lowerSharedDefaults None _ = []
 lowerSharedDefaults (Some _) prog = flatMap sharedDefaultsOf prog
