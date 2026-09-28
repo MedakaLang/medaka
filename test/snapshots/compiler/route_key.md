@@ -1,5 +1,5 @@
 # META
-source_lines=616
+source_lines=608
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -25,16 +25,13 @@ stages=DESUGAR,MARK
 -- otherwise invisible to `make medaka`, `make check-self` and
 -- `test/typecheck_compiler_source.sh`.
 --
--- ── What the three exports are ────────────────────────────────────────────
+-- ── What the exports are ──────────────────────────────────────────────────
 -- `implRouteKeyWord` builds the route word for an impl: `<iface word>|<type args,
 -- space-joined>|<method name or empty>`. The interface word is qualified when
 -- origin is known (e.g., "b::Speak"), or the bare name when origin is absent.
 --
--- `routeWordFor` consumes the collision verdict and the head tag
--- (`typeTagOf`: bare for a prelude or builtin type, module-qualified
--- otherwise), both computed from tables this module cannot see: unique head
--- yields the tag verbatim; colliding head yields the canonical impl word (see
--- above).
+-- A dictionary word is always the selected instance's `implRouteKeyWord` (no
+-- method): one word per instance, the same in every module.
 --
 -- `rkTy`/`rkTyFunArg`/`rkTyAtom` are one prec-2 `Ty` printer. It matches
 -- `types/typecheck.mdk`'s version, not `eval/eval.mdk`'s, because the latter is
@@ -148,6 +145,25 @@ remapEvidenceGo f arr i n
       None => ()
       Some e => arraySetUnsafe i (Some (f e)) arr
     remapEvidenceGo f arr (i + 1) n
+
+-- Every installed entry, in ordinal order: the draft carrier's copy of the table
+-- (`ir/draft_semantic_program.mdk`).  Empty when no elaboration has published one.
+export
+installedEvidenceEntries : Unit -> List EvEntry
+installedEvidenceEntries _ = match !evidenceRef
+  None => []
+  Some arr => evidenceEntriesFrom arr (arrayLength arr - 1) []
+
+evidenceEntriesFrom : Array (Option EvEntry) ->
+  Int ->
+  List EvEntry ->
+  List EvEntry
+evidenceEntriesFrom arr i acc =
+  if i < 0 then
+    acc
+  else match arrayGetUnsafe i arr
+    None => evidenceEntriesFrom arr (i - 1) acc
+    Some e => evidenceEntriesFrom arr (i - 1) (e :: acc)
 
 -- one past the largest ordinal in [entries]
 evSlotCount : EvTable -> Int -> Int
@@ -287,10 +303,9 @@ ifaceWordOf o name = match ifaceIdentity o name
 -- are both arity-1.  So NO tag drawn from an arrow's shape can discriminate two
 -- arrow-headed impls, and the discrimination has to come — and already does come
 -- — from `implRouteKeyWord` above, which prints the FULL type args.  The single
--- tag's job is only to make the two impls COLLIDE, because a collision is
--- precisely what makes `routeWordFor`/`keyForSite` upgrade the site to that
--- canonical word.  This is the same mechanism `Pair Int Bool` vs `Pair Bool Int`
--- already rides (`KeyEntry`'s C7 note, `types/typecheck.mdk`), not a new one.
+-- tag's job is only to make the two impls share a head, the case a symbol tag
+-- spells with the canonical key.  This is the same mechanism `Pair Int Bool` vs
+-- `Pair Bool Int` already rides, not a new one.
 export
 funHeadTag : String
 funHeadTag = "__fun__"
@@ -316,24 +331,11 @@ implRouteKeyWord : TyConOrigin -> String -> List Ty -> Option String -> String
 implRouteKeyWord o iface tys nm =
   "\{ifaceWordOf o iface}|\{joinWith " " (map rkTyAtom tys)}|\{optionOr "" nm}"
 
--- ── the route word a SITE gets ───────────────────────────────────────────
--- [headIsUnique] is the caller's collision verdict — "is this head the head of
--- exactly ONE declared impl of this interface?" — and [tag] the head tag
--- (`typeTagOf`) to use when it is. Unique head ⇒ the tag verbatim; otherwise
--- the canonical impl word, which is the only thing that can tell two impls at
--- one head apart.
---
--- ⚠️ THE VERDICT IS AN ARGUMENT ON PURPOSE. Both existing spellings compute it
--- from a table this module cannot see and must not acquire — `ifaceImplHeadsRef`
--- in `ir/core_ir_lower.mdk` (`ifaceDeclHeadUnique`) and the `IE` in
--- `types/typecheck.mdk` (`ieHeadCollidesByMethod`/`…ByIface`, whose sense is
--- INVERTED relative to this parameter: it answers "collides", this answers
--- "unique"). Unifying those two populations is not this bite's business; what
--- is unified here is the WORD each produces once it has its verdict.
+-- The dictionary word of the prelude's `Num Int` instance, whose `fromInt` is the
+-- identity: the native emitter recognises a literal routed to it.
 export
-routeWordFor : Bool -> String -> TyConOrigin -> String -> List Ty -> String
-routeWordFor headIsUnique tag o iface tys =
-  if headIsUnique then tag else implRouteKeyWord o iface tys None
+numIntWord : String
+numIntWord = "core::Num|Int|"
 
 -- ── the type-head word (#1397) ───────────────────────────────────────────
 -- The word a type head contributes to every impl tag, route word, dictionary
@@ -540,26 +542,16 @@ rkTyList =
 -- > implRouteKeyWord OriginUnresolved "Show" [rkTyIntM] None == implRouteKeyWord OriginUnresolved "Show" [rkTyInt] None
 -- False
 
+-- `numIntWord` is `implRouteKeyWord`'s word for the prelude's `Num Int`.
+-- > numIntWord == implRouteKeyWord (OriginModule "core") "Num" [rkTyInt] None
+-- True
+
 -- `implRouteKeyWord`, origin PRESENT: the #1047/#1265 route-word substitution
 -- (NOT #1182 — see the header). Applied by `B-2.2-b1` at `keyForSite`.
 -- > implRouteKeyWord (OriginModule "b") "Speak" [rkTyInt] None
 -- "b::Speak|Int|"
 -- > implRouteKeyWord (OriginModule "a") "Speak" [rkTyInt] None == implRouteKeyWord (OriginModule "b") "Speak" [rkTyInt] None
 -- False
-
--- `routeWordFor`: unique head ⇒ the caller's head tag verbatim; colliding head
--- ⇒ the canonical impl word, with the method slot empty.
--- > routeWordFor True "Int" OriginUnresolved "Show" [rkTyInt]
--- "Int"
--- > routeWordFor False "Int" OriginUnresolved "Show" [rkTyInt]
--- "Show|Int|"
--- > routeWordFor False "Int" OriginUnresolved "Show" [rkTyInt] == implRouteKeyWord OriginUnresolved "Show" [rkTyInt] None
--- True
-
--- The unique arm ignores the interface entirely — that is `declRouteKey`'s
--- existing behaviour, reproduced, not a new one.
--- > routeWordFor True "Int" (OriginModule "b") "Speak" [rkTyBool]
--- "Int"
 
 -- The `Ty` printer, at the three precedences. `rkTyAtom` wraps an application
 -- and an arrow; `rkTy` wraps neither.
@@ -629,6 +621,10 @@ rkTyList =
 (DFunDef false "remapEvidence" ((PVar "f")) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
 (DTypeSig false "remapEvidenceGo" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
 (DFunDef false "remapEvidenceGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "e")))) (EVar "arr"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "installedEvidenceEntries" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "EvEntry"))))
+(DFunDef false "installedEvidenceEntries" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit)))))
+(DTypeSig false "evidenceEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyApp (TyCon "List") (TyCon "EvEntry"))))))
+(DFunDef false "evidenceEntriesFrom" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "e") (EVar "acc")))))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "evSlotCount" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "evSlotCount" ((PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "evSlotCount") (EVar "rest")) (EApp (EApp (EVar "max") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))))
@@ -652,8 +648,8 @@ rkTyList =
 (DFunDef false "funHeadTag" () (ELit (LString "__fun__")))
 (DTypeSig true "implRouteKeyWord" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
-(DTypeSig true "routeWordFor" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String")))))))
-(DFunDef false "routeWordFor" ((PVar "headIsUnique") (PVar "tag") (PVar "o") (PVar "iface") (PVar "tys")) (EIf (EVar "headIsUnique") (EVar "tag") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "iface")) (EVar "tys")) (EVar "None"))))
+(DTypeSig true "numIntWord" (TyCon "String"))
+(DFunDef false "numIntWord" () (ELit (LString "core::Num|Int|")))
 (DTypeSig true "typeTagOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PLit (LString "core"))) (PVar "name")) (EVar "name"))
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
@@ -712,6 +708,10 @@ rkTyList =
 (DFunDef false "remapEvidence" ((PVar "f")) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
 (DTypeSig false "remapEvidenceGo" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
 (DFunDef false "remapEvidenceGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "e")))) (EVar "arr"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "installedEvidenceEntries" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "EvEntry"))))
+(DFunDef false "installedEvidenceEntries" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit)))))
+(DTypeSig false "evidenceEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyApp (TyCon "List") (TyCon "EvEntry"))))))
+(DFunDef false "evidenceEntriesFrom" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "e") (EVar "acc")))))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "evSlotCount" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "evSlotCount" ((PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "evSlotCount") (EVar "rest")) (EApp (EApp (EMethodRef "max") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))))
@@ -735,8 +735,8 @@ rkTyList =
 (DFunDef false "funHeadTag" () (ELit (LString "__fun__")))
 (DTypeSig true "implRouteKeyWord" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
-(DTypeSig true "routeWordFor" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String")))))))
-(DFunDef false "routeWordFor" ((PVar "headIsUnique") (PVar "tag") (PVar "o") (PVar "iface") (PVar "tys")) (EIf (EVar "headIsUnique") (EVar "tag") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "iface")) (EVar "tys")) (EVar "None"))))
+(DTypeSig true "numIntWord" (TyCon "String"))
+(DFunDef false "numIntWord" () (ELit (LString "core::Num|Int|")))
 (DTypeSig true "typeTagOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PLit (LString "core"))) (PVar "name")) (EVar "name"))
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))

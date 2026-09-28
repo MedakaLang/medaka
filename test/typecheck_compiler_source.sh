@@ -1063,7 +1063,7 @@ done || exit 1
 numeric_return_inst_body="$(sed -n '/^entailInst .*EKNumReturn/,/^entailInst .*EKNestedTop/p' "$predicate_slot_src")"
 numeric_return_inst_required='  let goals = predicate.predicateArguments
   match ieSelectRowByIface env predicate.predicateInterface goals
-      let route = RKey (methodRouteKeyForRow name env row) []
+      let route = RKey (rowRouteKey row) []
       let routes = implDictRoutesForRow encl useScope goals row'
 printf '%s\n' "$numeric_return_inst_required" | while IFS= read -r required; do
   if ! printf '%s\n' "$numeric_return_inst_body" | grep -Fq "$required"; then
@@ -1141,6 +1141,19 @@ fi
 # the per-instance receiver rebuild and desugar's same-module default copy are too.
 if grep -rqwE 'expandSupersTable|expandSupersVecs|expandFunPredicateSlots|expandPredicateSlots|userSuperLookup|userIfaceNamesRef|expandImplRequires|expandImplRequiresPaths|argExpandedImplReqRoutes|instanceSuperWords|isSuperWords|rrSuperWords|ReceiverRemap|receiverRemapRef|isDictWord|isSupers|fillImplDefaults' --include='*.mdk' "$ROOT/compiler"; then
   echo "FAIL: a retired flat super-slot name is back; a dictionary carries its supers and a given's super is an RProj"
+  exit 1
+fi
+# #1403 X-E.C: a dictionary word is ALWAYS the selected instance's canonical key, so
+# no side re-derives a bare-vs-canonical verdict, no dispatcher arm ORs two words,
+# and no engine keeps a general-instance fall-through tier on the dictionary path.
+if grep -rqwE 'methodRouteKeyForRow|methodRouteKeyOfSelection|predicateRouteKeyForRow|routeWordFor|ieHeadCollidesByMethod|ieHeadCollidesByIface|ieCountHeadByMethod|ieCountHeadByIface|ifaceDeclHeadUnique|ifaceImplRouteKeys|declRouteKey|declHeadOfRouteWord|implEntryRouteWords|emitRouteWordMatch|emitRouteWordMatchOr|implEntryRouteKey|implEntryRouteKeyE|implEntryRouteKeyW|emitGeneralRKey|emitGeneralRKeyRef|isGeneralEntry|firstGeneralImplW|findByTagW|usedDictRouteKeys|implReqDictCount|implIsInheritedW|pickByTag|pickTagFallback|keyForSiteByIface' --include='*.mdk' "$ROOT/compiler"; then
+  echo "FAIL: a retired route-word hedge is back; a dictionary word is the selected instance's canonical key"
+  exit 1
+fi
+# The draft semantic carrier is a probe's input, never an engine's: no physical backend
+# or interpreter may read it.
+if grep -rlE '^import ir\.draft_semantic_program' "$ROOT/compiler/backend" "$ROOT/compiler/eval" >/dev/null 2>&1; then
+  echo "FAIL: a backend or eval module imports ir.draft_semantic_program"
   exit 1
 fi
 if [ "$(printf '%s\n' "$ordinary_return_solver_body" | grep -c 'ieSelectRowByIface')" -ne 1 ]; then
@@ -1328,12 +1341,12 @@ printf '%s\n' "$ce_method_retired" | while IFS= read -r retired; do
 done || exit 1
 
 # Eval sizes an elaborated impl definition from its leading dictionary patterns and
-# registers both route words.  Interface declaration arity was a second, colliding
-# authority and must not return.
+# registers it under its instance's canonical key.  Interface declaration arity was a
+# second, colliding authority and must not return.
 eval_req_count_required='flatMap (implMethodReqCounts (installedDispositionsOpt ())) prog
 DImpl { iface, tys, methods, implOrigin, ... }
 let key = implRouteKeyWord implOrigin iface tys None
-[((mname, tag), count), ((mname, key), count)]
+((mname, key), leadingImplDictPats pats)
 leadingImplDictPats : List Pat -> Int'
 printf '%s\n' "$eval_req_count_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$eval_src"; then

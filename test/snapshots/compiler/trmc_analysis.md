@@ -1,5 +1,5 @@
 # META
-source_lines=1690
+source_lines=1691
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -50,8 +50,9 @@ import support.ordmap.{
 
 -- How the eligible function refers to ITSELF in a tail self-call.  A top-level
 -- define recurses by NAME (`CVar self`); a dispatched instance method (Phase 2
--- B-dispatch — stdlib `map`/`filterMap`) recurses via a `CMethod method (RKey tag)`
--- node post-restampIface, where the method NAME is invisible to `freeVars` — so the
+-- B-dispatch — stdlib `map`/`filterMap`) recurses via a `CMethod method (RKey key)`
+-- node, [key] its instance's canonical key, where the method NAME is invisible to
+-- `freeVars` — so the
 -- self-walk MUST be SelfRef-aware, not freeVars-based, or a non-tail `CMethod`
 -- self-recursion is silently accepted and MISCOMPILED (TRMC-DESIGN §"SAFETY-CRITICAL").
 public export data SelfRef = SelfByVar String | SelfByMethod String String

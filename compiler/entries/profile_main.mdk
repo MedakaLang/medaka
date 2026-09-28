@@ -49,7 +49,6 @@ import types.typecheck.{
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
-  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
   EmitTarget(..),
@@ -300,13 +299,6 @@ runStaged on targetPath rsrc csrc tsrc =
       targetPath
       (declaredRecordFieldOrders elaborated)
       (validateFfiExternTypeNames (checkedFfiExternTypeNames elaborated))
-      -- `elaborated`, not `live`: this driver builds every other input table from
-      -- the elaborated decls too, and DCE (which produces `live`) runs in its OWN
-      -- timed stage below, so reading it here would move that stage's work into
-      -- `elaborate`.  The head table is a strict superset of `live`'s, and this
-      -- driver DISCARDS its emitted IR (it measures stages), so the difference is
-      -- unobservable.
-      (ifaceImplHeadTable elaborated)
   let tEl1 = now ()
   let _ =
     emitPhaseAO

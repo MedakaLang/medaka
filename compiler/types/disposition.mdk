@@ -17,7 +17,7 @@
 -- body serves which instance's slot.
 import frontend.ast.{Ty}
 import types.repr.{IfaceRef(..)}
-import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
+import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert, omKeys}
 import support.util.{reverseL}
 
 -- An instance's within-compile identity: the declaring module id and a
@@ -180,6 +180,18 @@ export
 inheritorsOf : String -> String -> DispositionTable -> List InstanceShape
 inheritorsOf ifaceWord method table =
   optionOr [] (omLookup (slotKey ifaceWord method) table.dtInheritors)
+
+-- Every (interface slot, inheriting instance word) pair, slot by slot: the
+-- draft carrier's copy of the inherited-default rows.
+export
+inheritedDefaultSlots : DispositionTable -> List (String, String)
+inheritedDefaultSlots table =
+  flatMap
+    (slot => map (shape => (slot, shape.isWord)) (slotInheritors slot table))
+    (omKeys table.dtInheritors)
+
+slotInheritors : String -> DispositionTable -> List InstanceShape
+slotInheritors slot table = optionOr [] (omLookup slot table.dtInheritors)
 
 insertDispositions : List MethodDisposition ->
   OrdMap MethodDisposition ->

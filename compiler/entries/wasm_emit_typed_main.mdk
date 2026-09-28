@@ -1336,7 +1336,13 @@ defaultStateInputU =
 defaultStateCall : String -> CExpr
 defaultStateCall tag =
   CApp
-    (CMethod "synthDefault" "DefaultFace" 1 (RKey tag [] []) [] [])
+    (CMethod
+      "synthDefault"
+      "DefaultFace"
+      1
+      (RKey "DefaultFace|\{tag}|" [] [])
+      []
+      [])
     (CLit LUnit)
 
 defaultStateProgram : String -> Int -> CProgram

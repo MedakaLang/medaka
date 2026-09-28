@@ -2381,6 +2381,17 @@ table = [
     codes = [],
   },
   Row {
+    entry = "s3-xe-one-word-per-arm/main.mdk",
+    label =
+      "#1403 X-E.C (the value half of the structural exit in `diff_compiler_dict_semantics_ir.sh`): two interfaces' defaults for one method spelling at one type, each reached through a dictionary whose word is the instance's canonical key, plus a supplied method beside them. `viaA Dog` runs Speak's default, `viaB Dog` Greet's, `viaA Cat` Cat's own method",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A-default|B-default|meow\n",
+    codes = [],
+  },
+  Row {
     entry = "s5-xmod-default-sibling-amod-first/main.mdk",
     label =
       "§5 (#1821, drained from its must-fail pin): IA's cross-module default `dflt x = sib x + 1` calls its sibling through the default's receiver, so it reaches T's own `sib`, never the same-spelled `dflt` default of an interface imported under no name. 7 * 10 + 1",
@@ -2534,7 +2545,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 218
+tableRows = 219
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

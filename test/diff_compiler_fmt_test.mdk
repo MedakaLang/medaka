@@ -429,7 +429,46 @@ draftSemanticChecks name bin rt core entry dir baseline =
                 Some
                   "\{name}: unrelated positive control could not observe its unrelated module"
               else
-                draftSemanticIsolation name bin rt core entry dir baseline
+                draftSemanticTableControls name bin rt core entry dir baseline
+
+-- The two installed-table facts (#1403) must each observe a copy that disagrees
+-- with what the engines read: a dropped inherited-default row, and a method
+-- occurrence whose arity was skewed.
+draftSemanticTableControls : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec, FileRead, IO> Option String
+draftSemanticTableControls name bin rt core entry dir baseline =
+  let dispositions =
+    draftSemanticAssert
+      "\{name}: method-dispositions control"
+      "method-dispositions"
+      "(receipt method-dispositions X-E.P:dispositions installed-table DIFFERENT)"
+      (Some "(different 1)")
+      bin
+      rt
+      core
+      entry
+  match dispositions
+    Err e => Some e
+    Ok _ =>
+      let evidence =
+        draftSemanticAssert
+          "\{name}: evidence control"
+          "evidence"
+          "(receipt evidence X-E.P:evidence installed-table DIFFERENT)"
+          (Some "(different 1)")
+          bin
+          rt
+          core
+          entry
+      match evidence
+        Err e => Some e
+        Ok _ => draftSemanticIsolation name bin rt core entry dir baseline
 
 draftSemanticIsolation : String ->
   String ->

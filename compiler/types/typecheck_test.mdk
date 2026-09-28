@@ -282,12 +282,12 @@ test "numeric return keeps the Num predicate through production checking and sta
         (filter (view => view.ntvStage == NPTReturn) trace)),
   ]
 
-test "numeric return without a method collision preserves the short route ABI" =
+test "numeric return without a method collision stamps the same canonical key" =
   let (errors, trace) = numericCheckObserved (numericValueSource False)
   expectAll [
     expectEqual [] errors,
     expectEqual
-      ["numeric_predicate.N[]"]
+      ["core::Num|numeric_predicate.N|[]"]
       (map
         (view => view.ntvRoute)
         (filter (view => view.ntvStage == NPTReturn) trace)),
@@ -351,7 +351,7 @@ test "numeric return selects prerequisites from the Num instance row" =
   expectAll [
     expectEqual [] errors,
     expectEqual
-      [("core::Num", ["Box Int"], "Num", ["Int[]"])]
+      [("core::Num", ["Box Int"], "Num", ["core::Num|Int|[]"])]
       (map
         (view => (
           view.ntvInterface,
@@ -872,35 +872,35 @@ test "arithmetic collision imports select the exact Num row and prerequisites" =
           "core::Num",
           "core::Num",
           "core::Num|(arithmetic_shape.Box a)|[]",
-          ["Int[]"],
+          ["core::Num|Int|[]"],
         ),
         (
           "binding:divValue",
           "core::Num",
           "core::Num",
-          "arithmetic_shape.Box[]",
-          ["Int[]"],
+          "core::Num|(arithmetic_shape.Box a)|[]",
+          ["core::Num|Int|[]"],
         ),
         (
           "binding:mulValue",
           "core::Num",
           "core::Num",
-          "arithmetic_shape.Box[]",
-          ["Int[]"],
+          "core::Num|(arithmetic_shape.Box a)|[]",
+          ["core::Num|Int|[]"],
         ),
         (
           "binding:subValue",
           "core::Num",
           "core::Num",
-          "arithmetic_shape.Box[]",
-          ["Int[]"],
+          "core::Num|(arithmetic_shape.Box a)|[]",
+          ["core::Num|Int|[]"],
         ),
         (
           "binding:addValue",
           "core::Num",
           "core::Num",
           "core::Num|(arithmetic_shape.Box a)|[]",
-          ["Int[]"],
+          ["core::Num|Int|[]"],
         ),
       ]
       (map
@@ -1315,7 +1315,12 @@ wrappedReturnFlatRoutes source =
 
 test "wrapped return prerequisites use the class parameter, not the result type" =
   expectEqual
-    [Some ["Int[]"], Some ["Int[]"], Some ["Int[]"], Some ["Int[]"]]
+    [
+      Some ["wrapped_return::Seed|Int|[]"],
+      Some ["wrapped_return::Seed|Int|[]"],
+      Some ["wrapped_return_flat::Seed|Int|[]"],
+      Some ["wrapped_return_flat::Seed|Int|[]"],
+    ]
     [
       wrappedReturnRoutes (wrappedReturnSource True True),
       wrappedReturnRoutes (wrappedReturnSource True False),
@@ -1354,7 +1359,7 @@ test "wrapped return routes survive an intervening failed request" =
   let after = wrappedReturnRoutes (wrappedReturnSource True True)
   expectAll [
     expectTrue (listLen errors > 0),
-    expectEqual (Some ["Int[]"]) before,
+    expectEqual (Some ["wrapped_return::Seed|Int|[]"]) before,
     expectEqual before after,
   ]
 
@@ -3189,8 +3194,9 @@ test "a construction goal packs its prerequisite into the instance route (#2095 
   expectTrue (match constructed
     [e] =>
       e.eoeOutcome == EOKInstance
-        && e.eoeInstanceKey == Some "evidence_observation.Box"
-        && e.eoePrerequisites == ["RKey Int"]
+        && e.eoeInstanceKey
+          == Some "evidence_observation::Build|(evidence_observation.Box a)|"
+        && e.eoePrerequisites == ["RKey evidence_observation::Need|Int|"]
     _ => False)
 
 test "the construction goal's pin is sensitive to identity, prerequisites, and scope (#2095 mutation)" =
@@ -3217,22 +3223,37 @@ test "the construction goal's pin is sensitive to identity, prerequisites, and s
       expectAll [
         expectTrue
           (evidenceEntryMatches
-            (EOKInstance, Some "evidence_observation.Box", ["RKey Int"], scopeN)
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (EOKInstance, Some "SomethingElse", ["RKey Int"], scopeN)
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (EOKInstance, Some "evidence_observation.Box", [], scopeN)
+            (
+              EOKInstance,
+              Some "evidence_observation::Build|(evidence_observation.Box a)|",
+              ["RKey evidence_observation::Need|Int|"],
+              scopeN,
+            )
             e),
         expectFalse
           (evidenceEntryMatches
             (
               EOKInstance,
-              Some "evidence_observation.Box",
-              ["RKey Int"],
+              Some "SomethingElse",
+              ["RKey evidence_observation::Need|Int|"],
+              scopeN,
+            )
+            e),
+        expectFalse
+          (evidenceEntryMatches
+            (
+              EOKInstance,
+              Some "evidence_observation::Build|(evidence_observation.Box a)|",
+              [],
+              scopeN,
+            )
+            e),
+        expectFalse
+          (evidenceEntryMatches
+            (
+              EOKInstance,
+              Some "evidence_observation::Build|(evidence_observation.Box a)|",
+              ["RKey evidence_observation::Need|Int|"],
               scopeN + 1,
             )
             e),
@@ -3267,7 +3288,7 @@ test "a super at an instance construction goal rides inside that goal's one slot
         (e =>
           e.eoeArity == 1
             && e.eoeOutcome == EOKInstance
-            && e.eoeInstanceKey == Some "Int")
+            && e.eoeInstanceKey == Some "evidence_observation::B|Int|")
         slots),
   ]
 

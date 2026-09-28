@@ -1216,7 +1216,6 @@ hasPredicateSlots : String -> List (String, List PredicateSlot) -> Bool
 headAnnotTy : Ty -> Mono
 headAtomsOr : List (List Atom) -> List Atom
 headBucketKey : Option HeadKey -> RegKey
-headKeyTagOr : String -> Option HeadKey -> String
 headL : List String -> String
 headMonoNode : Mono -> Mono
 headRemainingKinds : TyConOrigin -> String -> Int -> Option (List Kind)
@@ -1239,10 +1238,6 @@ ieBuildSnapsGo : List ImplRow -> (List (Int, ImplUniverse), ImplUniverse) -> (Li
 ieCandidacyVisibleAt : Int -> Int -> Bool
 ieCandidatesForIface : ImplEnv -> HeadKey -> IfaceRef -> List Mono -> List KeyEntry
 ieCandidatesForMethod : ImplEnv -> HeadKey -> String -> Option IfaceRef -> List Mono -> List KeyEntry
-ieCountHeadByIface : ImplEnv -> IfaceRef -> Option HeadKey -> Int
-ieCountHeadByIfaceGo : List ImplRow -> IfaceRef -> Option TabKey -> Int
-ieCountHeadByMethod : ImplEnv -> String -> Option HeadKey -> Int
-ieCountHeadByMethodGo : List ImplRow -> String -> Option TabKey -> Int
 ieDefinesReqMethodAt : ImplEnv -> String -> Option HeadKey -> Bool
 ieDefinesReqMethodAtGo : List ImplRow -> String -> Option TabKey -> Bool
 ieEntriesForIface : List ImplRow -> IfaceRef -> List Mono -> List KeyEntry
@@ -1251,8 +1246,6 @@ ieFileRow : ImplRow -> ImplEnv -> ImplEnv
 ieFileRowByHead : ImplRow -> ImplEnv -> ImplEnv
 ieGenImplIn : String -> Decl
 ieHeadCandidateExists : ImplEnv -> IfaceRef -> HeadKey -> Bool
-ieHeadCollidesByIface : ImplEnv -> IfaceRef -> Option HeadKey -> Bool
-ieHeadCollidesByMethod : ImplEnv -> String -> Option HeadKey -> Bool
 ieHeadProbeAmod : List Decl
 ieHeadProbeDecls : List Decl
 ieHeadProbeEnv : ImplEnv
@@ -1267,7 +1260,6 @@ ieInsertRowAt : TabKey -> ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowKeys : List TabKey -> ImplRow -> ImplEnv -> ImplEnv
 ieLooseImplIn : String -> Decl
 ieOtherImplIn : String -> Decl
-ieOtherRowSharesMethod : List ImplRow -> Int -> Map String Unit -> Bool
 ieProbeBareKey : RegKey
 ieProbeBlobHead : HeadKey
 ieProbeEnv : ImplEnv
@@ -1279,7 +1271,6 @@ ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
 ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
 ieRowInheritsDefault : ImplRow -> String -> Bool
 ieRowInst : ImplRow -> InstRef
-ieRowMethodHeadCollides : ImplEnv -> ImplRow -> Bool
 ieRowMethodNames : ImplRow -> List String
 ieRowOfEntry : ImplEnv -> Option KeyEntry -> Option ImplRow
 ieRowOrd : ImplRow -> Int
@@ -1672,6 +1663,7 @@ letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 letPatRename : Pat -> Expr -> Map String String -> (Pat, Map String String)
 letRecNonFunctionMsg : String -> String
 litType : Lit -> Mono
+literalRouteHead : String -> String
 liveNumVarGo : Int -> List UObligation -> Option Mono
 liveTailId : Ref Effvar -> Int
 loadDataUniverse : Int -> Unit
@@ -1860,8 +1852,6 @@ methodReturnTraceEntries : Ref (List MethodReturnTraceEntry)
 methodReturnVectorCompletenessProbe : Unit -> (Option (List String), Option (List String), Bool, Bool)
 methodReturnWanted : MethodReturnRequest -> Option Wanted
 methodReturnWantedMatches : MethodReturnRequest -> Wanted -> Bool
-methodRouteKeyForRow : String -> ImplEnv -> ImplRow -> String
-methodRouteKeyOfSelection : String -> ImplEnv -> Option ImplRow -> Option String
 methodRowCanCarry : MethodSchemeRow -> Bool
 methodRowDeclarationProbe : Unit -> (List (String, String, Int, Int), List (String, String, Int, Int), (Int, Int, Bool, Int))
 methodRowFreshnessProbe : Unit -> ((Int, Int, Int, List Int, List Int), (List (List Int), List (List Int), List (List Int)))
@@ -2134,7 +2124,6 @@ prePassModulePair : List String -> (String, List Decl) -> (String, List Decl)
 predicateNodeKey : IfaceRef -> List Mono -> String
 predicateRequestArgsMatch : PredicateSlotArgs -> PredicateSlotArgs -> Bool
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
-predicateRouteKeyForRow : ImplEnv -> ImplRow -> String
 predicateSlotArgs : List PredicateSlot -> List (List Mono)
 predicateSlotCSlots : List PredicateSlot -> List CSlot
 predicateSlotFromExpanded : Map String PredicateSlot -> (CSlot, List Mono) -> PredicateSlot
@@ -2509,11 +2498,11 @@ rowAuthIds : EffRow -> Map Int Unit -> Map Int Unit
 rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
 rowFreeAuthvars : EffRow -> List Int
 rowFreeEffvars : EffRow -> List Int
-rowHasMethodIn : List String -> Map String Unit -> Bool
 rowHasRigid : EffRow -> Bool
 rowInto : Bool -> EffRow -> EffRow -> Unit
 rowKindMismatchMsg : List EffAtomTy -> List String -> String
 rowOfMembers : List Atom -> List (Ref Effvar) -> EffRow
+rowRouteKey : ImplRow -> String
 rowSlotArgMono : SigVars -> List (String, Mono) -> Ty -> Mono
 rowTailId : EffRow -> List Int
 rowTailIsJoin : EffRow -> Bool

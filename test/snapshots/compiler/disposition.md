@@ -1,5 +1,5 @@
 # META
-source_lines=282
+source_lines=294
 stages=DESUGAR,MARK
 # SOURCE
 -- The whole-graph per-method disposition table (#1112 A-3, #1403 X-E's future
@@ -21,7 +21,7 @@ stages=DESUGAR,MARK
 -- body serves which instance's slot.
 import frontend.ast.{Ty}
 import types.repr.{IfaceRef(..)}
-import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
+import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert, omKeys}
 import support.util.{reverseL}
 
 -- An instance's within-compile identity: the declaring module id and a
@@ -185,6 +185,18 @@ inheritorsOf : String -> String -> DispositionTable -> List InstanceShape
 inheritorsOf ifaceWord method table =
   optionOr [] (omLookup (slotKey ifaceWord method) table.dtInheritors)
 
+-- Every (interface slot, inheriting instance word) pair, slot by slot: the
+-- draft carrier's copy of the inherited-default rows.
+export
+inheritedDefaultSlots : DispositionTable -> List (String, String)
+inheritedDefaultSlots table =
+  flatMap
+    (slot => map (shape => (slot, shape.isWord)) (slotInheritors slot table))
+    (omKeys table.dtInheritors)
+
+slotInheritors : String -> DispositionTable -> List InstanceShape
+slotInheritors slot table = optionOr [] (omLookup slot table.dtInheritors)
+
 insertDispositions : List MethodDisposition ->
   OrdMap MethodDisposition ->
   OrdMap MethodDisposition
@@ -287,7 +299,7 @@ restoreDispositions saved = dispositionsRef := saved
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "InstId" () ((variant "InstId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DTypeSig true "instIdMid" (TyFun (TyCon "InstId") (TyCon "String")))
@@ -329,6 +341,10 @@ restoreDispositions saved = dispositionsRef := saved
 (DFunDef false "slotKey" ((PVar "ifaceWord") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig true "inheritorsOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "InstanceShape"))))))
 (DFunDef false "inheritorsOf" ((PVar "ifaceWord") (PVar "method") (PVar "table")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "slotKey") (EVar "ifaceWord")) (EVar "method"))) (EFieldAccess (EVar "table") "dtInheritors"))))
+(DTypeSig true "inheritedDefaultSlots" (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "inheritedDefaultSlots" ((PVar "table")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "slot")) (EApp (EApp (EVar "map") (ELam ((PVar "shape")) (ETuple (EVar "slot") (EFieldAccess (EVar "shape") "isWord")))) (EApp (EApp (EVar "slotInheritors") (EVar "slot")) (EVar "table"))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "table") "dtInheritors"))))
+(DTypeSig false "slotInheritors" (TyFun (TyCon "String") (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "InstanceShape")))))
+(DFunDef false "slotInheritors" ((PVar "slot") (PVar "table")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "slot")) (EFieldAccess (EVar "table") "dtInheritors"))))
 (DTypeSig false "insertDispositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodDisposition")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition")) (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition")))))
 (DFunDef false "insertDispositions" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertDispositions" ((PCons (PVar "d") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EApp (EVar "dispositionInstance") (EVar "d"))) (EApp (EVar "dispositionMethod") (EVar "d")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc")) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: two rows published for ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EVar "insertDispositions") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "d")) (EVar "acc"))))))))
@@ -354,7 +370,7 @@ restoreDispositions saved = dispositionsRef := saved
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "InstId" () ((variant "InstId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DTypeSig true "instIdMid" (TyFun (TyCon "InstId") (TyCon "String")))
@@ -396,6 +412,10 @@ restoreDispositions saved = dispositionsRef := saved
 (DFunDef false "slotKey" ((PVar "ifaceWord") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig true "inheritorsOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "InstanceShape"))))))
 (DFunDef false "inheritorsOf" ((PVar "ifaceWord") (PVar "method") (PVar "table")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "slotKey") (EVar "ifaceWord")) (EVar "method"))) (EFieldAccess (EVar "table") "dtInheritors"))))
+(DTypeSig true "inheritedDefaultSlots" (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "inheritedDefaultSlots" ((PVar "table")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "slot")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "shape")) (ETuple (EVar "slot") (EFieldAccess (EVar "shape") "isWord")))) (EApp (EApp (EVar "slotInheritors") (EVar "slot")) (EVar "table"))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "table") "dtInheritors"))))
+(DTypeSig false "slotInheritors" (TyFun (TyCon "String") (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "InstanceShape")))))
+(DFunDef false "slotInheritors" ((PVar "slot") (PVar "table")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "slot")) (EFieldAccess (EVar "table") "dtInheritors"))))
 (DTypeSig false "insertDispositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodDisposition")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition")) (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition")))))
 (DFunDef false "insertDispositions" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertDispositions" ((PCons (PVar "d") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EApp (EVar "dispositionInstance") (EVar "d"))) (EApp (EVar "dispositionMethod") (EVar "d")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc")) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: two rows published for ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EVar "insertDispositions") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "d")) (EVar "acc"))))))))

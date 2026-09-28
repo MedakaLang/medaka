@@ -426,17 +426,15 @@ buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildMethodReqCounts prog =
   flatMap (implMethodReqCounts (installedDispositionsOpt ())) prog
 
--- Each defined impl method is addressable by both route words carried on its
--- VTypedImpl: the short head tag and the canonical interface/type key.  A collision
--- selects by the latter, so both aliases must report the same leading-dictionary ABI.
+-- Each defined impl method is addressed by the word a dictionary for its instance
+-- carries: the instance's canonical interface/type key.
 implMethodReqCounts : Option DispositionTable ->
   Decl ->
   List ((String, String), Int)
 implMethodReqCounts dt (DAttrib _ d) = implMethodReqCounts dt d
 implMethodReqCounts _ (DImpl { iface, tys, methods, implOrigin, ... }) =
-  let tag = optionOr noneHeadTag (headTyconHead tys)
   let key = implRouteKeyWord implOrigin iface tys None
-  flatMap (implMethodReqCountEntries tag key) methods
+  map (implMethodReqCountEntry key) methods
 -- an inherited default's entry takes its receiver after its own method-level
 -- dictionaries (`inheritedDefaultEntries`)
 implMethodReqCounts (Some dt) (DInterface { name, ifaceOrigin, methods, ... }) =
@@ -448,23 +446,14 @@ inheritedDefaultReqCounts : DispositionTable ->
   IfaceMethod ->
   List ((String, String), Int)
 inheritedDefaultReqCounts dt ifaceWord (IfaceMethod mname _ (Some (MethodDefault pats _)) _) =
-  flatMap
-    (shape =>
-      let count = leadingImplDictPats pats + 1
-      [
-        ((mname, optionOr noneHeadTag (headTyconHead shape.isTys)), count),
-        ((mname, shape.isWord), count),
-      ])
+  map
+    (shape => ((mname, shape.isWord), leadingImplDictPats pats + 1))
     (inheritorsOf ifaceWord mname dt)
 inheritedDefaultReqCounts _ _ _ = []
 
-implMethodReqCountEntries : String ->
-  String ->
-  ImplMethod ->
-  List ((String, String), Int)
-implMethodReqCountEntries tag key (ImplMethod mname pats _) =
-  let count = leadingImplDictPats pats
-  [((mname, tag), count), ((mname, key), count)]
+implMethodReqCountEntry : String -> ImplMethod -> ((String, String), Int)
+implMethodReqCountEntry key (ImplMethod mname pats _) =
+  ((mname, key), leadingImplDictPats pats)
 
 -- Count the ABI already written into the dict-passed definition.  Deriving this
 -- from a bare method-name signature is ambiguous when unrelated interfaces reuse a
@@ -635,12 +624,11 @@ tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
 -- ⚠️ THE `TyFun` ARM IS THE DEFINITION-SIDE HALF OF #1617 AND CANNOT BE OMITTED
 -- WHEN `typecheck.headTyconTy` GAINS ITS OWN.  This projection is what
 -- `headTyconHead` (below) hands to `core_ir_lower.ifaceImplHeadEntries` /
--- `lowerImplMethod` as an impl's `CImplTagged` tag, and `declRouteKey`'s
--- uniqueness verdict is counted over THESE tags — so for a LONE arrow-headed
--- impl the caller side would stamp `__fun__` (unique at that head) while this
--- side still filed the impl under `__none__`, and the emitter would fail to find
--- it.  `funHeadTag` is imported from `types/route_key.mdk` rather than respelled
--- so the two sides cannot drift.
+-- `lowerImplMethod` as an impl's `CImplTagged` tag, which arg-tag dispatch and
+-- symbol naming read -- so for a LONE arrow-headed impl the caller side would
+-- tag `__fun__` while this side still filed the impl under `__none__`.
+-- `funHeadTag` is imported from `types/route_key.mdk` rather than respelled so
+-- the two sides cannot drift.
 --
 -- ⚠️ `TyConstrained` IS NO LONGER A DIVERGENCE — `typecheck.headTyNode` peels it
 -- too as of #1630, exactly as it peels `TyEffect` as of #1618.  This arm was the
@@ -1282,14 +1270,14 @@ candIface v = match splitOnChar '|' (candKey v)
   [] => ""
   w :: _ => w
 
--- return-position dispatch (RKey): narrow a method's VMulti to the impl whose
--- VTypedImpl tag matches the type the typechecker resolved (no runtime arg).  An
--- empty tag (an unresolved route, or a dict whose key is blank) leaves the VMulti
--- for arg-tag fallback.
+-- return-position dispatch (RKey): narrow a method's VMulti to the impl filed under
+-- the instance key the typechecker selected (no runtime arg).  An empty key (an
+-- unresolved route, or a dict whose key is blank) leaves the VMulti for arg-tag
+-- fallback.
 export
 narrowMethod : EvalEnv (Value e) -> String -> Value e -> String -> <e> Value e
 narrowMethod _ _ (VMulti vs) "" = VMulti vs
-narrowMethod _ _ (VMulti vs) tag = stripResolved (pickByTag vs tag)
+narrowMethod _ _ (VMulti vs) key = stripResolved (pickByKey vs key)
 -- A single-impl interface method binds to a BARE VTypedImpl (never coalesced into
 -- a VMulti).  A resolved route (non-empty tag) still has to strip its dispatch
 -- wrapper for a nullary return-position body — there's only one impl, so it IS the
@@ -1301,26 +1289,14 @@ narrowMethod _ _ (VTypedImpl t k p s inner) _ =
   stripResolved (VTypedImpl t k p s inner)
 narrowMethod _ _ v _ = v
 
--- A concrete route tag picks the impl whose VTypedImpl tag matches.  An inherited
--- default is one of those candidates — installed per inheriting instance, tagged
--- like the instance's own methods (`inheritedDefaultEntries`) — so no default tier
--- exists below this.
-pickByTag : List (Value e) -> String -> <e> Value e
-pickByTag vs tag = match filterList (hasTag tag) vs
-  [] => pickTagFallback vs
-  matched => oneOrMultiV matched vs
-
--- No concrete impl carries the route tag: a GENERAL instance (`impl Iface a`, whose
--- method is tagged noneHeadTag because a type-variable head has no head tycon) is the
--- `min⊑` selection (DICT-SEMANTICS §3) for an uncovered concrete type — its methods,
--- supplied or inherited, are all tagged noneHeadTag.  It must be selected here
--- BEFORE punting to the untyped arg-tag path, which would grab the first CONCRETE
--- sibling and mis-dispatch (#667).  Mirrors the LLVM emitGeneralRKey fallback.  With
--- no general instance either, the VMulti is left for arg-tag fallback.
-pickTagFallback : List (Value e) -> <e> Value e
-pickTagFallback vs = match filterList (hasTag noneHeadTag) vs
+-- A route key picks the impl filed under it -- a general instance's too, whose
+-- entries carry its own canonical key.  An inherited default is one of those
+-- candidates, installed per inheriting instance under the instance's key
+-- (`inheritedDefaultEntries`), so no default tier exists below this.
+pickByKey : List (Value e) -> String -> <e> Value e
+pickByKey vs key = match filterList (hasKey key) vs
   [] => VMulti vs
-  gens => oneOrMultiV gens vs
+  matched => oneOrMultiV matched vs
 
 -- Once a route has pinned a single impl, strip the dispatch wrapper iff its body
 -- is a terminal value (a nullary return-position method like `empty`/`minBound`
@@ -1473,9 +1449,9 @@ oneOrMultiV many _ = VMulti many
 -- lets two same-head non-overlapping impls (Pair Int Bool vs Pair Bool Int)
 -- narrow to the one the checker picked instead of first-impl-wins.
 export
-hasTag : String -> Value e -> Bool
-hasTag tag (VTypedImpl t k _ _ _) = t == tag || k == tag
-hasTag _ _ = False
+hasKey : String -> Value e -> Bool
+hasKey key (VTypedImpl _ k _ _ _) = k == key
+hasKey _ _ = False
 
 matchesTag : String -> Value e -> Bool
 matchesTag tag (VTypedImpl t k _ _ _) = t == tag || k == tag

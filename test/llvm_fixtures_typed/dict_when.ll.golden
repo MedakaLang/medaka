@@ -332,4 +332,4 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 3434027973270651559]
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 -2434867923178104399]

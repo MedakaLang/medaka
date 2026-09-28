@@ -150,7 +150,6 @@ emitTail runtimeDecls coreD modules2 =
       (srcNameFromArgs (args ()))
       (declaredRecordFieldOrders allDecls)
       (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-      (ifaceImplHeadTable allDecls)
   let statsOn = statsEnabled ()
   if statsOn then
     let (text, stats) =

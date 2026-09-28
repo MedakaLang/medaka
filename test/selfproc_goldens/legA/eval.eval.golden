@@ -159,8 +159,8 @@ groupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> <a> Value a
 groupsNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsNotNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsOf : List Decl -> List (String, List (List Pat, Expr))
+hasKey : String -> Value a -> Bool
 hasLaterSlot : Value a -> Bool
-hasTag : String -> Value a -> Bool
 headTycon : Ty -> Option String
 headTyconHead : List Ty -> Option String
 i64Value : (Int, Int) -> Value a
@@ -174,7 +174,7 @@ implDictRoutes : Option Int -> List Route -> List Route -> List Route
 implMethodEntry : EvalEnv (Value a) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
 implMethodName : ImplMethod -> String
 implMethodNames : List Decl -> List String
-implMethodReqCountEntries : String -> String -> ImplMethod -> List ((String, String), Int)
+implMethodReqCountEntry : String -> ImplMethod -> ((String, String), Int)
 implMethodReqCounts : Option DispositionTable -> Decl -> List ((String, String), Int)
 implMethodValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> Value a
 importFrameOf : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
@@ -409,8 +409,7 @@ pWriteFileBytes : Value a -> Value a -> <FileWrite | a> Value a
 pWriteFileMode : Value a -> Value a -> Value a -> <FileWrite | a> Value a
 payloadArity : ConPayload -> Int
 pendingRunDiags : Ref (List (String, String, List Diag))
-pickByTag : List (Value a) -> String -> <a> Value a
-pickTagFallback : List (Value a) -> <a> Value a
+pickByKey : List (Value a) -> String -> <a> Value a
 positionsById : String -> String -> List ((String, String, String), List Int) -> Option (List Int)
 positionsByName : String -> String -> List ((String, String, String), List Int) -> List Int
 ppField : (String, Value a) -> String

@@ -373,37 +373,33 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 193460240]
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 4190803891842103885]
 ; mdk-module program
 define i64 @mdk_disp_eq_0_2(i64 %dict, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = inttoptr i64 %dict to ptr
   %t1 = load i64, ptr %t0
   %t2 = alloca i64
-  %t4 = icmp eq i64 %t1, 193460240
-  %t5 = icmp eq i64 %t1, 4190803891842103885
-  %t6 = or i1 %t4, %t5
-  br i1 %t6, label %dispyes7, label %dispnext7
-dispyes7:
-  %t8 = call i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1)
-  store i64 %t8, ptr %t2
+  %t4 = icmp eq i64 %t1, 4190803891842103885
+  br i1 %t4, label %dispyes5, label %dispnext5
+dispyes5:
+  %t6 = call i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1)
+  store i64 %t6, ptr %t2
   br label %dispend3
-dispnext7:
-  %t9 = icmp eq i64 %t1, 3434027973201616720
-  %t10 = icmp eq i64 %t1, 1536689363680375647
-  %t11 = or i1 %t9, %t10
-  br i1 %t11, label %dispyes12, label %dispnext12
-dispyes12:
-  %t13 = inttoptr i64 %dict to ptr
-  %t14 = getelementptr i8, ptr %t13, i64 8
-  %t15 = load i64, ptr %t14
-  %t16 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_eq(i64 %t15, i64 %arg0, i64 %arg1)
-  store i64 %t16, ptr %t2
+dispnext5:
+  %t7 = icmp eq i64 %t1, 1536689363680375647
+  br i1 %t7, label %dispyes8, label %dispnext8
+dispyes8:
+  %t9 = inttoptr i64 %dict to ptr
+  %t10 = getelementptr i8, ptr %t9, i64 8
+  %t11 = load i64, ptr %t10
+  %t12 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_eq(i64 %t11, i64 %arg0, i64 %arg1)
+  store i64 %t12, ptr %t2
   br label %dispend3
-dispnext12:
+dispnext8:
   call void @mdk_dispatch_no_impl()
   unreachable
 dispend3:
-  %t17 = load i64, ptr %t2
-  ret i64 %t17
+  %t13 = load i64, ptr %t2
+  ret i64 %t13
 }

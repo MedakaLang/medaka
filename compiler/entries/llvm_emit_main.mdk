@@ -24,7 +24,6 @@ import ir.core_ir_lower.{
   lowerProgramEmit,
   EmitTarget(..),
   declaredRecordFieldOrders,
-  ifaceImplHeadTable,
 }
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 
@@ -63,6 +62,5 @@ emitTarget decls =
         -- scalar file and nothing else), so it holds no `stdlib/runtime.mdk`
         -- catalog to subtract the builtin-name exemption against.  An empty FFI
         -- index keeps its behaviour exactly what it was.
-        []
-        (ifaceImplHeadTable decls))
+        [])
       (lowerProgramEmit TargetNative decls))
