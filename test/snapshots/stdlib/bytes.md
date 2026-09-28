@@ -1,5 +1,5 @@
 # META
-source_lines=1084
+source_lines=1092
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -82,7 +82,8 @@ import core.{
   Hashable,
 }
 import array.{findIndex, fromList}
-import string.{fromUtf8, toChars, toDigit}
+import list as L
+import string.{fromUtf8, split, toChars, toDigit}
 import test.{expectEqual}
 import u8 as U8
 
@@ -997,6 +998,13 @@ test "fromUtf8 of stray continuation bytes gives one U+FFFD each" =
 test "an overlong encoding is U+FFFD, never the ASCII it spells" =
   expectEqual [|'�', '�'|] (toChars (fromUtf8 [|0xc0, 0xae|]))
 
+-- A 0xFF lead is one ill-formed byte, so the comma after it survives:
+-- 64 of them alternating with commas split into 65 parts, 64 U+FFFD and the
+-- empty part after the last comma.
+test "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" =
+  let raw = arrayMakeWith 128 (i => if i % 2 == 0 then 255 else 44)
+  expectEqual (L.replicate 64 "�" ++ [""]) (split "," (fromUtf8 raw))
+
 prop "fromUtf8 agrees with decodeUtf8Lossy" (raw : Array Int) = lossyAgrees raw
 
 -- LAW: every `String` survives the encode/decode round trip unchanged. This
@@ -1089,7 +1097,8 @@ lendByteBlockUnsafe (Bytes bb) = bb
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Hashable" false))))
 (DUse false (UseGroup ("array") ((mem "findIndex" false) (mem "fromList" false))))
-(DUse false (UseGroup ("string") ((mem "fromUtf8" false) (mem "toChars" false) (mem "toDigit" false))))
+(DUse false (UseAlias ("list") "L"))
+(DUse false (UseGroup ("string") ((mem "fromUtf8" false) (mem "split" false) (mem "toChars" false) (mem "toDigit" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false))))
 (DUse false (UseAlias ("u8") "U8"))
 (DNewtype true "Bytes" () "Bytes" (TyCon "ByteBlock") ())
@@ -1224,6 +1233,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTest false "fromUtf8 and decodeUtf8Lossy agree on every lead against edge bytes" (EApp (EApp (EVar "expectEqual") (EListLit)) (EApp (EApp (EVar "filter") (ELam ((PVar "raw")) (EApp (EVar "not") (EApp (EVar "lossyAgrees") (EVar "raw"))))) (EVar "lossyGrid"))))
 (DTest false "fromUtf8 of stray continuation bytes gives one U+FFFD each" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "arrayMake") (ELit (LInt 4000))) (ELit (LChar "�")))) (EApp (EVar "toChars") (EApp (EVar "fromUtf8") (EApp (EApp (EVar "arrayMake") (ELit (LInt 4000))) (ELit (LInt 128)))))))
 (DTest false "an overlong encoding is U+FFFD, never the ASCII it spells" (EApp (EApp (EVar "expectEqual") (EArrayLit (ELit (LChar "�")) (ELit (LChar "�")))) (EApp (EVar "toChars") (EApp (EVar "fromUtf8") (EArrayLit (ELit (LInt 192)) (ELit (LInt 174)))))))
+(DTest false "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EVar "arrayMakeWith") (ELit (LInt 128))) (ELam ((PVar "i")) (EIf (EBinOp "==" (EBinOp "%" (EVar "i") (ELit (LInt 2))) (ELit (LInt 0))) (ELit (LInt 255)) (ELit (LInt 44)))))) (DoExpr (EApp (EApp (EVar "expectEqual") (EBinOp "++" (EApp (EApp (EVar "L.replicate") (ELit (LInt 64))) (ELit (LString "�"))) (EListLit (ELit (LString ""))))) (EApp (EApp (EVar "split") (ELit (LString ","))) (EApp (EVar "fromUtf8") (EVar "raw")))))))
 (DProp false "fromUtf8 agrees with decodeUtf8Lossy" ((pp "raw" (TyApp (TyCon "Array") (TyCon "Int")))) (EApp (EVar "lossyAgrees") (EVar "raw")))
 (DProp false "decodeUtf8 (encodeUtf8 s) == Some s" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "decodeUtf8") (EApp (EVar "encodeUtf8") (EVar "s"))) (EApp (EVar "Some") (EVar "s"))))
 (DProp false "Hashable Bytes: a 1,000-byte string hashes alike when rebuilt" ((pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "block") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "propBytes") (EVar "x")) (ELit (LInt 1000)))))) (DoExpr (EBinOp "==" (EApp (EVar "hash") (EVar "block")) (EApp (EVar "hash") (EApp (EVar "fromU8Array") (EApp (EVar "toU8Array") (EVar "block"))))))))
@@ -1240,7 +1250,8 @@ lendByteBlockUnsafe (Bytes bb) = bb
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Hashable" false))))
 (DUse false (UseGroup ("array") ((mem "findIndex" false) (mem "fromList" false))))
-(DUse false (UseGroup ("string") ((mem "fromUtf8" false) (mem "toChars" false) (mem "toDigit" false))))
+(DUse false (UseAlias ("list") "L"))
+(DUse false (UseGroup ("string") ((mem "fromUtf8" false) (mem "split" false) (mem "toChars" false) (mem "toDigit" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false))))
 (DUse false (UseAlias ("u8") "U8"))
 (DNewtype true "Bytes" () "Bytes" (TyCon "ByteBlock") ())
@@ -1375,6 +1386,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTest false "fromUtf8 and decodeUtf8Lossy agree on every lead against edge bytes" (EApp (EApp (EVar "expectEqual") (EListLit)) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "raw")) (EApp (EVar "not") (EApp (EVar "lossyAgrees") (EVar "raw"))))) (EVar "lossyGrid"))))
 (DTest false "fromUtf8 of stray continuation bytes gives one U+FFFD each" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "arrayMake") (ELit (LInt 4000))) (ELit (LChar "�")))) (EApp (EVar "toChars") (EApp (EVar "fromUtf8") (EApp (EApp (EVar "arrayMake") (ELit (LInt 4000))) (ELit (LInt 128)))))))
 (DTest false "an overlong encoding is U+FFFD, never the ASCII it spells" (EApp (EApp (EVar "expectEqual") (EArrayLit (ELit (LChar "�")) (ELit (LChar "�")))) (EApp (EVar "toChars") (EApp (EVar "fromUtf8") (EArrayLit (ELit (LInt 192)) (ELit (LInt 174)))))))
+(DTest false "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EVar "arrayMakeWith") (ELit (LInt 128))) (ELam ((PVar "i")) (EIf (EBinOp "==" (EBinOp "%" (EVar "i") (ELit (LInt 2))) (ELit (LInt 0))) (ELit (LInt 255)) (ELit (LInt 44)))))) (DoExpr (EApp (EApp (EVar "expectEqual") (EBinOp "++" (EApp (EApp (EVar "L.replicate") (ELit (LInt 64))) (ELit (LString "�"))) (EListLit (ELit (LString ""))))) (EApp (EApp (EVar "split") (ELit (LString ","))) (EApp (EVar "fromUtf8") (EVar "raw")))))))
 (DProp false "fromUtf8 agrees with decodeUtf8Lossy" ((pp "raw" (TyApp (TyCon "Array") (TyCon "Int")))) (EApp (EVar "lossyAgrees") (EVar "raw")))
 (DProp false "decodeUtf8 (encodeUtf8 s) == Some s" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "decodeUtf8") (EApp (EVar "encodeUtf8") (EVar "s"))) (EApp (EVar "Some") (EVar "s"))))
 (DProp false "Hashable Bytes: a 1,000-byte string hashes alike when rebuilt" ((pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "block") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "propBytes") (EVar "x")) (ELit (LInt 1000)))))) (DoExpr (EBinOp "==" (EApp (EMethodRef "hash") (EVar "block")) (EApp (EMethodRef "hash") (EApp (EVar "fromU8Array") (EApp (EVar "toU8Array") (EVar "block"))))))))

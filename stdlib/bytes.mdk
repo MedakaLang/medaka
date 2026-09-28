@@ -78,7 +78,8 @@ import core.{
   Hashable,
 }
 import array.{findIndex, fromList}
-import string.{fromUtf8, toChars, toDigit}
+import list as L
+import string.{fromUtf8, split, toChars, toDigit}
 import test.{expectEqual}
 import u8 as U8
 
@@ -992,6 +993,13 @@ test "fromUtf8 of stray continuation bytes gives one U+FFFD each" =
 
 test "an overlong encoding is U+FFFD, never the ASCII it spells" =
   expectEqual [|'�', '�'|] (toChars (fromUtf8 [|0xc0, 0xae|]))
+
+-- A 0xFF lead is one ill-formed byte, so the comma after it survives:
+-- 64 of them alternating with commas split into 65 parts, 64 U+FFFD and the
+-- empty part after the last comma.
+test "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" =
+  let raw = arrayMakeWith 128 (i => if i % 2 == 0 then 255 else 44)
+  expectEqual (L.replicate 64 "�" ++ [""]) (split "," (fromUtf8 raw))
 
 prop "fromUtf8 agrees with decodeUtf8Lossy" (raw : Array Int) = lossyAgrees raw
 
