@@ -313,6 +313,7 @@ import backend.wasm_preamble.{
   floatStrRuntimeLines,
   strSearchRuntimeLines,
   strCodecRuntimeLines,
+  utf8LossyRuntimeLines,
   byteBlockRuntimeLines,
   charFromCodeRuntimeLines,
   charClassRuntimeLines,
@@ -3746,6 +3747,15 @@ emitRefProgram prog groups =
   -- the codec nor strLeaf, so its runtime fn is gated independently.
   let strCodecRt =
     if (progEmit prog).useStrCodec.value then strCodecRuntimeLines else []
+  -- the UTF-8 validation every producer of outside bytes reads a $str through:
+  -- the byte codec, byteBlockToString, and the IO host surface.
+  let utf8LossyRt =
+    if (progEmit prog).useStrCodec.value
+      || (progEmit prog).useByteBlock.value
+      || (progEmit prog).useIO.value then
+      utf8LossyRuntimeLines
+    else
+      []
   -- the `ByteBlock` builtin's loop/copy helpers.  Needs $u8arr + $str (forced
   -- via useStr) and $arr (useArray), both set with useByteBlock in noteW8Extern.
   let byteBlockRt =
@@ -3828,6 +3838,7 @@ emitRefProgram prog groups =
       ++ randomFloatRt
       ++ strSearchRt
       ++ strCodecRt
+      ++ utf8LossyRt
       ++ byteBlockRt
       ++ charFromCodeRt
       ++ charClassRt

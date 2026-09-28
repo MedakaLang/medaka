@@ -3734,12 +3734,11 @@ pByteBlockToString : Value e -> <e> Value e
 pByteBlockToString (VByteBlock b) = VString (stringFromUtf8Bytes b)
 pByteBlockToString _ = panic "byteBlockToString: not a ByteBlock"
 
--- byteBlockWriteStdout : ByteBlock -> <Stdout> Unit — writes the block's bytes
--- to stdout byte-for-byte, no encoding assumption. Routes through the SAME
--- buffered path putStr/putStrLn use (appendOutput/outputRef), not a bypass:
--- the permissive UTF-8 conversion here (the same one byteBlockToString uses)
--- preserves the raw bytes verbatim even when they are not valid UTF-8, so the
--- buffer still carries the exact byte sequence through to the CLI's flush.
+-- byteBlockWriteStdout : ByteBlock -> <Stdout> Unit — the oracle's form, which
+-- appends to the same captured String putStr/putStrLn use (appendOutput /
+-- outputRef).  A String holds only well-formed UTF-8, so a block that is not
+-- UTF-8 is captured with U+FFFD for each ill-formed subpart; `medaka run`
+-- overrides this with pByteBlockWriteStdoutIO, which writes the bytes as-is.
 pByteBlockWriteStdout : Value e -> <e> Value e
 pByteBlockWriteStdout (VByteBlock b) = appendOutput (stringFromUtf8Bytes b)
 pByteBlockWriteStdout _ = panic "byteBlockWriteStdout: not a ByteBlock"
@@ -4748,6 +4747,20 @@ pReadExactly : Value e -> <Stdin | e> Value e
 pReadExactly (VInt n) = vOptionString (readExactly n)
 pReadExactly _ = panic "readExactly: expected Int"
 
+-- ── Stdout bytes ──────────────────────────────────────────────────────────
+-- The buffered stdout is a String, which holds only well-formed UTF-8, so a
+-- block that is not UTF-8 cannot pass through it byte-for-byte.  `medaka run`
+-- writes the text buffered so far, then the block's own bytes, straight to the
+-- host stdout; output stays in program order.
+pByteBlockWriteStdoutIO : Value e -> <Stdout | e> Value e
+pByteBlockWriteStdoutIO (VByteBlock b) =
+  let _ = putStr !outputRef
+  outputRef := ""
+  let _ = stashRunStdout ""
+  let _ = byteBlockWriteStdout (byteBlockFromIntArray b)
+  VUnit
+pByteBlockWriteStdoutIO _ = panic "byteBlockWriteStdout: not a ByteBlock"
+
 -- ── OS entropy ────────────────────────────────────────────────────────────
 -- This binding is deliberately installed only by `medaka run`. It must not
 -- enter the deterministic oracle table or the long-lived test/repl process.
@@ -4794,6 +4807,8 @@ ioExternBindings _ = [
   ("readLineOpt", prim1M pReadLineOpt),
   ("readAll", prim1M pReadAll),
   ("readExactly", prim1 pReadExactly),
+  -- Stdout
+  ("byteBlockWriteStdout", prim1M pByteBlockWriteStdoutIO),
   -- Entropy
   ("osEntropyBytes", prim1M pOsEntropyBytes),
   -- Process

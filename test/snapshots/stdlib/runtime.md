@@ -1,5 +1,5 @@
 # META
-source_lines=898
+source_lines=903
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -58,7 +58,9 @@ extern readLineOpt : Unit -> <Stdin> Option String
 extern readAll : Unit -> <Stdin> String
 
 -- | Reads exactly the given number of bytes from standard input, or `None`
--- at end of input or on a short read.
+-- at end of input or on a short read. Like every string read from outside the
+-- program, each ill-formed UTF-8 sequence becomes U+FFFD, so the result's
+-- UTF-8 length can differ from the count.
 extern readExactly : Int -> <Stdin> Option String
 
 -- # Mutable references
@@ -74,6 +76,8 @@ extern setRef : Ref a -> a -> Unit
 -- # Files
 
 -- | The contents of a file as a string, or `Err` with the host's message.
+-- A file that is not valid UTF-8 is an `Err` naming the path; read it with
+-- `readFileBytes`.
 extern readFile : (path : String) -> <FileRead path> Result String String
 
 -- | The contents of a file as bytes, `0` to `255` each, or `Err` with the
@@ -800,10 +804,10 @@ extern byteBlockToIntArray : ByteBlock -> Array Int
 extern byteBlockFromString : String -> ByteBlock
 
 -- | A new string whose UTF-8 backing is the block's bytes. The inverse of
--- `byteBlockFromString`, and permissive in the same way `stringFromUtf8Bytes`
--- is: the bytes are copied verbatim, so an invalid or truncated sequence is
--- neither rejected nor replaced. Restricted to the standard library and to
--- modules compiled with `--allow-internal`.
+-- `byteBlockFromString`. Like `stringFromUtf8Bytes`, valid UTF-8 is copied
+-- verbatim and each ill-formed sequence becomes one U+FFFD per maximal
+-- subpart. Restricted to the standard library and to modules compiled with
+-- `--allow-internal`.
 extern byteBlockToString : ByteBlock -> String
 
 -- | Writes the block's bytes to stdout as-is, with no bounds check and no
@@ -825,15 +829,16 @@ extern stringToChars : String -> Array Char
 -- | A string built from an array of characters.
 extern stringFromChars : Array Char -> String
 
--- Decode is permissive (bytes are blitted verbatim; the cached codepoint
--- count is recomputed by the standard non-continuation-byte rule).  For
--- valid UTF-8 (e.g. SQLite text) `fromUtf8 (toUtf8 s) == s` byte-for-byte.
+-- A String is always well-formed UTF-8.  Decoding copies valid UTF-8
+-- verbatim and substitutes U+FFFD for each maximal ill-formed subpart, as
+-- `bytes.decodeUtf8Lossy` does, so `fromUtf8 (toUtf8 s) == s` for every `s`.
 
 -- | The UTF-8 encoding of a string, one byte (`0` to `255`) per element.
 extern stringToUtf8Bytes : String -> Array Int
 
 -- | The string encoded by an array of UTF-8 bytes. Only the low eight bits
--- of each element are used.
+-- of each element are used, and each ill-formed sequence becomes one U+FFFD
+-- per maximal subpart.
 extern stringFromUtf8Bytes : Array Int -> String
 
 -- | A one-character string.

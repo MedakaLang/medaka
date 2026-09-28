@@ -78,7 +78,8 @@ import core.{
   Hashable,
 }
 import array.{findIndex, fromList}
-import string.{toDigit}
+import string.{fromUtf8, toChars, toDigit}
+import test.{expectEqual}
 import u8 as U8
 
 {- | The byte-string type.
@@ -777,15 +778,15 @@ export
 encodeUtf8 : String -> Bytes
 encodeUtf8 s = Bytes (byteBlockFromString s)
 
--- Decoding validates before it hands any bytes to `byteBlockToString`, which
--- blits them into a `String` cell without reading them.  A `String` built
--- from bytes that are not UTF-8 is a value whose own invariants rule out its
--- contents: the cell caches a codepoint count computed by counting
--- non-continuation bytes, so `length`, `toChars` and every renderer answer
--- from it and disagree with the bytes.
+-- `byteBlockToString` itself substitutes U+FFFD for ill-formed input, by the
+-- same maximal-subpart rule, so a `String` is always well-formed UTF-8.  The
+-- decoders below keep their own Medaka reading of that rule: `decodeUtf8`
+-- needs the verdict to refuse, and `decodeUtf8Lossy` is the independent
+-- reference the runtime's substitution is tested against.
 --
--- The rules below are `mdk_utf8_is_valid` in `runtime/medaka_rt.c`, which is
--- what the runtime applies to bytes crossing the FFI boundary: `C0`/`C1` and
+-- The rules below are `mdk_utf8_step` in `runtime/medaka_rt.c`, which is
+-- what the runtime applies to every byte sequence it turns into a `String`
+-- and to bytes crossing the FFI boundary: `C0`/`C1` and
 -- `F5` upwards are not lead bytes, an `E0` or `F0` lead bounds its second
 -- byte below to refuse an overlong form, `ED` bounds its second byte above to
 -- refuse a surrogate, `F4` bounds its second byte above to refuse anything
@@ -947,6 +948,52 @@ decodeUtf8Lossy (Bytes bb) =
 -- "�"
 -- > toArray (encodeUtf8 (decodeUtf8Lossy (fromArrayAssumeByteDomain [|0xe2, 0x82|])))
 -- [|239, 191, 189|]
+
+-- `string.fromUtf8` is the runtime's own reading of bytes as UTF-8, and
+-- `decodeUtf8Lossy` above is this module's; they must agree subpart for
+-- subpart, since a `String` is well-formed UTF-8 whichever route built it.
+lossyAgrees : Array Int -> Bool
+lossyAgrees raw =
+  toChars (fromUtf8 raw)
+    == toChars (decodeUtf8Lossy (fromArrayAssumeByteDomain raw))
+
+-- Second bytes either side of every lead's bound, and ASCII / lead / 0xFF.
+lossyEdgeBytes : List Int
+lossyEdgeBytes =
+  [0x00, 0x41, 0x7f, 0x80, 0x8f, 0x90, 0x9f, 0xa0, 0xbf, 0xc0, 0xff]
+
+-- Every non-ASCII first byte against `lossyEdgeBytes`, then every three- and
+-- four-byte lead class against them with a good, bad or missing tail.
+lossyGrid : List (Array Int)
+lossyGrid =
+  flatMap (b0 => flatMap (b1 => [[|b0, b1|]]) lossyEdgeBytes) [0x80..=0xff]
+    ++ flatMap
+      (b0 =>
+        flatMap
+          (b1 =>
+            flatMap (b2 => lossyTails [b0, b1, b2]) [0x41, 0x80, 0xbf, 0xc0])
+          lossyEdgeBytes)
+      [0xe0, 0xe1, 0xed, 0xef, 0xf0, 0xf1, 0xf4, 0xf5]
+
+lossyTails : List Int -> List (Array Int)
+lossyTails front = [
+  arrayFromList front,
+  arrayFromList (front ++ [0x41]),
+  arrayFromList (front ++ [0x80]),
+]
+
+test "fromUtf8 and decodeUtf8Lossy agree on every lead against edge bytes" =
+  expectEqual [] (filter (raw => not (lossyAgrees raw)) lossyGrid)
+
+-- 4000 stray continuation bytes are 4000 maximal subparts; `toChars` sizes
+-- its result from the count the string caches, so the two must agree.
+test "fromUtf8 of stray continuation bytes gives one U+FFFD each" =
+  expectEqual (arrayMake 4000 '�') (toChars (fromUtf8 (arrayMake 4000 0x80)))
+
+test "an overlong encoding is U+FFFD, never the ASCII it spells" =
+  expectEqual [|'�', '�'|] (toChars (fromUtf8 [|0xc0, 0xae|]))
+
+prop "fromUtf8 agrees with decodeUtf8Lossy" (raw : Array Int) = lossyAgrees raw
 
 -- LAW: every `String` survives the encode/decode round trip unchanged. This
 -- is the property `decodeUtf8`'s refusal must not overreach into: a validator

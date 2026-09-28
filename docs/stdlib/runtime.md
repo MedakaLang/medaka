@@ -93,7 +93,9 @@ readExactly : Int -> <Stdin> Option String
 ```
 
 Reads exactly the given number of bytes from standard input, or `None`
-at end of input or on a short read.
+at end of input or on a short read. Like every string read from outside the
+program, each ill-formed UTF-8 sequence becomes U+FFFD, so the result's
+UTF-8 length can differ from the count.
 
 ## Mutable references
 
@@ -115,6 +117,8 @@ readFile : (path : String) -> <FileRead path> Result String String
 ```
 
 The contents of a file as a string, or `Err` with the host's message.
+A file that is not valid UTF-8 is an `Err` naming the path; read it with
+`readFileBytes`.
 
 ### `readFileBytes`
 
@@ -1119,7 +1123,8 @@ stringFromUtf8Bytes : Array Int -> String
 ```
 
 The string encoded by an array of UTF-8 bytes. Only the low eight bits
-of each element are used.
+of each element are used, and each ill-formed sequence becomes one U+FFFD
+per maximal subpart.
 
 ### `charToStr`
 

@@ -524,7 +524,9 @@ static int mdk_is_list_word(long long w);
 noreturn static void mdk_append_unsupported(void);
 
 /* Count UTF-8 codepoints in the first `n` bytes of `p`: every byte that is not a
- * 0b10xxxxxx continuation byte starts a new codepoint. */
+ * 0b10xxxxxx continuation byte starts a new codepoint.  Exact only on
+ * well-formed UTF-8, which every String cell holds: bytes from outside the
+ * program reach a cell only through mdk_str_lossy or a validating producer. */
 static long long mdk_utf8_cp_count(const char *p, long long n) {
   long long c = 0;
   for (long long i = 0; i < n; i++)
@@ -532,56 +534,113 @@ static long long mdk_utf8_cp_count(const char *p, long long n) {
   return c;
 }
 
-/* Validate one complete byte range as canonical UTF-8 encoding Unicode scalar
- * values.  This is stricter than mdk_utf8_cp_count: the latter is a fast cache
- * builder for bytes already known to be valid, while this predicate is the
- * trust-boundary check for bytes supplied by foreign C code. */
-static int mdk_utf8_is_valid(const char *p, size_t n) {
-  size_t i = 0;
-  while (i < n) {
-    unsigned char b0 = (unsigned char)p[i];
-    if (b0 <= 0x7F) {
-      i++;
-    } else if (b0 >= 0xC2 && b0 <= 0xDF) {
-      if (i + 1 >= n || ((unsigned char)p[i + 1] & 0xC0) != 0x80)
-        return 0;
-      i += 2;
-    } else if (b0 >= 0xE0 && b0 <= 0xEF) {
-      if (i + 2 >= n || ((unsigned char)p[i + 2] & 0xC0) != 0x80)
-        return 0;
-      unsigned char b1 = (unsigned char)p[i + 1];
-      if ((b0 == 0xE0 && (b1 < 0xA0 || b1 > 0xBF)) ||
-          (b0 == 0xED && (b1 < 0x80 || b1 > 0x9F)) ||
-          (b0 != 0xE0 && b0 != 0xED && (b1 & 0xC0) != 0x80))
-        return 0;
-      i += 3;
-    } else if (b0 >= 0xF0 && b0 <= 0xF4) {
-      if (i + 3 >= n || ((unsigned char)p[i + 2] & 0xC0) != 0x80 ||
-          ((unsigned char)p[i + 3] & 0xC0) != 0x80)
-        return 0;
-      unsigned char b1 = (unsigned char)p[i + 1];
-      if ((b0 == 0xF0 && (b1 < 0x90 || b1 > 0xBF)) ||
-          (b0 == 0xF4 && (b1 < 0x80 || b1 > 0x8F)) ||
-          (b0 != 0xF0 && b0 != 0xF4 && (b1 & 0xC0) != 0x80))
-        return 0;
-      i += 4;
-    } else {
-      return 0;
-    }
+/* The byte length (1..4) of the well-formed UTF-8 sequence starting at p[i],
+ * or the negated length of its maximal ill-formed subpart: the bytes accepted
+ * before the sequence failed, or 1 when it failed on its lead.  `C0`/`C1` and
+ * `F5` upwards are not leads; an `E0`/`F0` lead bounds its second byte below
+ * (overlong), `ED` above (surrogate) and `F4` above (past U+10FFFF).  The same
+ * rule, subpart for subpart, as `utf8StepAt` in stdlib/bytes.mdk and
+ * `$mdk_utf8_step` in compiler/backend/wasm_preamble.mdk. */
+static int mdk_utf8_step(const unsigned char *p, size_t i, size_t n) {
+  unsigned char b0 = p[i];
+  if (b0 <= 0x7F) return 1;
+  if (b0 >= 0xC2 && b0 <= 0xDF)
+    return (i + 1 < n && (p[i + 1] & 0xC0) == 0x80) ? 2 : -1;
+  if (b0 >= 0xE0 && b0 <= 0xF4) {
+    int wide = b0 >= 0xF0;
+    unsigned char lo = (b0 == 0xE0) ? 0xA0 : (b0 == 0xF0) ? 0x90 : 0x80;
+    unsigned char hi = (b0 == 0xED) ? 0x9F : (b0 == 0xF4) ? 0x8F : 0xBF;
+    if (i + 1 >= n || p[i + 1] < lo || p[i + 1] > hi) return -1;
+    if (i + 2 >= n || (p[i + 2] & 0xC0) != 0x80) return -2;
+    if (!wide) return 3;
+    if (i + 3 >= n || (p[i + 3] & 0xC0) != 0x80) return -3;
+    return 4;
   }
-  return 1;
+  return -1;
 }
 
-/* Build a boxed String cell from `byte_len` raw UTF-8 bytes; return the value
- * word (cell pointer as i64, low bit 0).  The single GC allocation every
- * String-returning extern (and the emitter's string literals) routes through. */
-long long mdk_str_lit(const char *bytes, long long byte_len) {
+/* The codepoint count of p[0..n) when it is well-formed UTF-8, else -1.  Eight
+ * ASCII bytes at a time until the first non-ASCII byte, so the common input
+ * costs about one load and one test per word. */
+static long long mdk_utf8_valid_count(const char *s, size_t n) {
+  const unsigned char *p = (const unsigned char *)s;
+  size_t i = 0;
+  long long c = 0;
+  while (i < n) {
+    if (i + 8 <= n) {
+      uint64_t w;
+      memcpy(&w, p + i, 8);
+      if ((w & 0x8080808080808080ULL) == 0) { i += 8; c += 8; continue; }
+    }
+    if (p[i] < 0x80) { i++; c++; continue; }
+    int st = mdk_utf8_step(p, i, n);
+    if (st < 0) return -1;
+    i += (size_t)st;
+    c++;
+  }
+  return c;
+}
+
+/* Validate one complete byte range as canonical UTF-8 encoding Unicode scalar
+ * values: the trust-boundary check for bytes supplied by foreign C code. */
+static int mdk_utf8_is_valid(const char *p, size_t n) {
+  return mdk_utf8_valid_count(p, n) >= 0;
+}
+
+/* A String cell holding `byte_len` bytes whose codepoint count the caller
+ * already knows.  The bytes must be well-formed UTF-8. */
+static long long mdk_str_cell(const char *bytes, long long byte_len,
+                              long long cp_count) {
   char *cell = (char *)mdk_alloc_atomic(24 + byte_len + 1);
   ((long long *)cell)[0] = MDK_STR_TAG;
   ((long long *)cell)[1] = byte_len;
-  ((long long *)cell)[2] = mdk_utf8_cp_count(bytes, byte_len);
+  ((long long *)cell)[2] = cp_count;
   memcpy(cell + 24, bytes, (size_t)byte_len);
   cell[24 + byte_len] = '\0';
+  return (long long)cell;
+}
+
+/* Build a boxed String cell from `byte_len` bytes of well-formed UTF-8 that the
+ * runtime or the program itself produced (a literal, a rendered number, a
+ * slice of an existing String); return the value word (cell pointer as i64,
+ * low bit 0).  Bytes from outside the program go through mdk_str_lossy. */
+long long mdk_str_lit(const char *bytes, long long byte_len) {
+  return mdk_str_cell(bytes, byte_len, mdk_utf8_cp_count(bytes, byte_len));
+}
+
+/* A String cell from bytes of unknown provenance: verbatim when they are
+ * well-formed UTF-8, otherwise with one U+FFFD (`EF BF BD`) substituted for
+ * each maximal ill-formed subpart, exactly as `bytes.decodeUtf8Lossy` does.
+ * Every producer that turns outside bytes into a String routes through here or
+ * validates them itself. */
+static long long mdk_str_lossy(const char *bytes, long long byte_len) {
+  long long valid = mdk_utf8_valid_count(bytes, (size_t)byte_len);
+  if (valid >= 0) return mdk_str_cell(bytes, byte_len, valid);
+  const unsigned char *p = (const unsigned char *)bytes;
+  size_t n = (size_t)byte_len, out = 0;
+  for (size_t i = 0; i < n;) {
+    int st = mdk_utf8_step(p, i, n);
+    if (st > 0) { out += (size_t)st; i += (size_t)st; }
+    else { out += 3; i += (size_t)-st; }
+  }
+  char *cell = (char *)mdk_alloc_atomic(24 + out + 1);
+  char *dst = cell + 24;
+  size_t j = 0;
+  long long cps = 0;
+  for (size_t i = 0; i < n; cps++) {
+    int st = mdk_utf8_step(p, i, n);
+    if (st > 0) {
+      memcpy(dst + j, p + i, (size_t)st);
+      j += (size_t)st; i += (size_t)st;
+    } else {
+      dst[j] = (char)0xEF; dst[j + 1] = (char)0xBF; dst[j + 2] = (char)0xBD;
+      j += 3; i += (size_t)-st;
+    }
+  }
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = (long long)out;
+  ((long long *)cell)[2] = cps;
+  dst[out] = '\0';
   return (long long)cell;
 }
 
@@ -1015,21 +1074,26 @@ long long mdk_string_concat(long long list) {
      * cp_count is ADDITIVE.  mdk_utf8_cp_count counts bytes whose top two bits are
        not 0b10 - a per-BYTE predicate with no cross-byte state - so its count over
        the concatenation of two byte spans is always the sum of its counts over each
-       span, for ill-formed UTF-8 as much as well-formed.  Each operand cell already
-       stores a cp_count at word 2, so the sum is exactly what a rescan would have
-       returned - PROVIDED every producer of a String cell stores a count that agrees
-       with mdk_utf8_cp_count's definition.  That, not "only one producer", is the
-       real invariant, and there are THREE producers, all of which satisfy it:
-         - mdk_str_lit (below), which calls mdk_utf8_cp_count outright;
-         - this function, whose result is a sum of two conforming counts (induction);
+       span.  Each operand cell already stores a cp_count at word 2, so the sum is
+       exactly what a rescan would have returned - PROVIDED every producer of a
+       String cell stores a count that agrees with mdk_utf8_cp_count's definition.
+       That count is the true codepoint count, and the one mdk_string_to_chars
+       and mdk_utf8_byte_offset walk by, only because every cell holds well-formed
+       UTF-8: two well-formed spans concatenate to a well-formed span, and every
+       producer of a cell keeps the rule, so the invariant holds by induction:
+         - mdk_str_lit, which calls mdk_utf8_cp_count outright, over bytes the
+           program or the runtime itself produced;
+         - mdk_str_cell / mdk_str_lossy, which validate outside bytes (replacing
+           each ill-formed subpart with U+FFFD) and store the counted codepoints;
+         - this function, whose result is a sum of two conforming counts;
          - the EMITTER, which mints a String-literal cell as a module-scope constant
            (`@.strc.N`, llvm_emit.mdk `emitLit (LString s)`) with the count computed
            at compile time as `arrayLength (stringToChars s)` - i.e. one per decoded
            codepoint, which for the byte encoding of that same literal is exactly the
            number of non-continuation bytes mdk_utf8_cp_count would count.
-       Adding a FOURTH producer that stores anything else (a UTF-16 unit count, a
-       grapheme count, a lazily-filled 0) silently breaks this function, without
-       touching it.
+       A producer that stores anything else (a UTF-16 unit count, a grapheme count,
+       a lazily-filled 0), or that copies outside bytes in without validating them,
+       silently breaks this function, without touching it.
    Atomic allocation is retained (the cell is a header plus raw bytes, never a
    pointer), and every byte of it is written here, so GC_malloc_atomic not zeroing is
    irrelevant - matching mdk_str_lit's own contract. */
@@ -1271,13 +1335,12 @@ long long mdk_byteblock_from_string(long long s) {
                     (size_t)n);
   return (long long)cell;
 }
-/* byteBlockToString: the block's bytes as a fresh String cell.  PERMISSIVE,
-   byte-for-byte the same route as mdk_string_from_utf8_bytes: the bytes are
-   copied verbatim and mdk_str_lit recomputes cp_count by the
-   non-continuation-byte rule, so invalid UTF-8 is preserved, not rejected. */
+/* byteBlockToString: the block's bytes as a fresh String cell, the same route
+   as mdk_string_from_utf8_bytes: well-formed UTF-8 is copied verbatim and each
+   ill-formed subpart becomes U+FFFD (mdk_str_lossy). */
 long long mdk_byteblock_to_string(long long bb) {
-  return mdk_str_lit((const char *)mdk_byteblock_bytes(bb),
-                     mdk_byteblock_count(bb));
+  return mdk_str_lossy((const char *)mdk_byteblock_bytes(bb),
+                       mdk_byteblock_count(bb));
 }
 
 
@@ -1405,16 +1468,25 @@ static long long mdk_utf8_byte_offset(const char *p, long long byte_len,
   }
   return b;
 }
-static long long mdk_utf8_decode(const char *p, long long b, int *w) {
+/* Decode the codepoint at p[b], of a cell's `byte_len` bytes.  The cell is
+ * well-formed UTF-8, so the width read from the lead byte is its sequence's;
+ * the clamp to `byte_len` only keeps a cell that broke that invariant from
+ * being read past its end. */
+static long long mdk_utf8_decode(const char *p, long long b, long long byte_len,
+                                 int *w) {
   unsigned char ch = (unsigned char)p[b];
   long long cp; int n;
   if (ch < 0x80)             { cp = ch;        n = 1; }
   else if ((ch >> 5) == 0x6) { cp = ch & 0x1F; n = 2; }
   else if ((ch >> 4) == 0xE) { cp = ch & 0x0F; n = 3; }
   else                       { cp = ch & 0x07; n = 4; }
+  if (n > byte_len - b) n = (int)(byte_len - b);
   for (int k = 1; k < n; k++) cp = (cp << 6) | ((unsigned char)p[b+k] & 0x3F);
   *w = n; return cp;
 }
+/* The output array is sized from the cached cp_count, and the loop stops
+ * there even if the bytes would decode to more, so it never writes past the
+ * allocation. */
 long long mdk_string_to_chars(long long s) {
   const char *cell = (const char *)s;
   long long byte_len = ((const long long *)cell)[1];
@@ -1423,8 +1495,8 @@ long long mdk_string_to_chars(long long s) {
   long long *arr = (long long *)mdk_alloc(8 * (cp_count + 1));
   arr[0] = cp_count;
   long long b = 0, i = 0;
-  while (b < byte_len) {
-    int w; long long cp = mdk_utf8_decode(bytes, b, &w);
+  while (b < byte_len && i < cp_count) {
+    int w; long long cp = mdk_utf8_decode(bytes, b, byte_len, &w);
     arr[++i] = (cp << 1) | 1; b += w;
   }
   return (long long)arr;
@@ -1451,16 +1523,15 @@ long long mdk_string_to_utf8_bytes(long long s) {
     arr[i + 1] = (((long long)bytes[i]) << 1) | 1;
   return (long long)arr;
 }
-/* stringFromUtf8Bytes : Array Int -> String.  Blit the low 8 bits of each tagged
- * Int element into a fresh String cell.  PERMISSIVE: bytes are copied verbatim;
- * mdk_str_lit recomputes cp_count by the standard non-continuation-byte rule, so
- * valid UTF-8 round-trips byte-for-byte and codepoint-count-for-count. */
+/* stringFromUtf8Bytes : Array Int -> String.  The low 8 bits of each tagged Int
+ * element, read as UTF-8: valid UTF-8 round-trips byte-for-byte, and each
+ * ill-formed subpart becomes U+FFFD (mdk_str_lossy). */
 long long mdk_string_from_utf8_bytes(long long arr) {
   const long long *a = (const long long *)arr;
   long long n = a[0];
   char *buf = (char *)mdk_alloc_atomic(n + 1);
   for (long long i = 0; i < n; i++) buf[i] = (char)((a[i + 1] >> 1) & 0xFF);
-  return mdk_str_lit(buf, n);
+  return mdk_str_lossy(buf, n);
 }
 long long mdk_string_slice(long long lo_t, long long hi_t, long long s) {
   const char *cell = (const char *)s;
@@ -1924,7 +1995,7 @@ long long mdk_args(long long unit_ignored) {
   (void)unit_ignored;
   long long acc = mdk_nil();
   for (int i = mdk_argc - 1; i >= 1; i--)
-    acc = mdk_cons(mdk_str_lit(mdk_argv[i], (long long)strlen(mdk_argv[i])), acc);
+    acc = mdk_cons(mdk_str_lossy(mdk_argv[i], (long long)strlen(mdk_argv[i])), acc);
   return acc;
 }
 
@@ -1932,14 +2003,15 @@ long long mdk_args(long long unit_ignored) {
 long long mdk_get_env(long long name) {
   const char *v = getenv((const char *)name + 24);
   if (v == 0) return mdk_none();
-  return mdk_some(mdk_str_lit(v, (long long)strlen(v)));
+  return mdk_some(mdk_str_lossy(v, (long long)strlen(v)));
 }
 
 /* slice 13: file IO + stdin readers --------------------------------------- */
 
-/* Helper: String cell from a NUL-terminated C string. */
+/* Helper: String cell from a NUL-terminated C string handed back by the host
+ * (a path, a directory entry, an strerror message), so read as outside bytes. */
 static long long mdk_str_cstr(const char *s) {
-  return mdk_str_lit(s, (long long)strlen(s));
+  return mdk_str_lossy(s, (long long)strlen(s));
 }
 
 /* readFile : String -> Result String String — Ok content / Err msg.
@@ -1949,7 +2021,12 @@ static long long mdk_str_cstr(const char *s) {
  * directory FD silently returns 0, so the caller would get a quiet "" for a
  * directory instead of an error.  Reject directories up front with S_ISDIR
  * (already used for fileType/stat below), mirroring the existing
- * mdk_err(mdk_str_cstr(strerror(errno))) shape. */
+ * mdk_err(mdk_str_cstr(strerror(errno))) shape.
+ *
+ * Contents that are not well-formed UTF-8 are an Err naming the path, never a
+ * String: a file is where raw bytes most often come from, so a silent U+FFFD
+ * here would lose data the caller never saw; readFileBytes is the raw route.
+ * The bytes are read straight into the String cell and validated there. */
 long long mdk_read_file(long long path) {
   const char *p = (const char *)path + 24;
   struct stat st;
@@ -1958,9 +2035,21 @@ long long mdk_read_file(long long path) {
   FILE *f = fopen(p, "rb");
   if (!f) return mdk_err(mdk_str_cstr(strerror(errno)));
   fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-  char *buf = (char *)mdk_alloc(n + 1);
-  size_t got = fread(buf, 1, (size_t)n, f); fclose(f);
-  return mdk_ok(mdk_str_lit(buf, (long long)got));
+  if (n < 0) n = 0;
+  char *cell = (char *)mdk_alloc_atomic(24 + n + 1);
+  size_t got = fread(cell + 24, 1, (size_t)n, f); fclose(f);
+  long long cps = mdk_utf8_valid_count(cell + 24, got);
+  if (cps < 0) {
+    static const char msg[] =
+      ": not valid UTF-8 (use readFileBytes for raw bytes)";
+    return mdk_err(mdk_string_append(
+      path, mdk_str_lit(msg, (long long)(sizeof msg - 1))));
+  }
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = (long long)got;
+  ((long long *)cell)[2] = cps;
+  cell[24 + got] = '\0';
+  return mdk_ok((long long)cell);
 }
 
 /* readFileBytes : String -> Result String (Array Int) — raw bytes, no decode.
@@ -2172,7 +2261,7 @@ static long long mdk_read_temp(const char *path) {
   fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
   char *buf = (char *)mdk_alloc((size_t)(n + 1));
   size_t got = fread(buf, 1, (size_t)n, f); fclose(f);
-  return mdk_str_lit(buf, (long long)got);
+  return mdk_str_lossy(buf, (long long)got);
 }
 
 /* Convert a Medaka List String (linked Cons/Nil cells) into a NULL-terminated
@@ -2351,7 +2440,7 @@ long long mdk_read_line(long long u) {
   char *line = 0; size_t cap = 0; ssize_t n = getline(&line, &cap, stdin);
   if (n < 0) { free(line); return mdk_str_cstr(""); }
   if (n > 0 && line[n-1] == '\n') n--;
-  long long r = mdk_str_lit(line, (long long)n); free(line); return r;
+  long long r = mdk_str_lossy(line, (long long)n); free(line); return r;
 }
 
 /* readLineOpt : Unit -> Option String — Some line / None at EOF. */
@@ -2360,7 +2449,7 @@ long long mdk_read_line_opt(long long u) {
   char *line = 0; size_t cap = 0; ssize_t n = getline(&line, &cap, stdin);
   if (n < 0) { free(line); return mdk_none(); }
   if (n > 0 && line[n-1] == '\n') n--;
-  long long r = mdk_some(mdk_str_lit(line, (long long)n)); free(line); return r;
+  long long r = mdk_some(mdk_str_lossy(line, (long long)n)); free(line); return r;
 }
 
 /* readExactly : Int -> Option String — read exactly N bytes; None at EOF or short read. */
@@ -2376,7 +2465,7 @@ long long mdk_read_exactly(long long n_tagged) {
   }
   if (total == 0) { free(buf); return mdk_none(); }
   if ((long long)total < n) { free(buf); return mdk_none(); }
-  long long r = mdk_some(mdk_str_lit(buf, (long long)total)); free(buf); return r;
+  long long r = mdk_some(mdk_str_lossy(buf, (long long)total)); free(buf); return r;
 }
 
 /* readAll : Unit -> String — all of stdin. */
@@ -2388,7 +2477,7 @@ long long mdk_read_all(long long u) {
     size_t got = fread(buf + len, 1, cap - len, stdin); len += got;
     if (got == 0) break;
   }
-  long long r = mdk_str_lit(buf, (long long)len); free(buf); return r;
+  long long r = mdk_str_lossy(buf, (long long)len); free(buf); return r;
 }
 
 /* ── RNG — deterministic SplitMix64 (native extern catalog, Tier D) ───────────

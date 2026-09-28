@@ -621,7 +621,8 @@ The status code.
 parsedResponseReason : ParsedResponse -> String
 ```
 
-The reason phrase, exactly as received.
+The reason phrase as received, read as UTF-8: a byte sequence that is not
+UTF-8 reads back as U+FFFD.
 
 ### `parsedResponseHeaders`
 

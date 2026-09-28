@@ -16,6 +16,8 @@ import core.{Result(..)}
 import io.{ownerOnlyMode}
 import path.{dirname, joinPath}
 import string.{contains}
+import test.{expectErrContains, fail}
+import test_process.{scratchDir}
 
 -- # Metadata
 
@@ -273,3 +275,15 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
         mtime = intToFloat n,
       }
     && debug x == debug y == False
+
+-- `readFile` refuses a file that is not UTF-8 rather than decoding it lossily,
+-- and its error names the path and the raw route.
+test "readFile of a file that is not UTF-8 is an Err naming readFileBytes" =
+  match scratchDir
+    Err e => fail "no scratch directory: \{e}"
+    Ok dir =>
+      let path = joinPath dir "not-utf8.bin"
+      let _ = writeFileBytes path [|0x61, 0xc0, 0xae|]
+      expectErrContains
+        "\{path}: not valid UTF-8 (use readFileBytes for raw bytes)"
+        (readFile path)
