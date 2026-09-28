@@ -17,6 +17,14 @@
 # Paths are relative to the repo root, matching every consumer above.
 
 [[entry]]
+file = "stdlib/net.mdk"
+count = 0
+
+[[entry]]
+file = "stdlib/net_async.mdk"
+count = 0
+
+[[entry]]
 file = "pds/lib/event_log_record.mdk"
 count = 0
 
@@ -219,14 +227,6 @@ count = 0
 [[entry]]
 file = "stdlib/http.mdk"
 count = 0
-
-[[entry]]
-file = "stdlib/net.mdk"
-count = 9
-
-[[entry]]
-file = "stdlib/net_async.mdk"
-count = 9
 
 [[entry]]
 file = "pds/lib/field.mdk"

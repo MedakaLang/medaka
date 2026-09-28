@@ -35,10 +35,11 @@ name: Nightly
 #
 #   pds_signing_parity         the DEEP half of pds/test/signing_parity_test.mdk (#1962),
 #                              selected by SIGNING_DEEP=1: the sampled driver under
-#                              the eval interpreter (~1171s) and the 322-row corpus
-#                              under interpreted WasmGC (~228s). Those two engines are
-#                              82%+16% of the gate; the corpus itself is 24s natively
-#                              and stays in the merge queue with the sampled
+#                              the eval interpreter and the 322-row corpus under
+#                              interpreted WasmGC. Those two engines are nearly all
+#                              of the gate's cost (the whole DEEP run took 682s, a
+#                              single sample, 2026-09-27); the corpus itself is 24s
+#                              natively and stays in the merge queue with the sampled
 #                              native==Wasm parity. PLAIN pass/fail: a deterministic
 #                              parity check, not a fuzzer, so red here is a real
 #                              regression.
@@ -584,9 +585,10 @@ jobs:
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
           sh test/wasm/build_wasm_oracle.sh --modules-only
 
-      # THE DEEP HALF ONLY (#1962). Profiled arm-by-arm, this gate's ~1430s is
-      # 82% one `medaka run` of the sampled driver and 16% the interpreted
-      # WasmGC pass over the 322-row corpus; the corpus costs 24s natively.
+      # THE DEEP HALF ONLY (#1962). One `medaka run` of the sampled driver and
+      # the interpreted WasmGC pass over the 322-row corpus are nearly all of
+      # this gate's cost (the whole DEEP run took 682s, a single sample,
+      # 2026-09-27); the corpus costs 24s natively.
       # SIGNING_DEEP=1 selects exactly those two interpreted arms, and the
       # merge tier keeps the sampled native==Wasm parity, all four witnesses,
       # and the whole corpus natively. Same demotion shape as the

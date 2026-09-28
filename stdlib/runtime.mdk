@@ -386,14 +386,16 @@ extern netTrySendFrom : Socket h ->
   Int ->
   <Net h> Result String (Option Int)
 
-{- | Sends the bytes of a block from index `start` up to but not including
-   `end`, at most 64 KiB per call. The result is the number of bytes written,
-   which may be fewer than asked for.
+{- | Sends the bytes of a block in the window between two indices, from the
+   first index up to but not including the second, at most 64 KiB per call.
+   The result is the number of bytes written, which may be fewer than asked
+   for.
 
-   A window outside the block, where `start` is negative, `end` is less than
-   `start`, or `end` is past the block's length, is `Err`. Unlike
-   `netSendFrom`, which clamps its offset, the window is not clamped: a window
-   outside the block is a caller's mistake, and clamping would hide it. -}
+   A window outside the block, where the first index is negative, the second
+   is less than the first, or the second is past the block's length, is
+   `Err`. Unlike `netSendFrom`, which clamps its offset, the window is not
+   clamped: a window outside the block is a caller's mistake, and clamping
+   would hide it. -}
 extern netSendBytesFrom : Socket h ->
   ByteBlock ->
   Int ->

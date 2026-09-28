@@ -176,10 +176,12 @@ NEUTRAL = {'MEDAKA_ROOT', 'MEDAKA', 'MEDAKA_EMITTER', 'LC_ALL',
 
 # >>> shared: workflow invocation recogniser >>>
 # This block is byte-identical in test/diff_compiler_tier_drift.sh and
-# test/diff_compiler_ci_shard_coverage.sh. Both ask whether a workflow `run:`
-# body RUNS a gate, so a spelling one of them learns and the other does not
-# makes the two disagree about the same step. `shared_block_drift` refuses
-# when the copies differ.
+# test/diff_compiler_ci_shard_coverage.sh, so the two agree on whether a
+# workflow `run:` body runs a gate by a NATIVE spelling. They do not agree on a
+# `.sh` invocation: tier_drift demands command position (`invocation_re`),
+# while shard_coverage counts any mention outside a `case` arm
+# (`_is_real_invocation`). `shared_block_drift` refuses when the copies differ,
+# and `recogniser_selftest` pins what the native rule accepts and rejects.
 
 # Command-position prefixes: what may sit between a command separator and the
 # program that runs a gate.
@@ -291,6 +293,50 @@ def shared_block_drift(root):
         return ("the shared invocation-recogniser block differs between "
                 + " and ".join(sorted(blocks)))
     return None
+
+
+# Fixed `run:` bodies and what each must run, checked on every run of either
+# gate. The negative rows are the point: no workflow in the tree spells one, so
+# a loosened end-of-name anchor or argument rule would otherwise derive the
+# same set and stay green. The probe names are in no registry, so this table is
+# never read as an invocation of a real gate.
+SELFTEST_TARGETS = {
+    'native': ('test/recogniser_probe_test.mdk', 'recogniser_probe'),
+    'exec': (None, 'recogniser_probe_sh'),
+}
+SELFTEST_MODULE = 'test/recogniser_probe_test.mdk'
+SELFTEST_CASES = (
+    ('./medaka test --native ' + SELFTEST_MODULE, {'native': {}}),
+    ('SIGNING_DEEP=1 ./medaka test --native ' + SELFTEST_MODULE,
+     {'native': {'SIGNING_DEEP': '1'}}),
+    ('"$MEDAKA" test --native ' + SELFTEST_MODULE, {'native': {}}),
+    ('if ! ./medaka test --native ' + SELFTEST_MODULE + '; then exit 1; fi',
+     {'native': {}}),
+    ('./medaka gate run recogniser_probe', {'native': {}}),
+    ('./medaka gate run recogniser_probe_sh', {'exec': {}}),
+    ('# ./medaka test --native ' + SELFTEST_MODULE, {}),
+    ('echo ./medaka test --native ' + SELFTEST_MODULE, {}),
+    ('./medaka gate run recogniser_probe --dry-run', {}),
+    ('./medaka gate run recogniser_probe --list', {}),
+    ('./medaka test --native ' + SELFTEST_MODULE + ' --list', {}),
+    ('./medaka gate run recogniser_probe other_gate', {}),
+    ('./medaka gate run recogniser_probe_extra', {}),
+    ('./medaka test --native ' + SELFTEST_MODULE + '.orig', {}),
+    ('./medaka test --native ' + SELFTEST_MODULE + '.bak', {}),
+    ('./medaka test ' + SELFTEST_MODULE, {}),
+)
+
+
+def recogniser_selftest():
+    """One line per fixed case the recogniser misclassifies; empty when all
+    agree."""
+    matchers = native_matchers(SELFTEST_TARGETS)
+    failures = []
+    for text, want in SELFTEST_CASES:
+        got = native_runs_in(text, matchers)
+        if got != want:
+            failures.append(f"{text!r} runs {got}, expected {want}")
+    return failures
 # <<< shared: workflow invocation recogniser <<<
 
 
@@ -424,6 +470,13 @@ if drift:
     print(f"FAIL: {drift}.")
     print("      The two scripts must agree on what a workflow step runs; copy the block")
     print("      from one to the other.")
+    sys.exit(1)
+
+selftest = recogniser_selftest()
+if selftest:
+    print("FAIL: the shared invocation recogniser misclassifies its fixed cases:")
+    for line in selftest:
+        print(f"       {line}")
     sys.exit(1)
 
 WORKFLOWS = (('ci.yml', 'merge'), ('nightly.yml', 'nightly'))

@@ -14,8 +14,8 @@ codepoint but `\n`, and `\d`, `\w`, `\s`, `\b` and `(?i)` folding are
 ASCII only, matching `string.isDigit` and `string.toUpper`.
 
 A subject may also be a UTF-8 byte buffer rather than a `String`:
-`isFullMatchBytes` and `findBytes` match a window of an `Array Int`, with
-each byte a code from `0` to `255`.
+`isFullMatchBytes` and `findBytes` match a window of a `Bytes`, with each
+byte a code from `0` to `255`.
 
 `compile` reports a bad pattern as an `Err`; `mustCompile` panics, which
 suits a pattern written as a literal. A top-level binding is evaluated
@@ -288,34 +288,36 @@ empty match at the end.
 ### `isFullMatchBytes`
 
 ```
-isFullMatchBytes : Regex -> Array Int -> Int -> Int -> Bool
+isFullMatchBytes : Regex -> Bytes -> Int -> Int -> Bool
 isFullMatchBytes re bytes start end
 ```
 
 Whether the pattern matches the whole of `bytes[start..end)`, each byte
 taken as a code from 0 to 255.
 
-The window is matched in place, without copying, and a bound in the
-pattern counts bytes rather than codepoints. `start` and `end` are clamped
-to the buffer, and `^`, `$` and `\b` refer to the ends of the window.
+Only the window is read, and it is copied once; the rest of `bytes` is
+not. A bound in the pattern counts bytes rather than codepoints. `start`
+and `end` are clamped to the buffer, and `^`, `$` and `\b` refer to the
+ends of the window.
 
 A pattern applied to bytes should name only ASCII: `[a-z]` matches the
 byte 97, and a non-ASCII codepoint arrives as two or more UTF-8 bytes, none
-of which any ASCII class matches. `toUtf8 "abc"` is `[|97, 98, 99|]`.
+of which any ASCII class matches. `B.encodeUtf8 "abc"` is the bytes 97, 98
+and 99.
 
 ```medaka
-> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99|] 0 3
+> isFullMatchBytes (mustCompile "[a-z]+") (B.encodeUtf8 "abc") 0 3
 True
-> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 3
+> isFullMatchBytes (mustCompile "[a-z]+") (B.encodeUtf8 "abc.") 0 3
 True
-> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 4
+> isFullMatchBytes (mustCompile "[a-z]+") (B.encodeUtf8 "abc.") 0 4
 False
 ```
 
 ### `findBytes`
 
 ```
-findBytes : Regex -> Array Int -> Int -> Int -> Option Match
+findBytes : Regex -> Bytes -> Int -> Int -> Option Match
 findBytes re bytes start end
 ```
 
@@ -328,11 +330,11 @@ codepoint decodes as `string.fromUtf8` decodes malformed input. An
 ASCII-only pattern never produces such a span.
 
 ```medaka
-> map (m => (m : Match).text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+> map (m => (m : Match).text) (findBytes (mustCompile "[0-9]+") (B.encodeUtf8 "a12b") 0 4)
 Some "12"
-> map (m => (m : Match).start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+> map (m => (m : Match).start) (findBytes (mustCompile "[0-9]+") (B.encodeUtf8 "a12b") 0 4)
 Some 1
-> findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 1
+> findBytes (mustCompile "[0-9]+") (B.encodeUtf8 "a12b") 0 1
 None
 ```
 
