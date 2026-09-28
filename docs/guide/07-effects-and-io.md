@@ -63,8 +63,10 @@ effects, and the compiler holds it to that. Add a `println` to its body and chec
 fails:
 
 ```
-error: probe.mdk:4:2: Effectful value used where <> is allowed, but it performs <IO>
-error: probe.mdk:4:2: Function 'double' declared with <> but also performs <IO>
+error: probe.mdk:3:10: Effectful value used where <> is allowed, but it performs <IO>
+  |
+3 |   println "doubling"
+  |           ^
 ```
 
 So a signature tells you whether a function can touch the outside world, and the
@@ -128,8 +130,10 @@ compiler refuses it.
 
 You can declare your own labels with `effect`, and rows can contain variables
 (`<e>`) and open tails (`<IO | e>`) so that a higher-order function can pass its
-argument's effects through. Those are out of scope for this guide; the
-[syntax reference](../spec/SYNTAX.md) has the spellings.
+argument's effects through. Those are out of scope for this guide. The
+[effects topic](../advanced/effects-1-rows.md) in Advanced Topics picks up
+exactly here and goes all the way to labels that name which file or host a
+function may touch; the [syntax reference](../spec/SYNTAX.md) has the spellings.
 
 ## What `do` is not
 

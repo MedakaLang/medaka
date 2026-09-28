@@ -88,6 +88,9 @@ The chapters build on each other, so the first time through, read them in order.
 10. [Tooling & Workflow](10-tooling-and-workflow.md). The `check`, `fmt`, `lint`,
     and `test` loop.
 
+When you have finished, [Advanced Topics](../advanced/00-about.md) goes deeper
+into one feature at a time, starting with effects.
+
 Every example in this guide is compiled by the test suite before a change can merge.
 Examples with output shown beneath them are also run, and the output is compared. If
 the guide says a program prints something, that is what the current compiler prints.

@@ -46,6 +46,10 @@ exec node "$SCRIPT_DIR/render_docs.mjs" \
   --exclude OUTLINE.md \
   --title "The Medaka Guide" \
   --repo-root "$REPO_ROOT" \
+  --nav-link "Advanced=../advanced/index.html" \
   --nav-link "Stdlib=../stdlib/index.html" \
   --nav-link "GitHub=https://github.com/MedakaLang/medaka" \
+  --sibling "advanced=../advanced" \
+  --sibling "stdlib=../stdlib" \
+  --sibling-exclude "stdlib=STDLIB.md,FP-STDLIB-DESIGN.md,P1-STDLIB-DESIGN.md" \
   "${DIST_ARGS[@]+"${DIST_ARGS[@]}"}"

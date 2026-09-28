@@ -333,9 +333,11 @@ jobs:
               # test/ is NEVER docs — this arm must stay first. See the job header.
               test/*) nondoc "$f" ;;
 
-              # Syntax references and guide chapters are executable docs, not prose.
+              # Syntax references, guide chapters and advanced-topic chapters are
+              # executable docs, not prose.
               docs/spec/SYNTAX.md) nondoc "$f" ;;
               docs/guide/*.md) nondoc "$f" ;;
+              docs/advanced/*.md) nondoc "$f" ;;
 
               docs/*) : ;;
               LICENSE|LICENSE.*) : ;;
