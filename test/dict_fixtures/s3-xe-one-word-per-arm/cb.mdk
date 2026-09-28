@@ -1,0 +1,4 @@
+import ifb.{Greet(..), speak}
+
+export viaB : Greet a => a -> String
+viaB x = speak x

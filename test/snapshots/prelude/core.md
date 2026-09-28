@@ -1517,10 +1517,10 @@ export interface Traversable t requires Mappable t, Foldable t where
   traverse : Thenable m => (a -> <e> m b) -> t a -> <e> m (t b)
   sequence : Thenable m => t (m a) -> m (t a)
   sequence ta = traverse identity ta
--- `sequence` is an interface default: the desugar fill pass (fillImplDefaults)
--- synthesizes a concrete-receiver per-impl copy of this body into every impl,
--- so each List/Option/Result instance dispatches `traverse` on its concrete
--- receiver and codegens correctly.  Written eta-expanded (`sequence ta = …`,
+-- `sequence` is an interface default: every instance that does not write it
+-- runs this one body with its own dictionary as the receiver, so each
+-- List/Option/Result instance dispatches `traverse` on that receiver and
+-- codegens correctly.  Written eta-expanded (`sequence ta = …`,
 -- not point-free `sequence = traverse identity`): the point-free form loses the
 -- `m` dictionary and mis-dispatches the inner `pure` to the `t` instance.
 

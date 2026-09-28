@@ -17,7 +17,7 @@
 -- body serves which instance's slot.
 import frontend.ast.{Ty}
 import types.repr.{IfaceRef(..)}
-import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
+import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert, omKeys}
 import support.util.{reverseL}
 
 -- An instance's within-compile identity: the declaring module id and a
@@ -74,29 +74,18 @@ dispositionKey : InstId -> String -> String
 dispositionKey inst method =
   "\{instIdMid inst}#\{intToString (instIdSeq inst)}@\{method}"
 
--- What a pass needs to build one instance's specialization of an inherited
--- default, named the way every engine already names the instance.
+-- What a pass needs to give one instance an entry for an inherited default, named
+-- the way every engine already names the instance.  The entry is the default's body
+-- specialized to the instance; the instance's dictionary reaches it as its receiver
+-- argument, so nothing about the instance's dictionary is kept here.
 public export data InstanceShape = InstanceShape {
   -- the canonical route word (`route_key.implRouteKeyWord` of the impl's own
   -- interface origin and type arguments, no method): the key its supplied
-  -- methods carry, so a specialization sits beside them under the same word
+  -- methods carry, so an inherited entry sits beside them under the same word
   isWord : String,
   -- the impl head's type arguments, from which a pass derives the head tag and
   -- specificity score exactly as it does for the impl's own methods
   isTys : List Ty,
-  -- the word a dictionary for this instance carries (the typechecker's
-  -- predicate route word: the bare head unless the head collides), which a
-  -- call of a method of the instance's own interface through the receiver
-  -- dispatches by
-  isDictWord : String,
-  -- the same word for each superclass instance at these type arguments, keyed
-  -- by the superclass's interface word: a superclass method reached through the
-  -- receiver dispatches by its own instance's word, which differs from
-  -- `isDictWord` whenever either head collides
-  isSuperWords : List (String, String),
-  -- how many `requires` dictionaries the instance's methods take after their
-  -- method-level ones (the expanded requires list's length)
-  isReqCount : Int,
 }
 
 export data DispositionTable = DispositionTable {
@@ -105,6 +94,10 @@ export data DispositionTable = DispositionTable {
   -- the instances inheriting each (interface word, method) slot, keyed by
   -- `slotKey`, in producer order
   dtInheritors : OrdMap (List InstanceShape),
+  -- each interface's DIRECT superinterface count, keyed by interface word: the
+  -- length of the super segment a dictionary of that interface stores ahead of its
+  -- `requires` dictionaries
+  dtIfaceSuperCounts : OrdMap Int,
 }
 
 export
@@ -113,6 +106,7 @@ emptyDispositionTable = DispositionTable {
   dtRows = [],
   dtIndex = omEmpty,
   dtInheritors = omEmpty,
+  dtIfaceSuperCounts = omEmpty,
 }
 
 export
@@ -129,20 +123,37 @@ buildDispositionTable rows = DispositionTable {
   dtRows = rows,
   dtIndex = insertDispositions rows omEmpty,
   dtInheritors = omEmpty,
+  dtIfaceSuperCounts = omEmpty,
 }
 
 -- The producer's builder: each row with its instance's shape and its interface's
--- word (`route_key.ifaceWordOf`), which also fills the inheritor index.
+-- word (`route_key.ifaceWordOf`), which also fills the inheritor index, and each
+-- interface word with its direct superinterface count.
 export
 buildDispositionTableWithShapes : List (InstanceShape, String, MethodDisposition) ->
+  List (String, Int) ->
   DispositionTable
-buildDispositionTableWithShapes shaped =
+buildDispositionTableWithShapes shaped superCounts =
   let rows = map ((_, _, d) => d) shaped
   DispositionTable {
     dtRows = rows,
     dtIndex = insertDispositions rows omEmpty,
     dtInheritors = insertInheritors (reverseL shaped) omEmpty,
+    dtIfaceSuperCounts = insertSuperCounts superCounts omEmpty,
   }
+
+insertSuperCounts : List (String, Int) -> OrdMap Int -> OrdMap Int
+insertSuperCounts [] acc = acc
+insertSuperCounts ((word, n) :: rest) acc =
+  insertSuperCounts rest (omInsert word n acc)
+
+-- How many superinterface dictionaries a dictionary of the interface with word
+-- [ifaceWord] stores ahead of its `requires` dictionaries.  An interface the table
+-- does not know has none.
+export
+ifaceSuperCount : String -> DispositionTable -> Int
+ifaceSuperCount ifaceWord table =
+  optionOr 0 (omLookup ifaceWord table.dtIfaceSuperCounts)
 
 insertInheritors : List (InstanceShape, String, MethodDisposition) ->
   OrdMap (List InstanceShape) ->
@@ -169,6 +180,18 @@ export
 inheritorsOf : String -> String -> DispositionTable -> List InstanceShape
 inheritorsOf ifaceWord method table =
   optionOr [] (omLookup (slotKey ifaceWord method) table.dtInheritors)
+
+-- Every (interface slot, inheriting instance word) pair, slot by slot: the
+-- draft carrier's copy of the inherited-default rows.
+export
+inheritedDefaultSlots : DispositionTable -> List (String, String)
+inheritedDefaultSlots table =
+  flatMap
+    (slot => map (shape => (slot, shape.isWord)) (slotInheritors slot table))
+    (omKeys table.dtInheritors)
+
+slotInheritors : String -> DispositionTable -> List InstanceShape
+slotInheritors slot table = optionOr [] (omLookup slot table.dtInheritors)
 
 insertDispositions : List MethodDisposition ->
   OrdMap MethodDisposition ->
@@ -262,3 +285,10 @@ installedDispositions _ = match !dispositionsRef
 export
 installedDispositionsOpt : Unit -> Option DispositionTable
 installedDispositionsOpt _ = !dispositionsRef
+
+-- Put back a table read with `installedDispositionsOpt`, for a driver that
+-- elaborates a program it derived from the user's and must leave the user's own
+-- elaboration's table installed for the engine that runs next.
+export
+restoreDispositions : Option DispositionTable -> Unit
+restoreDispositions saved = dispositionsRef := saved

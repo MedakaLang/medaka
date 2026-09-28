@@ -1,5 +1,5 @@
 # META
-source_lines=244
+source_lines=248
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -210,8 +210,8 @@ public export data CBind = CBind String (List CClause)
 public export data CClause = CClause (List Pat) CExpr
 
 -- ── typeclass impls (slice 5) ───────────────────────────────────────────────
--- A lowered typeclass method binding — one impl-method clause, or one interface
--- default specialized for one instance.  The dispatch decision (concrete type-head
+-- A lowered typeclass method binding — one impl-method clause, or one instance's
+-- entry for an interface default it inherits.  The dispatch decision (concrete type-head
 -- tag, dispatch positions, specificity score) is computed at lowering time from the
 -- AST's iface + impl decls — exactly as eval.mdk's `declImplEntries` does — so the IR
 -- stays Ty-free; only the method body is lowered to `CExpr`.  core_ir_eval turns each
@@ -230,10 +230,14 @@ public export data CClause = CClause (List Pat) CExpr
 --     (`types/disposition.mdk`): the interface word (`route_key.ifaceWordOf`,
 --     the same word the instance's key carries in its first field), the
 --     instance's head tag and canonical key, the dispatch positions, and the
---     default's patterns and body with its receiver evidence already rewritten
---     to this instance's route.  It dispatches exactly like the instance's own
---     `CImplTagged` entries; an engine never chooses between two defaults,
---     because every inherited slot has its own entry.
+--     default's body specialized to the instance (`core_ir_lower.specializeRow`:
+--     a call on the receiver to another method of the interface goes straight to
+--     the instance's own entry).  Its parameters are the default's method-level
+--     dictionaries, then the RECEIVER -- the dictionary that selected this entry,
+--     which every engine passes where a supplied method takes its instance's
+--     `requires` -- then the value arguments.  It dispatches exactly like
+--     the instance's own `CImplTagged` entries; an engine never chooses between two
+--     defaults, because every inherited slot has its own entry.
 public export data CImplEntry = CImplEntry String Int CImplBody
 public export data CImplBody =
   | CImplTagged String String String (List Int) (List Pat) CExpr

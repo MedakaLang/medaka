@@ -30,14 +30,12 @@ import types.typecheck.{
 import backend.private_mangle.{mangleUnitsEv}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
-  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
   EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
-  methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
   validateFfiExternTypeNames,
@@ -84,7 +82,7 @@ emitIsolation runtimePath pPath pPlusUPath =
 -- both, so an ambient Record mode leak changes the second observation to exit 0.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
-  let input = makeEmitInput [] [] [] [] [] [] False False 0 [] [] "" [] [] []
+  let input = makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] []
   let cp =
     CProgram [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])]] [] [] []
   let (_, gaps) = emitProgramRecord input cp
@@ -112,7 +110,6 @@ runEmit runtimeDecls preludeDecls userDecls =
       (returnsSelfTable mangled)
       (selfFnParamTable mangled)
       (methodIfaceTable mangled)
-      (methodConstraintIfaces mangled)
       (ctorFieldTypeNames mangled)
       (declSigTypeNames runtimeDecls ++ declSigTypeNames mangled)
       (mainTypeIsUnit ())
@@ -123,5 +120,4 @@ runEmit runtimeDecls preludeDecls userDecls =
       ""
       (declaredRecordFieldOrders mangled)
       (validateFfiExternTypeNames (checkedFfiExternTypeNames mangled))
-      (ifaceImplHeadTable mangled)
   emitProgram input (lowerProgramEmit TargetNative mangled)

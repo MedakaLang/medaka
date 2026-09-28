@@ -1,5 +1,5 @@
 # META
-source_lines=302
+source_lines=308
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the Core IR (STAGE2-DESIGN §2.1).  Mirrors
@@ -71,9 +71,13 @@ faithfulSexpMode = SexpMode { faithfulRoutes = True }
 export
 routeSexp : SexpMode -> Route -> String
 routeSexp _ RNone = "RNone"
-routeSexp m (RKey k ds) =
+routeSexp m (RKey k ds sups) =
   if m.faithfulRoutes then
-    node "RKey" [escStr k, slist (map (routeSexp m) ds)]
+    node "RKey" [
+      escStr k,
+      slist (map (routeSexp m) ds),
+      slist (map (routeSexp m) sups),
+    ]
   else
     node "RKey" [escStr k]
 routeSexp _ (RDict d) = node "RDict" [escStr d]
@@ -94,6 +98,8 @@ routeSexp m (RLocal s ds) =
   else
     node "RLocal" [escStr s]
 routeSexp _ (RScalar s) = node "RScalar" [escStr s]
+routeSexp m (RProj r path) =
+  node "RProj" (routeSexp m r :: map intToString path)
 
 -- ── CExpr ─────────────────────────────────────────────────────────────────────
 
@@ -319,12 +325,13 @@ cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls) = node
 (DFunDef false "faithfulSexpMode" () (ERecordCreate "SexpMode" ((fa "faithfulRoutes" (EVar "True")))))
 (DTypeSig true "routeSexp" (TyFun (TyCon "SexpMode") (TyFun (TyCon "Route") (TyCon "String"))))
 (DFunDef false "routeSexp" (PWild (PCon "RNone")) (ELit (LString "RNone")))
-(DFunDef false "routeSexp" ((PVar "m") (PCon "RKey" (PVar "k") (PVar "ds"))) (EIf (EFieldAccess (EVar "m") "faithfulRoutes") (EApp (EApp (EVar "node") (ELit (LString "RKey"))) (EListLit (EApp (EVar "escStr") (EVar "k")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "ds"))))) (EApp (EApp (EVar "node") (ELit (LString "RKey"))) (EListLit (EApp (EVar "escStr") (EVar "k"))))))
+(DFunDef false "routeSexp" ((PVar "m") (PCon "RKey" (PVar "k") (PVar "ds") (PVar "sups"))) (EIf (EFieldAccess (EVar "m") "faithfulRoutes") (EApp (EApp (EVar "node") (ELit (LString "RKey"))) (EListLit (EApp (EVar "escStr") (EVar "k")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "ds"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "sups"))))) (EApp (EApp (EVar "node") (ELit (LString "RKey"))) (EListLit (EApp (EVar "escStr") (EVar "k"))))))
 (DFunDef false "routeSexp" (PWild (PCon "RDict" (PVar "d"))) (EApp (EApp (EVar "node") (ELit (LString "RDict"))) (EListLit (EApp (EVar "escStr") (EVar "d")))))
 (DFunDef false "routeSexp" (PWild (PCon "RDictFwd" (PVar "d"))) (EApp (EApp (EVar "node") (ELit (LString "RDictFwd"))) (EListLit (EApp (EVar "escStr") (EVar "d")))))
 (DFunDef false "routeSexp" ((PVar "m") (PCon "RLocal" (PLit (LString "")) (PVar "ds"))) (EIf (EFieldAccess (EVar "m") "faithfulRoutes") (EApp (EApp (EVar "node") (ELit (LString "RLocal"))) (EListLit (EApp (EVar "escStr") (ELit (LString ""))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "ds"))))) (ELit (LString "RLocal"))))
 (DFunDef false "routeSexp" ((PVar "m") (PCon "RLocal" (PVar "s") (PVar "ds"))) (EIf (EFieldAccess (EVar "m") "faithfulRoutes") (EApp (EApp (EVar "node") (ELit (LString "RLocal"))) (EListLit (EApp (EVar "escStr") (EVar "s")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "ds"))))) (EApp (EApp (EVar "node") (ELit (LString "RLocal"))) (EListLit (EApp (EVar "escStr") (EVar "s"))))))
 (DFunDef false "routeSexp" (PWild (PCon "RScalar" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "RScalar"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
+(DFunDef false "routeSexp" ((PVar "m") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "node") (ELit (LString "RProj"))) (EBinOp "::" (EApp (EApp (EVar "routeSexp") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "map") (EVar "intToString")) (EVar "path")))))
 (DTypeSig true "cexprSexp" (TyFun (TyCon "SexpMode") (TyFun (TyCon "CExpr") (TyCon "String"))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CLit" (PVar "l"))) (EApp (EApp (EVar "node") (ELit (LString "CLit"))) (EListLit (EApp (EVar "litSexp") (EVar "l")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "node") (ELit (LString "CVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")) (EApp (EVar "addrSexp") (EVar "addr")))))
@@ -415,12 +422,13 @@ cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls) = node
 (DFunDef false "faithfulSexpMode" () (ERecordCreate "SexpMode" ((fa "faithfulRoutes" (EVar "True")))))
 (DTypeSig true "routeSexp" (TyFun (TyCon "SexpMode") (TyFun (TyCon "Route") (TyCon "String"))))
 (DFunDef false "routeSexp" (PWild (PCon "RNone")) (ELit (LString "RNone")))
-(DFunDef false "routeSexp" ((PVar "m") (PCon "RKey" (PVar "k") (PVar "ds"))) (EIf (EFieldAccess (EVar "m") "faithfulRoutes") (EApp (EApp (EVar "node") (ELit (LString "RKey"))) (EListLit (EApp (EVar "escStr") (EVar "k")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "ds"))))) (EApp (EApp (EVar "node") (ELit (LString "RKey"))) (EListLit (EApp (EVar "escStr") (EVar "k"))))))
+(DFunDef false "routeSexp" ((PVar "m") (PCon "RKey" (PVar "k") (PVar "ds") (PVar "sups"))) (EIf (EFieldAccess (EVar "m") "faithfulRoutes") (EApp (EApp (EVar "node") (ELit (LString "RKey"))) (EListLit (EApp (EVar "escStr") (EVar "k")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "ds"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "sups"))))) (EApp (EApp (EVar "node") (ELit (LString "RKey"))) (EListLit (EApp (EVar "escStr") (EVar "k"))))))
 (DFunDef false "routeSexp" (PWild (PCon "RDict" (PVar "d"))) (EApp (EApp (EVar "node") (ELit (LString "RDict"))) (EListLit (EApp (EVar "escStr") (EVar "d")))))
 (DFunDef false "routeSexp" (PWild (PCon "RDictFwd" (PVar "d"))) (EApp (EApp (EVar "node") (ELit (LString "RDictFwd"))) (EListLit (EApp (EVar "escStr") (EVar "d")))))
 (DFunDef false "routeSexp" ((PVar "m") (PCon "RLocal" (PLit (LString "")) (PVar "ds"))) (EIf (EFieldAccess (EVar "m") "faithfulRoutes") (EApp (EApp (EVar "node") (ELit (LString "RLocal"))) (EListLit (EApp (EVar "escStr") (ELit (LString ""))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "ds"))))) (ELit (LString "RLocal"))))
 (DFunDef false "routeSexp" ((PVar "m") (PCon "RLocal" (PVar "s") (PVar "ds"))) (EIf (EFieldAccess (EVar "m") "faithfulRoutes") (EApp (EApp (EVar "node") (ELit (LString "RLocal"))) (EListLit (EApp (EVar "escStr") (EVar "s")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "ds"))))) (EApp (EApp (EVar "node") (ELit (LString "RLocal"))) (EListLit (EApp (EVar "escStr") (EVar "s"))))))
 (DFunDef false "routeSexp" (PWild (PCon "RScalar" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "RScalar"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
+(DFunDef false "routeSexp" ((PVar "m") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "node") (ELit (LString "RProj"))) (EBinOp "::" (EApp (EApp (EVar "routeSexp") (EVar "m")) (EVar "r")) (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EVar "path")))))
 (DTypeSig true "cexprSexp" (TyFun (TyCon "SexpMode") (TyFun (TyCon "CExpr") (TyCon "String"))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CLit" (PVar "l"))) (EApp (EApp (EVar "node") (ELit (LString "CLit"))) (EListLit (EApp (EVar "litSexp") (EVar "l")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "node") (ELit (LString "CVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")) (EApp (EVar "addrSexp") (EVar "addr")))))

@@ -1,0 +1,25 @@
+CASE: a default declared in one module (`shape.Show2.showTwice`) inherited by an
+      instance declared in another (`box`'s `Show2 (Box a) requires Show2 a`).
+      The default's body calls the instance's supplied `show2`, which reads the
+      instance's `requires` dictionary; the call is made at a concrete type, at a
+      nested type, and through a dictionary parameter (`pair`).
+OWNS: nothing. Regression guard for cross-module inherited defaults with
+      `requires` on the typed Core-IR evaluator (`cevalModules`).
+
+── HOW THE EXPECTED VALUE WAS ESTABLISHED ────────────────────────────────────
+
+Derived from the semantics before any arm was run:
+
+  show2 (Box 7)          = "<" ++ show2 7 ++ ">"          = "<7>"
+  showTwice (Box 7)      = show2 (Box 7) ++ show2 (Box 7)  = "<7><7>"
+  show2 (Box (Box 1))    = "<" ++ "<1>" ++ ">"             = "<<1>>"
+  showTwice (Box (Box 1))                                  = "<<1>><<1>>"
+  pair (Box 2)           = showTwice (Box 2)               = "<2><2>"
+
+  -> <7><7>|<<1>><<1>>|<2><2>, in BOTH import orders.
+
+── UNTYPED ARMS ───────────────────────────────────────────────────────────────
+
+The untyped module drivers carry no default mechanism (only elaboration knows
+which instance inherits which default), so both entries are pinned
+(`main_perm*.untyped.txt`) to what they print, not ledgered.

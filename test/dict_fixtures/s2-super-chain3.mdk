@@ -1,0 +1,18 @@
+-- Multi-level super chain: Top requires Mid requires Base. A `Top a =>` function
+-- reaches base (path [0,0,0]) and mid (path [0,0]) through the one declared dict.
+-- Expected value: 321 (base=1, mid=20, top=300). Spec arity of useTop: 1 dict + 1 value.
+interface Base a where
+  base : a -> Int
+interface Mid a requires Base a where
+  mid : a -> Int
+interface Top a requires Mid a where
+  top : a -> Int
+impl Base Int where
+  base _ = 1
+impl Mid Int where
+  mid _ = 20
+impl Top Int where
+  top _ = 300
+useTop : Top a => a -> Int
+useTop x = top x + mid x + base x
+main = println (useTop (0 : Int))

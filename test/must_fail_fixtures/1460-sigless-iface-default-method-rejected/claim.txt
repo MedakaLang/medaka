@@ -18,7 +18,6 @@ what: "Hello World").
 cmd: check-json main.mdk
 exit: 1
 diag-code: T-IMPL-TOO-SPECIFIC 2:13-2:21
-diag-code: T-IMPL-TOO-SPECIFIC 2:13-2:21
 diag-code: T-AMBIGUOUS-INSTANCE 7:7-7:14
 diag-code: T-PHANTOM-METHOD 2:13-2:21
 control: check-json control.mdk
@@ -27,8 +26,8 @@ why-verb: `diag-code:` rather than `diag:` per docs/ops/TESTING-DESIGN.md 4.5. T
 why-verb: two T-IMPL-TOO-SPECIFIC messages are ~90 words each and embed a whole
 why-verb: paragraph of prose about effect rows -- pinning that text would drain this
 why-verb: row the day anybody rewords a diagnostic, an event with no relation to
-why-verb: #1460. The SET of four codes is the defect (a construct that cannot be
-why-verb: written, reported four times, never naming the missing signature); the
+why-verb: #1460. The SET of codes is the defect (a construct that cannot be
+why-verb: written, reported several times, never naming the missing signature); the
 why-verb: exact prose is not.
 why-diag-code: THE RANGES ARE LINE-SENSITIVE. `2:13-2:21` is 0-based, i.e. main.mdk's
 why-diag-code: human line 3 (`  helloI x = "Hello " ++ nameI x`), columns 14-22 human
@@ -53,6 +52,12 @@ why-note: EITHER outcome moves the pinned code+range list and reddens this row; 
 why-note: fixer reads this note, closes #1460 and deletes the fixture. What the pin
 why-note: asserts is only that TODAY the author gets four diagnostics about a type
 why-note: variable named `_` they never wrote.
+why-note: RE-DERIVED, NOT DRAINED (#993 A2): the pin carried TWO T-IMPL-TOO-SPECIFIC
+why-note: codes, one from the default body and one from desugar's same-module COPY of it
+why-note: into `impl GreetI Int`.  That copy pass is retired (every default is now an
+why-note: inherited entry sharing one body), so the copy's code is gone and three
+why-note: codes remain -- still about a type variable `_` nobody wrote, still never
+why-note: naming the missing signature, so #1460 still reproduces.
 why-note: NOT the existing T-PHANTOM-METHOD fixtures' shape: those exercise a method
 why-note: whose WRITTEN type genuinely omits the interface parameter. Here there is
 why-note: no written type at all -- the parser's own placeholder is what fails the

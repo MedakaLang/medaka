@@ -1,0 +1,20 @@
+-- §3 improvement runs before §6.3 defaulting.  `dbl b > 4` at `Box Float`
+-- poses `Get (Box Float) e`, `Num e` and `Ord e`, with the literal `4` at
+-- `e`.  The only instance `Get (Box a) a` fixes `e = Float` before the group
+-- defaults, so `e` is never defaulted to Int.
+-- Hand-derived: dbl (Box 1.5) = 3.0, and 3.0 > 4 is false, so "small".
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+dbl : (Get c e, Num e) => c -> e
+dbl b = get b + get b
+
+classify : Box Float -> String
+classify b = if dbl b > 4 then "big" else "small"
+
+main = println (classify (Box 1.5))

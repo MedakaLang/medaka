@@ -249,11 +249,12 @@ refsE (CDict name routes) = name :: flatMap refsRoute routes
 -- carry an RLocal, so recurse.
 refsRoute : Route -> List String
 refsRoute RNone = []
-refsRoute (RKey _ reqs) = flatMap refsRoute reqs
+refsRoute (RKey _ reqs sups) = flatMap refsRoute (reqs ++ sups)
 refsRoute (RDict _) = []
 refsRoute (RDictFwd _) = []
 refsRoute (RLocal sym reqs) = sym :: flatMap refsRoute reqs
 refsRoute (RScalar _) = []
+refsRoute (RProj r _) = refsRoute r
 
 refsBind : CBind -> List String
 refsBind (CBind _ clauses) = flatMap refsClause clauses

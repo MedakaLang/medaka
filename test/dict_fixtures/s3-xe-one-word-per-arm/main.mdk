@@ -1,0 +1,14 @@
+-- #1403 X-E.C structural exit: two interfaces' defaults for one method spelling at
+-- one type, each reached through a dictionary.  `Dog` inherits `speak` from BOTH
+-- `Speak` and `Greet`; `Cat` supplies `Speak`'s.  Every dictionary word is the
+-- selected instance's canonical key, so each dispatcher arm is one comparison.
+--
+-- HAND-DERIVED FROM THE SPEC: `viaA Dog` runs Speak's default, `viaB Dog` Greet's,
+-- `viaA Cat` Cat's own method.
+-- EXPECTED: A-default|B-default|meow
+import ca.{viaA}
+import cb.{viaB}
+import pets.{Dog(..), Cat(..)}
+
+main : <IO> Unit
+main = putStrLn (viaA Dog ++ "|" ++ viaB Dog ++ "|" ++ viaA Cat)

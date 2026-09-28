@@ -49,8 +49,8 @@ All seams are in `compiler/types/typecheck.mdk` (~11k lines).
    Two shapes: *unresolved-var* cascades (errored node's result is a free var →
    kill with a **poisoned-var set**) and *concrete-result* cascades
    (`record_missing_field`: result is concrete `Person` → needs **per-node
-   snapshot-restore**). Precedent already exists: `inferDefaultMethodBody`
-   (~L8090-8104) snapshots `pendingImplObligations` and restores on error to
+   snapshot-restore**). Precedent already exists: `checkMethodBodyAgainst`
+   (default kind) snapshots `pendingImplObligations` and restores on error to
    drop a spurious cascade. Generalize that pattern.
 
 ## Fork 1 — RESOLVED (was a false alarm; the blocker does not exist)

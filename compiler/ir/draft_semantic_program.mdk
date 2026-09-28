@@ -6,8 +6,8 @@
 -- install* hooks while the authoritative identity/type/call/evidence producers
 -- are still landing. Physical emitters must not import this module.
 
-import frontend.ast.{Decl}
-import ir.core_ir.{CProgram(..)}
+import frontend.ast.{Decl, EvEntry(..), EvId(..), EvVal(..), Route}
+import ir.core_ir.{CProgram(..), CImplEntry(..), CImplBody(..)}
 import ir.core_ir_lower.{
   lowerProgramEmit,
   EmitTarget(..),
@@ -18,10 +18,14 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declSigTypeNames,
 }
-import ir.core_ir_sexp.{cprogramToSexp}
+import ir.core_ir_sexp.{cprogramToSexp, faithfulSexpMode, routeSexp}
 import ir.dce.{dceFilter}
 import ir.sexp.{boolStr, node, slist}
-import support.util.{escStr, listLen}
+import support.util.{allList, escStr, listLen, sortUniqS}
+import types.disposition.{
+  installedDispositionsOpt, inheritedDefaultSlots, slotKey
+}
+import types.route_key.{installedEvidenceEntries, evDictRoutes, evMethodRoutes}
 
 -- Provenance is typed rather than free-form so producer changes move the draft
 -- schema instead of silently changing a comment or diagnostic string.
@@ -52,6 +56,7 @@ public export data DraftPopulation =
   | PopulationElaboratedGraph
   | PopulationRuntimeAndGraph
   | PopulationEntryScheme
+  | PopulationInstalledTable
   deriving (Eq, Debug)
 
 public export data DraftObservation a =
@@ -98,7 +103,7 @@ public export data DraftReceipt =
 -- current Medaka, and this migration carrier must not add another collision
 -- surface while owner-qualified FieldId is still pending.
 public export data DraftSemanticProgram =
-  | DraftSemanticProgram (DraftObservation (List Decl)) (DraftObservation (List Decl)) (DraftObservation (List DraftModule)) (DraftObservation CProgram) (DraftObservation (List (DraftRows ((String, String), Bool)))) (DraftObservation (List (DraftRows ((String, String), List Int)))) (DraftObservation (List (DraftRows (String, (String, String, Int))))) (DraftObservation (List (DraftRows (String, List String)))) (DraftObservation (List (DraftRows (String, List String)))) (DraftObservation (List (DraftRows (String, (List String, String))))) (DraftObservation Bool) (DraftObservation Bool) (List DraftPending)
+  | DraftSemanticProgram (DraftObservation (List Decl)) (DraftObservation (List Decl)) (DraftObservation (List DraftModule)) (DraftObservation CProgram) (DraftObservation (List (DraftRows ((String, String), Bool)))) (DraftObservation (List (DraftRows ((String, String), List Int)))) (DraftObservation (List (DraftRows (String, (String, String, Int))))) (DraftObservation (List (DraftRows (String, List String)))) (DraftObservation (List (DraftRows (String, List String)))) (DraftObservation (List (DraftRows (String, (List String, String))))) (DraftObservation Bool) (DraftObservation Bool) (DraftObservation (List EvEntry)) (DraftObservation (List (String, String))) (List DraftPending)
 
 moduleOf : (String, List Decl) -> DraftModule
 moduleOf (mid, decls) = DraftModule mid decls
@@ -120,11 +125,6 @@ pendingFacts = [
     "X-I.P and #1115",
   DraftPending FactRuntimeTypes ProducerRuntimeTypes "X-T.P / #353",
   DraftPending FactCallShapes ProducerCallShapes "X-C.P / #1318 -> #1137",
-  DraftPending FactEvidence ProducerEvidence "X-E.P / #993, #1113, #1082",
-  DraftPending
-    FactMethodDispositions
-    ProducerMethodDispositions
-    "X-E.P / A-3 #1112",
   DraftPending
     FactCapabilityManifest
     ProducerCapabilityManifest
@@ -182,7 +182,20 @@ buildDraftSemanticProgram runtimeDecls coreD modules mainIsUnit mainIsFloat =
       (rowsFor declSigTypeNames sigMods))
     (DraftObservation ProducerMainScheme PopulationEntryScheme mainIsUnit)
     (DraftObservation ProducerMainScheme PopulationEntryScheme mainIsFloat)
+    (DraftObservation
+      ProducerEvidence
+      PopulationInstalledTable
+      (installedEvidenceEntries ()))
+    (DraftObservation
+      ProducerMethodDispositions
+      PopulationInstalledTable
+      (installedInheritedSlots ()))
     pendingFacts
+
+installedInheritedSlots : Unit -> List (String, String)
+installedInheritedSlots _ = match installedDispositionsOpt ()
+  Some table => inheritedDefaultSlots table
+  None => []
 
 flattenRows : List (DraftRows a) -> List a
 flattenRows [] = []
@@ -235,8 +248,9 @@ compareDraftSemanticProgram : DraftSemanticProgram ->
   Bool ->
   Bool ->
   List DraftReceipt
-compareDraftSemanticProgram (DraftSemanticProgram (DraftObservation runtimeProducer runtimePopulation draftRuntime) (DraftObservation coreProducer corePopulation draftCore) (DraftObservation modulesProducer modulesPopulation draftModules) (DraftObservation legacyCoreProducer legacyCorePopulation draftLegacyCore) (DraftObservation returnsSelfProducer returnsSelfPopulation draftReturnsSelf) (DraftObservation selfFnProducer selfFnPopulation draftSelfFnParams) (DraftObservation methodIfaceProducer methodIfacePopulation draftMethodIface) (DraftObservation methodConstraintsProducer methodConstraintsPopulation draftMethodConstraints) (DraftObservation ctorFieldsProducer ctorFieldsPopulation draftCtorFieldTypes) (DraftObservation declSigsProducer declSigsPopulation draftDeclSigTypes) (DraftObservation mainUnitProducer mainUnitPopulation draftMainIsUnit) (DraftObservation mainFloatProducer mainFloatPopulation draftMainIsFloat) _) runtimeDecls coreD modules mainIsUnit mainIsFloat =
+compareDraftSemanticProgram (DraftSemanticProgram (DraftObservation runtimeProducer runtimePopulation draftRuntime) (DraftObservation coreProducer corePopulation draftCore) (DraftObservation modulesProducer modulesPopulation draftModules) (DraftObservation legacyCoreProducer legacyCorePopulation draftLegacyCore) (DraftObservation returnsSelfProducer returnsSelfPopulation draftReturnsSelf) (DraftObservation selfFnProducer selfFnPopulation draftSelfFnParams) (DraftObservation methodIfaceProducer methodIfacePopulation draftMethodIface) (DraftObservation methodConstraintsProducer methodConstraintsPopulation draftMethodConstraints) (DraftObservation ctorFieldsProducer ctorFieldsPopulation draftCtorFieldTypes) (DraftObservation declSigsProducer declSigsPopulation draftDeclSigTypes) (DraftObservation mainUnitProducer mainUnitPopulation draftMainIsUnit) (DraftObservation mainFloatProducer mainFloatPopulation draftMainIsFloat) (DraftObservation evidenceProducer evidencePopulation draftEvidence) (DraftObservation dispositionsProducer dispositionsPopulation draftDispositions) _) runtimeDecls coreD modules mainIsUnit mainIsFloat =
   let allDecls = dceFilter (coreD ++ flatMap snd modules)
+  let legacyCore = lowerProgramEmit TargetBothUnknown allDecls
   [
     receipt
       FactRuntimeProjection
@@ -279,8 +293,7 @@ compareDraftSemanticProgram (DraftSemanticProgram (DraftObservation runtimeProdu
           PopulationPostDceEmitCore
           legacyCoreProducer
           legacyCorePopulation
-        && cprogramToSexp draftLegacyCore
-          == cprogramToSexp (lowerProgramEmit TargetBothUnknown allDecls)),
+        && cprogramToSexp draftLegacyCore == cprogramToSexp legacyCore),
     receipt
       FactReturnsSelf
       ProducerReturnsSelfTable
@@ -363,7 +376,62 @@ compareDraftSemanticProgram (DraftSemanticProgram (DraftObservation runtimeProdu
           mainFloatProducer
           mainFloatPopulation
         && draftMainIsFloat == mainIsFloat),
+    receipt
+      FactEvidence
+      ProducerEvidence
+      PopulationInstalledTable
+      (observationMetadataMatches
+          ProducerEvidence
+          PopulationInstalledTable
+          evidenceProducer
+          evidencePopulation
+        && allEntriesAnswered draftEvidence),
+    receipt
+      FactMethodDispositions
+      ProducerMethodDispositions
+      PopulationInstalledTable
+      (observationMetadataMatches
+          ProducerMethodDispositions
+          PopulationInstalledTable
+          dispositionsProducer
+          dispositionsPopulation
+        && slotRowKeys draftDispositions == loweredDefaultRowKeys legacyCore),
   ]
+
+-- The engines read evidence through the accessors, so each copied entry is
+-- compared with what its accessor answers for its id.  An `EvOne` has no engine
+-- reader and compares as itself.
+allEntriesAnswered : List EvEntry -> Bool
+allEntriesAnswered entries = allList entryAnswered entries
+
+entryAnswered : EvEntry -> Bool
+entryAnswered (EvEntry id (EvMany routes)) =
+  routesText (evDictRoutes id) == routesText routes
+entryAnswered (EvEntry id (EvMethod iface arity route impls meths)) =
+  let (iface2, arity2, route2, impls2, meths2) = evMethodRoutes id
+  iface2 == iface
+    && arity2 == arity
+    && routesText [route2] == routesText [route]
+    && routesText impls2 == routesText impls
+    && routesText meths2 == routesText meths
+entryAnswered (EvEntry _ (EvOne _)) = True
+
+routesText : List Route -> String
+routesText routes = slist (map (routeSexp faithfulSexpMode) routes)
+
+-- The legacy answer to "which instances inherit which default": the per-instance
+-- entries lowering hands the engines.  Compared as sets of `slot\ninstance` keys.
+loweredDefaultRowKeys : CProgram -> List String
+loweredDefaultRowKeys (CProgram _ _ _ impls) =
+  sortUniqS (flatMap defaultEntryRowKey impls)
+
+defaultEntryRowKey : CImplEntry -> List String
+defaultEntryRowKey (CImplEntry method _ (CImplDefault ifaceWord _ key _ _ _)) =
+  ["\{slotKey ifaceWord method}\n\{key}"]
+defaultEntryRowKey _ = []
+
+slotRowKeys : List (String, String) -> List String
+slotRowKeys rows = sortUniqS (map ((slot, word) => "\{slot}\n\{word}") rows)
 
 dropFirstRows : List (DraftRows a) -> List (DraftRows a)
 dropFirstRows [] = []
@@ -375,7 +443,7 @@ dropFirstRows ((DraftRows mid (_ :: rows)) :: rest) = DraftRows mid rows :: rest
 -- migration; this named helper keeps the probe's malformed-field control small.
 export
 draftWithoutFirstMethodIface : DraftSemanticProgram -> DraftSemanticProgram
-draftWithoutFirstMethodIface (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation producer population methodIface) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending) =
+draftWithoutFirstMethodIface (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation producer population methodIface) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat evidence dispositions pending) =
   DraftSemanticProgram
     runtimeD
     coreD
@@ -389,13 +457,68 @@ draftWithoutFirstMethodIface (DraftSemanticProgram runtimeD coreD modules legacy
     declSigTypes
     mainIsUnit
     mainIsFloat
+    evidence
+    dispositions
     pending
+
+-- Test-only negative seams for the two installed-table facts: a copy missing an
+-- inherited-default row, and a copy whose first method occurrence claims one more
+-- argument than it was published with.  Each must compare DIFFERENT.
+export
+draftWithoutFirstDisposition : DraftSemanticProgram -> DraftSemanticProgram
+draftWithoutFirstDisposition (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams methodIface methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat evidence (DraftObservation producer population rows) pending) =
+  DraftSemanticProgram
+    runtimeD
+    coreD
+    modules
+    legacyCore
+    returnsSelf
+    selfFnParams
+    methodIface
+    methodConstraints
+    ctorFieldTypes
+    declSigTypes
+    mainIsUnit
+    mainIsFloat
+    evidence
+    (DraftObservation producer population (dropFirst rows))
+    pending
+
+export
+draftWithSkewedMethodEvidence : DraftSemanticProgram -> DraftSemanticProgram
+draftWithSkewedMethodEvidence (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams methodIface methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat (DraftObservation producer population entries) dispositions pending) =
+  DraftSemanticProgram
+    runtimeD
+    coreD
+    modules
+    legacyCore
+    returnsSelf
+    selfFnParams
+    methodIface
+    methodConstraints
+    ctorFieldTypes
+    declSigTypes
+    mainIsUnit
+    mainIsFloat
+    (DraftObservation producer population (skewFirstMethod entries))
+    dispositions
+    pending
+
+dropFirst : List a -> List a
+dropFirst [] = []
+dropFirst (_ :: rest) = rest
+
+skewFirstMethod : List EvEntry -> List EvEntry
+skewFirstMethod [] = []
+skewFirstMethod ((EvEntry id (EvMethod iface arity route impls meths)) :: rest) =
+  EvEntry id (EvMethod iface (arity + 1) route impls meths) :: rest
+skewFirstMethod (e :: rest) = e :: skewFirstMethod rest
 
 -- Provenance is part of the compared field, not decorative output.
 export
 draftWithWrongMethodIfaceProvenance : DraftSemanticProgram ->
   DraftSemanticProgram
-draftWithWrongMethodIfaceProvenance (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation _ _ methodIface) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending) =
+draftWithWrongMethodIfaceProvenance (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation _ _ methodIface) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat evidence dispositions pending) =
   DraftSemanticProgram
     runtimeD
     coreD
@@ -409,6 +532,8 @@ draftWithWrongMethodIfaceProvenance (DraftSemanticProgram runtimeD coreD modules
     declSigTypes
     mainIsUnit
     mainIsFloat
+    evidence
+    dispositions
     pending
 
 producerSexp : DraftProducer -> String
@@ -437,6 +562,7 @@ populationSexp PopulationPostDceEmitCore = "post-dce-emit-core"
 populationSexp PopulationElaboratedGraph = "elaborated-graph"
 populationSexp PopulationRuntimeAndGraph = "runtime-and-elaborated-graph"
 populationSexp PopulationEntryScheme = "entry-scheme"
+populationSexp PopulationInstalledTable = "installed-table"
 
 factSexp : DraftFact -> String
 factSexp FactRuntimeProjection = "runtime-emitter-projection"
@@ -513,6 +639,10 @@ rowsObservationSexp : DraftObservation (List (DraftRows a)) -> String
 rowsObservationSexp (DraftObservation producer population rows) =
   observationSexp producer population (rowsSummary rows)
 
+listObservationSexp : DraftObservation (List a) -> String
+listObservationSexp (DraftObservation producer population rows) =
+  observationSexp producer population (intToString (listLen rows))
+
 boolObservationSexp : DraftObservation Bool -> String
 boolObservationSexp (DraftObservation producer population value) =
   observationSexp producer population (boolStr value)
@@ -529,7 +659,7 @@ differentCount (_ :: rest) = differentCount rest
 -- full prelude-sized CProgram into a second golden family.
 export
 draftSemanticProgramToSexp : DraftSemanticProgram -> List DraftReceipt -> String
-draftSemanticProgramToSexp (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams methodIface methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending) receipts = node
+draftSemanticProgramToSexp (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams methodIface methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat evidence dispositions pending) receipts = node
   "DraftSemanticProgram"
   [
     node "runtime" [declObservationSexp runtimeD],
@@ -544,6 +674,8 @@ draftSemanticProgramToSexp (DraftSemanticProgram runtimeD coreD modules legacyCo
     node "decl-sig-types" [rowsObservationSexp declSigTypes],
     node "main-is-unit" [boolObservationSexp mainIsUnit],
     node "main-is-float" [boolObservationSexp mainIsFloat],
+    node "evidence" [listObservationSexp evidence],
+    node "method-dispositions" [listObservationSexp dispositions],
     node "pending-facts" [slist (map pendingSexp pending)],
     node "transport-receipts" [slist (map receiptSexp receipts)],
     node "summary" [

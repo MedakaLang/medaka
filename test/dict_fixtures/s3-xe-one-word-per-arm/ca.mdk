@@ -1,0 +1,4 @@
+import ifa.{Speak(..), speak}
+
+export viaA : Speak a => a -> String
+viaA x = speak x

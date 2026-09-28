@@ -1,0 +1,32 @@
+-- Every default of `Ord` is inherited here (the impl supplies `compare` only), at an
+-- instance carrying `requires`, used at TWO element types in one module.  The shared
+-- default bodies read `compare` through the receiver, whose `requires` dictionary is
+-- the element's.  Hand-derived: (1,2) < (1,3); ("b","a") > ("a","z"); (2,2) <= (2,2);
+-- ("a","a") >= ("b","a") is false; min picks (2,9); max picks ("x","z"); `<` on two
+-- pairs takes `lt`.  Expected: True|True|True|False|2,9|x,z|False
+data Pair a = Pair a a
+impl Eq (Pair a) requires Eq a where
+  eq (Pair a1 b1) (Pair a2 b2) = eq a1 a2 && eq b1 b2
+impl Ord (Pair a) requires Ord a where
+  compare (Pair a1 b1) (Pair a2 b2) = match compare a1 a2
+    Eq => compare b1 b2
+    o => o
+showInts : Pair Int -> String
+showInts (Pair a b) = "\{debug a},\{debug b}"
+showStrs : Pair String -> String
+showStrs (Pair a b) = "\{a},\{b}"
+main =
+  println
+    (debug (lt (Pair (1 : Int) 2) (Pair 1 3))
+      ++ "|"
+      ++ debug (gt (Pair "b" "a") (Pair "a" "z"))
+      ++ "|"
+      ++ debug (lte (Pair (2 : Int) 2) (Pair 2 2))
+      ++ "|"
+      ++ debug (gte (Pair "a" "a") (Pair "b" "a"))
+      ++ "|"
+      ++ showInts (min (Pair 3 1) (Pair 2 9))
+      ++ "|"
+      ++ showStrs (max (Pair "x" "y") (Pair "x" "z"))
+      ++ "|"
+      ++ debug (Pair (1 : Int) 2 < Pair 1 1))

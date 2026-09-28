@@ -531,7 +531,12 @@ echo "  ok: scopes_test.mdk only observes OriginUnresolved"
 # #2549 nominal-given classification: these two tuple patterns ELIMINATE an
 # unresolved request/given origin, keeping the answer explicitly legacy. They
 # mint no identity and must not license unresolved semantic given evidence.
-tc_originun_allowed="(OriginUnresolved, _) => givenAnswerResidual g
+# `sameIfaceOrUnresolved`'s two arms are the same elimination on the tyvar-keyed
+# rung (#3527): with an unresolved side the interfaces can only be compared by
+# spelling; with both resolved the comparison is `sameIfaceDecl`.
+tc_originun_allowed="(OriginUnresolved, _) => a.irName == b.irName
+(OriginUnresolved, _) => givenAnswerResidual g
+(_, OriginUnresolved) => a.irName == b.irName
 (_, OriginUnresolved) => givenAnswerResidual g
 OriginUnresolved => \"<unresolved>\"
 OriginUnresolved => [TkBare NsIface ir.irName]
@@ -875,14 +880,14 @@ data PendingMethodDict = PendingMethodDict {
 registerReqSlots : ScopeId ->
   List (String, Mono) ->
   Int ->
-  List (Require, List Int) ->
+  List Require ->
   Unit
     psArgs = PSArgsKnown argMonos,
     psBoundIds = ids,
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
-expandPredicateSlots : List PredicateSlot -> List PredicateSlot
+dedupPredicateSlotEntry : (String, List PredicateSlot) ->
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
 && sameIfaceDecl request.prIface slot.psIface
 monoVecSameGiven requestArgs slotArgs
@@ -1063,7 +1068,7 @@ done || exit 1
 numeric_return_inst_body="$(sed -n '/^entailInst .*EKNumReturn/,/^entailInst .*EKNestedTop/p' "$predicate_slot_src")"
 numeric_return_inst_required='  let goals = predicate.predicateArguments
   match ieSelectRowByIface env predicate.predicateInterface goals
-      let route = RKey (methodRouteKeyForRow name env row) []
+      let route = RKey (rowRouteKey row) []
       let routes = implDictRoutesForRow encl useScope goals row'
 printf '%s\n' "$numeric_return_inst_required" | while IFS= read -r required; do
   if ! printf '%s\n' "$numeric_return_inst_body" | grep -Fq "$required"; then
@@ -1132,6 +1137,28 @@ done || exit 1
 # `SuperclassEvidence`), never a separately registered alias answering on its own.
 if grep -rqE 'LegacySuperclassAlias|LegacySuperAlias|ATLegacySuperclass' "$ROOT/compiler"; then
   echo "FAIL: a retired superclass-alias given kind is back; supers are projections of their given"
+  exit 1
+fi
+# #993/#679: a superinterface takes no dict slot of its own — a dictionary carries its
+# supers (`RKey`'s third list) and a given's super is its projection (`RProj`).  The
+# flat super-slot expansion and the per-instance super-word table are retired.  A2: an
+# inherited default receives its receiver as a real parameter of its row's entry, so
+# the per-instance receiver rebuild and desugar's same-module default copy are too.
+if grep -rqwE 'expandSupersTable|expandSupersVecs|expandFunPredicateSlots|expandPredicateSlots|userSuperLookup|userIfaceNamesRef|expandImplRequires|expandImplRequiresPaths|argExpandedImplReqRoutes|instanceSuperWords|isSuperWords|rrSuperWords|ReceiverRemap|receiverRemapRef|isDictWord|isSupers|fillImplDefaults' --include='*.mdk' "$ROOT/compiler"; then
+  echo "FAIL: a retired flat super-slot name is back; a dictionary carries its supers and a given's super is an RProj"
+  exit 1
+fi
+# #1403 X-E.C: a dictionary word is ALWAYS the selected instance's canonical key, so
+# no side re-derives a bare-vs-canonical verdict, no dispatcher arm ORs two words,
+# and no engine keeps a general-instance fall-through tier on the dictionary path.
+if grep -rqwE 'methodRouteKeyForRow|methodRouteKeyOfSelection|predicateRouteKeyForRow|routeWordFor|ieHeadCollidesByMethod|ieHeadCollidesByIface|ieCountHeadByMethod|ieCountHeadByIface|ifaceDeclHeadUnique|ifaceImplRouteKeys|declRouteKey|declHeadOfRouteWord|implEntryRouteWords|emitRouteWordMatch|emitRouteWordMatchOr|implEntryRouteKey|implEntryRouteKeyE|implEntryRouteKeyW|emitGeneralRKey|emitGeneralRKeyRef|isGeneralEntry|firstGeneralImplW|findByTagW|usedDictRouteKeys|implReqDictCount|implIsInheritedW|pickByTag|pickTagFallback|keyForSiteByIface' --include='*.mdk' "$ROOT/compiler"; then
+  echo "FAIL: a retired route-word hedge is back; a dictionary word is the selected instance's canonical key"
+  exit 1
+fi
+# The draft semantic carrier is a probe's input, never an engine's: no physical backend
+# or interpreter may read it.
+if grep -rlE '^import ir\.draft_semantic_program' "$ROOT/compiler/backend" "$ROOT/compiler/eval" >/dev/null 2>&1; then
+  echo "FAIL: a backend or eval module imports ir.draft_semantic_program"
   exit 1
 fi
 if [ "$(printf '%s\n' "$ordinary_return_solver_body" | grep -c 'ieSelectRowByIface')" -ne 1 ]; then
@@ -1242,9 +1269,9 @@ if grep -Fq 'recordArithSite :' "$predicate_slot_src"; then
   exit 1
 fi
 
-# Every numeric boundary supplies one explicit descriptor. All eight boundaries name
-# their ambiguity owner; method bodies capture it inside their own balanced inference
-# window. SCC defaulting remains explicitly unrestricted while its ambiguity channel owns
+# Every numeric boundary supplies one explicit descriptor. All seven boundaries name
+# their ambiguity owner; the one method-body driver captures it inside its own balanced
+# inference window. SCC defaulting remains explicitly unrestricted while its ambiguity channel owns
 # the just-exited level.
 numeric_boundaries='blockRecLet blockLet NumBoundaryOwnedMember
 blockLet inferRecordCreate NumBoundaryOwnedMember
@@ -1252,8 +1279,7 @@ inferRecLet registerLocalScheme NumBoundaryOwnedMember
 inferLetSimple inferLetBody NumBoundaryOwnedMember
 processLetGroup inferLetBinds NumBoundaryOwnedGroup
 processSCC sccSchemes NumBoundaryOwnedScc
-inferDefaultMethod instantiateNamedMonos NumBoundaryOwnedMethodBody
-inferImplMethodBody implBodyLoc NumBoundaryOwnedMethodBody'
+inferMethodBody openMethodBodyScope NumBoundaryOwnedMethodBody'
 printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
   require_typecheck_arm "$reader" "$next" 'finalizeNumBoundary'
   require_typecheck_arm "$reader" "$next" 'NumBoundary {'
@@ -1319,12 +1345,12 @@ printf '%s\n' "$ce_method_retired" | while IFS= read -r retired; do
 done || exit 1
 
 # Eval sizes an elaborated impl definition from its leading dictionary patterns and
-# registers both route words.  Interface declaration arity was a second, colliding
-# authority and must not return.
+# registers it under its instance's canonical key.  Interface declaration arity was a
+# second, colliding authority and must not return.
 eval_req_count_required='flatMap (implMethodReqCounts (installedDispositionsOpt ())) prog
 DImpl { iface, tys, methods, implOrigin, ... }
 let key = implRouteKeyWord implOrigin iface tys None
-[((mname, tag), count), ((mname, key), count)]
+((mname, key), leadingImplDictPats pats)
 leadingImplDictPats : List Pat -> Int'
 printf '%s\n' "$eval_req_count_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$eval_src"; then
@@ -1399,7 +1425,7 @@ if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
 fi
 
 operator_owner_required='stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
-argImplDictRoutesForEncl encl useScope dictName tag m goals,
+argImplDictRoutesForEncl encl useScope dictName tag subject goals,
 entailInst name m encl useScope tag (EKOp isBinop _) =
 (stampOpRouteVal isBinop encl useScope name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do

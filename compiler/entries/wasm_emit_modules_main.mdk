@@ -39,7 +39,6 @@ import types.typecheck.{
 }
 import ir.core_ir.{CProgram(..)}
 import ir.core_ir_lower.{
-  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
   EmitTarget(..),
@@ -87,7 +86,6 @@ emitTail runtimeDecls coreD modules2 =
       (mainTypeIsFloat ())
       (declaredRecordFieldOrders allDecls)
       (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-      (ifaceImplHeadTable allDecls)
   let lowered = lowerProgramEmit TargetWasm allDecls
   let filtered = wasmReachFilter lowered
   -- MEDAKA_STATS reporting hook (S5, #2359 closure): the S5 gate's "emitted-vs-

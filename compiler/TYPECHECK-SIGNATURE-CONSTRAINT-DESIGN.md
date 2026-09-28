@@ -169,10 +169,9 @@ hand:
     — the `methodSiteFns`/`dictAppFns` (marked run/build/loader) path; this is the
     *same* source `registerInferredConstraints` uses for unsigned members
     (3360–3363).
-- **Superclass closure** — `ifaceSupersOf superDeclsRef.value` (6460–6468) driven
-  by the same fixpoint shape as `expandSupersPairs` (3563–3572)/`superSlotOf`
-  (3588–3594), but **ungated** (the existing `expandSupersPairs` is gated to *user*
-  interfaces at `superSlotsOf` 3578–3584 via `userIfaceNamesRef`; the check must
+- **Superclass closure** — `ifaceSupersOf superDeclsRef.value` (6460–6468), ungated
+  (at proposal time the alternative, `expandSupersPairs`/`superSlotOf`, was gated
+  to *user* interfaces via a since-deleted `userIfaceNamesRef`; the check must
   include prelude supers like `Applicative requires Mappable`).
 
 **Composition.** Purely additive — it only *reads* refs already populated at 8961

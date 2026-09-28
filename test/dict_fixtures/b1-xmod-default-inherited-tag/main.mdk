@@ -1,33 +1,16 @@
--- B-2.2-b1 / ARCH B-2 (#1113): THE `keyForSite` NO-ROW ARM, WHICH IS THE ARM
--- `b1` MUST NOT BREAK.
---
--- `fillImplDefaults` is SAME-MODULE ONLY, so a method-less impl declared in a
--- module OTHER than the interface's carries an empty method list.  `keyForSite`'s
--- candidate scan requires method-name membership, so it never sees this impl and
--- answers `None`, and the caller's `optionOr tag (...)` supplies the bare head
--- tag `Box`.  That tag is not a hedge over a selector result: it is the ONLY
--- word the site reaches the inherited default's per-instance entry by
--- (`@mdk_default_<iface>_<method>_<instance key>`, filed under the instance's
--- head tag beside its supplied methods, so `implForSite` finds it at `Box`).
--- A `b1` that deleted `optionOr tag` -- which every
--- design document before RUN-P3-013 said it would -- breaks EVERY cross-module
--- default-inheritance call site in the tree, and this fixture is the pin for it.
+-- An impl that inherits every method, declared in a module OTHER than its
+-- interface's.  Its site selects the instance and routes on the instance's
+-- canonical key to the inherited default's per-instance entry
+-- (`@mdk_default_<iface>_<method>_<instance key>`), exactly as `iface.mdk`'s
+-- same-module `Cup` does.
 --
 -- HAND-DERIVED FROM THE SPEC, not captured: both impls are method-less, so both
 -- occurrences run the interface default `sz _ = 42`.  100 * 42 + 42 = 4242.
 -- EXPECTED: 4242
 --
--- ⚠️ THE VALUE IS NOT THE ASSERTION.  Both arms answer 42, so the value cannot
--- tell the two dispatch paths apart -- and an exit-code-graded control cannot
--- either: this shape exits 0 today and would still exit 0 with a WRONG symbol,
--- right up until the link fails.  The discrimination lives in this gate's
--- Section 3 rows, which pin BOTH emitted symbols by name:
---   * `@mdk_default_<iface::Sz>_sz_<iface::Sz|Box|>` -- the cross-module (no-row)
---     arm, the per-instance body reached through the tag `optionOr tag` supplies;
---   * `@mdk_impl_Cup_sz`     -- the same-module twin, whose specialized clause
---     makes it an ordinary tagged impl.
--- Their COEXISTENCE in one program is the point: one source shape, two routes,
--- and only the pair shows that `b1` moved neither.
+-- The value is not the assertion: both occurrences answer 42 whichever entry
+-- they reach.  `diff_compiler_dict_semantics_ir.sh`'s rows pin both emitted
+-- per-instance symbols and the canonical word the cross-module receiver carries.
 import iface.{Sz(..), sz, Cup(..)}
 
 data Box = Box

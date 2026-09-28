@@ -33,14 +33,12 @@ import types.typecheck.{
   checkedFfiExternTypeNamesModules,
 }
 import ir.core_ir_lower.{
-  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
   EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
-  methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
   validateFfiExternTypeNames,
@@ -68,7 +66,6 @@ runEmit runtimeDecls coreDecls modules =
       (returnsSelfTable allDecls)
       (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
-      (methodConstraintIfaces allDecls)
       (ctorFieldTypeNames allDecls)
       (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       (mainTypeIsUnit ())
@@ -79,7 +76,6 @@ runEmit runtimeDecls coreDecls modules =
       ""
       (declaredRecordFieldOrders allDecls)
       (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-      (ifaceImplHeadTable allDecls)
   let (text, _) =
     emitProgramRecord input (lowerProgramEmit TargetNative allDecls)
   putStr text

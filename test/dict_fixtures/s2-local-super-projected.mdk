@@ -1,0 +1,27 @@
+-- A dictionary-abstracted local (D1) that projects a super, used at two types, plus a
+-- polymorphic-recursive group member forwarding a super through recursion.
+-- Expected value: 11|1011|3
+interface Sz a where
+  sz : a -> Int
+interface Hi a requires Sz a where
+  hi : a -> Int
+impl Sz Int where
+  sz x = 10
+impl Hi Int where
+  hi x = 1
+impl Sz String where
+  sz x = 1000
+impl Hi String where
+  hi x = 11
+both : Hi a => a -> Int
+both x = hi x + sz x
+countDown : Hi a => a -> Int -> Int
+countDown x n = if n <= 0 then 0 else sz x - sz x + 1 + countDown x (n - 1)
+main =
+  let g = y => hi y + sz y
+  println
+    (debug (g (0 : Int))
+      ++ "|"
+      ++ debug (g "s")
+      ++ "|"
+      ++ debug (countDown (0 : Int) 3))

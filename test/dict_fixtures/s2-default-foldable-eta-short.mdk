@@ -1,0 +1,20 @@
+-- `Foldable`'s `foldMap` default is ETA-SHORT (`foldMap f = fold (…) empty` binds
+-- the function and its `Monoid` dictionary and returns a function awaiting the
+-- container); `length` and `isEmpty` are defaults too.  All three are inherited
+-- here and reached through the receiver, at two monoids.  Hand-derived: the digits
+-- 1,2,3 concatenated; each of 4,5 doubled; three elements; an empty bag.
+-- Expected: 123|[4, 4, 5, 5]|3|True
+data Bag a = Bag (List a)
+impl Foldable Bag where
+  fold f z (Bag xs) = fold f z xs
+  foldRight f z (Bag xs) = foldRight f z xs
+  toList (Bag xs) = xs
+main =
+  println
+    (foldMap (x => debug x) (Bag [1 : Int, 2, 3])
+      ++ "|"
+      ++ debug (foldMap (x => [x, x]) (Bag [4 : Int, 5]))
+      ++ "|"
+      ++ debug (length (Bag [7 : Int, 8, 9]))
+      ++ "|"
+      ++ debug (isEmpty (Bag ([] : List Int))))

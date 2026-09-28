@@ -132,7 +132,6 @@ import types.typecheck.{
   checkedFfiExternTypeNamesModules, ppSchemeNamedFull, checkOneSchemeFullK
 }
 import ir.core_ir_lower.{
-  ifaceImplHeadTable,
   lowerProgramEmit,
   validateFfiExternTypeNames,
   EmitTarget(..),
@@ -563,7 +562,6 @@ runEmit runtimeDecls coreDecls modules =
       (mainTypeIsFloat ())
       (declaredRecordFieldOrders allDecls)
       (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-      (ifaceImplHeadTable allDecls)
   -- #2359 (F1): mirror wasm_emit_modules_main.emitTail — bind the lowered
   -- program, then drop the impl bodies (and the plain bindings only they
   -- reached) that no dispatchable method name in this program can reach.  Without

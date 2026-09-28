@@ -1,8 +1,8 @@
 -- WS-1b: a return-position SUPERCLASS method (`bump`, from `Sup`) called inside a
 -- function constrained only on the SUBclass (`process : Sub a =>`, where
--- `Sub a requires Sup a`).  expandSupersTable appends the Sup dict slot to process's
--- constraint table so the super method dispatches.  `a` is determined by the argument
--- (no ambiguity), which is the case WS-1b's superclass-evidence flatten closes.
+-- `Sub a requires Sup a`).  The Sub given's Sup super is an evidence-DAG
+-- projection (`ProjectedGiven`), so `bump` dispatches through it directly.
+-- `a` is determined by the argument (no ambiguity).
 interface Sup a where
   bump : a -> a
 interface Sub a requires Sup a where

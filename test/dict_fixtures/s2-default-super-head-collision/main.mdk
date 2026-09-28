@@ -1,0 +1,21 @@
+-- #3509: an inherited default calls a SUPERCLASS method on its
+-- receiver while the interface's head collides with a same-spelled interface at the
+-- same type, so the `ia.Shape Sq` dictionary's word is its canonical key.  The
+-- super call projects `Base Sq` out of that receiver and dispatches by `Base Sq`'s
+-- own word.  Hand-derived: base = "sq", size = 4, other = 4 + 5.
+-- Expected: sq4|9
+import ia.{Base(..), Shape(..), size, describe, base}
+import ib as B
+
+data Sq = Sq Int
+
+impl Base Sq where
+  base _ = "sq"
+
+impl Shape Sq where
+  size (Sq n) = n
+
+impl B.Shape Sq where
+  other (Sq n) = n + 5
+
+main = println (describe (Sq 4) ++ "|" ++ debug (B.other (Sq 4)))

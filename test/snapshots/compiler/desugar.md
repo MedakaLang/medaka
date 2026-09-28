@@ -1,5 +1,5 @@
 # META
-source_lines=1231
+source_lines=1136
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -986,100 +986,6 @@ mergedLoc None mLoc = mLoc
 methodName : IfaceMethod -> String
 methodName (IfaceMethod n _ _ _) = n
 
--- ── Pass: fill_impl_defaults (specialize interface defaults per impl) ──
--- For each DImpl, synthesize a concrete-receiver ImplMethod for every interface
--- default method the impl does not explicitly define.  The synthesized clause is
--- byte-identical to the hand-written per-impl form (receiver concreteness comes
--- from the impl's type, not the body text); the tagged copy is strictly more
--- specific than the untagged `lowerDefault` fallback, so `coalesceImpls` picks
--- it.  Universal across all interfaces; same-module only (sees just DInterface
--- defaults co-located in this decl list — a user impl of a prelude interface in
--- another module keeps using the fallback, as intended).  Runs after
--- mergeIfaceDefaults (so each IfaceMethod carries its merged default) and before
--- the later sugar passes (so the copied body lowers exactly like the original).
--- See TRAVERSABLE-DEFAULT-METHOD-DESIGN.md Fork 1.
-fillImplDefaults : List Decl -> List Decl
-fillImplDefaults prog = map (fillImplDecl prog) prog
-
-fillImplDecl : List Decl -> Decl -> Decl
-fillImplDecl prog (d@(DImpl { iface, methods, ... }))
-  -- UNIVERSAL: every interface's missing defaults are specialized per impl, with no
-  -- exclusions.  Ord and Foldable are not held back: the two emitter
-  -- dict-threading gaps their specialized defaults tripped are both CLOSED (see
-  -- TRAVERSABLE-DEFAULT-METHOD-DESIGN.md §9):
-  --   * Ord — registerImplRequires keys EVERY method of an impl under the same impl
-  --     tyvar id, so specializing lt/gt/min/max alongside compare made the global
-  --     route lookup return the LAST-registered `$dict_<m>_<slot>` for ALL bodies
-  --     (compare's element dispatch wrongly forwarded `$dict_max_0` → "unbound dict
-  --     witness").  Fixed by scope-aware requires routing (typecheck.mdk
-  --     activeDictVarForEncl / argImplDictRoutesForEncl).
-  --   * Foldable — `foldMap f = fold (acc x => acc ++ f x) empty` is ETA-SHORT (binds
-  --     only `f` + its `Monoid m` dict, returns a partial awaiting the container); the
-  --     tagged copy wasn't eta-expanded so a saturated call dropped the container and
-  --     returned an unapplied PAP → SIGSEGV.  Fixed by counting leading dict params in
-  --     gatherGroup's eta-expansion target (llvm_emit.mdk).
-  | otherwise = DImpl { d |
-    methods = methods ++ synthDefaultMethods methods (ifaceDefaults iface prog),
-  }
-fillImplDecl _ d = d
-
--- The named interface's default methods (those carrying a MethodDefault body).
-ifaceDefaults : String -> List Decl -> List IfaceMethod
-ifaceDefaults _ [] = []
-ifaceDefaults target (d :: rest) = ifaceDefaultsStep target d rest
-
-ifaceDefaultsStep : String -> Decl -> List Decl -> List IfaceMethod
-ifaceDefaultsStep target (DInterface { name, methods, ... }) rest
-  | name == target = filterList ifaceMethodHasDefault methods
-  | otherwise = ifaceDefaults target rest
-ifaceDefaultsStep target (DAttrib _ d) rest = ifaceDefaultsStep target d rest
-ifaceDefaultsStep target _ rest = ifaceDefaults target rest
-
-ifaceMethodHasDefault : IfaceMethod -> Bool
-ifaceMethodHasDefault (IfaceMethod _ _ (Some _) _) = True
-ifaceMethodHasDefault (IfaceMethod _ _ None _) = False
-
--- Synthesize an ImplMethod from each default whose name is not already explicit.
-synthDefaultMethods : List ImplMethod -> List IfaceMethod -> List ImplMethod
-synthDefaultMethods _ [] = []
-synthDefaultMethods explicit (m :: rest)
-  | implDefines (methodName m) explicit = synthDefaultMethods explicit rest
-  | otherwise = synthFromDefault m :: synthDefaultMethods explicit rest
-
-implDefines : String -> List ImplMethod -> Bool
-implDefines name explicit = anyList (implMethodNamed name) explicit
-
-implMethodNamed : String -> ImplMethod -> Bool
-implMethodNamed name (ImplMethod n _ _) = n == name
-
-synthFromDefault : IfaceMethod -> ImplMethod
-synthFromDefault (IfaceMethod n _ (Some (MethodDefault ps body)) _) =
-  ImplMethod n ps (freshenExprCells body)
-synthFromDefault (IfaceMethod n _ None _) = ImplMethod n [] (EVar n)
-
--- Give a COPIED expression its own resolution cells.  Several Expr nodes carry a
--- `Ref` that a later pass stamps from the node's grounded operand type — the
--- route cell on `EBinOp`/`EUnOp`/`ENumLit`, the Float-literal cell on `ENumLit`,
--- the resolved record/container name on `EFieldAccess`/`EIndex`/`ESlice`/
--- `ERecordUpdate`.  A default body handed unchanged to N impls would reach ONE
--- cell per site from all N specializations, so whichever receiver type grounds
--- first decides codegen for every other: `impl Keyed Int` stamps `<` as RScalar
--- "Int" and `impl Keyed Float`'s copy then emits `icmp` over boxed pointers.
--- Each cell keeps the value the original holds; only the sharing is broken.
-freshenExprCells : Expr -> Expr
-freshenExprCells body = mapExpr freshenNodeCells body
-
-freshenNodeCells : Expr -> Expr
-freshenNodeCells (EBinOp op a b r) = EBinOp op a b (Ref !r)
-freshenNodeCells (EUnOp op a r) = EUnOp op a (Ref !r)
-freshenNodeCells (ENumLit n fr rr lx) = ENumLit n (Ref !fr) (Ref !rr) lx
-freshenNodeCells (EWideLit hi lo rr lx) = EWideLit hi lo (Ref !rr) lx
-freshenNodeCells (EFieldAccess e0 n r) = EFieldAccess e0 n (Ref !r)
-freshenNodeCells (EIndex e0 i r) = EIndex e0 i (Ref !r)
-freshenNodeCells (ESlice e0 lo hi incl r) = ESlice e0 lo hi incl (Ref !r)
-freshenNodeCells (ERecordUpdate e0 fs r) = ERecordUpdate e0 fs (Ref !r)
-freshenNodeCells e = e
-
 concatMapDecl : (Decl -> List Decl) -> List Decl -> List Decl
 concatMapDecl f prog = concatLists (map f prog)
 
@@ -1226,7 +1132,6 @@ desugar : List Decl -> List Decl
 desugar prog =
   qualifyAliasRefs prog
     |> mergeIfaceDefaults
-    |> fillImplDefaults
     |> concatMapDecl expandDecl
     |> desugarRecordPuns
     |> lowerContainerLiterals
@@ -1590,43 +1495,6 @@ desugar prog =
 (DFunDef false "mergedLoc" ((PCon "None") (PVar "mLoc")) (EVar "mLoc"))
 (DTypeSig false "methodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "methodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
-(DTypeSig false "fillImplDefaults" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "fillImplDefaults" ((PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "fillImplDecl") (EVar "prog"))) (EVar "prog")))
-(DTypeSig false "fillImplDecl" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "fillImplDecl" ((PVar "prog") (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "methods" None)) true))) (EIf (EVar "otherwise") (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EBinOp "++" (EVar "methods") (EApp (EApp (EVar "synthDefaultMethods") (EVar "methods")) (EApp (EApp (EVar "ifaceDefaults") (EVar "iface")) (EVar "prog"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "fillImplDecl" (PWild (PVar "d")) (EVar "d"))
-(DTypeSig false "ifaceDefaults" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "IfaceMethod")))))
-(DFunDef false "ifaceDefaults" (PWild (PList)) (EListLit))
-(DFunDef false "ifaceDefaults" ((PVar "target") (PCons (PVar "d") (PVar "rest"))) (EApp (EApp (EApp (EVar "ifaceDefaultsStep") (EVar "target")) (EVar "d")) (EVar "rest")))
-(DTypeSig false "ifaceDefaultsStep" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "IfaceMethod"))))))
-(DFunDef false "ifaceDefaultsStep" ((PVar "target") (PRec "DInterface" ((rf "name" None) (rf "methods" None)) true) (PVar "rest")) (EIf (EBinOp "==" (EVar "name") (EVar "target")) (EApp (EApp (EVar "filterList") (EVar "ifaceMethodHasDefault")) (EVar "methods")) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceDefaults") (EVar "target")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "ifaceDefaultsStep" ((PVar "target") (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (EApp (EApp (EApp (EVar "ifaceDefaultsStep") (EVar "target")) (EVar "d")) (EVar "rest")))
-(DFunDef false "ifaceDefaultsStep" ((PVar "target") PWild (PVar "rest")) (EApp (EApp (EVar "ifaceDefaults") (EVar "target")) (EVar "rest")))
-(DTypeSig false "ifaceMethodHasDefault" (TyFun (TyCon "IfaceMethod") (TyCon "Bool")))
-(DFunDef false "ifaceMethodHasDefault" ((PCon "IfaceMethod" PWild PWild (PCon "Some" PWild) PWild)) (EVar "True"))
-(DFunDef false "ifaceMethodHasDefault" ((PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EVar "False"))
-(DTypeSig false "synthDefaultMethods" (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "ImplMethod")))))
-(DFunDef false "synthDefaultMethods" (PWild (PList)) (EListLit))
-(DFunDef false "synthDefaultMethods" ((PVar "explicit") (PCons (PVar "m") (PVar "rest"))) (EIf (EApp (EApp (EVar "implDefines") (EApp (EVar "methodName") (EVar "m"))) (EVar "explicit")) (EApp (EApp (EVar "synthDefaultMethods") (EVar "explicit")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "synthFromDefault") (EVar "m")) (EApp (EApp (EVar "synthDefaultMethods") (EVar "explicit")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "implDefines" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Bool"))))
-(DFunDef false "implDefines" ((PVar "name") (PVar "explicit")) (EApp (EApp (EVar "anyList") (EApp (EVar "implMethodNamed") (EVar "name"))) (EVar "explicit")))
-(DTypeSig false "implMethodNamed" (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyCon "Bool"))))
-(DFunDef false "implMethodNamed" ((PVar "name") (PCon "ImplMethod" (PVar "n") PWild PWild)) (EBinOp "==" (EVar "n") (EVar "name")))
-(DTypeSig false "synthFromDefault" (TyFun (TyCon "IfaceMethod") (TyCon "ImplMethod")))
-(DFunDef false "synthFromDefault" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "body"))) PWild)) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EVar "freshenExprCells") (EVar "body"))))
-(DFunDef false "synthFromDefault" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "None") PWild)) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EListLit)) (EApp (EVar "EVar") (EVar "n"))))
-(DTypeSig false "freshenExprCells" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "freshenExprCells" ((PVar "body")) (EApp (EApp (EVar "mapExpr") (EVar "freshenNodeCells")) (EVar "body")))
-(DTypeSig false "freshenNodeCells" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "freshenNodeCells" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PCon "EUnOp" (PVar "op") (PVar "a") (PVar "r"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "a")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PCon "ENumLit" (PVar "n") (PVar "fr") (PVar "rr") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "fr")))) (EApp (EVar "Ref") (EUnOp "!" (EVar "rr")))) (EVar "lx")))
-(DFunDef false "freshenNodeCells" ((PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "rr") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EVar "Ref") (EUnOp "!" (EVar "rr")))) (EVar "lx")))
-(DFunDef false "freshenNodeCells" ((PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "e0")) (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EVar "e0")) (EVar "i")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e0")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "e0")) (EVar "fs")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PVar "e")) (EVar "e"))
 (DTypeSig false "concatMapDecl" (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "concatMapDecl" ((PVar "f") (PVar "prog")) (EApp (EVar "concatLists") (EApp (EApp (EVar "map") (EVar "f")) (EVar "prog"))))
 (DTypeSig false "concatLists" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyApp (TyCon "List") (TyVar "a"))))
@@ -1685,7 +1553,7 @@ desugar prog =
 (DFunDef false "qualifiedAt" ((PCon "ELoc" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) PWild) (PVar "member") (PVar "e")) (EApp (EApp (EVar "ELoc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EBinOp "+" (EBinOp "+" (EVar "ec") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "member"))))) (EVar "e")))
 (DFunDef false "qualifiedAt" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig true "desugar" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "desugar" ((PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EVar "fillImplDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))))
+(DFunDef false "desugar" ((PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
@@ -2043,43 +1911,6 @@ desugar prog =
 (DFunDef false "mergedLoc" ((PCon "None") (PVar "mLoc")) (EVar "mLoc"))
 (DTypeSig false "methodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "methodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
-(DTypeSig false "fillImplDefaults" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "fillImplDefaults" ((PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "fillImplDecl") (EVar "prog"))) (EVar "prog")))
-(DTypeSig false "fillImplDecl" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "fillImplDecl" ((PVar "prog") (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "methods" None)) true))) (EIf (EVar "otherwise") (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EBinOp "++" (EVar "methods") (EApp (EApp (EVar "synthDefaultMethods") (EVar "methods")) (EApp (EApp (EVar "ifaceDefaults") (EVar "iface")) (EVar "prog"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "fillImplDecl" (PWild (PVar "d")) (EVar "d"))
-(DTypeSig false "ifaceDefaults" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "IfaceMethod")))))
-(DFunDef false "ifaceDefaults" (PWild (PList)) (EListLit))
-(DFunDef false "ifaceDefaults" ((PVar "target") (PCons (PVar "d") (PVar "rest"))) (EApp (EApp (EApp (EVar "ifaceDefaultsStep") (EVar "target")) (EVar "d")) (EVar "rest")))
-(DTypeSig false "ifaceDefaultsStep" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "IfaceMethod"))))))
-(DFunDef false "ifaceDefaultsStep" ((PVar "target") (PRec "DInterface" ((rf "name" None) (rf "methods" None)) true) (PVar "rest")) (EIf (EBinOp "==" (EVar "name") (EVar "target")) (EApp (EApp (EVar "filterList") (EVar "ifaceMethodHasDefault")) (EVar "methods")) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceDefaults") (EVar "target")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "ifaceDefaultsStep" ((PVar "target") (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (EApp (EApp (EApp (EVar "ifaceDefaultsStep") (EVar "target")) (EVar "d")) (EVar "rest")))
-(DFunDef false "ifaceDefaultsStep" ((PVar "target") PWild (PVar "rest")) (EApp (EApp (EVar "ifaceDefaults") (EVar "target")) (EVar "rest")))
-(DTypeSig false "ifaceMethodHasDefault" (TyFun (TyCon "IfaceMethod") (TyCon "Bool")))
-(DFunDef false "ifaceMethodHasDefault" ((PCon "IfaceMethod" PWild PWild (PCon "Some" PWild) PWild)) (EVar "True"))
-(DFunDef false "ifaceMethodHasDefault" ((PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EVar "False"))
-(DTypeSig false "synthDefaultMethods" (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "ImplMethod")))))
-(DFunDef false "synthDefaultMethods" (PWild (PList)) (EListLit))
-(DFunDef false "synthDefaultMethods" ((PVar "explicit") (PCons (PVar "m") (PVar "rest"))) (EIf (EApp (EApp (EVar "implDefines") (EApp (EVar "methodName") (EVar "m"))) (EVar "explicit")) (EApp (EApp (EVar "synthDefaultMethods") (EVar "explicit")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "synthFromDefault") (EVar "m")) (EApp (EApp (EVar "synthDefaultMethods") (EVar "explicit")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "implDefines" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Bool"))))
-(DFunDef false "implDefines" ((PVar "name") (PVar "explicit")) (EApp (EApp (EVar "anyList") (EApp (EVar "implMethodNamed") (EVar "name"))) (EVar "explicit")))
-(DTypeSig false "implMethodNamed" (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyCon "Bool"))))
-(DFunDef false "implMethodNamed" ((PVar "name") (PCon "ImplMethod" (PVar "n") PWild PWild)) (EBinOp "==" (EVar "n") (EVar "name")))
-(DTypeSig false "synthFromDefault" (TyFun (TyCon "IfaceMethod") (TyCon "ImplMethod")))
-(DFunDef false "synthFromDefault" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "body"))) PWild)) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EVar "freshenExprCells") (EVar "body"))))
-(DFunDef false "synthFromDefault" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "None") PWild)) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EListLit)) (EApp (EVar "EVar") (EVar "n"))))
-(DTypeSig false "freshenExprCells" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "freshenExprCells" ((PVar "body")) (EApp (EApp (EVar "mapExpr") (EVar "freshenNodeCells")) (EVar "body")))
-(DTypeSig false "freshenNodeCells" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "freshenNodeCells" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PCon "EUnOp" (PVar "op") (PVar "a") (PVar "r"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "a")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PCon "ENumLit" (PVar "n") (PVar "fr") (PVar "rr") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "fr")))) (EApp (EVar "Ref") (EUnOp "!" (EVar "rr")))) (EVar "lx")))
-(DFunDef false "freshenNodeCells" ((PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "rr") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EVar "Ref") (EUnOp "!" (EVar "rr")))) (EVar "lx")))
-(DFunDef false "freshenNodeCells" ((PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "e0")) (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EVar "e0")) (EVar "i")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e0")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EVar "e0")) (EVar "fs")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
-(DFunDef false "freshenNodeCells" ((PVar "e")) (EVar "e"))
 (DTypeSig false "concatMapDecl" (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "concatMapDecl" ((PVar "f") (PVar "prog")) (EApp (EVar "concatLists") (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "prog"))))
 (DTypeSig false "concatLists" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyApp (TyCon "List") (TyVar "a"))))
@@ -2138,4 +1969,4 @@ desugar prog =
 (DFunDef false "qualifiedAt" ((PCon "ELoc" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) PWild) (PVar "member") (PVar "e")) (EApp (EApp (EVar "ELoc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EBinOp "+" (EBinOp "+" (EVar "ec") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "member"))))) (EVar "e")))
 (DFunDef false "qualifiedAt" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig true "desugar" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "desugar" ((PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EVar "fillImplDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))))
+(DFunDef false "desugar" ((PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))))

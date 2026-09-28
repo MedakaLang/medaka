@@ -12,9 +12,6 @@
    | `eval_main` | `eval_fixtures` | the AST tree-walker on the engine core |
    | `core_ir_main` | `eval_fixtures` | Core IR evaluates as the AST does |
    | `core_ir_roundtrip_main` | `eval_fixtures` | S-expr serialization is lossless |
-   | `eval_prelude_main` | `eval_list_fixtures` | List combinators + comprehensions |
-   | `eval_list_batch` | `eval_list_fixtures` | batched == per-process |
-   | `core_ir_prelude_main` | `eval_list_fixtures` | the same through Core IR |
    | `eval_prelude_main` | `eval_prelude_fixtures` | `core.mdk` dispatch |
    | `eval_prelude_batch` | `eval_prelude_fixtures` | batched == per-process |
    | `core_ir_prelude_main` | `eval_prelude_fixtures` | the same through Core IR |
@@ -53,12 +50,18 @@
    - It grades every row in one process, so a red run names every failing
      (gate, fixture) pair at once instead of the first script to exit 1.
 
-   `test/eval_fixtures`, `test/eval_list_fixtures`,
-   `test/eval_prelude_fixtures` and `test/eval_typed_modules_fixtures` are
-   FROZEN dev-probe corpora (#1241): `test/capture_goldens.sh` is a no-op for
-   them and there is no regeneration script, so a missing or wrong golden is
-   hand-derived from the fixture's semantics, never captured from whatever an
-   oracle prints today.
+   `test/eval_fixtures`, `test/eval_prelude_fixtures` and
+   `test/eval_typed_modules_fixtures` are FROZEN dev-probe corpora (#1241):
+   `test/capture_goldens.sh` is a no-op for them and there is no
+   regeneration script, so a missing or wrong golden is hand-derived from the
+   fixture's semantics, never captured from whatever an oracle prints today.
+
+   An untyped oracle has no instance to give an interface default to: an
+   instance that leaves a method to its interface's default gets that body
+   only from the disposition table an elaboration builds. A program that
+   calls an inherited default therefore belongs to a typed corpus, here or in
+   `test/engine_fixtures/` and `test/run_check_agreement_fixtures/`, never to
+   an untyped one.
 
    Most of these corpora never reach the type checker: the entries behind
    `eval_main`, `core_ir_main` and `core_ir_roundtrip_main` import no
@@ -150,7 +153,7 @@ rows = [
     prelude = [],
     shape = FileStem,
     batched = False,
-    fixtures = 24,
+    fixtures = 22,
   },
   Row {
     gate = "diff_compiler_core_ir",
@@ -159,7 +162,7 @@ rows = [
     prelude = [],
     shape = FileStem,
     batched = False,
-    fixtures = 24,
+    fixtures = 22,
   },
   Row {
     gate = "diff_compiler_core_ir_roundtrip",
@@ -168,34 +171,7 @@ rows = [
     prelude = [],
     shape = FileStem,
     batched = False,
-    fixtures = 24,
-  },
-  Row {
-    gate = "diff_compiler_eval_list",
-    oracle = "test/bin/eval_prelude_main",
-    corpus = "test/eval_list_fixtures",
-    prelude = [coreMod, listMod],
-    shape = FileStem,
-    batched = False,
-    fixtures = 1,
-  },
-  Row {
-    gate = "diff_compiler_eval_list_batch",
-    oracle = "test/bin/eval_list_batch",
-    corpus = "test/eval_list_fixtures",
-    prelude = [coreMod, listMod],
-    shape = FileStem,
-    batched = True,
-    fixtures = 1,
-  },
-  Row {
-    gate = "diff_compiler_core_ir_list",
-    oracle = "test/bin/core_ir_prelude_main",
-    corpus = "test/eval_list_fixtures",
-    prelude = [coreMod, listMod],
-    shape = FileStem,
-    batched = False,
-    fixtures = 1,
+    fixtures = 22,
   },
   Row {
     gate = "diff_compiler_eval_prelude",
@@ -204,7 +180,7 @@ rows = [
     prelude = [coreMod],
     shape = FileStem,
     batched = False,
-    fixtures = 6,
+    fixtures = 5,
   },
   Row {
     gate = "diff_compiler_eval_prelude_batch",
@@ -213,7 +189,7 @@ rows = [
     prelude = [coreMod],
     shape = FileStem,
     batched = True,
-    fixtures = 6,
+    fixtures = 5,
   },
   Row {
     gate = "diff_compiler_core_ir_prelude",
@@ -222,7 +198,7 @@ rows = [
     prelude = [coreMod],
     shape = FileStem,
     batched = False,
-    fixtures = 6,
+    fixtures = 5,
   },
   Row {
     gate = "diff_compiler_eval_run",
@@ -231,7 +207,7 @@ rows = [
     prelude = [coreMod, listMod],
     shape = FileSection,
     batched = False,
-    fixtures = 54,
+    fixtures = 53,
   },
   Row {
     gate = "diff_compiler_eval_run_batch",
@@ -240,7 +216,7 @@ rows = [
     prelude = [coreMod, listMod],
     shape = FileSection,
     batched = True,
-    fixtures = 54,
+    fixtures = 53,
   },
   Row {
     gate = "diff_compiler_core_ir_run",
@@ -249,7 +225,7 @@ rows = [
     prelude = [coreMod, listMod],
     shape = FileSection,
     batched = False,
-    fixtures = 54,
+    fixtures = 53,
   },
   Row {
     gate = "diff_compiler_core_ir_typed",
@@ -285,7 +261,7 @@ rows = [
     prelude = [coreMod],
     shape = DirFixture "main_*.mdk" "main.eval.golden",
     batched = False,
-    fixtures = 12,
+    fixtures = 11,
   },
   Row {
     gate = "diff_compiler_core_ir_modules",
@@ -294,7 +270,7 @@ rows = [
     prelude = [coreMod],
     shape = DirFixture "main_*.mdk" "main.eval.golden",
     batched = False,
-    fixtures = 12,
+    fixtures = 11,
   },
   Row {
     gate = "diff_compiler_eval_typed_modules",
@@ -303,7 +279,7 @@ rows = [
     prelude = [runtimeMod, coreMod],
     shape = DirFixture "main.mdk" "main.eval.golden",
     batched = False,
-    fixtures = 23,
+    fixtures = 24,
   },
 ]
 
@@ -328,7 +304,10 @@ entriesOf r =
 
    `test/diff_fixtures`' `numlit_*` fixtures are excluded: they need the
    typed `fromInt` elaboration that no entry behind these oracles performs,
-   and the typed gates cover them. -}
+   and the typed gates cover them. `higher_order` is excluded for the same
+   reason: its `filter` is Filterable's inherited default, and
+   `test/run_check_agreement_fixtures/accept_higher_order_list_defaults.mdk`
+   holds its value on the typed engines. -}
 flatEntries : Row -> String -> <FileRead> Result String (List String)
 flatEntries r dir = match fixtureFiles dir
   Err e => Err e
@@ -340,7 +319,7 @@ flatEntries r dir = match fixtureFiles dir
 
 isGraded : Row -> String -> Bool
 isGraded r p = match r.shape
-  FileSection => not (startsWith "numlit_" (stem p))
+  FileSection => not (startsWith "numlit_" (stem p)) && stem p /= "higher_order"
   _ => True
 
 {- | The entry module of every fixture directory under `dir`, one per

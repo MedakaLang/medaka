@@ -46,11 +46,16 @@ import support.ordmap.{
 
 -- How the eligible function refers to ITSELF in a tail self-call.  A top-level
 -- define recurses by NAME (`CVar self`); a dispatched instance method (Phase 2
--- B-dispatch — stdlib `map`/`filterMap`) recurses via a `CMethod method (RKey tag)`
--- node post-restampIface, where the method NAME is invisible to `freeVars` — so the
--- self-walk MUST be SelfRef-aware, not freeVars-based, or a non-tail `CMethod`
--- self-recursion is silently accepted and MISCOMPILED (TRMC-DESIGN §"SAFETY-CRITICAL").
-public export data SelfRef = SelfByVar String | SelfByMethod String String
+-- B-dispatch — stdlib `map`/`filterMap`) recurses via a `CMethod method (RKey key)`
+-- node, [key] its instance's canonical key, where the method NAME is invisible to
+-- `freeVars` — so the self-walk MUST be SelfRef-aware, not freeVars-based, or a
+-- non-tail `CMethod` self-recursion is silently accepted and MISCOMPILED
+-- (TRMC-DESIGN §"SAFETY-CRITICAL").
+--
+-- A `SelfByMethod`'s Int is the define's count of leading dictionary parameters
+-- when it is an inherited default's entry, whose self-call supplies them only
+-- implicitly (see `isSelfSatApp`); 0 for any other define.
+public export data SelfRef = SelfByVar String | SelfByMethod String String Int
 
 -- ── pure structural helpers (CExpr free-variable + application analysis) ─────
 -- Backend-agnostic; relocated here so the analysis is self-contained (the emitters
@@ -129,6 +134,12 @@ routeDictNames b ((RDictFwd d) :: rest) =
 -- [] ⇒ byte-identical to the pre-S1 catch-all.
 routeDictNames b ((RLocal _ dicts) :: rest) =
   routeDictNames b dicts ++ routeDictNames b rest
+-- A dictionary built at the site nests its requires and supers, and either may
+-- forward an enclosing dict parameter; a projection reads the one it projects.
+routeDictNames b ((RKey _ reqs sups) :: rest) =
+  routeDictNames b reqs ++ routeDictNames b sups ++ routeDictNames b rest
+routeDictNames b ((RProj r _) :: rest) =
+  routeDictNames b [r] ++ routeDictNames b rest
 routeDictNames b (_ :: rest) = routeDictNames b rest
 
 export
@@ -407,7 +418,11 @@ splitLastF (x :: rest) =
 -- non-forwarded shape would break the loop's dict-slots-are-invariant emit).
 -- SelfByMethod: a `CMethod method (RKey tag) …`-headed spine (the dispatched
 -- recursive call post-restampIface — the only shape that lowers to a direct
--- `@mdk_impl_<tag>_<method>` recursion).
+-- `@mdk_impl_<tag>_<method>` recursion).  An inherited default's entry
+-- (`CImplDefault`) also takes its method-level dictionaries and its receiver ahead
+-- of `arity`'s value slots; its self-call passes those unchanged (forwarded
+-- method-level dictionaries, and the receiver rebuilt from its own fields,
+-- `core_ir_lower.specializeRow`), so its value arguments saturate it.
 export
 isSelfSatApp : SelfRef -> Int -> CExpr -> Bool
 isSelfSatApp self arity ex = match flattenApp ex []
@@ -415,7 +430,33 @@ isSelfSatApp self arity ex = match flattenApp ex []
     isSelfHead self (CDict f routes)
       && dictRoutesForwarded routes
       && listLen args + listLen routes == arity
-  (hd, args) => isSelfHead self hd && listLen args == arity
+  (hd, args) =>
+    isSelfHead self hd
+      && (listLen args == arity || receiverSaturated self arity hd args)
+
+receiverSaturated : SelfRef -> Int -> CExpr -> List CExpr -> Bool
+receiverSaturated (SelfByMethod _ _ n) arity hd args =
+  n > 0 && receiverDictCount hd == n && listLen args + n == arity
+receiverSaturated _ _ _ _ = False
+
+-- the dictionaries a self-call to an inherited default's entry passes, when they are
+-- the entry's own (its method-level dictionaries forwarded, and a receiver whose
+-- supers and `requires` are its own fields in order); 0 for any other call, which
+-- no value-arity count then saturates
+receiverDictCount : CExpr -> Int
+receiverDictCount (CMethod _ _ _ (RKey _ _ sups) implRoutes methRoutes) =
+  if dictRoutesForwarded methRoutes && ownFields (sups ++ implRoutes) 0 "" then
+    listLen methRoutes + 1
+  else
+    0
+receiverDictCount _ = 0
+
+-- `RProj (RDict r) [i]` for i = from, from + 1, … over one dictionary `r`
+ownFields : List Route -> Int -> String -> Bool
+ownFields [] _ _ = True
+ownFields ((RProj (RDict r) [i]) :: rest) from recv =
+  i == from && (recv == "" || r == recv) && ownFields rest (from + 1) r
+ownFields _ _ _ = False
 
 -- is `hd` the head of a self-call for this SelfRef?  A top-level define with a
 -- constrained scheme occurs as `CDict self routes` (dict_pass), NOT `CVar self`.
@@ -423,7 +464,7 @@ export
 isSelfHead : SelfRef -> CExpr -> Bool
 isSelfHead (SelfByVar self) (CVar f _) = f == self
 isSelfHead (SelfByVar self) (CDict f _) = f == self
-isSelfHead (SelfByMethod method tag) (CMethod m _ _ route _ _) =
+isSelfHead (SelfByMethod method tag _) (CMethod m _ _ route _ _) =
   m == method && routeIsKey tag route
 isSelfHead _ _ = False
 
@@ -440,7 +481,7 @@ dictRoutesForwarded _ = False
 -- self-recursion carries after restampIface).
 export
 routeIsKey : String -> Route -> Bool
-routeIsKey tag (RKey t _) = t == tag
+routeIsKey tag (RKey t _ _) = t == tag
 routeIsKey _ _ = False
 
 -- `ex` contains NO free reference to `self`.  SelfByVar: freeVars (a CVar name)
@@ -454,7 +495,7 @@ export
 selfFree : SelfRef -> CExpr -> Bool
 selfFree (SelfByVar self) ex =
   not (contains self (freeVars [] ex)) && not (mentionsSelfDict self ex)
-selfFree (SelfByMethod method tag) ex = not (mentionsSelfMethod method tag ex)
+selfFree (SelfByMethod method tag _) ex = not (mentionsSelfMethod method tag ex)
 
 -- does `ex` mention the self-method `method`@`tag` (a `CMethod method (RKey tag)`
 -- occurrence) ANYWHERE in its tree?  This is the safety-critical disqualification:
@@ -875,6 +916,11 @@ dictCountUniformGo : Int -> List (List Pat) -> Bool
 dictCountUniformGo _ [] = True
 dictCountUniformGo n (pats :: rest) =
   leadingDictCount pats == n && dictCountUniformGo n rest
+
+-- the self-reference of a dispatched impl group, whose first clause binds [pats]
+export
+methodSelf : String -> String -> List Pat -> SelfRef
+methodSelf method key pats = SelfByMethod method key (leadingDictCount pats)
 
 -- count of leading `$dict…` params in one clause's param list.
 export

@@ -1,0 +1,27 @@
+-- A constructor switch whose DEFAULT subtree holds a further constructor switch:
+-- `(A, _)` switches the first column, and its default switches the second column
+-- one scratch slot deeper.  Covers both emit paths, a tail-position match (`pick`)
+-- and a value-position one (`pickPlus`).  Expected output: 1 2 3 11 12 13.
+data O = A | B | C
+
+pick : O -> O -> Int
+pick a b = match (a, b)
+  (A, _) => 1
+  (_, A) => 2
+  _ => 3
+
+pickPlus : O -> O -> Int
+pickPlus a b =
+  10
+    + (match (a, b)
+      (A, _) => 1
+      (_, A) => 2
+      _ => 3)
+
+main =
+  let _ = println (pick A C)
+  let _ = println (pick B A)
+  let _ = println (pick C B)
+  let _ = println (pickPlus A B)
+  let _ = println (pickPlus C A)
+  println (pickPlus B C)

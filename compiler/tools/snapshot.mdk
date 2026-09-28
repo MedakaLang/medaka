@@ -166,7 +166,6 @@ import frontend.marker.{markWithPrelude}
 import ir.sexp.{programToSexp}
 import ir.core_ir.{CProgram}
 import ir.core_ir_lower.{
-  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgram,
   lowerProgramEmit,
@@ -174,7 +173,6 @@ import ir.core_ir_lower.{
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
-  methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
   ffiExternTypeNames,
@@ -609,8 +607,8 @@ emitBoth : String -> List String -> List Decl -> List Decl -> <IO> Unit
 emitBoth root sel runtimeDecls userDecls =
   -- Elaborate then mangle, keyed off the MANGLED decls -- the order
   -- `entry_support.emitModulesWith` runs (mirrors `llvm_emit_typed_main.mdk`'s
-  -- `runEmit`), so a name-keyed table below (`ifaceImplHeadTable`, …) sees the
-  -- same stamped names a real build's tables do.
+  -- `runEmit`), so a name-keyed table below sees the same stamped names a real
+  -- build's tables do.
   let (coreE, modulesE, _, _, _, _) =
     elaborateModules runtimeDecls [] [("__user__", userDecls)]
   let (coreD, modules2) = mangleUnitsEv coreE modulesE
@@ -632,7 +630,6 @@ llvmOf runtimeDecls allDecls cp =
       (returnsSelfTable allDecls)
       (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
-      (methodConstraintIfaces allDecls)
       (ctorFieldTypeNames allDecls)
       (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       (mainTypeIsUnit ())
@@ -643,7 +640,6 @@ llvmOf runtimeDecls allDecls cp =
       ""
       (declaredRecordFieldOrders allDecls)
       (ffiExternTypeNames runtimeDecls allDecls)
-      (ifaceImplHeadTable allDecls)
   let (text, gaps) = emitProgramRecord input cp
   withGaps ";" text gaps
 
@@ -657,7 +653,6 @@ wasmOf runtimeDecls allDecls cp =
       False
       (declaredRecordFieldOrders allDecls)
       []
-      (ifaceImplHeadTable allDecls)
   let (text, gaps) = wasmRecord input cp
   withGaps ";;" text gaps
 

@@ -960,20 +960,16 @@ that sentinel when a method is called at a concrete receiver the general instanc
   sibling); native "worked" only as a `clang -O2` accident (at `-O0` the same IR prints garbage,
   e.g. `70365815715828`); wasm trapped (`instantiate failed: unreachable`).
 
-**Fix (all three engines, mirroring the existing default-fallback structure — no new mechanism):**
-- **eval** (`eval.mdk`, `pickByTag`→`pickTagFallback`): when the per-tag filter is empty and no
-  interface-default candidate exists, select a `VTypedImpl noneHeadTag` general instance before
-  punting to the arg-tag whole-`VMulti` path.
-- **native RKey** (`llvm_emit.mdk`, `emitDefaultRKey`→`emitGeneralRKey`): on an `implFor` miss with
-  no `CImplDefault`, `findByTag noneHeadTag` and emit a direct call to the general's lifted fn.
-- **native RDict** (`llvm_emit.mdk`, `emitDispatchChain`): emit every concrete arm guarded, then the
-  general instance's body **unconditionally** as the catch-all, replacing the trailing
-  `unreachable` (the general matches any receiver no concrete arm claimed). Body factored into the
-  shared `emitDispatchArmBody`; **byte-identical** when no general instance is present (the whole
-  compiler + stdlib have none) — fixpoint C3a/C3b stayed YES with NO seed re-mint.
-- **wasm** (`wasm_emit.mdk`): `emitDefaultRKeyRef` general tier (peer of `emitGeneralRKey`) +
-  `emitMethodDispatchRef` general catch-all (`emitGeneralArm`, block-level after the concrete
-  chain — the fallthrough point before the outer `unreachable`).
+**Fix (all three engines, mirroring the existing default-fallback structure at the time — no new
+mechanism):** originally, a general instance was selected via a reserved tag
+(`noneHeadTag`) falling through the per-tag dispatch. Since S3-xe-consumers (#1403 X-E.C), every
+instance — a general instance included — is keyed by its own canonical dictionary word
+(`rowRouteKey`), so dispatch is a uniform set of guarded arms with no separate tag-based
+catch-all: `eval` matches the key (`pickByKey`), native RDict's `emitDispatchChain` emits every
+entry, general instance's too, as a guarded arm on its own canonical key (a word no arm claims
+traps), and wasm's `emitMethodDispatchRef` does the same. The reserved-tag machinery this
+paragraph originally named (`pickTagFallback`, `emitGeneralRKey`, the wasm general tier) is
+deleted.
 
 Most-specific-wins preserved everywhere: the new tier fires **only** on a concrete-lookup miss, so
 `sz (5:Int)` with both `impl Sz Int` + `impl Sz a` still selects the concrete `111` while `sz True`

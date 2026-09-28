@@ -1,0 +1,43 @@
+-- #3527: an impl whose `requires` puts two predicates on one type variable.  A
+-- constrained function called in the body is answered by the given of the goal's
+-- interface (or one reaching it through superclasses), never by whichever given was
+-- registered last for the variable.  Box: Eq via Ord's super, then Ord, with Debug
+-- last; Pair: Ord with the requires order swapped.
+interface Look c k where
+  look : c -> k -> String
+
+data Box k = Box k
+
+data P a b = P a b
+
+impl Ord (P a b) requires Ord a, Ord b where
+  compare (P a1 b1) (P a2 b2) = match compare a1 a2
+    Eq => compare b1 b2
+    o => o
+
+impl Eq (P a b) requires Eq a, Eq b where
+  eq (P a1 b1) (P a2 b2) = eq a1 a2 && eq b1 b2
+
+impl Debug (P a b) requires Debug b, Debug a where
+  debug (P a b) = "P(" ++ debug a ++ "," ++ debug b ++ ")"
+
+same : Eq k => k -> k -> Bool
+same a b = a == b
+
+smaller : Ord k => k -> k -> Bool
+smaller a b = a < b
+
+impl Look (Box k) k requires Ord k, Debug k where
+  look (Box a) b = if same a b then "eq \{debug b}" else if smaller a b then "lt" else "ge"
+
+data Pair k = Pair k
+
+impl Look (Pair k) k requires Debug k, Ord k where
+  look (Pair a) b = if smaller a b then "lt \{debug b}" else "ge \{debug b}"
+
+main =
+  println
+    (look (Box (P (1:Int) "b")) (P 1 "b")
+      ++ "|" ++ look (Box (P (1:Int) "b")) (P 2 "a")
+      ++ "|" ++ look (Pair (P (1:Int) "b")) (P 2 "a")
+      ++ "|" ++ look (Pair (P (5:Int) "b")) (P 2 "a"))

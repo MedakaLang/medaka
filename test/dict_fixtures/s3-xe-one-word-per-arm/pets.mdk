@@ -1,0 +1,13 @@
+import ifa.{Speak(..)}
+import ifb.{Greet(..)}
+
+public export data Dog = Dog
+
+public export data Cat = Cat
+
+impl Speak Dog
+
+impl Greet Dog
+
+impl Speak Cat where
+  speak _ = "meow"
