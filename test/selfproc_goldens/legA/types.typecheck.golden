@@ -2528,6 +2528,7 @@ sameRootId : Int -> Mono -> Bool
 sameSpellingHint : Mono -> Mono -> Option String
 sameTraceEvId : EvId -> EvId -> Bool
 sameWrittenAtoms : List EffAtomTy -> List EffAtomTy -> Bool
+scalarGivenAnswers : EvidenceBinderId -> IfaceRef -> ScopeId -> Bool
 scalarGivenProjection : EvidenceBinderId -> IfaceRef -> ScopeId -> Option (List Int)
 sccProtectedSignatureIds : List (String, Ty, List (String, Mono)) -> Map String Unit
 sccSchemes : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (Int, AuthResidual) -> Int -> List ScopedMember -> List (String, Scheme)

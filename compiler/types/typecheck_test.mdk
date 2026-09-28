@@ -3083,7 +3083,7 @@ test "same spelling retains module identity while impl bodies stay ordinary" =
       ],
     )
 
-test "synthesized impl copy retains ordinary binding ownership" =
+test "an inherited default is inferred once, as the default body" =
   let observed = runModulesObserved [
     (
       "specialized_default",
@@ -3103,10 +3103,7 @@ test "synthesized impl copy retains ordinary binding ownership" =
   ]
   expectEqual
     (
-      [
-        (ATDirectPredicate, 0, "default:use", "default:use", True),
-        (ATDirectPredicate, 0, "binding:use", "binding:use", True),
-      ],
+      [(ATDirectPredicate, 0, "default:use", "default:use", True)],
       0,
     )
     (map assumptionShape observed.mtvAssumptions, observed.mtvErrors)

@@ -1,5 +1,5 @@
 # META
-source_lines=50660
+source_lines=50685
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -10309,6 +10309,18 @@ scalarGivenProjection binder goalIface useScope =
               (_ _ _ => Some ())
               (ir _ => regKeyRender (regKeyOfTab (oblIfaceKey ir)))
               [(declared, ())]))
+
+-- Whether the tyvar-keyed binder [binder] can answer a goal of [goalIface]: its own
+-- predicate is the goal's interface or has it as a superclass.  A binder with no
+-- recorded direct given, or a goal with no interface, is not constrained here.
+scalarGivenAnswers : EvidenceBinderId -> IfaceRef -> ScopeId -> Bool
+scalarGivenAnswers binder goalIface useScope =
+  goalIface.irName == ""
+    || (match directGivenIfaceOf binder (givensForScope useScope)
+      None => True
+      Some declared =>
+        declared.irName == goalIface.irName
+          || isSome (scalarGivenProjection binder goalIface useScope))
 
 directGivenIfaceOf : EvidenceBinderId -> List GivenEntry -> Option IfaceRef
 directGivenIfaceOf _ [] = None
@@ -30753,15 +30765,28 @@ entailAssumVar request m encl _ useScope (EKReturn _ _) =
 entailAssumVar request m encl _ useScope (EKNumReturn _ _ _ _) =
   activeDictVarOfEncl request m encl useScope
 entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
-  match (activeFunDictPredOf
+  let request =
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m :: rest) }
-    useScope)
+  match activeFunDictPredOf request useScope
     Some answer => Some answer
     -- #1318 residual: EKNestedTop can still carry OriginUnresolved (#1507).  Preserve
     -- its pre-migration spelling fallback until that producer has declaration identity.
     None => match activeFunDictPredOfResidual iface.irName (m :: rest) useScope
       Some answer => Some answer
-      None => map LegacyScalar (activeDictVarForEncl m useScope)
+      -- An impl's `requires` givens are id-witnessed, so the predicate-only rungs above
+      -- cannot see them; this rung matches them by predicate, as a method occurrence's
+      -- does (#1154).  The tyvar-keyed registry that follows holds one entry per
+      -- `requires` predicate on the variable, so it may answer only with a binder whose
+      -- interface is the goal's or reaches it through superclasses.
+      None => match implReqDictVarOf (Some request) m useScope
+        Some answer => Some answer
+        None => match activeDictVarForEncl m useScope
+          Some b =>
+            if scalarGivenAnswers b iface useScope then
+              Some (LegacyScalar b)
+            else
+              None
+          None => None
 entailAssumVar request m encl _ useScope (EKArg _) =
   activeDictVarOfEncl request m encl useScope
 entailAssumVar request m encl name useScope (EKOp isBinop inImpl) =
@@ -52247,6 +52272,8 @@ isTyAuth _ = False
 (DFunDef false "assumAnswerRoute" ((PVar "answer") PWild PWild (PVar "paramRoute")) (EApp (EVar "paramRoute") (EApp (EVar "renderEvidenceBinder") (EApp (EVar "assumAnswerBinder") (EVar "answer")))))
 (DTypeSig false "scalarGivenProjection" (TyFun (TyCon "EvidenceBinderId") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "scalarGivenProjection" ((PVar "binder") (PVar "goalIface") (PVar "useScope")) (EMatch (EApp (EApp (EVar "directGivenIfaceOf") (EVar "binder")) (EApp (EVar "givensForScope") (EVar "useScope"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "declared")) () (EIf (EBinOp "==" (EFieldAccess (EVar "declared") "irName") (EFieldAccess (EVar "goalIface") "irName")) (EVar "None") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EFieldAccess (EVar "n") "superPath")))) (EApp (EApp (EVar "find") (ELam ((PVar "n")) (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "n") "superIface") "irName") (EFieldAccess (EVar "goalIface") "irName")))) (EApp (EApp (EApp (EApp (EVar "superClosure") (EVar "superLookup")) (ELam (PWild PWild PWild) (EApp (EVar "Some") (ELit LUnit)))) (ELam ((PVar "ir") PWild) (EApp (EVar "regKeyRender") (EApp (EVar "regKeyOfTab") (EApp (EVar "oblIfaceKey") (EVar "ir")))))) (EListLit (ETuple (EVar "declared") (ELit LUnit))))))))))
+(DTypeSig false "scalarGivenAnswers" (TyFun (TyCon "EvidenceBinderId") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "ScopeId") (TyCon "Bool")))))
+(DFunDef false "scalarGivenAnswers" ((PVar "binder") (PVar "goalIface") (PVar "useScope")) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "goalIface") "irName") (ELit (LString ""))) (EMatch (EApp (EApp (EVar "directGivenIfaceOf") (EVar "binder")) (EApp (EVar "givensForScope") (EVar "useScope"))) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "declared")) () (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "declared") "irName") (EFieldAccess (EVar "goalIface") "irName")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "scalarGivenProjection") (EVar "binder")) (EVar "goalIface")) (EVar "useScope"))))))))
 (DTypeSig false "directGivenIfaceOf" (TyFun (TyCon "EvidenceBinderId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "IfaceRef")))))
 (DFunDef false "directGivenIfaceOf" (PWild (PList)) (EVar "None"))
 (DFunDef false "directGivenIfaceOf" ((PVar "binder") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "g") "geBinder") (EVar "binder")) (EBinOp "==" (EFieldAccess (EVar "g") "geProvenance") (EVar "DirectGiven"))) (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psIface")) (EIf (EVar "otherwise") (EApp (EApp (EVar "directGivenIfaceOf") (EVar "binder")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -55944,7 +55971,7 @@ isTyAuth _ = False
 (DTypeSig false "entailAssumVar" (TyFun (TyApp (TyCon "Option") (TyCon "PredicateRequest")) (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyCon "EntailKind") (TyApp (TyCon "Option") (TyCon "AssumAnswer")))))))))
 (DFunDef false "entailAssumVar" ((PVar "request") (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKReturn" PWild PWild)) (EApp (EApp (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "request")) (EVar "m")) (EVar "encl")) (EVar "useScope")))
 (DFunDef false "entailAssumVar" ((PVar "request") (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKNumReturn" PWild PWild PWild PWild)) (EApp (EApp (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "request")) (EVar "m")) (EVar "encl")) (EVar "useScope")))
-(DFunDef false "entailAssumVar" (PWild (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKNestedTop" (PVar "iface") PWild PWild PWild (PVar "rest"))) (EMatch (EApp (EApp (EVar "activeFunDictPredOf") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EBinOp "::" (EVar "m") (EVar "rest"))))))) (EVar "useScope")) (arm (PCon "Some" (PVar "answer")) () (EApp (EVar "Some") (EVar "answer"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "activeFunDictPredOfResidual") (EFieldAccess (EVar "iface") "irName")) (EBinOp "::" (EVar "m") (EVar "rest"))) (EVar "useScope")) (arm (PCon "Some" (PVar "answer")) () (EApp (EVar "Some") (EVar "answer"))) (arm (PCon "None") () (EApp (EApp (EVar "map") (EVar "LegacyScalar")) (EApp (EApp (EVar "activeDictVarForEncl") (EVar "m")) (EVar "useScope"))))))))
+(DFunDef false "entailAssumVar" (PWild (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKNestedTop" (PVar "iface") PWild PWild PWild (PVar "rest"))) (EBlock (DoLet false false (PVar "request") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EBinOp "::" (EVar "m") (EVar "rest"))))))) (DoExpr (EMatch (EApp (EApp (EVar "activeFunDictPredOf") (EVar "request")) (EVar "useScope")) (arm (PCon "Some" (PVar "answer")) () (EApp (EVar "Some") (EVar "answer"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "activeFunDictPredOfResidual") (EFieldAccess (EVar "iface") "irName")) (EBinOp "::" (EVar "m") (EVar "rest"))) (EVar "useScope")) (arm (PCon "Some" (PVar "answer")) () (EApp (EVar "Some") (EVar "answer"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "implReqDictVarOf") (EApp (EVar "Some") (EVar "request"))) (EVar "m")) (EVar "useScope")) (arm (PCon "Some" (PVar "answer")) () (EApp (EVar "Some") (EVar "answer"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "activeDictVarForEncl") (EVar "m")) (EVar "useScope")) (arm (PCon "Some" (PVar "b")) () (EIf (EApp (EApp (EApp (EVar "scalarGivenAnswers") (EVar "b")) (EVar "iface")) (EVar "useScope")) (EApp (EVar "Some") (EApp (EVar "LegacyScalar") (EVar "b"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))))))))
 (DFunDef false "entailAssumVar" ((PVar "request") (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKArg" PWild)) (EApp (EApp (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "request")) (EVar "m")) (EVar "encl")) (EVar "useScope")))
 (DFunDef false "entailAssumVar" ((PVar "request") (PVar "m") (PVar "encl") (PVar "name") (PVar "useScope") (PCon "EKOp" (PVar "isBinop") (PVar "inImpl"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "opDictVarOf") (EVar "request")) (EVar "isBinop")) (EVar "name")) (EVar "m")) (EVar "inImpl")) (EVar "encl")) (EVar "useScope")))
 (DFunDef false "entailAssumVar" ((PVar "request") (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKPredicateOp" PWild PWild PWild)) (EApp (EApp (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "request")) (EVar "m")) (EVar "encl")) (EVar "useScope")))
@@ -60349,6 +60376,8 @@ isTyAuth _ = False
 (DFunDef false "assumAnswerRoute" ((PVar "answer") PWild PWild (PVar "paramRoute")) (EApp (EVar "paramRoute") (EApp (EVar "renderEvidenceBinder") (EApp (EVar "assumAnswerBinder") (EVar "answer")))))
 (DTypeSig false "scalarGivenProjection" (TyFun (TyCon "EvidenceBinderId") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "scalarGivenProjection" ((PVar "binder") (PVar "goalIface") (PVar "useScope")) (EMatch (EApp (EApp (EVar "directGivenIfaceOf") (EVar "binder")) (EApp (EVar "givensForScope") (EVar "useScope"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "declared")) () (EIf (EBinOp "==" (EFieldAccess (EVar "declared") "irName") (EFieldAccess (EVar "goalIface") "irName")) (EVar "None") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EFieldAccess (EVar "n") "superPath")))) (EApp (EApp (EDictApp "find") (ELam ((PVar "n")) (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "n") "superIface") "irName") (EFieldAccess (EVar "goalIface") "irName")))) (EApp (EApp (EApp (EApp (EVar "superClosure") (EVar "superLookup")) (ELam (PWild PWild PWild) (EApp (EVar "Some") (ELit LUnit)))) (ELam ((PVar "ir") PWild) (EApp (EVar "regKeyRender") (EApp (EVar "regKeyOfTab") (EApp (EVar "oblIfaceKey") (EVar "ir")))))) (EListLit (ETuple (EVar "declared") (ELit LUnit))))))))))
+(DTypeSig false "scalarGivenAnswers" (TyFun (TyCon "EvidenceBinderId") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "ScopeId") (TyCon "Bool")))))
+(DFunDef false "scalarGivenAnswers" ((PVar "binder") (PVar "goalIface") (PVar "useScope")) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "goalIface") "irName") (ELit (LString ""))) (EMatch (EApp (EApp (EVar "directGivenIfaceOf") (EVar "binder")) (EApp (EVar "givensForScope") (EVar "useScope"))) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "declared")) () (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "declared") "irName") (EFieldAccess (EVar "goalIface") "irName")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "scalarGivenProjection") (EVar "binder")) (EVar "goalIface")) (EVar "useScope"))))))))
 (DTypeSig false "directGivenIfaceOf" (TyFun (TyCon "EvidenceBinderId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "IfaceRef")))))
 (DFunDef false "directGivenIfaceOf" (PWild (PList)) (EVar "None"))
 (DFunDef false "directGivenIfaceOf" ((PVar "binder") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "g") "geBinder") (EVar "binder")) (EBinOp "==" (EFieldAccess (EVar "g") "geProvenance") (EVar "DirectGiven"))) (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psIface")) (EIf (EVar "otherwise") (EApp (EApp (EVar "directGivenIfaceOf") (EVar "binder")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -64046,7 +64075,7 @@ isTyAuth _ = False
 (DTypeSig false "entailAssumVar" (TyFun (TyApp (TyCon "Option") (TyCon "PredicateRequest")) (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyCon "EntailKind") (TyApp (TyCon "Option") (TyCon "AssumAnswer")))))))))
 (DFunDef false "entailAssumVar" ((PVar "request") (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKReturn" PWild PWild)) (EApp (EApp (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "request")) (EVar "m")) (EVar "encl")) (EVar "useScope")))
 (DFunDef false "entailAssumVar" ((PVar "request") (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKNumReturn" PWild PWild PWild PWild)) (EApp (EApp (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "request")) (EVar "m")) (EVar "encl")) (EVar "useScope")))
-(DFunDef false "entailAssumVar" (PWild (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKNestedTop" (PVar "iface") PWild PWild PWild (PVar "rest"))) (EMatch (EApp (EApp (EVar "activeFunDictPredOf") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EBinOp "::" (EVar "m") (EVar "rest"))))))) (EVar "useScope")) (arm (PCon "Some" (PVar "answer")) () (EApp (EVar "Some") (EVar "answer"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "activeFunDictPredOfResidual") (EFieldAccess (EVar "iface") "irName")) (EBinOp "::" (EVar "m") (EVar "rest"))) (EVar "useScope")) (arm (PCon "Some" (PVar "answer")) () (EApp (EVar "Some") (EVar "answer"))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (EVar "LegacyScalar")) (EApp (EApp (EVar "activeDictVarForEncl") (EVar "m")) (EVar "useScope"))))))))
+(DFunDef false "entailAssumVar" (PWild (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKNestedTop" (PVar "iface") PWild PWild PWild (PVar "rest"))) (EBlock (DoLet false false (PVar "request") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EBinOp "::" (EVar "m") (EVar "rest"))))))) (DoExpr (EMatch (EApp (EApp (EVar "activeFunDictPredOf") (EVar "request")) (EVar "useScope")) (arm (PCon "Some" (PVar "answer")) () (EApp (EVar "Some") (EVar "answer"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "activeFunDictPredOfResidual") (EFieldAccess (EVar "iface") "irName")) (EBinOp "::" (EVar "m") (EVar "rest"))) (EVar "useScope")) (arm (PCon "Some" (PVar "answer")) () (EApp (EVar "Some") (EVar "answer"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "implReqDictVarOf") (EApp (EVar "Some") (EVar "request"))) (EVar "m")) (EVar "useScope")) (arm (PCon "Some" (PVar "answer")) () (EApp (EVar "Some") (EVar "answer"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "activeDictVarForEncl") (EVar "m")) (EVar "useScope")) (arm (PCon "Some" (PVar "b")) () (EIf (EApp (EApp (EApp (EVar "scalarGivenAnswers") (EVar "b")) (EVar "iface")) (EVar "useScope")) (EApp (EVar "Some") (EApp (EVar "LegacyScalar") (EVar "b"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))))))))
 (DFunDef false "entailAssumVar" ((PVar "request") (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKArg" PWild)) (EApp (EApp (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "request")) (EVar "m")) (EVar "encl")) (EVar "useScope")))
 (DFunDef false "entailAssumVar" ((PVar "request") (PVar "m") (PVar "encl") (PVar "name") (PVar "useScope") (PCon "EKOp" (PVar "isBinop") (PVar "inImpl"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "opDictVarOf") (EVar "request")) (EVar "isBinop")) (EVar "name")) (EVar "m")) (EVar "inImpl")) (EVar "encl")) (EVar "useScope")))
 (DFunDef false "entailAssumVar" ((PVar "request") (PVar "m") (PVar "encl") PWild (PVar "useScope") (PCon "EKPredicateOp" PWild PWild PWild)) (EApp (EApp (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "request")) (EVar "m")) (EVar "encl")) (EVar "useScope")))

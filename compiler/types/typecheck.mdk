@@ -10306,6 +10306,18 @@ scalarGivenProjection binder goalIface useScope =
               (ir _ => regKeyRender (regKeyOfTab (oblIfaceKey ir)))
               [(declared, ())]))
 
+-- Whether the tyvar-keyed binder [binder] can answer a goal of [goalIface]: its own
+-- predicate is the goal's interface or has it as a superclass.  A binder with no
+-- recorded direct given, or a goal with no interface, is not constrained here.
+scalarGivenAnswers : EvidenceBinderId -> IfaceRef -> ScopeId -> Bool
+scalarGivenAnswers binder goalIface useScope =
+  goalIface.irName == ""
+    || (match directGivenIfaceOf binder (givensForScope useScope)
+      None => True
+      Some declared =>
+        declared.irName == goalIface.irName
+          || isSome (scalarGivenProjection binder goalIface useScope))
+
 directGivenIfaceOf : EvidenceBinderId -> List GivenEntry -> Option IfaceRef
 directGivenIfaceOf _ [] = None
 directGivenIfaceOf binder (g :: rest)
@@ -30749,15 +30761,28 @@ entailAssumVar request m encl _ useScope (EKReturn _ _) =
 entailAssumVar request m encl _ useScope (EKNumReturn _ _ _ _) =
   activeDictVarOfEncl request m encl useScope
 entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
-  match (activeFunDictPredOf
+  let request =
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m :: rest) }
-    useScope)
+  match activeFunDictPredOf request useScope
     Some answer => Some answer
     -- #1318 residual: EKNestedTop can still carry OriginUnresolved (#1507).  Preserve
     -- its pre-migration spelling fallback until that producer has declaration identity.
     None => match activeFunDictPredOfResidual iface.irName (m :: rest) useScope
       Some answer => Some answer
-      None => map LegacyScalar (activeDictVarForEncl m useScope)
+      -- An impl's `requires` givens are id-witnessed, so the predicate-only rungs above
+      -- cannot see them; this rung matches them by predicate, as a method occurrence's
+      -- does (#1154).  The tyvar-keyed registry that follows holds one entry per
+      -- `requires` predicate on the variable, so it may answer only with a binder whose
+      -- interface is the goal's or reaches it through superclasses.
+      None => match implReqDictVarOf (Some request) m useScope
+        Some answer => Some answer
+        None => match activeDictVarForEncl m useScope
+          Some b =>
+            if scalarGivenAnswers b iface useScope then
+              Some (LegacyScalar b)
+            else
+              None
+          None => None
 entailAssumVar request m encl _ useScope (EKArg _) =
   activeDictVarOfEncl request m encl useScope
 entailAssumVar request m encl name useScope (EKOp isBinop inImpl) =
