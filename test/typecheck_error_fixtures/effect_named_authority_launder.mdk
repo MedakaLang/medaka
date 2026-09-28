@@ -1,12 +1,16 @@
 -- #3382: a wrapper whose signature names its argument as the authority of
--- FileRead cannot read a path it does not derive from that argument.  Both
--- bodies must reject: the literal is unrelated to `p`, and a computed
--- prefix in front of `p` is not within `p`.
+-- FileRead cannot read a path it does not derive from that argument.  Every
+-- body must reject: the literal is unrelated to `p`, a computed prefix in
+-- front of `p` is not within `p`, and an extension of `p` is the whole domain,
+-- since the caller may choose an exact element that admits only itself.
 sneaky : (p : String) -> <FileRead p> Result String String
 sneaky p = readFile "/etc/shadow"
 
 rooted : (p : String) -> <FileRead p> Result String String
 rooted p = readFile ("/" ++ p)
+
+extended : (p : String) -> <FileRead p> Result String String
+extended p = readFile (p ++ "/x")
 
 cfg : Unit -> <FileRead "config/*"> Result String String
 cfg _ = sneaky "config/app.toml"

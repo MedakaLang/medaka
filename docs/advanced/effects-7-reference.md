@@ -80,14 +80,8 @@ These are the places where the current compiler does not yet express something
 the design intends, or where it is stricter than it needs to be. Each has an
 issue; the number is the thing to search for.
 
-- **Appending to a named authority is unsound in argument position.** Under
-  `(dir : String) -> <Store dir> Int`, a body may write `load (dir ++ "/x")`
-  and is charged `dir` while it reaches `dir/x`. Ruled to become the whole
-  domain, with a residual form to widen it later.
-  [#3501](https://github.com/MedakaLang/medaka/issues/3501)
 - **A pure helper cannot return a value at a named argument's authority.** The
-  qualifier needs a label atom, and an extension is the whole domain in a
-  result. [#3559](https://github.com/MedakaLang/medaka/issues/3559),
+  qualifier needs a label atom. [#3559](https://github.com/MedakaLang/medaka/issues/3559),
   [#3532](https://github.com/MedakaLang/medaka/issues/3532)
 - **There is no written syntax for a relation.** A binding whose inferred type
   carries `(a <= d) =>` must stay unsigned. Design notes in the specification;

@@ -13,7 +13,7 @@ mkConf : Unit -> Conf "config/*"
 mkRaw : Int -> Raw *
 none : Unit -> List (Handle p)
 open : (path : String) -> Handle path
-openSub : (path : String) -> Handle path
+openSub : String -> Handle "config/*"
 rawAt : (path : String) -> Raw path
 readAny : Handle * -> <FileRead> Result String String
 readConf : Conf p -> <FileRead p> Result String String

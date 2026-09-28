@@ -96,7 +96,7 @@ accepted. countNotes requires only <FileRead "notes.txt">
 
 `(path : String) -> <Store path> Int` is the signature of an operation whose
 authority is decided by its caller. Inside such a function, the body may use the
-named argument, and it may narrow it, but it may not reach anything else:
+named argument, but it may not reach anything else:
 
 ```medaka
 effect Store Prefix
@@ -125,7 +125,7 @@ substituted its literal for the name, so the row `main` is charged with is exact
 And the compiler holds the body of `under` to its promise:
 
 ```
-error: authority.mdk:7:18: Binding 'sneaky' reaches "secrets/key" where only dir is admitted: dir is an authority the caller chooses, so a body may forward the named argument or narrow it, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare
+error: authority.mdk:7:18: Binding 'sneaky' reaches "secrets/key" where only dir is admitted: dir is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from; an extension of it is the whole domain. Perform the operation on the named argument and build any extended value at the call site, or widen the declared row to the label bare
   |
 7 | sneaky dir = load "secrets/key"
   |                   ^
@@ -135,6 +135,30 @@ A name in a row is a variable of the signature, the way `a` is in `List a -> Int
 and the rule for it is the one from [chapter 2](effects-2-polymorphism.md): the
 caller chooses it, so the body must work for every choice. The name may only be
 used to the right of the argument that binds it, and only in the same signature.
+
+An extension of a named argument is the whole domain: a caller may pass an exact
+element such as `"cfg/app.toml"`, which admits only itself, so
+`load (dir ++ "/x")` is refused inside `under`. Forward the argument, and build
+the longer path at the call site:
+
+```medaka
+effect Store Prefix
+
+load : (path : String) -> <Store path> Int
+load _ = 1
+
+under : (dir : String) -> <Store dir> Int
+under dir = load dir
+
+inConfig : String -> <Store "cfg/*"> Int
+inConfig name = under ("cfg/" ++ name)
+
+main = println (inConfig "app.toml")
+```
+
+```medaka-expect
+1
+```
 
 The built-in file, environment, and network externs are all declared this way:
 `readFile : (path : String) -> <FileRead path> Result String String`,
@@ -325,7 +349,7 @@ Arguments passed in the wrong order are charged on the axes they land on, so
 `request "GET" "api.example.com/v1/items"` performs `Host="GET"` and a method
 named `"api.example.com/v1/items"`, and neither fits. Inside a function that
 names both axes, extending an axis argument (`host ++ "/x"`) gives that axis's
-whole domain, never a narrower value derived from the argument.
+whole domain, as extending any named argument does.
 
 In a manifest a product renders as a table, and a label that holds several
 elements renders as an array:
@@ -406,10 +430,8 @@ error: authority.mdk:6:38: The qualifier names 'dir', but no effect atom or inde
 ```
 
 > ⚠️ **A pure helper over paths is hard to write today.** A function that
-> returns `dir ++ "/index"` at `dir`'s authority is refused twice over: the
-> qualifier needs a label atom the function does not perform, and an extension
-> of a named authority counts as the whole domain in a result. Forward the
-> argument unchanged, or move the concatenation to the call site. Tracked as
+> returns a path at `dir`'s authority is refused unless its signature performs
+> a label atom naming `dir`: the qualifier has no domain without one. Tracked as
 > [#3559](https://github.com/MedakaLang/medaka/issues/3559).
 
 ## Relations the compiler keeps
