@@ -113,7 +113,7 @@ persistHasHead dir = fileExists (headPath dir)
 export
 persistSave : String ->
   Cid ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   <FileRead, FileWrite> Result String Unit
 persistSave dir head blocks = do
   () <- ensureRoot dir
@@ -126,7 +126,7 @@ persistSave dir head blocks = do
    The rows are unverified disk bytes; `repoFromBlocks` is what verifies them, so
    a caller must never treat this result as trusted state on its own. -}
 export
-persistLoad : String -> <FileRead> Result String (Cid, List (Cid, Array Int))
+persistLoad : String -> <FileRead> Result String (Cid, List (Cid, Bytes))
 persistLoad dir = do
   text <- mapErr
     (message => "persist: unreadable head file: \{message}")

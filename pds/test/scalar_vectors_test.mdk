@@ -20,8 +20,8 @@
 
    The Wasm arm sweeps the same full corpus as the native one, so it is held
    to the same per-op lines. It is the arm that can be absent from a host: it
-   needs the Wasm emitter, `node` and `wasm-tools`, and is skipped without
-   them unless `MEDAKA_REQUIRE_WASM=1`. -}
+   needs the Wasm emitter, `node` and `wasm-tools`, and a host without
+   them fails the row rather than skipping the arm. -}
 
 import test.vector_runner.{
   Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
@@ -61,6 +61,7 @@ fullCorpusArm e = Arm {
   countFloor = None,
   needs = fullCorpusOpLines,
   lastLine = Some "TOTAL: PASS",
+  exactStdout = None,
 }
 
 row : Row
@@ -78,6 +79,7 @@ row = Row {
       countFloor = None,
       needs = evalOpLines,
       lastLine = Some "TOTAL: PASS",
+      exactStdout = None,
     },
     fullCorpusArm NativeEngine,
     fullCorpusArm WasmEngine,

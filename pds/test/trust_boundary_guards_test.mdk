@@ -1,9 +1,8 @@
 {- | Trust-boundary PANIC guards for RUN-PDS0-036, #1727 and #3210, migrated
    from `pds/test/trust_boundary_guards.sh` under #2592.
 
-   The `readBufferAppend` byte domain and `uvarintEncode`'s non-negative
-   domain abort instead of returning a value: their result types have no
-   `Result` channel. Medaka has no catchable panics, so they cannot be
+   `uvarintEncode`'s non-negative domain aborts instead of returning a
+   value: its result type has no `Result` channel. Medaka has no catchable panics, so they cannot be
    asserted IN PROCESS — the first abort would shadow every later assertion.
    This gate spawns `pds/test/guard_probes_main.mdk` ONE CASE PER PROCESS
    (`medaka run … <case>`) and grades the outcome from outside, exactly as
@@ -18,12 +17,10 @@
                     an OOM), so it would stay green after the guard was
                     deleted. `expectSpawnFails` is exactly this shape.
      CONTROL cell — must exit 0 AND print its expected "OK …" line. This is
-                    the half that catches an over-tight bound;
-                    `readbuffer-edges` uses the two INCLUSIVE endpoints 0
-                    and 255 for exactly that reason.
+                    the half that catches an over-tight bound.
 
-   SHA-256 and base58 have no cell here. Both take `Bytes`, whose type
-   carries the byte domain, so an out-of-range element is refused where the
+   SHA-256, base58 and `pds/shell/server.mdk`'s `readBufferAppend` have no
+   cell here. All three take `Bytes`, whose type carries the byte domain, so an out-of-range element is refused where the
    `Bytes` is built: by `bytes.fromArray`, or at compile time for a `U8`
    literal, which `test/fixed_width_refusal_fixtures` pins.
 
@@ -69,19 +66,10 @@ cells : List (String, Result String String)
 cells = [
   ("uvarint-neg", Err "unsigned-varint encodes non-negative values only"),
   ("uvarint-ok", Ok "OK uvarint-ok len=2"),
-  (
-    "readbuffer-over",
-    Err "readBufferAppend: every element must be a byte in 0..255",
-  ),
-  (
-    "readbuffer-under",
-    Err "readBufferAppend: every element must be a byte in 0..255",
-  ),
-  ("readbuffer-edges", Ok "OK readbuffer-edges len=2"),
 ]
 
 cellFloor : Int
-cellFloor = 5
+cellFloor = 2
 
 runCell : (String, Result String String) -> <Exec, IO> (String, Expectation)
 runCell (name, Err wantMessage) =
@@ -104,18 +92,9 @@ test "uvarint-neg panics with the guard's own message" =
 
 test "uvarint-ok control case is unaffected" = cellExpectation "uvarint-ok"
 
-test "readbuffer-over panics with the guard's own message" =
-  cellExpectation "readbuffer-over"
-
-test "readbuffer-under panics with the guard's own message" =
-  cellExpectation "readbuffer-under"
-
-test "readbuffer-edges control case is unaffected" =
-  cellExpectation "readbuffer-edges"
-
 -- # Non-vacuity
 
-test "trust_boundary_guards ran at least CELL_FLOOR=5 cells" =
+test "trust_boundary_guards ran at least CELL_FLOOR=2 cells" =
   let n = length results
   if n >= cellFloor then
     Pass ">= \{intToString cellFloor} cells" "\{intToString n} cells"

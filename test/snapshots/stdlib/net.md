@@ -1,5 +1,5 @@
 # META
-source_lines=370
+source_lines=331
 stages=DESUGAR,MARK
 # SOURCE
 {- | TCP connections and name resolution.
@@ -25,15 +25,14 @@ stages=DESUGAR,MARK
 -- compiled loopback fixture rather than doctests, which would run under the
 -- interpreter (NET-DESIGN.md §7).
 
-import array.{setInPlace}
 import bytes as B
 import bytes.{Bytes, fromArrayAssumeByteDomain}
-import list.{reverse}
+import list.{drop, reverse, take}
 import vector.{Vector, new, push, toArray}
-import string.{toUtf8, fromUtf8}
+import string.{fromUtf8}
 import time.{Duration, toMillis}
 import u8 as U8
-import test.{expectAll, expectEqual, expectTrue}
+import test.{expectAll, expectEqual}
 
 -- # Handles
 
@@ -98,7 +97,7 @@ accept lis = netTcpAccept lis
    `sendAll` is the form that sends everything. -}
 export
 send : Connection h -> Bytes -> <Net h> Result String Int
-send conn bs = netSend conn (B.toArray bs)
+send conn bs = netSendBytesFrom conn (B.lendByteBlockUnsafe bs) 0 (B.length bs)
 
 {- | Receives up to `n` bytes in one call.
 
@@ -114,98 +113,64 @@ recv conn n = map fromArrayAssumeByteDomain (netRecv conn n)
    treated as a stalled connection. -}
 export
 sendAll : Connection h -> Bytes -> <Net h> Result String Unit
-sendAll conn bs = sendArray conn (B.toArray bs)
+sendAll conn bs =
+  let bb = B.lendByteBlockUnsafe bs
+  let end = B.length bs
+  sendAllFrom (off => netSendBytesFrom conn bb off end) end 0
 
--- The send externs take an array, so the payload is unpacked once here and
--- the loop below advances an offset through that one copy.
-sendArray : Connection h -> Array Int -> <Net h> Result String Unit
-sendArray conn bs = sendAllFrom (bytes off => netSendFrom conn bytes off) bs 0
-
-sendAllFrom : (Array Int -> Int -> <e> Result String Int) ->
-  Array Int ->
+-- The loop advances an offset through the payload's own block, and the
+-- extern sends at most 64 KiB per call, so a large payload costs its own
+-- length, not its length squared.
+sendAllFrom : (Int -> <e> Result String Int) ->
+  Int ->
   Int ->
   <e> Result String Unit
-sendAllFrom write bs off =
-  if off >= arrayLength bs then
+sendAllFrom write end off =
+  if off >= end then
     Ok ()
-  else match write bs off
+  else match write off
     Err e => Err e
     Ok 0 => Err "net.sendAll: 0 bytes written (connection stalled)"
-    Ok n => sendAllFrom write bs (off + n)
-
-testSentBytes : Array Int -> Int -> Int -> List Int
-testSentBytes bs i hi =
-  if i >= hi then [] else arrayGetUnsafe i bs :: testSentBytes bs (i + 1) hi
-
-testRecordAlias : Ref (Option (Array Int)) ->
-  Ref Bool ->
-  Array Int ->
-  Int ->
-  Unit
-testRecordAlias first aliasSeen bs call =
-  if call == 0 then
-    first := Some bs
-  else if call == 1 then match !first
-    Some original =>
-      let _ = setInPlace 0 251 original
-      aliasSeen := arrayGetUnsafe 0 bs == 251
-    None => ()
+    Ok n => sendAllFrom write end (off + n)
 
 testScriptedSend : Ref Int ->
   Ref (List Int) ->
   Ref (List Int) ->
-  Ref (Option (Array Int)) ->
-  Ref Bool ->
-  Array Int ->
+  List Int ->
   Int ->
   Result String Int
-testScriptedSend calls offsets sent first aliasSeen bs off =
+testScriptedSend calls offsets sent payload off =
   let call = !calls
   calls := call + 1
   offsets := !offsets ++ [off]
-  let _ = testRecordAlias first aliasSeen bs call
   if call >= 3 then
     Err "unexpected fourth send"
   else
     let n =
-      if call == 0 then 2 else if call == 1 then 3 else arrayLength bs - off
-    sent := !sent ++ testSentBytes bs off (off + n)
+      if call == 0 then 2 else if call == 1 then 3 else length payload - off
+    sent := !sent ++ take n (drop off payload)
     Ok n
 
-testScriptedObservation : Unit ->
-  (Result String Unit, Int, List Int, List Int, Bool)
-testScriptedObservation _ =
+test "sendAll advances one offset and covers exact bytes" =
   let calls = Ref 0
   let offsets = Ref []
   let sent = Ref []
-  let first = Ref None
-  let aliasSeen = Ref False
-  let payload = arrayFromList [10, 20, 30, 40, 50, 60, 70, 80]
-  let result =
-    sendAllFrom (testScriptedSend calls offsets sent first aliasSeen) payload 0
-  (result, !calls, !offsets, !sent, !aliasSeen)
-
-test "sendAll keeps one array while offsets cover exact bytes" =
-  let (result, calls, offsets, sent, aliasSeen) = testScriptedObservation ()
+  let payload = [10, 20, 30, 40, 50, 60, 70, 80]
+  let result = sendAllFrom (testScriptedSend calls offsets sent payload) 8 0
   expectAll [
     expectEqual (Ok ()) result,
-    expectEqual 3 calls,
-    expectEqual [0, 2, 5] offsets,
-    expectEqual [10, 20, 30, 40, 50, 60, 70, 80] sent,
-    expectTrue aliasSeen,
+    expectEqual 3 !calls,
+    expectEqual [0, 2, 5] !offsets,
+    expectEqual payload !sent,
   ]
 
 test "sendAll rejects a zero-byte write exactly" =
   expectEqual
     (Err "net.sendAll: 0 bytes written (connection stalled)")
-    (sendAllFrom (_ _ => Ok 0) (arrayFromList [1]) 0)
+    (sendAllFrom (_ => Ok 0) 1 0)
 
-testFirstErrorSend : Ref Int ->
-  Ref (List Int) ->
-  Array Int ->
-  Int ->
-  Result String Int
-testFirstErrorSend calls offsets _ off =
+testFirstErrorSend : Ref Int -> Ref (List Int) -> Int -> Result String Int
+testFirstErrorSend calls offsets off =
   let call = !calls
   calls := call + 1
   offsets := !offsets ++ [off]
@@ -214,11 +179,7 @@ testFirstErrorSend calls offsets _ off =
 test "sendAll returns the first host error without another write" =
   let calls = Ref 0
   let offsets = Ref []
-  let result =
-    sendAllFrom
-      (testFirstErrorSend calls offsets)
-      (arrayFromList [1, 2, 3, 4])
-      0
+  let result = sendAllFrom (testFirstErrorSend calls offsets) 4 0
   expectAll [
     expectEqual (Err "boom") result,
     expectEqual 2 !calls,
@@ -247,7 +208,7 @@ recvAll conn = recvAllLoop conn []
 -- | Sends a string as UTF-8, every byte of it.
 export
 sendString : Connection h -> String -> <Net h> Result String Unit
-sendString conn s = sendArray conn (toUtf8 s)
+sendString conn s = sendAll conn (B.encodeUtf8 s)
 
 {- | Receives everything until the peer closes the connection, decoded as
    UTF-8.
@@ -373,15 +334,14 @@ serveLoop lis handle = match accept lis
     let _ = close conn
     serveLoop lis handle
 # DESUGAR
-(DUse false (UseGroup ("array") ((mem "setInPlace" false))))
 (DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromArrayAssumeByteDomain" false))))
-(DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "reverse" false) (mem "take" false))))
 (DUse false (UseGroup ("vector") ((mem "Vector" false) (mem "new" false) (mem "push" false) (mem "toArray" false))))
-(DUse false (UseGroup ("string") ((mem "toUtf8" false) (mem "fromUtf8" false))))
+(DUse false (UseGroup ("string") ((mem "fromUtf8" false))))
 (DUse false (UseGroup ("time") ((mem "Duration" false) (mem "toMillis" false))))
 (DUse false (UseAlias ("u8") "U8"))
-(DUse false (UseGroup ("test") ((mem "expectAll" false) (mem "expectEqual" false) (mem "expectTrue" false))))
+(DUse false (UseGroup ("test") ((mem "expectAll" false) (mem "expectEqual" false))))
 (DTypeAlias true "Connection" ("h") (TyApp (TyCon "Socket") (TyVar "h")))
 (DTypeAlias true "Listener" ("a") (TyApp (TyCon "ListenSocket") (TyVar "a")))
 (DData Public "Shutdown" () ((variant "ShutdownRead" (ConPos)) (variant "ShutdownWrite" (ConPos)) (variant "ShutdownBoth" (ConPos))) ())
@@ -396,34 +356,26 @@ serveLoop lis handle = match accept lis
 (DTypeSig true "accept" (TyFun (TyApp (TyCon "Listener") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Connection") (TyVar "a"))))))
 (DFunDef false "accept" ((PVar "lis")) (EApp (EVar "netTcpAccept") (EVar "lis")))
 (DTypeSig true "send" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyCon "Bytes") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "send" ((PVar "conn") (PVar "bs")) (EApp (EApp (EVar "netSend") (EVar "conn")) (EApp (EVar "B.toArray") (EVar "bs"))))
+(DFunDef false "send" ((PVar "conn") (PVar "bs")) (EApp (EApp (EApp (EApp (EVar "netSendBytesFrom") (EVar "conn")) (EApp (EVar "B.lendByteBlockUnsafe") (EVar "bs"))) (ELit (LInt 0))) (EApp (EVar "B.length") (EVar "bs"))))
 (DTypeSig true "recv" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))))
 (DFunDef false "recv" ((PVar "conn") (PVar "n")) (EApp (EApp (EVar "map") (EVar "fromArrayAssumeByteDomain")) (EApp (EApp (EVar "netRecv") (EVar "conn")) (EVar "n"))))
 (DTypeSig true "sendAll" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyCon "Bytes") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "sendAll" ((PVar "conn") (PVar "bs")) (EApp (EApp (EVar "sendArray") (EVar "conn")) (EApp (EVar "B.toArray") (EVar "bs"))))
-(DTypeSig false "sendArray" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "sendArray" ((PVar "conn") (PVar "bs")) (EApp (EApp (EApp (EVar "sendAllFrom") (ELam ((PVar "bytes") (PVar "off")) (EApp (EApp (EApp (EVar "netSendFrom") (EVar "conn")) (EVar "bytes")) (EVar "off")))) (EVar "bs")) (ELit (LInt 0))))
-(DTypeSig false "sendAllFrom" (TyFun (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "sendAllFrom" ((PVar "write") (PVar "bs") (PVar "off")) (EIf (EBinOp ">=" (EVar "off") (EApp (EVar "arrayLength") (EVar "bs"))) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EApp (EVar "write") (EVar "bs")) (EVar "off")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LInt 0))) () (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (arm (PCon "Ok" (PVar "n")) () (EApp (EApp (EApp (EVar "sendAllFrom") (EVar "write")) (EVar "bs")) (EBinOp "+" (EVar "off") (EVar "n")))))))
-(DTypeSig false "testSentBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "testSentBytes" ((PVar "bs") (PVar "i") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs")) (EApp (EApp (EApp (EVar "testSentBytes") (EVar "bs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "hi")))))
-(DTypeSig false "testRecordAlias" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Unit"))))))
-(DFunDef false "testRecordAlias" ((PVar "first") (PVar "aliasSeen") (PVar "bs") (PVar "call")) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (EApp (EApp (EVar "setRef") (EVar "first")) (EApp (EVar "Some") (EVar "bs"))) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (EMatch (EUnOp "!" (EVar "first")) (arm (PCon "Some" (PVar "original")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (ELit (LInt 0))) (ELit (LInt 251))) (EVar "original"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "aliasSeen")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "bs")) (ELit (LInt 251))))))) (arm (PCon "None") () (ELit LUnit))) (ELit LUnit))))
-(DTypeSig false "testScriptedSend" (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))))))
-(DFunDef false "testScriptedSend" ((PVar "calls") (PVar "offsets") (PVar "sent") (PVar "first") (PVar "aliasSeen") (PVar "bs") (PVar "off")) (EBlock (DoLet false false (PVar "call") (EUnOp "!" (EVar "calls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EVar "call") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "offsets")) (EBinOp "++" (EUnOp "!" (EVar "offsets")) (EListLit (EVar "off"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "testRecordAlias") (EVar "first")) (EVar "aliasSeen")) (EVar "bs")) (EVar "call"))) (DoExpr (EIf (EBinOp ">=" (EVar "call") (ELit (LInt 3))) (EApp (EVar "Err") (ELit (LString "unexpected fourth send"))) (EBlock (DoLet false false (PVar "n") (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (ELit (LInt 2)) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (ELit (LInt 3)) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "bs")) (EVar "off"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "sent")) (EBinOp "++" (EUnOp "!" (EVar "sent")) (EApp (EApp (EApp (EVar "testSentBytes") (EVar "bs")) (EVar "off")) (EBinOp "+" (EVar "off") (EVar "n")))))) (DoExpr (EApp (EVar "Ok") (EVar "n"))))))))
-(DTypeSig false "testScriptedObservation" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")) (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
-(DFunDef false "testScriptedObservation" (PWild) (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "offsets") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "sent") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "first") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "aliasSeen") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false (PVar "payload") (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 10)) (ELit (LInt 20)) (ELit (LInt 30)) (ELit (LInt 40)) (ELit (LInt 50)) (ELit (LInt 60)) (ELit (LInt 70)) (ELit (LInt 80))))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "sendAllFrom") (EApp (EApp (EApp (EApp (EApp (EVar "testScriptedSend") (EVar "calls")) (EVar "offsets")) (EVar "sent")) (EVar "first")) (EVar "aliasSeen"))) (EVar "payload")) (ELit (LInt 0)))) (DoExpr (ETuple (EVar "result") (EUnOp "!" (EVar "calls")) (EUnOp "!" (EVar "offsets")) (EUnOp "!" (EVar "sent")) (EUnOp "!" (EVar "aliasSeen"))))))
-(DTest false "sendAll keeps one array while offsets cover exact bytes" (EBlock (DoLet false false (PTuple (PVar "result") (PVar "calls") (PVar "offsets") (PVar "sent") (PVar "aliasSeen")) (EApp (EVar "testScriptedObservation") (ELit LUnit))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ELit LUnit))) (EVar "result")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 3))) (EVar "calls")) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 0)) (ELit (LInt 2)) (ELit (LInt 5)))) (EVar "offsets")) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 10)) (ELit (LInt 20)) (ELit (LInt 30)) (ELit (LInt 40)) (ELit (LInt 50)) (ELit (LInt 60)) (ELit (LInt 70)) (ELit (LInt 80)))) (EVar "sent")) (EApp (EVar "expectTrue") (EVar "aliasSeen")))))))
-(DTest false "sendAll rejects a zero-byte write exactly" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (EApp (EApp (EApp (EVar "sendAllFrom") (ELam (PWild PWild) (EApp (EVar "Ok") (ELit (LInt 0))))) (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 1))))) (ELit (LInt 0)))))
-(DTypeSig false "testFirstErrorSend" (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
-(DFunDef false "testFirstErrorSend" ((PVar "calls") (PVar "offsets") PWild (PVar "off")) (EBlock (DoLet false false (PVar "call") (EUnOp "!" (EVar "calls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EVar "call") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "offsets")) (EBinOp "++" (EUnOp "!" (EVar "offsets")) (EListLit (EVar "off"))))) (DoExpr (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (EApp (EVar "Ok") (ELit (LInt 2))) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (EApp (EVar "Err") (ELit (LString "boom"))) (EApp (EVar "Err") (ELit (LString "late call"))))))))
-(DTest false "sendAll returns the first host error without another write" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "offsets") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "sendAllFrom") (EApp (EApp (EVar "testFirstErrorSend") (EVar "calls")) (EVar "offsets"))) (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4))))) (ELit (LInt 0)))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "boom")))) (EVar "result")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EUnOp "!" (EVar "calls"))) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 0)) (ELit (LInt 2)))) (EUnOp "!" (EVar "offsets"))))))))
+(DFunDef false "sendAll" ((PVar "conn") (PVar "bs")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "B.lendByteBlockUnsafe") (EVar "bs"))) (DoLet false false (PVar "end") (EApp (EVar "B.length") (EVar "bs"))) (DoExpr (EApp (EApp (EApp (EVar "sendAllFrom") (ELam ((PVar "off")) (EApp (EApp (EApp (EApp (EVar "netSendBytesFrom") (EVar "conn")) (EVar "bb")) (EVar "off")) (EVar "end")))) (EVar "end")) (ELit (LInt 0))))))
+(DTypeSig false "sendAllFrom" (TyFun (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
+(DFunDef false "sendAllFrom" ((PVar "write") (PVar "end") (PVar "off")) (EIf (EBinOp ">=" (EVar "off") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EVar "write") (EVar "off")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LInt 0))) () (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (arm (PCon "Ok" (PVar "n")) () (EApp (EApp (EApp (EVar "sendAllFrom") (EVar "write")) (EVar "end")) (EBinOp "+" (EVar "off") (EVar "n")))))))
+(DTypeSig false "testScriptedSend" (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))))
+(DFunDef false "testScriptedSend" ((PVar "calls") (PVar "offsets") (PVar "sent") (PVar "payload") (PVar "off")) (EBlock (DoLet false false (PVar "call") (EUnOp "!" (EVar "calls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EVar "call") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "offsets")) (EBinOp "++" (EUnOp "!" (EVar "offsets")) (EListLit (EVar "off"))))) (DoExpr (EIf (EBinOp ">=" (EVar "call") (ELit (LInt 3))) (EApp (EVar "Err") (ELit (LString "unexpected fourth send"))) (EBlock (DoLet false false (PVar "n") (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (ELit (LInt 2)) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (ELit (LInt 3)) (EBinOp "-" (EApp (EVar "length") (EVar "payload")) (EVar "off"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "sent")) (EBinOp "++" (EUnOp "!" (EVar "sent")) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EApp (EVar "drop") (EVar "off")) (EVar "payload")))))) (DoExpr (EApp (EVar "Ok") (EVar "n"))))))))
+(DTest false "sendAll advances one offset and covers exact bytes" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "offsets") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "sent") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "payload") (EListLit (ELit (LInt 10)) (ELit (LInt 20)) (ELit (LInt 30)) (ELit (LInt 40)) (ELit (LInt 50)) (ELit (LInt 60)) (ELit (LInt 70)) (ELit (LInt 80)))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "sendAllFrom") (EApp (EApp (EApp (EApp (EVar "testScriptedSend") (EVar "calls")) (EVar "offsets")) (EVar "sent")) (EVar "payload"))) (ELit (LInt 8))) (ELit (LInt 0)))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ELit LUnit))) (EVar "result")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 3))) (EUnOp "!" (EVar "calls"))) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 0)) (ELit (LInt 2)) (ELit (LInt 5)))) (EUnOp "!" (EVar "offsets"))) (EApp (EApp (EVar "expectEqual") (EVar "payload")) (EUnOp "!" (EVar "sent"))))))))
+(DTest false "sendAll rejects a zero-byte write exactly" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (EApp (EApp (EApp (EVar "sendAllFrom") (ELam (PWild) (EApp (EVar "Ok") (ELit (LInt 0))))) (ELit (LInt 1))) (ELit (LInt 0)))))
+(DTypeSig false "testFirstErrorSend" (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DFunDef false "testFirstErrorSend" ((PVar "calls") (PVar "offsets") (PVar "off")) (EBlock (DoLet false false (PVar "call") (EUnOp "!" (EVar "calls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EVar "call") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "offsets")) (EBinOp "++" (EUnOp "!" (EVar "offsets")) (EListLit (EVar "off"))))) (DoExpr (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (EApp (EVar "Ok") (ELit (LInt 2))) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (EApp (EVar "Err") (ELit (LString "boom"))) (EApp (EVar "Err") (ELit (LString "late call"))))))))
+(DTest false "sendAll returns the first host error without another write" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "offsets") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "sendAllFrom") (EApp (EApp (EVar "testFirstErrorSend") (EVar "calls")) (EVar "offsets"))) (ELit (LInt 4))) (ELit (LInt 0)))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "boom")))) (EVar "result")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EUnOp "!" (EVar "calls"))) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 0)) (ELit (LInt 2)))) (EUnOp "!" (EVar "offsets"))))))))
 (DTypeSig false "recvAllLoop" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyApp (TyCon "List") (TyCon "Bytes")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))))
 (DFunDef false "recvAllLoop" ((PVar "conn") (PVar "chunks")) (EMatch (EApp (EApp (EVar "recv") (EVar "conn")) (ELit (LInt 4096))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "chunk")) () (EIf (EApp (EVar "B.isEmpty") (EVar "chunk")) (EApp (EVar "Ok") (EApp (EVar "B.concat") (EApp (EVar "reverse") (EVar "chunks")))) (EApp (EApp (EVar "recvAllLoop") (EVar "conn")) (EBinOp "::" (EVar "chunk") (EVar "chunks")))))))
 (DTypeSig true "recvAll" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes")))))
 (DFunDef false "recvAll" ((PVar "conn")) (EApp (EApp (EVar "recvAllLoop") (EVar "conn")) (EListLit)))
 (DTypeSig true "sendString" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyCon "String") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "sendString" ((PVar "conn") (PVar "s")) (EApp (EApp (EVar "sendArray") (EVar "conn")) (EApp (EVar "toUtf8") (EVar "s"))))
+(DFunDef false "sendString" ((PVar "conn") (PVar "s")) (EApp (EApp (EVar "sendAll") (EVar "conn")) (EApp (EVar "B.encodeUtf8") (EVar "s"))))
 (DTypeSig true "recvString" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "recvString" ((PVar "conn")) (EApp (EApp (EVar "map") (ELam ((PVar "bs")) (EApp (EVar "fromUtf8") (EApp (EVar "B.toArray") (EVar "bs"))))) (EApp (EVar "recvAll") (EVar "conn"))))
 (DTypeSig true "sendLine" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyCon "String") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
@@ -451,15 +403,14 @@ serveLoop lis handle = match accept lis
 (DTypeSig true "serveLoop" (TyFun (TyApp (TyCon "Listener") (TyVar "a")) (TyFun (TyFun (TyApp (TyCon "Connection") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))) (TyEffect ((atom "Net" (name "a"))) (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "serveLoop" ((PVar "lis") (PVar "handle")) (EMatch (EApp (EVar "accept") (EVar "lis")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "conn")) () (EBlock (DoLet false false PWild (EApp (EVar "handle") (EVar "conn"))) (DoLet false false PWild (EApp (EVar "close") (EVar "conn"))) (DoExpr (EApp (EApp (EVar "serveLoop") (EVar "lis")) (EVar "handle")))))))
 # MARK
-(DUse false (UseGroup ("array") ((mem "setInPlace" false))))
 (DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromArrayAssumeByteDomain" false))))
-(DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "reverse" false) (mem "take" false))))
 (DUse false (UseGroup ("vector") ((mem "Vector" false) (mem "new" false) (mem "push" false) (mem "toArray" false))))
-(DUse false (UseGroup ("string") ((mem "toUtf8" false) (mem "fromUtf8" false))))
+(DUse false (UseGroup ("string") ((mem "fromUtf8" false))))
 (DUse false (UseGroup ("time") ((mem "Duration" false) (mem "toMillis" false))))
 (DUse false (UseAlias ("u8") "U8"))
-(DUse false (UseGroup ("test") ((mem "expectAll" false) (mem "expectEqual" false) (mem "expectTrue" false))))
+(DUse false (UseGroup ("test") ((mem "expectAll" false) (mem "expectEqual" false))))
 (DTypeAlias true "Connection" ("h") (TyApp (TyCon "Socket") (TyVar "h")))
 (DTypeAlias true "Listener" ("a") (TyApp (TyCon "ListenSocket") (TyVar "a")))
 (DData Public "Shutdown" () ((variant "ShutdownRead" (ConPos)) (variant "ShutdownWrite" (ConPos)) (variant "ShutdownBoth" (ConPos))) ())
@@ -474,34 +425,26 @@ serveLoop lis handle = match accept lis
 (DTypeSig true "accept" (TyFun (TyApp (TyCon "Listener") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Connection") (TyVar "a"))))))
 (DFunDef false "accept" ((PVar "lis")) (EApp (EVar "netTcpAccept") (EVar "lis")))
 (DTypeSig true "send" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyCon "Bytes") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "send" ((PVar "conn") (PVar "bs")) (EApp (EApp (EVar "netSend") (EVar "conn")) (EApp (EVar "B.toArray") (EVar "bs"))))
+(DFunDef false "send" ((PVar "conn") (PVar "bs")) (EApp (EApp (EApp (EApp (EVar "netSendBytesFrom") (EVar "conn")) (EApp (EVar "B.lendByteBlockUnsafe") (EVar "bs"))) (ELit (LInt 0))) (EApp (EVar "B.length") (EVar "bs"))))
 (DTypeSig true "recv" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))))
 (DFunDef false "recv" ((PVar "conn") (PVar "n")) (EApp (EApp (EMethodRef "map") (EVar "fromArrayAssumeByteDomain")) (EApp (EApp (EVar "netRecv") (EVar "conn")) (EVar "n"))))
 (DTypeSig true "sendAll" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyCon "Bytes") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "sendAll" ((PVar "conn") (PVar "bs")) (EApp (EApp (EVar "sendArray") (EVar "conn")) (EApp (EVar "B.toArray") (EVar "bs"))))
-(DTypeSig false "sendArray" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "sendArray" ((PVar "conn") (PVar "bs")) (EApp (EApp (EApp (EVar "sendAllFrom") (ELam ((PVar "bytes") (PVar "off")) (EApp (EApp (EApp (EVar "netSendFrom") (EVar "conn")) (EVar "bytes")) (EVar "off")))) (EVar "bs")) (ELit (LInt 0))))
-(DTypeSig false "sendAllFrom" (TyFun (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "sendAllFrom" ((PVar "write") (PVar "bs") (PVar "off")) (EIf (EBinOp ">=" (EVar "off") (EApp (EVar "arrayLength") (EVar "bs"))) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EApp (EVar "write") (EVar "bs")) (EVar "off")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LInt 0))) () (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (arm (PCon "Ok" (PVar "n")) () (EApp (EApp (EApp (EVar "sendAllFrom") (EVar "write")) (EVar "bs")) (EBinOp "+" (EVar "off") (EVar "n")))))))
-(DTypeSig false "testSentBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "testSentBytes" ((PVar "bs") (PVar "i") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs")) (EApp (EApp (EApp (EVar "testSentBytes") (EVar "bs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "hi")))))
-(DTypeSig false "testRecordAlias" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Unit"))))))
-(DFunDef false "testRecordAlias" ((PVar "first") (PVar "aliasSeen") (PVar "bs") (PVar "call")) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (EApp (EApp (EVar "setRef") (EVar "first")) (EApp (EVar "Some") (EVar "bs"))) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (EMatch (EUnOp "!" (EVar "first")) (arm (PCon "Some" (PVar "original")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (ELit (LInt 0))) (ELit (LInt 251))) (EVar "original"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "aliasSeen")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "bs")) (ELit (LInt 251))))))) (arm (PCon "None") () (ELit LUnit))) (ELit LUnit))))
-(DTypeSig false "testScriptedSend" (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))))))
-(DFunDef false "testScriptedSend" ((PVar "calls") (PVar "offsets") (PVar "sent") (PVar "first") (PVar "aliasSeen") (PVar "bs") (PVar "off")) (EBlock (DoLet false false (PVar "call") (EUnOp "!" (EVar "calls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EVar "call") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "offsets")) (EBinOp "++" (EUnOp "!" (EVar "offsets")) (EListLit (EVar "off"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "testRecordAlias") (EVar "first")) (EVar "aliasSeen")) (EVar "bs")) (EVar "call"))) (DoExpr (EIf (EBinOp ">=" (EVar "call") (ELit (LInt 3))) (EApp (EVar "Err") (ELit (LString "unexpected fourth send"))) (EBlock (DoLet false false (PVar "n") (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (ELit (LInt 2)) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (ELit (LInt 3)) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "bs")) (EVar "off"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "sent")) (EBinOp "++" (EUnOp "!" (EVar "sent")) (EApp (EApp (EApp (EVar "testSentBytes") (EVar "bs")) (EVar "off")) (EBinOp "+" (EVar "off") (EVar "n")))))) (DoExpr (EApp (EVar "Ok") (EVar "n"))))))))
-(DTypeSig false "testScriptedObservation" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")) (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
-(DFunDef false "testScriptedObservation" (PWild) (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "offsets") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "sent") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "first") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "aliasSeen") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false (PVar "payload") (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 10)) (ELit (LInt 20)) (ELit (LInt 30)) (ELit (LInt 40)) (ELit (LInt 50)) (ELit (LInt 60)) (ELit (LInt 70)) (ELit (LInt 80))))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "sendAllFrom") (EApp (EApp (EApp (EApp (EApp (EVar "testScriptedSend") (EVar "calls")) (EVar "offsets")) (EVar "sent")) (EVar "first")) (EVar "aliasSeen"))) (EVar "payload")) (ELit (LInt 0)))) (DoExpr (ETuple (EVar "result") (EUnOp "!" (EVar "calls")) (EUnOp "!" (EVar "offsets")) (EUnOp "!" (EVar "sent")) (EUnOp "!" (EVar "aliasSeen"))))))
-(DTest false "sendAll keeps one array while offsets cover exact bytes" (EBlock (DoLet false false (PTuple (PVar "result") (PVar "calls") (PVar "offsets") (PVar "sent") (PVar "aliasSeen")) (EApp (EVar "testScriptedObservation") (ELit LUnit))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ELit LUnit))) (EVar "result")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 3))) (EVar "calls")) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 0)) (ELit (LInt 2)) (ELit (LInt 5)))) (EVar "offsets")) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 10)) (ELit (LInt 20)) (ELit (LInt 30)) (ELit (LInt 40)) (ELit (LInt 50)) (ELit (LInt 60)) (ELit (LInt 70)) (ELit (LInt 80)))) (EVar "sent")) (EApp (EVar "expectTrue") (EVar "aliasSeen")))))))
-(DTest false "sendAll rejects a zero-byte write exactly" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (EApp (EApp (EApp (EVar "sendAllFrom") (ELam (PWild PWild) (EApp (EVar "Ok") (ELit (LInt 0))))) (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 1))))) (ELit (LInt 0)))))
-(DTypeSig false "testFirstErrorSend" (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
-(DFunDef false "testFirstErrorSend" ((PVar "calls") (PVar "offsets") PWild (PVar "off")) (EBlock (DoLet false false (PVar "call") (EUnOp "!" (EVar "calls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EVar "call") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "offsets")) (EBinOp "++" (EUnOp "!" (EVar "offsets")) (EListLit (EVar "off"))))) (DoExpr (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (EApp (EVar "Ok") (ELit (LInt 2))) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (EApp (EVar "Err") (ELit (LString "boom"))) (EApp (EVar "Err") (ELit (LString "late call"))))))))
-(DTest false "sendAll returns the first host error without another write" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "offsets") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "sendAllFrom") (EApp (EApp (EVar "testFirstErrorSend") (EVar "calls")) (EVar "offsets"))) (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4))))) (ELit (LInt 0)))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "boom")))) (EVar "result")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EUnOp "!" (EVar "calls"))) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 0)) (ELit (LInt 2)))) (EUnOp "!" (EVar "offsets"))))))))
+(DFunDef false "sendAll" ((PVar "conn") (PVar "bs")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "B.lendByteBlockUnsafe") (EVar "bs"))) (DoLet false false (PVar "end") (EApp (EVar "B.length") (EVar "bs"))) (DoExpr (EApp (EApp (EApp (EVar "sendAllFrom") (ELam ((PVar "off")) (EApp (EApp (EApp (EApp (EVar "netSendBytesFrom") (EVar "conn")) (EVar "bb")) (EVar "off")) (EVar "end")))) (EVar "end")) (ELit (LInt 0))))))
+(DTypeSig false "sendAllFrom" (TyFun (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
+(DFunDef false "sendAllFrom" ((PVar "write") (PVar "end") (PVar "off")) (EIf (EBinOp ">=" (EVar "off") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EVar "write") (EVar "off")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LInt 0))) () (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (arm (PCon "Ok" (PVar "n")) () (EApp (EApp (EApp (EVar "sendAllFrom") (EVar "write")) (EVar "end")) (EBinOp "+" (EVar "off") (EVar "n")))))))
+(DTypeSig false "testScriptedSend" (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))))
+(DFunDef false "testScriptedSend" ((PVar "calls") (PVar "offsets") (PVar "sent") (PVar "payload") (PVar "off")) (EBlock (DoLet false false (PVar "call") (EUnOp "!" (EVar "calls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EVar "call") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "offsets")) (EBinOp "++" (EUnOp "!" (EVar "offsets")) (EListLit (EVar "off"))))) (DoExpr (EIf (EBinOp ">=" (EVar "call") (ELit (LInt 3))) (EApp (EVar "Err") (ELit (LString "unexpected fourth send"))) (EBlock (DoLet false false (PVar "n") (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (ELit (LInt 2)) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (ELit (LInt 3)) (EBinOp "-" (EApp (EMethodRef "length") (EVar "payload")) (EVar "off"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "sent")) (EBinOp "++" (EUnOp "!" (EVar "sent")) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EApp (EVar "drop") (EVar "off")) (EVar "payload")))))) (DoExpr (EApp (EVar "Ok") (EVar "n"))))))))
+(DTest false "sendAll advances one offset and covers exact bytes" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "offsets") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "sent") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "payload") (EListLit (ELit (LInt 10)) (ELit (LInt 20)) (ELit (LInt 30)) (ELit (LInt 40)) (ELit (LInt 50)) (ELit (LInt 60)) (ELit (LInt 70)) (ELit (LInt 80)))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "sendAllFrom") (EApp (EApp (EApp (EApp (EVar "testScriptedSend") (EVar "calls")) (EVar "offsets")) (EVar "sent")) (EVar "payload"))) (ELit (LInt 8))) (ELit (LInt 0)))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (ELit LUnit))) (EVar "result")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 3))) (EUnOp "!" (EVar "calls"))) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 0)) (ELit (LInt 2)) (ELit (LInt 5)))) (EUnOp "!" (EVar "offsets"))) (EApp (EApp (EVar "expectEqual") (EVar "payload")) (EUnOp "!" (EVar "sent"))))))))
+(DTest false "sendAll rejects a zero-byte write exactly" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (EApp (EApp (EApp (EVar "sendAllFrom") (ELam (PWild) (EApp (EVar "Ok") (ELit (LInt 0))))) (ELit (LInt 1))) (ELit (LInt 0)))))
+(DTypeSig false "testFirstErrorSend" (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DFunDef false "testFirstErrorSend" ((PVar "calls") (PVar "offsets") (PVar "off")) (EBlock (DoLet false false (PVar "call") (EUnOp "!" (EVar "calls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EVar "call") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "offsets")) (EBinOp "++" (EUnOp "!" (EVar "offsets")) (EListLit (EVar "off"))))) (DoExpr (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (EApp (EVar "Ok") (ELit (LInt 2))) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (EApp (EVar "Err") (ELit (LString "boom"))) (EApp (EVar "Err") (ELit (LString "late call"))))))))
+(DTest false "sendAll returns the first host error without another write" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "offsets") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "sendAllFrom") (EApp (EApp (EVar "testFirstErrorSend") (EVar "calls")) (EVar "offsets"))) (ELit (LInt 4))) (ELit (LInt 0)))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "boom")))) (EVar "result")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EUnOp "!" (EVar "calls"))) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 0)) (ELit (LInt 2)))) (EUnOp "!" (EVar "offsets"))))))))
 (DTypeSig false "recvAllLoop" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyApp (TyCon "List") (TyCon "Bytes")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))))
 (DFunDef false "recvAllLoop" ((PVar "conn") (PVar "chunks")) (EMatch (EApp (EApp (EVar "recv") (EVar "conn")) (ELit (LInt 4096))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "chunk")) () (EIf (EApp (EVar "B.isEmpty") (EVar "chunk")) (EApp (EVar "Ok") (EApp (EVar "B.concat") (EApp (EVar "reverse") (EVar "chunks")))) (EApp (EApp (EVar "recvAllLoop") (EVar "conn")) (EBinOp "::" (EVar "chunk") (EVar "chunks")))))))
 (DTypeSig true "recvAll" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes")))))
 (DFunDef false "recvAll" ((PVar "conn")) (EApp (EApp (EVar "recvAllLoop") (EVar "conn")) (EListLit)))
 (DTypeSig true "sendString" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyCon "String") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "sendString" ((PVar "conn") (PVar "s")) (EApp (EApp (EVar "sendArray") (EVar "conn")) (EApp (EVar "toUtf8") (EVar "s"))))
+(DFunDef false "sendString" ((PVar "conn") (PVar "s")) (EApp (EApp (EVar "sendAll") (EVar "conn")) (EApp (EVar "B.encodeUtf8") (EVar "s"))))
 (DTypeSig true "recvString" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "recvString" ((PVar "conn")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "bs")) (EApp (EVar "fromUtf8") (EApp (EVar "B.toArray") (EVar "bs"))))) (EApp (EVar "recvAll") (EVar "conn"))))
 (DTypeSig true "sendLine" (TyFun (TyApp (TyCon "Connection") (TyVar "h")) (TyFun (TyCon "String") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))

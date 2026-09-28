@@ -296,7 +296,6 @@ pByteBlockSetUnsafe : Value a -> Value a -> Value a -> <a> Value a
 pByteBlockToIntArray : Value a -> <a> Value a
 pByteBlockToString : Value a -> <a> Value a
 pByteBlockWriteStdout : Value a -> <a> Value a
-pByteBlockWriteStdoutIO : Value a -> <Stdout | a> Value a
 pBytesToFloat64 : Value a -> Value a -> <a> Value a
 pCanonicalizePath : Value a -> <FileRead | a> Value a
 pCbrt : Value a -> <a> Value a

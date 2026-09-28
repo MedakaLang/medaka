@@ -77,6 +77,7 @@ row = Row {
         "counted: 80/80 rows ok",
       ],
       lastLine = Some "TOTAL: PASS",
+      exactStdout = None,
     },
   ],
   parity = False,

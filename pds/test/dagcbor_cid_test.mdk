@@ -2,7 +2,7 @@
    Published expected bytes and CIDs stay in the provenance-ledgered corpus;
    these tests assert round-trips, determinism, isolation, and rejection. -}
 
-import bytes.{fromArrayAssumeByteDomain, fromU8Array}
+import bytes.{fromU8Array}
 import string.{contains, toLower}
 import test.{
   expectEach, expectEqual, expectErr, expectFalse, expectOkThen, expectTrue
@@ -89,7 +89,7 @@ test "DAG-CBOR round-trips every admitted value kind" =
   let value = DcMap [
     ("link", DcLink link),
     ("array", DcArray [DcNull, DcBool False, DcBool True, DcInt (-25)]),
-    ("bytes", DcBytes (fromArrayAssumeByteDomain [|0, 255|])),
+    ("bytes", DcBytes (fromU8Array [|0, 255|])),
     ("text", DcString "水"),
   ]
   expectTrue (roundTrip value)
@@ -115,20 +115,18 @@ test "DAG-CBOR encoder refuses nesting one level past the decoder's ceiling" =
 test "DAG-CBOR decoder refuses exactly what the encoder now refuses" =
   expectOkThen
     (bytes =>
-      expectTrue
-        (isErr (dagCborDecode (fromArrayAssumeByteDomain [|0x81|] ++ bytes))))
+      expectTrue (isErr (dagCborDecode (fromU8Array [|0x81|] ++ bytes))))
     (dagCborEncode (nest maxDagCborDepth))
 
 test "DAG-CBOR decoder rejects non-shortest and trailing encodings" = expectEach
   [
     (
       "a non-shortest integer encoding is rejected",
-      expectTrue
-        (isErr (dagCborDecode (fromArrayAssumeByteDomain [|0x18, 0x17|]))),
+      expectTrue (isErr (dagCborDecode (fromU8Array [|0x18, 0x17|]))),
     ),
     (
       "trailing bytes after a complete value are rejected",
-      expectTrue (isErr (dagCborDecode (fromArrayAssumeByteDomain [|0xf6, 0|]))),
+      expectTrue (isErr (dagCborDecode (fromU8Array [|0xf6, 0|]))),
     ),
   ]
 
@@ -137,14 +135,12 @@ test "DAG-CBOR decoder rejects unordered and duplicate map keys" = expectEach [
     "map keys out of canonical order are rejected",
     expectTrue
       (isErr
-        (dagCborDecode
-          (fromArrayAssumeByteDomain [|0xa2, 0x61, 0x62, 1, 0x61, 0x61, 2|]))),
+        (dagCborDecode (fromU8Array [|0xa2, 0x61, 0x62, 1, 0x61, 0x61, 2|]))),
   ),
   (
     "a duplicate map key is rejected",
     expectTrue
       (isErr
-        (dagCborDecode
-          (fromArrayAssumeByteDomain [|0xa2, 0x61, 0x61, 1, 0x61, 0x61, 2|]))),
+        (dagCborDecode (fromU8Array [|0xa2, 0x61, 0x61, 1, 0x61, 0x61, 2|]))),
   ),
 ]

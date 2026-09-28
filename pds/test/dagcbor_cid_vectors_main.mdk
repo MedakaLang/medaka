@@ -4,8 +4,8 @@
    provenance ledger. Each row is graded four ways: construct-and-encode,
    decode-and-reencode, CID calculation, and CID text parse/render. -}
 
-import array as A
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromU8Array}
+import mut_bytes as MB
 import hex.{decode}
 import io.{readLines}
 import string.{contains, split, startsWith, toUpper}
@@ -19,12 +19,11 @@ import lib.cid.{
 }
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "dagcbor_cid_vectors: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "dagcbor_cid_vectors: malformed hex" (decode text)
 
 decodeHex : String -> Result String DagCbor
-decodeHex hex = dagCborDecode (fromArrayAssumeByteDomain (mustHex hex))
+decodeHex hex = dagCborDecode (mustHex hex)
 
 mustCid : String -> Cid
 mustCid text =
@@ -43,8 +42,8 @@ fixtureValue name = match name
   "array-65536" => DcArray [DcInt 65536]
   "array-9007199254740991" => DcArray [DcInt 9007199254740991]
   "array-empty" => DcArray []
-  "bytes-a1" => DcBytes (fromArrayAssumeByteDomain [|0xa1|])
-  "bytes-empty" => DcBytes (fromArrayAssumeByteDomain [||])
+  "bytes-a1" => DcBytes (fromU8Array [|0xa1|])
+  "bytes-empty" => DcBytes empty
   "map-1_pair" => DcMap [("a", DcInt 1)]
   "map-empty" => DcMap []
   "map-keysort" => DcMap [
@@ -85,13 +84,11 @@ runRow : String -> <IO> Int
 runRow line = match split "\t" line
   [name, cborHex, expectedCidText] =>
     let expectedBytes = mustHex cborHex
-    let constructed = map toArray (dagCborEncode (fixtureValue name))
-    let decodedReencoded =
-      match dagCborDecode (fromArrayAssumeByteDomain expectedBytes)
-        Err message => Err message
-        Ok value => map toArray (dagCborEncode value)
-    let calculatedCidText =
-      cidToString (cidForDagCbor (fromArrayAssumeByteDomain expectedBytes))
+    let constructed = dagCborEncode (fixtureValue name)
+    let decodedReencoded = match dagCborDecode expectedBytes
+      Err message => Err message
+      Ok value => dagCborEncode value
+    let calculatedCidText = cidToString (cidForDagCbor expectedBytes)
     let parsedCidText = match cidFromString expectedCidText
       Err message => "ERR:\{message}"
       Ok cid => cidToString cid
@@ -134,11 +131,11 @@ rejectContains label witness result = match result
     let () = println "MALFORMED \{label} FAIL accepted"
     0
 
-setAt : Int -> Int -> Array Int -> Array Int
+setAt : Int -> U8 -> Bytes -> Bytes
 setAt index value bytes =
-  let out = arrayCopy bytes
-  let () = A.setInPlace index value out
-  out
+  let out = MB.thaw bytes
+  let () = MB.setInPlace index value out
+  MB.freeze out
 
 runMalformed : <IO> Int
 runMalformed =
@@ -197,23 +194,23 @@ runMalformed =
     rejectContains
       "tag42-identity"
       "leading identity byte"
-      (dagCborDecode (fromArrayAssumeByteDomain (setAt 4 1 linkBytes))),
+      (dagCborDecode (setAt 4 1 linkBytes)),
     rejectContains
       "tag42-cid-codec-route"
       "tag-42 CID: cid: codec"
-      (dagCborDecode (fromArrayAssumeByteDomain (setAt 6 0x70 linkBytes))),
+      (dagCborDecode (setAt 6 0x70 linkBytes)),
     rejectContains
       "cid-codec"
       "cid: codec"
-      (cidFromBytes (fromArrayAssumeByteDomain (setAt 1 0x70 linkCidBytes))),
+      (cidFromBytes (setAt 1 0x70 linkCidBytes)),
     rejectContains
       "cid-hash"
       "cid: hash code"
-      (cidFromBytes (fromArrayAssumeByteDomain (setAt 2 0x13 linkCidBytes))),
+      (cidFromBytes (setAt 2 0x13 linkCidBytes)),
     rejectContains
       "cid-length"
       "cid: SHA-256 digest length"
-      (cidFromBytes (fromArrayAssumeByteDomain (setAt 3 0x1f linkCidBytes))),
+      (cidFromBytes (setAt 3 0x1f linkCidBytes)),
     rejectContains
       "base32-padding"
       "padding is not allowed"

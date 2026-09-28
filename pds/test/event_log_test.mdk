@@ -25,8 +25,8 @@
      back byte for byte after an append, which is the property #2692's
      whole-set rewrite would fail. -}
 
-import array.{drop}
-import bytes.{encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import list.{lookup, take}
@@ -677,12 +677,11 @@ writtenHead = cidToString (repoCommitCid (repoLatestCommit written))
 frameHeaderValue : DagCbor
 frameHeaderValue = DcMap [("op", DcInt 1), ("t", DcString "#commit")]
 
-mustEncode : DagCbor -> Array Int
+mustEncode : DagCbor -> Bytes
 mustEncode value =
-  toArray
-    (resultOrPanic "event_log_test: header encode failed" (dagCborEncode value))
+  resultOrPanic "event_log_test: header encode failed" (dagCborEncode value)
 
-frameHeaderBytes : Array Int
+frameHeaderBytes : Bytes
 frameHeaderBytes = mustEncode frameHeaderValue
 
 bodyField : String -> DagCbor -> Option DagCbor
@@ -738,12 +737,10 @@ test "a real commit's frame is stored and read back byte for byte" =
     Err message => Fail message "the frame" "an error"
     Ok () => match eventLogRead dir 0
       Err message => Fail message "the frame" "an error"
-      Ok [stored] => match map toArray (decode stored.frameHex)
+      Ok [stored] => match decode stored.frameHex
         Err message => Fail message "hex-decodable frame bytes" "an error"
         Ok frameBytes =>
-          let bodyBytes =
-            fromArrayAssumeByteDomain
-              (drop (arrayLength frameHeaderBytes) frameBytes)
+          let bodyBytes = B.drop (B.length frameHeaderBytes) frameBytes
           match dagCborDecode bodyBytes
             Err message => Fail message "a decodable #commit body" "an error"
             Ok body => match (

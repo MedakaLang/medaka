@@ -1,0 +1,227 @@
+{- | The PDS read, identity and well-known routes that need no repository,
+   the appview-proxy dispositions and the service-auth mints, on eval,
+   native and Wasm, and a mutation self-test showing the gate can fail.
+
+   No cell builds a repository, so nothing here signs a commit, which is
+   what makes an eval arm affordable: one `repoInit` under the interpreter
+   does not complete in 600s, which is why `pds/test/repo_vectors_test.mdk`
+   has no eval arm (#2208). A session secret and one minted access token,
+   which the proxy cells need, cost an HMAC over a short string. The
+   repository-bearing read routes run as an arm of `repo_vectors_test`,
+   next to the corpus they are graded by.
+
+   The cells cover the router's stateless half: the two non-XRPC well-known
+   paths, every other non-XRPC path still 404ing, every repository-bearing
+   read refusing cleanly on an unconfigured server, CORS preflight, the
+   `atproto-proxy` seam (#2912; default-allow on the method axis within
+   `app.bsky.*`/`chat.bsky.*`, default-deny on the audience axis) and
+   `com.atproto.server.getServiceAuth`. The socket half of the proxy is
+   `pds/test/serve_e2e.sh`'s. The driver takes
+   `pds/test/vectors/pds_protected_methods_corpus.txt` as its one argument,
+   because `pds/lib` declares no effect row and so cannot read the file its
+   `protectedMethods` list is compared against.
+
+   The value test requires every engine to print exactly `transcript`,
+   which is hand-authored: each line is the answer the route is defined to
+   give. Native and Wasm must print eval's bytes. A host without the Wasm
+   emitter, `node` or `wasm-tools` fails the row rather than skipping the
+   Wasm arm.
+
+   The mutation test copies `pds/` into a scratch tree, breaks one line of
+   the driver at a time, and requires the natively built mutant to fail with
+   that mutation's own witness line. Native only, for the reason
+   `test.vector_runner`'s `MutationTest` gives. -}
+
+import test.vector_runner.{
+  Bound(..),
+  Corpus(..),
+  Engine(..),
+  Mutation(..),
+  MutationTest(..),
+  Row(..),
+  expectMutations,
+  expectRow,
+  transcriptArm,
+}
+import test.{Expectation}
+import test_process.{medakaRoot}
+
+gate : String
+gate = "pds/test/read_routes_all_engines"
+
+driver : String
+driver = "pds/test/read_routes_all_engines_main.mdk"
+
+corpusFile : String
+corpusFile = "pds/test/vectors/pds_protected_methods_corpus.txt"
+
+-- # The transcript
+
+did : String
+did = "did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9"
+
+didDoc : String
+didDoc =
+  "{\"@context\":[\"https://www.w3.org/ns/did/v1\"],\"id\":\"did:web:pds.example\",\"service\":[{\"id\":\"#atproto_pds\",\"type\":\"AtprotoPersonalDataServer\",\"serviceEndpoint\":\"https://pds.example\"}]}"
+
+-- The two audiences the proxy cells are configured for, each with the
+-- loopback port its forwards leave by. The rows differ only in DID and port,
+-- so a call admitted for one and routed to the other shows up as a `port=`
+-- naming the wrong row. The first row is also the default audience, the one
+-- a request with no `atproto-proxy` header is forwarded to.
+avDid : String
+avDid = "did:web:appview.example"
+
+avPort : String
+avPort = "3128"
+
+chatDid : String
+chatDid = "did:web:chat.example"
+
+chatPort : String
+chatPort = "3129"
+
+-- The `jti` every admitted credential carries: the hex of the driver's fixed
+-- per-request nonce, written out rather than recomputed.
+jti : String
+jti = "05101b26313c47525d68737e89949faa"
+
+transcript : List String
+transcript = [
+  "CELL wellknown-did-json PASS status=200 media=application/json body=\{didDoc} state=unchanged",
+  "CELL wellknown-atproto-did PASS status=200 media=text/plain; charset=utf-8 body=\{did} state=unchanged",
+  "CELL wellknown-post-rejected PASS status=405 error=MethodNotAllowed state=unchanged",
+  "CELL wellknown-body-rejected PASS status=400 error=InvalidRequest state=unchanged",
+  "CELL wellknown-zero-length-framing-admitted PASS status=200 media=text/plain; charset=utf-8 body=\{did} state=unchanged",
+  "CELL non-xrpc-still-404 PASS status=404 error=NotFound state=unchanged",
+  "CELL well-known-sibling-still-404 PASS status=404 error=NotFound state=unchanged",
+  "CELL resolve-handle PASS status=200 media=application/json body={\"did\":\"\{did}\"} state=unchanged",
+  "CELL resolve-handle-unknown PASS status=400 error=HandleNotFound state=unchanged",
+  "CELL resolve-handle-repeated-param PASS status=400 error=InvalidRequest state=unchanged",
+  "CELL resolve-handle-missing-param PASS status=400 error=InvalidRequest state=unchanged",
+  "CELL describe-server PASS status=200 media=application/json body={\"did\":\"\{did}\",\"availableUserDomains\":[],\"inviteCodeRequired\":false,\"blobUploadLimit\":5242880} state=unchanged",
+  "CELL get-record-unconfigured PASS status=400 error=RepoNotFound state=unchanged",
+  "CELL list-records-unconfigured PASS status=400 error=RepoNotFound state=unchanged",
+  "CELL describe-repo-unconfigured PASS status=400 error=RepoNotFound state=unchanged",
+  "CELL get-repo-unconfigured PASS status=400 error=RepoNotFound state=unchanged",
+  "CELL get-latest-commit-unconfigured PASS status=400 error=RepoNotFound state=unchanged",
+  "CELL list-repos-empty PASS status=200 media=application/json body={\"repos\":[]} state=unchanged",
+  "CELL get-repo-status-unconfigured PASS status=400 error=RepoNotFound state=unchanged",
+  "CELL sync-get-record-unconfigured PASS status=400 error=RepoNotFound state=unchanged",
+  "CELL sync-get-blocks-unconfigured PASS status=400 error=RepoNotFound state=unchanged",
+  "CELL read-route-requires-get PASS status=405 error=MethodNotAllowed state=unchanged",
+  "CELL unregistered-xrpc-still-404 PASS status=404 error=NotFound state=unchanged",
+  "CELL preflight-timeline PASS status=204",
+  "CELL preflight-atproto-did PASS status=204",
+  "CELL preflight-unrepeatable-value PASS status=204",
+  "CELL preflight-repeated-field PASS status=204",
+  "CELL origin-only-on-200 PASS status=200",
+  "CELL origin-only-on-401 PASS status=401",
+  "CELL origin-only-on-404 PASS status=404",
+  "CELL proxy-header-absent-default-appview PASS decision=admitted verb=GET target=/xrpc/app.bsky.graph.getFollows?actor=\{did} audience=\{avDid} iss=\{did} aud=\{avDid} lxm=app.bsky.graph.getFollows jti=\{jti} iat=1700000000 relayed=[] body= port=\{avPort}",
+  "CELL proxy-header-absent-no-appview PASS decision=not-proxied signed=none",
+  "CELL proxy-admitted-timeline PASS decision=admitted verb=GET target=/xrpc/app.bsky.feed.getTimeline?limit=2 audience=\{avDid} iss=\{did} aud=\{avDid} lxm=app.bsky.feed.getTimeline jti=\{jti} iat=1700000000 relayed=[] body= port=\{avPort}",
+  "CELL proxy-admitted-service-fragment PASS decision=admitted verb=GET target=/xrpc/app.bsky.actor.getProfile?actor=\{did} audience=\{avDid} iss=\{did} aud=\{avDid}#bsky_appview lxm=app.bsky.actor.getProfile jti=\{jti} iat=1700000000 relayed=[] body= port=\{avPort}",
+  "CELL proxy-header-name-case-insensitive PASS decision=admitted verb=GET target=/xrpc/app.bsky.feed.getAuthorFeed?actor=\{did} audience=\{avDid} iss=\{did} aud=\{avDid} lxm=app.bsky.feed.getAuthorFeed jti=\{jti} iat=1700000000 relayed=[] body= port=\{avPort}",
+  "CELL proxy-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none",
+  "CELL proxy-audience-not-a-did PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy does not name a service DID signed=none",
+  "CELL proxy-header-repeated PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy must not be repeated signed=none",
+  "CELL proxy-protected-method-unregistered PASS decision=refused status=400 error=InvalidRequest message=No service configured for com.atproto.admin.deleteAccount signed=none",
+  "CELL proxy-registered-method-with-header PASS decision=not-proxied signed=none",
+  "CELL proxy-forward-on-local-miss PASS decision=not-proxied signed=none",
+  "CELL proxy-locally-served-preferences PASS decision=not-proxied signed=none",
+  "CELL proxy-no-appview-configured PASS decision=refused status=400 error=InvalidRequest message=No service configured for app.bsky.feed.getTimeline signed=none",
+  "CELL proxy-admitted-post-body PASS decision=admitted verb=POST target=/xrpc/app.bsky.notification.updateSeen audience=\{avDid} iss=\{did} aud=\{avDid} lxm=app.bsky.notification.updateSeen jti=\{jti} iat=1700000000 relayed=[accept-language=en-GB,content-type=application/json] body={\"seenAt\":\"2026-09-12T00:00:00.000Z\"} port=\{avPort}",
+  "CELL proxy-forwardable-requires-get-or-post PASS decision=refused status=405 error=MethodNotAllowed message=a proxied XRPC method requires GET or POST signed=none",
+  "CELL proxy-out-of-namespace-with-header PASS decision=refused status=400 error=InvalidRequest message=No service configured for com.atproto.temp.checkSignupQueue signed=none",
+  "CELL proxy-out-of-namespace-header-absent PASS decision=not-proxied signed=none",
+  "CELL proxy-header-on-well-known PASS decision=not-proxied signed=none",
+  "CELL proxy-unauthenticated PASS decision=refused status=401 error=AuthenticationRequired message=Authentication Required signed=none",
+  "CELL proxy-admitted-nsid-authority-case PASS decision=admitted verb=GET target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 audience=\{avDid} iss=\{did} aud=\{avDid} lxm=app.bsky.feed.getTimeline jti=\{jti} iat=1700000000 relayed=[] body= port=\{avPort}",
+  "CELL proxy-admitted-chat-audience PASS decision=admitted verb=GET target=/xrpc/chat.bsky.convo.listConvos audience=\{chatDid} iss=\{did} aud=\{chatDid} lxm=chat.bsky.convo.listConvos jti=\{jti} iat=1700000000 relayed=[] body= port=\{chatPort}",
+  "CELL proxy-admitted-chat-service-fragment PASS decision=admitted verb=GET target=/xrpc/chat.bsky.convo.listConvos audience=\{chatDid} iss=\{did} aud=\{chatDid}#bsky_chat lxm=chat.bsky.convo.listConvos jti=\{jti} iat=1700000000 relayed=[] body= port=\{chatPort}",
+  "CELL proxy-chat-method-default-audience PASS decision=admitted verb=GET target=/xrpc/chat.bsky.convo.listConvos audience=\{avDid} iss=\{did} aud=\{avDid} lxm=chat.bsky.convo.listConvos jti=\{jti} iat=1700000000 relayed=[] body= port=\{avPort}",
+  "CELL proxy-chat-audience-case-folded PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none",
+  "CELL proxy-appview-audience-case-folded PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none",
+  "CELL service-auth-minted-with-lxm PASS decision=minted iss=\{did} aud=\{chatDid} lxm=chat.bsky.convo.listConvos jti=\{jti} iat=1700000000 exp=1700000060",
+  "CELL service-auth-minted-no-lxm PASS decision=minted iss=\{did} aud=\{avDid} lxm=<absent> jti=\{jti} iat=1700000000 exp=1700000060",
+  "CELL service-auth-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=aud names a service this server does not mint credentials for signed=none",
+  "CELL service-auth-protected-lxm PASS decision=refused status=400 error=InvalidRequest message=cannot request a service auth token for the following method: com.atproto.server.getSession signed=none",
+  "CELL service-auth-lxm-trailing-space PASS decision=refused status=400 error=InvalidRequest message=service auth lxm: invalid collection NSID name characters signed=none",
+  "CELL service-auth-lxm-embedded-space PASS decision=refused status=400 error=InvalidRequest message=service auth lxm: invalid collection NSID name characters signed=none",
+  "CELL service-auth-lxm-not-an-nsid PASS decision=refused status=400 error=InvalidRequest message=service auth lxm: collection must be a valid normalized NSID signed=none",
+  "CELL service-auth-exp-beyond-an-hour PASS decision=refused status=400 error=BadExpiration message=cannot request a token with an expiration more than an hour in the future signed=none",
+  "CELL service-auth-protected-methods-corpus PASS corpus=16 transcribed=16 same-set",
+  "cells: 64/64 repository-free routes, proxy dispositions and service-auth mints",
+  "TOTAL: PASS",
+]
+
+row : Row
+row = Row {
+  gate = gate,
+  driver = driver,
+  corpus = Explicit [corpusFile],
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = map (transcriptArm transcript) [EvalEngine, NativeEngine, WasmEngine],
+  parity = True,
+}
+
+-- # Mutations
+
+mutationTest : MutationTest
+mutationTest = MutationTest {
+  gate = gate,
+  driver = driver,
+  args = ["\{medakaRoot}/\{corpusFile}"],
+  mutations = [
+    -- A document naming the wrong server must not satisfy the did:web cell.
+    Mutation {
+      name = "did-web-hostname",
+      file = driver,
+      anchor = "\\\"id\\\":\\\"did:web:pds.example\\\"",
+      mutant = "\\\"id\\\":\\\"did:web:other.example\\\"",
+      witness = "CELL wellknown-did-json FAIL",
+    },
+    -- The confused deputy (#2912): the "foreign" audience becomes the one
+    -- permitted audience, so the refusal cell sees an admission. Only an
+    -- expectation naming the whole outcome, claims or `signed=none`, can tell
+    -- a refusal from an admission.
+    Mutation {
+      name = "proxy-foreign-audience",
+      file = driver,
+      anchor = "foreignServiceDid = \"did:web:other.example\"",
+      mutant = "foreignServiceDid = \"did:web:appview.example\"",
+      witness = "CELL proxy-foreign-audience FAIL decision=admitted",
+    },
+    -- Every proxied request loses its `Authorization` field. The audience
+    -- mutation proves the seam grades which service a credential is for; this
+    -- one proves it grades whether the caller may have one at all.
+    Mutation {
+      name = "proxy-no-credential",
+      file = driver,
+      anchor =
+        "proxyAuthField = \"Authorization: Bearer \\{proxyAccessToken}\\r\\n\"",
+      mutant = "proxyAuthField = \"\"",
+      witness =
+        "CELL proxy-admitted-timeline FAIL decision=refused status=401 error=AuthenticationRequired",
+    },
+    -- The egress port is looked up under the default audience instead of the
+    -- admitted one. Every claim set stays correct, so only a cell naming the
+    -- port sees it: the appview cells stay green and the chat ones go red.
+    Mutation {
+      name = "proxy-audience-routing",
+      file = driver,
+      anchor = "match appviewRouteFor table did",
+      mutant = "match appviewRouteFor table configuredAppviewDid",
+      witness = "CELL proxy-admitted-chat-audience FAIL decision=admitted",
+    },
+  ],
+}
+
+test "read routes: 64 hand-authored cells, eval == native == Wasm" =
+  expectRow row
+
+test "read routes: each of 4 mutations turns the gate red with its own witness" =
+  expectMutations mutationTest

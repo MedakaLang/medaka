@@ -1,5 +1,5 @@
 # META
-source_lines=480
+source_lines=481
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -120,9 +120,10 @@ contentHashOf src =
 -- changes too.  Consequence, CORRECT not a bug: for compiler devs the cache dies
 -- on every `make medaka`; for a user on a released binary it is stable.
 --
--- `readFileBytes`, never `readFile`.  `readFile` accepts only valid UTF-8,
--- so on a binary it returns `Err` rather than the bytes, and the fingerprint
--- would be no fingerprint at all.  The bytes themselves are what is hashed.
+-- ⚠️ `readFileBytes`, never `readFile`.  `readFile` UTF-8-DECODES, silently
+-- dropping ~11% of a binary's bytes while returning `Ok` (#407).  Hashing a
+-- lossy projection of the binary would be unsound in precisely the way this
+-- fingerprint exists to prevent.
 --
 -- Kept behind this ONE function so it stays swappable.
 --

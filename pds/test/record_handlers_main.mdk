@@ -17,11 +17,11 @@
    `validationStatus: "unknown"` — this server grades nothing against a
    lexicon and says so rather than claiming a check it never ran. -}
 
-import bytes.{Bytes, fromArray, toArray}
+import bytes.{Bytes, decodeUtf8}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode}
 import io.{readLines}
-import string.{fromUtf8, split, startsWith, toUtf8}
+import string.{split, startsWith}
 import lib.cid.{cidToString}
 import lib.dagcbor.{dagCborDecode}
 import lib.handlers.{recordServer}
@@ -60,21 +60,6 @@ import test.fixture_support.{
 }
 import test.request_support.{createBody, deleteBody, procedureRequest}
 import test.response_support.{bodyText}
-
--- | `handleBytes` over a request fixture this driver still holds as an
--- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
--- door into one: a fixture element outside the byte domain stops here rather
--- than reaching the framer.
-handleFixture : Server ->
-  RequestContext ->
-  Store ->
-  Array Int ->
-  (Store, Array Int)
-handleFixture httpServer context store request = match fromArray request
-  Some packed =>
-    let (next, response) = handleBytes httpServer context store packed
-    (next, toArray response)
-  None => panic "record_handlers: request fixture holds a non-byte element"
 
 accountHandleText : String
 accountHandleText = "medaka.example"
@@ -155,13 +140,21 @@ testToken did =
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
-responseJson : Array Int -> Json
+responseJson : Bytes -> Json
 responseJson bytes =
   resultOrPanic
     "record_handlers: response body is not JSON"
     (parse (bodyText bytes))
 
 -- ── the transcript ──────────────────────────────────────────────────────────
+
+-- A corpus path names the record the response is compared against, so one
+-- that is not UTF-8 is a malformed corpus, not text to repair.
+corpusPath : String -> String
+corpusPath pathHex =
+  optionOrPanic
+    "record_handlers: corpus path is not UTF-8"
+    (decodeUtf8 (mustHex pathHex))
 
 splitPath : String -> (String, String)
 splitPath text = match split "/" text
@@ -174,7 +167,7 @@ runStep did server store opLine commitLine = match (
   split "\t" commitLine,
 )
   (["OP", kind, pathHex, recordHex, recordCid, rev], ["COMMIT", _, _, _, commitCid, _]) =>
-    let (collection, rkey) = splitPath (fromUtf8 (toArray (mustHex pathHex)))
+    let (collection, rkey) = splitPath (corpusPath pathHex)
     let (nsid, body) = match kind
       "CREATE" => (
         "com.atproto.repo.createRecord",
@@ -188,7 +181,7 @@ runStep did server store opLine commitLine = match (
         ("com.atproto.repo.deleteRecord", deleteBody did collection rkey)
       _ => panic "record_handlers: unknown transcript operation \{kind}"
     let (next, responseBytes) =
-      handleFixture
+      handleBytes
         server
         testContext
         store
@@ -232,7 +225,7 @@ acceptValidateCell : String ->
 acceptValidateCell label did nsid server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       store
@@ -268,7 +261,7 @@ rejectCell : String ->
 rejectCell label expectedCode did nsid server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       store

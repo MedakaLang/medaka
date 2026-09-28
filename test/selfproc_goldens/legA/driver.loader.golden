@@ -58,11 +58,8 @@ parsedModule : (String -> Result ParseError (List Decl)) -> String -> String -> 
 projectTrustedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
 rawValAfterEq : String -> String
 readDeps : String -> <IO> List (String, String)
-readFileNotUtf8Suffix : String
 readForeignLibs : String -> <IO> List (String, String)
 readModuleProgF : (String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> String -> <IO> Result LoadError (String, String, List Decl)
-readSource : String -> <FileRead> Result String String
-readSourceE : String -> <FileRead> Result (Option String) String
 relUnderRoots : List String -> String -> String
 resolveDepFile : List (String, String) -> String -> <IO> Option (String, String)
 revLookupRoot : String -> List (String, String) -> <IO> Option String
@@ -71,7 +68,6 @@ rewriteDecls : List (String, String) -> List String -> List Decl -> <IO> List De
 rewriteUsePath : String -> UsePath -> UsePath
 scanAllowInternal : Bool -> List String -> Bool
 slashToDot : String -> String
-sourceNotUtf8Message : String -> String
 splitDot : String -> List String
 splitGo : String -> String -> Int -> Int -> String -> List String
 splitOnChar : String -> String -> List String

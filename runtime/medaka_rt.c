@@ -3211,6 +3211,64 @@ long long mdk_net_try_send_from(long long fd_tagged, long long arr, long long of
   return mdk_ok(mdk_some(MDK_NET_TAG((long long)w)));
 }
 
+/* The window [start, end) of a ByteBlock that netSendBytesFrom and
+ * netTrySendBytesFrom send.  Unlike the clamping Array Int senders above, a
+ * window outside the block is refused: returns 0 and sets *err to the Err
+ * value; otherwise returns 1 and sets *n to the byte count, capped at
+ * MDK_SEND_CHUNK.  send(2) reads the block's own payload, so nothing is
+ * copied. */
+static int mdk_net_send_window(const char *who, long long bb, long long start,
+                               long long end, long long *n, long long *err) {
+  long long len = mdk_byteblock_count(bb);
+  if (start < 0 || end < start || end > len) {
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "%s: window [%lld, %lld) is outside a block of %lld bytes",
+             who, start, end, len);
+    *err = mdk_err(mdk_str_cstr(msg));
+    return 0;
+  }
+  *n = end - start;
+  if (*n > MDK_SEND_CHUNK) *n = MDK_SEND_CHUNK;
+  return 1;
+}
+
+/* netSendBytesFrom : fd -> ByteBlock -> start -> end -> Result String Int. */
+long long mdk_net_send_bytes_from(long long fd_tagged, long long bb,
+                                  long long start_tagged, long long end_tagged) {
+  long long start = start_tagged >> 1, n = 0, err = 0;
+  if (!mdk_net_send_window("netSendBytesFrom", bb, start, end_tagged >> 1, &n, &err))
+    return err;
+  int flags = 0;
+#ifdef MSG_NOSIGNAL
+  flags = MSG_NOSIGNAL;
+#endif
+  ssize_t w = send(MDK_NET_UNTAG(fd_tagged), mdk_byteblock_bytes(bb) + start,
+                   (size_t)n, flags);
+  if (w < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  return mdk_ok(MDK_NET_TAG((long long)w));
+}
+
+/* netTrySendBytesFrom : fd -> ByteBlock -> start -> end
+ *   -> Result String (Option Int).  None = would-block. */
+long long mdk_net_try_send_bytes_from(long long fd_tagged, long long bb,
+                                      long long start_tagged, long long end_tagged) {
+  long long start = start_tagged >> 1, n = 0, err = 0;
+  if (!mdk_net_send_window("netTrySendBytesFrom", bb, start, end_tagged >> 1, &n, &err))
+    return err;
+  int flags = 0;
+#ifdef MSG_NOSIGNAL
+  flags = MSG_NOSIGNAL;
+#endif
+  ssize_t w = send(MDK_NET_UNTAG(fd_tagged), mdk_byteblock_bytes(bb) + start,
+                   (size_t)n, flags);
+  if (w < 0) {
+    if (mdk_net_would_block(errno)) return mdk_ok(mdk_none());
+    return mdk_err(mdk_str_cstr(strerror(errno)));
+  }
+  return mdk_ok(mdk_some(MDK_NET_TAG((long long)w)));
+}
+
 /* ---------------------------------------------------------------------------
  * Process entry.  The emitted IR's entry point is `mdk_program_main` (renamed
  * from `@main` in compiler/backend/llvm_emit.mdk); this runtime owns the real

@@ -1,5 +1,5 @@
 # META
-source_lines=1005
+source_lines=1037
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -781,15 +781,15 @@ export
 encodeUtf8 : String -> Bytes
 encodeUtf8 s = Bytes (byteBlockFromString s)
 
--- `byteBlockToString` substitutes U+FFFD for each maximal ill-formed subpart,
--- so a `String` is always well-formed UTF-8 and `decodeUtf8Lossy` is that
--- conversion.  `decodeUtf8` needs a verdict instead, to refuse, so it reads the
--- rule itself below.  `stdlib/bytes_test.mdk` keeps an independent reading of
--- the lossy form that the runtime's is tested against.
+-- Decoding validates before it hands any bytes to `byteBlockToString`, which
+-- blits them into a `String` cell without reading them.  A `String` built
+-- from bytes that are not UTF-8 is a value whose own invariants rule out its
+-- contents: the cell caches a codepoint count computed by counting
+-- non-continuation bytes, so `length`, `toChars` and every renderer answer
+-- from it and disagree with the bytes.
 --
--- The rules below are `mdk_utf8_step` in `runtime/medaka_rt.c`, which is
--- what the runtime applies to every byte sequence it turns into a `String`
--- and to bytes crossing the FFI boundary: `C0`/`C1` and
+-- The rules below are `mdk_utf8_is_valid` in `runtime/medaka_rt.c`, which is
+-- what the runtime applies to bytes crossing the FFI boundary: `C0`/`C1` and
 -- `F5` upwards are not lead bytes, an `E0` or `F0` lead bounds its second
 -- byte below to refuse an overlong form, `ED` bounds its second byte above to
 -- refuse a surrogate, `F4` bounds its second byte above to refuse anything
@@ -897,6 +897,33 @@ decodeUtf8 (Bytes bb) =
   else
     None
 
+lossyLength : ByteBlock -> Int -> Int -> Int -> Int
+lossyLength bb i n acc =
+  if i >= n then
+    acc
+  else
+    let step = utf8StepAt bb i n
+    if step > 0 then
+      lossyLength bb (i + step) n (acc + step)
+    else
+      lossyLength bb (i + (0 - step)) n (acc + 3)
+
+lossyFill : ByteBlock -> Int -> Int -> ByteBlock -> Int -> Unit
+lossyFill bb i n dst j =
+  if i >= n then
+    ()
+  else
+    let step = utf8StepAt bb i n
+    if step > 0 then
+      let _ = byteBlockBlit bb i dst j step
+      lossyFill bb (i + step) n dst (j + step)
+    else
+      -- U+FFFD is `ef bf bd`, the three bytes `lossyLength` counted for it.
+      let _ = byteBlockSetUnsafe j 0xef dst
+      let _ = byteBlockSetUnsafe (j + 1) 0xbf dst
+      let _ = byteBlockSetUnsafe (j + 2) 0xbd dst
+      lossyFill bb (i + (0 - step)) n dst (j + 3)
+
 {- | The string `b` encodes, read as UTF-8, with one U+FFFD replacement
    character substituted for each ill-formed sequence.
 
@@ -911,7 +938,14 @@ decodeUtf8 (Bytes bb) =
    "��hi" -}
 export
 decodeUtf8Lossy : Bytes -> String
-decodeUtf8Lossy (Bytes bb) = byteBlockToString bb
+decodeUtf8Lossy (Bytes bb) =
+  let n = byteBlockLength bb
+  if utf8ValidFrom bb 0 n then
+    byteBlockToString bb
+  else
+    let dst = byteBlockMake (lossyLength bb 0 n 0)
+    let _ = lossyFill bb 0 n dst 0
+    byteBlockToString dst
 
 -- > decodeUtf8Lossy (fromArrayAssumeByteDomain [|0xe2, 0x82|])
 -- "�"
@@ -943,9 +977,7 @@ propBytes x n
 
    The bytes need not be valid UTF-8. Nothing decodes or re-encodes them, so
    a sequence that a `String` path would reject or alter is written exactly
-   as it is. The exception is `medaka test`'s interpreter, which captures a
-   program's output as a string, so there bytes that are not UTF-8 are
-   captured as U+FFFD. -}
+   as it is. -}
 export
 writeStdoutBytes : Bytes -> <Stdout> Unit
 writeStdoutBytes (Bytes bb) = byteBlockWriteStdout bb
@@ -1127,8 +1159,12 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DFunDef false "utf8ValidFrom" ((PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EVar "utf8StepAt") (EVar "bb")) (EVar "i")) (EVar "n"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "utf8ValidFrom") (EVar "bb")) (EBinOp "+" (EVar "i") (EVar "step"))) (EVar "n")))))))
 (DTypeSig true "decodeUtf8" (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "decodeUtf8" ((PCon "Bytes" (PVar "bb"))) (EIf (EApp (EApp (EApp (EVar "utf8ValidFrom") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))) (EApp (EVar "Some") (EApp (EVar "byteBlockToString") (EVar "bb"))) (EVar "None")))
+(DTypeSig false "lossyLength" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "lossyLength" ((PVar "bb") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EVar "utf8StepAt") (EVar "bb")) (EVar "i")) (EVar "n"))) (DoExpr (EIf (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "lossyLength") (EVar "bb")) (EBinOp "+" (EVar "i") (EVar "step"))) (EVar "n")) (EBinOp "+" (EVar "acc") (EVar "step"))) (EApp (EApp (EApp (EApp (EVar "lossyLength") (EVar "bb")) (EBinOp "+" (EVar "i") (EBinOp "-" (ELit (LInt 0)) (EVar "step")))) (EVar "n")) (EBinOp "+" (EVar "acc") (ELit (LInt 3)))))))))
+(DTypeSig false "lossyFill" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Unit")))))))
+(DFunDef false "lossyFill" ((PVar "bb") (PVar "i") (PVar "n") (PVar "dst") (PVar "j")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EVar "utf8StepAt") (EVar "bb")) (EVar "i")) (EVar "n"))) (DoExpr (EIf (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "i")) (EVar "dst")) (EVar "j")) (EVar "step"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "lossyFill") (EVar "bb")) (EBinOp "+" (EVar "i") (EVar "step"))) (EVar "n")) (EVar "dst")) (EBinOp "+" (EVar "j") (EVar "step"))))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "j")) (ELit (LInt 239))) (EVar "dst"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (ELit (LInt 191))) (EVar "dst"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EBinOp "+" (EVar "j") (ELit (LInt 2)))) (ELit (LInt 189))) (EVar "dst"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "lossyFill") (EVar "bb")) (EBinOp "+" (EVar "i") (EBinOp "-" (ELit (LInt 0)) (EVar "step")))) (EVar "n")) (EVar "dst")) (EBinOp "+" (EVar "j") (ELit (LInt 3)))))))))))
 (DTypeSig true "decodeUtf8Lossy" (TyFun (TyCon "Bytes") (TyCon "String")))
-(DFunDef false "decodeUtf8Lossy" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToString") (EVar "bb")))
+(DFunDef false "decodeUtf8Lossy" ((PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "utf8ValidFrom") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (EApp (EVar "byteBlockToString") (EVar "bb")) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EApp (EApp (EApp (EApp (EVar "lossyLength") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (ELit (LInt 0))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "lossyFill") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (EVar "dst")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "byteBlockToString") (EVar "dst"))))))))
 (DProp false "decodeUtf8 (encodeUtf8 s) == Some s" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "decodeUtf8") (EApp (EVar "encodeUtf8") (EVar "s"))) (EApp (EVar "Some") (EVar "s"))))
 (DProp false "Hashable Bytes: a 1,000-byte string hashes alike when rebuilt" ((pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "block") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "propBytes") (EVar "x")) (ELit (LInt 1000)))))) (DoExpr (EBinOp "==" (EApp (EVar "hash") (EVar "block")) (EApp (EVar "hash") (EApp (EVar "fromU8Array") (EApp (EVar "toU8Array") (EVar "block"))))))))
 (DTypeSig false "propBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
@@ -1261,8 +1297,12 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DFunDef false "utf8ValidFrom" ((PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EVar "utf8StepAt") (EVar "bb")) (EVar "i")) (EVar "n"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "utf8ValidFrom") (EVar "bb")) (EBinOp "+" (EVar "i") (EVar "step"))) (EVar "n")))))))
 (DTypeSig true "decodeUtf8" (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "decodeUtf8" ((PCon "Bytes" (PVar "bb"))) (EIf (EApp (EApp (EApp (EVar "utf8ValidFrom") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))) (EApp (EVar "Some") (EApp (EVar "byteBlockToString") (EVar "bb"))) (EVar "None")))
+(DTypeSig false "lossyLength" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "lossyLength" ((PVar "bb") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EVar "utf8StepAt") (EVar "bb")) (EVar "i")) (EVar "n"))) (DoExpr (EIf (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "lossyLength") (EVar "bb")) (EBinOp "+" (EVar "i") (EVar "step"))) (EVar "n")) (EBinOp "+" (EVar "acc") (EVar "step"))) (EApp (EApp (EApp (EApp (EVar "lossyLength") (EVar "bb")) (EBinOp "+" (EVar "i") (EBinOp "-" (ELit (LInt 0)) (EVar "step")))) (EVar "n")) (EBinOp "+" (EVar "acc") (ELit (LInt 3)))))))))
+(DTypeSig false "lossyFill" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Unit")))))))
+(DFunDef false "lossyFill" ((PVar "bb") (PVar "i") (PVar "n") (PVar "dst") (PVar "j")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EVar "utf8StepAt") (EVar "bb")) (EVar "i")) (EVar "n"))) (DoExpr (EIf (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "i")) (EVar "dst")) (EVar "j")) (EVar "step"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "lossyFill") (EVar "bb")) (EBinOp "+" (EVar "i") (EVar "step"))) (EVar "n")) (EVar "dst")) (EBinOp "+" (EVar "j") (EVar "step"))))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "j")) (ELit (LInt 239))) (EVar "dst"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (ELit (LInt 191))) (EVar "dst"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EBinOp "+" (EVar "j") (ELit (LInt 2)))) (ELit (LInt 189))) (EVar "dst"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "lossyFill") (EVar "bb")) (EBinOp "+" (EVar "i") (EBinOp "-" (ELit (LInt 0)) (EVar "step")))) (EVar "n")) (EVar "dst")) (EBinOp "+" (EVar "j") (ELit (LInt 3)))))))))))
 (DTypeSig true "decodeUtf8Lossy" (TyFun (TyCon "Bytes") (TyCon "String")))
-(DFunDef false "decodeUtf8Lossy" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToString") (EVar "bb")))
+(DFunDef false "decodeUtf8Lossy" ((PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "utf8ValidFrom") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (EApp (EVar "byteBlockToString") (EVar "bb")) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EApp (EApp (EApp (EApp (EVar "lossyLength") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (ELit (LInt 0))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "lossyFill") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (EVar "dst")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "byteBlockToString") (EVar "dst"))))))))
 (DProp false "decodeUtf8 (encodeUtf8 s) == Some s" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "decodeUtf8") (EApp (EVar "encodeUtf8") (EVar "s"))) (EApp (EVar "Some") (EVar "s"))))
 (DProp false "Hashable Bytes: a 1,000-byte string hashes alike when rebuilt" ((pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "block") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "propBytes") (EVar "x")) (ELit (LInt 1000)))))) (DoExpr (EBinOp "==" (EApp (EMethodRef "hash") (EVar "block")) (EApp (EMethodRef "hash") (EApp (EVar "fromU8Array") (EApp (EVar "toU8Array") (EVar "block"))))))))
 (DTypeSig false "propBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))

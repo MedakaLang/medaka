@@ -1,5 +1,5 @@
 # META
-source_lines=917
+source_lines=923
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -48,22 +48,17 @@ extern flushStdout : Unit -> <Stdout> Unit
 
 -- # Input
 
--- | Reads one line from standard input, without its newline. Bytes that are
--- not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
+-- | Reads one line from standard input, without its newline.
 extern readLine : Unit -> <Stdin> String
 
--- | Reads one line from standard input, or `None` at end of input. Bytes
--- that are not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
+-- | Reads one line from standard input, or `None` at end of input.
 extern readLineOpt : Unit -> <Stdin> Option String
 
--- | Reads all of standard input. Bytes that are not valid UTF-8 read as
--- U+FFFD, one per ill-formed sequence.
+-- | Reads all of standard input.
 extern readAll : Unit -> <Stdin> String
 
 -- | Reads exactly the given number of bytes from standard input, or `None`
--- at end of input or on a short read. Like every string read from outside the
--- program, each ill-formed UTF-8 sequence becomes U+FFFD, so the result's
--- UTF-8 length can differ from the count.
+-- at end of input or on a short read.
 extern readExactly : Int -> <Stdin> Option String
 
 -- # Mutable references
@@ -79,8 +74,6 @@ extern setRef : Ref a -> a -> Unit
 -- # Files
 
 -- | The contents of a file as a string, or `Err` with the host's message.
--- A file that is not valid UTF-8 is an `Err` naming the path; read it with
--- `readFileBytes`.
 extern readFile : (path : String) -> <FileRead path> Result String String
 
 -- | The contents of a file as bytes, `0` to `255` each, or `Err` with the
@@ -124,14 +117,10 @@ extern fileExists : (path : String) -> <FileRead path> Bool
 extern fileMode : (path : String) -> <FileRead path> Result String Int
 
 -- | The absolute path with `.`, `..`, and symbolic links resolved. The
--- input, unchanged, when it cannot be resolved. A resolved path whose bytes
--- are not valid UTF-8 reads with U+FFFD in their place, and so may not name
--- the entry it came from.
+-- input, unchanged, when it cannot be resolved.
 extern canonicalizePath : (path : String) -> <FileRead path> String
 
--- | The names of the entries in a directory. A name whose bytes are not
--- valid UTF-8 reads with U+FFFD in their place, so two such names can read
--- alike and a returned name may not open the entry it came from.
+-- | The names of the entries in a directory.
 extern listDir : (path : String) -> <FileRead path> Result String (List String)
 
 -- | Creates a directory.
@@ -161,16 +150,13 @@ extern statFile : (path : String) ->
 
 -- # Processes and environment
 
--- | The command-line arguments after the program name. Bytes that are not
--- valid UTF-8 read as U+FFFD, one per ill-formed sequence.
+-- | The command-line arguments after the program name.
 extern args : Unit -> <Env> List String
 
 -- | The value of an environment variable, or `None` when it is unset.
--- Bytes that are not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
 extern getEnv : (name : String) -> <Env name> Option String
 
--- | The absolute path of the running executable. Bytes that are not valid
--- UTF-8 read as U+FFFD, one per ill-formed sequence.
+-- | The absolute path of the running executable.
 extern executablePath : Unit -> <Env> String
 
 -- Compiler-source fingerprint this binary was built from, stamped in at link
@@ -193,9 +179,7 @@ extern buildDate : Unit -> <Env> String
 -- | Runs a program with arguments and waits for it. `Ok` carries the exit
 -- code, the captured standard output, and the captured standard error; a
 -- non-zero exit code is still `Ok`. `Err` carries the host's message when
--- the program could not be started. The captured output is read as UTF-8:
--- bytes that are not valid UTF-8 read as U+FFFD, so output that is binary
--- data does not come back unchanged.
+-- the program could not be started.
 extern runCommand : (program : String) ->
   List String ->
   <Exec program> Result String (Int, String, String)
@@ -403,6 +387,31 @@ extern netTrySend : Socket h -> Array Int -> <Net h> Result String (Option Int)
 -- per call, so a loop over a large payload pays only for the bytes it sends.
 extern netTrySendFrom : Socket h ->
   Array Int ->
+  Int ->
+  <Net h> Result String (Option Int)
+
+{- | Sends the bytes of a block in the window between two indices, from the
+   first index up to but not including the second, at most 64 KiB per call.
+   The result is the number of bytes written, which may be fewer than asked
+   for.
+
+   A window outside the block, where the first index is negative, the second
+   is less than the first, or the second is past the block's length, is
+   `Err`. Unlike `netSendFrom`, which clamps its offset, the window is not
+   clamped: a window outside the block is a caller's mistake, and clamping
+   would hide it. -}
+extern netSendBytesFrom : Socket h ->
+  ByteBlock ->
+  Int ->
+  Int ->
+  <Net h> Result String Int
+
+{- | `netSendBytesFrom` that returns `None` instead of blocking. `Some n` is
+   the count written, which may be short. A window outside the block is `Err`,
+   as for `netSendBytesFrom`. -}
+extern netTrySendBytesFrom : Socket h ->
+  ByteBlock ->
+  Int ->
   Int ->
   <Net h> Result String (Option Int)
 
@@ -816,18 +825,16 @@ extern byteBlockToIntArray : ByteBlock -> Array Int
 extern byteBlockFromString : String -> ByteBlock
 
 -- | A new string whose UTF-8 backing is the block's bytes. The inverse of
--- `byteBlockFromString`. Like `stringFromUtf8Bytes`, valid UTF-8 is copied
--- verbatim and each ill-formed sequence becomes one U+FFFD per maximal
--- subpart. Restricted to the standard library and to modules compiled with
--- `--allow-internal`.
+-- `byteBlockFromString`, and permissive in the same way `stringFromUtf8Bytes`
+-- is: the bytes are copied verbatim, so an invalid or truncated sequence is
+-- neither rejected nor replaced. Restricted to the standard library and to
+-- modules compiled with `--allow-internal`.
 extern byteBlockToString : ByteBlock -> String
 
 -- | Writes the block's bytes to stdout as-is, with no bounds check and no
 -- encoding assumption: unlike `putStr`, the bytes are not required to be
--- valid UTF-8 and are written byte-for-byte. Under `medaka test`'s
--- interpreter, which captures a program's output as a string, bytes that are
--- not UTF-8 are captured as U+FFFD. Restricted to the standard library and to
--- modules compiled with `--allow-internal`.
+-- valid UTF-8 and are written byte-for-byte. Restricted to the standard
+-- library and to modules compiled with `--allow-internal`.
 extern byteBlockWriteStdout : ByteBlock -> <Stdout> Unit
 
 -- # Strings
@@ -843,16 +850,15 @@ extern stringToChars : String -> Array Char
 -- | A string built from an array of characters.
 extern stringFromChars : Array Char -> String
 
--- A String is always well-formed UTF-8.  Decoding copies valid UTF-8
--- verbatim and substitutes U+FFFD for each maximal ill-formed subpart, as
--- `bytes.decodeUtf8Lossy` does, so `fromUtf8 (toUtf8 s) == s` for every `s`.
+-- Decode is permissive (bytes are blitted verbatim; the cached codepoint
+-- count is recomputed by the standard non-continuation-byte rule).  For
+-- valid UTF-8 (e.g. SQLite text) `fromUtf8 (toUtf8 s) == s` byte-for-byte.
 
 -- | The UTF-8 encoding of a string, one byte (`0` to `255`) per element.
 extern stringToUtf8Bytes : String -> Array Int
 
 -- | The string encoded by an array of UTF-8 bytes. Only the low eight bits
--- of each element are used, and each ill-formed sequence becomes one U+FFFD
--- per maximal subpart.
+-- of each element are used.
 extern stringFromUtf8Bytes : Array Int -> String
 
 -- | A one-character string.
@@ -989,6 +995,8 @@ extern stringToLower : String -> String
 (DExtern false "netTryRecvBytes" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
 (DExtern false "netTrySend" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DExtern false "netTrySendFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DExtern false "netSendBytesFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))))
+(DExtern false "netTrySendBytesFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))))
 (DExtern false "wallTimeSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "monotonicSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "sleepMs" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
@@ -1184,6 +1192,8 @@ extern stringToLower : String -> String
 (DExtern false "netTryRecvBytes" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
 (DExtern false "netTrySend" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DExtern false "netTrySendFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DExtern false "netSendBytesFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))))
+(DExtern false "netTrySendBytesFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))))
 (DExtern false "wallTimeSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "monotonicSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "sleepMs" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))

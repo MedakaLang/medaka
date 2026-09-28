@@ -9,9 +9,8 @@
    that while still disagreeing about a value no count or substring names.
 
    The Wasm arm is the one that may be absent — it needs the Wasm emitter,
-   `node` and `wasm-tools`. It is skipped when they are missing and required
-   when `MEDAKA_REQUIRE_WASM=1`, which is how CI states that a host it
-   controls must have them. -}
+   `node` and `wasm-tools`. A host without them fails the row rather than
+   skipping the arm. -}
 
 import test.vector_runner.{
   Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
@@ -73,6 +72,7 @@ arm e = Arm {
   countFloor = None,
   needs = needs,
   lastLine = Some "TOTAL: PASS",
+  exactStdout = None,
 }
 
 row : Row

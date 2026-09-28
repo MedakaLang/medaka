@@ -1,0 +1,109 @@
+-- The packed send externs over a loopback pair: each call sends the window
+-- [start, end) of a block, at most 64 KiB, and a window outside the block
+-- is Err rather than clamped. Every window sent is read back on the other
+-- end and compared with the bytes of that window.
+import bytes as B
+import bytes.{Bytes}
+import list.{reverse}
+import net.{
+  Connection, listen, listenPort, connect, accept, recv, close, closeListener
+}
+
+-- 65537 bytes, one past the 64 KiB per-call ceiling.
+payload : Bytes
+payload = match B.fromArray (arrayMakeWith 65537 (i => i % 251))
+  Some bs => bs
+  None => panic "payload bytes out of range"
+
+window : Int -> Int -> Bytes
+window lo hi = B.take (hi - lo) (B.drop lo payload)
+
+showSent : Result String Int -> String
+showSent (Ok n) = "Ok \{intToString n}"
+showSent (Err e) = "Err \{e}"
+
+showTry : Result String (Option Int) -> String
+showTry (Ok (Some n)) = "Ok (Some \{intToString n})"
+showTry (Ok None) = "Ok None"
+showTry (Err e) = "Err \{e}"
+
+-- Reads exactly `n` bytes, however the kernel splits them.
+recvExactly : Connection * -> Int -> List Bytes -> <Net> Result String Bytes
+recvExactly conn n acc =
+  if n <= 0 then
+    Ok (B.concat (reverse acc))
+  else match recv conn n
+    Err e => Err e
+    Ok chunk =>
+      if B.isEmpty chunk then
+        Err "peer closed early"
+      else
+        recvExactly conn (n - B.length chunk) (chunk :: acc)
+
+checkReceived : Connection * -> Int -> Int -> <Net> String
+checkReceived srv lo hi = match recvExactly srv (hi - lo) []
+  Err e => "recv failed: \{e}"
+  Ok got =>
+    if got == window lo hi then "received matches" else "received DIFFERS"
+
+-- Sends [lo, hi) with one call per step, printing each step's count.
+sendSteps : String ->
+  (Int -> Int -> <Net> Result String Int) ->
+  Int ->
+  Int ->
+  <Net, IO> Unit
+sendSteps name step lo hi =
+  if lo >= hi then
+    ()
+  else match step lo hi
+    Ok n =>
+      let _ =
+        println
+          "\{name} \{intToString lo}..\{intToString hi}: Ok \{intToString n}"
+      if n == 0 then () else sendSteps name step (lo + n) hi
+    Err e => println "\{name} \{intToString lo}..\{intToString hi}: Err \{e}"
+
+trySome : Result String (Option Int) -> Result String Int
+trySome (Ok (Some n)) = Ok n
+trySome (Ok None) = Err "would block"
+trySome (Err e) = Err e
+
+run : Connection * -> Connection * -> <Net, IO> Unit
+run cli srv =
+  let bb = B.lendByteBlockUnsafe payload
+  let len = B.length payload
+  let blocking = lo hi => netSendBytesFrom cli bb lo hi
+  let nonblocking = lo hi => trySome (netTrySendBytesFrom cli bb lo hi)
+  let _ = println "send 0..0: \{showSent (netSendBytesFrom cli bb 0 0)}"
+  let _ = sendSteps "send" blocking 0 65536
+  let _ = println (checkReceived srv 0 65536)
+  let _ = sendSteps "send" blocking 0 len
+  let _ = println (checkReceived srv 0 len)
+  let _ = println "send 5..4: \{showSent (netSendBytesFrom cli bb 5 4)}"
+  let _ =
+    println "send 0..65538: \{showSent (netSendBytesFrom cli bb 0 (len + 1))}"
+  let _ = println "send -1..3: \{showSent (netSendBytesFrom cli bb (0 - 1) 3)}"
+  let _ = println "try 0..0: \{showTry (netTrySendBytesFrom cli bb 0 0)}"
+  let _ = sendSteps "try" nonblocking 0 65536
+  let _ = println (checkReceived srv 0 65536)
+  let _ = sendSteps "try" nonblocking 0 len
+  let _ = println (checkReceived srv 0 len)
+  let _ = println "try 5..4: \{showTry (netTrySendBytesFrom cli bb 5 4)}"
+  let _ =
+    println "try 0..65538: \{showTry (netTrySendBytesFrom cli bb 0 (len + 1))}"
+  println "try -1..3: \{showTry (netTrySendBytesFrom cli bb (0 - 1) 3)}"
+
+main = match listen "127.0.0.1" 0
+  Err e => println "listen failed: \{e}"
+  Ok lis => match listenPort lis
+    Err e => println "listenPort failed: \{e}"
+    Ok port => match connect "127.0.0.1" port
+      Err e => println "connect failed: \{e}"
+      Ok cli => match accept lis
+        Err e => println "accept failed: \{e}"
+        Ok srv =>
+          let _ = run cli srv
+          let _ = close cli
+          let _ = close srv
+          let _ = closeListener lis
+          println "done"

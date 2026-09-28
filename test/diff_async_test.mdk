@@ -71,9 +71,7 @@ test "diff_async: exactly 3 fixtures on disk, matching the roster" =
 
 -- Builds `\{corpus}/\{name}.mdk` into `\{scratch}/\{name}` and executes it
 -- once, without ever invoking `medaka run` — see the file header for why.
-buildAndRun : String ->
-  String ->
-  <Exec, IO> Result String (Int, String, String)
+buildAndRun : String -> String -> <Exec, IO> Result String (Int, String, String)
 buildAndRun scratch name =
   let entry = "\{corpus}/\{name}.mdk"
   let binPath = "\{scratch}/\{name}"
@@ -141,6 +139,7 @@ readinessExterns = [
   "netTryRecvBytes",
   "netTrySend",
   "netTrySendFrom",
+  "netTrySendBytesFrom",
 ]
 
 test "diff_async: the readiness externs have no eval binding — the missing arm is structural" =

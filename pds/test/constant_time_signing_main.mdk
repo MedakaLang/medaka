@@ -13,7 +13,8 @@ import lib.secp256k1.{
   ecdsaVerifyRawForTest,
   pointFromUncompressedForTest,
 }
-import bytes.{Bytes, fromU8Array, length}
+import bytes as B
+import bytes.{Bytes, fromU8Array}
 import hex.{decode, encode}
 
 bytes : String -> Bytes
@@ -100,7 +101,7 @@ main =
       && exhaust0Valid == 0
       && exhaust1Valid == 0
       && exhausted == 0
-      && length exhaustedCompact == 64
+      && B.length exhaustedCompact == 64
   let () =
     if exhaustionOk then
       println

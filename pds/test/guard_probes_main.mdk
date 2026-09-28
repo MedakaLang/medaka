@@ -13,7 +13,6 @@
 
 import bytes as B
 import lib.multiformats.{uvarintEncode}
-import shell.server.{readBufferAppend, readBufferLen, readBufferNew}
 
 main = match args ()
   -- unsigned-varint encodes non-negative values only.
@@ -24,22 +23,4 @@ main = match args ()
   ["uvarint-ok"] =>
     let v = uvarintEncode 300
     println "OK uvarint-ok len=\{intToString (B.length v)}"
-  -- `readBufferAppend` packs an `Array Int` into the connection's byte
-  -- buffer. Without the guard both cells alias into the byte domain — 300
-  -- masks to 44 (`,`) and -1 to 255 — which is a byte on the wire the
-  -- caller never supplied.
-  ["readbuffer-over"] =>
-    let buf = readBufferNew ()
-    let () = readBufferAppend (arrayFromList [65, 300]) buf
-    println "REACHED readbuffer-over len=\{intToString (readBufferLen buf)}"
-  ["readbuffer-under"] =>
-    let buf = readBufferNew ()
-    let () = readBufferAppend (arrayFromList [65, 0 - 1]) buf
-    println "REACHED readbuffer-under len=\{intToString (readBufferLen buf)}"
-  -- CONTROL. 0 and 255 are the two INCLUSIVE endpoints, the cell that
-  -- catches a `>= 255` or `> 0` off-by-one in the guard.
-  ["readbuffer-edges"] =>
-    let buf = readBufferNew ()
-    let () = readBufferAppend (arrayFromList [0, 255]) buf
-    println "OK readbuffer-edges len=\{intToString (readBufferLen buf)}"
   _ => panic "guard_probes: unknown case"
