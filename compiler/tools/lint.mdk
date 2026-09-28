@@ -58,6 +58,7 @@ import frontend.ast.{
   Expr(..),
   Decl(..),
   qualifierSource,
+  authTermsSurface,
 }
 import frontend.parser.{
   Positions,
@@ -2371,12 +2372,12 @@ tyCanonIn tvs rvs (TyTuple ts) =
 tyCanonIn tvs rvs (TyEffect es tl t) =
   "(eff \{rowCanon rvs es tl} \{tyCanonIn tvs rvs t})"
 tyCanonIn _ rvs (TyRow es tl _) = "(row " ++ rowCanon rvs es tl ++ ")"
-tyCanonIn _ _ (TyAuth p _) = "(auth " ++ authTermSurface escStr p ++ ")"
+tyCanonIn _ _ (TyAuth ps _) = "(auth " ++ authTermsSurface escStr ps ++ ")"
 -- An authority binder and a qualifier are part of what a declared type
 -- means: two signatures differing only in them are different signatures.
 tyCanonIn tvs rvs (TyNamed n t) = "(named \{n} \{tyCanonIn tvs rvs t})"
 tyCanonIn tvs rvs (TyQual t ns _) =
-  "(qual \{tyCanonIn tvs rvs t} \{qualifierSource ns})"
+  "(qual \{tyCanonIn tvs rvs t} \{qualifierSource escStr ns})"
 tyCanonIn tvs rvs (TyConstrained cs t) =
   "(=> \{joinWith " " (sortUniqS (map (constrCanon tvs rvs) cs))} \{tyCanonIn tvs rvs t})"
 

@@ -3,7 +3,8 @@
 -- dictionary selection; atoms and rows are built over them in `effect_rows`.
 
 import support.util.{
-  listLen, filterList, joinWith, sortUniqS, startsWith, contains, allList
+  listLen, filterList, joinWith, sortUniqS, startsWith, contains, allList,
+  anyList, reverseL
 }
 
 public export data Param =
@@ -106,10 +107,16 @@ djoin p1 p2 = djoinN (canonParam p1) (canonParam p2)
 -- common prefix is top.
 export
 djoinN : Param -> Param -> Param
-djoinN PUnit PUnit = PUnit
-djoinN (PPrefix None) _ = PPrefix None
-djoinN _ (PPrefix None) = PPrefix None
-djoinN (PPrefix (Some a)) (PPrefix (Some b)) =
+djoinN p q = joinCapped setCardCap p q
+
+-- The join with a Set union that saturates to top past [cap] members.
+-- Inference joins at `setCardCap`; the check of a written bound joins with no
+-- cap, so a union too large to keep is seen and refused instead of widened.
+joinCapped : Int -> Param -> Param -> Param
+joinCapped _ PUnit PUnit = PUnit
+joinCapped _ (PPrefix None) _ = PPrefix None
+joinCapped _ _ (PPrefix None) = PPrefix None
+joinCapped _ (PPrefix (Some a)) (PPrefix (Some b)) =
   if a == b then
     PPrefix (Some a)
   else
@@ -117,24 +124,144 @@ djoinN (PPrefix (Some a)) (PPrefix (Some b)) =
     let cb = prefixConcrete b
     let k = commonPrefixLen ca cb 0
     if k == 0 then PPrefix None else PPrefix (Some (stringSlice 0 k ca ++ "*"))
-djoinN (PSet None) _ = PSet None
-djoinN _ (PSet None) = PSet None
-djoinN (PSet (Some a)) (PSet (Some b)) =
+joinCapped _ (PSet None) _ = PSet None
+joinCapped _ _ (PSet None) = PSet None
+joinCapped cap (PSet (Some a)) (PSet (Some b)) =
   let u = sortUniqS (a ++ b)
-  if listLen u > setCardCap then PSet None else PSet (Some u)
-djoinN (PProduct ax) (PProduct bx) =
-  productNorm (map (joinAxis ax bx) (axisUnion ax bx))
-djoinN p _ = p
+  if listLen u > cap then PSet None else PSet (Some u)
+joinCapped cap (PProduct ax) (PProduct bx) =
+  productNorm (map (joinAxisCapped cap ax bx) (axisUnion ax bx))
+joinCapped _ p _ = p
+
+-- The elements a join of constants denotes, kept as an antichain: no member
+-- covers another. Two members are merged only where their join adds nothing
+-- neither admits, which holds for Set members and for Products that differ
+-- in one Set axis; Prefix patterns and other Products stay separate, so
+-- `"a.com/*"` beside `"b.com/*"` admits those two hosts and nothing else.
+-- Past `setCardCap` members the set is folded by the domain join, which
+-- covers every member and bounds how far a fixpoint can grow; a written
+-- bound past it is refused (`writtenSetProblem`). Members are ordered by their
+-- rendering.
+export
+dantichain : List Param -> List Param
+dantichain ps =
+  let kept = dmaximal ps
+  if listLen kept > setCardCap then
+    [fold djoinN (headParam kept) kept]
+  else
+    kept
+
+-- The antichain before the cap. Its inputs are merged in the order of their
+-- rendering, so the same elements written in any order give the same set.
+export
+dmaximal : List Param -> List Param
+dmaximal ps = maximalWith setCardCap ps
+
+maximalWith : Int -> List Param -> List Param
+maximalWith cap ps =
+  sortParams
+    (fold
+      (acc p => insertMaximal cap p acc)
+      []
+      (sortParams (map canonParam ps)))
+
+-- Why a written bound cannot be kept as written: more than `setCardCap`
+-- elements of one label, or Set members that merge into a set larger than
+-- that. Inference would fold either into a wider element, so a bound, which
+-- must never widen, is refused instead. The members merge with no cap here,
+-- so a union that inference would saturate to top is seen.
+export
+writtenSetProblem : List Param -> Option String
+writtenSetProblem ps =
+  let merged = maximalWith noSetCap ps
+  let n = listLen merged
+  if n > setCardCap then
+    Some
+      "a bound admits at most \{intToString setCardCap} elements of one label, and this one writes \{intToString n}; write a pattern that covers several of them"
+  else match filterList (> setCardCap) (map largestSet merged)
+    big :: _ =>
+      Some
+        "a set holds at most \{intToString setCardCap} members, and these elements merge into one of \{intToString big}"
+    [] => None
+
+noSetCap : Int
+noSetCap = 1073741823
+
+largestSet : Param -> Int
+largestSet (PSet (Some xs)) = listLen xs
+largestSet (PProduct ax) = fold (acc a => max acc (largestSet (snd a))) 0 ax
+largestSet _ = 0
+
+headParam : List Param -> Param
+headParam (p :: _) = p
+headParam [] = PUnit
+
+insertMaximal : Int -> Param -> List Param -> List Param
+insertMaximal cap p acc =
+  if anyList (q => dsubN p q) acc then
+    acc
+  else
+    let rest = filterList (q => not (dsubN q p)) acc
+    match exactMerge cap p rest []
+      Some (merged, others) => insertMaximal cap merged others
+      None => p :: rest
+
+-- The first member `p` merges with exactly, and the other members.
+exactMerge : Int ->
+  Param ->
+  List Param ->
+  List Param ->
+  Option (Param, List Param)
+exactMerge _ _ [] _ = None
+exactMerge cap p (q :: qs) seen =
+  if joinIsExact p q then
+    Some (joinCapped cap p q, reverseL seen ++ qs)
+  else
+    exactMerge cap p qs (q :: seen)
+
+joinIsExact : Param -> Param -> Bool
+joinIsExact PUnit PUnit = True
+joinIsExact (PSet _) (PSet _) = True
+joinIsExact (PProduct ax) (PProduct bx) =
+  match filterList (n => not (axisEq n ax bx)) (axisUnion ax bx)
+    [name] => match (lookupAxis name ax, lookupAxis name bx)
+      (Some (PSet (Some _)), Some (PSet (Some _))) => True
+      _ => False
+    _ => False
+joinIsExact _ _ = False
+
+axisEq : String -> List (String, Param) -> List (String, Param) -> Bool
+axisEq name ax bx = match (lookupAxis name ax, lookupAxis name bx)
+  (Some a, Some b) => dsubN a b && dsubN b a
+  (None, None) => True
+  _ => False
+
+sortParams : List Param -> List Param
+sortParams [] = []
+sortParams (p :: ps) = insertParam p (sortParams ps)
+
+insertParam : Param -> List Param -> List Param
+insertParam p [] = [p]
+insertParam p (q :: qs) = match stringCompare (drenderN p) (drenderN q)
+  Gt => q :: insertParam p qs
+  _ => p :: q :: qs
 
 export
 joinAxis : List (String, Param) ->
   List (String, Param) ->
   String ->
   (String, Param)
-joinAxis ax bx name = match (lookupAxis name ax, lookupAxis name bx)
-  (Some pa, Some pb) => (name, djoinN pa pb)
-  (Some pa, None) => (name, djoinN pa (subTopOf pa))
-  (None, Some pb) => (name, djoinN (subTopOf pb) pb)
+joinAxis ax bx name = joinAxisCapped setCardCap ax bx name
+
+joinAxisCapped : Int ->
+  List (String, Param) ->
+  List (String, Param) ->
+  String ->
+  (String, Param)
+joinAxisCapped cap ax bx name = match (lookupAxis name ax, lookupAxis name bx)
+  (Some pa, Some pb) => (name, joinCapped cap pa pb)
+  (Some pa, None) => (name, joinCapped cap pa (subTopOf pa))
+  (None, Some pb) => (name, joinCapped cap (subTopOf pb) pb)
   (None, None) => (name, PUnit)
 
 export

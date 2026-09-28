@@ -56,6 +56,7 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  authTermNames,
 }
 import support.ordmap.{
   OrdMap,
@@ -521,9 +522,12 @@ checkTypeGo bound cur env (TyEffect labels _ t) =
   (errs ++ e2, b2)
 checkTypeGo bound cur _ (TyNamed n _) =
   ([MisplacedAuthorityBinder n cur], bound)
-checkTypeGo bound cur env (TyQual t ns l) =
+checkTypeGo bound cur env (TyQual t ps l) =
   let (e1, b1) = checkTypeGo bound cur env t
-  (e1 ++ flatMap (checkAuthorityName b1 (orElseLoc l cur)) ns, b1)
+  (
+    e1 ++ flatMap (checkAuthorityName b1 (orElseLoc l cur)) (authTermNames ps),
+    b1,
+  )
 -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
 -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
 -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
@@ -540,8 +544,9 @@ checkTypeGo bound cur env (TyConstrained cs t) =
 -- written effect labels a `TyEffect` carries — validate them the same way.
 checkTypeGo bound cur env (TyRow labels _ _) =
   (checkEffAtoms bound cur env labels, bound)
--- A written authority term names nothing.
-checkTypeGo bound _ _ (TyAuth _ _) = ([], bound)
+-- A written authority term binds the names it joins, as a bare index name
+-- (`Handle p`) does; its literals name nothing.
+checkTypeGo bound _ _ (TyAuth ps _) = ([], authTermNames ps ++ bound)
 
 -- Tuple components bind left to right, as arrow domains do.
 checkTypesGo : List String ->

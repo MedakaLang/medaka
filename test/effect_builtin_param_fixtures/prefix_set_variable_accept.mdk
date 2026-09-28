@@ -1,0 +1,21 @@
+-- A set bound through an authority variable: `pick`'s result is bounded by
+-- both arguments, so the call's variable solves to the set of the two hosts.
+pick : Bool -> (a : String) -> (b : String) -> <Net a, Net b> String @(a | b)
+pick c a b =
+  let _ = netResolve a
+  let _ = netResolve b
+  if c then a else b
+
+usePick : Bool -> <Net "a.com/*", Net "b.com/*"> Unit
+usePick c =
+  let h = pick c "a.com/x" "b.com/y"
+  let _ = netResolve h
+  ()
+
+branchDial : Bool -> <Net "a.com/*", Net "b.com/*"> Unit
+branchDial c =
+  let h = if c then "a.com/x" else "b.com/y"
+  let _ = netResolve h
+  ()
+
+main = println 1

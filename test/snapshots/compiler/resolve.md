@@ -1,5 +1,5 @@
 # META
-source_lines=6513
+source_lines=6518
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -60,6 +60,7 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  authTermNames,
 }
 import support.ordmap.{
   OrdMap,
@@ -525,9 +526,12 @@ checkTypeGo bound cur env (TyEffect labels _ t) =
   (errs ++ e2, b2)
 checkTypeGo bound cur _ (TyNamed n _) =
   ([MisplacedAuthorityBinder n cur], bound)
-checkTypeGo bound cur env (TyQual t ns l) =
+checkTypeGo bound cur env (TyQual t ps l) =
   let (e1, b1) = checkTypeGo bound cur env t
-  (e1 ++ flatMap (checkAuthorityName b1 (orElseLoc l cur)) ns, b1)
+  (
+    e1 ++ flatMap (checkAuthorityName b1 (orElseLoc l cur)) (authTermNames ps),
+    b1,
+  )
 -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
 -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
 -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
@@ -544,8 +548,9 @@ checkTypeGo bound cur env (TyConstrained cs t) =
 -- written effect labels a `TyEffect` carries — validate them the same way.
 checkTypeGo bound cur env (TyRow labels _ _) =
   (checkEffAtoms bound cur env labels, bound)
--- A written authority term names nothing.
-checkTypeGo bound _ _ (TyAuth _ _) = ([], bound)
+-- A written authority term binds the names it joins, as a bare index name
+-- (`Handle p`) does; its literals name nothing.
+checkTypeGo bound _ _ (TyAuth ps _) = ([], authTermNames ps ++ bound)
 
 -- Tuple components bind left to right, as arrow domains do.
 checkTypesGo : List String ->
@@ -6516,7 +6521,7 @@ takeOriginTrace _ =
   originTraceLog := []
   rows
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "authTermNames" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "splitOnChar" false) (mem "startsWith" false))))
@@ -6609,10 +6614,10 @@ takeOriginTrace _ =
 (DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts")))
 (DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
 (DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") PWild (PCon "TyNamed" (PVar "n") PWild)) (ETuple (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))) (EVar "bound")))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "ns") (PVar "l"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkAuthorityName") (EVar "b1")) (EApp (EApp (EVar "orElseLoc") (EVar "l")) (EVar "cur")))) (EVar "ns"))) (EVar "b1")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "ps") (PVar "l"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkAuthorityName") (EVar "b1")) (EApp (EApp (EVar "orElseLoc") (EVar "l")) (EVar "cur")))) (EApp (EVar "authTermNames") (EVar "ps")))) (EVar "b1")))))
 (DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
 (DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EVar "bound")))
-(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyAuth" PWild PWild)) (ETuple (EListLit) (EVar "bound")))
+(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyAuth" (PVar "ps") PWild)) (ETuple (EListLit) (EBinOp "++" (EApp (EVar "authTermNames") (EVar "ps")) (EVar "bound"))))
 (DTypeSig false "checkTypesGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "checkTypesGo" ((PVar "bound") PWild PWild (PList)) (ETuple (EListLit) (EVar "bound")))
 (DFunDef false "checkTypesGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
@@ -8093,7 +8098,7 @@ takeOriginTrace _ =
 (DTypeSig true "takeOriginTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EUnOp "!" (EVar "originTraceLog"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "authTermNames" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "splitOnChar" false) (mem "startsWith" false))))
@@ -8186,10 +8191,10 @@ takeOriginTrace _ =
 (DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts")))
 (DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
 (DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") PWild (PCon "TyNamed" (PVar "n") PWild)) (ETuple (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))) (EVar "bound")))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "ns") (PVar "l"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkAuthorityName") (EVar "b1")) (EApp (EApp (EVar "orElseLoc") (EVar "l")) (EVar "cur")))) (EVar "ns"))) (EVar "b1")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "ps") (PVar "l"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkAuthorityName") (EVar "b1")) (EApp (EApp (EVar "orElseLoc") (EVar "l")) (EVar "cur")))) (EApp (EVar "authTermNames") (EVar "ps")))) (EVar "b1")))))
 (DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
 (DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EVar "bound")))
-(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyAuth" PWild PWild)) (ETuple (EListLit) (EVar "bound")))
+(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyAuth" (PVar "ps") PWild)) (ETuple (EListLit) (EBinOp "++" (EApp (EVar "authTermNames") (EVar "ps")) (EVar "bound"))))
 (DTypeSig false "checkTypesGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "checkTypesGo" ((PVar "bound") PWild PWild (PList)) (ETuple (EListLit) (EVar "bound")))
 (DFunDef false "checkTypesGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))

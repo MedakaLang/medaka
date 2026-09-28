@@ -52,6 +52,7 @@ import frontend.ast.{
   useMemberLocal,
   DeriveRef,
   deriveRefName,
+  authTermsSurface,
 }
 import types.repr.{Scheme(..), ppScheme}
 import frontend.resolve.{internalExterns}
@@ -133,9 +134,9 @@ ppTyP _ (TyRow [] (a :: b :: rest) _) = "(\{joinWith " | " (a :: b :: rest)})"
 -- A bare row atom (#997) is already atomic (no wrapped type), so — unlike
 -- `TyEffect` above — it never needs precedence-parens at any `p`.
 ppTyP _ (TyRow effs tail _) = "<\{ppEffInsideDoc effs tail}>"
-ppTyP _ (TyAuth p _) = authTermSurface escStr p
+ppTyP _ (TyAuth ps _) = authTermsSurface escStr ps
 ppTyP _ (TyNamed n t) = "(\{n} : \{ppTyP 0 t})"
-ppTyP _ (TyQual t ns _) = "\{ppTyP 2 t} \{qualifierSource ns}"
+ppTyP _ (TyQual t ns _) = "\{ppTyP 2 t} \{qualifierSource escStr ns}"
 ppTyP _ (TyConstrained cs t) =
   let csStr = match cs
     [c] => ppConstrDoc c

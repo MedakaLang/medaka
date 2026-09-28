@@ -1,5 +1,5 @@
 # META
-source_lines=2483
+source_lines=2502
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -714,11 +714,12 @@ public export data Ty =
   -- An explicit authority qualifier `String @p`: the value's domain-directed
   -- abstraction is bounded by the authority `p` names.  `p` must be bound by a
   -- `TyNamed` to its left (or a data parameter); resolve checks that.  A
-  -- joined qualifier `String @(a | b)` names several binders and is bounded by
-  -- their join, so the names are a list of one or more.  The span is the
-  -- qualifier's own, from the `@`, so a diagnostic about a name it writes
-  -- points there; `None` for a qualifier a tool synthesises.
-  | TyQual Ty (List String) (Option Loc)
+  -- joined qualifier `String @(a | "b.com/*")` writes several terms, names
+  -- (`EPName`) and domain literals, and is bounded by their join, so the terms
+  -- are a list of one or more.  The span is the qualifier's own, from the `@`,
+  -- so a diagnostic about a term it writes points there; `None` for a
+  -- qualifier a tool synthesises.
+  | TyQual Ty (List EffParamTy) (Option Loc)
   -- A row/grade written BARE in a type-ARGUMENT slot (#997), e.g. the
   -- `<Stdout>` of `Async <Stdout> Unit`.  Distinct from `TyEffect` — which
   -- always WRAPS an inner type (`<Stdout> Unit` meaning "Unit, performing
@@ -730,11 +731,13 @@ public export data Ty =
   | TyRow (List EffAtomTy) (List String) (Option Loc)
   -- An authority term written in an `Authority`-kinded type-ARGUMENT slot:
   -- the top `*` (`Handle *`), a domain literal (`Handle "config/*"`), a set
-  -- or a product, spelled exactly as an atom's parameter is.  A bare name in
-  -- that slot is a `TyVar`; the slot's declared kind is what makes it an
-  -- authority binder rather than a type variable, as an `Effect` slot does
-  -- for a row.  Never appears outside such a slot: elaboration diagnoses it.
-  | TyAuth EffParamTy (Option Loc)
+  -- or a product, spelled exactly as an atom's parameter is, or a join of
+  -- terms, `Handle ("a/*" | p)`, whose names are `EPName`s.  A bare name in
+  -- that slot is a `TyVar`, and a join of names only is a `TyRow`; the slot's
+  -- declared kind is what makes either an authority rather than a type
+  -- variable or a row, as an `Effect` slot does for a row.  Never appears
+  -- outside such a slot: elaboration diagnoses it.
+  | TyAuth (List EffParamTy) (Option Loc)
 
 -- One written effect atom: a label, the identity of the `effect` declaration
 -- it names (acquired by resolve, `OriginBuiltin` for the language's own
@@ -837,6 +840,13 @@ authTermSurface _ EPTop = "*"
 authTermSurface esc p =
   let s = effParamSurface esc p
   stringSlice 1 (stringLength s) s
+
+-- A written authority term, one or a join: `"config/*"`, `("a/*" | p)`.
+export
+authTermsSurface : (String -> String) -> List EffParamTy -> String
+authTermsSurface esc [p] = authTermSurface esc p
+authTermsSurface esc ps =
+  "(" ++ join " | " (map (authTermSurface esc) ps) ++ ")"
 
 -- A constructor's existential binders as written, space-separated:
 -- `(p : Authority FileRead) (q : Authority Env)`.
@@ -976,13 +986,22 @@ kindAnnSource KindEffect = "Effect"
 kindAnnSource (KindAuthority l _ _) = "Authority \{l}"
 kindAnnSource (KindArrow a b) = "\{kindAnnArg a} -> \{kindAnnSource b}"
 
--- The source spelling of a qualifier's names, `@p` or the joined `@(a | b)`,
+-- The source spelling of a qualifier's terms, `@p` or the joined `@(a | "b/*")`,
 -- shared by every tool that renders a `TyQual` for the reason
 -- `kindAnnSource` is.
 export
-qualifierSource : List String -> String
-qualifierSource [n] = "@\{n}"
-qualifierSource ns = "@(" ++ join " | " ns ++ ")"
+qualifierSource : (String -> String) -> List EffParamTy -> String
+qualifierSource esc ps = "@" ++ authTermsSurface esc ps
+
+-- The names a written authority term refers to.
+export
+authTermNames : List EffParamTy -> List String
+authTermNames ps =
+  flatMap
+    (p => match p
+      EPName n => [n]
+      _ => [])
+    ps
 
 -- The arrow associates right, so only a LEFT operand that is itself an arrow
 -- needs parentheses: `Effect -> Type -> Type` prints bare, and `(Type ->
@@ -2545,7 +2564,7 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "sameTyConHead" ((PVar "n1") (PVar "o1") (PVar "n2") (PVar "o2")) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EVar "tyConIdsConflict") (EVar "o1")) (EVar "o2")))))
 (DTypeSig false "tyConIdsConflict" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))
 (DFunDef false "tyConIdsConflict" ((PVar "o1") (PVar "o2")) (EMatch (ETuple (EApp (EVar "identOriginOf") (EVar "o1")) (EApp (EVar "identOriginOf") (EVar "o2"))) (arm (PTuple (PCon "Some" (PVar "i1")) (PCon "Some" (PVar "i2"))) () (EBinOp "/=" (EVar "i1") (EVar "i2"))) (arm PWild () (EVar "False"))))
-(DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyNamed" (ConPos (TyCon "String") (TyCon "Ty"))) (variant "TyQual" (ConPos (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyAuth" (ConPos (TyCon "EffParamTy") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyNamed" (ConPos (TyCon "String") (TyCon "Ty"))) (variant "TyQual" (ConPos (TyCon "Ty") (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyAuth" (ConPos (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DData Public "EffAtomTy" () ((variant "EffAtomTy" (ConNamed (field "eatLabel" (TyCon "String")) (field "eatOrigin" (TyCon "TyConOrigin")) (field "eatParam" (TyCon "EffParamTy")) (field "eatLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "EffParamTy" () ((variant "EPTop" (ConPos)) (variant "EPLit" (ConPos (TyCon "String"))) (variant "EPName" (ConPos (TyCon "String"))) (variant "EPSet" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "EPProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))) ())
 (DTypeSig true "effAtomBare" (TyFun (TyCon "String") (TyCon "EffAtomTy")))
@@ -2573,6 +2592,9 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "authTermSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "EffParamTy") (TyCon "String"))))
 (DFunDef false "authTermSurface" (PWild (PCon "EPTop")) (ELit (LString "*")))
 (DFunDef false "authTermSurface" ((PVar "esc") (PVar "p")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "effParamSurface") (EVar "esc")) (EVar "p"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
+(DTypeSig true "authTermsSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
+(DFunDef false "authTermsSurface" ((PVar "esc") (PList (PVar "p"))) (EApp (EApp (EVar "authTermSurface") (EVar "esc")) (EVar "p")))
+(DFunDef false "authTermsSurface" ((PVar "esc") (PVar "ps")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "join") (ELit (LString " | "))) (EApp (EApp (EVar "map") (EApp (EVar "authTermSurface") (EVar "esc"))) (EVar "ps")))) (ELit (LString ")"))))
 (DTypeSig true "ctorBindersSurface" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyCon "String")))
 (DFunDef false "ctorBindersSurface" ((PVar "binders")) (EApp (EApp (EVar "join") (ELit (LString " "))) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "b")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "kindAnnSource") (EApp (EVar "snd") (EVar "b"))))) (ELit (LString ")"))))) (EVar "binders"))))
 (DTypeSig true "ctorBindersSource" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyCon "String")))
@@ -2606,9 +2628,10 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "kindAnnSource" ((PCon "KindEffect")) (ELit (LString "Effect")))
 (DFunDef false "kindAnnSource" ((PCon "KindAuthority" (PVar "l") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EApp (EVar "display") (EVar "l"))) (ELit (LString ""))))
 (DFunDef false "kindAnnSource" ((PCon "KindArrow" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "kindAnnArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EVar "kindAnnSource") (EVar "b")))) (ELit (LString ""))))
-(DTypeSig true "qualifierSource" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "qualifierSource" ((PList (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "@")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))
-(DFunDef false "qualifierSource" ((PVar "ns")) (EBinOp "++" (EBinOp "++" (ELit (LString "@(")) (EApp (EApp (EVar "join") (ELit (LString " | "))) (EVar "ns"))) (ELit (LString ")"))))
+(DTypeSig true "qualifierSource" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
+(DFunDef false "qualifierSource" ((PVar "esc") (PVar "ps")) (EBinOp "++" (ELit (LString "@")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EVar "ps"))))
+(DTypeSig true "authTermNames" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "authTermNames" ((PVar "ps")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EMatch (EVar "p") (arm (PCon "EPName" (PVar "n")) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (EVar "ps")))
 (DTypeSig false "kindAnnArg" (TyFun (TyCon "KindAnn") (TyCon "String")))
 (DFunDef false "kindAnnArg" ((PAs "k" (PCon "KindArrow" PWild PWild))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "kindAnnSource") (EVar "k")))) (ELit (LString ")"))))
 (DFunDef false "kindAnnArg" ((PVar "k")) (EApp (EVar "kindAnnSource") (EVar "k")))
@@ -2941,7 +2964,7 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "sameTyConHead" ((PVar "n1") (PVar "o1") (PVar "n2") (PVar "o2")) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EVar "tyConIdsConflict") (EVar "o1")) (EVar "o2")))))
 (DTypeSig false "tyConIdsConflict" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))
 (DFunDef false "tyConIdsConflict" ((PVar "o1") (PVar "o2")) (EMatch (ETuple (EApp (EVar "identOriginOf") (EVar "o1")) (EApp (EVar "identOriginOf") (EVar "o2"))) (arm (PTuple (PCon "Some" (PVar "i1")) (PCon "Some" (PVar "i2"))) () (EBinOp "/=" (EVar "i1") (EVar "i2"))) (arm PWild () (EVar "False"))))
-(DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyNamed" (ConPos (TyCon "String") (TyCon "Ty"))) (variant "TyQual" (ConPos (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyAuth" (ConPos (TyCon "EffParamTy") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyNamed" (ConPos (TyCon "String") (TyCon "Ty"))) (variant "TyQual" (ConPos (TyCon "Ty") (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyAuth" (ConPos (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DData Public "EffAtomTy" () ((variant "EffAtomTy" (ConNamed (field "eatLabel" (TyCon "String")) (field "eatOrigin" (TyCon "TyConOrigin")) (field "eatParam" (TyCon "EffParamTy")) (field "eatLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
 (DData Public "EffParamTy" () ((variant "EPTop" (ConPos)) (variant "EPLit" (ConPos (TyCon "String"))) (variant "EPName" (ConPos (TyCon "String"))) (variant "EPSet" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "EPProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))) ())
 (DTypeSig true "effAtomBare" (TyFun (TyCon "String") (TyCon "EffAtomTy")))
@@ -2969,6 +2992,9 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "authTermSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "EffParamTy") (TyCon "String"))))
 (DFunDef false "authTermSurface" (PWild (PCon "EPTop")) (ELit (LString "*")))
 (DFunDef false "authTermSurface" ((PVar "esc") (PVar "p")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "effParamSurface") (EVar "esc")) (EVar "p"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
+(DTypeSig true "authTermsSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
+(DFunDef false "authTermsSurface" ((PVar "esc") (PList (PVar "p"))) (EApp (EApp (EVar "authTermSurface") (EVar "esc")) (EVar "p")))
+(DFunDef false "authTermsSurface" ((PVar "esc") (PVar "ps")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "join") (ELit (LString " | "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "authTermSurface") (EVar "esc"))) (EVar "ps")))) (ELit (LString ")"))))
 (DTypeSig true "ctorBindersSurface" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyCon "String")))
 (DFunDef false "ctorBindersSurface" ((PVar "binders")) (EApp (EApp (EVar "join") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "b")))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "kindAnnSource") (EApp (EVar "snd") (EVar "b"))))) (ELit (LString ")"))))) (EVar "binders"))))
 (DTypeSig true "ctorBindersSource" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyCon "String")))
@@ -3002,9 +3028,10 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "kindAnnSource" ((PCon "KindEffect")) (ELit (LString "Effect")))
 (DFunDef false "kindAnnSource" ((PCon "KindAuthority" (PVar "l") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString ""))))
 (DFunDef false "kindAnnSource" ((PCon "KindArrow" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "kindAnnArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EVar "kindAnnSource") (EVar "b")))) (ELit (LString ""))))
-(DTypeSig true "qualifierSource" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "qualifierSource" ((PList (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "@")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))
-(DFunDef false "qualifierSource" ((PVar "ns")) (EBinOp "++" (EBinOp "++" (ELit (LString "@(")) (EApp (EApp (EVar "join") (ELit (LString " | "))) (EVar "ns"))) (ELit (LString ")"))))
+(DTypeSig true "qualifierSource" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
+(DFunDef false "qualifierSource" ((PVar "esc") (PVar "ps")) (EBinOp "++" (ELit (LString "@")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EVar "ps"))))
+(DTypeSig true "authTermNames" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "authTermNames" ((PVar "ps")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EMatch (EVar "p") (arm (PCon "EPName" (PVar "n")) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (EVar "ps")))
 (DTypeSig false "kindAnnArg" (TyFun (TyCon "KindAnn") (TyCon "String")))
 (DFunDef false "kindAnnArg" ((PAs "k" (PCon "KindArrow" PWild PWild))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "kindAnnSource") (EVar "k")))) (ELit (LString ")"))))
 (DFunDef false "kindAnnArg" ((PVar "k")) (EApp (EVar "kindAnnSource") (EVar "k")))

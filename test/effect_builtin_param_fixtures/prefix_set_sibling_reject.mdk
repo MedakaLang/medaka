@@ -1,0 +1,5 @@
+-- Two sibling directories: their join `cfg/*` would admit cfg/secret.
+readCfg : Unit -> <FileRead "cfg/a/*", FileRead "cfg/b/*"> Result String String
+readCfg _ = readFile "cfg/secret/key"
+
+main = println 1

@@ -31,7 +31,7 @@ import types.effect_rows.{
 }
 import frontend.ast.{
   Ty(..), Constraint(..), TyConOrigin(..), EffAtomTy(..), effAtomSurface,
-  authTermSurface, qualifierSource
+  authTermSurface, qualifierSource, authTermsSurface
 }
 import support.util.{listLen, filterList, isEmptyL, joinWith, sortUniqS, escStr}
 
@@ -764,10 +764,10 @@ ppTy (TyRow [] (a :: b :: rest) _) = "(\{joinWith " | " (a :: b :: rest)})"
 -- A bare row atom (#997): same row rendering as `TyEffect` above, minus the
 -- wrapped type it has none of.
 ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
-ppTy (TyAuth p _) = authTermSurface escStr p
+ppTy (TyAuth ps _) = authTermsSurface escStr ps
 ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
 ppTy (TyNamed n t) = "(\{n} : \{ppTy t})"
-ppTy (TyQual t ns _) = "\{ppTyAtom t} \{qualifierSource ns}"
+ppTy (TyQual t ns _) = "\{ppTyAtom t} \{qualifierSource escStr ns}"
 
 -- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
 -- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's

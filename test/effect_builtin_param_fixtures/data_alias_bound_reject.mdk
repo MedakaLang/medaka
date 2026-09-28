@@ -1,0 +1,11 @@
+-- A row written in a data field or a type alias is a bound like any other:
+-- its parameters are validated and its elements capped.
+data Box = Box (Unit -> <FileRead "a/*", FileRead "b/*", FileRead "c/*", FileRead "d/*", FileRead "e/*", FileRead "f/*", FileRead "g/*", FileRead "h/*", FileRead "i/*", FileRead "j/*", FileRead "k/*", FileRead "l/*", FileRead "m/*", FileRead "n/*", FileRead "o/*", FileRead "p/*", FileRead "q/*"> Unit)
+
+type Rd = Unit -> <FileRead "a/*", FileRead "b/*", FileRead "c/*", FileRead "d/*", FileRead "e/*", FileRead "f/*", FileRead "g/*", FileRead "h/*", FileRead "i/*", FileRead "j/*", FileRead "k/*", FileRead "l/*", FileRead "m/*", FileRead "n/*", FileRead "o/*", FileRead "p/*", FileRead "q/*"> Result String String
+
+data B = B (Unit -> <Net "a.com"> Unit)
+
+type R = Unit -> <Net "b.com"> Unit
+
+main = println 1

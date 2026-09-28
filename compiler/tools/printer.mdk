@@ -75,6 +75,7 @@ import frontend.ast.{
   Variant(..),
   Decl(..),
   Attr(..),
+  authTermsSurface,
 }
 import support.util.{
   u64HalvesHex, i64HalvesLiteral, zipL, joinWith, listLen, allList, isEmptyL,
@@ -992,7 +993,7 @@ printType (TyRow [] (a :: b :: rest) _) =
   Cat (text "(") (Cat (text (joinWith " | " (a :: b :: rest))) (text ")"))
 printType (TyRow es tail _) =
   Cat (text "<") (Cat (effectInside es tail) (text ">"))
-printType (TyAuth p _) = text (authTermSurface escStringLit p)
+printType (TyAuth ps _) = text (authTermsSurface escStringLit ps)
 printType (TyConstrained cs t) =
   Cat (constraintsDoc cs) (Cat (text " => ") (printType t))
 printType (TyNamed n t) =
@@ -1002,7 +1003,7 @@ printType (TyNamed n t) =
 -- `Result String @a` qualifies the whole application, so an application
 -- needs no parentheses under the qualifier.
 printType (TyQual t ns _) =
-  Cat (printTypeAppLhs t) (text " \{qualifierSource ns}")
+  Cat (printTypeAppLhs t) (text " \{qualifierSource escStringLit ns}")
 
 constraintsDoc : List Constraint -> Doc
 constraintsDoc [c] = printConstraint c
@@ -2597,9 +2598,10 @@ ppTyPrec p (TyEffect effs tail t) =
 ppTyPrec _ (TyRow [] (a :: b :: rest) _) =
   "(\{joinWith " | " (a :: b :: rest)})"
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
-ppTyPrec _ (TyAuth p _) = authTermSurface escStringLit p
+ppTyPrec _ (TyAuth ps _) = authTermsSurface escStringLit ps
 ppTyPrec _ (TyNamed n t) = "(\{n} : \{ppTyPrec 0 t})"
-ppTyPrec _ (TyQual t ns _) = "\{ppTyPrec 2 t} \{qualifierSource ns}"
+ppTyPrec _ (TyQual t ns _) =
+  "\{ppTyPrec 2 t} \{qualifierSource escStringLit ns}"
 ppTyPrec _ (TyConstrained cs t) =
   let csStr = match cs
     [c] => ppConstr c

@@ -226,7 +226,10 @@ under path = load (path ++ "/x")
 A qualified value type is written with a spaced `@`: `String @path` names the
 argument's authority on a value derived from it.  A joined qualifier names
 several binders in parentheses, `String @(src | dst)`, a value within either
-authority; it is the spelling a joined authority renders as.  A qualifier's
+authority; it is the spelling a joined authority renders as.  A qualifier or
+an index may also write literals: `String @"cfg/*"`,
+`String @("a.com/*" | p)`, `Socket ("a.com/x" | "b.com/y")`, a set of
+elements as it renders.  A qualifier's
 binders must be `String` authorities of one domain shape (two Prefix labels
 are one shape), and a named argument used only in a qualifier, with no atom or
 index naming it, has no domain and is an error.  The quoted underscore
@@ -296,9 +299,11 @@ effect Http Product (Host : Prefix, Method : Set)  -- a Product declares its axe
 -- names them; a Product without axes, or axes on another domain, is refused
 ```
 
-A row atom whose authority is a symbolic join prints as one atom per operand,
-`<FileWrite src, FileWrite dst>`, which is also how it is written: the parser
-joins same-label atoms into one.
+A row atom whose authority is a symbolic join, or a set of elements, prints
+as one atom per operand, `<FileWrite src, FileWrite dst>` or
+`<Net "a.com/*", Net "b.com/*">`, which is also how it is written: the parser
+gathers same-label atoms into one, and a row keeps at most 16 elements per
+label.
 
 ## Function definitions
 

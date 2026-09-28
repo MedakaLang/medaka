@@ -1,0 +1,17 @@
+-- A set is written in an index and a qualifier as the checker prints it: a
+-- join of literals, or of literals and names.
+openEither : Bool -> <Net "a.com/x", Net "b.com/y"> Result String (Socket ("a.com/x" | "b.com/y"))
+openEither c = if c then netTcpConnect "a.com/x" 80 else netTcpConnect "b.com/y" 80
+
+dialBoth : String @("a.com/*" | "b.com/*") -> <Net "a.com/*", Net "b.com/*"> Unit
+dialBoth h =
+  let _ = netResolve h
+  ()
+
+useSock : Socket ("a.com/*" | h) -> <Net "a.com/*", Net h> Int
+useSock s = socketFd s
+
+cfg : String @"cfg/*" -> <FileRead "cfg/*"> Result String String
+cfg p = readFile p
+
+main = dialBoth "a.com/x"

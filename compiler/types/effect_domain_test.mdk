@@ -1,8 +1,11 @@
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import list.{drop as listDrop}
 import types.effect_domain.{
-  Param(..), djoin, drender, dsub, extendParam, appendParam
+  Param(..), djoin, drender, dsub, extendParam, appendParam, dantichain,
+  dmaximal, setCardCap
 }
 import types.effect_rows.{atomBuiltin, atomsDiff, atomsUnion, renderAtoms}
+import types.effect_authority.{Authority(..), authSub, authJoinAll}
 
 test "prefix coverage is directed and respects the host boundary" = expectAll [
   expectTrue
@@ -113,4 +116,96 @@ test "an extension keeps a pattern, extends an exact element, tops a Set member"
     expectEqual
       (drender (PPrefix (Some "cfg/*")))
       (drender (appendParam (PPrefix None) ".toml" (PPrefix (Some "cfg/*")))),
+  ]
+
+pat : String -> Param
+pat s = PPrefix (Some s)
+
+test "a written Prefix row keeps the set of its patterns, never their join" =
+  let both =
+    atomsUnion
+      [atomBuiltin "FileRead" (pat "cfg/*")]
+      [atomBuiltin "FileRead" (pat "tmp/*")]
+  let siblings =
+    atomsUnion
+      [atomBuiltin "FileRead" (pat "cfg/a/*")]
+      [atomBuiltin "FileRead" (pat "cfg/b/*")]
+  expectAll
+    [
+      expectEqual "FileRead \"cfg/*\", FileRead \"tmp/*\"" (renderAtoms both),
+      -- the join of two siblings would be `cfg/*`, admitting cfg/secret
+      expectEqual
+        "FileRead \"cfg/a/*\", FileRead \"cfg/b/*\""
+        (renderAtoms siblings),
+      expectEqual
+        "FileRead \"cfg/secret\""
+        (renderAtoms
+          (atomsDiff [atomBuiltin "FileRead" (pat "cfg/secret")] siblings)),
+      expectEqual
+        ""
+        (renderAtoms
+          (atomsDiff [atomBuiltin "FileRead" (pat "cfg/b/key")] siblings)),
+      -- a member another covers is dropped
+      expectEqual
+        "FileRead \"cfg/*\""
+        (renderAtoms
+          (atomsUnion
+            [atomBuiltin "FileRead" (pat "cfg/app.toml")]
+            [atomBuiltin "FileRead" (pat "cfg/*")])),
+    ]
+
+test "a set is covered when each member is covered by some element" = expectAll
+  [
+    expectTrue
+      (authSub
+        (authJoinAll [AConst (pat "a.com/x"), AConst (pat "a.com/y")])
+        (AConst (pat "a.com/*"))),
+    expectFalse
+      (authSub
+        (authJoinAll [AConst (pat "a.com/x"), AConst (pat "b.com/y")])
+        (AConst (pat "a.com/*"))),
+    expectTrue
+      (authSub
+        (AConst (pat "b.com/y"))
+        (authJoinAll [AConst (pat "a.com/*"), AConst (pat "b.com/*")])),
+    expectFalse
+      (authSub
+        (AConst (pat "evil.net/y"))
+        (authJoinAll [AConst (pat "a.com/*"), AConst (pat "b.com/*")])),
+  ]
+
+test "Set members and Products differing in one Set axis merge exactly" =
+  let get = PProduct [("Host", pat "a.com/*"), ("Method", PSet (Some ["GET"]))]
+  let post =
+    PProduct [("Host", pat "a.com/*"), ("Method", PSet (Some ["POST"]))]
+  let otherHost =
+    PProduct [("Host", pat "b.com/*"), ("Method", PSet (Some ["POST"]))]
+  expectAll
+    [
+      expectEqual
+        [" {\"HOME\", \"PATH\"}"]
+        (map drender (dantichain [PSet (Some ["PATH"]), PSet (Some ["HOME"])])),
+      expectEqual
+        [" Host=\"a.com/*\" Method={\"GET\", \"POST\"}"]
+        (map drender (dantichain [get, post])),
+      -- a pointwise join would admit (a.com, POST); the set does not
+      expectEqual 2 (length (dantichain [get, otherHost])),
+      expectFalse
+        (authSub
+          (AConst
+            (PProduct [
+              ("Host", pat "a.com/*"),
+              ("Method", PSet (Some ["POST"])),
+            ]))
+          (authJoinAll [AConst get, AConst otherHost])),
+    ]
+
+test "past the cap a set folds to one element covering every member" =
+  let many = map (i => pat "d\{intToString i}/*") [1..=setCardCap + 1]
+  let folded = dantichain many
+  expectAll [
+    expectEqual (setCardCap + 1) (length (dmaximal many)),
+    expectEqual 1 (length folded),
+    expectTrue (all (m => any (f => dsub m f) folded) many),
+    expectEqual setCardCap (length (dantichain (listDrop 1 many))),
   ]

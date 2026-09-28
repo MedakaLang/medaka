@@ -1,0 +1,18 @@
+-- A literal in a qualifier or an index is an element of its domain: a Set
+-- or a pattern without a delimiter is refused, never read as the whole
+-- domain.
+setQual : String @({"A", "B"}) -> <Env> Option String
+setQual k = getEnv k
+
+bareQual : String @"a.com" -> <Net> Unit
+bareQual h =
+  let _ = netResolve h
+  ()
+
+setIndex : Socket {"A"} -> <Net> Int
+setIndex s = socketFd s
+
+bareIndex : Socket ("a.com" | "b.com/*") -> <Net> Int
+bareIndex s = socketFd s
+
+main = println 1

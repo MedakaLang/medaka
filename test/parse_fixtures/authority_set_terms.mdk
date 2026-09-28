@@ -1,0 +1,7 @@
+-- A set in a qualifier or an index, written as the checker prints one: a
+-- join of literals, of a literal and a name, or a single literal (#3464).
+data K (p : Authority FileRead) = K (String @("cfg/*" | p)) (String @"tmp/*")
+
+openEither : Bool -> <Net "a.com/x", Net "b.com/y"> Result String (Socket ("a.com/x" | "b.com/y"))
+
+useSock : Socket ("a.com/*" | h) -> <Net "a.com/*", Net h> Int

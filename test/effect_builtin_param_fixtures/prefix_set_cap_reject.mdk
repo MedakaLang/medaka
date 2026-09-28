@@ -1,0 +1,6 @@
+-- Seventeen patterns of one label exceed the cap of sixteen; a bound is
+-- refused rather than folded into one wider pattern.
+f : Unit -> <FileRead "a/*", FileRead "b/*", FileRead "c/*", FileRead "d/*", FileRead "e/*", FileRead "f/*", FileRead "g/*", FileRead "h/*", FileRead "i/*", FileRead "j/*", FileRead "k/*", FileRead "l/*", FileRead "m/*", FileRead "n/*", FileRead "o/*", FileRead "p/*", FileRead "q/*"> Unit
+f _ = ()
+
+main = println 1

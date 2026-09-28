@@ -68,6 +68,8 @@ import frontend.ast.{
   EffParamTy(..),
   KindAnn(..),
   authTermSurface,
+  authTermsSurface,
+  authTermNames,
   TyConOrigin(..),
   Ns(..),
   Ident(..),
@@ -211,6 +213,8 @@ import types.effect_domain.{
   sortAxes,
   insertAxis,
   setCardCap,
+  dmaximal,
+  writtenSetProblem,
   commonPrefixLen,
   drender,
   drenderN,
@@ -1739,6 +1743,14 @@ checkEffectParamsDecl : Decl -> Unit
 checkEffectParamsDecl (DTypeSig _ _ t) = checkEffectParamsTy t
 checkEffectParamsDecl (DExtern _ _ t) = checkEffectParamsTy t
 checkEffectParamsDecl (DAttrib _ d) = checkEffectParamsDecl d
+checkEffectParamsDecl (DData { dataCtors = ctors }) =
+  fold
+    (_ v => match v
+      Variant _ payload => checkEffectParamsTys (payloadAstTypes payload))
+    ()
+    ctors
+checkEffectParamsDecl (DTypeAlias { tyAliasRhs = rhs }) =
+  checkEffectParamsTy rhs
 checkEffectParamsDecl _ = ()
 
 -- #784 (Option A): reject an interface method whose signature has a free effect
@@ -1931,8 +1943,9 @@ authorityParamNames params anns =
 -- out in a carrying constructor, or the type is empty.
 tyCarries : List TabKey -> String -> Ty -> Bool
 tyCarries _ p (TyVar n) = n == p
-tyCarries seen p (TyQual t ns _) =
-  isNonEmptyL ns && allList (== p) ns || tyCarries seen p t
+tyCarries seen p (TyQual t ps _) =
+  isNonEmptyL ps && allList (q => authTermNames [q] == [p]) ps
+    || tyCarries seen p t
 tyCarries seen p (TyTuple ts) = anyList (tyCarries seen p) ts
 tyCarries seen p (TyConstrained _ t) = tyCarries seen p t
 tyCarries seen p (TyNamed _ t) = tyCarries seen p t
@@ -2886,21 +2899,9 @@ checkEffectParamsTy (TyFun (TyNamed n a) b) =
 checkEffectParamsTy (TyFun a b) =
   let _ = checkEffectParamsTy a
   checkEffectParamsTy b
--- An index literal (`Handle "config/*"`) is validated against the slot's
--- declared domain exactly as an atom's written parameter is against its
--- label's.
+-- An index literal (`Handle "config/*"`) is validated where the index is
+-- elaborated (`authArgOf`), which knows the slot's declared domain.
 checkEffectParamsTy (TyApp a b) =
-  let _ = match tyAppSpine (TyApp a b)
-    (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-      if anyList
-        isTyAuth
-        args then match (lookupTab
-        (tyTabKey o n)
-        perRun.value.dataParamKindsRef.value)
-        Some kinds if listLen kinds == listLen args =>
-          checkIndexLiterals (zipL kinds args)
-        _ => ()
-    _ => ()
   let _ = checkEffectParamsTy a
   checkEffectParamsTy b
 checkEffectParamsTy (TyAuth _ _) = ()
@@ -2918,13 +2919,6 @@ checkEffectParamsTy (TyRow labels _ _) = checkEffectAtoms labels
 checkEffectParamsTy (TyConstrained _ t) = checkEffectParamsTy t
 checkEffectParamsTy _ = ()
 
-checkIndexLiterals : List (Kind, Ty) -> Unit
-checkIndexLiterals [] = ()
-checkIndexLiterals ((KAuth l, TyAuth p _) :: rest) =
-  let _ = checkOneEffectParam (effLabelName l) (dtopFor l) p
-  checkIndexLiterals rest
-checkIndexLiterals (_ :: rest) = checkIndexLiterals rest
-
 checkEffectParamsTys : List Ty -> Unit
 checkEffectParamsTys [] = ()
 checkEffectParamsTys (t :: ts) =
@@ -2932,8 +2926,13 @@ checkEffectParamsTys (t :: ts) =
   checkEffectParamsTys ts
 
 checkEffectAtoms : List EffAtomTy -> Unit
-checkEffectAtoms [] = ()
-checkEffectAtoms (a :: rest) =
+checkEffectAtoms atoms =
+  let _ = checkEachEffectAtom atoms
+  checkWrittenElementCap atoms
+
+checkEachEffectAtom : List EffAtomTy -> Unit
+checkEachEffectAtom [] = ()
+checkEachEffectAtom (a :: rest) =
   let _ = match a.eatParam
     EPTop => ()
     p =>
@@ -2942,7 +2941,34 @@ checkEffectAtoms (a :: rest) =
       currentLoc := orElseLoc a.eatLoc saved
       let _ = checkOneEffectParam a.eatLabel (dtopFor l) p
       currentLoc := saved
-  checkEffectAtoms rest
+  checkEachEffectAtom rest
+
+-- A row keeps the elements it writes for one label as a set, at most
+-- `setCardCap` of them once covered ones are dropped, with no merged Set past
+-- that size. Past either, inference would fold them into one wider element,
+-- so a written bound would admit more than it says; it is refused at the
+-- label's first atom instead (`writtenSetProblem`).
+checkWrittenElementCap : List EffAtomTy -> Unit
+checkWrittenElementCap [] = ()
+checkWrittenElementCap (a :: rest) =
+  let l = EffLabel a.eatLabel a.eatOrigin
+  let onLabel b = labelKey (EffLabel b.eatLabel b.eatOrigin) == labelKey l
+  let same = filterList onLabel rest
+  let others = filterList (b => not (onLabel b)) rest
+  let top = dtopFor l
+  let _ = match writtenSetProblem (flatMap (writtenElement top) (a :: same))
+    Some why =>
+      let saved = !currentLoc
+      currentLoc := orElseLoc a.eatLoc saved
+      pushTypeError "T-EFFECT-PARAM" (effectParamMsg a.eatLabel why)
+      currentLoc := saved
+    None => ()
+  checkWrittenElementCap others
+
+writtenElement : Param -> EffAtomTy -> List Param
+writtenElement top a = match a.eatParam
+  EPName _ => []
+  p => [writtenParam top p]
 
 -- A written parameter must be an element of its label's domain: a Prefix
 -- label takes one delimiter-terminated pattern (an FFI library name is
@@ -2976,7 +3002,14 @@ effectParamProblems l (PProduct schema) (EPLit pat) =
   primaryLiteralProblems schema pat
     ++ productAxesProblems schema (productPrimaryLift schema pat)
 effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]
-effectParamProblems _ (PSet None) (EPSet _) = []
+effectParamProblems _ (PSet None) (EPSet xs) =
+  let n = listLen (sortUniqS xs)
+  if n > setCardCap then
+    [
+      "a set holds at most \{intToString setCardCap} members, and this one has \{intToString n}",
+    ]
+  else
+    []
 effectParamProblems l (PPrefix None) (EPSet _) =
   ["label '\{l}' takes a prefix pattern, not a set"]
 effectParamProblems l (PProduct _) (EPSet _) =
@@ -13056,7 +13089,7 @@ binderNoDomainMsg n =
 
 joinDomainMsg : List String -> String
 joinDomainMsg ns =
-  "The joined qualifier \{qualifierSource ns} joins authorities from different domains (a path prefix and a name set are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"
+  "The joined qualifier \{qualifierSource escStr (map EPName ns)} joins authorities from different domains (a path prefix and a name set are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"
 
 -- First occurrence of each name, keeping its span.
 dedupLocated : List (String, Option Loc) ->
@@ -13071,7 +13104,7 @@ dedupLocated ((n, l) :: rest) acc =
 
 -- Every qualifier the type writes, its names with its span.
 writtenQualifiers : Ty -> List (List String, Option Loc)
-writtenQualifiers (TyQual t ns l) = (ns, l) :: writtenQualifiers t
+writtenQualifiers (TyQual t ps l) = (authTermNames ps, l) :: writtenQualifiers t
 writtenQualifiers (TyEffect _ _ t) = writtenQualifiers t
 writtenQualifiers (TyApp a b) = writtenQualifiers a ++ writtenQualifiers b
 writtenQualifiers (TyFun a b) = writtenQualifiers a ++ writtenQualifiers b
@@ -13087,8 +13120,8 @@ nameNotAuthorityMsg n =
 -- The names written in authority position, atom parameters and qualifiers,
 -- each with the span of the atom or qualifier that writes it.
 authorityNamesWritten : Ty -> List (String, Option Loc)
-authorityNamesWritten (TyQual t ns l) =
-  map (n => (n, l)) ns ++ authorityNamesWritten t
+authorityNamesWritten (TyQual t ps l) =
+  map (n => (n, l)) (authTermNames ps) ++ authorityNamesWritten t
 authorityNamesWritten (TyEffect atoms _ t) =
   flatMap atomAuthorityName atoms ++ authorityNamesWritten t
 authorityNamesWritten (TyRow atoms _ _) = flatMap atomAuthorityName atoms
@@ -13157,6 +13190,8 @@ authArgBindersIn _ = []
 kauthArgVarNames : List Kind -> List Ty -> List (String, Param)
 kauthArgVarNames ((KAuth l) :: ks) ((TyVar n) :: as2) =
   (n, dtopFor l) :: kauthArgVarNames ks as2
+kauthArgVarNames ((KAuth l) :: ks) ((TyAuth ps _) :: as2) =
+  map (n => (n, dtopFor l)) (authTermNames ps) ++ kauthArgVarNames ks as2
 kauthArgVarNames (_ :: ks) (_ :: as2) = kauthArgVarNames ks as2
 kauthArgVarNames _ _ = []
 
@@ -13293,8 +13328,8 @@ fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
 -- A binder reached outside an arrow domain is a resolve error already; its
 -- type still elaborates so inference can continue.
 fromAstTypeE etbl tvs (TyNamed _ t) = fromAstTypeE etbl tvs t
-fromAstTypeE etbl tvs (TyQual t ns _) =
-  qualifyByAll etbl ns (fromAstTypeE etbl tvs t)
+fromAstTypeE etbl tvs (TyQual t ps loc) =
+  qualifyByTerms etbl ps loc (fromAstTypeE etbl tvs t)
 
 -- A bare row atom (#997) reached here means it landed in an ordinary
 -- (non-KRow) type slot — `kindArgMono`'s KRow branch (below) is what
@@ -13322,6 +13357,61 @@ fromAstDomainE etbl tvs t = fromAstTypeE etbl tvs t
 
 qualifyBy : SigVars -> String -> Mono -> Mono
 qualifyBy etbl n t = qualifyByAll etbl [n] t
+
+-- A written qualifier's terms: its names are bounded as `qualifyByAll` bounds
+-- them, and a literal term is an element of the names' domain, or of the
+-- Prefix domain (a string's own) when the qualifier names none, so
+-- `String @("a.com/*" | "b.com/*")` is bounded by the set of both.
+qualifyByTerms : SigVars -> List EffParamTy -> Option Loc -> Mono -> Mono
+qualifyByTerms etbl ps loc t =
+  let names = authTermNames ps
+  let lits = filterList (p => not (isEPName p)) ps
+  match lits
+    [] => qualifyByAll etbl names t
+    _ =>
+      let cells =
+        flatMap
+          (n => match lookupAssoc n etbl.svAuths
+            Some cell => [cell]
+            None => [])
+          names
+      if listLen cells /= listLen names then
+        t
+      else
+        let top = match cells
+          cell :: _ => authvarDomain cell
+          [] => PPrefix None
+        let src = qualifierSource escStr ps
+        let _ =
+          fold
+            (_ why =>
+              pushTypeErrorOnceAt
+                "T-EFFECT-PARAM"
+                loc
+                "Invalid authority in the qualifier `\{src}`: \{why}")
+            ()
+            (writtenTermProblems "qualifier" top lits)
+        TQual
+          t
+          (authJoinAll
+            (map AVar cells ++ map (p => AConst (writtenParam top p)) lits))
+
+-- The problems of a written authority term's literals, as elements of the
+-- domain whose top is [top]: each literal as an atom's parameter is checked,
+-- and all of them together as a bound (`writtenSetProblem`). A term with a
+-- problem must never be read as the whole domain.
+writtenTermProblems : String -> Param -> List EffParamTy -> List String
+writtenTermProblems l top lits =
+  let each = flatMap (effectParamProblems l top) lits
+  match each
+    [] => match writtenSetProblem (map (writtenParam top) lits)
+      Some why => [why]
+      None => []
+    _ => each
+
+isEPName : EffParamTy -> Bool
+isEPName (EPName _) = True
+isEPName _ = False
 
 -- A qualifier's names are bounded by the join of their authorities.  A name
 -- that is not an authority binder here is reported by
@@ -13571,7 +13661,20 @@ authArgOf etbl tvs l (TyVar n) = match lookupAssoc n etbl.svAuths
     else
       nameNotAuthorityMsg n)
     authTop (dtopFor l)
-authArgOf _ _ l (TyAuth p _) = AConst (writtenParam (dtopFor l) p)
+authArgOf etbl tvs l (TyAuth ps loc) =
+  let _ =
+    fold
+      (_ why =>
+        pushTypeErrorOnceAt
+          "T-EFFECT-PARAM"
+          loc
+          (effectParamMsg (effLabelName l) why))
+      ()
+      (writtenTermProblems
+        (effLabelName l)
+        (dtopFor l)
+        (filterList (p => not (isEPName p)) ps))
+  authJoinAll (map (authTermOf etbl tvs l) ps)
 authArgOf _ _ l ty =
   let _ =
     pushTypeErrorOnceAt
@@ -13580,13 +13683,23 @@ authArgOf _ _ l ty =
       (typeAsAuthorityMsg (ppTy ty) (effLabelName l))
   authTop (dtopFor l)
 
+-- One term of a written index join: a name through the signature's binders,
+-- a literal as the slot's domain element.
+authTermOf : SigVars ->
+  List (String, Mono) ->
+  EffLabel ->
+  EffParamTy ->
+  Authority
+authTermOf etbl tvs l (EPName n) = authArgOf etbl tvs l (TyVar n)
+authTermOf _ _ l p = AConst (writtenParam (dtopFor l) p)
+
 authorityAsTypeMsg : String -> String
 authorityAsTypeMsg n =
   "'\{n}' is an authority binder, but it is used here as a type. An authority fills a qualifier (`String @\{n}`), an atom (`<L \{n}>`) or an `Authority`-kinded index slot; write a different name for the type variable"
 
-authorityTermAsTypeMsg : EffParamTy -> String
+authorityTermAsTypeMsg : List EffParamTy -> String
 authorityTermAsTypeMsg p =
-  "The authority term `\{authTermSurface escStr p}` is written where a type goes. It belongs only in an `Authority`-kinded type argument, such as `Handle \{authTermSurface escStr p}`"
+  "The authority term `\{authTermsSurface escStr p}` is written where a type goes. It belongs only in an `Authority`-kinded type argument, such as `Handle \{authTermsSurface escStr p}`"
 
 typeVarAsAuthorityMsg : String -> String -> String
 typeVarAsAuthorityMsg n l =
@@ -26369,11 +26482,11 @@ checkImplHeadIndices (TyApp a b) = match tyAppSpine (TyApp a b)
       Some kinds if listLen kinds == listLen args =>
         fold
           (_ ka => match ka
-            (KAuth _, TyAuth p loc) =>
+            (KAuth _, TyAuth ps loc) =>
               pushTypeErrorOnceAt
                 "T-AUTHORITY-KIND"
                 loc
-                (implHeadIndexMsg n (ppTy (TyAuth p loc)))
+                (implHeadIndexMsg n (ppTy (TyAuth ps loc)))
             _ => ())
           ()
           (zipL kinds args)
@@ -38271,15 +38384,15 @@ ffiMatchAtom a d sub =
 -- written as the authority term.
 ffiParamTy : EffParamTy -> Ty
 ffiParamTy (EPName n) = TyVar n
-ffiParamTy p = TyAuth p None
+ffiParamTy p = TyAuth [p] None
 
 ffiParamOf : Ty -> Option EffParamTy
-ffiParamOf (TyAuth p _) = Some p
+ffiParamOf (TyAuth [p] _) = Some p
 ffiParamOf (TyVar m) = Some (EPName m)
 ffiParamOf _ = None
 
 ffiSameParam : EffParamTy -> EffParamTy -> Bool
-ffiSameParam p q = ppTy (TyAuth p None) == ppTy (TyAuth q None)
+ffiSameParam p q = ppTy (TyAuth [p] None) == ppTy (TyAuth [q] None)
 
 -- Two written rows are the same row: the same set of atoms, each label by its
 -- declared identity, and the same set of row variables. A row is a set, so a
@@ -38322,7 +38435,7 @@ ffiSameTy aliases a b = match (ffiSigStrip aliases a, ffiSigStrip aliases b)
     listLen xs == listLen ys
       && allList (p => ffiSameTy aliases (fst p) (snd p)) (zipL xs ys)
   (TyQual x _ _, TyQual y _ _) => ffiSameTy aliases x y
-  (TyAuth p _, TyAuth q _) => ffiSameParam p q
+  (TyAuth ps _, TyAuth qs _) => ppTy (TyAuth ps None) == ppTy (TyAuth qs None)
   (TyRow l1 t1 _, TyRow l2 t2 _) => ffiSameRow l1 t1 l2 t2
   _ => False
 
@@ -38365,7 +38478,7 @@ ffiInstRow names sub ls =
 ffiInstAtom : List (String, Ty) -> EffAtomTy -> EffAtomTy
 ffiInstAtom sub a = match a.eatParam
   EPName n => match lookupAssoc n sub
-    Some (TyAuth p _) => { a | eatParam = p }
+    Some (TyAuth [p] _) => { a | eatParam = p }
     Some (TyVar m) => { a | eatParam = EPName m }
     _ => a
   _ => a
@@ -51057,7 +51170,3 @@ popMarkedClause grouped pending n =
 schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []
 schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
-
-isTyAuth : Ty -> Bool
-isTyAuth (TyAuth _ _) = True
-isTyAuth _ = False

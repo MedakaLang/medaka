@@ -1,0 +1,11 @@
+-- Control: valid rows in a data field and a type alias.
+data Box = Box (Unit -> <FileRead "a/*", FileRead "b/*", FileRead "c/*", FileRead "d/*", FileRead "e/*", FileRead "f/*", FileRead "g/*", FileRead "h/*", FileRead "i/*", FileRead "j/*", FileRead "k/*", FileRead "l/*", FileRead "m/*", FileRead "n/*", FileRead "o/*", FileRead "p/*"> Unit)
+
+type Rd = Unit -> <FileRead "cfg/*"> Result String String
+
+data B = B (Unit -> <Net "a.com/*"> Unit)
+
+g : Rd
+g _ = readFile "cfg/app.toml"
+
+main = println 1

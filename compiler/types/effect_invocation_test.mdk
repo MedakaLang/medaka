@@ -70,10 +70,10 @@ callback path = TFun unit (net path) unit
 
 test "rows join across arrows, and the forcing row joins them" = expectAll [
   expectEqual
-    "Net \"host/*\""
+    "Net \"host/a/\", Net \"host/b/\""
     (summary pure (TFun unit (net "host/a/") (callback "host/b/"))),
   expectEqual
-    "Net"
+    "Net \"host/a/\", Net \"host/b/\", Net \"other/path/\""
     (summary
       (net "other/path/")
       (TFun unit (net "host/a/") (callback "host/b/"))),
@@ -120,14 +120,14 @@ test "tuple elements and constructor fields are read at their position" = expect
 test "each authority instantiation of a head is opened, and a growing type ends" = expectAll
   [
     expectEqual
-      "Net \"h/*\""
+      "Net \"h/a/\", Net \"h/b/\""
       (summary
         pure
         (TApp (TApp (con "__tuple2__") (holder "h/a/")) (holder "h/b/"))),
     expectEqual "Net \"grow/\"" (summary pure (TApp (con "Grow") unit)),
-    -- nine sibling authority instantiations are each opened
+    -- nine sibling authority instantiations are each opened, and stay a set
     expectEqual
-      "Net \"h/*\""
+      "Net \"h/a/\", Net \"h/b/\", Net \"h/c/\", Net \"h/d/\", Net \"h/e/\", Net \"h/f/\", Net \"h/g/\", Net \"h/h/\", Net \"h/i/\""
       (summary
         pure
         (holders [

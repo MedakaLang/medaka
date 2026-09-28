@@ -1,0 +1,14 @@
+-- The same call with a host outside the bound is refused.
+pick : Bool -> (a : String) -> (b : String) -> <Net a, Net b> String @(a | b)
+pick c a b =
+  let _ = netResolve a
+  let _ = netResolve b
+  if c then a else b
+
+launderPick : Bool -> <Net "a.com/*", Net "b.com/*"> Unit
+launderPick c =
+  let h = pick c "a.com/x" "evil.net/y"
+  let _ = netResolve h
+  ()
+
+main = println 1

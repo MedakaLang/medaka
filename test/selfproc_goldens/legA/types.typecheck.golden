@@ -212,6 +212,7 @@ authRowCells : EffRow -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authRowRoots : EffRow -> Map Int Unit -> Map Int Unit
 authTermCells : Authority -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authTermIds : Authority -> Map Int Unit -> Map Int Unit
+authTermOf : SigVars -> List (String, Mono) -> EffLabel -> EffParamTy -> Authority
 authorityAsTypeMsg : String -> String
 authorityAtomicLabelMsg : String -> String
 authorityBinderBound : List (String, Ty) -> List String -> String -> Bool
@@ -222,7 +223,7 @@ authorityParamAsRowMsg : String -> String -> String
 authorityParamAsTypeMsg : String -> String -> String
 authorityParamNames : List String -> List (Option KindAnn) -> List String
 authorityParamSubst : List Mono -> List Mono -> List (Int, Authority)
-authorityTermAsTypeMsg : EffParamTy -> String
+authorityTermAsTypeMsg : List EffParamTy -> String
 authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 authorityUsesOf : Ty -> List (String, Param)
 authvarIdOf : (String, Ref Authvar) -> Int
@@ -385,6 +386,7 @@ checkDeclaredKindsGo : List Decl -> List Decl -> Unit
 checkDefaultMethodRigidity : String -> List String -> String -> Ty -> List (String, Mono) -> List (Int, Mono) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkDeferredMatches : List (Mono, List Arm, Option Loc) -> Unit
 checkDomainAxes : Option Loc -> String -> Option String -> List (String, String) -> Unit
+checkEachEffectAtom : List EffAtomTy -> Unit
 checkEffVarAtoms : String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
 checkEffectAtoms : List EffAtomTy -> Unit
 checkEffectEscape : List (String, Ty) -> String -> List Atom -> Unit
@@ -410,7 +412,6 @@ checkImplHeadIndices : Ty -> Unit
 checkImplHeadNumIds : String -> List (String, Mono) -> List Require -> Map String Unit -> Option Loc -> List Int -> Unit
 checkImplHeadNumObligations : String -> List (String, Mono) -> List Require -> Map String Unit -> List UObligation -> Unit
 checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> List String -> Option Loc -> Unit
-checkIndexLiterals : List (Kind, Ty) -> Unit
 checkIndexOnlyEffVarsOpen : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkIndexOnlyGo : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkInterfaceCycles : ClassEnv -> Int -> Unit
@@ -480,6 +481,7 @@ checkUndeterminedObligations : ImplUniverse -> IfaceRef -> List Mono -> Option L
 checkUndeterminedRetEffVars : List Decl -> Unit
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
 checkWideLiterals : List (Mono, String, Int, Int, Bool, Option Loc) -> Unit
+checkWrittenElementCap : List EffAtomTy -> Unit
 checkedFfiExternTypeNames : List Decl -> List (String, (List String, String))
 checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List String, String))
 checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List String, String))
@@ -1611,6 +1613,7 @@ isDefinerShadow : String -> Bool
 isDirectInterfaceDecl : Decl -> Bool
 isDoLoweredAndThenCallee : Expr -> Bool
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
+isEPName : EffParamTy -> Bool
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
 isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLetrecGroup : List String -> Bool
@@ -1629,7 +1632,6 @@ isShadowStandalone : TcEnv -> String -> Bool
 isStringTy : Ty -> Bool
 isSyntacticLambda : Expr -> Bool
 isTupleTyName : String -> Bool
-isTyAuth : Ty -> Bool
 isUnboundTvar : Mono -> Bool
 isUnshaped : Mono -> Bool
 joinAnd : List String -> String
@@ -2253,6 +2255,7 @@ qualifierAuthIds : Mono -> Map Int Unit -> Map Int Unit
 qualifierBinderTypeMsg : String -> String -> String
 qualifyBy : SigVars -> String -> Mono -> Mono
 qualifyByAll : SigVars -> List String -> Mono -> Mono
+qualifyByTerms : SigVars -> List EffParamTy -> Option Loc -> Mono -> Mono
 quantifiableAuthorities : TcEnv -> Map String (List (List Pat, Expr)) -> List ScopedMember -> ScopeRoles
 quantifyFree : List AuthResidual -> EffRow -> Mono -> Scheme
 quotedNames : List String -> String
@@ -2917,9 +2920,11 @@ withoutVar : Ref Authvar -> Authority -> List Authority
 writtenAxis : (String, EffParamTy) -> (String, Param)
 writtenBindingForce : SigVars -> Ty -> Option EffRow
 writtenDiag : TcDiag -> TcDiag
+writtenElement : Param -> EffAtomTy -> List Param
 writtenNames : String -> String
 writtenParam : Param -> EffParamTy -> Param
 writtenQualifiers : Ty -> List (List String, Option Loc)
+writtenTermProblems : String -> Param -> List EffParamTy -> List String
 xmodOblArgId : Mono -> List Int
 xmodVecObl : CSlot -> List Mono -> VecObl
 zipBindFrom : List Mono -> List Mono -> Unit

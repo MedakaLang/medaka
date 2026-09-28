@@ -1,0 +1,5 @@
+-- A read under one of sixteen directories, for the policy cap tests.
+readSecret : Unit -> <FileRead "cfg/secret/key"> Result String String
+readSecret _ = readFile "cfg/secret/key"
+
+main = println 1

@@ -1,0 +1,8 @@
+-- Control: sixteen elements in a qualifier and in an index.
+readAny : String @("cfg/a/*" | "cfg/b/*" | "cfg/c/*" | "cfg/d/*" | "cfg/e/*" | "cfg/f/*" | "cfg/g/*" | "cfg/h/*" | "cfg/i/*" | "cfg/j/*" | "cfg/k/*" | "cfg/l/*" | "cfg/m/*" | "cfg/n/*" | "cfg/o/*" | "cfg/p/*") -> <FileRead "cfg/*"> Result String String
+readAny p = readFile p
+
+openOne : Unit -> <Net> Result String (Socket ("h/a/*" | "h/b/*" | "h/c/*" | "h/d/*" | "h/e/*" | "h/f/*" | "h/g/*" | "h/h/*" | "h/i/*" | "h/j/*" | "h/k/*" | "h/l/*" | "h/m/*" | "h/n/*" | "h/o/*" | "h/p/*"))
+openOne _ = netTcpConnect "h/a/x" 80
+
+main = println 1

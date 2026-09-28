@@ -1,16 +1,17 @@
 -- Authority terms: the parameter of an effect atom as inference sees it. A
 -- term is a concrete element of the label's domain, a scoped authority
--- variable, or a symbolic join of terms. A join stays symbolic while any
--- operand is a variable; concrete operands fold through the domain join.
+-- variable, or a join of terms. A join's constants are kept as the domain's
+-- antichain (`dantichain`), so a join of two Prefix patterns is the set of
+-- both, never their common prefix; its variables stay symbolic.
 -- Coverage is decided only where it is provable now: a variable covers itself
 -- and is covered by top, a join is covered when every operand is and covers
 -- when any operand does. Anything else is not proven, never assumed.
 
 import types.effect_domain.{
-  Param(..), djoin, dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam
+  Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
+  appendParam, dantichain
 }
-import support.util.{joinWith}
+import support.util.{joinWith, reverseL}
 import string.{trimLeft}
 import map as M
 import map.{Map(..)}
@@ -95,42 +96,34 @@ authDomainTop (AVar cell) = authvarDomain cell
 authDomainTop (AJoin (m :: _)) = authDomainTop m
 authDomainTop (AJoin []) = PUnit
 
--- Canonical form: links followed, joins flattened, constants folded into at
--- most one operand, variables deduplicated by identity, a top constant
--- absorbing everything, and a one-operand join collapsed.
+-- Canonical form: links followed, joins flattened, constants kept as the
+-- domain's antichain ahead of the variables, variables deduplicated by
+-- identity, a top constant absorbing everything, and a one-operand join
+-- collapsed.
 export
 authNorm : Authority -> Authority
 authNorm a =
-  let (const, vars) = collect [a] None Tip
-  match const
-    Some c => if isSubTop c then AConst c else assemble (Some c) vars
-    None => assemble None vars
+  let (consts, vars) = collect [a] [] Tip
+  match dantichain consts
+    [c] => if isSubTop c then AConst c else assemble [c] vars
+    cs => assemble cs vars
 
 collect : List Authority ->
-  Option Param ->
+  List Param ->
   Map Int (Ref Authvar) ->
-  (Option Param, Map Int (Ref Authvar))
-collect [] const vars = (const, vars)
-collect ((AConst p) :: rest) const vars =
-  collect rest (Some (foldConst const (canonParam p))) vars
-collect ((AVar cell) :: rest) const vars = match !cell
-  ALink _ target => collect (target :: rest) const vars
-  AUnbound id _ _ _ => collect rest const (M.set id cell vars)
-collect ((AJoin ms) :: rest) const vars = collect (ms ++ rest) const vars
+  (List Param, Map Int (Ref Authvar))
+collect [] consts vars = (consts, vars)
+collect ((AConst p) :: rest) consts vars = collect rest (p :: consts) vars
+collect ((AVar cell) :: rest) consts vars = match !cell
+  ALink _ target => collect (target :: rest) consts vars
+  AUnbound id _ _ _ => collect rest consts (M.set id cell vars)
+collect ((AJoin ms) :: rest) consts vars = collect (ms ++ rest) consts vars
 
-foldConst : Option Param -> Param -> Param
-foldConst None p = p
-foldConst (Some c) p = djoin c p
-
-assemble : Option Param -> Map Int (Ref Authvar) -> Authority
-assemble const vars =
-  let members = map AVar (M.values vars)
-  match (const, members)
-    (None, []) => AJoin []
-    (None, [m]) => m
-    (None, ms) => AJoin ms
-    (Some c, []) => AConst c
-    (Some c, ms) => AJoin (AConst c :: ms)
+assemble : List Param -> Map Int (Ref Authvar) -> Authority
+assemble consts vars = match map AConst consts ++ map AVar (M.values vars)
+  [] => AJoin []
+  [m] => m
+  ms => AJoin ms
 
 export
 authJoin : Authority -> Authority -> Authority
@@ -140,12 +133,27 @@ export
 authJoinAll : List Authority -> Authority
 authJoinAll ms = authNorm (AJoin ms)
 
--- The concrete element a term denotes, when it has no variable left.
+-- The concrete element a term denotes, when it is one constant.
 export
 authConst : Authority -> Option Param
 authConst a = match authNorm a
   AConst p => Some p
   _ => None
+
+-- The constants a term denotes, when it has no variable left: one for a
+-- single element, the antichain's members for a set, none for the empty
+-- authority.
+export
+authConsts : Authority -> Option (List Param)
+authConsts a = match authNorm a
+  AConst p => Some [p]
+  AJoin ms => allConsts ms []
+  _ => None
+
+allConsts : List Authority -> List Param -> Option (List Param)
+allConsts [] acc = Some (reverseL acc)
+allConsts ((AConst p) :: ms) acc = allConsts ms (p :: acc)
+allConsts _ _ = None
 
 export
 authIsTop : Authority -> Bool
@@ -157,7 +165,7 @@ authIsTop a = match authNorm a
 export
 authVars : Authority -> List (Ref Authvar)
 authVars a =
-  let (_, vars) = collect [a] None Tip
+  let (_, vars) = collect [a] [] Tip
   M.values vars
 
 export
@@ -177,8 +185,8 @@ authSubN (AJoin []) _ = True
 authSubN (AConst c) (AConst d) = dsub c d
 authSubN _ (AConst d)
   | isSubTop d = True
-authSubN _ (AConst _) = False
 authSubN (AJoin ms) hi = allSub ms hi
+authSubN _ (AConst _) = False
 authSubN lo (AJoin ms) = anySub lo ms
 authSubN (AVar v) (AVar w) = authvarId v == authvarId w
 authSubN _ _ = False
