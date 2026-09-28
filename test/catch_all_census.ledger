@@ -12,6 +12,7 @@ appSpineName	Expr	9/42
 appSpineNodes	Expr	2/42
 argDispatchOfDecl	Decl	2/14
 argDispatchOfDeclById	Decl	2/14
+checkDeclAuthorityUsesDecl	Decl	1/14
 checkDeclaredKindsDecl	Decl	3/14
 checkEffectParamsDecl	Decl	3/14
 checkGradedImplHeadDecl	Decl	1/14

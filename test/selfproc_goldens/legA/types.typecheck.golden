@@ -1118,6 +1118,7 @@ foreachUnit : (a -> Unit) -> List a -> Unit
 forgetLocalAbs : String -> Unit
 formBareLocals : UsePath -> BareLocals -> BareLocals
 forwardedVecObls : List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
+freeAuthorityNames : List String -> List EffAtomTy -> List String
 freeAuthvars : Mono -> List Int
 freeEffvars : Mono -> List Int
 freeGenVars : Int -> Mono -> List Int
@@ -2917,6 +2918,7 @@ wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 withAliasMethodNames : List (String, String) -> Map String Unit -> Map String Unit
 withDeclParamKinds : List Decl -> (Unit -> a) -> a
+withFreeAuths : List (String, Ref Authvar) -> SigVars -> SigVars
 withoutVar : Ref Authvar -> Authority -> List Authority
 writtenAxis : (String, EffParamTy) -> (String, Param)
 writtenBindingForce : SigVars -> Ty -> Option EffRow

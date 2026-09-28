@@ -657,3 +657,11 @@ test "a declaration's authority parameter is used at its own domain" = expectAll
     ],
     expectCheckAccept (fixture "decl_authority_domain_accept.mdk"),
   ]
+
+test "a catalog redeclaration at an index join covers every term" = expectAll [
+  expectCheckReject (fixture "catalog_index_var_join_reject.mdk") [
+    "redeclares a built-in runtime name with a NARROWER effect row",
+    "does not cover <Net \"a.com/*\"",
+  ],
+  expectCheckAccept (fixture "catalog_index_var_join_accept.mdk"),
+]

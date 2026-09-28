@@ -1709,19 +1709,22 @@ checkDeclAuthorityUsesDecl (DNewtype { newtypeParams = ps, newtypeParamKinds = k
   (flatMap declaredAuthority (zipParamKinds ps ks))
   bs
   [t]
+-- No other declaration declares an `Authority` parameter: a signature's
+-- binders are checked with the signature (`reportBinderDomains`), and an
+-- interface parameter cannot be an authority.
 checkDeclAuthorityUsesDecl _ = ()
 
--- The head's authorities less those a constructor binder of the same name
--- shadows, with the binder's; then each use in [fields] against them.
+-- The head's authorities and a constructor's own binders, then each use in
+-- [fields] against them. A binder never repeats a head parameter's name:
+-- resolve refuses that (`duplicateCtorBinders`).
 checkDeclAuthorityDomains : List (String, Param) ->
   List (String, KindAnn) ->
   List Ty ->
   Unit
 checkDeclAuthorityDomains _ _ [] = ()
 checkDeclAuthorityDomains heads bs (t :: ts) =
-  let own = flatMap (b => declaredAuthority (fst b, Some (snd b))) bs
-  let shadowed = map fst bs
-  let declared = own ++ filterList (h => not (contains (fst h) shadowed)) heads
+  let declared =
+    heads ++ flatMap (b => declaredAuthority (fst b, Some (snd b))) bs
   let names = map fst declared
   let uses =
     filterList (u => contains (fst u) names) (flatMap authorityUsesOf (t :: ts))
@@ -38639,7 +38642,9 @@ ffiCatalogTailMsg n arrow missing =
 -- Both rows are lifted with the SAME authority variable per argument
 -- position, so a binder covers the catalog's binder only when it names the
 -- same argument; a bare label (the top) covers any binder, and a binder never
--- covers a bare catalog label.
+-- covers a bare catalog label. Any other name, an index variable such as the
+-- `h` of `Socket ("a.com/*" | h)`, is one variable on both sides too: it
+-- covers itself and nothing else, as it does at a call.
 ffiCheckCatalogRowOne : String ->
   Ty ->
   String ->
@@ -38650,8 +38655,18 @@ ffiCheckCatalogRowOne : String ->
 ffiCheckCatalogRowOne n ty arrow catRow catNames declRow =
   let declNames = namedArgOrder ty
   let cells = positionCells (catNames ++ declNames)
-  let catAtoms = atomsOfWrittenIn (positionalSigVars catNames cells) catRow
-  let declAtoms = atomsOfWrittenIn (positionalSigVars declNames cells) declRow
+  let free =
+    map
+      (x => (x, freshAuthvar PUnit (Some x)))
+      (freeAuthorityNames (map fst (catNames ++ declNames)) (catRow ++ declRow))
+  let catAtoms =
+    atomsOfWrittenIn
+      (withFreeAuths free (positionalSigVars catNames cells))
+      catRow
+  let declAtoms =
+    atomsOfWrittenIn
+      (withFreeAuths free (positionalSigVars declNames cells))
+      declRow
   match atomsEscape catAtoms declAtoms
     [] => ()
     missing =>
@@ -38670,6 +38685,19 @@ positionCells ((binder, pos) :: rest) =
     others
   else
     (pos, freshAuthvar PUnit (Some binder)) :: others
+
+-- The names a row's atoms write that no argument binds, each once.
+freeAuthorityNames : List String -> List EffAtomTy -> List String
+freeAuthorityNames bound ls =
+  sortUniqS
+    (flatMap
+      (a => match a.eatParam
+        EPName x => if contains x bound then [] else [x]
+        _ => [])
+      ls)
+
+withFreeAuths : List (String, Ref Authvar) -> SigVars -> SigVars
+withFreeAuths free sv = { sv | svAuths = sv.svAuths ++ free }
 
 positionalSigVars : List (String, Int) -> List (Int, Ref Authvar) -> SigVars
 positionalSigVars names cells = SigVars {

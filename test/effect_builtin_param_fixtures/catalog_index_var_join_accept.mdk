@@ -1,0 +1,14 @@
+-- Control: the same redeclaration with a row that covers both terms of the
+-- join, and a plain variable index whose row names the variable, are both
+-- accepted, and a caller within the row passes.
+extern netSend : Socket ("a.com/*" | h) -> Array Int -> <Net "a.com/*", Net h> Result String Int
+
+extern netRecv : Socket h -> Int -> <Net h> Result String (Array Int)
+
+g : Socket "a.com/*" -> <Net "a.com/*"> Unit
+g s =
+  let _ = netSend s (arrayMake 1 0)
+  let _ = netRecv s 1
+  ()
+
+main = println 1

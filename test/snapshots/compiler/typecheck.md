@@ -1,5 +1,5 @@
 # META
-source_lines=51191
+source_lines=51219
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -1713,19 +1713,22 @@ checkDeclAuthorityUsesDecl (DNewtype { newtypeParams = ps, newtypeParamKinds = k
   (flatMap declaredAuthority (zipParamKinds ps ks))
   bs
   [t]
+-- No other declaration declares an `Authority` parameter: a signature's
+-- binders are checked with the signature (`reportBinderDomains`), and an
+-- interface parameter cannot be an authority.
 checkDeclAuthorityUsesDecl _ = ()
 
--- The head's authorities less those a constructor binder of the same name
--- shadows, with the binder's; then each use in [fields] against them.
+-- The head's authorities and a constructor's own binders, then each use in
+-- [fields] against them. A binder never repeats a head parameter's name:
+-- resolve refuses that (`duplicateCtorBinders`).
 checkDeclAuthorityDomains : List (String, Param) ->
   List (String, KindAnn) ->
   List Ty ->
   Unit
 checkDeclAuthorityDomains _ _ [] = ()
 checkDeclAuthorityDomains heads bs (t :: ts) =
-  let own = flatMap (b => declaredAuthority (fst b, Some (snd b))) bs
-  let shadowed = map fst bs
-  let declared = own ++ filterList (h => not (contains (fst h) shadowed)) heads
+  let declared =
+    heads ++ flatMap (b => declaredAuthority (fst b, Some (snd b))) bs
   let names = map fst declared
   let uses =
     filterList (u => contains (fst u) names) (flatMap authorityUsesOf (t :: ts))
@@ -38643,7 +38646,9 @@ ffiCatalogTailMsg n arrow missing =
 -- Both rows are lifted with the SAME authority variable per argument
 -- position, so a binder covers the catalog's binder only when it names the
 -- same argument; a bare label (the top) covers any binder, and a binder never
--- covers a bare catalog label.
+-- covers a bare catalog label. Any other name, an index variable such as the
+-- `h` of `Socket ("a.com/*" | h)`, is one variable on both sides too: it
+-- covers itself and nothing else, as it does at a call.
 ffiCheckCatalogRowOne : String ->
   Ty ->
   String ->
@@ -38654,8 +38659,18 @@ ffiCheckCatalogRowOne : String ->
 ffiCheckCatalogRowOne n ty arrow catRow catNames declRow =
   let declNames = namedArgOrder ty
   let cells = positionCells (catNames ++ declNames)
-  let catAtoms = atomsOfWrittenIn (positionalSigVars catNames cells) catRow
-  let declAtoms = atomsOfWrittenIn (positionalSigVars declNames cells) declRow
+  let free =
+    map
+      (x => (x, freshAuthvar PUnit (Some x)))
+      (freeAuthorityNames (map fst (catNames ++ declNames)) (catRow ++ declRow))
+  let catAtoms =
+    atomsOfWrittenIn
+      (withFreeAuths free (positionalSigVars catNames cells))
+      catRow
+  let declAtoms =
+    atomsOfWrittenIn
+      (withFreeAuths free (positionalSigVars declNames cells))
+      declRow
   match atomsEscape catAtoms declAtoms
     [] => ()
     missing =>
@@ -38674,6 +38689,19 @@ positionCells ((binder, pos) :: rest) =
     others
   else
     (pos, freshAuthvar PUnit (Some binder)) :: others
+
+-- The names a row's atoms write that no argument binds, each once.
+freeAuthorityNames : List String -> List EffAtomTy -> List String
+freeAuthorityNames bound ls =
+  sortUniqS
+    (flatMap
+      (a => match a.eatParam
+        EPName x => if contains x bound then [] else [x]
+        _ => [])
+      ls)
+
+withFreeAuths : List (String, Ref Authvar) -> SigVars -> SigVars
+withFreeAuths free sv = { sv | svAuths = sv.svAuths ++ free }
 
 positionalSigVars : List (String, Int) -> List (Int, Ref Authvar) -> SigVars
 positionalSigVars names cells = SigVars {
@@ -51493,7 +51521,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkDeclAuthorityUsesDecl" (PWild) (ELit LUnit))
 (DTypeSig false "checkDeclAuthorityDomains" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))
 (DFunDef false "checkDeclAuthorityDomains" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkDeclAuthorityDomains" ((PVar "heads") (PVar "bs") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PVar "own") (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EVar "declaredAuthority") (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b"))))))) (EVar "bs"))) (DoLet false false (PVar "shadowed") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs"))) (DoLet false false (PVar "declared") (EBinOp "++" (EVar "own") (EApp (EApp (EVar "filterList") (ELam ((PVar "h")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "fst") (EVar "h"))) (EVar "shadowed"))))) (EVar "heads")))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "declared"))) (DoLet false false (PVar "uses") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EApp (EApp (EVar "contains") (EApp (EVar "fst") (EVar "u"))) (EVar "names")))) (EApp (EApp (EVar "flatMap") (EVar "authorityUsesOf")) (EBinOp "::" (EVar "t") (EVar "ts"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "uses")) (ELit LUnit) (EApp (EApp (EVar "reportBinderDomains") (EVar "t")) (EBinOp "++" (EVar "declared") (EVar "uses")))))))
+(DFunDef false "checkDeclAuthorityDomains" ((PVar "heads") (PVar "bs") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PVar "declared") (EBinOp "++" (EVar "heads") (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EVar "declaredAuthority") (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b"))))))) (EVar "bs")))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "declared"))) (DoLet false false (PVar "uses") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EApp (EApp (EVar "contains") (EApp (EVar "fst") (EVar "u"))) (EVar "names")))) (EApp (EApp (EVar "flatMap") (EVar "authorityUsesOf")) (EBinOp "::" (EVar "t") (EVar "ts"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "uses")) (ELit LUnit) (EApp (EApp (EVar "reportBinderDomains") (EVar "t")) (EBinOp "++" (EVar "declared") (EVar "uses")))))))
 (DTypeSig false "declaredAuthority" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))
 (DFunDef false "declaredAuthority" ((PTuple (PVar "p") (PCon "Some" (PCon "KindAuthority" (PVar "l") (PVar "o") PWild)))) (EListLit (ETuple (EVar "p") (EApp (EVar "dtopFor") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))))))
 (DFunDef false "declaredAuthority" (PWild) (EListLit))
@@ -57615,10 +57643,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ffiCatalogTailMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "ffiCatalogTailMsg" ((PVar "n") (PVar "arrow") (PVar "missing")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Foreign declaration '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' redeclares a built-in runtime name with a NARROWER effect row"))) (EApp (EVar "display") (EVar "arrow"))) (ELit (LString ": the built-in also performs the row variable "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "missing")))) (ELit (LString ", which this declaration's row does not carry. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, so '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' performs whatever that variable stands for at each call. Write the row variable in the declaration's row, or rename the extern"))))
 (DTypeSig false "ffiCheckCatalogRowOne" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyCon "Unit"))))))))
-(DFunDef false "ffiCheckCatalogRowOne" ((PVar "n") (PVar "ty") (PVar "arrow") (PVar "catRow") (PVar "catNames") (PVar "declRow")) (EBlock (DoLet false false (PVar "declNames") (EApp (EVar "namedArgOrder") (EVar "ty"))) (DoLet false false (PVar "cells") (EApp (EVar "positionCells") (EBinOp "++" (EVar "catNames") (EVar "declNames")))) (DoLet false false (PVar "catAtoms") (EApp (EApp (EVar "atomsOfWrittenIn") (EApp (EApp (EVar "positionalSigVars") (EVar "catNames")) (EVar "cells"))) (EVar "catRow"))) (DoLet false false (PVar "declAtoms") (EApp (EApp (EVar "atomsOfWrittenIn") (EApp (EApp (EVar "positionalSigVars") (EVar "declNames")) (EVar "cells"))) (EVar "declRow"))) (DoExpr (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "catAtoms")) (EVar "declAtoms")) (arm (PList) () (ELit LUnit)) (arm (PVar "missing") () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-CATALOG-NARROW"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EApp (EApp (EVar "ffiCatalogNarrowMsg") (EVar "n")) (EVar "arrow")) (EVar "catAtoms")) (EVar "declAtoms")) (EVar "missing"))))))))
+(DFunDef false "ffiCheckCatalogRowOne" ((PVar "n") (PVar "ty") (PVar "arrow") (PVar "catRow") (PVar "catNames") (PVar "declRow")) (EBlock (DoLet false false (PVar "declNames") (EApp (EVar "namedArgOrder") (EVar "ty"))) (DoLet false false (PVar "cells") (EApp (EVar "positionCells") (EBinOp "++" (EVar "catNames") (EVar "declNames")))) (DoLet false false (PVar "free") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (ETuple (EVar "x") (EApp (EApp (EVar "freshAuthvar") (EVar "PUnit")) (EApp (EVar "Some") (EVar "x")))))) (EApp (EApp (EVar "freeAuthorityNames") (EApp (EApp (EVar "map") (EVar "fst")) (EBinOp "++" (EVar "catNames") (EVar "declNames")))) (EBinOp "++" (EVar "catRow") (EVar "declRow"))))) (DoLet false false (PVar "catAtoms") (EApp (EApp (EVar "atomsOfWrittenIn") (EApp (EApp (EVar "withFreeAuths") (EVar "free")) (EApp (EApp (EVar "positionalSigVars") (EVar "catNames")) (EVar "cells")))) (EVar "catRow"))) (DoLet false false (PVar "declAtoms") (EApp (EApp (EVar "atomsOfWrittenIn") (EApp (EApp (EVar "withFreeAuths") (EVar "free")) (EApp (EApp (EVar "positionalSigVars") (EVar "declNames")) (EVar "cells")))) (EVar "declRow"))) (DoExpr (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "catAtoms")) (EVar "declAtoms")) (arm (PList) () (ELit LUnit)) (arm (PVar "missing") () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-CATALOG-NARROW"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EApp (EApp (EVar "ffiCatalogNarrowMsg") (EVar "n")) (EVar "arrow")) (EVar "catAtoms")) (EVar "declAtoms")) (EVar "missing"))))))))
 (DTypeSig false "positionCells" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Authvar"))))))
 (DFunDef false "positionCells" ((PList)) (EListLit))
 (DFunDef false "positionCells" ((PCons (PTuple (PVar "binder") (PVar "pos")) (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EVar "positionCells") (EVar "rest"))) (DoExpr (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssocI") (EVar "pos")) (EVar "others"))) (EVar "others") (EBinOp "::" (ETuple (EVar "pos") (EApp (EApp (EVar "freshAuthvar") (EVar "PUnit")) (EApp (EVar "Some") (EVar "binder")))) (EVar "others"))))))
+(DTypeSig false "freeAuthorityNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeAuthorityNames" ((PVar "bound") (PVar "ls")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" (PVar "x")) () (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "bound")) (EListLit) (EListLit (EVar "x")))) (arm PWild () (EListLit))))) (EVar "ls"))))
+(DTypeSig false "withFreeAuths" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Authvar")))) (TyFun (TyCon "SigVars") (TyCon "SigVars"))))
+(DFunDef false "withFreeAuths" ((PVar "free") (PVar "sv")) (ERecordUpdate (EVar "sv") ((fa "svAuths" (EBinOp "++" (EFieldAccess (EVar "sv") "svAuths") (EVar "free"))))))
 (DTypeSig false "positionalSigVars" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Authvar")))) (TyCon "SigVars"))))
 (DFunDef false "positionalSigVars" ((PVar "names") (PVar "cells")) (ERecordCreate "SigVars" ((fa "svRows" (EListLit)) (fa "svAuths" (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EApp (EVar "snd") (EVar "p"))) (EVar "cells")) (arm (PCon "Some" (PVar "cell")) () (EListLit (ETuple (EApp (EVar "fst") (EVar "p")) (EVar "cell")))) (arm (PCon "None") () (EListLit))))) (EVar "names"))))))
 (DTypeSig false "ffiCatalogNarrowMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))))))
@@ -59694,7 +59726,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkDeclAuthorityUsesDecl" (PWild) (ELit LUnit))
 (DTypeSig false "checkDeclAuthorityDomains" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))
 (DFunDef false "checkDeclAuthorityDomains" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkDeclAuthorityDomains" ((PVar "heads") (PVar "bs") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PVar "own") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EVar "declaredAuthority") (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b"))))))) (EVar "bs"))) (DoLet false false (PVar "shadowed") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs"))) (DoLet false false (PVar "declared") (EBinOp "++" (EVar "own") (EApp (EApp (EVar "filterList") (ELam ((PVar "h")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "fst") (EVar "h"))) (EVar "shadowed"))))) (EVar "heads")))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "declared"))) (DoLet false false (PVar "uses") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EApp (EApp (EVar "contains") (EApp (EVar "fst") (EVar "u"))) (EVar "names")))) (EApp (EApp (EDictApp "flatMap") (EVar "authorityUsesOf")) (EBinOp "::" (EVar "t") (EVar "ts"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "uses")) (ELit LUnit) (EApp (EApp (EVar "reportBinderDomains") (EVar "t")) (EBinOp "++" (EVar "declared") (EVar "uses")))))))
+(DFunDef false "checkDeclAuthorityDomains" ((PVar "heads") (PVar "bs") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PVar "declared") (EBinOp "++" (EVar "heads") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EVar "declaredAuthority") (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b"))))))) (EVar "bs")))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "declared"))) (DoLet false false (PVar "uses") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EApp (EApp (EVar "contains") (EApp (EVar "fst") (EVar "u"))) (EVar "names")))) (EApp (EApp (EDictApp "flatMap") (EVar "authorityUsesOf")) (EBinOp "::" (EVar "t") (EVar "ts"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "uses")) (ELit LUnit) (EApp (EApp (EVar "reportBinderDomains") (EVar "t")) (EBinOp "++" (EVar "declared") (EVar "uses")))))))
 (DTypeSig false "declaredAuthority" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))
 (DFunDef false "declaredAuthority" ((PTuple (PVar "p") (PCon "Some" (PCon "KindAuthority" (PVar "l") (PVar "o") PWild)))) (EListLit (ETuple (EVar "p") (EApp (EVar "dtopFor") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))))))
 (DFunDef false "declaredAuthority" (PWild) (EListLit))
@@ -65816,10 +65848,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ffiCatalogTailMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "ffiCatalogTailMsg" ((PVar "n") (PVar "arrow") (PVar "missing")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Foreign declaration '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' redeclares a built-in runtime name with a NARROWER effect row"))) (EApp (EMethodRef "display") (EVar "arrow"))) (ELit (LString ": the built-in also performs the row variable "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "missing")))) (ELit (LString ", which this declaration's row does not carry. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, so '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' performs whatever that variable stands for at each call. Write the row variable in the declaration's row, or rename the extern"))))
 (DTypeSig false "ffiCheckCatalogRowOne" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyCon "Unit"))))))))
-(DFunDef false "ffiCheckCatalogRowOne" ((PVar "n") (PVar "ty") (PVar "arrow") (PVar "catRow") (PVar "catNames") (PVar "declRow")) (EBlock (DoLet false false (PVar "declNames") (EApp (EVar "namedArgOrder") (EVar "ty"))) (DoLet false false (PVar "cells") (EApp (EVar "positionCells") (EBinOp "++" (EVar "catNames") (EVar "declNames")))) (DoLet false false (PVar "catAtoms") (EApp (EApp (EVar "atomsOfWrittenIn") (EApp (EApp (EVar "positionalSigVars") (EVar "catNames")) (EVar "cells"))) (EVar "catRow"))) (DoLet false false (PVar "declAtoms") (EApp (EApp (EVar "atomsOfWrittenIn") (EApp (EApp (EVar "positionalSigVars") (EVar "declNames")) (EVar "cells"))) (EVar "declRow"))) (DoExpr (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "catAtoms")) (EVar "declAtoms")) (arm (PList) () (ELit LUnit)) (arm (PVar "missing") () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-CATALOG-NARROW"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EApp (EApp (EVar "ffiCatalogNarrowMsg") (EVar "n")) (EVar "arrow")) (EVar "catAtoms")) (EVar "declAtoms")) (EVar "missing"))))))))
+(DFunDef false "ffiCheckCatalogRowOne" ((PVar "n") (PVar "ty") (PVar "arrow") (PVar "catRow") (PVar "catNames") (PVar "declRow")) (EBlock (DoLet false false (PVar "declNames") (EApp (EVar "namedArgOrder") (EVar "ty"))) (DoLet false false (PVar "cells") (EApp (EVar "positionCells") (EBinOp "++" (EVar "catNames") (EVar "declNames")))) (DoLet false false (PVar "free") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (ETuple (EVar "x") (EApp (EApp (EVar "freshAuthvar") (EVar "PUnit")) (EApp (EVar "Some") (EVar "x")))))) (EApp (EApp (EVar "freeAuthorityNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EBinOp "++" (EVar "catNames") (EVar "declNames")))) (EBinOp "++" (EVar "catRow") (EVar "declRow"))))) (DoLet false false (PVar "catAtoms") (EApp (EApp (EVar "atomsOfWrittenIn") (EApp (EApp (EVar "withFreeAuths") (EVar "free")) (EApp (EApp (EVar "positionalSigVars") (EVar "catNames")) (EVar "cells")))) (EVar "catRow"))) (DoLet false false (PVar "declAtoms") (EApp (EApp (EVar "atomsOfWrittenIn") (EApp (EApp (EVar "withFreeAuths") (EVar "free")) (EApp (EApp (EVar "positionalSigVars") (EVar "declNames")) (EVar "cells")))) (EVar "declRow"))) (DoExpr (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "catAtoms")) (EVar "declAtoms")) (arm (PList) () (ELit LUnit)) (arm (PVar "missing") () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-CATALOG-NARROW"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EApp (EApp (EVar "ffiCatalogNarrowMsg") (EVar "n")) (EVar "arrow")) (EVar "catAtoms")) (EVar "declAtoms")) (EVar "missing"))))))))
 (DTypeSig false "positionCells" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Authvar"))))))
 (DFunDef false "positionCells" ((PList)) (EListLit))
 (DFunDef false "positionCells" ((PCons (PTuple (PVar "binder") (PVar "pos")) (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EVar "positionCells") (EVar "rest"))) (DoExpr (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssocI") (EVar "pos")) (EVar "others"))) (EVar "others") (EBinOp "::" (ETuple (EVar "pos") (EApp (EApp (EVar "freshAuthvar") (EVar "PUnit")) (EApp (EVar "Some") (EVar "binder")))) (EVar "others"))))))
+(DTypeSig false "freeAuthorityNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeAuthorityNames" ((PVar "bound") (PVar "ls")) (EApp (EVar "sortUniqS") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" (PVar "x")) () (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "bound")) (EListLit) (EListLit (EVar "x")))) (arm PWild () (EListLit))))) (EVar "ls"))))
+(DTypeSig false "withFreeAuths" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Authvar")))) (TyFun (TyCon "SigVars") (TyCon "SigVars"))))
+(DFunDef false "withFreeAuths" ((PVar "free") (PVar "sv")) (ERecordUpdate (EVar "sv") ((fa "svAuths" (EBinOp "++" (EFieldAccess (EVar "sv") "svAuths") (EVar "free"))))))
 (DTypeSig false "positionalSigVars" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Authvar")))) (TyCon "SigVars"))))
 (DFunDef false "positionalSigVars" ((PVar "names") (PVar "cells")) (ERecordCreate "SigVars" ((fa "svRows" (EListLit)) (fa "svAuths" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EApp (EVar "snd") (EVar "p"))) (EVar "cells")) (arm (PCon "Some" (PVar "cell")) () (EListLit (ETuple (EApp (EVar "fst") (EVar "p")) (EVar "cell")))) (arm (PCon "None") () (EListLit))))) (EVar "names"))))))
 (DTypeSig false "ffiCatalogNarrowMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))))))
