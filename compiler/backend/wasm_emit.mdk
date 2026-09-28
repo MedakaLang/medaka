@@ -12550,6 +12550,9 @@ maxIndexAt _ d = d - 1
 
 -- the deepest switch nesting in a tree (each CTSwitch increments the emit depth by
 -- 1 for its subtrees; an arm body at a leaf is emitted at decision-depth + this).
+-- A constructor switch emits its default subtree inside the same tower as its
+-- branches, one level deeper (`emitBrTableTower` at d+1); a literal switch emits
+-- both at its own depth, so counting the default one level deeper covers both.
 treeSwitchNesting : CTree -> Int
 treeSwitchNesting CTFail = 0
 treeSwitchNesting (CTLeaf _) = 0
@@ -12557,7 +12560,7 @@ treeSwitchNesting (CTGuard _ fail) = treeSwitchNesting fail
 treeSwitchNesting (CTDrop sub) = treeSwitchNesting sub
 treeSwitchNesting (CTSwitch branches dft) =
   let bd = foldMaxI (map (b => treeSwitchNesting (branchSub b)) branches)
-  maxI (1 + bd) (treeSwitchNesting dft)
+  1 + maxI bd (treeSwitchNesting dft)
 
 -- P1: scratch depth of a group's nullary VALUE member's inline-emitted rhs (a function
 -- member contributes nothing here — it is lifted).
@@ -12590,7 +12593,7 @@ maxIndexTree (CTGuard _ fail) d = maxIndexTree fail d
 maxIndexTree (CTDrop sub) d = maxIndexTree sub d
 maxIndexTree (CTSwitch branches dft) d =
   let bd = foldMaxI (map (b => maxIndexTree (branchSub b) (d + 1)) branches)
-  maxI d (maxI bd (maxIndexTree dft d))
+  maxI d (maxI bd (maxIndexTree dft (d + 1)))
 
 branchSub : CTBranch -> CTree
 branchSub (CTBranch _ sub) = sub

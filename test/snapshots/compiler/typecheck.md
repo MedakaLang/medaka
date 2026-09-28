@@ -1,5 +1,5 @@
 # META
-source_lines=51073
+source_lines=51049
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -30730,61 +30730,37 @@ augmentWithParams headSub implTys paramMonos
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
 implHeadSubst pats concretes
   | listLen pats /= listLen concretes = None
-  | otherwise = implHeadSubstGo pats concretes (Some [])
+  | otherwise = match positionBindings pats concretes []
+    None => None
+    Some binds =>
+      if cohOverlapGo (Ref []) (repeatedBindings binds []) then
+        Some (fold (acc b => mergeOne acc (fst b) (snd b)) [] binds)
+      else
+        None
 
-implHeadSubstGo : List Ty ->
+-- Each head position matched on its own, its bindings in position order.
+positionBindings : List Ty ->
   List Mono ->
-  Option (List (String, Mono)) ->
-  Option (List (String, Mono))
-implHeadSubstGo [] [] acc = acc
-implHeadSubstGo (p :: ps) (c :: cs) None = None
-implHeadSubstGo (p :: ps) (c :: cs) (Some sofar) = match matchTyMono p c
-  None => None
-  Some s => implHeadSubstGo ps cs (mergeSubstConsistent sofar s)
-implHeadSubstGo _ _ _ = None
-
--- Merge the bindings one head position recovered into those of the positions
--- before it. A name bound at two positions keeps the binding that says more:
--- a constructor over a free variable, then the one with fewer free variables,
--- so a later position is compared against the most specific binding so far.
--- Two bindings that no instantiation can make equal admit no single matcher
--- for the head, so it does not match: `Get (Box a) a` never matches
--- `Get (Box Float) Int`, and `Pick a a a` never matches
--- `Pick (List x) (List Int) (List U8)`.
-mergeSubstConsistent : List (String, Mono) ->
   List (String, Mono) ->
   Option (List (String, Mono))
-mergeSubstConsistent acc [] = Some acc
-mergeSubstConsistent acc ((k, v) :: rest) = match lookupAssoc k acc
-  Some old =>
-    if monosClash old v then
-      None
-    else
-      mergeSubstConsistent
-        (map (e => if fst e == k then (k, moreSpecific old v) else e) acc)
-        rest
-  None => mergeSubstConsistent (acc ++ [(k, v)]) rest
+positionBindings [] [] acc = Some acc
+positionBindings (p :: ps) (c :: cs) acc = match matchTyMono p c
+  None => None
+  Some s => positionBindings ps cs (acc ++ s)
+positionBindings _ _ _ = None
 
-moreSpecific : Mono -> Mono -> Mono
-moreSpecific old v = match (normalize old, normalize v)
-  (TVar _, _) => v
-  (_, TVar _) => old
-  _ =>
-    if listLen (monoUnboundIds v) < listLen (monoUnboundIds old) then v else old
-
--- No instantiation of the free variables can make the two equal: their spines
--- disagree on a constructor both know, or both are ground and differ.
-monosClash : Mono -> Mono -> Bool
-monosClash a b = match (normalize a, normalize b)
-  (TVar _, _) => False
-  (_, TVar _) => False
-  (TApp f x, TApp g y) => monosClash f g || monosClash x y
-  (TApp _ _, TCon _ _) => True
-  (TCon _ _, TApp _ _) => True
-  (na, nb) =>
-    isEmptyL (monoUnboundIds na)
-      && isEmptyL (monoUnboundIds nb)
-      && not (cohEqMono na nb)
+-- A variable the head repeats is one type: every later binding of it must
+-- unify with its first, all of them under one substitution of the goal's free
+-- variables (`cohOverlapGo`), so `Get (Box a) a` never matches
+-- `Get (Box Float) Int`, nor `Pick a a a` a goal whose three positions cannot
+-- be made equal together, whatever order they are visited in.
+repeatedBindings : List (String, Mono) ->
+  List (String, Mono) ->
+  List (Mono, Mono)
+repeatedBindings [] _ = []
+repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
+  Some first => (first, v) :: repeatedBindings rest seen
+  None => repeatedBindings rest ((k, v) :: seen)
 
 -- Merge two name→mono substs; on a key collision keep whichever value has a
 -- concrete head tycon (so the grounded element wins over a free result var).
@@ -56374,19 +56350,14 @@ isTyAuth _ = False
 (DTypeSig false "augmentWithParams" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "augmentWithParams" ((PVar "headSub") (PVar "implTys") (PVar "paramMonos")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "implTys")) (EApp (EVar "listLen") (EVar "paramMonos"))) (EBinOp ">" (EApp (EVar "listLen") (EVar "paramMonos")) (ELit (LInt 1)))) (EMatch (EApp (EApp (EVar "implHeadSubst") (EVar "implTys")) (EVar "paramMonos")) (arm (PCon "Some" (PVar "full")) () (EApp (EApp (EVar "mergeSubstPreferConcrete") (EVar "headSub")) (EVar "full"))) (arm (PCon "None") () (EVar "headSub"))) (EIf (EVar "otherwise") (EVar "headSub") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implHeadSubst" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "implHeadSubst" ((PVar "pats") (PVar "concretes")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "concretes"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "implHeadSubstGo") (EVar "pats")) (EVar "concretes")) (EApp (EVar "Some") (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "implHeadSubstGo" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))))
-(DFunDef false "implHeadSubstGo" ((PList) (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "implHeadSubstGo" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PCon "None")) (EVar "None"))
-(DFunDef false "implHeadSubstGo" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PCon "Some" (PVar "sofar"))) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "p")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "implHeadSubstGo") (EVar "ps")) (EVar "cs")) (EApp (EApp (EVar "mergeSubstConsistent") (EVar "sofar")) (EVar "s"))))))
-(DFunDef false "implHeadSubstGo" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "mergeSubstConsistent" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "mergeSubstConsistent" ((PVar "acc") (PList)) (EApp (EVar "Some") (EVar "acc")))
-(DFunDef false "mergeSubstConsistent" ((PVar "acc") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "k")) (EVar "acc")) (arm (PCon "Some" (PVar "old")) () (EIf (EApp (EApp (EVar "monosClash") (EVar "old")) (EVar "v")) (EVar "None") (EApp (EApp (EVar "mergeSubstConsistent") (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EIf (EBinOp "==" (EApp (EVar "fst") (EVar "e")) (EVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "moreSpecific") (EVar "old")) (EVar "v"))) (EVar "e")))) (EVar "acc"))) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mergeSubstConsistent") (EBinOp "++" (EVar "acc") (EListLit (ETuple (EVar "k") (EVar "v"))))) (EVar "rest")))))
-(DTypeSig false "moreSpecific" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
-(DFunDef false "moreSpecific" ((PVar "old") (PVar "v")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "old")) (EApp (EVar "normalize") (EVar "v"))) (arm (PTuple (PCon "TVar" PWild) PWild) () (EVar "v")) (arm (PTuple PWild (PCon "TVar" PWild)) () (EVar "old")) (arm PWild () (EIf (EBinOp "<" (EApp (EVar "listLen") (EApp (EVar "monoUnboundIds") (EVar "v"))) (EApp (EVar "listLen") (EApp (EVar "monoUnboundIds") (EVar "old")))) (EVar "v") (EVar "old")))))
-(DTypeSig false "monosClash" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "monosClash" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "a")) (EApp (EVar "normalize") (EVar "b"))) (arm (PTuple (PCon "TVar" PWild) PWild) () (EVar "False")) (arm (PTuple PWild (PCon "TVar" PWild)) () (EVar "False")) (arm (PTuple (PCon "TApp" (PVar "f") (PVar "x")) (PCon "TApp" (PVar "g") (PVar "y"))) () (EBinOp "||" (EApp (EApp (EVar "monosClash") (EVar "f")) (EVar "g")) (EApp (EApp (EVar "monosClash") (EVar "x")) (EVar "y")))) (arm (PTuple (PCon "TApp" PWild PWild) (PCon "TCon" PWild PWild)) () (EVar "True")) (arm (PTuple (PCon "TCon" PWild PWild) (PCon "TApp" PWild PWild)) () (EVar "True")) (arm (PTuple (PVar "na") (PVar "nb")) () (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EVar "monoUnboundIds") (EVar "na"))) (EApp (EVar "isEmptyL") (EApp (EVar "monoUnboundIds") (EVar "nb")))) (EApp (EVar "not") (EApp (EApp (EVar "cohEqMono") (EVar "na")) (EVar "nb")))))))
+(DFunDef false "implHeadSubst" ((PVar "pats") (PVar "concretes")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "concretes"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "positionBindings") (EVar "pats")) (EVar "concretes")) (EListLit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "binds")) () (EIf (EApp (EApp (EVar "cohOverlapGo") (EApp (EVar "Ref") (EListLit))) (EApp (EApp (EVar "repeatedBindings") (EVar "binds")) (EListLit))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EApp (EVar "fst") (EVar "b"))) (EApp (EVar "snd") (EVar "b"))))) (EListLit)) (EVar "binds"))) (EVar "None")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "positionBindings" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))))
+(DFunDef false "positionBindings" ((PList) (PList) (PVar "acc")) (EApp (EVar "Some") (EVar "acc")))
+(DFunDef false "positionBindings" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PVar "acc")) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "p")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "positionBindings") (EVar "ps")) (EVar "cs")) (EBinOp "++" (EVar "acc") (EVar "s"))))))
+(DFunDef false "positionBindings" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "repeatedBindings" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Mono"))))))
+(DFunDef false "repeatedBindings" ((PList) PWild) (EListLit))
+(DFunDef false "repeatedBindings" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "seen")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "k")) (EVar "seen")) (arm (PCon "Some" (PVar "first")) () (EBinOp "::" (ETuple (EVar "first") (EVar "v")) (EApp (EApp (EVar "repeatedBindings") (EVar "rest")) (EVar "seen")))) (arm (PCon "None") () (EApp (EApp (EVar "repeatedBindings") (EVar "rest")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EVar "seen"))))))
 (DTypeSig false "mergeSubstPreferConcrete" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))
 (DFunDef false "mergeSubstPreferConcrete" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "mergeSubstPreferConcrete" ((PVar "acc") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EApp (EApp (EVar "mergeSubstPreferConcrete") (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EVar "k")) (EVar "v"))) (EVar "rest")))
@@ -64550,19 +64521,14 @@ isTyAuth _ = False
 (DTypeSig false "augmentWithParams" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "augmentWithParams" ((PVar "headSub") (PVar "implTys") (PVar "paramMonos")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "implTys")) (EApp (EVar "listLen") (EVar "paramMonos"))) (EBinOp ">" (EApp (EVar "listLen") (EVar "paramMonos")) (ELit (LInt 1)))) (EMatch (EApp (EApp (EVar "implHeadSubst") (EVar "implTys")) (EVar "paramMonos")) (arm (PCon "Some" (PVar "full")) () (EApp (EApp (EVar "mergeSubstPreferConcrete") (EVar "headSub")) (EVar "full"))) (arm (PCon "None") () (EVar "headSub"))) (EIf (EVar "otherwise") (EVar "headSub") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implHeadSubst" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "implHeadSubst" ((PVar "pats") (PVar "concretes")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "concretes"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "implHeadSubstGo") (EVar "pats")) (EVar "concretes")) (EApp (EVar "Some") (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "implHeadSubstGo" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))))
-(DFunDef false "implHeadSubstGo" ((PList) (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "implHeadSubstGo" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PCon "None")) (EVar "None"))
-(DFunDef false "implHeadSubstGo" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PCon "Some" (PVar "sofar"))) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "p")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "implHeadSubstGo") (EVar "ps")) (EVar "cs")) (EApp (EApp (EVar "mergeSubstConsistent") (EVar "sofar")) (EVar "s"))))))
-(DFunDef false "implHeadSubstGo" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "mergeSubstConsistent" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "mergeSubstConsistent" ((PVar "acc") (PList)) (EApp (EVar "Some") (EVar "acc")))
-(DFunDef false "mergeSubstConsistent" ((PVar "acc") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "k")) (EVar "acc")) (arm (PCon "Some" (PVar "old")) () (EIf (EApp (EApp (EVar "monosClash") (EVar "old")) (EVar "v")) (EVar "None") (EApp (EApp (EVar "mergeSubstConsistent") (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EIf (EBinOp "==" (EApp (EVar "fst") (EVar "e")) (EVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "moreSpecific") (EVar "old")) (EVar "v"))) (EVar "e")))) (EVar "acc"))) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mergeSubstConsistent") (EBinOp "++" (EVar "acc") (EListLit (ETuple (EVar "k") (EVar "v"))))) (EVar "rest")))))
-(DTypeSig false "moreSpecific" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
-(DFunDef false "moreSpecific" ((PVar "old") (PVar "v")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "old")) (EApp (EVar "normalize") (EVar "v"))) (arm (PTuple (PCon "TVar" PWild) PWild) () (EVar "v")) (arm (PTuple PWild (PCon "TVar" PWild)) () (EVar "old")) (arm PWild () (EIf (EBinOp "<" (EApp (EVar "listLen") (EApp (EVar "monoUnboundIds") (EVar "v"))) (EApp (EVar "listLen") (EApp (EVar "monoUnboundIds") (EVar "old")))) (EVar "v") (EVar "old")))))
-(DTypeSig false "monosClash" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "monosClash" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "a")) (EApp (EVar "normalize") (EVar "b"))) (arm (PTuple (PCon "TVar" PWild) PWild) () (EVar "False")) (arm (PTuple PWild (PCon "TVar" PWild)) () (EVar "False")) (arm (PTuple (PCon "TApp" (PVar "f") (PVar "x")) (PCon "TApp" (PVar "g") (PVar "y"))) () (EBinOp "||" (EApp (EApp (EVar "monosClash") (EVar "f")) (EVar "g")) (EApp (EApp (EVar "monosClash") (EVar "x")) (EVar "y")))) (arm (PTuple (PCon "TApp" PWild PWild) (PCon "TCon" PWild PWild)) () (EVar "True")) (arm (PTuple (PCon "TCon" PWild PWild) (PCon "TApp" PWild PWild)) () (EVar "True")) (arm (PTuple (PVar "na") (PVar "nb")) () (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EVar "monoUnboundIds") (EVar "na"))) (EApp (EVar "isEmptyL") (EApp (EVar "monoUnboundIds") (EVar "nb")))) (EApp (EVar "not") (EApp (EApp (EVar "cohEqMono") (EVar "na")) (EVar "nb")))))))
+(DFunDef false "implHeadSubst" ((PVar "pats") (PVar "concretes")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "concretes"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "positionBindings") (EVar "pats")) (EVar "concretes")) (EListLit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "binds")) () (EIf (EApp (EApp (EVar "cohOverlapGo") (EApp (EVar "Ref") (EListLit))) (EApp (EApp (EVar "repeatedBindings") (EVar "binds")) (EListLit))) (EApp (EVar "Some") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EApp (EVar "fst") (EVar "b"))) (EApp (EVar "snd") (EVar "b"))))) (EListLit)) (EVar "binds"))) (EVar "None")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "positionBindings" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))))
+(DFunDef false "positionBindings" ((PList) (PList) (PVar "acc")) (EApp (EVar "Some") (EVar "acc")))
+(DFunDef false "positionBindings" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PVar "acc")) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "p")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "positionBindings") (EVar "ps")) (EVar "cs")) (EBinOp "++" (EVar "acc") (EVar "s"))))))
+(DFunDef false "positionBindings" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "repeatedBindings" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Mono"))))))
+(DFunDef false "repeatedBindings" ((PList) PWild) (EListLit))
+(DFunDef false "repeatedBindings" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "seen")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "k")) (EVar "seen")) (arm (PCon "Some" (PVar "first")) () (EBinOp "::" (ETuple (EVar "first") (EVar "v")) (EApp (EApp (EVar "repeatedBindings") (EVar "rest")) (EVar "seen")))) (arm (PCon "None") () (EApp (EApp (EVar "repeatedBindings") (EVar "rest")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EVar "seen"))))))
 (DTypeSig false "mergeSubstPreferConcrete" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))
 (DFunDef false "mergeSubstPreferConcrete" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "mergeSubstPreferConcrete" ((PVar "acc") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EApp (EApp (EVar "mergeSubstPreferConcrete") (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EVar "k")) (EVar "v"))) (EVar "rest")))

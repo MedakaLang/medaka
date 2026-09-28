@@ -2479,6 +2479,50 @@ table = [
     pinned = "total=3.75\ntotal=7\n",
     codes = [],
   },
+  Row {
+    entry = "impl-head-repeated-var-function.mdk",
+    label =
+      "§3 a repeated head variable's bindings unify jointly: `Get (Box (t -> Int)) Int` never matches `impl Get (Box a) a`, since no `t` makes a function type Int. Was accepted, printing a garbage Int natively",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "impl-head-repeated-var-function-control.mdk",
+    label =
+      "control for the function row: the box holds the function the use asks for. Hand-derived: (x => x + 1) 5 is 6",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "6\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-repeated-var-incomparable.mdk",
+    label =
+      "§3 `Pick a a a` against three tuples no one of which is more specific: pairwise unifiable, not jointly, so refused whichever position is visited first. Was accepted, reading a Float as a Bool",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "impl-head-repeated-var-incomparable-control.mdk",
+    label =
+      "control for the incomparable row: the three tuples unify together at `(List Bool, List Int)`. Hand-derived: `pick` returns its second argument ([True], []), printed as [1] then []",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[1]\n[]\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -2490,7 +2534,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 214
+tableRows = 218
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

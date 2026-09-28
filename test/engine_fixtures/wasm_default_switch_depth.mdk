@@ -1,0 +1,25 @@
+-- A decision tree whose default subtree is itself a constructor switch: the
+-- WasmGC emitter must declare a scratch local for the nested switch, one level
+-- deeper than the outer switch. Expected, derived from the source: `pick`
+-- returns its second argument when the first is `V`, its first when the second
+-- is `V`, else the smaller; sizes 0, 0, then 1.
+data T = V Int | C String | A T T
+
+norm : T -> T
+norm t = t
+
+size : T -> Int
+size (V _) = 1
+size (C _) = 0
+size (A f x) = size f + size x
+
+pick : T -> T -> T
+pick old v = match (norm old, norm v)
+  (V _, _) => v
+  (_, V _) => old
+  _ => if size v < size old then v else old
+
+main =
+  println (size (pick (V 1) (C "x")))
+  println (size (pick (C "x") (V 1)))
+  println (size (pick (A (V 1) (V 2)) (A (C "a") (V 3))))

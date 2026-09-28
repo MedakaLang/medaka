@@ -1,0 +1,15 @@
+-- `impl Get (Box a) a` against `Get (Box (t -> Int)) Int`: a function type
+-- is never `Int`, whatever `t` is, so the goal is refused.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+viaG b = get b
+
+main =
+  let n : Int = viaG (Box (x => 5))
+  println (n + 1)

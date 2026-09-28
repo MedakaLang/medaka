@@ -1365,7 +1365,6 @@ implHeadMatchesArgs : List Ty -> List Mono -> Bool
 implHeadMonos : List Ty -> (List (String, Mono), List Mono)
 implHeadParametric : Decl -> Bool
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
-implHeadSubstGo : List Ty -> List Mono -> Option (List (String, Mono)) -> Option (List (String, Mono))
 implHeadTagForIface : String -> Decl -> List String
 implHeadTagsForIface : List Decl -> String -> List String
 implKeyTc : String -> List Ty -> String
@@ -1786,7 +1785,6 @@ mentionsEscaped : Authority -> Bool
 mentionsOpened : Authority -> Bool
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
 mergeOne : List (String, Mono) -> String -> Mono -> List (String, Mono)
-mergeSubstConsistent : List (String, Mono) -> List (String, Mono) -> Option (List (String, Mono))
 mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (String, Mono)
 methodArgs : Ty -> List Ty
 methodCandAdmitted : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
@@ -1958,9 +1956,7 @@ monoUnboundIds : Mono -> List Int
 monoUnboundVarLevels : Mono -> List (Int, Int)
 monoVecSameGiven : List Mono -> List Mono -> Bool
 monoVectorClosed : List Mono -> Bool
-monosClash : Mono -> Mono -> Bool
 monosTvarIds : List Int -> List Mono -> List Int
-moreSpecific : Mono -> Mono -> Mono
 multiParamIds : UObligation -> List Int
 nameNotAuthorityMsg : String -> String
 nameableIfaceMethodSet : List Decl -> Map String Unit
@@ -2140,6 +2136,7 @@ popMarkedClause : Map String (List (List Pat, Expr)) -> Map String (List (List P
 populateEffectDomainsGraph : List Decl -> List (String, List Decl) -> Unit
 populateGo : List Decl -> Unit
 populateUnitsGo : List (String, List Decl) -> Unit
+positionBindings : List Ty -> List Mono -> List (String, Mono) -> Option (List (String, Mono))
 positionCells : List (String, Int) -> List (Int, Ref Authvar)
 positionalSigVars : List (String, Int) -> List (Int, Ref Authvar) -> SigVars
 postponePendingJoins : Int -> Unit
@@ -2421,6 +2418,7 @@ renderKindAnn : KindAnn -> String
 renderKindAnnAtomic : KindAnn -> String
 renderKindArrow : List Kind -> String
 renderRouteIdentity : Route -> String
+repeatedBindings : List (String, Mono) -> List (String, Mono) -> List (Mono, Mono)
 repeatedNames : List String -> List String -> List String
 reportAmbiguousImpl : String -> Route
 reportAmbiguousImport : Map String Unit -> String -> UsePath -> Loc -> Unit
