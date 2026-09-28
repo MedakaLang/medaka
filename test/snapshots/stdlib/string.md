@@ -1,5 +1,5 @@
 # META
-source_lines=827
+source_lines=822
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -158,13 +158,8 @@ toUtf8 s = stringToUtf8Bytes s
 
 {- | The string encoded by an array of UTF-8 bytes.
 
-   Only the low eight bits of each element are used. Each ill-formed sequence
-   (a stray continuation byte, a truncated sequence, an overlong form, a
-   surrogate, anything above U+10FFFF) becomes one U+FFFD replacement
-   character per maximal subpart, as `bytes.decodeUtf8Lossy` does, so
-   `fromUtf8 (toUtf8 s)` is `s` for every string, but `toUtf8 (fromUtf8 bytes)`
-   is `bytes` only when `bytes` is valid UTF-8. Keep bytes that are not text in
-   a `bytes.Bytes`.
+   Only the low eight bits of each element are used. On valid UTF-8,
+   `fromUtf8 (toUtf8 s)` is `s`.
 
    > fromUtf8 (toUtf8 "héllo→")
    "héllo→" -}

@@ -1,0 +1,39 @@
+-- #3487: a where helper whose type mentions a Num-only variable generalizes
+-- it, so its uses pick their own types; the value each use prints is the
+-- one a single where group gave.  (The helpers are functions: a where VALUE
+-- calling a sibling function is a separate wasm emitter gap, W9.)
+-- Expected, derived from the source:
+-- `big` (c 10 is 1 compared with 0.5), `3.5`, `(3, 1.25)`, `2`.
+interface Shw a where
+  shw : a -> String
+
+data T = T
+
+impl Shw T where
+  shw _ = debug (two ())
+    where
+      two _ = 2
+
+cmp : Unit -> String
+cmp _ = if big () then "big" else "small"
+  where
+    c k = if k == 0 then 0 else 1
+    big _ = c 10 > 0.5
+
+best : Unit -> String
+best _ = debug (b ())
+  where
+    score k = if k > 1 then 3 else 1
+    b _ = max (score 5) 0.5 + 0.5
+
+halves : Unit -> String
+halves _ = debug (go 7, go 2.5)
+  where
+    two _ = 2
+    go y = y / two ()
+
+main =
+  println (cmp ())
+  println (best ())
+  println (halves ())
+  println (shw T)

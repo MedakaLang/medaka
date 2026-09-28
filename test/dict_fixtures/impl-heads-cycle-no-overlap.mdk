@@ -1,0 +1,15 @@
+-- Two impl heads share an instance only if `a = List a`, which has no finite
+-- solution: they do not overlap, and coherence must say so and terminate.
+-- Expected `one`, then `two`.
+interface Tri a b c where
+  tri : a -> b -> c -> String
+
+impl Tri a (List a) a where
+  tri _ _ _ = "one"
+
+impl Tri b b b where
+  tri _ _ _ = "two"
+
+main =
+  println (tri 1 [1] 1)
+  println (tri True True True)

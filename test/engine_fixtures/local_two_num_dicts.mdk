@@ -1,0 +1,22 @@
+-- #3516: a local function with two Num-constrained type variables, used at two
+-- Num types.  Its scheme's variables must not be grounded by the enclosing
+-- binding's numeric defaulting, or both predicates read one dictionary.
+-- Expected, derived from the source: `(20, 2.25)`, then `2.5`, then `(3, 1.5)`.
+pairs : Unit -> String
+pairs _ = debug (s (10 : Int) (1.5 : Float))
+  where
+    s a b = (a + a, b * b)
+
+step : Unit -> String
+step _ = debug (c 10 1.5)
+  where
+    c k z = if k == 0 then z else z + 1
+
+lets : Unit -> String
+lets _ =
+  let t x y = (x + 1, y * 2.0) in debug (t (2 : Int) (0.75 : Float))
+
+main =
+  println (pairs ())
+  println (step ())
+  println (lets ())

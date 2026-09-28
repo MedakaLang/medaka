@@ -2413,6 +2413,149 @@ table = [
     pinned = "(7, 100)\n",
     codes = [],
   },
+  Row {
+    entry = "impl-head-repeated-var-three-positions.mdk",
+    label =
+      "§3 one matcher for the whole head vector: `impl Pick a a a` never matches `Pick (List x) (List Int) (List U8)`, whichever position binds `a` first. Was accepted, printing a U8 list holding 300",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "impl-head-repeated-var-three-positions-control.mdk",
+    label =
+      "control for the three-position row: every position `List Int` matches. Hand-derived: `pick [] [3, 7]` returns its second argument, [3, 7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[3, 7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-repeated-var-spine.mdk",
+    label =
+      "§3 `impl Get (Box a) a` against `Get (Box (Option t)) (List Int)`: the two bindings of `a` disagree on their constructor while both hold a free variable, so no instantiation matches. Was accepted and crashed at run time",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "impl-head-repeated-var-spine-control.mdk",
+    label =
+      "control for the spine row: a box holding the list the use wants matches. Hand-derived: total of [1, 2] is 3",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-repeated-var-body-default.mdk",
+    label =
+      "an impl body must not default a Num variable that `Index (Array a) Int e` ties to the impl's own, still free, `a`: grounding `e` to Int passed a head match it contradicts and ran an Int dictionary on Floats. Refused as ambiguous by run and build; `check` accepting it is #1641 (a constrained impl head suppresses the ambiguity), and this row reds when #1641 is fixed",
+    expCheck = "ACCEPT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-repeated-var-body-default-control.mdk",
+    label =
+      "control for the body-default row: the helper's signature names the element type as the impl's `a`. Hand-derived: 1.5 + 2.25 = 3.75, then 3 + 4 = 7",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "total=3.75\ntotal=7\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-repeated-var-function.mdk",
+    label =
+      "§3 a repeated head variable's bindings unify jointly: `Get (Box (t -> Int)) Int` never matches `impl Get (Box a) a`, since no `t` makes a function type Int. Was accepted, printing a garbage Int natively",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "impl-head-repeated-var-function-control.mdk",
+    label =
+      "control for the function row: the box holds the function the use asks for. Hand-derived: (x => x + 1) 5 is 6",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "6\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-repeated-var-incomparable.mdk",
+    label =
+      "§3 `Pick a a a` against three tuples no one of which is more specific: pairwise unifiable, not jointly, so refused whichever position is visited first. Was accepted, reading a Float as a Bool",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "impl-head-repeated-var-incomparable-control.mdk",
+    label =
+      "control for the incomparable row: the three tuples unify together at `(List Bool, List Int)`. Hand-derived: `pick` returns its second argument ([True], []), printed as [1] then []",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[1]\n[]\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-repeated-var-cycle.mdk",
+    label =
+      "§3 the joint unification of a repeated head variable's bindings has an occurs check: `Same (Int, Int) (List Int, Int)` needs `x = List x` and is refused, where binding the cycle looped forever",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "impl-head-repeated-var-cycle-control.mdk",
+    label =
+      "control for the cycle row: both bindings are `(x, List x)`. Hand-derived: `same` returns \"same\"",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "same\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-heads-cycle-no-overlap.mdk",
+    label =
+      "§4 coherence: `Tri a (List a) a` and `Tri b b b` share an instance only if `a = List a`, so they do not overlap; the check terminates (it looped on main). Hand-derived: `tri 1 [1] 1` is the first impl, `one`; `tri True True True` the second, `two`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "one\ntwo\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -2424,7 +2567,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 208
+tableRows = 221
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

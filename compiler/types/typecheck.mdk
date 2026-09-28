@@ -10664,6 +10664,9 @@ resetGraphState _ =
   graphRun := freshGraphRun ()
   graphRun.value.evCounter := n
   graphRun.value.evCells := cells
+  -- The binder names survive; the quantified ids do not: they are type-variable
+  -- ids, and the fresh run restarts the counter that minted them.
+  localAbs.lasQuantified := omEmpty
   graphRun := GraphRun { graphRun.value | localAbs = localAbs }
 
 -- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
@@ -15060,6 +15063,9 @@ data LocalAbsState = LocalAbsState {
   lasRecOccs : Ref (OrdMap (List (EvId, ScopeId))),
   -- monotone for the whole graph, so a binder name is never minted twice
   lasCounter : Ref Int,
+  -- every type variable a generalized local's scheme quantifies: no longer a
+  -- monomorphic variable, so no later numeric boundary may ground it (#3516)
+  lasQuantified : Ref (OrdMap Unit),
 }
 
 freshLocalAbsState : Unit -> LocalAbsState
@@ -15067,6 +15073,7 @@ freshLocalAbsState _ = LocalAbsState {
   lasBinders = Ref omEmpty,
   lasRecOccs = Ref omEmpty,
   lasCounter = Ref 0,
+  lasQuantified = Ref omEmpty,
 }
 
 copyLocalAbsState : LocalAbsState -> LocalAbsState
@@ -15074,6 +15081,7 @@ copyLocalAbsState st = LocalAbsState {
   lasBinders = Ref st.lasBinders.value,
   lasRecOccs = Ref st.lasRecOccs.value,
   lasCounter = Ref st.lasCounter.value,
+  lasQuantified = Ref st.lasQuantified.value,
 }
 
 freshLocalAbsName : String -> String
@@ -15165,9 +15173,23 @@ closeLocalScope (Some _) = closeScope ()
 closeLocalScope None = ()
 
 registerLocalAbsIf : String -> Option ScopeId -> Scheme -> Int -> Int -> Unit
-registerLocalAbsIf name (Some lscope) sch oblN0 callN0 =
-  registerLocalAbs name lscope sch oblN0 callN0
-registerLocalAbsIf _ None _ _ _ = ()
+registerLocalAbsIf name lscope sch oblN0 callN0 =
+  let _ = recordLocalQuantified sch
+  match lscope
+    Some scope => registerLocalAbs name scope sch oblN0 callN0
+    None => ()
+
+-- A generalized local's quantified variables stay in the enclosing binding's
+-- obligation window, but they are the scheme's now: each use instantiates them
+-- afresh, and the enclosing boundary's defaulting must reach those instances,
+-- never the scheme's own variables.  Grounding one would fix the local at one
+-- type behind every use and select one dictionary for two predicates (#3516).
+recordLocalQuantified : Scheme -> Unit
+recordLocalQuantified sch = match schemeIds sch
+  [] => ()
+  ids =>
+    let st = graphRun.value.localAbs
+    st.lasQuantified := omFromNames (map intToString ids) st.lasQuantified.value
 
 -- After a candidate local generalized: the predicates its scheme quantifies become
 -- its dictionary parameters, registered as givens of its own scope so the sites in
@@ -22213,8 +22235,33 @@ inferArmGuards env ((GBind p e) :: rest) =
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
 inferLetGroup env binds body =
   let _ = checkLetGroupBindsLocated binds  -- #799
-  let env2 = processLetGroup env binds
+  let env2 = fold processLetGroup env (letGroupComponents binds)
   infer env2 body
+
+-- A `where` block is checked one dependency component at a time, a
+-- component's dependencies first, as a module's top level is: a binding that
+-- only USES a sibling sees it generalized, rather than sharing its type
+-- variables as a member of one recursive group would, so a helper may be used
+-- at two types and keeps its own authority residual (#3487).  Members keep
+-- their source order inside a component.  A block that repeats a name stays
+-- one group: its components are not well defined.
+letGroupComponents : List LetBind -> List (List LetBind)
+letGroupComponents binds =
+  let names = map letBindNameTc binds
+  let nameSet = namesToSet names omEmpty
+  if omSize nameSet < listLen names then
+    [binds]
+  else
+    let grouped =
+      fold
+        (m (LetBind n clauses) => omInsert n (map funClausePair clauses) m)
+        omEmpty
+        binds
+    map
+      (component =>
+        let members = namesToSet component omEmpty
+        filterList (b => omHasKey (letBindNameTc b) members) binds)
+      (tarjanSCCs names (depGraphMap names grouped))
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
@@ -23474,7 +23521,8 @@ groupNames ((n, _) :: rest) seen = match omLookup n seen
   Some _ => groupNames rest seen
   None => n :: groupNames rest (omInsert n () seen)
 
--- process a let-group (where clauses): bind names, infer, generalize
+-- process one dependency component of a where block: bind names, infer,
+-- generalize
 processLetGroup : TcEnv -> List LetBind -> TcEnv
 processLetGroup env binds =
   let _ = enterLevel ()
@@ -23495,9 +23543,13 @@ processLetGroup env binds =
       (map (letBindGeneralizes env) (zipL binds summaries))
   let _ = flushPendingEscapes ()
   let _ = exitLevel ()
-  -- PLAN.md #11 / D4: ground ambiguous Num-only vars owned by this just-exited
-  -- where-group boundary (and not arg-reachable from any member type) before the
-  -- group generalizes.  Scoped to this group's newly added obligations.
+  -- PLAN.md #11 / D4, as a where block narrows it (#3487): ground the Num-only
+  -- vars owned by this just-exited component that no member's type mentions
+  -- (nothing can generalize them).  One a member's type does mention, even in
+  -- return position, generalizes with its constraint, so a sibling or the
+  -- enclosing body instantiates it (`two _ = 2` beside `go y = y / two ()`);
+  -- the enclosing binding's boundary decides what its uses leave ambiguous.
+  -- Scoped to this group's newly added obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
   let memberMonos = map (p => schemeMono (snd p)) placeholders
   let _ = finalizeNumBoundary NumBoundary {
@@ -23661,7 +23713,7 @@ numObligIds o = match o.oblProj
 -- These four policies preserve the existing candidate sets while making the
 -- outliving channels named data instead of positional arguments:
 --   * member: roots in one member, excluding its arguments;
---   * group: all roots, excluding arguments of any member;
+--   * group (a where component): roots no member's type mentions;
 --   * SCC: the group rule plus the existing per-member fallback;
 --   * body-local: roots absent from the boundary's explicit surviving-channel set.
 data NumBoundaryDisposition =
@@ -23701,7 +23753,7 @@ finalizeNumBoundary boundary =
           member
       _ => panic "NumBoundaryOwnedMember must carry exactly one member"
     NumBoundaryOwnedGroup _ =>
-      defaultGroupNumWith
+      defaultAbsentNumWith
         defaultOwnerPolicy
         boundary.nbSurvivingIds
         boundary.nbDefaultObls
@@ -23769,6 +23821,22 @@ defaultGroupNumWith ownerPolicy protectedIds obls monos =
     obls
     (filterList (id => not (containsI id argIds)) candidates)
 
+-- where-component defaulting: ground every unprotected Num-constrained var no
+-- member's type mentions (a var consumed inside a body, `n = length [1, 2]`).
+-- A var a member's type mentions generalizes with its constraint instead.
+defaultAbsentNumWith : Option Int ->
+  OrdMap Unit ->
+  List UObligation ->
+  List Mono ->
+  Unit
+defaultAbsentNumWith ownerPolicy protectedIds obls monos =
+  let inTypes = flatMap monoUnboundIds monos
+  let candidates = unprotectedNumCandidates protectedIds obls
+  groundNumVarsWith
+    ownerPolicy
+    obls
+    (filterList (id => not (containsI id inTypes)) candidates)
+
 unprotectedNumCandidates : OrdMap Unit -> List UObligation -> List Int
 unprotectedNumCandidates protectedIds obls =
   filterList
@@ -23819,6 +23887,28 @@ numChannelRootSet obls channels =
 -- `t _ = s [1, 2]` is consumed entirely inside the body and surfaces nowhere in
 -- `t : Option2 Int -> Int`, so nothing outside the body can ever determine it.  That
 -- var, and only that var, is what this grounds.
+-- A method body's Num variables that reach it only through a constrained
+-- callee's instantiation (a where helper generalized as `Num r => a -> r`,
+-- used as `debug (two ())`): their Num obligation is on the call and
+-- dictionary-application windows, not the body's own, exactly as at a
+-- top-level group (#23).  The body-local boundary grounds them like any other
+-- body-local root, except one a multi-parameter obligation of the body still
+-- mentions (`e` of `Index (Array a) Int e`): another parameter may fix it, and
+-- in an impl body that parameter is the impl's own head variable, still free
+-- here, so grounding it to Int would pass a head match it contradicts (#3521).
+bodyExtraNumObls : List UObligation -> Int -> Int -> List UObligation
+bodyExtraNumObls bodyObls callN0 dictN0 =
+  let calls = callUOblsWindow callN0
+  let tied = flatMap multiParamIds (bodyObls ++ calls)
+  filterList
+    (o => not (anyList (id => containsI id tied) (numObligIds o)))
+    (numCallObls calls ++ numDictObls (dictAppsSince dictN0))
+
+multiParamIds : UObligation -> List Int
+multiParamIds o = match uOblArgs o
+  args@(_ :: _ :: _) => flatMap monoUnboundIds args
+  _ => []
+
 defaultBodyLocalNumWith : Option Int -> OrdMap Unit -> List UObligation -> Unit
 defaultBodyLocalNumWith ownerPolicy protectedIds obls =
   let candidates = unprotectedNumCandidates protectedIds obls
@@ -24037,6 +24127,9 @@ numDefaultOwnerAllows (Some level) m = match normalize m
 -- Num operand monos — refs alias post-unify, grounding any grounds all).
 groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
 groundNumVarsWith _ _ [] = ()
+groundNumVarsWith ownerPolicy obls (id :: rest)
+  | omHasKey (intToString id) graphRun.value.localAbs.lasQuantified.value =
+    groundNumVarsWith ownerPolicy obls rest
 groundNumVarsWith ownerPolicy obls (id :: rest) =
   let _ = match liveNumVarGo id obls
     Some m =>
@@ -26404,15 +26497,29 @@ cohGoR _ (TEff _) (TEff _) = True
 cohGoR _ (TAuth _) (TAuth _) = True
 -- A qualifier is not part of a head's shape: coherence compares the value
 -- types under it.
-cohGoR subst (TQual a _) b = cohGoR subst (normalize a) b
-cohGoR subst a (TQual b _) = cohGoR subst a (normalize b)
+cohGoR subst (TQual a _) b = cohGo subst a b
+cohGoR subst a (TQual b _) = cohGo subst a b
 cohGoR _ _ _ = False
 
 -- bind id := m in the wildcard subst and return True
+-- A variable never binds to a type that contains it: `t := List t` has no
+-- finite solution, so the two sides share no instance, and binding it would
+-- send every later comparison through `t` round the cycle forever.
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohBind subst id m =
-  subst := (id, m) :: !subst
-  True
+  if cohOccurs subst id m then
+    False
+  else
+    subst := (id, m) :: !subst
+    True
+
+cohOccurs : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
+cohOccurs subst id m = match cohResolve subst m
+  TVar cell => tyvarId cell == id
+  TApp f a => cohOccurs subst id f || cohOccurs subst id a
+  TFun a _ b => cohOccurs subst id a || cohOccurs subst id b
+  TQual a _ => cohOccurs subst id a
+  _ => False
 
 -- ── shared one-sided matcher core (#156 S1) ────────────────────────────────
 -- cohSubsumes (Mono-space), tySubsumes (AST-space) and matchTyMono (AST head-
@@ -30633,18 +30740,37 @@ augmentWithParams headSub implTys paramMonos
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
 implHeadSubst pats concretes
   | listLen pats /= listLen concretes = None
-  | otherwise = implHeadSubstGo pats concretes (Some [])
+  | otherwise = match positionBindings pats concretes []
+    None => None
+    Some binds =>
+      if cohOverlapGo (Ref []) (repeatedBindings binds []) then
+        Some (fold (acc b => mergeOne acc (fst b) (snd b)) [] binds)
+      else
+        None
 
-implHeadSubstGo : List Ty ->
+-- Each head position matched on its own, its bindings in position order.
+positionBindings : List Ty ->
   List Mono ->
-  Option (List (String, Mono)) ->
+  List (String, Mono) ->
   Option (List (String, Mono))
-implHeadSubstGo [] [] acc = acc
-implHeadSubstGo (p :: ps) (c :: cs) None = None
-implHeadSubstGo (p :: ps) (c :: cs) (Some sofar) = match matchTyMono p c
+positionBindings [] [] acc = Some acc
+positionBindings (p :: ps) (c :: cs) acc = match matchTyMono p c
   None => None
-  Some s => implHeadSubstGo ps cs (Some (mergeSubstPreferConcrete sofar s))
-implHeadSubstGo _ _ _ = None
+  Some s => positionBindings ps cs (acc ++ s)
+positionBindings _ _ _ = None
+
+-- A variable the head repeats is one type: every later binding of it must
+-- unify with its first, all of them under one substitution of the goal's free
+-- variables (`cohOverlapGo`), so `Get (Box a) a` never matches
+-- `Get (Box Float) Int`, nor `Pick a a a` a goal whose three positions cannot
+-- be made equal together, whatever order they are visited in.
+repeatedBindings : List (String, Mono) ->
+  List (String, Mono) ->
+  List (Mono, Mono)
+repeatedBindings [] _ = []
+repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
+  Some first => (first, v) :: repeatedBindings rest seen
+  None => repeatedBindings rest ((k, v) :: seen)
 
 -- Merge two name→mono substs; on a key collision keep whichever value has a
 -- concrete head tycon (so the grounded element wins over a free result var).
@@ -33655,6 +33781,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- obligations on both channels, exactly as inferImplMethod does.
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
+  let dictN0 = goalsMark ()
   let defLoc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
   let subject = defaultSubject iface.irName mname
   -- Read rigidity from the SAME instantiation used for the body and force.
@@ -33725,7 +33852,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
       nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
       nbMembers = [descriptor.mtiBody],
       nbSurvivingIds = monoRootIdSet [descriptor.mtiBody],
-      nbDefaultObls = addedObls,
+      nbDefaultObls = addedObls ++ bodyExtraNumObls addedObls callN0 dictN0,
       nbAmbiguityObls = addedObls,
     }
   -- #837: schemeObligationsRef restore RETIRED (see snapshot site above).
@@ -35750,19 +35877,13 @@ allConcreteHeads (m :: rest) =
 
 -- #154 PR3: implMatches / implMatchesReceiver (flat whole-universe scans) are replaced
 -- by the keyed implMatchesU / implMatchesReceiverU above.  implHeadMatchesArgs (used by
--- both the keyed matcher and matchTyMono callers) stays: a head-arg type pattern is
+-- both the keyed matcher and matchTyMono callers) stays: each head-arg type pattern is
 -- matched against the corresponding mono via matchTyMono (a TyVar in the head is a
--- wildcard; a parametric impl `impl Eq (List a)` thus matches `List Int`).
+-- wildcard; a parametric impl `impl Eq (List a)` thus matches `List Int`), and a
+-- variable the head repeats must be bound consistently across positions
+-- (`implHeadSubst`).
 implHeadMatchesArgs : List Ty -> List Mono -> Bool
-implHeadMatchesArgs tys args
-  | listLen tys == listLen args = allHeadArgsMatch (zipL tys args)
-  | otherwise = False
-
-allHeadArgsMatch : List (Ty, Mono) -> Bool
-allHeadArgsMatch [] = True
-allHeadArgsMatch ((ty, m) :: rest) = match matchTyMono ty m
-  Some _ => allHeadArgsMatch rest
-  None => False
+implHeadMatchesArgs tys args = isSome (implHeadSubst tys args)
 
 -- register, per slot, the default body's constraint var id → `$dict_<method>_<slot>`
 -- in activeDictVars, so an in-body method ref unified to that var routes RDict.
@@ -35951,6 +36072,7 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
       -- THIS method and can never touch an already-generalized outer var.
       let oblN0 = wMark perRun.value.implObls
       let callN0 = wMark perRun.value.obls
+      let dictN0 = goalsMark ()
       -- build the method type's tv map explicitly (instead of expectedMethodType,
       -- which hides it) so the impl method's OWN method-level constraint vars
       -- (`Thenable m => …`) can be registered into activeDictVars below.
@@ -36148,7 +36270,7 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
           nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
           nbMembers = [expected],
           nbSurvivingIds = survivingNumIds,
-          nbDefaultObls = addedObls,
+          nbDefaultObls = addedObls ++ bodyExtraNumObls addedObls callN0 dictN0,
           nbAmbiguityObls = addedObls,
         }
       -- Eval-path method-dict threading (parity with inferDefaultMethod's
