@@ -281,7 +281,7 @@ toolchain = []
 [[gate]]
 name = "build_cmd"
 area = "backend"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -356,7 +356,7 @@ toolchain = []
 [[gate]]
 name = "gzip/test/deflate_oracle"
 area = "engines"
-shard = "gates_3"
+shard = "gates_7"
 project = "gzip"
 tiers = ["merge"]
 cost = "cheap"
@@ -473,7 +473,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/car_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -495,7 +495,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/constant_time_parity"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -525,7 +525,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "pds/test/constant_time_reductions"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -540,7 +540,7 @@ toolchain = ["wasm-tools", "node>=24", "clang"]
 [[gate]]
 name = "pds/test/constant_time_signing"
 area = "engines"
-shard = "gates_5"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -773,7 +773,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/repo_vectors"
 area = "engines"
-shard = "gates_8"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 # Was "medium" while this gate was the 948.9s pole of the whole suite — i.e. the
@@ -824,7 +824,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/secp256k1_point_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -899,7 +899,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/store_persistence"
 area = "engines"
-shard = "gates_7"
+shard = "gates_6"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -959,7 +959,7 @@ toolchain = ["node>=24"]
 [[gate]]
 name = "sqlite/test/dml_oracle"
 area = "engines"
-shard = "gates_3"
+shard = "gates_7"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1009,7 +1009,7 @@ toolchain = []
 [[gate]]
 name = "sqlite/test/oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_3"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1328,7 +1328,7 @@ toolchain = []
 [[gate]]
 name = "cross_project_deps"
 area = "infra"
-shard = "gates_7"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1509,7 +1509,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_typed_modules"
 area = "eval"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1573,7 +1573,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_dict_semantics_permute"
 area = "infra"
-shard = "gates_8"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1828,7 +1828,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_iface_order"
 area = "infra"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1843,7 +1843,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_import_order"
 area = "infra"
-shard = "gates_2"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1948,7 +1948,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_lint_cache"
 area = "tools"
-shard = "gates_5"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2275,7 +2275,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_prelude_obj"
 area = "infra"
-shard = "gates_2"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2425,7 +2425,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_run_stdout_flush"
 area = "infra"
-shard = "gates_5"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2575,7 +2575,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_test_native"
 area = "infra"
-shard = "gates_5"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2635,7 +2635,7 @@ toolchain = []
 [[gate]]
 name = "diff_native_cli"
 area = "infra"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2650,7 +2650,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_native_stack"
 area = "infra"
-shard = "gates_7"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2680,7 +2680,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "diff_async"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2875,7 +2875,7 @@ toolchain = []
 [[gate]]
 name = "selfcompile_build_fixpoint"
 area = "backend"
-shard = "gates_2"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -3143,7 +3143,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_tier_drift"
 area = "infra"
-shard = "gates_6"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3304,7 +3304,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_emitted_code_floor"
 area = "infra"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3334,7 +3334,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_cli_help_conformance"
 area = "cli"
-shard = "gates_7"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
