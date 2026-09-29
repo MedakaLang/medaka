@@ -105,7 +105,12 @@
    newer than the pinned reference and writes record types that version does
    not know; refusing them would refuse the app. `validate: false` stores the
    record ungraded and reports `"unknown"`, where the reference omits the
-   field. -}
+   field.
+
+   After those refusals, and after the repository has accepted the
+   transition but before it is kept, every `blob` ref a written record names
+   must be a blob this server holds (`requireHeldBlobs`), whatever `validate`
+   says; in a batch, one missing blob refuses the whole batch. -}
 
 import http.{
   Header,
@@ -125,7 +130,15 @@ import list.{last, take}
 import string.{join, split, startsWith, toInt, toLower}
 import string.{utf8ByteLength}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
-import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
+import lib.blob.{
+  BlobRef,
+  admitBlob,
+  blobRefCid,
+  blobRefMimeType,
+  blobRefSize,
+  blobRefToJson,
+  recordBlobRefs,
+}
 import lib.blockstore.{blockStoreGet}
 import lib.car.{carEncode, carEncodeRootless}
 import lib.cid.{
@@ -327,9 +340,16 @@ recordNotFound : String -> Response
 recordNotFound = xrpcErrorResponse 400 "Bad Request" "RecordNotFound"
 
 -- | The name is `sync.getBlob`'s own lexicon-declared error (graded against
--- the pinned reference package, not invented here).
+-- the pinned reference package, not invented here), and the one the
+-- reference's commit gives a record naming a blob it does not hold.
 blobNotFound : String -> Response
 blobNotFound = xrpcErrorResponse 400 "Bad Request" "BlobNotFound"
+
+invalidMimeType : String -> Response
+invalidMimeType = xrpcErrorResponse 400 "Bad Request" "InvalidMimeType"
+
+invalidSize : String -> Response
+invalidSize = xrpcErrorResponse 400 "Bad Request" "InvalidSize"
 
 handleNotFound : String -> Response
 handleNotFound = xrpcErrorResponse 400 "Bad Request" "HandleNotFound"
@@ -669,6 +689,62 @@ admitBlobRef : Result String BlobRef -> Result Response BlobRef
 admitBlobRef (Err message) = Err (invalidRequest "Blob rejected: \{message}")
 admitBlobRef (Ok ref) = Ok ref
 
+{- | The reference's commit-time blob check (`processWriteBlobs`): every blob
+   ref `record` names must be a blob this server holds, refused
+   `BlobNotFound` otherwise, and the ref's MIME type and size must be the
+   held blob's, refused `InvalidMimeType` or `InvalidSize` otherwise. The
+   first ref that fails decides the answer.
+
+   The reference compares MIME type and size only while a blob is still
+   temporary, which is until the first write that names it commits; a later
+   ref to the same blob is not compared. This store keeps no such state: an
+   uploaded blob is held the same way before and after a record names it,
+   and it is never dropped when no record names it any more, as the
+   reference drops one. So the comparison runs on every ref, and refuses one
+   write the reference accepts: a ref to an already-named blob that misstates
+   its type or size. `uploadBlob` answers with the held type and size, which
+   are what a client copies into a ref.
+
+   A blob held with no declared type (the byte-only `storePut`, which no
+   route uses) has no type to compare, and only its size is. -}
+requireHeldBlobs : Store -> DagCbor -> Result Response Unit
+requireHeldBlobs store record = requireHeldRefs store (recordBlobRefs record)
+
+requireHeldRefs : Store -> List BlobRef -> Result Response Unit
+requireHeldRefs _ [] = Ok ()
+requireHeldRefs store (ref :: rest) = do
+  () <- requireHeldRef store ref
+  requireHeldRefs store rest
+
+requireHeldRef : Store -> BlobRef -> Result Response Unit
+requireHeldRef store ref =
+  let cid = blobRefCid ref
+  match storeGet cid store
+    None => Err (blobNotFound "Could not find blob: \{cidToString cid}")
+    Some bytes => match storeBlobMimeType cid store
+      Some held if held /= blobRefMimeType ref =>
+        Err
+          (invalidMimeType
+            "Referenced Mimetype does not match stored blob. Expected: \{held}, Got: \{blobRefMimeType ref}")
+      _ =>
+        if B.length bytes /= blobRefSize ref then
+          Err
+            (invalidSize
+              "Referenced Size does not match stored blob. Expected: \{intToString (B.length bytes)}, Got: \{intToString (blobRefSize ref)}")
+        else
+          Ok ()
+
+-- | `requireHeldBlobs` over every record a batch creates or updates, before
+-- any of them is committed.
+requireBatchHeldBlobs : Store -> List RepoWrite -> Result Response Unit
+requireBatchHeldBlobs _ [] = Ok ()
+requireBatchHeldBlobs store (write :: rest) = do
+  () <- match write
+    RepoWriteCreate _ record => requireHeldBlobs store record
+    RepoWriteUpdate _ record => requireHeldBlobs store record
+    RepoWriteDelete _ => Ok ()
+  requireBatchHeldBlobs store rest
+
 -- ── the write endpoints ─────────────────────────────────────────────────────
 
 applyCreateRecord : Account ->
@@ -694,6 +770,7 @@ applyCreateRecord account context store body = do
   () <- checkSwapRecord body path repo
   bytes <- encodeRecord record
   mutation <- admitMutation (repoCreate path record rev repo)
+  () <- requireHeldBlobs store record
   Ok (
     repoMutationState mutation,
     writeOutput
@@ -729,6 +806,7 @@ applyPutRecord account context store body = do
     None => repoCreate path record rev repo
     Some _ => repoUpdate path record rev repo
   mutation <- admitMutation transition
+  () <- requireHeldBlobs store record
   Ok (
     repoMutationState mutation,
     writeOutput
@@ -947,6 +1025,7 @@ applyBatchWrites account context store body = do
   () <- checkSwapCommit body repo
   commitRev <- advanceTidBy rev finalAuto
   mutation <- admitMutation (repoApplyWrites writes commitRev repo)
+  () <- requireBatchHeldBlobs store writes
   Ok (
     repoMutationState mutation,
     jObject [

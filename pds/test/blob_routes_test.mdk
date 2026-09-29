@@ -3,15 +3,18 @@
    real registry, the real seam, and the real handler, exactly like
    `pds/test/session_routes_test.mdk` drives the session routes.
 
-   No repository is configured: the blob half is independent of it
-   (`pds/lib/store.mdk`), so every cell here runs against a store with a
-   session secret and credential but no repository, the same shape
-   `pds/test/session_routes_test.mdk` already uses. -}
+   The blob routes' cells configure no repository: the blob half is
+   independent of it (`pds/lib/store.mdk`), so they run against a store with
+   a session secret and credential but no repository, the same shape
+   `pds/test/session_routes_test.mdk` already uses. The record-write cells at
+   the end, which check that a record names only blobs this server holds,
+   add one. -}
 
 import bytes as B
 import bytes.{Bytes, encodeUtf8, fromU8Array}
 import http.{parseRequestClassified}
-import json.{Json(..), get, parse}
+import hex.{decode}
+import json.{Json(..), get, jArray, jObject, parse, stringify}
 import list.{sort}
 import test.{expectEqual, expectTrue}
 import u8 as U8
@@ -21,6 +24,7 @@ import lib.credential.{
   CredentialRecord, LoginCheck, LoginVerdict, makeCredential
 }
 import lib.handlers.{pdsServer, serverLinksEmpty}
+import lib.repo.{repoInitFromKeyBytes}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -29,8 +33,15 @@ import lib.server_core.{
   handleBytes,
   makeAccount,
 }
-import lib.store.{Store, storeEmpty, storeWithCredential, storeWithServerSecret}
-import test.fixture_support.{altTestSecret, contextAt}
+import lib.store.{
+  Store,
+  storeEmpty,
+  storeFromRepo,
+  storeWithCredential,
+  storeWithServerSecret,
+}
+import lib.tid.{tidParse}
+import test.fixture_support.{altTestSecret, contextAt, storeFingerprint}
 import test.request_support.{authOf, loginJson, postJson}
 import test.response_support.{
   hasContentType,
@@ -378,3 +389,258 @@ test "listBlobs with one big page lists every uploaded blob" =
 
 test "listBlobs cursor pagination returns every uploaded blob exactly once" =
   expectEqual walkedCids pagedCids
+
+-- # record writes name only blobs this server holds
+
+-- | `configuredStore` with a repository for `account`, so the record writes
+-- have somewhere to commit.
+repoStore : Store
+repoStore =
+  let secret =
+    resultOrPanic
+      "blob_routes_test: signing key"
+      (decode
+        "0000000000000000000000000000000000000000000000000000000000000001")
+  let rev =
+    resultOrPanic
+      "blob_routes_test: initial revision"
+      (tidParse "3ke6kg3wk222b")
+  let repo =
+    resultOrPanic
+      "blob_routes_test: repository"
+      (repoInitFromKeyBytes accountDidText secret rev)
+  match storeWithServerSecret altTestSecret (storeFromRepo repo)
+    Ok withSecret => storeWithCredential credential withSecret
+    Err message => panic "blob_routes_test: session secret: \{message}"
+
+repoLoggedIn : (Store, String)
+repoLoggedIn =
+  let (store, response) = login testInstant 300 repoStore
+  (store, stringField "accessJwt" response)
+
+repoToken : String
+repoToken = match repoLoggedIn
+  (_, token) => token
+
+-- | The repository store after `uploadedBytes` is uploaded: the one blob every
+-- write below can name and have held.
+heldStore : Store
+heldStore =
+  let (store, _) = repoLoggedIn
+  let (next, _) =
+    send
+      (contextAt testInstant 301)
+      store
+      (postRaw repoToken uploadBlobNsid uploadedMimeType uploadedBytes)
+  next
+
+blobRef : String -> String -> Int -> Json
+blobRef cidText mimeType size = jObject [
+  ("$type", JString "blob"),
+  ("ref", jObject [("$link", JString cidText)]),
+  ("mimeType", JString mimeType),
+  ("size", JInt size),
+]
+
+heldRef : Json
+heldRef = blobRef uploadedCidText uploadedMimeType (B.length uploadedBytes)
+
+unheldCidText : String
+unheldCidText = cidToString (blobCid (encodeUtf8 "never uploaded"))
+
+unheldRef : Json
+unheldRef = blobRef unheldCidText uploadedMimeType 14
+
+notFoundOutcome : String
+notFoundOutcome =
+  "400 Bad Request BlobNotFound: Could not find blob: \{unheldCidText}"
+
+-- A collection with no schema, so no lexicon verdict stands between a record
+-- and the blob check.
+holderCollection : String
+holderCollection = "com.example.blobholder"
+
+holderWith : Json -> Json
+holderWith value = jObject [
+  ("$type", JString holderCollection),
+  ("image", value),
+]
+
+-- | A response's outcome and, for a refusal, its message.
+answer : Bytes -> String
+answer response = match stringField "message" response
+  "" => outcome response
+  message => "\{outcome response}: \{message}"
+
+writeTo : String -> List (String, Json) -> (Store, Bytes)
+writeTo nsid fields =
+  send
+    (contextAt testInstant 302)
+    heldStore
+    (postJson
+      accountHostText
+      repoToken
+      nsid
+      (stringify (jObject ([("repo", JString accountDidText)] ++ fields))))
+
+createHolding : String -> Json -> List (String, Json) -> (Store, Bytes)
+createHolding collection record flags =
+  writeTo
+    "com.atproto.repo.createRecord"
+    ([("collection", JString collection), ("record", record)] ++ flags)
+
+createOf : Json -> (Store, Bytes)
+createOf record = createHolding holderCollection record []
+
+putOf : Json -> (Store, Bytes)
+putOf record = writeTo "com.atproto.repo.putRecord" [
+  ("collection", JString holderCollection),
+  ("rkey", JString "self"),
+  ("record", record),
+]
+
+createElement : String -> Json -> Json
+createElement rkey record = jObject [
+  ("$type", JString "com.atproto.repo.applyWrites#create"),
+  ("collection", JString holderCollection),
+  ("rkey", JString rkey),
+  ("value", record),
+]
+
+batchOf : List Json -> (Store, Bytes)
+batchOf writes =
+  writeTo "com.atproto.repo.applyWrites" [("writes", jArray writes)]
+
+-- | A refused write leaves the repository at the commit it started from. A
+-- sync event is emitted from a commit's before and after pair, so an
+-- unchanged commit also means nothing was emitted.
+committedNothing : (Store, Bytes) -> Bool
+committedNothing (store, _) =
+  storeFingerprint store == storeFingerprint heldStore
+
+test "createRecord naming a blob this server does not hold is refused BlobNotFound" =
+  let (_, response) = createOf (holderWith unheldRef)
+  expectEqual (answer response) notFoundOutcome
+
+test "createRecord naming an unheld blob commits nothing" =
+  expectTrue (committedNothing (createOf (holderWith unheldRef)))
+
+test "putRecord naming a blob this server does not hold is refused BlobNotFound" =
+  let (_, response) = putOf (holderWith unheldRef)
+  expectEqual (answer response) notFoundOutcome
+
+test "a blob ref nested inside arrays and objects is checked too" =
+  let nested = jObject [
+    ("$type", JString holderCollection),
+    ("a", jObject [("b", jArray [JInt 1, jObject [("c", unheldRef)]])]),
+  ]
+  let (_, response) = createOf nested
+  expectEqual (answer response) notFoundOutcome
+
+test "validate false does not skip the blob check" =
+  let (_, response) = createHolding holderCollection (holderWith unheldRef) [
+    ("validate", JBool False),
+  ]
+  expectEqual (answer response) notFoundOutcome
+
+test "an applyWrites batch whose second write names an unheld blob is refused whole" =
+  let (_, response) = batchOf [
+    createElement "first" (holderWith heldRef),
+    createElement "second" (holderWith unheldRef),
+  ]
+  expectEqual (answer response) notFoundOutcome
+
+test "an applyWrites batch refused for an unheld blob commits nothing" =
+  expectTrue
+    (committedNothing
+      (batchOf [
+        createElement "first" (holderWith heldRef),
+        createElement "second" (holderWith unheldRef),
+      ]))
+
+test "createRecord naming a held blob is accepted" =
+  let (_, response) = createOf (holderWith heldRef)
+  expectEqual (answer response) "200 OK"
+
+test "putRecord naming a held blob is accepted" =
+  let (_, response) = putOf (holderWith heldRef)
+  expectEqual (answer response) "200 OK"
+
+test "an applyWrites batch naming only held blobs is accepted" =
+  let (_, response) = batchOf [
+    createElement "first" (holderWith heldRef),
+    createElement "second" (holderWith heldRef),
+  ]
+  expectEqual (answer response) "200 OK"
+
+test "a post embedding a held image is accepted and graded valid" =
+  let post = jObject [
+    ("$type", JString "app.bsky.feed.post"),
+    ("text", JString "an image"),
+    ("createdAt", JString "2024-01-01T00:00:00.000Z"),
+    (
+      "embed",
+      jObject [
+        ("$type", JString "app.bsky.embed.images"),
+        ("images", jArray [jObject [("image", heldRef), ("alt", JString "")]]),
+      ],
+    ),
+  ]
+  let (_, response) = createHolding "app.bsky.feed.post" post []
+  expectEqual
+    (answer response, stringField "validationStatus" response)
+    ("200 OK", "valid")
+
+test "a record naming another collection's type gets that refusal before the blob check" =
+  let record = jObject [
+    ("$type", JString "com.example.other"),
+    ("image", unheldRef),
+  ]
+  let (_, response) = createOf record
+  expectEqual
+    (answer response)
+    "400 Bad Request InvalidRequest: Invalid $type: expected \{holderCollection}, got com.example.other"
+
+test "a record its lexicon refuses gets that refusal before the blob check" =
+  let post = jObject [
+    ("$type", JString "app.bsky.feed.post"),
+    ("text", JString "no createdAt"),
+    (
+      "embed",
+      jObject [
+        ("$type", JString "app.bsky.embed.images"),
+        ("images", jArray [jObject [("image", unheldRef), ("alt", JString "")]]),
+      ],
+    ),
+  ]
+  let (_, response) = createHolding "app.bsky.feed.post" post []
+  expectEqual (outcome response) "400 Bad Request InvalidRequest"
+
+test "a ref whose MIME type is not the held blob's is refused InvalidMimeType" =
+  let (_, response) =
+    createOf
+      (holderWith
+        (blobRef uploadedCidText "image/jpeg" (B.length uploadedBytes)))
+  expectEqual
+    (answer response)
+    "400 Bad Request InvalidMimeType: Referenced Mimetype does not match stored blob. Expected: image/png, Got: image/jpeg"
+
+test "a ref whose size is not the held blob's is refused InvalidSize" =
+  let (_, response) =
+    createOf (holderWith (blobRef uploadedCidText uploadedMimeType 11))
+  expectEqual
+    (answer response)
+    "400 Bad Request InvalidSize: Referenced Size does not match stored blob. Expected: 10, Got: 11"
+
+-- A `$type: "blob"` map with a fifth key is not a ref, so the CID link inside
+-- it names nothing that has to be held.
+test "a blob-shaped map with an extra key is not a blob ref" =
+  let lookalike = jObject [
+    ("$type", JString "blob"),
+    ("ref", jObject [("$link", JString unheldCidText)]),
+    ("mimeType", JString uploadedMimeType),
+    ("size", JInt 14),
+    ("alt", JString "extra"),
+  ]
+  let (_, response) = createOf (holderWith lookalike)
+  expectEqual (answer response) "200 OK"

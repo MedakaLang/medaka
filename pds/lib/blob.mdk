@@ -16,8 +16,11 @@
 
 import json.{Json(..), get, jObject, stringify}
 import lib.cid.{Cid, cidForRaw, cidFromString, cidToString}
+import lib.dagcbor.{DagCbor(..)}
 import lib.resource_limits.{checkAccountBlobBytes, checkBlobBytes}
+import list.{lookup, reverse}
 import regex.{Regex, isFullMatch, mustCompile}
+import string.{contains}
 import bytes as B
 import bytes.{Bytes, fromU8Array}
 
@@ -29,9 +32,9 @@ blobCid bytes = cidForRaw bytes
 
 {- | An admitted blob reference: its content CID, declared MIME type, and
    byte size. The constructor is private — a `BlobRef` is only ever minted by
-   `admitBlob` (bytes actually hashed and sized) or `blobRefFromJson` (a
-   syntactically valid `blob` ref value), never assembled from parts a caller
-   could mismatch. -}
+   `admitBlob` (bytes actually hashed and sized), `blobRefFromJson` (a
+   syntactically valid `blob` ref value) or `recordBlobRefs` (a ref a record
+   names), never assembled from parts a caller could mismatch. -}
 export data BlobRef = BlobRef Cid String Int
 
 export
@@ -157,3 +160,56 @@ blobRefFromJson body = do
   mimeType <- requiredMimeType body
   size <- requiredSize body
   Ok (BlobRef cid mimeType size)
+
+-- ── the blob refs a record names ────────────────────────────────────────────
+
+{- | Every `blob` ref `record` names, at any depth, in document order.
+
+   A ref is recognised exactly as the reference PDS's `prepareWrite`
+   recognises one (`enumBlobRefs` in `@atproto/lex-data`, non-strict): a map
+   with exactly the keys `$type`, `ref`, `mimeType` and `size`, where `$type`
+   is `"blob"`, `ref` is a link, `mimeType` contains a `/`, and `size` is a
+   non-negative safe integer or `-1`. A map that falls short of that is not a
+   ref and is searched like any other. The `size` of a ref is what the record
+   claims, so it can be `-1` here, which no `admitBlob` result ever is.
+
+   The walk keeps its own worklist rather than recursing, so a record's
+   nesting depth costs nothing, and visits every value once. -}
+export
+recordBlobRefs : DagCbor -> List BlobRef
+recordBlobRefs record = collectBlobRefs [record] []
+
+collectBlobRefs : List DagCbor -> List BlobRef -> List BlobRef
+collectBlobRefs [] found = reverse found
+collectBlobRefs (value :: rest) found = match value
+  DcArray items => collectBlobRefs (items ++ rest) found
+  DcMap pairs => match typedBlobRef pairs
+    Some ref => collectBlobRefs rest (ref :: found)
+    None => collectBlobRefs (map snd pairs ++ rest) found
+  _ => collectBlobRefs rest found
+
+-- The largest integer a JavaScript number holds exactly, which is the bound
+-- the reference puts on a ref's `size`.
+maxSafeInteger : Int
+maxSafeInteger = 9007199254740991
+
+-- A map is a ref only with exactly four keys, so the lookups below each
+-- scan four pairs.
+typedBlobRef : List (String, DagCbor) -> Option BlobRef
+typedBlobRef [a, b, c, d] = blobRefFields [a, b, c, d]
+typedBlobRef _ = None
+
+blobRefFields : List (String, DagCbor) -> Option BlobRef
+blobRefFields pairs = match (
+  lookup "$type" pairs,
+  lookup "ref" pairs,
+  lookup "mimeType" pairs,
+  lookup "size" pairs,
+)
+  (Some (DcString "blob"), Some (DcLink cid), Some (DcString mimeType), Some (DcInt size)) =>
+    if contains "/" mimeType
+      && (size == -1 || size >= 0 && size <= maxSafeInteger) then
+      Some (BlobRef cid mimeType size)
+    else
+      None
+  _ => None
