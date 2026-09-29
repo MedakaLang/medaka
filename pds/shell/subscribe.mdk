@@ -476,11 +476,12 @@ clientControl pending _ rest = clientStep pending rest
 
    RFC 6455 §5.5.1 does not require the code to be echoed, but a peer that
    said 3001 and is answered 1000 has been told something it never said. A
-   payload that does not parse is the peer breaking §5.5.1 — that is 1002,
-   never the value that failed to parse and never a normal close. -}
+   payload that does not parse is the peer breaking §5.5.1 — 1002, or 1007 for
+   a reason that is not UTF-8; never the value that failed to parse and never
+   a normal close. -}
 echoCloseCode : Bytes -> Int
 echoCloseCode payload = match parseClosePayload payload
-  Err _ => protocolCloseCode
+  Err (code, _) => code
   Ok None => normalCloseCode
   Ok (Some (code, _)) => code
 
