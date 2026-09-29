@@ -1,7 +1,9 @@
 {- | The write routes grade a record against its lexicon, end to end through
    `handleBytes`: request bytes in, response bytes out.
 
-   `validate` absent or `true` grades, `false` does not. A record the
+   `validate` absent or `true` grades, `false` does not, though a
+   `__proto__` key or a `$type` naming another collection is refused either
+   way. A record the
    lexicon accepts is written and reported `"valid"`; one it refuses is
    `400 InvalidRequest` and leaves the store as it was, and in an
    `applyWrites` batch one refused record refuses the batch. A record whose
@@ -129,15 +131,20 @@ createRecord collection rkey record flags =
       ++ flags)
 
 putRecord : String -> String -> Json -> Answer
-putRecord collection rkey record = send
-  initialStore
-  "com.atproto.repo.putRecord"
-  [
-    ("repo", JString accountDidText),
-    ("collection", JString collection),
-    ("rkey", JString rkey),
-    ("record", record),
-  ]
+putRecord collection rkey record = putRecordWith collection rkey record []
+
+putRecordWith : String -> String -> Json -> List (String, Json) -> Answer
+putRecordWith collection rkey record flags =
+  send
+    initialStore
+    "com.atproto.repo.putRecord"
+    ([
+        ("repo", JString accountDidText),
+        ("collection", JString collection),
+        ("rkey", JString rkey),
+        ("record", record),
+      ]
+      ++ flags)
 
 createElement : String -> Json -> Json
 createElement rkey record = jObject [
@@ -456,6 +463,140 @@ test "a record without $type is written and reported unknown, and one with $type
         ["unknown"]
         (resultStatuses
           (applyWrites [createElement "3ke6kg3wk2c2b" untypedPost] [])),
+    ),
+    (
+      "createRecord like without $type, validate false",
+      expectEqual
+        ("<missing:error>", "unknown")
+        (errorAndStatus
+          (createRecord
+            "app.bsky.feed.like"
+            "3jzfcijpj2z2a"
+            (jObject like)
+            validateFalse)),
+    ),
+  ]
+
+-- ── refused whatever validate says ──────────────────────────────────────────
+
+-- A post carrying a `__proto__` key, at the top or inside an embed.
+protoPost : Json
+protoPost = jObject [
+  ("$type", JString "app.bsky.feed.post"),
+  ("text", JString "hello"),
+  ("createdAt", JString "2024-01-01T00:00:00.000Z"),
+  ("__proto__", JInt 1),
+]
+
+nestedProtoPost : Json
+nestedProtoPost = jObject [
+  ("$type", JString "app.bsky.feed.post"),
+  ("text", JString "hello"),
+  ("createdAt", JString "2024-01-01T00:00:00.000Z"),
+  ("embed", jObject [("inner", jArray [jObject [("__proto__", JInt 1)]])]),
+]
+
+{- | The reference refuses these in `prepareWrite`, before it looks at
+   `validate`, so `false` refuses them as absent does. -}
+test "a $type naming another collection is refused under validate false" =
+  let prefix =
+    "Invalid $type: expected app.bsky.feed.like, got app.bsky.feed.post"
+  expectEach [
+    (
+      "createRecord",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (createRecord
+            "app.bsky.feed.like"
+            "3ke6kg3wk2c2b"
+            post
+            validateFalse)),
+    ),
+    (
+      "putRecord",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (putRecordWith
+            "app.bsky.feed.like"
+            "3ke6kg3wk2c2b"
+            post
+            validateFalse)),
+    ),
+    (
+      "applyWrites",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (applyWrites
+            [
+              createElement "3ke6kg3wk2c2b" post,
+              jObject [
+                ("$type", JString "com.atproto.repo.applyWrites#create"),
+                ("collection", JString "app.bsky.feed.like"),
+                ("rkey", JString "3ke6kg3wk2d2b"),
+                ("value", post),
+              ],
+            ]
+            validateFalse)),
+    ),
+  ]
+
+test "a __proto__ key anywhere is refused under validate false" =
+  let prefix = "Invalid key: __proto__"
+  expectEach [
+    (
+      "createRecord",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (createRecord
+            "app.bsky.feed.post"
+            "3ke6kg3wk2c2b"
+            protoPost
+            validateFalse)),
+    ),
+    (
+      "createRecord nested",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (createRecord
+            "app.bsky.feed.post"
+            "3ke6kg3wk2c2b"
+            nestedProtoPost
+            validateFalse)),
+    ),
+    (
+      "putRecord nested",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (putRecordWith
+            "app.bsky.feed.post"
+            "3ke6kg3wk2c2b"
+            nestedProtoPost
+            validateFalse)),
+    ),
+    (
+      "applyWrites",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (applyWrites
+            [
+              createElement "3ke6kg3wk2c2b" post,
+              createElement "3ke6kg3wk2d2b" nestedProtoPost,
+            ]
+            validateFalse)),
     ),
   ]
 
