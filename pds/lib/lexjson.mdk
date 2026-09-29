@@ -161,5 +161,9 @@ hasDuplicateKey pairs i n = hasDuplicateKeyFrom pairs i n Tip
 hasDuplicateKeyFrom : Array (String, Json) -> Int -> Int -> Set String -> Bool
 hasDuplicateKeyFrom pairs i n seen
   | i >= n = False
-  | has (fst pairs[i]) seen = True
-  | otherwise = hasDuplicateKeyFrom pairs (i + 1) n (insert (fst pairs[i]) seen)
+  | otherwise =
+    let key = fst pairs[i]
+    if has key seen then
+      True
+    else
+      hasDuplicateKeyFrom pairs (i + 1) n (insert key seen)

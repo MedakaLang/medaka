@@ -347,7 +347,7 @@ isRepoExportNsid nsid =
    per-request classes every framed request clears.
 
    This lives here rather than at the charging site so that the route table
-   and the server read the same classification: a second fold over the four
+   and the server read the same classification: a second fold over the
    predicates would let one of them drift while the other still reported the
    old answer. The order is canonical — writes, preferences, createSession,
    repoExport, handleUpdate — so a rendered class set is comparable as text. -}

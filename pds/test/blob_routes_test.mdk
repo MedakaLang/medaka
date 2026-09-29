@@ -616,14 +616,32 @@ test "a record its lexicon refuses gets that refusal before the blob check" =
   let (_, response) = createHolding "app.bsky.feed.post" post []
   expectEqual (outcome response) "400 Bad Request InvalidRequest"
 
-test "a ref whose MIME type is not the held blob's is refused InvalidMimeType" =
+-- The same bytes uploaded a second time under another type re-declare the
+-- held blob's type, and a ref copied from the first upload's answer is still
+-- accepted, as the reference accepts it.
+test "a ref carrying the type an earlier upload of the same bytes answered is accepted" =
+  let (reuploaded, uploadResponse) =
+    send
+      (contextAt testInstant 303)
+      heldStore
+      (postRaw repoToken uploadBlobNsid "image/jpeg" uploadedBytes)
   let (_, response) =
-    createOf
-      (holderWith
-        (blobRef uploadedCidText "image/jpeg" (B.length uploadedBytes)))
+    send
+      (contextAt testInstant 304)
+      reuploaded
+      (postJson
+        accountHostText
+        repoToken
+        "com.atproto.repo.createRecord"
+        (stringify
+          (jObject [
+            ("repo", JString accountDidText),
+            ("collection", JString holderCollection),
+            ("record", holderWith heldRef),
+          ])))
   expectEqual
-    (answer response)
-    "400 Bad Request InvalidMimeType: Referenced Mimetype does not match stored blob. Expected: image/png, Got: image/jpeg"
+    ("image/jpeg", "200 OK")
+    (blobStringField "mimeType" uploadResponse, answer response)
 
 test "a ref whose size is not the held blob's is refused InvalidSize" =
   let (_, response) =

@@ -142,7 +142,7 @@ runDupCells =
 distinctObject : Int -> Json
 distinctObject n = jObject (keyPairs (map (i => "key\{intToString i}") [0..n]))
 
--- Best of three decisions of an n-field distinct-key object, in seconds.
+-- Best of five decisions of an n-field distinct-key object, in seconds.
 timeDecision : Int -> <Clock> Float
 timeDecision n =
   let obj = distinctObject n
@@ -154,19 +154,20 @@ timeDecision n =
         Err _ => False
       let t1 = if ok then monotonicSec () else panic "scaling object refused"
       t1 - t0
-  min (one ()) (min (one ()) (one ()))
+  min (one ()) (min (one ()) (min (one ()) (min (one ()) (one ()))))
 
+-- Quadrupling the field count multiplies an n log n decision by about 4.5
+-- and a quadratic one by 16. The threshold sits between the two with a
+-- factor of two of load noise on either side, so a loaded machine cannot
+-- redden an n log n decision and cannot pass a quadratic one.
 runScaling : <IO, Clock> Bool
 runScaling =
   let _warm = timeDecision 1000
   let t1 = timeDecision 10000
-  let t2 = timeDecision 20000
   let t4 = timeDecision 40000
-  let r1 = t2 / t1
-  let r2 = t4 / t2
-  let () =
-    println "scaling: 10k=\{t1}s 20k=\{t2}s 40k=\{t4}s ratios=\{r1},\{r2}"
-  r1 < 3.0 && r2 < 3.0
+  let ratio = t4 / t1
+  let () = println "scaling: 10k=\{t1}s 40k=\{t4}s ratio=\{ratio}"
+  ratio < 9.0
 
 runCap : <IO, Clock> Unit
 runCap =
