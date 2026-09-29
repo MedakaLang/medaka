@@ -64,7 +64,7 @@ The first words of each message, and where the rule behind it is explained.
 | `Ambiguous effect label: …` | two modules' labels with one spelling in scope | [III](effects-3-labels.md) |
 | `Foreign declaration '…' does not name the 'FFI' effect` | an `extern` without `FFI` | [III](effects-3-labels.md) |
 | `Foreign declaration '…' redeclares a built-in runtime name with a NARROWER effect row` | a catalog name redeclared too narrowly | [III](effects-3-labels.md) |
-| `Invalid effect parameter on <…>` | a written element the domain refuses: no delimiter, or more than 16 | [IV](effects-4-authority.md) |
+| `Invalid effect parameter on <…>` | a written element the domain refuses: an empty element, or more than 16 members | [IV](effects-4-authority.md) |
 | `Binding '…' reaches "…" where only … is admitted` | a body under a named authority reaches a value it did not derive from it | [IV](effects-4-authority.md) |
 | `Binding '…' reaches … where its declared bound admits only …` | a constructor or existential exceeds a literal bound | [V](effects-5-data.md) |
 | `The qualifier names '…', but no effect atom or index in this signature names '…'` | a qualifier with no domain | [IV](effects-4-authority.md) |

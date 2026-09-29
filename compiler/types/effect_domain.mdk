@@ -105,7 +105,8 @@ djoin p1 p2 = djoinN (canonParam p1) (canonParam p2)
 -- spelled as a written pattern: a common prefix that is not one of the
 -- operands verbatim takes an explicit trailing wildcard, so the joined
 -- pattern is exactly what a signature may write (`"a.com/*" ⊔ "a.com.evil/*"`
--- is `"a.com*"`, never the bare `"a.com"` a signature rejects). An empty
+-- is `"a.com*"`, never the bare `"a.com"`, which names one exact element and
+-- is not a cover of the two). An empty
 -- common prefix is top.
 export
 djoinN : Param -> Param -> Param

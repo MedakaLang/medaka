@@ -683,6 +683,8 @@ takesAndReturnsString (Forall _ _ _ _ _ mono) = match normalize mono
 
 isStringCon : Mono -> Bool
 isStringCon (TCon "String" _) = True
+-- A named argument's type is `String @κ`; the qualifier erases before runtime.
+isStringCon (TQual t _) = isStringCon (normalize t)
 isStringCon _ = False
 
 firstOf : List String -> String

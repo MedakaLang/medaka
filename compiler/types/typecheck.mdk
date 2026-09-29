@@ -1673,7 +1673,7 @@ effectParamMsg label why = "Invalid effect parameter on <\{label}>: \{why}"
 -- for a top-level Prefix param, `<axis> pattern` for a product axis).
 prefixPatternErrMsg : String -> String
 prefixPatternErrMsg noun =
-  "\{noun} is empty; name the element, or write \"*\" for every one"
+  "\{noun} is empty; name the element (the whole domain is the bare label, with no parameter)"
 
 -- validate every written effect param in a program's type annotations against
 -- the registry: a Prefix label's pattern must pass prefixPatternOk; an atomic
@@ -2988,13 +2988,17 @@ checkWrittenElementCap (a :: rest) =
 writtenElement : Param -> EffAtomTy -> List Param
 writtenElement top a = match a.eatParam
   EPName _ => []
-  EPProduct axes if axisNamesArgument axes => []
+  EPProduct axes if axisNamesArgument axes => [
+    writtenParam
+      top
+      (EPProduct (filterList (ax => not (isEPName (snd ax))) axes)),
+  ]
   p => [writtenParam top p]
 
 -- A written parameter must be an element of its label's domain: a Prefix
--- label takes one non-empty pattern or exact element, a Set label takes a set or a single
--- member, a Product label takes its axes or a bare host pattern, and an
--- atomic label takes nothing.  A named authority is checked at its binder.
+-- label takes one non-empty pattern or exact element, a Set label takes a
+-- set or a single member, a Product label takes its axes or a bare host
+-- pattern, and an atomic label takes nothing.  A named authority is checked at its binder.
 -- The rule is `effectParamProblems`; this reports each problem at the atom.
 checkOneEffectParam : String -> Param -> EffParamTy -> Unit
 checkOneEffectParam l top p =

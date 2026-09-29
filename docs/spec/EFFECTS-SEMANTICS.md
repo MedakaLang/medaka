@@ -148,7 +148,7 @@ realize a prefix of it — see the audit):
 | Domain | Elements | `⊑` | `⊔` | `⊓` |
 |---|---|---|---|---|
 | **`Unit`** | `()` only | trivial | `()` | `()` |
-| **`Prefix`** | a delimiter-terminated string pattern, or `⊤` | structural prefix-containment (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
+| **`Prefix`** | a string pattern (an exact element, or one ending in `*`), or `⊤` | structural prefix-containment (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
 | **`Set`** | a finite set of strings, or `⊤` | `⊆` | `∪` (saturating to `⊤` past a cardinality cap) | `∩` |
 | **`Product`** | a tuple of sub-domains, e.g. `Net = Host(Prefix) × Method(Set)` | pointwise | pointwise | pointwise (⊥ if any component ⊥) |
 
@@ -235,12 +235,10 @@ An element written without a trailing `*` is exact and admits only itself:
 so `Net "a.com/api/v1" ⊑ Net "a.com/api/*" ⊑ Net "a.com/*" ⊑ Net ⊤`. **Raw-prefix
 matching is unsound for authority** — `"a.com"` is a string-prefix of
 `"a.com.evil.com"`, so a bare prefix would silently grant a sibling host.
-The domain therefore requires every pattern to terminate at a **structural
-delimiter**: a path/host boundary (`/`) or an explicit trailing `*`. `Net "a.com/*"`
-matches `a.com/...` but **not** `a.com.evil.com/...`. A pattern lacking a delimiter
-is rejected at declaration/annotation time. An exact element (no trailing `*`) needs
-no delimiter, because it admits only itself: `Net "a.com"` does not admit
-`a.com.evil.com`. The empty string is rejected. Full scheme/host/port/path structure is
+The domain therefore reads a pattern as either an exact element or an explicit
+trailing `*`. `Net "a.com/*"` matches `a.com/...` but **not** `a.com.evil.com/...`.
+An exact element (no trailing `*`) admits only itself: `Net "a.com"` does not
+admit `a.com.evil.com`. The empty string is rejected. Full scheme/host/port/path structure is
 the `Product` domain; `Prefix` is its sound, coarse one-axis approximation. Only
 trailing-`*` wildcards are admitted — general globs/regex break decidability of
 `⊑` and are rejected.
