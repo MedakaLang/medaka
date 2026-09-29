@@ -2056,11 +2056,13 @@ timedGetRecord port did collection rkey =
    derivation inside its store transition answers the read only when the
    derivation ends, so the read would take nearly as long as the login.
 
-   The login must still be running when the read is answered, which is what
-   makes the read a measurement taken mid-derivation. That is checked against
-   the head start and the read's own latency rather than a fixed number of
-   seconds, since how long one derivation takes depends on the machine and on
-   the KDF's speed, neither of which this case is about. -}
+   The grade is relative to the login, never to a number of seconds: the read
+   must be answered in under a tenth of the login's own time. That grade only
+   discriminates when the login is long enough that a read serialised behind
+   it, which takes about the login's time less the head start, would fail it;
+   a login shorter than `discriminationFloor` cannot tell the two apart on
+   this machine, so the case prints `KDFYIELD: SKIP` and passes rather than
+   grade a read it could not have caught waiting. -}
 runKdfYield : Int ->
   String ->
   String ->
@@ -2076,13 +2078,25 @@ runKdfYield port identifier password did collection rkey =
   let loginStatus = statusOnly (readResponse login empty)
   let loginSeconds = elapsedSince t0
   let () = ignoreResult (close login)
-  report
-    "KDFYIELD"
-    (readStatus == 200
-      && loginStatus == 401
-      && loginSeconds >= headStartSeconds + readSeconds
-      && readSeconds * 10.0 <= loginSeconds)
-    "getRecord \{intToString readStatus} in \{floatToString readSeconds}s during a login answered \{intToString loginStatus} in \{floatToString loginSeconds}s (bound: a tenth of the login, which must outlast the \{floatToString headStartSeconds}s head start plus the read)"
+  let detail =
+    "getRecord \{intToString readStatus} in \{floatToString readSeconds}s during a login answered \{intToString loginStatus} in \{floatToString loginSeconds}s"
+  if readStatus /= 200 || loginStatus /= 401 then
+    report "KDFYIELD" False detail
+  else if loginSeconds < discriminationFloor then
+    println
+      "KDFYIELD: SKIP the login took \{floatToString loginSeconds}s, under the \{floatToString discriminationFloor}s below which a read serialised behind it would also pass; \{detail}"
+  else
+    report
+      "KDFYIELD"
+      (readSeconds * 10.0 <= loginSeconds)
+      "\{detail} (bound: a tenth of the login)"
+
+-- | A read serialised behind a login of `L` seconds is answered after about
+-- `L - headStartSeconds`, and passes the tenth-of-the-login grade when that
+-- is at most `L / 10`, that is when `L` is at most `10/9` of the head start.
+-- Twice the head start keeps the grade discriminating with margin.
+discriminationFloor : Float
+discriminationFloor = 2.0 * headStartSeconds
 
 headStartSeconds : Float
 headStartSeconds = intToFloat (toMillis derivationHeadStart) / 1000.0

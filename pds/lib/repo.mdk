@@ -6,7 +6,8 @@
 import bytes as B
 import bytes.{Bytes, encodeUtf8}
 import hex.{encode}
-import list.{reverse}
+import list.{reverse, somes}
+import map.{Map, delete, fromList, get, set, size}
 import regex.{Regex, isFullMatchBytes, mustCompile}
 import set.{Set(..), has, insert}
 import string.{startsWith}
@@ -24,7 +25,9 @@ import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.mst.{
   Mst,
   MstRangeQuery,
+  mstCreatedNodes,
   mstDelete,
+  mstDiff,
   mstEmpty,
   mstEntries,
   mstFromBlocks,
@@ -36,8 +39,16 @@ import lib.mst.{
   mstRootCid,
   mstValidateBlocks,
 }
+import lib.multiformats.{uvarintEncode}
 import lib.nsid.{nsidErrorMessage, validateNsidPrefix}
-import lib.resource_limits.{checkMstBlocks, checkMstTraversalDepth}
+import lib.resource_limits.{
+  checkCarSectionBytes,
+  checkMstBlocks,
+  checkMstTraversalDepth,
+  maxCarBlocks,
+  maxCarBytes,
+  maxMstBlocks,
+}
 import crypto.sha256.{sha256}
 import lib.sign.{
   PublicKey,
@@ -59,7 +70,18 @@ import u8 as U8
 export data RepoCommit = RepoCommit Tid Cid Cid Bytes Bytes Signature
 
 -- | Immutable repository state; its representation is private.
-export data Repo = Repo String SecretKey PublicKey Mst BlockStore RepoCommit
+export data Repo =
+  | Repo String SecretKey PublicKey Mst BlockStore RepoCommit RepoFootprint
+
+{- | What the repository's full CAR export holds besides its commit block: how
+   many MST node blocks and the bytes their CAR sections take, and the record
+   blocks its paths name, keyed by CID, each with the number of paths naming
+   it and the bytes its section takes, and those bytes' total.
+
+   Records are counted by CID because the export counts them that way: two
+   paths naming byte-identical records share one block, which leaves the
+   totals only when the last path naming it does. -}
+data RepoFootprint = RepoFootprint Int Int (Map String (Int, Int)) Int
 
 -- | A successful mutation returns both its new state and new commit metadata.
 export data RepoMutation = RepoMutation Repo RepoCommit
@@ -279,7 +301,16 @@ repoInit : String -> SecretKey -> Tid -> Result String Repo
 repoInit did secret rev = do
   () <- validateDid did
   (commit, store) <- buildCommit did secret rev mstEmpty blockStoreEmpty
-  Ok (Repo did secret (publicKeyForSecret secret) mstEmpty store commit)
+  footprint <- footprintOf (mstNodeBlocks mstEmpty) [] store
+  Ok
+    (Repo
+      did
+      secret
+      (publicKeyForSecret secret)
+      mstEmpty
+      store
+      commit
+      footprint)
 
 -- | Key-byte convenience boundary; malformed signing keys fail loudly.
 export
@@ -307,11 +338,12 @@ rehydrate did secret commitCid signed store = do
     (message => "repo: invalid persisted MST: \{message}")
     (mstFromBlocks dataCid nodes)
   _ <- recordBlocks leaves store []
+  footprint <- footprintOf nodes (mstEntries tree) store
   unsigned <- encodeCommit "unsigned" (unsignedValue did dataCid rev)
   let publicKey = publicKeyForSecret secret
   let commit = RepoCommit rev dataCid commitCid unsigned signed signature
   if repoVerifyCommit did publicKey commit then
-    Ok (Repo did secret publicKey tree store commit)
+    Ok (Repo did secret publicKey tree store commit footprint)
   else
     Err
       "repo: persisted commit does not verify under the configured signing key"
@@ -347,7 +379,7 @@ repoCommitRev (RepoCommit rev _ _ _ _ _) = rev
 -- | Latest commit metadata.
 export
 repoLatestCommit : Repo -> RepoCommit
-repoLatestCommit (Repo _ _ _ _ _ commit) = commit
+repoLatestCommit (Repo _ _ _ _ _ commit _) = commit
 
 -- | Revision of commit metadata.
 export
@@ -382,17 +414,17 @@ repoCommitSignature (RepoCommit _ _ _ _ _ signature) = signature
 -- | Public verification key bound to the repository state.
 export
 repoPublicKey : Repo -> PublicKey
-repoPublicKey (Repo _ _ publicKey _ _ _) = publicKey
+repoPublicKey (Repo _ _ publicKey _ _ _ _) = publicKey
 
 -- | Latest immutable verified store.
 export
 repoStore : Repo -> BlockStore
-repoStore (Repo _ _ _ _ store _) = store
+repoStore (Repo _ _ _ _ store _ _) = store
 
 -- | Latest MST root CID.
 export
 repoRootCid : Repo -> Cid
-repoRootCid (Repo _ _ _ tree _ _) = mstRootCid tree
+repoRootCid (Repo _ _ _ tree _ _ _) = mstRootCid tree
 
 {- | The current MST itself.
 
@@ -403,7 +435,7 @@ repoRootCid (Repo _ _ _ tree _ _) = mstRootCid tree
    derivable from a root CID. -}
 export
 repoTree : Repo -> Mst
-repoTree (Repo _ _ _ tree _ _) = tree
+repoTree (Repo _ _ _ tree _ _ _) = tree
 
 {- | The CID currently stored at one path, without decoding the record.
 
@@ -412,7 +444,7 @@ repoTree (Repo _ _ _ tree _ _) = tree
    the path names the new record or nothing at all. -}
 export
 repoRecordCid : Bytes -> Repo -> Result String (Option Cid)
-repoRecordCid path (Repo _ _ _ tree _ _) = do
+repoRecordCid path (Repo _ _ _ tree _ _ _) = do
   () <- validatePath path
   Ok (mstLookup path tree)
 
@@ -425,16 +457,22 @@ ensureNewer next prior =
   else
     Err "repo: revision must be strictly monotonic"
 
+-- `priorTree` and `prior` are the tree and footprint the mutation started
+-- from; the new footprint follows from them and the nodes and paths the two
+-- trees do not share.
 finishMutation : String ->
   SecretKey ->
   PublicKey ->
   Tid ->
   Mst ->
+  RepoFootprint ->
+  Mst ->
   BlockStore ->
   Result String RepoMutation
-finishMutation did secret publicKey rev tree store = do
+finishMutation did secret publicKey rev priorTree prior tree store = do
   (commit, complete) <- buildCommit did secret rev tree store
-  let repo = Repo did secret publicKey tree complete commit
+  footprint <- footprintStep prior priorTree tree complete
+  let repo = Repo did secret publicKey tree complete commit footprint
   Ok (RepoMutation repo commit)
 
 {- | Encode a record and admit its block, yielding the CID the MST will point
@@ -455,39 +493,41 @@ stageRecord record store = do
 -- | Create a previously absent record.
 export
 repoCreate : Bytes -> DagCbor -> Tid -> Repo -> Result String RepoMutation
-repoCreate path record rev (Repo did secret publicKey tree store prior) = do
-  () <- validatePath path
-  () <- validateRecord record
-  () <- ensureNewer rev prior
-  (recordCid, withRecord) <- stageRecord record store
-  nextTree <- mapErr
-    (message => "repo: duplicate create: \{message}")
-    (mstInsert path recordCid tree)
-  finishMutation did secret publicKey rev nextTree withRecord
+repoCreate path record rev (Repo did secret publicKey tree store prior footprint) =
+  do
+    () <- validatePath path
+    () <- validateRecord record
+    () <- ensureNewer rev prior
+    (recordCid, withRecord) <- stageRecord record store
+    nextTree <- mapErr
+      (message => "repo: duplicate create: \{message}")
+      (mstInsert path recordCid tree)
+    finishMutation did secret publicKey rev tree footprint nextTree withRecord
 
 -- | Replace an existing record.
 export
 repoUpdate : Bytes -> DagCbor -> Tid -> Repo -> Result String RepoMutation
-repoUpdate path record rev (Repo did secret publicKey tree store prior) = do
-  () <- validatePath path
-  () <- validateRecord record
-  () <- ensureNewer rev prior
-  (recordCid, withRecord) <- stageRecord record store
-  nextTree <- mapErr
-    (message => "repo: missing update: \{message}")
-    (mstReplace path recordCid tree)
-  finishMutation did secret publicKey rev nextTree withRecord
+repoUpdate path record rev (Repo did secret publicKey tree store prior footprint) =
+  do
+    () <- validatePath path
+    () <- validateRecord record
+    () <- ensureNewer rev prior
+    (recordCid, withRecord) <- stageRecord record store
+    nextTree <- mapErr
+      (message => "repo: missing update: \{message}")
+      (mstReplace path recordCid tree)
+    finishMutation did secret publicKey rev tree footprint nextTree withRecord
 
 -- | Delete an existing record.
 export
 repoDelete : Bytes -> Tid -> Repo -> Result String RepoMutation
-repoDelete path rev (Repo did secret publicKey tree store prior) = do
+repoDelete path rev (Repo did secret publicKey tree store prior footprint) = do
   () <- validatePath path
   () <- ensureNewer rev prior
   nextTree <- mapErr
     (message => "repo: missing delete: \{message}")
     (mstDelete path tree)
-  finishMutation did secret publicKey rev nextTree store
+  finishMutation did secret publicKey rev tree footprint nextTree store
 
 {- | One batch element against the intermediate tree and blocks.
 
@@ -558,13 +598,17 @@ applyWriteList (write :: rest) tree store = do
 export
 repoApplyWrites : List RepoWrite -> Tid -> Repo -> Result String RepoMutation
 repoApplyWrites [] _ repo = Ok (RepoMutation repo (repoLatestCommit repo))
-repoApplyWrites writes rev (Repo did secret publicKey tree store prior) = do
-  () <- ensureNewer rev prior
-  (nextTree, nextStore) <- applyWriteList writes tree store
-  if cidEqual (mstRootCid nextTree) (mstRootCid tree) then
-    Ok (RepoMutation (Repo did secret publicKey tree store prior) prior)
-  else
-    finishMutation did secret publicKey rev nextTree nextStore
+repoApplyWrites writes rev (Repo did secret publicKey tree store prior footprint) =
+  do
+    () <- ensureNewer rev prior
+    (nextTree, nextStore) <- applyWriteList writes tree store
+    if cidEqual (mstRootCid nextTree) (mstRootCid tree) then
+      Ok
+        (RepoMutation
+          (Repo did secret publicKey tree store prior footprint)
+          prior)
+    else
+      finishMutation did secret publicKey rev tree footprint nextTree nextStore
 
 -- | Extract the new immutable state from a successful mutation.
 export
@@ -589,7 +633,7 @@ decodeAt cid store = match blockStoreGet cid store
 -- | Look up and strictly decode one record.
 export
 repoLookup : Bytes -> Repo -> Result String (Option DagCbor)
-repoLookup path (Repo _ _ _ tree store _) = do
+repoLookup path (Repo _ _ _ tree store _ _) = do
   () <- validatePath path
   match mstLookup path tree
     None => Ok None
@@ -603,7 +647,7 @@ repoLookup path (Repo _ _ _ tree store _) = do
    repository; `repoList` is this plus a decode of every entry. -}
 export
 repoEntries : Repo -> List (Bytes, Cid)
-repoEntries (Repo _ _ _ tree _ _) = mstEntries tree
+repoEntries (Repo _ _ _ tree _ _ _) = mstEntries tree
 
 {- | The entries one bounded key range names, in the direction the query asks
    for, without reading or decoding a record.
@@ -613,17 +657,17 @@ repoEntries (Repo _ _ _ tree _ _) = mstEntries tree
    page does not grow with the repository behind it. -}
 export
 repoEntriesRange : MstRangeQuery -> Repo -> List (Bytes, Cid)
-repoEntriesRange query (Repo _ _ _ tree _ _) = mstRange query tree
+repoEntriesRange query (Repo _ _ _ tree _ _ _) = mstRange query tree
 
 -- | Strictly decode the record one `repoEntries` entry names.
 export
 repoDecodeEntry : Cid -> Repo -> Result String DagCbor
-repoDecodeEntry cid (Repo _ _ _ _ store _) = decodeAt cid store
+repoDecodeEntry cid (Repo _ _ _ _ store _ _) = decodeAt cid store
 
 -- | List canonical path order with decoded current records.
 export
 repoList : Repo -> Result String (List (Bytes, Cid, DagCbor))
-repoList (Repo _ _ _ tree store _) = listRecords (mstEntries tree) store []
+repoList (Repo _ _ _ tree store _ _) = listRecords (mstEntries tree) store []
 
 listRecords : List (Bytes, Cid) ->
   BlockStore ->
@@ -649,10 +693,13 @@ data CidSeq = CidSeq (Set String) (List Cid)
 cidSeqEmpty : CidSeq
 cidSeqEmpty = CidSeq Tip []
 
--- The key is the CID's byte encoding in hex, so key equality is `cidEqual`.
+-- A CID's byte encoding in hex, so key equality is `cidEqual`.
+cidKey : Cid -> String
+cidKey cid = encode (cidToBytes cid)
+
 cidSeqAdd : Cid -> CidSeq -> CidSeq
 cidSeqAdd cid (CidSeq seen values) =
-  let key = encode (cidToBytes cid)
+  let key = cidKey cid
   if has key seen then
     CidSeq seen values
   else
@@ -767,14 +814,206 @@ repoExportGraph commitCid commitBytes dataRoot store =
 -- | Deterministic full repository CAR bytes.
 export
 repoExportCar : Repo -> Result String Bytes
-repoExportCar (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _)) =
+repoExportCar (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _) _) =
   map snd (repoExportGraph commitCid signed (mstRootCid tree) store)
 
 -- | Deterministic full repository CAR block order.
 export
 repoExportBlocks : Repo -> Result String (List (Cid, Bytes))
-repoExportBlocks (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _)) =
+repoExportBlocks (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _) _) =
   map fst (repoExportGraph commitCid signed (mstRootCid tree) store)
+
+{- | The blocks of `after`'s graph that `before`'s graph does not hold: the
+   commit block, the MST nodes `mstCreatedNodes` finds, and the record block
+   of every path `mstDiff` reports written. Without a `before` it is the whole
+   graph, `repoExportBlocks`.
+
+   Every block `after` reaches and this leaves out is CID-equal to a block
+   `before` reaches: a node the diff skipped met an equal node in `before`, and
+   a record under a path whose CID did not move is the record `before` named
+   there. The converse is not promised, so a block `before` also reaches may
+   still be listed. A caller that already holds every block of `before`'s
+   graph therefore holds all of `after`'s once it has these, at a cost that
+   follows the nodes the two trees do not share rather than the repository.
+
+   `after`'s graph must stay within `repoExportCeilings`, or the answer is the
+   ceiling's refusal, the one `repoExportCar` would give it: a graph persisted
+   past them could no longer be exported, or past the MST node ceiling loaded
+   again. -}
+export
+repoAddedBlocks : Option Repo -> Repo -> Result String (List (Cid, Bytes))
+repoAddedBlocks = repoAddedBlocksWithin repoExportCeilings
+
+-- | `repoAddedBlocks` against the given ceilings rather than the production
+-- ones, so a test can cross one with a handful of records.
+export
+repoAddedBlocksWithin : RepoCeilings ->
+  Option Repo ->
+  Repo ->
+  Result String (List (Cid, Bytes))
+repoAddedBlocksWithin ceilings prior after = do
+  () <- checkCeilings ceilings after
+  blocks <- addedBlocks prior after
+  () <- sectionsWithin blocks
+  Ok blocks
+
+addedBlocks : Option Repo -> Repo -> Result String (List (Cid, Bytes))
+addedBlocks None after = repoExportBlocks after
+addedBlocks (Some (Repo _ _ _ priorTree _ _ _)) (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _) _) =
+  do
+    let (writes, _) = mstDiff priorTree tree
+    records <- recordBlocks (map ((_, cid, _) => cid) writes) store []
+    Ok ((commitCid, signed) :: mstCreatedNodes priorTree tree ++ records)
+
+-- The per-section ceiling the export applies to every block. Only the blocks
+-- a commit adds need it: every other block was admitted by an earlier one.
+sectionsWithin : List (Cid, Bytes) -> Result String Unit
+sectionsWithin [] = Ok ()
+sectionsWithin ((cid, bytes) :: rest) = do
+  () <- mapErr
+    (message => "repo: CAR export failed: \{message}")
+    (checkCarSectionBytes (B.length (cidToBytes cid) + B.length bytes))
+  sectionsWithin rest
+
+-- ── the export ceilings ─────────────────────────────────────────────────────
+
+{- | The ceilings a repository's graph must stay within to be exported and
+   loaded again: the bytes of its full CAR export, the blocks in it, and its
+   MST node blocks, in that order. -}
+public export data RepoCeilings = RepoCeilings Int Int Int
+
+-- | The production ceilings: `lib.resource_limits`' CAR and MST limits.
+export
+repoExportCeilings : RepoCeilings
+repoExportCeilings = RepoCeilings maxCarBytes maxCarBlocks maxMstBlocks
+
+{- | Refuse a repository whose full export would pass a ceiling, with the
+   message the export itself refuses it with.
+
+   The MST node ceiling is checked first and the container bytes last, the
+   order `repoExportGraph` meets them in. The container's header and commit
+   section are measured by encoding them, so the bytes counted are exactly
+   `carEncode`'s. -}
+checkCeilings : RepoCeilings -> Repo -> Result String Unit
+checkCeilings (RepoCeilings carBytes carBlocks mstBlocks) (Repo _ _ _ _ _ (RepoCommit _ _ commitCid _ signed _) (RepoFootprint nodes nodeBytes records recordBytes)) =
+  do
+    framed <- mapErr
+      (message => "repo: CAR export failed: \{message}")
+      (carEncode [commitCid] [(commitCid, signed)])
+    if nodes > mstBlocks then
+      Err
+        "mst: node block count exceeds \{intToString mstBlocks} resource limit"
+    else if 1 + nodes + size records > carBlocks then
+      Err
+        "repo: CAR export failed: car: block count exceeds \{intToString carBlocks} resource limit"
+    else if B.length framed + nodeBytes + recordBytes > carBytes then
+      Err
+        "repo: CAR export failed: car: container exceeds \{intToString carBytes}-byte resource limit"
+    else
+      Ok ()
+
+-- The bytes one block takes in a CAR: its length prefix, its CID, itself.
+carSectionBytes : Cid -> Bytes -> Int
+carSectionBytes cid bytes =
+  let payload = B.length (cidToBytes cid) + B.length bytes
+  B.length (uvarintEncode payload) + payload
+
+emptyFootprint : RepoFootprint
+emptyFootprint = RepoFootprint 0 0 (fromList []) 0
+
+-- `sign` is 1 for nodes a tree gained and -1 for nodes it lost.
+shiftNodes : Int -> List (Cid, Bytes) -> RepoFootprint -> RepoFootprint
+shiftNodes sign blocks (RepoFootprint nodes nodeBytes records recordBytes) =
+  let bytes =
+    fold (acc (cid, block) => acc + carSectionBytes cid block) 0 blocks
+  RepoFootprint
+    (nodes + sign * length blocks)
+    (nodeBytes + sign * bytes)
+    records
+    recordBytes
+
+addRecords : BlockStore ->
+  List Cid ->
+  RepoFootprint ->
+  Result String RepoFootprint
+addRecords _ [] footprint = Ok footprint
+addRecords store (cid :: rest) (RepoFootprint nodes nodeBytes records recordBytes) =
+  let key = cidKey cid
+  match get key records
+    Some (paths, section) =>
+      addRecords
+        store
+        rest
+        (RepoFootprint
+          nodes
+          nodeBytes
+          (set key (paths + 1, section) records)
+          recordBytes)
+    None => match blockStoreGet cid store
+      None => Err "repo: missing graph record block"
+      Some bytes =>
+        let section = carSectionBytes cid bytes
+        addRecords
+          store
+          rest
+          (RepoFootprint
+            nodes
+            nodeBytes
+            (set key (1, section) records)
+            (recordBytes + section))
+
+dropRecords : List Cid -> RepoFootprint -> Result String RepoFootprint
+dropRecords [] footprint = Ok footprint
+dropRecords (cid :: rest) (RepoFootprint nodes nodeBytes records recordBytes) =
+  let key = cidKey cid
+  match get key records
+    None => Err "repo: a removed path names a record the footprint lacks"
+    Some (paths, section) =>
+      if paths == 1 then
+        dropRecords
+          rest
+          (RepoFootprint
+            nodes
+            nodeBytes
+            (delete key records)
+            (recordBytes - section))
+      else
+        dropRecords
+          rest
+          (RepoFootprint
+            nodes
+            nodeBytes
+            (set key (paths - 1, section) records)
+            recordBytes)
+
+-- The footprint of a whole graph: its MST nodes and every path's record.
+footprintOf : List (Cid, Bytes) ->
+  List (Bytes, Cid) ->
+  BlockStore ->
+  Result String RepoFootprint
+footprintOf nodes entries store =
+  addRecords store (map snd entries) (shiftNodes 1 nodes emptyFootprint)
+
+{- | `after`'s footprint from `before`'s: the nodes one tree holds and the
+   other does not, and the paths the diff reports written or deleted. A write
+   adds its new record before its old one is dropped, so a record that only
+   moves between paths never leaves the totals. -}
+footprintStep : RepoFootprint ->
+  Mst ->
+  Mst ->
+  BlockStore ->
+  Result String RepoFootprint
+footprintStep prior before after store = do
+  let (writes, deletes) = mstDiff before after
+  let moved =
+    shiftNodes
+      (-1)
+      (mstCreatedNodes after before)
+      (shiftNodes 1 (mstCreatedNodes before after) prior)
+  added <- addRecords store (map ((_, cid, _) => cid) writes) moved
+  dropRecords
+    (somes (map ((_, _, priorCid) => priorCid) writes) ++ map snd deletes)
+    added
 
 -- ── verifying a signed commit ───────────────────────────────────────────────
 

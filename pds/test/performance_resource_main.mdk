@@ -231,8 +231,11 @@ insertAllGo n i tree =
 -- class before and after the fix and cannot discriminate them.
 runMstInsert : Int -> <IO> Unit
 runMstInsert n =
+  let a0 = allocBytes ()
   let tree = insertAllGo n 0 mstEmpty
-  println "MSTINSERT \{intToString n} \{intToString (length (mstEntries tree))}"
+  let a1 = allocBytes ()
+  println
+    "MSTINSERT \{intToString n} \{intToString (length (mstEntries tree))} allocBytes=\{intToString (floatToInt (a1 - a0))}"
 
 runExport : Int -> <IO> Unit
 runExport n =

@@ -205,18 +205,48 @@ export
 maxCreateSessionPerWindow : Int
 maxCreateSessionPerWindow = 30
 
-{- | `com.atproto.identity.updateHandle`: every accepted call appends one
-   `#identity` event to the durable event log, so the count is bounded by its
-   own class rather than by the shared request allowance.
+{- | The per-client floor on `com.atproto.identity.updateHandle`, charged at
+   admission before any credential is resolved, so a 401 and a malformed body
+   spend it as an accepted call does.
 
-   The reference allows 10 per 5 minutes and 50 per day, keyed by the
-   authenticated DID. This table has one window and charges by client
-   identity before a credential is resolved, so 10 per 60-second window per
-   client identity is the nearest shape it can hold; it admits more per day
-   than the reference does. -}
+   The reference's own numbers are the per-DID allowances below, which only
+   an authenticated call that passed handle syntax is charged. This floor
+   bounds the uncharged remainder per client, and sits above the per-DID
+   short-window allowance so that a single client's calls meet the per-DID
+   refusal first: the floor is never what gives an account its reference
+   numbers. -}
 export
 maxHandleUpdatesPerWindow : Int
-maxHandleUpdatesPerWindow = 10
+maxHandleUpdatesPerWindow = 30
+
+{- | `com.atproto.identity.updateHandle` per authenticated DID, as the
+   reference limits it: 10 per 5 minutes and 50 per day.
+
+   Each window is fixed and starts at the first charge after the previous one
+   expired. A refused call is still charged in both windows, so an eleventh
+   call inside 5 minutes spends one of the day's 50. The counters are held in
+   memory only and do not survive a restart. -}
+export
+handleUpdateShortWindowSeconds : Int
+handleUpdateShortWindowSeconds = 300
+
+export
+maxHandleUpdatesPerShortWindow : Int
+maxHandleUpdatesPerShortWindow = 10
+
+export
+handleUpdateDayWindowSeconds : Int
+handleUpdateDayWindowSeconds = 86400
+
+export
+maxHandleUpdatesPerDay : Int
+maxHandleUpdatesPerDay = 50
+
+-- Row-count ceiling on the per-DID handle-update table. Only a DID whose
+-- credential verified is ever a row, so the ceiling is structural.
+export
+maxHandleUpdateAccounts : Int
+maxHandleUpdateAccounts = 64
 
 {- | The whole-repository export ceiling (`com.atproto.sync.getRepo` and
    `com.atproto.sync.getBlocks` — `pds/lib/ratelimit.mdk`'s `isRepoExportNsid`

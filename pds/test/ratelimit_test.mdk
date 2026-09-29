@@ -11,10 +11,15 @@ import http.{
 import list.{replicate}
 import string.{join, repeat}
 import test.{
-  expectAll, expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue
+  Expectation(..), expectAll, expectEach, expectEqual, expectFalse,
+  expectNotEqual, expectTrue
 }
 import lib.resource_limits.{
+  handleUpdateDayWindowSeconds,
+  handleUpdateShortWindowSeconds,
   maxCreateSessionPerWindow,
+  maxHandleUpdateAccounts,
+  maxHandleUpdatesPerShortWindow,
   maxPreferencesPerWindow,
   maxRateLimitIdentitiesPerWindow,
   maxRepoExportsPerWindow,
@@ -32,6 +37,7 @@ import lib.ratelimit.{
   classAllowance,
   classMessage,
   directIdentity,
+  handleUpdateHeaderList,
   identifyClient,
   identityLabel,
   initRateLimitState,
@@ -44,6 +50,7 @@ import lib.ratelimit.{
   rateLimitHeaderList,
   remainingInClass,
   step,
+  stepHandleUpdate,
 }
 import lib.xrpc.{
   rateLimitFailureWithHeaders,
@@ -205,54 +212,104 @@ test "classAllowance is per-class, not one shared counter" = expectAll [
     (classAllowance CreateSessionClass),
 ]
 
--- An ordinary class refusal names its own class and reports its own usage:
--- a fresh identity's remaining allowance is its class's full allowance, and
--- the reset is the time left in the current window.
-test "an ordinary class refusal renders its own class message and headers" =
+{- | One class driven past its allowance with `step`, then rendered the way a
+   refusal is: the verdict must be an ordinary `Refused`, the message the
+   class's own, and the headers those of the state AFTER the refusal, so a
+   builder that reads a full-allowance state (`initRateLimitState`) reports
+   `remaining` = the allowance and reds. Reset is the time left in the window
+   the refusal happened in. -}
+expectClassRefusal : RateLimitClass -> String -> Expectation
+expectClassRefusal cls message =
   let now = 25
-  match rateLimitHeaderList initRateLimitState directIdentity WritesClass now
-    [limitH, remainingH, resetH] => expectAll [
-      expectEqual
-        (classMessage WritesClass)
-        "too many write requests for this identity in the current window",
-      expectEqual (headerName limitH) "ratelimit-limit",
-      expectEqual
-        (headerValue limitH)
-        (encodeUtf8 "\{classAllowance WritesClass}"),
-      expectEqual (headerName remainingH) "ratelimit-remaining",
-      expectEqual
-        (headerValue remainingH)
-        (encodeUtf8 "\{classAllowance WritesClass}"),
-      expectEqual (headerName resetH) "ratelimit-reset",
-      expectEqual
-        (headerValue resetH)
-        (encodeUtf8 "\{rateLimitWindowSeconds - now % rateLimitWindowSeconds}"),
-    ]
-    _ => expectTrue False
+  let spent =
+    exhaust initRateLimitState directIdentity cls now (classAllowance cls)
+  let (after, verdict) = step spent directIdentity cls now
+  expectAll [
+    expectFalse (isAdmitted verdict),
+    expectFalse (isRefusedCapacity verdict),
+    expectEqual (classMessage cls) message,
+    expectEqual (headerPairs
+      (rateLimitHeaderList after directIdentity cls now)) [
+      ("ratelimit-limit", encodeUtf8 "\{classAllowance cls}"),
+      ("ratelimit-remaining", encodeUtf8 "0"),
+      (
+        "ratelimit-reset",
+        encodeUtf8 "\{rateLimitWindowSeconds - now % rateLimitWindowSeconds}",
+      ),
+    ],
+  ]
+
+test "a refused ConnectionsClass renders its message and zero remaining" =
+  expectClassRefusal
+    ConnectionsClass
+    "too many connections for this identity in the current window"
+
+test "a refused RequestsClass renders its message and zero remaining" =
+  expectClassRefusal
+    RequestsClass
+    "too many requests for this identity in the current window"
+
+test "a refused WritesClass renders its message and zero remaining" =
+  expectClassRefusal
+    WritesClass
+    "too many write requests for this identity in the current window"
+
+test "a refused PreferencesClass renders its message and zero remaining" =
+  expectClassRefusal
+    PreferencesClass
+    "too many preferences updates for this identity in the current window"
+
+test "a refused CreateSessionClass renders its message and zero remaining" =
+  expectClassRefusal
+    CreateSessionClass
+    "too many createSession attempts for this identity in the current window"
+
+test "a refused RepoExportClass renders its message and zero remaining" =
+  expectClassRefusal
+    RepoExportClass
+    "too many repository exports for this identity in the current window"
+
+test "a refused ProxyClass renders its message and zero remaining" =
+  expectClassRefusal
+    ProxyClass
+    "too many proxied appview reads for this identity in the current window"
+
+test "a refused HandleUpdateClass renders its message and zero remaining" =
+  expectClassRefusal
+    HandleUpdateClass
+    "too many handle updates for this identity in the current window"
 
 -- A capacity refusal is a different shape: it names the cardinality cap
 -- rather than any class allowance, and reports zero remaining, because the
--- identity that hit it has no usage of its own — the shared table was full
--- of OTHER identities.
+-- identity that hit it has no usage of its own. The verdict comes from a
+-- table actually filled to the cap, not from a constant.
 test "a capacity refusal renders capacityMessage and the cardinality cap" =
   let now = 25
-  match rateLimitCapacityHeaderList now
-    [limitH, remainingH, resetH] => expectAll [
-      expectEqual
-        capacityMessage
-        "too many distinct client identities tracked in the current window",
-      expectEqual (headerName limitH) "ratelimit-limit",
-      expectEqual
-        (headerValue limitH)
-        (encodeUtf8 "\{maxRateLimitIdentitiesPerWindow}"),
-      expectEqual (headerName remainingH) "ratelimit-remaining",
-      expectEqual (headerValue remainingH) (encodeUtf8 "0"),
-      expectEqual (headerName resetH) "ratelimit-reset",
-      expectEqual
-        (headerValue resetH)
-        (encodeUtf8 "\{rateLimitWindowSeconds - now % rateLimitWindowSeconds}"),
-    ]
-    _ => expectTrue False
+  let filled =
+    populateOthers initRateLimitState maxRateLimitIdentitiesPerWindow now
+  let (_, verdict) =
+    step
+      filled
+      (otherIdentity maxRateLimitIdentitiesPerWindow)
+      RequestsClass
+      now
+  expectAll [
+    expectTrue (isRefusedCapacity verdict),
+    expectEqual
+      capacityMessage
+      "too many distinct client identities tracked in the current window",
+    expectEqual (headerPairs (rateLimitCapacityHeaderList now)) [
+      (
+        "ratelimit-limit",
+        encodeUtf8 "\{maxRateLimitIdentitiesPerWindow}",
+      ),
+      ("ratelimit-remaining", encodeUtf8 "0"),
+      (
+        "ratelimit-reset",
+        encodeUtf8 "\{rateLimitWindowSeconds - now % rateLimitWindowSeconds}",
+      ),
+    ],
+  ]
 
 test "PreferencesClass has its own message and its own allowance" = expectAll [
   expectEqual
@@ -711,4 +768,142 @@ test "a preferences burst and a write burst do not share a budget" =
     expectEqual
       (remainingInClass afterWrite directIdentity PreferencesClass 0)
       (classAllowance PreferencesClass),
+  ]
+
+-- ── the per-DID updateHandle limit ──────────────────────────────────────────
+
+didA : String
+didA = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
+
+didB : String
+didB = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"
+
+-- An instant on no 300-second boundary, so a window aligned to the clock and
+-- a window that starts at its first charge disagree about when it ends.
+handleEpoch : Int
+handleEpoch = 1700000123
+
+-- The instant `index` short windows after `handleEpoch`.
+shortWindowAt : Int -> Int
+shortWindowAt index = handleEpoch + index * handleUpdateShortWindowSeconds
+
+-- `n` charges to `did` at `now`: the state after them, and each verdict in
+-- the order it was given.
+chargeHandle : RateLimitState ->
+  String ->
+  Int ->
+  Int ->
+  (RateLimitState, List RateLimitVerdict)
+chargeHandle state _ _ 0 = (state, [])
+chargeHandle state did now n =
+  let (next, verdict) = stepHandleUpdate state did now
+  let (final, rest) = chargeHandle next did now (n - 1)
+  (final, verdict :: rest)
+
+-- Ten charges in each short window from `from` up to, not including, `to`.
+fillShortWindows : RateLimitState -> String -> Int -> Int -> RateLimitState
+fillShortWindows state did from to =
+  if from >= to then
+    state
+  else
+    let (next, _) =
+      chargeHandle state did (shortWindowAt from) maxHandleUpdatesPerShortWindow
+    fillShortWindows next did (from + 1) to
+
+-- One charge apiece for `count` distinct DIDs at `handleEpoch`.
+fillAccounts : RateLimitState -> Int -> RateLimitState
+fillAccounts state 0 = state
+fillAccounts state count =
+  let (next, _) = stepHandleUpdate state "did:plc:row\{count}" handleEpoch
+  fillAccounts next (count - 1)
+
+headerPairs : List Header -> List (String, Bytes)
+headerPairs = map (h => (headerName h, headerValue h))
+
+test "a DID's first ten handle updates in five minutes are admitted and the eleventh refused" =
+  let (_, verdicts) = chargeHandle initRateLimitState didA handleEpoch 11
+  expectEqual (replicate 10 True ++ [False]) (map isAdmitted verdicts)
+
+test "the fifty-first handle update in a day is refused though its five minutes are fresh" =
+  let (_, spendingDay) =
+    chargeHandle
+      initRateLimitState
+      didA
+      handleEpoch
+      maxHandleUpdatesPerShortWindow
+  let dayFull = fillShortWindows initRateLimitState didA 0 5
+  let (_, fiftyFirst) = stepHandleUpdate dayFull didA (shortWindowAt 5)
+  let (_, nextDay) =
+    stepHandleUpdate dayFull didA (handleEpoch + handleUpdateDayWindowSeconds)
+  expectEach [
+    (
+      "each short window admits its ten",
+      expectEqual (replicate 10 True) (map isAdmitted spendingDay),
+    ),
+    ("the day's fifty-first charge", expectFalse (isAdmitted fiftyFirst)),
+    ("the day after the first charge", expectTrue (isAdmitted nextDay)),
+  ]
+
+test "the five-minute count starts again 300 seconds after its first charge" =
+  let (spent, _) =
+    chargeHandle
+      initRateLimitState
+      didA
+      handleEpoch
+      maxHandleUpdatesPerShortWindow
+  let (_, justBefore) = stepHandleUpdate spent didA (handleEpoch + 299)
+  let (_, atReset) = stepHandleUpdate spent didA (handleEpoch + 300)
+  expectEqual [False, True] (map isAdmitted [justBefore, atReset])
+
+-- Eleven calls in the first window, one of them refused, then ten in each of
+-- the next three: forty-one day charges. The fifth window's tenth call is the
+-- day's fifty-first and is refused, though that window has only its own ten.
+test "a refused handle update still spends one of the day's fifty" =
+  let (first, _) = chargeHandle initRateLimitState didA handleEpoch 11
+  let middle = fillShortWindows first didA 1 4
+  let (_, fifth) = chargeHandle middle didA (shortWindowAt 4) 10
+  expectEqual (replicate 9 True ++ [False]) (map isAdmitted fifth)
+
+test "another DID has its own handle-update counters" =
+  let (spent, _) = chargeHandle initRateLimitState didA handleEpoch 11
+  let (_, forA) = stepHandleUpdate spent didA handleEpoch
+  let (_, forB) = stepHandleUpdate spent didB handleEpoch
+  expectEqual [False, True] (map isAdmitted [forA, forB])
+
+test "a new DID past the handle-update table's ceiling is refused until a row expires" =
+  let full = fillAccounts initRateLimitState maxHandleUpdateAccounts
+  let (_, sameDay) = stepHandleUpdate full didB (handleEpoch + 1)
+  let (_, dayOn) =
+    stepHandleUpdate full didB (handleEpoch + handleUpdateDayWindowSeconds)
+  expectEqual [True, True] [isRefusedCapacity sameDay, isAdmitted dayOn]
+
+test "a per-DID refusal reports the window that refused it" =
+  let (shortSpent, _) = chargeHandle initRateLimitState didA handleEpoch 11
+  let dayNow = shortWindowAt 5
+  let (daySpent, _) =
+    stepHandleUpdate (fillShortWindows initRateLimitState didA 0 5) didA dayNow
+  expectEach [
+    (
+      "the five-minute window",
+      expectEqual
+        [
+          ("ratelimit-limit", encodeUtf8 "10"),
+          ("ratelimit-remaining", encodeUtf8 "0"),
+          ("ratelimit-reset", encodeUtf8 "300"),
+        ]
+        (headerPairs (handleUpdateHeaderList shortSpent didA handleEpoch)),
+    ),
+    (
+      "the day window",
+      expectEqual
+        [
+          ("ratelimit-limit", encodeUtf8 "50"),
+          ("ratelimit-remaining", encodeUtf8 "0"),
+          (
+            "ratelimit-reset",
+            encodeUtf8 "\{handleEpoch + handleUpdateDayWindowSeconds - dayNow}",
+          ),
+        ]
+        (headerPairs (handleUpdateHeaderList daySpent didA dayNow)),
+    ),
   ]

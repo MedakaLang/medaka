@@ -454,7 +454,12 @@ its caller's identity exceeds one of six independent per-window allowances
 (`pds/lib/resource_limits.mdk`: `maxConnectionsPerWindow`,
 `maxRequestsPerWindow`, `maxWritesPerWindow`, `maxCreateSessionPerWindow`,
 `maxRepoExportsPerWindow`, `maxProxiedCallsPerWindow`, all placeholders
-pending real traffic data, refilled every `rateLimitWindowSeconds`).
+pending real traffic data, refilled every `rateLimitWindowSeconds`), and
+refuses a `com.atproto.identity.updateHandle` call that authenticated and
+passed handle syntax once its account's DID has made 10 such calls in 5
+minutes or 50 in a day, as the reference does (`stepHandleUpdate`). Every
+one of these counters is held in memory only, so a restart starts them all
+again at zero.
 `maxRepoExportsPerWindow` covers
 `com.atproto.sync.getRepo` alone: its response is a whole-repository CAR
 bounded only by `maxCarBytes`, so the request count that bounds every other

@@ -1,9 +1,12 @@
-{- | Structural TID and pre-sign repository admission tests, and the
-   revision a write commits at, driven through the record-write handler at a
-   chosen clock. Protocol answer bytes remain only in the provenance-ledgered
-   corpus. -}
+{- | Structural TID and pre-sign repository admission tests, the revision a
+   write commits at, driven through the record-write handler at a chosen
+   clock, and the export ceilings a commit's persist must stay within, driven
+   through `repoAddedBlocksWithin` at ceilings small enough to cross with a
+   record or two. Protocol answer bytes remain only in the
+   provenance-ledgered corpus. -}
 
-import bytes.{encodeUtf8, fromU8Array}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import json.{Json(..), jObject}
 import list.{replicate}
 import string.{contains, join, repeat}
@@ -12,17 +15,31 @@ import test.{
   expectEach,
   expectEqual,
   expectFalse,
+  expectGreaterThan,
   expectOkThen,
   expectTrue,
   fail,
 }
+import lib.dagcbor.{DagCbor(..)}
 import lib.handlers.{recordHandler}
+import lib.mst.{mstNodeBlocks}
 import lib.nsid.{nsidErrorMessage, validateNsid}
 import lib.repo.{
+  Repo,
+  RepoCeilings(..),
+  RepoMutation,
+  repoAddedBlocksWithin,
   repoCommitTid,
+  repoCreate,
+  repoDelete,
+  repoExportBlocks,
+  repoExportCar,
   repoInitFromKeyBytes,
   repoLatestCommit,
   repoLookup,
+  repoMutationState,
+  repoTree,
+  repoUpdate,
 }
 import lib.server_core.{Account, AuthOutcome(..), makeAccount}
 import lib.store.{Store, storeFromRepo, storeRepo}
@@ -306,5 +323,208 @@ test "a clock one second past the latest commit sets the revision" =
     (
       "a second write in that second leads the clock by one microsecond",
       expectEqual (Some (clock * 1000000 + 1)) (latestRevision second),
+    ),
+  ]
+
+-- # The export ceilings a commit must stay within
+
+ceilingTid : Int -> Tid
+ceilingTid step = mustTid (1700000000000000 + step) 0
+
+ceilingRepo : Repo
+ceilingRepo =
+  resultOrPanic
+    "repo_tid_test: ceiling repository setup failed"
+    (repoInitFromKeyBytes
+      "did:plc:medakaceiling"
+      (fromU8Array (arrayMake 32 1))
+      (ceilingTid 0))
+
+ceilingPath : String -> Bytes
+ceilingPath rkey = encodeUtf8 "app.bsky.feed.post/\{rkey}"
+
+ceilingRecord : String -> DagCbor
+ceilingRecord text = DcMap [("text", DcString text)]
+
+mutated : Result String RepoMutation -> Repo
+mutated result =
+  repoMutationState
+    (resultOrPanic "repo_tid_test: ceiling mutation failed" result)
+
+createText : Int -> String -> String -> Repo -> Repo
+createText step rkey text repo =
+  mutated
+    (repoCreate (ceilingPath rkey) (ceilingRecord text) (ceilingTid step) repo)
+
+updateText : Int -> String -> String -> Repo -> Repo
+updateText step rkey text repo =
+  mutated
+    (repoUpdate (ceilingPath rkey) (ceilingRecord text) (ceilingTid step) repo)
+
+deletePath : Int -> String -> Repo -> Repo
+deletePath step rkey repo =
+  mutated (repoDelete (ceilingPath rkey) (ceilingTid step) repo)
+
+-- The ceilings `repo`'s own export sits exactly at, read off the export
+-- itself: its CAR bytes, its block count, and its MST node blocks.
+exactCeilings : Repo -> RepoCeilings
+exactCeilings repo =
+  let car =
+    resultOrPanic "repo_tid_test: ceiling export failed" (repoExportCar repo)
+  let blocks =
+    resultOrPanic "repo_tid_test: ceiling export failed" (repoExportBlocks repo)
+  RepoCeilings
+    (B.length car)
+    (length blocks)
+    (length (mstNodeBlocks (repoTree repo)))
+
+persistVerdict : RepoCeilings -> Option Repo -> Repo -> Result String Unit
+persistVerdict ceilings prior after =
+  map (_ => ()) (repoAddedBlocksWithin ceilings prior after)
+
+byteRefusal : Int -> Result String Unit
+byteRefusal ceiling =
+  Err
+    "repo: CAR export failed: car: container exceeds \{intToString ceiling}-byte resource limit"
+
+blockRefusal : Int -> Result String Unit
+blockRefusal ceiling =
+  Err
+    "repo: CAR export failed: car: block count exceeds \{intToString ceiling} resource limit"
+
+nodeRefusal : Int -> Result String Unit
+nodeRefusal ceiling =
+  Err "mst: node block count exceeds \{intToString ceiling} resource limit"
+
+-- One record under rkey "a"; creating "b" beside it takes the MST from one
+-- node to three, so the same commit crosses all three ceilings at once.
+ceilingBefore : Repo
+ceilingBefore = createText 1 "a" "first" ceilingRepo
+
+ceilingAfter : Repo
+ceilingAfter = createText 2 "b" "second" ceilingBefore
+
+-- `after` is refused one step under its own export and admitted at it, on
+-- each ceiling, diffed against `before`.
+admittedExactly : Repo -> Repo -> Expectation
+admittedExactly before after =
+  let (RepoCeilings bytes blocks nodes) = exactCeilings after
+  expectEach [
+    (
+      "admitted at its own export's ceilings",
+      expectEqual
+        (Ok ())
+        (persistVerdict (exactCeilings after) (Some before) after),
+    ),
+    (
+      "refused one byte under",
+      expectEqual
+        (byteRefusal (bytes - 1))
+        (persistVerdict
+          (RepoCeilings (bytes - 1) blocks nodes)
+          (Some before)
+          after),
+    ),
+    (
+      "refused one block under",
+      expectEqual
+        (blockRefusal (blocks - 1))
+        (persistVerdict
+          (RepoCeilings bytes (blocks - 1) nodes)
+          (Some before)
+          after),
+    ),
+    (
+      "refused one MST node under",
+      expectEqual
+        (nodeRefusal (nodes - 1))
+        (persistVerdict
+          (RepoCeilings bytes blocks (nodes - 1))
+          (Some before)
+          after),
+    ),
+  ]
+
+test "a commit past the export byte ceiling is refused, and the graph before it is within it" =
+  let (RepoCeilings bytes blocks nodes) = exactCeilings ceilingAfter
+  let ceilings = RepoCeilings (bytes - 1) blocks nodes
+  expectEach [
+    (
+      "the commit is refused with the export's own message",
+      expectEqual
+        (byteRefusal (bytes - 1))
+        (persistVerdict ceilings (Some ceilingBefore) ceilingAfter),
+    ),
+    (
+      "the repository before it persists under the same ceilings",
+      expectEqual (Ok ()) (persistVerdict ceilings None ceilingBefore),
+    ),
+  ]
+
+test "a commit past the export block ceiling is refused, and the graph before it is within it" =
+  let (RepoCeilings bytes blocks nodes) = exactCeilings ceilingAfter
+  let ceilings = RepoCeilings bytes (blocks - 1) nodes
+  expectEach [
+    (
+      "the commit is refused with the export's own message",
+      expectEqual
+        (blockRefusal (blocks - 1))
+        (persistVerdict ceilings (Some ceilingBefore) ceilingAfter),
+    ),
+    (
+      "the repository before it persists under the same ceilings",
+      expectEqual (Ok ()) (persistVerdict ceilings None ceilingBefore),
+    ),
+  ]
+
+test "a commit past the MST node ceiling is refused, and the graph before it is within it" =
+  let (RepoCeilings bytes blocks nodes) = exactCeilings ceilingAfter
+  let (RepoCeilings _ _ nodesBefore) = exactCeilings ceilingBefore
+  let ceilings = RepoCeilings bytes blocks (nodes - 1)
+  expectEach [
+    ("the commit adds MST nodes", expectGreaterThan nodesBefore nodes),
+    (
+      "the commit is refused with the load walk's own message",
+      expectEqual
+        (nodeRefusal (nodes - 1))
+        (persistVerdict ceilings (Some ceilingBefore) ceilingAfter),
+    ),
+    (
+      "the repository before it persists under the same ceilings",
+      expectEqual (Ok ()) (persistVerdict ceilings None ceilingBefore),
+    ),
+  ]
+
+test "a commit exactly at every ceiling is admitted, after creates, updates, deletes and shared records" =
+  let updated = updateText 3 "a" "first, edited" ceilingAfter
+  let shared = createText 4 "c" "second" updated
+  let unshared = deletePath 5 "b" shared
+  let emptied = deletePath 6 "a" unshared
+  expectEach [
+    ("a create", admittedExactly ceilingBefore ceilingAfter),
+    ("an update", admittedExactly ceilingAfter updated),
+    ("a second path naming an existing record", admittedExactly updated shared),
+    (
+      "deleting one of two paths naming a record",
+      admittedExactly shared unshared,
+    ),
+    ("deleting down to one record", admittedExactly unshared emptied),
+  ]
+
+test "a refused commit leaves the totals the next commit is judged against alone" =
+  let small = createText 2 "b" "small" ceilingBefore
+  let large = createText 2 "b" (repeat 400 "x") ceilingBefore
+  let ceilings = exactCeilings small
+  let (RepoCeilings bytes _ _) = ceilings
+  expectEach [
+    (
+      "the larger commit is refused under the smaller one's ceilings",
+      expectEqual
+        (byteRefusal bytes)
+        (persistVerdict ceilings (Some ceilingBefore) large),
+    ),
+    (
+      "the smaller commit from the same repository is then admitted exactly",
+      admittedExactly ceilingBefore small,
     ),
   ]

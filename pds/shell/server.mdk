@@ -81,6 +81,10 @@ import lib.ratelimit.{
   derivationCeilingHeaderList,
   derivationCeilingMessage,
   directIdentity,
+  handleUpdateCapacityHeaderList,
+  handleUpdateCapacityMessage,
+  handleUpdateHeaderList,
+  handleUpdateLimitMessage,
   identifyClient,
   identityLabel,
   initRateLimitState,
@@ -88,6 +92,7 @@ import lib.ratelimit.{
   rateLimitCapacityHeaderList,
   rateLimitHeaderList,
   step,
+  stepHandleUpdate,
 }
 import hex.{encode}
 import map.{Map(..), delete, get, set}
@@ -99,10 +104,10 @@ import lib.event_log_record.{
 import lib.blockstore.{blockStoreSize}
 import lib.repo.{
   Repo,
+  repoAddedBlocks,
   repoCommitCid,
   repoCommitSignedBytes,
   repoCommitTid,
-  repoExportBlocks,
   repoLatestCommit,
   repoStore,
 }
@@ -543,6 +548,12 @@ persistFailureBytes =
    between. The request has already succeeded by then, so an emit failure is
    logged and the answer still goes out.
 
+   A request whose answer owes the per-DID `updateHandle` charge is charged
+   here too, before the persist, in the same sequence, so the count and the
+   answer cannot be separated by another request. A refused charge answers
+   the 429 in place of the handler's answer: the store is not advanced and
+   nothing is announced.
+
    A login's password derivations are NOT in this sequence: they are paid for
    before it, a slice at a time (`settleLogin`), and `login` is only their
    verdict. The handler accepts that verdict only against the credential the
@@ -551,10 +562,11 @@ persistFailureBytes =
 applyRequest : Server ->
   String ->
   Ref Store ->
+  Ref RateLimitState ->
   Option LoginVerdict ->
   Bytes ->
   <Clock, FileRead, FileWrite, Rand, Stderr> Bytes
-applyRequest server dir storeRef login bytes =
+applyRequest server dir storeRef limiterRef login bytes =
   let store = !storeRef
   let nowSeconds = floatToInt (now ())
   let context = RequestContext {
@@ -562,20 +574,51 @@ applyRequest server dir storeRef login bytes =
     nonce = requestNonce (),
     login = login,
   }
-  let (next, response, announce) =
+  let (next, response, announce, charge) =
     handleBytesAnnouncing server context store bytes
   let account = serverAccount server
   let did = accountDid account
-  match persistTransition dir did nowSeconds store next
-    Err message =>
-      let () = ePutStrLn "serve: persist failed, state not advanced: \{message}"
-      persistFailureBytes
-    Ok () =>
-      let () = storeRef := next
-      let () =
-        if announce then
-          announceIdentity dir nowSeconds did (accountHandle account)
-      response
+  match chargeHandleUpdate limiterRef charge nowSeconds
+    Some refusal => serializeResponse (withAllowOrigin refusal)
+    None => match persistTransition dir did nowSeconds store next
+      Err message =>
+        let () =
+          ePutStrLn "serve: persist failed, state not advanced: \{message}"
+        persistFailureBytes
+      Ok () =>
+        let () = storeRef := next
+        let () =
+          if announce then
+            announceIdentity dir nowSeconds did (accountHandle account)
+        response
+
+{- | Charge the per-DID `updateHandle` limit a handler's answer owes, if it
+   owes one. `None` keeps the handler's answer; `Some` is the 429 to send in
+   its place. -}
+chargeHandleUpdate : Ref RateLimitState ->
+  Option String ->
+  Int ->
+  Option Response
+chargeHandleUpdate _ None _ = None
+chargeHandleUpdate limiterRef (Some chargedDid) nowSeconds =
+  match stepHandleUpdate !limiterRef chargedDid nowSeconds
+    (next, Admitted) =>
+      let () = limiterRef := next
+      None
+    (next, Refused) =>
+      let () = limiterRef := next
+      Some
+        (xrpcFailureResponse
+          (rateLimitFailureWithHeaders
+            handleUpdateLimitMessage
+            (handleUpdateHeaderList next chargedDid nowSeconds)))
+    (next, RefusedCapacity) =>
+      let () = limiterRef := next
+      Some
+        (xrpcFailureResponse
+          (rateLimitFailureWithHeaders
+            handleUpdateCapacityMessage
+            handleUpdateCapacityHeaderList))
 
 announceIdentity : String ->
   Int ->
@@ -688,7 +731,7 @@ persistCredentialHalf dir before after = match (
 {- | Whether this transition produced a new commit.
 
    One question asked once: it is both the condition under which the block
-   graph is rewritten and the condition under which a firehose event exists,
+   graph is persisted and the condition under which a firehose event exists,
    and two spellings of it could disagree — which is exactly the divergence
    "commit persisted, event missing" is made of. -}
 repoAdvanced : Store -> Store -> Bool
@@ -717,7 +760,7 @@ persistRepoHalf dir did nowSeconds before after = match storeRepo after
       Ok ()
     else match stageCommitEvent dir did nowSeconds (storeRepo before) next
       Err message => Err message
-      Ok () => match persistRepo dir next
+      Ok () => match persistRepo dir (storeRepo before) next
         Err message => match eventLogDiscardStaged dir
           Err _ => Err message
           Ok () => Err message
@@ -999,9 +1042,24 @@ persistBlobHalf dir before after = do
 headText : Repo -> String
 headText repo = cidToString (repoCommitCid (repoLatestCommit repo))
 
-persistRepo : String -> Repo -> <FileRead, FileWrite> Result String Unit
-persistRepo dir repo = do
-  blocks <- repoExportBlocks repo
+{- | Persist `repo` over a data directory already holding every block of
+   `prior`'s graph, writing only the blocks `repo`'s graph adds to it.
+
+   `prior` is the repository of the store this process last published, and
+   every block its graph reaches is on disk: it was either read off the disk
+   at startup, which `repoFromBlocks` refuses unless its whole graph is there,
+   or persisted by the transition that published it, head last. Nothing
+   removes a block from `blocks/`, so it is still there. Rewriting one of
+   those blocks promotes the same bytes over themselves, and doing it for
+   every block makes one write cost the whole repository. A persist that fails
+   publishes nothing, so the next one is diffed against the same `prior` and
+   writes again whatever this one did not finish. -}
+persistRepo : String ->
+  Option Repo ->
+  Repo ->
+  <FileRead, FileWrite> Result String Unit
+persistRepo dir prior repo = do
+  blocks <- repoAddedBlocks prior repo
   persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
 
 -- ── rate limiting ───────────────────────────────────────────────────────────
@@ -2865,6 +2923,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                           server
                           dir
                           storeRef
+                          limiterRef
                           (gateVerdict login)
                           requestBytes)
                       sendAndContinue
@@ -3600,7 +3659,7 @@ rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds s
         deferPure sent
     None => defer
       response <- liftIO (u =>
-        applyRequest server dir storeRef None (readBufferLive buf))
+        applyRequest server dir storeRef limiterRef None (readBufferLive buf))
       sent <- A.sendAllWithin writeTimeout conn response
       _ <- liftIO (u => logAccessBytes trace response)
       deferPure sent
