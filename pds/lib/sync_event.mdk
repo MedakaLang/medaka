@@ -17,12 +17,12 @@
 import bytes.{Bytes, decodeUtf8}
 import hex.{encode}
 import list.{reverse, sortBy}
-import map.{Map(..), get, has, set}
+import map.{Map(..), has, set}
 import lib.blockstore.{BlockStore, blockStoreGet}
 import lib.car.{carEncode}
-import lib.cid.{Cid, cidEqual, cidToString}
+import lib.cid.{Cid, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
-import lib.mst.{Mst, mstCoveringProofBlocks, mstNodeBlocks}
+import lib.mst.{Mst, mstCoveringProofBlocks, mstDiff, mstEmpty, mstNodeBlocks}
 import lib.repo.{
   Repo,
   RepoCommit,
@@ -30,7 +30,6 @@ import lib.repo.{
   repoCommitDataCid,
   repoCommitSignedBytes,
   repoCommitTid,
-  repoEntries,
   repoLatestCommit,
   repoStore,
   repoTree,
@@ -403,41 +402,17 @@ syncErrorFrame error message =
     body <- dagCborEncode bodyValue
     Ok (header ++ body)
 
--- Keyed on the path's bytes, not on any text decoding of them: two distinct
--- keys must never share an entry, whether or not either is valid UTF-8.
-indexEntries : List (Bytes, Cid) -> Map Bytes Cid -> Map Bytes Cid
-indexEntries [] index = index
-indexEntries ((path, cid) :: rest) index =
-  indexEntries rest (set path cid index)
-
 -- A record present after the write is a create when the prior tree did not
 -- name its path, and an update when it did under a different CID. A path whose
 -- CID did not move is not an op at all: a batch may rewrite a record to the
 -- bytes it already held, and announcing that as an update would claim a
--- mutation the MST cannot show.
-writesAgainst : List (Bytes, Cid) ->
-  Map Bytes Cid ->
-  List SyncRepoOp ->
-  List SyncRepoOp
-writesAgainst [] _ acc = reverse acc
-writesAgainst ((path, cid) :: rest) priorIndex acc = match get path priorIndex
-  None => writesAgainst rest priorIndex (SyncOpCreate path cid :: acc)
-  Some prior =>
-    if cidEqual prior cid then
-      writesAgainst rest priorIndex acc
-    else
-      writesAgainst rest priorIndex (SyncOpUpdate path cid prior :: acc)
+-- mutation the MST cannot show. `mstDiff` already leaves such a path out.
+writeOp : (Bytes, Cid, Option Cid) -> SyncRepoOp
+writeOp (path, cid, None) = SyncOpCreate path cid
+writeOp (path, cid, Some prior) = SyncOpUpdate path cid prior
 
-deletesAgainst : List (Bytes, Cid) ->
-  Map Bytes Cid ->
-  List SyncRepoOp ->
-  List SyncRepoOp
-deletesAgainst [] _ acc = reverse acc
-deletesAgainst ((path, cid) :: rest) nextIndex acc =
-  if has path nextIndex then
-    deletesAgainst rest nextIndex acc
-  else
-    deletesAgainst rest nextIndex (SyncOpDelete path cid :: acc)
+deleteOp : (Bytes, Cid) -> SyncRepoOp
+deleteOp (path, prior) = SyncOpDelete path prior
 
 opPath : SyncRepoOp -> Bytes
 opPath (SyncOpCreate path _) = path
@@ -499,8 +474,10 @@ commitBlocksFor priorTree nextTree ops added commit =
    The ops are derived from the two trees rather than from the request that
    caused them, so the event states what the repository actually did: a route
    that wrote a record to the bytes it already held emits no op, and a batch
-   emits exactly the paths whose CIDs moved. `before` is `None` only for the
-   genesis commit, which is the one case the lexicon spells `since = null`.
+   emits exactly the paths whose CIDs moved. `mstDiff` reads them off the
+   nodes the two trees do not share, so the cost follows the write, not the
+   size of the repository. `before` is `None` only for the genesis commit,
+   which is the one case the lexicon spells `since = null`.
 
    The op ORDER is creates and updates in post-write key order, then deletes
    in pre-write key order. The lexicon constrains it no further, and a total
@@ -517,14 +494,9 @@ syncCommitEventFor : Int ->
   Repo ->
   Result String SyncCommitEvent
 syncCommitEventFor seq time did before after = do
-  let priorEntries = match before
-    None => []
-    Some repo => repoEntries repo
-  let nextEntries = repoEntries after
-  let ops =
-    writesAgainst nextEntries (indexEntries priorEntries Tip) []
-      ++ deletesAgainst priorEntries (indexEntries nextEntries Tip) []
   let priorTree = map repoTree before
+  let (writes, deletes) = mstDiff (optionOr mstEmpty priorTree) (repoTree after)
+  let ops = map writeOp writes ++ map deleteOp deletes
   let commit = repoLatestCommit after
   let commitCid = repoCommitCid commit
   added <- addedRecordBlocks ops (repoStore after) []

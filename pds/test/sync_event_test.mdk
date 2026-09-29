@@ -35,6 +35,7 @@ import bytes.{Bytes, encodeUtf8, fromU8Array, sliceClamped}
 import crypto.sha256.{sha256}
 import hex.{encode}
 import list.{lookup, range, sort}
+import string.{padLeft}
 import test.{expectEqual}
 import lib.car.{carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidForDagCbor, cidForRaw, cidToString}
@@ -43,6 +44,8 @@ import lib.mst.{mstEmpty, mstFromEntries, mstNodeBlocks, mstRootCid}
 import lib.repo.{
   Repo,
   RepoMutation,
+  RepoWrite(..),
+  repoApplyWrites,
   repoCommitCid,
   repoCreate,
   repoFromBlocks,
@@ -434,3 +437,57 @@ test "a non-ASCII UTF-8 path reaches the frame byte for byte" =
   let path = encodeUtf8 "a.b.c/é🐟"
   let event = { eventWithOps 0 | ops = [SyncOpCreate path recordCid] }
   expectEqual path (framedOpPath (syncCommitFrame event))
+
+postPath : String -> Bytes
+postPath rkey = encodeUtf8 "app.bsky.feed.post/\{rkey}"
+
+-- Enough filler records that the tree is several nodes deep, so the four named
+-- keys sit in different subtrees and most of the tree is untouched.
+fillerRows : List (Bytes, String)
+fillerRows =
+  map
+    (i =>
+      (postPath "k\{padLeft 3 '0' (intToString i)}", "filler \{intToString i}"))
+    (range 0 120)
+
+batchBase : Repo
+batchBase =
+  rebuiltRepo
+    5
+    ([
+        (postPath "a", "a1"),
+        (postPath "b", "b1"),
+        (postPath "c", "c1"),
+        (postPath "d", "d1"),
+      ]
+      ++ fillerRows)
+
+{- | One batch touching every op shape. `a` is deleted and recreated with new
+   bytes, which is an update; `d` is rewritten to the bytes it already held and
+   `f` is created, updated and deleted again, and neither is an op at all. The
+   ops come in post-write key order for creates and updates, then pre-write key
+   order for deletes, so the delete of `c` follows the create of `e`. -}
+test "one applyWrites batch announces exactly the keys whose CIDs moved" =
+  let writes = [
+    RepoWriteCreate (postPath "e") (sampleRecord "e1"),
+    RepoWriteUpdate (postPath "b") (sampleRecord "b2"),
+    RepoWriteDelete (postPath "c"),
+    RepoWriteUpdate (postPath "d") (sampleRecord "d1"),
+    RepoWriteCreate (postPath "f") (sampleRecord "f1"),
+    RepoWriteUpdate (postPath "f") (sampleRecord "f2"),
+    RepoWriteDelete (postPath "f"),
+    RepoWriteDelete (postPath "a"),
+    RepoWriteCreate (postPath "a") (sampleRecord "a2"),
+  ]
+  let after =
+    mustState (repoApplyWrites writes (mustTid (tidEncode 30 1)) batchBase)
+  let cidOf = text => cidToString (recordCidOf text)
+  let hexOf = rkey => encode (postPath rkey)
+  expectEqual
+    [
+      "update \{hexOf "a"} \{cidOf "a2"} prev \{cidOf "a1"}",
+      "update \{hexOf "b"} \{cidOf "b2"} prev \{cidOf "b1"}",
+      "create \{hexOf "e"} \{cidOf "e1"}",
+      "delete \{hexOf "c"} prev \{cidOf "c1"}",
+    ]
+    (opsBetween batchBase after)
