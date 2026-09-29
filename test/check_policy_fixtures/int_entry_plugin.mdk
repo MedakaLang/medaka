@@ -1,0 +1,4 @@
+-- An accepted entry that is not `String -> String` is accepted without a sample run.
+-- lint-disable-file rule-dead-code
+transfer : Int -> Int
+transfer n = n + 1

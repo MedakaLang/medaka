@@ -1,0 +1,4 @@
+-- A thunk entry is accepted without a sample run.
+-- lint-disable-file rule-dead-code
+tick : Unit -> Int
+tick _ = 1

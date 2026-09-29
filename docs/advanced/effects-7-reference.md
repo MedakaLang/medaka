@@ -98,13 +98,9 @@ issue; the number is the thing to search for.
 - **A relation cannot be shared by a recursive group.** Two mutually recursive
   functions over a captured handle are refused where one function would be
   accepted. [#3482](https://github.com/MedakaLang/medaka/issues/3482)
-- **`check-policy`'s sample run assumes `String -> String`.**
-  [#3329](https://github.com/MedakaLang/medaka/issues/3329)
 - **`check` prints effect and type variables from one alphabet.** The issue's
   title describes an older symptom, since fixed; the naming is what remains.
   [#2583](https://github.com/MedakaLang/medaka/issues/2583)
-- **A discarded arithmetic statement reports `No impl of Num for Unit`.**
-  [#3560](https://github.com/MedakaLang/medaka/issues/3560)
 
 ## Further reading
 
