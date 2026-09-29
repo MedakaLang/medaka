@@ -1,4 +1,4 @@
-main : <IO> Unit
+main : <Stdout> Unit
 packCfg : Unit -> AnyHandle
 pack : String -> AnyHandle
 readAny : AnyHandle -> <FileRead> Result String String

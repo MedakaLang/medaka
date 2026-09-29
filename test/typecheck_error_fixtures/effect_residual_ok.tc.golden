@@ -4,4 +4,4 @@ readIn : (a <= d) => Dir d -> Dir a -> <FileRead a> Result String String
 cfg : Dir "cfg/*"
 app : Dir "cfg/app"
 cfgApp : Unit -> <FileRead "cfg/app"> Result String String
-main : <IO> Unit
+main : <Stdout> Unit

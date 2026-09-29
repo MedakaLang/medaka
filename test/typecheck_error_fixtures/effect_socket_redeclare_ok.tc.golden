@@ -1,5 +1,5 @@
 closeAny : Socket h -> <Net h> Result String Unit
-main : <IO> Unit
+main : <Stdout> Unit
 netClose : Socket k -> <Net k> Result String Unit
 netRecv : Socket "api.example.com/*" -> Int -> <Net "api.example.com/*"> Result String (Array Int)
 netTcpConnect : (target : String) -> Int -> <Net target> Result String (Socket target)
