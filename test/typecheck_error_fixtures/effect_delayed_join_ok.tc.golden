@@ -3,4 +3,4 @@ choose : Bool -> (Unit -> <a> Unit) -> (Unit -> Unit) -> Unit -> <a> Unit
 loud : Unit -> <IO> Unit
 quiet : Unit -> Unit
 use : Unit -> <IO> Unit
-main : <IO> Unit
+main : <Stdout> Unit

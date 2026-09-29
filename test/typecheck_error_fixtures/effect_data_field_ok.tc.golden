@@ -6,7 +6,7 @@ convRaw : Raw "config/a" -> Int
 count : Sealed -> Int
 keep : (path : String) -> Ref (Handle path) -> Unit
 madeRaw : Unit -> Raw "config/*"
-main : <IO> Unit
+main : <Stdout> Unit
 make : Int -> a
 mkCfg : Unit -> Handle "config/*"
 mkConf : Unit -> Conf "config/*"

@@ -1,6 +1,6 @@
 built : Box <Stdout> Int
 gmap : (a -> <b> c) -> d b a -> d b c
 loud : Int -> <Stdout> Int
-main : <IO> Unit
+main : <Stdout> Unit
 pureInt : Int
 runBox : Box a b -> <a> b
