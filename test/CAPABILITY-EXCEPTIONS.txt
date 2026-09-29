@@ -264,13 +264,13 @@ wallTimeSec	wasm	WASM-GAP	real gettimeofday FFI in llvm (isPerfExtern), no wasm 
 # writeFileBytes) are implemented, so a row here would read as an accidental
 # fix.  The host import carries only the path (`mdk_path_push`) and has no
 # channel for the granted elements, so a wasm host cannot refuse a path outside
-# them (EFFECTS-SEMANTICS §7).  `medaka build --target wasm` therefore builds a
-# call only when no check is needed: its grant is the whole domain, or its path
-# is a string literal the grant names exactly (`wasmGrantConfined`,
-# compiler/backend/wasm_emit.mdk).  Any other call is a located compile-time
-# error, T-WASM-FILE-GRANT, including a call through a library wrapper that
-# forwards its caller's grant (`io.readLines`, `fs.isFile`, …), which is
-# refused even when that caller grants the whole domain.  Pinned by
+# them (EFFECTS-SEMANTICS §7).  `medaka build --target wasm` therefore refuses,
+# as a located compile-time error (T-WASM-FILE-GRANT), every grant the program
+# writes, for a function that can reach a file extern, that needs a check:
+# anything but the whole domain or exact paths
+# (`wasmGrantConfined`, compiler/backend/wasm_emit.mdk).  A library wrapper
+# that forwards its caller's grant (`io.readLines`, `fs.isFile`, …) builds,
+# and the refusal lands at the call that writes the narrow grant.  Pinned by
 # test/wasm/diff_wasm_ffi_wall.sh.  The confinement fixtures
 # (test/native_fixtures/confinement/) run under `medaka run` and a native build
 # only.

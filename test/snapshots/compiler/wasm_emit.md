@@ -1,5 +1,5 @@
 # META
-source_lines=12842
+source_lines=12835
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -231,6 +231,7 @@ import support.util.{
   contains,
   filterList,
   anyList,
+  allList,
   lookupAssoc,
   listLen,
   maxI,
@@ -2170,8 +2171,8 @@ isWasmEtaExtern name =
 -- before its grant.  The wasm host import reads a path and nothing else, so it
 -- cannot refuse a path outside a grant (`wasmGrantConfined`).
 export
-wasmFileGrantArity : String -> Option Int
-wasmFileGrantArity name = lookupAssoc name [
+wasmFileGrantExterns : List (String, Int)
+wasmFileGrantExterns = [
   ("readFile", 1),
   ("fileExists", 1),
   ("canonicalizePath", 1),
@@ -2179,61 +2180,53 @@ wasmFileGrantArity name = lookupAssoc name [
   ("writeFileBytes", 2),
 ]
 
--- A file extern's grant as the wasm target reads it: the whole domain (the
--- literal `[]`), the elements of a literal, the parameter of an enclosing
--- binding, or any other term.
-public export data WasmGrant =
-  | GrantWhole
-  | GrantElems (List String)
-  | GrantParam
-  | GrantComputed
-
--- Whether a call is confined without a runtime check: its grant is the whole
--- domain, or its path is a string literal equal to an exact (not `*`) element of
--- a literal grant, which the runtime would admit by comparing a path with
--- itself.  Any other call (a narrowed pattern, a parameter some caller may
--- narrow, a join) is refused at compile time rather than emitted unconfined.
 export
-wasmGrantConfined : Option String -> WasmGrant -> Bool
-wasmGrantConfined _ GrantWhole = True
-wasmGrantConfined (Some path) (GrantElems es) =
-  not (endsWith "*" path) && contains path es
-wasmGrantConfined _ _ = False
+wasmFileGrantArity : String -> Option Int
+wasmFileGrantArity name = lookupAssoc name wasmFileGrantExterns
+
+-- Whether the concrete elements of a grant need no runtime check.  An authority
+-- written only of exact paths (no `*`, not the empty element) admits exactly
+-- those strings, which the type checker has already held every path to, and a
+-- path admitted as a string equal to an element is admitted as a file, since
+-- the runtime would compare a path with itself.  A file extern whose path is a
+-- literal naming an exact element needs no check either.  A pattern, or the
+-- empty authority a lost binder renders, needs the runtime the wasm host lacks.
+export
+wasmGrantConfined : Option String -> List String -> Bool
+wasmGrantConfined path es =
+  let exact = s => s /= "" && not (endsWith "*" s)
+  allList exact es
+    || (match path
+      Some p => exact p && contains p es
+      None => False)
 
 export
-wasmFileGrantMsg : String -> WasmGrant -> String
-wasmFileGrantMsg name grant =
-  let given = match grant
-    GrantWhole => "the whole domain"
-    GrantElems es =>
-      "the file grant [" ++ joinWith ", " (map (s => "\"\{s}\"") es) ++ "]"
-    GrantParam => "a file grant its caller supplies"
-    GrantComputed => "a file grant computed at run time"
-  "`\{name}` is given \{given}, but a wasm build cannot confine a file operation to a grant: its host reads the path alone, so the operation could reach any file. Build for a native target, pass a literal path the grant names exactly, or give this operation the whole domain (a bare `FileRead` or `FileWrite` label)"
+wasmFileGrantMsg : String -> List String -> String
+wasmFileGrantMsg name es =
+  let grant = joinWith ", " (map (s => "\"\{s}\"") es)
+  "`\{name}` is given the file grant [\{grant}], but a wasm build cannot confine a file operation to a pattern: its host reads the path alone, so the operation could reach any file. Build for a native target, grant exact paths, or give this call the whole domain (a bare `FileRead` or `FileWrite` label)"
 
--- A file extern leaf's grant: dropped when the call is confined, else refused.
+-- A file extern leaf's grant.  A literal grant is refused here unless its
+-- elements need no check.  The whole domain, and a grant parameter of the
+-- enclosing binding (alone or joined), are emitted: a parameter's value is a
+-- concrete grant at some call site, which the build driver checks where it is
+-- written (`wasm_emit_modules_main.refuseNarrowFileGrants`).
 confinedGrantW : Prog -> String -> CExpr -> CExpr -> List String
-confinedGrantW prog name p g =
-  let grant = grantOfC g
-  let path = match p
-    CLit (LString s) => Some s
-    _ => None
-  if wasmGrantConfined path grant then
-    []
-  else
-    let emit = progEmit prog
-    let msg = "wasm: \{wasmFileGrantMsg name grant}"
-    match emit.gapMode
-      WGapRecord => let _ = noteGapW emit msg in []
-      WGapStrict => panic msg
-
-grantOfC : CExpr -> WasmGrant
-grantOfC (CList []) = GrantWhole
-grantOfC (CList es) = match stringLitsW es []
-  Some ss => GrantElems ss
-  None => GrantComputed
-grantOfC (CVar _ _) = GrantParam
-grantOfC _ = GrantComputed
+confinedGrantW prog name p (CList (elems@(_ :: _))) = match stringLitsW elems []
+  Some es =>
+    let path = match p
+      CLit (LString s) => Some s
+      _ => None
+    if wasmGrantConfined path es then
+      []
+    else
+      let emit = progEmit prog
+      let msg = "wasm: \{wasmFileGrantMsg name es}"
+      match emit.gapMode
+        WGapRecord => let _ = noteGapW emit msg in []
+        WGapStrict => panic msg
+  None => []
+confinedGrantW _ _ _ _ = []
 
 stringLitsW : List CExpr -> List String -> Option (List String)
 stringLitsW [] acc = Some (reverseL acc)
@@ -12849,7 +12842,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "isSelfHead" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
@@ -13145,22 +13138,17 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "externArityW" ((PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "flushStdout")) (ELit (LString "randomBool")))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "intToString")) (ELit (LString "charToStr")) (ELit (LString "stringLength")) (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")) (ELit (LString "hashString")) (ELit (LString "stringConcat")) (ELit (LString "setSeed")) (ELit (LString "randomChar")) (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "charCode")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")) (ELit (LString "floatToString")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")) (ELit (LString "panic")) (ELit (LString "arrayLength")) (ELit (LString "arrayFromList")) (ELit (LString "arrayCopy")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "floatToBytes64")) (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")) (ELit (LString "charFromCode")) (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")) (ELit (LString "getEnv")) (ELit (LString "exit")) (ELit (LString "args")) (ELit (LString "bitNot")) (ELit (LString "intBitNot")) (ELit (LString "intBitsToFloat")) (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "stringToFloat")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")) (ELit (LString "byteBlockToString")))) (ELit (LInt 1)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "bitAnd")) (ELit (LString "shiftLeft")) (ELit (LString "shiftRight")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "bitOr")) (ELit (LString "bitXor")) (ELit (LString "intBitAnd")) (ELit (LString "intBitOr")) (ELit (LString "intBitXor")) (ELit (LString "intShiftLeft")) (ELit (LString "intShiftRight")) (ELit (LString "u64BitAnd")) (ELit (LString "u64BitOr")) (ELit (LString "u64BitXor")) (ELit (LString "u64ShiftLeft")) (ELit (LString "u64ShiftRight")) (ELit (LString "u64MulHigh")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")) (ELit (LString "floatRem")) (ELit (LString "sliceError")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "readFileBytes")) (ELit (LString "canonicalizePath")))) (ELit (LInt 2)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringSlice")) (ELit (LString "arraySetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "writeFileBytes")))) (ELit (LInt 3)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayBlit")) (ELit (LString "byteBlockBlit")))) (ELit (LInt 5)) (ELit (LInt 1))))))))
 (DTypeSig false "isWasmEtaExtern" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isWasmEtaExtern" ((PVar "name")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isStrExternW") (EVar "name")) (EApp (EVar "isLeafExternW") (EVar "name"))) (EApp (EVar "isArrayExternW") (EVar "name"))) (EApp (EVar "isByteBlockExternW") (EVar "name"))))
+(DTypeSig true "wasmFileGrantExterns" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "wasmFileGrantExterns" () (EListLit (ETuple (ELit (LString "readFile")) (ELit (LInt 1))) (ETuple (ELit (LString "fileExists")) (ELit (LInt 1))) (ETuple (ELit (LString "canonicalizePath")) (ELit (LInt 1))) (ETuple (ELit (LString "readFileBytes")) (ELit (LInt 1))) (ETuple (ELit (LString "writeFileBytes")) (ELit (LInt 2)))))
 (DTypeSig true "wasmFileGrantArity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "wasmFileGrantArity" ((PVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EListLit (ETuple (ELit (LString "readFile")) (ELit (LInt 1))) (ETuple (ELit (LString "fileExists")) (ELit (LInt 1))) (ETuple (ELit (LString "canonicalizePath")) (ELit (LInt 1))) (ETuple (ELit (LString "readFileBytes")) (ELit (LInt 1))) (ETuple (ELit (LString "writeFileBytes")) (ELit (LInt 2))))))
-(DData Public "WasmGrant" () ((variant "GrantWhole" (ConPos)) (variant "GrantElems" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "GrantParam" (ConPos)) (variant "GrantComputed" (ConPos))) ())
-(DTypeSig true "wasmGrantConfined" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "WasmGrant") (TyCon "Bool"))))
-(DFunDef false "wasmGrantConfined" (PWild (PCon "GrantWhole")) (EVar "True"))
-(DFunDef false "wasmGrantConfined" ((PCon "Some" (PVar "path")) (PCon "GrantElems" (PVar "es"))) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "*"))) (EVar "path"))) (EApp (EApp (EVar "contains") (EVar "path")) (EVar "es"))))
-(DFunDef false "wasmGrantConfined" (PWild PWild) (EVar "False"))
-(DTypeSig true "wasmFileGrantMsg" (TyFun (TyCon "String") (TyFun (TyCon "WasmGrant") (TyCon "String"))))
-(DFunDef false "wasmFileGrantMsg" ((PVar "name") (PVar "grant")) (EBlock (DoLet false false (PVar "given") (EMatch (EVar "grant") (arm (PCon "GrantWhole") () (ELit (LString "the whole domain"))) (arm (PCon "GrantElems" (PVar "es")) () (EBinOp "++" (EBinOp "++" (ELit (LString "the file grant [")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "display") (EVar "s"))) (ELit (LString "\""))))) (EVar "es")))) (ELit (LString "]")))) (arm (PCon "GrantParam") () (ELit (LString "a file grant its caller supplies"))) (arm (PCon "GrantComputed") () (ELit (LString "a file grant computed at run time"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` is given "))) (EApp (EVar "display") (EVar "given"))) (ELit (LString ", but a wasm build cannot confine a file operation to a grant: its host reads the path alone, so the operation could reach any file. Build for a native target, pass a literal path the grant names exactly, or give this operation the whole domain (a bare `FileRead` or `FileWrite` label)"))))))
+(DFunDef false "wasmFileGrantArity" ((PVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "wasmFileGrantExterns")))
+(DTypeSig true "wasmGrantConfined" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "wasmGrantConfined" ((PVar "path") (PVar "es")) (EBlock (DoLet false false (PVar "exact") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "/=" (EVar "s") (ELit (LString ""))) (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "*"))) (EVar "s")))))) (DoExpr (EBinOp "||" (EApp (EApp (EVar "allList") (EVar "exact")) (EVar "es")) (EMatch (EVar "path") (arm (PCon "Some" (PVar "p")) () (EBinOp "&&" (EApp (EVar "exact") (EVar "p")) (EApp (EApp (EVar "contains") (EVar "p")) (EVar "es")))) (arm (PCon "None") () (EVar "False")))))))
+(DTypeSig true "wasmFileGrantMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "wasmFileGrantMsg" ((PVar "name") (PVar "es")) (EBlock (DoLet false false (PVar "grant") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "display") (EVar "s"))) (ELit (LString "\""))))) (EVar "es")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` is given the file grant ["))) (EApp (EVar "display") (EVar "grant"))) (ELit (LString "], but a wasm build cannot confine a file operation to a pattern: its host reads the path alone, so the operation could reach any file. Build for a native target, grant exact paths, or give this call the whole domain (a bare `FileRead` or `FileWrite` label)"))))))
 (DTypeSig false "confinedGrantW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "confinedGrantW" ((PVar "prog") (PVar "name") (PVar "p") (PVar "g")) (EBlock (DoLet false false (PVar "grant") (EApp (EVar "grantOfC") (EVar "g"))) (DoLet false false (PVar "path") (EMatch (EVar "p") (arm (PCon "CLit" (PCon "LString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None")))) (DoExpr (EIf (EApp (EApp (EVar "wasmGrantConfined") (EVar "path")) (EVar "grant")) (EListLit) (EBlock (DoLet false false (PVar "emit") (EApp (EVar "progEmit") (EVar "prog"))) (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: ")) (EApp (EVar "display") (EApp (EApp (EVar "wasmFileGrantMsg") (EVar "name")) (EVar "grant")))) (ELit (LString "")))) (DoExpr (EMatch (EFieldAccess (EVar "emit") "gapMode") (arm (PCon "WGapRecord") () (ELet false PWild (EApp (EApp (EVar "noteGapW") (EVar "emit")) (EVar "msg")) (EListLit))) (arm (PCon "WGapStrict") () (EApp (EVar "panic") (EVar "msg"))))))))))
-(DTypeSig false "grantOfC" (TyFun (TyCon "CExpr") (TyCon "WasmGrant")))
-(DFunDef false "grantOfC" ((PCon "CList" (PList))) (EVar "GrantWhole"))
-(DFunDef false "grantOfC" ((PCon "CList" (PVar "es"))) (EMatch (EApp (EApp (EVar "stringLitsW") (EVar "es")) (EListLit)) (arm (PCon "Some" (PVar "ss")) () (EApp (EVar "GrantElems") (EVar "ss"))) (arm (PCon "None") () (EVar "GrantComputed"))))
-(DFunDef false "grantOfC" ((PCon "CVar" PWild PWild)) (EVar "GrantParam"))
-(DFunDef false "grantOfC" (PWild) (EVar "GrantComputed"))
+(DFunDef false "confinedGrantW" ((PVar "prog") (PVar "name") (PVar "p") (PCon "CList" (PAs "elems" (PCons PWild PWild)))) (EMatch (EApp (EApp (EVar "stringLitsW") (EVar "elems")) (EListLit)) (arm (PCon "Some" (PVar "es")) () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "p") (arm (PCon "CLit" (PCon "LString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None")))) (DoExpr (EIf (EApp (EApp (EVar "wasmGrantConfined") (EVar "path")) (EVar "es")) (EListLit) (EBlock (DoLet false false (PVar "emit") (EApp (EVar "progEmit") (EVar "prog"))) (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: ")) (EApp (EVar "display") (EApp (EApp (EVar "wasmFileGrantMsg") (EVar "name")) (EVar "es")))) (ELit (LString "")))) (DoExpr (EMatch (EFieldAccess (EVar "emit") "gapMode") (arm (PCon "WGapRecord") () (ELet false PWild (EApp (EApp (EVar "noteGapW") (EVar "emit")) (EVar "msg")) (EListLit))) (arm (PCon "WGapStrict") () (EApp (EVar "panic") (EVar "msg")))))))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "confinedGrantW" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "stringLitsW" (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "stringLitsW" ((PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverseL") (EVar "acc"))))
 (DFunDef false "stringLitsW" ((PCons (PCon "CLit" (PCon "LString" (PVar "s"))) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "stringLitsW") (EVar "rest")) (EBinOp "::" (EVar "s") (EVar "acc"))))
@@ -15211,7 +15199,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "isSelfHead" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
@@ -15507,22 +15495,17 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "externArityW" ((PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "flushStdout")) (ELit (LString "randomBool")))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "intToString")) (ELit (LString "charToStr")) (ELit (LString "stringLength")) (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")) (ELit (LString "hashString")) (ELit (LString "stringConcat")) (ELit (LString "setSeed")) (ELit (LString "randomChar")) (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "charCode")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")) (ELit (LString "floatToString")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")) (ELit (LString "panic")) (ELit (LString "arrayLength")) (ELit (LString "arrayFromList")) (ELit (LString "arrayCopy")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "floatToBytes64")) (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")) (ELit (LString "charFromCode")) (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")) (ELit (LString "getEnv")) (ELit (LString "exit")) (ELit (LString "args")) (ELit (LString "bitNot")) (ELit (LString "intBitNot")) (ELit (LString "intBitsToFloat")) (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "stringToFloat")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")) (ELit (LString "byteBlockToString")))) (ELit (LInt 1)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "bitAnd")) (ELit (LString "shiftLeft")) (ELit (LString "shiftRight")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "bitOr")) (ELit (LString "bitXor")) (ELit (LString "intBitAnd")) (ELit (LString "intBitOr")) (ELit (LString "intBitXor")) (ELit (LString "intShiftLeft")) (ELit (LString "intShiftRight")) (ELit (LString "u64BitAnd")) (ELit (LString "u64BitOr")) (ELit (LString "u64BitXor")) (ELit (LString "u64ShiftLeft")) (ELit (LString "u64ShiftRight")) (ELit (LString "u64MulHigh")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")) (ELit (LString "floatRem")) (ELit (LString "sliceError")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "readFileBytes")) (ELit (LString "canonicalizePath")))) (ELit (LInt 2)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringSlice")) (ELit (LString "arraySetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "writeFileBytes")))) (ELit (LInt 3)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayBlit")) (ELit (LString "byteBlockBlit")))) (ELit (LInt 5)) (ELit (LInt 1))))))))
 (DTypeSig false "isWasmEtaExtern" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isWasmEtaExtern" ((PVar "name")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isStrExternW") (EVar "name")) (EApp (EVar "isLeafExternW") (EVar "name"))) (EApp (EVar "isArrayExternW") (EVar "name"))) (EApp (EVar "isByteBlockExternW") (EVar "name"))))
+(DTypeSig true "wasmFileGrantExterns" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "wasmFileGrantExterns" () (EListLit (ETuple (ELit (LString "readFile")) (ELit (LInt 1))) (ETuple (ELit (LString "fileExists")) (ELit (LInt 1))) (ETuple (ELit (LString "canonicalizePath")) (ELit (LInt 1))) (ETuple (ELit (LString "readFileBytes")) (ELit (LInt 1))) (ETuple (ELit (LString "writeFileBytes")) (ELit (LInt 2)))))
 (DTypeSig true "wasmFileGrantArity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "wasmFileGrantArity" ((PVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EListLit (ETuple (ELit (LString "readFile")) (ELit (LInt 1))) (ETuple (ELit (LString "fileExists")) (ELit (LInt 1))) (ETuple (ELit (LString "canonicalizePath")) (ELit (LInt 1))) (ETuple (ELit (LString "readFileBytes")) (ELit (LInt 1))) (ETuple (ELit (LString "writeFileBytes")) (ELit (LInt 2))))))
-(DData Public "WasmGrant" () ((variant "GrantWhole" (ConPos)) (variant "GrantElems" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "GrantParam" (ConPos)) (variant "GrantComputed" (ConPos))) ())
-(DTypeSig true "wasmGrantConfined" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "WasmGrant") (TyCon "Bool"))))
-(DFunDef false "wasmGrantConfined" (PWild (PCon "GrantWhole")) (EVar "True"))
-(DFunDef false "wasmGrantConfined" ((PCon "Some" (PVar "path")) (PCon "GrantElems" (PVar "es"))) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "*"))) (EVar "path"))) (EApp (EApp (EVar "contains") (EVar "path")) (EVar "es"))))
-(DFunDef false "wasmGrantConfined" (PWild PWild) (EVar "False"))
-(DTypeSig true "wasmFileGrantMsg" (TyFun (TyCon "String") (TyFun (TyCon "WasmGrant") (TyCon "String"))))
-(DFunDef false "wasmFileGrantMsg" ((PVar "name") (PVar "grant")) (EBlock (DoLet false false (PVar "given") (EMatch (EVar "grant") (arm (PCon "GrantWhole") () (ELit (LString "the whole domain"))) (arm (PCon "GrantElems" (PVar "es")) () (EBinOp "++" (EBinOp "++" (ELit (LString "the file grant [")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "\""))))) (EVar "es")))) (ELit (LString "]")))) (arm (PCon "GrantParam") () (ELit (LString "a file grant its caller supplies"))) (arm (PCon "GrantComputed") () (ELit (LString "a file grant computed at run time"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` is given "))) (EApp (EMethodRef "display") (EVar "given"))) (ELit (LString ", but a wasm build cannot confine a file operation to a grant: its host reads the path alone, so the operation could reach any file. Build for a native target, pass a literal path the grant names exactly, or give this operation the whole domain (a bare `FileRead` or `FileWrite` label)"))))))
+(DFunDef false "wasmFileGrantArity" ((PVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "wasmFileGrantExterns")))
+(DTypeSig true "wasmGrantConfined" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "wasmGrantConfined" ((PVar "path") (PVar "es")) (EBlock (DoLet false false (PVar "exact") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "/=" (EVar "s") (ELit (LString ""))) (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "*"))) (EVar "s")))))) (DoExpr (EBinOp "||" (EApp (EApp (EVar "allList") (EVar "exact")) (EVar "es")) (EMatch (EVar "path") (arm (PCon "Some" (PVar "p")) () (EBinOp "&&" (EApp (EVar "exact") (EVar "p")) (EApp (EApp (EVar "contains") (EVar "p")) (EVar "es")))) (arm (PCon "None") () (EVar "False")))))))
+(DTypeSig true "wasmFileGrantMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "wasmFileGrantMsg" ((PVar "name") (PVar "es")) (EBlock (DoLet false false (PVar "grant") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "\""))))) (EVar "es")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` is given the file grant ["))) (EApp (EMethodRef "display") (EVar "grant"))) (ELit (LString "], but a wasm build cannot confine a file operation to a pattern: its host reads the path alone, so the operation could reach any file. Build for a native target, grant exact paths, or give this call the whole domain (a bare `FileRead` or `FileWrite` label)"))))))
 (DTypeSig false "confinedGrantW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "confinedGrantW" ((PVar "prog") (PVar "name") (PVar "p") (PVar "g")) (EBlock (DoLet false false (PVar "grant") (EApp (EVar "grantOfC") (EVar "g"))) (DoLet false false (PVar "path") (EMatch (EVar "p") (arm (PCon "CLit" (PCon "LString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None")))) (DoExpr (EIf (EApp (EApp (EVar "wasmGrantConfined") (EVar "path")) (EVar "grant")) (EListLit) (EBlock (DoLet false false (PVar "emit") (EApp (EVar "progEmit") (EVar "prog"))) (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "wasmFileGrantMsg") (EVar "name")) (EVar "grant")))) (ELit (LString "")))) (DoExpr (EMatch (EFieldAccess (EVar "emit") "gapMode") (arm (PCon "WGapRecord") () (ELet false PWild (EApp (EApp (EVar "noteGapW") (EVar "emit")) (EVar "msg")) (EListLit))) (arm (PCon "WGapStrict") () (EApp (EVar "panic") (EVar "msg"))))))))))
-(DTypeSig false "grantOfC" (TyFun (TyCon "CExpr") (TyCon "WasmGrant")))
-(DFunDef false "grantOfC" ((PCon "CList" (PList))) (EVar "GrantWhole"))
-(DFunDef false "grantOfC" ((PCon "CList" (PVar "es"))) (EMatch (EApp (EApp (EVar "stringLitsW") (EVar "es")) (EListLit)) (arm (PCon "Some" (PVar "ss")) () (EApp (EVar "GrantElems") (EVar "ss"))) (arm (PCon "None") () (EVar "GrantComputed"))))
-(DFunDef false "grantOfC" ((PCon "CVar" PWild PWild)) (EVar "GrantParam"))
-(DFunDef false "grantOfC" (PWild) (EVar "GrantComputed"))
+(DFunDef false "confinedGrantW" ((PVar "prog") (PVar "name") (PVar "p") (PCon "CList" (PAs "elems" (PCons PWild PWild)))) (EMatch (EApp (EApp (EVar "stringLitsW") (EVar "elems")) (EListLit)) (arm (PCon "Some" (PVar "es")) () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "p") (arm (PCon "CLit" (PCon "LString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None")))) (DoExpr (EIf (EApp (EApp (EVar "wasmGrantConfined") (EVar "path")) (EVar "es")) (EListLit) (EBlock (DoLet false false (PVar "emit") (EApp (EVar "progEmit") (EVar "prog"))) (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "wasmFileGrantMsg") (EVar "name")) (EVar "es")))) (ELit (LString "")))) (DoExpr (EMatch (EFieldAccess (EVar "emit") "gapMode") (arm (PCon "WGapRecord") () (ELet false PWild (EApp (EApp (EVar "noteGapW") (EVar "emit")) (EVar "msg")) (EListLit))) (arm (PCon "WGapStrict") () (EApp (EVar "panic") (EVar "msg")))))))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "confinedGrantW" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "stringLitsW" (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "stringLitsW" ((PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverseL") (EVar "acc"))))
 (DFunDef false "stringLitsW" ((PCons (PCon "CLit" (PCon "LString" (PVar "s"))) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "stringLitsW") (EVar "rest")) (EBinOp "::" (EVar "s") (EVar "acc"))))

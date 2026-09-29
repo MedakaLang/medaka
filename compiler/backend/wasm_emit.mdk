@@ -227,6 +227,7 @@ import support.util.{
   contains,
   filterList,
   anyList,
+  allList,
   lookupAssoc,
   listLen,
   maxI,
@@ -2166,8 +2167,8 @@ isWasmEtaExtern name =
 -- before its grant.  The wasm host import reads a path and nothing else, so it
 -- cannot refuse a path outside a grant (`wasmGrantConfined`).
 export
-wasmFileGrantArity : String -> Option Int
-wasmFileGrantArity name = lookupAssoc name [
+wasmFileGrantExterns : List (String, Int)
+wasmFileGrantExterns = [
   ("readFile", 1),
   ("fileExists", 1),
   ("canonicalizePath", 1),
@@ -2175,61 +2176,53 @@ wasmFileGrantArity name = lookupAssoc name [
   ("writeFileBytes", 2),
 ]
 
--- A file extern's grant as the wasm target reads it: the whole domain (the
--- literal `[]`), the elements of a literal, the parameter of an enclosing
--- binding, or any other term.
-public export data WasmGrant =
-  | GrantWhole
-  | GrantElems (List String)
-  | GrantParam
-  | GrantComputed
-
--- Whether a call is confined without a runtime check: its grant is the whole
--- domain, or its path is a string literal equal to an exact (not `*`) element of
--- a literal grant, which the runtime would admit by comparing a path with
--- itself.  Any other call (a narrowed pattern, a parameter some caller may
--- narrow, a join) is refused at compile time rather than emitted unconfined.
 export
-wasmGrantConfined : Option String -> WasmGrant -> Bool
-wasmGrantConfined _ GrantWhole = True
-wasmGrantConfined (Some path) (GrantElems es) =
-  not (endsWith "*" path) && contains path es
-wasmGrantConfined _ _ = False
+wasmFileGrantArity : String -> Option Int
+wasmFileGrantArity name = lookupAssoc name wasmFileGrantExterns
+
+-- Whether the concrete elements of a grant need no runtime check.  An authority
+-- written only of exact paths (no `*`, not the empty element) admits exactly
+-- those strings, which the type checker has already held every path to, and a
+-- path admitted as a string equal to an element is admitted as a file, since
+-- the runtime would compare a path with itself.  A file extern whose path is a
+-- literal naming an exact element needs no check either.  A pattern, or the
+-- empty authority a lost binder renders, needs the runtime the wasm host lacks.
+export
+wasmGrantConfined : Option String -> List String -> Bool
+wasmGrantConfined path es =
+  let exact = s => s /= "" && not (endsWith "*" s)
+  allList exact es
+    || (match path
+      Some p => exact p && contains p es
+      None => False)
 
 export
-wasmFileGrantMsg : String -> WasmGrant -> String
-wasmFileGrantMsg name grant =
-  let given = match grant
-    GrantWhole => "the whole domain"
-    GrantElems es =>
-      "the file grant [" ++ joinWith ", " (map (s => "\"\{s}\"") es) ++ "]"
-    GrantParam => "a file grant its caller supplies"
-    GrantComputed => "a file grant computed at run time"
-  "`\{name}` is given \{given}, but a wasm build cannot confine a file operation to a grant: its host reads the path alone, so the operation could reach any file. Build for a native target, pass a literal path the grant names exactly, or give this operation the whole domain (a bare `FileRead` or `FileWrite` label)"
+wasmFileGrantMsg : String -> List String -> String
+wasmFileGrantMsg name es =
+  let grant = joinWith ", " (map (s => "\"\{s}\"") es)
+  "`\{name}` is given the file grant [\{grant}], but a wasm build cannot confine a file operation to a pattern: its host reads the path alone, so the operation could reach any file. Build for a native target, grant exact paths, or give this call the whole domain (a bare `FileRead` or `FileWrite` label)"
 
--- A file extern leaf's grant: dropped when the call is confined, else refused.
+-- A file extern leaf's grant.  A literal grant is refused here unless its
+-- elements need no check.  The whole domain, and a grant parameter of the
+-- enclosing binding (alone or joined), are emitted: a parameter's value is a
+-- concrete grant at some call site, which the build driver checks where it is
+-- written (`wasm_emit_modules_main.refuseNarrowFileGrants`).
 confinedGrantW : Prog -> String -> CExpr -> CExpr -> List String
-confinedGrantW prog name p g =
-  let grant = grantOfC g
-  let path = match p
-    CLit (LString s) => Some s
-    _ => None
-  if wasmGrantConfined path grant then
-    []
-  else
-    let emit = progEmit prog
-    let msg = "wasm: \{wasmFileGrantMsg name grant}"
-    match emit.gapMode
-      WGapRecord => let _ = noteGapW emit msg in []
-      WGapStrict => panic msg
-
-grantOfC : CExpr -> WasmGrant
-grantOfC (CList []) = GrantWhole
-grantOfC (CList es) = match stringLitsW es []
-  Some ss => GrantElems ss
-  None => GrantComputed
-grantOfC (CVar _ _) = GrantParam
-grantOfC _ = GrantComputed
+confinedGrantW prog name p (CList (elems@(_ :: _))) = match stringLitsW elems []
+  Some es =>
+    let path = match p
+      CLit (LString s) => Some s
+      _ => None
+    if wasmGrantConfined path es then
+      []
+    else
+      let emit = progEmit prog
+      let msg = "wasm: \{wasmFileGrantMsg name es}"
+      match emit.gapMode
+        WGapRecord => let _ = noteGapW emit msg in []
+        WGapStrict => panic msg
+  None => []
+confinedGrantW _ _ _ _ = []
 
 stringLitsW : List CExpr -> List String -> Option (List String)
 stringLitsW [] acc = Some (reverseL acc)

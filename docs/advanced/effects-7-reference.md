@@ -89,10 +89,11 @@ search for.
   Closing this needs resolution beneath the granted directory (`openat` with
   `O_NOFOLLOW`, or `openat2`). [#3585](https://github.com/MedakaLang/medaka/issues/3585)
 - **A wasm build cannot confine a file operation.** Its host reads the path
-  alone, so `medaka build --target wasm` refuses a file call whose grant is
-  narrower than the whole domain, unless its path is a string literal the grant
-  names exactly. A call through `io.readLines` or `fs.*` is refused even under
-  a whole-domain caller, since the wrapper passes on a grant it cannot prove.
+  alone, so `medaka build --target wasm` refuses a call that writes a pattern
+  grant such as `"cfg/*"` for a function that can reach a file operation,
+  located at that call. The whole domain and exact
+  paths build, and so does a wrapper such as `io.readLines` or `fs.*`, which
+  only passes on the grant its caller writes.
 - **An opened existential or an instance head's index grants the whole
   domain.** Neither has a caller to supply an authority. The declaration that
   reaches one is held to its declared row, which is the bound, rather than the

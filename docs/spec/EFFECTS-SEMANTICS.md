@@ -1277,11 +1277,13 @@ that is in place when the path is checked. Four edges bound that claim:
   directory (`openat` with `O_NOFOLLOW`, or `openat2` with `RESOLVE_BENEATH`),
   which the runtime does not do.
 - **The wasm target.** Its host reads the path alone and cannot refuse one, so
-  `medaka build --target wasm` builds a file operation only when no check is
-  needed: its grant is the whole domain, or its path is a string literal the
-  grant names exactly. Any other call is a compile-time error, including one
-  through a library wrapper that forwards its caller's grant (`io.readLines`,
-  `fs.isFile`), even when that caller grants the whole domain.
+  `medaka build --target wasm` accepts a program only when no grant it writes
+  for a function that can reach a file operation needs a check: each is the
+  whole domain or a set of exact paths (no `*`). A grant parameter a wrapper
+  forwards (`io.readLines`, `fs.isFile`) is not written there, and holds only
+  what its callers write, so a wrapper builds under a whole-domain caller. A
+  narrower grant (`"cfg/*"`) is a compile-time error at the call that writes
+  it, in the program's own code.
 - **Sourceless authorities.** An authority opened from an existential, and an
   instance head's index inside a method body, have no caller to supply them
   and are granted the whole domain. The escape check holds the declaration

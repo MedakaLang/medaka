@@ -97,11 +97,11 @@ main = (useIt ()) ()' \
   "gNullary"
 
 # ── The file-grant wall (EFFECTS-SEMANTICS §7) ──────────────────────────────
-# The wasm host reads a path with no granted authority beside it, so a file
-# operation is built only when the host needs no check: its grant is the whole
-# domain, or its path is a string literal the grant names exactly
-# (`wasmGrantConfined`, compiler/backend/wasm_emit.mdk).  Any other grant is a
-# located compile-time error, never an unconfined read.
+# The wasm host reads a path with no granted authority beside it, so every grant
+# the program writes must need no check: the whole domain, or exact paths
+# (`wasmGrantConfined`, compiler/backend/wasm_emit.mdk).  A library wrapper that
+# forwards its caller's grant builds; a narrow grant is a located compile-time
+# error where the program writes it, never an unconfined read.
 check_grant() {
   name="$1"; src="$2"; want="$3"
   f="$WORK/$name.mdk"
@@ -130,13 +130,31 @@ check_grant "file_grant_pattern_refused" \
 readCfg name = readFile ("cfg/" ++ name)
 
 main = println (readCfg "../secret.txt")' \
-  "file_grant_pattern_refused.mdk:2:24: \`readFile\` is given the file grant [\"cfg/*\"], but a wasm build cannot confine a file operation to a grant"
+  "file_grant_pattern_refused.mdk:2:24: \`readFile\` is given the file grant [\"cfg/*\"], but a wasm build cannot confine a file operation to a pattern"
 
-check_grant "file_grant_wrapper_refused" \
+check_grant "file_grant_wrapper_narrow_caller_refused" \
+'import io.{readLines}
+
+cfgLines : String -> <FileRead "cfg/*"> Result String (List String)
+cfgLines name = readLines ("cfg/" ++ name)
+
+main = println (cfgLines "a.txt")' \
+  "file_grant_wrapper_narrow_caller_refused.mdk:4:26: \`readLines\` is given the file grant [\"cfg/*\"], but a wasm build cannot confine a file operation to a pattern"
+
+check_grant "file_grant_wrapper_whole_domain_built" \
+'import io.{readLines}
+
+linesOf : String -> <FileRead> Result String (List String)
+linesOf p = readLines p
+
+main = println (linesOf "data.txt")' \
+  ""
+
+check_grant "file_grant_wrapper_literal_built" \
 'import io.{readLines}
 
 main = println (readLines "cfg/a.txt")' \
-  "io.mdk:75:42: \`readFile\` is given a file grant its caller supplies, but a wasm build cannot confine a file operation to a grant"
+  ""
 
 check_grant "file_grant_literal_element_built" \
 'readData : Unit -> <FileRead "data.txt"> Result String String
@@ -153,7 +171,7 @@ main = println (readAny "data.txt")' \
   ""
 
 if [ "$fail" -eq 0 ]; then
-  echo "7 ok, 0 failing"
+  echo "9 ok, 0 failing"
   exit 0
 else
   echo "diff_wasm_ffi_wall: FAILURES ABOVE"

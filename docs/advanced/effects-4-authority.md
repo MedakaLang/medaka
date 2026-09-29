@@ -288,9 +288,9 @@ The check has limits, each listed under "Open edges" in the
   symlink swapped inside `cfg/` between those two steps can reach a file
   outside it.
 - A wasm build cannot check a path at all, so `medaka build --target wasm`
-  refuses a file call whose grant is narrower than the whole domain, unless
-  its path is a string literal the grant names exactly. That includes a call
-  through `io.readLines` or `fs.isFile`, which pass on their caller's grant.
+  refuses a call that grants a pattern such as `"cfg/*"`, at that call. A
+  whole-domain or exact-path grant builds, including through `io.readLines`
+  or `fs.isFile`, which pass on their caller's grant.
 - An authority opened from an existential, and an instance head's index
   inside a method body, are granted the whole domain. The declaration that
   reaches them is held to its own row, so that row bounds them.
