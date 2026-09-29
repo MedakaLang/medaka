@@ -16182,8 +16182,9 @@ inferLastStmt env s =
 
 inferStmt : TcEnv -> DoStmt -> TcEnv
 inferStmt env (DoExpr e) =
+  let oblN0 = wMark perRun.value.implObls
   let t = infer env e
-  let _ = checkStmtNotDiscarded t e
+  let _ = checkStmtNotDiscarded (wWindow perRun.value.implObls oblN0) t e
   env
 -- #866: the binder's own Loc is threaded to blockRecLet for the pin note.  A
 -- FUNCTION-FORM block let (`let h a p q = …`) parses with rec=True and lands HERE, not
@@ -16218,13 +16219,19 @@ inferStmt _ _ = panic "typecheck: unsupported block statement"
 -- `Type mismatch: Int vs Unit` (ERROR-QUALITY.md dim 3/5: doesn't name the rule
 -- or offer the fix), so it is reported here instead with its own code and a
 -- one-token `fix` (`let _ = `) for the intentional-discard case.
-checkStmtNotDiscarded : Mono -> Expr -> Unit
-checkStmtNotDiscarded t e
+checkStmtNotDiscarded : List UObligation -> Mono -> Expr -> Unit
+checkStmtNotDiscarded stmtObls t e
   | isExemptInPlaceSetIndex t e = ()
   | otherwise = match normalize t
     TCon "Unit" _ => ()
     TVar cell => match !cell
-      Unbound _ _ => unify t (tconBuiltin "Unit")
+      Unbound id _ =>
+        -- A variable a pending `Num` obligation constrains would default to
+        -- `Int`; pinning it to `Unit` instead fails as `No impl of Num for Unit`.
+        if containsI id (numConstrainedIds stmtObls) then
+          pushDiscardedValueError (tconBuiltin "Int") e
+        else
+          unify t (tconBuiltin "Unit")
       Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
     nt => pushDiscardedValueError nt e
 
