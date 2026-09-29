@@ -259,9 +259,10 @@ manifest and are NOT projects; preflight derives their gates per-path instead
 🚨 **[W-GH-WRITE-VERIFY] A `gh` write can report success while writing nothing — always read
 the result back, never the exit code.** Three concrete traps beyond [W-MERGE-EXIT-CODE], the
 first two both hit in one session (#1212):
-  - `gh pr edit --body-file <f>` can silently no-op (observed on a Projects-classic deprecation
-    error) — the body is unchanged but the command exits 0. Verify by re-reading the body
-    length, not the exit code. Workaround: `gh api -X PATCH repos/OWNER/REPO/pulls/N -f body="…"`.
+  - `gh pr edit --body-file <f>` silently no-opped on Debian's gh 2.46 (a Projects-classic
+    deprecation error): the body was unchanged and the command exited 0. On gh 2.101 (the box's
+    gh since 2026-09-29, [B-ENV]) the same write lands with a clean stderr, but still verify by
+    re-reading the body, not the exit code. Workaround: `gh api -X PATCH repos/OWNER/REPO/pulls/N -F body=@file`.
   - **`-f body=@file` does NOT expand `@file`** — it writes the four literal characters `@file`
     as the body. Only `-F` expands `@file` into the file's contents. This is the workaround for
     the bullet above, so routing around one bug lands directly in the other.
@@ -269,7 +270,9 @@ first two both hit in one session (#1212):
     CLOBBERS prior content. Not a no-op and not a literal-string bug — it succeeds and destroys
     (#1824). For an append: read the existing body first (`gh issue view N --json body -q
     .body`), concatenate the new content locally, then write the full combined result back —
-    never `--body-file` with just the new fragment.
+    never `--body-file` with just the new fragment. A `-q .body` / `--jq .body` read appends
+    one trailing newline that is not in the body, so a read-then-write round trip grows it by a
+    byte. Strip it (`head -c -1`) before comparing or writing back.
 
 ⚠️ **[W-QUEUE-FROZEN] Once a PR is enqueued, treat its branch as frozen.** The queue merges the
 branch as it stood at enqueue time — a commit pushed afterward can be left behind, landing on
@@ -423,7 +426,9 @@ identical command with an absolute path succeeds immediately. ⇒ Always pass ab
 
 **[B-ENV] Environment.** opam/dune NOT needed. Native build: **clang + Boehm GC** (Debian:
 `clang` + `libgc-dev`, `-lgc`; macOS: Apple clang + `brew install bdw-gc`). `node` ≥24 only for
-wasm/sqlite/playground gates.
+wasm/sqlite/playground gates. `gh` comes from GitHub's own apt repo (`cli.github.com/packages`,
+2.101+). Debian trixie's package is frozen at 2.46, which lacks flags such as
+`gh issue edit --remove-milestone`.
 
 **[B-BOX] Where you're running.** Dedicated x86_64 Linux box (Debian 13, 12 cores/32GB; repo at
 `/root/medaka`). Build natively — no container/VM/wrapper. `scripts/docker-dev.sh`/`docker/` are
