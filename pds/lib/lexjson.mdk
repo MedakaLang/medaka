@@ -31,6 +31,7 @@ import base64.{decode, encode}
 import json.{Json(..), jArray, jObject}
 import lib.cid.{cidFromString, cidToString}
 import lib.dagcbor.{DagCbor(..)}
+import set.{Set(..), has, insert}
 
 -- ── DagCbor → Json (total) ─────────────────────────────────────────────
 
@@ -155,7 +156,14 @@ hasKey key pairs i n
   | otherwise = hasKey key pairs (i + 1) n
 
 hasDuplicateKey : Array (String, Json) -> Int -> Int -> Bool
-hasDuplicateKey pairs i n
+hasDuplicateKey pairs i n = hasDuplicateKeyFrom pairs i n Tip
+
+hasDuplicateKeyFrom : Array (String, Json) -> Int -> Int -> Set String -> Bool
+hasDuplicateKeyFrom pairs i n seen
   | i >= n = False
-  | hasKey (fst pairs[i]) pairs (i + 1) n = True
-  | otherwise = hasDuplicateKey pairs (i + 1) n
+  | otherwise =
+    let key = fst pairs[i]
+    if has key seen then
+      True
+    else
+      hasDuplicateKeyFrom pairs (i + 1) n (insert key seen)

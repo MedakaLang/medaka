@@ -34,24 +34,26 @@
 
    Known differences from the reference, each a case no conforming client
    writes:
-     - a record without `$type` is judged as its collection's and, if that
-       passes, is `LexUndecided`: the reference first adds the field, which
-       changes the stored bytes and the CID, and this server stores the
-       record as given, so it is never called valid;
+     - a record without `$type` is stored as given and, if it passes as its
+       collection's, is `LexUndecided`, never valid: the reference adds the
+       field first, but injecting it here would change the stored bytes and
+       the CID, and the official app always sends `$type`;
      - a `$link` spelled in base36 is read as an ordinary object;
      - a CID whose varints are not minimal is refused;
      - a `$bytes` string carrying whitespace is refused. -}
 
 import bytes as B
 import bytes.{Bytes, decodeUtf8, encodeUtf8}
-import json.{Json(..), get}
+import json.{Json(..), get, stringify}
 import list.{dropWhile, reverse}
 import map as M
 import map.{Map}
 import set as S
 import set.{Set}
 import regex.{Regex, isFullMatch, mustCompile}
-import string.{contains, endsWith, indexOf, split, startsWith, toInt, toLower}
+import string.{
+  contains, endsWith, indexOf, join, split, startsWith, toInt, toLower
+}
 import string.{utf8ByteLength}
 import lib.atsyntax.{
   validateAtIdentifier,
@@ -178,9 +180,7 @@ recordValidationStatus (LexInvalid message) = Err message
 export
 validateRecord : Lexicons -> String -> String -> Json -> LexVerdict
 validateRecord lex collection rkey record =
-  if hasProtoKey record then
-    LexInvalid "Invalid key: __proto__"
-  else match recordTypeMismatch collection record
+  match prepareRefusal collection record
     Some message => LexInvalid message
     None => match lookupDef lex "\{collection}#main"
       Some (LexRecordDef key shape) => match checkKey key rkey
@@ -194,15 +194,48 @@ validateRecord lex collection rkey record =
           Fail message => LexInvalid "Invalid \{collection} record: \{message}"
       _ => LexNoSchema
 
+{- | The refusal `record` written to `collection` gets before any schema is
+   consulted, or `None`. It applies whether or not the write asked for
+   validation: a `__proto__` key anywhere, then a `$type` naming another
+   collection.
+
+   The `$type` rule is the reference's `prepareWrite`. The `__proto__` rule is
+   its request-body decoding (`jsonToLex`), which refuses the key anywhere in
+   a request body before any write is prepared; `lib.xrpc` applies that to
+   every JSON body here. It is kept on the record too because `validateRecord`
+   also grades records that never passed through `lib.xrpc`, as
+   `pds/test/lexicon_corpus_test.mdk` does. -}
+export
+prepareRefusal : String -> Json -> Option String
+prepareRefusal collection record =
+  if hasProtoKey record then
+    Some "Invalid key: __proto__"
+  else
+    recordTypeMismatch collection record
+
 recordTypeMismatch : String -> Json -> Option String
 recordTypeMismatch collection record = match get "$type" record
   None => None
-  Some (JString given) =>
-    if given == collection then
-      None
-    else
-      Some "Invalid $type: expected \{collection}, got \{given}"
-  Some _ => Some "Invalid $type: expected \{collection}"
+  Some (JString given) if given == collection => None
+  Some given =>
+    Some "Invalid $type: expected \{collection}, got \{templateText given}"
+
+-- How a JavaScript template literal renders a parsed JSON value, which is how
+-- the reference's `$type` message renders whatever `$type` held.
+templateText : Json -> String
+templateText JNull = "null"
+templateText (JBool True) = "true"
+templateText (JBool False) = "false"
+templateText (JInt n) = intToString n
+templateText (JString s) = s
+templateText (JArray values) = join "," (map arrayElementText (toList values))
+templateText (JObject _) = "[object Object]"
+templateText value = stringify value
+
+-- `Array.prototype.toString` renders a null element as nothing.
+arrayElementText : Json -> String
+arrayElementText JNull = ""
+arrayElementText value = templateText value
 
 checkKey : LexKey -> String -> Option String
 checkKey KeyAny rkey = match validateRecordKey rkey
@@ -550,6 +583,9 @@ isPlainObject (JObject pairs) = match special pairs
   _ => False
 isPlainObject _ = False
 
+-- | Whether an object anywhere in `value`, at any depth, has a key spelled
+-- `__proto__`: the key `jsonToLex` refuses.
+export
 hasProtoKey : Json -> Bool
 hasProtoKey (JObject pairs) = anyProtoPair pairs 0
 hasProtoKey (JArray values) = anyProtoValue values 0

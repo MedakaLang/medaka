@@ -4,12 +4,16 @@
    applyWrites, uploadBlob}`) are the five that transition the `Store` — the
    first four the repository half under one signed commit apiece (`applyWrites`
    batches the other three), `uploadBlob` the blob half. **Reads** are the
-   thirteen that cannot:
+   ones that cannot:
    `com.atproto.repo.{getRecord, listRecords, describeRepo}`,
    `com.atproto.server.describeServer`,
    `com.atproto.sync.{getRepo, getLatestCommit, getBlob, listBlobs, listRepos,
    getRepoStatus, getRecord, getBlocks}`, and
-   `com.atproto.identity.resolveHandle`. **Sessions** are
+   `com.atproto.identity.resolveHandle`. **Identity** is
+   `com.atproto.identity.updateHandle`, which transitions nothing: it answers
+   whether the requested handle is the one this account's DID document
+   already names, and asks the shell to re-announce it when it is.
+   **Sessions** are
    the four
    `com.atproto.server.{createSession, refreshSession, deleteSession,
    getSession}` routes, which transition the `Store`'s auth half rather than
@@ -28,8 +32,9 @@
    reason, not because it is a repository write.
 
    Every registration carries its own `AuthPolicy`: the five writes,
-   `getSession`, `getServiceAuth`, and both preference routes are
-   `AuthenticatedRoute`, the thirteen reads are `PublicRoute`,
+   `updateHandle`, `getSession`, `getServiceAuth`, and both preference routes
+   are
+   `AuthenticatedRoute`, the reads are `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`,
    `createSession` is `PublicRoute` (it is the login that issues the tokens the
    other session routes require), and the two well-knowns are public by
@@ -105,7 +110,12 @@
    newer than the pinned reference and writes record types that version does
    not know; refusing them would refuse the app. `validate: false` stores the
    record ungraded and reports `"unknown"`, where the reference omits the
-   field. -}
+   field.
+
+   After those refusals, and after the repository has accepted the
+   transition but before it is kept, every `blob` ref a written record names
+   must be a blob this server holds (`requireHeldBlobs`), whatever `validate`
+   says; in a batch, one missing blob refuses the whole batch. -}
 
 import http.{
   Header,
@@ -122,10 +132,18 @@ import bytes.{Bytes, encodeUtf8}
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import list.{last, take}
-import string.{join, split, startsWith, toInt, toLower}
+import regex.{Regex, isMatch, mustCompile}
+import string.{endsWith, join, replaceAll, split, startsWith, toInt, toLower}
 import string.{utf8ByteLength}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
-import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
+import lib.blob.{
+  BlobRef,
+  admitBlob,
+  blobRefCid,
+  blobRefSize,
+  blobRefToJson,
+  recordBlobRefs,
+}
 import lib.blockstore.{blockStoreGet}
 import lib.car.{carEncode, carEncodeRootless}
 import lib.cid.{
@@ -133,7 +151,7 @@ import lib.cid.{
 }
 import lib.dagcbor.{DagCbor, dagCborEncode}
 import lib.did_key.{didKeyMultibase}
-import lib.lexicon.{recordValidationStatus, validateRecord}
+import lib.lexicon.{prepareRefusal, recordValidationStatus, validateRecord}
 import lib.lexicon_schemas.{knownLexicons}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 import lib.mst.{MstRangeQuery(..), mstCoveringProofBlocks}
@@ -182,6 +200,7 @@ import lib.server_core.{
   accountDid,
   accountHandle,
   accountHostname,
+  announceIdentityHeader,
   createSessionNsid,
   getServiceAuthNsid,
   identifiesAccount,
@@ -294,6 +313,9 @@ subscribeReposNsid = "com.atproto.sync.subscribeRepos"
 resolveHandleNsid : String
 resolveHandleNsid = "com.atproto.identity.resolveHandle"
 
+updateHandleNsid : String
+updateHandleNsid = "com.atproto.identity.updateHandle"
+
 refreshSessionNsid : String
 refreshSessionNsid = "com.atproto.server.refreshSession"
 
@@ -327,12 +349,19 @@ recordNotFound : String -> Response
 recordNotFound = xrpcErrorResponse 400 "Bad Request" "RecordNotFound"
 
 -- | The name is `sync.getBlob`'s own lexicon-declared error (graded against
--- the pinned reference package, not invented here).
+-- the pinned reference package, not invented here), and the one the
+-- reference's commit gives a record naming a blob it does not hold.
 blobNotFound : String -> Response
 blobNotFound = xrpcErrorResponse 400 "Bad Request" "BlobNotFound"
 
+invalidSize : String -> Response
+invalidSize = xrpcErrorResponse 400 "Bad Request" "InvalidSize"
+
 handleNotFound : String -> Response
 handleNotFound = xrpcErrorResponse 400 "Bad Request" "HandleNotFound"
+
+invalidHandle : String -> Response
+invalidHandle = xrpcErrorResponse 400 "Bad Request" "InvalidHandle"
 
 authenticationRequired : String -> Response
 authenticationRequired =
@@ -441,9 +470,16 @@ admitValidateFlag body = match get "validate" body
 
 {- | The `validationStatus` a write reports, or the refusal its record gets:
    `lib.lexicon`'s verdict on the record written to `collection` under
-   `rkey`, or `"unknown"` when grading was skipped. -}
+   `rkey`, or `"unknown"` when grading was skipped. Skipping grading does not
+   skip `prepareRefusal`: the reference's `prepareWrite` refuses a `$type`
+   naming another collection on every write, and a `__proto__` key never
+   reaches it, because the reference's request-body decoding refuses one
+   first, as `lib.xrpc` does here. -}
 recordStatus : Validation -> String -> String -> Json -> Result Response String
-recordStatus Ungraded _ _ _ = Ok "unknown"
+recordStatus Ungraded collection _ record =
+  match prepareRefusal collection record
+    Some message => Err (invalidRequest message)
+    None => Ok "unknown"
 recordStatus Graded collection rkey record =
   mapErr
     invalidRequest
@@ -665,6 +701,56 @@ admitBlobRef : Result String BlobRef -> Result Response BlobRef
 admitBlobRef (Err message) = Err (invalidRequest "Blob rejected: \{message}")
 admitBlobRef (Ok ref) = Ok ref
 
+{- | The reference's commit-time blob check (`processWriteBlobs`): every blob
+   ref `record` names must be a blob this server holds, refused
+   `BlobNotFound` otherwise, and the ref's size must be the held blob's,
+   refused `InvalidSize` otherwise. The first ref that fails decides the
+   answer.
+
+   The reference compares a ref's MIME type as well as its size, but only
+   against a blob that is still temporary, which is until the first write
+   that names it commits; a later ref to the same blob is compared against
+   nothing. This store keeps no such association state: an uploaded blob is
+   held the same way before and after a record names it, and its recorded
+   type is whatever the latest upload of its bytes declared, while a client
+   may have copied an earlier upload's answer into its ref. So MIME type is
+   not compared at all. Size cannot misfire that way, because identical
+   bytes have identical length, so it is compared on every ref; that refuses
+   one write the reference accepts, a ref to an already-named blob that
+   misstates its size. -}
+requireHeldBlobs : Store -> DagCbor -> Result Response Unit
+requireHeldBlobs store record = requireHeldRefs store (recordBlobRefs record)
+
+requireHeldRefs : Store -> List BlobRef -> Result Response Unit
+requireHeldRefs _ [] = Ok ()
+requireHeldRefs store (ref :: rest) = do
+  () <- requireHeldRef store ref
+  requireHeldRefs store rest
+
+requireHeldRef : Store -> BlobRef -> Result Response Unit
+requireHeldRef store ref =
+  let cid = blobRefCid ref
+  match storeGet cid store
+    None => Err (blobNotFound "Could not find blob: \{cidToString cid}")
+    Some bytes =>
+      if B.length bytes /= blobRefSize ref then
+        Err
+          (invalidSize
+            "Referenced Size does not match stored blob. Expected: \{intToString (B.length bytes)}, Got: \{intToString (blobRefSize ref)}")
+      else
+        Ok ()
+
+-- | `requireHeldBlobs` over every record a batch creates or updates, before
+-- any of them is committed.
+requireBatchHeldBlobs : Store -> List RepoWrite -> Result Response Unit
+requireBatchHeldBlobs _ [] = Ok ()
+requireBatchHeldBlobs store (write :: rest) = do
+  () <- match write
+    RepoWriteCreate _ record => requireHeldBlobs store record
+    RepoWriteUpdate _ record => requireHeldBlobs store record
+    RepoWriteDelete _ => Ok ()
+  requireBatchHeldBlobs store rest
+
 -- ── the write endpoints ─────────────────────────────────────────────────────
 
 applyCreateRecord : Account ->
@@ -690,6 +776,7 @@ applyCreateRecord account context store body = do
   () <- checkSwapRecord body path repo
   bytes <- encodeRecord record
   mutation <- admitMutation (repoCreate path record rev repo)
+  () <- requireHeldBlobs store record
   Ok (
     repoMutationState mutation,
     writeOutput
@@ -725,6 +812,7 @@ applyPutRecord account context store body = do
     None => repoCreate path record rev repo
     Some _ => repoUpdate path record rev repo
   mutation <- admitMutation transition
+  () <- requireHeldBlobs store record
   Ok (
     repoMutationState mutation,
     writeOutput
@@ -943,6 +1031,7 @@ applyBatchWrites account context store body = do
   () <- checkSwapCommit body repo
   commitRev <- advanceTidBy rev finalAuto
   mutation <- admitMutation (repoApplyWrites writes commitRev repo)
+  () <- requireBatchHeldBlobs store writes
   Ok (
     repoMutationState mutation,
     jObject [
@@ -1837,6 +1926,135 @@ applyResolveHandle account params = do
   else
     Err (handleNotFound "Unable to resolve handle '\{handle}'")
 
+-- ── com.atproto.identity.updateHandle ───────────────────────────────────────
+
+{- | The top-level domains a handle may not end in: the reference's own list,
+   the names reserved from public DNS. `.test` is not among them. -}
+disallowedHandleTlds : List String
+disallowedHandleTlds = [
+  ".local",
+  ".arpa",
+  ".invalid",
+  ".localhost",
+  ".internal",
+  ".example",
+  ".alt",
+  ".onion",
+]
+
+{- | The reference's handle slur list, as it applies to a handle that has
+   already passed the handle syntax check and been lowercased.
+
+   The reference's patterns are JavaScript regular expressions without the
+   `u` flag, whose character classes also list Unicode lookalikes. A handle
+   reaching this check holds only `a-z`, `0-9`, `.` and `-`, so each class
+   here is the original class's members from that alphabet and nothing else
+   is lost. `\b` is ASCII in both dialects. -}
+explicitSlurPatterns : List Regex
+explicitSlurPatterns = [
+  mustCompile "\\bch[il1]nks?\\b",
+  mustCompile "\\bc[o0]{2}ns?\\b",
+  mustCompile "\\bf[a4]g{1,2}([eilo013]t{1,2}(ry|r[il1][e3])?)?s?\\b",
+  mustCompile "\\bk[ily1]k[e3](ry|r[il1][e3])?s*\\b",
+  mustCompile "\\bn[ailo14][gq]{2}(l[e3]t|[ae3]r?|n[o0][gq]|[a4]?)?s?\\b",
+  mustCompile "n[ailo14][gq]{2}(l[e3]t|[e3]r)s?",
+  mustCompile "\\btr[a4]+n{1,2}([il1][e3]|y|[e3]r)s?\\b",
+]
+
+{- | The reference's test: any pattern matches the handle, or the handle with
+   every `.`, `-` and `_` removed. -}
+hasExplicitSlur : String -> Bool
+hasExplicitSlur handle =
+  let squeezed =
+    replaceAll "_" "" (replaceAll "-" "" (replaceAll "." "" handle))
+  any
+    (pattern => isMatch pattern handle || isMatch pattern squeezed)
+    explicitSlurPatterns
+
+{- | The 200 an accepted call answers: no body, and the internal field that
+   asks the shell to emit `#identity` (`lib.server_core`'s
+   `announceIdentityHeader`, removed before the response is written). -}
+announceIdentityResponse : Response
+announceIdentityResponse =
+  resultOrPanic
+    "handlers: internal response construction error"
+    (makeResponse 200 "OK" [announceIdentityHeader] empty)
+
+{- | `com.atproto.identity.updateHandle` for the one account this server
+   hosts.
+
+   The handle is configuration (`--handle`), and the DID document this server
+   publishes names it, so the only handle the reference would accept for this
+   account is the current one. That call is answered 200 with an empty body
+   and re-announces the account's `#identity` on the event stream; nothing is
+   persisted. Any other valid handle is refused the way the reference refuses a
+   `did:web` account whose document does not name the requested handle.
+
+   The checks run in the reference's order: body shape, handle syntax on the
+   string as sent, lowercasing, the reserved top-level domains, the slur list,
+   and equality with the current handle. The syntax check comes before the
+   lowercasing, so a non-ASCII spelling that some other case mapping would
+   turn into an ASCII handle is refused rather than folded.
+
+   Where it differs from the reference:
+   - The body-shape and handle-syntax refusals use this module's wording. The
+     error name, `InvalidRequest`, is the reference's.
+   - There are no service handle domains, so their length and reserved-name
+     constraints do not apply.
+   - There is no handle resolver. The reference resolves a handle outside its
+     service domains and refuses one that does not resolve to the account's
+     DID, with "External handle did not resolve to DID", before it reads the
+     DID document; here every valid handle but the current one gets the DID
+     document refusal.
+   - With one account, "Handle already taken" cannot arise.
+   - The rate limit is `maxHandleUpdatesPerWindow`, charged per client
+     identity when the request is admitted; the reference charges per DID and
+     only after its input checks pass. -}
+applyUpdateHandle : Account -> Json -> Result Response Response
+applyUpdateHandle account body = do
+  () <- requireObject body
+  requested <- requiredString "handle" body
+  () <- match validateHandle requested
+    Err message =>
+      Err
+        (invalidRequest
+          "Request field 'handle' is not a valid handle: \{message}")
+    Ok () => Ok ()
+  let normalized = toLower requested
+  if any (tld => endsWith tld normalized) disallowedHandleTlds then
+    Err (invalidHandle "Handle TLD is invalid or disallowed")
+  else if hasExplicitSlur normalized then
+    Err (invalidHandle "Inappropriate language in handle")
+  else if sameHandle normalized (accountHandle account) then
+    Ok announceIdentityResponse
+  else
+    Err (invalidRequest "DID is not properly configured for handle")
+
+-- | The identity procedure, or `None` for a call this half does not own. It
+-- is `AuthenticatedRoute`, so its `Unauthenticated` arm answers 401 for a
+-- direct caller of this function, as the session routes do.
+identityHandled : Account ->
+  AuthOutcome ->
+  Store ->
+  XrpcCall ->
+  Option (Store, Response)
+identityHandled account outcome store (ProcedureJsonCall nsid _ body)
+  | nsid == updateHandleNsid = match outcome
+    Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    Authenticated _ _ =>
+      Some (store, collapseResponse (applyUpdateHandle account body))
+  | otherwise = None
+identityHandled _ _ _ _ = None
+
+{- | The identity procedure. `AuthenticatedRoute`: it speaks for the
+   account's identity, and registering it here also keeps it locally served
+   rather than forwardable (`lib.proxy`'s `proxyDisposition`). -}
+identityEndpoints : Result String (List Endpoint)
+identityEndpoints = do
+  update <- procedureEndpoint updateHandleNsid JsonInput AuthenticatedRoute
+  Ok [update]
+
 -- ── the two well-knowns ─────────────────────────────────────────────────────
 
 {- | The hosted account's DID document, built from the repository's OWN
@@ -2304,7 +2522,7 @@ finishRead : Result Response Json -> Response
 finishRead (Err response) = response
 finishRead (Ok value) = jsonOkResponse value
 
-{- | The thirteen read/sync/identity queries, the two well-knowns, and the
+{- | The read/sync/identity queries, the two well-knowns, and the
    health probe, or `None` for a call this half does not own. It returns a
    bare `Response` because no route here can transition the `Store`. -}
 readHandled : Account ->
@@ -2429,8 +2647,9 @@ preferencesHandled _ _ _ = None
 
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
-{- | The complete handler: five record writes, five session routes, two
-   preference routes, thirteen reads, two well-knowns, and the health probe.
+{- | The complete handler: five record writes, one identity procedure, five
+   session routes, two preference routes, the reads, two well-knowns,
+   and the health probe.
    The halves are disjoint by construction — each owns a distinct set of
    NSIDs, and the read half additionally owns the two well-knowns and the
    health probe — so the order below is a formality rather than a
@@ -2444,11 +2663,13 @@ pdsHandler account links version context outcome store call =
       Some result => result
       None => match preferencesHandled outcome store call
         Some result => result
-        None => match readHandled account links version store call
-          Some response => (store, response)
-          None => (store, unhandledRoute call)
+        None => match identityHandled account outcome store call
+          Some result => result
+          None => match readHandled account links version store call
+            Some response => (store, response)
+            None => (store, unhandledRoute call)
 
--- | The registry of all twenty-six XRPC endpoints. The two well-known paths
+-- | The registry of every XRPC endpoint this PDS serves. The two well-known paths
 -- are NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
@@ -2456,13 +2677,16 @@ pdsRegistry = do
   writes <- recordEndpoints
   sessions <- sessionEndpoints
   preferences <- preferencesEndpoints
+  identity <- identityEndpoints
   reads <- readEndpoints
   makeRegistry
     (concatEndpoints
       writes
-      (concatEndpoints sessions (concatEndpoints preferences reads)))
+      (concatEndpoints
+        sessions
+        (concatEndpoints preferences (concatEndpoints identity reads))))
 
-{- | The thirteen read queries and the one event-stream subscription, every one
+{- | The read queries and the one event-stream subscription, every one
    of them public.
 
    A repository is public data on atproto: `com.atproto.repo.getRecord`,

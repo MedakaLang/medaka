@@ -17,7 +17,7 @@
 import bytes.{Bytes}
 import hex.{decode}
 import io.{readLines}
-import json.{Json, parse, stringify}
+import json.{Json(..), jObject, parse, stringify}
 import string.{split, startsWith}
 import lib.dagcbor.{dagCborDecode, dagCborEncode}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
@@ -116,7 +116,65 @@ runMalformed =
   ]
   sum checks
 
-main : <IO, Env, FileRead> Unit
+-- Duplicate detection cells: the refused shapes and one accepted object,
+-- built directly so no JSON text has to be parsed.
+keyPairs : List String -> List (String, Json)
+keyPairs keys = map (k => (k, JInt 1)) keys
+
+isRefusedDuplicate : List String -> Bool
+isRefusedDuplicate keys = match lexJsonToDagCbor (jObject (keyPairs keys))
+  Err message => message == "lexjson: duplicate object key"
+  Ok _ => False
+
+runDupCells : Int
+runDupCells =
+  let checks = [
+    isRefusedDuplicate ["a", "b", "c", "a"],
+    isRefusedDuplicate ["a", "b", "c", "c"],
+    isRefusedDuplicate ["a", "a", "b", "c"],
+    isRefusedDuplicate ["x", "a", "b", "a", "y"],
+    match lexJsonToDagCbor (jObject (keyPairs ["a", "b", "c", "d"]))
+      Ok _ => True
+      Err _ => False,
+  ]
+  length (filter (== True) checks)
+
+distinctObject : Int -> Json
+distinctObject n = jObject (keyPairs (map (i => "key\{intToString i}") [0..n]))
+
+-- Best of five decisions of an n-field distinct-key object, in seconds.
+timeDecision : Int -> <Clock> Float
+timeDecision n =
+  let obj = distinctObject n
+  let one =
+    _ =>
+      let t0 = monotonicSec ()
+      let ok = match lexJsonToDagCbor obj
+        Ok _ => True
+        Err _ => False
+      let t1 = if ok then monotonicSec () else panic "scaling object refused"
+      t1 - t0
+  min (one ()) (min (one ()) (min (one ()) (min (one ()) (one ()))))
+
+-- Quadrupling the field count multiplies an n log n decision by about 4.5
+-- and a quadratic one by 16. The threshold sits between the two with a
+-- factor of two of load noise on either side, so a loaded machine cannot
+-- redden an n log n decision and cannot pass a quadratic one.
+runScaling : <IO, Clock> Bool
+runScaling =
+  let _warm = timeDecision 1000
+  let t1 = timeDecision 10000
+  let t4 = timeDecision 40000
+  let ratio = t4 / t1
+  let () = println "scaling: 10k=\{t1}s 40k=\{t4}s ratio=\{ratio}"
+  ratio < 9.0
+
+runCap : <IO, Clock> Unit
+runCap =
+  let t = timeDecision 19000
+  println "cap-19k: \{t}s"
+
+main : <IO, Env, FileRead, Clock> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message => panic "lexjson_vectors: cannot read corpus: \{message}"
@@ -128,7 +186,12 @@ main = match args ()
         println
           "lexjson: \{intToString passed}/\{intToString total} round-trip (both directions)"
       let () = println "malformed: \{intToString malformed}/3 rejected"
-      if passed == total && malformed == 3 then
+      let dups = runDupCells
+      let () = println "dup-keys: \{intToString dups}/5"
+      let scaled = runScaling
+      let () = println "scaling-ok: \{scaled}"
+      let () = runCap
+      if passed == total && malformed == 3 && dups == 5 && scaled then
         println "TOTAL: PASS"
       else
         let () = println "TOTAL: FAIL"

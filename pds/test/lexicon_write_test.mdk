@@ -1,7 +1,9 @@
 {- | The write routes grade a record against its lexicon, end to end through
    `handleBytes`: request bytes in, response bytes out.
 
-   `validate` absent or `true` grades, `false` does not. A record the
+   `validate` absent or `true` grades, `false` does not, though a
+   `__proto__` key or a `$type` naming another collection is refused either
+   way. A record the
    lexicon accepts is written and reported `"valid"`; one it refuses is
    `400 InvalidRequest` and leaves the store as it was, and in an
    `applyWrites` batch one refused record refuses the batch. A record whose
@@ -12,16 +14,18 @@
 
 import bytes.{Bytes}
 import hex.{decode}
+import http.{parseRequest, responseStatus, serializeResponse}
 import json.{Json(..), get, jArray, jObject, parse, stringify}
 import string.{repeat, startsWith}
 import test.{Expectation, expectEach, expectEqual, expectTrue}
-import lib.handlers.{recordServer}
+import lib.handlers.{pdsServer, recordServer, serverLinksEmpty}
 import lib.jwt.{mintToken}
 import lib.repo.{repoInitFromKeyBytes}
 import lib.server_core.{
   Account,
   RequestContext(..),
   Server,
+  handleAnnouncing,
   handleBytes,
   makeAccount,
 }
@@ -129,15 +133,20 @@ createRecord collection rkey record flags =
       ++ flags)
 
 putRecord : String -> String -> Json -> Answer
-putRecord collection rkey record = send
-  initialStore
-  "com.atproto.repo.putRecord"
-  [
-    ("repo", JString accountDidText),
-    ("collection", JString collection),
-    ("rkey", JString rkey),
-    ("record", record),
-  ]
+putRecord collection rkey record = putRecordWith collection rkey record []
+
+putRecordWith : String -> String -> Json -> List (String, Json) -> Answer
+putRecordWith collection rkey record flags =
+  send
+    initialStore
+    "com.atproto.repo.putRecord"
+    ([
+        ("repo", JString accountDidText),
+        ("collection", JString collection),
+        ("rkey", JString rkey),
+        ("record", record),
+      ]
+      ++ flags)
 
 createElement : String -> Json -> Json
 createElement rkey record = jObject [
@@ -456,6 +465,267 @@ test "a record without $type is written and reported unknown, and one with $type
         ["unknown"]
         (resultStatuses
           (applyWrites [createElement "3ke6kg3wk2c2b" untypedPost] [])),
+    ),
+    (
+      "createRecord like without $type, validate false",
+      expectEqual
+        ("<missing:error>", "unknown")
+        (errorAndStatus
+          (createRecord
+            "app.bsky.feed.like"
+            "3jzfcijpj2z2a"
+            (jObject like)
+            validateFalse)),
+    ),
+  ]
+
+-- ── refused whatever validate says ──────────────────────────────────────────
+
+-- A post carrying a `__proto__` key, at the top or inside an embed.
+protoPost : Json
+protoPost = jObject [
+  ("$type", JString "app.bsky.feed.post"),
+  ("text", JString "hello"),
+  ("createdAt", JString "2024-01-01T00:00:00.000Z"),
+  ("__proto__", JInt 1),
+]
+
+nestedProtoPost : Json
+nestedProtoPost = jObject [
+  ("$type", JString "app.bsky.feed.post"),
+  ("text", JString "hello"),
+  ("createdAt", JString "2024-01-01T00:00:00.000Z"),
+  ("embed", jObject [("inner", jArray [jObject [("__proto__", JInt 1)]])]),
+]
+
+{- | The reference refuses these in `prepareWrite`, before it looks at
+   `validate`, so `false` refuses them as absent does. -}
+test "a $type naming another collection is refused under validate false" =
+  let prefix =
+    "Invalid $type: expected app.bsky.feed.like, got app.bsky.feed.post"
+  expectEach [
+    (
+      "createRecord",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (createRecord
+            "app.bsky.feed.like"
+            "3ke6kg3wk2c2b"
+            post
+            validateFalse)),
+    ),
+    (
+      "putRecord",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (putRecordWith
+            "app.bsky.feed.like"
+            "3ke6kg3wk2c2b"
+            post
+            validateFalse)),
+    ),
+    (
+      "applyWrites",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (applyWrites
+            [
+              createElement "3ke6kg3wk2c2b" post,
+              jObject [
+                ("$type", JString "com.atproto.repo.applyWrites#create"),
+                ("collection", JString "app.bsky.feed.like"),
+                ("rkey", JString "3ke6kg3wk2d2b"),
+                ("value", post),
+              ],
+            ]
+            validateFalse)),
+    ),
+  ]
+
+test "a __proto__ key anywhere is refused under validate false" =
+  let prefix = "Invalid key: __proto__"
+  expectEach [
+    (
+      "createRecord",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (createRecord
+            "app.bsky.feed.post"
+            "3ke6kg3wk2c2b"
+            protoPost
+            validateFalse)),
+    ),
+    (
+      "createRecord nested",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (createRecord
+            "app.bsky.feed.post"
+            "3ke6kg3wk2c2b"
+            nestedProtoPost
+            validateFalse)),
+    ),
+    (
+      "putRecord nested",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (putRecordWith
+            "app.bsky.feed.post"
+            "3ke6kg3wk2c2b"
+            nestedProtoPost
+            validateFalse)),
+    ),
+    (
+      "applyWrites",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (applyWrites
+            [
+              createElement "3ke6kg3wk2c2b" post,
+              createElement "3ke6kg3wk2d2b" nestedProtoPost,
+            ]
+            validateFalse)),
+    ),
+  ]
+
+-- A `$type` that is not a string is named as a JavaScript template renders it.
+typeMessage : Json -> String
+typeMessage given =
+  let record = jObject [("$type", given), ("text", JString "hello")]
+  fieldText
+    "message"
+    (createRecord
+      "app.bsky.feed.post"
+      "3ke6kg3wk2c2b"
+      record
+      validateFalse).body
+
+test "a $type that is not a string is named in the refusal" = expectEach [
+  (
+    "null",
+    expectEqual
+      "Invalid $type: expected app.bsky.feed.post, got null"
+      (typeMessage JNull),
+  ),
+  (
+    "number",
+    expectEqual
+      "Invalid $type: expected app.bsky.feed.post, got 5"
+      (typeMessage (JInt 5)),
+  ),
+  (
+    "array",
+    expectEqual
+      "Invalid $type: expected app.bsky.feed.post, got 1,,true"
+      (typeMessage (jArray [JInt 1, JNull, JBool True])),
+  ),
+  (
+    "object",
+    expectEqual
+      "Invalid $type: expected app.bsky.feed.post, got [object Object]"
+      (typeMessage (jObject [])),
+  ),
+]
+
+-- The reference refuses a `__proto__` key while decoding any JSON request
+-- body, so one outside the record is refused as one inside it is.
+test "a __proto__ key in the request body outside the record is refused under validate false" =
+  let prefix = "Invalid key: __proto__"
+  expectEach [
+    (
+      "top level",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (createRecord
+            "app.bsky.feed.post"
+            "3ke6kg3wk2c2b"
+            post
+            ([("__proto__", JInt 1)] ++ validateFalse))),
+    ),
+    (
+      "nested",
+      expectEqual
+        (refused prefix)
+        (refusal
+          prefix
+          (createRecord
+            "app.bsky.feed.post"
+            "3ke6kg3wk2c2b"
+            post
+            ([
+                (
+                  "extra",
+                  jObject [("a", jArray [jObject [("__proto__", JInt 1)]])],
+                ),
+              ]
+              ++ validateFalse))),
+    ),
+  ]
+
+-- ── updateHandle ────────────────────────────────────────────────────────────
+
+-- `account`'s handle is under `.example`, a TLD `updateHandle` refuses, so
+-- the handle cells run as the same DID under a handle it accepts.
+currentHandle : String
+currentHandle = "medaka.dev"
+
+fullServer : Server
+fullServer =
+  let handleAccount =
+    resultOrPanic
+      "lexicon_write_test: handle account setup failed"
+      (makeAccount accountDidText currentHandle hostText)
+  resultOrPanic
+    "lexicon_write_test: full server setup failed"
+    (pdsServer handleAccount serverLinksEmpty "lexicon_write_test")
+
+-- The status an `updateHandle` call is answered, its error name, and whether
+-- it asked the shell to announce an `#identity` event.
+updateHandleOutcome : List (String, Json) -> (Int, String, Bool)
+updateHandleOutcome fields =
+  let request =
+    resultOrPanic
+      "lexicon_write_test: updateHandle request did not parse"
+      (parseRequest
+        (procedureRequest
+          hostText
+          token
+          "com.atproto.identity.updateHandle"
+          (stringify (jObject fields))))
+  let (_, response, announced) =
+    handleAnnouncing fullServer testContext initialStore request
+  let error = match parse (bodyText (serializeResponse response))
+    Ok body => fieldText "error" body
+    Err _ => ""
+  (responseStatus response, error, announced)
+
+test "updateHandle with a __proto__ key is refused and announces nothing" =
+  let plain = [("handle", JString currentHandle)]
+  let withProto = plain ++ [("__proto__", JInt 1)]
+  expectEach [
+    (
+      "the current handle alone announces",
+      expectEqual (200, "", True) (updateHandleOutcome plain),
+    ),
+    (
+      "the current handle beside __proto__",
+      expectEqual (400, "InvalidRequest", False) (updateHandleOutcome withProto),
     ),
   ]
 

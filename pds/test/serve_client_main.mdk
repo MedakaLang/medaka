@@ -368,6 +368,12 @@ xrpcPath nsid = "/xrpc/\{nsid}"
 createRecordPath : String
 createRecordPath = xrpcPath "com.atproto.repo.createRecord"
 
+updateHandlePath : String
+updateHandlePath = xrpcPath "com.atproto.identity.updateHandle"
+
+updateHandleJson : String -> String
+updateHandleJson handle = stringify (jObject [("handle", JString handle)])
+
 getRecordPath : String -> String -> String -> String
 getRecordPath did collection rkey =
   "\{xrpcPath "com.atproto.repo.getRecord"}?repo=\{did}&collection=\{collection}&rkey=\{rkey}"
@@ -1243,6 +1249,50 @@ runRateLimitWrite port xff count want token did collection rkeyPrefix =
         "rate limit probe"))
   let () = ignoreResult (close conn)
   reportRateLimit "RLWRITE" want status headerText body
+
+runRateLimitHandleUpdate : Int ->
+  String ->
+  Int ->
+  Int ->
+  String ->
+  String ->
+  <IO, Net> Unit
+runRateLimitHandleUpdate port xff count want token handle =
+  let conn = mustConnect port
+  let (status, headerText, body) = floodLoop conn count (_ =>
+    postRequestXff xff token updateHandlePath (updateHandleJson handle))
+  let () = ignoreResult (close conn)
+  reportRateLimit "RLHANDLE" want status headerText body
+
+{- | One `com.atproto.identity.updateHandle` call with a verbatim JSON body,
+   from its own forwarded-for identity, graded by status and, for a refusal,
+   by the XRPC error name and a fragment of its message.
+
+   The body is verbatim so a cell can send what no well-formed client would:
+   no `handle` at all, or one that is not a string. An empty `token` sends no
+   `Authorization` header. -}
+runUpdateHandleCell : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  String ->
+  <IO, Net> Unit
+runUpdateHandleCell port xff token bodyJson want errorName fragment =
+  let conn = mustConnect port
+  let () = mustSend conn (postRequestXff xff token updateHandlePath bodyJson)
+  let () = match readHeaderResponse conn empty
+    Err message => report "UPDATEHANDLE" False message
+    Ok (status, _, body, _) =>
+      let text = textOrHex body
+      report
+        "UPDATEHANDLE"
+        (status == want
+          && contains "\"error\":\"\{errorName}\"" text
+          && contains fragment text)
+        "status \{intToString status} (wanted \{intToString want} \{errorName}): \{text}"
+  ignoreResult (close conn)
 
 runRateLimitSession : Int ->
   String ->
@@ -2141,7 +2191,7 @@ runKdfFloodOwnerLockout port attackerXff identifier wrongPassword count ownerXff
 
 usage : String
 usage =
-  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|kdf-flood-xff|login-race> ..."
+  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-update-handle|update-handle|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|kdf-flood-xff|login-race> ..."
 
 main : <IO, Env, Net, Clock> Unit
 main = match args ()
@@ -2297,6 +2347,23 @@ main = match args ()
     runLoginRace (mustPort port) identifier password
   ["credential-at", count, password] =>
     runCredentialAt (mustCount count) password
+  ["rl-update-handle", port, xff, count, want, token, handle] =>
+    runRateLimitHandleUpdate
+      (mustPort port)
+      xff
+      (mustCount count)
+      (mustStatus want)
+      token
+      handle
+  ["update-handle", port, xff, token, bodyJson, want, errorName, fragment] =>
+    runUpdateHandleCell
+      (mustPort port)
+      xff
+      token
+      bodyJson
+      (mustStatus want)
+      errorName
+      fragment
   ["rl-session", port, xff, count, want, identifier, password] =>
     runRateLimitSession
       (mustPort port)
