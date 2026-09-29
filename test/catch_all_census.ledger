@@ -89,6 +89,7 @@ rewriteLocalDictExpr	Expr	4/42
 rewriteRPDict	Expr	1/42
 shadowStandaloneHead	Expr	4/42
 sourceBindingArity	Expr	6/42
+spineHeadEv	Expr	3/42
 stampTailDecl	Decl	1/14
 stmtCalleeName	Expr	10/42
 superImplMsgsOf	Decl	1/14

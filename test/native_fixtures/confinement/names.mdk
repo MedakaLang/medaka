@@ -1,0 +1,34 @@
+-- A binding takes its grants by its own identity, not by its spelling: a file
+-- helper named like a prelude interface method (`append` of `Semigroup`, `sub`
+-- of `Num`) or like a catalog extern that is not a file extern (`log`) still
+-- receives its caller's authority, so each refuses a path outside `cfg/` and
+-- admits one inside it.
+append : (path : String) -> String -> <FileWrite path> Result String Unit
+append path msg = appendFile path msg
+
+sub : (path : String) -> <FileRead path> Result String String
+sub path = readFile path
+
+log : (path : String) -> String -> <FileWrite path> Result String Unit
+log path msg = appendFile path msg
+
+appendCfg : String -> <FileWrite "cfg/*"> Result String Unit
+appendCfg name = append ("cfg/" ++ name) "x"
+
+subCfg : String -> <FileRead "cfg/*"> Result String String
+subCfg name = sub ("cfg/" ++ name)
+
+logCfg : String -> <FileWrite "cfg/*"> Result String Unit
+logCfg name = log ("cfg/" ++ name) "x"
+
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+main =
+  println "append in: \{said (appendCfg "b.txt")}"
+  println "append out: \{said (appendCfg "../outdir/stolen.txt")}"
+  println "sub in: \{said (subCfg "a.txt")}"
+  println "sub out: \{said (subCfg "../secret.txt")}"
+  println "log in: \{said (logCfg "b.txt")}"
+  println "log out: \{said (logCfg "../pwned.txt")}"

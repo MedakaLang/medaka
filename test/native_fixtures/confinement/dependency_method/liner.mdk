@@ -1,0 +1,3 @@
+-- An interface whose method is spelled like the entry module's file helper.
+export interface Liner a where
+  fetch : a -> Int

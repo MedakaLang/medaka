@@ -1,0 +1,6 @@
+-- Brings `liner` into the program graph without the entry module importing it.
+import liner.{Liner}
+
+export
+size : List Int -> Int
+size xs = length xs

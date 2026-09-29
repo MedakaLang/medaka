@@ -1,0 +1,18 @@
+-- An interface method named `fetch` in a module this one never imports does not
+-- change what this module's own `fetch` is: it takes its caller's grant.
+import other.{size}
+
+fetch : (path : String) -> <FileRead path> Result String String
+fetch path = readFile path
+
+readCfg : String -> <FileRead "cfg/*"> Result String String
+readCfg name = fetch ("cfg/" ++ name)
+
+said : Result String String -> String
+said (Ok c) = "Ok \{c}"
+said (Err e) = "Err \{e}"
+
+main =
+  println (size [1, 2])
+  println (said (readCfg "a.txt"))
+  println (said (readCfg "../secret.txt"))

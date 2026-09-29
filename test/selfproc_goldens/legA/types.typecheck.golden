@@ -279,6 +279,7 @@ bodyExtraNumObls : List UObligation -> Int -> Int -> List UObligation
 bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
 borrowedEffectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
+bottomGrant : Expr
 boundFailureMsg : String -> Authority -> String -> String -> Authority -> Option Authority -> String
 boundInsert : List String -> Map String String -> Map String String
 boundNames : UsePath -> Option (Map String Unit)
@@ -316,9 +317,11 @@ callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
 callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono, Option Loc)
 callUOblsWindow : Int -> List UObligation
 calleeArrow : Mono -> (Mono, EffRow, Mono)
+calleeTakesGrants : GrantCallee -> Bool
 candIfaceOf : (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> IfaceRef
 candsOneIface : List KeyEntry -> Option String
 captureScope : Unit -> ScopeId
+catalogCallee : String -> GrantCallee
 ceAddRows : List CeRow -> ClassEnv -> ClassEnv
 ceFunctorEnv : ClassEnv
 ceFunctorIface : Decl
@@ -993,6 +996,7 @@ extendPropParams : TcEnv -> List PropParam -> TcEnv
 extendTermBindings : TcEnv -> Map String Unit -> List (String, Scheme) -> TcEnv
 extendVar : TcEnv -> String -> Scheme -> TcEnv
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
+externCallee : String -> GrantCallee
 externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : List Decl -> List (String, Scheme)
@@ -1205,12 +1209,10 @@ goalsMark : Unit -> Int
 goalsOfKindIn : GoalKind -> List Obligation -> List Obligation
 goalsSince : Int -> List Obligation
 grantArrows : Int -> Ty -> Ty
+grantCalleeOf : String -> GrantCallee
 grantChainAt : ScopeId -> List GrantBinder
 grantDecl : String -> Decl -> Decl
-grantExcluded : String -> Bool
-grantExcludedNames : List Decl -> Map String Unit
 grantExpr : Expr -> Expr
-grantExternArity : String -> Scheme -> Option Int
 grantIdTerm : List GrantBinder -> Int -> Expr
 grantIfaceMethod : String -> IfaceMethod -> IfaceMethod
 grantImplMethod : String -> ImplMethod -> ImplMethod
@@ -1231,7 +1233,9 @@ grantTerm : List GrantBinder -> Authority -> Expr
 grantTerms : GrantOcc -> List Expr
 grantTopKey : String -> String -> String
 grantUse : String -> EvId -> Expr
+grantVarParams : List GrantBinder -> List (Ref Authvar) -> List String -> Option (List String)
 grantWholeDomain : List Decl -> List Decl
+grantsEnabled : Unit -> Bool
 graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
 graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
@@ -1674,6 +1678,7 @@ isRigidCell : Ref Effvar -> Bool
 isRowSlotArg : SigVars -> List (String, Mono) -> Ty -> Bool
 isSemanticGivenAnswer : Option AssumAnswer -> Bool
 isShadowStandalone : TcEnv -> String -> Bool
+isSourceless : Int -> Bool
 isStringTy : Ty -> Bool
 isSyntacticLambda : Expr -> Bool
 isTupleTyName : String -> Bool
@@ -1810,6 +1815,7 @@ markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String,
 markNumlitOpTaint : Mono -> Unit
 markRecursiveOccurrences : ModuleMarking -> List (String, Mono) -> List ScopedMember -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 markSetsOf : PreludeMarkFacts -> List Decl -> List (String, List Decl) -> List Decl -> MarkSets
+markSourceless : List Int -> Unit
 markTailDecl : ArgRw -> Decl -> Decl
 markTailDecls : MarkCtx -> Map String Unit -> (String -> Bool) -> List Decl -> List Decl
 matchCol0Type : Mono -> Option TabKey
@@ -1866,7 +1872,7 @@ methodEnvBinding : MethodSchemeRow -> EnvBinding
 methodGrantKey : String -> String -> String
 methodGrantOf : String -> String -> Option MethodGrant
 methodGrantOfRow : MethodSchemeRow -> Option MethodGrant
-methodGrantUse : String -> EvId -> Option (Int, List Expr)
+methodGrantUse : String -> EvId -> MethodGrantUse
 methodInterfacePredicateTemplate : List String -> List (String, Mono) -> List (Option Mono)
 methodLevelConstraintMonos : List String -> Ty -> List (String, Mono) -> List Mono
 methodLevelConstraintSlots : List String -> Ty -> List (String, IfaceRef)
@@ -1964,6 +1970,7 @@ methodSlotIdsAtPositions : List Int -> List MethodPredicateSlot -> List (List In
 methodSlotPositions : List MethodPredicateSlot -> List (List Int)
 methodSlotSubst : List Int -> List Int -> List (Int, Mono) -> Option (List (Int, Mono))
 methodTemplateGivenScan : MethodPredicateTemplate -> List Int -> List GivenEntry -> MethodTemplateGivenResult -> MethodTemplateGivenResult
+methodTerms : String -> MethodGrant -> GrantOcc -> List Expr
 methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List (String, List String)
 minLevelOf : List (Ref Effvar) -> Int
 mintDictAt : (String -> EvId -> Unit) -> String -> Expr
@@ -1981,7 +1988,6 @@ mkMethodOccObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option L
 modInScope : String -> Map String Unit -> Bool
 moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
 moduleChainMemoRef : Ref (Option ChainMemo)
-moduleDefinesName : String -> Bool
 moduleDictNames : List (String, List String) -> List String -> List (String, List Decl) -> List String
 moduleImportSeed : List (String, Scheme) -> List (String, (Option String, ExportBinding)) -> ModuleSeed
 moduleMarkCtx : MarkSets -> String -> List Decl -> Map String Scheme -> MarkCtx
@@ -2117,7 +2123,6 @@ openRow : Unit -> EffRow
 openRowHint : List Atom -> String
 openScope : ScopeId -> Unit
 optLocEq : Option Loc -> Option Loc -> Bool
-optionAll : List (Option a) -> Option (List a)
 optionOrFresh : Option Mono -> Mono
 ordCompareOp : Mono -> Mono -> Mono
 ordinalIsSentinel : Int -> Bool
@@ -2394,6 +2399,7 @@ recordNumlitLoc : Mono -> Unit
 recordNumlitRange : Mono -> Int -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
 recordOblAt : Predicate -> Int -> Provenance -> Option Loc -> ScopeId -> Unit
+recordOccWith : String -> EvId -> Scheme -> List (Int, Authority) -> Option Int -> Bool -> Unit
 recordOfOtherType : Mono -> RecordInfo -> Bool
 recordOwnerModule : RecordInfo -> Option String
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
@@ -2406,6 +2412,8 @@ recordSchemeCallObligations : Int -> List VecObl -> List (Int, Mono) -> Unit
 recordSelectedStandaloneRoutes : String -> ShadowDicts -> List (Ref Route) -> Mono -> Unit
 recordShadowStandaloneObls : TcEnv -> String -> List (Int, Mono) -> Unit
 recordSite : TcEnv -> String -> Scheme -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono -> MethodInstantiationSubst -> Mono
+recordStandaloneAt : String -> Expr -> SelectedValueOccurrence -> Unit
+recordStandaloneGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Int -> Unit
 recordTopGrants : String -> List (String, Scheme) -> Map String (List (List Pat, Expr)) -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
@@ -2457,7 +2465,7 @@ registerLocalGroupAbs : TcEnv -> Int -> Int -> List (LetBind, Option ScopeId) ->
 registerLocalScheme : String -> Scheme -> Int -> Int -> Int -> Unit
 registerMember : String -> ScopeId -> List (IfaceRef, List Mono) -> List (List Mono) -> Unit
 registerMethodBodyGivens : IfaceRef -> MethodBodyKind -> List String -> Ty -> MethodBodyInstance -> ScopeId -> Unit
-registerMethodBodyGrants : IfaceRef -> String -> MethodBodyInstance -> ScopeId -> Unit
+registerMethodBodyGrants : IfaceRef -> String -> List Mono -> MethodBodyInstance -> ScopeId -> Unit
 registerMethodDictSlots : ScopeId -> Int -> List Int -> List (Int, Mono) -> Unit
 registerMethodIfaceParamsAll : List Decl -> Unit
 registerMethodIfaceParamsDecl : Decl -> Unit
@@ -2746,6 +2754,7 @@ sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
 sourceBindingArity : Expr -> Int
 spellCtxOf : List Decl -> SpellCtx
 spineHead : Mono -> Mono
+spineHeadEv : Expr -> Option EvId
 spineHeadMono : Mono -> Mono
 splitOnComma : String -> List String
 splitOnCommaGo : String -> Int -> Int -> List String -> List String
@@ -2758,6 +2767,7 @@ stampRoutes : List (Ref Route) -> Unit
 stampTailDecl : Map String Int -> Decl -> Decl
 stampTailDecls : Map String Int -> List Decl -> List Decl
 stampedRecordHead : String -> RecordInfo -> String
+standaloneOcc : Option GrantOcc -> Option (Int, GrantOcc)
 standaloneOccurrence : TcEnv -> String -> String -> Option Loc -> Option SelectedValueOccurrence
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
 standaloneShadowDomainAt : String -> Int -> Option Mono

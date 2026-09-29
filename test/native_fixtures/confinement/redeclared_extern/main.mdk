@@ -1,0 +1,14 @@
+-- An imported redeclaration of a catalog file extern is that same operation: it
+-- takes its grant after its argument, and is confined by it.
+import rext.{readFile}
+
+readCfg : String -> <FileRead "cfg/*"> Result String String
+readCfg name = readFile ("cfg/" ++ name)
+
+said : Result String String -> String
+said (Ok c) = "Ok \{c}"
+said (Err e) = "Err \{e}"
+
+main =
+  println (said (readCfg "a.txt"))
+  println (said (readCfg "../secret.txt"))

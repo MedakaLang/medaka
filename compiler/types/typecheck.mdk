@@ -12591,6 +12591,7 @@ third3 (_, _, z) = z
 openExistentials : List (Ref Authvar) -> Unit
 openExistentials [] = ()
 openExistentials cells =
+  let _ = markSourceless (map authvarId cells)
   perRun.value.openedExistentialsRef :=
     cells ++ perRun.value.openedExistentialsRef.value
 
@@ -14858,10 +14859,19 @@ inferMethodAtCell : TcEnv -> String -> EvCell -> Mono
 inferMethodAtCell env name c =
   let st = graphRun.value.grants
   st.gsLastMethodInst := None
+  st.gsLastStandalone := None
   let t = inferMethodAt env name c.ecIface c.ecArity c.ecTag c.ecImpl c.ecMeth
-  let _ = match st.gsLastMethodInst.value
-    Some (scheme, subst) => recordMethodGrantOcc name c.ecId scheme subst
-    None => ()
+  let _ = match (st.gsLastStandalone.value, st.gsLastMethodInst.value)
+    (Some (scheme, subst), _) =>
+      recordStandaloneGrantOcc
+        name
+        c.ecId
+        scheme
+        subst
+        (optionOr 0 c.ecArity.value)
+    (None, Some (scheme, subst)) =>
+      recordMethodGrantOcc name c.ecId scheme subst
+    (None, None) => ()
   t
 
 -- #2705: a standalone-shadow occurrence (a user fn spelled like an interface
@@ -14900,6 +14910,8 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef =
         instantiateStandaloneOccurrence env name sym !currentLoc value
       let inst = occurrence.svoInstance
       let dicts = occurrence.svoDicts
+      graphRun.value.grants.gsLastStandalone :=
+        Some (occurrence.svoScheme, inst.mtiSubstitution.misAuthSubst)
       arityRef := Some (funArity inst.mtiBody)
       let receiver = match methodDispatchIdx name
         Some idx => optionOr inst.mtiBody (nthArgMono idx inst.mtiBody)
@@ -15714,18 +15726,27 @@ data GrantBinder =
 -- One recorded use: its callee, the authority cells it instantiated (in grant
 -- order), or, for a use inside the callee's own recursive group, the callee's
 -- own quantified ids; the value arity after which a file extern or a method
--- takes its grants; and the binders enclosing the use, innermost first.
+-- takes its grants; the binders enclosing the use, innermost first; and whether
+-- the use is a method occurrence that instantiated the standalone binding its
+-- name shadows, whose grants lead its arguments as a source binding's do (its
+-- value arity is then the occurrence's, which its published arity adds them to).
 data GrantOcc = GrantOcc {
   goCallee : String,
   goCells : List Authority,
   goRecIds : List Int,
   goTrailing : Option Int,
   goChain : List GrantBinder,
+  goStandalone : Bool,
 }
 
--- An interface method whose type quantifies authorities: its value arity, and the
--- binder names of its authorities in grant order.
+-- An interface method whose type quantifies authorities: the value arity its
+-- written type spells, and the binder names of its authorities in grant order.
 data MethodGrant = MethodGrant { mgArity : Int, mgNames : List String }
+
+-- What a use of a name denotes, for its grants: a source binding (grants lead its
+-- arguments), a catalog file extern (grants follow its value arguments), or a
+-- binding that takes none (any other extern).
+data GrantCallee = SourceCallee | FileExternCallee | NoGrantCallee
 
 data GrantState = GrantState {
   -- keyed by the use's evidence ordinal
@@ -15740,10 +15761,18 @@ data GrantState = GrantState {
   gsMethods : Ref (OrdMap MethodGrant),
   -- a method body's scope ordinal: its grant binder
   gsBodies : Ref (Map Int GrantBinder),
-  -- the scheme and authority substitution of the last value instantiation, and
-  -- of the last method candidate's
+  -- the scheme and authority substitution of the last value instantiation, of
+  -- the last method candidate's, and of the last standalone a method occurrence
+  -- selected
   gsLastInst : Ref (Option (Scheme, List (Int, Authority))),
   gsLastMethodInst : Ref (Option (Scheme, List (Int, Authority))),
+  gsLastStandalone : Ref (Option (Scheme, List (Int, Authority))),
+  -- the authority variables no caller supplies: an existential a pattern opened,
+  -- and an instance head's index inside the instance's method bodies
+  gsSourceless : Ref (Map Int Unit),
+  -- the name, as its declaration spells it, of every top-level binding that
+  -- takes grants
+  gsTakers : Ref (OrdMap Unit),
   gsFresh : Ref Int,
 }
 
@@ -15757,6 +15786,9 @@ freshGrantState _ = GrantState {
   gsBodies = Ref Tip,
   gsLastInst = Ref None,
   gsLastMethodInst = Ref None,
+  gsLastStandalone = Ref None,
+  gsSourceless = Ref Tip,
+  gsTakers = Ref omEmpty,
   gsFresh = Ref 0,
 }
 
@@ -15770,6 +15802,9 @@ copyGrantState st = GrantState {
   gsBodies = Ref st.gsBodies.value,
   gsLastInst = Ref st.gsLastInst.value,
   gsLastMethodInst = Ref st.gsLastMethodInst.value,
+  gsLastStandalone = Ref st.gsLastStandalone.value,
+  gsSourceless = Ref st.gsSourceless.value,
+  gsTakers = Ref st.gsTakers.value,
   gsFresh = Ref st.gsFresh.value,
 }
 
@@ -15869,40 +15904,62 @@ mapDeclBodies f (DAttrib attrs d) = DAttrib attrs (mapDeclBodies f d)
 -- a declaration with no expression body (data, signatures, imports, externs)
 mapDeclBodies _ d = d
 
--- A name that never takes a grant however its scheme reads: an interface method
--- anywhere in the graph (its uses are method occurrences, not `EDictAt`) and any
--- extern other than a file one.  Decided over the whole graph, so the module that
--- defines a binding and every module that uses it agree.
-grantExcluded : String -> Bool
-grantExcluded n = match driverState.value.markSetsRef.value
-  Some ms =>
-    omHasKey n ms.msGrantExcluded
-      || omHasKey n driverState.value.builtinExternNamesRef.value
-        && not (omHasKey n fileGrantExterns)
-  None => True
+-- Grants are passed only on a graph whose driver ran the marking preamble: a
+-- driver that never marks has no use that could carry one.
+grantsEnabled : Unit -> Bool
+grantsEnabled _ = isSome driverState.value.markSetsRef.value
 
--- The graph-wide half of `grantExcluded`: every interface method name and every
--- declared extern that is not a file extern.
-grantExcludedNames : List Decl -> OrdMap Unit
-grantExcludedNames allDecls =
-  omFromNames
-    (allIfaceMethodNames allDecls
-      ++ filterList
-        (n => not (omHasKey n fileGrantExterns))
-        (map fst (directExternSigs (externDecls allDecls))))
-    omEmpty
+-- What a use of [name] in the module being marked denotes.  An extern the module
+-- declares or imports is a foreign declaration, and one spelled like a catalog
+-- file extern binds that same runtime operation (a redeclaration must agree with
+-- the catalog row); any other value the module defines or imports is a source
+-- binding; a name the module neither defines nor imports is the catalog extern
+-- when the catalog declares it.
+grantCalleeOf : String -> GrantCallee
+grantCalleeOf name
+  | isLocalAbsName name = SourceCallee
+  | otherwise = match perRun.value.markingRef.value
+    Some mm =>
+      if omHasKey name mm.mmExterns then
+        externCallee name
+      else if omHasKey name mm.mmUserNames then
+        SourceCallee
+      else
+        catalogCallee name
+    None => catalogCallee name
+
+catalogCallee : String -> GrantCallee
+catalogCallee name =
+  if omHasKey name driverState.value.builtinExternNamesRef.value then
+    externCallee name
+  else
+    SourceCallee
+
+externCallee : String -> GrantCallee
+externCallee name =
+  if omHasKey name fileGrantExterns then FileExternCallee else NoGrantCallee
 
 schemeAuthIds : Scheme -> List Int
 schemeAuthIds (Forall _ _ avars _ _ _) = avars
 
--- Whether the marker gives a use of [n] a grant identity: its scheme in [env]
--- quantifies an authority.
+-- Whether the marker gives a use of [n] a grant identity: the binding [n] denotes
+-- in [env] is a value, not an interface method (whose uses are method
+-- occurrences), that takes grants, and its own scheme quantifies an authority.
 grantNameIn : TcEnv -> String -> Bool
 grantNameIn env n
-  | grantExcluded n = False
+  | not (grantsEnabled ()) = False
   | otherwise = match lookupBinding env n
-    Some b => isNonEmptyL (schemeAuthIds b.ebValue.vsScheme)
+    Some b => match b.ebMethodRow
+      Some _ => False
+      None =>
+        calleeTakesGrants (grantCalleeOf n)
+          && isNonEmptyL (schemeAuthIds b.ebValue.vsScheme)
     None => False
+
+calleeTakesGrants : GrantCallee -> Bool
+calleeTakesGrants SourceCallee = True
+calleeTakesGrants FileExternCallee = True
+calleeTakesGrants NoGrantCallee = False
 
 -- A scheme's quantified authorities in grant order: first occurrence in the
 -- type read left to right (an arrow's domain, its row, its result), so a
@@ -15918,8 +15975,8 @@ grantOrder (Forall _ _ avars _ force body) =
 -- arguments.
 export
 bindingGrantArity : String -> Scheme -> Int
-bindingGrantArity n sch =
-  if grantExcluded n then 0 else listLen (grantOrder sch)
+bindingGrantArity _ sch =
+  if grantsEnabled () then listLen (grantOrder sch) else 0
 
 authOrderIn : Mono -> List Int -> List Int
 authOrderIn t acc = match normalize t
@@ -15996,30 +16053,66 @@ grantOnlyBindingId name = match perRun.value.markingRef.value
   None => 0
 
 recordGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Unit
-recordGrantOcc name ev scheme subst
-  | not (isLocalAbsName name) && grantExcluded name = ()
-  | otherwise = match grantOrder scheme
-    [] => ()
-    ids => setGrantOcc ev GrantOcc {
-      goCallee = name,
-      goCells = map (i => optionOr (AJoin []) (lookupAssocI i subst)) ids,
-      goRecIds = [],
-      goTrailing = grantExternArity name scheme,
-      goChain = grantChainAt (captureScope ()),
-    }
+recordGrantOcc name ev (scheme@(Forall _ _ _ _ _ body)) subst =
+  match grantCalleeOf name
+    NoGrantCallee => ()
+    SourceCallee => recordOccWith name ev scheme subst None False
+    FileExternCallee =>
+      recordOccWith name ev scheme subst (Some (arrowArity body)) False
 
 -- A method candidate's use: its grants follow its value arguments.
 recordMethodGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Unit
 recordMethodGrantOcc name ev (scheme@(Forall _ _ _ _ _ body)) subst =
-  match grantOrder scheme
-    [] => ()
-    ids => setGrantOcc ev GrantOcc {
-      goCallee = name,
-      goCells = map (i => optionOr (AJoin []) (lookupAssocI i subst)) ids,
-      goRecIds = [],
-      goTrailing = Some (arrowArity body),
-      goChain = grantChainAt (captureScope ()),
-    }
+  recordOccWith name ev scheme subst (Some (arrowArity body)) False
+
+-- A method occurrence typed as the standalone binding its name shadows: that
+-- binding's grants, leading its arguments.
+recordStandaloneGrantOcc : String ->
+  EvId ->
+  Scheme ->
+  List (Int, Authority) ->
+  Int ->
+  Unit
+recordStandaloneGrantOcc name ev scheme subst arity =
+  recordOccWith name ev scheme subst (Some arity) True
+
+recordOccWith : String ->
+  EvId ->
+  Scheme ->
+  List (Int, Authority) ->
+  Option Int ->
+  Bool ->
+  Unit
+recordOccWith name ev scheme subst trailing standalone = match grantOrder scheme
+  [] => ()
+  ids => setGrantOcc ev GrantOcc {
+    goCallee = name,
+    goCells = map (i => optionOr (AJoin []) (lookupAssocI i subst)) ids,
+    goRecIds = [],
+    goTrailing = trailing,
+    goChain = grantChainAt (captureScope ()),
+    goStandalone = standalone,
+  }
+
+-- The evidence id of the method occurrence heading an application spine.
+spineHeadEv : Expr -> Option EvId
+spineHeadEv (ELoc _ e) = spineHeadEv e
+spineHeadEv (EApp f _) = spineHeadEv f
+spineHeadEv (EMethodAt _ _ ev) = Some ev
+-- any other head is not a method occurrence
+spineHeadEv _ = None
+
+-- A shadow application's head, typed as the standalone [occurrence] selected.
+recordStandaloneAt : String -> Expr -> SelectedValueOccurrence -> Unit
+recordStandaloneAt name hd occurrence = match spineHeadEv hd
+  Some ev =>
+    recordStandaloneGrantOcc
+      name
+      ev
+      occurrence.svoScheme
+      occurrence.svoInstance.mtiSubstitution.misAuthSubst
+      (funArity occurrence.svoInstance.mtiBody)
+  None => ()
 
 methodGrantKey : String -> String -> String
 methodGrantKey ifaceWord method = "\{ifaceWord}#\{method}"
@@ -16030,9 +16123,9 @@ methodGrantOf ifaceWord method =
     (methodGrantKey ifaceWord method)
     graphRun.value.grants.gsMethods.value
 
--- The interface methods a module declares whose type quantifies authorities.  A
--- method whose written type does not spell out its arrows (an alias for one) is
--- left without grants, since its declared arity is what the backends read.
+-- The interface methods a module declares whose type quantifies authorities.  The
+-- grants follow the arrows the written type spells, since that declared arity is
+-- what the backends read; a result an alias names a function stays the result.
 recordMethodGrants : List MethodSchemeRow -> Unit
 recordMethodGrants rows =
   let st = graphRun.value.grants
@@ -16055,20 +16148,16 @@ methodGrantOfRow row = match row.msrScheme
   Forall _ _ _ _ force body => match grantOrder row.msrScheme
     [] => None
     ids =>
-      let arity = arrowArity body
-      if tyArrowCount row.msrType /= arity then
-        None
-      else
-        let cells = authCellsIn body (authRowCells force Tip)
-        Some MethodGrant {
-          mgArity = arity,
-          mgNames =
-            map
-              (i => match IdMap.get i cells
-                Some cell => optionOr "" (authvarName cell)
-                None => "")
-              ids,
-        }
+      let cells = authCellsIn body (authRowCells force Tip)
+      Some MethodGrant {
+        mgArity = tyArrowCount row.msrType,
+        mgNames =
+          map
+            (i => match IdMap.get i cells
+              Some cell => optionOr "" (authvarName cell)
+              None => "")
+            ids,
+      }
 
 -- The arrows a written type spells, as `core_ir_lower.methodArgTys` counts them.
 tyArrowCount : Ty -> Int
@@ -16077,43 +16166,47 @@ tyArrowCount (TyEffect _ _ t) = tyArrowCount t
 tyArrowCount (TyFun _ b) = 1 + tyArrowCount b
 tyArrowCount _ = 0
 
--- A method body's own authority binders: the cells its instantiated type holds
--- under the method's binder names, bound by the body's grant parameters.
+-- A method body's own authority binders, bound by the body's grant parameters.
+-- The instance head's cells are no caller's to supply.  Every other authority
+-- variable of the instantiated type is the method's own, and they occur in the
+-- order `grantOrder` reads the method's scheme in, since both are the one written
+-- type read left to right: the k-th of them is the k-th grant, whatever it is
+-- called.
 registerMethodBodyGrants : IfaceRef ->
   String ->
+  List Mono ->
   MethodBodyInstance ->
   ScopeId ->
   Unit
-registerMethodBodyGrants iface mname inst (ScopeId sid) =
+registerMethodBodyGrants iface mname heads inst (ScopeId sid) =
+  let headIds = IdMap.keys (fold (acc h => authCellsIn h acc) Tip heads)
+  let _ = markSourceless headIds
   match methodGrantOf (ifaceWordOf iface.irOrigin iface.irName) mname
     None => ()
     Some mg =>
-      let cells =
-        IdMap.values
-          (authCellsIn
-            inst.mbiExpected
-            (authRowCells inst.mbiContractForce Tip))
+      let own =
+        filterList
+          (i => not (containsI i headIds))
+          (reverseL
+            (authOrderRow
+              inst.mbiContractForce
+              (authOrderIn inst.mbiExpected [])))
       let ids =
         map
-          (n => match filterList (c => authvarName c == Some n) cells
-            c :: _ => authvarId c
-            [] => 0 - 1)
-          mg.mgNames
+          (k => optionOr (0 - 1) (nthOpt k own))
+          (rangeFromCount 0 (listLen mg.mgNames))
       let st = graphRun.value.grants
       st.gsBodies := IdMap.set sid (BodyGrantBinder mname ids) st.gsBodies.value
 
--- The value arity of a use of a parameterized file extern, or None for a source
--- binding.  A binding this module defines or imports under the name is its own.
-grantExternArity : String -> Scheme -> Option Int
-grantExternArity name (Forall _ _ _ _ _ body)
-  | omHasKey name fileGrantExterns && not (moduleDefinesName name) =
-    Some (arrowArity body)
-  | otherwise = None
+-- Authority variables no caller supplies, whose grant is the whole domain: the
+-- escape check has already held every declaration they reach to its label's top.
+markSourceless : List Int -> Unit
+markSourceless ids =
+  let st = graphRun.value.grants
+  st.gsSourceless := fold (m i => IdMap.set i () m) st.gsSourceless.value ids
 
-moduleDefinesName : String -> Bool
-moduleDefinesName name = match perRun.value.markingRef.value
-  Some mm => omHasKey name mm.mmUserNames
-  None => False
+isSourceless : Int -> Bool
+isSourceless i = IdMap.has i graphRun.value.grants.gsSourceless.value
 
 arrowArity : Mono -> Int
 arrowArity t = match normalize t
@@ -16151,14 +16244,14 @@ recordTopGrants : String ->
 recordTopGrants mid schemes grouped =
   let st = graphRun.value.grants
   let taking =
-    flatMap
-      ((n, sch) =>
-        if grantExcluded n then
-          []
-        else match grantOrder sch
+    if grantsEnabled () then
+      flatMap
+        ((n, sch) => match grantOrder sch
           [] => []
           ids => [(n, ids)])
-      schemes
+        schemes
+    else
+      []
   match taking
     [] => ()
     _ =>
@@ -16167,6 +16260,7 @@ recordTopGrants mid schemes grouped =
           (m entry => omInsert (grantTopKey mid (fst entry)) (snd entry) m)
           st.gsTopIds.value
           taking
+      st.gsTakers := omFromNames (map fst taking) st.gsTakers.value
       fold
         (_ (m, _) =>
           fold
@@ -16192,6 +16286,7 @@ recordRecursiveGrants mid m taking body =
             goRecIds = ids,
             goTrailing = None,
             goChain = [TopGrantBinder mid m],
+            goStandalone = False,
           }
           e
         _ => e
@@ -16216,6 +16311,7 @@ registerLocalGrants name sch = match grantOrder sch
         goRecIds = ids,
         goTrailing = None,
         goChain = grantChainAt (snd occ),
+        goStandalone = False,
       })
       ()
       recOccs
@@ -20459,6 +20555,7 @@ inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
           ""
           (orElseLoc (appSpineHeadLoc f) !currentLoc)
           value
+      let _ = recordStandaloneAt mname f occurrence
       let smono = occurrence.svoInstance.mtiBody
       let _ = stampMethodArities arityRefs (funArity smono)
       let r = freshVar ()
@@ -20568,6 +20665,7 @@ inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx =
           ""
           (orElseLoc (appSpineHeadLoc f) !currentLoc)
           value
+      let _ = recordStandaloneAt mname hd occurrence
       let smono = occurrence.svoInstance.mtiBody
       let _ = stampMethodArities arityRefs (funArity smono)
       let r = unifySpineResult env f smono (pre ++ [(x, tx)])
@@ -20852,7 +20950,9 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef hd nodes f x =
     if dispatches then
       shadowVarHeadMethodScheme env name hd
     else match selected
-      Some occurrence => occurrence.svoInstance.mtiBody
+      Some occurrence =>
+        let _ = recordStandaloneAt name hd occurrence
+        occurrence.svoInstance.mtiBody
       None => infer env hd
   arityRef := Some (funArity ft)
   toggles.value.shadowHeadCtxRef := savedShadowHead
@@ -21193,6 +21293,7 @@ maybeStandaloneValueMono env name =
 -- A selected standalone value contributes its own forcing row and constraints.
 -- Preparing a method candidate must not charge this alternate binding.
 data SelectedValueOccurrence = SelectedValueOccurrence {
+  svoScheme : Scheme,
   svoInstance : MethodTrackedInstantiation,
   svoDicts : ShadowDicts,
 }
@@ -21214,6 +21315,7 @@ instantiateStandaloneOccurrence env name sym origin value =
   let key = if sym == "" then name else sym
   let dc = optionOr (shadowDeclaredFor name key) declared
   SelectedValueOccurrence {
+    svoScheme = value.vsScheme,
     svoInstance = inst,
     svoDicts =
       shadowStandaloneDictSlots
@@ -21508,6 +21610,7 @@ inferDefinerStandaloneVarAppAt : TcEnv ->
 inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc =
   match standaloneOccurrence env name "" (orElseLoc (appSpineHeadLoc f) dloc)
     Some occurrence =>
+      let _ = recordStandaloneAt name hd occurrence
       currentLoc := dloc
       -- #1815: consume the WHOLE applied prefix, not just the receiver.  Unifying the
       -- standalone's declared type against `TFun xt … r` when the receiver is argument 1
@@ -32692,14 +32795,18 @@ grantExpr (e@(EApp _ _)) = match grantSpine e []
       None => mapChildren grantExpr e
     None => mapChildren grantExpr e
   (EMethodAt n seed ev, args) => match methodGrantUse n ev
-    Some (arity, grants) =>
+    MethodGrants arity grants =>
       saturateGrants (EMethodAt n seed ev) arity grants (map grantExpr args)
-    None => mapChildren grantExpr e
+    LeadingGrants _ grants =>
+      applyExprs (applyExprs (EMethodAt n seed ev) grants) (map grantExpr args)
+    NoGrants => mapChildren grantExpr e
   _ => mapChildren grantExpr e
 grantExpr (EDictAt n ev) = grantUse n ev
 grantExpr (EMethodAt n seed ev) = match methodGrantUse n ev
-  Some (arity, grants) => saturateGrants (EMethodAt n seed ev) arity grants []
-  None => EMethodAt n seed ev
+  MethodGrants arity grants =>
+    saturateGrants (EMethodAt n seed ev) arity grants []
+  LeadingGrants _ grants => applyExprs (EMethodAt n seed ev) grants
+  NoGrants => EMethodAt n seed ev
 grantExpr (ELet m r (PVar x xloc) e1 e2) =
   ELet m r (PVar x xloc) (grantLocalRhs x (grantExpr e1)) (grantExpr e2)
 grantExpr (ELetGroup binds body) =
@@ -32751,28 +32858,73 @@ grantUse n ev =
       Some arity => saturateGrants (EVar n) arity (grantTerms occ) []
       None => applyExprs head (grantTerms occ)
 
--- A method occurrence's value arity and grants, when the method it denotes takes
--- grants.  A use that inference did not record (its denotation was settled by a
--- path that instantiates no method scheme) passes the whole domain, so the
--- method's arity still agrees with every body.  An occurrence routed to a
--- standalone that shadows the method takes none: a standalone never does.
--- The occurrence's published arity counts the grants, as the backends read it.
-methodGrantUse : String -> EvId -> Option (Int, List Expr)
+-- How a method occurrence takes grants: after the method's value arguments, ahead
+-- of the arguments of the standalone binding it was routed to, or not at all.
+data MethodGrantUse =
+  | MethodGrants Int (List Expr)
+  | LeadingGrants Int (List Expr)
+  | NoGrants
+
+-- A method occurrence's grants.  One that dispatches passes the method's, after
+-- the value arity its written type spells; a use that inference did not record
+-- (its denotation was settled by a path that instantiates no method scheme) passes
+-- the empty authority, so the method's arity still agrees with every body and the
+-- use is refused rather than admitted.  One routed to the standalone its name
+-- shadows passes that binding's grants, which inference recorded when it typed
+-- the occurrence as the standalone; a grant-taking standalone reached without that
+-- record has no grants to pass, and is a compile-time failure.  The occurrence's
+-- published arity counts the grants, as the backends read it.
+methodGrantUse : String -> EvId -> MethodGrantUse
 methodGrantUse n ev =
   let cell = methodCellOf ev
-  match cell.ecTag.value
-    RLocal _ _ => None
-    _ =>
-      let found = match grantOccOf ev
-        Some occ => map (arity => (arity, grantTerms occ)) occ.goTrailing
-        None =>
-          map
-            (mg => (mg.mgArity, map (_ => EListLit []) mg.mgNames))
-            (methodGrantOf cell.ecIface.value n)
-      let _ = match found
-        Some (arity, grants) => cell.ecArity := Some (arity + listLen grants)
-        None => ()
-      found
+  let recorded = grantOccOf ev
+  let use = match cell.ecTag.value
+    RLocal sym _ => match standaloneOcc recorded
+      Some (arity, occ) => LeadingGrants arity (grantTerms occ)
+      None =>
+        if omHasKey
+          (if sym == "" then n else sym)
+          graphRun.value.grants.gsTakers.value then
+          panic
+            "grant pass: '\{n}' is routed to a standalone binding that takes authority grants, but inference did not type this use as that binding"
+        else
+          NoGrants
+    _ => match methodGrantOf cell.ecIface.value n
+      None => NoGrants
+      Some mg => match recorded
+        Some occ =>
+          if occ.goStandalone then
+            MethodGrants mg.mgArity (map (_ => bottomGrant) mg.mgNames)
+          else
+            MethodGrants mg.mgArity (methodTerms n mg occ)
+        None => MethodGrants mg.mgArity (map (_ => bottomGrant) mg.mgNames)
+  let _ = match use
+    MethodGrants arity grants => cell.ecArity := Some (arity + listLen grants)
+    LeadingGrants arity grants => cell.ecArity := Some (arity + listLen grants)
+    NoGrants => ()
+  use
+
+-- A use recorded as the standalone binding a method occurrence shadows, with its
+-- value arity.
+standaloneOcc : Option GrantOcc -> Option (Int, GrantOcc)
+standaloneOcc (Some occ) = match (occ.goStandalone, occ.goTrailing)
+  (True, Some arity) => Some (arity, occ)
+  _ => None
+standaloneOcc None = None
+
+-- A recorded method use's grants, one per authority the method quantifies.
+methodTerms : String -> MethodGrant -> GrantOcc -> List Expr
+methodTerms n mg occ =
+  let terms = grantTerms occ
+  if listLen terms == listLen mg.mgNames then
+    terms
+  else
+    panic
+      "grant pass: a use of method '\{n}' instantiated \{intToString (listLen terms)} authorities, but the method takes \{intToString (listLen mg.mgNames)} grants"
+
+-- The empty authority: a grant that admits no path.
+bottomGrant : Expr
+bottomGrant = EListLit [ELit (LString "")]
 
 applyExprs : Expr -> List Expr -> Expr
 applyExprs f args = fold (acc a => EApp acc a) f args
@@ -32814,32 +32966,47 @@ grantTerms occ = match occ.goRecIds
 
 -- The whole domain is the empty list, the empty authority a list holding only the
 -- empty element (it admits no path), and a set of elements joined with the
--- parameters of enclosing binders is their concatenation.  A variable no
--- enclosing binder quantifies has no caller to supply it — an opened existential
--- or an instance head's index — and takes the enclosing declaration's bound for
--- its label, which the escape check has already held to the whole domain.
+-- parameters of enclosing binders is their concatenation.  A variable is the
+-- parameter of the innermost enclosing binder that quantifies it.  Two kinds of
+-- variable have no caller to supply them, an opened existential and an instance
+-- head's index (`markSourceless`), and each is the whole domain: the escape check
+-- has held the declaration it reaches to its label's top.  Any other variable
+-- whose binder is not found contributes the empty authority, so a lost binder is
+-- a refusal at run time rather than an unconfined operation.
 grantTerm : List GrantBinder -> Authority -> Expr
 grantTerm chain a = match authGrantShape a
   GrantTop => EListLit []
-  GrantBottom => EListLit [ELit (LString "")]
-  GrantParts elems vars =>
-    match optionAll (map (v => grantParamFor chain (authvarId v)) vars)
-      None => EListLit []
-      Some params =>
-        let parts =
-          (if isEmptyL elems then
-              []
-            else
-              [EListLit (map (s => ELit (LString s)) elems)])
-            ++ map EVar (dedup params)
-        match parts
-          [] => EListLit [ELit (LString "")]
-          [p] => p
-          p :: rest =>
-            fold
-              (acc param => topAbsorbs param acc)
-              (fold (acc q => EBinOp "++" acc q (Ref RNone)) p rest)
-              (dedup params)
+  GrantBottom => bottomGrant
+  GrantParts elems vars => match grantVarParams chain vars []
+    None => EListLit []
+    Some params =>
+      let parts =
+        (if isEmptyL elems then
+            []
+          else
+            [EListLit (map (s => ELit (LString s)) elems)])
+          ++ map EVar (dedup params)
+      match parts
+        [] => bottomGrant
+        [p] => p
+        p :: rest =>
+          fold
+            (acc param => topAbsorbs param acc)
+            (fold (acc q => EBinOp "++" acc q (Ref RNone)) p rest)
+            (dedup params)
+
+-- The parameters a join's variables are, or None when one of them has no caller
+-- to supply it and so makes the join the whole domain.  A variable whose binder
+-- is not found contributes nothing.
+grantVarParams : List GrantBinder ->
+  List (Ref Authvar) ->
+  List String ->
+  Option (List String)
+grantVarParams _ [] acc = Some (reverseL acc)
+grantVarParams chain (v :: rest) acc = match grantParamFor chain (authvarId v)
+  Some p => grantVarParams chain rest (p :: acc)
+  None =>
+    if isSourceless (authvarId v) then None else grantVarParams chain rest acc
 
 -- A parameter holding the whole domain makes a join it is part of the whole
 -- domain; concatenation alone would narrow it to the other parts.
@@ -32851,12 +33018,6 @@ grantIdTerm : List GrantBinder -> Int -> Expr
 grantIdTerm chain i = match grantParamFor chain i
   Some p => EVar p
   None => EListLit []
-
-optionAll : List (Option a) -> Option (List a)
-optionAll [] = Some []
-optionAll (x :: xs) = match (x, optionAll xs)
-  (Some v, Some vs) => Some (v :: vs)
-  _ => None
 
 -- The parameter of the innermost enclosing binder that quantifies authority [i].
 grantParamFor : List GrantBinder -> Int -> Option String
@@ -36928,7 +37089,13 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
   let inst = instantiateMethodBody kind params mty gscope
-  let _ = registerMethodBodyGrants iface mname inst bodyScope
+  let _ =
+    registerMethodBodyGrants
+      iface
+      mname
+      (methodBodyHeadMonos kind)
+      inst
+      bodyScope
   let loc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
   let subject = methodBodySubject kind iface.irName mname
   -- #821: the method's effect variables are RIGID for the body — two of them
@@ -45968,15 +46135,20 @@ data ModuleBindings = ModuleBindings {
   -- Only standalone definitions owned by this module, before method overlays.
   mbStandaloneSchemes : OrdMap Scheme,
 }
+-- [xbExtern]: the binding is a foreign declaration, which takes no grant ahead of
+-- its arguments however its scheme reads.
 data ExportBinding = ExportBinding {
   xbScheme : Scheme,
   xbStandalone : Option Scheme,
+  xbExtern : Bool,
 }
 data ModuleSeed = ModuleSeed {
   msSchemes : List (String, Scheme),
   msImportedValues : OrdMap Scheme,
   -- every value name an import of the module supplies
   msImportedNames : OrdMap Unit,
+  -- the imported names that denote an extern
+  msImportedExterns : OrdMap Unit,
 }
 
 plainModuleSeed : List (String, Scheme) -> ModuleSeed
@@ -45984,6 +46156,7 @@ plainModuleSeed schemes = ModuleSeed {
   msSchemes = schemes,
   msImportedValues = omEmpty,
   msImportedNames = omEmpty,
+  msImportedExterns = omEmpty,
 }
 
 -- The ordinary winner and standalone alternative travel together through
@@ -45998,6 +46171,7 @@ tagModuleExports standalones schemes =
       ExportBinding {
         xbScheme = scheme,
         xbStandalone = omLookup name standalones,
+        xbExtern = False,
       },
     ))
     schemes
@@ -46014,9 +46188,16 @@ publicModuleExports prog bindings =
           None => [])
         (pubTopFnNames prog))
       omEmpty
-  tagModuleExports
-    standalones
-    (pickSchemes (publicValNames prog) bindings.mbSchemes)
+  let externs =
+    omFromNames (map fst (directExternSigs (externDecls prog))) omEmpty
+  map
+    ((name, binding) => (
+      name,
+      ExportBinding { binding | xbExtern = omHasKey name externs },
+    ))
+    (tagModuleExports
+      standalones
+      (pickSchemes (publicValNames prog) bindings.mbSchemes))
 
 -- The first row for a name wins, unless a second import supplies the same name:
 -- then the occurrence is the ambiguity the resolver reports (`ambiguousSet`
@@ -46067,6 +46248,7 @@ ambiguousImportBinding _ =
   ExportBinding {
     xbScheme = Forall [ambiguousImportTyvarId] [] [] [] pureRow (TVar cell),
     xbStandalone = None,
+    xbExtern = False,
   }
 
 moduleImportSeed : List (String, Scheme) ->
@@ -46087,6 +46269,12 @@ moduleImportSeed base imported =
           selected)
         omEmpty,
     msImportedNames = omFromNames (map fst selected) omEmpty,
+    msImportedExterns =
+      omFromNames
+        (flatMap
+          ((name, binding) => if binding.xbExtern then [name] else [])
+          selected)
+        omEmpty,
   }
 
 monoSpineHeadIsCon : Mono -> Bool
@@ -51779,8 +51967,6 @@ data MarkSets = MarkSets {
   msCoreShadowMap : List (String, String),
   msBareDictNames : List String,
   msUnits : List (String, List Decl),  -- `("core", coreDecls) :: modules`, for import-alias expansion
-  -- the names that never take an authority grant (`grantExcludedNames`)
-  msGrantExcluded : OrdMap Unit,
 }
 
 -- Writes `mangledShadowMapRef`, `argDispatchIdxByIdRef` and `markSetsRef` as a side
@@ -51848,7 +52034,6 @@ markSetsOf pmf coreDecls modules allDecls =
     msBareDictNames =
       dedup (moduleDictNames pmf.pmfConstrainedBodyVars rpNames modules),
     msUnits = units,
-    msGrantExcluded = grantExcludedNames allDecls,
   }
   driverState.value.markSetsRef := Some ms
   ms
@@ -51897,6 +52082,8 @@ data ModuleMarking = ModuleMarking {
   -- the value names the module defines at top level or imports: a use of one is
   -- that binding, never a catalog extern of the same spelling
   mmUserNames : OrdMap Unit,
+  -- the externs among the names the module declares or imports
+  mmExterns : OrdMap Unit,
 }
 
 -- Install the module's marking state at module start.  Reads the graph's mark sets
@@ -51917,6 +52104,10 @@ beginModuleMarking mid prog top seed =
     mmTop = top,
     mmDictSet = Ref (omFromNames names omEmpty),
     mmUserNames = omFromNames (declTopFnNames prog) seed.msImportedNames,
+    mmExterns =
+      omFromNames
+        (map fst (directExternSigs (externDecls prog)))
+        seed.msImportedExterns,
   }
 
 -- Mark one binding group's clauses (in the stored, newest-first order the map keeps)
@@ -51929,8 +52120,7 @@ markGroupClauses : ModuleMarking ->
   OrdMap (List (List Pat, Expr)) ->
   OrdMap (List (List Pat, Expr))
 markGroupClauses mm env members grouped =
-  let own =
-    omFromNames (filterList (m => not (grantExcluded m)) members) omEmpty
+  let own = omFromNames members omEmpty
   mapGroupClauses
     (markClauseWith
       (argRwOf mm.mmCtx mm.mmDictSet.value noDictHook (n =>

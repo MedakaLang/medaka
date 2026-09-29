@@ -238,11 +238,12 @@ confine_untouched() {
   [ -f "$1/secret.txt" ] && [ -L "$1/inlink" ] || echo "an entry outside cfg/ was removed"
 }
 # confine_case <fixture> <dir to run from, relative to the tree> <stdout> [panic]
+# A multi-module fixture is named by its entry, `<dir>/main`.
 # With `panic`, the run must exit nonzero with stderr naming the refusal of
 # cfg/../secret.txt.
 confine_case() {
   tree="${TMPDIR:-/tmp}/medaka_confine_$$"
-  bin="${TMPDIR:-/tmp}/medaka_confine_$$_$1"
+  bin="${TMPDIR:-/tmp}/medaka_confine_$$_$(printf '%s' "$1" | tr / _)"
   refusal='runtime error [E-PANIC]: cfg/../secret.txt is outside the granted authority ["cfg/*"]'
   (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$CONFINE/$1.mdk" -o "$bin" >/dev/null 2>&1)
   detail=""
@@ -317,6 +318,36 @@ Ok granted
 Err outdir/../secret.txt $outside [\"cfg/a.txt\", \"outdir/*\"]"
 confine_case exists_panic . "True" panic
 confine_case canonicalize_panic . "True" panic
+# A binding's grants follow its identity, never its spelling: a helper named like
+# an interface method or a foreign function anywhere in the graph, an instance
+# head index named like a method's binder, an imported redeclaration of a file
+# extern, and a method whose type ends in a function alias are each confined.
+confine_case names . "append in: Ok
+append out: Err cfg/../outdir/stolen.txt $outside [\"cfg/*\"]
+sub in: Ok
+sub out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+log in: Ok
+log out: Err cfg/../pwned.txt $outside [\"cfg/*\"]"
+confine_case dependency_method/main . "2
+Ok granted
+Err cfg/../secret.txt $outside [\"cfg/*\"]"
+confine_case ffi_stat/main . "4
+isFile in: Ok
+isFile out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+isDir out: Err cfg/../outdir $outside [\"cfg/*\"]
+fileSize out: Err cfg/../secret.txt $outside [\"cfg/*\"]"
+confine_case indexed_head . "load in: Ok
+load out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+copy in: Ok
+copy src out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+copy dst out: Err outdir/../pwned.txt $outside [\"outdir/*\"]"
+confine_case redeclared_extern/main . "Ok granted
+Err cfg/../secret.txt $outside [\"cfg/*\"]"
+confine_case method_named_readfile/main . "2
+Ok [\"granted\"]
+Err cfg/../secret.txt $outside [\"cfg/*\"]"
+confine_case alias_method . "in: Ok granted
+out: Err cfg/../secret.txt $outside [\"cfg/*\"]"
 
 echo
 
