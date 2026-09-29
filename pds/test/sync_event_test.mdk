@@ -34,21 +34,32 @@ import bytes as B
 import bytes.{Bytes, encodeUtf8, fromU8Array, sliceClamped}
 import crypto.sha256.{sha256}
 import hex.{encode}
-import list.{lookup, range, sort}
+import list.{lookup, nub, range, sort}
+import string.{padLeft}
 import test.{expectEqual}
 import lib.car.{carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidForDagCbor, cidForRaw, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
-import lib.mst.{mstEmpty, mstFromEntries, mstNodeBlocks, mstRootCid}
+import lib.mst.{
+  mstCoveringProofBlocks,
+  mstCreatedNodes,
+  mstEmpty,
+  mstFromEntries,
+  mstNodeBlocks,
+  mstRootCid,
+}
 import lib.repo.{
   Repo,
   RepoMutation,
+  RepoWrite(..),
+  repoApplyWrites,
   repoCommitCid,
   repoCreate,
   repoFromBlocks,
   repoInitFromKeyBytes,
   repoLatestCommit,
   repoMutationState,
+  repoTree,
   repoUpdate,
 }
 import lib.sign.{SecretKey, secretKeyFromBytes, signDigest, signatureCompact}
@@ -434,3 +445,135 @@ test "a non-ASCII UTF-8 path reaches the frame byte for byte" =
   let path = encodeUtf8 "a.b.c/é🐟"
   let event = { eventWithOps 0 | ops = [SyncOpCreate path recordCid] }
   expectEqual path (framedOpPath (syncCommitFrame event))
+
+postPath : String -> Bytes
+postPath rkey = encodeUtf8 "app.bsky.feed.post/\{rkey}"
+
+-- Enough filler records that the tree is several nodes deep, so the four named
+-- keys sit in different subtrees and most of the tree is untouched.
+fillerRows : List (Bytes, String)
+fillerRows =
+  map
+    (i =>
+      (postPath "k\{padLeft 3 '0' (intToString i)}", "filler \{intToString i}"))
+    (range 0 120)
+
+batchBase : Repo
+batchBase =
+  rebuiltRepo
+    5
+    ([
+        (postPath "a", "a1"),
+        (postPath "b", "b1"),
+        (postPath "c", "c1"),
+        (postPath "d", "d1"),
+      ]
+      ++ fillerRows)
+
+{- | One batch touching every op shape. `a` is deleted and recreated with new
+   bytes, which is an update; `d` is rewritten to the bytes it already held and
+   `f` is created, updated and deleted again, and neither is an op at all. The
+   ops come in post-write key order for creates and updates, then pre-write key
+   order for deletes, so the delete of `c` follows the create of `e`. -}
+test "one applyWrites batch announces exactly the keys whose CIDs moved" =
+  let writes = [
+    RepoWriteCreate (postPath "e") (sampleRecord "e1"),
+    RepoWriteUpdate (postPath "b") (sampleRecord "b2"),
+    RepoWriteDelete (postPath "c"),
+    RepoWriteUpdate (postPath "d") (sampleRecord "d1"),
+    RepoWriteCreate (postPath "f") (sampleRecord "f1"),
+    RepoWriteUpdate (postPath "f") (sampleRecord "f2"),
+    RepoWriteDelete (postPath "f"),
+    RepoWriteDelete (postPath "a"),
+    RepoWriteCreate (postPath "a") (sampleRecord "a2"),
+  ]
+  let after =
+    mustState (repoApplyWrites writes (mustTid (tidEncode 30 1)) batchBase)
+  let cidOf = text => cidToString (recordCidOf text)
+  let hexOf = rkey => encode (postPath rkey)
+  expectEqual
+    [
+      "update \{hexOf "a"} \{cidOf "a2"} prev \{cidOf "a1"}",
+      "update \{hexOf "b"} \{cidOf "b2"} prev \{cidOf "b1"}",
+      "create \{hexOf "e"} \{cidOf "e1"}",
+      "delete \{hexOf "c"} prev \{cidOf "c1"}",
+    ]
+    (opsBetween batchBase after)
+
+{- | The `blocks` CAR as the sync specification states it: the post-write MST
+   nodes the prior tree does not hold, the covering proofs for every op's
+   path over the post-write tree, the record blocks the ops name, and the
+   commit, each once, sorted by CID. Computed here over the two whole trees. -}
+wholeTreeBlocks : Repo -> Repo -> SyncCommitEvent -> List String
+wholeTreeBlocks before after event =
+  let created = wholeTreeCreated before after
+  let proof =
+    map
+      ((cid, _) => cidToString cid)
+      (must (mstCoveringProofBlocks (map opPathOf event.ops) (repoTree after)))
+  let records = flatMap opRecordCids event.ops
+  let commit = cidToString (repoCommitCid (repoLatestCommit after))
+  sort (nub (created ++ proof ++ records ++ [commit]))
+
+opPathOf : SyncRepoOp -> Bytes
+opPathOf (SyncOpCreate path _) = path
+opPathOf (SyncOpUpdate path _ _) = path
+opPathOf (SyncOpDelete path _) = path
+
+opRecordCids : SyncRepoOp -> List String
+opRecordCids (SyncOpCreate _ cid) = [cidToString cid]
+opRecordCids (SyncOpUpdate _ cid _) = [cidToString cid]
+opRecordCids (SyncOpDelete _ _) = []
+
+-- The post-write MST nodes the prior tree does not hold, over the two whole
+-- trees, sorted by CID text.
+wholeTreeCreated : Repo -> Repo -> List String
+wholeTreeCreated before after =
+  let nodeCids =
+    repo => map ((cid, _) => cidToString cid) (mstNodeBlocks (repoTree repo))
+  let priorNodes = nodeCids before
+  sort (filter (cid => not (elem cid priorNodes)) (nodeCids after))
+
+{- | The event's `blocks` CAR and `mstCreatedNodes` beside what the two whole
+   trees say each must be. -}
+blocksAgainstWholeTrees : Repo ->
+  List RepoWrite ->
+  ((List String, List String), (List String, List String))
+blocksAgainstWholeTrees before writes =
+  let after =
+    mustState (repoApplyWrites writes (mustTid (tidEncode 31 1)) before)
+  let event =
+    mustEvent (syncCommitEventFor 2 sampleTime sampleDid (Some before) after)
+  let created =
+    sort
+      (map
+        ((cid, _) => cidToString cid)
+        (mstCreatedNodes (repoTree before) (repoTree after)))
+  (
+    (snd (carCidsOf event.blocksCar), created),
+    (wholeTreeBlocks before after event, wholeTreeCreated before after),
+  )
+
+{- | The mixed batch above, as its `blocks` CAR and its created nodes: each
+   the whole-tree statement of what it must be. -}
+test "a mixed batch's blocks CAR holds exactly the whole-tree block set" =
+  let writes = [
+    RepoWriteCreate (postPath "e") (sampleRecord "e1"),
+    RepoWriteUpdate (postPath "b") (sampleRecord "b2"),
+    RepoWriteDelete (postPath "c"),
+    RepoWriteUpdate (postPath "d") (sampleRecord "d1"),
+    RepoWriteDelete (postPath "a"),
+    RepoWriteCreate (postPath "a") (sampleRecord "a2"),
+  ]
+  let (actual, expected) = blocksAgainstWholeTrees batchBase writes
+  expectEqual expected actual
+
+{- | Deleting `k031` leaves a subtree next to it unchanged but no longer
+   facing the node it faced before, so a walk of the two trees opens that
+   subtree on both sides. It is still in the prior tree, so it is not a new
+   block. Most single-key deletes from this repository never open an
+   unchanged subtree at all. -}
+test "a delete that moves an unchanged subtree adds no block for it" =
+  let writes = [RepoWriteDelete (postPath "k031")]
+  let (actual, expected) = blocksAgainstWholeTrees batchBase writes
+  expectEqual expected actual

@@ -16,7 +16,12 @@
    A second mode, `persist`, times `shell.server`'s `persistTransition` seam
    directly: it hands the same store as both `before` and `after`, so every
    half compares equal and persists nothing, leaving only the decision cost —
-   `blobsMoved`'s comparison included — to measure. -}
+   `blobsMoved`'s comparison included — to measure.
+
+   A third mode, `commit-event`, answers one `createRecord` against the
+   corpus and then times `lib.sync_event`'s `syncCommitEventFor` over the
+   repository either side of it: the `#commit` event a real server stages
+   for that write, measured apart from the route that caused it. -}
 
 import bytes as B
 import bytes.{Bytes, encodeUtf8}
@@ -39,10 +44,12 @@ import lib.store.{
   Store,
   sessionFingerprint,
   storeFromRepo,
+  storeRepo,
   storePutBlob,
   storeSessionOpen,
   storeWithServerSecret,
 }
+import lib.sync_event.{syncCommitEventFor}
 import shell.blobfile.{blobFileRead}
 import shell.persist.{persistLoad}
 import shell.server.{persistTransition}
@@ -242,10 +249,42 @@ measurePersist dir store reps =
 runPersist : String -> Int -> <IO, Clock, FileRead, FileWrite> Unit
 runPersist dir reps = measurePersist dir (loadStore dir) reps
 
+-- ── the `#commit` event one write stages ─────────────────────────────────────
+
+repeatCommitEvent : Option Repo -> Repo -> Int -> Int -> Int
+repeatCommitEvent before after n acc =
+  if n <= 0 then
+    acc
+  else match (syncCommitEventFor
+    n
+    "2026-09-14T00:00:00.000Z"
+    corpusDid
+    before
+    after)
+    Ok event => repeatCommitEvent before after (n - 1) (acc + length event.ops)
+    Err message => panic "cost_curve: commit event failed: \{message}"
+
+runCommitEvent : String -> Int -> <IO, Clock, FileRead> Unit
+runCommitEvent dir reps =
+  let store = loadStore dir
+  let server = match pdsServer (mustAccount ()) serverLinksEmpty "cost-curve"
+    Ok value => value
+    Err message => panic "cost_curve: server setup failed: \{message}"
+  let (written, response) = handleBytes server benchContext store createRequest
+  let after = match storeRepo written
+    Some repo => repo
+    None => panic "cost_curve: the write left no repository"
+  let start = monotonicSec ()
+  let opCount = repeatCommitEvent (storeRepo store) after reps 0
+  let elapsed = monotonicSec () - start
+  println
+    "commitEvent us=\{intToString (micros elapsed reps)} reps=\{intToString reps} ops=\{intToString (opCount / reps)} status=\{firstLineText response}"
+
 main : <IO, Env, Clock, FileRead, FileWrite> Unit
 main = match args ()
   ["persist", dir, repsText] => runPersist dir (mustInt repsText)
+  ["commit-event", dir, repsText] => runCommitEvent dir (mustInt repsText)
   [dir, collection, repsText] => run dir collection (mustInt repsText)
   _ =>
     panic
-      "usage: cost_curve_main <corpus-dir> <collection> <reps> | cost_curve_main persist <corpus-dir> <reps>"
+      "usage: cost_curve_main <corpus-dir> <collection> <reps> | cost_curve_main persist <corpus-dir> <reps> | cost_curve_main commit-event <corpus-dir> <reps>"
