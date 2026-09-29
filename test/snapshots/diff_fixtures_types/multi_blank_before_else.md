@@ -9,4 +9,4 @@ main =
 
   else println "no"
 # TYPES_USER
-main : <IO> Unit
+main : <Stdout> Unit

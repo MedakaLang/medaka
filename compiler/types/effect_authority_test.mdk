@@ -11,10 +11,11 @@ import types.typecheck.{
 import types.repr.{Scheme(..), ppScheme}
 import frontend.ast.{Loc(..)}
 import types.effect_authority.{
-  Authority(..), Authvar(..), authNorm, authSub, authJoin, renderAuthority
+  Authority(..), Authvar(..), authNorm, authSub, authJoin, renderAuthority,
+  authSplit, authExtend, authAppend, authIsTop
 }
 import types.effect_domain.{Param(..)}
-import support.util.{contains, lookupAssoc, anyList}
+import support.util.{contains, lookupAssoc, anyList, listLen}
 import string as S
 
 -- A prefix-domain label with a named-authority extern and a set-domain
@@ -69,8 +70,8 @@ test "a named wrapper is checked against its own argument" = expectAll [
   expectTrue
     (accepts "honest : (p : String) -> <Store p> Int\nhonest p = load p\n"),
   expectTrue
-    (accepts
-      "narrow : (p : String) -> <Store p> Int\nnarrow p = load (p ++ \"/x\")\n"),
+    (rejects
+      "extend : (p : String) -> <Store p> Int\nextend p = load (p ++ \"/x\")\n"),
   expectTrue
     (rejects
       "sneaky : (p : String) -> <Store p> Int\nsneaky p = load \"/etc/x\"\n"),
@@ -206,7 +207,7 @@ test "a method contract's binder is rigid in every body that implements it" = ex
       (accepts
         "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\ndata X = X\nimpl Loader X where\n  get _ p = load p\n"),
     expectTrue
-      (accepts
+      (rejects
         "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\n  get _ p = load (p ++ \"/x\")\ndata X = X\nimpl Loader X where\n"),
   ]
 
@@ -254,6 +255,53 @@ test "the authority algebra" =
     expectEqual "" (renderAuthority (authJoin top k)),
   ]
 
+-- A Product tuple whose axes are terms: each axis is compared on its own, a
+-- tuple of constants is a constant, and a cover is proven only by one element.
+test "the Product tuple algebra" =
+  let h = AVar (Ref (AUnbound 10 0 (PPrefix None) (Some "h")))
+  let m = AVar (Ref (AUnbound 11 0 (PSet None) (Some "m")))
+  let u = AVar (Ref (AUnbound 12 0 (PProduct []) (Some "u")))
+  let pre s = AConst (PPrefix (Some s))
+  let set xs = AConst (PSet (Some xs))
+  let tuple host method = AProduct [("Host", host), ("Method", method)]
+  let elem host method =
+    AConst (PProduct [("Host", PPrefix host), ("Method", PSet method)])
+  expectAll
+    [
+      expectTrue (authSub (tuple h m) (tuple h m)),
+      expectFalse (authSub (tuple h (set ["GET"])) (tuple h m)),
+      expectFalse (authSub (elem (Some "a/x") (Some ["GET"])) (tuple h m)),
+      expectTrue (authSub (tuple h m) (elem None None)),
+      expectTrue (authSub (tuple h (set ["GET"])) (elem None (Some ["GET"]))),
+      expectFalse (authSub (tuple h (set ["GET"])) (elem None (Some ["POST"]))),
+      expectTrue
+        (authSub
+          (elem (Some "a/x") (Some ["GET"]))
+          (tuple (pre "a/*") (AConst (PSet None)))),
+      -- two elements cover this tuple only together: not proven
+      expectFalse
+        (authSub
+          (tuple (authJoin (pre "a/x") (pre "b/x")) m)
+          (authJoin (elem (Some "a/*") None) (elem (Some "b/*") None))),
+      expectEqual " Host=h Method=m" (renderAuthority (tuple h m)),
+      expectEqual " Host=h" (renderAuthority (tuple h (AConst (PSet None)))),
+      expectEqual
+        " Host=\"a/x\" Method={\"GET\"}"
+        (renderAuthority (tuple (pre "a/x") (set ["GET"]))),
+      expectEqual
+        ["\"a/x\" <= h", "{\"GET\"} <= m"]
+        (map
+          (p =>
+            "\{S.trim (renderAuthority (fst p))} <= \{S.trim (renderAuthority (snd p))}")
+          (authSplit (elem (Some "a/x") (Some ["GET"])) (tuple h m))),
+      -- a variable of the whole Product domain has no projection on an axis
+      expectEqual 1 (listLen (authSplit u (tuple h m))),
+      -- a variable may stand for an exact element: any suffix leaves it
+      expectTrue (authIsTop (authExtend h)),
+      expectTrue (authIsTop (authAppend "/x" h)),
+      expectTrue (authIsTop (authExtend m)),
+    ]
+
 -- ── The data half (EFFECTS-SEMANTICS §4.1): fields, constructors, patterns ──
 
 -- A handle whose one field is qualified by the head's authority parameter.
@@ -271,7 +319,7 @@ test "a qualified field is a proof source: construction checks the stored value"
       (accepts
         (handle ++ "open : (path : String) -> H path\nopen path = H path\n")),
     expectTrue
-      (accepts
+      (rejects
         (handle
           ++ "open : (path : String) -> H path\nopen path = H (path ++ \"/x\")\n")),
     expectTrue
@@ -1414,3 +1462,87 @@ test "a concatenation extends a Product's primary axis; a literal chain is a lit
           ++ "extern call : (m : String) -> <M m> Unit\n"
           ++ "bad : String -> <M \"GET\"> Unit\nbad s = call (\"GE\" ++ s)\n")),
   ]
+
+-- A label whose every axis an argument names, for the tests below.
+httpPrelude : String
+httpPrelude =
+  "effect Http Product (Host : Prefix, Method : Set)\n"
+    ++ "extern request : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\n"
+    ++ "extern whole : (u : String) -> <Http u> Int\n"
+
+test "every axis takes a binder: each argument is charged on its own axis" = expectAll
+  [
+    expectTrue
+      (accepts
+        (httpPrelude
+          ++ "get : Unit -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nget _ = request \"a.com/x\" \"GET\"\n")),
+    expectFalse
+      (accepts
+        (httpPrelude
+          ++ "get : String -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nget m = request \"a.com/x\" m\n")),
+    expectTrue
+      (accepts
+        (httpPrelude
+          ++ "fwd : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nfwd host method = request host method\n")),
+    expectTrue
+      (rejects
+        (httpPrelude
+          ++ "swap : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nswap host method = request method host\n")),
+    expectEqual
+      "(host : String) -> (method : String) -> <Http Host=host Method=method> Int"
+      (schemeOf httpPrelude "request"),
+  ]
+
+test "an axis variable extends to its axis's top; a whole-domain binder is no axis's" = expectAll
+  [
+    -- `host ++ "/x"` may leave what the caller's exact host admits
+    expectTrue
+      (rejects
+        (httpPrelude
+          ++ "under : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nunder host method = request (host ++ \"/x\") method\n")),
+    expectTrue
+      (accepts
+        (httpPrelude
+          ++ "lit : String -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nlit s = request (\"a.com/\" ++ s) \"GET\"\n")),
+    -- `u` is an element of the whole Product domain, so on the Host axis its
+    -- value is that axis's top
+    expectTrue
+      (rejects
+        (httpPrelude
+          ++ "via : (u : String) -> (method : String) -> <Http u> Int\nvia u method = request u method\n")),
+    -- one binder at an axis and at a label of another domain
+    expectTrue
+      (contains
+        "T-AUTHORITY-DOMAIN"
+        (codes
+          (httpPrelude
+            ++ "extern two : (m : String) -> <Http Method=m, Store m> Int\n"))),
+  ]
+
+-- #3501 and #3502: an authority variable may stand for an exact element,
+-- which admits only itself, so appending to it reaches the whole domain. The
+-- signature's own variable is refused at the definition, and a flexible one
+-- still unbound when the arm is inferred is charged the whole domain.
+test "an extension of an authority variable is the whole domain" = expectAll [
+  expectEqual
+    ["T-AUTHORITY"]
+    (codes
+      "readUnder : (p : String) -> String -> <Store p> Int\nreadUnder p suffix = load (p ++ suffix)\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \".bak\"\n"),
+  expectTrue
+    (accepts
+      "readUnder : (p : String) -> String -> <Store p> Int\nreadUnder p _ = load p\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \".bak\"\n"),
+  expectEqual
+    ["T-AUTHORITY"]
+    (codes
+      (handle
+        ++ "readH : H d -> String -> <Store d> Int\nreadH (H p) x = load (p ++ x)\n")),
+  expectEqual
+    ["T-EFFECT-LEAK"]
+    (codes
+      (handle
+        ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load (p ++ x)\n")),
+  expectTrue
+    (accepts
+      (handle
+        ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load p\n")),
+]

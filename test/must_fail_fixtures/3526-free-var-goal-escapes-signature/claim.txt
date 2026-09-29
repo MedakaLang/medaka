@@ -10,7 +10,7 @@ what: `run` panics with `unknown op '+'` and the native binary prints a garbage 
 cmd: check main.mdk
 exit: 0
 stdout-line: weird : List a -> List a
-stdout-line: main : <IO> Unit
+stdout-line: main : <Stdout> Unit
 control: check control.mdk
 why-verb: `check`: the defect is an acceptance, and the scheme line shows it.
 why-stdout: `weird`'s printed scheme differs from its declared `b -> b`; that is the

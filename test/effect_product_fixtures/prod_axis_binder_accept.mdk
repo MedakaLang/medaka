@@ -1,0 +1,27 @@
+-- Every axis takes a binder: each argument determines its own axis, in that
+-- axis's domain.  A literal method within the Method bound, a wrapper that
+-- forwards both arguments to the axes they name, and a signature that binds
+-- only the Method axis beside a written Host are all accepted.
+effect Http Product (Host : Prefix, Method : Set)
+
+extern request : (host : String) ->
+  (method : String) ->
+  <FFI, Http Host=host Method=method> Int
+
+get : Unit -> <FFI, Http Host="api.example.com/*" Method={"GET"}> Int
+get _ = request "api.example.com/users" "GET"
+
+fetch : (host : String) ->
+  (method : String) ->
+  <FFI, Http Host=host Method=method> Int
+fetch host method = request host method
+
+onlyMethod : (method : String) ->
+  <FFI, Http Host="api.example.com/*" Method=method> Int
+onlyMethod method = request "api.example.com/users" method
+
+head : Unit -> <FFI, Http Host="api.example.com/*" Method={"GET", "HEAD"}> Int
+head _ = onlyMethod "HEAD"
+
+main : <IO> Unit
+main = println "every axis takes a binder"

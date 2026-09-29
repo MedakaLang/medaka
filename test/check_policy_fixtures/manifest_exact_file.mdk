@@ -1,0 +1,4 @@
+-- `reader` returns a closure so a policy run yields a value without reading a
+-- file. The closure's row is <FileRead "notes.txt">: an exact element with no
+-- delimiter, which the manifest emits and `--allow FileRead=notes.txt` accepts.
+reader req = u => readFile "notes.txt"

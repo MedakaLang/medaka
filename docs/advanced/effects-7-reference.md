@@ -64,7 +64,7 @@ The first words of each message, and where the rule behind it is explained.
 | `Ambiguous effect label: …` | two modules' labels with one spelling in scope | [III](effects-3-labels.md) |
 | `Foreign declaration '…' does not name the 'FFI' effect` | an `extern` without `FFI` | [III](effects-3-labels.md) |
 | `Foreign declaration '…' redeclares a built-in runtime name with a NARROWER effect row` | a catalog name redeclared too narrowly | [III](effects-3-labels.md) |
-| `Invalid effect parameter on <…>` | a written element the domain refuses: no delimiter, or more than 16 | [IV](effects-4-authority.md) |
+| `Invalid effect parameter on <…>` | a written element the domain refuses: an empty element, or more than 16 members | [IV](effects-4-authority.md) |
 | `Binding '…' reaches "…" where only … is admitted` | a body under a named authority reaches a value it did not derive from it | [IV](effects-4-authority.md) |
 | `Binding '…' reaches … where its declared bound admits only …` | a constructor or existential exceeds a literal bound | [V](effects-5-data.md) |
 | `The qualifier names '…', but no effect atom or index in this signature names '…'` | a qualifier with no domain | [IV](effects-4-authority.md) |
@@ -85,20 +85,9 @@ issue; the number is the thing to search for.
   lies within `"cfg/*"` for `name = "../secret.txt"`, and the runtime resolves
   the `..`, so the manifest's `cfg/*` is not a sandbox.
   [#3564](https://github.com/MedakaLang/medaka/issues/3564)
-- **Appending to a named authority is unsound in argument position.** Under
-  `(dir : String) -> <Store dir> Int`, a body may write `load (dir ++ "/x")`
-  and is charged `dir` while it reaches `dir/x`. Slated to be refused: the
-  extension will count as the whole domain.
-  [#3501](https://github.com/MedakaLang/medaka/issues/3501)
 - **A pure helper cannot return a value at a named argument's authority.** The
-  qualifier needs a label atom, and an extension is the whole domain in a
-  result. [#3559](https://github.com/MedakaLang/medaka/issues/3559),
+  qualifier needs a label atom. [#3559](https://github.com/MedakaLang/medaka/issues/3559),
   [#3532](https://github.com/MedakaLang/medaka/issues/3532)
-- **A bare filename cannot be written as a bound**, though inference produces
-  it, so a manifest naming one does not round-trip as a policy.
-  [#3557](https://github.com/MedakaLang/medaka/issues/3557)
-- **Only a product's primary axis can name an argument.**
-  [#3558](https://github.com/MedakaLang/medaka/issues/3558)
 - **There is no written syntax for a relation.** A binding whose inferred type
   carries a context such as `(a <= d) =>` (the relation the compiler kept, see
   chapter IV) must stay unsigned.
@@ -109,17 +98,9 @@ issue; the number is the thing to search for.
 - **A relation cannot be shared by a recursive group.** Two mutually recursive
   functions over a captured handle are refused where one function would be
   accepted. [#3482](https://github.com/MedakaLang/medaka/issues/3482)
-- **`println` is `<IO>`.** The prelude's printers and several `io` helpers claim
-  the umbrella label where they perform one, which pulls every caller's row up.
-  [#2411](https://github.com/MedakaLang/medaka/issues/2411),
-  [#3388](https://github.com/MedakaLang/medaka/issues/3388)
-- **`check-policy`'s sample run assumes `String -> String`.**
-  [#3329](https://github.com/MedakaLang/medaka/issues/3329)
 - **`check` prints effect and type variables from one alphabet.** The issue's
   title describes an older symptom, since fixed; the naming is what remains.
   [#2583](https://github.com/MedakaLang/medaka/issues/2583)
-- **A discarded arithmetic statement reports `No impl of Num for Unit`.**
-  [#3560](https://github.com/MedakaLang/medaka/issues/3560)
 
 ## Further reading
 

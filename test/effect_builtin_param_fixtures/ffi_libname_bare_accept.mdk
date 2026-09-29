@@ -9,10 +9,10 @@
 -- library exists, and nothing cross-checks it against the `[foreign-libraries]`
 -- manifest section — those are two independent facts by design (sprint Q3).
 --
--- WHAT BARE vs WILDCARD MEAN: the same thing.  Prefix subsumption compares
--- `prefixConcrete` values and `prefixConcrete` STRIPS a trailing `*`, so
--- `<FFI "libcurl">` and `<FFI "libcurl*">` are one and the same set — every
--- library name beginning with "libcurl".  See ffi_libname_wildcard_accept.mdk.
+-- WHAT BARE vs WILDCARD MEAN: different elements.  `<FFI "libcurl">` is the
+-- exact library "libcurl"; `<FFI "libcurl*">` is every library name beginning
+-- with "libcurl", so a bound of the bare name does not admit the wildcard.
+-- See ffi_libname_wildcard_accept.mdk.
 extern callLib : String -> <FFI "libcurl"> Int
 
 caller : Unit -> <FFI "libcurl"> Int

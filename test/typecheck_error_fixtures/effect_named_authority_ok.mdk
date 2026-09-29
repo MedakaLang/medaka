@@ -1,11 +1,9 @@
 -- The honest controls for effect_named_authority_launder: forwarding the
--- named argument, narrowing it, reaching it through a let, an alias and a
--- higher-order apply, and a caller whose bound admits the literal it passes.
+-- named argument, reaching it through a let, an alias and a higher-order
+-- apply, a caller whose bound admits the literal it passes, and a caller that
+-- builds the extended path itself and passes it to the forwarding wrapper.
 readIt : (path : String) -> <FileRead path> Result String String
 readIt path = readFile path
-
-readSub : (path : String) -> <FileRead path> Result String String
-readSub path = readFile (path ++ "/x")
 
 viaLet : (path : String) -> <FileRead path> Result String String
 viaLet path =
@@ -23,8 +21,8 @@ rf = readFile
 cfg : Unit -> <FileRead "config/*"> Result String String
 cfg _ = readIt "config/app.toml"
 
-cfgSub : Unit -> <FileRead "config/*"> Result String String
-cfgSub _ = readSub "config/app"
+cfgSub : String -> <FileRead "config/*"> Result String String
+cfgSub name = readIt ("config/" ++ name)
 
 cfgAlias : Unit -> <FileRead "config/*"> Result String String
 cfgAlias _ = rf "config/app.toml"

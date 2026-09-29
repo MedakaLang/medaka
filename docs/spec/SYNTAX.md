@@ -219,9 +219,15 @@ extern load : (path : String) -> <FFI, Store path> Int
 extern move : (src : String) ->
   (dst : String) ->
   <FFI, Store src, Store dst> Unit
-under : (path : String) -> <FFI, Store path> Int  -- may read path or narrow it, nothing else
-under path = load (path ++ "/x")
+under : (path : String) -> <FFI, Store path> Int  -- may read path, nothing else
+under path = load path
+config : String -> <FFI, Store "cfg/*"> Int  -- the caller extends the path
+config name = under ("cfg/" ++ name)
 ```
+
+An extension of a named argument (`path ++ "/x"`) is the label's whole domain,
+since the caller may pass an exact element that admits only itself: forward the
+argument and build the longer path at the call site, as `config` does.
 
 A qualified value type is written with a spaced `@`: `String @path` names the
 argument's authority on a value derived from it.  A joined qualifier names
@@ -229,7 +235,8 @@ several binders in parentheses, `String @(src | dst)`, a value within either
 authority; it is the spelling a joined authority renders as.  A qualifier or
 an index may also write literals: `String @"cfg/*"`,
 `String @("a.com/*" | p)`, `Socket ("a.com/x" | "b.com/y")`, a set of
-elements as it renders.  A qualifier's
+elements as it renders.  A `Prefix` element without a trailing `*` is exact
+and needs no `/`: `<FileRead "notes.txt">` is a legal bound.  A qualifier's
 binders must be `String` authorities of one domain shape (two Prefix labels
 are one shape), and a named argument used only in a qualifier, with no atom or
 index naming it, has no domain and is an error.  The quoted underscore
@@ -298,6 +305,12 @@ effect Http Product (Host : Prefix, Method : Set)  -- a Product declares its axe
 -- `<Http "a.com/*">` lifts into the FIRST axis, `<Http Host="a.com/*" Method={"GET"}>`
 -- names them; a Product without axes, or axes on another domain, is refused
 ```
+
+Any axis of a product may name an argument written to its left, as a whole
+parameter may: `(host : String) -> (method : String) -> <Http Host=host
+Method=method> Int`.  Each such argument is an authority of that axis's own
+domain (`host` a Prefix element, `method` a Set element).  Only an effect
+atom's axes take a name; an axis in a qualifier or an index takes a literal.
 
 A row atom whose authority is a symbolic join, or a set of elements, prints
 as one atom per operand, `<FileWrite src, FileWrite dst>` or

@@ -1,7 +1,7 @@
 Ref : (Unit -> <IO> Unit) -> Ref (Unit -> <IO> Unit)
 arrayMakeWith : Int -> (Int -> <IO> a) -> <IO> Array a
 later : Unit -> <IO> Unit
-main : <IO> Unit
+main : <Stdout> Unit
 numbered : Int -> <IO> Array Int
 save : (path : String) -> <FileWrite path> Result String Unit
 setRef : Ref (Box <Stdout>) -> Box <Stdout> -> Unit

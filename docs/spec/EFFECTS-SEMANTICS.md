@@ -148,7 +148,7 @@ realize a prefix of it — see the audit):
 | Domain | Elements | `⊑` | `⊔` | `⊓` |
 |---|---|---|---|---|
 | **`Unit`** | `()` only | trivial | `()` | `()` |
-| **`Prefix`** | a delimiter-terminated string pattern, or `⊤` | structural prefix-containment (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
+| **`Prefix`** | a string pattern (an exact element, or one ending in `*`), or `⊤` | structural prefix-containment (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
 | **`Set`** | a finite set of strings, or `⊤` | `⊆` | `∪` (saturating to `⊤` past a cardinality cap) | `∩` |
 | **`Product`** | a tuple of sub-domains, e.g. `Net = Host(Prefix) × Method(Set)` | pointwise | pointwise | pointwise (⊥ if any component ⊥) |
 
@@ -235,10 +235,10 @@ An element written without a trailing `*` is exact and admits only itself:
 so `Net "a.com/api/v1" ⊑ Net "a.com/api/*" ⊑ Net "a.com/*" ⊑ Net ⊤`. **Raw-prefix
 matching is unsound for authority** — `"a.com"` is a string-prefix of
 `"a.com.evil.com"`, so a bare prefix would silently grant a sibling host.
-The domain therefore requires every pattern to terminate at a **structural
-delimiter**: a path/host boundary (`/`) or an explicit trailing `*`. `Net "a.com/*"`
-matches `a.com/...` but **not** `a.com.evil.com/...`. A pattern lacking a delimiter
-is rejected at declaration/annotation time. Full scheme/host/port/path structure is
+The domain therefore reads a pattern as either an exact element or an explicit
+trailing `*`. `Net "a.com/*"` matches `a.com/...` but **not** `a.com.evil.com/...`.
+An exact element (no trailing `*`) admits only itself: `Net "a.com"` does not
+admit `a.com.evil.com`. The empty string is rejected. Full scheme/host/port/path structure is
 the `Product` domain; `Prefix` is its sound, coarse one-axis approximation. Only
 trailing-`*` wildcards are admitted — general globs/regex break decidability of
 `⊑` and are rejected.
@@ -383,7 +383,7 @@ is the safe default):
 | Core form | `α` |
 |---|---|
 | string literal `"s"` | the singleton authority `s` (e.g. `Prefix` pattern from `s`) |
-| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays. In `Set`, non-literal concatenation gives `⊤` |
+| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays; an authority variable becomes its domain's top (below). In `Set`, non-literal concatenation gives `⊤` |
 | string interpolation `"s\{e}…"` | the `++`-chain rule: the leading literal `s` is the known prefix, extended to `s*` by the first interpolated expression |
 | `let x = e₁ in …x…` | propagate `α(e₁)` to uses of `x` |
 | `if c then e₁ else e₂` | `α(e₁) ⊔ α(e₂)` (join of branch authorities) |
@@ -391,17 +391,22 @@ is the safe default):
 | a value whose checked type is `τ @q` | `q`, including variables, application results and field reads |
 | application result, parameter, or field without an authority qualifier; anything else | `⊤` |
 
-**Open: extending an authority variable.** No term names the extension of a
-variable, so `p ++ x` with `p : String @κ` currently keeps `κ`. That is sound
-only when whatever `κ` stands for is a pattern, and nothing guarantees it:
+**Extending an authority variable gives the domain's top.** No term names the
+extension of a variable, and keeping `κ` for `p ++ x` with `p : String @κ`
+would be sound only when whatever `κ` stands for is a pattern, which nothing
+guarantees:
 - a signature's variable, bound by an argument or a data index, admits a
-  caller's exact element: `"cfg/app.toml"` is charged for that file while the
-  read reaches `cfg/app.toml<x>`;
+  caller's exact element: `"cfg/app.toml"` would be charged for that file while
+  the read reaches `cfg/app.toml<x>`;
 - a flexible variable still unbound when `α` runs is solved afterwards, and
   may be solved to an exact element with no caller involved.
 
-(#3501 and #3502, pinned by must_fail `3501-signature-variable-extension` and
-`3502-flexible-variable-extension`.)
+So `α(p ++ x)` is the top of `κ`'s domain, whatever the suffix. A body that
+reads under a named argument's authority forwards the argument, or an operation
+that keeps its authority; a caller that wants a path below its own element
+builds it (`readUnder ("cfg/" ++ name)`) and passes it, and a constant left
+operand extends as the table says. A wrapper that must extend its argument
+declares the label bare.
 
 **The ⊤-fallback *is* the no-exfiltration guarantee.** A URL/path that is computed
 (a function result, a runtime input, an un-analyzable expression) abstracts to
@@ -478,6 +483,25 @@ constant a signature writes, so the domain is the schema itself: two Product
 labels are one domain only when they declare the same axes (the same names,
 of the same domains) in the same order. A written product names each axis
 at most once. Domain mismatches are errors, never proofs of containment.
+
+Any axis of a written product may name a binder, `<Http Host=host
+Method=method>`, under the rules a whole parameter's binder obeys (to the left
+in the same signature, a `String`, one domain), where the binder's domain is
+that axis's sub-domain, not the label's: `host` is a Prefix element and
+`method` a Set element. The atom's authority is then one tuple whose axes are
+terms, each a term of its axis's domain; an axis it leaves out is that axis's
+top. An argument is abstracted in the domain of the axis it determines, so a
+runtime method is the Method axis's top and a host passed as the method is a
+Set member named by the host. A tuple lies within another when each axis does,
+and an obligation `lo ⊑ (h, m)` is the pair `lo|Host ⊑ h`, `lo|Method ⊑ m` of
+its projections, which is exact because a tuple of terms denotes a product of
+sets. A term with no projection, a variable of the whole Product domain, keeps
+the obligation whole, where it is not proven; so is a tuple holding a variable
+that several elements of a set cover only together. Extending a binder an axis
+names (`host ++ x`) gives that axis's top, whether or not the axis is primary,
+as extending any authority variable does (§4).
+Only an atom's axes take a binder; an axis in a qualifier or an index is a
+literal.
 
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates

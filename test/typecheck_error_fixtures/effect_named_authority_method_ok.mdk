@@ -13,7 +13,7 @@ impl Loader X where
 
 interface Reader a where
   fetch : a -> (p : String) -> <FileRead p> Result String String
-  fetch _ p = readFile (p ++ "/x")
+  fetch _ p = readFile p
 
 data Y = Y
 

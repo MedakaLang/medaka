@@ -71,6 +71,10 @@ one_case "malicious-reject"   demo/plugin_malicious.mdk "Cache,Log" transform ws
 one_case "midgraph-reject"    demo/plugin_malicious.mdk "Cache,Log" tagVisit  ws1a_midgraph_reject
 # Accept: the plugin run reaches a user interface default and a prelude one.
 one_case "defaults-accept"    test/check_policy_fixtures/defaults_plugin.mdk "Log,FFI" transform defaults_accept
+# Accepted entries that are not `String -> String`: verdict, then a no-sample line.
+one_case "int-entry-accept"   test/check_policy_fixtures/int_entry_plugin.mdk "Audit" transfer int_entry_accept
+one_case "named-entry-sample" test/check_policy_fixtures/named_entry_plugin.mdk "FileRead" transform named_entry_accept
+one_case "thunk-entry-accept" test/check_policy_fixtures/thunk_entry_plugin.mdk "Audit" tick thunk_entry_accept
 #
 # NOTE: an ACCEPT case that admits Fetch (e.g. malicious + --allow Cache,Log,Fetch)
 # is deliberately NOT tested.  check-policy ACCEPT runs the plugin with stubs for

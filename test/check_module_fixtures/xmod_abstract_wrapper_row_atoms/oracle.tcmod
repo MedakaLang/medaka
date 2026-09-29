@@ -1,5 +1,5 @@
 keep : (Unit -> <a> Unit) -> Bare a
-main : <IO> Unit
+main : <Stdout> Unit
 pureStash : Slot <>
 shout : Unit -> <Stdout> Unit
 stash : (Unit -> <Stdout | a> Unit) -> Slot a

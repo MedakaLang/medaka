@@ -98,6 +98,25 @@ if [ -f "$NET_FIX" ]; then
   fi
 fi
 
+# ── case 3b: an exact bare filename round-trips (#3557) ──────────────────────
+# The manifest line `FileRead = "notes.txt"` is a legal --allow entry: an exact
+# element needs no delimiter because it admits only itself.
+FILE_FIX="$ROOT/test/check_policy_fixtures/manifest_exact_file.mdk"
+if [ -f "$FILE_FIX" ]; then
+  fm_out="$(perl -e 'alarm 90; exec @ARGV' "$NATIVE" manifest "$FILE_FIX" --fn reader 2>&1)"
+  fa_out="$(perl -e 'alarm 90; exec @ARGV' \
+      "$NATIVE" check-policy "$FILE_FIX" --allow "FileRead=notes.txt" --fn reader 2>&1)"
+  fa_rc=$?
+  if [ "$fm_out" = '[package.capabilities]
+FileRead = "notes.txt"' ] && [ "$fa_rc" = "0" ] && printf '%s' "$fa_out" | grep -qF "accepted"; then
+    ok_case "round-trip-exact-file (manifest FileRead = \"notes.txt\" → --allow rc=0)"
+  else
+    fail_case "round-trip-exact-file" "manifest: $fm_out; rc=$fa_rc output: $fa_out"
+  fi
+else
+  fail_case "round-trip-exact-file" "missing $FILE_FIX"
+fi
+
 # ── case 4: tightened reject ─────────────────────────────────────────────────
 # Narrow the Net param to a NON-MATCHING prefix: other.com/api.
 # The inferred <Net "idp.example.com/api"> is NOT ⊑ <Net "other.com/api">.

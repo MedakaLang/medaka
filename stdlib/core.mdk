@@ -744,12 +744,12 @@ export impl Hashable (a, b, c, d, e) requires Hashable a, Hashable b, Hashable c
 -- externs: the `Display` constraint has to live in Medaka, where dict-passing
 -- works (an extern can't receive a dictionary).
 export
-println : Display a => a -> <IO> Unit
+println : Display a => a -> <Stdout> Unit
 println x = putStrLn (display x)
 
 -- | Writes a value to standard output with no trailing newline. See `println`.
 export
-print : Display a => a -> <IO> Unit
+print : Display a => a -> <Stdout> Unit
 print x = putStr (display x)
 
 -- # Numbers

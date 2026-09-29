@@ -6,7 +6,7 @@ import map as M
 import map.{Map(..)}
 import types.effect_authority.{
   renderAuthority, Authority(..), Authvar(..), authvarId, authvarLevel,
-  authNorm, authSub, authVars, authJoinAll, linkAuthvar, authIsTop
+  authNorm, authSub, authVars, authJoinAll, linkAuthvar, authIsTop, authSplit
 }
 import types.effect_rows.{
   Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
@@ -581,7 +581,8 @@ firstEscapingKey [] lowerAtoms upperAtoms escape exact =
 
 -- An escaping atom whose label the upper row carries with a symbolic
 -- authority is an authority obligation, not a missing label: record
--- `lower ⊑ upper` for the authority pass and keep only the genuine escapes.
+-- `lower ⊑ upper` for the authority pass (one obligation per axis against a
+-- Product tuple, `authSplit`) and keep only the genuine escapes.
 -- In an exact (index) relation the obligation is one half of an equality.
 authorityEscapes : SummaryScope c ->
   c ->
@@ -596,15 +597,17 @@ authorityEscapes scope context exact upper (x :: rest) =
     Some y =>
       if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
         scope.essAuthorities :=
-          AuthWanted {
-              awLower = atomAuth x,
-              awUpper = atomAuth y,
-              awContext = context,
-              awLabel = Some (atomKey x),
-              awExact = exact,
-              awResidualOf = None,
-            }
-            :: scope.essAuthorities.value
+          map
+              (pair => AuthWanted {
+                awLower = fst pair,
+                awUpper = snd pair,
+                awContext = context,
+                awLabel = Some (atomKey x),
+                awExact = exact,
+                awResidualOf = None,
+              })
+              (authSplit (atomAuth x) (atomAuth y))
+            ++ scope.essAuthorities.value
         others
       else
         x :: others

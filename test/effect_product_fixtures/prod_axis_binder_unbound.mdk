@@ -1,0 +1,8 @@
+-- An axis names an argument written to its left in the same signature, as a
+-- whole parameter does: `method` is bound nowhere.
+effect Http Product (Host : Prefix, Method : Set)
+
+extern request : (host : String) -> <FFI, Http Host=host Method=method> Int
+
+main : <IO> Unit
+main = println "should not typecheck"

@@ -18,7 +18,7 @@ in `Err`. There is no IO monad: an action runs when it is evaluated, so
 ### `eprint`
 
 ```
-eprint : Display a => a -> <IO> Unit
+eprint : Display a => a -> <Stderr> Unit
 eprint x
 ```
 
@@ -29,7 +29,7 @@ The value is rendered with `display`, like `print`.
 ### `eprintln`
 
 ```
-eprintln : Display a => a -> <IO> Unit
+eprintln : Display a => a -> <Stderr> Unit
 eprintln x
 ```
 
@@ -43,7 +43,7 @@ diagnostics and errors so they do not mix with standard output.
 ### `inspect`
 
 ```
-inspect : Debug a => a -> <IO> Unit
+inspect : Debug a => a -> <Stdout> Unit
 inspect x
 ```
 
@@ -59,7 +59,7 @@ values without writing a `Display` instance.
 ### `readLines`
 
 ```
-readLines : String -> <IO> Result String (List String)
+readLines : (path : String) -> <FileRead path> Result String (List String)
 readLines path
 ```
 

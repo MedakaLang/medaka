@@ -178,12 +178,16 @@ handling X-Forwarded-For: 192.168.1.1
    transform "X-Forwarded-For: 192.168.1.1" = ok
 ```
 
-> ⚠️ **The sample run assumes a `String -> String` entry.** An accepted entry of
-> any other shape can exit 1 with a runtime error and no verdict printed at all,
-> because the sample run comes before the `accepted.` line and applies the entry
-> to a string. A rejection is always printed. Use `medaka manifest` to inspect an
-> entry of another shape; the sample run is tracked as
-> [#3329](https://github.com/MedakaLang/medaka/issues/3329).
+The sample run applies only to an entry of type `String -> String`. An accepted
+entry of any other shape, such as `transfer : Int -> <Audit, Stdout> Int` or a
+thunk `Unit -> Int`, gets its verdict and one line saying no sample was run,
+and the exit code is still 0:
+
+```
+$ medaka check-policy plugin.mdk --fn transfer --allow Audit,Stdout
+accepted. transfer requires only <Audit, Stdout>
+   no sample run: 'transfer' is not a String -> String entry
+```
 
 Together the two commands are the whole story of "effects as capabilities". The
 compiler computes what a module needs. The host decides what it is willing to
@@ -231,8 +235,8 @@ bounded main
 
 There is no rule that `main` may only use certain labels. Bounding a program is
 the host's job, done by reading the manifest, and the type system's job ends at
-computing it truthfully. A `main` declared `<Stdout>` that calls `println` is an
-error, but only because `println` is `<IO>` and `<IO>` does not fit `<Stdout>`,
+computing it truthfully. A `main` declared `<Stdout>` may call `println`, which
+is `<Stdout>` too; one declared `<Stderr>` that calls it is an error, and
 not because of anything special about `main`.
 
 ## Foreign code

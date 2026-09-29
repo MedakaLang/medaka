@@ -1,5 +1,5 @@
 # META
-source_lines=1656
+source_lines=1659
 stages=DESUGAR,MARK
 # SOURCE
 -- Binding-owned effect equations. Operational lower bounds and compatibility
@@ -10,7 +10,7 @@ import map as M
 import map.{Map(..)}
 import types.effect_authority.{
   renderAuthority, Authority(..), Authvar(..), authvarId, authvarLevel,
-  authNorm, authSub, authVars, authJoinAll, linkAuthvar, authIsTop
+  authNorm, authSub, authVars, authJoinAll, linkAuthvar, authIsTop, authSplit
 }
 import types.effect_rows.{
   Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
@@ -585,7 +585,8 @@ firstEscapingKey [] lowerAtoms upperAtoms escape exact =
 
 -- An escaping atom whose label the upper row carries with a symbolic
 -- authority is an authority obligation, not a missing label: record
--- `lower ⊑ upper` for the authority pass and keep only the genuine escapes.
+-- `lower ⊑ upper` for the authority pass (one obligation per axis against a
+-- Product tuple, `authSplit`) and keep only the genuine escapes.
 -- In an exact (index) relation the obligation is one half of an equality.
 authorityEscapes : SummaryScope c ->
   c ->
@@ -600,15 +601,17 @@ authorityEscapes scope context exact upper (x :: rest) =
     Some y =>
       if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
         scope.essAuthorities :=
-          AuthWanted {
-              awLower = atomAuth x,
-              awUpper = atomAuth y,
-              awContext = context,
-              awLabel = Some (atomKey x),
-              awExact = exact,
-              awResidualOf = None,
-            }
-            :: scope.essAuthorities.value
+          map
+              (pair => AuthWanted {
+                awLower = fst pair,
+                awUpper = snd pair,
+                awContext = context,
+                awLabel = Some (atomKey x),
+                awExact = exact,
+                awResidualOf = None,
+              })
+              (authSplit (atomAuth x) (atomAuth y))
+            ++ scope.essAuthorities.value
         others
       else
         x :: others
@@ -1661,7 +1664,7 @@ relationProven escape rel =
 # DESUGAR
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "renderAuthority" false) (mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarLevel" false) (mem "authNorm" false) (mem "authSub" false) (mem "authVars" false) (mem "authJoinAll" false) (mem "linkAuthvar" false) (mem "authIsTop" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "renderAuthority" false) (mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarLevel" false) (mem "authNorm" false) (mem "authSub" false) (mem "authVars" false) (mem "authJoinAll" false) (mem "linkAuthvar" false) (mem "authIsTop" false) (mem "authSplit" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomsUnion" false) (mem "atomsDiff" false) (mem "atomKey" false) (mem "atomAuth" false) (mem "findAtom" false) (mem "EffRow" true) (mem "Effvar" true) (mem "effvarId" false) (mem "rowFlat" false) (mem "rowFlatMembers" false) (mem "rowHasSummary" false) (mem "linkRow" false) (mem "solveSummaryCell" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "isNonEmptyL" false) (mem "isEmptyL" false) (mem "anyList" false) (mem "allList" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
@@ -1755,7 +1758,7 @@ relationProven escape rel =
 (DFunDef false "firstEscapingKey" ((PList) (PVar "lowerAtoms") (PVar "upperAtoms") (PVar "escape") (PVar "exact")) (EMatch (EApp (EApp (EApp (EVar "escape") (EVar "exact")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (arm (PCons (PVar "x") PWild) () (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (arm (PList) () (EVar "None"))))
 (DTypeSig false "authorityEscapes" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyVar "c") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))))))
 (DFunDef false "authorityEscapes" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "exact") (PVar "upper") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EVar "scope")) (EVar "context")) (EVar "exact")) (EVar "upper")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "atomAuth") (EVar "x"))) (fa "awUpper" (EApp (EVar "atomAuth") (EVar "y"))) (fa "awContext" (EVar "context")) (fa "awLabel" (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (fa "awExact" (EVar "exact")) (fa "awResidualOf" (EVar "None")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others")))))))
+(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "exact") (PVar "upper") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EVar "scope")) (EVar "context")) (EVar "exact")) (EVar "upper")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "pair")) (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "fst") (EVar "pair"))) (fa "awUpper" (EApp (EVar "snd") (EVar "pair"))) (fa "awContext" (EVar "context")) (fa "awLabel" (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (fa "awExact" (EVar "exact")) (fa "awResidualOf" (EVar "None")))))) (EApp (EApp (EVar "authSplit") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others")))))))
 (DTypeSig false "isSymbolic" (TyFun (TyCon "Authority") (TyCon "Bool")))
 (DFunDef false "isSymbolic" ((PVar "q")) (EMatch (EApp (EVar "authVars") (EVar "q")) (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig false "retainRowAt" (TyFun (TyCon "Int") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
@@ -1883,7 +1886,7 @@ relationProven escape rel =
 # MARK
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "renderAuthority" false) (mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarLevel" false) (mem "authNorm" false) (mem "authSub" false) (mem "authVars" false) (mem "authJoinAll" false) (mem "linkAuthvar" false) (mem "authIsTop" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "renderAuthority" false) (mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarLevel" false) (mem "authNorm" false) (mem "authSub" false) (mem "authVars" false) (mem "authJoinAll" false) (mem "linkAuthvar" false) (mem "authIsTop" false) (mem "authSplit" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomsUnion" false) (mem "atomsDiff" false) (mem "atomKey" false) (mem "atomAuth" false) (mem "findAtom" false) (mem "EffRow" true) (mem "Effvar" true) (mem "effvarId" false) (mem "rowFlat" false) (mem "rowFlatMembers" false) (mem "rowHasSummary" false) (mem "linkRow" false) (mem "solveSummaryCell" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "isNonEmptyL" false) (mem "isEmptyL" false) (mem "anyList" false) (mem "allList" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
@@ -1977,7 +1980,7 @@ relationProven escape rel =
 (DFunDef false "firstEscapingKey" ((PList) (PVar "lowerAtoms") (PVar "upperAtoms") (PVar "escape") (PVar "exact")) (EMatch (EApp (EApp (EApp (EVar "escape") (EVar "exact")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (arm (PCons (PVar "x") PWild) () (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (arm (PList) () (EVar "None"))))
 (DTypeSig false "authorityEscapes" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyVar "c") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))))))
 (DFunDef false "authorityEscapes" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "exact") (PVar "upper") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EVar "scope")) (EVar "context")) (EVar "exact")) (EVar "upper")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "atomAuth") (EVar "x"))) (fa "awUpper" (EApp (EVar "atomAuth") (EVar "y"))) (fa "awContext" (EVar "context")) (fa "awLabel" (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (fa "awExact" (EVar "exact")) (fa "awResidualOf" (EVar "None")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others")))))))
+(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "exact") (PVar "upper") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EVar "scope")) (EVar "context")) (EVar "exact")) (EVar "upper")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "pair")) (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "fst") (EVar "pair"))) (fa "awUpper" (EApp (EVar "snd") (EVar "pair"))) (fa "awContext" (EVar "context")) (fa "awLabel" (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (fa "awExact" (EVar "exact")) (fa "awResidualOf" (EVar "None")))))) (EApp (EApp (EVar "authSplit") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others")))))))
 (DTypeSig false "isSymbolic" (TyFun (TyCon "Authority") (TyCon "Bool")))
 (DFunDef false "isSymbolic" ((PVar "q")) (EMatch (EApp (EVar "authVars") (EVar "q")) (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig false "retainRowAt" (TyFun (TyCon "Int") (TyFun (TyCon "EffRow") (TyCon "Unit"))))

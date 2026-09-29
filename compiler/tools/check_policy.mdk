@@ -659,7 +659,13 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
             else
               "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
           let header = "accepted. \{fnName} requires only \{effStr}\n"
-          let pluginOutput = runPlugin fnName elaborated
+          -- The sample is a String; only an entry taking and returning one is
+          -- run, so a sample can never crash an already-accepted verdict.
+          let pluginOutput =
+            if takesAndReturnsString fnScheme then
+              runPlugin fnName elaborated
+            else
+              "   no sample run: '\{fnName}' is not a String -> String entry\n"
           PolicyAccept (header ++ pluginOutput)
         _ =>
           let chain = findChain callGraph effTable fnName (firstOf forbidden)
@@ -669,6 +675,17 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
           let problems = stringConcat (policyProblems fnEffects policy)
           let unproven = stringConcat (notProvenLines fnEffects policy)
           PolicyReject (header ++ via ++ problems ++ unproven)
+
+takesAndReturnsString : Scheme -> Bool
+takesAndReturnsString (Forall _ _ _ _ _ mono) = match normalize mono
+  TFun arg _ res => isStringCon (normalize arg) && isStringCon (normalize res)
+  _ => False
+
+isStringCon : Mono -> Bool
+isStringCon (TCon "String" _) = True
+-- A named argument's type is `String @κ`; the qualifier erases before runtime.
+isStringCon (TQual t _) = isStringCon (normalize t)
+isStringCon _ = False
 
 firstOf : List String -> String
 firstOf [] = ""

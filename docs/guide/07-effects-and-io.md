@@ -63,7 +63,7 @@ effects, and the compiler holds it to that. Add a `println` to its body and chec
 fails:
 
 ```
-error: probe.mdk:3:10: Effectful value used where <> is allowed, but it performs <IO>
+error: probe.mdk:3:10: Effectful value used where <> is allowed, but it performs <Stdout>
   |
 3 |   println "doubling"
   |           ^
@@ -74,7 +74,7 @@ answer is checked. You do not have to read the body, and you do not have to trus
 naming convention.
 
 Effect rows are inferred like everything else, so the compiler would have worked out
-`<IO>` for `shout` on its own. Write the row on top-level definitions anyway, for the
+`<Stdout>` for `shout` on its own. Write the row on top-level definitions anyway, for the
 same reason you write the rest of the signature.
 
 ## Labels name capabilities
@@ -124,9 +124,9 @@ second
 ```
 
 A function cannot claim a narrower row than the functions it calls. `println` is
-declared `<IO>` in the prelude, so a function that calls it cannot be annotated
-`<Stdout>`. Narrowing what a caller has to permit would hide an effect, and the
-compiler refuses it.
+declared `<Stdout>` in the prelude, so a function that calls it may be annotated
+`<Stdout>` or the wider `<IO>`, but not `<>` or `<Stderr>`. Narrowing what a caller
+has to permit would hide an effect, and the compiler refuses it.
 
 You can declare your own labels with `effect`, and rows can contain variables
 (`<e>`) and open tails (`<IO | e>`) so that a higher-order function can pass its

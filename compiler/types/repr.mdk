@@ -507,6 +507,7 @@ ppAuthArg : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 ppAuthArg ctx cnt q = match authNorm q
   q2 if authIsTop q2 => "*"
   AConst (PProduct (_ :: _)) => "(" ++ ppAuthority ctx cnt q ++ ")"
+  AProduct _ => "(" ++ ppAuthority ctx cnt q ++ ")"
   _ => ppAuthority ctx cnt q
 
 -- `T @p` outside an arrow domain (an arrow domain renders as the named
@@ -529,6 +530,7 @@ ppQualTerm : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 ppQualTerm ctx cnt q = match authNorm q
   AConst (PSet _) => "(" ++ ppAuthority ctx cnt q ++ ")"
   AConst (PProduct _) => "(" ++ ppAuthority ctx cnt q ++ ")"
+  AProduct _ => "(" ++ ppAuthority ctx cnt q ++ ")"
   _ => ppAuthority ctx cnt q
 
 -- The authority term without a leading space, under the shared naming context.

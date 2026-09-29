@@ -45,6 +45,32 @@ test "a written product may name only the declared axes" = expectCheckReject
   (fixture "prod_unknown_axis.mdk")
   ["unknown product axis 'Host' (declared axes: Table, Op)"]
 
+test "every axis takes a binder, each in its own axis's domain" =
+  expectCheckAccept (fixture "prod_axis_binder_accept.mdk")
+
+-- Charged against the primary axis's domain, the runtime method would land
+-- in Host and the program would typecheck.
+test "a runtime argument on the Method axis is that axis's top" = expectCheckReject
+  (fixture "prod_axis_binder_runtime.mdk")
+  [
+    "where <FFI, Http Host=\"api.example.com/*\" Method={\"GET\"}> is allowed, but it performs <Http Host=\"api.example.com/users\">",
+  ]
+
+test "arguments passed swapped are charged on the axes they land on" = expectCheckReject
+  (fixture "prod_axis_binder_swapped.mdk")
+  ["performs <Http Host=\"GET\" Method={\"api.example.com/users\"}>"]
+
+test "an axis names only a binder written to its left" = expectCheckReject
+  (fixture "prod_axis_binder_unbound.mdk")
+  ["Unknown authority 'method'"]
+
+test "a product that names arguments prints back as written" =
+  expectVerbExitStartsWith
+    "fmt"
+    ["--check", fixture "prod_axis_binder_accept.mdk"]
+    0
+    ""
+
 test "a non-Product Prefix domain keeps its old behavior" =
   expectCheckAccept (fixture "prod_compat_prefix.mdk")
 
@@ -120,3 +146,10 @@ test "check-policy refuses an undeclared axis" = expectVerbExitStartsWithAndCont
   1
   "rejected"
   ["unknown product axis 'Verb'"]
+
+test "a 16-member Set axis beside an axis binder is accepted" =
+  expectCheckAccept (fixture "prod_binder_set16_accept.mdk")
+
+test "a 17-member Set axis beside an axis binder is refused" = expectCheckReject
+  (fixture "prod_binder_set17_reject.mdk")
+  ["a set holds at most 16 members, and this one has 17"]

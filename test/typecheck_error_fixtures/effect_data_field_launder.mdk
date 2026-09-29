@@ -16,6 +16,11 @@ cfg _ = Handle "/etc/passwd"
 dyn : String -> Handle "config/*"
 dyn s = Handle s
 
+-- an extension of the named argument is the whole domain, which `path` does
+-- not admit when the caller chooses an exact element
+openSub : (path : String) -> Handle path
+openSub path = Handle (path ++ "/x")
+
 -- the matched field's authority is `p`; an unrelated literal is not within it
 readIt : Handle p -> <FileRead p> Result String String
 readIt (Handle _) = readFile "/etc/passwd"

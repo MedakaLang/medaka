@@ -1,0 +1,7 @@
+-- A literal Set axis written beside an axis binder is held to the 16-member cap (16 accepted).
+effect Http Product (Host : Prefix, Method : Set)
+
+extern request : (host : String) -> <FFI, Http Host=host Method={"a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p"}> Int
+
+main : <IO> Unit
+main = println "set cap beside a binder"

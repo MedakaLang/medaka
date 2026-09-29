@@ -1,2 +1,2 @@
 act : a -> (Unit -> <b> Unit) -> <b> Unit -> Unit
-main : <IO, Stdout> Unit
+main : <Stdout> Unit

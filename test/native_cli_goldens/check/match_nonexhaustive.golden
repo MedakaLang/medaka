@@ -1,2 +1,2 @@
 colorName : Color -> String
-main : <IO> Unit
+main : <Stdout> Unit

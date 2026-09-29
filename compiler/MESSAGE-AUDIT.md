@@ -172,7 +172,7 @@ Medaka uses '\{sug}')` (:535).
 | T-MISSING-SUPER-IMPL | `impl \{iface} \{tys} requires a superinterface impl 'impl \{superName} \{tys}', which is missing` | :7177 | inconsistent (lowercase) | capitalize |
 | T-CYCLIC-SUPERINTERFACE | `cyclic superinterface: \{joinWith " requires " path}` | :7138 | inconsistent (lowercase) | capitalize |
 | T-AMBIGUOUS-INSTANCE | `ambiguous instance for '\{iface} a': cannot determine which impl; annotate the type` | :7771 | inconsistent (lowercase; literal ` a` reads oddly) | `Ambiguous instance for `\{iface}` — cannot determine which impl; add a type annotation` |
-| T-EFFECT-PARAM | `Host pattern "\{pat}" must end in '*' …` | :997 | inconsistent (near-dup of :969 `pattern "…"` but capitalized) | share one builder with :969 |
+| T-EFFECT-PARAM | `\{noun} is empty; name the element (the whole domain is the bare label, with no parameter)` | typecheck.mdk `prefixPatternErrMsg` | consistent (the delimiter message this row named is deleted: an exact element needs no delimiter) | none |
 | T-TYPE-MISMATCH (numlit if) | `if branches have different types: Int vs \{args}` | :9024 | inconsistent (lowercase vs generic `Type mismatch:` fallback) | `If branches have different types: Int vs \{args}` |
 | T-TYPE-MISMATCH (numlit list) | `list elements have different types: Int vs \{args}` | :9026 | inconsistent (lowercase) | capitalize |
 | T-TYPE-MISMATCH (numlit cons) | `cons (::) type mismatch: head is Int but the list holds \{args}` | :9027 | inconsistent (lowercase) | capitalize |

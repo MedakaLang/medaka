@@ -1,5 +1,5 @@
 # META
-source_lines=2517
+source_lines=2525
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -998,6 +998,14 @@ qualifierSource : (String -> String) -> List EffParamTy -> String
 -- `@` takes a name, a string or a parenthesised term.
 qualifierSource esc [EPSet xs] = "@(" ++ authTermsSurface esc [EPSet xs] ++ ")"
 qualifierSource esc ps = "@" ++ authTermsSurface esc ps
+
+-- The names an atom's written parameter refers to: the parameter itself, or
+-- the axes of a product.
+export
+effParamNames : EffParamTy -> List String
+effParamNames (EPName n) = [n]
+effParamNames (EPProduct axes) = flatMap (a => effParamNames (snd a)) axes
+effParamNames _ = []
 
 -- The names a written authority term refers to.
 export
@@ -2646,6 +2654,10 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "qualifierSource" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
 (DFunDef false "qualifierSource" ((PVar "esc") (PList (PCon "EPSet" (PVar "xs")))) (EBinOp "++" (EBinOp "++" (ELit (LString "@(")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EListLit (EApp (EVar "EPSet") (EVar "xs"))))) (ELit (LString ")"))))
 (DFunDef false "qualifierSource" ((PVar "esc") (PVar "ps")) (EBinOp "++" (ELit (LString "@")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EVar "ps"))))
+(DTypeSig true "effParamNames" (TyFun (TyCon "EffParamTy") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "effParamNames" ((PCon "EPName" (PVar "n"))) (EListLit (EVar "n")))
+(DFunDef false "effParamNames" ((PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EVar "effParamNames") (EApp (EVar "snd") (EVar "a"))))) (EVar "axes")))
+(DFunDef false "effParamNames" (PWild) (EListLit))
 (DTypeSig true "authTermNames" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "authTermNames" ((PVar "ps")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EMatch (EVar "p") (arm (PCon "EPName" (PVar "n")) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (EVar "ps")))
 (DTypeSig false "kindAnnArg" (TyFun (TyCon "KindAnn") (TyCon "String")))
@@ -3047,6 +3059,10 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "qualifierSource" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
 (DFunDef false "qualifierSource" ((PVar "esc") (PList (PCon "EPSet" (PVar "xs")))) (EBinOp "++" (EBinOp "++" (ELit (LString "@(")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EListLit (EApp (EVar "EPSet") (EVar "xs"))))) (ELit (LString ")"))))
 (DFunDef false "qualifierSource" ((PVar "esc") (PVar "ps")) (EBinOp "++" (ELit (LString "@")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EVar "ps"))))
+(DTypeSig true "effParamNames" (TyFun (TyCon "EffParamTy") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "effParamNames" ((PCon "EPName" (PVar "n"))) (EListLit (EVar "n")))
+(DFunDef false "effParamNames" ((PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EVar "effParamNames") (EApp (EVar "snd") (EVar "a"))))) (EVar "axes")))
+(DFunDef false "effParamNames" (PWild) (EListLit))
 (DTypeSig true "authTermNames" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "authTermNames" ((PVar "ps")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EMatch (EVar "p") (arm (PCon "EPName" (PVar "n")) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (EVar "ps")))
 (DTypeSig false "kindAnnArg" (TyFun (TyCon "KindAnn") (TyCon "String")))

@@ -5,27 +5,37 @@
 -- both, never their common prefix; its variables stay symbolic.
 -- Coverage is decided only where it is provable now: a variable covers itself
 -- and is covered by top, a join is covered when every operand is and covers
--- when any operand does. Anything else is not proven, never assumed.
+-- when any operand does, and a Product tuple is compared axis by axis.
+-- Anything else is not proven, never assumed.
 
 import types.effect_domain.{
   Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam, dantichain, dsubAny, djoinN, setCardCap
+  appendParam, dantichain, dsubAny, djoinN, setCardCap, productNorm,
+  renderAxisVal, lookupAxis, domainKey
 }
-import support.util.{joinWith, reverseL, listLen}
+import support.util.{
+  joinWith, reverseL, listLen, anyList, allList, dedupBy, filterList
+}
 import string.{trimLeft}
 import map as M
 import map.{Map(..)}
 
+-- `AProduct` is one element of a Product domain whose axes are terms rather
+-- than values: every axis of the label's schema, in declaration order, each a
+-- term of that axis's own domain. A signature writes one when an argument
+-- names an axis (`<Http Host=host Method=method>`); once no axis holds a
+-- variable it is an ordinary Product constant (`authNorm`).
 public export data Authority =
   | AConst Param
   | AVar (Ref Authvar)
   | AJoin (List Authority)
+  | AProduct (List (String, Authority))
 
 -- id, inference level, the domain's top, and the source binder's name when
 -- the variable came from a written signature. Identity belongs to the cell
--- and survives linking, as an effect variable's does, and so does the
--- domain: a linked variable still has its label's declared schema, never
--- the axes of the constant it was linked to.
+-- and survives linking, as an effect variable's does, and so does the domain:
+-- a linked variable still has its label's declared schema, never the axes of
+-- the constant it was linked to.
 public export data Authvar =
   | AUnbound Int Int Param (Option String)
   | ALink Int Param Authority
@@ -45,6 +55,8 @@ authvarLevel cell = match !cell
 authLevelOf : Authority -> Int
 authLevelOf (AVar cell) = authvarLevel cell
 authLevelOf (AJoin ms) = fold (acc m => max acc (authLevelOf m)) 0 ms
+authLevelOf (AProduct axes) =
+  fold (acc a => max acc (authLevelOf (snd a))) 0 axes
 authLevelOf _ = 0
 
 export
@@ -69,11 +81,9 @@ authTop top = AConst (subTopOf top)
 
 -- The authority of a value once a suffix is appended: each constant extends
 -- through its domain, by the suffix when it is known (`authAppend`) and to
--- the pattern it begins when it is not (`authExtend`). A variable is kept as
--- it stands, which is sound only when what it stands for is a pattern: a
--- signature's variable may be given an exact element by a caller, and a
--- flexible one may be solved to one later. Pinned by must_fail
--- `3501-signature-variable-extension` and `3502-flexible-variable-extension`.
+-- the pattern it begins when it is not (`authExtend`). A variable extends to
+-- its domain's top: what it stands for is not known here, and an exact
+-- element has no extension inside itself, so no narrower bound is sound.
 export
 authExtend : Authority -> Authority
 authExtend a = mapConstants extendParam a
@@ -82,10 +92,15 @@ export
 authAppend : String -> Authority -> Authority
 authAppend suffix a = mapConstants (appendParam suffix) a
 
+-- A Product tuple extends on its primary axis only, as a constant does
+-- (`extendParam`).
 mapConstants : (Param -> Param) -> Authority -> Authority
 mapConstants f a = match authNorm a
   AConst p => AConst (f p)
   AJoin ms => authJoinAll (map (mapConstants f) ms)
+  AProduct ((name, t) :: rest) =>
+    authNorm (AProduct ((name, mapConstants f t) :: rest))
+  AVar cell => authTop (authvarDomain cell)
   v => v
 
 -- The domain's top for a term: from a constant's shape, or a variable's
@@ -95,6 +110,8 @@ export
 authDomainTop : Authority -> Param
 authDomainTop (AConst p) = subTopOf p
 authDomainTop (AVar cell) = authvarDomain cell
+authDomainTop (AProduct axes) =
+  PProduct (map (a => (fst a, authDomainTop (snd a))) axes)
 -- A join's domain is a variable's when it has one, else its first member's.
 authDomainTop (AJoin ms) = match filterVars ms
   v :: _ => authDomainTop v
@@ -108,33 +125,80 @@ filterVars ((AVar c) :: ms) = AVar c :: filterVars ms
 filterVars (_ :: ms) = filterVars ms
 
 -- Canonical form: links followed, joins flattened, constants kept as the
--- domain's antichain ahead of the variables, variables deduplicated by
--- identity, a top constant absorbing everything, and a one-operand join
--- collapsed.
+-- domain's antichain ahead of the Product tuples and then the variables,
+-- tuples and variables deduplicated, a top constant absorbing everything, and
+-- a one-operand join collapsed.
 export
 authNorm : Authority -> Authority
 authNorm a =
-  let (consts, vars) = collect [a] [] Tip
+  let (consts, tuples, vars) = collect [a] (Parts [] [] Tip)
   match dantichain consts
-    [c] => if isSubTop c then AConst c else assemble [c] vars
-    cs => assemble cs vars
+    [c] => if isSubTop c then AConst c else assemble [c] tuples vars
+    cs => assemble cs tuples vars
+
+-- A term's operands, gathered: constants, Product tuples that still hold a
+-- variable, and variables by identity.
+data Parts = Parts (List Param) (List Authority) (Map Int (Ref Authvar))
 
 collect : List Authority ->
-  List Param ->
-  Map Int (Ref Authvar) ->
-  (List Param, Map Int (Ref Authvar))
-collect [] consts vars = (consts, vars)
-collect ((AConst p) :: rest) consts vars = collect rest (p :: consts) vars
-collect ((AVar cell) :: rest) consts vars = match !cell
-  ALink _ _ target => collect (target :: rest) consts vars
-  AUnbound id _ _ _ => collect rest consts (M.set id cell vars)
-collect ((AJoin ms) :: rest) consts vars = collect (ms ++ rest) consts vars
+  Parts ->
+  (List Param, List Authority, Map Int (Ref Authvar))
+collect [] (Parts consts tuples vars) = (consts, reverseL tuples, vars)
+collect ((AConst p) :: rest) (Parts consts tuples vars) =
+  collect rest (Parts (p :: consts) tuples vars)
+collect ((AVar cell) :: rest) (Parts consts tuples vars) = match !cell
+  ALink _ _ target => collect (target :: rest) (Parts consts tuples vars)
+  AUnbound id _ _ _ => collect rest (Parts consts tuples (M.set id cell vars))
+collect ((AJoin ms) :: rest) parts = collect (ms ++ rest) parts
+collect ((AProduct axes) :: rest) (Parts consts tuples vars) =
+  match productTerm axes
+    AProduct normed =>
+      collect rest (Parts consts (AProduct normed :: tuples) vars)
+    other => collect (other :: rest) (Parts consts tuples vars)
 
-assemble : List Param -> Map Int (Ref Authvar) -> Authority
-assemble consts vars = match map AConst consts ++ map AVar (M.values vars)
-  [] => AJoin []
-  [m] => m
-  ms => AJoin ms
+-- A tuple with every axis normalised. An empty axis makes the tuple empty;
+-- once no axis holds a variable the tuple is the join of the constant tuples
+-- its axes span, which is exact, since a product of sets is the set of its
+-- tuples.
+productTerm : List (String, Authority) -> Authority
+productTerm axes =
+  let normed = map (a => (fst a, authNorm (snd a))) axes
+  if anyList (a => isEmptyAuth (snd a)) normed then
+    AJoin []
+  else match axisConstants normed
+    Some choices => AJoin (map (ax => AConst (productNorm ax)) choices)
+    None => AProduct normed
+
+isEmptyAuth : Authority -> Bool
+isEmptyAuth (AJoin []) = True
+isEmptyAuth _ = False
+
+-- Every tuple of constants the axes span, when no axis holds a variable.
+axisConstants : List (String, Authority) -> Option (List (List (String, Param)))
+axisConstants [] = Some [[]]
+axisConstants ((name, t) :: rest) = match (authConsts t, axisConstants rest)
+  (Some ps, Some tails) => Some (flatMap (p => map ((name, p) :: _) tails) ps)
+  _ => None
+
+assemble : List Param -> List Authority -> Map Int (Ref Authvar) -> Authority
+assemble consts tuples vars =
+  match map AConst consts ++ dedupBy termKey tuples ++ map AVar (M.values vars)
+    [] => AJoin []
+    [m] => m
+    ms => AJoin ms
+
+-- A key that identifies a tuple whose axes are normalised: every axis, a top
+-- one included, and variables by identity. It reads the axes as they stand,
+-- so it never normalises the tuple it keys.
+termKey : Authority -> String
+termKey (AProduct axes) =
+  joinWith
+    " "
+    (map
+      (a =>
+        "\{fst a}=\{renderAxisTerm (cell => "#" ++ intToString (authvarId cell)) (snd a)}")
+      axes)
+termKey _ = ""
 
 -- A value's abstraction may over-approximate it, so a value whose authority
 -- would hold more than `setCardCap` constants is folded by the domain join
@@ -144,10 +208,10 @@ assemble consts vars = match map AConst consts ++ map AVar (M.values vars)
 export
 authWidenValue : Authority -> Authority
 authWidenValue a =
-  let (consts, vars) = collect [a] [] Tip
+  let (consts, tuples, vars) = collect [a] (Parts [] [] Tip)
   let cs = dantichain consts
   if listLen cs > setCardCap then
-    assemble [fold djoinN (headOr cs) cs] vars
+    assemble [fold djoinN (headOr cs) cs] tuples vars
   else
     authNorm a
 
@@ -191,12 +255,21 @@ authIsTop a = match authNorm a
   AConst p => isSubTop p
   _ => False
 
--- The unbound variables a term mentions, deduplicated by identity.
+-- The unbound variables a term mentions, deduplicated by identity, those on
+-- a Product tuple's axes included.
 export
 authVars : Authority -> List (Ref Authvar)
-authVars a =
-  let (_, vars) = collect [a] [] Tip
-  M.values vars
+authVars a = M.values (varsInto a Tip)
+
+varsInto : Authority -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
+varsInto a acc =
+  let (_, tuples, vars) = collect [a] (Parts [] [] Tip)
+  fold
+    (m t => match t
+      AProduct axes => fold (m2 ax => varsInto (snd ax) m2) m axes
+      _ => m)
+    (M.union vars acc)
+    tuples
 
 export
 authHasVars : Authority -> Bool
@@ -216,14 +289,89 @@ authSubN (AConst c) (AConst d) = dsub c d
 authSubN _ (AConst d)
   | isSubTop d = True
 authSubN (AJoin ms) hi = allSub ms hi
+-- One tuple lies within another when each axis does, and a tuple is a single
+-- element, so a tuple that holds a variable is within a constant only when
+-- that one constant covers it pointwise.
+authSubN (AProduct xs) (AConst (PProduct dx)) =
+  axesWithin xs (map (a => (fst a, AConst (snd a))) dx)
 authSubN _ (AConst _) = False
 -- A constant is within a set when some element covers it, or when the
 -- elements cover it together (a Product tuple, singleton by singleton).
 authSubN (AConst c) (AJoin ms) =
   anySub (AConst c) ms || dsubAny c (constantsOf ms)
+authSubN (AConst (PProduct cx)) (AProduct ys) =
+  axesWithin (map (a => (fst a, AConst (snd a))) cx) ys
+authSubN (AProduct xs) (AProduct ys) = axesWithin xs ys
+-- A tuple that holds a variable is within a set only when one element covers
+-- it: which tuples several elements cover together depends on the variable.
 authSubN lo (AJoin ms) = anySub lo ms
 authSubN (AVar v) (AVar w) = authvarId v == authvarId w
 authSubN _ _ = False
+
+-- Two tuples of one schema, axis by axis.
+axesWithin : List (String, Authority) -> List (String, Authority) -> Bool
+axesWithin xs ys =
+  map fst xs == map fst ys
+    && allList
+      (y => match lookupTerm (fst y) xs
+        Some x =>
+          domainKey (authDomainTop x) == domainKey (authDomainTop (snd y))
+            && authSub x (snd y)
+        None => False)
+      ys
+
+lookupTerm : String -> List (String, Authority) -> Option Authority
+lookupTerm _ [] = None
+lookupTerm name ((k, t) :: rest) =
+  if name == k then Some t else lookupTerm name rest
+
+-- `lo ⊑ hi` as the obligations it is equivalent to. Against a tuple that
+-- holds variables it is one obligation per axis, `lo`'s projection on that
+-- axis within the tuple's term, which is exact because a tuple of terms
+-- denotes a product of sets. A lower term with no projection (a variable of
+-- the whole Product domain) keeps the obligation whole, where it is not
+-- proven.
+export
+authSplit : Authority -> Authority -> List (Authority, Authority)
+authSplit lo hi = match authNorm hi
+  AProduct axes =>
+    let schema = domainKey (authDomainTop (AProduct axes))
+    match projections schema axes lo
+      Some parts => parts
+      None => [(lo, hi)]
+  _ => [(lo, hi)]
+
+projections : String ->
+  List (String, Authority) ->
+  Authority ->
+  Option (List (Authority, Authority))
+projections _ [] _ = Some []
+projections schema ((name, t) :: rest) lo = match (
+  projectAxis schema name lo,
+  projections schema rest lo,
+)
+  (Some p, Some more) => Some ((p, t) :: more)
+  _ => None
+
+-- A term's values on one axis of the Product domain keyed [schema].
+projectAxis : String -> String -> Authority -> Option Authority
+projectAxis schema name lo = match authNorm lo
+  AJoin [] => Some (AJoin [])
+  AConst (p@(PProduct ax)) =>
+    if domainKey p == schema then map AConst (lookupAxis name ax) else None
+  AProduct axes =>
+    if domainKey (authDomainTop (AProduct axes)) == schema then
+      lookupTerm name axes
+    else
+      None
+  AJoin ms =>
+    fold
+      (acc m => match (acc, projectAxis schema name m)
+        (Some a, Some b) => Some (authJoin a b)
+        _ => None)
+      (Some (AJoin []))
+      ms
+  _ => None
 
 constantsOf : List Authority -> List Param
 constantsOf [] = []
@@ -247,11 +395,30 @@ renderAuthorityWith name a = match authNorm a
   AConst p => drender p
   AVar cell => " " ++ name cell
   AJoin ms => " (" ++ joinWith " | " (map (renderOperand name) ms) ++ ")"
+  AProduct axes => " " ++ renderTuple name axes
 
 renderOperand : (Ref Authvar -> String) -> Authority -> String
 renderOperand _ (AConst p) = trimLeft (drender p)
 renderOperand name (AVar cell) = name cell
+renderOperand name (AProduct axes) = renderTuple name axes
 renderOperand name a = renderAuthorityWith name a
+
+-- A tuple's axes as a signature writes them, a top axis left out.
+renderTuple : (Ref Authvar -> String) -> List (String, Authority) -> String
+renderTuple name axes =
+  joinWith
+    " "
+    (map
+      (a => "\{fst a}=\{renderAxisTerm name (snd a)}")
+      (filterList (a => not (authIsTop (snd a))) axes))
+
+renderAxisTerm : (Ref Authvar -> String) -> Authority -> String
+renderAxisTerm name t = match authNorm t
+  AConst p => renderAxisVal p
+  AVar cell => name cell
+  AJoin [] => "{}"
+  AJoin ms => "(" ++ joinWith " | " (map (renderAxisTerm name) ms) ++ ")"
+  AProduct axes => "(" ++ renderTuple name axes ++ ")"
 
 -- The default namer: a binder's own name where the variable came from a
 -- signature, else a stable id-based spelling.
