@@ -25,6 +25,8 @@ row = Row {
       needs = [
         "lexjson: 18/18 round-trip (both directions)",
         "malformed: 3/3 rejected",
+        "dup-keys: 5/5",
+        "scaling-ok: True",
       ],
       lastLine = Some "TOTAL: PASS",
       exactStdout = None,
