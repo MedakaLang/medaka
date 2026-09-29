@@ -92,9 +92,6 @@ issue; the number is the thing to search for.
   carries a context such as `(a <= d) =>` (the relation the compiler kept, see
   chapter IV) must stay unsigned.
   [#3566](https://github.com/MedakaLang/medaka/issues/3566)
-- **`IO` is a label above the ten, not their abbreviation.** A performed `<IO>`
-  does not fit a bound or a policy that spells the ten labels out.
-  [#3565](https://github.com/MedakaLang/medaka/issues/3565)
 - **A relation cannot be shared by a recursive group.** Two mutually recursive
   functions over a captured handle are refused where one function would be
   accepted. [#3482](https://github.com/MedakaLang/medaka/issues/3482)

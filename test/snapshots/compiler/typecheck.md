@@ -1,5 +1,5 @@
 # META
-source_lines=51130
+source_lines=51149
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -691,6 +691,7 @@ dtopFor label =
     _ => PUnit
 
 -- lift one of the language's own labels to its ⊤-param atom
+export
 atomOfLabel : String -> Atom
 atomOfLabel l = atomWith (builtinLabel l) (dtopFor (builtinLabel l))
 
@@ -702,6 +703,7 @@ ioLabel = builtinLabel "IO"
 -- the join of every narrow security label at ⊤.  ioAliasLabels lists them
 -- (every minted security label EXCEPT IO itself); internal labels (Mut/Panic)
 -- are NOT members, so they are tracked independently of IO.
+export
 ioAliasLabels : List String
 ioAliasLabels = [
   "Stdout",
@@ -720,20 +722,37 @@ ioAliasLabels = [
 -- trust boundary the IO alias is not meant to paper over. Do not "complete"
 -- this list by adding FFI.
 
--- expand a bound `IO` atom into the security-label alias before an escape
--- check, so a NARROW inferred row is subsumed by an `<IO>` bound (narrow ⊑ IO
--- accepts).  Sound in reverse: an inferred raw `IO` against a NARROW bound is
--- never expanded (the bound has no IO) ⇒ escapes (IO ⊑ narrow rejects).  `IO`
--- stays in the expansion (atomsNorm keeps it) so inferred IO-vs-IO matches.
+-- `IO` is the join of the ten security labels, so it widens on either side of an
+-- escape check.  On the bound side a NARROW inferred row is subsumed by an `<IO>`
+-- bound (narrow ⊑ IO); `IO` stays in the expansion (atomsNorm keeps it) so an
+-- inferred IO matches a bound IO.
 expandIoInBound : List Atom -> List Atom
 expandIoInBound b = match findAtom (labelKey ioLabel) b
   None => b
   Some _ => atomsNorm (b ++ map atomOfLabel ioAliasLabels)
 
+-- A performed `IO` left over against a bound without `IO` stands for the ten
+-- labels: a bound naming all ten admits it, a bound naming some refuses it
+-- naming the labels it lacks, and a bound naming none leaves it as `IO`.
+narrowPerformedIo : List Atom -> List Atom -> List Atom
+narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
+  None => diff
+  Some _ =>
+    let rest = filterList (x => atomKey x /= labelKey ioLabel) diff
+    let missing = atomsDiff (map atomOfLabel ioAliasLabels) bound
+    if isEmptyL missing then
+      rest
+    else if listLen missing == listLen ioAliasLabels then
+      diff
+    else
+      atomsNorm (rest ++ missing)
+
 -- escape-direction difference: inferred [a] not permitted by bound [b], with
--- the bound's `IO` widened to its security-label alias first.
+-- `IO` widened to its security-label alias on both sides.
 atomsEscape : List Atom -> List Atom -> List Atom
-atomsEscape a b = atomsDiff a (expandIoInBound b)
+atomsEscape a b =
+  let bound = expandIoInBound b
+  narrowPerformedIo (atomsDiff a bound) bound
 
 -- build an atom from a WRITTEN annotation atom.  A bare label takes the
 -- domain's top; a written parameter becomes the element of the label's domain
@@ -51204,16 +51223,18 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "lookupDomain" ((PVar "l") (PCons (PTuple (PVar "k") (PVar "p")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "l") (EVar "k")) (EVar "p") (EApp (EApp (EVar "lookupDomain") (EVar "l")) (EVar "rest"))))
 (DTypeSig false "dtopFor" (TyFun (TyCon "EffLabel") (TyCon "Param")))
 (DFunDef false "dtopFor" ((PVar "label")) (EMatch (EApp (EApp (EVar "lookupDomain") (EApp (EVar "labelKey") (EVar "label"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains") "value")) (arm (PCon "PPrefix" (PCon "None")) () (EApp (EVar "PPrefix") (EVar "None"))) (arm (PCon "PSet" (PCon "None")) () (EApp (EVar "PSet") (EVar "None"))) (arm (PAs "p" (PCon "PProduct" PWild)) () (EVar "p")) (arm PWild () (EVar "PUnit"))))
-(DTypeSig false "atomOfLabel" (TyFun (TyCon "String") (TyCon "Atom")))
+(DTypeSig true "atomOfLabel" (TyFun (TyCon "String") (TyCon "Atom")))
 (DFunDef false "atomOfLabel" ((PVar "l")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EVar "dtopFor") (EApp (EVar "builtinLabel") (EVar "l")))))
 (DTypeSig false "ioLabel" (TyCon "EffLabel"))
 (DFunDef false "ioLabel" () (EApp (EVar "builtinLabel") (ELit (LString "IO"))))
-(DTypeSig false "ioAliasLabels" (TyApp (TyCon "List") (TyCon "String")))
+(DTypeSig true "ioAliasLabels" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
 (DTypeSig false "expandIoInBound" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "expandIoInBound" ((PVar "b")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "b")) (arm (PCon "None") () (EVar "b")) (arm (PCon "Some" PWild) () (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "b") (EApp (EApp (EVar "map") (EVar "atomOfLabel")) (EVar "ioAliasLabels")))))))
+(DTypeSig false "narrowPerformedIo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "narrowPerformedIo" ((PVar "diff") (PVar "bound")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "diff")) (arm (PCon "None") () (EVar "diff")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EBinOp "/=" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "labelKey") (EVar "ioLabel"))))) (EVar "diff"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "atomsDiff") (EApp (EApp (EVar "map") (EVar "atomOfLabel")) (EVar "ioAliasLabels"))) (EVar "bound"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "missing")) (EVar "rest") (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "missing")) (EApp (EVar "listLen") (EVar "ioAliasLabels"))) (EVar "diff") (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "rest") (EVar "missing"))))))))))
 (DTypeSig false "atomsEscape" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
-(DFunDef false "atomsEscape" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "atomsDiff") (EVar "a")) (EApp (EVar "expandIoInBound") (EVar "b"))))
+(DFunDef false "atomsEscape" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "expandIoInBound") (EVar "b"))) (DoExpr (EApp (EApp (EVar "narrowPerformedIo") (EApp (EApp (EVar "atomsDiff") (EVar "a")) (EVar "bound"))) (EVar "bound")))))
 (DTypeSig false "atomOfWrittenIn" (TyFun (TyCon "SigVars") (TyFun (TyCon "EffAtomTy") (TyCon "Atom"))))
 (DFunDef false "atomOfWrittenIn" ((PVar "sv") (PVar "a")) (EBlock (DoLet false false (PVar "l") (EApp (EApp (EVar "EffLabel") (EFieldAccess (EVar "a") "eatLabel")) (EFieldAccess (EVar "a") "eatOrigin"))) (DoExpr (EMatch (ETuple (EFieldAccess (EVar "a") "eatParam") (EApp (EVar "dtopFor") (EVar "l"))) (arm (PTuple (PCon "EPName" (PVar "n")) (PVar "top")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "sv") "svAuths")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "Atom") (EVar "l")) (EApp (EVar "AVar") (EVar "cell")))) (arm (PCon "None") () (EApp (EApp (EVar "atomWith") (EVar "l")) (EVar "top"))))) (arm (PTuple (PCon "EPProduct" (PVar "axes")) (PCon "PProduct" (PVar "schema"))) ((GBool (EApp (EVar "axisNamesArgument") (EVar "axes")))) (EApp (EApp (EVar "Atom") (EVar "l")) (EApp (EVar "AProduct") (EApp (EApp (EVar "map") (EApp (EApp (EVar "writtenAxisTerm") (EVar "sv")) (EVar "axes"))) (EVar "schema"))))) (arm (PTuple (PVar "p") (PVar "top")) () (EApp (EApp (EVar "atomWith") (EVar "l")) (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "p"))))))))
 (DTypeSig false "writtenAxisTerm" (TyFun (TyCon "SigVars") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyTuple (TyCon "String") (TyCon "Authority"))))))
@@ -59446,16 +59467,18 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "lookupDomain" ((PVar "l") (PCons (PTuple (PVar "k") (PVar "p")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "l") (EVar "k")) (EVar "p") (EApp (EApp (EVar "lookupDomain") (EVar "l")) (EVar "rest"))))
 (DTypeSig false "dtopFor" (TyFun (TyCon "EffLabel") (TyCon "Param")))
 (DFunDef false "dtopFor" ((PVar "label")) (EMatch (EApp (EApp (EVar "lookupDomain") (EApp (EVar "labelKey") (EVar "label"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains") "value")) (arm (PCon "PPrefix" (PCon "None")) () (EApp (EVar "PPrefix") (EVar "None"))) (arm (PCon "PSet" (PCon "None")) () (EApp (EVar "PSet") (EVar "None"))) (arm (PAs "p" (PCon "PProduct" PWild)) () (EVar "p")) (arm PWild () (EVar "PUnit"))))
-(DTypeSig false "atomOfLabel" (TyFun (TyCon "String") (TyCon "Atom")))
+(DTypeSig true "atomOfLabel" (TyFun (TyCon "String") (TyCon "Atom")))
 (DFunDef false "atomOfLabel" ((PVar "l")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EVar "dtopFor") (EApp (EVar "builtinLabel") (EVar "l")))))
 (DTypeSig false "ioLabel" (TyCon "EffLabel"))
 (DFunDef false "ioLabel" () (EApp (EVar "builtinLabel") (ELit (LString "IO"))))
-(DTypeSig false "ioAliasLabels" (TyApp (TyCon "List") (TyCon "String")))
+(DTypeSig true "ioAliasLabels" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
 (DTypeSig false "expandIoInBound" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "expandIoInBound" ((PVar "b")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "b")) (arm (PCon "None") () (EVar "b")) (arm (PCon "Some" PWild) () (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "b") (EApp (EApp (EMethodRef "map") (EVar "atomOfLabel")) (EVar "ioAliasLabels")))))))
+(DTypeSig false "narrowPerformedIo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "narrowPerformedIo" ((PVar "diff") (PVar "bound")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "diff")) (arm (PCon "None") () (EVar "diff")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EBinOp "/=" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "labelKey") (EVar "ioLabel"))))) (EVar "diff"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "atomsDiff") (EApp (EApp (EMethodRef "map") (EVar "atomOfLabel")) (EVar "ioAliasLabels"))) (EVar "bound"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "missing")) (EVar "rest") (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "missing")) (EApp (EVar "listLen") (EVar "ioAliasLabels"))) (EVar "diff") (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "rest") (EVar "missing"))))))))))
 (DTypeSig false "atomsEscape" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
-(DFunDef false "atomsEscape" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "atomsDiff") (EVar "a")) (EApp (EVar "expandIoInBound") (EVar "b"))))
+(DFunDef false "atomsEscape" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "expandIoInBound") (EVar "b"))) (DoExpr (EApp (EApp (EVar "narrowPerformedIo") (EApp (EApp (EVar "atomsDiff") (EVar "a")) (EVar "bound"))) (EVar "bound")))))
 (DTypeSig false "atomOfWrittenIn" (TyFun (TyCon "SigVars") (TyFun (TyCon "EffAtomTy") (TyCon "Atom"))))
 (DFunDef false "atomOfWrittenIn" ((PVar "sv") (PVar "a")) (EBlock (DoLet false false (PVar "l") (EApp (EApp (EVar "EffLabel") (EFieldAccess (EVar "a") "eatLabel")) (EFieldAccess (EVar "a") "eatOrigin"))) (DoExpr (EMatch (ETuple (EFieldAccess (EVar "a") "eatParam") (EApp (EVar "dtopFor") (EVar "l"))) (arm (PTuple (PCon "EPName" (PVar "n")) (PVar "top")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "sv") "svAuths")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "Atom") (EVar "l")) (EApp (EVar "AVar") (EVar "cell")))) (arm (PCon "None") () (EApp (EApp (EVar "atomWith") (EVar "l")) (EVar "top"))))) (arm (PTuple (PCon "EPProduct" (PVar "axes")) (PCon "PProduct" (PVar "schema"))) ((GBool (EApp (EVar "axisNamesArgument") (EVar "axes")))) (EApp (EApp (EVar "Atom") (EVar "l")) (EApp (EVar "AProduct") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "writtenAxisTerm") (EVar "sv")) (EVar "axes"))) (EVar "schema"))))) (arm (PTuple (PVar "p") (PVar "top")) () (EApp (EApp (EVar "atomWith") (EVar "l")) (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "p"))))))))
 (DTypeSig false "writtenAxisTerm" (TyFun (TyCon "SigVars") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyTuple (TyCon "String") (TyCon "Authority"))))))

@@ -1,0 +1,11 @@
+-- `IO` is the join of the ten host labels, so a body that performs a declared
+-- `<IO>` fits a bound spelling the ten out.
+ioSay : String -> <IO> Unit
+ioSay s = println s
+
+say : String ->
+  <Clock, Env, Exec, FileRead, FileWrite, Net, Rand, Stderr, Stdin, Stdout> Unit
+say s = ioSay s
+
+main : <IO> Unit
+main = say "io join accept"

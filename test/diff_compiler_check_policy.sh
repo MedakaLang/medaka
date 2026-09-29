@@ -74,6 +74,8 @@ one_case "defaults-accept"    test/check_policy_fixtures/defaults_plugin.mdk "Lo
 # Accepted entries that are not `String -> String`: verdict, then a no-sample line.
 one_case "int-entry-accept"   test/check_policy_fixtures/int_entry_plugin.mdk "Audit" transfer int_entry_accept
 one_case "named-entry-sample" test/check_policy_fixtures/named_entry_plugin.mdk "FileRead" transform named_entry_accept
+# An <IO> entry under a policy that names the ten host labels.
+one_case "io-join-accept"     test/check_policy_fixtures/io_join_plugin.mdk "Clock,Env,Exec,FileRead,FileWrite,Net,Rand,Stderr,Stdin,Stdout" transform io_join_accept
 one_case "thunk-entry-accept" test/check_policy_fixtures/thunk_entry_plugin.mdk "Audit" tick thunk_entry_accept
 #
 # NOTE: an ACCEPT case that admits Fetch (e.g. malicious + --allow Cache,Log,Fetch)
@@ -195,6 +197,7 @@ echo "-- fail-closed analysis, entry, and evaluation --"
 refuse_case "analysis-type-error" "test/check_policy_fixtures/type_error_plugin.mdk" "Panic" transform "rejected. compiler analysis failed"
 refuse_case "analysis-unlabelled-ffi" "test/check_policy_fixtures/ffi_unlabelled_plugin.mdk" "FFI,Net" transform "rejected. compiler analysis failed"
 refuse_case "missing-entry-2047" "test/check_policy_fixtures/missing_entry_plugin.mdk" "Cache,Log" transform "rejected. no 'transform' entry found"
+refuse_case "io-join-nine-labels" "test/check_policy_fixtures/io_join_plugin.mdk" "Clock,Env,Exec,FileRead,FileWrite,Rand,Stderr,Stdin,Stdout" transform "rejected. transform requires <IO>"
 refuse_case "evaluation-panic" "test/check_policy_fixtures/panic_plugin.mdk" "Panic" transform "policy evaluation boom"
 
 # The #2047 control flips only entry presence in the same fixture and must still

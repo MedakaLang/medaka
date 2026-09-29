@@ -1978,6 +1978,7 @@ namedArgTypes : Ty -> List (String, Ty)
 namedAtomBinder : EffAtomTy -> List (String, Param)
 namedAtomBinders : Ty -> List (String, Param)
 namesToSet : List String -> Map String Unit -> Map String Unit
+narrowPerformedIo : List Atom -> List Atom -> List Atom
 narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
 narrowedPick : Option HeadKey -> String -> List String -> List (String, RecordInfo) -> Option (String, RecordInfo)
 narrowingBlockedByCtorSibling : Option HeadKey -> String -> String -> Bool

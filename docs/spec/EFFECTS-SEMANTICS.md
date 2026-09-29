@@ -1128,7 +1128,9 @@ the history.)
 **`IO` as a widening alias.** `IO` is not a primitive label but the **join of the
 security labels at `⊤`** (`Stdout ⊔ Stderr ⊔ … ⊔ Net⊤`). An inferred narrow row is
 `≤ <IO>`, so any `<IO>` annotation still typechecks (it widens), while inference
-yields tight narrow rows for the manifest. `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
+yields tight narrow rows for the manifest. The join holds on both sides of the order: a
+performed `<IO>` fits a bound that names all ten labels, and a policy that allows all ten
+admits an `<IO>` entry. `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
 is deliberately EXCLUDED from this join by design — `<IO>` does not subsume
 `<FFI>` — because FFI crosses a trust boundary the IO alias is not meant to
 paper over; see [`CAPABILITY-PLATFORM.md`](../design/CAPABILITY-PLATFORM.md) §8

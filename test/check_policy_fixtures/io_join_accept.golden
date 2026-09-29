@@ -1,0 +1,2 @@
+accepted. transform requires only <IO>
+   transform "X-Forwarded-For: 192.168.1.1" = X-Forwarded-For: 192.168.1.1!

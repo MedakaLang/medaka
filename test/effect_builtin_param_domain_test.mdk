@@ -149,6 +149,16 @@ test "IO does not subsume an FFI-performing body" = expectCheckReject (fixture
 test "IO still subsumes an Exec-performing body" =
   expectCheckAccept (fixture "exec_io_accept.mdk")
 
+test "a performed IO fits a bound naming the ten host labels" =
+  expectCheckAccept (fixture "io_join_accept.mdk")
+
+test "a performed IO under nine host labels is refused naming the missing one" =
+  expectCheckReject (fixture "io_join_reject.mdk") ["but it performs <Net>"]
+
+test "an IO value stored at ten labels is refused when applied under nine" = expectCheckReject
+  (fixture "io_join_launder_reject.mdk")
+  ["but it performs <Net>"]
+
 -- The non-empty-row reject and the narrow accept distinguish the honesty
 -- rule from one that only rejects a bare empty row.
 test "an extern row missing FFI is rejected even when the row is non-empty" = expectCheckReject
