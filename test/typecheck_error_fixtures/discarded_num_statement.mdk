@@ -1,5 +1,5 @@
 -- T-DISCARDED-VALUE: a discarded `1 + 1` is an open `Num` variable, not a free
--- one; it reports the discard, naming the type it would default to, rather
+-- one; it reports the discard as "a number", rather
 -- than `No impl of Num for Unit`.
 main =
   1 + 1

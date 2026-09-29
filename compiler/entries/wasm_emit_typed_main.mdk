@@ -938,6 +938,11 @@ leafValueCmpU = leafRuntimeProgram [
 
 -- A2: P selects stringToFloat. U retains Float, String, and IO cofactors without
 -- selecting its host import/runtime; shared leaf census remains ownership-only.
+-- A file extern takes, after its value arguments, the authority granted for
+-- its path; these hand-built calls grant the whole domain.
+wholeDomain : CExpr
+wholeDomain = CList []
+
 leafFloatStrP : CProgram
 leafFloatStrP = leafRuntimeProgram [
   CBind "leafFloatStr" [
@@ -957,7 +962,9 @@ leafFloatStrU = leafRuntimeProgram [
   CBind "leafFloatStrNearestStringIo" [
     CClause
       [leafRuntimeArg]
-      (CApp (CVar "readFile" AGlobal) (CLit (LString "floatstr-nearest"))),
+      (CApp
+        (CApp (CVar "readFile" AGlobal) (CLit (LString "floatstr-nearest")))
+        wholeDomain),
   ],
 ]
 
@@ -975,7 +982,9 @@ leafArgsU = leafRuntimeProgram [
   CBind "leafArgsNearestIo" [
     CClause
       [leafRuntimeArg]
-      (CApp (CVar "readFile" AGlobal) (CLit (LString "args-nearest"))),
+      (CApp
+        (CApp (CVar "readFile" AGlobal) (CLit (LString "args-nearest")))
+        wholeDomain),
   ],
   CBind "leafArgsNearestList" [
     CClause [leafRuntimeArg] (CList [CLit (LString "args-nearest")]),
@@ -991,8 +1000,10 @@ leafFileBytesReadP = leafRuntimeProgram [
     CClause
       [leafRuntimeArg]
       (CApp
-        (CVar "readFileBytes" AGlobal)
-        (CLit (LString "filebytes-read-inert"))),
+        (CApp
+          (CVar "readFileBytes" AGlobal)
+          (CLit (LString "filebytes-read-inert")))
+        wholeDomain),
   ],
 ]
 
@@ -1003,9 +1014,11 @@ leafFileBytesWriteP = leafRuntimeProgram [
       [leafRuntimeArg]
       (CApp
         (CApp
-          (CVar "writeFileBytes" AGlobal)
-          (CLit (LString "filebytes-write-inert")))
-        (CArray [CLit (LInt 1)])),
+          (CApp
+            (CVar "writeFileBytes" AGlobal)
+            (CLit (LString "filebytes-write-inert")))
+          (CArray [CLit (LInt 1)]))
+        wholeDomain),
   ],
 ]
 
@@ -1014,7 +1027,9 @@ leafFileBytesU = leafRuntimeProgram [
   CBind "leafFileBytesNearestIoString" [
     CClause
       [leafRuntimeArg]
-      (CApp (CVar "readFile" AGlobal) (CLit (LString "filebytes-nearest"))),
+      (CApp
+        (CApp (CVar "readFile" AGlobal) (CLit (LString "filebytes-nearest")))
+        wholeDomain),
   ],
   CBind "leafFileBytesNearestArray" [
     CClause [leafRuntimeArg] (CArray [CLit (LInt 1)]),

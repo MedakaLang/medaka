@@ -1,0 +1,24 @@
+-- A user extern named `stat` elsewhere in the graph leaves the stdlib's own
+-- `stat`, and so `isFile`, `isDir` and `fileSize`, taking their callers' grants.
+import cffi.{twice}
+import fs.{isFile, isDir, fileSize}
+
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+isFileCfg : String -> <FileRead "cfg/*"> Result String Bool
+isFileCfg name = isFile ("cfg/" ++ name)
+
+isDirCfg : String -> <FileRead "cfg/*"> Result String Bool
+isDirCfg name = isDir ("cfg/" ++ name)
+
+sizeCfg : String -> <FileRead "cfg/*"> Result String Int
+sizeCfg name = fileSize ("cfg/" ++ name)
+
+main =
+  println (twice 2)
+  println "isFile in: \{said (isFileCfg "a.txt")}"
+  println "isFile out: \{said (isFileCfg "../secret.txt")}"
+  println "isDir out: \{said (isDirCfg "../outdir")}"
+  println "fileSize out: \{said (sizeCfg "../secret.txt")}"

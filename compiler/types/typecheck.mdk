@@ -247,6 +247,8 @@ import types.effect_authority.{
   authDomainTop,
   authHasVars,
   linkAuthvar,
+  GrantShape(..),
+  authGrantShape,
 }
 import types.effect_rows.{
   EffLabel(..),
@@ -336,7 +338,7 @@ import types.registry.{
   regInsertK,
   regLookupK,
 }
-import frontend.desugar.{mapProg}
+import frontend.desugar.{mapProg, mapChildren, mapExpr}
 import frontend.marker.{localBoundNames}
 import frontend.resolve.{
   firstExprLoc,
@@ -384,7 +386,7 @@ import support.ordmap.{
   omSize,
   omDelete,
 }
-import list.{replicate, drop}
+import list.{replicate, drop, take}
 import support.util.{
   splitOnChar,
   u64HalvesHex,
@@ -687,6 +689,7 @@ dtopFor label =
     _ => PUnit
 
 -- lift one of the language's own labels to its ⊤-param atom
+export
 atomOfLabel : String -> Atom
 atomOfLabel l = atomWith (builtinLabel l) (dtopFor (builtinLabel l))
 
@@ -698,6 +701,7 @@ ioLabel = builtinLabel "IO"
 -- the join of every narrow security label at ⊤.  ioAliasLabels lists them
 -- (every minted security label EXCEPT IO itself); internal labels (Mut/Panic)
 -- are NOT members, so they are tracked independently of IO.
+export
 ioAliasLabels : List String
 ioAliasLabels = [
   "Stdout",
@@ -716,20 +720,37 @@ ioAliasLabels = [
 -- trust boundary the IO alias is not meant to paper over. Do not "complete"
 -- this list by adding FFI.
 
--- expand a bound `IO` atom into the security-label alias before an escape
--- check, so a NARROW inferred row is subsumed by an `<IO>` bound (narrow ⊑ IO
--- accepts).  Sound in reverse: an inferred raw `IO` against a NARROW bound is
--- never expanded (the bound has no IO) ⇒ escapes (IO ⊑ narrow rejects).  `IO`
--- stays in the expansion (atomsNorm keeps it) so inferred IO-vs-IO matches.
+-- `IO` is the join of the ten security labels, so it widens on either side of an
+-- escape check.  On the bound side a NARROW inferred row is subsumed by an `<IO>`
+-- bound (narrow ⊑ IO); `IO` stays in the expansion (atomsNorm keeps it) so an
+-- inferred IO matches a bound IO.
 expandIoInBound : List Atom -> List Atom
 expandIoInBound b = match findAtom (labelKey ioLabel) b
   None => b
   Some _ => atomsNorm (b ++ map atomOfLabel ioAliasLabels)
 
+-- A performed `IO` left over against a bound without `IO` stands for the ten
+-- labels: a bound naming all ten admits it, a bound naming some refuses it
+-- naming the labels it lacks, and a bound naming none leaves it as `IO`.
+narrowPerformedIo : List Atom -> List Atom -> List Atom
+narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
+  None => diff
+  Some _ =>
+    let rest = filterList (x => atomKey x /= labelKey ioLabel) diff
+    let missing = atomsDiff (map atomOfLabel ioAliasLabels) bound
+    if isEmptyL missing then
+      rest
+    else if listLen missing == listLen ioAliasLabels then
+      diff
+    else
+      atomsNorm (rest ++ missing)
+
 -- escape-direction difference: inferred [a] not permitted by bound [b], with
--- the bound's `IO` widened to its security-label alias first.
+-- `IO` widened to its security-label alias on both sides.
 atomsEscape : List Atom -> List Atom -> List Atom
-atomsEscape a b = atomsDiff a (expandIoInBound b)
+atomsEscape a b =
+  let bound = expandIoInBound b
+  narrowPerformedIo (atomsDiff a bound) bound
 
 -- build an atom from a WRITTEN annotation atom.  A bare label takes the
 -- domain's top; a written parameter becomes the element of the label's domain
@@ -1968,7 +1989,7 @@ tyCarries seen p (TyQual t ps _) =
     || tyCarries seen p t
 tyCarries seen p (TyTuple ts) = anyList (tyCarries seen p) ts
 tyCarries seen p (TyConstrained _ t) = tyCarries seen p t
-tyCarries seen p (TyNamed _ t) = tyCarries seen p t
+tyCarries seen p (TyNamed _ t _) = tyCarries seen p t
 tyCarries seen p (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     argsCarry seen p (tyTabKey o n) 0 args
@@ -2085,7 +2106,7 @@ tyVarTypeOcc : String -> Ty -> Bool
 tyVarTypeOcc p (TyVar n) = n == p
 tyVarTypeOcc p (TyEffect _ _ t) = tyVarTypeOcc p t
 tyVarTypeOcc _ (TyRow _ _ _) = False
-tyVarTypeOcc p (TyNamed _ t) = tyVarTypeOcc p t
+tyVarTypeOcc p (TyNamed _ t _) = tyVarTypeOcc p t
 tyVarTypeOcc p (TyQual t _ _) = tyVarTypeOcc p t
 tyVarTypeOcc p (TyFun a b) = tyVarTypeOcc p a || tyVarTypeOcc p b
 tyVarTypeOcc p (TyTuple ts) = anyList (tyVarTypeOcc p) ts
@@ -2912,8 +2933,9 @@ implTupleHeadKindMsg iface n want =
   "Instance head `\{ppConName (tupleHeadTagTc n)}` has the wrong kind for interface '\{iface}': the interface's type parameter is graded — kind `\{renderKindArrow want}` — but a saturated tuple type is always kind `Type`, so there is no slot for the grade the methods index by. A tuple cannot be given a row parameter; implement a non-graded interface for it, or use a row-indexed data type (one with a constructor field of the shape `Unit -> <e> a`) as the instance head."
 
 checkEffectParamsTy : Ty -> Unit
-checkEffectParamsTy (TyFun (TyNamed n a) b) =
+checkEffectParamsTy (TyFun (TyNamed n a d) b) =
   let _ = checkAuthorityBinder n a b
+  let _ = checkBinderDomain n a d
   let _ = checkEffectParamsTy a
   checkEffectParamsTy b
 checkEffectParamsTy (TyFun a b) =
@@ -3081,6 +3103,28 @@ checkAuthorityBinder n a rest =
         ()
       else
         pushTypeError "T-AUTHORITY-BINDER" (binderTypeMsg n (ppTy a))
+
+-- A written binder domain, `(n : String @L)`, names a label whose domain has
+-- elements, for a binder of a type the domain can abstract.
+checkBinderDomain : String -> Ty -> Option EffAtomTy -> Unit
+checkBinderDomain _ _ None = ()
+checkBinderDomain n a (Some l) =
+  let saved = !currentLoc
+  currentLoc := orElseLoc l.eatLoc saved
+  let _ =
+    if isStringTy a then match dtopFor (EffLabel l.eatLabel l.eatOrigin)
+      PUnit =>
+        pushTypeError
+          "T-EFFECT-PARAM"
+          (effectParamMsg l.eatLabel (atomicLabelParamText l.eatLabel))
+      _ => ()
+    else
+      pushTypeError "T-AUTHORITY-BINDER" (binderDomainTypeMsg n (ppTy a))
+  currentLoc := saved
+
+binderDomainTypeMsg : String -> String -> String
+binderDomainTypeMsg n ty =
+  "Named argument '\{n}' has type `\{ty}`, but it is written with a domain: only a `String` argument has an authority. Give '\{n}' the type `String`, or drop the domain"
 
 isStringTy : Ty -> Bool
 isStringTy (TyCon { tyConName = n }) = n == "String"
@@ -10614,6 +10658,9 @@ data GraphRun = GraphRun {
   -- survives `resetGraphState`, because the pre-pass renames binders before the
   -- inference that resets a Flat graph.
   localAbs : LocalAbsState,
+  -- The authorities each occurrence of an authority-quantified binding was
+  -- granted, and each binder's own authority parameters (`GrantState`).
+  grants : GrantState,
 }
 
 freshGraphRun : Unit -> GraphRun
@@ -10636,6 +10683,7 @@ freshGraphRun _ = GraphRun {
   evCells = Ref (arrayMake 0 None),
   scopeStore = Scopes.freshScopeStore (),
   localAbs = freshLocalAbsState (),
+  grants = freshGrantState (),
 }
 
 -- #2705: mint the cells for one `EMethodAt` node and return the id the node
@@ -10784,13 +10832,18 @@ resetGraphState _ =
   let n = graphRun.value.evCounter.value
   let cells = graphRun.value.evCells.value
   let localAbs = graphRun.value.localAbs
+  let grants = graphRun.value.grants
   graphRun := freshGraphRun ()
   graphRun.value.evCounter := n
   graphRun.value.evCells := cells
   -- The binder names survive; the quantified ids do not: they are type-variable
   -- ids, and the fresh run restarts the counter that minted them.
   localAbs.lasQuantified := omEmpty
-  graphRun := GraphRun { graphRun.value | localAbs = localAbs }
+  -- Grant-marked occurrences are minted before the inference that resets, like
+  -- `evCells`.  The sourceless variables are not: the inference that follows
+  -- registers them under ids the restarted counter mints again.
+  grants.gsSourceless := Tip
+  graphRun := GraphRun { graphRun.value | localAbs = localAbs, grants = grants }
 
 -- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
 -- over the same value, so neither side's later writes reach the other.
@@ -10817,6 +10870,7 @@ copyGraphRun g = GraphRun {
   evCells = Ref (arrayCopy g.evCells.value),
   scopeStore = Scopes.copyScopeStore g.scopeStore,
   localAbs = copyLocalAbsState g.localAbs,
+  grants = copyGrantState g.grants,
 }
 
 -- Memo snapshots are taken only after `checkGraphFinish` drained the prefix.  At
@@ -12539,6 +12593,7 @@ third3 (_, _, z) = z
 openExistentials : List (Ref Authvar) -> Unit
 openExistentials [] = ()
 openExistentials cells =
+  let _ = markSourceless (map authvarId cells)
   perRun.value.openedExistentialsRef :=
     cells ++ perRun.value.openedExistentialsRef.value
 
@@ -12770,7 +12825,7 @@ tyVarNames (TyConstrained _ t) = tyVarNames t
 -- name captured by `effTailNames`/`rowArgNames`, not this one).
 tyVarNames (TyRow _ _ _) = []
 tyVarNames (TyAuth _ _) = []
-tyVarNames (TyNamed _ t) = tyVarNames t
+tyVarNames (TyNamed _ t _) = tyVarNames t
 tyVarNames (TyQual t _ _) = tyVarNames t
 
 -- WS-1c: the tyvar names appearing in a signature's `=>` CONSTRAINTS (not the value
@@ -12810,7 +12865,7 @@ tyConNamesInTy (TyTuple ts) = flatMap tyConNamesInTy ts
 tyConNamesInTy (TyEffect _ _ t) = tyConNamesInTy t
 tyConNamesInTy (TyRow _ _ _) = []
 tyConNamesInTy (TyAuth _ _) = []
-tyConNamesInTy (TyNamed _ t) = tyConNamesInTy t
+tyConNamesInTy (TyNamed _ t _) = tyConNamesInTy t
 tyConNamesInTy (TyQual t _ _) = tyConNamesInTy t
 tyConNamesInTy (TyConstrained cs t) =
   flatMap tyConNamesInConstraint cs ++ tyConNamesInTy t
@@ -13028,7 +13083,7 @@ effTailNames (TyConstrained _ t) = effTailNames t
 -- shape as that pre-existing gap, not a new one — see #784.
 effTailNames (TyRow _ tail _) = tail
 effTailNames (TyAuth _ _) = []
-effTailNames (TyNamed _ t) = effTailNames t
+effTailNames (TyNamed _ t _) = effTailNames t
 effTailNames (TyQual t _ _) = effTailNames t
 
 freshEffMap : List String -> List (String, Ref Effvar)
@@ -13037,8 +13092,9 @@ freshEffMap (n :: rest) = (n, freshEffvar ()) :: freshEffMap rest
 
 -- The variables one signature binds: its row tails (and row-kinded type
 -- arguments) and its authority binders, each name to one fresh cell shared by
--- every occurrence in that signature.  A binder is an authority only where an
--- effect atom names it; its domain is that label's.
+-- every occurrence in that signature.  A binder is an authority only where
+-- its written domain, an effect atom or an index names it; its domain is that
+-- label's.
 data SigVars = SigVars {
   svRows : List (String, Ref Effvar),
   svAuths : List (String, Ref Authvar),
@@ -13071,7 +13127,8 @@ sigVarsForWith : Ty -> List String -> List (String, Param) -> SigVars
 sigVarsForWith ty rowNames auths =
   let named = namedArgTypes ty
   let authNames = map fst auths
-  let _ = reportBinderDomains ty (namedAtomBinders ty ++ auths)
+  let uses = binderDomainsIn ty ++ namedAtomBinders ty ++ auths
+  let _ = reportBinderDomains ty uses
   let sv = SigVars {
     svRows = freshEffMap rowNames,
     svAuths =
@@ -13079,14 +13136,14 @@ sigVarsForWith ty rowNames auths =
         freshAuthBinder
         (filterList
           (b => authorityBinderBound named authNames (fst b))
-          (dedupBinders (namedAtomBinders ty ++ auths) [])),
+          (dedupBinders uses [])),
   }
   let _ = reportUnboundAuthorityNames ty sv
   sv
 
 -- An authority has exactly one domain: a name the signature uses at two
--- labels of different domains — as an atom's parameter, an index slot, or
--- one of each — is reported once, whatever binds it.
+-- labels of different domains — as its binder's written domain, an atom's
+-- parameter or an index slot, in any pair — is reported once, whatever binds it.
 reportBinderDomains : Ty -> List (String, Param) -> Unit
 reportBinderDomains ty uses =
   fold
@@ -13187,7 +13244,7 @@ qualifierBinderTypeMsg n ty =
 
 binderNoDomainMsg : String -> String
 binderNoDomainMsg n =
-  "The qualifier names '\{n}', but no effect atom or index in this signature names '\{n}', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Name the label it bounds, `<FileRead \{n}>`, or index a handle by it, `Handle \{n}`, or drop the qualifier"
+  "The qualifier names '\{n}', but no binder domain, effect atom or index in this signature names '\{n}', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Write the domain on the binder, `(\{n} : String @FileRead)`, name the label it bounds, `<FileRead \{n}>`, or index a handle by it, `Handle \{n}`, or drop the qualifier"
 
 joinDomainMsg : List String -> String
 joinDomainMsg ns =
@@ -13212,7 +13269,7 @@ writtenQualifiers (TyApp a b) = writtenQualifiers a ++ writtenQualifiers b
 writtenQualifiers (TyFun a b) = writtenQualifiers a ++ writtenQualifiers b
 writtenQualifiers (TyTuple ts) = flatMap writtenQualifiers ts
 writtenQualifiers (TyConstrained _ t) = writtenQualifiers t
-writtenQualifiers (TyNamed _ t) = writtenQualifiers t
+writtenQualifiers (TyNamed _ t _) = writtenQualifiers t
 writtenQualifiers _ = []
 
 nameNotAuthorityMsg : String -> String
@@ -13233,7 +13290,7 @@ authorityNamesWritten (TyFun a b) =
   authorityNamesWritten a ++ authorityNamesWritten b
 authorityNamesWritten (TyTuple ts) = flatMap authorityNamesWritten ts
 authorityNamesWritten (TyConstrained _ t) = authorityNamesWritten t
-authorityNamesWritten (TyNamed _ t) = authorityNamesWritten t
+authorityNamesWritten (TyNamed _ t _) = authorityNamesWritten t
 authorityNamesWritten _ = []
 
 atomAuthorityName : EffAtomTy -> List (String, Option Loc)
@@ -13247,7 +13304,7 @@ sigTyVarNames ty rows authNames =
   removeAllS (rows ++ authNames) (tyVarNamesWithConstraints ty)
 
 namedArgTypes : Ty -> List (String, Ty)
-namedArgTypes (TyFun (TyNamed n a) b) = (n, a) :: namedArgTypes b
+namedArgTypes (TyFun (TyNamed n a _) b) = (n, a) :: namedArgTypes b
 namedArgTypes (TyFun _ b) = namedArgTypes b
 namedArgTypes (TyConstrained _ t) = namedArgTypes t
 namedArgTypes _ = []
@@ -13267,7 +13324,28 @@ authvarIdOf (_, cell) = authvarId cell
 -- index slot, with the slot's declared label's.  A name used at two domains
 -- is diagnosed by `checkAuthorityBinder`; the first use decides here.
 authorityUsesOf : Ty -> List (String, Param)
-authorityUsesOf ty = namedAtomBinders ty ++ authArgBindersIn ty
+authorityUsesOf ty =
+  binderDomainsIn ty ++ namedAtomBinders ty ++ authArgBindersIn ty
+
+-- The binders a signature writes a domain for, `(n : String @L)`, each with
+-- the domain its authority is drawn from: the label's, or for a Product label
+-- its primary axis's, the axis a string lifts into.  An atomic label has no
+-- domain and gives none (`checkBinderDomain` reports it).
+binderDomainsIn : Ty -> List (String, Param)
+binderDomainsIn (TyNamed n t (Some l)) =
+  let own = match dtopFor (EffLabel l.eatLabel l.eatOrigin)
+    PUnit => []
+    PProduct ((_, axis) :: _) => [(n, subTopOf axis)]
+    top => [(n, top)]
+  own ++ binderDomainsIn t
+binderDomainsIn (TyNamed _ t None) = binderDomainsIn t
+binderDomainsIn (TyFun a b) = binderDomainsIn a ++ binderDomainsIn b
+binderDomainsIn (TyApp a b) = binderDomainsIn a ++ binderDomainsIn b
+binderDomainsIn (TyTuple ts) = flatMap binderDomainsIn ts
+binderDomainsIn (TyEffect _ _ t) = binderDomainsIn t
+binderDomainsIn (TyConstrained _ t) = binderDomainsIn t
+binderDomainsIn (TyQual t _ _) = binderDomainsIn t
+binderDomainsIn _ = []
 
 -- The bare names sitting in `Authority`-kinded argument slots of registered
 -- heads, with the slot's domain: the twin of `rowArgNamesIn` for authorities.
@@ -13283,7 +13361,7 @@ authArgBindersIn (TyFun a b) = authArgBindersIn a ++ authArgBindersIn b
 authArgBindersIn (TyTuple ts) = flatMap authArgBindersIn ts
 authArgBindersIn (TyEffect _ _ t) = authArgBindersIn t
 authArgBindersIn (TyConstrained _ t) = authArgBindersIn t
-authArgBindersIn (TyNamed _ t) = authArgBindersIn t
+authArgBindersIn (TyNamed _ t _) = authArgBindersIn t
 authArgBindersIn (TyQual t _ _) = authArgBindersIn t
 authArgBindersIn _ = []
 
@@ -13322,7 +13400,7 @@ atomBindersIn readAtom (TyEffect atoms _ t) =
 atomBindersIn readAtom (TyRow atoms _ _) = flatMap readAtom atoms
 atomBindersIn _ (TyAuth _ _) = []
 atomBindersIn readAtom (TyConstrained _ t) = atomBindersIn readAtom t
-atomBindersIn readAtom (TyNamed _ t) = atomBindersIn readAtom t
+atomBindersIn readAtom (TyNamed _ t _) = atomBindersIn readAtom t
 atomBindersIn readAtom (TyQual t _ _) = atomBindersIn readAtom t
 
 -- The names an atom's parameter binds, each with its domain: the label's for
@@ -13449,7 +13527,7 @@ fromAstTypeE etbl tvs (TyEffect _ _ t) = fromAstTypeE etbl tvs t
 fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
 -- A binder reached outside an arrow domain is a resolve error already; its
 -- type still elaborates so inference can continue.
-fromAstTypeE etbl tvs (TyNamed _ t) = fromAstTypeE etbl tvs t
+fromAstTypeE etbl tvs (TyNamed _ t _) = fromAstTypeE etbl tvs t
 fromAstTypeE etbl tvs (TyQual t ps loc) =
   qualifyByTerms etbl ps loc (fromAstTypeE etbl tvs t)
 
@@ -13473,7 +13551,7 @@ fromAstTypeE etbl tvs (TyRow labels tail loc) =
 -- An arrow's domain: a named argument whose name an effect atom refers to is
 -- qualified by that binder's authority; an unreferenced name binds nothing.
 fromAstDomainE : SigVars -> List (String, Mono) -> Ty -> Mono
-fromAstDomainE etbl tvs (TyNamed n t) =
+fromAstDomainE etbl tvs (TyNamed n t _) =
   qualifyBy etbl n (fromAstTypeE etbl tvs t)
 fromAstDomainE etbl tvs t = fromAstTypeE etbl tvs t
 
@@ -14693,7 +14771,7 @@ infer env (EVariantUpdate cname base fields) =
   inferVariantUpdate env cname base fields
 infer env (EBlock stmts) = inferBlock env stmts
 infer env (EMethodAt name _ ev) = inferMethodAtCell env name (methodCellOf ev)
-infer env (EDictAt name ev) = inferDictAt env name ev
+infer env (EDictAt name ev) = inferGrantedAt env name ev
 infer env (EArrayLit es) = inferArrayLit env es
 infer env (ERangeList lo hi _) = inferIntRange env lo hi (tconBuiltin "List")
 infer env (ERangeArray lo hi _) = inferIntRange env lo hi (tconBuiltin "Array")
@@ -14781,7 +14859,22 @@ inferMethodAt : TcEnv ->
   Mono
 inferMethodAtCell : TcEnv -> String -> EvCell -> Mono
 inferMethodAtCell env name c =
-  inferMethodAt env name c.ecIface c.ecArity c.ecTag c.ecImpl c.ecMeth
+  let st = graphRun.value.grants
+  st.gsLastMethodInst := None
+  st.gsLastStandalone := None
+  let t = inferMethodAt env name c.ecIface c.ecArity c.ecTag c.ecImpl c.ecMeth
+  let _ = match (st.gsLastStandalone.value, st.gsLastMethodInst.value)
+    (Some (scheme, subst), _) =>
+      recordStandaloneGrantOcc
+        name
+        c.ecId
+        scheme
+        subst
+        (optionOr 0 c.ecArity.value)
+    (None, Some (scheme, subst)) =>
+      recordMethodGrantOcc name c.ecId scheme subst
+    (None, None) => ()
+  t
 
 -- #2705: a standalone-shadow occurrence (a user fn spelled like an interface
 -- method — `add x y = x + y` beside `Num`'s `add`) DENOTES THE STANDALONE, whose
@@ -14819,6 +14912,8 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef =
         instantiateStandaloneOccurrence env name sym !currentLoc value
       let inst = occurrence.svoInstance
       let dicts = occurrence.svoDicts
+      graphRun.value.grants.gsLastStandalone :=
+        Some (occurrence.svoScheme, inst.mtiSubstitution.misAuthSubst)
       arityRef := Some (funArity inst.mtiBody)
       let receiver = match methodDispatchIdx name
         Some idx => optionOr inst.mtiBody (nthArgMono idx inst.mtiBody)
@@ -14858,6 +14953,7 @@ inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef =
       let inst = instantiateMethodTracked s
       let occurrence = inst.mtiBody
       let subst = inst.mtiSubstitution
+      graphRun.value.grants.gsLastMethodInst := Some (s, subst.misAuthSubst)
       arityRef := Some (funArity occurrence)
       ifaceRef := admittedIfaceWord name
       let _ = recordRLocalSite env name tagRef occurrence
@@ -15437,7 +15533,9 @@ registerLocalAbsIf : String -> Option ScopeId -> Scheme -> Int -> Int -> Unit
 registerLocalAbsIf name lscope sch oblN0 callN0 =
   let _ = recordLocalQuantified sch
   match lscope
-    Some scope => registerLocalAbs name scope sch oblN0 callN0
+    Some scope =>
+      let _ = registerLocalGrants name sch
+      registerLocalAbs name scope sch oblN0 callN0
     None => ()
 
 -- A generalized local's quantified variables stay in the enclosing binding's
@@ -15606,6 +15704,620 @@ inferGlobalDictAt env name ev = match lookupVar env name
     match bindingDeclaredAt env name inst
       Some dc => inferDeclaredDictAt ev dc occurrence
       None => inferDictAtFound name ev occurrence
+
+-- ── authority grants (EFFECTS-SEMANTICS §8) ──────────────────────────────────
+-- A use of a binding whose scheme quantifies authorities receives, for each of
+-- them, the authority inference solved at that use, so that the runtime can
+-- confine a file path to what the program was granted.  The pipeline is the
+-- dictionary one with a different payload: the marker gives every such use an
+-- `EDictAt` identity (`mintGrantOnly` when the name takes no dictionary),
+-- inference records the use's authority cells under that id (`inferGrantedAt`),
+-- and `grantPass` applies the solved authorities as ordinary `List String`
+-- terms.  A source binding takes one leading parameter per quantified authority,
+-- after its dictionary parameters.  A parameterized file extern and an interface
+-- method take them after their value arguments, which is why every use of one
+-- is saturated: a method's leading arguments are the ones dispatch reads.
+--
+-- An enclosing binder whose own parameter a grant forwards: a top-level or local
+-- binding, or a method body (its parameter name and the ids it binds).
+data GrantBinder =
+  | TopGrantBinder String String
+  | LocalGrantBinder String
+  | BodyGrantBinder String (List Int)
+
+-- One recorded use: its callee, the authority cells it instantiated (in grant
+-- order), or, for a use inside the callee's own recursive group, the callee's
+-- own quantified ids; the value arity after which a file extern or a method
+-- takes its grants; the binders enclosing the use, innermost first; and whether
+-- the use is a method occurrence that instantiated the standalone binding its
+-- name shadows, whose grants lead its arguments as a source binding's do (its
+-- value arity is then the occurrence's, which its published arity adds them to).
+data GrantOcc = GrantOcc {
+  goCallee : String,
+  goCells : List Authority,
+  goRecIds : List Int,
+  goTrailing : Option Int,
+  goChain : List GrantBinder,
+  goStandalone : Bool,
+}
+
+-- An interface method whose type quantifies authorities: the value arity its
+-- written type spells, and the binder names of its authorities in grant order.
+data MethodGrant = MethodGrant { mgArity : Int, mgNames : List String }
+
+-- What a use of a name denotes, for its grants: a source binding (grants lead its
+-- arguments), a catalog file extern (grants follow its value arguments), or a
+-- binding that takes none (any other extern).
+data GrantCallee = SourceCallee | FileExternCallee | NoGrantCallee
+
+data GrantState = GrantState {
+  -- keyed by the use's evidence ordinal
+  gsOccs : Ref (Map Int GrantOcc),
+  -- the uses the marker identified for their grants alone
+  gsGrantOnly : Ref (Map Int Unit),
+  -- `mid|name` of a top-level binder, and a renamed local binder: the ids its
+  -- scheme quantifies, in grant order
+  gsTopIds : Ref (OrdMap (List Int)),
+  gsLocalIds : Ref (OrdMap (List Int)),
+  -- `iface word#method` of an interface method that takes grants
+  gsMethods : Ref (OrdMap MethodGrant),
+  -- a method body's scope ordinal: its grant binder
+  gsBodies : Ref (Map Int GrantBinder),
+  -- the scheme and authority substitution of the last value instantiation, of
+  -- the last method candidate's, and of the last standalone a method occurrence
+  -- selected
+  gsLastInst : Ref (Option (Scheme, List (Int, Authority))),
+  gsLastMethodInst : Ref (Option (Scheme, List (Int, Authority))),
+  gsLastStandalone : Ref (Option (Scheme, List (Int, Authority))),
+  -- the authority variables no caller supplies: an existential a pattern opened,
+  -- and an instance head's index inside the instance's method bodies
+  gsSourceless : Ref (Map Int Unit),
+  -- the name, as its declaration spells it, of every top-level binding that
+  -- takes grants
+  gsTakers : Ref (OrdMap Unit),
+  gsFresh : Ref Int,
+}
+
+freshGrantState : Unit -> GrantState
+freshGrantState _ = GrantState {
+  gsOccs = Ref Tip,
+  gsGrantOnly = Ref Tip,
+  gsTopIds = Ref omEmpty,
+  gsLocalIds = Ref omEmpty,
+  gsMethods = Ref omEmpty,
+  gsBodies = Ref Tip,
+  gsLastInst = Ref None,
+  gsLastMethodInst = Ref None,
+  gsLastStandalone = Ref None,
+  gsSourceless = Ref Tip,
+  gsTakers = Ref omEmpty,
+  gsFresh = Ref 0,
+}
+
+copyGrantState : GrantState -> GrantState
+copyGrantState st = GrantState {
+  gsOccs = Ref st.gsOccs.value,
+  gsGrantOnly = Ref st.gsGrantOnly.value,
+  gsTopIds = Ref st.gsTopIds.value,
+  gsLocalIds = Ref st.gsLocalIds.value,
+  gsMethods = Ref st.gsMethods.value,
+  gsBodies = Ref st.gsBodies.value,
+  gsLastInst = Ref st.gsLastInst.value,
+  gsLastMethodInst = Ref st.gsLastMethodInst.value,
+  gsLastStandalone = Ref st.gsLastStandalone.value,
+  gsSourceless = Ref st.gsSourceless.value,
+  gsTakers = Ref st.gsTakers.value,
+  gsFresh = Ref st.gsFresh.value,
+}
+
+-- The catalog externs whose authority parameter names a file path
+-- (`stdlib/runtime.mdk`), each with its value arity and the number of paths it
+-- names.  No other extern takes a grant: a foreign function is not a
+-- parameterized file extern.
+fileGrantExterns : OrdMap (Int, Int)
+fileGrantExterns =
+  omFromPairs
+    [
+      ("readFile", (1, 1)),
+      ("readFileBytes", (1, 1)),
+      ("writeFile", (2, 1)),
+      ("writeFileBytes", (2, 1)),
+      ("writeFileMode", (3, 1)),
+      ("appendFile", (2, 1)),
+      ("fileExists", (1, 1)),
+      ("fileMode", (1, 1)),
+      ("canonicalizePath", (1, 1)),
+      ("listDir", (1, 1)),
+      ("makeDir", (1, 1)),
+      ("removeFile", (1, 1)),
+      ("rename", (2, 2)),
+      ("fsync", (1, 1)),
+      ("removeDir", (1, 1)),
+      ("statFile", (1, 1)),
+    ]
+    omEmpty
+
+-- A program lowered without elaboration (the prelude-free emitter probes) has no
+-- inference to solve a grant from: each file extern it names is granted the
+-- whole domain, and saturated as elaboration saturates it.
+export
+grantWholeDomain : List Decl -> List Decl
+grantWholeDomain prog = map (mapDeclBodies wholeDomainExpr) prog
+
+wholeDomainExpr : Expr -> Expr
+wholeDomainExpr (e@(EApp _ _)) = match grantSpine e []
+  (EVar n, args) => match omLookup n fileGrantExterns
+    Some (arity, paths) =>
+      saturateGrants
+        (EVar n)
+        arity
+        (replicate paths (EListLit []))
+        (map wholeDomainExpr args)
+    None => mapChildren wholeDomainExpr e
+  _ => mapChildren wholeDomainExpr e
+wholeDomainExpr (EVar n) = match omLookup n fileGrantExterns
+  Some (arity, paths) =>
+    saturateGrants (EVar n) arity (replicate paths (EListLit [])) []
+  None => EVar n
+-- every other node: its children, through the one traversal every pass shares
+wholeDomainExpr e = mapChildren wholeDomainExpr e
+
+-- Apply [f] once to the root of every expression a declaration holds.
+export
+mapDeclBodies : (Expr -> Expr) -> Decl -> Decl
+mapDeclBodies f (DFunDef pub n ps e) = DFunDef pub n ps (f e)
+mapDeclBodies f (DLetGroup pub binds) =
+  DLetGroup
+    pub
+    (map
+      (b => match b
+        LetBind n clauses =>
+          LetBind
+            n
+            (map
+              (c => match c
+                FunClause ps e => FunClause ps (f e))
+              clauses))
+      binds)
+mapDeclBodies f (d@(DInterface { methods, ... })) = DInterface { d |
+  methods =
+    map
+      (m => match m
+        IfaceMethod n ty def mloc =>
+          IfaceMethod
+            n
+            ty
+            (map
+              (dm => match dm
+                MethodDefault ps e => MethodDefault ps (f e))
+              def)
+            mloc)
+      methods,
+}
+mapDeclBodies f (d@(DImpl { methods, ... })) = DImpl { d |
+  methods =
+    map
+      (m => match m
+        ImplMethod n ps e => ImplMethod n ps (f e))
+      methods,
+}
+mapDeclBodies f (DProp pub name params body) = DProp pub name params (f body)
+mapDeclBodies f (DTest pub name body) = DTest pub name (f body)
+mapDeclBodies f (DAttrib attrs d) = DAttrib attrs (mapDeclBodies f d)
+-- a declaration with no expression body (data, signatures, imports, externs)
+mapDeclBodies _ d = d
+
+-- Grants are passed only on a graph whose driver ran the marking preamble: a
+-- driver that never marks has no use that could carry one.
+grantsEnabled : Unit -> Bool
+grantsEnabled _ = isSome driverState.value.markSetsRef.value
+
+-- What a use of [name] in the module being marked denotes.  An extern the module
+-- declares or imports is a foreign declaration, and one spelled like a catalog
+-- file extern binds that same runtime operation (a redeclaration must agree with
+-- the catalog row); any other value the module defines or imports is a source
+-- binding; a name the module neither defines nor imports is the catalog extern
+-- when the catalog declares it.
+grantCalleeOf : String -> GrantCallee
+grantCalleeOf name
+  | isLocalAbsName name = SourceCallee
+  | otherwise = match perRun.value.markingRef.value
+    Some mm =>
+      if omHasKey name mm.mmExterns then
+        externCallee name
+      else if omHasKey name mm.mmUserNames then
+        SourceCallee
+      else
+        catalogCallee name
+    None => catalogCallee name
+
+catalogCallee : String -> GrantCallee
+catalogCallee name =
+  if omHasKey name driverState.value.builtinExternNamesRef.value then
+    externCallee name
+  else
+    SourceCallee
+
+externCallee : String -> GrantCallee
+externCallee name =
+  if omHasKey name fileGrantExterns then FileExternCallee else NoGrantCallee
+
+schemeAuthIds : Scheme -> List Int
+schemeAuthIds (Forall _ _ avars _ _ _) = avars
+
+-- Whether the marker gives a use of [n] a grant identity: the binding [n] denotes
+-- in [env] is a value, not an interface method (whose uses are method
+-- occurrences), that takes grants, and its own scheme quantifies an authority.
+grantNameIn : TcEnv -> String -> Bool
+grantNameIn env n
+  | not (grantsEnabled ()) = False
+  | otherwise = match lookupBinding env n
+    Some b => match b.ebMethodRow
+      Some _ => False
+      None =>
+        calleeTakesGrants (grantCalleeOf n)
+          && isNonEmptyL (schemeAuthIds b.ebValue.vsScheme)
+    None => False
+
+calleeTakesGrants : GrantCallee -> Bool
+calleeTakesGrants SourceCallee = True
+calleeTakesGrants FileExternCallee = True
+calleeTakesGrants NoGrantCallee = False
+
+-- A scheme's quantified authorities in grant order: first occurrence in the
+-- type read left to right (an arrow's domain, its row, its result), so a
+-- scheme and every copy of it list them alike whatever ids they carry.
+grantOrder : Scheme -> List Int
+grantOrder (Forall _ _ [] _ _ _) = []
+grantOrder (Forall _ _ avars _ force body) =
+  let seen = reverseL (authOrderRow force (authOrderIn body []))
+  let quantified = filterList (i => containsI i avars) seen
+  quantified ++ filterList (i => not (containsI i quantified)) avars
+
+-- How many grants a top-level binding with this scheme takes ahead of its value
+-- arguments.
+export
+bindingGrantArity : String -> Scheme -> Int
+bindingGrantArity _ sch =
+  if grantsEnabled () then listLen (grantOrder sch) else 0
+
+authOrderIn : Mono -> List Int -> List Int
+authOrderIn t acc = match normalize t
+  TFun a row b => authOrderIn b (authOrderRow row (authOrderIn a acc))
+  TApp a b => authOrderIn b (authOrderIn a acc)
+  TEff row => authOrderRow row acc
+  TQual inner q => authOrderTerm q (authOrderIn inner acc)
+  TAuth q => authOrderTerm q acc
+  _ => acc
+
+authOrderRow : EffRow -> List Int -> List Int
+authOrderRow row acc =
+  fold (a atom => authOrderTerm (atomAuth atom) a) acc (fst (rowFlat row))
+
+authOrderTerm : Authority -> List Int -> List Int
+authOrderTerm q acc =
+  fold
+    (a cell =>
+      let i = authvarId cell
+      if containsI i a then a else i :: a)
+    acc
+    (authVars q)
+
+-- Mint a use node for a name that takes no dictionary, so its grants have an
+-- identity to be recorded under.
+mintGrantOnly : String -> Expr
+mintGrantOnly n =
+  let ev = freshEvId ()
+  let st = graphRun.value.grants
+  st.gsGrantOnly := IdMap.set (evOrdinal ev) () st.gsGrantOnly.value
+  EDictAt n ev
+
+isGrantOnlyEv : EvId -> Bool
+isGrantOnlyEv ev =
+  IdMap.has (evOrdinal ev) graphRun.value.grants.gsGrantOnly.value
+
+-- A grant-only use that became a dictionary application (a recursive use of a
+-- member its group just promoted).
+unmarkGrantOnly : EvId -> Unit
+unmarkGrantOnly ev =
+  let st = graphRun.value.grants
+  st.gsGrantOnly := IdMap.delete (evOrdinal ev) st.gsGrantOnly.value
+
+grantOccOf : EvId -> Option GrantOcc
+grantOccOf ev = IdMap.get (evOrdinal ev) graphRun.value.grants.gsOccs.value
+
+setGrantOcc : EvId -> GrantOcc -> Unit
+setGrantOcc ev occ =
+  let st = graphRun.value.grants
+  st.gsOccs := IdMap.set (evOrdinal ev) occ st.gsOccs.value
+
+-- An `EDictAt` use: a dictionary application, a grant-only use, or both.  The
+-- instantiation inference makes for it is recorded for its grants; a grant-only
+-- use is inferred exactly as the stamped variable it stands for.
+inferGrantedAt : TcEnv -> String -> EvId -> Mono
+inferGrantedAt env name ev =
+  let st = graphRun.value.grants
+  st.gsLastInst := None
+  let t =
+    if isGrantOnlyEv ev then
+      inferVarId env name (grantOnlyBindingId name)
+    else
+      inferDictAt env name ev
+  let _ = match st.gsLastInst.value
+    Some (scheme, subst) => recordGrantOcc name ev scheme subst
+    None => ()
+  t
+
+-- The binding id resolve's stamp would have given this use: its top-level
+-- binder's, or 0 for an imported name.
+grantOnlyBindingId : String -> Int
+grantOnlyBindingId name = match perRun.value.markingRef.value
+  Some mm => optionOr 0 (omLookup name mm.mmTop)
+  None => 0
+
+recordGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Unit
+recordGrantOcc name ev (scheme@(Forall _ _ _ _ _ body)) subst =
+  match grantCalleeOf name
+    NoGrantCallee => ()
+    SourceCallee => recordOccWith name ev scheme subst None False
+    FileExternCallee =>
+      recordOccWith name ev scheme subst (Some (arrowArity body)) False
+
+-- A method candidate's use: its grants follow its value arguments.
+recordMethodGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Unit
+recordMethodGrantOcc name ev (scheme@(Forall _ _ _ _ _ body)) subst =
+  recordOccWith name ev scheme subst (Some (arrowArity body)) False
+
+-- A method occurrence typed as the standalone binding its name shadows: that
+-- binding's grants, leading its arguments.
+recordStandaloneGrantOcc : String ->
+  EvId ->
+  Scheme ->
+  List (Int, Authority) ->
+  Int ->
+  Unit
+recordStandaloneGrantOcc name ev scheme subst arity =
+  recordOccWith name ev scheme subst (Some arity) True
+
+recordOccWith : String ->
+  EvId ->
+  Scheme ->
+  List (Int, Authority) ->
+  Option Int ->
+  Bool ->
+  Unit
+recordOccWith name ev scheme subst trailing standalone = match grantOrder scheme
+  [] => ()
+  ids => setGrantOcc ev GrantOcc {
+    goCallee = name,
+    goCells = map (i => optionOr (AJoin []) (lookupAssocI i subst)) ids,
+    goRecIds = [],
+    goTrailing = trailing,
+    goChain = grantChainAt (captureScope ()),
+    goStandalone = standalone,
+  }
+
+-- The evidence id of the method occurrence heading an application spine.
+spineHeadEv : Expr -> Option EvId
+spineHeadEv (ELoc _ e) = spineHeadEv e
+spineHeadEv (EApp f _) = spineHeadEv f
+spineHeadEv (EMethodAt _ _ ev) = Some ev
+-- any other head is not a method occurrence
+spineHeadEv _ = None
+
+-- A shadow application's head, typed as the standalone [occurrence] selected.
+recordStandaloneAt : String -> Expr -> SelectedValueOccurrence -> Unit
+recordStandaloneAt name hd occurrence = match spineHeadEv hd
+  Some ev =>
+    recordStandaloneGrantOcc
+      name
+      ev
+      occurrence.svoScheme
+      occurrence.svoInstance.mtiSubstitution.misAuthSubst
+      (funArity occurrence.svoInstance.mtiBody)
+  None => ()
+
+methodGrantKey : String -> String -> String
+methodGrantKey ifaceWord method = "\{ifaceWord}#\{method}"
+
+methodGrantOf : String -> String -> Option MethodGrant
+methodGrantOf ifaceWord method =
+  omLookup
+    (methodGrantKey ifaceWord method)
+    graphRun.value.grants.gsMethods.value
+
+-- The interface methods a module declares whose type quantifies authorities.  The
+-- grants follow the arrows the written type spells, since that declared arity is
+-- what the backends read; a result an alias names a function stays the result.
+recordMethodGrants : List MethodSchemeRow -> Unit
+recordMethodGrants rows =
+  let st = graphRun.value.grants
+  st.gsMethods :=
+    fold
+      (acc row => match methodGrantOfRow row
+        Some mg =>
+          omInsert
+            (methodGrantKey
+              (ifaceWordOf row.msrIface.irOrigin row.msrIface.irName)
+              row.msrName)
+            mg
+            acc
+        None => acc)
+      st.gsMethods.value
+      rows
+
+methodGrantOfRow : MethodSchemeRow -> Option MethodGrant
+methodGrantOfRow row = match row.msrScheme
+  Forall _ _ _ _ force body => match grantOrder row.msrScheme
+    [] => None
+    ids =>
+      let cells = authCellsIn body (authRowCells force Tip)
+      Some MethodGrant {
+        mgArity = tyArrowCount row.msrType,
+        mgNames =
+          map
+            (i => match IdMap.get i cells
+              Some cell => optionOr "" (authvarName cell)
+              None => "")
+            ids,
+      }
+
+-- The arrows a written type spells, as `core_ir_lower.methodArgTys` counts them.
+tyArrowCount : Ty -> Int
+tyArrowCount (TyConstrained _ t) = tyArrowCount t
+tyArrowCount (TyEffect _ _ t) = tyArrowCount t
+tyArrowCount (TyFun _ b) = 1 + tyArrowCount b
+tyArrowCount _ = 0
+
+-- A method body's own authority binders, bound by the body's grant parameters.
+-- The instance head's cells are no caller's to supply.  Every other authority
+-- variable of the instantiated type is the method's own, and they occur in the
+-- order `grantOrder` reads the method's scheme in, since both are the one written
+-- type read left to right: the k-th of them is the k-th grant, whatever it is
+-- called.
+registerMethodBodyGrants : IfaceRef ->
+  String ->
+  List Mono ->
+  MethodBodyInstance ->
+  ScopeId ->
+  Unit
+registerMethodBodyGrants iface mname heads inst (ScopeId sid) =
+  let headIds = IdMap.keys (fold (acc h => authCellsIn h acc) Tip heads)
+  let _ = markSourceless headIds
+  match methodGrantOf (ifaceWordOf iface.irOrigin iface.irName) mname
+    None => ()
+    Some mg =>
+      let own =
+        filterList
+          (i => not (containsI i headIds))
+          (reverseL
+            (authOrderRow
+              inst.mbiContractForce
+              (authOrderIn inst.mbiExpected [])))
+      let ids =
+        map
+          (k => optionOr (0 - 1) (nthOpt k own))
+          (rangeFromCount 0 (listLen mg.mgNames))
+      let st = graphRun.value.grants
+      st.gsBodies := IdMap.set sid (BodyGrantBinder mname ids) st.gsBodies.value
+
+-- Authority variables no caller supplies, whose grant is the whole domain: the
+-- escape check has already held every declaration they reach to its label's top.
+markSourceless : List Int -> Unit
+markSourceless ids =
+  let st = graphRun.value.grants
+  st.gsSourceless := fold (m i => IdMap.set i () m) st.gsSourceless.value ids
+
+isSourceless : Int -> Bool
+isSourceless i = IdMap.has i graphRun.value.grants.gsSourceless.value
+
+arrowArity : Mono -> Int
+arrowArity t = match normalize t
+  TFun _ _ b => 1 + arrowArity b
+  TQual inner _ => arrowArity inner
+  _ => 0
+
+-- The binders around [sid] whose authority parameters a grant may forward,
+-- innermost first.
+grantChainAt : ScopeId -> List GrantBinder
+grantChainAt (sid@(ScopeId i)) =
+  let frame = Scopes.scopeFrame (currentScopeStore ()) sid
+  let outer = match frame.sfParent
+    Some parent => grantChainAt parent
+    None => []
+  let own = match frame.sfOwner
+    BindingOwner n => TopGrantBinder frame.sfModuleId n :: outer
+    LocalBindingOwner n => LocalGrantBinder n :: outer
+    _ => outer
+  match IdMap.get i graphRun.value.grants.gsBodies.value
+    Some body => body :: own
+    None => own
+
+grantTopKey : String -> String -> String
+grantTopKey mid n = "\{mid}|\{n}"
+
+-- A generalized top-level group: each member whose scheme quantifies
+-- authorities takes them as parameters, and each use of such a member inside
+-- the group that instantiated nothing (its type was the member's own) forwards
+-- them.
+recordTopGrants : String ->
+  List (String, Scheme) ->
+  OrdMap (List (List Pat, Expr)) ->
+  Unit
+recordTopGrants mid schemes grouped =
+  let st = graphRun.value.grants
+  let taking =
+    if grantsEnabled () then
+      flatMap
+        ((n, sch) => match grantOrder sch
+          [] => []
+          ids => [(n, ids)])
+        schemes
+    else
+      []
+  match taking
+    [] => ()
+    _ =>
+      st.gsTopIds :=
+        fold
+          (m entry => omInsert (grantTopKey mid (fst entry)) (snd entry) m)
+          st.gsTopIds.value
+          taking
+      st.gsTakers := omFromNames (map fst taking) st.gsTakers.value
+      fold
+        (_ (m, _) =>
+          fold
+            (_ clause => recordRecursiveGrants mid m taking (snd clause))
+            ()
+            (clausesOf m grouped))
+        ()
+        schemes
+
+recordRecursiveGrants : String ->
+  String ->
+  List (String, List Int) ->
+  Expr ->
+  Unit
+recordRecursiveGrants mid m taking body =
+  let visit =
+    e => match e
+      EDictAt n ev => match (lookupAssoc n taking, grantOccOf ev)
+        (Some ids, None) =>
+          let _ = setGrantOcc ev GrantOcc {
+            goCallee = n,
+            goCells = [],
+            goRecIds = ids,
+            goTrailing = None,
+            goChain = [TopGrantBinder mid m],
+            goStandalone = False,
+          }
+          e
+        _ => e
+      _ => e
+  let _ = mapExpr visit body
+  ()
+
+-- A generalized candidate local: its quantified authorities become its
+-- parameters, and its uses inside its own right-hand side forward them.
+registerLocalGrants : String -> Scheme -> Unit
+registerLocalGrants name sch = match grantOrder sch
+  [] => ()
+  ids =>
+    let st = graphRun.value.grants
+    st.gsLocalIds := omInsert name ids st.gsLocalIds.value
+    let recOccs =
+      optionOr [] (omLookup name graphRun.value.localAbs.lasRecOccs.value)
+    fold
+      (_ occ => setGrantOcc (fst occ) GrantOcc {
+        goCallee = name,
+        goCells = [],
+        goRecIds = ids,
+        goTrailing = None,
+        goChain = grantChainAt (snd occ),
+        goStandalone = False,
+      })
+      ()
+      recOccs
 
 -- The callee's constraints are registered (funConstraintsRef has it) ⇒ a normal
 -- call: map each constraint id through the instantiation subst to this call's
@@ -16035,6 +16747,8 @@ instantiateValueTracked : String -> Scheme -> MethodTrackedInstantiation
 instantiateValueTracked name scheme =
   let inst = instantiateMethodTracked scheme
   let _ = forceInstantiation name inst
+  graphRun.value.grants.gsLastInst :=
+    Some (scheme, inst.mtiSubstitution.misAuthSubst)
   inst
 
 -- Slot-parallel to constraintMonosOf's OUTPUT, and it must stay that way: it walks the
@@ -16230,10 +16944,11 @@ checkStmtNotDiscarded stmtObls t e
     TCon "Unit" _ => ()
     TVar cell => match !cell
       Unbound id _ =>
-        -- A variable a pending `Num` obligation constrains would default to
-        -- `Int`; pinning it to `Unit` instead fails as `No impl of Num for Unit`.
+        -- A variable a pending `Num` obligation constrains is a number of a
+        -- kind a later statement may still fix (`Float`), so the report says
+        -- "a number"; pinning it to `Unit` instead fails as `No impl of Num for Unit`.
         if containsI id (numConstrainedIds stmtObls) then
-          pushDiscardedValueError (tconBuiltin "Int") e
+          pushDiscardedValueDesc "a number" e
         else
           unify t (tconBuiltin "Unit")
       Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
@@ -16294,18 +17009,21 @@ isExemptInPlaceSetIndex t e = match headTyconNameMono t
   None => False
 
 pushDiscardedValueError : Mono -> Expr -> Unit
-pushDiscardedValueError nt e =
+pushDiscardedValueError nt e = pushDiscardedValueDesc (ppMono nt) e
+
+pushDiscardedValueDesc : String -> Expr -> Unit
+pushDiscardedValueDesc desc e =
   let loc = exprLoc e
   pushTypeErrorHelpFixAt
     "T-DISCARDED-VALUE"
     loc
-    (discardedValueMsg nt)
+    (discardedValueMsg desc)
     "bind it with 'let _ = …' if dropping the value is intentional, or use its value"
     (discardedValueFix loc)
 
-discardedValueMsg : Mono -> String
-discardedValueMsg nt =
-  "this statement's value (\{ppMono nt}) is silently discarded — only a `Unit`-typed expression may stand alone as a statement"
+discardedValueMsg : String -> String
+discardedValueMsg desc =
+  "this statement's value (\{desc}) is silently discarded — only a `Unit`-typed expression may stand alone as a statement"
 
 discardedValueFix : Option Loc -> Option (Loc, String)
 discardedValueFix (Some (Loc f sl sc _ _)) =
@@ -19840,6 +20558,7 @@ inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
           ""
           (orElseLoc (appSpineHeadLoc f) !currentLoc)
           value
+      let _ = recordStandaloneAt mname f occurrence
       let smono = occurrence.svoInstance.mtiBody
       let _ = stampMethodArities arityRefs (funArity smono)
       let r = freshVar ()
@@ -19949,6 +20668,7 @@ inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx =
           ""
           (orElseLoc (appSpineHeadLoc f) !currentLoc)
           value
+      let _ = recordStandaloneAt mname hd occurrence
       let smono = occurrence.svoInstance.mtiBody
       let _ = stampMethodArities arityRefs (funArity smono)
       let r = unifySpineResult env f smono (pre ++ [(x, tx)])
@@ -20233,7 +20953,9 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef hd nodes f x =
     if dispatches then
       shadowVarHeadMethodScheme env name hd
     else match selected
-      Some occurrence => occurrence.svoInstance.mtiBody
+      Some occurrence =>
+        let _ = recordStandaloneAt name hd occurrence
+        occurrence.svoInstance.mtiBody
       None => infer env hd
   arityRef := Some (funArity ft)
   toggles.value.shadowHeadCtxRef := savedShadowHead
@@ -20574,6 +21296,7 @@ maybeStandaloneValueMono env name =
 -- A selected standalone value contributes its own forcing row and constraints.
 -- Preparing a method candidate must not charge this alternate binding.
 data SelectedValueOccurrence = SelectedValueOccurrence {
+  svoScheme : Scheme,
   svoInstance : MethodTrackedInstantiation,
   svoDicts : ShadowDicts,
 }
@@ -20595,6 +21318,7 @@ instantiateStandaloneOccurrence env name sym origin value =
   let key = if sym == "" then name else sym
   let dc = optionOr (shadowDeclaredFor name key) declared
   SelectedValueOccurrence {
+    svoScheme = value.vsScheme,
     svoInstance = inst,
     svoDicts =
       shadowStandaloneDictSlots
@@ -20889,6 +21613,7 @@ inferDefinerStandaloneVarAppAt : TcEnv ->
 inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc =
   match standaloneOccurrence env name "" (orElseLoc (appSpineHeadLoc f) dloc)
     Some occurrence =>
+      let _ = recordStandaloneAt name hd occurrence
       currentLoc := dloc
       -- #1815: consume the WHOLE applied prefix, not just the receiver.  Unifying the
       -- standalone's declared type against `TFun xt … r` when the receiver is argument 1
@@ -22961,7 +23686,7 @@ paramOccPolarities tab p pol (TyConstrained _ t) =
   paramOccPolarities tab p pol t
 paramOccPolarities _ _ _ (TyRow _ _ _) = []
 paramOccPolarities _ _ _ (TyAuth _ _) = []
-paramOccPolarities tab p pol (TyNamed _ t) = paramOccPolarities tab p pol t
+paramOccPolarities tab p pol (TyNamed _ t _) = paramOccPolarities tab p pol t
 paramOccPolarities tab p pol (TyQual t _ _) = paramOccPolarities tab p pol t
 paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
   -- OCCURRENCE MINT (#1110/#1111 A-2.3): same record pattern as
@@ -24574,8 +25299,10 @@ mintDictAt onDict n =
 -- The fifth field is called once per `EDictAt` the rewrite mints, with the callee
 -- name and the minted evidence id; `noDictHook` for every marker except the
 -- schedule's group-recursive one, which pushes the application's goal from it.
+-- The sixth field answers whether a use of a name that takes no dictionary
+-- needs a grant identity (`mintGrantOnly`).
 data ArgRw =
-  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String)) (String -> EvId -> Unit)
+  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String)) (String -> EvId -> Unit) (String -> Bool)
 
 -- rewrite a decl body with its own parameters seeded into the bound set.  Mirrors
 -- desugar's mapDecl coverage exactly (DFunDef / DInterface / DImpl / DProp /
@@ -24727,7 +25454,7 @@ boundOfList ns = boundInsert ns omEmpty
 -- binders) extend `bound`; every other node recurses into its children with the
 -- same `bound`.
 rewriteArgScoped : ArgRw -> OrdMap String -> Expr -> Expr
-rewriteArgScoped (ArgRw rp dn an sm onDict) bound (EVar n)
+rewriteArgScoped (ArgRw rp dn an sm onDict granted) bound (EVar n)
   -- P0-18: `n` is a MANGLED definer-shadow standalone (`<mid>__size`).  Mark it
   -- `EMethodAt` with the BARE dispatch name (so `implFor` finds the impl when the
   -- receiver has one) and seed the route's `RLocal <n>` fallback with the mangled
@@ -24743,8 +25470,18 @@ rewriteArgScoped (ArgRw rp dn an sm onDict) bound (EVar n)
         EMethodAt n "" (mintMethodCell "")
       else if omHasKey n dn then
         mintDictAt onDict n
+      else if granted n then
+        mintGrantOnly n
       else
         EVar n
+-- A grant-only use of a member its group has just promoted becomes that member's
+-- dictionary application, under the same id.
+rewriteArgScoped (ArgRw _ dn _ _ onDict _) _ (EDictAt n ev)
+  | isGrantOnlyEv ev && omHasKey n dn =
+    let _ = unmarkGrantOnly ev
+    let _ = onDict n ev
+    EDictAt n ev
+  | otherwise = EDictAt n ev
 -- No `EVarId` arm: every marker runs BEFORE resolve's binding-id stamp (the Flat
 -- arm's whole-program pre-pass, and the schedule's per-group `markGroupClauses` →
 -- `stampGroupClauses`), so a stamped occurrence never reaches this rewrite.
@@ -29283,7 +30020,7 @@ tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
 -- wrapped type at all — is vacuously concrete too.
 tyIsConcrete (TyRow _ _ _) = True
 tyIsConcrete (TyAuth _ _) = True
-tyIsConcrete (TyNamed _ t) = tyIsConcrete t
+tyIsConcrete (TyNamed _ t _) = tyIsConcrete t
 tyIsConcrete (TyQual t _ _) = tyIsConcrete t
 
 -- one-directional structural match (pattern may carry free TyVar wildcards;
@@ -29991,7 +30728,7 @@ tyStep (TyConstrained _ t1) s = MKids [(t1, stripTyWrap s)]
 -- vacuously matches anything in this position.
 tyStep (TyRow _ _ _) _ = MOk
 tyStep (TyAuth _ _) _ = MOk
-tyStep (TyNamed _ t1) s = MKids [(t1, stripTyWrap s)]
+tyStep (TyNamed _ t1 _) s = MKids [(t1, stripTyWrap s)]
 tyStep (TyQual t1 _ _) s = MKids [(t1, stripTyWrap s)]
 
 eqStr : String -> String -> Bool
@@ -30000,7 +30737,7 @@ eqStr a b = a == b
 stripTyWrap : Ty -> Ty
 stripTyWrap (TyEffect _ _ t) = stripTyWrap t
 stripTyWrap (TyConstrained _ t) = stripTyWrap t
-stripTyWrap (TyNamed _ t) = stripTyWrap t
+stripTyWrap (TyNamed _ t _) = stripTyWrap t
 stripTyWrap (TyQual t _ _) = stripTyWrap t
 stripTyWrap t = t
 
@@ -31909,11 +32646,395 @@ firstTvar a b id = match findTvarInMono a id
 -- maps over EVERY decl — so `contains n names` inside `dictPassDecl` was
 -- O(decls x names).  Index it ONCE here; `dictPassDecl`/`dictPassLetBind` probe
 -- with `omHasKey`.  Membership semantics unchanged.
-dictPass : List String -> List Decl -> List Decl
-dictPass names prog =
+dictPass : String -> List String -> List Decl -> List Decl
+dictPass mid names prog =
   map
     (dictPassDecl (omFromNames names omEmpty) (returnPosMethodNames prog))
-    (mapProg (e => rewriteLocalDictExpr (rewriteBinopExpr e)) prog)
+    (mapProg
+      (e => rewriteLocalDictExpr (rewriteBinopExpr e))
+      (grantPass mid prog))
+
+-- ── grant passing: the authority analogue of the dictionary pass ─────────────
+-- Runs before the dictionary rewrites of module [mid], so a binder's authority
+-- parameters land after the dictionary parameters those rewrites prepend, and
+-- each recorded use is applied to its grants while it still carries its id.
+grantPass : String -> List Decl -> List Decl
+grantPass mid prog = map (grantDecl mid) prog
+
+grantDecl : String -> Decl -> Decl
+grantDecl mid (DFunDef pub n pats body) =
+  DFunDef pub n (grantParamPats (topGrantIds mid n) n ++ pats) (grantExpr body)
+grantDecl mid (DLetGroup pub binds) =
+  DLetGroup
+    pub
+    (map
+      (b => match b
+        LetBind n clauses =>
+          grantLetBind
+            (grantParamPats (topGrantIds mid n) n)
+            (LetBind n clauses))
+      binds)
+grantDecl _ (d@(DInterface { name, ifaceOrigin, methods, ... })) = DInterface { d |
+  methods = map (grantIfaceMethod (ifaceWordOf ifaceOrigin name)) methods,
+}
+grantDecl _ (d@(DImpl { iface, implOrigin, methods, ... })) = DImpl { d |
+  methods = map (grantImplMethod (ifaceWordOf implOrigin iface)) methods,
+}
+grantDecl _ (DProp pub name params body) =
+  DProp pub name params (grantExpr body)
+grantDecl _ (DTest pub name body) = DTest pub name (grantExpr body)
+grantDecl mid (DAttrib attrs d) = DAttrib attrs (grantDecl mid d)
+-- a declaration with no expression body (data, signatures, imports, externs)
+grantDecl _ d = d
+
+-- A method that takes grants declares them after its value arguments, so the
+-- arity every backend reads off the declaration counts them.
+grantIfaceMethod : String -> IfaceMethod -> IfaceMethod
+grantIfaceMethod word (IfaceMethod n ty def mloc) = match methodGrantOf word n
+  None =>
+    IfaceMethod
+      n
+      ty
+      (map
+        (d => match d
+          MethodDefault ps e => MethodDefault ps (grantExpr e))
+        def)
+      mloc
+  Some mg =>
+    IfaceMethod
+      n
+      (insertGrantArrows mg.mgArity (listLen mg.mgNames) ty)
+      (map
+        (d => match d
+          MethodDefault ps e =>
+            let (ps2, e2) = grantMethodParams mg n ps (grantExpr e)
+            MethodDefault ps2 e2)
+        def)
+      mloc
+
+grantImplMethod : String -> ImplMethod -> ImplMethod
+grantImplMethod word (ImplMethod n ps e) = match methodGrantOf word n
+  None => ImplMethod n ps (grantExpr e)
+  Some mg =>
+    let (ps2, e2) = grantMethodParams mg n ps (grantExpr e)
+    ImplMethod n ps2 e2
+
+-- A method clause's grant parameters, after its value parameters; a clause
+-- written with fewer parameters than the method's arity takes the missing ones
+-- first and applies its body to them.
+grantMethodParams : MethodGrant ->
+  String ->
+  List Pat ->
+  Expr ->
+  (List Pat, Expr)
+grantMethodParams mg n ps body =
+  let grants = grantParamPats mg.mgNames n
+  let given = listLen ps
+  if given >= mg.mgArity then
+    (take mg.mgArity ps ++ grants ++ drop mg.mgArity ps, body)
+  else
+    let missing =
+      map (_ => freshGrantName ()) (rangeFromCount given (mg.mgArity - given))
+    (
+      ps ++ map (x => PVar x (Loc "" 0 0 0 0)) missing ++ grants,
+      applyExprs body (map EVar missing),
+    )
+
+-- [g] `List String` arguments after the first [k] arrows of a method's type.
+insertGrantArrows : Int -> Int -> Ty -> Ty
+insertGrantArrows k g (TyConstrained cs t) =
+  TyConstrained cs (insertGrantArrows k g t)
+insertGrantArrows k g (TyEffect effs tails t)
+  | k > 0 = TyEffect effs tails (insertGrantArrows k g t)
+insertGrantArrows k g (TyFun a b)
+  | k > 0 = TyFun a (insertGrantArrows (k - 1) g b)
+insertGrantArrows _ g t = grantArrows g t
+
+grantArrows : Int -> Ty -> Ty
+grantArrows g t
+  | g <= 0 = t
+  | otherwise =
+    TyFun
+      (TyApp (tyConBuiltin "List" None) (tyConBuiltin "String" None))
+      (grantArrows (g - 1) t)
+
+grantLetBind : List Pat -> LetBind -> LetBind
+grantLetBind params (LetBind n clauses) =
+  LetBind
+    n
+    (map
+      (c => match c
+        FunClause ps body => FunClause (params ++ ps) (grantExpr body))
+      clauses)
+
+topGrantIds : String -> String -> List Int
+topGrantIds mid n =
+  optionOr
+    []
+    (omLookup (grantTopKey mid n) graphRun.value.grants.gsTopIds.value)
+
+localGrantIds : String -> List Int
+localGrantIds n =
+  optionOr [] (omLookup n graphRun.value.grants.gsLocalIds.value)
+
+grantParamName : String -> Int -> String
+grantParamName n i = "$auth_\{n}_\{intToString i}"
+
+grantParamPats : List a -> String -> List Pat
+grantParamPats ids n =
+  map
+    (i => PVar (grantParamName n i) (Loc "" 0 0 0 0))
+    (rangeFromCount 0 (listLen ids))
+
+-- The top-down walk: a use of a file extern or a method is rebuilt with every
+-- argument it takes, so it sees its whole application spine before its
+-- arguments do.
+grantExpr : Expr -> Expr
+grantExpr (e@(EApp _ _)) = match grantSpine e []
+  (EDictAt n ev, args) => match grantOccOf ev
+    Some occ => match occ.goTrailing
+      Some arity =>
+        saturateGrants (EVar n) arity (grantTerms occ) (map grantExpr args)
+      None => mapChildren grantExpr e
+    None => mapChildren grantExpr e
+  (EMethodAt n seed ev, args) => match methodGrantUse n ev
+    MethodGrants arity grants =>
+      saturateGrants (EMethodAt n seed ev) arity grants (map grantExpr args)
+    LeadingGrants _ grants =>
+      applyExprs (applyExprs (EMethodAt n seed ev) grants) (map grantExpr args)
+    NoGrants => mapChildren grantExpr e
+  _ => mapChildren grantExpr e
+grantExpr (EDictAt n ev) = grantUse n ev
+grantExpr (EMethodAt n seed ev) = match methodGrantUse n ev
+  MethodGrants arity grants =>
+    saturateGrants (EMethodAt n seed ev) arity grants []
+  LeadingGrants _ grants => applyExprs (EMethodAt n seed ev) grants
+  NoGrants => EMethodAt n seed ev
+grantExpr (ELet m r (PVar x xloc) e1 e2) =
+  ELet m r (PVar x xloc) (grantLocalRhs x (grantExpr e1)) (grantExpr e2)
+grantExpr (ELetGroup binds body) =
+  ELetGroup
+    (map
+      (b => match b
+        LetBind x clauses =>
+          grantLetBind (grantParamPats (localGrantIds x) x) (LetBind x clauses))
+      binds)
+    (grantExpr body)
+grantExpr (EBlock stmts) = EBlock (map grantStmt stmts)
+-- every other node: its children, through the one traversal every pass shares
+grantExpr e = mapChildren grantExpr e
+
+grantStmt : DoStmt -> DoStmt
+grantStmt (DoLet m r (PVar x xloc) e) =
+  DoLet m r (PVar x xloc) (grantLocalRhs x (grantExpr e))
+grantStmt (DoExpr e) = DoExpr (grantExpr e)
+grantStmt (DoBind p e) = DoBind p (grantExpr e)
+grantStmt (DoLet m r p e) = DoLet m r p (grantExpr e)
+grantStmt (DoAssign x e) = DoAssign x (grantExpr e)
+grantStmt (DoFieldAssign x fs e) = DoFieldAssign x fs (grantExpr e)
+
+-- A local that quantifies authorities takes them ahead of its own parameters.
+grantLocalRhs : String -> Expr -> Expr
+grantLocalRhs x e = match localGrantIds x
+  [] => e
+  ids =>
+    prependLocalDicts
+      (map (i => grantParamName x i) (rangeFromCount 0 (listLen ids)))
+      e
+
+-- An application spine's head and its arguments, through source-location
+-- wrappers.
+grantSpine : Expr -> List Expr -> (Expr, List Expr)
+grantSpine (EApp f x) args = grantSpine f (x :: args)
+grantSpine (ELoc _ e) args = grantSpine e args
+-- any other node is the head
+grantSpine e args = (e, args)
+
+-- A use of a source binding: the head applied to its grants.  A grant-only use
+-- of a binding that quantifies nothing is the plain variable it stood for.
+grantUse : String -> EvId -> Expr
+grantUse n ev =
+  let head = if isGrantOnlyEv ev then EVar n else EDictAt n ev
+  match grantOccOf ev
+    None => head
+    Some occ => match occ.goTrailing
+      Some arity => saturateGrants (EVar n) arity (grantTerms occ) []
+      None => applyExprs head (grantTerms occ)
+
+-- How a method occurrence takes grants: after the method's value arguments, ahead
+-- of the arguments of the standalone binding it was routed to, or not at all.
+data MethodGrantUse =
+  | MethodGrants Int (List Expr)
+  | LeadingGrants Int (List Expr)
+  | NoGrants
+
+-- A method occurrence's grants.  One that dispatches passes the method's, after
+-- the value arity its written type spells; a use that inference did not record
+-- (its denotation was settled by a path that instantiates no method scheme) passes
+-- the empty authority, so the method's arity still agrees with every body and the
+-- use is refused rather than admitted.  One routed to the standalone its name
+-- shadows passes that binding's grants, which inference recorded when it typed
+-- the occurrence as the standalone; a grant-taking standalone reached without that
+-- record has no grants to pass, and is a compile-time failure.  The occurrence's
+-- published arity counts the grants, as the backends read it.
+methodGrantUse : String -> EvId -> MethodGrantUse
+methodGrantUse n ev =
+  let cell = methodCellOf ev
+  let recorded = grantOccOf ev
+  let use = match cell.ecTag.value
+    RLocal sym _ => match standaloneOcc recorded
+      Some (arity, occ) => LeadingGrants arity (grantTerms occ)
+      None =>
+        if omHasKey
+          (if sym == "" then n else sym)
+          graphRun.value.grants.gsTakers.value then
+          panic
+            "grant pass: '\{n}' is routed to a standalone binding that takes authority grants, but inference did not type this use as that binding"
+        else
+          NoGrants
+    _ => match methodGrantOf cell.ecIface.value n
+      None => NoGrants
+      Some mg => match recorded
+        Some occ =>
+          if occ.goStandalone then
+            MethodGrants mg.mgArity (map (_ => bottomGrant) mg.mgNames)
+          else
+            MethodGrants mg.mgArity (methodTerms n mg occ)
+        None => MethodGrants mg.mgArity (map (_ => bottomGrant) mg.mgNames)
+  let _ = match use
+    MethodGrants arity grants => cell.ecArity := Some (arity + listLen grants)
+    LeadingGrants arity grants => cell.ecArity := Some (arity + listLen grants)
+    NoGrants => ()
+  use
+
+-- A use recorded as the standalone binding a method occurrence shadows, with its
+-- value arity.
+standaloneOcc : Option GrantOcc -> Option (Int, GrantOcc)
+standaloneOcc (Some occ) = match (occ.goStandalone, occ.goTrailing)
+  (True, Some arity) => Some (arity, occ)
+  _ => None
+standaloneOcc None = None
+
+-- A recorded method use's grants, one per authority the method quantifies.
+methodTerms : String -> MethodGrant -> GrantOcc -> List Expr
+methodTerms n mg occ =
+  let terms = grantTerms occ
+  if listLen terms == listLen mg.mgNames then
+    terms
+  else
+    panic
+      "grant pass: a use of method '\{n}' instantiated \{intToString (listLen terms)} authorities, but the method takes \{intToString (listLen mg.mgNames)} grants"
+
+-- The empty authority: a grant that admits no path.
+bottomGrant : Expr
+bottomGrant = EListLit [ELit (LString "")]
+
+applyExprs : Expr -> List Expr -> Expr
+applyExprs f args = fold (acc a => EApp acc a) f args
+
+-- A head applied to all [arity] value arguments and then its grants.  A partial
+-- or value use becomes a function of the arguments still missing; the arguments
+-- it was given are bound first, so each is evaluated once, where the program
+-- wrote it.
+saturateGrants : Expr -> Int -> List Expr -> List Expr -> Expr
+saturateGrants head arity grants args =
+  let given = listLen args
+  if given >= arity then
+    applyExprs (applyExprs head (take arity args ++ grants)) (drop arity args)
+  else
+    let bound = map (a => (freshGrantName (), a)) args
+    let missing =
+      map (_ => freshGrantName ()) (rangeFromCount given (arity - given))
+    let call =
+      applyExprs
+        head
+        (map (b => EVar (fst b)) bound ++ map EVar missing ++ grants)
+    fold
+      (body b => ELet False False (PVar (fst b) (Loc "" 0 0 0 0)) (snd b) body)
+      (ELam (map (x => PVar x (Loc "" 0 0 0 0)) missing) call)
+      (reverseL bound)
+
+freshGrantName : Unit -> String
+freshGrantName _ =
+  let st = graphRun.value.grants
+  let k = st.gsFresh.value
+  st.gsFresh := k + 1
+  "$grant_arg_\{intToString k}"
+
+-- The grant terms of one use, one per authority the callee quantifies.
+grantTerms : GrantOcc -> List Expr
+grantTerms occ = match occ.goRecIds
+  [] => map (grantTerm occ.goChain) occ.goCells
+  ids => map (i => grantIdTerm occ.goChain i) ids
+
+-- The whole domain is the empty list, the empty authority a list holding only the
+-- empty element (it admits no path), and a set of elements joined with the
+-- parameters of enclosing binders is their concatenation.  A variable is the
+-- parameter of the innermost enclosing binder that quantifies it.  Two kinds of
+-- variable have no caller to supply them, an opened existential and an instance
+-- head's index (`markSourceless`), and each is the whole domain: the escape check
+-- has held the declaration it reaches to its label's top.  Any other variable
+-- whose binder is not found contributes the empty authority, so a lost binder is
+-- a refusal at run time rather than an unconfined operation.
+grantTerm : List GrantBinder -> Authority -> Expr
+grantTerm chain a = match authGrantShape a
+  GrantTop => EListLit []
+  GrantBottom => bottomGrant
+  GrantParts elems vars => match grantVarParams chain vars []
+    None => EListLit []
+    Some params =>
+      let parts =
+        (if isEmptyL elems then
+            []
+          else
+            [EListLit (map (s => ELit (LString s)) elems)])
+          ++ map EVar (dedup params)
+      match parts
+        [] => bottomGrant
+        [p] => p
+        p :: rest =>
+          fold
+            (acc param => topAbsorbs param acc)
+            (fold (acc q => EBinOp "++" acc q (Ref RNone)) p rest)
+            (dedup params)
+
+-- The parameters a join's variables are, or None when one of them has no caller
+-- to supply it and so makes the join the whole domain.  A variable whose binder
+-- is not found contributes nothing.
+grantVarParams : List GrantBinder ->
+  List (Ref Authvar) ->
+  List String ->
+  Option (List String)
+grantVarParams _ [] acc = Some (reverseL acc)
+grantVarParams chain (v :: rest) acc = match grantParamFor chain (authvarId v)
+  Some p => grantVarParams chain rest (p :: acc)
+  None =>
+    if isSourceless (authvarId v) then None else grantVarParams chain rest acc
+
+-- A parameter holding the whole domain makes a join it is part of the whole
+-- domain; concatenation alone would narrow it to the other parts.
+topAbsorbs : String -> Expr -> Expr
+topAbsorbs param join =
+  EMatch (EVar param) [Arm (PList []) [] (EListLit []), Arm PWild [] join]
+
+-- A recursive use forwards its enclosing binder's parameters; one whose binder is
+-- not found is the empty authority, as in `grantTerm`.
+grantIdTerm : List GrantBinder -> Int -> Expr
+grantIdTerm chain i = match grantParamFor chain i
+  Some p => EVar p
+  None => bottomGrant
+
+-- The parameter of the innermost enclosing binder that quantifies authority [i].
+grantParamFor : List GrantBinder -> Int -> Option String
+grantParamFor [] _ = None
+grantParamFor (b :: rest) i =
+  let (name, ids) = match b
+    TopGrantBinder mid n => (n, topGrantIds mid n)
+    LocalGrantBinder n => (n, localGrantIds n)
+    BodyGrantBinder n bound => (n, bound)
+  match indexOfId i ids
+    Some k => Some (grantParamName name k)
+    None => grantParamFor rest i
 
 -- Routed operators become method applications, including generic arithmetic.
 -- Packed instance prerequisites move into EMethodAt's implementation-dictionary
@@ -32633,7 +33754,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- twin.  The Flat callers marked their whole program before this call.
   let stampRes =
     let (top, ids) = stampTopScope prog
-    let _ = beginModuleMarking mid prog top moduleSeed.msImportedValues
+    let _ = beginModuleMarking mid prog top moduleSeed
     (prog, ids)
   let progS = fst stampRes
   -- #907: index name→id as an OrdMap (was a List scanned linearly per rendered
@@ -33066,6 +34187,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- DECLARATION site (the program under check).  It builds the declared type
   -- verbatim; the two guards below are what hold a user extern to its row.
   let currentMethodRows = ifaceMethodSchemeRows prog
+  let _ = recordMethodGrants currentMethodRows
   let visibleMethodRows = ifaceMethodSchemeRows implDecls
   let visibleMethodRowIndex =
     methodRowsByIdentity
@@ -33143,7 +34265,8 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- back, the tail bodies marked with the module's final dict-name set) and its
   -- stamped twin, which the tail-body inference below reads.  Flat: `progS` is both.
   let progOut = match perRun.value.markingRef.value
-    Some mm => finishModuleMarking mm groupedOut progS
+    Some mm =>
+      finishModuleMarking mm (extendVars env1 topSchemes) groupedOut progS
     None => progS
   let progT = match perRun.value.markingRef.value
     Some mm => stampTailDecls mm.mmTop progOut
@@ -35202,7 +36325,7 @@ substTyVars sub (TyConstrained cs t) = TyConstrained cs (substTyVars sub t)
 -- ordinary type-var names — a bare row atom substitutes to itself.
 substTyVars _ (TyRow es eff l) = TyRow es eff l
 substTyVars _ (TyAuth p l) = TyAuth p l
-substTyVars sub (TyNamed n t) = TyNamed n (substTyVars sub t)
+substTyVars sub (TyNamed n t d) = TyNamed n (substTyVars sub t) d
 substTyVars sub (TyQual t ns l) = TyQual (substTyVars sub t) ns l
 
 -- A function-typed dispatch mono is fully GROUND — its head is `->`, structurally
@@ -35971,6 +37094,13 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
   let inst = instantiateMethodBody kind params mty gscope
+  let _ =
+    registerMethodBodyGrants
+      iface
+      mname
+      (methodBodyHeadMonos kind)
+      inst
+      bodyScope
   let loc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
   let subject = methodBodySubject kind iface.irName mname
   -- #821: the method's effect variables are RIGID for the body — two of them
@@ -37821,7 +38951,7 @@ namedArgOrder : Ty -> List (String, Int)
 namedArgOrder ty = namedArgPositions ty 0
 
 namedArgPositions : Ty -> Int -> List (String, Int)
-namedArgPositions (TyFun (TyNamed n _) b) i =
+namedArgPositions (TyFun (TyNamed n _ _) b) i =
   (n, i) :: namedArgPositions b (i + 1)
 namedArgPositions (TyFun _ b) i = namedArgPositions b (i + 1)
 namedArgPositions (TyConstrained _ t) i = namedArgPositions t i
@@ -38022,7 +39152,7 @@ ffiCrossableTy t = match expandAliasHeadTy t
   TyCon { tyConName = n } => ffiCrossableConName n
   -- A named argument crosses as its type; the name is the authority the
   -- declared row charges, which is compile-time only.
-  TyNamed _ inner => ffiCrossableTy inner
+  TyNamed _ inner _ => ffiCrossableTy inner
   TyQual inner _ _ => ffiCrossableTy inner
   -- `Array Int` and nothing else: §2.4 specifies only the all-immediate-element
   -- case, so `Array String` / `Array (Array Int)` fall through to False.
@@ -38388,7 +39518,7 @@ ffiRowBody t = match ffiRowParts t
 ffiSigStrip : List (TabKey, (List String, Ty)) -> Ty -> Ty
 ffiSigStrip aliases t = match expandAliasHeadTyWith aliases t
   TyConstrained _ inner => ffiSigStrip aliases inner
-  TyNamed _ inner => ffiSigStrip aliases inner
+  TyNamed _ inner _ => ffiSigStrip aliases inner
   u => u
 
 -- The row each arrow of a signature's spine carries on its result, in order.
@@ -38742,7 +39872,7 @@ ffiTyHeadNameWith aliases ty = match expandAliasHeadTyWith aliases ty
   TyVar _ => "_"
   TyConstrained _ t => ffiTyHeadNameWith aliases t
   TyEffect _ _ t => ffiTyHeadNameWith aliases t
-  TyNamed _ t => ffiTyHeadNameWith aliases t
+  TyNamed _ t _ => ffiTyHeadNameWith aliases t
   TyQual t _ _ => ffiTyHeadNameWith aliases t
   -- A parenthesised arrow in a VALUE position (a function-typed parameter).  It
   -- gets its own token rather than falling into the catch-all so that two
@@ -39840,7 +40970,7 @@ processSCC env sigs grouped0 members =
   -- caller marked and stamped the whole program, the map is used as given.
   let marking = perRun.value.markingRef.value
   let grouped = match marking
-    Some mm => markGroupClauses mm members grouped0
+    Some mm => markGroupClauses mm env members grouped0
     None => grouped0
   let groupedStamped = match marking
     Some mm => stampGroupClauses mm members grouped
@@ -39983,6 +41113,13 @@ processSCC env sigs grouped0 members =
   let groupedOut = match marking
     Some mm => markRecursiveOccurrences mm placeholders scopedMembers grouped
     None => grouped
+  let _ = match marking
+    Some _ =>
+      recordTopGrants
+        driverState.value.currentModuleRef.value
+        schemes
+        groupedOut
+    None => ()
   -- FLAT-PATH SHADOW FIX (facet 1): thread forward only the NON-method-shadowing
   -- schemes, so a method name a user fn shadows keeps resolving to the METHOD
   -- (base env / globalS) for later prelude bindings.  The shadowing scheme is still
@@ -45003,19 +46140,28 @@ data ModuleBindings = ModuleBindings {
   -- Only standalone definitions owned by this module, before method overlays.
   mbStandaloneSchemes : OrdMap Scheme,
 }
+-- [xbExtern]: the binding is a foreign declaration, which takes no grant ahead of
+-- its arguments however its scheme reads.
 data ExportBinding = ExportBinding {
   xbScheme : Scheme,
   xbStandalone : Option Scheme,
+  xbExtern : Bool,
 }
 data ModuleSeed = ModuleSeed {
   msSchemes : List (String, Scheme),
   msImportedValues : OrdMap Scheme,
+  -- every value name an import of the module supplies
+  msImportedNames : OrdMap Unit,
+  -- the imported names that denote an extern
+  msImportedExterns : OrdMap Unit,
 }
 
 plainModuleSeed : List (String, Scheme) -> ModuleSeed
 plainModuleSeed schemes = ModuleSeed {
   msSchemes = schemes,
   msImportedValues = omEmpty,
+  msImportedNames = omEmpty,
+  msImportedExterns = omEmpty,
 }
 
 -- The ordinary winner and standalone alternative travel together through
@@ -45030,6 +46176,7 @@ tagModuleExports standalones schemes =
       ExportBinding {
         xbScheme = scheme,
         xbStandalone = omLookup name standalones,
+        xbExtern = False,
       },
     ))
     schemes
@@ -45046,9 +46193,16 @@ publicModuleExports prog bindings =
           None => [])
         (pubTopFnNames prog))
       omEmpty
-  tagModuleExports
-    standalones
-    (pickSchemes (publicValNames prog) bindings.mbSchemes)
+  let externs =
+    omFromNames (map fst (directExternSigs (externDecls prog))) omEmpty
+  map
+    ((name, binding) => (
+      name,
+      ExportBinding { binding | xbExtern = omHasKey name externs },
+    ))
+    (tagModuleExports
+      standalones
+      (pickSchemes (publicValNames prog) bindings.mbSchemes))
 
 -- The first row for a name wins, unless a second import supplies the same name:
 -- then the occurrence is the ambiguity the resolver reports (`ambiguousSet`
@@ -45099,6 +46253,7 @@ ambiguousImportBinding _ =
   ExportBinding {
     xbScheme = Forall [ambiguousImportTyvarId] [] [] [] pureRow (TVar cell),
     xbStandalone = None,
+    xbExtern = False,
   }
 
 moduleImportSeed : List (String, Scheme) ->
@@ -45116,6 +46271,13 @@ moduleImportSeed base imported =
           ((name, binding) => match binding.xbStandalone
             Some scheme => [(name, scheme)]
             None => [])
+          selected)
+        omEmpty,
+    msImportedNames = omFromNames (map fst selected) omEmpty,
+    msImportedExterns =
+      omFromNames
+        (flatMap
+          ((name, binding) => if binding.xbExtern then [name] else [])
           selected)
         omEmpty,
   }
@@ -49518,7 +50680,7 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
     scopeMethodPredicateSlots
       crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       allMods
-  let core2' = dictPass dictNames core2
+  let core2' = dictPass "" dictNames core2
   -- ONE reverse-reachability index for the whole run: `dictPassModulesScoped` asks the
   -- importer question once per module, and re-deriving it there re-walked the graph
   -- (twice — ids and decls) with a decl-list scan at every visited node.
@@ -49595,7 +50757,7 @@ dictPassModulesScoped dictNames promotedQ importerReach core2 allModules ((mid, 
     scopeMethodPredicateSlots
       crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       scopeMods
-  (mid, dictPass dictNames prog)
+  (mid, dictPass mid dictNames prog)
     :: dictPassModulesScoped
       dictNames
       promotedQ
@@ -50122,14 +51284,23 @@ data MarkCtx = MarkCtx {
   mcSm : List (String, String),
 }
 
-argRwOf : MarkCtx -> OrdMap Unit -> (String -> EvId -> Unit) -> ArgRw
-argRwOf mc dn onDict = ArgRw mc.mcRp dn mc.mcAn mc.mcSm onDict
+argRwOf : MarkCtx ->
+  OrdMap Unit ->
+  (String -> EvId -> Unit) ->
+  (String -> Bool) ->
+  ArgRw
+argRwOf mc dn onDict granted = ArgRw mc.mcRp dn mc.mcAn mc.mcSm onDict granted
 
 -- Mark the declarations of one module that are not binding groups (impl, default,
 -- prop and test bodies) with the module's final dict-name set.  Binding
 -- groups were marked on the schedule (`markGroupClauses`) and are left alone.
-markTailDecls : MarkCtx -> OrdMap Unit -> List Decl -> List Decl
-markTailDecls mc dn decls = map (markTailDecl (argRwOf mc dn noDictHook)) decls
+markTailDecls : MarkCtx ->
+  OrdMap Unit ->
+  (String -> Bool) ->
+  List Decl ->
+  List Decl
+markTailDecls mc dn granted decls =
+  map (markTailDecl (argRwOf mc dn noDictHook granted)) decls
 
 markTailDecl : ArgRw -> Decl -> Decl
 markTailDecl _ (d@(DFunDef _ _ _ _)) = d
@@ -50913,13 +52084,18 @@ data ModuleMarking = ModuleMarking {
   mmCtx : MarkCtx,
   mmTop : OrdMap Int,
   mmDictSet : Ref (OrdMap Unit),
+  -- the value names the module defines at top level or imports: a use of one is
+  -- that binding, never a catalog extern of the same spelling
+  mmUserNames : OrdMap Unit,
+  -- the externs among the names the module declares or imports
+  mmExterns : OrdMap Unit,
 }
 
 -- Install the module's marking state at module start.  Reads the graph's mark sets
 -- off the driver preamble; a Module arm reached without one is a driver bug, and
 -- fails loud rather than marking nothing.
-beginModuleMarking : String -> List Decl -> OrdMap Int -> OrdMap Scheme -> Unit
-beginModuleMarking mid prog top imported =
+beginModuleMarking : String -> List Decl -> OrdMap Int -> ModuleSeed -> Unit
+beginModuleMarking mid prog top seed =
   let ms = match driverState.value.markSetsRef.value
     Some s => s
     None =>
@@ -50929,20 +52105,31 @@ beginModuleMarking mid prog top imported =
     dedup (ms.msBareDictNames ++ driverState.value.promotionHarvestRef.value)
   let names = known ++ aliasDictNames known ms.msUnits [(mid, prog)]
   perRun.value.markingRef := Some ModuleMarking {
-    mmCtx = moduleMarkCtx ms mid prog imported,
+    mmCtx = moduleMarkCtx ms mid prog seed.msImportedValues,
     mmTop = top,
     mmDictSet = Ref (omFromNames names omEmpty),
+    mmUserNames = omFromNames (declTopFnNames prog) seed.msImportedNames,
+    mmExterns =
+      omFromNames
+        (map fst (directExternSigs (externDecls prog)))
+        seed.msImportedExterns,
   }
 
 -- Mark one binding group's clauses (in the stored, newest-first order the map keeps)
--- with the dict-name set as it stands when the schedule reaches the group.
+-- with the dict-name set as it stands when the schedule reaches the group.  A use
+-- of a member, or of a name whose scheme in [env] quantifies an authority, is
+-- given a grant identity: a member's scheme is not known until the group closes.
 markGroupClauses : ModuleMarking ->
+  TcEnv ->
   List String ->
   OrdMap (List (List Pat, Expr)) ->
   OrdMap (List (List Pat, Expr))
-markGroupClauses mm members grouped =
+markGroupClauses mm env members grouped =
+  let own = omFromNames members omEmpty
   mapGroupClauses
-    (markClauseWith (argRwOf mm.mmCtx mm.mmDictSet.value noDictHook))
+    (markClauseWith
+      (argRwOf mm.mmCtx mm.mmDictSet.value noDictHook (n =>
+        omHasKey n own || grantNameIn env n)))
     members
     grouped
 
@@ -51023,7 +52210,7 @@ recMarkMembers dn placeholders (member :: rest) grouped =
           (placeholderMonoOf callee placeholders)
           member.smScope
           ev)
-  let rw = ArgRw omEmpty dn omEmpty [] onDict
+  let rw = ArgRw omEmpty dn omEmpty [] onDict (_ => False)
   recMarkMembers
     dn
     placeholders
@@ -51041,11 +52228,16 @@ placeholderMonoOf callee placeholders = match lookupAssoc callee placeholders
 -- test) marked with the module's final dict-name set — they are inferred
 -- after every group, so every promotion the module made is in the set by then.
 finishModuleMarking : ModuleMarking ->
+  TcEnv ->
   OrdMap (List (List Pat, Expr)) ->
   List Decl ->
   List Decl
-finishModuleMarking mm grouped prog =
-  markTailDecls mm.mmCtx mm.mmDictSet.value (rebuildGroupDecls grouped prog)
+finishModuleMarking mm env grouped prog =
+  markTailDecls
+    mm.mmCtx
+    mm.mmDictSet.value
+    (grantNameIn env)
+    (rebuildGroupDecls grouped prog)
 
 -- The stamped twin of the tail declarations, for their inference; binding groups
 -- were stamped as the schedule reached them and are not walked again.

@@ -20,6 +20,7 @@ import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
+import types.typecheck.{grantWholeDomain}
 import ir.core_ir_lower.{
   lowerProgramEmit,
   EmitTarget(..),
@@ -32,9 +33,11 @@ main = match args ()
   _ =>
     ePutStrLn "usage: medaka run compiler/entries/llvm_emit_main.mdk <file.mdk>"
 
+-- No elaboration runs here, so each file extern is granted the whole domain.
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
-  Ok targetSrc => emitTarget (annotateProgram (desugar (parse targetSrc)))
+  Ok targetSrc =>
+    emitTarget (annotateProgram (grantWholeDomain (desugar (parse targetSrc))))
   Err msg => ePutStrLn msg
 
 -- The record field-order table comes from the SAME decl list that is lowered, so

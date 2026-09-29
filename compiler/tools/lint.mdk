@@ -31,6 +31,7 @@ import frontend.ast.{
   Ty(..),
   EffAtomTy(..),
   effAtomSurface,
+  binderDomainSurface,
   authTermSurface,
   Constraint(..),
   -- `rule-prefer-assign-op` MINTS an `EBinOp ":="` node, and every EBinOp carries
@@ -60,6 +61,7 @@ import frontend.ast.{
   qualifierSource,
   authTermsSurface,
 }
+import frontend.desugar.{mapChildren}
 import frontend.parser.{
   Positions,
   DeclPos,
@@ -2022,7 +2024,7 @@ tyNamesOf (TyEffect es _ t) = map effAtomLabel es ++ tyNamesOf t
 tyNamesOf (TyRow es _ _) = map effAtomLabel es
 tyNamesOf (TyAuth _ _) = []
 tyNamesOf (TyConstrained cs t) = flatMap constrTyNames cs ++ tyNamesOf t
-tyNamesOf (TyNamed _ t) = tyNamesOf t
+tyNamesOf (TyNamed _ t _) = tyNamesOf t
 tyNamesOf (TyQual t _ _) = tyNamesOf t
 
 effAtomLabel : EffAtomTy -> String
@@ -2335,7 +2337,7 @@ tyVarsOf (TyEffect _ _ t) = tyVarsOf t
 tyVarsOf (TyConstrained cs t) = flatMap constrTyVars cs ++ tyVarsOf t
 tyVarsOf (TyRow _ _ _) = []
 tyVarsOf (TyAuth _ _) = []
-tyVarsOf (TyNamed _ t) = tyVarsOf t
+tyVarsOf (TyNamed _ t _) = tyVarsOf t
 tyVarsOf (TyQual t _ _) = tyVarsOf t
 
 constrTyVars : Constraint -> List String
@@ -2354,7 +2356,7 @@ rowVarsOf (TyEffect _ tl t) = tl ++ rowVarsOf t
 rowVarsOf (TyConstrained cs t) = flatMap constrRowVars cs ++ rowVarsOf t
 rowVarsOf (TyRow _ tl _) = tl
 rowVarsOf (TyAuth _ _) = []
-rowVarsOf (TyNamed _ t) = rowVarsOf t
+rowVarsOf (TyNamed _ t _) = rowVarsOf t
 rowVarsOf (TyQual t _ _) = rowVarsOf t
 
 constrRowVars : Constraint -> List String
@@ -2375,7 +2377,8 @@ tyCanonIn _ rvs (TyRow es tl _) = "(row " ++ rowCanon rvs es tl ++ ")"
 tyCanonIn _ _ (TyAuth ps _) = "(auth " ++ authTermsSurface escStr ps ++ ")"
 -- An authority binder and a qualifier are part of what a declared type
 -- means: two signatures differing only in them are different signatures.
-tyCanonIn tvs rvs (TyNamed n t) = "(named \{n} \{tyCanonIn tvs rvs t})"
+tyCanonIn tvs rvs (TyNamed n t d) =
+  "(named \{n} \{tyCanonIn tvs rvs t}\{binderDomainSurface d})"
 tyCanonIn tvs rvs (TyQual t ns _) =
   "(qual \{tyCanonIn tvs rvs t} \{qualifierSource escStr ns})"
 tyCanonIn tvs rvs (TyConstrained cs t) =
@@ -3708,88 +3711,12 @@ rewriteAndThenPureMapKv (k, v) =
 -- Every rewrite is EXACTLY equivalent (see each rule's soundness note), so the
 -- self-compile fixpoint stays byte-identical after the tree is fixed.
 
--- rebuild every immediate child expr with `g`, reconstructing this node.  Faithful
--- transcription of `rewriteLamExpr`'s node coverage MINUS its `ELam` special-case
--- (here `ELam` is an ordinary node), so the recursion visits the exact same set of
--- sub-expressions the other whole-tree rewriters do.
+-- rebuild every immediate child expr with `g`: the shared one-level step
+-- (`desugar.mapChildren`) plus the parser's as-pattern node, which the other
+-- whole-tree rewriters here (`rewriteLamExpr` &c.) descend into as well.
 mapChildExprs : (Expr -> Expr) -> Expr -> Expr
-mapChildExprs g (ELoc l e) = ELoc l (g e)
-mapChildExprs g (EDoOrigin l e) = EDoOrigin l (g e)
-mapChildExprs g (EApp f x) = EApp (g f) (g x)
-mapChildExprs g (ELam ps b) = ELam ps (g b)
-mapChildExprs g (ELet m isf p e1 e2) = ELet m isf p (g e1) (g e2)
-mapChildExprs g (EMatch s arms) = EMatch (g s) (map (mapChildArm g) arms)
-mapChildExprs g (EIf c t el) = EIf (g c) (g t) (g el)
-mapChildExprs g (EBinOp op a b r) = EBinOp op (g a) (g b) r
-mapChildExprs g (EUnOp op a r) = EUnOp op (g a) r
-mapChildExprs g (EInfix op a b) = EInfix op (g a) (g b)
-mapChildExprs g (EFieldAccess e f r) = EFieldAccess (g e) f r
-mapChildExprs g (ETuple es) = ETuple (map g es)
-mapChildExprs g (EListLit es) = EListLit (map g es)
-mapChildExprs g (EArrayLit es) = EArrayLit (map g es)
-mapChildExprs g (ERangeList lo hi i) = ERangeList (g lo) (g hi) i
-mapChildExprs g (ERangeArray lo hi i) = ERangeArray (g lo) (g hi) i
-mapChildExprs g (ESlice e lo hi i r) = ESlice (g e) (g lo) (g hi) i r
-mapChildExprs g (ELetGroup binds body) =
-  ELetGroup (map (mapChildLet g) binds) (g body)
-mapChildExprs g (ESection s) = ESection (mapChildSection g s)
-mapChildExprs g (EIndex a i r) = EIndex (g a) (g i) r
-mapChildExprs g (EAnnot e t) = EAnnot (g e) t
-mapChildExprs g (EHeadAnnot e t) = EHeadAnnot (g e) t
-mapChildExprs g (EBlock stmts) = EBlock (map (mapChildStmt g) stmts)
-mapChildExprs g (EDo d stmts) = EDo d (map (mapChildStmt g) stmts)
-mapChildExprs g (EStringInterp parts) =
-  EStringInterp (map (mapChildInterp g) parts)
-mapChildExprs g (EGuards arms) = EGuards (map (mapChildGuardArm g) arms)
-mapChildExprs g (ERecordCreate n fs) =
-  ERecordCreate n (map (mapChildField g) fs)
-mapChildExprs g (ERecordUpdate e fs r) =
-  ERecordUpdate (g e) (map (mapChildField g) fs) r
-mapChildExprs g (EVariantUpdate c e fs) =
-  EVariantUpdate c (g e) (map (mapChildField g) fs)
-mapChildExprs g (EMapLit n kvs) = EMapLit n (map (mapChildKv g) kvs)
-mapChildExprs g (ESetLit n es) = ESetLit n (map g es)
 mapChildExprs g (EAsPat x e) = EAsPat x (g e)
-mapChildExprs _ e = e
-
-mapChildStmt : (Expr -> Expr) -> DoStmt -> DoStmt
-mapChildStmt g (DoExpr e) = DoExpr (g e)
-mapChildStmt g (DoBind p e) = DoBind p (g e)
-mapChildStmt g (DoLet m r p e) = DoLet m r p (g e)
-mapChildStmt g (DoAssign x e) = DoAssign x (g e)
-mapChildStmt g (DoFieldAssign x fs e) = DoFieldAssign x fs (g e)
-
-mapChildArm : (Expr -> Expr) -> Arm -> Arm
-mapChildArm g (Arm p gs body) = Arm p (map (mapChildGuard g) gs) (g body)
-
-mapChildGuard : (Expr -> Expr) -> Guard -> Guard
-mapChildGuard g (GBool e) = GBool (g e)
-mapChildGuard g (GBind p e) = GBind p (g e)
-
-mapChildLet : (Expr -> Expr) -> LetBind -> LetBind
-mapChildLet g (LetBind n clauses) = LetBind n (map (mapChildClause g) clauses)
-
-mapChildClause : (Expr -> Expr) -> FunClause -> FunClause
-mapChildClause g (FunClause ps body) = FunClause ps (g body)
-
-mapChildSection : (Expr -> Expr) -> Section -> Section
-mapChildSection _ (SecBare op) = SecBare op
-mapChildSection g (SecRight op e) = SecRight op (g e)
-mapChildSection g (SecLeft e op) = SecLeft (g e) op
-
-mapChildInterp : (Expr -> Expr) -> InterpPart -> InterpPart
-mapChildInterp _ (InterpStr s) = InterpStr s
-mapChildInterp g (InterpExpr e) = InterpExpr (g e)
-
-mapChildGuardArm : (Expr -> Expr) -> GuardArm -> GuardArm
-mapChildGuardArm g (GuardArm gs body) =
-  GuardArm (map (mapChildGuard g) gs) (g body)
-
-mapChildField : (Expr -> Expr) -> FieldAssign -> FieldAssign
-mapChildField g (FieldAssign n e) = FieldAssign n (g e)
-
-mapChildKv : (Expr -> Expr) -> (Expr, Expr) -> (Expr, Expr)
-mapChildKv g (k, v) = (g k, g v)
+mapChildExprs g e = mapChildren g e
 
 -- generic bottom-up rewrite: rebuild children first, THEN apply the node-local
 -- transform `f` at this (child-rewritten) node.  Bottom-up so a rewrite exposed by

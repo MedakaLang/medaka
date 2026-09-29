@@ -1,0 +1,8 @@
+-- A relative element resolves against the working directory at the call: run
+-- from `other/`, `"cfg/*"` names `other/cfg`, and the top-level `cfg` is outside.
+readCfg : String -> <FileRead "cfg/*"> Result String String
+readCfg name = readFile ("cfg/" ++ name)
+
+main =
+  println (readCfg "a.txt")
+  println (readCfg "../../cfg/a.txt")

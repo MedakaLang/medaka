@@ -16,6 +16,7 @@ import types.effect_authority.{
 }
 import types.effect_domain.{Param(..)}
 import support.util.{contains, lookupAssoc, anyList, listLen}
+import tools.fmt.{formatSource}
 import string as S
 
 -- A prefix-domain label with a named-authority extern and a set-domain
@@ -1546,3 +1547,84 @@ test "an extension of an authority variable is the whole domain" = expectAll [
       (handle
         ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load p\n")),
 ]
+
+-- A named argument may write its domain, `(dir : String @Store)`, so a helper
+-- that performs nothing can return a value at the argument's authority. The
+-- domain belongs to the binder; the argument's type stays `String` (#3559).
+test "a binder's written domain gives a qualifier a domain and charges nothing" = expectAll
+  [
+    expectTrue
+      (accepts
+        "same : (dir : String @Store) -> String @dir\nsame dir = dir\nuse : (a : String) -> <Store a> Int\nuse a = load (same a)\n"),
+    -- the helper forwards its caller's authority, so it cannot launder one
+    expectTrue
+      (accepts
+        "same : (dir : String @Store) -> String @dir\nsame dir = dir\ncfg : Unit -> <Store \"cfg/*\"> Int\ncfg _ = load (same \"cfg/app\")\n"),
+    expectFalse
+      (accepts
+        "same : (dir : String @Store) -> String @dir\nsame dir = dir\ncfg : Unit -> <Store \"cfg/*\"> Int\ncfg _ = load (same \"/etc/x\")\n"),
+    expectTrue
+      (accepts
+        "pick : (a : String @Store) -> (b : String @Store) -> Bool -> String @(a | b)\npick a b c = if c then a else b\n"),
+    -- an annotated binder may still be an atom's parameter of its domain
+    expectTrue
+      (accepts
+        "rd : (dir : String @Store) -> <Store dir> Int\nrd dir = load dir\n"),
+    expectTrue
+      (contains
+        "T-AUTHORITY-DOMAIN"
+        (codes
+          "rd : (dir : String @Store) -> <Var dir> Int\nrd dir = lookup dir\n")),
+    -- an extension of the argument in a result is still the whole domain
+    expectTrue
+      (anyMentions
+        "reaches the whole domain"
+        (messagesOf
+          "withSuffix : (dir : String @Store) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n")),
+    -- with no domain written, the qualifier's report names the binder form first
+    expectTrue
+      (anyMentions
+        "Write the domain on the binder, `(a : String @FileRead)`"
+        (messagesOf "idQ : (a : String) -> String @a\nidQ a = a\n")),
+  ]
+
+test "a Product label's binder domain is its primary axis" = expectAll
+  [
+    expectTrue
+      (accepts
+        (httpPrelude
+          ++ "hostOf : (host : String @Http) -> String @host\nhostOf host = host\nget : (host : String @Http) -> (m : String) -> <Http Host=host Method=m> Int\nget host m = request (hostOf host) m\n")),
+    -- the whole Product is a different domain from its primary axis
+    expectTrue
+      (contains
+        "T-AUTHORITY-DOMAIN"
+        (codes
+          (httpPrelude
+            ++ "all : (u : String @Http) -> <Http u> Int\nall u = whole u\n"))),
+    -- a Set-first Product's primary axis is a Set
+    expectTrue
+      (accepts
+        "effect M Product (Method : Set, Host : Prefix)\nm : (x : String @M) -> <Var x> Int\nm x = lookup x\n"),
+    expectTrue
+      (contains
+        "T-AUTHORITY-DOMAIN"
+        (codes
+          "effect M Product (Method : Set, Host : Prefix)\nm : (x : String @M) -> <Store x> Int\nm x = load x\n")),
+  ]
+
+test "a binder's written domain needs a String binder and a parameterized label" = expectAll
+  [
+    expectTrue
+      (contains
+        "T-AUTHORITY-BINDER"
+        (codes "n : (x : Int @Store) -> Int\nn x = x\n")),
+    expectTrue
+      (contains
+        "T-EFFECT-PARAM"
+        (codes "n : (x : String @Stdout) -> String @x\nn x = x\n")),
+  ]
+
+test "the formatter prints a binder's written domain back" =
+  let source =
+    "effect Store Prefix\n\nsame : (dir : String @Store) -> String @dir\nsame dir = dir\n"
+  expectEqual source (formatSource source)

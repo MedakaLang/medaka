@@ -1,0 +1,8 @@
+-- Run from a working directory whose absolute path is longer than PATH_MAX, where
+-- no path has a canonical form: each engine refuses, even the granted read.
+readCfg : String -> <FileRead "cfg/*"> Result String String
+readCfg name = readFile ("cfg/" ++ name)
+
+main =
+  println (readCfg "a.txt")
+  println (readCfg "../secret.txt")

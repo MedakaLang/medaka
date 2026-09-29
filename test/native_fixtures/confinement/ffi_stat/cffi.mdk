@@ -1,0 +1,7 @@
+-- A foreign function spelled like the stdlib's `fs.stat`.
+export
+extern stat : Int -> <FFI> Int
+
+export
+twice : Int -> Int
+twice n = n * 2

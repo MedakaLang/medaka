@@ -1,0 +1,5 @@
+-- T-DISCARDED-VALUE: a discarded `x + 1` is an open `Num` variable that a
+-- later statement fixes to `Float`; the report never names a wrong `Int`.
+f x =
+  x + 1
+  x * 2.5

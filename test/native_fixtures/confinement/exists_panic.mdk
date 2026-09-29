@@ -1,0 +1,9 @@
+-- `fileExists` returns no Result, so a refused path panics rather than
+-- answering False.
+existsCfg : String -> <FileRead "cfg/*"> Bool
+existsCfg name = fileExists ("cfg/" ++ name)
+
+main =
+  println (existsCfg "a.txt")
+  println (existsCfg "../secret.txt")
+  println "unreachable"

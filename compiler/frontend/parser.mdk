@@ -2124,7 +2124,7 @@ tyFor _ = defer
 -- signature, so it can only be an arrow's domain: without the arrow there is
 -- no "rest" for the name to scope over.
 tyAfterApp : Ty -> Parser Ty
-tyAfterApp (left@(TyNamed _ _)) =
+tyAfterApp (left@(TyNamed _ _ _)) =
   orElse (tyArrowTail left) (failP namedArgNeedsArrowMsg)
 tyAfterApp left = orElse (tyArrowTail left) (deferPure left)
 
@@ -2601,13 +2601,19 @@ parseTyParenBody (TIdent _) = defer
 parseTyParenBody _ = parseTyParenTuple
 
 parseTyParenIdent : Token -> Parser Ty
--- `(name : T)`: an arrow-domain binder naming the argument's authority.
+-- `(name : T)`: an arrow-domain binder naming the argument's authority, and
+-- `(name : T @Label)`, the same binder with its domain written.  A label
+-- after the type is not a qualifier on `T` (a qualifier names a binder, and
+-- is lowercase); it says which label's domain the binder's authority is in.
 parseTyParenIdent TColon = defer
   n <- identNameP
   expectTok TColon
   t <- parseTy
+  t1 <- peekP
+  t2 <- peek2P
+  d <- binderDomainP t1 t2
   expectTok TRParen
-  deferPure (TyNamed n t)
+  deferPure (TyNamed n t d)
 -- `(a | b)` of names only stays a row join, as an `Effect` slot reads it; a
 -- literal among the terms makes it an authority join.
 parseTyParenIdent TPipe = defer
@@ -2618,6 +2624,22 @@ parseTyParenIdent TPipe = defer
   q <- getPos
   deferPure (namesOrAuthJoin v rest (Some (locOfSpan s q)))
 parseTyParenIdent _ = parseTyParenTuple
+
+-- A binder's written domain, `@Label` after its type, held as a label-only
+-- atom so resolve acquires the label's identity as it does for a row's.
+binderDomainP : Token -> Token -> Parser (Option EffAtomTy)
+binderDomainP TAt (TUpper _) = defer
+  s <- getPos
+  advance
+  l <- upperNameP
+  q <- getPos
+  deferPure (Some (effAtomAt l EPTop (locOfSpan s q)))
+binderDomainP TAsAt (TUpper l) = defer
+  pos <- getPos
+  fatalAtP
+    "a binder's domain is written with a space before the `@`: `String @\{l}`"
+    pos
+binderDomainP _ _ = deferPure None
 
 namesOrAuthJoin : String -> List EffParamTy -> Option Loc -> Ty
 namesOrAuthJoin v rest loc = match allNames rest []

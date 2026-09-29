@@ -1,0 +1,4 @@
+-- An entry that performs a declared `<IO>`: a policy naming the ten host labels admits it.
+-- lint-disable-file rule-dead-code
+transform : String -> <IO> String
+transform s = s ++ "!"

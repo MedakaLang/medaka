@@ -1,0 +1,62 @@
+-- A file extern refuses a path whose canonical form its grant does not admit:
+-- `..` anywhere in the path, symlinks leading out of and into the granted tree,
+-- a new file under a granted directory, an entry removed or renamed across the
+-- boundary, an absolute element, an element that does not exist, and elements
+-- that are themselves a symlink or hold `..`.  run.sh builds the tree.
+readCfg : String -> <FileRead "cfg/*"> Result String String
+readCfg name = readFile ("cfg/" ++ name)
+
+writeCfg : String -> <FileWrite "cfg/*"> Result String Unit
+writeCfg name = writeFile ("cfg/" ++ name) "w"
+
+makeCfg : String -> <FileWrite "cfg/*"> Result String Unit
+makeCfg name = makeDir ("cfg/" ++ name)
+
+removeCfg : String -> <FileWrite "cfg/*"> Result String Unit
+removeCfg name = removeFile ("cfg/" ++ name)
+
+moveCfg : String -> String -> <FileWrite "cfg/*"> Result String Unit
+moveCfg a b = rename ("cfg/" ++ a) ("cfg/" ++ b)
+
+readDev : String -> <FileRead "/dev/*"> Result String String
+readDev name = readFile ("/dev/" ++ name)
+
+readNowhere : String -> <FileRead "nowhere/*"> Result String String
+readNowhere name = readFile ("nowhere/" ++ name)
+
+readLink : String -> <FileRead "link/*"> Result String String
+readLink name = readFile ("link/" ++ name)
+
+readUp : String -> <FileRead "cfg/sub/../*"> Result String String
+readUp name = readFile ("cfg/sub/../" ++ name)
+
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+main =
+  println "dotdot first: \{said (readCfg "../cfg/a.txt")}"
+  println "dotdot middle in: \{said (readCfg "sub/../a.txt")}"
+  println "dotdot middle out: \{said (readCfg "sub/../../secret.txt")}"
+  println "dotdot last out: \{said (readCfg "../secret.txt")}"
+  println "symlink out: \{said (readCfg "out")}"
+  println "symlink in: \{said (readCfg "../inlink")}"
+  println "new file: \{said (writeCfg "new.txt")}"
+  println "new file read: \{said (readCfg "new.txt")}"
+  println "new dir: \{said (makeCfg "newdir")}"
+  println "new file out: \{said (writeCfg "../new.txt")}"
+  println "dangling: \{said (writeCfg "dangling")}"
+  println "dotdot in absent tail: \{said (writeCfg "nodir/../../x.txt")}"
+  println "remove outside link: \{said (removeCfg "../inlink")}"
+  println "remove inside link: \{said (removeCfg "out")}"
+  println "rename dst out: \{said (moveCfg "new.txt" "../outdir/stolen.txt")}"
+  println "rename src out: \{said (moveCfg "../secret.txt" "stolen.txt")}"
+  println "rename inside: \{said (moveCfg "new.txt" "sub/moved.txt")}"
+  println "absolute in: \{said (readDev "null")}"
+  println "absolute out: \{said (readDev "../etc/passwd")}"
+  println "absent element in: \{said (readNowhere "x")}"
+  println "absent element out: \{said (readNowhere "../secret.txt")}"
+  println "element symlink in: \{said (readLink "a.txt")}"
+  println "element symlink out: \{said (readLink "../secret.txt")}"
+  println "element dotdot in: \{said (readUp "a.txt")}"
+  println "element dotdot out: \{said (readUp "../secret.txt")}"

@@ -1,0 +1,106 @@
+-- Every shape a grant reaches a file extern through refuses `cfg/../secret.txt`
+-- under `<FileRead "cfg/*">`: a handle read by a function polymorphic in its
+-- authority, stdlib wrappers, a file extern as a value, a local reader, a
+-- delayed read, an interface method, and partial applications.  The one read
+-- admitted is through an opened existential, whose function is bounded by the
+-- bare label and so holds the whole domain.
+import io.{readLines}
+import fs.{isDir}
+
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)
+
+data Rd (p : Authority FileRead) = Rd (Unit -> <FileRead p> Result String String)
+
+open : (path : String) -> Handle path
+open path = Handle path
+
+read : Handle p -> <FileRead p> Result String String
+read (Handle s) = readFile s
+
+viaHandle : String -> <FileRead "cfg/*"> Result String String
+viaHandle name = read (open ("cfg/" ++ name))
+
+app : (a -> <e> b) -> a -> <e> b
+app f x = f x
+
+viaWrapper : String -> <FileRead "cfg/*"> Result String (List String)
+viaWrapper name = readLines ("cfg/" ++ name)
+
+viaIsDir : String -> <FileRead "cfg/*"> Result String Bool
+viaIsDir name = isDir ("cfg/" ++ name)
+
+viaApp : String -> <FileRead "cfg/*"> Result String String
+viaApp name = app readFile ("cfg/" ++ name)
+
+viaList : String -> <FileRead "cfg/*"> Result String String
+viaList name = match [readFile]
+  f :: _ => f ("cfg/" ++ name)
+  [] => Err "none"
+
+viaRef : String -> <FileRead "cfg/*"> Result String String
+viaRef name =
+  let r = Ref readFile
+  (!r) ("cfg/" ++ name)
+
+viaLocal : String -> <FileRead "cfg/*"> Result String String
+viaLocal name =
+  let go (Handle s) = readFile s
+  go (open ("cfg/" ++ name))
+
+delay : Handle p -> Rd p
+delay (Handle s) = Rd (_ => readFile s)
+
+force : Rd p -> <FileRead p> Result String String
+force (Rd f) = f ()
+
+viaDelay : String -> <FileRead "cfg/*"> Result String String
+viaDelay name = force (delay (open ("cfg/" ++ name)))
+
+readAny : AnyHandle -> <FileRead> Result String String
+readAny (AnyHandle h) = read h
+
+interface Source s where
+  load : s -> (path : String) -> <FileRead path> Result String String
+
+data Disk = Disk
+
+impl Source Disk where
+  load _ path = readFile path
+
+viaMethod : String -> <FileRead "cfg/*"> Result String String
+viaMethod name = load Disk ("cfg/" ++ name)
+
+viaPoly : Source s => s -> (path : String) -> <FileRead path> Result String String
+viaPoly src path = load src path
+
+viaPartialMethod : String -> <FileRead "cfg/*"> Result String String
+viaPartialMethod name =
+  let f = load Disk
+  f ("cfg/" ++ name)
+
+viaPartialWrite : String -> <FileWrite "cfg/*"> Result String Unit
+viaPartialWrite name =
+  let w = writeFile ("cfg/" ++ name)
+  w "x"
+
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+main =
+  let up = "../secret.txt"
+  println "handle: \{said (viaHandle up)}"
+  println "wrapper: \{said (viaWrapper up)}"
+  println "isDir: \{said (viaIsDir "../outdir")}"
+  println "app: \{said (viaApp up)}"
+  println "list: \{said (viaList up)}"
+  println "ref: \{said (viaRef up)}"
+  println "local: \{said (viaLocal up)}"
+  println "delay: \{said (viaDelay up)}"
+  println "existential: \{said (readAny (AnyHandle (open ("cfg/" ++ up))))}"
+  println "method: \{said (viaMethod up)}"
+  println "poly: \{said (viaPoly Disk ("cfg/" ++ up))}"
+  println "partial method: \{said (viaPartialMethod up)}"
+  println "partial write: \{said (viaPartialWrite "../pwned.txt")}"

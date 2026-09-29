@@ -1,6 +1,7 @@
 authTermNames : List EffParamTy -> List String
 authTermSurface : (String -> String) -> EffParamTy -> String
 authTermsSurface : (String -> String) -> List EffParamTy -> String
+binderDomainSurface : Option EffAtomTy -> String
 constraintUnresolved : String -> List Ty -> Constraint
 ctorBindersSource : List (String, KindAnn) -> String
 ctorBindersSurface : List (String, KindAnn) -> String

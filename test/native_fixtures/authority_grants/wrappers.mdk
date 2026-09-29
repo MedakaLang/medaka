@@ -1,0 +1,20 @@
+-- A stdlib wrapper with a named argument, a higher-order function applying a file
+-- extern, and a file extern mapped over a list.
+import io.{readLines}
+
+app : (a -> <e> b) -> a -> <e> b
+app f x = f x
+
+viaWrapper : String -> <FileRead "cfg/*"> Result String (List String)
+viaWrapper name = readLines ("cfg/" ++ name)
+
+viaApp : String -> <FileRead "cfg/*"> Result String String
+viaApp name = app readFile ("cfg/" ++ name)
+
+viaMapLit : String -> <FileRead> List (Result String String)
+viaMapLit name = map readFile ["cfg/" ++ name]
+
+main =
+  println (viaWrapper "a.txt")
+  println (viaApp "a.txt")
+  println (viaMapLit "a.txt")

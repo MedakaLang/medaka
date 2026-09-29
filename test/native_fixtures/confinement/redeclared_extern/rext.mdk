@@ -1,0 +1,3 @@
+-- The catalog's `readFile`, redeclared and exported.
+export
+extern readFile : (path : String) -> <FileRead path> Result String String

@@ -1,0 +1,7 @@
+cfg/a.txt
+[cfg/b, b]
+cfg/c
+Ok echo cfg/d
+Ok echo cfg/e
+Ok echo cfg/f
+[Ok echo g, Ok echo h]

@@ -1,0 +1,25 @@
+-- A method whose written type ends in an alias for a function type takes its
+-- grants after the arrows it writes, and the result the alias names is applied
+-- after them.
+type Tail = Int -> Result String String
+
+interface Source s where
+  load : s -> (path : String) -> <FileRead path> Tail
+
+data Disk = Disk
+
+impl Source Disk where
+  load _ path = match readFile path
+    Ok c => _ => Ok c
+    Err e => _ => Err e
+
+viaMethod : String -> <FileRead "cfg/*"> Result String String
+viaMethod name = load Disk ("cfg/" ++ name) 0
+
+said : Result String String -> String
+said (Ok c) = "Ok \{c}"
+said (Err e) = "Err \{e}"
+
+main =
+  println "in: \{said (viaMethod "a.txt")}"
+  println "out: \{said (viaMethod "../secret.txt")}"

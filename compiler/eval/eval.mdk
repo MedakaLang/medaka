@@ -77,6 +77,7 @@ import support.util.{
   joinDot,
   dedup,
   startsWith,
+  endsWith,
   zipL,
 }
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
@@ -556,7 +557,7 @@ countTyvars (TyEffect _ _ t) = countTyvars t
 countTyvars (TyConstrained _ t) = countTyvars t
 countTyvars (TyRow _ _ _) = 0
 countTyvars (TyAuth _ _) = 0
-countTyvars (TyNamed _ t) = countTyvars t
+countTyvars (TyNamed _ t _) = countTyvars t
 countTyvars (TyQual t _ _) = countTyvars t
 
 sumInts : List Int -> Int
@@ -655,7 +656,7 @@ dispatchPositionsOf mty params = filterMentions 0 (argsOfTy mty) params
 argsOfTy : Ty -> List Ty
 argsOfTy (TyConstrained _ t) = argsOfTy t
 argsOfTy (TyEffect _ _ t) = argsOfTy t
-argsOfTy (TyFun (TyNamed _ a) b) = a :: argsOfTy b
+argsOfTy (TyFun (TyNamed _ a _) b) = a :: argsOfTy b
 argsOfTy (TyFun a b) = a :: argsOfTy b
 argsOfTy _ = []
 
@@ -673,7 +674,7 @@ tyMentions (TyFun a b) params = tyMentions a params || tyMentions b params
 tyMentions (TyTuple ts) params = anyList (t => tyMentions t params) ts
 tyMentions (TyEffect _ _ t) params = tyMentions t params
 tyMentions (TyConstrained _ t) params = tyMentions t params
-tyMentions (TyNamed _ t) params = tyMentions t params
+tyMentions (TyNamed _ t _) params = tyMentions t params
 tyMentions (TyQual t _ _) params = tyMentions t params
 -- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`,
 -- no labels) IS a mention of that name — the same relationship `TyVar`
@@ -2712,6 +2713,169 @@ prim5M f =
 
 prim1M : (Value e -> <e> Value e) -> Value e
 prim1M f = VPrim f
+
+-- A file extern whose path is an authority takes, after its value arguments,
+-- the authority granted for each path (EFFECTS-SEMANTICS §8), and refuses a
+-- path that authority does not admit before it touches the file system.
+granted1 : Confine -> (Value <IO> -> <IO> Value <IO>) -> Value <IO>
+granted1 mode f = VPrim (a => VPrim (g => confined mode g a (_ => f a)))
+
+granted2 : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
+granted2 f =
+  VPrim (a => VPrim (b => VPrim (g => confined Follow g a (_ => f a b))))
+
+granted3 : (Value <IO> -> Value <IO> -> Value <IO> -> <IO> Value <IO>) ->
+  Value <IO>
+granted3 f = VPrim
+  (a =>
+    VPrim (b => VPrim (c => VPrim (g => confined Follow g a (_ => f a b c)))))
+
+-- `rename` names two paths, so it takes two grants, and each path is refused
+-- against its own.
+grantedPair : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
+grantedPair f = VPrim
+  (a => VPrim
+    (b => VPrim
+      (ga => VPrim (gb => confined Entry ga a (_ => confined Entry gb b (_ =>
+        f a b))))))
+
+-- How a file extern resolves its path and reports a refusal: through the last
+-- component or at the entry itself, as an `Err` or as a panic.
+data Confine = Follow | Entry | FollowPanic
+
+confined : Confine ->
+  Value <IO> ->
+  Value <IO> ->
+  (Unit -> <IO> Value <IO>) ->
+  <IO> Value <IO>
+confined _ (VList []) _ k = k ()
+confined mode (VList elems) path k =
+  let entry = match mode
+    Entry => True
+    _ => False
+  match confinePath entry (map unString elems) (unString path)
+    None => k ()
+    Some msg => match mode
+      FollowPanic => runtimePanic "E-PANIC" msg
+      _ => VCon "Err" [VString msg]
+confined _ _ _ _ = panic "file extern: the granted authority is not a List"
+
+-- ── Confinement ───────────────────────────────────────────────────────────
+-- `mdk_confine` in runtime/medaka_rt.c states the rules and the reason for
+-- each; this is the same function for the interpreter, over the same host
+-- calls, and the two must stay in step.  Some message when the path is refused.
+confinePath : Bool -> List String -> String -> <FileRead | e> Option String
+confinePath entry elems path =
+  let admitted = match canonPath entry path
+    Some canon => anyAdmits canon elems
+    None => False
+  if admitted then
+    None
+  else
+    let quoted = map (s => "\"\{s}\"") elems
+    Some "\{path} is outside the granted authority [\{joinWith ", " quoted}]"
+
+anyAdmits : String -> List String -> <FileRead | e> Bool
+anyAdmits _ [] = False
+anyAdmits canon (el :: rest) =
+  if elementAdmits canon el then True else anyAdmits canon rest
+
+elementAdmits : String -> String -> <FileRead | e> Bool
+elementAdmits canon el =
+  if endsWith "*" el then
+    let concrete = stringSlice 0 (stringLength el - 1) el
+    match reverseL (splitOnChar '/' concrete)
+      [""] => True
+      stem :: revDir =>
+        let dirParts = reverseL revDir
+        let d = match dirParts
+          [] => "."
+          _ =>
+            let j = joinWith "/" dirParts
+            if j == "" then "/" else j
+        match canonPath False d
+          Some dir =>
+            stem == "" && canon == dir
+              || startsWith (appendComponent dir stem) canon
+          None => False
+      [] => True
+  else match canonPath False el
+    Some c => c == canon
+    None => False
+
+-- Components of a path split on `/`, with the empty and `.` ones dropped.
+pathComponents : String -> List String
+pathComponents p = filterList (c => c /= "" && c /= ".") (splitOnChar '/' p)
+
+-- `/` or `.` followed by the components, joined by `/`.
+joinComponents : Bool -> List String -> String
+joinComponents absolute cs =
+  let base = if absolute then "/" else "."
+  match cs
+    [] => base
+    _ => if absolute then "/" ++ joinWith "/" cs else "./" ++ joinWith "/" cs
+
+appendComponent : String -> String -> String
+appendComponent dir name = if dir == "/" then "/" ++ name else "\{dir}/\{name}"
+
+-- realpath(3) of a path, or None when realpath fails, which is when
+-- `mdk_canon_path` (runtime/medaka_rt.c) finds no canonical form.
+-- `canonicalizePath` returns its input unchanged on failure, so the input is
+-- given a form no resolved path has: a relative path is not absolute, and an
+-- absolute one is prefixed with `/.`, which realpath removes.
+resolvePath : String -> <FileRead | e> Option String
+resolvePath p =
+  if fileExists p then
+    let r = canonicalizePath (if startsWith "/" p then "/." ++ p else p)
+    if startsWith "/" r && not (startsWith "/./" r) then Some r else None
+  else
+    None
+
+-- The canonical form of a path, or None when it has none.  In entry mode the
+-- last component is appended to its directory's canonical form unresolved.
+canonPath : Bool -> String -> <FileRead | e> Option String
+canonPath entry p =
+  if p == "" then
+    None
+  else
+    let absolute = startsWith "/" p
+    let cs = pathComponents p
+    match reverseL cs
+      final :: revInit =>
+        if entry && final /= ".." then
+          mapOption
+            (d => appendComponent d final)
+            (canonPath False (joinComponents absolute (reverseL revInit)))
+        else
+          canonFrom absolute cs (listLen cs)
+      [] => canonFrom absolute cs 0
+
+-- The realpath of the longest resolving prefix, extended by the rest.
+canonFrom : Bool -> List String -> Int -> <FileRead | e> Option String
+canonFrom absolute cs k =
+  if k < 0 then
+    None
+  else match resolvePath (joinComponents absolute (takeN k cs))
+    Some r => extendAbsent r (drop k cs)
+    None => canonFrom absolute cs (k - 1)
+
+-- The unresolved rest may not climb, and its first component must be absent
+-- (lstat fails in the runtime).  A directory that cannot be listed cannot show
+-- that, so it refuses.
+extendAbsent : String -> List String -> <FileRead | e> Option String
+extendAbsent r [] = Some r
+extendAbsent r (first :: rest) =
+  if contains ".." (first :: rest) || entryPresent r first then
+    None
+  else
+    Some (fold appendComponent r (first :: rest))
+
+entryPresent : String -> String -> <FileRead | e> Bool
+entryPresent dir name = match listDir dir
+  Ok names => contains name names
+  Err _ => match statFile dir
+    Ok (_, isDir, _, _) => isDir
+    Err _ => False
 
 -- captured stdout: putStr/putStrLn append here instead of doing real IO, so the
 -- output buffer can be diffed against the === EVAL === goldens (no <IO> effect;
@@ -4788,22 +4952,22 @@ ioExternBindings _ = [
   ("ePutStr", prim1M pEPutStr),
   ("ePutStrLn", prim1M pEPutStrLn),
   -- File
-  ("readFile", prim1 pReadFile),
-  ("readFileBytes", prim1 pReadFileBytes),
-  ("fileExists", prim1 pFileExists),
-  ("fileMode", prim1 pFileMode),
-  ("canonicalizePath", prim1 pCanonicalizePath),
-  ("listDir", prim1 pListDir),
-  ("statFile", prim1 pStatFile),
-  ("writeFile", prim2M pWriteFile),
-  ("writeFileBytes", prim2M pWriteFileBytes),
-  ("writeFileMode", prim3M pWriteFileMode),
-  ("appendFile", prim2M pAppendFile),
-  ("makeDir", prim1 pMakeDir),
-  ("removeFile", prim1 pRemoveFile),
-  ("removeDir", prim1 pRemoveDir),
-  ("rename", prim2M pRename),
-  ("fsync", prim1 pFsync),
+  ("readFile", granted1 Follow pReadFile),
+  ("readFileBytes", granted1 Follow pReadFileBytes),
+  ("fileExists", granted1 FollowPanic pFileExists),
+  ("fileMode", granted1 Follow pFileMode),
+  ("canonicalizePath", granted1 FollowPanic pCanonicalizePath),
+  ("listDir", granted1 Follow pListDir),
+  ("statFile", granted1 Follow pStatFile),
+  ("writeFile", granted2 pWriteFile),
+  ("writeFileBytes", granted2 pWriteFileBytes),
+  ("writeFileMode", granted3 pWriteFileMode),
+  ("appendFile", granted2 pAppendFile),
+  ("makeDir", granted1 Entry pMakeDir),
+  ("removeFile", granted1 Entry pRemoveFile),
+  ("removeDir", granted1 Entry pRemoveDir),
+  ("rename", grantedPair pRename),
+  ("fsync", granted1 Follow pFsync),
   -- Env
   ("args", prim1M pArgs),
   ("getEnv", prim1 pGetEnv),

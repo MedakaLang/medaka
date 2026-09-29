@@ -38,6 +38,7 @@ import frontend.ast.{
   EffAtomTy(..),
   qualifierSource,
   effAtomSurface,
+  binderDomainSurface,
   authTermSurface,
   ctorBindersSurface,
   DeriveRef(..),
@@ -996,10 +997,12 @@ printType (TyRow es tail _) =
 printType (TyAuth ps _) = text (authTermsSurface escStringLit ps)
 printType (TyConstrained cs t) =
   Cat (constraintsDoc cs) (Cat (text " => ") (printType t))
-printType (TyNamed n t) =
+printType (TyNamed n t d) =
   Cat
     (text "(")
-    (Cat (text n) (Cat (text " : ") (Cat (printType t) (text ")"))))
+    (Cat
+      (text n)
+      (Cat (text " : ") (Cat (printType t) (text "\{binderDomainSurface d})"))))
 -- `Result String @a` qualifies the whole application, so an application
 -- needs no parentheses under the qualifier.
 printType (TyQual t ns _) =
@@ -1058,7 +1061,7 @@ printTypeAtom (TyTuple ts) = printType (TyTuple ts)
 printTypeAtom (TyRow es tail loc) = printType (TyRow es tail loc)
 printTypeAtom (TyAuth p loc) = printType (TyAuth p loc)
 -- A binder already carries its own parentheses.
-printTypeAtom (TyNamed n t) = printType (TyNamed n t)
+printTypeAtom (TyNamed n t d) = printType (TyNamed n t d)
 -- A `TyEffect` in argument position keeps its parentheses: its wrapped type can
 -- be a genuine payload (`Foo (<Stdout> Int)`), and nothing in the AST
 -- distinguishes that from the pre-#997 filler spelling — dropping the parens
@@ -2599,7 +2602,7 @@ ppTyPrec _ (TyRow [] (a :: b :: rest) _) =
   "(\{joinWith " | " (a :: b :: rest)})"
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
 ppTyPrec _ (TyAuth ps _) = authTermsSurface escStringLit ps
-ppTyPrec _ (TyNamed n t) = "(\{n} : \{ppTyPrec 0 t})"
+ppTyPrec _ (TyNamed n t d) = "(\{n} : \{ppTyPrec 0 t}\{binderDomainSurface d})"
 ppTyPrec _ (TyQual t ns _) =
   "\{ppTyPrec 2 t} \{qualifierSource escStringLit ns}"
 ppTyPrec _ (TyConstrained cs t) =

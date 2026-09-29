@@ -567,7 +567,7 @@ tyReaches tydefs seen (TyFun a b) target =
   tyReaches tydefs seen a target || tyReaches tydefs seen b target
 tyReaches tydefs seen (TyTuple ts) target = anyTyReaches tydefs seen ts target
 tyReaches tydefs seen (TyEffect _ _ t) target = tyReaches tydefs seen t target
-tyReaches tydefs seen (TyNamed _ t) target = tyReaches tydefs seen t target
+tyReaches tydefs seen (TyNamed _ t _) target = tyReaches tydefs seen t target
 tyReaches tydefs seen (TyQual t _ _) target = tyReaches tydefs seen t target
 tyReaches tydefs seen (TyConstrained _ t) target =
   tyReaches tydefs seen t target
@@ -606,7 +606,7 @@ tyCanDiverge tydefs (TyApp a b) = tyCanDiverge tydefs a || tyCanDiverge tydefs b
 tyCanDiverge tydefs (TyFun a b) = tyCanDiverge tydefs a || tyCanDiverge tydefs b
 tyCanDiverge tydefs (TyTuple ts) = anyTyCanDiverge tydefs ts
 tyCanDiverge tydefs (TyEffect _ _ t) = tyCanDiverge tydefs t
-tyCanDiverge tydefs (TyNamed _ t) = tyCanDiverge tydefs t
+tyCanDiverge tydefs (TyNamed _ t _) = tyCanDiverge tydefs t
 tyCanDiverge tydefs (TyQual t _ _) = tyCanDiverge tydefs t
 tyCanDiverge tydefs (TyConstrained _ t) = tyCanDiverge tydefs t
 tyCanDiverge _ _ = False
@@ -1391,7 +1391,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyFun" (PVar "a") (PVar "b")) (PVar "target")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "a")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "b")) (EVar "target"))))
 (DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyTuple" (PVar "ts")) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "anyTyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "ts")) (EVar "target")))
 (DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyEffect" PWild PWild (PVar "t")) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "t")) (EVar "target")))
-(DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyNamed" PWild (PVar "t")) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "t")) (EVar "target")))
+(DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyNamed" PWild (PVar "t") PWild) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "t")) (EVar "target")))
 (DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyQual" (PVar "t") PWild PWild) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "t")) (EVar "target")))
 (DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyConstrained" PWild (PVar "t")) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "t")) (EVar "target")))
 (DFunDef false "tyReaches" (PWild PWild PWild PWild) (EVar "False"))
@@ -1409,7 +1409,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "||" (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "a")) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "b"))))
 (DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "anyTyCanDiverge") (EVar "tydefs")) (EVar "ts")))
 (DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "t")))
-(DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyNamed" PWild (PVar "t"))) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "t")))
+(DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "t")))
 (DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "t")))
 (DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "t")))
 (DFunDef false "tyCanDiverge" (PWild PWild) (EVar "False"))
@@ -1698,7 +1698,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyFun" (PVar "a") (PVar "b")) (PVar "target")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "a")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "b")) (EVar "target"))))
 (DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyTuple" (PVar "ts")) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "anyTyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "ts")) (EVar "target")))
 (DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyEffect" PWild PWild (PVar "t")) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "t")) (EVar "target")))
-(DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyNamed" PWild (PVar "t")) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "t")) (EVar "target")))
+(DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyNamed" PWild (PVar "t") PWild) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "t")) (EVar "target")))
 (DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyQual" (PVar "t") PWild PWild) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "t")) (EVar "target")))
 (DFunDef false "tyReaches" ((PVar "tydefs") (PVar "seen") (PCon "TyConstrained" PWild (PVar "t")) (PVar "target")) (EApp (EApp (EApp (EApp (EVar "tyReaches") (EVar "tydefs")) (EVar "seen")) (EVar "t")) (EVar "target")))
 (DFunDef false "tyReaches" (PWild PWild PWild PWild) (EVar "False"))
@@ -1716,7 +1716,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "||" (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "a")) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "b"))))
 (DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "anyTyCanDiverge") (EVar "tydefs")) (EVar "ts")))
 (DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "t")))
-(DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyNamed" PWild (PVar "t"))) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "t")))
+(DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "t")))
 (DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "t")))
 (DFunDef false "tyCanDiverge" ((PVar "tydefs") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "tyCanDiverge") (EVar "tydefs")) (EVar "t")))
 (DFunDef false "tyCanDiverge" (PWild PWild) (EVar "False"))

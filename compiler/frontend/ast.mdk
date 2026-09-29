@@ -706,7 +706,11 @@ public export data Ty =
   -- atom `<FileRead path>` or a qualifier `@path` further right can refer to
   -- its authority.  Only ever the domain of a `TyFun`; the parser rejects it
   -- elsewhere.  Carries no identity: the name is lexical to its signature.
-  | TyNamed String Ty
+  -- The optional atom is a written domain, `(dir : String @Store)`: the label
+  -- whose domain the binder's authority is drawn from, so a signature that
+  -- performs nothing can still qualify by it.  It names the BINDER's domain,
+  -- never a qualifier on the argument's type; its parameter is always `EPTop`.
+  | TyNamed String Ty (Option EffAtomTy)
   -- An explicit authority qualifier `String @p`: the value's domain-directed
   -- abstraction is bounded by the authority `p` names.  `p` must be bound by a
   -- `TyNamed` to its left (or a data parameter); resolve checks that.  A
@@ -826,6 +830,13 @@ effAtomAt l p loc = EffAtomTy {
 export
 effAtomSurface : (String -> String) -> EffAtomTy -> String
 effAtomSurface esc a = a.eatLabel ++ effParamSurface esc a.eatParam
+
+-- A named argument's written domain as it follows the argument's type,
+-- ` @Store`, or nothing when the binder writes none.
+export
+binderDomainSurface : Option EffAtomTy -> String
+binderDomainSurface (Some a) = " @" ++ a.eatLabel
+binderDomainSurface None = ""
 
 -- An authority term as an INDEX argument spells it (`Handle *`, `Handle
 -- "config/*"`): the atom-parameter spelling without its leading space, and
@@ -1073,7 +1084,7 @@ firstTyLoc (TyApp f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)
 firstTyLoc (TyFun f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)
 firstTyLoc (TyTuple ts) = firstTyLocList ts
 firstTyLoc (TyEffect _ _ t) = firstTyLoc t
-firstTyLoc (TyNamed _ t) = firstTyLoc t
+firstTyLoc (TyNamed _ t _) = firstTyLoc t
 firstTyLoc (TyQual t _ l) = orElseLoc (firstTyLoc t) l
 firstTyLoc (TyConstrained _ t) = firstTyLoc t
 firstTyLoc (TyRow _ _ l) = l
@@ -2111,9 +2122,9 @@ mapTyKids f (TyEffect es tail t) =
 -- visits the node itself.
 mapTyKids _ (TyRow es tail l) = (TyRow es tail l, False)
 mapTyKids _ (TyAuth p l) = (TyAuth p l, False)
-mapTyKids f (TyNamed n t) =
+mapTyKids f (TyNamed n t d) =
   let (t2, c) = mapTyFull f t
-  (TyNamed n t2, c)
+  (TyNamed n t2 d, c)
 mapTyKids f (TyQual t ns l) =
   let (t2, c) = mapTyFull f t
   (TyQual t2 ns l, c)

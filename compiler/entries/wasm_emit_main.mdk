@@ -20,6 +20,7 @@
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
+import types.typecheck.{grantWholeDomain}
 import ir.core_ir_lower.{
   lowerProgramEmit,
   EmitTarget(..),
@@ -34,10 +35,11 @@ main = match args ()
   _ =>
     ePutStrLn "usage: medaka run compiler/entries/wasm_emit_main.mdk <file.mdk>"
 
+-- Unelaborated, so file externs take the whole domain (see llvm_emit_main).
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok targetSrc =>
-    let decls = desugar (parse targetSrc)
+    let decls = grantWholeDomain (desugar (parse targetSrc))
     -- the SAME decl list that is lowered, so the head table and the lowered
     -- program's impl entries are projections of one program.
     let annotated = annotateProgram decls

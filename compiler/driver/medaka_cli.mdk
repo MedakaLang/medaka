@@ -3550,8 +3550,8 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
   match r
     Err msg => dieMsg msg
     Ok (rsrc, csrc, tsrc) => match runCheckPolicy rsrc csrc tsrc allow fn
-      -- runCheckPolicy forces the accepted-plugin evaluation before it
-      -- returns, so an evaluation panic cannot leak an acceptance verdict.
+      -- The accepted verdict prints before the sample run is forced, so a
+      -- sample that panics leaves the verdict on stdout.
 
       -- C4 (docs/ops/CLI-CONFORMANCE.md §4): stdout carries the ANSWER,
       -- stderr everything else.  The ACCEPT report is the answer and
@@ -3561,7 +3561,9 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
       PolicyReject report =>
         let _ = ePutStr report
         exit 1
-      PolicyAccept report => putStr report
+      PolicyAccept header sample =>
+        let _ = putStr header
+        putStr (sample ())
 
 -- ── manifest ─────────────────────────────────────────────────────────────────
 -- WS-1c of EFFECTS-CONFORMANCE-ROADMAP.md.  Emit a module's verified capability

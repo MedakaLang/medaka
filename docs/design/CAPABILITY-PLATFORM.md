@@ -238,6 +238,15 @@ otherwise have to catch.
   coarse "network on" import. The platform **injects a constrained proxy host
   function** that permits only that domain — adding enforcement the provider lacks.
   This is exactly the platform's value-add over a thin wrapper.
+- File paths already carry that enforcement in the program itself. Each file
+  function receives the authority the compiler granted at its call and refuses a
+  path whose canonical form, `..` and symlinks resolved, no granted element admits
+  (`docs/spec/EFFECTS-SEMANTICS.md` §2.3). So a `<FileRead "cfg/*">` in the
+  manifest and the reads the program can make agree on files, not only on the
+  strings the program wrote, under `medaka run` and in a native build. Two
+  places still need the proxy: a WasmGC build, whose host imports receive the
+  path without the grant, and every `Net` authority, whose host part the runtime
+  does not normalize.
 
 ## 7b. Worked example C — multi-plugin personalization pipeline (composition, scoped state, per-install policy)
 

@@ -2021,6 +2021,171 @@ static long long mdk_str_cstr(const char *s) {
   return mdk_str_lossy(s, (long long)strlen(s));
 }
 
+/* Every file extern whose path is an authority receives, after its value
+ * arguments, the authority granted for each path (EFFECTS-SEMANTICS §8): a
+ * List String of domain elements, a trailing `*` spelling a pattern, and Nil
+ * for the whole domain.  It exists for confinement and cannot change a value
+ * an extern returns.
+ *
+ * Confinement compares canonical paths, never strings, because the kernel
+ * resolves `..` and symlinks and the type checker cannot.  A path is admitted
+ * when its canonical form is admitted by some element of the grant, each
+ * element canonicalized the same way against the working directory:
+ *   - an exact element admits the path whose canonical form equals its own;
+ *   - a pattern `<dir>/<stem>*` admits a canonical path that starts with the
+ *     canonical `<dir>` followed by `/<stem>`, and a pattern whose stem is empty
+ *     also admits `<dir>` itself; a pattern with no `/` has the working
+ *     directory as its `<dir>`, and `*` alone admits every path.
+ * A refused path is reported as "<path> is outside the granted authority
+ * [<elements>]": an Err from an extern that returns a Result, a panic from
+ * fileExists and canonicalizePath.  The interpreter's confinePath in
+ * compiler/eval/eval.mdk states the same rules and must stay in step with this
+ * one. */
+
+/* Components of `p`, split on `/`, with empty and `.` components dropped.
+ * Writes into `buf` (a copy of p) and `comps`; returns the count, or -1 when
+ * `p` is too long to canonicalize. */
+static int mdk_path_components(const char *p, char *buf, char **comps) {
+  size_t n = strlen(p);
+  if (n >= PATH_MAX) return -1;
+  memcpy(buf, p, n + 1);
+  int count = 0;
+  char *s = buf;
+  while (*s) {
+    while (*s == '/') *s++ = '\0';
+    if (!*s) break;
+    char *start = s;
+    while (*s && *s != '/') s++;
+    if (*s) *s++ = '\0';
+    if (strcmp(start, ".") != 0) comps[count++] = start;
+  }
+  return count;
+}
+
+/* `base` (`/` or `.`) followed by comps[0..k), joined by `/`, into `out`. */
+static int mdk_path_join(int absolute, char **comps, int k, char *out) {
+  size_t len = 0;
+  out[len++] = absolute ? '/' : '.';
+  out[len] = '\0';
+  for (int i = 0; i < k; i++) {
+    size_t cl = strlen(comps[i]);
+    if (len + 1 + cl >= PATH_MAX) return 0;
+    if (!(absolute && len == 1)) out[len++] = '/';
+    memcpy(out + len, comps[i], cl);
+    len += cl;
+    out[len] = '\0';
+  }
+  return 1;
+}
+
+/* `dir` followed by `/name`, into `out`, `dir` being canonical. */
+static int mdk_path_append(char *out, const char *name) {
+  size_t len = strlen(out), nl = strlen(name);
+  int root = len == 1 && out[0] == '/';
+  if (len + (root ? 0 : 1) + nl >= PATH_MAX) return 0;
+  if (!root) out[len++] = '/';
+  memcpy(out + len, name, nl + 1);
+  return 1;
+}
+
+/* The canonical form of `p` into `out` (PATH_MAX bytes); 0 when it has none.
+ * When every component resolves it is realpath(3).  Otherwise it is the
+ * realpath of the longest prefix that resolves, followed by the remaining
+ * components, which may not include `..` and whose first must be absent: an
+ * entry that is present yet does not resolve is a dangling or looping symlink,
+ * whose target could lie anywhere.  In entry mode the last component is
+ * appended to its directory's canonical form unresolved, since unlink, rmdir,
+ * rename and mkdir act on the entry, not on what it points to. */
+static int mdk_canon_path(const char *p, int entry, char *out) {
+  char *comps[PATH_MAX / 2 + 1];
+  char buf[PATH_MAX], probe[PATH_MAX];
+  if (p[0] == '\0') return 0;
+  int absolute = p[0] == '/';
+  int n = mdk_path_components(p, buf, comps);
+  if (n < 0) return 0;
+  if (entry && n > 0 && strcmp(comps[n - 1], "..") != 0) {
+    char last[PATH_MAX];
+    strcpy(last, comps[n - 1]);
+    if (!mdk_path_join(absolute, comps, n - 1, probe)) return 0;
+    if (!mdk_canon_path(probe, 0, out)) return 0;
+    return mdk_path_append(out, last);
+  }
+  int k = n;
+  for (; k >= 0; k--) {
+    if (!mdk_path_join(absolute, comps, k, probe)) return 0;
+    if (realpath(probe, out) != 0) break;
+  }
+  if (k < 0) return 0;
+  if (k == n) return 1;
+  for (int i = k; i < n; i++)
+    if (strcmp(comps[i], "..") == 0) return 0;
+  strcpy(probe, out);
+  if (!mdk_path_append(probe, comps[k])) return 0;
+  struct stat st;
+  if (lstat(probe, &st) == 0) return 0;
+  for (int i = k; i < n; i++)
+    if (!mdk_path_append(out, comps[i])) return 0;
+  return 1;
+}
+
+/* Whether one grant element admits the canonical path `canon`. */
+static int mdk_element_admits(const char *elem, long long elem_len, const char *canon) {
+  char e[PATH_MAX], d[PATH_MAX];
+  if (elem_len >= PATH_MAX) return 0;
+  memcpy(e, elem, (size_t)elem_len);
+  e[elem_len] = '\0';
+  if (elem_len > 0 && e[elem_len - 1] == '*') {
+    e[elem_len - 1] = '\0';
+    if (e[0] == '\0') return 1;
+    char *slash = strrchr(e, '/');
+    const char *stem;
+    if (slash == 0) {
+      strcpy(d, ".");
+      stem = e;
+    } else {
+      stem = slash + 1;
+      if (slash == e) strcpy(d, "/");
+      else { *slash = '\0'; strcpy(d, e); }
+    }
+    char want[PATH_MAX];
+    if (!mdk_canon_path(d, 0, want)) return 0;
+    if (stem[0] == '\0' && strcmp(canon, want) == 0) return 1;
+    if (!mdk_path_append(want, stem)) return 0;
+    return strncmp(canon, want, strlen(want)) == 0;
+  }
+  char c[PATH_MAX];
+  if (!mdk_canon_path(e, 0, c)) return 0;
+  return strcmp(c, canon) == 0;
+}
+
+/* NULL when `grant` admits `path`, else the refusal message as a String cell. */
+static long long mdk_confine(long long path, long long grant, int entry) {
+  if (grant == mdk_nil()) return 0;
+  const char *p = (const char *)path + 24;
+  char canon[PATH_MAX];
+  int ok = mdk_canon_path(p, entry, canon);
+  for (long long g = grant; ok && g != mdk_nil(); g = ((const long long *)g)[2]) {
+    long long s = ((const long long *)g)[1];
+    if (mdk_element_admits((const char *)s + 24, ((const long long *)s)[1], canon))
+      return 0;
+  }
+  long long msg = mdk_string_append(
+      path, mdk_str_cstr(" is outside the granted authority ["));
+  for (long long g = grant; g != mdk_nil(); g = ((const long long *)g)[2]) {
+    if (g != grant) msg = mdk_string_append(msg, mdk_str_cstr(", "));
+    msg = mdk_string_append(msg, mdk_str_cstr("\""));
+    msg = mdk_string_append(msg, ((const long long *)g)[1]);
+    msg = mdk_string_append(msg, mdk_str_cstr("\""));
+  }
+  return mdk_string_append(msg, mdk_str_cstr("]"));
+}
+
+#define MDK_CONFINE(path, grant, entry)                       \
+  do {                                                        \
+    long long refused_ = mdk_confine((path), (grant), (entry)); \
+    if (refused_) return mdk_err(refused_);                   \
+  } while (0)
+
 /* readFile : String -> Result String String — Ok content / Err msg.
  * fopen(2) happily opens a directory for reading, but SEEK_END+ftell then
  * reports an absurd size (LONG_MAX on ext4), which overflows mdk_alloc and
@@ -2034,7 +2199,8 @@ static long long mdk_str_cstr(const char *s) {
  * String: a file is where raw bytes most often come from, so a silent U+FFFD
  * here would lose data the caller never saw; readFileBytes is the raw route.
  * The bytes are read straight into the String cell and validated there. */
-long long mdk_read_file(long long path) {
+long long mdk_read_file(long long path, long long grant) {
+  MDK_CONFINE(path, grant, 0);
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) == 0 && S_ISDIR(st.st_mode))
@@ -2063,7 +2229,8 @@ long long mdk_read_file(long long path) {
  * Builds an Array cell [len, b0<<1|1, b1<<1|1, ...] of TAGGED int byte values
  * 0..255 (mirrors mdk_array_from_list element tagging).
  * Same directory guard as mdk_read_file — see comment there. */
-long long mdk_read_file_bytes(long long path) {
+long long mdk_read_file_bytes(long long path, long long grant) {
+  MDK_CONFINE(path, grant, 0);
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) == 0 && S_ISDIR(st.st_mode))
@@ -2120,15 +2287,22 @@ static long long mdk_write_impl(long long path, long long content, const char *m
 }
 
 /* writeFile : String -> String -> Result String Unit — truncating write. */
-long long mdk_write_file(long long path, long long content)  { return mdk_write_impl(path, content, "wb"); }
+long long mdk_write_file(long long path, long long content, long long grant) {
+  MDK_CONFINE(path, grant, 0);
+  return mdk_write_impl(path, content, "wb");
+}
 /* appendFile : String -> String -> Result String Unit — append (create if absent). */
-long long mdk_append_file(long long path, long long content) { return mdk_write_impl(path, content, "ab"); }
+long long mdk_append_file(long long path, long long content, long long grant) {
+  MDK_CONFINE(path, grant, 0);
+  return mdk_write_impl(path, content, "ab");
+}
 
 /* writeFileBytes : String -> Array Int -> Result String Unit — write raw bytes.
  * arr[0] = length; arr[i+1] = tagged int byte ((byte << 1)|1) for i in 0..len-1.
  * Untag each element: (elem >> 1) & 0xFF.  Byte-clean write counterpart of
  * mdk_read_file_bytes. */
-long long mdk_write_file_bytes(long long path, long long arr) {
+long long mdk_write_file_bytes(long long path, long long arr, long long grant) {
+  MDK_CONFINE(path, grant, 0);
   const char *p = (const char *)path + 24;
   const long long *a = (const long long *)arr;
   long long n = a[0];
@@ -2148,7 +2322,9 @@ long long mdk_write_file_bytes(long long path, long long arr) {
  * narrows it even then; an existing file keeps whatever mode it already had.
  * fchmod on the open descriptor settles both cases, and it runs BEFORE the
  * first byte is written, so the contents never exist at a wider mode. */
-long long mdk_write_file_mode(long long path, long long mode_tagged, long long content) {
+long long mdk_write_file_mode(long long path, long long mode_tagged, long long content,
+                               long long grant) {
+  MDK_CONFINE(path, grant, 0);
   const char *p = (const char *)path + 24;
   const char *c = (const char *)content + 24;
   long long cl = ((const long long *)content)[1];
@@ -2174,7 +2350,8 @@ long long mdk_write_file_mode(long long path, long long mode_tagged, long long c
 
 /* fileMode : String -> Result String Int — st_mode's permission bits (& 07777),
  * as a tagged Int inside Ok.  stat(2), so a symlink reports its target. */
-long long mdk_file_mode(long long path) {
+long long mdk_file_mode(long long path, long long grant) {
+  MDK_CONFINE(path, grant, 0);
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2182,13 +2359,17 @@ long long mdk_file_mode(long long path) {
 }
 
 /* fileExists : String -> Bool — raw 0/1, emitter tags via tagInt. */
-long long mdk_file_exists(long long path) {
+long long mdk_file_exists(long long path, long long grant) {
+  long long refused = mdk_confine(path, grant, 0);
+  if (refused) mdk_panic(refused);
   return access((const char *)path + 24, F_OK) == 0 ? 1 : 0;
 }
 
 /* canonicalizePath : String -> String — realpath(3); input unchanged on failure
  * (matches the OCaml oracle's `try Unix.realpath p with _ -> p`). */
-long long mdk_canonicalize_path(long long path) {
+long long mdk_canonicalize_path(long long path, long long grant) {
+  long long refused = mdk_confine(path, grant, 0);
+  if (refused) mdk_panic(refused);
   const char *p = (const char *)path + 24;
   char buf[PATH_MAX];
   if (realpath(p, buf) != 0) return mdk_str_cstr(buf);
@@ -2197,7 +2378,8 @@ long long mdk_canonicalize_path(long long path) {
 
 /* listDir : String -> Result String (List String).
  * OCaml Sys.readdir excludes "." and ".." — skip them for correctness. */
-long long mdk_list_dir(long long path) {
+long long mdk_list_dir(long long path, long long grant) {
+  MDK_CONFINE(path, grant, 0);
   const char *p = (const char *)path + 24;
   DIR *d = opendir(p);
   if (!d) return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2211,21 +2393,26 @@ long long mdk_list_dir(long long path) {
 }
 
 /* makeDir : String -> Result String Unit — mkdir 0755. */
-long long mdk_make_dir(long long path) {
+long long mdk_make_dir(long long path, long long grant) {
+  MDK_CONFINE(path, grant, 1);
   const char *p = (const char *)path + 24;
   if (mkdir(p, 0755) == 0) return mdk_ok(1);  /* Ok () */
   return mdk_err(mdk_str_cstr(strerror(errno)));
 }
 
 /* removeFile : String -> Result String Unit — unlink(2). */
-long long mdk_remove_file(long long path) {
+long long mdk_remove_file(long long path, long long grant) {
+  MDK_CONFINE(path, grant, 1);
   const char *p = (const char *)path + 24;
   if (unlink(p) == 0) return mdk_ok(1);  /* Ok () */
   return mdk_err(mdk_str_cstr(strerror(errno)));
 }
 
 /* rename : String -> String -> Result String Unit — rename(2) old new. */
-long long mdk_rename(long long oldp, long long newp) {
+long long mdk_rename(long long oldp, long long newp, long long grant_src,
+                     long long grant_dst) {
+  MDK_CONFINE(oldp, grant_src, 1);
+  MDK_CONFINE(newp, grant_dst, 1);
   const char *o = (const char *)oldp + 24;
   const char *n = (const char *)newp + 24;
   if (rename(o, n) == 0) return mdk_ok(1);  /* Ok () */
@@ -2233,7 +2420,8 @@ long long mdk_rename(long long oldp, long long newp) {
 }
 
 /* removeDir : String -> Result String Unit — rmdir(2); empty dir only. */
-long long mdk_remove_dir(long long path) {
+long long mdk_remove_dir(long long path, long long grant) {
+  MDK_CONFINE(path, grant, 1);
   const char *p = (const char *)path + 24;
   if (rmdir(p) == 0) return mdk_ok(1);  /* Ok () */
   return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2242,7 +2430,8 @@ long long mdk_remove_dir(long long path) {
 /* fsync : String -> Result String Unit — open(O_RDONLY)+fsync(2)+close.
  * O_RDONLY opens both a regular file and a directory, since the durability
  * of a rename is a property of the containing directory, not either file. */
-long long mdk_fsync(long long path) {
+long long mdk_fsync(long long path, long long grant) {
+  MDK_CONFINE(path, grant, 0);
   const char *p = (const char *)path + 24;
   int fd = open(p, O_RDONLY);
   if (fd < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2426,7 +2615,8 @@ long long mdk_build_date(long long unit_ignored) {
  * stat(2) the path; Ok (sizeBytes, isDir, isFile, mtimeSeconds) or Err strerror.
  * 4-tuple cell layout mirrors mdk_run_command's 3-tuple: [TUPLE_TAG, e0..e3].
  * Bool uses the native tagged encoding (True=3, False=1); Float is boxed. */
-long long mdk_stat_file(long long path) {
+long long mdk_stat_file(long long path, long long grant) {
+  MDK_CONFINE(path, grant, 0);
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));

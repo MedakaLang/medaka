@@ -245,6 +245,19 @@ literal/print/`intToString` path on this layout (`runtime/medaka_rt.c`,
 | `stringToLower` | `String -> String` | UNICODE | |
 
 ### IO / syscalls — `IO`
+A file extern whose path is an authority (every `FileRead path`/`FileWrite path` row
+of `stdlib/runtime.mdk`; the rows below marked *grant*) takes, after its value
+arguments, the authority the type checker granted for each path
+(`docs/spec/EFFECTS-SEMANTICS.md` §8): a `List String` of domain elements, Nil for
+the whole domain. Its C symbol takes one trailing `long long` per path, so `rename`
+takes two. Elaboration saturates every use, so no backend sees a partial one.
+The C runtime's `mdk_confine` (and the interpreter's `confinePath` in
+`compiler/eval/eval.mdk`, which follows the same rules) refuses a path whose
+canonical form no granted element admits (`EFFECTS-SEMANTICS.md` §2.3): an
+`Err` naming the path and the grant, or a panic from `fileExists` and
+`canonicalizePath`. Nil skips the check, so a bare-label call costs nothing.
+The WasmGC host imports carry the path alone and do not confine.
+
 | `putStr` | `String -> <IO> Unit` | IO | |
 | `putStrLn` | `String -> <IO> Unit` | IO | |
 | `ePutStr` | `String -> <IO> Unit` | IO | stderr |
@@ -252,11 +265,11 @@ literal/print/`intToString` path on this layout (`runtime/medaka_rt.c`,
 | `readLine` | `Unit -> <IO> String` | IO | |
 | `readLineOpt` | `Unit -> <IO> Option String` | IO | `None` at EOF |
 | `readAll` | `Unit -> <IO> String` | IO | all of stdin |
-| `readFile` | `String -> <IO> Result String String` | IO | |
-| `writeFile` | `String -> String -> <IO> Result String Unit` | IO | |
-| `appendFile` | `String -> String -> <IO> Result String Unit` | IO | |
-| `fileExists` | `String -> <IO> Bool` | IO | |
-| `listDir` | `String -> <IO> Result String (List String)` | IO | |
+| `readFile` | `String -> <IO> Result String String` | IO | grant |
+| `writeFile` | `String -> String -> <IO> Result String Unit` | IO | grant |
+| `appendFile` | `String -> String -> <IO> Result String Unit` | IO | grant |
+| `fileExists` | `String -> <IO> Bool` | IO | grant |
+| `listDir` | `String -> <IO> Result String (List String)` | IO | grant |
 | `args` | `Unit -> <IO> List String` | IO | program args |
 | `getEnv` | `String -> <IO> Option String` | IO | |
 | `wallTimeSec` | `Unit -> <IO> Float` | IO | `gettimeofday` |

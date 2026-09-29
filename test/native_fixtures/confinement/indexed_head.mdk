@@ -1,0 +1,45 @@
+-- A method body's grants are its own authority binders by position, whatever
+-- they are called: an instance head whose index shares a binder's name (`p`, and
+-- `dst` for the second of two binders) does not capture that binder's grant.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+open : (path : String) -> Handle path
+open path = Handle path
+
+interface Src s where
+  load : s -> Handle p -> <FileRead p> Result String String
+
+data Tagged (p : Authority FileRead) = Tagged (Handle p)
+
+impl Src (Tagged p) where
+  load _ (Handle s) = readFile s
+
+interface Cp s where
+  cp : s ->
+    (src : String) ->
+    (dst : String) ->
+    <FileRead src, FileWrite dst> Result String Unit
+
+impl Cp (Tagged dst) where
+  cp _ src dst = match readFile src
+    Ok c => writeFile dst c
+    Err e => Err e
+
+viaTagged : String -> <FileRead "cfg/*"> Result String String
+viaTagged name = load (Tagged (open "cfg/a.txt")) (open ("cfg/" ++ name))
+
+copyIn : String ->
+  String ->
+  <FileRead "cfg/*", FileWrite "outdir/*"> Result String Unit
+copyIn a b = cp (Tagged (open "cfg/a.txt")) ("cfg/" ++ a) ("outdir/" ++ b)
+
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+main =
+  println "load in: \{said (viaTagged "a.txt")}"
+  println "load out: \{said (viaTagged "../secret.txt")}"
+  println "copy in: \{said (copyIn "a.txt" "b.txt")}"
+  println "copy src out: \{said (copyIn "../secret.txt" "c.txt")}"
+  println "copy dst out: \{said (copyIn "a.txt" "../pwned.txt")}"

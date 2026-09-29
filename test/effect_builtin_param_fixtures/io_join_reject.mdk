@@ -1,0 +1,11 @@
+-- Nine of the ten labels: a performed `<IO>` still needs `Net`, and the
+-- refusal names it.
+ioSay : String -> <IO> Unit
+ioSay s = println s
+
+say : String ->
+  <Clock, Env, Exec, FileRead, FileWrite, Rand, Stderr, Stdin, Stdout> Unit
+say s = ioSay s
+
+main : <IO> Unit
+main = say "io join reject"

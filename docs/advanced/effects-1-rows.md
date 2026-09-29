@@ -152,14 +152,12 @@ vocabulary:
 | `Rand` | `randomInt`, `randomBool`, `randomFloat`, `randomChar`, `setSeed`, `osEntropyBytes` |
 | `FFI` | any `extern` you declare yourself |
 
-`IO` is not on the list because it stands above it. A bound of `<IO>` admits all
-ten labels, so a row that performs `<Stdout>` fits `<IO>`. Two things it does not
-cover: `FFI`, which has to be named explicitly because it leaves the language, and
-any label you declare yourself ([chapter 3](effects-3-labels.md)). The other
-direction is not symmetric today: a function that performs `<IO>` fits only a
-bound that says `IO`, not one that spells out the ten labels, so `IO` behaves as a
-label of its own rather than as an abbreviation
-([#3565](https://github.com/MedakaLang/medaka/issues/3565)).
+`IO` is not on the list because it is their abbreviation: `<IO>` is the join of the
+ten labels. A bound of `<IO>` admits all ten, so a row that performs `<Stdout>` fits
+`<IO>`, and a function that performs `<IO>` fits a bound that spells the ten labels
+out (a bound that names only nine refuses it, naming the missing label). Two things
+it does not cover: `FFI`, which has to be named explicitly because it leaves the
+language, and any label you declare yourself ([chapter 3](effects-3-labels.md)).
 
 Narrow labels let a signature say which part of the world a function touches:
 

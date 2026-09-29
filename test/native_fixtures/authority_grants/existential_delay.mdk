@@ -1,0 +1,35 @@
+-- A local reader generalized over a handle's authority, a read delayed in a
+-- closure that carries the authority, and a read through an opened existential.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)
+
+data Rd (p : Authority FileRead) = Rd (Unit -> <FileRead p> Result String String)
+
+open : (path : String) -> Handle path
+open path = Handle path
+
+read : Handle p -> <FileRead p> Result String String
+read (Handle s) = readFile s
+
+viaLocal : String -> <FileRead "cfg/*"> Result String String
+viaLocal name =
+  let go (Handle s) = readFile s
+  go (open ("cfg/" ++ name))
+
+delay : Handle p -> Rd p
+delay (Handle s) = Rd (_ => readFile s)
+
+force : Rd p -> <FileRead p> Result String String
+force (Rd f) = f ()
+
+viaDelay : String -> <FileRead "cfg/*"> Result String String
+viaDelay name = force (delay (open ("cfg/" ++ name)))
+
+readAny : AnyHandle -> <FileRead> Result String String
+readAny (AnyHandle h) = read h
+
+main =
+  println (viaLocal "a.txt")
+  println (viaDelay "a.txt")
+  println (readAny (AnyHandle (open "cfg/a.txt")))

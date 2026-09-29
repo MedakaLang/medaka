@@ -243,6 +243,36 @@ the `Product` domain; `Prefix` is its sound, coarse one-axis approximation. Only
 trailing-`*` wildcards are admitted — general globs/regex break decidability of
 `⊑` and are rejected.
 
+**A file path is confined by its canonical form, at the call.** The order above
+is on strings, and a string is not a file: `"cfg/" ++ "../secret.txt"` lies
+within `"cfg/*"`, and the operating system resolves the `..`. So each
+parameterized file extern receives the authority granted at its call (§8) and
+refuses a path unless some granted element admits the path's canonical form:
+
+- The canonical form of a path is its `realpath`, with `..` and every symlink
+  resolved. A path that does not exist yet (a file about to be written) is the
+  canonical form of its deepest existing ancestor followed by the remaining
+  components, none of which may be `..`; if the first of them exists but does not
+  resolve (a dangling or looping symlink, whose target could lie anywhere) the
+  path has no canonical form. An extern that acts on an entry rather than on
+  what it names (`removeFile`, `removeDir`, `rename`, `makeDir`) takes the
+  canonical form of the entry's directory followed by the entry's own name.
+- Each element is canonicalized the same way, a relative one against the
+  working directory at the call. An exact element admits the path whose
+  canonical form equals its own. A pattern `d/s*` admits a canonical path that
+  begins with the canonical `d` followed by `/s`; a pattern whose stem `s` is
+  empty also admits `d` itself, and `*` alone admits every path.
+- A path with no canonical form is refused. So is every path under the empty
+  authority, which a call receives as the one empty element.
+
+The refusal is `Err "<path> is outside the granted authority [<elements>]"` from
+an extern that returns a `Result`, and a panic with the same message from
+`fileExists` and `canonicalizePath`, whose answers could otherwise be mistaken
+for a real one. The whole domain confines nothing. `Net` has the same problem
+and not yet the answer: a host part such as `a.com/../x`, a percent-encoded
+byte, or a `.` segment is not normalized, and the socket externs, which take a
+host and a port, receive no grant. That is open.
+
 ### 2.4 Sub-effecting (row order)
 
 The order on rows, `φ₁ ≤ φ₂` ("`φ₁` performs no more than `φ₂`"), lifts the domain
@@ -468,11 +498,22 @@ qualifier names none, the literal's shape gives the domain: a string is a
 Prefix pattern and a set is a Set element. Axes need a binder to name their
 label, since only a label declares a Product's axes and which is primary.
 
-Each authority has exactly one domain. A binder used by two compatible Prefix
-labels shares a variable; incompatible-domain uses are ill-formed, and so is a
-qualifier naming a named argument that no atom or index slot of the signature
-gives a domain (`(a : String) -> String @a`): nothing says which domain `a` is
-an element of, so the qualifier would bound nothing. Product
+Each authority has exactly one domain. A binder's domain has three sources: a
+domain written on the binder, `(dir : String @Store)`, which names the label
+whose domain the binder's authority is drawn from (for a Product label, its
+primary axis, the one a string lifts into) and charges nothing; an atom that
+names the binder; and an index slot that names it. The written domain belongs
+to the binder, not to the argument's type: the argument is still checked as
+`String @κ`, never as a value qualified by the label. So
+`(dir : String @Store) -> String @dir` is a pure helper whose result carries
+its argument's authority, and a binder with a written domain may still be named
+by atoms and indices of that domain. A binder used by two compatible Prefix
+labels shares a variable; sources of incompatible domains are ill-formed
+(`T-AUTHORITY-DOMAIN`), and so is a qualifier naming a named argument that none
+of the three sources gives a domain (`(a : String) -> String @a`): nothing
+says which domain `a` is an element of, so the qualifier would bound nothing.
+A written domain needs a `String` binder (`T-AUTHORITY-BINDER`) and a label
+whose domain has elements (`T-EFFECT-PARAM` for an atomic label). Product
 domains retain their declared axis schema, `effect L Product (Host : Prefix,
 Method : Set)`: the axes are declared in order and the first is the primary
 axis an unqualified string argument or a bare written literal lifts into; a
@@ -1128,7 +1169,9 @@ the history.)
 **`IO` as a widening alias.** `IO` is not a primitive label but the **join of the
 security labels at `⊤`** (`Stdout ⊔ Stderr ⊔ … ⊔ Net⊤`). An inferred narrow row is
 `≤ <IO>`, so any `<IO>` annotation still typechecks (it widens), while inference
-yields tight narrow rows for the manifest. `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
+yields tight narrow rows for the manifest. The join holds on both sides of the order: a
+performed `<IO>` fits a bound that names all ten labels, and a policy that allows all ten
+admits an `<IO>` entry. `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
 is deliberately EXCLUDED from this join by design — `<IO>` does not subsume
 `<FFI>` — because FFI crosses a trust boundary the IO alias is not meant to
 paper over; see [`CAPABILITY-PLATFORM.md`](../design/CAPABILITY-PLATFORM.md) §8
@@ -1221,7 +1264,33 @@ type-checks with manifest `M`, then for every label `L`, every authority
 it can exercise at `L` is `⊑ M(L)`. In particular a parameterized bound confines
 *which* hosts/paths/resources, not merely *whether* the label is used — and the
 α ⊤-fallback guarantees runtime-chosen targets cannot escape the bound. This is the
-theorem the whole apparatus exists to deliver.
+theorem the whole apparatus exists to deliver. For the file labels the native
+runtime and `medaka run` extend it from strings to files: each refuses a path
+whose canonical form the granted authority does not admit (§2.3), so a
+runtime-chosen suffix cannot walk out of `"cfg/*"` through `..` or a symlink
+that is in place when the path is checked. Four edges bound that claim:
+
+- **Check, then use.** The runtime resolves the path string once to check it
+  and the operating system resolves it again to perform the operation. A
+  symlink swapped inside the granted tree between the two can escape it.
+  Closing that needs the operation itself to resolve beneath the granted
+  directory (`openat` with `O_NOFOLLOW`, or `openat2` with `RESOLVE_BENEATH`),
+  which the runtime does not do.
+- **The wasm target.** Its host reads the path alone and cannot refuse one, so
+  `medaka build --target wasm` accepts a program only when no grant it writes
+  for a function that can reach a file operation needs a check: each is the
+  whole domain or a set of exact paths (no `*`). A grant parameter a wrapper
+  forwards (`io.readLines`, `fs.isFile`) is not written there, and holds only
+  what its callers write, so a wrapper builds under a whole-domain caller. A
+  narrower grant (`"cfg/*"`) is a compile-time error at the call that writes
+  it, in the program's own code.
+- **Sourceless authorities.** An authority opened from an existential, and an
+  instance head's index inside a method body, have no caller to supply them
+  and are granted the whole domain. The escape check holds the declaration
+  that reaches them to its declared row, so they are bounded by that row, not
+  by the value's index.
+- **`Net`.** The claim holds of the strings a program passes, and host
+  normalization is open (§2.3).
 
 ---
 
@@ -1239,9 +1308,12 @@ code. Therefore:
   on every well-typed program, because effects are erased identically before either
   runs. (This is the effect analogue of the dictionary spec's single-evaluator law;
   here the content is *erasure*, not dispatch.)
-- **Zero runtime cost.** Parameters never become runtime data; only the *verified*
-  parameter reaches the static manifest. The security guarantee is paid for entirely
-  at compile time.
+- **Zero runtime cost.** Apart from the grant below, parameters never become runtime
+  data; only the *verified* parameter reaches the static manifest. The security
+  guarantee is paid for entirely at compile time.
+- **The grant.** The authority the type checker grants a parameterized file extern
+  at a call reaches the runtime as a hidden argument, for confinement only (§2.3).
+  It can refuse the call, and cannot otherwise change a value a program computes.
 
 A corollary worth stating because it is easy to violate: a primitive's effect must
 be a faithful upper bound of what it *actually does* at runtime. Erasure means the
@@ -1265,7 +1337,10 @@ the extern catalog is trusted, like any FFI boundary.
   `⟦e_k⟧ ∈ γ(α(e_k))`. (Over-approximation; §4.)
 - **Capability confinement.** If a module type-checks with manifest `M`, every
   authority it exercises at a label `L` is `⊑ M(L)` (§7). With a host that
-  honors `M`, the module cannot act outside its declared capabilities.
+  honors `M`, the module cannot act outside its declared capabilities. For the
+  file labels this is a statement about the path checked, not the file finally
+  opened: a symlink swapped between the check and the operation is outside it
+  (§7, "Check, then use").
 - **Index fidelity (effect-indexed data).** For a constructor of kind
   `Effect → Type → Type`, the index is part of the type and is checked as such:
   `F φ₁ τ̄` and `F φ₂ τ̄` are interchangeable only when `φ₁ = φ₂`. **The index is

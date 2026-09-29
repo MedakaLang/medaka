@@ -178,6 +178,9 @@ handling X-Forwarded-For: 192.168.1.1
    transform "X-Forwarded-For: 192.168.1.1" = ok
 ```
 
+The verdict prints before the sample runs, so a sample that panics still leaves
+the verdict on stdout, and the exit code is 1.
+
 The sample run applies only to an entry of type `String -> String`. An accepted
 entry of any other shape, such as `transfer : Int -> <Audit, Stdout> Int` or a
 thunk `Unit -> Int`, gets its verdict and one line saying no sample was run,

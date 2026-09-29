@@ -1,0 +1,16 @@
+-- An interface method named `readFile` elsewhere in the graph leaves the catalog
+-- extern the stdlib's `readLines` calls a file extern, granted and confined.
+import io.{readLines}
+import other.{size}
+
+readCfg : String -> <FileRead "cfg/*"> Result String (List String)
+readCfg name = readLines ("cfg/" ++ name)
+
+said : Result String (List String) -> String
+said (Ok ls) = "Ok \{debug ls}"
+said (Err e) = "Err \{e}"
+
+main =
+  println (size [1, 2])
+  println (said (readCfg "a.txt"))
+  println (said (readCfg "../secret.txt"))

@@ -255,12 +255,45 @@ conservative. It can over-approximate, refusing a program a human can see is
 fine, and when that happens the remedy is to name the argument in the signature,
 as `under` does above, and let the caller supply the authority.
 
-> ⚠️ **A prefix is a prefix of the string, not of the file.** `"cfg/" ++ name` is
-> within `"cfg/*"` for every `name`, including `"../secret.txt"`, and the runtime
-> resolves the `..`. So a `<FileRead "cfg/*">` bound, and the manifest it produces,
-> can today be walked out of by a caller-supplied suffix. Tracked as
-> [#3564](https://github.com/MedakaLang/medaka/issues/3564); until it is closed,
-> treat a path bound as documentation of intent, not as a sandbox.
+A pattern is a prefix of the string, and a string is not yet a file:
+`"cfg/" ++ name` is within `"cfg/*"` for every `name`, including
+`"../secret.txt"`. So the check does not stop at the string. The authority the
+compiler granted reaches the file function at the call, and the runtime compares
+files, not strings: it resolves the path, `..` and symlinks included, and refuses
+one that lands outside every element it was granted.
+
+```medaka
+readConfig : String -> <FileRead "cfg/*"> Result String String
+readConfig name = readFile ("cfg/" ++ name)
+
+main = println (readConfig "../secret.txt")
+```
+
+```medaka-expect
+Err cfg/../secret.txt is outside the granted authority ["cfg/*"]
+```
+
+The same holds for a symlink inside `cfg/` that points out of it, and for a file
+not created yet: a new file under `cfg/` resolves through the part of its path
+that exists. A function that returns a `Result` answers with that `Err`;
+`fileExists` and `canonicalizePath`, which have no error to return, panic with the
+same message. The grant is also what the manifest records, so a host that trusts
+`cfg/*` from the manifest reads it as the program does. A bare `<FileRead>`
+grants every path, and confines nothing.
+
+The check has limits, each listed under "Open edges" in the
+[reference](effects-7-reference.md):
+
+- The runtime checks the path, and the operating system then opens it. A
+  symlink swapped inside `cfg/` between those two steps can reach a file
+  outside it.
+- A wasm build cannot check a path at all, so `medaka build --target wasm`
+  refuses a call that grants a pattern such as `"cfg/*"`, at that call. A
+  whole-domain or exact-path grant builds, including through `io.readLines`
+  or `fs.isFile`, which pass on their caller's grant.
+- An authority opened from an existential, and an instance head's index
+  inside a method body, are granted the whole domain. The declaration that
+  reaches them is held to its own row, so that row bounds them.
 
 ## Sets and products
 
@@ -407,13 +440,10 @@ effect Store Prefix
 load : (path : String) -> <Store path> Int
 load _ = 1
 
-same : (dir : String) -> <Store dir> String @dir
+same : (dir : String @Store) -> String @dir
 same dir = dir
 
-choose : Bool ->
-  (a : String) ->
-  (b : String) ->
-  <Store a, Store b> String @(a | b)
+choose : Bool -> (a : String @Store) -> (b : String @Store) -> String @(a | b)
 choose first a b = if first then a else b
 
 main =
@@ -432,22 +462,26 @@ of two arguments, and `@(a | b)` is the spelling for "within either". `check`
 prints `main : <Stdout, Store "cfg/x", Store "data/y"> Unit`, which is what a caller
 would hope for.
 
-A qualifier's name needs a domain, and the only way to give it one is an atom or
-an index in the same signature that names the same argument. That is why `same`
-carries `<Store dir>` even though its body performs nothing. Drop the atom and
-the compiler explains:
+Neither function performs anything, and neither signature has a row. A
+qualifier's name still needs a domain, some label's set of authorities for
+`dir` to be an element of, and `(dir : String @Store)` writes it on the binder.
+That `@Store` belongs to `dir`, not to the string: the argument is an ordinary
+`String`, and naming the domain charges nothing. For a `Product` label the
+domain is its primary axis, the one a bare string lifts into. An atom that
+names the argument (`<Store dir>`) or an index (`Handle dir`) gives a binder a
+domain too, and a binder may have several of these as long as they agree.
+With none of them the compiler explains:
 
 ```
-error: authority.mdk:6:38: The qualifier names 'dir', but no effect atom or index in this signature names 'dir', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Name the label it bounds, `<FileRead dir>`, or index a handle by it, `Handle dir`, or drop the qualifier
+error: authority.mdk:6:32: The qualifier names 'dir', but no binder domain, effect atom or index in this signature names 'dir', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Write the domain on the binder, `(dir : String @FileRead)`, name the label it bounds, `<FileRead dir>`, or index a handle by it, `Handle dir`, or drop the qualifier
   |
-6 | withSuffix : (dir : String) -> String @dir
-  |                                       ^
+6 | same : (dir : String) -> String @dir
+  |                                 ^
 ```
 
-> ⚠️ **A pure helper over paths is hard to write today.** A function that
-> returns a path at `dir`'s authority is refused unless its signature performs
-> a label atom naming `dir`: the qualifier has no domain without one. Tracked as
-> [#3559](https://github.com/MedakaLang/medaka/issues/3559).
+A helper like `same` may return its argument, or a value derived from it that
+keeps its authority, but not an extension of it: `dir ++ "/index"` in the
+result is the whole domain, for the reason an extension in a row is.
 
 ## Relations the compiler keeps
 

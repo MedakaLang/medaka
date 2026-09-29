@@ -31,6 +31,7 @@ where the system is known not to express something yet.
 | `<Var {"HOME", "PATH"}>` | a set element | [IV](effects-4-authority.md) |
 | `<Http Host="a.com/*" Method={"GET"}>` | a product element; an unwritten axis is its whole axis | [IV](effects-4-authority.md) |
 | `(path : String) -> <Store path> B` | a named argument; the caller's path is the authority | [IV](effects-4-authority.md) |
+| `(dir : String @Store) -> String @dir` | a named argument with its domain written; charges nothing | [IV](effects-4-authority.md) |
 | `String @p` | a string known to lie within `p` | [IV](effects-4-authority.md) |
 | `String @(a \| b)` | a string within either authority | [IV](effects-4-authority.md) |
 | `(a <= d) => …` | a relation `check` prints on an unsigned binding | [IV](effects-4-authority.md) |
@@ -67,7 +68,7 @@ The first words of each message, and where the rule behind it is explained.
 | `Invalid effect parameter on <…>` | a written element the domain refuses: an empty element, or more than 16 members | [IV](effects-4-authority.md) |
 | `Binding '…' reaches "…" where only … is admitted` | a body under a named authority reaches a value it did not derive from it | [IV](effects-4-authority.md) |
 | `Binding '…' reaches … where its declared bound admits only …` | a constructor or existential exceeds a literal bound | [V](effects-5-data.md) |
-| `The qualifier names '…', but no effect atom or index in this signature names '…'` | a qualifier with no domain | [IV](effects-4-authority.md) |
+| `The qualifier names '…', but no binder domain, effect atom or index in this signature names '…'` | a qualifier with no domain | [IV](effects-4-authority.md) |
 | `'…' needs "…" to lie within "…" here` | a use violates a relation the binding's inferred type carries | [IV](effects-4-authority.md) |
 | `Authority index mismatch` | an authority index is invariant | [V](effects-5-data.md) |
 | `Effect index mismatch` | an effect index is invariant | [VI](effects-6-indexed.md) |
@@ -78,23 +79,36 @@ The first words of each message, and where the rule behind it is explained.
 ## Open edges
 
 These are the places where the current compiler does not yet express something
-the design intends, or where it is stricter than it needs to be. Each has an
-issue; the number is the thing to search for.
+the design intends, where it is stricter than it needs to be, or where a
+guarantee stops short. Where an issue is filed, its number is the thing to
+search for.
 
-- **A path bound is a string prefix, and `..` escapes it.** `"cfg/" ++ name`
-  lies within `"cfg/*"` for `name = "../secret.txt"`, and the runtime resolves
-  the `..`, so the manifest's `cfg/*` is not a sandbox.
-  [#3564](https://github.com/MedakaLang/medaka/issues/3564)
-- **A pure helper cannot return a value at a named argument's authority.** The
-  qualifier needs a label atom. [#3559](https://github.com/MedakaLang/medaka/issues/3559),
+- **File confinement checks a path, then uses it.** The runtime resolves the
+  path to check it, and the operating system resolves it again to open it. A
+  symlink swapped inside the granted tree between the two can escape it.
+  Closing this needs resolution beneath the granted directory (`openat` with
+  `O_NOFOLLOW`, or `openat2`). [#3585](https://github.com/MedakaLang/medaka/issues/3585)
+- **A wasm build cannot confine a file operation.** Its host reads the path
+  alone, so `medaka build --target wasm` refuses a call that writes a pattern
+  grant such as `"cfg/*"` for a function that can reach a file operation,
+  located at that call. The whole domain and exact
+  paths build, and so does a wrapper such as `io.readLines` or `fs.*`, which
+  only passes on the grant its caller writes.
+- **An opened existential or an instance head's index grants the whole
+  domain.** Neither has a caller to supply an authority. The declaration that
+  reaches one is held to its declared row, which is the bound, rather than the
+  value's index.
+- **`Net` authority is a string.** A `Net` bound confines the strings a program
+  passes. A host part such as `a.com/../x`, a percent-encoded byte, or a `.`
+  segment is not normalized, and the socket externs receive no grant.
+
+- **A qualified result cannot return a literal its qualifier admits.** A
+  return is checked by its type, not by the literal's authority.
   [#3532](https://github.com/MedakaLang/medaka/issues/3532)
 - **There is no written syntax for a relation.** A binding whose inferred type
   carries a context such as `(a <= d) =>` (the relation the compiler kept, see
   chapter IV) must stay unsigned.
   [#3566](https://github.com/MedakaLang/medaka/issues/3566)
-- **`IO` is a label above the ten, not their abbreviation.** A performed `<IO>`
-  does not fit a bound or a policy that spells the ten labels out.
-  [#3565](https://github.com/MedakaLang/medaka/issues/3565)
 - **A relation cannot be shared by a recursive group.** Two mutually recursive
   functions over a captured handle are refused where one function would be
   accepted. [#3482](https://github.com/MedakaLang/medaka/issues/3482)

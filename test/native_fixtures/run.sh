@@ -176,6 +176,212 @@ case "$out" in
   *) bad semicolon_stmt "got [$out]" ;;
 esac
 
+# EFFECTS-SEMANTICS §8: a file extern receives the authority granted at each use,
+# and that argument cannot change a value the program computes — so `run` and a
+# built binary print the same thing for every shape a grant reaches a call through.
+# Each case runs in its own directory, whose `cfg/a.txt` holds `granted`.
+GRANTS="$FIX/authority_grants"
+grant_case() {
+  out_run="$(cd "$GRANTS" && perl -e 'alarm 60; exec @ARGV' -- "$M" run "$1.mdk" 2>&1)"
+  bin="${TMPDIR:-/tmp}/medaka_grants_$$_$1"
+  (cd "$GRANTS" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$1.mdk" -o "$bin" >/dev/null 2>&1)
+  out_build="$( (cd "$GRANTS" && "$bin") 2>&1)"
+  rm -f "$bin" "$bin.ll"
+  if [ "$out_run" = "$2" ] && [ "$out_build" = "$2" ]; then
+    ok "grants_$1"
+  else
+    bad "grants_$1" "expected [$2], run printed [$out_run], build printed [$out_build]"
+  fi
+}
+grant_case open_read "Ok granted"
+grant_case wrappers "Ok [granted]
+Ok granted
+[Ok granted]"
+grant_case value_uses "Ok granted
+Ok granted"
+grant_case existential_delay "Ok granted
+Ok granted
+Ok granted"
+grant_case method "Ok granted
+Ok grantedgranted
+Ok granted
+Ok echo cfg/a.txt
+Ok granted
+[Ok granted]"
+grant_case partial_write "Ok ()
+Ok x
+Ok ()"
+
+# EFFECTS-SEMANTICS §7: the runtime refuses a path whose canonical form lies
+# outside every element of its grant, the same way under `run` and in a built
+# binary.  Each engine runs in a fresh copy of one tree: a granted `cfg/`, a secret
+# beside it, symlinks out of and into `cfg/`, a dangling symlink whose target lies
+# outside, a symlink standing for `cfg/`, and `other/cfg/` for a changed working
+# directory.  After each run, nothing the refusals guard may have been created,
+# moved or removed.
+CONFINE="$FIX/confinement"
+confine_tree() {
+  rm -rf "$1"
+  mkdir -p "$1/cfg/sub" "$1/outdir" "$1/other/cfg"
+  printf 'top secret' > "$1/secret.txt"
+  printf 'granted' > "$1/cfg/a.txt"
+  printf 'other granted' > "$1/other/cfg/a.txt"
+  ln -s ../secret.txt "$1/cfg/out"
+  ln -s cfg/a.txt "$1/inlink"
+  ln -s ../newsecret.txt "$1/cfg/dangling"
+  ln -s cfg "$1/link"
+}
+confine_untouched() {
+  for f in newsecret.txt new.txt pwned.txt x.txt outdir/stolen.txt cfg/stolen.txt; do
+    [ -e "$1/$f" ] && { echo "$f was created"; return; }
+  done
+  [ -f "$1/secret.txt" ] && [ -L "$1/inlink" ] || echo "an entry outside cfg/ was removed"
+}
+# confine_case <fixture> <dir to run from, relative to the tree> <stdout> [panic]
+# A multi-module fixture is named by its entry, `<dir>/main`.
+# With `panic`, the run must exit nonzero with stderr naming the refusal of
+# cfg/../secret.txt.
+confine_case() {
+  tree="${TMPDIR:-/tmp}/medaka_confine_$$"
+  bin="${TMPDIR:-/tmp}/medaka_confine_$$_$(printf '%s' "$1" | tr / _)"
+  refusal='runtime error [E-PANIC]: cfg/../secret.txt is outside the granted authority ["cfg/*"]'
+  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$CONFINE/$1.mdk" -o "$bin" >/dev/null 2>&1)
+  detail=""
+  for engine in run build; do
+    confine_tree "$tree"
+    if [ "$engine" = run ]; then
+      out="$(cd "$tree/$2" && perl -e 'alarm 60; exec @ARGV' -- "$M" run "$CONFINE/$1.mdk" 2>"$tree.err")"
+    else
+      out="$(cd "$tree/$2" && "$bin" 2>"$tree.err")"
+    fi
+    status=$?
+    err="$(cat "$tree.err")"
+    [ "$out" = "$3" ] || detail="$detail $engine printed [$out];"
+    if [ "${4:-}" = panic ]; then
+      [ "$status" -ne 0 ] || detail="$detail $engine exited 0;"
+      case "$err" in
+        *"$refusal"*) ;;
+        *) detail="$detail $engine stderr [$err];" ;;
+      esac
+    else
+      [ "$status" -eq 0 ] || detail="$detail $engine exited $status [$err];"
+    fi
+    touched="$(confine_untouched "$tree")"
+    [ -z "$touched" ] || detail="$detail $engine: $touched;"
+  done
+  rm -rf "$tree" "$tree.err" "$bin" "$bin.ll"
+  if [ -z "$detail" ]; then ok "confine_$1"; else bad "confine_$1" "$detail"; fi
+}
+outside='is outside the granted authority'
+confine_case paths . "dotdot first: Ok
+dotdot middle in: Ok
+dotdot middle out: Err cfg/sub/../../secret.txt $outside [\"cfg/*\"]
+dotdot last out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+symlink out: Err cfg/out $outside [\"cfg/*\"]
+symlink in: Ok
+new file: Ok
+new file read: Ok
+new dir: Ok
+new file out: Err cfg/../new.txt $outside [\"cfg/*\"]
+dangling: Err cfg/dangling $outside [\"cfg/*\"]
+dotdot in absent tail: Err cfg/nodir/../../x.txt $outside [\"cfg/*\"]
+remove outside link: Err cfg/../inlink $outside [\"cfg/*\"]
+remove inside link: Ok
+rename dst out: Err cfg/../outdir/stolen.txt $outside [\"cfg/*\"]
+rename src out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+rename inside: Ok
+absolute in: Ok
+absolute out: Err /dev/../etc/passwd $outside [\"/dev/*\"]
+absent element in: Err No such file or directory
+absent element out: Err nowhere/../secret.txt $outside [\"nowhere/*\"]
+element symlink in: Ok
+element symlink out: Err link/../secret.txt $outside [\"link/*\"]
+element dotdot in: Ok
+element dotdot out: Err cfg/sub/../../secret.txt $outside [\"cfg/sub/../*\"]"
+confine_case shapes . "handle: Err cfg/../secret.txt $outside [\"cfg/*\"]
+wrapper: Err cfg/../secret.txt $outside [\"cfg/*\"]
+isDir: Err cfg/../outdir $outside [\"cfg/*\"]
+app: Err cfg/../secret.txt $outside [\"cfg/*\"]
+list: Err cfg/../secret.txt $outside [\"cfg/*\"]
+ref: Err cfg/../secret.txt $outside [\"cfg/*\"]
+local: Err cfg/../secret.txt $outside [\"cfg/*\"]
+delay: Err cfg/../secret.txt $outside [\"cfg/*\"]
+existential: Ok
+method: Err cfg/../secret.txt $outside [\"cfg/*\"]
+poly: Err cfg/../secret.txt $outside [\"cfg/*\"]
+partial method: Err cfg/../secret.txt $outside [\"cfg/*\"]
+partial write: Err cfg/../pwned.txt $outside [\"cfg/*\"]"
+confine_case cwd other "Ok other granted
+Err cfg/../../cfg/a.txt $outside [\"cfg/*\"]"
+confine_case join . "Ok top secret
+Ok granted
+Err outdir/../secret.txt $outside [\"cfg/a.txt\", \"outdir/*\"]"
+confine_case exists_panic . "True" panic
+confine_case canonicalize_panic . "True" panic
+# A binding's grants follow its identity, never its spelling: a helper named like
+# an interface method or a foreign function anywhere in the graph, an instance
+# head index named like a method's binder, an imported redeclaration of a file
+# extern, and a method whose type ends in a function alias are each confined.
+confine_case names . "append in: Ok
+append out: Err cfg/../outdir/stolen.txt $outside [\"cfg/*\"]
+sub in: Ok
+sub out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+log in: Ok
+log out: Err cfg/../pwned.txt $outside [\"cfg/*\"]"
+confine_case dependency_method/main . "2
+Ok granted
+Err cfg/../secret.txt $outside [\"cfg/*\"]"
+confine_case ffi_stat/main . "4
+isFile in: Ok
+isFile out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+isDir out: Err cfg/../outdir $outside [\"cfg/*\"]
+fileSize out: Err cfg/../secret.txt $outside [\"cfg/*\"]"
+confine_case indexed_head . "load in: Ok
+load out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+copy in: Ok
+copy src out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+copy dst out: Err outdir/../pwned.txt $outside [\"outdir/*\"]"
+confine_case redeclared_extern/main . "Ok granted
+Err cfg/../secret.txt $outside [\"cfg/*\"]"
+confine_case method_named_readfile/main . "2
+Ok [\"granted\"]
+Err cfg/../secret.txt $outside [\"cfg/*\"]"
+confine_case alias_method . "in: Ok granted
+out: Err cfg/../secret.txt $outside [\"cfg/*\"]"
+
+# realpath(3) fails under a working directory longer than PATH_MAX, so no path
+# has a canonical form there and each engine refuses every path, granted or not,
+# rather than compare the unresolved strings.  The tree is 22 directories of 200
+# characters, built and entered one relative component at a time by perl, since
+# the shell's `cd` keeps the whole logical path and fails past PATH_MAX.
+deep_in() {
+  perl -e '$t = shift; chdir $t or die "$t: $!";
+    for (1 .. 22) { chdir("d" x 200) or die "$!" }
+    alarm 60; exec @ARGV or die "$!"' -- "$@"
+}
+deep_case() {
+  tree="${TMPDIR:-/tmp}/medaka_deep_$$"
+  bin="${TMPDIR:-/tmp}/medaka_deep_$$_bin"
+  rm -rf "$tree"
+  mkdir -p "$tree"
+  perl -e 'chdir shift or die "$!";
+    for (1 .. 22) { mkdir("d" x 200) or die "$!"; chdir("d" x 200) or die "$!" }
+    mkdir "cfg" or die "$!";
+    open(my $a, ">", "cfg/a.txt") or die "$!"; print $a "granted"; close $a;
+    open(my $s, ">", "secret.txt") or die "$!"; print $s "top secret"; close $s' "$tree"
+  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$CONFINE/deep_cwd.mdk" -o "$bin" >/dev/null 2>&1)
+  out_run="$(deep_in "$tree" "$M" run "$CONFINE/deep_cwd.mdk" 2>&1)"
+  out_build="$(deep_in "$tree" "$bin" 2>&1)"
+  rm -rf "$tree" "$bin" "$bin.ll"
+  if [ "$out_run" = "$1" ] && [ "$out_build" = "$1" ]; then
+    ok "confine_deep_cwd"
+  else
+    bad "confine_deep_cwd" "expected [$1], run printed [$out_run], build printed [$out_build]"
+  fi
+}
+deep_case "Err cfg/a.txt $outside [\"cfg/*\"]
+Err cfg/../secret.txt $outside [\"cfg/*\"]"
+
 echo
 
 # ── The ledger bites in BOTH directions ───────────────────────────────────────

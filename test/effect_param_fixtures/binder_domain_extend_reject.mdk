@@ -1,0 +1,7 @@
+-- A written binder domain does not make an extension of the argument keep its
+-- authority: `dir ++ "/index"` in a result is the whole domain (#3501).
+withSuffix : (dir : String @FileRead) -> String @dir
+withSuffix dir = dir ++ "/index"
+
+main : <IO> Unit
+main = println "should not typecheck"

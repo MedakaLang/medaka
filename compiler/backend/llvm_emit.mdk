@@ -3103,74 +3103,83 @@ isFileExtern name = contains name [
   "buildDate",
 ]
 
+-- A file extern whose path is an authority takes, after its value arguments, the
+-- authority granted for each path (EFFECTS-SEMANTICS §8): elaboration saturates
+-- every use of one, so a call here always carries them.
 emitFileExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
   List CExpr ->
   (String, LTy)
 emitFileExtern e env "readFile" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_read_file(i64 \{p})"
+    let _ = emit e "  \{r} = call i64 @mdk_read_file(i64 \{p}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: readFile takes one argument"
+  _ => panic "llvm: readFile takes one argument and its grant"
 emitFileExtern e env "readFileBytes" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_read_file_bytes(i64 \{p})"
+    let _ = emit e "  \{r} = call i64 @mdk_read_file_bytes(i64 \{p}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: readFileBytes takes one argument"
+  _ => panic "llvm: readFileBytes takes one argument and its grant"
 emitFileExtern e env "writeFile" args = match emitArgs e env args
-  [p, c] =>
+  [p, c, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_write_file(i64 \{p}, i64 \{c})"
+    let _ =
+      emit e "  \{r} = call i64 @mdk_write_file(i64 \{p}, i64 \{c}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: writeFile takes two arguments"
+  _ => panic "llvm: writeFile takes two arguments and its grant"
 emitFileExtern e env "writeFileBytes" args = match emitArgs e env args
-  [p, a] =>
-    let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_write_file_bytes(i64 \{p}, i64 \{a})"
-    (r, LTCon)
-  _ => panic "llvm: writeFileBytes takes two arguments"
-emitFileExtern e env "writeFileMode" args = match emitArgs e env args
-  [p, m, c] =>
+  [p, a, g] =>
     let r = freshReg e
     let _ =
       emit
         e
-        "  \{r} = call i64 @mdk_write_file_mode(i64 \{p}, i64 \{m}, i64 \{c})"
+        "  \{r} = call i64 @mdk_write_file_bytes(i64 \{p}, i64 \{a}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: writeFileMode takes three arguments"
+  _ => panic "llvm: writeFileBytes takes two arguments and its grant"
+emitFileExtern e env "writeFileMode" args = match emitArgs e env args
+  [p, m, c, g] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_write_file_mode(i64 \{p}, i64 \{m}, i64 \{c}, i64 \{g})"
+    (r, LTCon)
+  _ => panic "llvm: writeFileMode takes three arguments and its grant"
 emitFileExtern e env "fileMode" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_file_mode(i64 \{p})"
+    let _ = emit e "  \{r} = call i64 @mdk_file_mode(i64 \{p}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: fileMode takes one argument"
+  _ => panic "llvm: fileMode takes one argument and its grant"
 emitFileExtern e env "appendFile" args = match emitArgs e env args
-  [p, c] =>
+  [p, c, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_append_file(i64 \{p}, i64 \{c})"
+    let _ =
+      emit e "  \{r} = call i64 @mdk_append_file(i64 \{p}, i64 \{c}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: appendFile takes two arguments"
+  _ => panic "llvm: appendFile takes two arguments and its grant"
 emitFileExtern e env "fileExists" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_file_exists(i64 \{p})"
+    let _ = emit e "  \{r} = call i64 @mdk_file_exists(i64 \{p}, i64 \{g})"
     (tagInt e r, LTBool)
-  _ => panic "llvm: fileExists takes one argument"
+  _ => panic "llvm: fileExists takes one argument and its grant"
 emitFileExtern e env "canonicalizePath" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_canonicalize_path(i64 \{p})"
+    let _ =
+      emit e "  \{r} = call i64 @mdk_canonicalize_path(i64 \{p}, i64 \{g})"
     (r, LTStr)
-  _ => panic "llvm: canonicalizePath takes one argument"
+  _ => panic "llvm: canonicalizePath takes one argument and its grant"
 emitFileExtern e env "listDir" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_list_dir(i64 \{p})"
+    let _ = emit e "  \{r} = call i64 @mdk_list_dir(i64 \{p}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: listDir takes one argument"
+  _ => panic "llvm: listDir takes one argument and its grant"
 emitFileExtern e env "readLine" args = match emitArgs e env args
   [u] =>
     let r = freshReg e
@@ -3196,41 +3205,44 @@ emitFileExtern e env "readExactly" args = match emitArgs e env args
     (r, LTCon)
   _ => panic "llvm: readExactly takes one (Int) argument"
 emitFileExtern e env "makeDir" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_make_dir(i64 \{p})"
+    let _ = emit e "  \{r} = call i64 @mdk_make_dir(i64 \{p}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: makeDir takes one argument"
+  _ => panic "llvm: makeDir takes one argument and its grant"
 emitFileExtern e env "removeFile" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_remove_file(i64 \{p})"
+    let _ = emit e "  \{r} = call i64 @mdk_remove_file(i64 \{p}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: removeFile takes one argument"
+  _ => panic "llvm: removeFile takes one argument and its grant"
 emitFileExtern e env "rename" args = match emitArgs e env args
-  [old, new] =>
+  [old, new, gs, gd] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_rename(i64 \{old}, i64 \{new})"
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_rename(i64 \{old}, i64 \{new}, i64 \{gs}, i64 \{gd})"
     (r, LTCon)
-  _ => panic "llvm: rename takes two arguments"
+  _ => panic "llvm: rename takes two arguments and its two grants"
 emitFileExtern e env "removeDir" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_remove_dir(i64 \{p})"
+    let _ = emit e "  \{r} = call i64 @mdk_remove_dir(i64 \{p}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: removeDir takes one argument"
+  _ => panic "llvm: removeDir takes one argument and its grant"
 emitFileExtern e env "fsync" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_fsync(i64 \{p})"
+    let _ = emit e "  \{r} = call i64 @mdk_fsync(i64 \{p}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: fsync takes one argument"
+  _ => panic "llvm: fsync takes one argument and its grant"
 emitFileExtern e env "statFile" args = match emitArgs e env args
-  [p] =>
+  [p, g] =>
     let r = freshReg e
-    let _ = emit e "  \{r} = call i64 @mdk_stat_file(i64 \{p})"
+    let _ = emit e "  \{r} = call i64 @mdk_stat_file(i64 \{p}, i64 \{g})"
     (r, LTCon)
-  _ => panic "llvm: statFile takes one argument"
+  _ => panic "llvm: statFile takes one argument and its grant"
 emitFileExtern e env "runCommand" args = match emitArgs e env args
   [prog, argv] =>
     let r = freshReg e
