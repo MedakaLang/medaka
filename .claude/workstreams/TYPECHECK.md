@@ -243,10 +243,15 @@ not exist yet, so don't grep for them), where survive-vs-clear becomes type stru
 `typeErrorsSticky` stays OUTSIDE any bundle, permanently — it is sound *because* it lives outside
 resets (ARCH-REVIEW hazard #1).
 
-### 8. Effect rows are transparent in matching ON PURPOSE
-Coherence, subsumption, and dispatch matching all ignore/strip `TEff` rows. That is the
-single-meaning law (`docs/spec/EFFECTS-SEMANTICS.md` §8 — effects erase; they never participate in
-dispatch), not an oversight. Do not "fix" it while unifying the matchers in #156.
+### 8. Dispatch shape and typing proof are different judgments
+Coherence/ranking and runtime dispatch do not select instances by effect rows or
+authority indices (`docs/spec/EFFECTS-SEMANTICS.md` §6.9). This does not license
+erasing them while proving that a goal satisfies an instance: repeated head
+variables must agree at the full type, including rows, qualifiers and invariant
+indices. #3523 demonstrates why using dispatch-shape equality for that proof
+launders effects. Preserve effect-independent ranking and discharge the selected
+instance's full typing obligations; do not rank a different instance by whether
+its effect constraints happen to pass.
 
 ### 9. Measurement discipline for the perf items
 The scans this workstream removes are **pure traversals — they allocate nothing**, so the
