@@ -1,11 +1,17 @@
 # Effects within the typechecker
 
-**Status:** DELIVERED THROUGH ITEM 6 — the data half merged in PR #3445
+**Status (2026-09-29):** the data half merged in PR #3445
 (`ea782db98`); the close-out checkpoint below answers the handoff's owed list.
-Item 7 (stdlib migration to authority-indexed handles) is delivered on the
-same branch. Residual schemes with delayed joins (checklist item 2, #3462) are
-delivered in the residual-scheme checkpoint below; one invocation summary for
-policy and manifest (#3463) is ratified and not yet built. The delivery checklist below
+Item 7 (stdlib migration to authority-indexed handles) merged in PR #3458.
+Residual schemes with delayed joins (checklist item 2, #3462) are
+delivered in the residual-scheme checkpoint below. One invocation summary for
+policy and manifest (#3463) is delivered in `effect_invocation.mdk`; the
+[handoff's invocation checkpoint](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md#3463-invocation-summary-2026-09-27)
+records its protocol and limits. File-authority passing and runtime confinement
+landed in PR #3584; the grant boundary below describes that addition.
+The [dated issue review](../docs/design/EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md)
+maps remaining failures and proposed extensions; the tracker owns their status.
+The delivery checklist below
 distinguishes the destination from code that has actually migrated. This is
 one implementation effort, not a sprint contract. Base: `c8d1ffe38`.
 
@@ -124,18 +130,49 @@ through imports and reexports. Each identity owns exactly one domain schema.
 Printed spelling is not an atom key: graph traversal order must not select a
 schema for two different declarations with the same name.
 
-The surface spelling for authority-qualified fields is to be settled alongside
-the parser implementation and documented in EFFECTS-SEMANTICS, not encoded as a
-magic string in the existing optional-string parameter carrier. Named-argument
-syntax must lower to the same representation used by constructor fields and
-callback signatures. Authority annotations erase before runtime layout; they do
-not add hidden arguments or change dictionary arity.
+Authority-qualified fields use `String @p`, with authority parameters declared
+as `(p : Authority L)`; EFFECTS-SEMANTICS §4.1 defines their scope and domains.
+Named arguments, constructor fields and callback signatures share the authority
+representation. Rows and qualifiers do not select dictionaries or change
+constructor layout. File confinement retains an enforcement projection as hidden
+grant arguments, described below; full authority erasure is no longer the runtime
+contract.
 
 Interface methods quantify authorities together with their type and row
 variables. Supplied methods and default bodies obey the same signature contract.
 Effects do not participate in instance ranking. Authority-qualified fields must
 still be checked when a value passes through ordinary polymorphic code; erasure
 belongs after checking, never inside a unifier as a catch-all.
+
+A dispatch-shape match is not a proof that repeated occurrences of an instance
+head variable denote the same full type. Successful instance evidence must also
+satisfy row, qualifier and invariant-index constraints. This distinction preserves
+effect-independent ranking while excluding the laundering channel in #3523.
+
+## Authority grants and resource enforcement
+
+The static domain algebra bounds argument strings. Resource confinement also
+needs a runtime interpretation of those strings. The file implementation records
+instantiated authorities by occurrence identity in `GrantState`, then `grantPass`
+lowers them to ordinary `List String` arguments after inference. Source bindings
+take grants after dictionary parameters and before value arguments; file externs
+and interface methods take them after value arguments. Partial applications are
+saturated to preserve that convention. Grant arguments are separate from
+dictionary evidence and do not participate in instance selection.
+
+This integration currently lives in `types/typecheck.mdk`; the native runtime and
+interpreter enforce file grants, and the Wasm emitter refuses unsupported pattern
+grants. Backends consume the elaborated arguments, not unsolved authority cells.
+An empty grant list means the whole domain; the empty authority uses a list with
+one empty element. Opened existential authorities and impl-head indices without
+a caller-supplied grant use the documented whole-domain fallback.
+
+EFFECTS-SEMANTICS §2.3/§7/§8 define the actual guarantee and its limits: file
+canonicalization still precedes the operation, leaving a TOCTOU race; Wasm has no
+equivalent grant-enforcing host protocol; Net bounds strings only. Runtime
+enforcement is not implied by a static Prefix proof or by manifest emission.
+Stronger operation-level confinement, network enforcement and value-carried
+existential grants require the designs identified in the issue review.
 
 ## Module ownership and dependency direction
 
@@ -155,7 +192,7 @@ listed here as proposed paths; presence in this table is not a delivery claim.
 | `effect_check.mdk` | Declared-signature and method-effect checks | Solver and explicit checking context; same entry for supplied/default bodies |
 | `repr.mdk` | HM monotypes, schemes and type rendering | Imports effect representation; does not own a second effect algebra |
 | `solver_contract.mdk` | Common wanted/outcome scheduling and qualified schemes | Domain-specific payloads do not require fake evidence destinations |
-| `typecheck.mdk` | Integration into eager inference, SCC boundaries and graph publication | Calls services; retains small adapters while consumers migrate |
+| `typecheck.mdk` | Integration into eager inference, SCC boundaries, graph publication and current grant elaboration (`GrantState`, `grantPass`) | Calls services; grant occurrences retain the inference substitution and lower to ordinary arguments, never backend re-inference |
 
 Extraction is by ownership, not by a requirement that every module be pure.
 Stateful services receive narrow contexts: fresh identity allocation, inference
@@ -446,8 +483,9 @@ foundation:
   Positive returned-value envelopes own separate summary equations; arbitrary
   existing inference rows are never retroactively claimed as summaries.
 - Policy aggregation joins same-label authority parameters rather than keeping
-  the first occurrence. It includes binding forcing effects. Its old structural
-  traversal is still not an invocation-protocol summary.
+  the first occurrence. It includes binding forcing effects. At this foundation
+  checkpoint its traversal was not yet an invocation summary; #3463 subsequently
+  supplied the shared `effect_invocation.mdk` service.
 - Interpreter capability tables now declare their actual `Value <IO>` index.
   Test/property runners propagate the effects of the values they evaluate rather
   than claiming an unrelated closed row. Runtime bodies and evaluation order are
@@ -460,7 +498,8 @@ foundation:
 
 Still required before this package can be called complete or laundering-free:
 
-1. Retirement of legacy signature post-checks (#830, #2111, #825). Scoped
+1. Retirement of legacy signature post-checks (the historical #830/#2111/#825
+   families; retained walks tracked by #995). Scoped
    universal checking is integrated, but the remaining row equality solver is
    not a general inclusion solver. Authority residuals of inferred schemes are
    delivered (the residual-scheme checkpoint); a written residual syntax is not.
@@ -468,16 +507,16 @@ Still required before this package can be called complete or laundering-free:
    binding (the residual-scheme checkpoint). A join between arguments of an
    already generalized function (`sel : a -> a -> a`) is still HM equality at
    the call: that is a join constraint in a scheme, which is not ratified.
-3. Qualified data fields, constructor proof sources and authority-indexed
-   existentials (#3385's data half). Named authorities on arrows, the retirement
-   of the underscore and of first-argument hole filling, resolved effect-label
-   identity and prefix-join canonicalization are delivered (the named-authority
-   checkpoint); #3382, #3383 and #3391 are regressions under
-   `test/typecheck_error_fixtures/effect_*` and their must-fail pins drain.
+3. Full proof preservation through ordinary polymorphic code, including the
+   instance-applicability boundary (#3523). Qualified data fields, constructor
+   proof sources and authority-indexed existentials are delivered in the data-half
+   checkpoint. Named authorities, underscore retirement and removal of
+   first-argument hole filling are delivered in the named-authority checkpoint.
 4. A located `R-AMBIGUOUS-EFFECT`: an effect atom carries no source location, so
    the ambiguity of two imported same-spelled labels reports unlocated.
-5. One invocation-protocol summary consumed by manifests and policy, with
-   conservative unresolved authority reporting.
+5. Common checked-project inputs for manifest and policy (#3331). Their invocation
+   summary and conservative unresolved-authority reporting are delivered; policy's
+   single-file driver remains a separate integration gap.
 6. Full multi-module/engine coverage, final fixpoint and scaling evidence for the
    completed architecture. Passing foundation tests cannot discharge these.
 
@@ -748,8 +787,8 @@ receipts in [the handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) §
    is checked as its first axis's value before the lift, which canonicalised
    an empty pattern to the top (`primaryLiteralProblems`); set members may be
    quoted. This is the first piece the policy
-   consumer shares with the typechecker; the invocation summary itself is not
-   built.
+   consumer shared with the typechecker at this checkpoint; #3463 subsequently
+   delivered the shared invocation summary.
 7. **Label identity across member-list re-exports (#3304).** `nsEffects`
    carries a label through a member list or a single-name hop by the binding
    rule every namespace uses, and `reexportedEffectOrigins` carries its

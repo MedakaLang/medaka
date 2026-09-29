@@ -387,8 +387,10 @@ potential force from a static may-effect: no proof assumes some other caller
 already evaluated the binding. Strict `let` charges its RHS immediately and
 binds a pure lookup; a top-level thunk binds the RHS's full row for later lookup.
 An annotation on the resulting value cannot erase this separate forcing row.
-The least-row property is what makes the
-inferred row a *tight* manifest rather than a conservative blanket.
+This least-row target is relative to the chosen abstraction and declared
+contracts. The host invocation protocol and its conservative treatment of
+unknowns (§7) can widen the manifest further; a sound manifest need not be the
+smallest description of a particular execution.
 
 ---
 
@@ -611,24 +613,32 @@ substitution and owes the instances as ordinary obligations of the using
 scope, which may prove them, keep them for its own scheme, or refuse them: a
 failure names the binding whose inferred type carried the relation. An
 obligation stays a residual when its constraint component (the local
-authorities it is linked to by shared obligations) relates one member's
-quantified authorities to constants and to authorities outside the binding's
+authorities it is linked to by shared obligations) relates the publishing
+members' quantified authorities to constants and to authorities outside the binding's
 scope, an enclosing variable or universal or a monomorphic sibling's cell,
 which the residual names as it stands, as a scheme names its environment. An
 outside authority links nothing: two members may each owe a relation to one
 monomorphic cell, and each keeps its own residual over it: a local helper that uses a captured handle,
 `let inner (Dir p) = sub h p`, keeps `p <= d_h` and each use of `inner`
-owes it. A component that reaches a local variable the binding does not
-quantify, or that another member of its binding group mentions (after the
-group's first solve, which may have linked one member's variable to
-another's), is decided in the group: a residual on one member would leave the
-other quantifying the same variable with no relation. A binding group is a
-set of mutually dependent top-level definitions, or a whole `where` block, so
-a `where` sibling that only calls a residual-bearing helper shares it and the
-block decides the relation (splitting `where` blocks is #3487). Such a
-component is decided as before, and
-so is one bounded below by the domain's top, whose variable has no freedom
-left and is solved to it. A binding the value restriction keeps monomorphic
+owes it. A component that reaches a local variable the binding does not quantify
+is decided in the group. Sharing a residual among recursive members is permitted
+when there is a mention-closed set of members: every member in the set mentions
+and quantifies every local variable of the component, and no member outside it
+mentions any. Attach the complete residual to each member, instantiated by that
+member's own scheme substitution. Variables that are distinct but related only
+by an obligation cannot be shared through a scheme that cannot name both; a
+partial residual is not permitted. A member reaching an authority only through
+its row publishes it as top under the publication rule above, which can make
+the residual unprovable. A component bounded below by top likewise has no
+remaining freedom and is solved to it.
+
+The implementation currently keeps only the single-member case; the
+mention-closed extension is ratified in
+[#3482](https://github.com/MedakaLang/medaka/issues/3482) and remains to be built.
+The current grouping also treats a whole `where` block as one group; refining
+that grouping is separate from this residual-sharing rule.
+
+A binding the value restriction keeps monomorphic
 has no context: the authorities of its type belong to the enclosing scope,
 which bounds them at its uses (`let p = subIn cfg` then `p app`). A
 residual renders in the context beside the class constraints, `(Num n, p <=
@@ -763,8 +773,10 @@ invariant: every write must satisfy the stored qualifier.
 
 Medaka remains rank-1 HM. A generalized alias can instantiate its scheme afresh;
 a higher-order argument retains one instantiated monotype and its relationships,
-not a new polymorphic scheme at each invocation. None of these terms affects
-dictionary selection, runtime argument count or constructor layout.
+not a new polymorphic scheme at each invocation. These terms do not select
+dictionaries or change constructor layout. The enforcement projection in §8
+does add hidden grant arguments; it does not make a higher-order argument
+polymorphic.
 
 ## 5. Sub-effecting, escape, and the no-laundering law
 
@@ -1144,16 +1156,23 @@ different solving rules. Dictionary selection depends on interface/type
 evidence, not effect parameters. Neither a selected implementation nor the
 runtime dispatch route may refine the caller's declared effect contract.
 
+Effect-independent selection does not erase the typing obligations of the
+selected instance. Repeated occurrences of a head variable must denote the
+same full type, including effect rows, qualifiers and invariant indices.
+Candidate-shape equality cannot establish that proof; unresolved obligations
+remain pending and must be discharged before successful publication. Failure
+of an effect obligation does not rank or select another instance.
+
 Historical design alternatives and dated implementation observations are in
 [the design history](archive/EFFECTS-DESIGN-HISTORY.md); they are not additional
 semantic restrictions.
 
 ## 7. The capability semantics: effects as a verified manifest
 
-This is the operational *point* of the discipline. Effects have **no runtime
-behavior of their own** — they are erased before evaluation (§8). What they
-produce is a **capability manifest**, and the *meaning* of an effect is fixed by
-who reads that manifest.
+This is the operational *point* of the discipline. Effects produce a
+**capability manifest**; the host gives the labels their resource meaning.
+Rows and qualifiers erase as types, while file confinement retains authority
+grants for runtime checks (§8). There is no in-language effect handler.
 
 **Every label is a host capability.** There is no internal/purity-tracking label
 class — a label is a host-granted authority; the platform supplies the primitive
@@ -1296,29 +1315,31 @@ that is in place when the path is checked. Four edges bound that claim:
 
 ## 8. Erasure and the single-meaning law
 
-Effect rows and their parameters are **compile-time only**. After type-checking
-(escape + laundering verified, manifest extracted), the row is **erased**; it
-contributes nothing to the runtime representation, the evaluator, or the emitted
-code. Therefore:
+Effect rows and authority qualifiers are checked before erasure. They do not
+select dictionaries or change the representation of an ordinary data value.
+File confinement retains a projection of the checked authority as hidden grant
+arguments, however, so complete erasure of every authority fact is not the
+runtime contract. The two parts are:
 
-- **Single-meaning law.** *The value a program computes is independent of its
-  effect annotations.* Adding, tightening, or removing a (still-well-typed)
-  annotation cannot change the result — only whether the program is *accepted* and
-  what manifest it carries. Any two backends (interpreter, native emitter) agree
-  on every well-typed program, because effects are erased identically before either
-  runs. (This is the effect analogue of the dictionary spec's single-evaluator law;
-  here the content is *erasure*, not dispatch.)
-- **Zero runtime cost.** Apart from the grant below, parameters never become runtime
-  data; only the *verified* parameter reaches the static manifest. The security
-  guarantee is paid for entirely at compile time.
+- **Single-meaning law for admitted operations.** Effect annotations do not
+  change instance selection or the value computed by an operation admitted
+  under both grants. Adding, tightening or removing an annotation can change
+  type acceptance, the manifest and whether a grant check refuses an operation.
+  Such a refusal is observable (`Err` or panic, §2.3), so unrestricted
+  annotation-independent observational equivalence is not claimed. Backend
+  agreement requires the same supported resource and grant semantics, not
+  erasure alone.
+- **Erased static proof.** Rows, qualifiers and their proof obligations do not
+  become runtime dictionaries. Grant passing and enforcement do have runtime
+  cost; they are the deliberate exception to erased effect checking.
 - **The grant.** The authority the type checker grants a parameterized file extern
   at a call reaches the runtime as a hidden argument, for confinement only (§2.3).
   It can refuse the call, and cannot otherwise change a value a program computes.
 
 A corollary worth stating because it is easy to violate: a primitive's effect must
-be a faithful upper bound of what it *actually does* at runtime. Erasure means the
-type system is the *only* place the authority is checked — so the externs' declared
-rows are part of the trusted base. A mis-annotated extern
+be a faithful upper bound of what it *actually does* at runtime. Static checking
+trusts the extern catalog, while resource confinement additionally trusts the
+grant elaboration and the runtime/host checks. A mis-annotated extern
 (claiming a narrower row than it performs) is a soundness bug the spec cannot catch;
 the extern catalog is trusted, like any FFI boundary.
 
@@ -1354,11 +1375,14 @@ the extern catalog is trusted, like any FFI boundary.
   now, produced later" a conservation law rather than a convention: an effect
   corked into an index is uncorked into a row, never dropped. The same universal
   body judgment applies to ordinary functions and interface methods.
-- **Principality.** Inference computes the `≤`-least row for every term (§3); the
-  manifest is therefore the *tightest* sound description, not a conservative blanket.
-- **Coherence with erasure.** Under §8, the denotation is independent of the row;
-  well-typedness and the manifest are the only observable consequences of the
-  effect system.
+- **Principality.** Inference targets the `≤`-least solution in its supported
+  constraint fragment, relative to the abstraction and declared contracts (§3).
+  A join constraint without a principal decomposition is not solved by an
+  arbitrary choice (§4.1). The host invocation summary can conservatively widen
+  that result (§7), so soundness does not imply an absolutely minimal manifest.
+- **Coherence with erasure.** Under §8, rows do not select implementations or
+  change values computed by operations admitted under both grants. Type
+  acceptance, manifests and runtime confinement refusals can differ.
 
 ---
 

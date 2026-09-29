@@ -11,11 +11,17 @@ sets, #3465 prelude type shadowing. Handoff first recorded 2026-09-24.
 
 ## Resume here
 
-The effects rearchitecture is on `main`. Start the next piece of work from
-`main` on a topic branch. Read this handoff's § "Close-out session" first: its
-last list is the open work, as proposals awaiting ratification, and nothing in
-it is to be implemented before Val rules on it. Then the architecture, the
-semantics and the typechecker contracts; the reading order below still applies.
+**2026-09-29 correction:** this is a chronological handoff, not a live backlog.
+The later residual-scheme and invocation-summary checkpoints supersede the
+close-out session's pending proposals. PR #3584 subsequently added hidden
+authority grants and file confinement; earlier statements below about complete
+erasure and no runtime arguments describe the pre-confinement design.
+Start from the current [effects architecture](../../compiler/EFFECTS-ARCHITECTURE.md),
+[semantics](../spec/EFFECTS-SEMANTICS.md) and
+[dated issue review](../design/EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md), then verify
+remaining issue status in GitHub. Historical pending lists are not new approval
+requirements for work already ratified and delivered. Start implementation from
+`main` on a topic branch.
 
 Read, in order:
 
