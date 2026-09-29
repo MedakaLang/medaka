@@ -314,10 +314,11 @@ inboundAllocFindings bin =
     (_, fs) => fs
 
 -- Bytes allocated by `mstInsert` building a tree of 1000 and of 2000 keys are
--- deterministic, so the ratio between them is a property of the code and not
--- of the host: 3.18 when the bound was set. A linear insert would sit near
--- 2.0; the bound leaves 7% headroom over today's figure and trips on an
--- insert that has grown a further O(n) factor.
+-- deterministic, so their ratio is a property of the code, not of the host:
+-- about 2.0 for a linear insert and 4.0 for a quadratic one. The bound is the
+-- measured ratio plus a small headroom, so it fails when the insert's growth
+-- moves further toward quadratic; a ratio cannot see a constant-factor
+-- regression.
 insertAllocRatio : Float
 insertAllocRatio = 3.4
 

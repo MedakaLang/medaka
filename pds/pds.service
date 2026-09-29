@@ -57,10 +57,12 @@ Wants=network-online.target
 RequiresMountsFor=/opt/pds
 StartLimitIntervalSec=60
 StartLimitBurst=5
-# Fires when systemd gives up after the burst above — a crash LOOP, not a
-# single crash that restarted cleanly. pds-alert@.service's header states
-# exactly what that does and does not catch, and why pds-healthping.timer
-# exists beside it rather than instead of it.
+# Fires on every failure of this unit, a single crash that Restart= recovers
+# from included, not only when the burst above is exhausted (systemd 257).
+# So the first crash after the alert is armed takes its one push, and a crash
+# loop after it pages nobody until the alert is re-armed. pds-alert@.service's
+# header states exactly what that does and does not catch, and why
+# pds-healthping.timer exists beside it rather than instead of it.
 OnFailure=pds-alert@%n.service
 
 [Service]
