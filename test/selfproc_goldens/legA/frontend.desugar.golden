@@ -66,6 +66,7 @@ lookupDeriver : String -> List (String, Unit -> Decl) -> Option Decl
 lowerContainerLiterals : List Decl -> List Decl
 lowerDo : Bool -> List DoStmt -> Expr
 mapArm : (Expr -> Expr) -> Arm -> Arm
+mapChildren : (Expr -> Expr) -> Expr -> Expr
 mapDecl : (Expr -> Expr) -> Decl -> Decl
 mapDoStmt : (Expr -> Expr) -> DoStmt -> DoStmt
 mapExpr : (Expr -> Expr) -> Expr -> Expr

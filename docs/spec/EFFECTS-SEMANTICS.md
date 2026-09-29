@@ -1252,9 +1252,12 @@ code. Therefore:
   on every well-typed program, because effects are erased identically before either
   runs. (This is the effect analogue of the dictionary spec's single-evaluator law;
   here the content is *erasure*, not dispatch.)
-- **Zero runtime cost.** Parameters never become runtime data; only the *verified*
-  parameter reaches the static manifest. The security guarantee is paid for entirely
-  at compile time.
+- **Zero runtime cost.** Apart from the grant below, parameters never become runtime
+  data; only the *verified* parameter reaches the static manifest. The security
+  guarantee is paid for entirely at compile time.
+- **The grant.** The authority the type checker grants a parameterized file extern
+  at a call reaches the runtime as a hidden argument, for confinement only, and
+  cannot change a value a program computes.
 
 A corollary worth stating because it is easy to violate: a primitive's effect must
 be a faithful upper bound of what it *actually does* at runtime. Erasure means the

@@ -1,0 +1,12 @@
+-- A file extern applied to fewer arguments than it takes, then called: the
+-- partial application is saturated where it is written, so a built binary emits
+-- it as `run` evaluates it.
+viaPartial : String -> <FileWrite "cfg/*"> Result String Unit
+viaPartial name =
+  let w = writeFile ("cfg/" ++ name)
+  w "x"
+
+main =
+  println (viaPartial "out.txt")
+  println (readFile "cfg/out.txt")
+  println (removeFile "cfg/out.txt")

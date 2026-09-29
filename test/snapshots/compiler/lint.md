@@ -1,5 +1,5 @@
 # META
-source_lines=7029
+source_lines=6954
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -65,6 +65,7 @@ import frontend.ast.{
   qualifierSource,
   authTermsSurface,
 }
+import frontend.desugar.{mapChildren}
 import frontend.parser.{
   Positions,
   DeclPos,
@@ -3714,88 +3715,12 @@ rewriteAndThenPureMapKv (k, v) =
 -- Every rewrite is EXACTLY equivalent (see each rule's soundness note), so the
 -- self-compile fixpoint stays byte-identical after the tree is fixed.
 
--- rebuild every immediate child expr with `g`, reconstructing this node.  Faithful
--- transcription of `rewriteLamExpr`'s node coverage MINUS its `ELam` special-case
--- (here `ELam` is an ordinary node), so the recursion visits the exact same set of
--- sub-expressions the other whole-tree rewriters do.
+-- rebuild every immediate child expr with `g`: the shared one-level step
+-- (`desugar.mapChildren`) plus the parser's as-pattern node, which the other
+-- whole-tree rewriters here (`rewriteLamExpr` &c.) descend into as well.
 mapChildExprs : (Expr -> Expr) -> Expr -> Expr
-mapChildExprs g (ELoc l e) = ELoc l (g e)
-mapChildExprs g (EDoOrigin l e) = EDoOrigin l (g e)
-mapChildExprs g (EApp f x) = EApp (g f) (g x)
-mapChildExprs g (ELam ps b) = ELam ps (g b)
-mapChildExprs g (ELet m isf p e1 e2) = ELet m isf p (g e1) (g e2)
-mapChildExprs g (EMatch s arms) = EMatch (g s) (map (mapChildArm g) arms)
-mapChildExprs g (EIf c t el) = EIf (g c) (g t) (g el)
-mapChildExprs g (EBinOp op a b r) = EBinOp op (g a) (g b) r
-mapChildExprs g (EUnOp op a r) = EUnOp op (g a) r
-mapChildExprs g (EInfix op a b) = EInfix op (g a) (g b)
-mapChildExprs g (EFieldAccess e f r) = EFieldAccess (g e) f r
-mapChildExprs g (ETuple es) = ETuple (map g es)
-mapChildExprs g (EListLit es) = EListLit (map g es)
-mapChildExprs g (EArrayLit es) = EArrayLit (map g es)
-mapChildExprs g (ERangeList lo hi i) = ERangeList (g lo) (g hi) i
-mapChildExprs g (ERangeArray lo hi i) = ERangeArray (g lo) (g hi) i
-mapChildExprs g (ESlice e lo hi i r) = ESlice (g e) (g lo) (g hi) i r
-mapChildExprs g (ELetGroup binds body) =
-  ELetGroup (map (mapChildLet g) binds) (g body)
-mapChildExprs g (ESection s) = ESection (mapChildSection g s)
-mapChildExprs g (EIndex a i r) = EIndex (g a) (g i) r
-mapChildExprs g (EAnnot e t) = EAnnot (g e) t
-mapChildExprs g (EHeadAnnot e t) = EHeadAnnot (g e) t
-mapChildExprs g (EBlock stmts) = EBlock (map (mapChildStmt g) stmts)
-mapChildExprs g (EDo d stmts) = EDo d (map (mapChildStmt g) stmts)
-mapChildExprs g (EStringInterp parts) =
-  EStringInterp (map (mapChildInterp g) parts)
-mapChildExprs g (EGuards arms) = EGuards (map (mapChildGuardArm g) arms)
-mapChildExprs g (ERecordCreate n fs) =
-  ERecordCreate n (map (mapChildField g) fs)
-mapChildExprs g (ERecordUpdate e fs r) =
-  ERecordUpdate (g e) (map (mapChildField g) fs) r
-mapChildExprs g (EVariantUpdate c e fs) =
-  EVariantUpdate c (g e) (map (mapChildField g) fs)
-mapChildExprs g (EMapLit n kvs) = EMapLit n (map (mapChildKv g) kvs)
-mapChildExprs g (ESetLit n es) = ESetLit n (map g es)
 mapChildExprs g (EAsPat x e) = EAsPat x (g e)
-mapChildExprs _ e = e
-
-mapChildStmt : (Expr -> Expr) -> DoStmt -> DoStmt
-mapChildStmt g (DoExpr e) = DoExpr (g e)
-mapChildStmt g (DoBind p e) = DoBind p (g e)
-mapChildStmt g (DoLet m r p e) = DoLet m r p (g e)
-mapChildStmt g (DoAssign x e) = DoAssign x (g e)
-mapChildStmt g (DoFieldAssign x fs e) = DoFieldAssign x fs (g e)
-
-mapChildArm : (Expr -> Expr) -> Arm -> Arm
-mapChildArm g (Arm p gs body) = Arm p (map (mapChildGuard g) gs) (g body)
-
-mapChildGuard : (Expr -> Expr) -> Guard -> Guard
-mapChildGuard g (GBool e) = GBool (g e)
-mapChildGuard g (GBind p e) = GBind p (g e)
-
-mapChildLet : (Expr -> Expr) -> LetBind -> LetBind
-mapChildLet g (LetBind n clauses) = LetBind n (map (mapChildClause g) clauses)
-
-mapChildClause : (Expr -> Expr) -> FunClause -> FunClause
-mapChildClause g (FunClause ps body) = FunClause ps (g body)
-
-mapChildSection : (Expr -> Expr) -> Section -> Section
-mapChildSection _ (SecBare op) = SecBare op
-mapChildSection g (SecRight op e) = SecRight op (g e)
-mapChildSection g (SecLeft e op) = SecLeft (g e) op
-
-mapChildInterp : (Expr -> Expr) -> InterpPart -> InterpPart
-mapChildInterp _ (InterpStr s) = InterpStr s
-mapChildInterp g (InterpExpr e) = InterpExpr (g e)
-
-mapChildGuardArm : (Expr -> Expr) -> GuardArm -> GuardArm
-mapChildGuardArm g (GuardArm gs body) =
-  GuardArm (map (mapChildGuard g) gs) (g body)
-
-mapChildField : (Expr -> Expr) -> FieldAssign -> FieldAssign
-mapChildField g (FieldAssign n e) = FieldAssign n (g e)
-
-mapChildKv : (Expr -> Expr) -> (Expr, Expr) -> (Expr, Expr)
-mapChildKv g (k, v) = (g k, g v)
+mapChildExprs g e = mapChildren g e
 
 -- generic bottom-up rewrite: rebuild children first, THEN apply the node-local
 -- transform `f` at this (child-rewritten) node.  Bottom-up so a rewrite exposed by
@@ -7033,6 +6958,7 @@ preludeShadowFinding name loc = Finding {
 }
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false) (mem "isSome" false))))
@@ -8209,67 +8135,8 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "rewriteAndThenPureMapKv" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteAndThenPureMapKv" ((PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "k")) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "v"))))
 (DTypeSig false "mapChildExprs" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "EApp") (EApp (EVar "g") (EVar "f"))) (EApp (EVar "g") (EVar "x"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ELam" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EVar "g") (EVar "b"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ELet" (PVar "m") (PVar "isf") (PVar "p") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "isf")) (EVar "p")) (EApp (EVar "g") (EVar "e1"))) (EApp (EVar "g") (EVar "e2"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EMatch" (PVar "s") (PVar "arms"))) (EApp (EApp (EVar "EMatch") (EApp (EVar "g") (EVar "s"))) (EApp (EApp (EVar "map") (EApp (EVar "mapChildArm") (EVar "g"))) (EVar "arms"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EApp (EVar "EIf") (EApp (EVar "g") (EVar "c"))) (EApp (EVar "g") (EVar "t"))) (EApp (EVar "g") (EVar "el"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EVar "g") (EVar "a"))) (EApp (EVar "g") (EVar "b"))) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EUnOp" (PVar "op") (PVar "a") (PVar "r"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EApp (EVar "g") (EVar "a"))) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EInfix" (PVar "op") (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EVar "g") (EVar "a"))) (EApp (EVar "g") (EVar "b"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EFieldAccess" (PVar "e") (PVar "f") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EVar "g") (EVar "e"))) (EVar "f")) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EVar "map") (EVar "g")) (EVar "es"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EVar "map") (EVar "g")) (EVar "es"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EVar "g")) (EVar "es"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "i")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "i")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "g") (EVar "e"))) (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "i")) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EVar "mapChildLet") (EVar "g"))) (EVar "binds"))) (EApp (EVar "g") (EVar "body"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EApp (EVar "mapChildSection") (EVar "g")) (EVar "s"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EVar "g") (EVar "a"))) (EApp (EVar "g") (EVar "i"))) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "g") (EVar "e"))) (EVar "t")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "g") (EVar "e"))) (EVar "t")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EApp (EVar "mapChildStmt") (EVar "g"))) (EVar "stmts"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "mapChildStmt") (EVar "g"))) (EVar "stmts"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EApp (EVar "mapChildInterp") (EVar "g"))) (EVar "parts"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EApp (EVar "mapChildGuardArm") (EVar "g"))) (EVar "arms"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "mapChildField") (EVar "g"))) (EVar "fs"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ERecordUpdate" (PVar "e") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EVar "g") (EVar "e"))) (EApp (EApp (EVar "map") (EApp (EVar "mapChildField") (EVar "g"))) (EVar "fs"))) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EVariantUpdate" (PVar "c") (PVar "e") (PVar "fs"))) (EApp (EApp (EApp (EVar "EVariantUpdate") (EVar "c")) (EApp (EVar "g") (EVar "e"))) (EApp (EApp (EVar "map") (EApp (EVar "mapChildField") (EVar "g"))) (EVar "fs"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "mapChildKv") (EVar "g"))) (EVar "kvs"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EVar "g")) (EVar "es"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildExprs" (PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "mapChildStmt" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "DoStmt") (TyCon "DoStmt"))))
-(DFunDef false "mapChildStmt" ((PVar "g") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildStmt" ((PVar "g") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildStmt" ((PVar "g") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildStmt" ((PVar "g") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildStmt" ((PVar "g") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EVar "g") (EVar "e"))))
-(DTypeSig false "mapChildArm" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Arm") (TyCon "Arm"))))
-(DFunDef false "mapChildArm" ((PVar "g") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EApp (EApp (EVar "map") (EApp (EVar "mapChildGuard") (EVar "g"))) (EVar "gs"))) (EApp (EVar "g") (EVar "body"))))
-(DTypeSig false "mapChildGuard" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Guard") (TyCon "Guard"))))
-(DFunDef false "mapChildGuard" ((PVar "g") (PCon "GBool" (PVar "e"))) (EApp (EVar "GBool") (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildGuard" ((PVar "g") (PCon "GBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "GBind") (EVar "p")) (EApp (EVar "g") (EVar "e"))))
-(DTypeSig false "mapChildLet" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
-(DFunDef false "mapChildLet" ((PVar "g") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "mapChildClause") (EVar "g"))) (EVar "clauses"))))
-(DTypeSig false "mapChildClause" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "FunClause") (TyCon "FunClause"))))
-(DFunDef false "mapChildClause" ((PVar "g") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EVar "g") (EVar "body"))))
-(DTypeSig false "mapChildSection" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Section") (TyCon "Section"))))
-(DFunDef false "mapChildSection" (PWild (PCon "SecBare" (PVar "op"))) (EApp (EVar "SecBare") (EVar "op")))
-(DFunDef false "mapChildSection" ((PVar "g") (PCon "SecRight" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "SecRight") (EVar "op")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildSection" ((PVar "g") (PCon "SecLeft" (PVar "e") (PVar "op"))) (EApp (EApp (EVar "SecLeft") (EApp (EVar "g") (EVar "e"))) (EVar "op")))
-(DTypeSig false "mapChildInterp" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart"))))
-(DFunDef false "mapChildInterp" (PWild (PCon "InterpStr" (PVar "s"))) (EApp (EVar "InterpStr") (EVar "s")))
-(DFunDef false "mapChildInterp" ((PVar "g") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EVar "g") (EVar "e"))))
-(DTypeSig false "mapChildGuardArm" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm"))))
-(DFunDef false "mapChildGuardArm" ((PVar "g") (PCon "GuardArm" (PVar "gs") (PVar "body"))) (EApp (EApp (EVar "GuardArm") (EApp (EApp (EVar "map") (EApp (EVar "mapChildGuard") (EVar "g"))) (EVar "gs"))) (EApp (EVar "g") (EVar "body"))))
-(DTypeSig false "mapChildField" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign"))))
-(DFunDef false "mapChildField" ((PVar "g") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EVar "g") (EVar "e"))))
-(DTypeSig false "mapChildKv" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "mapChildKv" ((PVar "g") (PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EVar "g") (EVar "k")) (EApp (EVar "g") (EVar "v"))))
+(DFunDef false "mapChildExprs" ((PVar "g") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "g")) (EVar "e")))
 (DTypeSig false "rewriteExprBU" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteExprBU" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapChildExprs") (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "e"))))
 (DTypeSig false "detApply" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -9107,6 +8974,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "preludeShadowFinding" ((PVar "name") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestPreludeShadow")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false) (mem "isSome" false))))
@@ -10283,67 +10151,8 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "rewriteAndThenPureMapKv" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteAndThenPureMapKv" ((PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "k")) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "v"))))
 (DTypeSig false "mapChildExprs" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "EApp") (EApp (EVar "g") (EVar "f"))) (EApp (EVar "g") (EVar "x"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ELam" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EVar "g") (EVar "b"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ELet" (PVar "m") (PVar "isf") (PVar "p") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "isf")) (EVar "p")) (EApp (EVar "g") (EVar "e1"))) (EApp (EVar "g") (EVar "e2"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EMatch" (PVar "s") (PVar "arms"))) (EApp (EApp (EVar "EMatch") (EApp (EVar "g") (EVar "s"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildArm") (EVar "g"))) (EVar "arms"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EApp (EVar "EIf") (EApp (EVar "g") (EVar "c"))) (EApp (EVar "g") (EVar "t"))) (EApp (EVar "g") (EVar "el"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EVar "g") (EVar "a"))) (EApp (EVar "g") (EVar "b"))) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EUnOp" (PVar "op") (PVar "a") (PVar "r"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EApp (EVar "g") (EVar "a"))) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EInfix" (PVar "op") (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EVar "g") (EVar "a"))) (EApp (EVar "g") (EVar "b"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EFieldAccess" (PVar "e") (PVar "f") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EVar "g") (EVar "e"))) (EVar "f")) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EMethodRef "map") (EVar "g")) (EVar "es"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EMethodRef "map") (EVar "g")) (EVar "es"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EVar "g")) (EVar "es"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "i")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "i")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "g") (EVar "e"))) (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "i")) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildLet") (EVar "g"))) (EVar "binds"))) (EApp (EVar "g") (EVar "body"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EApp (EVar "mapChildSection") (EVar "g")) (EVar "s"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EVar "g") (EVar "a"))) (EApp (EVar "g") (EVar "i"))) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "g") (EVar "e"))) (EVar "t")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "g") (EVar "e"))) (EVar "t")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildStmt") (EVar "g"))) (EVar "stmts"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildStmt") (EVar "g"))) (EVar "stmts"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildInterp") (EVar "g"))) (EVar "parts"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildGuardArm") (EVar "g"))) (EVar "arms"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildField") (EVar "g"))) (EVar "fs"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ERecordUpdate" (PVar "e") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EVar "g") (EVar "e"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildField") (EVar "g"))) (EVar "fs"))) (EVar "r")))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EVariantUpdate" (PVar "c") (PVar "e") (PVar "fs"))) (EApp (EApp (EApp (EVar "EVariantUpdate") (EVar "c")) (EApp (EVar "g") (EVar "e"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildField") (EVar "g"))) (EVar "fs"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildKv") (EVar "g"))) (EVar "kvs"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "g")) (EVar "es"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildExprs" (PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "mapChildStmt" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "DoStmt") (TyCon "DoStmt"))))
-(DFunDef false "mapChildStmt" ((PVar "g") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildStmt" ((PVar "g") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildStmt" ((PVar "g") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildStmt" ((PVar "g") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildStmt" ((PVar "g") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EVar "g") (EVar "e"))))
-(DTypeSig false "mapChildArm" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Arm") (TyCon "Arm"))))
-(DFunDef false "mapChildArm" ((PVar "g") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildGuard") (EVar "g"))) (EVar "gs"))) (EApp (EVar "g") (EVar "body"))))
-(DTypeSig false "mapChildGuard" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Guard") (TyCon "Guard"))))
-(DFunDef false "mapChildGuard" ((PVar "g") (PCon "GBool" (PVar "e"))) (EApp (EVar "GBool") (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildGuard" ((PVar "g") (PCon "GBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "GBind") (EVar "p")) (EApp (EVar "g") (EVar "e"))))
-(DTypeSig false "mapChildLet" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
-(DFunDef false "mapChildLet" ((PVar "g") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildClause") (EVar "g"))) (EVar "clauses"))))
-(DTypeSig false "mapChildClause" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "FunClause") (TyCon "FunClause"))))
-(DFunDef false "mapChildClause" ((PVar "g") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EVar "g") (EVar "body"))))
-(DTypeSig false "mapChildSection" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Section") (TyCon "Section"))))
-(DFunDef false "mapChildSection" (PWild (PCon "SecBare" (PVar "op"))) (EApp (EVar "SecBare") (EVar "op")))
-(DFunDef false "mapChildSection" ((PVar "g") (PCon "SecRight" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "SecRight") (EVar "op")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapChildSection" ((PVar "g") (PCon "SecLeft" (PVar "e") (PVar "op"))) (EApp (EApp (EVar "SecLeft") (EApp (EVar "g") (EVar "e"))) (EVar "op")))
-(DTypeSig false "mapChildInterp" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart"))))
-(DFunDef false "mapChildInterp" (PWild (PCon "InterpStr" (PVar "s"))) (EApp (EVar "InterpStr") (EVar "s")))
-(DFunDef false "mapChildInterp" ((PVar "g") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EVar "g") (EVar "e"))))
-(DTypeSig false "mapChildGuardArm" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm"))))
-(DFunDef false "mapChildGuardArm" ((PVar "g") (PCon "GuardArm" (PVar "gs") (PVar "body"))) (EApp (EApp (EVar "GuardArm") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildGuard") (EVar "g"))) (EVar "gs"))) (EApp (EVar "g") (EVar "body"))))
-(DTypeSig false "mapChildField" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign"))))
-(DFunDef false "mapChildField" ((PVar "g") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EVar "g") (EVar "e"))))
-(DTypeSig false "mapChildKv" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "mapChildKv" ((PVar "g") (PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EVar "g") (EVar "k")) (EApp (EVar "g") (EVar "v"))))
+(DFunDef false "mapChildExprs" ((PVar "g") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "g")) (EVar "e")))
 (DTypeSig false "rewriteExprBU" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteExprBU" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapChildExprs") (EApp (EVar "rewriteExprBU") (EVar "f"))) (EVar "e"))))
 (DTypeSig false "detApply" (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))

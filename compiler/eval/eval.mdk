@@ -2713,6 +2713,22 @@ prim5M f =
 prim1M : (Value e -> <e> Value e) -> Value e
 prim1M f = VPrim f
 
+-- A file extern whose path is an authority takes, after its value arguments,
+-- the authority granted for each path (EFFECTS-SEMANTICS §8); the interpreter
+-- does not consult it.
+granted1 : (Value e -> <e> Value e) -> Value e
+granted1 f = VPrim (a => VPrim (_ => f a))
+
+granted2 : (Value e -> Value e -> <e> Value e) -> Value e
+granted2 f = VPrim (a => VPrim (b => VPrim (_ => f a b)))
+
+granted3 : (Value e -> Value e -> Value e -> <e> Value e) -> Value e
+granted3 f = VPrim (a => VPrim (b => VPrim (c => VPrim (_ => f a b c))))
+
+-- `rename` names two paths, so it takes two grants.
+grantedPair : (Value e -> Value e -> <e> Value e) -> Value e
+grantedPair f = VPrim (a => VPrim (b => VPrim (_ => VPrim (_ => f a b))))
+
 -- captured stdout: putStr/putStrLn append here instead of doing real IO, so the
 -- output buffer can be diffed against the === EVAL === goldens (no <IO> effect;
 -- appending is just a plain mutation).  ePutStr/ePutStrLn (stderr) are discarded HERE (the
@@ -4788,22 +4804,22 @@ ioExternBindings _ = [
   ("ePutStr", prim1M pEPutStr),
   ("ePutStrLn", prim1M pEPutStrLn),
   -- File
-  ("readFile", prim1 pReadFile),
-  ("readFileBytes", prim1 pReadFileBytes),
-  ("fileExists", prim1 pFileExists),
-  ("fileMode", prim1 pFileMode),
-  ("canonicalizePath", prim1 pCanonicalizePath),
-  ("listDir", prim1 pListDir),
-  ("statFile", prim1 pStatFile),
-  ("writeFile", prim2M pWriteFile),
-  ("writeFileBytes", prim2M pWriteFileBytes),
-  ("writeFileMode", prim3M pWriteFileMode),
-  ("appendFile", prim2M pAppendFile),
-  ("makeDir", prim1 pMakeDir),
-  ("removeFile", prim1 pRemoveFile),
-  ("removeDir", prim1 pRemoveDir),
-  ("rename", prim2M pRename),
-  ("fsync", prim1 pFsync),
+  ("readFile", granted1 pReadFile),
+  ("readFileBytes", granted1 pReadFileBytes),
+  ("fileExists", granted1 pFileExists),
+  ("fileMode", granted1 pFileMode),
+  ("canonicalizePath", granted1 pCanonicalizePath),
+  ("listDir", granted1 pListDir),
+  ("statFile", granted1 pStatFile),
+  ("writeFile", granted2 pWriteFile),
+  ("writeFileBytes", granted2 pWriteFileBytes),
+  ("writeFileMode", granted3 pWriteFileMode),
+  ("appendFile", granted2 pAppendFile),
+  ("makeDir", granted1 pMakeDir),
+  ("removeFile", granted1 pRemoveFile),
+  ("removeDir", granted1 pRemoveDir),
+  ("rename", grantedPair pRename),
+  ("fsync", granted1 pFsync),
   -- Env
   ("args", prim1M pArgs),
   ("getEnv", prim1 pGetEnv),

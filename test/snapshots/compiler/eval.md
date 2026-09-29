@@ -1,5 +1,5 @@
 # META
-source_lines=4910
+source_lines=4926
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -2717,6 +2717,22 @@ prim5M f =
 prim1M : (Value e -> <e> Value e) -> Value e
 prim1M f = VPrim f
 
+-- A file extern whose path is an authority takes, after its value arguments,
+-- the authority granted for each path (EFFECTS-SEMANTICS §8); the interpreter
+-- does not consult it.
+granted1 : (Value e -> <e> Value e) -> Value e
+granted1 f = VPrim (a => VPrim (_ => f a))
+
+granted2 : (Value e -> Value e -> <e> Value e) -> Value e
+granted2 f = VPrim (a => VPrim (b => VPrim (_ => f a b)))
+
+granted3 : (Value e -> Value e -> Value e -> <e> Value e) -> Value e
+granted3 f = VPrim (a => VPrim (b => VPrim (c => VPrim (_ => f a b c))))
+
+-- `rename` names two paths, so it takes two grants.
+grantedPair : (Value e -> Value e -> <e> Value e) -> Value e
+grantedPair f = VPrim (a => VPrim (b => VPrim (_ => VPrim (_ => f a b))))
+
 -- captured stdout: putStr/putStrLn append here instead of doing real IO, so the
 -- output buffer can be diffed against the === EVAL === goldens (no <IO> effect;
 -- appending is just a plain mutation).  ePutStr/ePutStrLn (stderr) are discarded HERE (the
@@ -4792,22 +4808,22 @@ ioExternBindings _ = [
   ("ePutStr", prim1M pEPutStr),
   ("ePutStrLn", prim1M pEPutStrLn),
   -- File
-  ("readFile", prim1 pReadFile),
-  ("readFileBytes", prim1 pReadFileBytes),
-  ("fileExists", prim1 pFileExists),
-  ("fileMode", prim1 pFileMode),
-  ("canonicalizePath", prim1 pCanonicalizePath),
-  ("listDir", prim1 pListDir),
-  ("statFile", prim1 pStatFile),
-  ("writeFile", prim2M pWriteFile),
-  ("writeFileBytes", prim2M pWriteFileBytes),
-  ("writeFileMode", prim3M pWriteFileMode),
-  ("appendFile", prim2M pAppendFile),
-  ("makeDir", prim1 pMakeDir),
-  ("removeFile", prim1 pRemoveFile),
-  ("removeDir", prim1 pRemoveDir),
-  ("rename", prim2M pRename),
-  ("fsync", prim1 pFsync),
+  ("readFile", granted1 pReadFile),
+  ("readFileBytes", granted1 pReadFileBytes),
+  ("fileExists", granted1 pFileExists),
+  ("fileMode", granted1 pFileMode),
+  ("canonicalizePath", granted1 pCanonicalizePath),
+  ("listDir", granted1 pListDir),
+  ("statFile", granted1 pStatFile),
+  ("writeFile", granted2 pWriteFile),
+  ("writeFileBytes", granted2 pWriteFileBytes),
+  ("writeFileMode", granted3 pWriteFileMode),
+  ("appendFile", granted2 pAppendFile),
+  ("makeDir", granted1 pMakeDir),
+  ("removeFile", granted1 pRemoveFile),
+  ("removeDir", granted1 pRemoveDir),
+  ("rename", grantedPair pRename),
+  ("fsync", granted1 pFsync),
   -- Env
   ("args", prim1M pArgs),
   ("getEnv", prim1 pGetEnv),
@@ -5882,6 +5898,14 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "prim5M" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam ((PVar "d")) (EApp (EVar "VPrim") (ELam ((PVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")) (EVar "x")))))))))))))
 (DTypeSig false "prim1M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "prim1M" ((PVar "f")) (EApp (EVar "VPrim") (EVar "f")))
+(DTypeSig false "granted1" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))
+(DFunDef false "granted1" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EVar "f") (EVar "a")))))))
+(DTypeSig false "granted2" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e"))))
+(DFunDef false "granted2" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))
+(DTypeSig false "granted3" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (TyApp (TyCon "Value") (TyVar "e"))))
+(DFunDef false "granted3" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")))))))))))
+(DTypeSig false "grantedPair" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e"))))
+(DFunDef false "grantedPair" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))))
 (DTypeSig true "outputRef" (TyApp (TyCon "Ref") (TyCon "String")))
 (DFunDef false "outputRef" () (EApp (EVar "Ref") (ELit (LString ""))))
 (DTypeSig true "currentEvalLoc" (TyApp (TyCon "Ref") (TyCon "Loc")))
@@ -6546,7 +6570,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pOsEntropyBytes" ((PCon "VInt" (PVar "n"))) (EApp (EVar "vIntArray") (EApp (EVar "osEntropyBytes") (EVar "n"))))
 (DFunDef false "pOsEntropyBytes" (PWild) (EApp (EVar "panic") (ELit (LString "osEntropyBytes: expected Int"))))
 (DTypeSig true "ioExternBindings" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))
-(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EVar "prim1") (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EVar "prim1") (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EVar "prim1") (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EVar "prim1") (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EVar "prim1") (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EVar "prim1") (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EVar "prim1") (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "prim2M") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "prim2M") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "prim3M") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "prim2M") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EVar "prim1") (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EVar "prim1") (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EVar "prim1") (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "prim2M") (EVar "pRename"))) (ETuple (ELit (LString "fsync")) (EApp (EVar "prim1") (EVar "pFsync"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdoutIO"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
+(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EVar "granted1") (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EVar "granted1") (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EVar "granted1") (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EVar "granted1") (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EVar "granted1") (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EVar "granted1") (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EVar "granted1") (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "granted2") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "granted2") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "granted3") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "granted2") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EVar "granted1") (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EVar "granted1") (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EVar "granted1") (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "grantedPair") (EVar "pRename"))) (ETuple (ELit (LString "fsync")) (EApp (EVar "granted1") (EVar "pFsync"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdoutIO"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
 (DTypeSig true "testCapableExterns" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))
 (DFunDef false "testCapableExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn")))))
 (DTypeSig true "evalModulesOutputRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
@@ -7531,6 +7555,14 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "prim5M" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam ((PVar "d")) (EApp (EVar "VPrim") (ELam ((PVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")) (EVar "x")))))))))))))
 (DTypeSig false "prim1M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "prim1M" ((PVar "f")) (EApp (EVar "VPrim") (EVar "f")))
+(DTypeSig false "granted1" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))
+(DFunDef false "granted1" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EVar "f") (EVar "a")))))))
+(DTypeSig false "granted2" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e"))))
+(DFunDef false "granted2" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))
+(DTypeSig false "granted3" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (TyApp (TyCon "Value") (TyVar "e"))))
+(DFunDef false "granted3" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")))))))))))
+(DTypeSig false "grantedPair" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e"))))
+(DFunDef false "grantedPair" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))))
 (DTypeSig true "outputRef" (TyApp (TyCon "Ref") (TyCon "String")))
 (DFunDef false "outputRef" () (EApp (EVar "Ref") (ELit (LString ""))))
 (DTypeSig true "currentEvalLoc" (TyApp (TyCon "Ref") (TyCon "Loc")))
@@ -8195,7 +8227,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pOsEntropyBytes" ((PCon "VInt" (PVar "n"))) (EApp (EVar "vIntArray") (EApp (EVar "osEntropyBytes") (EVar "n"))))
 (DFunDef false "pOsEntropyBytes" (PWild) (EApp (EVar "panic") (ELit (LString "osEntropyBytes: expected Int"))))
 (DTypeSig true "ioExternBindings" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))
-(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EVar "prim1") (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EVar "prim1") (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EVar "prim1") (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EVar "prim1") (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EVar "prim1") (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EVar "prim1") (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EVar "prim1") (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "prim2M") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "prim2M") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "prim3M") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "prim2M") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EVar "prim1") (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EVar "prim1") (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EVar "prim1") (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "prim2M") (EVar "pRename"))) (ETuple (ELit (LString "fsync")) (EApp (EVar "prim1") (EVar "pFsync"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdoutIO"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
+(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EVar "granted1") (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EVar "granted1") (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EVar "granted1") (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EVar "granted1") (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EVar "granted1") (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EVar "granted1") (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EVar "granted1") (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "granted2") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "granted2") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "granted3") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "granted2") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EVar "granted1") (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EVar "granted1") (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EVar "granted1") (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "grantedPair") (EVar "pRename"))) (ETuple (ELit (LString "fsync")) (EApp (EVar "granted1") (EVar "pFsync"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdoutIO"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
 (DTypeSig true "testCapableExterns" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))
 (DFunDef false "testCapableExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn")))))
 (DTypeSig true "evalModulesOutputRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))

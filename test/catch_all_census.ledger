@@ -37,6 +37,9 @@ directIfaceSchemeRows	Decl	1/14
 doChainIsDeferred	Expr	3/42
 eagerRefs	Expr	36/42
 exprLoc	Expr	2/42
+grantDecl	Decl	5/14
+grantExpr	Expr	5/42
+grantSpine	Expr	2/42
 ifaceMethodRowOf	Decl	2/14
 implBodyLoc	Expr	4/42
 implCompletenessMsgsOfMap	Decl	1/14
@@ -61,6 +64,7 @@ isSyntacticLambda	Expr	1/42
 lamUnderLoc	Expr	2/42
 localAbsCandidate	Expr	14/42
 localAbsCtorSpine	Expr	5/42
+mapDeclBodies	Decl	5/14
 markTailDecl	Decl	1/14
 methodConstraintNamesOfDecl	Decl	2/14
 negatedI32Lit	Expr	3/42
@@ -79,7 +83,7 @@ registerData	Decl	1/14
 registerMethodIfaceParamsDecl	Decl	2/14
 renderCallArg	Expr	10/42
 returnPosOfDecl	Decl	1/14
-rewriteArgScoped	Expr	33/42
+rewriteArgScoped	Expr	34/42
 rewriteBinopExpr	Expr	4/42
 rewriteLocalDictExpr	Expr	4/42
 rewriteRPDict	Expr	1/42
@@ -90,3 +94,4 @@ stmtCalleeName	Expr	10/42
 superImplMsgsOf	Decl	1/14
 tupleArgElems	Expr	2/42
 useModuleId	Decl	1/14
+wholeDomainExpr	Expr	1/42

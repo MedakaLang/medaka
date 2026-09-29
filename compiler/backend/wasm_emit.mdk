@@ -2027,12 +2027,9 @@ externArityW name =
       "charFromCode",
       "stringToUtf8Bytes",
       "stringFromUtf8Bytes",
-      "readFile",
-      "fileExists",
       "getEnv",
       "exit",
       "args",
-      "readFileBytes",
       "bitNot",
       "intBitNot",
       "intBitsToFloat",
@@ -2079,10 +2076,8 @@ externArityW name =
 
     -- W11b: the UTF-8 byte codec externs are each 1-arg.
 
-    -- W12: readFile/fileExists/getEnv/exit take 1 arg; args takes a Unit arg
-    -- (emitted + dropped, like randomFloat).
-
-    -- stage-D: readFileBytes : String -> Result String (Array Int) (1-arg).
+    -- W12: getEnv/exit take 1 arg; args takes a Unit arg (emitted + dropped, like
+    -- randomFloat).
 
     -- #101: bitNot / intBitsToFloat are 1-arg (Int -> Int / Int -> Float).
 
@@ -2121,11 +2116,16 @@ externArityW name =
       "atan2",
       "hypot",
       "floatRem",
-      "writeFileBytes",
       "sliceError",
       "byteBlockGetUnsafe",
       "byteBlockCopyUnsafe",
+      "readFile",
+      "fileExists",
+      "readFileBytes",
+      "canonicalizePath",
     ] then
+    -- a file extern whose path is an authority: its path and its grant
+
     -- W10: arrayGetUnsafe (idx, arr); arrayMake (size, init); arrayMakeWith (size, f).
 
     -- stage-A: 2-arg bitwise (Int->Int->Int) and arrayFill (val->arr->Unit).
@@ -2135,13 +2135,17 @@ externArityW name =
     -- #101: bitOr/bitXor (Int->Int->Int) + the 2-arg libm math (pow/atan2/hypot) +
     -- floatRem (Float->Float->Float).
 
-    -- stage-D: writeFileBytes : String -> Array Int -> Result String Unit (2-arg).
-
     -- #670: sliceError (lo, hiIncl) -- the coded E-SLICE-OOB abort extern (2-arg).
     2
   else if contains
     name
-    ["stringSlice", "arraySetUnsafe", "byteBlockSetUnsafe"] then
+    [
+      "stringSlice",
+      "arraySetUnsafe",
+      "byteBlockSetUnsafe",
+      "writeFileBytes",
+    ] then
+    -- writeFileBytes: its path, its bytes and the path's grant
     3
   else if contains name ["arrayBlit", "byteBlockBlit"] then
     -- stage-A: arrayBlit src srcOff dst dstOff len (5 args); byteBlockBlit is
@@ -7875,20 +7879,24 @@ emitLeafExternRef prog env d "randomFloat" _ =
 -- byte-channel host-import runtime (ioHostRuntimeLines).  readFile returns a Result
 -- (ref eq), fileExists a Bool i31, getEnv an Option (ref eq), args a List (ref eq),
 -- exit traps (mdk_exit + unreachable, stack-polymorphic like panic).
-emitLeafExternRef prog env d "readFile" [p] =
+-- A file extern whose path is an authority takes its grant last
+-- (EFFECTS-SEMANTICS §8); the host import carries only the path, so the grant is
+-- taken and not emitted.
+emitLeafExternRef prog env d "readFile" [p, _] =
   emitRefExpr prog env d p ++ ["ref.cast (ref $str)", "call $mdk_read_file_io"]
 emitLeafExternRef prog env d "readFile" _ =
-  gapLP prog "wasm W12: readFile takes exactly one argument"
+  gapLP prog "wasm W12: readFile takes exactly one argument and its grant"
 -- canonicalizePath : String -> String — IDENTITY on the wasm host (no realpath in a
 -- browser vfs).  Emit the $str argument and leave it on the stack as the result.
-emitLeafExternRef prog env d "canonicalizePath" [p] = emitRefExpr prog env d p
+emitLeafExternRef prog env d "canonicalizePath" [p, _] =
+  emitRefExpr prog env d p
 emitLeafExternRef prog env d "canonicalizePath" _ =
-  gapLP prog "wasm: canonicalizePath takes exactly one argument"
-emitLeafExternRef prog env d "fileExists" [p] =
+  gapLP prog "wasm: canonicalizePath takes exactly one argument and its grant"
+emitLeafExternRef prog env d "fileExists" [p, _] =
   emitRefExpr prog env d p
     ++ ["ref.cast (ref $str)", "call $mdk_file_exists_io"]
 emitLeafExternRef prog env d "fileExists" _ =
-  gapLP prog "wasm W12: fileExists takes exactly one argument"
+  gapLP prog "wasm W12: fileExists takes exactly one argument and its grant"
 emitLeafExternRef prog env d "getEnv" [n] =
   emitRefExpr prog env d n ++ ["ref.cast (ref $str)", "call $mdk_get_env_io"]
 emitLeafExternRef prog env d "getEnv" _ =
@@ -7905,18 +7913,22 @@ emitLeafExternRef prog env d "exit" _ =
 -- stage-D: byte-clean file I/O.  readFileBytes returns a Result String (Array Int);
 -- writeFileBytes takes (path, Array Int) and returns Result String Unit.  Both route
 -- into the fileBytes host seam ($mdk_read_file_bytes_io / $mdk_write_file_bytes_io).
-emitLeafExternRef prog env d "readFileBytes" [p] =
+emitLeafExternRef prog env d "readFileBytes" [p, _] =
   emitRefExpr prog env d p
     ++ ["ref.cast (ref $str)", "call $mdk_read_file_bytes_io"]
 emitLeafExternRef prog env d "readFileBytes" _ =
-  gapLP prog "wasm stage-D: readFileBytes takes exactly one argument"
-emitLeafExternRef prog env d "writeFileBytes" [p, arr] =
+  gapLP
+    prog
+    "wasm stage-D: readFileBytes takes exactly one argument and its grant"
+emitLeafExternRef prog env d "writeFileBytes" [p, arr, _] =
   emitRefExpr prog env d p
     ++ ["ref.cast (ref $str)"]
     ++ emitRefExpr prog env d arr
     ++ ["ref.cast (ref $arr)", "call $mdk_write_file_bytes_io"]
 emitLeafExternRef prog env d "writeFileBytes" _ =
-  gapLP prog "wasm stage-D: writeFileBytes takes exactly two arguments"
+  gapLP
+    prog
+    "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"
 -- W10/B5: `panic msg` → stream the coded line `runtime error [E-PANIC]: <msg>\n` to
 -- stderr, then `unreachable` (peer of native @mdk_panic / the interp's runtimePanic).
 -- The fixed prefix is unrolled to byte-writes; the user message (a $str (ref eq), any

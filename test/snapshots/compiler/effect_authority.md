@@ -1,5 +1,5 @@
 # META
-source_lines=433
+source_lines=469
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -435,6 +435,42 @@ authvarDefaultName cell = match authvarName cell
 export
 renderAuthority : Authority -> String
 renderAuthority a = renderAuthorityWith authvarDefaultName a
+
+-- A solved authority as the runtime receives it (EFFECTS-SEMANTICS §8): the
+-- whole domain, the empty authority, or the domain elements it admits (a
+-- trailing `*` spells a pattern) joined with the variables it still names. The
+-- empty authority is kept apart from the whole domain, because a runtime that
+-- read it as the whole domain would admit what no value ever reached. A
+-- Product tuple that still holds a variable has no element spelling, so it
+-- widens to the whole domain.
+public export data GrantShape =
+  | GrantTop
+  | GrantBottom
+  | GrantParts (List String) (List (Ref Authvar))
+
+export
+authGrantShape : Authority -> GrantShape
+authGrantShape a = match authNorm a
+  AJoin [] => GrantBottom
+  AJoin ms => grantJoin ms [] []
+  other => grantJoin [other] [] []
+
+grantJoin : List Authority -> List String -> List (Ref Authvar) -> GrantShape
+grantJoin [] elems vars = GrantParts (reverseL elems) (reverseL vars)
+grantJoin ((AConst p) :: rest) elems vars =
+  if isSubTop p then
+    GrantTop
+  else
+    grantJoin rest (reverseL (paramElements p) ++ elems) vars
+grantJoin ((AVar cell) :: rest) elems vars = grantJoin rest elems (cell :: vars)
+grantJoin _ _ _ = GrantTop
+
+-- The domain spelling of one constant: a Prefix element or pattern, each Set
+-- member, or a Product element as a signature writes it.
+paramElements : Param -> List String
+paramElements (PPrefix (Some s)) = [s]
+paramElements (PSet (Some xs)) = xs
+paramElements p = [trimLeft (drender p)]
 # DESUGAR
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productNorm" false) (mem "renderAxisVal" false) (mem "lookupAxis" false) (mem "domainKey" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "dedupBy" false) (mem "filterList" false))))
@@ -574,6 +610,18 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "authvarDefaultName" ((PVar "cell")) (EMatch (EApp (EVar "authvarName") (EVar "cell")) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (EBinOp "++" (ELit (LString "k")) (EApp (EVar "intToString") (EApp (EVar "authvarId") (EVar "cell")))))))
 (DTypeSig true "renderAuthority" (TyFun (TyCon "Authority") (TyCon "String")))
 (DFunDef false "renderAuthority" ((PVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "authvarDefaultName")) (EVar "a")))
+(DData Public "GrantShape" () ((variant "GrantTop" (ConPos)) (variant "GrantBottom" (ConPos)) (variant "GrantParts" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar")))))) ())
+(DTypeSig true "authGrantShape" (TyFun (TyCon "Authority") (TyCon "GrantShape")))
+(DFunDef false "authGrantShape" ((PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AJoin" (PList)) () (EVar "GrantBottom")) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EApp (EVar "grantJoin") (EVar "ms")) (EListLit)) (EListLit))) (arm (PVar "other") () (EApp (EApp (EApp (EVar "grantJoin") (EListLit (EVar "other"))) (EListLit)) (EListLit)))))
+(DTypeSig false "grantJoin" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "GrantShape")))))
+(DFunDef false "grantJoin" ((PList) (PVar "elems") (PVar "vars")) (EApp (EApp (EVar "GrantParts") (EApp (EVar "reverseL") (EVar "elems"))) (EApp (EVar "reverseL") (EVar "vars"))))
+(DFunDef false "grantJoin" ((PCons (PCon "AConst" (PVar "p")) (PVar "rest")) (PVar "elems") (PVar "vars")) (EIf (EApp (EVar "isSubTop") (EVar "p")) (EVar "GrantTop") (EApp (EApp (EApp (EVar "grantJoin") (EVar "rest")) (EBinOp "++" (EApp (EVar "reverseL") (EApp (EVar "paramElements") (EVar "p"))) (EVar "elems"))) (EVar "vars"))))
+(DFunDef false "grantJoin" ((PCons (PCon "AVar" (PVar "cell")) (PVar "rest")) (PVar "elems") (PVar "vars")) (EApp (EApp (EApp (EVar "grantJoin") (EVar "rest")) (EVar "elems")) (EBinOp "::" (EVar "cell") (EVar "vars"))))
+(DFunDef false "grantJoin" (PWild PWild PWild) (EVar "GrantTop"))
+(DTypeSig false "paramElements" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "paramElements" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EListLit (EVar "s")))
+(DFunDef false "paramElements" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EVar "xs"))
+(DFunDef false "paramElements" ((PVar "p")) (EListLit (EApp (EVar "trimLeft") (EApp (EVar "drender") (EVar "p")))))
 # MARK
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productNorm" false) (mem "renderAxisVal" false) (mem "lookupAxis" false) (mem "domainKey" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "dedupBy" false) (mem "filterList" false))))
@@ -713,3 +761,15 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "authvarDefaultName" ((PVar "cell")) (EMatch (EApp (EVar "authvarName") (EVar "cell")) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (EBinOp "++" (ELit (LString "k")) (EApp (EVar "intToString") (EApp (EVar "authvarId") (EVar "cell")))))))
 (DTypeSig true "renderAuthority" (TyFun (TyCon "Authority") (TyCon "String")))
 (DFunDef false "renderAuthority" ((PVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "authvarDefaultName")) (EVar "a")))
+(DData Public "GrantShape" () ((variant "GrantTop" (ConPos)) (variant "GrantBottom" (ConPos)) (variant "GrantParts" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar")))))) ())
+(DTypeSig true "authGrantShape" (TyFun (TyCon "Authority") (TyCon "GrantShape")))
+(DFunDef false "authGrantShape" ((PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AJoin" (PList)) () (EVar "GrantBottom")) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EApp (EVar "grantJoin") (EVar "ms")) (EListLit)) (EListLit))) (arm (PVar "other") () (EApp (EApp (EApp (EVar "grantJoin") (EListLit (EVar "other"))) (EListLit)) (EListLit)))))
+(DTypeSig false "grantJoin" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Authvar"))) (TyCon "GrantShape")))))
+(DFunDef false "grantJoin" ((PList) (PVar "elems") (PVar "vars")) (EApp (EApp (EVar "GrantParts") (EApp (EVar "reverseL") (EVar "elems"))) (EApp (EVar "reverseL") (EVar "vars"))))
+(DFunDef false "grantJoin" ((PCons (PCon "AConst" (PVar "p")) (PVar "rest")) (PVar "elems") (PVar "vars")) (EIf (EApp (EVar "isSubTop") (EVar "p")) (EVar "GrantTop") (EApp (EApp (EApp (EVar "grantJoin") (EVar "rest")) (EBinOp "++" (EApp (EVar "reverseL") (EApp (EVar "paramElements") (EVar "p"))) (EVar "elems"))) (EVar "vars"))))
+(DFunDef false "grantJoin" ((PCons (PCon "AVar" (PVar "cell")) (PVar "rest")) (PVar "elems") (PVar "vars")) (EApp (EApp (EApp (EVar "grantJoin") (EVar "rest")) (EVar "elems")) (EBinOp "::" (EVar "cell") (EVar "vars"))))
+(DFunDef false "grantJoin" (PWild PWild PWild) (EVar "GrantTop"))
+(DTypeSig false "paramElements" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "paramElements" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EListLit (EVar "s")))
+(DFunDef false "paramElements" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EVar "xs"))
+(DFunDef false "paramElements" ((PVar "p")) (EListLit (EApp (EVar "trimLeft") (EApp (EVar "drender") (EVar "p")))))

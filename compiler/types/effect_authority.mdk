@@ -431,3 +431,39 @@ authvarDefaultName cell = match authvarName cell
 export
 renderAuthority : Authority -> String
 renderAuthority a = renderAuthorityWith authvarDefaultName a
+
+-- A solved authority as the runtime receives it (EFFECTS-SEMANTICS §8): the
+-- whole domain, the empty authority, or the domain elements it admits (a
+-- trailing `*` spells a pattern) joined with the variables it still names. The
+-- empty authority is kept apart from the whole domain, because a runtime that
+-- read it as the whole domain would admit what no value ever reached. A
+-- Product tuple that still holds a variable has no element spelling, so it
+-- widens to the whole domain.
+public export data GrantShape =
+  | GrantTop
+  | GrantBottom
+  | GrantParts (List String) (List (Ref Authvar))
+
+export
+authGrantShape : Authority -> GrantShape
+authGrantShape a = match authNorm a
+  AJoin [] => GrantBottom
+  AJoin ms => grantJoin ms [] []
+  other => grantJoin [other] [] []
+
+grantJoin : List Authority -> List String -> List (Ref Authvar) -> GrantShape
+grantJoin [] elems vars = GrantParts (reverseL elems) (reverseL vars)
+grantJoin ((AConst p) :: rest) elems vars =
+  if isSubTop p then
+    GrantTop
+  else
+    grantJoin rest (reverseL (paramElements p) ++ elems) vars
+grantJoin ((AVar cell) :: rest) elems vars = grantJoin rest elems (cell :: vars)
+grantJoin _ _ _ = GrantTop
+
+-- The domain spelling of one constant: a Prefix element or pattern, each Set
+-- member, or a Product element as a signature writes it.
+paramElements : Param -> List String
+paramElements (PPrefix (Some s)) = [s]
+paramElements (PSet (Some xs)) = xs
+paramElements p = [trimLeft (drender p)]

@@ -68,80 +68,86 @@ mapExpr : (Expr -> Expr) -> Expr -> Expr
 mapExpr f e = f (mapKids f e)
 
 mapKids : (Expr -> Expr) -> Expr -> Expr
+mapKids f e = mapChildren (mapExpr f) e
+
+-- `mapChildren g e` applies `g` to each immediate subexpression of `e` and
+-- rebuilds the node, recursing no further: the one-level step both traversal
+-- orders are built from.
+export
+mapChildren : (Expr -> Expr) -> Expr -> Expr
 -- ELoc is transparent: recurse into the wrapped expr, preserve the loc.
 -- Without this the wildcard below
 -- would stop the rewrite at the wrapper and never reach the atom inside.
-mapKids f (ELoc l e) = ELoc l (mapExpr f e)
-mapKids f (EDoOrigin l e) = EDoOrigin l (mapExpr f e)
-mapKids f (EApp a b) = EApp (mapExpr f a) (mapExpr f b)
-mapKids f (ELam ps b) = ELam ps (mapExpr f b)
-mapKids f (ELet m r p e1 e2) = ELet m r p (mapExpr f e1) (mapExpr f e2)
-mapKids f (ELetGroup bs e2) = ELetGroup (map (mapLetBind f) bs) (mapExpr f e2)
-mapKids f (EMatch e0 arms) = EMatch (mapExpr f e0) (map (mapArm f) arms)
-mapKids f (EIf c t el) = EIf (mapExpr f c) (mapExpr f t) (mapExpr f el)
-mapKids f (EBinOp op a b r) = EBinOp op (mapExpr f a) (mapExpr f b) r
-mapKids f (EUnOp op a r) = EUnOp op (mapExpr f a) r
-mapKids f (EInfix op a b) = EInfix op (mapExpr f a) (mapExpr f b)
-mapKids f (EFieldAccess e0 n r) = EFieldAccess (mapExpr f e0) n r
-mapKids f (ERecordCreate n fs) = ERecordCreate n (map (mapFieldAssign f) fs)
-mapKids f (ERecordUpdate e0 fs r) =
-  ERecordUpdate (mapExpr f e0) (map (mapFieldAssign f) fs) r
-mapKids f (EVariantUpdate c e0 fs) =
-  EVariantUpdate c (mapExpr f e0) (map (mapFieldAssign f) fs)
-mapKids f (EArrayLit es) = EArrayLit (map (mapExpr f) es)
-mapKids f (EListLit es) = EListLit (map (mapExpr f) es)
-mapKids f (ETuple es) = ETuple (map (mapExpr f) es)
-mapKids f (EIndex e0 i r) = EIndex (mapExpr f e0) (mapExpr f i) r
-mapKids f (ERangeList lo hi incl) =
-  ERangeList (mapExpr f lo) (mapExpr f hi) incl
-mapKids f (ERangeArray lo hi incl) =
-  ERangeArray (mapExpr f lo) (mapExpr f hi) incl
-mapKids f (ESlice e0 lo hi incl r) =
-  ESlice (mapExpr f e0) (mapExpr f lo) (mapExpr f hi) incl r
-mapKids f (EBlock stmts) = EBlock (map (mapDoStmt f) stmts)
-mapKids f (EDo d stmts) = EDo d (map (mapDoStmt f) stmts)
-mapKids f (EAnnot e0 t) = EAnnot (mapExpr f e0) t
-mapKids f (EStringInterp parts) = EStringInterp (map (mapInterp f) parts)
-mapKids f (EGuards arms) = EGuards (map (mapGuardArm f) arms)
-mapKids f (ESection (SecRight op e0)) = ESection (SecRight op (mapExpr f e0))
-mapKids f (ESection (SecLeft e0 op)) = ESection (SecLeft (mapExpr f e0) op)
-mapKids f (EMapLit n kvs) = EMapLit n (map (mapKv f) kvs)
-mapKids f (ESetLit n es) = ESetLit n (map (mapExpr f) es)
-mapKids f (EHeadAnnot e0 t) = EHeadAnnot (mapExpr f e0) t
-mapKids _ e = e
+mapChildren g (ELoc l e) = ELoc l (g e)
+mapChildren g (EDoOrigin l e) = EDoOrigin l (g e)
+mapChildren g (EApp a b) = EApp (g a) (g b)
+mapChildren g (ELam ps b) = ELam ps (g b)
+mapChildren g (ELet m r p e1 e2) = ELet m r p (g e1) (g e2)
+mapChildren g (ELetGroup bs e2) = ELetGroup (map (mapLetBind g) bs) (g e2)
+mapChildren g (EMatch e0 arms) = EMatch (g e0) (map (mapArm g) arms)
+mapChildren g (EIf c t el) = EIf (g c) (g t) (g el)
+mapChildren g (EBinOp op a b r) = EBinOp op (g a) (g b) r
+mapChildren g (EUnOp op a r) = EUnOp op (g a) r
+mapChildren g (EInfix op a b) = EInfix op (g a) (g b)
+mapChildren g (EFieldAccess e0 n r) = EFieldAccess (g e0) n r
+mapChildren g (ERecordCreate n fs) = ERecordCreate n (map (mapFieldAssign g) fs)
+mapChildren g (ERecordUpdate e0 fs r) =
+  ERecordUpdate (g e0) (map (mapFieldAssign g) fs) r
+mapChildren g (EVariantUpdate c e0 fs) =
+  EVariantUpdate c (g e0) (map (mapFieldAssign g) fs)
+mapChildren g (EArrayLit es) = EArrayLit (map g es)
+mapChildren g (EListLit es) = EListLit (map g es)
+mapChildren g (ETuple es) = ETuple (map g es)
+mapChildren g (EIndex e0 i r) = EIndex (g e0) (g i) r
+mapChildren g (ERangeList lo hi incl) = ERangeList (g lo) (g hi) incl
+mapChildren g (ERangeArray lo hi incl) = ERangeArray (g lo) (g hi) incl
+mapChildren g (ESlice e0 lo hi incl r) = ESlice (g e0) (g lo) (g hi) incl r
+mapChildren g (EBlock stmts) = EBlock (map (mapDoStmt g) stmts)
+mapChildren g (EDo d stmts) = EDo d (map (mapDoStmt g) stmts)
+mapChildren g (EAnnot e0 t) = EAnnot (g e0) t
+mapChildren g (EStringInterp parts) = EStringInterp (map (mapInterp g) parts)
+mapChildren g (EGuards arms) = EGuards (map (mapGuardArm g) arms)
+mapChildren g (ESection (SecRight op e0)) = ESection (SecRight op (g e0))
+mapChildren g (ESection (SecLeft e0 op)) = ESection (SecLeft (g e0) op)
+mapChildren g (EMapLit n kvs) = EMapLit n (map (mapKv g) kvs)
+mapChildren g (ESetLit n es) = ESetLit n (map g es)
+mapChildren g (EHeadAnnot e0 t) = EHeadAnnot (g e0) t
+mapChildren _ e = e
 
+-- The helpers below apply their function to each subexpression directly; the
+-- caller decides whether that function recurses.
 mapKv : (Expr -> Expr) -> (Expr, Expr) -> (Expr, Expr)
-mapKv f (k, v) = (mapExpr f k, mapExpr f v)
+mapKv g (k, v) = (g k, g v)
 
 mapArm : (Expr -> Expr) -> Arm -> Arm
-mapArm f (Arm p gs b) = Arm p (map (mapGuard f) gs) (mapExpr f b)
+mapArm g (Arm p gs b) = Arm p (map (mapGuard g) gs) (g b)
 
 mapGuard : (Expr -> Expr) -> Guard -> Guard
-mapGuard f (GBool g) = GBool (mapExpr f g)
-mapGuard f (GBind p g) = GBind p (mapExpr f g)
+mapGuard g (GBool e) = GBool (g e)
+mapGuard g (GBind p e) = GBind p (g e)
 
 mapGuardArm : (Expr -> Expr) -> GuardArm -> GuardArm
-mapGuardArm f (GuardArm gs b) = GuardArm (map (mapGuard f) gs) (mapExpr f b)
+mapGuardArm g (GuardArm gs b) = GuardArm (map (mapGuard g) gs) (g b)
 
 mapLetBind : (Expr -> Expr) -> LetBind -> LetBind
-mapLetBind f (LetBind n clauses) = LetBind n (map (mapFunClause f) clauses)
+mapLetBind g (LetBind n clauses) = LetBind n (map (mapFunClause g) clauses)
 
 mapFunClause : (Expr -> Expr) -> FunClause -> FunClause
-mapFunClause f (FunClause ps b) = FunClause ps (mapExpr f b)
+mapFunClause g (FunClause ps b) = FunClause ps (g b)
 
 mapFieldAssign : (Expr -> Expr) -> FieldAssign -> FieldAssign
-mapFieldAssign f (FieldAssign n v) = FieldAssign n (mapExpr f v)
+mapFieldAssign g (FieldAssign n v) = FieldAssign n (g v)
 
 mapDoStmt : (Expr -> Expr) -> DoStmt -> DoStmt
-mapDoStmt f (DoExpr e) = DoExpr (mapExpr f e)
-mapDoStmt f (DoBind p e) = DoBind p (mapExpr f e)
-mapDoStmt f (DoLet m r p e) = DoLet m r p (mapExpr f e)
-mapDoStmt f (DoAssign x e) = DoAssign x (mapExpr f e)
-mapDoStmt f (DoFieldAssign x fs e) = DoFieldAssign x fs (mapExpr f e)
+mapDoStmt g (DoExpr e) = DoExpr (g e)
+mapDoStmt g (DoBind p e) = DoBind p (g e)
+mapDoStmt g (DoLet m r p e) = DoLet m r p (g e)
+mapDoStmt g (DoAssign x e) = DoAssign x (g e)
+mapDoStmt g (DoFieldAssign x fs e) = DoFieldAssign x fs (g e)
 
 mapInterp : (Expr -> Expr) -> InterpPart -> InterpPart
 mapInterp _ (InterpStr s) = InterpStr s
-mapInterp f (InterpExpr e) = InterpExpr (mapExpr f e)
+mapInterp g (InterpExpr e) = InterpExpr (g e)
 
 export
 mapDecl : (Expr -> Expr) -> Decl -> Decl

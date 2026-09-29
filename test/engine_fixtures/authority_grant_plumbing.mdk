@@ -1,0 +1,47 @@
+-- Bindings and an interface method whose types quantify an authority take it as
+-- a hidden argument at every use (EFFECTS-SEMANTICS §8): direct, local,
+-- recursive, dispatched, partially applied and passed as a value.  No file is
+-- touched, so every engine runs it.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+open : (path : String) -> Handle path
+open path = Handle path
+
+pathOf : Handle p -> String
+pathOf (Handle s) = s
+
+interface Source s where
+  load : s -> (path : String) -> <FileRead path> Result String String
+
+data Echo = Echo
+
+impl Source Echo where
+  load _ path = Ok ("echo " ++ path)
+
+both : String -> List String
+both name =
+  let get (Handle s) = s
+  [get (open ("cfg/" ++ name)), get (open name)]
+
+depth : Int -> (path : String) -> String
+depth n path = if n <= 0 then pathOf (open path) else depth (n - 1) path
+
+viaMethod : String -> <FileRead "cfg/*"> Result String String
+viaMethod name = load Echo ("cfg/" ++ name)
+
+viaDict : Source s => s -> (path : String) -> <FileRead path> Result String String
+viaDict src path = load src path
+
+viaPartial : String -> <FileRead "cfg/*"> Result String String
+viaPartial name =
+  let f = load Echo
+  f ("cfg/" ++ name)
+
+main =
+  println (pathOf (open "cfg/a.txt"))
+  println (both "b")
+  println (depth 3 "cfg/c")
+  println (viaMethod "d")
+  println (viaDict Echo "cfg/e")
+  println (viaPartial "f")
+  println (map (load Echo) ["g", "h"])

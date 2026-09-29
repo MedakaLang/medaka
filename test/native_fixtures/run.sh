@@ -176,6 +176,42 @@ case "$out" in
   *) bad semicolon_stmt "got [$out]" ;;
 esac
 
+# EFFECTS-SEMANTICS §8: a file extern receives the authority granted at each use,
+# and that argument cannot change a value the program computes — so `run` and a
+# built binary print the same thing for every shape a grant reaches a call through.
+# Each case runs in its own directory, whose `cfg/a.txt` holds `granted`.
+GRANTS="$FIX/authority_grants"
+grant_case() {
+  out_run="$(cd "$GRANTS" && perl -e 'alarm 60; exec @ARGV' -- "$M" run "$1.mdk" 2>&1)"
+  bin="${TMPDIR:-/tmp}/medaka_grants_$$_$1"
+  (cd "$GRANTS" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$1.mdk" -o "$bin" >/dev/null 2>&1)
+  out_build="$( (cd "$GRANTS" && "$bin") 2>&1)"
+  rm -f "$bin" "$bin.ll"
+  if [ "$out_run" = "$2" ] && [ "$out_build" = "$2" ]; then
+    ok "grants_$1"
+  else
+    bad "grants_$1" "expected [$2], run printed [$out_run], build printed [$out_build]"
+  fi
+}
+grant_case open_read "Ok granted"
+grant_case wrappers "Ok [granted]
+Ok granted
+[Ok granted]"
+grant_case value_uses "Ok granted
+Ok granted"
+grant_case existential_delay "Ok granted
+Ok granted
+Ok granted"
+grant_case method "Ok granted
+Ok grantedgranted
+Ok granted
+Ok echo cfg/a.txt
+Ok granted
+[Ok granted]"
+grant_case partial_write "Ok ()
+Ok x
+Ok ()"
+
 echo
 
 # ── The ledger bites in BOTH directions ───────────────────────────────────────

@@ -155,6 +155,10 @@ funGroupNames : List (String, (List Pat, Expr)) -> List String -> List String
 funNamesOf : List Decl -> List String
 getByte64 : Int -> Array (Value a) -> Int -> Int
 globalFramesWith : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> List (List (String, Ref (Value a)))
+granted1 : (Value a -> <a> Value a) -> Value a
+granted2 : (Value a -> Value a -> <a> Value a) -> Value a
+granted3 : (Value a -> Value a -> Value a -> <a> Value a) -> Value a
+grantedPair : (Value a -> Value a -> <a> Value a) -> Value a
 groupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> <a> Value a
 groupsNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsNotNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))

@@ -1,0 +1,14 @@
+-- A handle opened at one authority and read by a function polymorphic in it: the
+-- read's file extern is granted the authority `readCfg` passes through `read`.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+open : (path : String) -> Handle path
+open path = Handle path
+
+read : Handle p -> <FileRead p> Result String String
+read (Handle s) = readFile s
+
+readCfg : String -> <FileRead "cfg/*"> Result String String
+readCfg name = read (open ("cfg/" ++ name))
+
+main = println (readCfg "a.txt")

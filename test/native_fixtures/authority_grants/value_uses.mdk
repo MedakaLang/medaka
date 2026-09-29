@@ -1,0 +1,14 @@
+-- A file extern stored as a value and applied later: in a list and in a cell.
+viaList : String -> <FileRead "cfg/*"> Result String String
+viaList name = match [readFile]
+  f :: _ => f ("cfg/" ++ name)
+  [] => Err "none"
+
+viaRef : String -> <FileRead "cfg/*"> Result String String
+viaRef name =
+  let r = Ref readFile
+  (!r) ("cfg/" ++ name)
+
+main =
+  println (viaList "a.txt")
+  println (viaRef "a.txt")

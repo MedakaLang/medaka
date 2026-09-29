@@ -2021,6 +2021,12 @@ static long long mdk_str_cstr(const char *s) {
   return mdk_str_lossy(s, (long long)strlen(s));
 }
 
+/* Every file extern whose path is an authority receives, after its value
+ * arguments, the authority granted for each path (EFFECTS-SEMANTICS §8): a
+ * List String of domain elements, a trailing `*` spelling a pattern, and Nil
+ * for the whole domain.  It exists for confinement and cannot change a value
+ * an extern returns. */
+
 /* readFile : String -> Result String String — Ok content / Err msg.
  * fopen(2) happily opens a directory for reading, but SEEK_END+ftell then
  * reports an absurd size (LONG_MAX on ext4), which overflows mdk_alloc and
@@ -2034,7 +2040,8 @@ static long long mdk_str_cstr(const char *s) {
  * String: a file is where raw bytes most often come from, so a silent U+FFFD
  * here would lose data the caller never saw; readFileBytes is the raw route.
  * The bytes are read straight into the String cell and validated there. */
-long long mdk_read_file(long long path) {
+long long mdk_read_file(long long path, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) == 0 && S_ISDIR(st.st_mode))
@@ -2063,7 +2070,8 @@ long long mdk_read_file(long long path) {
  * Builds an Array cell [len, b0<<1|1, b1<<1|1, ...] of TAGGED int byte values
  * 0..255 (mirrors mdk_array_from_list element tagging).
  * Same directory guard as mdk_read_file — see comment there. */
-long long mdk_read_file_bytes(long long path) {
+long long mdk_read_file_bytes(long long path, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) == 0 && S_ISDIR(st.st_mode))
@@ -2120,15 +2128,22 @@ static long long mdk_write_impl(long long path, long long content, const char *m
 }
 
 /* writeFile : String -> String -> Result String Unit — truncating write. */
-long long mdk_write_file(long long path, long long content)  { return mdk_write_impl(path, content, "wb"); }
+long long mdk_write_file(long long path, long long content, long long grant) {
+  (void)grant;
+  return mdk_write_impl(path, content, "wb");
+}
 /* appendFile : String -> String -> Result String Unit — append (create if absent). */
-long long mdk_append_file(long long path, long long content) { return mdk_write_impl(path, content, "ab"); }
+long long mdk_append_file(long long path, long long content, long long grant) {
+  (void)grant;
+  return mdk_write_impl(path, content, "ab");
+}
 
 /* writeFileBytes : String -> Array Int -> Result String Unit — write raw bytes.
  * arr[0] = length; arr[i+1] = tagged int byte ((byte << 1)|1) for i in 0..len-1.
  * Untag each element: (elem >> 1) & 0xFF.  Byte-clean write counterpart of
  * mdk_read_file_bytes. */
-long long mdk_write_file_bytes(long long path, long long arr) {
+long long mdk_write_file_bytes(long long path, long long arr, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   const long long *a = (const long long *)arr;
   long long n = a[0];
@@ -2148,7 +2163,9 @@ long long mdk_write_file_bytes(long long path, long long arr) {
  * narrows it even then; an existing file keeps whatever mode it already had.
  * fchmod on the open descriptor settles both cases, and it runs BEFORE the
  * first byte is written, so the contents never exist at a wider mode. */
-long long mdk_write_file_mode(long long path, long long mode_tagged, long long content) {
+long long mdk_write_file_mode(long long path, long long mode_tagged, long long content,
+                               long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   const char *c = (const char *)content + 24;
   long long cl = ((const long long *)content)[1];
@@ -2174,7 +2191,8 @@ long long mdk_write_file_mode(long long path, long long mode_tagged, long long c
 
 /* fileMode : String -> Result String Int — st_mode's permission bits (& 07777),
  * as a tagged Int inside Ok.  stat(2), so a symlink reports its target. */
-long long mdk_file_mode(long long path) {
+long long mdk_file_mode(long long path, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2182,13 +2200,15 @@ long long mdk_file_mode(long long path) {
 }
 
 /* fileExists : String -> Bool — raw 0/1, emitter tags via tagInt. */
-long long mdk_file_exists(long long path) {
+long long mdk_file_exists(long long path, long long grant) {
+  (void)grant;
   return access((const char *)path + 24, F_OK) == 0 ? 1 : 0;
 }
 
 /* canonicalizePath : String -> String — realpath(3); input unchanged on failure
  * (matches the OCaml oracle's `try Unix.realpath p with _ -> p`). */
-long long mdk_canonicalize_path(long long path) {
+long long mdk_canonicalize_path(long long path, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   char buf[PATH_MAX];
   if (realpath(p, buf) != 0) return mdk_str_cstr(buf);
@@ -2197,7 +2217,8 @@ long long mdk_canonicalize_path(long long path) {
 
 /* listDir : String -> Result String (List String).
  * OCaml Sys.readdir excludes "." and ".." — skip them for correctness. */
-long long mdk_list_dir(long long path) {
+long long mdk_list_dir(long long path, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   DIR *d = opendir(p);
   if (!d) return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2211,21 +2232,26 @@ long long mdk_list_dir(long long path) {
 }
 
 /* makeDir : String -> Result String Unit — mkdir 0755. */
-long long mdk_make_dir(long long path) {
+long long mdk_make_dir(long long path, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   if (mkdir(p, 0755) == 0) return mdk_ok(1);  /* Ok () */
   return mdk_err(mdk_str_cstr(strerror(errno)));
 }
 
 /* removeFile : String -> Result String Unit — unlink(2). */
-long long mdk_remove_file(long long path) {
+long long mdk_remove_file(long long path, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   if (unlink(p) == 0) return mdk_ok(1);  /* Ok () */
   return mdk_err(mdk_str_cstr(strerror(errno)));
 }
 
 /* rename : String -> String -> Result String Unit — rename(2) old new. */
-long long mdk_rename(long long oldp, long long newp) {
+long long mdk_rename(long long oldp, long long newp, long long grant_src,
+                     long long grant_dst) {
+  (void)grant_src;
+  (void)grant_dst;
   const char *o = (const char *)oldp + 24;
   const char *n = (const char *)newp + 24;
   if (rename(o, n) == 0) return mdk_ok(1);  /* Ok () */
@@ -2233,7 +2259,8 @@ long long mdk_rename(long long oldp, long long newp) {
 }
 
 /* removeDir : String -> Result String Unit — rmdir(2); empty dir only. */
-long long mdk_remove_dir(long long path) {
+long long mdk_remove_dir(long long path, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   if (rmdir(p) == 0) return mdk_ok(1);  /* Ok () */
   return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2242,7 +2269,8 @@ long long mdk_remove_dir(long long path) {
 /* fsync : String -> Result String Unit — open(O_RDONLY)+fsync(2)+close.
  * O_RDONLY opens both a regular file and a directory, since the durability
  * of a rename is a property of the containing directory, not either file. */
-long long mdk_fsync(long long path) {
+long long mdk_fsync(long long path, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   int fd = open(p, O_RDONLY);
   if (fd < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2426,7 +2454,8 @@ long long mdk_build_date(long long unit_ignored) {
  * stat(2) the path; Ok (sizeBytes, isDir, isFile, mtimeSeconds) or Err strerror.
  * 4-tuple cell layout mirrors mdk_run_command's 3-tuple: [TUPLE_TAG, e0..e3].
  * Bool uses the native tagged encoding (True=3, False=1); Float is boxed. */
-long long mdk_stat_file(long long path) {
+long long mdk_stat_file(long long path, long long grant) {
+  (void)grant;
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));

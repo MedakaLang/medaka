@@ -1,0 +1,46 @@
+-- An interface method whose argument names an authority: called directly, through
+-- a default body, through a dictionary, partially applied, and as a value.
+interface Source s where
+  load : s -> (path : String) -> <FileRead path> Result String String
+  loadTwice : s -> (path : String) -> <FileRead path> Result String String
+  loadTwice src path = match load src path
+    Ok a => map (b => a ++ b) (load src path)
+    Err e => Err e
+
+data Disk = Disk
+
+data Echo = Echo
+
+impl Source Disk where
+  load _ path = readFile path
+
+impl Source Echo where
+  load _ = p => Ok ("echo " ++ p)
+
+viaMethod : String -> <FileRead "cfg/*"> Result String String
+viaMethod name = load Disk ("cfg/" ++ name)
+
+viaDefault : String -> <FileRead "cfg/*"> Result String String
+viaDefault name = loadTwice Disk ("cfg/" ++ name)
+
+viaPoly : Source s =>
+  s ->
+  (path : String) ->
+  <FileRead path> Result String String
+viaPoly src path = load src path
+
+viaPartial : String -> <FileRead "cfg/*"> Result String String
+viaPartial name =
+  let f = load Disk
+  f ("cfg/" ++ name)
+
+viaValue : String -> <FileRead> List (Result String String)
+viaValue name = map (load Disk) ["cfg/" ++ name]
+
+main =
+  println (viaMethod "a.txt")
+  println (viaDefault "a.txt")
+  println (viaPoly Disk "cfg/a.txt")
+  println (viaPoly Echo "cfg/a.txt")
+  println (viaPartial "a.txt")
+  println (viaValue "a.txt")

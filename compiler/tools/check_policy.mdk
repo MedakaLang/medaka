@@ -78,6 +78,7 @@ import types.typecheck.{
   atomOfLabel,
   ioAliasLabels,
   TcDiag,
+  bindingGrantArity,
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{
@@ -85,6 +86,7 @@ import support.util.{
   listLen
 }
 import string.{toLower}
+import list.{replicate}
 
 -- ── policy args ──────────────────────────────────────────────────────────
 public export data PolicyArgs = PolicyArgs (Option String) String String
@@ -553,21 +555,21 @@ stubSource = stringConcat
     "getEnv k = None\n",
     "args u = []\n",
     "executablePath u = \"\"\n",
-    -- file read
-    "readFile p = Err \"\"\n",
-    "readFileBytes p = Err \"\"\n",
-    "fileExists p = False\n",
-    "canonicalizePath p = p\n",
-    "listDir p = Err \"\"\n",
-    "statFile p = Err \"\"\n",
+    -- file read: each file extern takes its path's grant last
+    "readFile p g = Err \"\"\n",
+    "readFileBytes p g = Err \"\"\n",
+    "fileExists p g = False\n",
+    "canonicalizePath p g = p\n",
+    "listDir p g = Err \"\"\n",
+    "statFile p g = Err \"\"\n",
     -- file write
-    "writeFile p c = Err \"\"\n",
-    "writeFileBytes p b = Err \"\"\n",
-    "appendFile p c = Err \"\"\n",
-    "makeDir p = Err \"\"\n",
-    "removeFile p = Err \"\"\n",
-    "rename o n = Err \"\"\n",
-    "removeDir p = Err \"\"\n",
+    "writeFile p c g = Err \"\"\n",
+    "writeFileBytes p b g = Err \"\"\n",
+    "appendFile p c g = Err \"\"\n",
+    "makeDir p g = Err \"\"\n",
+    "removeFile p g = Err \"\"\n",
+    "rename o n gs gd = Err \"\"\n",
+    "removeDir p g = Err \"\"\n",
     -- exec
     "runCommand cmd a = Err \"\"\n",
     -- net
@@ -585,9 +587,11 @@ stubSource = stringConcat
 
 -- Run `fn` on the sample request "X-Forwarded-For: 192.168.1.1" with stub
 -- platform impls, returning the captured stdout (LOG lines) ++ the transform
--- line.  Mirror the OCaml accept-path eval block.
-runPlugin : String -> ElabResult -> String
-runPlugin fnName (coreD, modules, _, _, _, _) =
+-- line.  Mirror the OCaml accept-path eval block.  An entry whose type
+-- quantifies authorities first takes one grant per authority
+-- (EFFECTS-SEMANTICS §8); the sample run grants each the whole domain.
+runPlugin : String -> Int -> ElabResult -> String
+runPlugin fnName grants (coreD, modules, _, _, _, _) =
   let stubD = desugar (parse stubSource)
   -- The plugin runs ELABORATED, as `run` does: an interface default reaches an
   -- instance only through the elaboration's disposition table.  The stubs are
@@ -599,7 +603,8 @@ runPlugin fnName (coreD, modules, _, _, _, _) =
     None => "   (no '" ++ fnName ++ "' binding in output)\n"
     Some fnVal =>
       let sample = "X-Forwarded-For: 192.168.1.1"
-      let result = apply fnVal (VString sample)
+      let granted = fold (f _ => apply f (VList [])) fnVal (replicate grants ())
+      let result = apply granted (VString sample)
       let logged = !outputRef
       "\{logged}   transform \{escStr sample} = \{ppValue result}\n"
 
@@ -678,7 +683,7 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
           -- run, so a sample can never crash an already-accepted verdict.
           let pluginOutput =
             if takesAndReturnsString fnScheme then
-              runPlugin fnName elaborated
+              runPlugin fnName (bindingGrantArity fnName fnScheme) elaborated
             else
               "   no sample run: '\{fnName}' is not a String -> String entry\n"
           PolicyAccept (header ++ pluginOutput)
