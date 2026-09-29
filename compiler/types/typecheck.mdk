@@ -10840,7 +10840,9 @@ resetGraphState _ =
   -- ids, and the fresh run restarts the counter that minted them.
   localAbs.lasQuantified := omEmpty
   -- Grant-marked occurrences are minted before the inference that resets, like
-  -- `evCells`.
+  -- `evCells`.  The sourceless variables are not: the inference that follows
+  -- registers them under ids the restarted counter mints again.
+  grants.gsSourceless := Tip
   graphRun := GraphRun { graphRun.value | localAbs = localAbs, grants = grants }
 
 -- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
