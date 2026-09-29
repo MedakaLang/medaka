@@ -9,7 +9,11 @@
    `com.atproto.server.describeServer`,
    `com.atproto.sync.{getRepo, getLatestCommit, getBlob, listBlobs, listRepos,
    getRepoStatus, getRecord, getBlocks}`, and
-   `com.atproto.identity.resolveHandle`. **Sessions** are
+   `com.atproto.identity.resolveHandle`. **Identity** is
+   `com.atproto.identity.updateHandle`, which transitions nothing: it answers
+   whether the requested handle is the one this account's DID document
+   already names, and asks the shell to re-announce it when it is.
+   **Sessions** are
    the four
    `com.atproto.server.{createSession, refreshSession, deleteSession,
    getSession}` routes, which transition the `Store`'s auth half rather than
@@ -28,7 +32,8 @@
    reason, not because it is a repository write.
 
    Every registration carries its own `AuthPolicy`: the five writes,
-   `getSession`, `getServiceAuth`, and both preference routes are
+   `updateHandle`, `getSession`, `getServiceAuth`, and both preference routes
+   are
    `AuthenticatedRoute`, the thirteen reads are `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`,
    `createSession` is `PublicRoute` (it is the login that issues the tokens the
@@ -127,7 +132,8 @@ import bytes.{Bytes, encodeUtf8}
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import list.{last, take}
-import string.{join, split, startsWith, toInt, toLower}
+import regex.{Regex, isMatch, mustCompile}
+import string.{endsWith, join, replaceAll, split, startsWith, toInt, toLower}
 import string.{utf8ByteLength}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{
@@ -195,6 +201,7 @@ import lib.server_core.{
   accountDid,
   accountHandle,
   accountHostname,
+  announceIdentityHeader,
   createSessionNsid,
   getServiceAuthNsid,
   identifiesAccount,
@@ -307,6 +314,9 @@ subscribeReposNsid = "com.atproto.sync.subscribeRepos"
 resolveHandleNsid : String
 resolveHandleNsid = "com.atproto.identity.resolveHandle"
 
+updateHandleNsid : String
+updateHandleNsid = "com.atproto.identity.updateHandle"
+
 refreshSessionNsid : String
 refreshSessionNsid = "com.atproto.server.refreshSession"
 
@@ -353,6 +363,9 @@ invalidSize = xrpcErrorResponse 400 "Bad Request" "InvalidSize"
 
 handleNotFound : String -> Response
 handleNotFound = xrpcErrorResponse 400 "Bad Request" "HandleNotFound"
+
+invalidHandle : String -> Response
+invalidHandle = xrpcErrorResponse 400 "Bad Request" "InvalidHandle"
 
 authenticationRequired : String -> Response
 authenticationRequired =
@@ -1920,6 +1933,135 @@ applyResolveHandle account params = do
   else
     Err (handleNotFound "Unable to resolve handle '\{handle}'")
 
+-- ── com.atproto.identity.updateHandle ───────────────────────────────────────
+
+{- | The top-level domains a handle may not end in: the reference's own list,
+   the names reserved from public DNS. `.test` is not among them. -}
+disallowedHandleTlds : List String
+disallowedHandleTlds = [
+  ".local",
+  ".arpa",
+  ".invalid",
+  ".localhost",
+  ".internal",
+  ".example",
+  ".alt",
+  ".onion",
+]
+
+{- | The reference's handle slur list, as it applies to a handle that has
+   already passed the handle syntax check and been lowercased.
+
+   The reference's patterns are JavaScript regular expressions without the
+   `u` flag, whose character classes also list Unicode lookalikes. A handle
+   reaching this check holds only `a-z`, `0-9`, `.` and `-`, so each class
+   here is the original class's members from that alphabet and nothing else
+   is lost. `\b` is ASCII in both dialects. -}
+explicitSlurPatterns : List Regex
+explicitSlurPatterns = [
+  mustCompile "\\bch[il1]nks?\\b",
+  mustCompile "\\bc[o0]{2}ns?\\b",
+  mustCompile "\\bf[a4]g{1,2}([eilo013]t{1,2}(ry|r[il1][e3])?)?s?\\b",
+  mustCompile "\\bk[ily1]k[e3](ry|r[il1][e3])?s*\\b",
+  mustCompile "\\bn[ailo14][gq]{2}(l[e3]t|[ae3]r?|n[o0][gq]|[a4]?)?s?\\b",
+  mustCompile "n[ailo14][gq]{2}(l[e3]t|[e3]r)s?",
+  mustCompile "\\btr[a4]+n{1,2}([il1][e3]|y|[e3]r)s?\\b",
+]
+
+{- | The reference's test: any pattern matches the handle, or the handle with
+   every `.`, `-` and `_` removed. -}
+hasExplicitSlur : String -> Bool
+hasExplicitSlur handle =
+  let squeezed =
+    replaceAll "_" "" (replaceAll "-" "" (replaceAll "." "" handle))
+  any
+    (pattern => isMatch pattern handle || isMatch pattern squeezed)
+    explicitSlurPatterns
+
+{- | The 200 an accepted call answers: no body, and the internal field that
+   asks the shell to emit `#identity` (`lib.server_core`'s
+   `announceIdentityHeader`, removed before the response is written). -}
+announceIdentityResponse : Response
+announceIdentityResponse =
+  resultOrPanic
+    "handlers: internal response construction error"
+    (makeResponse 200 "OK" [announceIdentityHeader] empty)
+
+{- | `com.atproto.identity.updateHandle` for the one account this server
+   hosts.
+
+   The handle is configuration (`--handle`), and the DID document this server
+   publishes names it, so the only handle the reference would accept for this
+   account is the current one. That call is answered 200 with an empty body
+   and re-announces the account's `#identity` on the event stream; nothing is
+   persisted. Any other valid handle is refused the way the reference refuses a
+   `did:web` account whose document does not name the requested handle.
+
+   The checks run in the reference's order: body shape, handle syntax on the
+   string as sent, lowercasing, the reserved top-level domains, the slur list,
+   and equality with the current handle. The syntax check comes before the
+   lowercasing, so a non-ASCII spelling that some other case mapping would
+   turn into an ASCII handle is refused rather than folded.
+
+   Where it differs from the reference:
+   - The body-shape and handle-syntax refusals use this module's wording. The
+     error name, `InvalidRequest`, is the reference's.
+   - There are no service handle domains, so their length and reserved-name
+     constraints do not apply.
+   - There is no handle resolver. The reference resolves a handle outside its
+     service domains and refuses one that does not resolve to the account's
+     DID, with "External handle did not resolve to DID", before it reads the
+     DID document; here every valid handle but the current one gets the DID
+     document refusal.
+   - With one account, "Handle already taken" cannot arise.
+   - The rate limit is `maxHandleUpdatesPerWindow`, charged per client
+     identity when the request is admitted; the reference charges per DID and
+     only after its input checks pass. -}
+applyUpdateHandle : Account -> Json -> Result Response Response
+applyUpdateHandle account body = do
+  () <- requireObject body
+  requested <- requiredString "handle" body
+  () <- match validateHandle requested
+    Err message =>
+      Err
+        (invalidRequest
+          "Request field 'handle' is not a valid handle: \{message}")
+    Ok () => Ok ()
+  let normalized = toLower requested
+  if any (tld => endsWith tld normalized) disallowedHandleTlds then
+    Err (invalidHandle "Handle TLD is invalid or disallowed")
+  else if hasExplicitSlur normalized then
+    Err (invalidHandle "Inappropriate language in handle")
+  else if sameHandle normalized (accountHandle account) then
+    Ok announceIdentityResponse
+  else
+    Err (invalidRequest "DID is not properly configured for handle")
+
+-- | The identity procedure, or `None` for a call this half does not own. It
+-- is `AuthenticatedRoute`, so its `Unauthenticated` arm answers 401 for a
+-- direct caller of this function, as the session routes do.
+identityHandled : Account ->
+  AuthOutcome ->
+  Store ->
+  XrpcCall ->
+  Option (Store, Response)
+identityHandled account outcome store (ProcedureJsonCall nsid _ body)
+  | nsid == updateHandleNsid = match outcome
+    Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    Authenticated _ _ =>
+      Some (store, collapseResponse (applyUpdateHandle account body))
+  | otherwise = None
+identityHandled _ _ _ _ = None
+
+{- | The identity procedure. `AuthenticatedRoute`: it speaks for the
+   account's identity, and registering it here also keeps it locally served
+   rather than forwardable (`lib.proxy`'s `proxyDisposition`). -}
+identityEndpoints : Result String (List Endpoint)
+identityEndpoints = do
+  update <- procedureEndpoint updateHandleNsid JsonInput AuthenticatedRoute
+  Ok [update]
+
 -- ── the two well-knowns ─────────────────────────────────────────────────────
 
 {- | The hosted account's DID document, built from the repository's OWN
@@ -2512,8 +2654,9 @@ preferencesHandled _ _ _ = None
 
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
-{- | The complete handler: five record writes, five session routes, two
-   preference routes, thirteen reads, two well-knowns, and the health probe.
+{- | The complete handler: five record writes, one identity procedure, five
+   session routes, two preference routes, thirteen reads, two well-knowns,
+   and the health probe.
    The halves are disjoint by construction — each owns a distinct set of
    NSIDs, and the read half additionally owns the two well-knowns and the
    health probe — so the order below is a formality rather than a
@@ -2527,11 +2670,13 @@ pdsHandler account links version context outcome store call =
       Some result => result
       None => match preferencesHandled outcome store call
         Some result => result
-        None => match readHandled account links version store call
-          Some response => (store, response)
-          None => (store, unhandledRoute call)
+        None => match identityHandled account outcome store call
+          Some result => result
+          None => match readHandled account links version store call
+            Some response => (store, response)
+            None => (store, unhandledRoute call)
 
--- | The registry of all twenty-six XRPC endpoints. The two well-known paths
+-- | The registry of all twenty-seven XRPC endpoints. The two well-known paths
 -- are NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
@@ -2539,11 +2684,14 @@ pdsRegistry = do
   writes <- recordEndpoints
   sessions <- sessionEndpoints
   preferences <- preferencesEndpoints
+  identity <- identityEndpoints
   reads <- readEndpoints
   makeRegistry
     (concatEndpoints
       writes
-      (concatEndpoints sessions (concatEndpoints preferences reads)))
+      (concatEndpoints
+        sessions
+        (concatEndpoints preferences (concatEndpoints identity reads))))
 
 {- | The thirteen read queries and the one event-stream subscription, every one
    of them public.

@@ -205,6 +205,19 @@ export
 maxCreateSessionPerWindow : Int
 maxCreateSessionPerWindow = 30
 
+{- | `com.atproto.identity.updateHandle`: every accepted call appends one
+   `#identity` event to the durable event log, so the count is bounded by its
+   own class rather than by the shared request allowance.
+
+   The reference allows 10 per 5 minutes and 50 per day, keyed by the
+   authenticated DID. This table has one window and charges by client
+   identity before a credential is resolved, so 10 per 60-second window per
+   client identity is the nearest shape it can hold; it admits more per day
+   than the reference does. -}
+export
+maxHandleUpdatesPerWindow : Int
+maxHandleUpdatesPerWindow = 10
+
 {- | The whole-repository export ceiling (`com.atproto.sync.getRepo` and
    `com.atproto.sync.getBlocks` — `pds/lib/ratelimit.mdk`'s `isRepoExportNsid`
    is the list), which

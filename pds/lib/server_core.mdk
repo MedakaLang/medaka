@@ -11,6 +11,8 @@ import http.{
   headerName,
   headerValue,
   HttpParseFailure(..),
+  makeHeader,
+  makeResponse,
   parseRequestClassified,
   QueryParam(..),
   Request,
@@ -19,10 +21,14 @@ import http.{
   requestMethod,
   requestTarget,
   Response,
+  responseBody,
+  responseHeaders,
+  responseReason,
+  responseStatus,
   serializeResponse,
 }
 import bytes as B
-import bytes.{Bytes}
+import bytes.{Bytes, encodeUtf8}
 import hex as Hex
 import json.{Json(..), get}
 import lib.credential.{
@@ -380,11 +386,62 @@ refusalFor _ =
 export
 handle : Server -> RequestContext -> Store -> Request -> (Store, Response)
 handle server context store request =
+  let (next, response, _) = handleAnnouncing server context store request
+  (next, response)
+
+{- | `handle`, also answering whether the handler asked for the account's
+   identity to be announced on the event stream.
+
+   A handler asks by putting `announceIdentityHeader` on its response. The
+   field is removed here, before the response leaves this module, so it never
+   reaches a client and every response that does not carry it is returned
+   unchanged. -}
+export
+handleAnnouncing : Server ->
+  RequestContext ->
+  Store ->
+  Request ->
+  (Store, Response, Bool)
+handleAnnouncing server context store request =
   if isPreflight request then
-    (store, preflightResponse request)
+    (store, preflightResponse request, False)
   else
     let (next, response) = handleRouted server context store request
-    (next, withAllowOrigin response)
+    let (stripped, announce) = takeAnnouncement response
+    (next, withAllowOrigin stripped, announce)
+
+announceIdentityName : String
+announceIdentityName = "medaka-announce"
+
+{- | The internal response field a handler sets when its success obliges the
+   shell to emit an `#identity` event. The pure core cannot emit one itself:
+   the event's sequence number comes off the durable log. -}
+export
+announceIdentityHeader : Header
+announceIdentityHeader =
+  resultOrPanic
+    "server_core: internal response header error"
+    (makeHeader announceIdentityName (encodeUtf8 "identity"))
+
+isAnnouncement : Header -> Bool
+isAnnouncement field = headerName field == announceIdentityName
+
+takeAnnouncement : Response -> (Response, Bool)
+takeAnnouncement response =
+  let fields = responseHeaders response
+  if any isAnnouncement fields then
+    let kept = filter (field => not (isAnnouncement field)) fields
+    let rebuilt =
+      resultOrPanic
+        "server_core: rebuilt from a Response makeResponse already accepted"
+        (makeResponse
+          (responseStatus response)
+          (responseReason response)
+          kept
+          (responseBody response))
+    (rebuilt, True)
+  else
+    (response, False)
 
 handleRouted : Server -> RequestContext -> Store -> Request -> (Store, Response)
 handleRouted (Server account registry handler) context store request =
@@ -1217,11 +1274,25 @@ resourceExcessResponse =
 -- the exact input Store; successful calls expose the handler's successor.
 export
 handleBytes : Server -> RequestContext -> Store -> Bytes -> (Store, Bytes)
-handleBytes server context store bytes = match parseRequestClassified bytes
-  Err (HttpMalformed _) =>
-    (store, serializeResponse (withAllowOrigin malformedHttpResponse))
-  Err (HttpResourceExcess _) =>
-    (store, serializeResponse (withAllowOrigin resourceExcessResponse))
-  Ok request =>
-    let (next, response) = handle server context store request
-    (next, serializeResponse response)
+handleBytes server context store bytes =
+  let (next, response, _) = handleBytesAnnouncing server context store bytes
+  (next, response)
+
+-- | `handleBytes`, also answering `handleAnnouncing`'s flag. A buffer that
+-- does not frame reaches no handler, so it never asks for an announcement.
+export
+handleBytesAnnouncing : Server ->
+  RequestContext ->
+  Store ->
+  Bytes ->
+  (Store, Bytes, Bool)
+handleBytesAnnouncing server context store bytes =
+  match parseRequestClassified bytes
+    Err (HttpMalformed _) =>
+      (store, serializeResponse (withAllowOrigin malformedHttpResponse), False)
+    Err (HttpResourceExcess _) =>
+      (store, serializeResponse (withAllowOrigin resourceExcessResponse), False)
+    Ok request =>
+      let (next, response, announce) =
+        handleAnnouncing server context store request
+      (next, serializeResponse response, announce)

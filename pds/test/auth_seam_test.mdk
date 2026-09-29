@@ -526,11 +526,12 @@ samePolicy _ _ = False
    the diff. A route registered later shows up in exactly one of these three
    lists, so neither an unclassified new write nor a wrongly closed read can
    land without moving one of them. -}
-test "exactly the four record writes, uploadBlob, getSession, getServiceAuth and the two preferences routes are access-gated" = expectEqual
+test "exactly the four record writes, uploadBlob, updateHandle, getSession, getServiceAuth and the two preferences routes are access-gated" = expectEqual
   (nsidsWith AuthenticatedRoute)
   [
     "app.bsky.actor.getPreferences",
     "app.bsky.actor.putPreferences",
+    "com.atproto.identity.updateHandle",
     "com.atproto.repo.applyWrites",
     "com.atproto.repo.createRecord",
     "com.atproto.repo.deleteRecord",

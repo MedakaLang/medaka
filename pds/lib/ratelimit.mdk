@@ -57,6 +57,7 @@ import lib.resource_limits.{
   maxCreateSessionPerWindow,
   maxPreferencesPerWindow,
   maxProxiedCallsPerWindow,
+  maxHandleUpdatesPerWindow,
   maxRateLimitIdentitiesPerWindow,
   maxRepoExportsPerWindow,
   maxRequestsPerWindow,
@@ -95,6 +96,7 @@ public export data RateLimitClass =
   | CreateSessionClass
   | RepoExportClass
   | ProxyClass
+  | HandleUpdateClass
 
 -- | `RefusedCapacity` is distinct from `Refused`: the identity itself has not
 -- exceeded any class allowance (it may have no row at all), and what refused
@@ -120,9 +122,10 @@ public export data RateLimitVerdict = Admitted | Refused | RefusedCapacity
 export data RateLimitState =
   | RateLimitState Int (Map String ClientCounters) (Map String ClientCounters)
 
-data ClientCounters = ClientCounters Int Int Int Int Int Int Int
+data ClientCounters = ClientCounters Int Int Int Int Int Int Int Int
 -- connections used, requests used, writes used, preferences used,
--- createSession used, repo exports used, proxied calls used
+-- createSession used, repo exports used, proxied calls used, handle updates
+-- used
 
 -- | No window has been entered yet, so any first decision starts fresh: the
 -- index cannot collide with a real `now / rateLimitWindowSeconds`, which is
@@ -140,6 +143,7 @@ classAllowance PreferencesClass = maxPreferencesPerWindow
 classAllowance CreateSessionClass = maxCreateSessionPerWindow
 classAllowance RepoExportClass = maxRepoExportsPerWindow
 classAllowance ProxyClass = maxProxiedCallsPerWindow
+classAllowance HandleUpdateClass = maxHandleUpdatesPerWindow
 
 {- | The two tables in view at `windowIdx`, given the pair a state holds and
    the index they were written at: the same pair while the index has not
@@ -229,32 +233,35 @@ step (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key
       )
 
 emptyCounters : ClientCounters
-emptyCounters = ClientCounters 0 0 0 0 0 0 0
+emptyCounters = ClientCounters 0 0 0 0 0 0 0 0
 
 classUsed : RateLimitClass -> ClientCounters -> Int
-classUsed ConnectionsClass (ClientCounters c _ _ _ _ _ _) = c
-classUsed RequestsClass (ClientCounters _ r _ _ _ _ _) = r
-classUsed WritesClass (ClientCounters _ _ w _ _ _ _) = w
-classUsed PreferencesClass (ClientCounters _ _ _ pf _ _ _) = pf
-classUsed CreateSessionClass (ClientCounters _ _ _ _ s _ _) = s
-classUsed RepoExportClass (ClientCounters _ _ _ _ _ x _) = x
-classUsed ProxyClass (ClientCounters _ _ _ _ _ _ p) = p
+classUsed ConnectionsClass (ClientCounters c _ _ _ _ _ _ _) = c
+classUsed RequestsClass (ClientCounters _ r _ _ _ _ _ _) = r
+classUsed WritesClass (ClientCounters _ _ w _ _ _ _ _) = w
+classUsed PreferencesClass (ClientCounters _ _ _ pf _ _ _ _) = pf
+classUsed CreateSessionClass (ClientCounters _ _ _ _ s _ _ _) = s
+classUsed RepoExportClass (ClientCounters _ _ _ _ _ x _ _) = x
+classUsed ProxyClass (ClientCounters _ _ _ _ _ _ p _) = p
+classUsed HandleUpdateClass (ClientCounters _ _ _ _ _ _ _ h) = h
 
 bumpClass : RateLimitClass -> ClientCounters -> ClientCounters
-bumpClass ConnectionsClass (ClientCounters c r wr pf s x p) =
-  ClientCounters (c + 1) r wr pf s x p
-bumpClass RequestsClass (ClientCounters c r wr pf s x p) =
-  ClientCounters c (r + 1) wr pf s x p
-bumpClass WritesClass (ClientCounters c r wr pf s x p) =
-  ClientCounters c r (wr + 1) pf s x p
-bumpClass PreferencesClass (ClientCounters c r wr pf s x p) =
-  ClientCounters c r wr (pf + 1) s x p
-bumpClass CreateSessionClass (ClientCounters c r wr pf s x p) =
-  ClientCounters c r wr pf (s + 1) x p
-bumpClass RepoExportClass (ClientCounters c r wr pf s x p) =
-  ClientCounters c r wr pf s (x + 1) p
-bumpClass ProxyClass (ClientCounters c r wr pf s x p) =
-  ClientCounters c r wr pf s x (p + 1)
+bumpClass ConnectionsClass (ClientCounters c r wr pf s x p h) =
+  ClientCounters (c + 1) r wr pf s x p h
+bumpClass RequestsClass (ClientCounters c r wr pf s x p h) =
+  ClientCounters c (r + 1) wr pf s x p h
+bumpClass WritesClass (ClientCounters c r wr pf s x p h) =
+  ClientCounters c r (wr + 1) pf s x p h
+bumpClass PreferencesClass (ClientCounters c r wr pf s x p h) =
+  ClientCounters c r wr (pf + 1) s x p h
+bumpClass CreateSessionClass (ClientCounters c r wr pf s x p h) =
+  ClientCounters c r wr pf (s + 1) x p h
+bumpClass RepoExportClass (ClientCounters c r wr pf s x p h) =
+  ClientCounters c r wr pf s (x + 1) p h
+bumpClass ProxyClass (ClientCounters c r wr pf s x p h) =
+  ClientCounters c r wr pf s x (p + 1) h
+bumpClass HandleUpdateClass (ClientCounters c r wr pf s x p h) =
+  ClientCounters c r wr pf s x p (h + 1)
 
 -- | `RateLimit-Remaining` for a class, without mutating state: for response
 -- headers, computed AFTER the `step` call it accompanies so it reflects the
@@ -307,6 +314,14 @@ isCreateSessionNsid : String -> Bool
 isCreateSessionNsid nsid =
   sameNsidIdentity nsid "com.atproto.server.createSession"
 
+{- | `com.atproto.identity.updateHandle` gets its own allowance: each
+   accepted call appends an `#identity` event to the durable event log, which
+   a plain request does not. -}
+export
+isHandleUpdateNsid : String -> Bool
+isHandleUpdateNsid nsid =
+  sameNsidIdentity nsid "com.atproto.identity.updateHandle"
+
 {- | The procedures whose single response is a whole-repository CAR, and which
    therefore need `maxRepoExportsPerWindow` on top of the shared request
    allowance: one call's output is bounded by `maxCarBytes` alone, so a count
@@ -335,7 +350,7 @@ isRepoExportNsid nsid =
    and the server read the same classification: a second fold over the four
    predicates would let one of them drift while the other still reported the
    old answer. The order is canonical — writes, preferences, createSession,
-   repoExport — so a rendered class set is comparable as text. -}
+   repoExport, handleUpdate — so a rendered class set is comparable as text. -}
 export
 nsidRateLimitClasses : String -> List RateLimitClass
 nsidRateLimitClasses nsid =
@@ -343,6 +358,7 @@ nsidRateLimitClasses nsid =
     ++ (if isPreferencesNsid nsid then [PreferencesClass] else [])
     ++ (if isCreateSessionNsid nsid then [CreateSessionClass] else [])
     ++ (if isRepoExportNsid nsid then [RepoExportClass] else [])
+    ++ (if isHandleUpdateNsid nsid then [HandleUpdateClass] else [])
 
 {- | The operator's assertion that this process's peer is a configured trusted
    proxy (`--trusted-proxy`), carried as its own type rather than as a `Bool`.
@@ -480,6 +496,8 @@ classMessage RepoExportClass =
   "too many repository exports for this identity in the current window"
 classMessage ProxyClass =
   "too many proxied appview reads for this identity in the current window"
+classMessage HandleUpdateClass =
+  "too many handle updates for this identity in the current window"
 
 -- | What a `RequestRefusedCapacity` refusal is told: this identity has not
 -- exceeded anything of its own — the shared per-window table is full of

@@ -39,7 +39,18 @@ import lib.websocket.{
 }
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import regex.{Regex, find, mustCompile}
-import string.{contains, join, lines, split, toInt, trim}
+import string.{
+  contains,
+  drop,
+  indexOf,
+  join,
+  lines,
+  split,
+  splitAt,
+  toInt,
+  toUpper,
+  trim,
+}
 import time.{Duration, elapsedSince, monotonic, seconds, sleep}
 import test.response_support.{closeAll, findHeaderEnd, report}
 
@@ -769,6 +780,190 @@ runHold port hold token did collection rkey =
   let () = sayGoodbye conn
   ignoreResult (close conn)
 
+-- # com.atproto.identity.updateHandle
+
+{- | One `updateHandle` call: the handle sent, the status it must answer, and
+   for a refusal the XRPC error name and a fragment of its message. An empty
+   error name means the call is accepted, and must then answer an empty body
+   and put exactly one `#identity` event on the stream. -}
+data HandleCell = HandleCell String Int String String
+
+{- | The cells, in the order they are sent, built from the current handle.
+
+   Every refusal sits between the two accepted calls, so the second accepted
+   call's `#identity` following the first's with no gap is what shows that no
+   refusal emitted anything. The spellings are the ones a client could hope
+   would fold to the current handle: a trailing dot, surrounding spaces, and
+   three non-ASCII letters that a Unicode case mapping sends toward ASCII
+   (U+212A KELVIN SIGN lowercases to `k`, U+0130 to `i` plus a combining dot,
+   and Cyrillic `а` looks like `a`). All of them are refused by the handle
+   syntax check before anything is lowercased.
+
+   Ten calls: exactly `maxHandleUpdatesPerWindow`, so this case never meets
+   the rate limiter. -}
+updateHandleCells : String -> List HandleCell
+updateHandleCells current = [
+  HandleCell current 200 "" "",
+  HandleCell
+    "other-\{current}"
+    400
+    "InvalidRequest"
+    "DID is not properly configured for handle",
+  HandleCell "\{current}." 400 "InvalidRequest" "is not a valid handle",
+  HandleCell " \{current}" 400 "InvalidRequest" "is not a valid handle",
+  HandleCell "\{current} " 400 "InvalidRequest" "is not a valid handle",
+  HandleCell "а\{drop 1 current}" 400 "InvalidRequest" "is not a valid handle",
+  HandleCell "K\{current}" 400 "InvalidRequest" "is not a valid handle",
+  HandleCell "İ\{current}" 400 "InvalidRequest" "is not a valid handle",
+  HandleCell
+    "\{current}.local"
+    400
+    "InvalidHandle"
+    "Handle TLD is invalid or disallowed",
+  HandleCell (upperFirstLabel current) 200 "" "",
+]
+
+-- | `alice.test` as `ALICE.test`: the current handle in a different case.
+upperFirstLabel : String -> String
+upperFirstLabel handle = match indexOf "." handle
+  None => toUpper handle
+  Some at =>
+    let (label, rest) = splitAt at handle
+    "\{toUpper label}\{rest}"
+
+{- | Send one `updateHandle` and answer its status, header text, and body.
+   The handle goes out as raw UTF-8 inside the JSON string, which is what a
+   client typing it would send. -}
+postUpdateHandle : Int ->
+  String ->
+  String ->
+  <IO, Net> Result String (Int, String, String)
+postUpdateHandle port token handle =
+  let body = encodeUtf8 "{\"handle\":\"\{handle}\"}"
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let () =
+    mustSend
+      conn
+      (encodeUtf8
+          "POST /xrpc/com.atproto.identity.updateHandle HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer \{token}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
+        ++ body)
+  let answer = match readHead conn empty
+    Err message => Err message
+    Ok (status, headerText, rest) =>
+      map
+        (text => (status, headerText, text))
+        (readRefusalBody conn headerText rest)
+  let () = ignoreResult (close conn)
+  answer
+
+{- | Grade one cell's response, and for an accepted call the `#identity` event
+   it must produce: kind, DID, the CURRENT handle as configured (not the
+   spelling sent), and the sequence number one past the previous event this
+   case saw (`previous`, or any number for the first).
+
+   An accepted response must also not carry the internal field the handler
+   uses to ask for the announcement; it is stripped before the response is
+   written. -}
+gradeHandleCell : Connection * ->
+  Bytes ->
+  String ->
+  String ->
+  Option Int ->
+  HandleCell ->
+  (Int, String, String) ->
+  <Net> Result String (Option Int, Bytes)
+gradeHandleCell conn buffered did current previous (HandleCell sent wantStatus wantError fragment) (status, headerText, body) =
+  let label = "handle '\{sent}'"
+  if status /= wantStatus then
+    Err
+      "\{label}: status \{intToString status}, wanted \{intToString wantStatus}: \{body}"
+  else if wantError /= "" then
+    if contains "\"error\":\"\{wantError}\"" body && contains fragment body then
+      Ok (previous, buffered)
+    else
+      Err "\{label}: wanted \{wantError} '\{fragment}', got \{body}"
+  else if body /= "" || contains "medaka-announce" headerText then
+    Err "\{label}: accepted with a body or an internal field: \{headerText}"
+  else match nextEvent conn buffered
+    Err message => Err "\{label}: \{message}"
+    Ok None => Err "\{label}: stream ended before its #identity"
+    Ok (Some (payload, rest)) => match splitEvent payload
+      Err message => Err message
+      Ok (header, event) =>
+        let kind = eventKind header
+        let seq = intField event "seq"
+        let seqOk = match previous
+          None => True
+          Some prior => seq == prior + 1
+        if kind /= "#identity" then
+          Err "\{label}: expected #identity, got '\{kind}'"
+        else if textField event "did" /= did
+          || textField event "handle" /= current then
+          Err
+            "\{label}: #identity names '\{textField event "did"}' '\{textField event "handle"}'"
+        else if not seqOk then
+          Err "\{label}: #identity seq \{intToString seq} is not the next one"
+        else
+          Ok (Some seq, rest)
+
+runHandleCells : Int ->
+  Connection * ->
+  Bytes ->
+  String ->
+  String ->
+  String ->
+  Option Int ->
+  List HandleCell ->
+  <IO, Net> Result String (Option Int, Bytes)
+runHandleCells _ _ buffered _ _ _ previous [] = Ok (previous, buffered)
+runHandleCells port conn buffered token did current previous (cell :: more) =
+  let (HandleCell sent _ _ _) = cell
+  match postUpdateHandle port token sent
+    Err message => Err "handle '\{sent}': \{message}"
+    Ok answer =>
+      match gradeHandleCell conn buffered did current previous cell answer
+        Err message => Err message
+        Ok (seen, rest) =>
+          runHandleCells port conn rest token did current seen more
+
+{- | `com.atproto.identity.updateHandle` as a subscriber sees it: each
+   accepted call puts exactly one `#identity` event on the stream, numbered
+   from the durable counter, every refusal puts nothing there, and an
+   ordinary write afterwards is announced with the very next number.
+
+   The closing write is what makes the count exact. A refusal that emitted, or
+   an accepted call that emitted twice, leaves the `#commit` one number
+   further on than this case expects; an emit that skipped the counter leaves
+   a gap in the same place. -}
+runUpdateHandle : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net> Unit
+runUpdateHandle port token did current collection rkey =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn ""
+  let cells = updateHandleCells current
+  let () = match runHandleCells port conn rest token did current None cells
+    Err message => report "SUBHANDLE" False message
+    Ok (None, _) => report "SUBHANDLE" False "no call was accepted"
+    Ok (Some last, after) =>
+      let () = writeRecord port token did collection rkey
+      match commitSeq conn after
+        Err message =>
+          report "SUBHANDLE" False "the write after the calls: \{message}"
+        Ok (seq, _) =>
+          report
+            "SUBHANDLE"
+            (seq == last + 1)
+            "\{intToString (length cells)} calls, two #identity events ending at seq \{intToString last}, then #commit seq \{intToString seq}"
+  let () = sayGoodbye conn
+  ignoreResult (close conn)
+
 -- # Frame-level cases: RFC 6455 §5.4 fragmentation and §5.5.1 close
 
 -- | One client frame on the wire, masked the way §5.1 requires of a client.
@@ -968,7 +1163,7 @@ runSoak port durationMs =
 
 usage : String
 usage =
-  "usage: serve_subscribe <genesis|live|soak|future-cursor|refused-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
+  "usage: serve_subscribe <genesis|live|soak|future-cursor|refused-cursor|outdated-cursor|exact-cursor|ceiling|hold|update-handle|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
 
 main : <IO, Env, Net, Clock> Unit
 main = match args ()
@@ -986,6 +1181,8 @@ main = match args ()
     runCeiling (mustPort port) (mustCount ceiling) did
   ["hold", port, hold, token, did, collection, rkey] =>
     runHold (mustPort port) (mustCount hold) token did collection rkey
+  ["update-handle", port, token, did, current, collection, rkey] =>
+    runUpdateHandle (mustPort port) token did current collection rkey
   ["fragment", port] => runFragment (mustPort port)
   ["stray-continuation", port] =>
     runClosingCase (mustPort port) "SUBSTRAY" 1002 strayFrames

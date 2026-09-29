@@ -1535,6 +1535,20 @@ subclient refused-cursor "$PORTSUB" notanumber 'is not a sequence number' \
 subclient exact-cursor "$PORTSUB" 6 "$SUBACCESS" "$DID" "$COLLECTION" subexact \
   || fail 'case 36: a cursor at the newest delivered event'
 
+# 36b. (#2939) com.atproto.identity.updateHandle naming the CURRENT handle
+#    re-announces it: 200 with an empty body and exactly one #identity event
+#    naming the configured handle, for the handle as configured and for a
+#    differently-cased spelling of it. Every other call in between is refused
+#    and emits nothing: a different valid handle (InvalidRequest "DID is not
+#    properly configured for handle"), a reserved TLD (InvalidHandle), and the
+#    hostile spellings (trailing dot, surrounding spaces, Cyrillic a, U+212A,
+#    U+0130), which the handle syntax check refuses before any case folding.
+#    A write afterwards is announced with the very next sequence number, so an
+#    extra, missing or skipped emit anywhere in the run moves it. Plants
+#    events 8, 9 and 10.
+subclient update-handle "$PORTSUB" "$SUBACCESS" "$DID" "$HANDLE" "$COLLECTION" subhandle \
+  || fail 'case 36b: updateHandle did not announce exactly once per accepted call'
+
 # 37. a cursor whose next events have left the retention window is answered
 #    `#info` `OutdatedCursor` and then replayed from what the log still
 #    holds — the subscriber learns it has a gap rather than inferring one.
@@ -1704,6 +1718,33 @@ client rl-req "$PORTRL" 203.0.113.41 1 200 \
   || fail 'case 23: a plain read was refused by the repo-export ceiling'
 client rl-repo "$PORTRL" 203.0.113.42 1 200 "$DID" \
   || fail "case 23: a second identity was refused by the first one's ceiling"
+
+# 23b. (#2939) updateHandle has its own class: ten calls naming the current
+#    handle are accepted inside one window and the eleventh is refused 429,
+#    while a second identity is still served. Every call is charged when it
+#    is admitted, before its credential or its body is looked at.
+wait_for_window_room
+client rl-update-handle "$PORTRL" 203.0.113.61 11 429 "$RLACCESS" "$HANDLE" \
+  || fail 'case 23b: the updateHandle class did not refuse the eleventh call'
+client rl-update-handle "$PORTRL" 203.0.113.62 1 200 "$RLACCESS" "$HANDLE" \
+  || fail "case 23b: a second identity was refused by the first one's ceiling"
+
+# 23c. updateHandle is gated and shape-checked: no token is 401, a token
+#    that does not verify is 401, and a body with no handle, or a handle that
+#    is not a string, is 400 InvalidRequest. Each call has its own identity so
+#    none of them spends case 23b's budget.
+client update-handle "$PORTRL" 203.0.113.63 '' "{\"handle\":\"$HANDLE\"}" \
+  401 AuthenticationRequired 'Authentication Required' \
+  || fail 'case 23c: an unauthenticated updateHandle was not refused 401'
+client update-handle "$PORTRL" 203.0.113.64 not-a-token "{\"handle\":\"$HANDLE\"}" \
+  401 InvalidToken 'Token could not be verified' \
+  || fail 'case 23c: an updateHandle with a bad token was not refused 401'
+client update-handle "$PORTRL" 203.0.113.65 "$RLACCESS" '{}' \
+  400 InvalidRequest "Request field 'handle' is required" \
+  || fail 'case 23c: an updateHandle with no handle was not refused'
+client update-handle "$PORTRL" 203.0.113.66 "$RLACCESS" '{"handle":5}' \
+  400 InvalidRequest "Request field 'handle' must be a string" \
+  || fail 'case 23c: an updateHandle with a non-string handle was not refused'
 
 # 24. requests the server answers 400 are charged too, in both shapes: one
 #    that frames and fails to parse, and one no framer can complete. Neither

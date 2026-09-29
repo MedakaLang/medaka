@@ -177,9 +177,11 @@ does not re-derive them.
 - **Video posting.** A3 of the launch plan names the video service as one of
   the reasons `getServiceAuth` exists, but no issue tracks video upload end to
   end and nothing in this tree has exercised it. Out of this walkthrough.
-- **Changing the handle.** `com.atproto.identity.updateHandle` is criterion A7
-  and is milestoned G-ANNOUNCE (#2939) — not registered today. Do not try it;
-  a 404 here is the documented state.
+- **Changing the handle.** `com.atproto.identity.updateHandle` (criterion A7,
+  #2939) accepts only the handle the account already has, and re-announces it.
+  Any other handle is refused "DID is not properly configured for handle",
+  which is the documented state: the handle changes only by restarting the
+  server with a different `--handle`.
 - **Anything needing OAuth**, a third-party client, email verification,
   password reset, app passwords, or a second account on this server. All are
   out of scope for every gate by decision (`PDS-LAUNCH-PLAN.md` §2.A).
