@@ -1232,6 +1232,31 @@ nodeLayer (MstNode _ _ ((NodeSubtree child) :: _)) = nodeLayer child + 1
 rootItems : Mst -> List DiffItem
 rootItems (Mst _ _ _ node) = [DiffSubtree (nodeLayer node) node]
 
+{- | What a walk has found so far, newest first: the keys `after` holds under
+   a CID `before` did not give it, the keys only `before` holds, and the nodes
+   the walk opened on the `after` side and on the `before` side. -}
+data DiffWalk =
+  | DiffWalk (List (Bytes, Cid, Option Cid)) (List (Bytes, Cid)) (List MstNode) (List MstNode)
+
+diffStart : DiffWalk
+diffStart = DiffWalk [] [] [] []
+
+addWrite : Bytes -> Cid -> Option Cid -> DiffWalk -> DiffWalk
+addWrite key value prior (DiffWalk writes deletes opened closed) =
+  DiffWalk ((key, value, prior) :: writes) deletes opened closed
+
+addDelete : Bytes -> Cid -> DiffWalk -> DiffWalk
+addDelete key value (DiffWalk writes deletes opened closed) =
+  DiffWalk writes ((key, value) :: deletes) opened closed
+
+openedAfter : MstNode -> DiffWalk -> DiffWalk
+openedAfter node (DiffWalk writes deletes opened closed) =
+  DiffWalk writes deletes (node :: opened) closed
+
+openedBefore : MstNode -> DiffWalk -> DiffWalk
+openedBefore node (DiffWalk writes deletes opened closed) =
+  DiffWalk writes deletes opened (node :: closed)
+
 {- | Walk both trees in key order, opening a subtree only when its CID is not
    matched by the subtree at the same position and layer on the other side.
    Of two subtrees at different layers the higher one is opened first, so an
@@ -1239,70 +1264,64 @@ rootItems (Mst _ _ _ node) = [DiffSubtree (nodeLayer node) node]
    skipped whole; a subtree facing a leaf is opened, because a leaf and a
    subtree cannot be compared without it. The work is bounded by the nodes the
    two trees do not share, not by the number of keys either holds. -}
-diffItems : List DiffItem ->
-  List DiffItem ->
-  List (Bytes, Cid, Option Cid) ->
-  List (Bytes, Cid) ->
-  (List (Bytes, Cid, Option Cid), List (Bytes, Cid))
-diffItems [] [] writes deletes = (reverse writes, reverse deletes)
-diffItems ((DiffSubtree layer node) :: after) [] writes deletes =
-  diffItems (nodeItems layer node after) [] writes deletes
-diffItems ((DiffLeaf key value) :: after) [] writes deletes =
-  diffItems after [] ((key, value, None) :: writes) deletes
-diffItems [] ((DiffSubtree layer node) :: before) writes deletes =
-  diffItems [] (nodeItems layer node before) writes deletes
-diffItems [] ((DiffLeaf key value) :: before) writes deletes =
-  diffItems [] before writes ((key, value) :: deletes)
-diffItems ((DiffSubtree nextLayer nextNode) :: after) ((DiffSubtree priorLayer priorNode) :: before) writes deletes =
+diffItems : List DiffItem -> List DiffItem -> DiffWalk -> DiffWalk
+diffItems [] [] walk = walk
+diffItems ((DiffSubtree layer node) :: after) [] walk =
+  diffItems (nodeItems layer node after) [] (openedAfter node walk)
+diffItems ((DiffLeaf key value) :: after) [] walk =
+  diffItems after [] (addWrite key value None walk)
+diffItems [] ((DiffSubtree layer node) :: before) walk =
+  diffItems [] (nodeItems layer node before) (openedBefore node walk)
+diffItems [] ((DiffLeaf key value) :: before) walk =
+  diffItems [] before (addDelete key value walk)
+diffItems ((DiffSubtree nextLayer nextNode) :: after) ((DiffSubtree priorLayer priorNode) :: before) walk =
   let (MstNode nextCid _ _) = nextNode
   let (MstNode priorCid _ _) = priorNode
   if nextLayer == priorLayer && cidEqual nextCid priorCid then
-    diffItems after before writes deletes
+    diffItems after before walk
   else if nextLayer > priorLayer then
     diffItems
       (nodeItems nextLayer nextNode after)
       (DiffSubtree priorLayer priorNode :: before)
-      writes
-      deletes
+      (openedAfter nextNode walk)
   else if priorLayer > nextLayer then
     diffItems
       (DiffSubtree nextLayer nextNode :: after)
       (nodeItems priorLayer priorNode before)
-      writes
-      deletes
+      (openedBefore priorNode walk)
   else
     diffItems
       (nodeItems nextLayer nextNode after)
       (nodeItems priorLayer priorNode before)
-      writes
-      deletes
-diffItems ((DiffSubtree layer node) :: after) before writes deletes =
-  diffItems (nodeItems layer node after) before writes deletes
-diffItems after ((DiffSubtree layer node) :: before) writes deletes =
-  diffItems after (nodeItems layer node before) writes deletes
-diffItems ((DiffLeaf nextKey nextValue) :: after) ((DiffLeaf priorKey priorValue) :: before) writes deletes =
+      (openedBefore priorNode (openedAfter nextNode walk))
+diffItems ((DiffSubtree layer node) :: after) before walk =
+  diffItems (nodeItems layer node after) before (openedAfter node walk)
+diffItems after ((DiffSubtree layer node) :: before) walk =
+  diffItems after (nodeItems layer node before) (openedBefore node walk)
+diffItems ((DiffLeaf nextKey nextValue) :: after) ((DiffLeaf priorKey priorValue) :: before) walk =
   match bytesCompare nextKey priorKey
     Lt =>
       diffItems
         after
         (DiffLeaf priorKey priorValue :: before)
-        ((nextKey, nextValue, None) :: writes)
-        deletes
+        (addWrite nextKey nextValue None walk)
     Gt =>
       diffItems
         (DiffLeaf nextKey nextValue :: after)
         before
-        writes
-        ((priorKey, priorValue) :: deletes)
+        (addDelete priorKey priorValue walk)
     Eq =>
       if cidEqual nextValue priorValue then
-        diffItems after before writes deletes
+        diffItems after before walk
       else
         diffItems
           after
           before
-          ((nextKey, nextValue, Some priorValue) :: writes)
-          deletes
+          (addWrite nextKey nextValue (Some priorValue) walk)
+
+walkBetween : Mst -> Mst -> DiffWalk
+walkBetween before after =
+  diffItems (rootItems after) (rootItems before) diffStart
 
 {- | What moved between `before` and `after`, read off the two trees' nodes.
 
@@ -1310,8 +1329,43 @@ diffItems ((DiffLeaf nextKey nextValue) :: after) ((DiffLeaf priorKey priorValue
    it, in key order, with the prior CID when `before` held the key at all. The
    second is every key `before` holds that `after` does not, in key order, with
    the CID it held. A key whose CID is the same on both sides appears in
-   neither. The walk skips every subtree the two trees share, so a single-key
-   write costs a few root-to-leaf paths, not a pass over every key. -}
+   neither. The walk skips every subtree the two trees share, so its cost
+   follows the nodes that differ, not the number of keys either tree holds. -}
 export
 mstDiff : Mst -> Mst -> (List (Bytes, Cid, Option Cid), List (Bytes, Cid))
-mstDiff before after = diffItems (rootItems after) (rootItems before) [] []
+mstDiff before after =
+  let (DiffWalk writes deletes _ _) = walkBetween before after
+  (reverse writes, reverse deletes)
+
+nodeCidKeys : List MstNode -> Set String -> Set String
+nodeCidKeys [] seen = seen
+nodeCidKeys ((MstNode cid _ _) :: rest) seen =
+  nodeCidKeys rest (Set.insert (cidKey cid) seen)
+
+unseenNodes : List MstNode ->
+  Set String ->
+  List (Cid, Bytes) ->
+  List (Cid, Bytes)
+unseenNodes [] _ acc = acc
+unseenNodes ((MstNode cid bytes _) :: rest) seen acc =
+  if Set.has (cidKey cid) seen then
+    unseenNodes rest seen acc
+  else
+    unseenNodes rest seen ((cid, bytes) :: acc)
+
+{- | The node blocks `after` holds that `before` does not, compared by CID.
+
+   Only nodes the walk opened can qualify. A node the walk skipped met a
+   CID-equal node in `before`, and so did everything beneath it. An opened
+   `after` node whose CID `before` holds anywhere is matched against the
+   `before` nodes the walk opened, which is enough: no CID occurs twice in one
+   tree, because every node holds a key no other node does or, holding none,
+   has a single child that does. So a `before` node the walk skipped cannot
+   share a CID with an `after` node it opened.
+
+   The result is a set in no particular order. -}
+export
+mstCreatedNodes : Mst -> Mst -> List (Cid, Bytes)
+mstCreatedNodes before after =
+  let (DiffWalk _ _ opened closed) = walkBetween before after
+  unseenNodes opened (nodeCidKeys closed mstEmptySet) []

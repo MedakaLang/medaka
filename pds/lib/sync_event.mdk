@@ -22,7 +22,14 @@ import lib.blockstore.{BlockStore, blockStoreGet}
 import lib.car.{carEncode}
 import lib.cid.{Cid, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
-import lib.mst.{Mst, mstCoveringProofBlocks, mstDiff, mstEmpty, mstNodeBlocks}
+import lib.mst.{
+  Mst,
+  mstCoveringProofBlocks,
+  mstCreatedNodes,
+  mstDiff,
+  mstEmpty,
+  mstNodeBlocks,
+}
 import lib.repo.{
   Repo,
   RepoCommit,
@@ -73,22 +80,6 @@ public export data SyncCommitEvent = SyncCommitEvent {
   blocksCar : Bytes,
   ops : List SyncRepoOp,
 }
-
-seenCids : List (Cid, Bytes) -> Map String Bool -> Map String Bool
-seenCids [] index = index
-seenCids ((cid, _) :: rest) index =
-  seenCids rest (set (cidToString cid) True index)
-
-missingFrom : List (Cid, Bytes) ->
-  Map String Bool ->
-  List (Cid, Bytes) ->
-  List (Cid, Bytes)
-missingFrom [] _ acc = reverse acc
-missingFrom ((cid, bytes) :: rest) index acc =
-  if has (cidToString cid) index then
-    missingFrom rest index acc
-  else
-    missingFrom rest index ((cid, bytes) :: acc)
 
 dedupe : List (Cid, Bytes) ->
   Map String Bool ->
@@ -160,15 +151,15 @@ syncCommitBlocks before after keys addedRecords commitCid commitBytes = do
 
 {- | The MST nodes this write brought into existence.
 
-   With a prior tree, that is the post-write nodes it does not already hold.
-   Without one — the genesis commit, the only case a caller has no prior tree
-   for — nothing existed to hold anything, so every post-write node is new.
-   An empty tree that merely HAPPENS to equal the post-write one is still a
-   prior tree and still subtracts. -}
+   With a prior tree, that is the post-write nodes it does not already hold,
+   found without visiting the subtrees the two trees share. Without one — the
+   genesis commit, the only case a caller has no prior tree for — nothing
+   existed to hold anything, so every post-write node is new. An empty tree
+   that merely HAPPENS to equal the post-write one is still a prior tree and
+   still subtracts. -}
 createdNodes : Option Mst -> Mst -> List (Cid, Bytes)
 createdNodes None after = mstNodeBlocks after
-createdNodes (Some before) after =
-  missingFrom (mstNodeBlocks after) (seenCids (mstNodeBlocks before) Tip) []
+createdNodes (Some before) after = mstCreatedNodes before after
 
 {- | Wrap a block set as the CAR file the `blocks` field carries. The commit
    CID is the sole root, which is the one ordering constraint the lexicon
