@@ -46,7 +46,8 @@ import lib.xrpc.{
 data RoutePolicy = RoutePolicy AuthPolicy (List RateLimitClass) (Option Int)
 
 {- | The committed table, in registration order: five record writes, five
-   session routes, two preference routes, thirteen reads and one subscription.
+   session routes, two preference routes, one identity procedure, thirteen
+   reads and one subscription.
 
    The two `com.atproto.sync` reads differ from each other in the same column,
    and the difference is the point: `getBlocks` is `RepoExportClass` because
@@ -92,6 +93,10 @@ committedPolicies = [
     "app.bsky.actor.putPreferences",
     RoutePolicy AuthenticatedRoute [PreferencesClass] (Some 153600),
   ),
+  (
+    "com.atproto.identity.updateHandle",
+    RoutePolicy AuthenticatedRoute [HandleUpdateClass] (Some 153600),
+  ),
   ("com.atproto.repo.getRecord", RoutePolicy PublicRoute [] None),
   ("com.atproto.repo.listRecords", RoutePolicy PublicRoute [] None),
   ("com.atproto.repo.describeRepo", RoutePolicy PublicRoute [] None),
@@ -118,7 +123,7 @@ committedPolicies = [
 -- that dropping a route AND its row together still shows up here, which the
 -- pair of closure checks alone cannot see.
 registeredRouteCount : Int
-registeredRouteCount = 26
+registeredRouteCount = 27
 
 authName : AuthPolicy -> String
 authName PublicRoute = "public"
@@ -133,6 +138,7 @@ className PreferencesClass = "preferences"
 className CreateSessionClass = "createSession"
 className RepoExportClass = "repoExport"
 className ProxyClass = "proxy"
+className HandleUpdateClass = "handleUpdate"
 
 classSetName : List RateLimitClass -> String
 classSetName [] = "none"

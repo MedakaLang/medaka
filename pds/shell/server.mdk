@@ -136,11 +136,13 @@ import lib.server_core.{
   UpgradeAdmission(..),
   UpgradeDecision(..),
   accountDid,
+  accountHandle,
   classifyLogin,
   classifyProxy,
   classifyServiceAuth,
   classifyUpgrade,
   handleBytes,
+  handleBytesAnnouncing,
   serverAccount,
   serviceAuthUnavailableResponse,
 }
@@ -534,6 +536,13 @@ persistFailureBytes =
    A persist that fails does not publish: the in-memory store and the disk stay
    the same store, and the client is told the write did not happen.
 
+   A request the handler answered with an identity announcement
+   (`com.atproto.identity.updateHandle` naming the current handle) emits one
+   `#identity` event after the publish, inside the same sequence, so its
+   sequence number is taken from the durable counter with no other emit
+   between. The request has already succeeded by then, so an emit failure is
+   logged and the answer still goes out.
+
    A login's password derivations are NOT in this sequence: they are paid for
    before it, a slice at a time (`settleLogin`), and `login` is only their
    verdict. The handler accepts that verdict only against the credential the
@@ -553,15 +562,31 @@ applyRequest server dir storeRef login bytes =
     nonce = requestNonce (),
     login = login,
   }
-  let (next, response) = handleBytes server context store bytes
-  let did = accountDid (serverAccount server)
+  let (next, response, announce) =
+    handleBytesAnnouncing server context store bytes
+  let account = serverAccount server
+  let did = accountDid account
   match persistTransition dir did nowSeconds store next
     Err message =>
       let () = ePutStrLn "serve: persist failed, state not advanced: \{message}"
       persistFailureBytes
     Ok () =>
       let () = storeRef := next
+      let () =
+        if announce then
+          announceIdentity dir nowSeconds did (accountHandle account)
       response
+
+announceIdentity : String ->
+  Int ->
+  String ->
+  String ->
+  <FileRead, FileWrite, Stderr> Unit
+announceIdentity dir nowSeconds did handle =
+  let identityFrame = seq time => syncIdentityFrame seq time did handle
+  match emitUnanchored dir nowSeconds identityFrame
+    Ok () => ()
+    Err message => ePutStrLn "serve: #identity event not emitted: \{message}"
 
 {- | Persist whichever halves of the `Store` the transition moved.
 

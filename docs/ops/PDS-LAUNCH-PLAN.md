@@ -104,7 +104,7 @@ Every row's leaf was filed 2026-09-12; the three milestones `PDS launch: G-QUIET
 
 ### 2.A Feature completeness
 
-The tree serves twenty-six XRPC methods plus two well-knowns and a health
+The tree serves twenty-seven XRPC methods plus two well-knowns and a health
 probe, forwards any unregistered `app.bsky.*`/`chat.bsky.*` method to a
 configured audience, and emits `#commit`, `#identity`, `#account` and `#sync`
 on the firehose. The official PDS's route registration
@@ -119,7 +119,7 @@ what a client and a relay expect.
 | A4 | Firehose emits `#identity`, `#account`, `#sync` alongside `#commit`; `sync.getRecord` and `sync.getBlocks` served. | G-QUIET | exists — `#identity`/`#account`/`#sync` frame builders in `pds/lib/sync_event.mdk`; `sync.getRecord` and `sync.getBlocks` registered | #2937 |
 | A5 | `createSession` / `getSession` / `describeServer` return the fields the official app reads (`active`, `status`, `email` where applicable, `links`, `contact`). | G-QUIET | exists — `active`, `links`, `contact`, `availableUserDomains`, `inviteCodeRequired` all served | #2936 |
 | A6 | CORS: a browser at `bsky.app` can complete a preflight and a credentialed request against this PDS. | G-QUIET | exists — `pds/lib/cors.mdk`; preflight and credentialed request graded in `serve_e2e.sh` | #2938 |
-| A7 | `com.atproto.identity.updateHandle` changes the handle, emits `#identity`, and `resolveHandle` answers the new one. | G-ANNOUNCE | missing | #2939 |
+| A7 | `com.atproto.identity.updateHandle`: the reference's behaviour for a `did:web` account: re-announce only; handle changes are an operator step until G-MIGRATE. | G-ANNOUNCE | exists — registered as an authenticated procedure; the current handle answers 200 and emits one `#identity`, any other valid handle is refused `InvalidRequest`; graded in `serve_e2e.sh` | #2939 |
 | A8 | A written conformance walkthrough, run by hand against the live server from the official app: log in, post, upload an image, follow, reply, read notifications, send and receive a DM, log out; the relay indexes the repo; a fresh appview fetch of the profile succeeds. Each step's expected observation written before the run. | G-QUIET | drafted — [`PDS-CONFORMANCE-WALKTHROUGH.md`](PDS-CONFORMANCE-WALKTHROUGH.md) holds the steps and their expected observations; the pieces are gated individually against stubs and nothing has been run against a live deploy, so this closes only on a completed transcript | #2940 |
 | A9 | Migration route surface: `server.createAccount` with an existing DID under an inbound service-auth token from the old PDS, `repo.importRepo`, `repo.listMissingBlobs`, `server.activateAccount` / `deactivateAccount` / `checkAccountStatus`, `identity.getRecommendedDidCredentials`, `identity.submitPlcOperation`. | G-MIGRATE | missing — zero of these; the inbound service-auth verifier was explicitly declined for 0.1.0 (design §4.5) and must be un-declined for this gate | #2941 |
 | A10 | PLC operation signing with rotation keys held separately from the repo signing key; the isolated-PLC rehearsal and rollback checklist on #2609 run twice. | G-MIGRATE | missing | #2609 |
