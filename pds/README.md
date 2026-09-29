@@ -329,7 +329,8 @@ addressing.
   `validate` absent or `true`, a record in one of the twenty collections the
   pinned reference PDS knows is graded by `pds/lib/lexicon.mdk`: `"valid"` if
   it passes, `400 InvalidRequest` if it fails, `"unknown"` if only a grapheme
-  bound is left open (graphemes are not counted). A collection outside the
+  bound of a non-ASCII string is left open (a pure ASCII string is counted
+  exactly, so one over its bound is refused; other strings are not segmented). A collection outside the
   twenty is stored and reported `"unknown"`, where the reference refuses it.
   `validate: false` stores the record as given and reports `"unknown"`.
 - **One account per server.** `Server` carries exactly one `Account` and

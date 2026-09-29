@@ -5,7 +5,8 @@
    lexicon accepts is written and reported `"valid"`; one it refuses is
    `400 InvalidRequest` and leaves the store as it was, and in an
    `applyWrites` batch one refused record refuses the batch. A record whose
-   only open constraint is a grapheme bound, and a collection with no
+   only open constraint is a grapheme bound of a string with a non-ASCII
+   codepoint (a pure ASCII string is graded exactly), and a collection with no
    schema, are written and reported `"unknown"`. Every record key here is a
    TID, which is what `app.bsky.feed.post` requires. -}
 
@@ -13,7 +14,7 @@ import bytes.{Bytes}
 import hex.{decode}
 import json.{Json(..), get, jArray, jObject, parse, stringify}
 import string.{repeat, startsWith}
-import test.{Expectation, expectEach, expectEqual}
+import test.{Expectation, expectEach, expectEqual, expectTrue}
 import lib.handlers.{recordServer}
 import lib.jwt.{mintToken}
 import lib.repo.{repoInitFromKeyBytes}
@@ -293,16 +294,83 @@ test "a collection with no schema is written and reported unknown, validate abse
     ),
   ]
 
-{- | 301 codepoints against `text`'s 300-grapheme bound, in 301 bytes against
-   its 3000-byte one: the codepoints may or may not be 301 graphemes, so the
-   post is written, and it is not reported valid. -}
-test "a grapheme bound left open is written and reported unknown" =
-  let answer =
-    createRecord
-      "app.bsky.feed.post"
-      "3ke6kg3wk2c2b"
-      (postWith (repeat 301 "a"))
-      []
+-- The answer to a post carrying `text`.
+postTextAnswer : String -> Answer
+postTextAnswer text =
+  createRecord "app.bsky.feed.post" "3ke6kg3wk2c2b" (postWith text) []
+
+{- | A pure ASCII string is graded exactly: its graphemes are its codepoints
+   less its CRLF pairs, so past the bound it is refused, and a run of CRLF
+   pairs counts one grapheme each. -}
+test "a pure ASCII string past its grapheme bound is 400 InvalidRequest and writes nothing" =
+  let over = postTextAnswer (repeat 1000 "a")
+  expectEach [
+    (
+      "message",
+      expectEqual
+        (
+          "InvalidRequest",
+          "Invalid app.bsky.feed.post record: grapheme too big (maximum 300, got 1000) at $.record.text",
+        )
+        (errorOf over, fieldText "message" over.body),
+    ),
+    ("unchanged", expectTrue (unchanged over)),
+    (
+      "301 refused",
+      expectEqual "InvalidRequest" (errorOf (postTextAnswer (repeat 301 "a"))),
+    ),
+    (
+      "300 valid",
+      expectEqual "valid" (statusOf (postTextAnswer (repeat 300 "a"))),
+    ),
+    (
+      "150 CRLF pairs valid",
+      expectEqual "valid" (statusOf (postTextAnswer (repeat 150 "\r\n"))),
+    ),
+    (
+      "300 CRLF pairs valid",
+      expectEqual "valid" (statusOf (postTextAnswer (repeat 300 "\r\n"))),
+    ),
+    (
+      "301 CRLF pairs refused",
+      expectEqual
+        "InvalidRequest"
+        (errorOf (postTextAnswer (repeat 301 "\r\n"))),
+    ),
+  ]
+
+test "an over-limit ASCII displayName and tag are 400 InvalidRequest" =
+  let profile = jObject [
+    ("$type", JString "app.bsky.actor.profile"),
+    ("displayName", JString (repeat 65 "a")),
+  ]
+  let tagged = jObject [
+    ("$type", JString "app.bsky.feed.post"),
+    ("text", JString "hello"),
+    ("createdAt", JString "2024-01-01T00:00:00.000Z"),
+    ("tags", jArray [JString (repeat 65 "a")]),
+  ]
+  expectEach [
+    (
+      "displayName",
+      expectEqual
+        "InvalidRequest"
+        (errorOf (createRecord "app.bsky.actor.profile" "self" profile [])),
+    ),
+    (
+      "tag",
+      expectEqual
+        "InvalidRequest"
+        (errorOf (createRecord "app.bsky.feed.post" "3ke6kg3wk2c2b" tagged [])),
+    ),
+  ]
+
+{- | 301 codepoints against `text`'s 300-grapheme bound, in 602 bytes against
+   its 3000-byte one: with a non-ASCII codepoint the codepoints may or may
+   not be 301 graphemes, so the post is written, and it is not reported
+   valid. -}
+test "a non-ASCII grapheme bound left open is written and reported unknown" =
+  let answer = postTextAnswer (repeat 301 "é")
   expectEqual ("<missing:error>", "unknown") (errorOf answer, statusOf answer)
 
 test "putRecord grades as createRecord does" =

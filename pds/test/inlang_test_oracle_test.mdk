@@ -121,7 +121,7 @@ suites = [
   ("route_policy_test", (4, Eval)),
   ("lexicon_corpus_test", (4, NativeCapability)),
   ("lexicon_schemas_test", (3, NativeCapability)),
-  ("lexicon_write_test", (12, NativeCapability)),
+  ("lexicon_write_test", (14, NativeCapability)),
 ]
 
 {- | Exclusion ledger: file stem paired with the reason it is not run today,
@@ -613,7 +613,7 @@ test "pds/test/lexicon_corpus_test.mdk executed >= 4 assertions" =
 test "pds/test/lexicon_schemas_test.mdk executed >= 3 assertions" =
   floorExpectation "lexicon_schemas_test"
 
-test "pds/test/lexicon_write_test.mdk executed >= 12 assertions" =
+test "pds/test/lexicon_write_test.mdk executed >= 14 assertions" =
   floorExpectation "lexicon_write_test"
 
 -- # Non-vacuity

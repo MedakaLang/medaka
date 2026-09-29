@@ -16,10 +16,11 @@
      - `LexUndecided`: nothing failed, but the record is not known to be
        what the reference would store: a `maxGraphemes` bound was not
        decided, or the record has no `$type`. The reference counts extended
-       grapheme clusters (UAX #29) and this tree has no segmenter. A string
-       with no more codepoints than the bound has no more graphemes either,
-       so only a string past it in codepoints and within its byte bound is
-       left open.
+       grapheme clusters (UAX #29) and this tree has no segmenter. A pure
+       ASCII string is decided exactly: its graphemes are its codepoints
+       less its CRLF pairs. Any other string with no more codepoints than the
+       bound has no more graphemes either, so only a non-ASCII string past
+       the bound in codepoints and within its byte bound is left open.
      - `LexNoSchema`: the collection is not one of the twenty.
 
    `recordValidationStatus` is the only place a verdict becomes the
@@ -408,13 +409,23 @@ checkByteBounds path rules text = match (rules.minLength, rules.maxLength)
             "string too big (maximum \{intToString bound}, got \{intToString size}) at \{path}"
         _ => Pass
 
--- A grapheme is one or more codepoints, so a count of codepoints within the
--- bound decides it; a count past it does not.
+-- A pure ASCII string has exactly codepoints minus CRLF pairs graphemes (GB3,
+-- CR x LF, is the only UAX #29 rule that joins ASCII), so it is decided. Any
+-- other string is decided only within the bound: a grapheme is one or more
+-- codepoints, so a count of codepoints within it passes and a count past it
+-- is open. Bytes equal codepoints exactly when every codepoint is ASCII.
 checkGraphemes : String -> Option Int -> String -> Check
 checkGraphemes _ None _ = Pass
 checkGraphemes path (Some most) text =
   let count = stringLength text
-  if count <= most then
+  if utf8ByteLength text == count then
+    let graphemes = count - (length (split "\r\n" text) - 1)
+    if graphemes <= most then
+      Pass
+    else
+      Fail
+        "grapheme too big (maximum \{intToString most}, got \{intToString graphemes}) at \{path}"
+  else if count <= most then
     Pass
   else
     Open
