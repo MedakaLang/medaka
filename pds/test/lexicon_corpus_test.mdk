@@ -117,5 +117,5 @@ test "the only row the JSON parser cannot read is the lone surrogate" =
     ["grapheme-edge-lone-surrogate-escape"]
     (somes (map unreadableId corpusLines))
 
-test "21 rows are left undecided by the grapheme bound" =
-  expectEqual 21 (length undecidedIds)
+test "11 rows are left undecided by the grapheme bound" =
+  expectEqual 11 (length undecidedIds)
