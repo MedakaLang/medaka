@@ -76,6 +76,8 @@ one_case "int-entry-accept"   test/check_policy_fixtures/int_entry_plugin.mdk "A
 one_case "named-entry-sample" test/check_policy_fixtures/named_entry_plugin.mdk "FileRead" transform named_entry_accept
 # An <IO> entry under a policy that names the ten host labels.
 one_case "io-join-accept"     test/check_policy_fixtures/io_join_plugin.mdk "Clock,Env,Exec,FileRead,FileWrite,Net,Rand,Stderr,Stdin,Stdout" transform io_join_accept
+# The sample line follows `--fn`, not a fixed entry name.
+one_case "renamed-entry-sample" test/check_policy_fixtures/renamed_entry_plugin.mdk "Audit" rewrite renamed_entry_accept
 one_case "thunk-entry-accept" test/check_policy_fixtures/thunk_entry_plugin.mdk "Audit" tick thunk_entry_accept
 #
 # NOTE: an ACCEPT case that admits Fetch (e.g. malicious + --allow Cache,Log,Fetch)
@@ -198,7 +200,21 @@ refuse_case "analysis-type-error" "test/check_policy_fixtures/type_error_plugin.
 refuse_case "analysis-unlabelled-ffi" "test/check_policy_fixtures/ffi_unlabelled_plugin.mdk" "FFI,Net" transform "rejected. compiler analysis failed"
 refuse_case "missing-entry-2047" "test/check_policy_fixtures/missing_entry_plugin.mdk" "Cache,Log" transform "rejected. no 'transform' entry found"
 refuse_case "io-join-nine-labels" "test/check_policy_fixtures/io_join_plugin.mdk" "Clock,Env,Exec,FileRead,FileWrite,Rand,Stderr,Stdin,Stdout" transform "rejected. transform requires <IO>"
-refuse_case "evaluation-panic" "test/check_policy_fixtures/panic_plugin.mdk" "Panic" transform "policy evaluation boom"
+
+# Verdict first: the accepted verdict is printed before the sample run, so a
+# panicking sample leaves `accepted.` on stdout, then panics, exit 1.
+panic_tmp="$(mktemp)"
+perl -e 'alarm 90; exec @ARGV' \
+    "$NATIVE" check-policy "$ROOT/test/check_policy_fixtures/panic_plugin.mdk" \
+    --allow "Panic" --fn transform > "$panic_tmp" 2> "$panic_tmp.err"
+panic_rc=$?
+if [ "$panic_rc" -eq 1 ] && [ "$(cat "$panic_tmp")" = "accepted. transform requires only pure" ] && grep -qF "policy evaluation boom" "$panic_tmp.err"; then
+  fpass=$((fpass+1)); printf 'ok   evaluation-panic (verdict prints, then the sample panics, rc=1)\n'
+else
+  ffail=$((ffail+1)); printf 'FAIL evaluation-panic (rc=%s, want 1 + stdout exactly the accepted verdict + boom on stderr)\n' "$panic_rc"
+  sed 's/^/  /' "$panic_tmp" "$panic_tmp.err"
+fi
+rm -f "$panic_tmp" "$panic_tmp.err"
 
 # The #2047 control flips only entry presence in the same fixture and must still
 # reach a genuine acceptance verdict at exit 0.

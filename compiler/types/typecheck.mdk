@@ -16845,10 +16845,11 @@ checkStmtNotDiscarded stmtObls t e
     TCon "Unit" _ => ()
     TVar cell => match !cell
       Unbound id _ =>
-        -- A variable a pending `Num` obligation constrains would default to
-        -- `Int`; pinning it to `Unit` instead fails as `No impl of Num for Unit`.
+        -- A variable a pending `Num` obligation constrains is a number of a
+        -- kind a later statement may still fix (`Float`), so the report says
+        -- "a number"; pinning it to `Unit` instead fails as `No impl of Num for Unit`.
         if containsI id (numConstrainedIds stmtObls) then
-          pushDiscardedValueError (tconBuiltin "Int") e
+          pushDiscardedValueDesc "a number" e
         else
           unify t (tconBuiltin "Unit")
       Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
@@ -16909,18 +16910,21 @@ isExemptInPlaceSetIndex t e = match headTyconNameMono t
   None => False
 
 pushDiscardedValueError : Mono -> Expr -> Unit
-pushDiscardedValueError nt e =
+pushDiscardedValueError nt e = pushDiscardedValueDesc (ppMono nt) e
+
+pushDiscardedValueDesc : String -> Expr -> Unit
+pushDiscardedValueDesc desc e =
   let loc = exprLoc e
   pushTypeErrorHelpFixAt
     "T-DISCARDED-VALUE"
     loc
-    (discardedValueMsg nt)
+    (discardedValueMsg desc)
     "bind it with 'let _ = …' if dropping the value is intentional, or use its value"
     (discardedValueFix loc)
 
-discardedValueMsg : Mono -> String
-discardedValueMsg nt =
-  "this statement's value (\{ppMono nt}) is silently discarded — only a `Unit`-typed expression may stand alone as a statement"
+discardedValueMsg : String -> String
+discardedValueMsg desc =
+  "this statement's value (\{desc}) is silently discarded — only a `Unit`-typed expression may stand alone as a statement"
 
 discardedValueFix : Option Loc -> Option (Loc, String)
 discardedValueFix (Some (Loc f sl sc _ _)) =

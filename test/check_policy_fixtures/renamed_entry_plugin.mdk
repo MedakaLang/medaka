@@ -1,0 +1,4 @@
+-- The sample line names the entry `--fn` selected, not a fixed `transform`.
+-- lint-disable-file rule-dead-code
+rewrite : String -> String
+rewrite s = s ++ "?"

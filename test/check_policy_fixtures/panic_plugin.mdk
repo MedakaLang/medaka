@@ -1,5 +1,5 @@
--- For a String -> String entry, an analysis-clean, policy-admitted plugin is
--- not accepted unless its sample completes; a panic precedes any verdict.
+-- An analysis-clean, policy-admitted String -> String entry prints its
+-- accepted verdict before its sample runs; a panic in the sample follows it.
 -- lint-disable-file rule-dead-code
 transform : String -> String
 transform _ = panic "policy evaluation boom"

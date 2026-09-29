@@ -842,7 +842,7 @@ directInferredPreds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List
 directInterfaceDecls : List Decl -> List Decl
 directSuperGoals : IfaceRef -> List Mono -> List (IfaceRef, Option (List Mono))
 discardedValueFix : Option Loc -> Option (Loc, String)
-discardedValueMsg : Mono -> String
+discardedValueMsg : String -> String
 dispHeadTab : HeadKey -> TabKey
 dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> Option Int
 dispatchMonosOf : List String -> Ty -> Mono -> List Mono
@@ -2281,6 +2281,7 @@ pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
 pushArithGoal : Ref Route -> Mono -> EvId -> Unit
 pushCoherenceWarning : Option Loc -> String -> Unit
 pushDictApp : PendingDictApp -> Unit
+pushDiscardedValueDesc : String -> Expr -> Unit
 pushDiscardedValueError : Mono -> Expr -> Unit
 pushExactReturnObl : MethodReturnRequest -> Unit
 pushGiven : GivenMatch -> GivenProvenance -> PredicateSlot -> EvidenceBinderId -> Unit

@@ -761,7 +761,7 @@ typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
    rules out an EMPTY scan — a corpus that lost fifty fixtures still reports
    nothing. -}
 typecheckErrorFixtureCount : Int
-typecheckErrorFixtureCount = 143
+typecheckErrorFixtureCount = 144
 
 {- | Fixtures whose documented error depends on the prelude (#11: an integer
    literal desugars to `fromInt`, so the no-prelude driver structurally

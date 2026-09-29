@@ -1,5 +1,5 @@
 # META
-source_lines=52123
+source_lines=52127
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -16849,10 +16849,11 @@ checkStmtNotDiscarded stmtObls t e
     TCon "Unit" _ => ()
     TVar cell => match !cell
       Unbound id _ =>
-        -- A variable a pending `Num` obligation constrains would default to
-        -- `Int`; pinning it to `Unit` instead fails as `No impl of Num for Unit`.
+        -- A variable a pending `Num` obligation constrains is a number of a
+        -- kind a later statement may still fix (`Float`), so the report says
+        -- "a number"; pinning it to `Unit` instead fails as `No impl of Num for Unit`.
         if containsI id (numConstrainedIds stmtObls) then
-          pushDiscardedValueError (tconBuiltin "Int") e
+          pushDiscardedValueDesc "a number" e
         else
           unify t (tconBuiltin "Unit")
       Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
@@ -16913,18 +16914,21 @@ isExemptInPlaceSetIndex t e = match headTyconNameMono t
   None => False
 
 pushDiscardedValueError : Mono -> Expr -> Unit
-pushDiscardedValueError nt e =
+pushDiscardedValueError nt e = pushDiscardedValueDesc (ppMono nt) e
+
+pushDiscardedValueDesc : String -> Expr -> Unit
+pushDiscardedValueDesc desc e =
   let loc = exprLoc e
   pushTypeErrorHelpFixAt
     "T-DISCARDED-VALUE"
     loc
-    (discardedValueMsg nt)
+    (discardedValueMsg desc)
     "bind it with 'let _ = …' if dropping the value is intentional, or use its value"
     (discardedValueFix loc)
 
-discardedValueMsg : Mono -> String
-discardedValueMsg nt =
-  "this statement's value (\{ppMono nt}) is silently discarded — only a `Unit`-typed expression may stand alone as a statement"
+discardedValueMsg : String -> String
+discardedValueMsg desc =
+  "this statement's value (\{desc}) is silently discarded — only a `Unit`-typed expression may stand alone as a statement"
 
 discardedValueFix : Option Loc -> Option (Loc, String)
 discardedValueFix (Some (Loc f sl sc _ _)) =
@@ -55060,7 +55064,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoBind" (PVar "pat") (PVar "e"))) (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-BIND-OUTSIDE-DO"))) (EVar "bindOutsideDoMsg"))) (DoLet false false (PVar "lits") (EApp (EVar "takePatLits") (ELit LUnit))) (DoLet false false (PVar "pr") (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "pat"))) (DoLet false false PWild (EApp (EApp (EVar "bindFrom") (EApp (EVar "fst") (EVar "pr"))) (EVar "t"))) (DoLet false false PWild (EApp (EVar "settlePatLits") (EVar "lits"))) (DoExpr (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EApp (EVar "snd") (EVar "pr"))))))
 (DFunDef false "inferStmt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported block statement"))))
 (DTypeSig false "checkStmtNotDiscarded" (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit")))))
-(DFunDef false "checkStmtNotDiscarded" ((PVar "stmtObls") (PVar "t") (PVar "e")) (EIf (EApp (EApp (EVar "isExemptInPlaceSetIndex") (EVar "t")) (EVar "e")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (ELit LUnit)) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "containsI") (EVar "id")) (EApp (EVar "numConstrainedIds") (EVar "stmtObls"))) (EApp (EApp (EVar "pushDiscardedValueError") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EVar "e")) (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit")))))) (arm (PCon "Link" PWild) () (EApp (EVar "panic") (ELit (LString "checkStmtNotDiscarded: normalize left a Link")))))) (arm (PVar "nt") () (EApp (EApp (EVar "pushDiscardedValueError") (EVar "nt")) (EVar "e")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "checkStmtNotDiscarded" ((PVar "stmtObls") (PVar "t") (PVar "e")) (EIf (EApp (EApp (EVar "isExemptInPlaceSetIndex") (EVar "t")) (EVar "e")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (ELit LUnit)) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "containsI") (EVar "id")) (EApp (EVar "numConstrainedIds") (EVar "stmtObls"))) (EApp (EApp (EVar "pushDiscardedValueDesc") (ELit (LString "a number"))) (EVar "e")) (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit")))))) (arm (PCon "Link" PWild) () (EApp (EVar "panic") (ELit (LString "checkStmtNotDiscarded: normalize left a Link")))))) (arm (PVar "nt") () (EApp (EApp (EVar "pushDiscardedValueError") (EVar "nt")) (EVar "e")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "stmtCalleeName" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "stmtCalleeName" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stmtCalleeName") (EVar "e")))
 (DFunDef false "stmtCalleeName" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "stmtCalleeName") (EVar "e")))
@@ -55078,9 +55082,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "isExemptInPlaceSetIndex" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isExemptInPlaceSetIndex" ((PVar "t") (PVar "e")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "t")) (arm (PCon "Some" (PVar "hd")) () (EBinOp "&&" (EBinOp "==" (EApp (EVar "stmtCalleeName") (EVar "e")) (EApp (EVar "Some") (ELit (LString "setIndex")))) (EApp (EApp (EVar "contains") (EVar "hd")) (EVar "exemptInPlaceIndexMutHeads")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "pushDiscardedValueError" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
-(DFunDef false "pushDiscardedValueError" ((PVar "nt") (PVar "e")) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "exprLoc") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-DISCARDED-VALUE"))) (EVar "loc")) (EApp (EVar "discardedValueMsg") (EVar "nt"))) (ELit (LString "bind it with 'let _ = …' if dropping the value is intentional, or use its value"))) (EApp (EVar "discardedValueFix") (EVar "loc"))))))
-(DTypeSig false "discardedValueMsg" (TyFun (TyCon "Mono") (TyCon "String")))
-(DFunDef false "discardedValueMsg" ((PVar "nt")) (EBinOp "++" (EBinOp "++" (ELit (LString "this statement's value (")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "nt")))) (ELit (LString ") is silently discarded — only a `Unit`-typed expression may stand alone as a statement"))))
+(DFunDef false "pushDiscardedValueError" ((PVar "nt") (PVar "e")) (EApp (EApp (EVar "pushDiscardedValueDesc") (EApp (EVar "ppMono") (EVar "nt"))) (EVar "e")))
+(DTypeSig false "pushDiscardedValueDesc" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Unit"))))
+(DFunDef false "pushDiscardedValueDesc" ((PVar "desc") (PVar "e")) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "exprLoc") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-DISCARDED-VALUE"))) (EVar "loc")) (EApp (EVar "discardedValueMsg") (EVar "desc"))) (ELit (LString "bind it with 'let _ = …' if dropping the value is intentional, or use its value"))) (EApp (EVar "discardedValueFix") (EVar "loc"))))))
+(DTypeSig false "discardedValueMsg" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "discardedValueMsg" ((PVar "desc")) (EBinOp "++" (EBinOp "++" (ELit (LString "this statement's value (")) (EApp (EVar "display") (EVar "desc"))) (ELit (LString ") is silently discarded — only a `Unit`-typed expression may stand alone as a statement"))))
 (DTypeSig false "discardedValueFix" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))
 (DFunDef false "discardedValueFix" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild))) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EVar "sc")) (ELit (LString "let _ = ")))))
 (DFunDef false "discardedValueFix" ((PCon "None")) (EVar "None"))
@@ -63492,7 +63498,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoBind" (PVar "pat") (PVar "e"))) (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-BIND-OUTSIDE-DO"))) (EVar "bindOutsideDoMsg"))) (DoLet false false (PVar "lits") (EApp (EVar "takePatLits") (ELit LUnit))) (DoLet false false (PVar "pr") (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "pat"))) (DoLet false false PWild (EApp (EApp (EVar "bindFrom") (EApp (EVar "fst") (EVar "pr"))) (EVar "t"))) (DoLet false false PWild (EApp (EVar "settlePatLits") (EVar "lits"))) (DoExpr (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EApp (EVar "snd") (EVar "pr"))))))
 (DFunDef false "inferStmt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported block statement"))))
 (DTypeSig false "checkStmtNotDiscarded" (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit")))))
-(DFunDef false "checkStmtNotDiscarded" ((PVar "stmtObls") (PVar "t") (PVar "e")) (EIf (EApp (EApp (EVar "isExemptInPlaceSetIndex") (EVar "t")) (EVar "e")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (ELit LUnit)) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "containsI") (EVar "id")) (EApp (EVar "numConstrainedIds") (EVar "stmtObls"))) (EApp (EApp (EVar "pushDiscardedValueError") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EVar "e")) (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit")))))) (arm (PCon "Link" PWild) () (EApp (EVar "panic") (ELit (LString "checkStmtNotDiscarded: normalize left a Link")))))) (arm (PVar "nt") () (EApp (EApp (EVar "pushDiscardedValueError") (EVar "nt")) (EVar "e")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "checkStmtNotDiscarded" ((PVar "stmtObls") (PVar "t") (PVar "e")) (EIf (EApp (EApp (EVar "isExemptInPlaceSetIndex") (EVar "t")) (EVar "e")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (ELit LUnit)) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "containsI") (EVar "id")) (EApp (EVar "numConstrainedIds") (EVar "stmtObls"))) (EApp (EApp (EVar "pushDiscardedValueDesc") (ELit (LString "a number"))) (EVar "e")) (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit")))))) (arm (PCon "Link" PWild) () (EApp (EVar "panic") (ELit (LString "checkStmtNotDiscarded: normalize left a Link")))))) (arm (PVar "nt") () (EApp (EApp (EVar "pushDiscardedValueError") (EVar "nt")) (EVar "e")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "stmtCalleeName" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "stmtCalleeName" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stmtCalleeName") (EVar "e")))
 (DFunDef false "stmtCalleeName" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "stmtCalleeName") (EVar "e")))
@@ -63510,9 +63516,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "isExemptInPlaceSetIndex" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isExemptInPlaceSetIndex" ((PVar "t") (PVar "e")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "t")) (arm (PCon "Some" (PVar "hd")) () (EBinOp "&&" (EBinOp "==" (EApp (EVar "stmtCalleeName") (EVar "e")) (EApp (EVar "Some") (ELit (LString "setIndex")))) (EApp (EApp (EVar "contains") (EVar "hd")) (EVar "exemptInPlaceIndexMutHeads")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "pushDiscardedValueError" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
-(DFunDef false "pushDiscardedValueError" ((PVar "nt") (PVar "e")) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "exprLoc") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-DISCARDED-VALUE"))) (EVar "loc")) (EApp (EVar "discardedValueMsg") (EVar "nt"))) (ELit (LString "bind it with 'let _ = …' if dropping the value is intentional, or use its value"))) (EApp (EVar "discardedValueFix") (EVar "loc"))))))
-(DTypeSig false "discardedValueMsg" (TyFun (TyCon "Mono") (TyCon "String")))
-(DFunDef false "discardedValueMsg" ((PVar "nt")) (EBinOp "++" (EBinOp "++" (ELit (LString "this statement's value (")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "nt")))) (ELit (LString ") is silently discarded — only a `Unit`-typed expression may stand alone as a statement"))))
+(DFunDef false "pushDiscardedValueError" ((PVar "nt") (PVar "e")) (EApp (EApp (EVar "pushDiscardedValueDesc") (EApp (EVar "ppMono") (EVar "nt"))) (EVar "e")))
+(DTypeSig false "pushDiscardedValueDesc" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Unit"))))
+(DFunDef false "pushDiscardedValueDesc" ((PVar "desc") (PVar "e")) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "exprLoc") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-DISCARDED-VALUE"))) (EVar "loc")) (EApp (EVar "discardedValueMsg") (EVar "desc"))) (ELit (LString "bind it with 'let _ = …' if dropping the value is intentional, or use its value"))) (EApp (EVar "discardedValueFix") (EVar "loc"))))))
+(DTypeSig false "discardedValueMsg" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "discardedValueMsg" ((PVar "desc")) (EBinOp "++" (EBinOp "++" (ELit (LString "this statement's value (")) (EApp (EMethodRef "display") (EVar "desc"))) (ELit (LString ") is silently discarded — only a `Unit`-typed expression may stand alone as a statement"))))
 (DTypeSig false "discardedValueFix" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))
 (DFunDef false "discardedValueFix" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild))) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EVar "sc")) (ELit (LString "let _ = ")))))
 (DFunDef false "discardedValueFix" ((PCon "None")) (EVar "None"))

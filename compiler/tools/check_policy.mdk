@@ -606,7 +606,7 @@ runPlugin fnName grants (coreD, modules, _, _, _, _) =
       let granted = fold (f _ => apply f (VList [])) fnVal (replicate grants ())
       let result = apply granted (VString sample)
       let logged = !outputRef
-      "\{logged}   transform \{escStr sample} = \{ppValue result}\n"
+      "\{logged}   \{fnName} \{escStr sample} = \{ppValue result}\n"
 
 lookupValue : String -> List (String, Value e) -> Option (Value e)
 lookupValue _ [] = None
@@ -617,15 +617,13 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- sets the exit code (0 accept / 1 reject) — mirroring the OCaml arm's exit
 -- behaviour while keeping IO at the CLI boundary.  rtSrc/coreSrc are the prelude
 -- sources (runtime.mdk/core.mdk); src is the plugin file.
--- The outcome of a policy check.  Accept carries the header and the desugared
--- plugin output.  The run is forced before PolicyAccept is constructed, so a
--- panic cannot print an acceptance verdict for an invocation that never
--- completed.  Reject carries the full report; the run never happens.
--- Not a `Result` clone worth collapsing: both arms carry a `String`, so
--- `Result String String` would leave `runCheckPolicy`'s signature unable to say
--- which String is the acceptance report and which the rejection.
--- lint-disable-next-line rule-clone-type
-public export data PolicyOutcome = PolicyAccept String | PolicyReject String
+-- The outcome of a policy check.  Accept carries the verdict header and the
+-- sample run as a thunk: the verdict is decided from the static analysis alone,
+-- so the caller prints it BEFORE forcing the run, and a sample that panics
+-- cannot hide it.  Reject carries the full report; the run never happens.
+public export data PolicyOutcome =
+  | PolicyAccept String (Unit -> String)
+  | PolicyReject String
 
 export
 runCheckPolicy : String -> String -> String -> String -> String -> PolicyOutcome
@@ -680,13 +678,14 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
               "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
           let header = "accepted. \{fnName} requires only \{effStr}\n"
           -- The sample is a String; only an entry taking and returning one is
-          -- run, so a sample can never crash an already-accepted verdict.
+          -- run.  It stays a thunk so the verdict prints first.
           let pluginOutput =
-            if takesAndReturnsString fnScheme then
-              runPlugin fnName (bindingGrantArity fnName fnScheme) elaborated
-            else
-              "   no sample run: '\{fnName}' is not a String -> String entry\n"
-          PolicyAccept (header ++ pluginOutput)
+            _ =>
+              if takesAndReturnsString fnScheme then
+                runPlugin fnName (bindingGrantArity fnName fnScheme) elaborated
+              else
+                "   no sample run: '\{fnName}' is not a String -> String entry\n"
+          PolicyAccept header pluginOutput
         _ =>
           let chain = findChain callGraph effTable fnName (firstOf forbidden)
           let header =
