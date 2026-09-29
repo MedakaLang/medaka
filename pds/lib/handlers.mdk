@@ -207,6 +207,7 @@ import lib.server_core.{
   makeServer,
   refreshAudience,
   serviceAuthUnavailableResponse,
+  withHandleUpdateCharge,
 }
 import lib.store.{
   SessionRotation(..),
@@ -2007,11 +2008,18 @@ announceIdentityResponse =
      DID document; here every valid handle but the current one gets the DID
      document refusal.
    - With one account, "Handle already taken" cannot arise.
-   - The rate limit is `maxHandleUpdatesPerWindow`, charged per client
-     identity when the request is admitted; the reference charges per DID and
-     only after its input checks pass. -}
-applyUpdateHandle : Account -> Json -> Result Response Response
-applyUpdateHandle account body = do
+
+   The rate limit is the reference's: 10 per 5 minutes and 50 per day for the
+   authenticated `did`, charged where the reference charges it, once the body
+   shape and the handle syntax (its lexicon input check) have passed and
+   before the lowercasing. So a 401, a malformed body and an invalid handle
+   cost nothing, and a reserved TLD, a slur, another handle and the current
+   handle each cost one. The answer carries the charge
+   (`withHandleUpdateCharge`) and the shell applies it, answering 429 in
+   place of this answer when the limit is spent. A per-client floor
+   (`maxHandleUpdatesPerWindow`) is also charged at admission. -}
+applyUpdateHandle : Account -> String -> Json -> Result Response Response
+applyUpdateHandle account did body = do
   () <- requireObject body
   requested <- requiredString "handle" body
   () <- match validateHandle requested
@@ -2020,6 +2028,15 @@ applyUpdateHandle account body = do
         (invalidRequest
           "Request field 'handle' is not a valid handle: \{message}")
     Ok () => Ok ()
+  Ok
+    (withHandleUpdateCharge
+      did
+      (collapseResponse (updateHandleOutcome account requested)))
+
+-- The checks the reference makes after its rate limit: everything after the
+-- handle syntax.
+updateHandleOutcome : Account -> String -> Result Response Response
+updateHandleOutcome account requested =
   let normalized = toLower requested
   if any (tld => endsWith tld normalized) disallowedHandleTlds then
     Err (invalidHandle "Handle TLD is invalid or disallowed")
@@ -2042,8 +2059,8 @@ identityHandled account outcome store (ProcedureJsonCall nsid _ body)
   | nsid == updateHandleNsid = match outcome
     Unauthenticated =>
       Some (store, authenticationRequired "Authentication Required")
-    Authenticated _ _ =>
-      Some (store, collapseResponse (applyUpdateHandle account body))
+    Authenticated did _ =>
+      Some (store, collapseResponse (applyUpdateHandle account did body))
   | otherwise = None
 identityHandled _ _ _ _ = None
 

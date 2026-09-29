@@ -799,8 +799,9 @@ data HandleCell = HandleCell String Int String String
    and Cyrillic `а` looks like `a`). All of them are refused by the handle
    syntax check before anything is lowercased.
 
-   Ten calls: exactly `maxHandleUpdatesPerWindow`, so this case never meets
-   the rate limiter. -}
+   Ten calls, under the per-client `maxHandleUpdatesPerWindow`, and four of
+   them charged to the DID (the other handle, the reserved TLD and the two
+   accepted calls), under its ten, so this case never meets a rate limit. -}
 updateHandleCells : String -> List HandleCell
 updateHandleCells current = [
   HandleCell current 200 "" "",
