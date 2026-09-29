@@ -1,2 +1,2 @@
 getx : Local -> Int
-main : <IO> Unit
+main : <Stdout> Unit

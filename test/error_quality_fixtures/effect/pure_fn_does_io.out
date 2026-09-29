@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/effect/pure_fn_does_io.mdk:3:10: Effectful value used where <> is allowed, but it performs <IO>
+error: test/error_quality_fixtures/effect/pure_fn_does_io.mdk:3:10: Effectful value used where <> is allowed, but it performs <Stdout>
   |
 3 |   println "computing"
   |           ^

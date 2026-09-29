@@ -9,13 +9,13 @@ tag : (p : String) -> <Audit p> String
 tag p = p ++ "!"
 
 sub : (p : String) -> <Audit p> String
-sub p = tag (p ++ "/x")
+sub p = tag p
 
 pick : Bool -> <Audit "cfg/*"> String
-pick b = if b then tag "cfg/a" else sub "cfg/b"
+pick b = if b then tag "cfg/a" else sub ("cfg/b" ++ "/x")
 
 main : <Audit "cfg/*", IO> Unit
 main =
   println (tag "cfg/app")
-  println (sub "cfg/app")
+  println (sub ("cfg/app" ++ "/x"))
   println (pick False)
