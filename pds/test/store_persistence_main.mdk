@@ -95,7 +95,7 @@ import lib.store.{
   storeWithRepo,
   storeWithSessionRows,
 }
-import lib.tid.{Tid, tidParse}
+import lib.tid.{Tid, tidEncode, tidParse, tidToString}
 import shell.blobfile.{
   blobDir,
   blobFileCount,
@@ -763,6 +763,69 @@ runBlobChurnAdd dir =
     Err message => panic "store_persistence: churn add failed: \{message}"
     Ok () => reportChurnAdd row
 
+-- ── one commit's share of the block graph (#3596) ───────────────────────────
+
+{- | How many records the block churn routes add to `olderRepo`'s two. The
+   seed route persists that repository whole, the way `--init` persists a
+   genesis, and the add route persists one more record through
+   `persistTransition` alone, so the gate can stat the block area in between
+   and see what that ONE commit cost. -}
+blockChurnCount : Int
+blockChurnCount = 100
+
+-- Revisions after every one `olderRepo` holds, one microsecond apart; each
+-- doubles as its record's key, so every record is at a distinct path.
+blockChurnRev : Int -> String
+blockChurnRev index =
+  tidToString
+    (resultOrPanic
+      "store_persistence: malformed churn TID"
+      (tidEncode (1800000000000000 + index) 0))
+
+blockChurnWrite : Int -> Repo -> Repo
+blockChurnWrite index repo =
+  let rev = blockChurnRev index
+  write "app.bsky.feed.post/\{rev}" "churn \{intToString index}" rev repo
+
+blockChurnRepo : Int -> Repo -> Repo
+blockChurnRepo index repo =
+  if index > blockChurnCount then
+    repo
+  else
+    blockChurnRepo (index + 1) (blockChurnWrite index repo)
+
+runBlockChurnSeed : String -> <IO, FileRead, FileWrite> Unit
+runBlockChurnSeed dir =
+  let repo = blockChurnRepo 1 olderRepo
+  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+    Err message =>
+      panic "store_persistence: block churn seed failed: \{message}"
+    Ok () =>
+      let () =
+        println
+          "BLOCK-CHURN-SEED blocks \{intToString (length (blocksOf repo))}"
+      println "BLOCK-CHURN-SEED: PASS"
+
+{- | One more record, against the repository the seed route left on disk.
+
+   The seed's repository is rebuilt in memory rather than read back, for
+   `blob-churn-add`'s reason: it is the store a server would have published,
+   and reading it back would be the whole-repository walk this route is here
+   to show is gone. -}
+runBlockChurnAdd : String -> <IO, FileRead, FileWrite> Unit
+runBlockChurnAdd dir =
+  let prior = blockChurnRepo 1 olderRepo
+  let next = blockChurnWrite (blockChurnCount + 1) prior
+  let before = storeFromRepo prior
+  let after = storeWithRepo next before
+  match persistTransition dir accountDid eventFixtureTime before after
+    Err message => panic "store_persistence: block churn add failed: \{message}"
+    Ok () =>
+      let () =
+        println
+          "BLOCK-CHURN-ADD head \{cidToString (repoCommitCid (repoLatestCommit next))}"
+      println "BLOCK-CHURN-ADD: PASS"
+
 -- ── a re-declared type at an unchanged block count (#3263) ──────────────────
 
 -- The bytes both retype routes upload. One blob, uploaded twice, so that the
@@ -1262,6 +1325,8 @@ main = match args ()
   ["transition", dir] => runTransition dir
   ["blob-churn-seed", dir] => runBlobChurnSeed dir
   ["blob-churn-add", dir] => runBlobChurnAdd dir
+  ["block-churn-seed", dir] => runBlockChurnSeed dir
+  ["block-churn-add", dir] => runBlockChurnAdd dir
   ["blob-retype-seed", dir] => runBlobRetypeSeed dir
   ["blob-retype-add", dir] => runBlobRetypeAdd dir
   ["sweep-staging", dir] => runSweepStaging dir
@@ -1271,4 +1336,4 @@ main = match args ()
   ["genesis-guard", dir] => runGenesisGuard dir
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|sessions-save|sessions-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|blob-churn-seed|blob-churn-add|blob-retype-seed|blob-retype-add|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|sessions-save|sessions-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|blob-churn-seed|blob-churn-add|block-churn-seed|block-churn-add|blob-retype-seed|blob-retype-add|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"

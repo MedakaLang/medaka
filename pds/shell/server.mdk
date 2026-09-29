@@ -99,10 +99,10 @@ import lib.event_log_record.{
 import lib.blockstore.{blockStoreSize}
 import lib.repo.{
   Repo,
+  repoAddedBlocks,
   repoCommitCid,
   repoCommitSignedBytes,
   repoCommitTid,
-  repoExportBlocks,
   repoLatestCommit,
   repoStore,
 }
@@ -688,7 +688,7 @@ persistCredentialHalf dir before after = match (
 {- | Whether this transition produced a new commit.
 
    One question asked once: it is both the condition under which the block
-   graph is rewritten and the condition under which a firehose event exists,
+   graph is persisted and the condition under which a firehose event exists,
    and two spellings of it could disagree — which is exactly the divergence
    "commit persisted, event missing" is made of. -}
 repoAdvanced : Store -> Store -> Bool
@@ -717,7 +717,7 @@ persistRepoHalf dir did nowSeconds before after = match storeRepo after
       Ok ()
     else match stageCommitEvent dir did nowSeconds (storeRepo before) next
       Err message => Err message
-      Ok () => match persistRepo dir next
+      Ok () => match persistRepo dir (storeRepo before) next
         Err message => match eventLogDiscardStaged dir
           Err _ => Err message
           Ok () => Err message
@@ -999,9 +999,24 @@ persistBlobHalf dir before after = do
 headText : Repo -> String
 headText repo = cidToString (repoCommitCid (repoLatestCommit repo))
 
-persistRepo : String -> Repo -> <FileRead, FileWrite> Result String Unit
-persistRepo dir repo = do
-  blocks <- repoExportBlocks repo
+{- | Persist `repo` over a data directory already holding every block of
+   `prior`'s graph, writing only the blocks `repo`'s graph adds to it.
+
+   `prior` is the repository of the store this process last published, and
+   every block its graph reaches is on disk: it was either read off the disk
+   at startup, which `repoFromBlocks` refuses unless its whole graph is there,
+   or persisted by the transition that published it, head last. Nothing
+   removes a block from `blocks/`, so it is still there. Rewriting one of
+   those blocks promotes the same bytes over themselves, and doing it for
+   every block makes one write cost the whole repository. A persist that fails
+   publishes nothing, so the next one is diffed against the same `prior` and
+   writes again whatever this one did not finish. -}
+persistRepo : String ->
+  Option Repo ->
+  Repo ->
+  <FileRead, FileWrite> Result String Unit
+persistRepo dir prior repo = do
+  blocks <- repoAddedBlocks prior repo
   persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
 
 -- ── rate limiting ───────────────────────────────────────────────────────────
