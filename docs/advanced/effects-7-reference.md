@@ -87,7 +87,7 @@ search for.
   path to check it, and the operating system resolves it again to open it. A
   symlink swapped inside the granted tree between the two can escape it.
   Closing this needs resolution beneath the granted directory (`openat` with
-  `O_NOFOLLOW`, or `openat2`). [#3564](https://github.com/MedakaLang/medaka/issues/3564)
+  `O_NOFOLLOW`, or `openat2`). [#3585](https://github.com/MedakaLang/medaka/issues/3585)
 - **A wasm build cannot confine a file operation.** Its host reads the path
   alone, so `medaka build --target wasm` refuses a file call whose grant is
   narrower than the whole domain, unless its path is a string literal the grant
