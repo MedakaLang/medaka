@@ -250,6 +250,8 @@ bindTyName : List (String, String) -> String -> String -> Option (List (String, 
 bindValueUpper : Ref Tyvar -> Mono -> Unit
 bindVar : Ref Tyvar -> Mono -> Unit
 binderDomainMsg : String -> String
+binderDomainTypeMsg : String -> String -> String
+binderDomainsIn : Ty -> List (String, Param)
 binderNoDomainMsg : String -> String
 binderTypeMsg : String -> String -> String
 bindingDeclared : TcEnv -> String -> Option CDeclared
@@ -378,6 +380,7 @@ checkArgEffVars : Option String -> String -> Ty -> List (String, List Atom) -> L
 checkAuthorityBinder : String -> Ty -> Ty -> Unit
 checkAuthorityKindLabel : KindAnn -> Unit
 checkAuthorityKindLabels : List (Option KindAnn) -> Unit
+checkBinderDomain : String -> Ty -> Option EffAtomTy -> Unit
 checkBodyImpl : ModuleSeed -> String -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit

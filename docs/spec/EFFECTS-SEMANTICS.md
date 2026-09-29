@@ -468,11 +468,22 @@ qualifier names none, the literal's shape gives the domain: a string is a
 Prefix pattern and a set is a Set element. Axes need a binder to name their
 label, since only a label declares a Product's axes and which is primary.
 
-Each authority has exactly one domain. A binder used by two compatible Prefix
-labels shares a variable; incompatible-domain uses are ill-formed, and so is a
-qualifier naming a named argument that no atom or index slot of the signature
-gives a domain (`(a : String) -> String @a`): nothing says which domain `a` is
-an element of, so the qualifier would bound nothing. Product
+Each authority has exactly one domain. A binder's domain has three sources: a
+domain written on the binder, `(dir : String @Store)`, which names the label
+whose domain the binder's authority is drawn from (for a Product label, its
+primary axis, the one a string lifts into) and charges nothing; an atom that
+names the binder; and an index slot that names it. The written domain belongs
+to the binder, not to the argument's type: the argument is still checked as
+`String @κ`, never as a value qualified by the label. So
+`(dir : String @Store) -> String @dir` is a pure helper whose result carries
+its argument's authority, and a binder with a written domain may still be named
+by atoms and indices of that domain. A binder used by two compatible Prefix
+labels shares a variable; sources of incompatible domains are ill-formed
+(`T-AUTHORITY-DOMAIN`), and so is a qualifier naming a named argument that none
+of the three sources gives a domain (`(a : String) -> String @a`): nothing
+says which domain `a` is an element of, so the qualifier would bound nothing.
+A written domain needs a `String` binder (`T-AUTHORITY-BINDER`) and a label
+whose domain has elements (`T-EFFECT-PARAM` for an atomic label). Product
 domains retain their declared axis schema, `effect L Product (Host : Prefix,
 Method : Set)`: the axes are declared in order and the first is the primary
 axis an unqualified string argument or a bare written literal lifts into; a

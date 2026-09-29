@@ -31,6 +31,7 @@ where the system is known not to express something yet.
 | `<Var {"HOME", "PATH"}>` | a set element | [IV](effects-4-authority.md) |
 | `<Http Host="a.com/*" Method={"GET"}>` | a product element; an unwritten axis is its whole axis | [IV](effects-4-authority.md) |
 | `(path : String) -> <Store path> B` | a named argument; the caller's path is the authority | [IV](effects-4-authority.md) |
+| `(dir : String @Store) -> String @dir` | a named argument with its domain written; charges nothing | [IV](effects-4-authority.md) |
 | `String @p` | a string known to lie within `p` | [IV](effects-4-authority.md) |
 | `String @(a \| b)` | a string within either authority | [IV](effects-4-authority.md) |
 | `(a <= d) => …` | a relation `check` prints on an unsigned binding | [IV](effects-4-authority.md) |
@@ -67,7 +68,7 @@ The first words of each message, and where the rule behind it is explained.
 | `Invalid effect parameter on <…>` | a written element the domain refuses: an empty element, or more than 16 members | [IV](effects-4-authority.md) |
 | `Binding '…' reaches "…" where only … is admitted` | a body under a named authority reaches a value it did not derive from it | [IV](effects-4-authority.md) |
 | `Binding '…' reaches … where its declared bound admits only …` | a constructor or existential exceeds a literal bound | [V](effects-5-data.md) |
-| `The qualifier names '…', but no effect atom or index in this signature names '…'` | a qualifier with no domain | [IV](effects-4-authority.md) |
+| `The qualifier names '…', but no binder domain, effect atom or index in this signature names '…'` | a qualifier with no domain | [IV](effects-4-authority.md) |
 | `'…' needs "…" to lie within "…" here` | a use violates a relation the binding's inferred type carries | [IV](effects-4-authority.md) |
 | `Authority index mismatch` | an authority index is invariant | [V](effects-5-data.md) |
 | `Effect index mismatch` | an effect index is invariant | [VI](effects-6-indexed.md) |
@@ -85,8 +86,8 @@ issue; the number is the thing to search for.
   lies within `"cfg/*"` for `name = "../secret.txt"`, and the runtime resolves
   the `..`, so the manifest's `cfg/*` is not a sandbox.
   [#3564](https://github.com/MedakaLang/medaka/issues/3564)
-- **A pure helper cannot return a value at a named argument's authority.** The
-  qualifier needs a label atom. [#3559](https://github.com/MedakaLang/medaka/issues/3559),
+- **A qualified result cannot return a literal its qualifier admits.** A
+  return is checked by its type, not by the literal's authority.
   [#3532](https://github.com/MedakaLang/medaka/issues/3532)
 - **There is no written syntax for a relation.** A binding whose inferred type
   carries a context such as `(a <= d) =>` (the relation the compiler kept, see

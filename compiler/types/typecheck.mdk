@@ -1987,7 +1987,7 @@ tyCarries seen p (TyQual t ps _) =
     || tyCarries seen p t
 tyCarries seen p (TyTuple ts) = anyList (tyCarries seen p) ts
 tyCarries seen p (TyConstrained _ t) = tyCarries seen p t
-tyCarries seen p (TyNamed _ t) = tyCarries seen p t
+tyCarries seen p (TyNamed _ t _) = tyCarries seen p t
 tyCarries seen p (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     argsCarry seen p (tyTabKey o n) 0 args
@@ -2104,7 +2104,7 @@ tyVarTypeOcc : String -> Ty -> Bool
 tyVarTypeOcc p (TyVar n) = n == p
 tyVarTypeOcc p (TyEffect _ _ t) = tyVarTypeOcc p t
 tyVarTypeOcc _ (TyRow _ _ _) = False
-tyVarTypeOcc p (TyNamed _ t) = tyVarTypeOcc p t
+tyVarTypeOcc p (TyNamed _ t _) = tyVarTypeOcc p t
 tyVarTypeOcc p (TyQual t _ _) = tyVarTypeOcc p t
 tyVarTypeOcc p (TyFun a b) = tyVarTypeOcc p a || tyVarTypeOcc p b
 tyVarTypeOcc p (TyTuple ts) = anyList (tyVarTypeOcc p) ts
@@ -2931,8 +2931,9 @@ implTupleHeadKindMsg iface n want =
   "Instance head `\{ppConName (tupleHeadTagTc n)}` has the wrong kind for interface '\{iface}': the interface's type parameter is graded — kind `\{renderKindArrow want}` — but a saturated tuple type is always kind `Type`, so there is no slot for the grade the methods index by. A tuple cannot be given a row parameter; implement a non-graded interface for it, or use a row-indexed data type (one with a constructor field of the shape `Unit -> <e> a`) as the instance head."
 
 checkEffectParamsTy : Ty -> Unit
-checkEffectParamsTy (TyFun (TyNamed n a) b) =
+checkEffectParamsTy (TyFun (TyNamed n a d) b) =
   let _ = checkAuthorityBinder n a b
+  let _ = checkBinderDomain n a d
   let _ = checkEffectParamsTy a
   checkEffectParamsTy b
 checkEffectParamsTy (TyFun a b) =
@@ -3100,6 +3101,28 @@ checkAuthorityBinder n a rest =
         ()
       else
         pushTypeError "T-AUTHORITY-BINDER" (binderTypeMsg n (ppTy a))
+
+-- A written binder domain, `(n : String @L)`, names a label whose domain has
+-- elements, for a binder of a type the domain can abstract.
+checkBinderDomain : String -> Ty -> Option EffAtomTy -> Unit
+checkBinderDomain _ _ None = ()
+checkBinderDomain n a (Some l) =
+  let saved = !currentLoc
+  currentLoc := orElseLoc l.eatLoc saved
+  let _ =
+    if isStringTy a then match dtopFor (EffLabel l.eatLabel l.eatOrigin)
+      PUnit =>
+        pushTypeError
+          "T-EFFECT-PARAM"
+          (effectParamMsg l.eatLabel (atomicLabelParamText l.eatLabel))
+      _ => ()
+    else
+      pushTypeError "T-AUTHORITY-BINDER" (binderDomainTypeMsg n (ppTy a))
+  currentLoc := saved
+
+binderDomainTypeMsg : String -> String -> String
+binderDomainTypeMsg n ty =
+  "Named argument '\{n}' has type `\{ty}`, but it is written with a domain: only a `String` argument has an authority. Give '\{n}' the type `String`, or drop the domain"
 
 isStringTy : Ty -> Bool
 isStringTy (TyCon { tyConName = n }) = n == "String"
@@ -12789,7 +12812,7 @@ tyVarNames (TyConstrained _ t) = tyVarNames t
 -- name captured by `effTailNames`/`rowArgNames`, not this one).
 tyVarNames (TyRow _ _ _) = []
 tyVarNames (TyAuth _ _) = []
-tyVarNames (TyNamed _ t) = tyVarNames t
+tyVarNames (TyNamed _ t _) = tyVarNames t
 tyVarNames (TyQual t _ _) = tyVarNames t
 
 -- WS-1c: the tyvar names appearing in a signature's `=>` CONSTRAINTS (not the value
@@ -12829,7 +12852,7 @@ tyConNamesInTy (TyTuple ts) = flatMap tyConNamesInTy ts
 tyConNamesInTy (TyEffect _ _ t) = tyConNamesInTy t
 tyConNamesInTy (TyRow _ _ _) = []
 tyConNamesInTy (TyAuth _ _) = []
-tyConNamesInTy (TyNamed _ t) = tyConNamesInTy t
+tyConNamesInTy (TyNamed _ t _) = tyConNamesInTy t
 tyConNamesInTy (TyQual t _ _) = tyConNamesInTy t
 tyConNamesInTy (TyConstrained cs t) =
   flatMap tyConNamesInConstraint cs ++ tyConNamesInTy t
@@ -13047,7 +13070,7 @@ effTailNames (TyConstrained _ t) = effTailNames t
 -- shape as that pre-existing gap, not a new one — see #784.
 effTailNames (TyRow _ tail _) = tail
 effTailNames (TyAuth _ _) = []
-effTailNames (TyNamed _ t) = effTailNames t
+effTailNames (TyNamed _ t _) = effTailNames t
 effTailNames (TyQual t _ _) = effTailNames t
 
 freshEffMap : List String -> List (String, Ref Effvar)
@@ -13056,8 +13079,9 @@ freshEffMap (n :: rest) = (n, freshEffvar ()) :: freshEffMap rest
 
 -- The variables one signature binds: its row tails (and row-kinded type
 -- arguments) and its authority binders, each name to one fresh cell shared by
--- every occurrence in that signature.  A binder is an authority only where an
--- effect atom names it; its domain is that label's.
+-- every occurrence in that signature.  A binder is an authority only where
+-- its written domain, an effect atom or an index names it; its domain is that
+-- label's.
 data SigVars = SigVars {
   svRows : List (String, Ref Effvar),
   svAuths : List (String, Ref Authvar),
@@ -13090,7 +13114,8 @@ sigVarsForWith : Ty -> List String -> List (String, Param) -> SigVars
 sigVarsForWith ty rowNames auths =
   let named = namedArgTypes ty
   let authNames = map fst auths
-  let _ = reportBinderDomains ty (namedAtomBinders ty ++ auths)
+  let uses = binderDomainsIn ty ++ namedAtomBinders ty ++ auths
+  let _ = reportBinderDomains ty uses
   let sv = SigVars {
     svRows = freshEffMap rowNames,
     svAuths =
@@ -13098,14 +13123,14 @@ sigVarsForWith ty rowNames auths =
         freshAuthBinder
         (filterList
           (b => authorityBinderBound named authNames (fst b))
-          (dedupBinders (namedAtomBinders ty ++ auths) [])),
+          (dedupBinders uses [])),
   }
   let _ = reportUnboundAuthorityNames ty sv
   sv
 
 -- An authority has exactly one domain: a name the signature uses at two
--- labels of different domains — as an atom's parameter, an index slot, or
--- one of each — is reported once, whatever binds it.
+-- labels of different domains — as its binder's written domain, an atom's
+-- parameter or an index slot, in any pair — is reported once, whatever binds it.
 reportBinderDomains : Ty -> List (String, Param) -> Unit
 reportBinderDomains ty uses =
   fold
@@ -13206,7 +13231,7 @@ qualifierBinderTypeMsg n ty =
 
 binderNoDomainMsg : String -> String
 binderNoDomainMsg n =
-  "The qualifier names '\{n}', but no effect atom or index in this signature names '\{n}', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Name the label it bounds, `<FileRead \{n}>`, or index a handle by it, `Handle \{n}`, or drop the qualifier"
+  "The qualifier names '\{n}', but no binder domain, effect atom or index in this signature names '\{n}', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Write the domain on the binder, `(\{n} : String @FileRead)`, name the label it bounds, `<FileRead \{n}>`, or index a handle by it, `Handle \{n}`, or drop the qualifier"
 
 joinDomainMsg : List String -> String
 joinDomainMsg ns =
@@ -13231,7 +13256,7 @@ writtenQualifiers (TyApp a b) = writtenQualifiers a ++ writtenQualifiers b
 writtenQualifiers (TyFun a b) = writtenQualifiers a ++ writtenQualifiers b
 writtenQualifiers (TyTuple ts) = flatMap writtenQualifiers ts
 writtenQualifiers (TyConstrained _ t) = writtenQualifiers t
-writtenQualifiers (TyNamed _ t) = writtenQualifiers t
+writtenQualifiers (TyNamed _ t _) = writtenQualifiers t
 writtenQualifiers _ = []
 
 nameNotAuthorityMsg : String -> String
@@ -13252,7 +13277,7 @@ authorityNamesWritten (TyFun a b) =
   authorityNamesWritten a ++ authorityNamesWritten b
 authorityNamesWritten (TyTuple ts) = flatMap authorityNamesWritten ts
 authorityNamesWritten (TyConstrained _ t) = authorityNamesWritten t
-authorityNamesWritten (TyNamed _ t) = authorityNamesWritten t
+authorityNamesWritten (TyNamed _ t _) = authorityNamesWritten t
 authorityNamesWritten _ = []
 
 atomAuthorityName : EffAtomTy -> List (String, Option Loc)
@@ -13266,7 +13291,7 @@ sigTyVarNames ty rows authNames =
   removeAllS (rows ++ authNames) (tyVarNamesWithConstraints ty)
 
 namedArgTypes : Ty -> List (String, Ty)
-namedArgTypes (TyFun (TyNamed n a) b) = (n, a) :: namedArgTypes b
+namedArgTypes (TyFun (TyNamed n a _) b) = (n, a) :: namedArgTypes b
 namedArgTypes (TyFun _ b) = namedArgTypes b
 namedArgTypes (TyConstrained _ t) = namedArgTypes t
 namedArgTypes _ = []
@@ -13286,7 +13311,28 @@ authvarIdOf (_, cell) = authvarId cell
 -- index slot, with the slot's declared label's.  A name used at two domains
 -- is diagnosed by `checkAuthorityBinder`; the first use decides here.
 authorityUsesOf : Ty -> List (String, Param)
-authorityUsesOf ty = namedAtomBinders ty ++ authArgBindersIn ty
+authorityUsesOf ty =
+  binderDomainsIn ty ++ namedAtomBinders ty ++ authArgBindersIn ty
+
+-- The binders a signature writes a domain for, `(n : String @L)`, each with
+-- the domain its authority is drawn from: the label's, or for a Product label
+-- its primary axis's, the axis a string lifts into.  An atomic label has no
+-- domain and gives none (`checkBinderDomain` reports it).
+binderDomainsIn : Ty -> List (String, Param)
+binderDomainsIn (TyNamed n t (Some l)) =
+  let own = match dtopFor (EffLabel l.eatLabel l.eatOrigin)
+    PUnit => []
+    PProduct ((_, axis) :: _) => [(n, subTopOf axis)]
+    top => [(n, top)]
+  own ++ binderDomainsIn t
+binderDomainsIn (TyNamed _ t None) = binderDomainsIn t
+binderDomainsIn (TyFun a b) = binderDomainsIn a ++ binderDomainsIn b
+binderDomainsIn (TyApp a b) = binderDomainsIn a ++ binderDomainsIn b
+binderDomainsIn (TyTuple ts) = flatMap binderDomainsIn ts
+binderDomainsIn (TyEffect _ _ t) = binderDomainsIn t
+binderDomainsIn (TyConstrained _ t) = binderDomainsIn t
+binderDomainsIn (TyQual t _ _) = binderDomainsIn t
+binderDomainsIn _ = []
 
 -- The bare names sitting in `Authority`-kinded argument slots of registered
 -- heads, with the slot's domain: the twin of `rowArgNamesIn` for authorities.
@@ -13302,7 +13348,7 @@ authArgBindersIn (TyFun a b) = authArgBindersIn a ++ authArgBindersIn b
 authArgBindersIn (TyTuple ts) = flatMap authArgBindersIn ts
 authArgBindersIn (TyEffect _ _ t) = authArgBindersIn t
 authArgBindersIn (TyConstrained _ t) = authArgBindersIn t
-authArgBindersIn (TyNamed _ t) = authArgBindersIn t
+authArgBindersIn (TyNamed _ t _) = authArgBindersIn t
 authArgBindersIn (TyQual t _ _) = authArgBindersIn t
 authArgBindersIn _ = []
 
@@ -13341,7 +13387,7 @@ atomBindersIn readAtom (TyEffect atoms _ t) =
 atomBindersIn readAtom (TyRow atoms _ _) = flatMap readAtom atoms
 atomBindersIn _ (TyAuth _ _) = []
 atomBindersIn readAtom (TyConstrained _ t) = atomBindersIn readAtom t
-atomBindersIn readAtom (TyNamed _ t) = atomBindersIn readAtom t
+atomBindersIn readAtom (TyNamed _ t _) = atomBindersIn readAtom t
 atomBindersIn readAtom (TyQual t _ _) = atomBindersIn readAtom t
 
 -- The names an atom's parameter binds, each with its domain: the label's for
@@ -13468,7 +13514,7 @@ fromAstTypeE etbl tvs (TyEffect _ _ t) = fromAstTypeE etbl tvs t
 fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
 -- A binder reached outside an arrow domain is a resolve error already; its
 -- type still elaborates so inference can continue.
-fromAstTypeE etbl tvs (TyNamed _ t) = fromAstTypeE etbl tvs t
+fromAstTypeE etbl tvs (TyNamed _ t _) = fromAstTypeE etbl tvs t
 fromAstTypeE etbl tvs (TyQual t ps loc) =
   qualifyByTerms etbl ps loc (fromAstTypeE etbl tvs t)
 
@@ -13492,7 +13538,7 @@ fromAstTypeE etbl tvs (TyRow labels tail loc) =
 -- An arrow's domain: a named argument whose name an effect atom refers to is
 -- qualified by that binder's authority; an unreferenced name binds nothing.
 fromAstDomainE : SigVars -> List (String, Mono) -> Ty -> Mono
-fromAstDomainE etbl tvs (TyNamed n t) =
+fromAstDomainE etbl tvs (TyNamed n t _) =
   qualifyBy etbl n (fromAstTypeE etbl tvs t)
 fromAstDomainE etbl tvs t = fromAstTypeE etbl tvs t
 
@@ -22980,7 +23026,7 @@ paramOccPolarities tab p pol (TyConstrained _ t) =
   paramOccPolarities tab p pol t
 paramOccPolarities _ _ _ (TyRow _ _ _) = []
 paramOccPolarities _ _ _ (TyAuth _ _) = []
-paramOccPolarities tab p pol (TyNamed _ t) = paramOccPolarities tab p pol t
+paramOccPolarities tab p pol (TyNamed _ t _) = paramOccPolarities tab p pol t
 paramOccPolarities tab p pol (TyQual t _ _) = paramOccPolarities tab p pol t
 paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
   -- OCCURRENCE MINT (#1110/#1111 A-2.3): same record pattern as
@@ -29302,7 +29348,7 @@ tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
 -- wrapped type at all — is vacuously concrete too.
 tyIsConcrete (TyRow _ _ _) = True
 tyIsConcrete (TyAuth _ _) = True
-tyIsConcrete (TyNamed _ t) = tyIsConcrete t
+tyIsConcrete (TyNamed _ t _) = tyIsConcrete t
 tyIsConcrete (TyQual t _ _) = tyIsConcrete t
 
 -- one-directional structural match (pattern may carry free TyVar wildcards;
@@ -30010,7 +30056,7 @@ tyStep (TyConstrained _ t1) s = MKids [(t1, stripTyWrap s)]
 -- vacuously matches anything in this position.
 tyStep (TyRow _ _ _) _ = MOk
 tyStep (TyAuth _ _) _ = MOk
-tyStep (TyNamed _ t1) s = MKids [(t1, stripTyWrap s)]
+tyStep (TyNamed _ t1 _) s = MKids [(t1, stripTyWrap s)]
 tyStep (TyQual t1 _ _) s = MKids [(t1, stripTyWrap s)]
 
 eqStr : String -> String -> Bool
@@ -30019,7 +30065,7 @@ eqStr a b = a == b
 stripTyWrap : Ty -> Ty
 stripTyWrap (TyEffect _ _ t) = stripTyWrap t
 stripTyWrap (TyConstrained _ t) = stripTyWrap t
-stripTyWrap (TyNamed _ t) = stripTyWrap t
+stripTyWrap (TyNamed _ t _) = stripTyWrap t
 stripTyWrap (TyQual t _ _) = stripTyWrap t
 stripTyWrap t = t
 
@@ -35221,7 +35267,7 @@ substTyVars sub (TyConstrained cs t) = TyConstrained cs (substTyVars sub t)
 -- ordinary type-var names — a bare row atom substitutes to itself.
 substTyVars _ (TyRow es eff l) = TyRow es eff l
 substTyVars _ (TyAuth p l) = TyAuth p l
-substTyVars sub (TyNamed n t) = TyNamed n (substTyVars sub t)
+substTyVars sub (TyNamed n t d) = TyNamed n (substTyVars sub t) d
 substTyVars sub (TyQual t ns l) = TyQual (substTyVars sub t) ns l
 
 -- A function-typed dispatch mono is fully GROUND — its head is `->`, structurally
@@ -37840,7 +37886,7 @@ namedArgOrder : Ty -> List (String, Int)
 namedArgOrder ty = namedArgPositions ty 0
 
 namedArgPositions : Ty -> Int -> List (String, Int)
-namedArgPositions (TyFun (TyNamed n _) b) i =
+namedArgPositions (TyFun (TyNamed n _ _) b) i =
   (n, i) :: namedArgPositions b (i + 1)
 namedArgPositions (TyFun _ b) i = namedArgPositions b (i + 1)
 namedArgPositions (TyConstrained _ t) i = namedArgPositions t i
@@ -38041,7 +38087,7 @@ ffiCrossableTy t = match expandAliasHeadTy t
   TyCon { tyConName = n } => ffiCrossableConName n
   -- A named argument crosses as its type; the name is the authority the
   -- declared row charges, which is compile-time only.
-  TyNamed _ inner => ffiCrossableTy inner
+  TyNamed _ inner _ => ffiCrossableTy inner
   TyQual inner _ _ => ffiCrossableTy inner
   -- `Array Int` and nothing else: §2.4 specifies only the all-immediate-element
   -- case, so `Array String` / `Array (Array Int)` fall through to False.
@@ -38407,7 +38453,7 @@ ffiRowBody t = match ffiRowParts t
 ffiSigStrip : List (TabKey, (List String, Ty)) -> Ty -> Ty
 ffiSigStrip aliases t = match expandAliasHeadTyWith aliases t
   TyConstrained _ inner => ffiSigStrip aliases inner
-  TyNamed _ inner => ffiSigStrip aliases inner
+  TyNamed _ inner _ => ffiSigStrip aliases inner
   u => u
 
 -- The row each arrow of a signature's spine carries on its result, in order.
@@ -38761,7 +38807,7 @@ ffiTyHeadNameWith aliases ty = match expandAliasHeadTyWith aliases ty
   TyVar _ => "_"
   TyConstrained _ t => ffiTyHeadNameWith aliases t
   TyEffect _ _ t => ffiTyHeadNameWith aliases t
-  TyNamed _ t => ffiTyHeadNameWith aliases t
+  TyNamed _ t _ => ffiTyHeadNameWith aliases t
   TyQual t _ _ => ffiTyHeadNameWith aliases t
   -- A parenthesised arrow in a VALUE position (a function-typed parameter).  It
   -- gets its own token rather than falling into the catch-all so that two

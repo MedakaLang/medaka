@@ -508,10 +508,14 @@ checkTypeGo bound cur env (TyApp a b) =
   let (e1, b1) = checkTypeGo bound cur env a
   let (e2, b2) = checkTypeGo b1 cur env b
   (e1 ++ e2, b2)
-checkTypeGo bound cur env (TyFun (TyNamed n a) b) =
+-- A written domain names a label as a row atom does, and is checked as one.
+checkTypeGo bound cur env (TyFun (TyNamed n a d) b) =
   let (e1, b1) = checkTypeGo bound cur env a
+  let ed = match d
+    Some atom => checkEffAtoms b1 cur env [atom]
+    None => []
   let (e2, b2) = checkTypeGo (n :: b1) cur env b
-  (e1 ++ e2, b2)
+  (e1 ++ ed ++ e2, b2)
 checkTypeGo bound cur env (TyFun a b) =
   let (e1, b1) = checkTypeGo bound cur env a
   let (e2, b2) = checkTypeGo b1 cur env b
@@ -521,7 +525,7 @@ checkTypeGo bound cur env (TyEffect labels _ t) =
   let errs = checkEffAtoms bound cur env labels
   let (e2, b2) = checkTypeGo bound cur env t
   (errs ++ e2, b2)
-checkTypeGo bound cur _ (TyNamed n _) =
+checkTypeGo bound cur _ (TyNamed n _ _) =
   ([MisplacedAuthorityBinder n cur], bound)
 checkTypeGo bound cur env (TyQual t ps l) =
   let (e1, b1) = checkTypeGo bound cur env t
@@ -5583,6 +5587,9 @@ stampTyHead _ scope (TyEffect atoms tail t) =
 stampTyHead _ scope (TyRow atoms tail l) =
   let (atoms2, changed) = stampEffAtoms scope atoms
   (TyRow atoms2 tail l, changed)
+stampTyHead _ scope (TyNamed n t (Some a)) = match stampEffAtoms scope [a]
+  ([a2], changed) => (TyNamed n t (Some a2), changed)
+  _ => (TyNamed n t (Some a), False)
 stampTyHead [] _ (t@(TyConstrained _ _)) = (t, False)
 stampTyHead aliases scope (TyConstrained cs t) =
   (TyConstrained (map (unqualConstraint (aliasCtx aliases scope)) cs) t, True)

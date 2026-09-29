@@ -2223,7 +2223,7 @@ tyMentionsParams (TyEffect _ _ t) params = tyMentionsParams t params
 tyMentionsParams (TyRow _ tail _) params = anyList (v => contains v params) tail
 tyMentionsParams (TyAuth _ _) _ = False
 tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
-tyMentionsParams (TyNamed _ t) params = tyMentionsParams t params
+tyMentionsParams (TyNamed _ t _) params = tyMentionsParams t params
 tyMentionsParams (TyQual t _ _) params = tyMentionsParams t params
 
 -- ── self-returning function-PARAM table (native backend) ────────────────────
@@ -2257,7 +2257,7 @@ ifaceSelfFnParamEntry ifaceName typeParams (IfaceMethod mname mty _ _) =
 methodArgTys : Ty -> List Ty
 methodArgTys (TyConstrained _ t) = methodArgTys t
 methodArgTys (TyEffect _ _ t) = methodArgTys t
-methodArgTys (TyFun (TyNamed _ a) b) = a :: methodArgTys b
+methodArgTys (TyFun (TyNamed _ a _) b) = a :: methodArgTys b
 methodArgTys (TyFun a b) = a :: methodArgTys b
 methodArgTys _ = []
 
@@ -2411,7 +2411,7 @@ tyMentionsNonParam (TyRow _ tail _) params =
   anyList (v => not (contains v params)) tail
 tyMentionsNonParam (TyAuth _ _) _ = False
 tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
-tyMentionsNonParam (TyNamed _ t) params = tyMentionsNonParam t params
+tyMentionsNonParam (TyNamed _ t _) params = tyMentionsNonParam t params
 tyMentionsNonParam (TyQual t _ _) params = tyMentionsNonParam t params
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
@@ -2460,7 +2460,7 @@ tyHeadName (TyVar n) = n
 tyHeadName (TyApp a _) = tyHeadName a
 tyHeadName (TyConstrained _ t) = tyHeadName t
 tyHeadName (TyEffect _ _ t) = tyHeadName t
-tyHeadName (TyNamed _ t) = tyHeadName t
+tyHeadName (TyNamed _ t _) = tyHeadName t
 tyHeadName (TyQual t _ _) = tyHeadName t
 tyHeadName _ = ""
 

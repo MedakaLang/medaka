@@ -560,7 +560,7 @@ countTyvars (TyEffect _ _ t) = countTyvars t
 countTyvars (TyConstrained _ t) = countTyvars t
 countTyvars (TyRow _ _ _) = 0
 countTyvars (TyAuth _ _) = 0
-countTyvars (TyNamed _ t) = countTyvars t
+countTyvars (TyNamed _ t _) = countTyvars t
 countTyvars (TyQual t _ _) = countTyvars t
 
 sumInts : List Int -> Int
@@ -659,7 +659,7 @@ dispatchPositionsOf mty params = filterMentions 0 (argsOfTy mty) params
 argsOfTy : Ty -> List Ty
 argsOfTy (TyConstrained _ t) = argsOfTy t
 argsOfTy (TyEffect _ _ t) = argsOfTy t
-argsOfTy (TyFun (TyNamed _ a) b) = a :: argsOfTy b
+argsOfTy (TyFun (TyNamed _ a _) b) = a :: argsOfTy b
 argsOfTy (TyFun a b) = a :: argsOfTy b
 argsOfTy _ = []
 
@@ -677,7 +677,7 @@ tyMentions (TyFun a b) params = tyMentions a params || tyMentions b params
 tyMentions (TyTuple ts) params = anyList (t => tyMentions t params) ts
 tyMentions (TyEffect _ _ t) params = tyMentions t params
 tyMentions (TyConstrained _ t) params = tyMentions t params
-tyMentions (TyNamed _ t) params = tyMentions t params
+tyMentions (TyNamed _ t _) params = tyMentions t params
 tyMentions (TyQual t _ _) params = tyMentions t params
 -- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`,
 -- no labels) IS a mention of that name — the same relationship `TyVar`
@@ -5087,7 +5087,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "countTyvars" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyRow" PWild PWild PWild)) (ELit (LInt 0)))
 (DFunDef false "countTyvars" ((PCon "TyAuth" PWild PWild)) (ELit (LInt 0)))
-(DFunDef false "countTyvars" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
+(DFunDef false "countTyvars" ((PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "countTyvars") (EVar "t")))
 (DTypeSig false "sumInts" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "sumInts" ((PList)) (ELit (LInt 0)))
@@ -5110,7 +5110,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "argsOfTy" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty"))))
 (DFunDef false "argsOfTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "argsOfTy") (EVar "t")))
 (DFunDef false "argsOfTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "argsOfTy") (EVar "t")))
-(DFunDef false "argsOfTy" ((PCon "TyFun" (PCon "TyNamed" PWild (PVar "a")) (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
+(DFunDef false "argsOfTy" ((PCon "TyFun" (PCon "TyNamed" PWild (PVar "a") PWild) (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
 (DFunDef false "argsOfTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
 (DFunDef false "argsOfTy" (PWild) (EListLit))
 (DTypeSig false "filterMentions" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -5124,7 +5124,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentions" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentions" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentions" ((PCon "TyNamed" PWild (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
 (DFunDef false "tyMentions" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
@@ -6736,7 +6736,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "countTyvars" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyRow" PWild PWild PWild)) (ELit (LInt 0)))
 (DFunDef false "countTyvars" ((PCon "TyAuth" PWild PWild)) (ELit (LInt 0)))
-(DFunDef false "countTyvars" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
+(DFunDef false "countTyvars" ((PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "countTyvars") (EVar "t")))
 (DTypeSig false "sumInts" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "sumInts" ((PList)) (ELit (LInt 0)))
@@ -6759,7 +6759,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "argsOfTy" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty"))))
 (DFunDef false "argsOfTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "argsOfTy") (EVar "t")))
 (DFunDef false "argsOfTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "argsOfTy") (EVar "t")))
-(DFunDef false "argsOfTy" ((PCon "TyFun" (PCon "TyNamed" PWild (PVar "a")) (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
+(DFunDef false "argsOfTy" ((PCon "TyFun" (PCon "TyNamed" PWild (PVar "a") PWild) (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
 (DFunDef false "argsOfTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
 (DFunDef false "argsOfTy" (PWild) (EListLit))
 (DTypeSig false "filterMentions" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -6773,7 +6773,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentions" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentions" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentions" ((PCon "TyNamed" PWild (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
 (DFunDef false "tyMentions" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))

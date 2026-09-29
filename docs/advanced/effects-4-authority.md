@@ -407,13 +407,10 @@ effect Store Prefix
 load : (path : String) -> <Store path> Int
 load _ = 1
 
-same : (dir : String) -> <Store dir> String @dir
+same : (dir : String @Store) -> String @dir
 same dir = dir
 
-choose : Bool ->
-  (a : String) ->
-  (b : String) ->
-  <Store a, Store b> String @(a | b)
+choose : Bool -> (a : String @Store) -> (b : String @Store) -> String @(a | b)
 choose first a b = if first then a else b
 
 main =
@@ -432,22 +429,26 @@ of two arguments, and `@(a | b)` is the spelling for "within either". `check`
 prints `main : <Stdout, Store "cfg/x", Store "data/y"> Unit`, which is what a caller
 would hope for.
 
-A qualifier's name needs a domain, and the only way to give it one is an atom or
-an index in the same signature that names the same argument. That is why `same`
-carries `<Store dir>` even though its body performs nothing. Drop the atom and
-the compiler explains:
+Neither function performs anything, and neither signature has a row. A
+qualifier's name still needs a domain, some label's set of authorities for
+`dir` to be an element of, and `(dir : String @Store)` writes it on the binder.
+That `@Store` belongs to `dir`, not to the string: the argument is an ordinary
+`String`, and naming the domain charges nothing. For a `Product` label the
+domain is its primary axis, the one a bare string lifts into. An atom that
+names the argument (`<Store dir>`) or an index (`Handle dir`) gives a binder a
+domain too, and a binder may have several of these as long as they agree.
+With none of them the compiler explains:
 
 ```
-error: authority.mdk:6:38: The qualifier names 'dir', but no effect atom or index in this signature names 'dir', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Name the label it bounds, `<FileRead dir>`, or index a handle by it, `Handle dir`, or drop the qualifier
+error: authority.mdk:6:32: The qualifier names 'dir', but no binder domain, effect atom or index in this signature names 'dir', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Write the domain on the binder, `(dir : String @FileRead)`, name the label it bounds, `<FileRead dir>`, or index a handle by it, `Handle dir`, or drop the qualifier
   |
-6 | withSuffix : (dir : String) -> String @dir
-  |                                       ^
+6 | same : (dir : String) -> String @dir
+  |                                 ^
 ```
 
-> ⚠️ **A pure helper over paths is hard to write today.** A function that
-> returns a path at `dir`'s authority is refused unless its signature performs
-> a label atom naming `dir`: the qualifier has no domain without one. Tracked as
-> [#3559](https://github.com/MedakaLang/medaka/issues/3559).
+A helper like `same` may return its argument, or a value derived from it that
+keeps its authority, but not an extension of it: `dir ++ "/index"` in the
+result is the whole domain, for the reason an extension in a row is.
 
 ## Relations the compiler keeps
 

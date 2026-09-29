@@ -556,7 +556,7 @@ countTyvars (TyEffect _ _ t) = countTyvars t
 countTyvars (TyConstrained _ t) = countTyvars t
 countTyvars (TyRow _ _ _) = 0
 countTyvars (TyAuth _ _) = 0
-countTyvars (TyNamed _ t) = countTyvars t
+countTyvars (TyNamed _ t _) = countTyvars t
 countTyvars (TyQual t _ _) = countTyvars t
 
 sumInts : List Int -> Int
@@ -655,7 +655,7 @@ dispatchPositionsOf mty params = filterMentions 0 (argsOfTy mty) params
 argsOfTy : Ty -> List Ty
 argsOfTy (TyConstrained _ t) = argsOfTy t
 argsOfTy (TyEffect _ _ t) = argsOfTy t
-argsOfTy (TyFun (TyNamed _ a) b) = a :: argsOfTy b
+argsOfTy (TyFun (TyNamed _ a _) b) = a :: argsOfTy b
 argsOfTy (TyFun a b) = a :: argsOfTy b
 argsOfTy _ = []
 
@@ -673,7 +673,7 @@ tyMentions (TyFun a b) params = tyMentions a params || tyMentions b params
 tyMentions (TyTuple ts) params = anyList (t => tyMentions t params) ts
 tyMentions (TyEffect _ _ t) params = tyMentions t params
 tyMentions (TyConstrained _ t) params = tyMentions t params
-tyMentions (TyNamed _ t) params = tyMentions t params
+tyMentions (TyNamed _ t _) params = tyMentions t params
 tyMentions (TyQual t _ _) params = tyMentions t params
 -- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`,
 -- no labels) IS a mention of that name — the same relationship `TyVar`

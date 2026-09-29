@@ -223,6 +223,8 @@ under : (path : String) -> <FFI, Store path> Int  -- may read path, nothing else
 under path = load path
 config : String -> <FFI, Store "cfg/*"> Int  -- the caller extends the path
 config name = under ("cfg/" ++ name)
+pathOf : (dir : String @Store) -> String @dir  -- a domain on the binder, no charge
+pathOf dir = dir
 ```
 
 An extension of a named argument (`path ++ "/x"`) is the label's whole domain,
@@ -238,8 +240,13 @@ an index may also write literals: `String @"cfg/*"`,
 elements as it renders.  A `Prefix` element without a trailing `*` is exact
 and needs no `/`: `<FileRead "notes.txt">` is a legal bound.  A qualifier's
 binders must be `String` authorities of one domain shape (two Prefix labels
-are one shape), and a named argument used only in a qualifier, with no atom or
-index naming it, has no domain and is an error.  The quoted underscore
+are one shape).  A named argument may write its domain after its type,
+`(dir : String @Store)`: the label names the domain the binder's authority is
+drawn from (a `Product` label's primary axis, the one a string lifts into) and
+charges nothing, so `pathOf` above performs no effect.  That `@Store` belongs
+to the binder, not to `String`: the argument's type is unqualified.  A named
+argument used only in a qualifier, with no written domain, atom or index naming
+it, has no domain and is an error.  The quoted underscore
 (`<Store "_">`) is a parse error naming the replacement.
 
 A `data` head may declare an `Authority`-kinded parameter, `(p : Authority

@@ -1,5 +1,5 @@
 # META
-source_lines=6075
+source_lines=6097
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -2128,7 +2128,7 @@ tyFor _ = defer
 -- signature, so it can only be an arrow's domain: without the arrow there is
 -- no "rest" for the name to scope over.
 tyAfterApp : Ty -> Parser Ty
-tyAfterApp (left@(TyNamed _ _)) =
+tyAfterApp (left@(TyNamed _ _ _)) =
   orElse (tyArrowTail left) (failP namedArgNeedsArrowMsg)
 tyAfterApp left = orElse (tyArrowTail left) (deferPure left)
 
@@ -2605,13 +2605,19 @@ parseTyParenBody (TIdent _) = defer
 parseTyParenBody _ = parseTyParenTuple
 
 parseTyParenIdent : Token -> Parser Ty
--- `(name : T)`: an arrow-domain binder naming the argument's authority.
+-- `(name : T)`: an arrow-domain binder naming the argument's authority, and
+-- `(name : T @Label)`, the same binder with its domain written.  A label
+-- after the type is not a qualifier on `T` (a qualifier names a binder, and
+-- is lowercase); it says which label's domain the binder's authority is in.
 parseTyParenIdent TColon = defer
   n <- identNameP
   expectTok TColon
   t <- parseTy
+  t1 <- peekP
+  t2 <- peek2P
+  d <- binderDomainP t1 t2
   expectTok TRParen
-  deferPure (TyNamed n t)
+  deferPure (TyNamed n t d)
 -- `(a | b)` of names only stays a row join, as an `Effect` slot reads it; a
 -- literal among the terms makes it an authority join.
 parseTyParenIdent TPipe = defer
@@ -2622,6 +2628,22 @@ parseTyParenIdent TPipe = defer
   q <- getPos
   deferPure (namesOrAuthJoin v rest (Some (locOfSpan s q)))
 parseTyParenIdent _ = parseTyParenTuple
+
+-- A binder's written domain, `@Label` after its type, held as a label-only
+-- atom so resolve acquires the label's identity as it does for a row's.
+binderDomainP : Token -> Token -> Parser (Option EffAtomTy)
+binderDomainP TAt (TUpper _) = defer
+  s <- getPos
+  advance
+  l <- upperNameP
+  q <- getPos
+  deferPure (Some (effAtomAt l EPTop (locOfSpan s q)))
+binderDomainP TAsAt (TUpper l) = defer
+  pos <- getPos
+  fatalAtP
+    "a binder's domain is written with a space before the `@`: `String @\{l}`"
+    pos
+binderDomainP _ _ = deferPure None
 
 namesOrAuthJoin : String -> List EffParamTy -> Option Loc -> Ty
 namesOrAuthJoin v rest loc = match allNames rest []
@@ -6774,7 +6796,7 @@ parseResultWith src tokList offList =
 (DFunDef false "tyFor" ((PCon "TLt")) (EVar "parseEffectTy"))
 (DFunDef false "tyFor" (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseTyApp")) (ELam ((PVar "left")) (EApp (EVar "tyAfterApp") (EVar "left")))))
 (DTypeSig false "tyAfterApp" (TyFun (TyCon "Ty") (TyApp (TyCon "Parser") (TyCon "Ty"))))
-(DFunDef false "tyAfterApp" ((PAs "left" (PCon "TyNamed" PWild PWild))) (EApp (EApp (EVar "orElse") (EApp (EVar "tyArrowTail") (EVar "left"))) (EApp (EVar "failP") (EVar "namedArgNeedsArrowMsg"))))
+(DFunDef false "tyAfterApp" ((PAs "left" (PCon "TyNamed" PWild PWild PWild))) (EApp (EApp (EVar "orElse") (EApp (EVar "tyArrowTail") (EVar "left"))) (EApp (EVar "failP") (EVar "namedArgNeedsArrowMsg"))))
 (DFunDef false "tyAfterApp" ((PVar "left")) (EApp (EApp (EVar "orElse") (EApp (EVar "tyArrowTail") (EVar "left"))) (EApp (EVar "deferPure") (EVar "left"))))
 (DTypeSig false "namedArgNeedsArrowMsg" (TyCon "String"))
 (DFunDef false "namedArgNeedsArrowMsg" () (ELit (LString "a named argument `(name : T)` must be followed by `->`: the name is an authority the rest of the signature refers to, as in `(path : String) -> <FileRead path> Result String String`")))
@@ -6912,9 +6934,13 @@ parseResultWith src tokList offList =
 (DFunDef false "parseTyParenBody" ((PCon "TIdent" PWild)) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EVar "parseTyParenIdent") (EVar "t2")))))
 (DFunDef false "parseTyParenBody" (PWild) (EVar "parseTyParenTuple"))
 (DTypeSig false "parseTyParenIdent" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))
-(DFunDef false "parseTyParenIdent" ((PCon "TColon")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "n")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseTy")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EVar "TyNamed") (EVar "n")) (EVar "t"))))))))))))
+(DFunDef false "parseTyParenIdent" ((PCon "TColon")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "n")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseTy")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t1")) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "binderDomainP") (EVar "t1")) (EVar "t2"))) (ELam ((PVar "d")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "TyNamed") (EVar "n")) (EVar "t")) (EVar "d"))))))))))))))))))
 (DFunDef false "parseTyParenIdent" ((PCon "TPipe")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "v")) (EApp (EApp (EVar "deferThen") (EVar "authJoinTail")) (ELam ((PVar "rest")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "namesOrAuthJoin") (EVar "v")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))))
 (DFunDef false "parseTyParenIdent" (PWild) (EVar "parseTyParenTuple"))
+(DTypeSig false "binderDomainP" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "Option") (TyCon "EffAtomTy"))))))
+(DFunDef false "binderDomainP" ((PCon "TAt") (PCon "TUpper" PWild)) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "upperNameP")) (ELam ((PVar "l")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "deferPure") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "effAtomAt") (EVar "l")) (EVar "EPTop")) (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
+(DFunDef false "binderDomainP" ((PCon "TAsAt") (PCon "TUpper" (PVar "l"))) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "a binder's domain is written with a space before the `@`: `String @")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "`")))) (EVar "pos")))))
+(DFunDef false "binderDomainP" (PWild PWild) (EApp (EVar "deferPure") (EVar "None")))
 (DTypeSig false "namesOrAuthJoin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty")))))
 (DFunDef false "namesOrAuthJoin" ((PVar "v") (PVar "rest") (PVar "loc")) (EMatch (EApp (EApp (EVar "allNames") (EVar "rest")) (EListLit)) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EApp (EVar "TyRow") (EListLit)) (EBinOp "::" (EVar "v") (EVar "names"))) (EVar "loc"))) (arm (PCon "None") () (EApp (EApp (EVar "TyAuth") (EBinOp "::" (EApp (EVar "EPName") (EVar "v")) (EVar "rest"))) (EVar "loc")))))
 (DTypeSig false "allNames" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -8496,7 +8522,7 @@ parseResultWith src tokList offList =
 (DFunDef false "tyFor" ((PCon "TLt")) (EVar "parseEffectTy"))
 (DFunDef false "tyFor" (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseTyApp")) (ELam ((PVar "left")) (EApp (EVar "tyAfterApp") (EVar "left")))))
 (DTypeSig false "tyAfterApp" (TyFun (TyCon "Ty") (TyApp (TyCon "Parser") (TyCon "Ty"))))
-(DFunDef false "tyAfterApp" ((PAs "left" (PCon "TyNamed" PWild PWild))) (EApp (EApp (EVar "orElse#shadow") (EApp (EVar "tyArrowTail") (EVar "left"))) (EApp (EVar "failP") (EVar "namedArgNeedsArrowMsg"))))
+(DFunDef false "tyAfterApp" ((PAs "left" (PCon "TyNamed" PWild PWild PWild))) (EApp (EApp (EVar "orElse#shadow") (EApp (EVar "tyArrowTail") (EVar "left"))) (EApp (EVar "failP") (EVar "namedArgNeedsArrowMsg"))))
 (DFunDef false "tyAfterApp" ((PVar "left")) (EApp (EApp (EVar "orElse#shadow") (EApp (EVar "tyArrowTail") (EVar "left"))) (EApp (EMethodRef "deferPure") (EVar "left"))))
 (DTypeSig false "namedArgNeedsArrowMsg" (TyCon "String"))
 (DFunDef false "namedArgNeedsArrowMsg" () (ELit (LString "a named argument `(name : T)` must be followed by `->`: the name is an authority the rest of the signature refers to, as in `(path : String) -> <FileRead path> Result String String`")))
@@ -8634,9 +8660,13 @@ parseResultWith src tokList offList =
 (DFunDef false "parseTyParenBody" ((PCon "TIdent" PWild)) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EVar "parseTyParenIdent") (EVar "t2")))))
 (DFunDef false "parseTyParenBody" (PWild) (EVar "parseTyParenTuple"))
 (DTypeSig false "parseTyParenIdent" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))
-(DFunDef false "parseTyParenIdent" ((PCon "TColon")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "n")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseTy")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "TyNamed") (EVar "n")) (EVar "t"))))))))))))
+(DFunDef false "parseTyParenIdent" ((PCon "TColon")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "n")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseTy")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t1")) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "binderDomainP") (EVar "t1")) (EVar "t2"))) (ELam ((PVar "d")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "TyNamed") (EVar "n")) (EVar "t")) (EVar "d"))))))))))))))))))
 (DFunDef false "parseTyParenIdent" ((PCon "TPipe")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "v")) (EApp (EApp (EMethodRef "deferThen") (EVar "authJoinTail")) (ELam ((PVar "rest")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "namesOrAuthJoin") (EVar "v")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))))
 (DFunDef false "parseTyParenIdent" (PWild) (EVar "parseTyParenTuple"))
+(DTypeSig false "binderDomainP" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "Option") (TyCon "EffAtomTy"))))))
+(DFunDef false "binderDomainP" ((PCon "TAt") (PCon "TUpper" PWild)) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "upperNameP")) (ELam ((PVar "l")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "deferPure") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "effAtomAt") (EVar "l")) (EVar "EPTop")) (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
+(DFunDef false "binderDomainP" ((PCon "TAsAt") (PCon "TUpper" (PVar "l"))) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "a binder's domain is written with a space before the `@`: `String @")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "`")))) (EVar "pos")))))
+(DFunDef false "binderDomainP" (PWild PWild) (EApp (EMethodRef "deferPure") (EVar "None")))
 (DTypeSig false "namesOrAuthJoin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty")))))
 (DFunDef false "namesOrAuthJoin" ((PVar "v") (PVar "rest") (PVar "loc")) (EMatch (EApp (EApp (EVar "allNames") (EVar "rest")) (EListLit)) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EApp (EVar "TyRow") (EListLit)) (EBinOp "::" (EVar "v") (EVar "names"))) (EVar "loc"))) (arm (PCon "None") () (EApp (EApp (EVar "TyAuth") (EBinOp "::" (EApp (EVar "EPName") (EVar "v")) (EVar "rest"))) (EVar "loc")))))
 (DTypeSig false "allNames" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))

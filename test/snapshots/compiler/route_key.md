@@ -402,7 +402,7 @@ rkTy (TyAuth ps _) = authTermsSurface escStr ps
 rkTy (TyConstrained cs t) = "\{rkConstraints cs} => \{rkTy t}"
 -- A binder's name is lexical to its signature and is not part of the word;
 -- the qualifier IS (it changes what the argument means), so it is kept.
-rkTy (TyNamed _ t) = rkTy t
+rkTy (TyNamed _ t _) = rkTy t
 rkTy (TyQual t ns _) = "\{rkTyAtom t} \{qualifierSource escStr ns}"
 
 -- argument of `->`: wrap `TyFun` (prec ≥ 1) but not `TyApp` (prec < 2).
@@ -669,7 +669,7 @@ rkTyList =
 (DFunDef false "rkTy" ((PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "rkRowBody") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
 (DFunDef false "rkTy" ((PCon "TyAuth" (PVar "ps") PWild)) (EApp (EApp (EVar "authTermsSurface") (EVar "escStr")) (EVar "ps")))
 (DFunDef false "rkTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "rkConstraints") (EVar "cs")))) (ELit (LString " => "))) (EApp (EVar "display") (EApp (EVar "rkTy") (EVar "t")))) (ELit (LString ""))))
-(DFunDef false "rkTy" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "rkTy") (EVar "t")))
+(DFunDef false "rkTy" ((PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EVar "rkTy") (EVar "t")))
 (DFunDef false "rkTy" ((PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "rkTyAtom") (EVar "t")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "qualifierSource") (EVar "escStr")) (EVar "ns")))) (ELit (LString ""))))
 (DTypeSig false "rkTyFunArg" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "rkTyFunArg" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "rkTy") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
@@ -756,7 +756,7 @@ rkTyList =
 (DFunDef false "rkTy" ((PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "rkRowBody") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
 (DFunDef false "rkTy" ((PCon "TyAuth" (PVar "ps") PWild)) (EApp (EApp (EVar "authTermsSurface") (EVar "escStr")) (EVar "ps")))
 (DFunDef false "rkTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "rkConstraints") (EVar "cs")))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EApp (EVar "rkTy") (EVar "t")))) (ELit (LString ""))))
-(DFunDef false "rkTy" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "rkTy") (EVar "t")))
+(DFunDef false "rkTy" ((PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EVar "rkTy") (EVar "t")))
 (DFunDef false "rkTy" ((PCon "TyQual" (PVar "t") (PVar "ns") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "rkTyAtom") (EVar "t")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "qualifierSource") (EVar "escStr")) (EVar "ns")))) (ELit (LString ""))))
 (DTypeSig false "rkTyFunArg" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "rkTyFunArg" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "rkTy") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))

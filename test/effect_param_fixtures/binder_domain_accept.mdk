@@ -1,0 +1,11 @@
+-- A binder may write its domain, so a helper that performs nothing returns a
+-- value at its argument's authority (#3559). `pathOf` charges no label; the
+-- caller's row is the only place `FileRead` is named.
+pathOf : (dir : String @FileRead) -> String @dir
+pathOf dir = dir
+
+readIn : (dir : String) -> <FileRead dir> Result String String
+readIn dir = readFile (pathOf dir)
+
+main : <IO> Unit
+main = println "binder domain accept"

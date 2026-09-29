@@ -44,6 +44,7 @@ binOp : Token -> String -> ParserE <> (Expr -> Expr -> Expr)
 bindAnnot : Expr -> Ty -> Expr -> List DoStmt
 bindPR : ParserE a b -> (b -> <a> ParserE a c) -> Array Token -> Int -> <a> PR c
 bindStmts : Expr -> Expr -> List DoStmt
+binderDomainP : Token -> Token -> ParserE <> (Option EffAtomTy)
 blockCommentMsg : String
 blockOrExpr : List DoStmt -> Expr
 blockStmtAt : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> Token -> List Int
