@@ -721,8 +721,16 @@ Two units do it, and they are not redundant — they fail in opposite directions
 
 | Unit | Catches | Blind to |
 |---|---|---|
-| `pds-alert@.service`, via `OnFailure=` on `pds.service` | the first failed-state transition after arming (including a crash loop), within seconds | further failed-state transitions until re-armed; a single crash that restarted cleanly (journal only); anything that stops the whole box |
+| `pds-alert@.service`, via `OnFailure=` on `pds.service` | the first failure after arming, within seconds, whether a single crash that restarted cleanly or a crash loop | every later failure until re-armed, a crash loop after a single crash included (journal only); anything that stops the whole box |
 | `pds-healthping.service` + `.timer` | a dead box, a severed network, a wedged-but-running process — the external service alerts when pings stop | nothing, but it is as slow as its grace period |
+
+`OnFailure=` fires on every failure of `pds.service`, including one that
+`Restart=on-failure` recovers from, not only when `StartLimitBurst` is
+exhausted (systemd 257: a single OOM kill in auto-restart triggers it). So
+the first single crash after arming takes the incident's only push, and a
+crash loop that starts after it pages nobody until the alert is re-armed;
+only `pds-healthping` reports that loop, once it keeps `/xrpc/_health` from
+answering past the grace period.
 
 The push unit has `RemainAfterExit=yes`: after the first successful push it
 stays active (exited), making later `OnFailure=` starts of that instance
