@@ -243,6 +243,36 @@ the `Product` domain; `Prefix` is its sound, coarse one-axis approximation. Only
 trailing-`*` wildcards are admitted — general globs/regex break decidability of
 `⊑` and are rejected.
 
+**A file path is confined by its canonical form, at the call.** The order above
+is on strings, and a string is not a file: `"cfg/" ++ "../secret.txt"` lies
+within `"cfg/*"`, and the operating system resolves the `..`. So each
+parameterized file extern receives the authority granted at its call (§8) and
+refuses a path unless some granted element admits the path's canonical form:
+
+- The canonical form of a path is its `realpath`, with `..` and every symlink
+  resolved. A path that does not exist yet (a file about to be written) is the
+  canonical form of its deepest existing ancestor followed by the remaining
+  components, none of which may be `..`; if the first of them exists but does not
+  resolve (a dangling or looping symlink, whose target could lie anywhere) the
+  path has no canonical form. An extern that acts on an entry rather than on
+  what it names (`removeFile`, `removeDir`, `rename`, `makeDir`) takes the
+  canonical form of the entry's directory followed by the entry's own name.
+- Each element is canonicalized the same way, a relative one against the
+  working directory at the call. An exact element admits the path whose
+  canonical form equals its own. A pattern `d/s*` admits a canonical path that
+  begins with the canonical `d` followed by `/s`; a pattern whose stem `s` is
+  empty also admits `d` itself, and `*` alone admits every path.
+- A path with no canonical form is refused. So is every path under the empty
+  authority, which a call receives as the one empty element.
+
+The refusal is `Err "<path> is outside the granted authority [<elements>]"` from
+an extern that returns a `Result`, and a panic with the same message from
+`fileExists` and `canonicalizePath`, whose answers could otherwise be mistaken
+for a real one. The whole domain confines nothing. `Net` has the same problem
+and not yet the answer: a host part such as `a.com/../x`, a percent-encoded
+byte, or a `.` segment is not normalized, and the socket externs, which take a
+host and a port, receive no grant. That is open.
+
 ### 2.4 Sub-effecting (row order)
 
 The order on rows, `φ₁ ≤ φ₂` ("`φ₁` performs no more than `φ₂`"), lifts the domain
@@ -1234,7 +1264,11 @@ type-checks with manifest `M`, then for every label `L`, every authority
 it can exercise at `L` is `⊑ M(L)`. In particular a parameterized bound confines
 *which* hosts/paths/resources, not merely *whether* the label is used — and the
 α ⊤-fallback guarantees runtime-chosen targets cannot escape the bound. This is the
-theorem the whole apparatus exists to deliver.
+theorem the whole apparatus exists to deliver. For the file labels it holds of
+files, not only of strings, because the runtime refuses a path whose canonical
+form the granted authority does not admit (§2.3): a runtime-chosen suffix cannot
+walk out of `"cfg/*"` through `..` or a symlink. For `Net` it holds of the
+strings a program passes, and host normalization is open (§2.3).
 
 ---
 
@@ -1256,8 +1290,8 @@ code. Therefore:
   data; only the *verified* parameter reaches the static manifest. The security
   guarantee is paid for entirely at compile time.
 - **The grant.** The authority the type checker grants a parameterized file extern
-  at a call reaches the runtime as a hidden argument, for confinement only, and
-  cannot change a value a program computes.
+  at a call reaches the runtime as a hidden argument, for confinement only (§2.3).
+  It can refuse the call, and cannot otherwise change a value a program computes.
 
 A corollary worth stating because it is easy to violate: a primitive's effect must
 be a faithful upper bound of what it *actually does* at runtime. Erasure means the

@@ -1,0 +1,16 @@
+-- A grant joining a literal with a parameter the caller holds at the whole
+-- domain is the whole domain, not the literal alone; a narrower parameter joins
+-- as its own elements.
+pick : Bool -> (p : String) -> <FileRead p, FileRead "cfg/*"> Result String String
+pick b p = readFile (if b then p else "cfg/a.txt")
+
+anyName : Unit -> String
+anyName _ = "secret.txt"
+
+viaOutdir : String -> <FileRead "cfg/*", FileRead "outdir/*"> Result String String
+viaOutdir n = pick True ("outdir/" ++ n)
+
+main =
+  println (pick True (anyName ()))
+  println (pick False (anyName ()))
+  println (viaOutdir "../secret.txt")

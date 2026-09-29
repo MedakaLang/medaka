@@ -82,10 +82,6 @@ These are the places where the current compiler does not yet express something
 the design intends, or where it is stricter than it needs to be. Each has an
 issue; the number is the thing to search for.
 
-- **A path bound is a string prefix, and `..` escapes it.** `"cfg/" ++ name`
-  lies within `"cfg/*"` for `name = "../secret.txt"`, and the runtime resolves
-  the `..`, so the manifest's `cfg/*` is not a sandbox.
-  [#3564](https://github.com/MedakaLang/medaka/issues/3564)
 - **A qualified result cannot return a literal its qualifier admits.** A
   return is checked by its type, not by the literal's authority.
   [#3532](https://github.com/MedakaLang/medaka/issues/3532)

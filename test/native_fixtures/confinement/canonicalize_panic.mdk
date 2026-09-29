@@ -1,0 +1,11 @@
+-- `canonicalizePath` returns no Result, so a refused path panics rather than
+-- answering with its input.
+import string.{endsWith}
+
+canonCfg : String -> <FileRead "cfg/*"> String
+canonCfg name = canonicalizePath ("cfg/" ++ name)
+
+main =
+  println (endsWith "/cfg/a.txt" (canonCfg "sub/../a.txt"))
+  println (canonCfg "../secret.txt")
+  println "unreachable"

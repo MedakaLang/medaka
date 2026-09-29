@@ -32830,7 +32830,18 @@ grantTerm chain a = match authGrantShape a
             ++ map EVar (dedup params)
         match parts
           [] => EListLit [ELit (LString "")]
-          p :: rest => fold (acc q => EBinOp "++" acc q (Ref RNone)) p rest
+          [p] => p
+          p :: rest =>
+            fold
+              (acc param => topAbsorbs param acc)
+              (fold (acc q => EBinOp "++" acc q (Ref RNone)) p rest)
+              (dedup params)
+
+-- A parameter holding the whole domain makes a join it is part of the whole
+-- domain; concatenation alone would narrow it to the other parts.
+topAbsorbs : String -> Expr -> Expr
+topAbsorbs param join =
+  EMatch (EVar param) [Arm (PList []) [] (EListLit []), Arm PWild [] join]
 
 grantIdTerm : List GrantBinder -> Int -> Expr
 grantIdTerm chain i = match grantParamFor chain i

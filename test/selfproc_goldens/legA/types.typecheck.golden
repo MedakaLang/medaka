@@ -2832,6 +2832,7 @@ tconTupleHead : Int -> Mono
 tconUnresolved : String -> Mono
 third3 : (a, b, c) -> c
 toggles : Ref Toggles
+topAbsorbs : String -> Expr -> Expr
 topGrantIds : String -> String -> List Int
 topRouteV : List Decl -> String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
 transitiveImporters : Map String (Map String Unit) -> String -> List (String, List Decl) -> List (String, List Decl)

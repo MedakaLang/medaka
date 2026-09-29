@@ -1,5 +1,7 @@
 addrCell : List (String, Ref (Value a)) -> Int -> String -> Ref (Value a)
+anyAdmits : String -> List String -> <FileRead | a> Bool
 anyTypedImpl : List (Value a) -> Bool
+appendComponent : String -> String -> String
 appendOutput : String -> <a> Value a
 appendVal : Value a -> Value a -> Value a
 apply : Value a -> Value a -> <a> Value a
@@ -39,8 +41,10 @@ candIface : Value a -> String
 candIfaceKey : Value a -> (String, String)
 candKey : Value a -> String
 candOfIface : String -> Value a -> Bool
+canonFrom : Bool -> List String -> Int -> <FileRead | a> Option String
 canonHashFloat : Float -> Float
 canonNaN : Float
+canonPath : Bool -> String -> <FileRead | a> Option String
 cellOf : (String, Value a) -> (String, Ref (Value a))
 cellResult : (String, Ref (Value a)) -> (String, Value a)
 charFromCodeUnsafe : Int -> Char
@@ -60,6 +64,8 @@ compareValueLists : List (Value a) -> List (Value a) -> Ordering
 composeBwd : Value a -> Value a -> Value a
 composeFwd : Value a -> Value a -> Value a
 concatList : List (List a) -> List a
+confinePath : Bool -> List String -> String -> <FileRead | a> Option String
+confined : Confine -> Value <IO> -> Value <IO> -> (Unit -> <IO> Value <IO>) -> <IO> Value <IO>
 consVal : Value a -> Value a -> Value a
 containsInt : Int -> List Int -> Bool
 coreAliasCells : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
@@ -84,6 +90,8 @@ displayCtorName : String -> String
 doSetRef : Ref (Value a) -> Value a -> <a> Value a
 dropShadowed : List String -> List Decl -> List Decl
 dropShadowedExp : List String -> List Decl -> List Decl
+elementAdmits : String -> String -> <FileRead | a> Bool
+entryPresent : String -> String -> <FileRead | a> Bool
 eval : EvalEnv (Value a) -> Expr -> <a> Value a
 evalAnd : EvalEnv (Value a) -> Value a -> Expr -> <a> Value a
 evalArith : String -> Value a -> Value a -> Value a
@@ -127,6 +135,7 @@ evalSliceInt : Value a -> Int -> Int -> Bool -> Value a
 evalUnop : String -> Value a -> Value a
 evalValueField : Value a -> Value a
 evalVariantUpdate : String -> Value a -> List (String, Value a) -> Value a
+extendAbsent : String -> List String -> <FileRead | a> Option String
 extendEnv : EvalEnv (Value a) -> List (String, Value a) -> EvalEnv (Value a)
 externBindings : Unit -> List (String, Value a)
 externDeclNamesOfDecls : List Decl -> List String
@@ -155,10 +164,10 @@ funGroupNames : List (String, (List Pat, Expr)) -> List String -> List String
 funNamesOf : List Decl -> List String
 getByte64 : Int -> Array (Value a) -> Int -> Int
 globalFramesWith : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> List (List (String, Ref (Value a)))
-granted1 : (Value a -> <a> Value a) -> Value a
-granted2 : (Value a -> Value a -> <a> Value a) -> Value a
-granted3 : (Value a -> Value a -> Value a -> <a> Value a) -> Value a
-grantedPair : (Value a -> Value a -> <a> Value a) -> Value a
+granted1 : Confine -> (Value <IO> -> <IO> Value <IO>) -> Value <IO>
+granted2 : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
+granted3 : (Value <IO> -> Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
+grantedPair : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
 groupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> <a> Value a
 groupsNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsNotNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
@@ -203,6 +212,7 @@ isInheritedEntry : String -> String -> Bool
 isMethodBinding : Value a -> Bool
 isNullary : List Pat -> Bool
 isPartial : Value a -> Bool
+joinComponents : Bool -> List String -> String
 joinSp : List String -> String
 keepCand : String -> Value a -> Bool
 keepOrAll : List (Value a) -> List (Value a) -> List (Value a)
@@ -412,6 +422,7 @@ pWallTimeSecIO : Value a -> <Clock | a> Value a
 pWriteFile : Value a -> Value a -> <FileWrite | a> Value a
 pWriteFileBytes : Value a -> Value a -> <FileWrite | a> Value a
 pWriteFileMode : Value a -> Value a -> Value a -> <FileWrite | a> Value a
+pathComponents : String -> List String
 payloadArity : ConPayload -> Int
 pendingRunDiags : Ref (List (String, String, List Diag))
 pickByKey : List (Value a) -> String -> <a> Value a
@@ -442,6 +453,7 @@ recordCreateVals : String -> List String -> List (String, Value a) -> List (Valu
 reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
 reportIfUndecidable : String -> List (Value a) -> Unit
 resolveMembers : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
+resolvePath : String -> <FileRead | a> Option String
 resultToValue : Result String (Value a) -> Value a
 rngDraw : Unit -> U64
 rngStateRef : Ref Int

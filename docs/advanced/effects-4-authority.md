@@ -255,12 +255,31 @@ conservative. It can over-approximate, refusing a program a human can see is
 fine, and when that happens the remedy is to name the argument in the signature,
 as `under` does above, and let the caller supply the authority.
 
-> ⚠️ **A prefix is a prefix of the string, not of the file.** `"cfg/" ++ name` is
-> within `"cfg/*"` for every `name`, including `"../secret.txt"`, and the runtime
-> resolves the `..`. So a `<FileRead "cfg/*">` bound, and the manifest it produces,
-> can today be walked out of by a caller-supplied suffix. Tracked as
-> [#3564](https://github.com/MedakaLang/medaka/issues/3564); until it is closed,
-> treat a path bound as documentation of intent, not as a sandbox.
+A pattern is a prefix of the string, and a string is not yet a file:
+`"cfg/" ++ name` is within `"cfg/*"` for every `name`, including
+`"../secret.txt"`. So the check does not stop at the string. The authority the
+compiler granted reaches the file function at the call, and the runtime compares
+files, not strings: it resolves the path, `..` and symlinks included, and refuses
+one that lands outside every element it was granted.
+
+```medaka
+readConfig : String -> <FileRead "cfg/*"> Result String String
+readConfig name = readFile ("cfg/" ++ name)
+
+main = println (readConfig "../secret.txt")
+```
+
+```medaka-expect
+Err cfg/../secret.txt is outside the granted authority ["cfg/*"]
+```
+
+The same holds for a symlink inside `cfg/` that points out of it, and for a file
+not created yet: a new file under `cfg/` resolves through the part of its path
+that exists. A function that returns a `Result` answers with that `Err`;
+`fileExists` and `canonicalizePath`, which have no error to return, panic with the
+same message. The grant is also what the manifest records, so a host that trusts
+`cfg/*` from the manifest and the program that runs agree on what it means. A
+bare `<FileRead>` grants every path, and confines nothing.
 
 ## Sets and products
 

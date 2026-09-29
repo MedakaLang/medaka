@@ -251,6 +251,12 @@ arguments, the authority the type checker granted for each path
 (`docs/spec/EFFECTS-SEMANTICS.md` §8): a `List String` of domain elements, Nil for
 the whole domain. Its C symbol takes one trailing `long long` per path, so `rename`
 takes two. Elaboration saturates every use, so no backend sees a partial one.
+The C runtime's `mdk_confine` (and the interpreter's `confinePath` in
+`compiler/eval/eval.mdk`, which follows the same rules) refuses a path whose
+canonical form no granted element admits (`EFFECTS-SEMANTICS.md` §2.3): an
+`Err` naming the path and the grant, or a panic from `fileExists` and
+`canonicalizePath`. Nil skips the check, so a bare-label call costs nothing.
+The WasmGC host imports carry the path alone and do not confine.
 
 | `putStr` | `String -> <IO> Unit` | IO | |
 | `putStrLn` | `String -> <IO> Unit` | IO | |

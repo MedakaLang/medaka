@@ -1,5 +1,5 @@
 # META
-source_lines=4926
+source_lines=5065
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -81,6 +81,7 @@ import support.util.{
   joinDot,
   dedup,
   startsWith,
+  endsWith,
   zipL,
 }
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
@@ -2718,20 +2719,158 @@ prim1M : (Value e -> <e> Value e) -> Value e
 prim1M f = VPrim f
 
 -- A file extern whose path is an authority takes, after its value arguments,
--- the authority granted for each path (EFFECTS-SEMANTICS §8); the interpreter
--- does not consult it.
-granted1 : (Value e -> <e> Value e) -> Value e
-granted1 f = VPrim (a => VPrim (_ => f a))
+-- the authority granted for each path (EFFECTS-SEMANTICS §8), and refuses a
+-- path that authority does not admit before it touches the file system.
+granted1 : Confine -> (Value <IO> -> <IO> Value <IO>) -> Value <IO>
+granted1 mode f = VPrim (a => VPrim (g => confined mode g a (_ => f a)))
 
-granted2 : (Value e -> Value e -> <e> Value e) -> Value e
-granted2 f = VPrim (a => VPrim (b => VPrim (_ => f a b)))
+granted2 : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
+granted2 f =
+  VPrim (a => VPrim (b => VPrim (g => confined Follow g a (_ => f a b))))
 
-granted3 : (Value e -> Value e -> Value e -> <e> Value e) -> Value e
-granted3 f = VPrim (a => VPrim (b => VPrim (c => VPrim (_ => f a b c))))
+granted3 : (Value <IO> -> Value <IO> -> Value <IO> -> <IO> Value <IO>) ->
+  Value <IO>
+granted3 f = VPrim
+  (a =>
+    VPrim (b => VPrim (c => VPrim (g => confined Follow g a (_ => f a b c)))))
 
--- `rename` names two paths, so it takes two grants.
-grantedPair : (Value e -> Value e -> <e> Value e) -> Value e
-grantedPair f = VPrim (a => VPrim (b => VPrim (_ => VPrim (_ => f a b))))
+-- `rename` names two paths, so it takes two grants, and each path is refused
+-- against its own.
+grantedPair : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
+grantedPair f = VPrim
+  (a => VPrim
+    (b => VPrim
+      (ga => VPrim (gb => confined Entry ga a (_ => confined Entry gb b (_ =>
+        f a b))))))
+
+-- How a file extern resolves its path and reports a refusal: through the last
+-- component or at the entry itself, as an `Err` or as a panic.
+data Confine = Follow | Entry | FollowPanic
+
+confined : Confine ->
+  Value <IO> ->
+  Value <IO> ->
+  (Unit -> <IO> Value <IO>) ->
+  <IO> Value <IO>
+confined _ (VList []) _ k = k ()
+confined mode (VList elems) path k =
+  let entry = match mode
+    Entry => True
+    _ => False
+  match confinePath entry (map unString elems) (unString path)
+    None => k ()
+    Some msg => match mode
+      FollowPanic => runtimePanic "E-PANIC" msg
+      _ => VCon "Err" [VString msg]
+confined _ _ _ _ = panic "file extern: the granted authority is not a List"
+
+-- ── Confinement ───────────────────────────────────────────────────────────
+-- `mdk_confine` in runtime/medaka_rt.c states the rules and the reason for
+-- each; this is the same function for the interpreter, over the same host
+-- calls, and the two must stay in step.  Some message when the path is refused.
+confinePath : Bool -> List String -> String -> <FileRead | e> Option String
+confinePath entry elems path =
+  let admitted = match canonPath entry path
+    Some canon => anyAdmits canon elems
+    None => False
+  if admitted then
+    None
+  else
+    let quoted = map (s => "\"\{s}\"") elems
+    Some "\{path} is outside the granted authority [\{joinWith ", " quoted}]"
+
+anyAdmits : String -> List String -> <FileRead | e> Bool
+anyAdmits _ [] = False
+anyAdmits canon (el :: rest) =
+  if elementAdmits canon el then True else anyAdmits canon rest
+
+elementAdmits : String -> String -> <FileRead | e> Bool
+elementAdmits canon el =
+  if endsWith "*" el then
+    let concrete = stringSlice 0 (stringLength el - 1) el
+    match reverseL (splitOnChar '/' concrete)
+      [""] => True
+      stem :: revDir =>
+        let dirParts = reverseL revDir
+        let d = match dirParts
+          [] => "."
+          _ =>
+            let j = joinWith "/" dirParts
+            if j == "" then "/" else j
+        match canonPath False d
+          Some dir =>
+            stem == "" && canon == dir
+              || startsWith (appendComponent dir stem) canon
+          None => False
+      [] => True
+  else match canonPath False el
+    Some c => c == canon
+    None => False
+
+-- Components of a path split on `/`, with the empty and `.` ones dropped.
+pathComponents : String -> List String
+pathComponents p = filterList (c => c /= "" && c /= ".") (splitOnChar '/' p)
+
+-- `/` or `.` followed by the components, joined by `/`.
+joinComponents : Bool -> List String -> String
+joinComponents absolute cs =
+  let base = if absolute then "/" else "."
+  match cs
+    [] => base
+    _ => if absolute then "/" ++ joinWith "/" cs else "./" ++ joinWith "/" cs
+
+appendComponent : String -> String -> String
+appendComponent dir name = if dir == "/" then "/" ++ name else "\{dir}/\{name}"
+
+-- realpath(3) of a path when every component resolves.
+resolvePath : String -> <FileRead | e> Option String
+resolvePath p = if fileExists p then Some (canonicalizePath p) else None
+
+-- The canonical form of a path, or None when it has none.  In entry mode the
+-- last component is appended to its directory's canonical form unresolved.
+canonPath : Bool -> String -> <FileRead | e> Option String
+canonPath entry p =
+  if p == "" then
+    None
+  else
+    let absolute = startsWith "/" p
+    let cs = pathComponents p
+    match reverseL cs
+      final :: revInit =>
+        if entry && final /= ".." then
+          mapOption
+            (d => appendComponent d final)
+            (canonPath False (joinComponents absolute (reverseL revInit)))
+        else
+          canonFrom absolute cs (listLen cs)
+      [] => canonFrom absolute cs 0
+
+-- The realpath of the longest resolving prefix, extended by the rest.
+canonFrom : Bool -> List String -> Int -> <FileRead | e> Option String
+canonFrom absolute cs k =
+  if k < 0 then
+    None
+  else match resolvePath (joinComponents absolute (takeN k cs))
+    Some r => extendAbsent r (drop k cs)
+    None => canonFrom absolute cs (k - 1)
+
+-- The unresolved rest may not climb, and its first component must be absent
+-- (lstat fails in the runtime).  A directory that cannot be listed cannot show
+-- that, so it refuses.
+extendAbsent : String -> List String -> <FileRead | e> Option String
+extendAbsent r [] = Some r
+extendAbsent r (first :: rest) =
+  if contains ".." (first :: rest) || entryPresent r first then
+    None
+  else
+    Some (fold appendComponent r (first :: rest))
+
+entryPresent : String -> String -> <FileRead | e> Bool
+entryPresent dir name = match listDir dir
+  Ok names => contains name names
+  Err _ => match statFile dir
+    Ok (_, isDir, _, _) => isDir
+    Err _ => False
 
 -- captured stdout: putStr/putStrLn append here instead of doing real IO, so the
 -- output buffer can be diffed against the === EVAL === goldens (no <IO> effect;
@@ -4808,22 +4947,22 @@ ioExternBindings _ = [
   ("ePutStr", prim1M pEPutStr),
   ("ePutStrLn", prim1M pEPutStrLn),
   -- File
-  ("readFile", granted1 pReadFile),
-  ("readFileBytes", granted1 pReadFileBytes),
-  ("fileExists", granted1 pFileExists),
-  ("fileMode", granted1 pFileMode),
-  ("canonicalizePath", granted1 pCanonicalizePath),
-  ("listDir", granted1 pListDir),
-  ("statFile", granted1 pStatFile),
+  ("readFile", granted1 Follow pReadFile),
+  ("readFileBytes", granted1 Follow pReadFileBytes),
+  ("fileExists", granted1 FollowPanic pFileExists),
+  ("fileMode", granted1 Follow pFileMode),
+  ("canonicalizePath", granted1 FollowPanic pCanonicalizePath),
+  ("listDir", granted1 Follow pListDir),
+  ("statFile", granted1 Follow pStatFile),
   ("writeFile", granted2 pWriteFile),
   ("writeFileBytes", granted2 pWriteFileBytes),
   ("writeFileMode", granted3 pWriteFileMode),
   ("appendFile", granted2 pAppendFile),
-  ("makeDir", granted1 pMakeDir),
-  ("removeFile", granted1 pRemoveFile),
-  ("removeDir", granted1 pRemoveDir),
+  ("makeDir", granted1 Entry pMakeDir),
+  ("removeFile", granted1 Entry pRemoveFile),
+  ("removeDir", granted1 Entry pRemoveDir),
   ("rename", grantedPair pRename),
-  ("fsync", granted1 pFsync),
+  ("fsync", granted1 Follow pFsync),
   -- Env
   ("args", prim1M pArgs),
   ("getEnv", prim1 pGetEnv),
@@ -4932,7 +5071,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositionsOpt" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
@@ -5898,14 +6037,43 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "prim5M" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam ((PVar "d")) (EApp (EVar "VPrim") (ELam ((PVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")) (EVar "x")))))))))))))
 (DTypeSig false "prim1M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "prim1M" ((PVar "f")) (EApp (EVar "VPrim") (EVar "f")))
-(DTypeSig false "granted1" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "granted1" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EVar "f") (EVar "a")))))))
-(DTypeSig false "granted2" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "granted2" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))
-(DTypeSig false "granted3" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "granted3" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")))))))))))
-(DTypeSig false "grantedPair" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "grantedPair" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))))
+(DTypeSig false "granted1" (TyFun (TyCon "Confine") (TyFun (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None)))) (TyApp (TyCon "Value") (TyRow ("IO") None)))))
+(DFunDef false "granted1" ((PVar "mode") (PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EVar "confined") (EVar "mode")) (EVar "g")) (EVar "a")) (ELam (PWild) (EApp (EVar "f") (EVar "a")))))))))
+(DTypeSig false "granted2" (TyFun (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None))))) (TyApp (TyCon "Value") (TyRow ("IO") None))))
+(DFunDef false "granted2" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EVar "confined") (EVar "Follow")) (EVar "g")) (EVar "a")) (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))))
+(DTypeSig false "granted3" (TyFun (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None)))))) (TyApp (TyCon "Value") (TyRow ("IO") None))))
+(DFunDef false "granted3" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EVar "confined") (EVar "Follow")) (EVar "g")) (EVar "a")) (ELam (PWild) (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")))))))))))))
+(DTypeSig false "grantedPair" (TyFun (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None))))) (TyApp (TyCon "Value") (TyRow ("IO") None))))
+(DFunDef false "grantedPair" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "ga")) (EApp (EVar "VPrim") (ELam ((PVar "gb")) (EApp (EApp (EApp (EApp (EVar "confined") (EVar "Entry")) (EVar "ga")) (EVar "a")) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "confined") (EVar "Entry")) (EVar "gb")) (EVar "b")) (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))))))))
+(DData Private "Confine" () ((variant "Follow" (ConPos)) (variant "Entry" (ConPos)) (variant "FollowPanic" (ConPos))) ())
+(DTypeSig false "confined" (TyFun (TyCon "Confine") (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None)))) (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None))))))))
+(DFunDef false "confined" (PWild (PCon "VList" (PList)) PWild (PVar "k")) (EApp (EVar "k") (ELit LUnit)))
+(DFunDef false "confined" ((PVar "mode") (PCon "VList" (PVar "elems")) (PVar "path") (PVar "k")) (EBlock (DoLet false false (PVar "entry") (EMatch (EVar "mode") (arm (PCon "Entry") () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "confinePath") (EVar "entry")) (EApp (EApp (EVar "map") (EVar "unString")) (EVar "elems"))) (EApp (EVar "unString") (EVar "path"))) (arm (PCon "None") () (EApp (EVar "k") (ELit LUnit))) (arm (PCon "Some" (PVar "msg")) () (EMatch (EVar "mode") (arm (PCon "FollowPanic") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-PANIC"))) (EVar "msg"))) (arm PWild () (EApp (EApp (EVar "VCon") (ELit (LString "Err"))) (EListLit (EApp (EVar "VString") (EVar "msg")))))))))))
+(DFunDef false "confined" (PWild PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "file extern: the granted authority is not a List"))))
+(DTypeSig false "confinePath" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "confinePath" ((PVar "entry") (PVar "elems") (PVar "path")) (EBlock (DoLet false false (PVar "admitted") (EMatch (EApp (EApp (EVar "canonPath") (EVar "entry")) (EVar "path")) (arm (PCon "Some" (PVar "canon")) () (EApp (EApp (EVar "anyAdmits") (EVar "canon")) (EVar "elems"))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "admitted") (EVar "None") (EBlock (DoLet false false (PVar "quoted") (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "display") (EVar "s"))) (ELit (LString "\""))))) (EVar "elems"))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString " is outside the granted authority ["))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "quoted")))) (ELit (LString "]"))))))))))
+(DTypeSig false "anyAdmits" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") (Some "e") (TyCon "Bool")))))
+(DFunDef false "anyAdmits" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyAdmits" ((PVar "canon") (PCons (PVar "el") (PVar "rest"))) (EIf (EApp (EApp (EVar "elementAdmits") (EVar "canon")) (EVar "el")) (EVar "True") (EApp (EApp (EVar "anyAdmits") (EVar "canon")) (EVar "rest"))))
+(DTypeSig false "elementAdmits" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyCon "Bool")))))
+(DFunDef false "elementAdmits" ((PVar "canon") (PVar "el")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "*"))) (EVar "el")) (EBlock (DoLet false false (PVar "concrete") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "el")) (ELit (LInt 1)))) (EVar "el"))) (DoExpr (EMatch (EApp (EVar "reverseL") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "concrete"))) (arm (PList (PLit (LString ""))) () (EVar "True")) (arm (PCons (PVar "stem") (PVar "revDir")) () (EBlock (DoLet false false (PVar "dirParts") (EApp (EVar "reverseL") (EVar "revDir"))) (DoLet false false (PVar "d") (EMatch (EVar "dirParts") (arm (PList) () (ELit (LString "."))) (arm PWild () (EBlock (DoLet false false (PVar "j") (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "dirParts"))) (DoExpr (EIf (EBinOp "==" (EVar "j") (ELit (LString ""))) (ELit (LString "/")) (EVar "j"))))))) (DoExpr (EMatch (EApp (EApp (EVar "canonPath") (EVar "False")) (EVar "d")) (arm (PCon "Some" (PVar "dir")) () (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EVar "stem") (ELit (LString ""))) (EBinOp "==" (EVar "canon") (EVar "dir"))) (EApp (EApp (EVar "startsWith") (EApp (EApp (EVar "appendComponent") (EVar "dir")) (EVar "stem"))) (EVar "canon")))) (arm (PCon "None") () (EVar "False")))))) (arm (PList) () (EVar "True"))))) (EMatch (EApp (EApp (EVar "canonPath") (EVar "False")) (EVar "el")) (arm (PCon "Some" (PVar "c")) () (EBinOp "==" (EVar "c") (EVar "canon"))) (arm (PCon "None") () (EVar "False")))))
+(DTypeSig false "pathComponents" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "pathComponents" ((PVar "p")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "&&" (EBinOp "/=" (EVar "c") (ELit (LString ""))) (EBinOp "/=" (EVar "c") (ELit (LString ".")))))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "p"))))
+(DTypeSig false "joinComponents" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "joinComponents" ((PVar "absolute") (PVar "cs")) (EBlock (DoLet false false (PVar "base") (EIf (EVar "absolute") (ELit (LString "/")) (ELit (LString ".")))) (DoExpr (EMatch (EVar "cs") (arm (PList) () (EVar "base")) (arm PWild () (EIf (EVar "absolute") (EBinOp "++" (ELit (LString "/")) (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "cs"))) (EBinOp "++" (ELit (LString "./")) (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "cs")))))))))
+(DTypeSig false "appendComponent" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "appendComponent" ((PVar "dir") (PVar "name")) (EIf (EBinOp "==" (EVar "dir") (ELit (LString "/"))) (EBinOp "++" (ELit (LString "/")) (EVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))))
+(DTypeSig false "resolvePath" (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "resolvePath" ((PVar "p")) (EIf (EApp (EVar "fileExists") (EVar "p")) (EApp (EVar "Some") (EApp (EVar "canonicalizePath") (EVar "p"))) (EVar "None")))
+(DTypeSig false "canonPath" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "canonPath" ((PVar "entry") (PVar "p")) (EIf (EBinOp "==" (EVar "p") (ELit (LString ""))) (EVar "None") (EBlock (DoLet false false (PVar "absolute") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "p"))) (DoLet false false (PVar "cs") (EApp (EVar "pathComponents") (EVar "p"))) (DoExpr (EMatch (EApp (EVar "reverseL") (EVar "cs")) (arm (PCons (PVar "final") (PVar "revInit")) () (EIf (EBinOp "&&" (EVar "entry") (EBinOp "/=" (EVar "final") (ELit (LString "..")))) (EApp (EApp (EVar "mapOption") (ELam ((PVar "d")) (EApp (EApp (EVar "appendComponent") (EVar "d")) (EVar "final")))) (EApp (EApp (EVar "canonPath") (EVar "False")) (EApp (EApp (EVar "joinComponents") (EVar "absolute")) (EApp (EVar "reverseL") (EVar "revInit"))))) (EApp (EApp (EApp (EVar "canonFrom") (EVar "absolute")) (EVar "cs")) (EApp (EVar "listLen") (EVar "cs"))))) (arm (PList) () (EApp (EApp (EApp (EVar "canonFrom") (EVar "absolute")) (EVar "cs")) (ELit (LInt 0)))))))))
+(DTypeSig false "canonFrom" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "canonFrom" ((PVar "absolute") (PVar "cs") (PVar "k")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EVar "None") (EMatch (EApp (EVar "resolvePath") (EApp (EApp (EVar "joinComponents") (EVar "absolute")) (EApp (EApp (EVar "takeN") (EVar "k")) (EVar "cs")))) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "extendAbsent") (EVar "r")) (EApp (EApp (EVar "drop") (EVar "k")) (EVar "cs")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "canonFrom") (EVar "absolute")) (EVar "cs")) (EBinOp "-" (EVar "k") (ELit (LInt 1))))))))
+(DTypeSig false "extendAbsent" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "extendAbsent" ((PVar "r") (PList)) (EApp (EVar "Some") (EVar "r")))
+(DFunDef false "extendAbsent" ((PVar "r") (PCons (PVar "first") (PVar "rest"))) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (ELit (LString ".."))) (EBinOp "::" (EVar "first") (EVar "rest"))) (EApp (EApp (EVar "entryPresent") (EVar "r")) (EVar "first"))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "fold") (EVar "appendComponent")) (EVar "r")) (EBinOp "::" (EVar "first") (EVar "rest"))))))
+(DTypeSig false "entryPresent" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyCon "Bool")))))
+(DFunDef false "entryPresent" ((PVar "dir") (PVar "name")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Ok" (PVar "names")) () (EApp (EApp (EVar "contains") (EVar "name")) (EVar "names"))) (arm (PCon "Err" PWild) () (EMatch (EApp (EVar "statFile") (EVar "dir")) (arm (PCon "Ok" (PTuple PWild (PVar "isDir") PWild PWild)) () (EVar "isDir")) (arm (PCon "Err" PWild) () (EVar "False"))))))
 (DTypeSig true "outputRef" (TyApp (TyCon "Ref") (TyCon "String")))
 (DFunDef false "outputRef" () (EApp (EVar "Ref") (ELit (LString ""))))
 (DTypeSig true "currentEvalLoc" (TyApp (TyCon "Ref") (TyCon "Loc")))
@@ -6570,7 +6738,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pOsEntropyBytes" ((PCon "VInt" (PVar "n"))) (EApp (EVar "vIntArray") (EApp (EVar "osEntropyBytes") (EVar "n"))))
 (DFunDef false "pOsEntropyBytes" (PWild) (EApp (EVar "panic") (ELit (LString "osEntropyBytes: expected Int"))))
 (DTypeSig true "ioExternBindings" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))
-(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EVar "granted1") (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EVar "granted1") (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EVar "granted1") (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EVar "granted1") (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EVar "granted1") (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EVar "granted1") (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EVar "granted1") (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "granted2") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "granted2") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "granted3") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "granted2") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EVar "granted1") (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EVar "granted1") (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EVar "granted1") (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "grantedPair") (EVar "pRename"))) (ETuple (ELit (LString "fsync")) (EApp (EVar "granted1") (EVar "pFsync"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdoutIO"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
+(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EApp (EVar "granted1") (EVar "FollowPanic")) (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EApp (EVar "granted1") (EVar "FollowPanic")) (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "granted2") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "granted2") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "granted3") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "granted2") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EApp (EVar "granted1") (EVar "Entry")) (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EApp (EVar "granted1") (EVar "Entry")) (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EApp (EVar "granted1") (EVar "Entry")) (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "grantedPair") (EVar "pRename"))) (ETuple (ELit (LString "fsync")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pFsync"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdoutIO"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
 (DTypeSig true "testCapableExterns" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))
 (DFunDef false "testCapableExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn")))))
 (DTypeSig true "evalModulesOutputRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
@@ -6589,7 +6757,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositionsOpt" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "zipL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
@@ -7555,14 +7723,43 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "prim5M" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam ((PVar "d")) (EApp (EVar "VPrim") (ELam ((PVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")) (EVar "x")))))))))))))
 (DTypeSig false "prim1M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "prim1M" ((PVar "f")) (EApp (EVar "VPrim") (EVar "f")))
-(DTypeSig false "granted1" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "granted1" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EVar "f") (EVar "a")))))))
-(DTypeSig false "granted2" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "granted2" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))
-(DTypeSig false "granted3" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "granted3" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")))))))))))
-(DTypeSig false "grantedPair" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "grantedPair" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EVar "VPrim") (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))))
+(DTypeSig false "granted1" (TyFun (TyCon "Confine") (TyFun (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None)))) (TyApp (TyCon "Value") (TyRow ("IO") None)))))
+(DFunDef false "granted1" ((PVar "mode") (PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EVar "confined") (EVar "mode")) (EVar "g")) (EVar "a")) (ELam (PWild) (EApp (EVar "f") (EVar "a")))))))))
+(DTypeSig false "granted2" (TyFun (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None))))) (TyApp (TyCon "Value") (TyRow ("IO") None))))
+(DFunDef false "granted2" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EVar "confined") (EVar "Follow")) (EVar "g")) (EVar "a")) (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))))
+(DTypeSig false "granted3" (TyFun (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None)))))) (TyApp (TyCon "Value") (TyRow ("IO") None))))
+(DFunDef false "granted3" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EVar "confined") (EVar "Follow")) (EVar "g")) (EVar "a")) (ELam (PWild) (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")))))))))))))
+(DTypeSig false "grantedPair" (TyFun (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None))))) (TyApp (TyCon "Value") (TyRow ("IO") None))))
+(DFunDef false "grantedPair" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "ga")) (EApp (EVar "VPrim") (ELam ((PVar "gb")) (EApp (EApp (EApp (EApp (EVar "confined") (EVar "Entry")) (EVar "ga")) (EVar "a")) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "confined") (EVar "Entry")) (EVar "gb")) (EVar "b")) (ELam (PWild) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))))))))))
+(DData Private "Confine" () ((variant "Follow" (ConPos)) (variant "Entry" (ConPos)) (variant "FollowPanic" (ConPos))) ())
+(DTypeSig false "confined" (TyFun (TyCon "Confine") (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyApp (TyCon "Value") (TyRow ("IO") None)) (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None)))) (TyEffect ("IO") None (TyApp (TyCon "Value") (TyRow ("IO") None))))))))
+(DFunDef false "confined" (PWild (PCon "VList" (PList)) PWild (PVar "k")) (EApp (EVar "k") (ELit LUnit)))
+(DFunDef false "confined" ((PVar "mode") (PCon "VList" (PVar "elems")) (PVar "path") (PVar "k")) (EBlock (DoLet false false (PVar "entry") (EMatch (EVar "mode") (arm (PCon "Entry") () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "confinePath") (EVar "entry")) (EApp (EApp (EMethodRef "map") (EVar "unString")) (EVar "elems"))) (EApp (EVar "unString") (EVar "path"))) (arm (PCon "None") () (EApp (EVar "k") (ELit LUnit))) (arm (PCon "Some" (PVar "msg")) () (EMatch (EVar "mode") (arm (PCon "FollowPanic") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-PANIC"))) (EVar "msg"))) (arm PWild () (EApp (EApp (EVar "VCon") (ELit (LString "Err"))) (EListLit (EApp (EVar "VString") (EVar "msg")))))))))))
+(DFunDef false "confined" (PWild PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "file extern: the granted authority is not a List"))))
+(DTypeSig false "confinePath" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "confinePath" ((PVar "entry") (PVar "elems") (PVar "path")) (EBlock (DoLet false false (PVar "admitted") (EMatch (EApp (EApp (EVar "canonPath") (EVar "entry")) (EVar "path")) (arm (PCon "Some" (PVar "canon")) () (EApp (EApp (EVar "anyAdmits") (EVar "canon")) (EVar "elems"))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "admitted") (EVar "None") (EBlock (DoLet false false (PVar "quoted") (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "\""))))) (EVar "elems"))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString " is outside the granted authority ["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "quoted")))) (ELit (LString "]"))))))))))
+(DTypeSig false "anyAdmits" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") (Some "e") (TyCon "Bool")))))
+(DFunDef false "anyAdmits" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyAdmits" ((PVar "canon") (PCons (PVar "el") (PVar "rest"))) (EIf (EApp (EApp (EVar "elementAdmits") (EVar "canon")) (EVar "el")) (EVar "True") (EApp (EApp (EVar "anyAdmits") (EVar "canon")) (EVar "rest"))))
+(DTypeSig false "elementAdmits" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyCon "Bool")))))
+(DFunDef false "elementAdmits" ((PVar "canon") (PVar "el")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "*"))) (EVar "el")) (EBlock (DoLet false false (PVar "concrete") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "el")) (ELit (LInt 1)))) (EVar "el"))) (DoExpr (EMatch (EApp (EVar "reverseL") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "concrete"))) (arm (PList (PLit (LString ""))) () (EVar "True")) (arm (PCons (PVar "stem") (PVar "revDir")) () (EBlock (DoLet false false (PVar "dirParts") (EApp (EVar "reverseL") (EVar "revDir"))) (DoLet false false (PVar "d") (EMatch (EVar "dirParts") (arm (PList) () (ELit (LString "."))) (arm PWild () (EBlock (DoLet false false (PVar "j") (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "dirParts"))) (DoExpr (EIf (EBinOp "==" (EVar "j") (ELit (LString ""))) (ELit (LString "/")) (EVar "j"))))))) (DoExpr (EMatch (EApp (EApp (EVar "canonPath") (EVar "False")) (EVar "d")) (arm (PCon "Some" (PVar "dir")) () (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EVar "stem") (ELit (LString ""))) (EBinOp "==" (EVar "canon") (EVar "dir"))) (EApp (EApp (EVar "startsWith") (EApp (EApp (EVar "appendComponent") (EVar "dir")) (EVar "stem"))) (EVar "canon")))) (arm (PCon "None") () (EVar "False")))))) (arm (PList) () (EVar "True"))))) (EMatch (EApp (EApp (EVar "canonPath") (EVar "False")) (EVar "el")) (arm (PCon "Some" (PVar "c")) () (EBinOp "==" (EVar "c") (EVar "canon"))) (arm (PCon "None") () (EVar "False")))))
+(DTypeSig false "pathComponents" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "pathComponents" ((PVar "p")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "&&" (EBinOp "/=" (EVar "c") (ELit (LString ""))) (EBinOp "/=" (EVar "c") (ELit (LString ".")))))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "p"))))
+(DTypeSig false "joinComponents" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "joinComponents" ((PVar "absolute") (PVar "cs")) (EBlock (DoLet false false (PVar "base") (EIf (EVar "absolute") (ELit (LString "/")) (ELit (LString ".")))) (DoExpr (EMatch (EVar "cs") (arm (PList) () (EVar "base")) (arm PWild () (EIf (EVar "absolute") (EBinOp "++" (ELit (LString "/")) (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "cs"))) (EBinOp "++" (ELit (LString "./")) (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "cs")))))))))
+(DTypeSig false "appendComponent" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "appendComponent" ((PVar "dir") (PVar "name")) (EIf (EBinOp "==" (EVar "dir") (ELit (LString "/"))) (EBinOp "++" (ELit (LString "/")) (EVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))))
+(DTypeSig false "resolvePath" (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "resolvePath" ((PVar "p")) (EIf (EApp (EVar "fileExists") (EVar "p")) (EApp (EVar "Some") (EApp (EVar "canonicalizePath") (EVar "p"))) (EVar "None")))
+(DTypeSig false "canonPath" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "canonPath" ((PVar "entry") (PVar "p")) (EIf (EBinOp "==" (EVar "p") (ELit (LString ""))) (EVar "None") (EBlock (DoLet false false (PVar "absolute") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "p"))) (DoLet false false (PVar "cs") (EApp (EVar "pathComponents") (EVar "p"))) (DoExpr (EMatch (EApp (EVar "reverseL") (EVar "cs")) (arm (PCons (PVar "final") (PVar "revInit")) () (EIf (EBinOp "&&" (EVar "entry") (EBinOp "/=" (EVar "final") (ELit (LString "..")))) (EApp (EApp (EVar "mapOption") (ELam ((PVar "d")) (EApp (EApp (EVar "appendComponent") (EVar "d")) (EVar "final")))) (EApp (EApp (EVar "canonPath") (EVar "False")) (EApp (EApp (EVar "joinComponents") (EVar "absolute")) (EApp (EVar "reverseL") (EVar "revInit"))))) (EApp (EApp (EApp (EVar "canonFrom") (EVar "absolute")) (EVar "cs")) (EApp (EVar "listLen") (EVar "cs"))))) (arm (PList) () (EApp (EApp (EApp (EVar "canonFrom") (EVar "absolute")) (EVar "cs")) (ELit (LInt 0)))))))))
+(DTypeSig false "canonFrom" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "canonFrom" ((PVar "absolute") (PVar "cs") (PVar "k")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EVar "None") (EMatch (EApp (EVar "resolvePath") (EApp (EApp (EVar "joinComponents") (EVar "absolute")) (EApp (EApp (EVar "takeN") (EVar "k")) (EVar "cs")))) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "extendAbsent") (EVar "r")) (EApp (EApp (EVar "drop") (EVar "k")) (EVar "cs")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "canonFrom") (EVar "absolute")) (EVar "cs")) (EBinOp "-" (EVar "k") (ELit (LInt 1))))))))
+(DTypeSig false "extendAbsent" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "extendAbsent" ((PVar "r") (PList)) (EApp (EVar "Some") (EVar "r")))
+(DFunDef false "extendAbsent" ((PVar "r") (PCons (PVar "first") (PVar "rest"))) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (ELit (LString ".."))) (EBinOp "::" (EVar "first") (EVar "rest"))) (EApp (EApp (EVar "entryPresent") (EVar "r")) (EVar "first"))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EMethodRef "fold") (EVar "appendComponent")) (EVar "r")) (EBinOp "::" (EVar "first") (EVar "rest"))))))
+(DTypeSig false "entryPresent" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyCon "Bool")))))
+(DFunDef false "entryPresent" ((PVar "dir") (PVar "name")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Ok" (PVar "names")) () (EApp (EApp (EVar "contains") (EVar "name")) (EVar "names"))) (arm (PCon "Err" PWild) () (EMatch (EApp (EVar "statFile") (EVar "dir")) (arm (PCon "Ok" (PTuple PWild (PVar "isDir") PWild PWild)) () (EVar "isDir")) (arm (PCon "Err" PWild) () (EVar "False"))))))
 (DTypeSig true "outputRef" (TyApp (TyCon "Ref") (TyCon "String")))
 (DFunDef false "outputRef" () (EApp (EVar "Ref") (ELit (LString ""))))
 (DTypeSig true "currentEvalLoc" (TyApp (TyCon "Ref") (TyCon "Loc")))
@@ -8227,7 +8424,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pOsEntropyBytes" ((PCon "VInt" (PVar "n"))) (EApp (EVar "vIntArray") (EApp (EVar "osEntropyBytes") (EVar "n"))))
 (DFunDef false "pOsEntropyBytes" (PWild) (EApp (EVar "panic") (ELit (LString "osEntropyBytes: expected Int"))))
 (DTypeSig true "ioExternBindings" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))
-(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EVar "granted1") (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EVar "granted1") (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EVar "granted1") (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EVar "granted1") (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EVar "granted1") (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EVar "granted1") (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EVar "granted1") (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "granted2") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "granted2") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "granted3") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "granted2") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EVar "granted1") (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EVar "granted1") (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EVar "granted1") (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "grantedPair") (EVar "pRename"))) (ETuple (ELit (LString "fsync")) (EApp (EVar "granted1") (EVar "pFsync"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdoutIO"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
+(DFunDef false "ioExternBindings" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMsIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn"))) (ETuple (ELit (LString "readFile")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pReadFile"))) (ETuple (ELit (LString "readFileBytes")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pReadFileBytes"))) (ETuple (ELit (LString "fileExists")) (EApp (EApp (EVar "granted1") (EVar "FollowPanic")) (EVar "pFileExists"))) (ETuple (ELit (LString "fileMode")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pFileMode"))) (ETuple (ELit (LString "canonicalizePath")) (EApp (EApp (EVar "granted1") (EVar "FollowPanic")) (EVar "pCanonicalizePath"))) (ETuple (ELit (LString "listDir")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pListDir"))) (ETuple (ELit (LString "statFile")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pStatFile"))) (ETuple (ELit (LString "writeFile")) (EApp (EVar "granted2") (EVar "pWriteFile"))) (ETuple (ELit (LString "writeFileBytes")) (EApp (EVar "granted2") (EVar "pWriteFileBytes"))) (ETuple (ELit (LString "writeFileMode")) (EApp (EVar "granted3") (EVar "pWriteFileMode"))) (ETuple (ELit (LString "appendFile")) (EApp (EVar "granted2") (EVar "pAppendFile"))) (ETuple (ELit (LString "makeDir")) (EApp (EApp (EVar "granted1") (EVar "Entry")) (EVar "pMakeDir"))) (ETuple (ELit (LString "removeFile")) (EApp (EApp (EVar "granted1") (EVar "Entry")) (EVar "pRemoveFile"))) (ETuple (ELit (LString "removeDir")) (EApp (EApp (EVar "granted1") (EVar "Entry")) (EVar "pRemoveDir"))) (ETuple (ELit (LString "rename")) (EApp (EVar "grantedPair") (EVar "pRename"))) (ETuple (ELit (LString "fsync")) (EApp (EApp (EVar "granted1") (EVar "Follow")) (EVar "pFsync"))) (ETuple (ELit (LString "args")) (EApp (EVar "prim1M") (EVar "pArgs"))) (ETuple (ELit (LString "getEnv")) (EApp (EVar "prim1") (EVar "pGetEnv"))) (ETuple (ELit (LString "executablePath")) (EApp (EVar "prim1M") (EVar "pExecutablePath"))) (ETuple (ELit (LString "buildFingerprint")) (EApp (EVar "prim1M") (EVar "pBuildFingerprint"))) (ETuple (ELit (LString "buildCommit")) (EApp (EVar "prim1M") (EVar "pBuildCommit"))) (ETuple (ELit (LString "buildDate")) (EApp (EVar "prim1M") (EVar "pBuildDate"))) (ETuple (ELit (LString "readLine")) (EApp (EVar "prim1M") (EVar "pReadLine"))) (ETuple (ELit (LString "readLineOpt")) (EApp (EVar "prim1M") (EVar "pReadLineOpt"))) (ETuple (ELit (LString "readAll")) (EApp (EVar "prim1M") (EVar "pReadAll"))) (ETuple (ELit (LString "readExactly")) (EApp (EVar "prim1") (EVar "pReadExactly"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdoutIO"))) (ETuple (ELit (LString "osEntropyBytes")) (EApp (EVar "prim1M") (EVar "pOsEntropyBytes"))) (ETuple (ELit (LString "exit")) (EApp (EVar "prim1") (EVar "pExit")))))
 (DTypeSig true "testCapableExterns" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))
 (DFunDef false "testCapableExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn")))))
 (DTypeSig true "evalModulesOutputRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
