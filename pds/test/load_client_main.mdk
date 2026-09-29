@@ -31,6 +31,7 @@ import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import json.{Json(..), get, jObject, parse, stringify}
 import lib.blob.{blobCid}
 import lib.cid.{cidToString}
+import lib.resource_limits.{maxWritesPerWindow, rateLimitWindowSeconds}
 import io.{eprintln}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{join, lines, padLeft, split, startsWith, toInt, trim}
@@ -361,6 +362,17 @@ recordWriteBody did collection rkey =
       ),
     ])
 
+{- | The pause the writer takes after each acknowledged write.
+
+   The writer is one account holder, so every write it makes is charged to
+   one rate-limit identity, which `maxWritesPerWindow` allows so many writes
+   per `rateLimitWindowSeconds`. Writing back to back would reach that limit
+   within seconds and end the run on a 429 the harness grades as a refused
+   writer. This spaces writes a fifth wider than the allowance, so the writer
+   stays under it wherever its writes fall relative to a window. -}
+writeGap : Duration
+writeGap = millis (rateLimitWindowSeconds * 1000 * 6 / (maxWritesPerWindow * 5))
+
 responseRoundTrip : Connection * ->
   Bytes ->
   Bytes ->
@@ -400,6 +412,7 @@ writeLoop conn pending did collection token clientId t0 budget i requests writes
       Err _ => (pending, requests + 1, writes, non200, errors + 1, i)
       Ok (200, _, rest) =>
         let () = println "write-path \{collection}/\{rkey}"
+        let () = sleep writeGap
         writeLoop
           conn
           rest
