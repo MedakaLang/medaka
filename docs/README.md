@@ -92,7 +92,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`CAPABILITY-EFFECTS.md`](design/CAPABILITY-EFFECTS.md) | Capability-safe effects — Medaka's headline direction | PARTIAL |
 | [`CAPABILITY-PLATFORM.md`](design/CAPABILITY-PLATFORM.md) | The capability platform — runtime/product architecture | OPEN |
 | [`EFFECTS-CONFORMANCE-ROADMAP.md`](design/EFFECTS-CONFORMANCE-ROADMAP.md) | Effect-and-Capability Conformance Roadmap | PARTIAL |
-| [`EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md`](design/EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md) | Effects issues against the architecture | — |
+| [`EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md`](design/EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md) | Effects issues against the architecture | REVIEWED |
 | [`GAP3-SLICE7-DESIGN.md`](design/GAP3-SLICE7-DESIGN.md) | Gap 3 — slice-7 arg-tag dispatch on a generic prelude free function | OPEN |
 | [`GZIP-DESIGN.md`](design/GZIP-DESIGN.md) | DEFLATE / gzip — a compression codec in pure Medaka | PARTIAL |
 | [`INTEGER-TYPES-DESIGN.md`](design/INTEGER-TYPES-DESIGN.md) | The integer stack | — |
@@ -199,7 +199,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`DISPATCH-INVENTORY.md`](../compiler/DISPATCH-INVENTORY.md) | DISPATCH-INVENTORY.md | PARTIAL |
 | [`DRIVER-COLLAPSE-PLAN.md`](../compiler/DRIVER-COLLAPSE-PLAN.md) | DRIVER-COLLAPSE-PLAN.md — collapse the dual single-file / multi-module drivers | PARTIALLY IMPLEMENTED |
 | [`EAGER-INIT-DESIGN.md`](../compiler/EAGER-INIT-DESIGN.md) | EAGER-INIT-DESIGN — closing the shared eager-global init-order hole (#553, S0) | COMPLETE |
-| [`EFFECTS-ARCHITECTURE.md`](../compiler/EFFECTS-ARCHITECTURE.md) | Effects within the typechecker | — |
+| [`EFFECTS-ARCHITECTURE.md`](../compiler/EFFECTS-ARCHITECTURE.md) | Effects within the typechecker | PARTIAL |
 | [`EMITTER-ARCH-BUG-FIT.md`](../compiler/EMITTER-ARCH-BUG-FIT.md) | Emitter target architecture - per-bug fit ledger | RE-DERIVED 2026-09-03 |
 | [`EMITTER-ARCHITECTURE.md`](../compiler/EMITTER-ARCHITECTURE.md) | Emitter Architecture - the derived current map | CURRENT - source-derived LLVM/WasmGC emitter map, re-derived 2026-09-03 at `7132909b7` |
 | [`EMITTER-GAPS.md`](../compiler/EMITTER-GAPS.md) | EMITTER-GAPS.md | PARTIAL |

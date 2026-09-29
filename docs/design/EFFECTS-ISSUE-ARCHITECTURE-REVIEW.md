@@ -1,5 +1,7 @@
 # Effects issues against the architecture
 
+**Status:** REVIEWED — dated architectural assessment, 2026-09-29.
+
 Review dated 2026-09-29. Source inspected: `afab823b1fcdf10ad7f066dac6ccd992de51db94`
 (PR #3584, file confinement). Issue inventory: all 865 open GitHub issues at
 retrieval, filtered by titles and bodies, with discussions read for the effects

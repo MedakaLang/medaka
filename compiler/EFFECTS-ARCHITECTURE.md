@@ -1,6 +1,6 @@
 # Effects within the typechecker
 
-**Status (2026-09-29):** the data half merged in PR #3445
+**Status:** PARTIAL — delivery reconciled 2026-09-29. The data half merged in PR #3445
 (`ea782db98`); the close-out checkpoint below answers the handoff's owed list.
 Item 7 (stdlib migration to authority-indexed handles) merged in PR #3458.
 Residual schemes with delayed joins (checklist item 2, #3462) are
