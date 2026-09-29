@@ -1719,20 +1719,36 @@ client rl-req "$PORTRL" 203.0.113.41 1 200 \
 client rl-repo "$PORTRL" 203.0.113.42 1 200 "$DID" \
   || fail "case 23: a second identity was refused by the first one's ceiling"
 
-# 23b. updateHandle has its own class: ten calls naming the current
-#    handle are accepted inside one window and the eleventh is refused 429,
-#    while a second identity is still served. Every call is charged when it
-#    is admitted, before its credential or its body is looked at.
+# 23b. updateHandle is limited per ACCOUNT, as the reference limits it: 10
+#    per 5 minutes for the authenticated DID, charged only once the
+#    credential and the handle syntax pass. Fifteen unauthenticated calls
+#    come first, from the same client, and are answered 401 without spending
+#    the account's allowance, so all ten authenticated calls after them are
+#    accepted. The per-client floor (`maxHandleUpdatesPerWindow`, 30) admits
+#    all 26 calls from that client, so the eleventh authenticated call is
+#    refused by the per-account limit, and its message says so. A second
+#    client identity is then refused too: the limit belongs to the DID.
 wait_for_window_room
-client rl-update-handle "$PORTRL" 203.0.113.61 11 429 "$RLACCESS" "$HANDLE" \
-  || fail 'case 23b: the updateHandle class did not refuse the eleventh call'
-client rl-update-handle "$PORTRL" 203.0.113.62 1 200 "$RLACCESS" "$HANDLE" \
-  || fail "case 23b: a second identity was refused by the first one's ceiling"
+client rl-update-handle "$PORTRL" 203.0.113.61 15 401 '' "$HANDLE" \
+  || fail 'case 23b: an unauthenticated updateHandle burst was not answered 401'
+n=1
+while [ "$n" -le 10 ]; do
+  client rl-update-handle "$PORTRL" 203.0.113.61 1 200 "$RLACCESS" "$HANDLE" \
+    || fail "case 23b: authenticated updateHandle $n was refused after an unauthenticated burst"
+  n=$((n + 1))
+done
+client update-handle "$PORTRL" 203.0.113.61 "$RLACCESS" "{\"handle\":\"$HANDLE\"}" \
+  429 RateLimitExceeded 'handle updates for this account' \
+  || fail 'case 23b: the eleventh updateHandle was not refused by the per-account limit'
+client rl-update-handle "$PORTRL" 203.0.113.62 1 429 "$RLACCESS" "$HANDLE" \
+  || fail "case 23b: a second client identity escaped the account's limit"
 
 # 23c. updateHandle is gated and shape-checked: no token is 401, a token
 #    that does not verify is 401, and a body with no handle, or a handle that
 #    is not a string, is 400 InvalidRequest. Each call has its own identity so
-#    none of them spends case 23b's budget.
+#    none of them spends a per-client floor. The two body refusals come after
+#    case 23b spent the account's allowance and are still 400, not 429: a
+#    malformed call is refused before the per-account charge.
 client update-handle "$PORTRL" 203.0.113.63 '' "{\"handle\":\"$HANDLE\"}" \
   401 AuthenticationRequired 'Authentication Required' \
   || fail 'case 23c: an unauthenticated updateHandle was not refused 401'

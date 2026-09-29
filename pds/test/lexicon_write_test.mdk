@@ -38,7 +38,7 @@ import lib.store.{
 }
 import lib.tid.{tidParse}
 import test.fixture_support.{fieldText, storeFingerprint, testNonce, testSecret}
-import test.request_support.{procedureRequest}
+import test.request_support.{postJson, procedureRequest}
 import test.response_support.{bodyText}
 
 -- The account and signing key of the Phase-1 transcript
@@ -708,7 +708,7 @@ updateHandleOutcome fields =
           token
           "com.atproto.identity.updateHandle"
           (stringify (jObject fields))))
-  let (_, response, announced) =
+  let (_, response, announced, _) =
     handleAnnouncing fullServer testContext initialStore request
   let error = match parse (bodyText (serializeResponse response))
     Ok body => fieldText "error" body
@@ -726,6 +726,68 @@ test "updateHandle with a __proto__ key is refused and announces nothing" =
     (
       "the current handle beside __proto__",
       expectEqual (400, "InvalidRequest", False) (updateHandleOutcome withProto),
+    ),
+  ]
+
+-- The DID an `updateHandle` call asks the shell to charge, for the verbatim
+-- JSON `bodyJson` sent with `bearer` ("" sends no credential at all).
+updateHandleCharge : String -> String -> Option String
+updateHandleCharge bearer bodyJson =
+  let request =
+    resultOrPanic
+      "lexicon_write_test: updateHandle request did not parse"
+      (parseRequest
+        (postJson hostText bearer "com.atproto.identity.updateHandle" bodyJson))
+  let (_, _, _, charge) =
+    handleAnnouncing fullServer testContext initialStore request
+  charge
+
+handleBody : String -> String
+handleBody requested = stringify (jObject [("handle", JString requested)])
+
+-- The reference charges its per-DID limit after the credential and the
+-- lexicon input check (body shape and handle syntax), and before the
+-- reserved-TLD, slur and DID-document checks.
+test "updateHandle charges the DID once handle syntax passes, and not before" = expectEach
+  [
+    (
+      "no credential",
+      expectEqual None (updateHandleCharge "" (handleBody currentHandle)),
+    ),
+    (
+      "a credential that does not verify",
+      expectEqual
+        None
+        (updateHandleCharge "not-a-token" (handleBody currentHandle)),
+    ),
+    ("no handle field", expectEqual None (updateHandleCharge token "{}")),
+    (
+      "a handle that is not a string",
+      expectEqual None (updateHandleCharge token "{\"handle\":5}"),
+    ),
+    (
+      "a handle that fails syntax",
+      expectEqual
+        None
+        (updateHandleCharge token (handleBody "\{currentHandle}.")),
+    ),
+    (
+      "a reserved TLD",
+      expectEqual
+        (Some accountDidText)
+        (updateHandleCharge token (handleBody "medaka.local")),
+    ),
+    (
+      "another valid handle",
+      expectEqual
+        (Some accountDidText)
+        (updateHandleCharge token (handleBody "other.dev")),
+    ),
+    (
+      "the current handle",
+      expectEqual
+        (Some accountDidText)
+        (updateHandleCharge token (handleBody currentHandle)),
     ),
   ]
 

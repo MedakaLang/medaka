@@ -40,23 +40,33 @@
    A header that violates one of `maxXffHeaderBytes`/`maxXffTokens` is the
    one case that does NOT fall back — `identifyClient` returns `Err` and the
    caller refuses the request. Falling back would make the fallback bucket
-   the reward for violating the ceiling. -}
+   the reward for violating the ceiling.
+
+   `stepHandleUpdate` is the one decision here that is not keyed by client
+   identity: `com.atproto.identity.updateHandle` is limited per authenticated
+   DID, in two fixed windows of its own, as the reference limits it. Its
+   state is in memory only, so a restart forgets every count. -}
 
 import bytes as B
 import bytes.{Bytes, decodeUtf8}
 import http.{Header, headerName, headerValue, makeHeader}
 import list.{head, reverse}
-import map.{Map(..), get, has, set, size}
+import map.{Map(..), filterWithKey, get, has, set, size}
 import regex.{Regex, isFullMatch, mustCompile}
 import string.{split, trim}
 import lib.nsid.{sameNsidIdentity}
 import lib.resource_limits.{
   checkXffHeaderBytes,
   checkXffTokens,
+  handleUpdateDayWindowSeconds,
+  handleUpdateShortWindowSeconds,
   maxConnectionsPerWindow,
   maxCreateSessionPerWindow,
   maxPreferencesPerWindow,
   maxProxiedCallsPerWindow,
+  maxHandleUpdateAccounts,
+  maxHandleUpdatesPerDay,
+  maxHandleUpdatesPerShortWindow,
   maxHandleUpdatesPerWindow,
   maxRateLimitIdentitiesPerWindow,
   maxRepoExportsPerWindow,
@@ -118,9 +128,13 @@ public export data RateLimitVerdict = Admitted | Refused | RefusedCapacity
    The index is held once for the pair rather than once per row so that
    retirement costs one comparison instead of a walk: a per-row index forces
    whoever prunes to visit every row, which puts the count of OTHER clients
-   seen this window into the cost of serving one request. -}
+   seen this window into the cost of serving one request.
+
+   The fourth field is the per-DID `updateHandle` table (`stepHandleUpdate`).
+   It is held here so that one reference carries all limiter state; its
+   windows are its own and do not move with the index. -}
 export data RateLimitState =
-  | RateLimitState Int (Map String ClientCounters) (Map String ClientCounters)
+  | RateLimitState Int (Map String ClientCounters) (Map String ClientCounters) (Map String HandleCounters)
 
 data ClientCounters = ClientCounters Int Int Int Int Int Int Int Int
 -- connections used, requests used, writes used, preferences used,
@@ -132,7 +146,7 @@ data ClientCounters = ClientCounters Int Int Int Int Int Int Int Int
 -- never negative.
 export
 initRateLimitState : RateLimitState
-initRateLimitState = RateLimitState (0 - 1) Tip Tip
+initRateLimitState = RateLimitState (0 - 1) Tip Tip Tip
 
 export
 classAllowance : RateLimitClass -> Int
@@ -204,7 +218,7 @@ step : RateLimitState ->
   RateLimitClass ->
   Int ->
   (RateLimitState, RateLimitVerdict)
-step (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key) limitClass now =
+step (RateLimitState stateWindow previousTable currentTable handleTable) (ClientIdentity key) limitClass now =
   let windowIdx = now / rateLimitWindowSeconds
   let elapsed = now % rateLimitWindowSeconds
   let (previous, current) =
@@ -214,7 +228,7 @@ step (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key
   if not known
     && not isDirect
     && size current >= maxRateLimitIdentitiesPerWindow then
-    (RateLimitState windowIdx previous current, RefusedCapacity)
+    (RateLimitState windowIdx previous current handleTable, RefusedCapacity)
   else
     let previousCounters = countersFor key previous
     let currentCounters = countersFor key current
@@ -222,13 +236,14 @@ step (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key
     if used >= classAllowance limitClass then
       let nextCurrent =
         if known then set key currentCounters current else current
-      (RateLimitState windowIdx previous nextCurrent, Refused)
+      (RateLimitState windowIdx previous nextCurrent handleTable, Refused)
     else
       (
         RateLimitState
           windowIdx
           previous
-          (set key (bumpClass limitClass currentCounters) current),
+          (set key (bumpClass limitClass currentCounters) current)
+          handleTable,
         Admitted,
       )
 
@@ -274,7 +289,7 @@ remainingInClass : RateLimitState ->
   RateLimitClass ->
   Int ->
   Int
-remainingInClass (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key) limitClass now =
+remainingInClass (RateLimitState stateWindow previousTable currentTable _) (ClientIdentity key) limitClass now =
   let windowIdx = now / rateLimitWindowSeconds
   let elapsed = now % rateLimitWindowSeconds
   let (previous, current) =
@@ -287,6 +302,144 @@ remainingInClass (RateLimitState stateWindow previousTable currentTable) (Client
       (countersFor key current)
   let remaining = classAllowance limitClass - used
   if remaining < 0 then 0 else remaining
+
+-- ── the per-DID updateHandle limit ──────────────────────────────────────────
+
+-- One fixed window: the instant of its first charge, and the charges since.
+data HandleWindow = HandleWindow Int Int
+
+-- The short window and the day window of one DID.
+data HandleCounters = HandleCounters HandleWindow HandleWindow
+
+-- A window that has expired, or was never opened, starts again at `now`.
+chargeWindow : Int -> Int -> Option HandleWindow -> HandleWindow
+chargeWindow duration now (Some (HandleWindow start count)) =
+  if now < start + duration then
+    HandleWindow start (count + 1)
+  else
+    HandleWindow now 1
+chargeWindow _ now None = HandleWindow now 1
+
+shortWindowOf : HandleCounters -> HandleWindow
+shortWindowOf (HandleCounters short _) = short
+
+dayWindowOf : HandleCounters -> HandleWindow
+dayWindowOf (HandleCounters _ day) = day
+
+windowOver : Int -> HandleWindow -> Bool
+windowOver allowance (HandleWindow _ count) = count > allowance
+
+windowExpired : Int -> Int -> HandleWindow -> Bool
+windowExpired duration now (HandleWindow start _) = now >= start + duration
+
+-- A row neither of whose windows still counts anything, and which may be
+-- dropped without forgetting a charge.
+handleRowExpired : Int -> HandleCounters -> Bool
+handleRowExpired now (HandleCounters short day) =
+  windowExpired handleUpdateShortWindowSeconds now short
+    && windowExpired handleUpdateDayWindowSeconds now day
+
+{- | Charge one `com.atproto.identity.updateHandle` call to `did` at `now`, the
+   way the reference's two limiters do: both windows are charged whatever the
+   verdict, and the call is refused when either is past its allowance.
+
+   `did` must be the DID of a credential that verified, and the call must
+   have passed handle syntax; nothing else is ever charged here. A DID not yet
+   in the table is refused `RefusedCapacity` once the table holds
+   `maxHandleUpdateAccounts` rows that are still counting, after rows whose
+   windows have both expired are dropped. That drop walks the table, which it
+   can afford because the table is capped at a few dozen rows and is only
+   walked when it is full. -}
+export
+stepHandleUpdate : RateLimitState ->
+  String ->
+  Int ->
+  (RateLimitState, RateLimitVerdict)
+stepHandleUpdate (RateLimitState stateWindow previous current table) did now =
+  let live =
+    if has did table || size table < maxHandleUpdateAccounts then
+      table
+    else
+      filterWithKey (_ row => not (handleRowExpired now row)) table
+  if not (has did live) && size live >= maxHandleUpdateAccounts then
+    (RateLimitState stateWindow previous current live, RefusedCapacity)
+  else
+    let prior = get did live
+    let charged =
+      HandleCounters
+        (chargeWindow
+          handleUpdateShortWindowSeconds
+          now
+          (map shortWindowOf prior))
+        (chargeWindow handleUpdateDayWindowSeconds now (map dayWindowOf prior))
+    let next =
+      RateLimitState stateWindow previous current (set did charged live)
+    let over =
+      windowOver maxHandleUpdatesPerShortWindow (shortWindowOf charged)
+        || windowOver maxHandleUpdatesPerDay (dayWindowOf charged)
+    if over then (next, Refused) else (next, Admitted)
+
+-- `(limit, remaining, seconds to reset)` for one window as of `now`.
+windowStatus : Int -> Int -> Int -> HandleWindow -> (Int, Int, Int)
+windowStatus allowance duration now (HandleWindow start count) =
+  if now >= start + duration then
+    (allowance, allowance, duration)
+  else
+    let remaining = allowance - count
+    (allowance, if remaining < 0 then 0 else remaining, start + duration - now)
+
+{- | The `RateLimit-*` fields of a per-DID refusal: the day window's when it
+   is spent, since no retry succeeds before it resets, and otherwise the
+   short window's. -}
+export
+handleUpdateHeaderList : RateLimitState -> String -> Int -> List Header
+handleUpdateHeaderList (RateLimitState _ _ _ table) did now =
+  let (limit, remaining, reset) = match get did table
+    None => (
+      maxHandleUpdatesPerShortWindow,
+      maxHandleUpdatesPerShortWindow,
+      handleUpdateShortWindowSeconds,
+    )
+    Some (HandleCounters short day) =>
+      let dayStatus =
+        windowStatus maxHandleUpdatesPerDay handleUpdateDayWindowSeconds now day
+      let (_, dayRemaining, _) = dayStatus
+      if dayRemaining == 0 then
+        dayStatus
+      else
+        windowStatus
+          maxHandleUpdatesPerShortWindow
+          handleUpdateShortWindowSeconds
+          now
+          short
+  [
+    intHeader "ratelimit-limit" limit,
+    intHeader "ratelimit-remaining" remaining,
+    intHeader "ratelimit-reset" reset,
+  ]
+
+-- | What a per-DID `updateHandle` refusal is told. It is the account that is
+-- over its allowance, whichever client sent the call.
+export
+handleUpdateLimitMessage : String
+handleUpdateLimitMessage =
+  "too many handle updates for this account in the current window"
+
+-- | What a DID refused because the per-DID table is full is told.
+export
+handleUpdateCapacityMessage : String
+handleUpdateCapacityMessage =
+  "too many distinct accounts tracked by the handle update limit"
+
+-- | Headers for a `handleUpdateCapacityMessage` refusal. A row frees only
+-- when its day window ends, so the reset is that bound.
+export
+handleUpdateCapacityHeaderList : List Header
+handleUpdateCapacityHeaderList = [
+  intHeader "ratelimit-limit" maxHandleUpdateAccounts,
+  intHeader "ratelimit-remaining" 0,
+  intHeader "ratelimit-reset" handleUpdateDayWindowSeconds,
+]
 
 -- | The write procedures a lower allowance applies to: they cost signing
 -- work (or, for `uploadBlob`, disk), unlike a plain read.
@@ -314,9 +467,9 @@ isCreateSessionNsid : String -> Bool
 isCreateSessionNsid nsid =
   sameNsidIdentity nsid "com.atproto.server.createSession"
 
-{- | `com.atproto.identity.updateHandle` gets its own allowance: each
-   accepted call appends an `#identity` event to the durable event log, which
-   a plain request does not. -}
+{- | `com.atproto.identity.updateHandle` gets its own per-client floor,
+   `maxHandleUpdatesPerWindow`, charged at admission. The account's own
+   allowance is per DID and charged later, by `stepHandleUpdate`. -}
 export
 isHandleUpdateNsid : String -> Bool
 isHandleUpdateNsid nsid =
