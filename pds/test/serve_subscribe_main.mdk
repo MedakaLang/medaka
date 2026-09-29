@@ -302,11 +302,12 @@ armRead conn budget = ignoreResult (setTimeout conn budget)
 -- The one HTTP request this driver makes: a record write, which is what
 -- produces the `#commit` event every live case waits for. It is spelled out
 -- here rather than shelled out to the other driver because the write has to
--- happen WHILE a subscription this process holds is open.
+-- happen WHILE a subscription this process holds is open. It says
+-- `validate: false` because its record keys (`sublive1`, …) are not TIDs.
 writeRecord : Int -> String -> String -> String -> String -> <IO, Net> Unit
 writeRecord port token did collection rkey =
   let bodyJson =
-    "{\"repo\":\"\{did}\",\"collection\":\"\{collection}\",\"rkey\":\"\{rkey}\",\"record\":{\"$type\":\"\{collection}\",\"text\":\"subscribe gate \{rkey}\",\"createdAt\":\"2026-01-01T00:00:00Z\"}}"
+    "{\"repo\":\"\{did}\",\"collection\":\"\{collection}\",\"rkey\":\"\{rkey}\",\"record\":{\"$type\":\"\{collection}\",\"text\":\"subscribe gate \{rkey}\",\"createdAt\":\"2026-01-01T00:00:00Z\"},\"validate\":false}"
   let body = encodeUtf8 bodyJson
   let conn = mustConnect port
   let () =

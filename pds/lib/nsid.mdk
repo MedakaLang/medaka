@@ -11,7 +11,6 @@ import u8 as U8
 public export data NsidError =
   | NsidTooLong
   | NsidMalformed
-  | NsidAuthorityTooLong
   | NsidAuthorityNeedsTwoSegments
   | NsidAuthoritySegmentLength
   | NsidAuthoritySegmentHyphen
@@ -90,6 +89,9 @@ validateName bytes start end =
 
 -- | Validate the first `end` bytes as one NSID. The prefix form
 -- lets repository paths validate their collection without copying the rkey.
+-- The total is capped at 317 and the authority has no separate cap
+-- (`interop_nsid_valid.txt` holds a valid NSID with a 283-character
+-- authority); each segment (1-63) and the name (1-63) are still bounded.
 export
 validateNsidPrefix : Bytes -> Int -> Result NsidError Unit
 validateNsidPrefix bytes end =
@@ -190,8 +192,6 @@ export
 nsidErrorMessage : NsidError -> String
 nsidErrorMessage NsidTooLong = "collection NSID exceeds 317 characters"
 nsidErrorMessage NsidMalformed = "collection must be a valid normalized NSID"
-nsidErrorMessage NsidAuthorityTooLong =
-  "collection NSID authority exceeds 253 characters"
 nsidErrorMessage NsidAuthorityNeedsTwoSegments =
   "collection NSID authority needs at least two segments"
 nsidErrorMessage NsidAuthoritySegmentLength =
@@ -205,3 +205,24 @@ nsidErrorMessage NsidAuthorityNotNormalized =
 nsidErrorMessage NsidNameLength = "invalid collection NSID name length"
 nsidErrorMessage NsidNameStart = "invalid collection NSID name start"
 nsidErrorMessage NsidNameCharacters = "invalid collection NSID name characters"
+
+-- | The same causes worded for a method NSID (an `lxm` claim), which names a
+-- method and not a collection.
+export
+nsidMethodErrorMessage : NsidError -> String
+nsidMethodErrorMessage NsidTooLong = "method NSID exceeds 317 characters"
+nsidMethodErrorMessage NsidMalformed = "method must be a valid normalized NSID"
+nsidMethodErrorMessage NsidAuthorityNeedsTwoSegments =
+  "method NSID authority needs at least two segments"
+nsidMethodErrorMessage NsidAuthoritySegmentLength =
+  "invalid method NSID authority segment length"
+nsidMethodErrorMessage NsidAuthoritySegmentHyphen =
+  "invalid method NSID authority segment hyphen"
+nsidMethodErrorMessage NsidTopLevelStartsWithDigit =
+  "invalid method NSID top-level segment"
+nsidMethodErrorMessage NsidAuthorityNotNormalized =
+  "method NSID authority contains invalid characters"
+nsidMethodErrorMessage NsidNameLength = "invalid method NSID name length"
+nsidMethodErrorMessage NsidNameStart = "invalid method NSID name start"
+nsidMethodErrorMessage NsidNameCharacters =
+  "invalid method NSID name characters"

@@ -147,7 +147,7 @@ createRequest =
         (
           "record",
           jObject [
-            ("$type", JString "app.bsky.feed.post"),
+            ("$type", JString "bench.synth.record"),
             ("text", JString "cost curve probe"),
             ("createdAt", JString "2026-09-14T00:00:00.000Z"),
           ],

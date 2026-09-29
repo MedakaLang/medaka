@@ -869,3 +869,47 @@ extraction:    pds/tools/gen_pbkdf2_corpus.sh fetches the pinned JSON, verifies 
 retrieved:     2026-09-24
 consumer:      S-pbkdf2 (#3362 S-more-answer-keys round 2)
 notes:         60 rows, all `result: valid` (this Wycheproof file carries no adversarial/malformed rows, unlike its HMAC and ECDSA siblings) — iterationCount 4096 (58 rows), 1 and 80000 (1 row each, the latter two matching RFC 7914 §11's two vectors already hand-transcribed in pds/test/pbkdf2_test.mdk under a different, independently-published source). tcId 1 and 2 here reproduce those same two RFC 7914 vectors byte-for-byte, which is retained (not excluded) as cross-source corroboration rather than dropped as a duplicate — see this file's own header note.
+
+[vector]
+file:          pds/test/vectors/lexicon_schemas.json
+local-sha256:  6bd3a3266871b5a05270778f51b821f0e09db09f63b829aa3331426d2f27cf88
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/repo/prepare.ts
+extraction:    pds/tools/gen_lexicon_corpus.sh: node introspection of the compiled lex-schema objects behind repo/prepare.js knownSchemas, run in the pinned image; re-running must reproduce this file byte-for-byte
+retrieved:     2026-09-28
+consumer:      S-lexicon-corpus (#3098 lexicon validation; read by pds/test/lexicon_schemas_test.mdk, which holds lib.lexicon_schemas to this file)
+notes:         every record schema of prepare.js's knownSchemas (20) plus every def they reach (53 defs in all), as Lexicon-shaped JSON keyed `nsid#name` with sorted keys; record defs carry `key`. Read off the class instances (StringSchema/IntegerSchema/ArraySchema/BlobSchema/BytesSchema/RefSchema/TypedUnionSchema/ObjectSchema/RecordSchema options), never transcribed; `description`/`knownValues` do not survive compilation and none appear in the reached set. All unions are open. The lex-schema string-format validators are opaque code, so the format semantics are graded by lexicon_record_corpus.jsonl rows, not by this file. Where several exports are one shared instance (a token string type) the first name in directory order names it.
+
+[vector]
+file:          pds/test/vectors/lexicon_record_corpus.jsonl
+local-sha256:  5ebea7d53701be759df09bf96c94a48ddea36e71cc098abdc40c9240fc1d0768
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/repo/prepare.ts
+extraction:    pds/tools/gen_lexicon_corpus.sh (gen_lexicon_corpus.mjs, run in the pinned image with the tools dir and the vectors dir mounted read-only); re-running must reproduce this file byte-for-byte
+retrieved:     2026-09-28
+consumer:      S-lexicon-corpus (#3098 lexicon validation; read by pds/test/lexicon_corpus_test.mdk, which holds lib.lexicon to every row)
+notes:         each row {id,collection,rkey,record,verdict,message} is the pinned image's own answer: verdict/message come from RUNNING the reference's validateRecord path (schema.keySchema.safeValidate(rkey), then schema.safeValidate(record,{path:['record']}), messages wrapped exactly as repo/prepare.js does, unknown $type = `Unknown lexicon type: <t>` as with validate:true) over the inputs in lexicon_cases.jsonl after @atproto/lex-json jsonToLex; a record jsonToLex itself throws on (an own `__proto__` key) carries the thrown message, as a request would. Nothing in a verdict is hand-written. The rows answer validateRecord only: prepareWrite's earlier steps (default/mismatched $type against the collection, isValidRecordKey, slur filter) are not part of this answer key.
+
+[vector]
+file:          pds/test/vectors/lexicon_cases.jsonl
+local-sha256:  d2eb794be87d91e68e09bcdde65535df6541f54e9a72c395b0e46d36652798a6
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/repo/prepare.ts
+extraction:    hand-authored input list (collection, rkey, record per row; no expected values), emitted once by a throwaway script and committed; not regenerated, edited by hand
+retrieved:     2026-09-28
+consumer:      S-lexicon-corpus (#3098 lexicon validation; input list of gen_lexicon_corpus.sh, which produces lexicon_record_corpus.jsonl for pds/test/lexicon_corpus_test.mdk)
+notes:         INPUTS ONLY. Every schema gets a valid row plus, per constraint class, rows violating that constraint alone (required, type, maxLength in UTF-8 bytes, maxGraphemes, each string format, array maxLength, integer minimum, blob accept/maxSize, bytes, open union unknown $type, ref, rkey type tid/self/nsid/any), grapheme-edge rows, unknown-collection rows and hostile-shape rows. Two macros are expanded by the generator: {"$repeat":[unit,count]} and {"$times":[value,count]}. The expected answers live only in lexicon_record_corpus.jsonl.
+
+[vector]
+file:          pds/test/vectors/lexicon_corpus.meta
+local-sha256:  c1bec9a6fa7c2c480f0eabb8012510d7c4e03c927158325f426875ffe30d1229
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/repo/prepare.ts
+extraction:    pds/tools/gen_lexicon_corpus.sh (gen_lexicon_corpus.mjs, run in the pinned image with the tools dir and the vectors dir mounted read-only); re-running must reproduce this file byte-for-byte; this file is its third output
+retrieved:     2026-09-28
+consumer:      S-lexicon-corpus (#3098 lexicon validation; generation record of gen_lexicon_corpus.sh, whose output pds/test/lexicon_corpus_test.mdk reads)
+notes:         records the image tag and digest, @atproto/pds version, node version and counts the other three lexicon_* files were generated with.
