@@ -1,0 +1,7 @@
+# lexicon answer key generator record
+image-tag:    ghcr.io/bluesky-social/pds:0.4
+image-digest: sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12
+package:      @atproto/pds@0.5.27
+node:         v24.18.1
+schemas:      53 defs, 20 of them knownSchemas records
+rows:         437

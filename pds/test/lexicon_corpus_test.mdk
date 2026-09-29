@@ -1,0 +1,121 @@
+{- | `lib.lexicon` against the reference's own verdicts: every row of
+   `pds/test/vectors/lexicon_record_corpus.jsonl`, which
+   `pds/tools/gen_lexicon_corpus.sh` produced by running the pinned
+   reference PDS's `validateRecord` with `validate: true`.
+
+   A row agrees when the validator reaches the reference's answer: `ok` for
+   a valid record, `error` for an invalid one or for a collection with no
+   schema (the reference refuses an unknown collection under
+   `validate: true`). An undecided verdict agrees with an `ok` row, since
+   the write is accepted either way, and with an `error` row only when the
+   reference refused the record for its grapheme count alone. -}
+
+import io.{readLines}
+import json.{Json(..), get, parse}
+import list.{filter, somes}
+import string.{contains, split}
+import test.{Expectation, expectEach, expectEqual, expectSatisfies}
+import lib.lexicon.{LexVerdict(..), validateRecord}
+import lib.lexicon_schemas.{knownLexicons}
+
+corpusPath : String
+corpusPath = "pds/test/vectors/lexicon_record_corpus.jsonl"
+
+data Row = Row {
+  id : String,
+  collection : String,
+  rkey : String,
+  record : Json,
+  verdict : String,
+  message : String,
+}
+
+corpusLines : <IO> List String
+corpusLines = match readLines corpusPath
+  Ok lines => filter (/= "") lines
+  Err message =>
+    panic "lexicon_corpus_test: cannot read \{corpusPath}: \{message}"
+
+field : String -> Json -> String
+field name value = match get name value
+  Some (JString text) => text
+  _ => panic "lexicon_corpus_test: a row without a string '\{name}'"
+
+rowOf : Json -> Row
+rowOf value = Row {
+  id = field "id" value,
+  collection = field "collection" value,
+  rkey = field "rkey" value,
+  record = match get "record" value
+    Some record => record
+    None => panic "lexicon_corpus_test: a row without a record",
+  verdict = field "verdict" value,
+  message = field "message" value,
+}
+
+-- A line `json.parse` refuses, named by the id its first field spells.
+unreadableId : String -> Option String
+unreadableId line = match parse line
+  Ok _ => None
+  Err _ => match split "\"" line
+    _ :: "id" :: _ :: id :: _ => Some id
+    _ => Some line
+
+readableRow : String -> Option Row
+readableRow line = match parse line
+  Ok value => Some (rowOf value)
+  Err _ => None
+
+corpusRows : <IO> List Row
+corpusRows = somes (map readableRow corpusLines)
+
+verdictOf : Row -> LexVerdict
+verdictOf row = validateRecord knownLexicons row.collection row.rkey row.record
+
+-- The answer a verdict gives the reference's question, "is this write
+-- accepted under `validate: true`?"
+answerOf : LexVerdict -> String
+answerOf LexValid = "ok"
+answerOf (LexUndecided _) = "undecided"
+answerOf (LexInvalid _) = "error"
+answerOf LexNoSchema = "error"
+
+-- A reference answer an undecided verdict agrees with: the verdict and the
+-- message of the row.
+groundedUndecided : (String, String) -> Bool
+groundedUndecided (verdict, message) =
+  verdict == "ok" || contains "grapheme too big" message
+
+agreement : Row -> (String, Expectation)
+agreement row = match verdictOf row
+  LexUndecided _ => (
+    row.id,
+    expectSatisfies
+      "accepted by the reference, or refused for its grapheme count alone"
+      groundedUndecided
+      (row.verdict, row.message),
+  )
+  verdict => (row.id, expectEqual row.verdict (answerOf verdict))
+
+undecidedIds : <IO> List String
+undecidedIds =
+  map
+    (row => row.id)
+    (filter (row => answerOf (verdictOf row) == "undecided") corpusRows)
+
+test "the corpus has its 437 rows" = expectEqual 437 (length corpusLines)
+
+test "every readable row gets the reference's answer" =
+  expectEach (map agreement corpusRows)
+
+{- | `json.parse` refuses a lone surrogate escape, since a Medaka string is
+   always valid UTF-8, so the one row whose text carries `\ud800` never
+   reaches the validator: a request carrying it is refused as malformed
+   JSON, where the reference accepts the record. -}
+test "the only row the JSON parser cannot read is the lone surrogate" =
+  expectEqual
+    ["grapheme-edge-lone-surrogate-escape"]
+    (somes (map unreadableId corpusLines))
+
+test "11 rows are left undecided by the grapheme bound" =
+  expectEqual 11 (length undecidedIds)

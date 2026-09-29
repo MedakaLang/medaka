@@ -738,7 +738,7 @@ secret_comparisons_ok() {
   for spec in \
     "$credential:3:digest password derived stored" \
     "$jwt:2:secret expected sigSeg" \
-    "$store:9:secret wanted access refresh token fingerprint family consumed previous"
+    "$store:11:secret wanted access refresh token fingerprint family consumed previous"
   do
     file=${spec%%:*}
     rest=${spec#*:}
@@ -781,8 +781,9 @@ secret_comparisons_ok() {
     "withoutConsumed:store:1" \
     "hasAccess:store:1" \
     "withoutRefresh:store:1" \
-    "withoutFamily:store:2" \
-    "storeSessionClose:store:1"
+    "withoutFamily:store:3" \
+    "sessionOf:store:1" \
+    "supersededRefresh:store:1"
   do
     name=${spec%%:*}
     rest=${spec#*:}

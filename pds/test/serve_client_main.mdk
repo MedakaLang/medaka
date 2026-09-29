@@ -305,6 +305,10 @@ chunkedPostRequest token path bodyJson =
 
 -- # Fixture JSON
 
+{- | A write body with `validate: false`: the gate's record keys
+   (`e2egatefixture`, `s-sessions-live-1` and the rate-limit
+   keys) are not TIDs, which `app.bsky.feed.post` requires, and what these
+   cases grade is the server around the write, not the lexicon. -}
 createRecordJson : String -> String -> String -> String -> String
 createRecordJson did collection rkey text =
   stringify
@@ -320,6 +324,7 @@ createRecordJson did collection rkey text =
           ("createdAt", JString "2026-09-02T00:00:00.000Z"),
         |],
       ),
+      ("validate", JBool False),
     ])
 
 -- | `n` nested single-key objects around one leaf string.
@@ -330,7 +335,8 @@ nestedJson n =
 {- | A `createRecord` body whose record nests objects until its deepest value
    sits at DAG-CBOR nesting depth `depth`. The record map is itself depth 0
    and its own field values are depth 1, so reaching `depth` takes `depth - 1`
-   nested objects around the leaf. -}
+   nested objects around the leaf. It says `validate: false`, so the refusal
+   it draws is the depth bound's and not the lexicon's. -}
 deepRecordJson : String -> String -> String -> Int -> String
 deepRecordJson did collection rkey depth =
   stringify
@@ -345,6 +351,7 @@ deepRecordJson did collection rkey depth =
           ("nested", nestedJson (depth - 1)),
         ],
       ),
+      ("validate", JBool False),
     ])
 
 createSessionJson : String -> String -> String

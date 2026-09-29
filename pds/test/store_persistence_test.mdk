@@ -326,6 +326,39 @@ legacySessionsAdmitted bin dir = do
     out
     "legacy sessions file was not admitted"
 
+{- | The sessions file a build without superseded rows wrote for
+   `store_persistence_main.mdk`'s base rows, byte for byte as that build's
+   `sessions-save` route left it. A live instance holds a file of this shape,
+   so the rows must load unchanged. -}
+baseSessionsAdmitted : String -> String -> <Exec, FileWrite> Result String Unit
+baseSessionsAdmitted bin dir = do
+  () <- makeDir dir
+  let rows = [
+    join " " [
+      "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+      "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+      "2000000000",
+      "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+    ],
+    join " " [
+      "0f0e0d0c0b0a090807060504030201000f0e0d0c0b0a09080706050403020100",
+      "1f1e1d1c1b1a191817161514131211101f1e1d1c1b1a19181716151413121110",
+      "2100000000",
+      "2f2e2d2c2b2a292827262524232221202f2e2d2c2b2a29282726252423222120",
+    ],
+    join " " [
+      "consumed",
+      "2f2e2d2c2b2a292827262524232221202f2e2d2c2b2a29282726252423222120",
+      "2f2e2d2c2b2a292827262524232221202f2e2d2c2b2a29282726252423222120",
+      "2090000000",
+      "2100000000",
+      "1f1e1d1c1b1a191817161514131211101f1e1d1c1b1a19181716151413121110",
+    ],
+  ]
+  () <- writeFileMode (joinPath dir "sessions") 384 (join "\n" rows)
+  out <- runRoute bin "sessions-base" dir
+  requireLast "SESSIONS BASE: PASS" out "base sessions file was not admitted"
+
 test "resume: the repository, blobs, preferences and sessions persisted by one process are read back by another" = inScratch
   (bin scratch => do
     let dir = joinPath scratch "data"
@@ -333,7 +366,8 @@ test "resume: the repository, blobs, preferences and sessions persisted by one p
     () <- repoResumed p
     () <- blobsResumed p
     () <- prefsAndSessionsResumed dir p
-    legacySessionsAdmitted bin (joinPath scratch "legacy-sessions"))
+    () <- legacySessionsAdmitted bin (joinPath scratch "legacy-sessions")
+    baseSessionsAdmitted bin (joinPath scratch "base-sessions"))
 
 -- # The signing key
 

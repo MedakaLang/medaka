@@ -1,0 +1,1412 @@
+{- | The Lexicon definitions this server validates record writes against:
+   the twenty record collections of the reference PDS's `knownSchemas` and
+   every definition they reach, keyed `nsid#name`.
+
+   Generated from `pds/test/vectors/lexicon_schemas.json` by
+   `pds/tools/gen_lexicon_schemas.sh`; regenerate rather than edit.
+   `pds/test/lexicon_schemas_test.mdk` holds this module equal to that
+   file. -}
+
+import lib.lexicon.{
+  LexDef(..),
+  LexFormat(..),
+  LexKey(..),
+  LexShape(..),
+  LexString(..),
+  LexType(..),
+  Lexicons,
+  lexicons,
+}
+
+-- | The definitions, in the JSON file's order.
+export
+lexiconDefs : List (String, LexDef)
+lexiconDefs = [
+  (
+    "app.bsky.actor.profile#main",
+    LexRecordDef
+      (KeyLiteral "self")
+      (LexShape [] [
+        (
+          "displayName",
+          LexText LexString {
+            minLength = None,
+            maxLength = Some 640,
+            maxGraphemes = Some 64,
+            format = None,
+            defaultValue = None,
+          },
+        ),
+        (
+          "description",
+          LexText LexString {
+            minLength = None,
+            maxLength = Some 2560,
+            maxGraphemes = Some 256,
+            format = None,
+            defaultValue = None,
+          },
+        ),
+        (
+          "pronouns",
+          LexText LexString {
+            minLength = None,
+            maxLength = Some 200,
+            maxGraphemes = Some 20,
+            format = None,
+            defaultValue = None,
+          },
+        ),
+        (
+          "website",
+          LexText LexString {
+            minLength = None,
+            maxLength = None,
+            maxGraphemes = None,
+            format = Some FormatUri,
+            defaultValue = None,
+          },
+        ),
+        ("avatar", LexBlob (Some ["image/png", "image/jpeg"]) (Some 1000000)),
+        ("banner", LexBlob (Some ["image/png", "image/jpeg"]) (Some 1000000)),
+        ("labels", LexUnion ["com.atproto.label.defs#selfLabels"] False),
+        ("joinedViaStarterPack", LexRef "com.atproto.repo.strongRef#main"),
+        ("pinnedPost", LexRef "com.atproto.repo.strongRef#main"),
+        (
+          "createdAt",
+          LexText LexString {
+            minLength = None,
+            maxLength = None,
+            maxGraphemes = None,
+            format = Some FormatDatetime,
+            defaultValue = None,
+          },
+        ),
+      ]),
+  ),
+  (
+    "app.bsky.actor.status#main",
+    LexRecordDef
+      (KeyLiteral "self")
+      (LexShape
+        ["status", "createdAt"]
+        [
+          (
+            "status",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          ("embed", LexUnion ["app.bsky.embed.external#main"] False),
+          ("durationMinutes", LexInteger (Some 1)),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.ageassurance.defs#access",
+    LexTypeDef
+      (LexText LexString {
+        minLength = None,
+        maxLength = None,
+        maxGraphemes = None,
+        format = None,
+        defaultValue = None,
+      }),
+  ),
+  (
+    "app.bsky.embed.defs#aspectRatio",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["width", "height"]
+          [("width", LexInteger (Some 1)), ("height", LexInteger (Some 1))])),
+  ),
+  (
+    "app.bsky.embed.external#external",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["uri", "title", "description"]
+          [
+            (
+              "uri",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatUri,
+                defaultValue = None,
+              },
+            ),
+            (
+              "title",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+            (
+              "description",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+            ("thumb", LexBlob (Some ["image/*"]) (Some 1000000)),
+            (
+              "associatedRefs",
+              LexArray (LexRef "com.atproto.repo.strongRef#main") None,
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.embed.external#main",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["external"]
+          [("external", LexRef "app.bsky.embed.external#external")])),
+  ),
+  (
+    "app.bsky.embed.gallery#image",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["image", "alt", "aspectRatio"]
+          [
+            ("image", LexBlob (Some ["image/*"]) (Some 2000000)),
+            (
+              "alt",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+            ("aspectRatio", LexRef "app.bsky.embed.defs#aspectRatio"),
+          ])),
+  ),
+  (
+    "app.bsky.embed.gallery#main",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["items"]
+          [
+            (
+              "items",
+              LexArray
+                (LexUnion ["app.bsky.embed.gallery#image"] False)
+                (Some 20),
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.embed.images#image",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["image", "alt"]
+          [
+            ("image", LexBlob (Some ["image/*"]) (Some 2000000)),
+            (
+              "alt",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+            ("aspectRatio", LexRef "app.bsky.embed.defs#aspectRatio"),
+          ])),
+  ),
+  (
+    "app.bsky.embed.images#main",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["images"]
+          [
+            ("images", LexArray (LexRef "app.bsky.embed.images#image") (Some 4)),
+          ])),
+  ),
+  (
+    "app.bsky.embed.record#main",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["record"]
+          [("record", LexRef "com.atproto.repo.strongRef#main")])),
+  ),
+  (
+    "app.bsky.embed.recordWithMedia#main",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["record", "media"]
+          [
+            ("record", LexRef "app.bsky.embed.record#main"),
+            (
+              "media",
+              LexUnion
+                [
+                  "app.bsky.embed.images#main", "app.bsky.embed.video#main",
+                  "app.bsky.embed.gallery#main", "app.bsky.embed.external#main"
+                ]
+                False,
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.embed.video#caption",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["lang", "file"]
+          [
+            (
+              "lang",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatLanguage,
+                defaultValue = None,
+              },
+            ),
+            ("file", LexBlob (Some ["text/vtt"]) (Some 20000)),
+          ])),
+  ),
+  (
+    "app.bsky.embed.video#main",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["video"]
+          [
+            ("video", LexBlob (Some ["video/mp4"]) (Some 300000000)),
+            (
+              "captions",
+              LexArray (LexRef "app.bsky.embed.video#caption") (Some 20),
+            ),
+            (
+              "alt",
+              LexText LexString {
+                minLength = None,
+                maxLength = Some 10000,
+                maxGraphemes = Some 1000,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+            ("aspectRatio", LexRef "app.bsky.embed.defs#aspectRatio"),
+            (
+              "presentation",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.feed.generator#main",
+    LexRecordDef
+      KeyAny
+      (LexShape
+        ["did", "displayName", "createdAt"]
+        [
+          (
+            "did",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDid,
+              defaultValue = None,
+            },
+          ),
+          (
+            "displayName",
+            LexText LexString {
+              minLength = None,
+              maxLength = Some 240,
+              maxGraphemes = Some 24,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          (
+            "description",
+            LexText LexString {
+              minLength = None,
+              maxLength = Some 3000,
+              maxGraphemes = Some 300,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          (
+            "descriptionFacets",
+            LexArray (LexRef "app.bsky.richtext.facet#main") None,
+          ),
+          ("avatar", LexBlob (Some ["image/png", "image/jpeg"]) (Some 1000000)),
+          ("acceptsInteractions", LexBoolean),
+          ("labels", LexUnion ["com.atproto.label.defs#selfLabels"] False),
+          (
+            "contentMode",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.feed.like#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["subject", "createdAt"]
+        [
+          ("subject", LexRef "com.atproto.repo.strongRef#main"),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+          ("via", LexRef "com.atproto.repo.strongRef#main"),
+        ]),
+  ),
+  (
+    "app.bsky.feed.post#entity",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["index", "type", "value"]
+          [
+            ("index", LexRef "app.bsky.feed.post#textSlice"),
+            (
+              "type",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+            (
+              "value",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.feed.post#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["text", "createdAt"]
+        [
+          (
+            "text",
+            LexText LexString {
+              minLength = None,
+              maxLength = Some 3000,
+              maxGraphemes = Some 300,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          ("entities", LexArray (LexRef "app.bsky.feed.post#entity") None),
+          ("facets", LexArray (LexRef "app.bsky.richtext.facet#main") None),
+          ("reply", LexRef "app.bsky.feed.post#replyRef"),
+          (
+            "embed",
+            LexUnion
+              [
+                "app.bsky.embed.images#main", "app.bsky.embed.video#main",
+                "app.bsky.embed.gallery#main", "app.bsky.embed.external#main",
+                "app.bsky.embed.record#main",
+                "app.bsky.embed.recordWithMedia#main"
+              ]
+              False,
+          ),
+          (
+            "langs",
+            LexArray
+              (LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatLanguage,
+                defaultValue = None,
+              })
+              (Some 3),
+          ),
+          ("labels", LexUnion ["com.atproto.label.defs#selfLabels"] False),
+          (
+            "tags",
+            LexArray
+              (LexText LexString {
+                minLength = None,
+                maxLength = Some 640,
+                maxGraphemes = Some 64,
+                format = None,
+                defaultValue = None,
+              })
+              (Some 8),
+          ),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.feed.post#replyRef",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["root", "parent"]
+          [
+            ("root", LexRef "com.atproto.repo.strongRef#main"),
+            ("parent", LexRef "com.atproto.repo.strongRef#main"),
+          ])),
+  ),
+  (
+    "app.bsky.feed.post#textSlice",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["start", "end"]
+          [("start", LexInteger (Some 0)), ("end", LexInteger (Some 0))])),
+  ),
+  (
+    "app.bsky.feed.postgate#disableRule",
+    LexTypeDef (LexObject (LexShape [] [])),
+  ),
+  (
+    "app.bsky.feed.postgate#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["createdAt", "post"]
+        [
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+          (
+            "post",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatAtUri,
+              defaultValue = None,
+            },
+          ),
+          (
+            "detachedEmbeddingUris",
+            LexArray
+              (LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatAtUri,
+                defaultValue = None,
+              })
+              (Some 50),
+          ),
+          (
+            "embeddingRules",
+            LexArray
+              (LexUnion ["app.bsky.feed.postgate#disableRule"] False)
+              (Some 5),
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.feed.repost#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["subject", "createdAt"]
+        [
+          ("subject", LexRef "com.atproto.repo.strongRef#main"),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+          ("via", LexRef "com.atproto.repo.strongRef#main"),
+        ]),
+  ),
+  (
+    "app.bsky.feed.threadgate#followerRule",
+    LexTypeDef (LexObject (LexShape [] [])),
+  ),
+  (
+    "app.bsky.feed.threadgate#followingRule",
+    LexTypeDef (LexObject (LexShape [] [])),
+  ),
+  (
+    "app.bsky.feed.threadgate#listRule",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["list"]
+          [
+            (
+              "list",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatAtUri,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.feed.threadgate#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["post", "createdAt"]
+        [
+          (
+            "post",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatAtUri,
+              defaultValue = None,
+            },
+          ),
+          (
+            "allow",
+            LexArray
+              (LexUnion
+                [
+                  "app.bsky.feed.threadgate#mentionRule",
+                  "app.bsky.feed.threadgate#followerRule",
+                  "app.bsky.feed.threadgate#followingRule",
+                  "app.bsky.feed.threadgate#listRule"
+                ]
+                False)
+              (Some 5),
+          ),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+          (
+            "hiddenReplies",
+            LexArray
+              (LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatAtUri,
+                defaultValue = None,
+              })
+              (Some 300),
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.feed.threadgate#mentionRule",
+    LexTypeDef (LexObject (LexShape [] [])),
+  ),
+  (
+    "app.bsky.graph.block#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["subject", "createdAt"]
+        [
+          (
+            "subject",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDid,
+              defaultValue = None,
+            },
+          ),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.graph.follow#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["subject", "createdAt"]
+        [
+          (
+            "subject",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDid,
+              defaultValue = None,
+            },
+          ),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+          ("via", LexRef "com.atproto.repo.strongRef#main"),
+        ]),
+  ),
+  (
+    "app.bsky.graph.list#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["purpose", "name", "createdAt"]
+        [
+          ("purpose", LexRef "app.bsky.ageassurance.defs#access"),
+          (
+            "name",
+            LexText LexString {
+              minLength = Some 1,
+              maxLength = Some 64,
+              maxGraphemes = None,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          (
+            "description",
+            LexText LexString {
+              minLength = None,
+              maxLength = Some 3000,
+              maxGraphemes = Some 300,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          (
+            "descriptionFacets",
+            LexArray (LexRef "app.bsky.richtext.facet#main") None,
+          ),
+          ("avatar", LexBlob (Some ["image/png", "image/jpeg"]) (Some 1000000)),
+          ("labels", LexUnion ["com.atproto.label.defs#selfLabels"] False),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.graph.listblock#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["subject", "createdAt"]
+        [
+          (
+            "subject",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatAtUri,
+              defaultValue = None,
+            },
+          ),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.graph.listitem#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["subject", "list", "createdAt"]
+        [
+          (
+            "subject",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDid,
+              defaultValue = None,
+            },
+          ),
+          (
+            "list",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatAtUri,
+              defaultValue = None,
+            },
+          ),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.graph.starterpack#feedItem",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["uri"]
+          [
+            (
+              "uri",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatAtUri,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.graph.starterpack#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["name", "list", "createdAt"]
+        [
+          (
+            "name",
+            LexText LexString {
+              minLength = Some 1,
+              maxLength = Some 500,
+              maxGraphemes = Some 50,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          (
+            "description",
+            LexText LexString {
+              minLength = None,
+              maxLength = Some 3000,
+              maxGraphemes = Some 300,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          (
+            "descriptionFacets",
+            LexArray (LexRef "app.bsky.richtext.facet#main") None,
+          ),
+          (
+            "list",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatAtUri,
+              defaultValue = None,
+            },
+          ),
+          (
+            "feeds",
+            LexArray (LexRef "app.bsky.graph.starterpack#feedItem") (Some 3),
+          ),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.graph.verification#main",
+    LexRecordDef
+      KeyTid
+      (LexShape
+        ["subject", "handle", "displayName", "createdAt"]
+        [
+          (
+            "subject",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDid,
+              defaultValue = None,
+            },
+          ),
+          (
+            "handle",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatHandle,
+              defaultValue = None,
+            },
+          ),
+          (
+            "displayName",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.labeler.defs#labelerPolicies",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["labelValues"]
+          [
+            (
+              "labelValues",
+              LexArray (LexRef "app.bsky.ageassurance.defs#access") None,
+            ),
+            (
+              "labelValueDefinitions",
+              LexArray
+                (LexRef "com.atproto.label.defs#labelValueDefinition")
+                None,
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.labeler.service#main",
+    LexRecordDef
+      (KeyLiteral "self")
+      (LexShape
+        ["policies", "createdAt"]
+        [
+          ("policies", LexRef "app.bsky.labeler.defs#labelerPolicies"),
+          ("labels", LexUnion ["com.atproto.label.defs#selfLabels"] False),
+          (
+            "createdAt",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = Some FormatDatetime,
+              defaultValue = None,
+            },
+          ),
+          (
+            "reasonTypes",
+            LexArray (LexRef "app.bsky.ageassurance.defs#access") None,
+          ),
+          (
+            "subjectTypes",
+            LexArray (LexRef "app.bsky.ageassurance.defs#access") None,
+          ),
+          (
+            "subjectCollections",
+            LexArray
+              (LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatNsid,
+                defaultValue = None,
+              })
+              None,
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.notification.declaration#main",
+    LexRecordDef
+      (KeyLiteral "self")
+      (LexShape
+        ["allowSubscriptions"]
+        [
+          (
+            "allowSubscriptions",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "app.bsky.richtext.facet#byteSlice",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["byteStart", "byteEnd"]
+          [
+            ("byteStart", LexInteger (Some 0)),
+            ("byteEnd", LexInteger (Some 0)),
+          ])),
+  ),
+  (
+    "app.bsky.richtext.facet#link",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["uri"]
+          [
+            (
+              "uri",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatUri,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.richtext.facet#main",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["index", "features"]
+          [
+            ("index", LexRef "app.bsky.richtext.facet#byteSlice"),
+            (
+              "features",
+              LexArray
+                (LexUnion
+                  [
+                    "app.bsky.richtext.facet#mention",
+                    "app.bsky.richtext.facet#link",
+                    "app.bsky.richtext.facet#tag"
+                  ]
+                  False)
+                None,
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.richtext.facet#mention",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["did"]
+          [
+            (
+              "did",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatDid,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+  (
+    "app.bsky.richtext.facet#tag",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["tag"]
+          [
+            (
+              "tag",
+              LexText LexString {
+                minLength = None,
+                maxLength = Some 640,
+                maxGraphemes = Some 64,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+  (
+    "chat.bsky.actor.declaration#main",
+    LexRecordDef
+      (KeyLiteral "self")
+      (LexShape
+        ["allowIncoming"]
+        [
+          (
+            "allowIncoming",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          (
+            "allowGroupInvites",
+            LexText LexString {
+              minLength = None,
+              maxLength = None,
+              maxGraphemes = None,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+        ]),
+  ),
+  (
+    "com.atproto.label.defs#labelValueDefinition",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["identifier", "severity", "blurs", "locales"]
+          [
+            (
+              "identifier",
+              LexText LexString {
+                minLength = None,
+                maxLength = Some 100,
+                maxGraphemes = Some 100,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+            (
+              "severity",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+            (
+              "blurs",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+            (
+              "defaultSetting",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = Some "warn",
+              },
+            ),
+            ("adultOnly", LexBoolean),
+            (
+              "locales",
+              LexArray
+                (LexRef "com.atproto.label.defs#labelValueDefinitionStrings")
+                None,
+            ),
+          ])),
+  ),
+  (
+    "com.atproto.label.defs#labelValueDefinitionStrings",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["lang", "name", "description"]
+          [
+            (
+              "lang",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatLanguage,
+                defaultValue = None,
+              },
+            ),
+            (
+              "name",
+              LexText LexString {
+                minLength = None,
+                maxLength = Some 640,
+                maxGraphemes = Some 64,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+            (
+              "description",
+              LexText LexString {
+                minLength = None,
+                maxLength = Some 100000,
+                maxGraphemes = Some 10000,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+  (
+    "com.atproto.label.defs#selfLabel",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["val"]
+          [
+            (
+              "val",
+              LexText LexString {
+                minLength = None,
+                maxLength = Some 128,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+  (
+    "com.atproto.label.defs#selfLabels",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["values"]
+          [
+            (
+              "values",
+              LexArray (LexRef "com.atproto.label.defs#selfLabel") (Some 10),
+            ),
+          ])),
+  ),
+  (
+    "com.atproto.lexicon.schema#main",
+    LexRecordDef KeyNsid (LexShape ["lexicon"] [("lexicon", LexInteger None)]),
+  ),
+  (
+    "com.atproto.repo.strongRef#main",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["uri", "cid"]
+          [
+            (
+              "uri",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatAtUri,
+                defaultValue = None,
+              },
+            ),
+            (
+              "cid",
+              LexText LexString {
+                minLength = None,
+                maxLength = None,
+                maxGraphemes = None,
+                format = Some FormatCid,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+  (
+    "com.germnetwork.declaration#main",
+    LexRecordDef
+      (KeyLiteral "self")
+      (LexShape
+        ["version", "currentKey"]
+        [
+          (
+            "version",
+            LexText LexString {
+              minLength = Some 5,
+              maxLength = Some 14,
+              maxGraphemes = None,
+              format = None,
+              defaultValue = None,
+            },
+          ),
+          ("currentKey", LexBytes),
+          ("messageMe", LexRef "com.germnetwork.declaration#messageMe"),
+          ("keyPackage", LexBytes),
+          ("continuityProofs", LexArray LexBytes (Some 1000)),
+        ]),
+  ),
+  (
+    "com.germnetwork.declaration#messageMe",
+    LexTypeDef
+      (LexObject
+        (LexShape
+          ["messageMeUrl", "showButtonTo"]
+          [
+            (
+              "messageMeUrl",
+              LexText LexString {
+                minLength = Some 1,
+                maxLength = Some 2047,
+                maxGraphemes = None,
+                format = Some FormatUri,
+                defaultValue = None,
+              },
+            ),
+            (
+              "showButtonTo",
+              LexText LexString {
+                minLength = Some 1,
+                maxLength = Some 100,
+                maxGraphemes = None,
+                format = None,
+                defaultValue = None,
+              },
+            ),
+          ])),
+  ),
+]
+
+-- | `lexiconDefs`, indexed.
+export
+knownLexicons : Lexicons
+knownLexicons = lexicons lexiconDefs

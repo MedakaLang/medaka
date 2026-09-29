@@ -183,7 +183,9 @@ sessionsPath dir = "\{dir}/sessions"
    family, the instant it was consumed, the instant the family ends, and, once
    a replay inside the grace window has opened a session from it, that
    session's refresh fingerprint. A five-field consumed row is one no replay
-   has opened a session from. No
+   has opened a session from. A superseded refresh token, one whose session a
+   later replay closed, is the word `superseded`, its fingerprint, its family,
+   and the instant that session would have stopped verifying. No
    field is a bearer token -- each fingerprint is a SHA-256 digest of one
    (`lib.store`'s `sessionFingerprint`), and a family is named by one -- so
    what this file holds cannot be presented to the server it was read from.
@@ -202,6 +204,8 @@ sessionRowText (ConsumedRefreshRow refresh family at ends replayed) =
   match replayed
     None => fields
     Some session => "\{fields} \{encode session}"
+sessionRowText (SupersededRefreshRow refresh family until) =
+  "superseded \{encode refresh} \{encode family} \{intToString until}"
 
 sessionsText : List SessionRow -> String
 sessionsText rows = join "\n" (map sessionRowText rows)
@@ -219,6 +223,11 @@ rowInstant text = match toInt text
 
 parseSessionRow : String -> Result String SessionRow
 parseSessionRow line = match split " " (trim line)
+  ["superseded", refreshHex, familyHex, untilText] => do
+    refresh <- rowFingerprint refreshHex
+    family <- rowFingerprint familyHex
+    until <- rowInstant untilText
+    Ok (SupersededRefreshRow refresh family until)
   [accessHex, refreshHex, expiresText] => do
     access <- rowFingerprint accessHex
     refresh <- rowFingerprint refreshHex

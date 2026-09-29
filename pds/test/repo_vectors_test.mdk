@@ -102,7 +102,7 @@ recordHandlersRow = nativeRow "pds/test/record_handlers_main.mdk" (Ledgered
   "P1-D-REPO") [
   "transcript: 4/4 handler-layer steps matched the pinned corpus",
   "CELL swap-commit-mismatch PASS error=InvalidSwap",
-  "CELL validate-true-accepted PASS validationStatus=unknown state=advanced",
+  "CELL validate-true-accepted PASS validationStatus=valid state=advanced",
   "cells: 4/4 (3 state-preserving rejections + 1 admitted validate flag)",
 ]
 

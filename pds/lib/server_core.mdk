@@ -47,7 +47,7 @@ import lib.nsid.{
   lowerAsciiByte,
   sameNsidIdentity,
   validateNsid,
-  nsidErrorMessage,
+  nsidMethodErrorMessage,
 }
 import lib.proxy.{
   appviewRouteDid,
@@ -1015,7 +1015,7 @@ admitServiceMethod : Option String -> Result Response Unit
 admitServiceMethod None = Ok ()
 admitServiceMethod (Some lxm) = match validateNsid lxm
   Err cause =>
-    Err (serviceAuthRefusal "service auth lxm: \{nsidErrorMessage cause}")
+    Err (serviceAuthRefusal "service auth lxm: \{nsidMethodErrorMessage cause}")
   Ok () =>
     if isProtectedMethod lxm then
       Err

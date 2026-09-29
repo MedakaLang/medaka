@@ -1053,6 +1053,73 @@ test "logging out with a consumed refresh token leaves a sibling family open" =
       (getQuery siblingAccess getSessionNsid)
   expectEqual "200 OK" (outcome response)
 
+{- | The original refresh token, consumed at +60, replayed at +100 and again at
+   +110. The second replay's pair supersedes the first's, so the first
+   replay's refresh token is left naming no open session, and it still belongs
+   to the family. -}
+superseded : (Store, String, String)
+superseded =
+  let (once, _, firstReplay) =
+    rotateAt (testInstant + 100) 70 rotatedStore refreshToken
+  let (twice, secondAccess, _) =
+    rotateAt (testInstant + 110) 71 once refreshToken
+  (twice, firstReplay, secondAccess)
+
+test "logging out with a superseded refresh token ends its family" =
+  let (store, supersededRefresh, replayAccess) = superseded
+  let (closedFamily, logout) =
+    send
+      (contextAt (testInstant + 120) 72)
+      store
+      (postNoInput supersededRefresh deleteSessionNsid)
+  let at = contextAt (testInstant + 121) 73
+  let refused = "401 Unauthorized InvalidToken"
+  expectEach [
+    ("the logout is 200", expectEqual "200 OK" (outcome logout)),
+    (
+      "the replay that superseded it is refused",
+      expectEqual
+        refused
+        (answerTo at closedFamily (getQuery replayAccess getSessionNsid)),
+    ),
+    (
+      "the rotated sibling is refused",
+      expectEqual
+        refused
+        (answerTo at closedFamily (getQuery rotatedAccess getSessionNsid)),
+    ),
+  ]
+
+{- | A superseded refresh token mints nothing. `refreshSession` refuses it and
+   keeps the store it was handed, so the family stays open and the token can
+   still end it. -}
+test "a superseded refresh token is refused a refresh and leaves its family open" =
+  let (store, supersededRefresh, replayAccess) = superseded
+  let (after, refresh) =
+    send
+      (contextAt (testInstant + 120) 74)
+      store
+      (postNoInput supersededRefresh refreshSessionNsid)
+  let at = contextAt (testInstant + 121) 75
+  expectEach [
+    (
+      "the refresh is refused",
+      expectEqual "401 Unauthorized InvalidToken" (outcome refresh),
+    ),
+    (
+      "the replay that superseded it still reaches a gated route",
+      expectEqual
+        "200 OK"
+        (answerTo at after (getQuery replayAccess getSessionNsid)),
+    ),
+    (
+      "the token still ends the family afterwards",
+      expectEqual
+        "200 OK"
+        (answerTo at after (postNoInput supersededRefresh deleteSessionNsid)),
+    ),
+  ]
+
 -- # Independence
 
 {- | Two logins are two sessions, and closing one leaves the other open. A
