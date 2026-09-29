@@ -24,7 +24,7 @@ import bytebuilder.{
   Builder, buildBytes, emitBeUint, emitBytes, emitU8, newBuilder
 }
 import bytes as B
-import bytes.{Bytes, encodeUtf8}
+import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import list.{reverse}
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
@@ -127,6 +127,11 @@ public export data DecodeResult =
 -- RFC 6455 §7.4.1 status codes this module produces.
 protocolErrorCode : Int
 protocolErrorCode = 1002
+
+-- RFC 6455 §7.4.1: a Text message or close reason that is not valid UTF-8.
+export
+invalidPayloadCode : Int
+invalidPayloadCode = 1007
 
 messageTooBigCode : Int
 messageTooBigCode = 1009
@@ -240,7 +245,9 @@ export
 decodeFrame : Direction -> Int -> Bytes -> Int -> DecodeResult
 decodeFrame direction maxPayload bytes offset =
   let available = B.length bytes - offset
-  if available < 2 then
+  if offset < 0 then
+    Rejected protocolErrorCode "negative frame offset"
+  else if available < 2 then
     NeedMore
   else
     let b0 = byteAt bytes offset
@@ -451,26 +458,38 @@ closeFrame code reason =
 
 {- | The status code and reason bytes a Close frame's payload carries, or
    `None` for the empty payload RFC 6455 §5.5.1 permits, or the reason the
-   payload is malformed.
+   payload is malformed, paired with the status code to fail the connection
+   with: 1002 for a bad shape, 1007 for a reason that is not UTF-8 (§7.4.1).
 
    A one-byte payload is a violation, not a code: there is no second byte to
    read, and reading the one byte as a code would invent a status the peer
    never sent. -}
 export
-parseClosePayload : Bytes -> Result String (Option (Int, Bytes))
+parseClosePayload : Bytes -> Result (Int, String) (Option (Int, Bytes))
 parseClosePayload payload =
   let len = B.length payload
   if len == 0 then
     Ok None
   else if len == 1 then
-    Err "close payload is 1 byte; a status code is 2 (RFC 6455 §5.5.1)"
+    Err (
+      protocolErrorCode,
+      "close payload is 1 byte; a status code is 2 (RFC 6455 §5.5.1)",
+    )
   else
     let code = readBigEndian payload 0 2 0
     if not (closeCodeOnWire code) then
-      Err
-        "close status code \{intToString code} may not appear on the wire (RFC 6455 §7.4)"
+      Err (
+        protocolErrorCode,
+        "close status code \{intToString code} may not appear on the wire (RFC 6455 §7.4)",
+      )
     else
-      Ok (Some (code, copyPayload payload 2 (len - 2) None))
+      let reason = copyPayload payload 2 (len - 2) None
+      match decodeUtf8 reason
+        None => Err (
+          invalidPayloadCode,
+          "close reason is not valid UTF-8 (RFC 6455 §5.5.1)",
+        )
+        Some _ => Ok (Some (code, reason))
 
 -- ── Fragmentation ────────────────────────────────────────────────────
 
@@ -520,9 +539,19 @@ assembleFrame pending (Frame fin opcode payload) =
     )
     (None, _) =>
       if fin then
-        (None, EventMessage opcode payload)
+        (None, completeMessage opcode payload)
       else
         (Some (Assembly opcode [payload]), EventPartial)
+
+-- A Text message is checked as a whole: a multi-byte character may be split
+-- across fragments, so no single frame's bytes need be valid UTF-8.
+completeMessage : Opcode -> Bytes -> AssembleEvent
+completeMessage opcode payload = match (opcode, decodeUtf8 payload)
+  (Text, None) =>
+    EventRejected
+      invalidPayloadCode
+      "text message is not valid UTF-8 (RFC 6455 §8.1)"
+  _ => EventMessage opcode payload
 
 continueMessage : Option Assembly ->
   Bool ->
@@ -537,6 +566,6 @@ continueMessage None _ _ = (
 continueMessage (Some (Assembly opcode chunks)) fin payload =
   let grown = payload :: chunks
   if fin then
-    (None, EventMessage opcode (B.concat (reverse grown)))
+    (None, completeMessage opcode (B.concat (reverse grown)))
   else
     (Some (Assembly opcode grown), EventPartial)
