@@ -147,8 +147,8 @@ checkDagCborDepth depth =
   else
     Ok ()
 
--- Rate limiting policy. One shared window across the five limit
--- classes `pds/lib/ratelimit.mdk` defines; each class keeps its own
+-- Rate limiting policy. One shared window across every limit class
+-- `pds/lib/ratelimit.mdk` defines; each class keeps its own
 -- allowance within that window.
 export
 rateLimitWindowSeconds : Int

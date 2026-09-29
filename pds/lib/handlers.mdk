@@ -4,7 +4,7 @@
    applyWrites, uploadBlob}`) are the five that transition the `Store` — the
    first four the repository half under one signed commit apiece (`applyWrites`
    batches the other three), `uploadBlob` the blob half. **Reads** are the
-   thirteen that cannot:
+   ones that cannot:
    `com.atproto.repo.{getRecord, listRecords, describeRepo}`,
    `com.atproto.server.describeServer`,
    `com.atproto.sync.{getRepo, getLatestCommit, getBlob, listBlobs, listRepos,
@@ -34,7 +34,7 @@
    Every registration carries its own `AuthPolicy`: the five writes,
    `updateHandle`, `getSession`, `getServiceAuth`, and both preference routes
    are
-   `AuthenticatedRoute`, the thirteen reads are `PublicRoute`,
+   `AuthenticatedRoute`, the reads are `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`,
    `createSession` is `PublicRoute` (it is the login that issues the tokens the
    other session routes require), and the two well-knowns are public by
@@ -140,7 +140,6 @@ import lib.blob.{
   BlobRef,
   admitBlob,
   blobRefCid,
-  blobRefMimeType,
   blobRefSize,
   blobRefToJson,
   recordBlobRefs,
@@ -355,9 +354,6 @@ recordNotFound = xrpcErrorResponse 400 "Bad Request" "RecordNotFound"
 blobNotFound : String -> Response
 blobNotFound = xrpcErrorResponse 400 "Bad Request" "BlobNotFound"
 
-invalidMimeType : String -> Response
-invalidMimeType = xrpcErrorResponse 400 "Bad Request" "InvalidMimeType"
-
 invalidSize : String -> Response
 invalidSize = xrpcErrorResponse 400 "Bad Request" "InvalidSize"
 
@@ -475,7 +471,10 @@ admitValidateFlag body = match get "validate" body
 {- | The `validationStatus` a write reports, or the refusal its record gets:
    `lib.lexicon`'s verdict on the record written to `collection` under
    `rkey`, or `"unknown"` when grading was skipped. Skipping grading does not
-   skip `prepareRefusal`, which the reference applies to every write. -}
+   skip `prepareRefusal`: the reference's `prepareWrite` refuses a `$type`
+   naming another collection on every write, and a `__proto__` key never
+   reaches it, because the reference's request-body decoding refuses one
+   first, as `lib.xrpc` does here. -}
 recordStatus : Validation -> String -> String -> Json -> Result Response String
 recordStatus Ungraded collection _ record =
   match prepareRefusal collection record
@@ -704,22 +703,21 @@ admitBlobRef (Ok ref) = Ok ref
 
 {- | The reference's commit-time blob check (`processWriteBlobs`): every blob
    ref `record` names must be a blob this server holds, refused
-   `BlobNotFound` otherwise, and the ref's MIME type and size must be the
-   held blob's, refused `InvalidMimeType` or `InvalidSize` otherwise. The
-   first ref that fails decides the answer.
+   `BlobNotFound` otherwise, and the ref's size must be the held blob's,
+   refused `InvalidSize` otherwise. The first ref that fails decides the
+   answer.
 
-   The reference compares MIME type and size only while a blob is still
-   temporary, which is until the first write that names it commits; a later
-   ref to the same blob is not compared. This store keeps no such state: an
-   uploaded blob is held the same way before and after a record names it,
-   and it is never dropped when no record names it any more, as the
-   reference drops one. So the comparison runs on every ref, and refuses one
-   write the reference accepts: a ref to an already-named blob that misstates
-   its type or size. `uploadBlob` answers with the held type and size, which
-   are what a client copies into a ref.
-
-   A blob held with no declared type (the byte-only `storePut`, which no
-   route uses) has no type to compare, and only its size is. -}
+   The reference compares a ref's MIME type as well as its size, but only
+   against a blob that is still temporary, which is until the first write
+   that names it commits; a later ref to the same blob is compared against
+   nothing. This store keeps no such association state: an uploaded blob is
+   held the same way before and after a record names it, and its recorded
+   type is whatever the latest upload of its bytes declared, while a client
+   may have copied an earlier upload's answer into its ref. So MIME type is
+   not compared at all. Size cannot misfire that way, because identical
+   bytes have identical length, so it is compared on every ref; that refuses
+   one write the reference accepts, a ref to an already-named blob that
+   misstates its size. -}
 requireHeldBlobs : Store -> DagCbor -> Result Response Unit
 requireHeldBlobs store record = requireHeldRefs store (recordBlobRefs record)
 
@@ -734,18 +732,13 @@ requireHeldRef store ref =
   let cid = blobRefCid ref
   match storeGet cid store
     None => Err (blobNotFound "Could not find blob: \{cidToString cid}")
-    Some bytes => match storeBlobMimeType cid store
-      Some held if held /= blobRefMimeType ref =>
+    Some bytes =>
+      if B.length bytes /= blobRefSize ref then
         Err
-          (invalidMimeType
-            "Referenced Mimetype does not match stored blob. Expected: \{held}, Got: \{blobRefMimeType ref}")
-      _ =>
-        if B.length bytes /= blobRefSize ref then
-          Err
-            (invalidSize
-              "Referenced Size does not match stored blob. Expected: \{intToString (B.length bytes)}, Got: \{intToString (blobRefSize ref)}")
-        else
-          Ok ()
+          (invalidSize
+            "Referenced Size does not match stored blob. Expected: \{intToString (B.length bytes)}, Got: \{intToString (blobRefSize ref)}")
+      else
+        Ok ()
 
 -- | `requireHeldBlobs` over every record a batch creates or updates, before
 -- any of them is committed.
@@ -2529,7 +2522,7 @@ finishRead : Result Response Json -> Response
 finishRead (Err response) = response
 finishRead (Ok value) = jsonOkResponse value
 
-{- | The thirteen read/sync/identity queries, the two well-knowns, and the
+{- | The read/sync/identity queries, the two well-knowns, and the
    health probe, or `None` for a call this half does not own. It returns a
    bare `Response` because no route here can transition the `Store`. -}
 readHandled : Account ->
@@ -2655,7 +2648,7 @@ preferencesHandled _ _ _ = None
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
 {- | The complete handler: five record writes, one identity procedure, five
-   session routes, two preference routes, thirteen reads, two well-knowns,
+   session routes, two preference routes, the reads, two well-knowns,
    and the health probe.
    The halves are disjoint by construction — each owns a distinct set of
    NSIDs, and the read half additionally owns the two well-knowns and the
@@ -2676,7 +2669,7 @@ pdsHandler account links version context outcome store call =
             Some response => (store, response)
             None => (store, unhandledRoute call)
 
--- | The registry of all twenty-seven XRPC endpoints. The two well-known paths
+-- | The registry of every XRPC endpoint this PDS serves. The two well-known paths
 -- are NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
@@ -2693,7 +2686,7 @@ pdsRegistry = do
         sessions
         (concatEndpoints preferences (concatEndpoints identity reads))))
 
-{- | The thirteen read queries and the one event-stream subscription, every one
+{- | The read queries and the one event-stream subscription, every one
    of them public.
 
    A repository is public data on atproto: `com.atproto.repo.getRecord`,

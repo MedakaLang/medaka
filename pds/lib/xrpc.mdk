@@ -37,6 +37,7 @@ import http.{
 import bytes.{Bytes, encodeUtf8}
 import json.{Json, Json(..), jObject, stringify}
 import string.{stripPrefix}
+import lib.lexicon.{hasProtoKey}
 import lib.nsid.{sameNsidIdentity, validateNsid}
 
 public export data InputPolicy = NoInput | JsonInput | TextInput | RawInput
@@ -485,6 +486,9 @@ mediaMatches TextInput media = mediaTypeType media == "text"
 mediaMatches RawInput _ = True
 mediaMatches NoInput _ = False
 
+-- A JSON body with a `__proto__` key at any depth is refused before any
+-- handler sees it, as the reference's request-body decoding (`jsonToLex`)
+-- refuses it for every JSON procedure.
 decodeProcedure : String ->
   InputPolicy ->
   AuthPolicy ->
@@ -524,7 +528,10 @@ decodeProcedure nsid policy auth params request =
           Err _ => invalidRequest "Request body is invalid for endpoint input"
           Ok decoded => match (policy, decoded)
             (JsonInput, JsonBody _ value) =>
-              RouteCall auth (ProcedureJsonCall nsid params value)
+              if hasProtoKey value then
+                invalidRequest "Invalid key: __proto__"
+              else
+                RouteCall auth (ProcedureJsonCall nsid params value)
             (TextInput, TextBody decodedMedia text) =>
               RouteCall auth (ProcedureTextCall nsid params decodedMedia text)
             _ =>

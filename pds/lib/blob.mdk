@@ -199,6 +199,8 @@ typedBlobRef : List (String, DagCbor) -> Option BlobRef
 typedBlobRef [a, b, c, d] = blobRefFields [a, b, c, d]
 typedBlobRef _ = None
 
+-- The `contains "/"` MIME test is looser than `mimeShapeRe` on purpose: it
+-- is the test the reference's `enumBlobRefs` applies to a ref.
 blobRefFields : List (String, DagCbor) -> Option BlobRef
 blobRefFields pairs = match (
   lookup "$type" pairs,

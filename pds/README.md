@@ -26,8 +26,8 @@ unless `--trusted-proxy` also asserts that a reverse proxy terminates TLS in
 front of this process (`requireTrustedBind`), because nothing here terminates TLS
 itself.
 
-Authentication gates the writes and the three session routes that need it — the
-five record/blob writes and `getSession` require a valid access token,
+Authentication gates the writes, `updateHandle`, and the three session routes that need it — the
+five record/blob writes, `updateHandle` and `getSession` require a valid access token,
 `refreshSession`/`deleteSession` require a valid refresh token, and
 `createSession` is the public login that issues both — while the eight reads,
 `resolveHandle`, and the two well-knowns stay public.
