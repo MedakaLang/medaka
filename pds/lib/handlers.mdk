@@ -94,10 +94,10 @@
    decide in full (a grapheme bound, or a record with no `$type`, see
    `lib.lexicon`) `"unknown"`.
 
-   Three choices are the implementing sprint's own and not yet confirmed:
-   validation applies when `validate` is unset, as in the reference; the wire
-   error name is `InvalidRequest`; and a verdict that is neither valid nor
-   invalid is reported `"unknown"`.
+   Three choices were confirmed by Val (2026-09-29): validation applies when
+   `validate` is unset, as in the reference; the wire error name is
+   `InvalidRequest`; and a verdict that is neither valid nor invalid is
+   reported `"unknown"`.
 
    One difference from the reference is deliberate: a collection outside the
    twenty the reference knows is stored and reported `"unknown"` under
