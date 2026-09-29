@@ -103,9 +103,13 @@ export
 persistHasHead : String -> <FileRead> Bool
 persistHasHead dir = fileExists (headPath dir)
 
-{- | Persist a repository's head commit CID and its complete block graph beneath
-   `dir`. The blocks are written first: the head is the last thing to move, so it
-   never names a graph that is not yet on disk.
+{- | Persist a repository's head commit CID beneath `dir`, with every block of
+   the graph that head reaches which `dir` does not already hold. `blocks` may
+   be the whole graph, or only what it adds to a graph already persisted here:
+   a block's name is its content and nothing removes one, so a block on disk
+   is already the block the head needs. The blocks are written first: the head
+   is the last thing to move, so it never names a graph that is not yet on
+   disk.
 
    The head's closing barrier on `dir` publishes only its own `rename`: a
    `blocks/` that `blockFileWrite` had to create was barriered into `dir` when

@@ -19,8 +19,9 @@
    - every file is written at the mode it owes;
    - every promote and every directory creation is barriered, read from the
      syscall order under `strace`;
-   - one upload writes its own blob and nothing else, and a re-declared MIME
-     type still reaches the disk.
+   - one upload writes its own blob and nothing else, one commit writes the
+     blocks it adds and nothing else, and a re-declared MIME type still
+     reaches the disk.
 
    None of the crash states races a process kill. Every write path promotes
    with `rename`, so the states a crash can leave are a finite set with fixed
@@ -1421,14 +1422,14 @@ test "barriers: every promote and every created directory is barriered, and the 
     Ok (0, _, _) => traceAll bin scratch
     _ => straceMissing)
 
--- # What one upload costs the disk
+-- # What one write costs the disk
 
--- `path inode size ctime` for every regular file under `dir/blobs`, sorted.
--- Both halves of a promote produce a new inode, so a blob rewritten over
--- itself moves its stamp exactly as a blob written for the first time does.
-blobStamps : String -> <Exec, FileRead> Result String (List String)
-blobStamps dir = do
-  files <- filesUnder (joinPath dir "blobs")
+-- `path inode size ctime` for every regular file under `dir/area`, sorted.
+-- Both halves of a promote produce a new inode, so a file rewritten over
+-- itself moves its stamp exactly as a file written for the first time does.
+areaStamps : String -> String -> <Exec, FileRead> Result String (List String)
+areaStamps area dir = do
+  files <- filesUnder (joinPath dir area)
   out <- match spawn runSeconds [] "stat" (["-c", "%n %i %s %Z"] ++ files)
     Ok (0, gnu, "") => Ok gnu
     _ =>
@@ -1451,7 +1452,7 @@ test "cost: the hundredth upload writes its own blob and sidecar, and no other b
       "BLOB-CHURN-SEED: PASS"
       seed
       "the churn seed route did not pass"
-    before <- blobStamps dir
+    before <- areaStamps "blobs" dir
     () <- require
       (length before == 198)
       "the seed left \{intToString (length before)} blob files, not the 198 that 99 blobs and their sidecars are"
@@ -1460,7 +1461,7 @@ test "cost: the hundredth upload writes its own blob and sidecar, and no other b
       "BLOB-CHURN-ADD: PASS"
       add
       "the churn add route did not pass"
-    after <- blobStamps dir
+    after <- areaStamps "blobs" dir
     () <- require
       (length after == 200)
       "the account holds \{intToString (length after)} blob files after the hundredth upload, not 200"
@@ -1486,6 +1487,57 @@ test "cost: the hundredth upload writes its own blob and sidecar, and no other b
     require
       (writtenBytes < blobSize * 3)
       "the hundredth upload wrote \{intToString writtenBytes} bytes for a blob of \{intToString blobSize}")
+
+-- The path a stamp line names.
+stampPath : String -> String
+stampPath line = match words line
+  path :: _ => path
+  [] => line
+
+{- | The block area is stamped either side of one record written into a
+   repository of a hundred and two, and no block file the repository already
+   held may have moved: only the blocks that commit adds are owed, which are
+   its commit, its record and the MST nodes on the path to it (#3596). A
+   persist of the whole graph promotes every block file over itself onto a
+   fresh inode, so every stamp would move. The repository is then reloaded by
+   a separate process, which refuses a head whose graph is not wholly on
+   disk. -}
+test "cost: one commit writes the blocks it adds, and no block the repository already held" = inScratch
+  (bin scratch => do
+    let dir = joinPath scratch "blockchurn"
+    () <- makeDir dir
+    seed <- runRoute bin "block-churn-seed" dir
+    () <- requireLast
+      "BLOCK-CHURN-SEED: PASS"
+      seed
+      "the block churn seed route did not pass"
+    before <- areaStamps "blocks" dir
+    () <- require
+      (length before > 100)
+      "the seed left \{intToString (length before)} block files, fewer than its hundred and two records"
+    add <- runRoute bin "block-churn-add" dir
+    () <- requireLast
+      "BLOCK-CHURN-ADD: PASS"
+      add
+      "the block churn add route did not pass"
+    after <- areaStamps "blocks" dir
+    let held = map stampPath before
+    let moved = filter (l => not (elem l before)) after
+    let rewritten = filter (l => elem (stampPath l) held) moved
+    () <- require
+      (rewritten == [])
+      "one commit rewrote \{intToString (length rewritten)} of the \{intToString (length before)} block files the repository already held:\n\{join "\n" rewritten}"
+    () <- require
+      (length moved >= 2 && length moved <= 8)
+      "one commit wrote \{intToString (length moved)} new block files; its commit, its record and one MST path are owed:\n\{join "\n" moved}"
+    load <- runRoute bin "load" dir
+    () <- requireLast
+      "LOAD: PASS"
+      load
+      "the repository did not reload after one commit"
+    require
+      (tagged "LOAD head " load == tagged "BLOCK-CHURN-ADD head " add)
+      "the reloaded head is not the commit the add route persisted")
 
 {- | The one blob-half change a block count cannot see: bytes the account
    already holds, uploaded again by a separate process under a different

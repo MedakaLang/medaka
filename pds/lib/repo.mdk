@@ -24,7 +24,9 @@ import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.mst.{
   Mst,
   MstRangeQuery,
+  mstCreatedNodes,
   mstDelete,
+  mstDiff,
   mstEmpty,
   mstEntries,
   mstFromBlocks,
@@ -775,6 +777,27 @@ export
 repoExportBlocks : Repo -> Result String (List (Cid, Bytes))
 repoExportBlocks (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _)) =
   map fst (repoExportGraph commitCid signed (mstRootCid tree) store)
+
+{- | The blocks of `after`'s graph that `before`'s graph does not hold: the
+   commit block, the MST nodes `mstCreatedNodes` finds, and the record block
+   of every path `mstDiff` reports written. Without a `before` it is the whole
+   graph, `repoExportBlocks`.
+
+   Every block `after` reaches and this leaves out is CID-equal to a block
+   `before` reaches: a node the diff skipped met an equal node in `before`, and
+   a record under a path whose CID did not move is the record `before` named
+   there. The converse is not promised, so a block `before` also reaches may
+   still be listed. A caller that already holds every block of `before`'s
+   graph therefore holds all of `after`'s once it has these, at a cost that
+   follows the nodes the two trees do not share rather than the repository. -}
+export
+repoAddedBlocks : Option Repo -> Repo -> Result String (List (Cid, Bytes))
+repoAddedBlocks None after = repoExportBlocks after
+repoAddedBlocks (Some (Repo _ _ _ priorTree _ _)) (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _)) =
+  do
+    let (writes, _) = mstDiff priorTree tree
+    records <- recordBlocks (map ((_, cid, _) => cid) writes) store []
+    Ok ((commitCid, signed) :: mstCreatedNodes priorTree tree ++ records)
 
 -- ── verifying a signed commit ───────────────────────────────────────────────
 
