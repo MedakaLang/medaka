@@ -23,6 +23,32 @@
 # `ProtectSystem=strict` already makes every other path read-only by
 # default, so this entry exists to say the read is intentional rather than
 # to grant it.
+#
+# RestrictAddressFamilies, SystemCallFilter and OOMPolicy below are derived
+# from what the process was measured doing, so a change to what `pdsd` opens
+# or calls has to be re-measured against them. Boot a freshly built `pdsd`
+# as a throwaway transient unit carrying this file's [Service] sandbox, from
+# a `mktemp -d` $DIR outside /tmp, /var/tmp, /root and /home (the sandbox
+# hides all four) with `data/` and the secrets owned by the unit's user, on
+# `--port 0`, and drive every path the
+# live service reaches through it: a request, a proxied call to a local stub
+# on `--egress-port`, a `subscribeRepos` frame, a login and a record write,
+# a burst of a few hundred large-bodied requests, and `systemctl stop` for
+# the drain. Then remove one syscall group and check that the same boot now
+# fails. Never point it at the live unit, data directory or ports:
+#   systemd-run --unit=sprint-annbin-perimeter --collect \
+#     -p User=nobody -p Group=nogroup -p ReadWritePaths=$DIR/data \
+#     -p NoNewPrivileges=true -p ProtectSystem=strict -p ProtectHome=true \
+#     -p PrivateDevices=true -p PrivateTmp=true -p CapabilityBoundingSet= \
+#     -p UMask=0077 -p LimitCORE=0 -p IPAddressDeny=any \
+#     -p IPAddressAllow=localhost -p MemoryMax=512M -p TasksMax=256 \
+#     -p LimitNOFILE=65536 -p CPUWeight=20 -p Environment=GC_MARKERS=1 \
+#     -p RestrictAddressFamilies=AF_INET \
+#     -p SystemCallFilter=@system-service \
+#     -p 'SystemCallFilter=~@privileged @resources' \
+#     -p SystemCallErrorNumber=EPERM -p OOMPolicy=kill \
+#     $DIR/pdsd --did ... --key $DIR/key.hex --data $DIR/data --port 0 \
+#     --init --trusted-proxy --appview-did ... --egress-port $STUB_PORT
 
 [Unit]
 Description=Medaka atproto PDS
@@ -68,6 +94,28 @@ UMask=0077
 LimitCORE=0
 IPAddressDeny=any
 IPAddressAllow=localhost
+# IPv4 sockets only. The listener binds 127.0.0.1, the egress proxy is
+# dialled at the literal 127.0.0.1 (`egressAddress`, pds/shell/egress.mdk),
+# no name is ever resolved, and stdout reaches the journal on a descriptor
+# systemd hands in, so the process opens no AF_UNIX or AF_INET6 socket.
+RestrictAddressFamilies=AF_INET
+# Every system call the exercise above reached (threads, the GC's
+# SIGPWR/SIGXCPU stop-the-world signals, mmap/mprotect/madvise, fsync and
+# rename for the store, getrandom for keys and tokens) is inside
+# @system-service, and none is in @privileged or @resources. EPERM rather
+# than the default SIGSYS kill: a call on a path the exercise never reached
+# then fails as an error the process reports for that one request, instead
+# of killing every open connection with it.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+# An OOM kill against MemoryMax is a designed event. `kill` has the kernel
+# take the whole cgroup at once (memory.oom.group), so nothing is left to
+# drain against a heap at its ceiling, and the unit's result is `oom-kill`:
+# on systemd 257 that is a failure, so Restart=on-failure restarts it and
+# OnFailure= is triggered. `continue` would leave any survivor of the kill
+# running as though the unit were healthy.
+OOMPolicy=kill
 MemoryMax=512M
 TasksMax=256
 LimitNOFILE=65536
