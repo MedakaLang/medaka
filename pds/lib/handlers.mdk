@@ -133,7 +133,7 @@ import lib.cid.{
 }
 import lib.dagcbor.{DagCbor, dagCborEncode}
 import lib.did_key.{didKeyMultibase}
-import lib.lexicon.{recordValidationStatus, validateRecord}
+import lib.lexicon.{prepareRefusal, recordValidationStatus, validateRecord}
 import lib.lexicon_schemas.{knownLexicons}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 import lib.mst.{MstRangeQuery(..), mstCoveringProofBlocks}
@@ -441,9 +441,13 @@ admitValidateFlag body = match get "validate" body
 
 {- | The `validationStatus` a write reports, or the refusal its record gets:
    `lib.lexicon`'s verdict on the record written to `collection` under
-   `rkey`, or `"unknown"` when grading was skipped. -}
+   `rkey`, or `"unknown"` when grading was skipped. Skipping grading does not
+   skip `prepareRefusal`, which the reference applies to every write. -}
 recordStatus : Validation -> String -> String -> Json -> Result Response String
-recordStatus Ungraded _ _ _ = Ok "unknown"
+recordStatus Ungraded collection _ record =
+  match prepareRefusal collection record
+    Some message => Err (invalidRequest message)
+    None => Ok "unknown"
 recordStatus Graded collection rkey record =
   mapErr
     invalidRequest

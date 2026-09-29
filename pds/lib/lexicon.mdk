@@ -34,10 +34,10 @@
 
    Known differences from the reference, each a case no conforming client
    writes:
-     - a record without `$type` is judged as its collection's and, if that
-       passes, is `LexUndecided`: the reference first adds the field, which
-       changes the stored bytes and the CID, and this server stores the
-       record as given, so it is never called valid;
+     - a record without `$type` is stored as given and, if it passes as its
+       collection's, is `LexUndecided`, never valid: the reference adds the
+       field first, but injecting it here would change the stored bytes and
+       the CID, and the official app always sends `$type`;
      - a `$link` spelled in base36 is read as an ordinary object;
      - a CID whose varints are not minimal is refused;
      - a `$bytes` string carrying whitespace is refused. -}
@@ -178,9 +178,7 @@ recordValidationStatus (LexInvalid message) = Err message
 export
 validateRecord : Lexicons -> String -> String -> Json -> LexVerdict
 validateRecord lex collection rkey record =
-  if hasProtoKey record then
-    LexInvalid "Invalid key: __proto__"
-  else match recordTypeMismatch collection record
+  match prepareRefusal collection record
     Some message => LexInvalid message
     None => match lookupDef lex "\{collection}#main"
       Some (LexRecordDef key shape) => match checkKey key rkey
@@ -193,6 +191,18 @@ validateRecord lex collection rkey record =
           Open message => LexUndecided message
           Fail message => LexInvalid "Invalid \{collection} record: \{message}"
       _ => LexNoSchema
+
+{- | The refusal the reference's `prepareWrite` gives `record` written to
+   `collection` before any schema is consulted, or `None`. It applies whether
+   or not the write asked for validation: a `__proto__` key anywhere, then a
+   `$type` naming another collection. -}
+export
+prepareRefusal : String -> Json -> Option String
+prepareRefusal collection record =
+  if hasProtoKey record then
+    Some "Invalid key: __proto__"
+  else
+    recordTypeMismatch collection record
 
 recordTypeMismatch : String -> Json -> Option String
 recordTypeMismatch collection record = match get "$type" record
