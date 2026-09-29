@@ -1,5 +1,5 @@
 # META
-source_lines=51126
+source_lines=51130
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -1677,7 +1677,7 @@ effectParamMsg label why = "Invalid effect parameter on <\{label}>: \{why}"
 -- for a top-level Prefix param, `<axis> pattern` for a product axis).
 prefixPatternErrMsg : String -> String
 prefixPatternErrMsg noun =
-  "\{noun} is empty; name the element, or write \"*\" for every one"
+  "\{noun} is empty; name the element (the whole domain is the bare label, with no parameter)"
 
 -- validate every written effect param in a program's type annotations against
 -- the registry: a Prefix label's pattern must pass prefixPatternOk; an atomic
@@ -2992,13 +2992,17 @@ checkWrittenElementCap (a :: rest) =
 writtenElement : Param -> EffAtomTy -> List Param
 writtenElement top a = match a.eatParam
   EPName _ => []
-  EPProduct axes if axisNamesArgument axes => []
+  EPProduct axes if axisNamesArgument axes => [
+    writtenParam
+      top
+      (EPProduct (filterList (ax => not (isEPName (snd ax))) axes)),
+  ]
   p => [writtenParam top p]
 
 -- A written parameter must be an element of its label's domain: a Prefix
--- label takes one non-empty pattern or exact element, a Set label takes a set or a single
--- member, a Product label takes its axes or a bare host pattern, and an
--- atomic label takes nothing.  A named authority is checked at its binder.
+-- label takes one non-empty pattern or exact element, a Set label takes a
+-- set or a single member, a Product label takes its axes or a bare host
+-- pattern, and an atomic label takes nothing.  A named authority is checked at its binder.
 -- The rule is `effectParamProblems`; this reports each problem at the atom.
 checkOneEffectParam : String -> Param -> EffParamTy -> Unit
 checkOneEffectParam l top p =
@@ -51406,7 +51410,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "effectParamMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "effectParamMsg" ((PVar "label") (PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Invalid effect parameter on <")) (EApp (EVar "display") (EVar "label"))) (ELit (LString ">: "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString ""))))
 (DTypeSig false "prefixPatternErrMsg" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "prefixPatternErrMsg" ((PVar "noun")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "noun"))) (ELit (LString " is empty; name the element, or write \"*\" for every one"))))
+(DFunDef false "prefixPatternErrMsg" ((PVar "noun")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "noun"))) (ELit (LString " is empty; name the element (the whole domain is the bare label, with no parameter)"))))
 (DTypeSig false "checkEffectParams" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "checkEffectParams" ((PList)) (ELit LUnit))
 (DFunDef false "checkEffectParams" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectParamsDecl") (EVar "d"))) (DoExpr (EApp (EVar "checkEffectParams") (EVar "rest")))))
@@ -51676,7 +51680,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkWrittenElementCap" ((PList)) (ELit LUnit))
 (DFunDef false "checkWrittenElementCap" ((PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "l") (EApp (EApp (EVar "EffLabel") (EFieldAccess (EVar "a") "eatLabel")) (EFieldAccess (EVar "a") "eatOrigin"))) (DoLet false true (PVar "onLabel") (ELam ((PVar "b")) (EBinOp "==" (EApp (EVar "labelKey") (EApp (EApp (EVar "EffLabel") (EFieldAccess (EVar "b") "eatLabel")) (EFieldAccess (EVar "b") "eatOrigin"))) (EApp (EVar "labelKey") (EVar "l"))))) (DoLet false false (PVar "same") (EApp (EApp (EVar "filterList") (EVar "onLabel")) (EVar "rest"))) (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "onLabel") (EVar "b"))))) (EVar "rest"))) (DoLet false false (PVar "top") (EApp (EVar "dtopFor") (EVar "l"))) (DoLet false false PWild (EMatch (EApp (EVar "writtenSetProblem") (EApp (EApp (EVar "flatMap") (EApp (EVar "writtenElement") (EVar "top"))) (EBinOp "::" (EVar "a") (EVar "same")))) (arm (PCon "Some" (PVar "why")) () (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentLoc"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EApp (EVar "orElseLoc") (EFieldAccess (EVar "a") "eatLoc")) (EVar "saved")))) (DoExpr (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EFieldAccess (EVar "a") "eatLabel")) (EVar "why")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "saved"))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EVar "checkWrittenElementCap") (EVar "others")))))
 (DTypeSig false "writtenElement" (TyFun (TyCon "Param") (TyFun (TyCon "EffAtomTy") (TyApp (TyCon "List") (TyCon "Param")))))
-(DFunDef false "writtenElement" ((PVar "top") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" PWild) () (EListLit)) (arm (PCon "EPProduct" (PVar "axes")) ((GBool (EApp (EVar "axisNamesArgument") (EVar "axes")))) (EListLit)) (arm (PVar "p") () (EListLit (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "p"))))))
+(DFunDef false "writtenElement" ((PVar "top") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" PWild) () (EListLit)) (arm (PCon "EPProduct" (PVar "axes")) ((GBool (EApp (EVar "axisNamesArgument") (EVar "axes")))) (EListLit (EApp (EApp (EVar "writtenParam") (EVar "top")) (EApp (EVar "EPProduct") (EApp (EApp (EVar "filterList") (ELam ((PVar "ax")) (EApp (EVar "not") (EApp (EVar "isEPName") (EApp (EVar "snd") (EVar "ax")))))) (EVar "axes")))))) (arm (PVar "p") () (EListLit (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "p"))))))
 (DTypeSig false "checkOneEffectParam" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyFun (TyCon "EffParamTy") (TyCon "Unit")))))
 (DFunDef false "checkOneEffectParam" ((PVar "l") (PVar "top") (PVar "p")) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "m")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (EVar "m"))))) (ELit LUnit)) (EApp (EApp (EApp (EVar "effectParamProblems") (EVar "l")) (EVar "top")) (EVar "p"))))
 (DTypeSig true "effectParamProblems" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyFun (TyCon "EffParamTy") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -59648,7 +59652,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "effectParamMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "effectParamMsg" ((PVar "label") (PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Invalid effect parameter on <")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString ">: "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString ""))))
 (DTypeSig false "prefixPatternErrMsg" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "prefixPatternErrMsg" ((PVar "noun")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "noun"))) (ELit (LString " is empty; name the element, or write \"*\" for every one"))))
+(DFunDef false "prefixPatternErrMsg" ((PVar "noun")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "noun"))) (ELit (LString " is empty; name the element (the whole domain is the bare label, with no parameter)"))))
 (DTypeSig false "checkEffectParams" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "checkEffectParams" ((PList)) (ELit LUnit))
 (DFunDef false "checkEffectParams" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectParamsDecl") (EVar "d"))) (DoExpr (EApp (EVar "checkEffectParams") (EVar "rest")))))
@@ -59918,7 +59922,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkWrittenElementCap" ((PList)) (ELit LUnit))
 (DFunDef false "checkWrittenElementCap" ((PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "l") (EApp (EApp (EVar "EffLabel") (EFieldAccess (EVar "a") "eatLabel")) (EFieldAccess (EVar "a") "eatOrigin"))) (DoLet false true (PVar "onLabel") (ELam ((PVar "b")) (EBinOp "==" (EApp (EVar "labelKey") (EApp (EApp (EVar "EffLabel") (EFieldAccess (EVar "b") "eatLabel")) (EFieldAccess (EVar "b") "eatOrigin"))) (EApp (EVar "labelKey") (EVar "l"))))) (DoLet false false (PVar "same") (EApp (EApp (EVar "filterList") (EVar "onLabel")) (EVar "rest"))) (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "onLabel") (EVar "b"))))) (EVar "rest"))) (DoLet false false (PVar "top") (EApp (EVar "dtopFor") (EVar "l"))) (DoLet false false PWild (EMatch (EApp (EVar "writtenSetProblem") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "writtenElement") (EVar "top"))) (EBinOp "::" (EVar "a") (EVar "same")))) (arm (PCon "Some" (PVar "why")) () (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentLoc"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EApp (EVar "orElseLoc") (EFieldAccess (EVar "a") "eatLoc")) (EVar "saved")))) (DoExpr (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EFieldAccess (EVar "a") "eatLabel")) (EVar "why")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "saved"))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EVar "checkWrittenElementCap") (EVar "others")))))
 (DTypeSig false "writtenElement" (TyFun (TyCon "Param") (TyFun (TyCon "EffAtomTy") (TyApp (TyCon "List") (TyCon "Param")))))
-(DFunDef false "writtenElement" ((PVar "top") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" PWild) () (EListLit)) (arm (PCon "EPProduct" (PVar "axes")) ((GBool (EApp (EVar "axisNamesArgument") (EVar "axes")))) (EListLit)) (arm (PVar "p") () (EListLit (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "p"))))))
+(DFunDef false "writtenElement" ((PVar "top") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" PWild) () (EListLit)) (arm (PCon "EPProduct" (PVar "axes")) ((GBool (EApp (EVar "axisNamesArgument") (EVar "axes")))) (EListLit (EApp (EApp (EVar "writtenParam") (EVar "top")) (EApp (EVar "EPProduct") (EApp (EApp (EVar "filterList") (ELam ((PVar "ax")) (EApp (EVar "not") (EApp (EVar "isEPName") (EApp (EVar "snd") (EVar "ax")))))) (EVar "axes")))))) (arm (PVar "p") () (EListLit (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "p"))))))
 (DTypeSig false "checkOneEffectParam" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyFun (TyCon "EffParamTy") (TyCon "Unit")))))
 (DFunDef false "checkOneEffectParam" ((PVar "l") (PVar "top") (PVar "p")) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "m")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (EVar "m"))))) (ELit LUnit)) (EApp (EApp (EApp (EVar "effectParamProblems") (EVar "l")) (EVar "top")) (EVar "p"))))
 (DTypeSig true "effectParamProblems" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyFun (TyCon "EffParamTy") (TyApp (TyCon "List") (TyCon "String"))))))

@@ -91,6 +91,7 @@ FileRead = "notes.txt"
 
 $ medaka check-policy notes.mdk --allow FileRead=notes.txt --fn countNotes
 accepted. countNotes requires only <FileRead "notes.txt">
+   no sample run: 'countNotes' is not a String -> String entry
 ```
 
 ## Named arguments
@@ -312,8 +313,13 @@ main = putStrLn "\{fetchApi ()}"
 200
 ```
 
-`<Http host>` is the same as `<Http Host=host>`, and an axis a row does not
-mention is the whole of that axis. A written product may pin several:
+`<Http host>` lifts the argument into the primary axis, so it reads as
+`<Http Host=host>` when `host` is used at this label alone. The two spellings
+are not interchangeable when the same binder is also used at another label:
+`<Http Host=host, FileRead host>` is accepted, while `<Http host, FileRead host>`
+is refused ("used at labels from different domains"), because a whole-parameter
+binder ranges over the product and an axis binder over the axis. An axis a row
+does not mention is the whole of that axis. A written product may pin several:
 `<Http Host="api.example.com/*" Method={"GET"}>`. Comparison is pointwise, so a
 row that says nothing about `Method` does not fit a bound that restricts it.
 

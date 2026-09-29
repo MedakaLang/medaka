@@ -1,0 +1,4 @@
+-- A named-argument String entry keeps its sample run.
+-- lint-disable-file rule-dead-code
+transform : (s : String) -> <FileRead s> String
+transform s = s ++ "!"

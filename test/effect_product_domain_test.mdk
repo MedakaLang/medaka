@@ -146,3 +146,10 @@ test "check-policy refuses an undeclared axis" = expectVerbExitStartsWithAndCont
   1
   "rejected"
   ["unknown product axis 'Verb'"]
+
+test "a 16-member Set axis beside an axis binder is accepted" =
+  expectCheckAccept (fixture "prod_binder_set16_accept.mdk")
+
+test "a 17-member Set axis beside an axis binder is refused" = expectCheckReject
+  (fixture "prod_binder_set17_reject.mdk")
+  ["a set holds at most 16 members, and this one has 17"]

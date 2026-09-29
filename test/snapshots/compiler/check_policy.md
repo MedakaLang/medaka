@@ -1,5 +1,5 @@
 # META
-source_lines=898
+source_lines=900
 stages=DESUGAR,MARK
 # SOURCE
 import types.effect_domain.{canonParam, drender, isSubTop, Param(..)}
@@ -687,6 +687,8 @@ takesAndReturnsString (Forall _ _ _ _ _ mono) = match normalize mono
 
 isStringCon : Mono -> Bool
 isStringCon (TCon "String" _) = True
+-- A named argument's type is `String @κ`; the qualifier erases before runtime.
+isStringCon (TQual t _) = isStringCon (normalize t)
 isStringCon _ = False
 
 firstOf : List String -> String
@@ -1081,6 +1083,7 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "takesAndReturnsString" ((PCon "Forall" PWild PWild PWild PWild PWild (PVar "mono"))) (EMatch (EApp (EVar "normalize") (EVar "mono")) (arm (PCon "TFun" (PVar "arg") PWild (PVar "res")) () (EBinOp "&&" (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "arg"))) (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "res"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "isStringCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "isStringCon" ((PCon "TCon" (PLit (LString "String")) PWild)) (EVar "True"))
+(DFunDef false "isStringCon" ((PCon "TQual" (PVar "t") PWild)) (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "t"))))
 (DFunDef false "isStringCon" (PWild) (EVar "False"))
 (DTypeSig false "firstOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOf" ((PList)) (ELit (LString "")))
@@ -1313,6 +1316,7 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "takesAndReturnsString" ((PCon "Forall" PWild PWild PWild PWild PWild (PVar "mono"))) (EMatch (EApp (EVar "normalize") (EVar "mono")) (arm (PCon "TFun" (PVar "arg") PWild (PVar "res")) () (EBinOp "&&" (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "arg"))) (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "res"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "isStringCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "isStringCon" ((PCon "TCon" (PLit (LString "String")) PWild)) (EVar "True"))
+(DFunDef false "isStringCon" ((PCon "TQual" (PVar "t") PWild)) (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "t"))))
 (DFunDef false "isStringCon" (PWild) (EVar "False"))
 (DTypeSig false "firstOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOf" ((PList)) (ELit (LString "")))
