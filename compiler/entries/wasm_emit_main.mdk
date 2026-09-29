@@ -35,7 +35,7 @@ main = match args ()
   _ =>
     ePutStrLn "usage: medaka run compiler/entries/wasm_emit_main.mdk <file.mdk>"
 
--- No elaboration runs here, so each file extern is granted the whole domain.
+-- Unelaborated, so file externs take the whole domain (see llvm_emit_main).
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok targetSrc =>

@@ -587,7 +587,7 @@ stubSource = stringConcat
 
 -- Run `fn` on the sample request "X-Forwarded-For: 192.168.1.1" with stub
 -- platform impls, returning the captured stdout (LOG lines) ++ the transform
--- line.  Mirror the OCaml accept-path eval block.  An entry whose type
+-- line.  An entry whose type
 -- quantifies authorities first takes one grant per authority
 -- (EFFECTS-SEMANTICS §8); the sample run grants each the whole domain.
 runPlugin : String -> Int -> ElabResult -> String

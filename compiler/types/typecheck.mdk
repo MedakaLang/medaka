@@ -15863,6 +15863,7 @@ wholeDomainExpr (EVar n) = match omLookup n fileGrantExterns
 wholeDomainExpr e = mapChildren wholeDomainExpr e
 
 -- Apply [f] once to the root of every expression a declaration holds.
+export
 mapDeclBodies : (Expr -> Expr) -> Decl -> Decl
 mapDeclBodies f (DFunDef pub n ps e) = DFunDef pub n ps (f e)
 mapDeclBodies f (DLetGroup pub binds) =
@@ -33016,10 +33017,12 @@ topAbsorbs : String -> Expr -> Expr
 topAbsorbs param join =
   EMatch (EVar param) [Arm (PList []) [] (EListLit []), Arm PWild [] join]
 
+-- A recursive use forwards its enclosing binder's parameters; one whose binder is
+-- not found is the empty authority, as in `grantTerm`.
 grantIdTerm : List GrantBinder -> Int -> Expr
 grantIdTerm chain i = match grantParamFor chain i
   Some p => EVar p
-  None => EListLit []
+  None => bottomGrant
 
 -- The parameter of the innermost enclosing binder that quantifies authority [i].
 grantParamFor : List GrantBinder -> Int -> Option String

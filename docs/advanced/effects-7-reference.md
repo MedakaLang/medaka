@@ -79,8 +79,27 @@ The first words of each message, and where the rule behind it is explained.
 ## Open edges
 
 These are the places where the current compiler does not yet express something
-the design intends, or where it is stricter than it needs to be. Each has an
-issue; the number is the thing to search for.
+the design intends, where it is stricter than it needs to be, or where a
+guarantee stops short. Where an issue is filed, its number is the thing to
+search for.
+
+- **File confinement checks a path, then uses it.** The runtime resolves the
+  path to check it, and the operating system resolves it again to open it. A
+  symlink swapped inside the granted tree between the two can escape it.
+  Closing this needs resolution beneath the granted directory (`openat` with
+  `O_NOFOLLOW`, or `openat2`). [#3564](https://github.com/MedakaLang/medaka/issues/3564)
+- **A wasm build cannot confine a file operation.** Its host reads the path
+  alone, so `medaka build --target wasm` refuses a file call whose grant is
+  narrower than the whole domain, unless its path is a string literal the grant
+  names exactly. A call through `io.readLines` or `fs.*` is refused even under
+  a whole-domain caller, since the wrapper passes on a grant it cannot prove.
+- **An opened existential or an instance head's index grants the whole
+  domain.** Neither has a caller to supply an authority. The declaration that
+  reaches one is held to its declared row, which is the bound, rather than the
+  value's index.
+- **`Net` authority is a string.** A `Net` bound confines the strings a program
+  passes. A host part such as `a.com/../x`, a percent-encoded byte, or a `.`
+  segment is not normalized, and the socket externs receive no grant.
 
 - **A qualified result cannot return a literal its qualifier admits.** A
   return is checked by its type, not by the literal's authority.

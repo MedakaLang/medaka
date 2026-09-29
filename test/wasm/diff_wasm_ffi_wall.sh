@@ -16,7 +16,10 @@
 # this gate needs only the wasm_emit_modules_main oracle binary (`sh
 # test/wasm/build_wasm_oracle.sh --modules-only`), not the full wasm toolchain.
 #
-# Exit: 0 if all three shapes wall with the expected message; 1 on any divergence;
+# The file-grant cases at the bottom are the same kind of wall: a file operation
+# the wasm host cannot confine is refused with a located message.
+#
+# Exit: 0 if every shape walls (or builds) as expected; 1 on any divergence;
 # 2 if the oracle binary isn't built (toolchain-skip, mirroring the other wasm
 # gates' opt-in-skip convention).
 set -u
@@ -93,8 +96,64 @@ main : <FFI> Int
 main = (useIt ()) ()' \
   "gNullary"
 
+# ── The file-grant wall (EFFECTS-SEMANTICS §7) ──────────────────────────────
+# The wasm host reads a path with no granted authority beside it, so a file
+# operation is built only when the host needs no check: its grant is the whole
+# domain, or its path is a string literal the grant names exactly
+# (`wasmGrantConfined`, compiler/backend/wasm_emit.mdk).  Any other grant is a
+# located compile-time error, never an unconfined read.
+check_grant() {
+  name="$1"; src="$2"; want="$3"
+  f="$WORK/$name.mdk"
+  printf '%s\n' "$src" > "$f"
+  out="$(MEDAKA_WASM_EMITTER="$EMITBIN" "$MEDAKA" build --target wasm "$f" -o "$WORK/$name.out" 2>&1)"
+  st=$?
+  if [ -z "$want" ]; then
+    if [ "$st" -eq 0 ]; then echo "ok   $name"; else
+      echo "FAIL $name: expected a build, got exit $st:"
+      echo "$out" | sed 's/^/  /'
+      fail=1
+    fi
+  elif [ "$st" -ne 0 ] && printf '%s' "$out" | grep -qF "$want"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: expected exit != 0 and a message containing:"
+    echo "  $want"
+    echo "  got exit $st:"
+    echo "$out" | sed 's/^/  /'
+    fail=1
+  fi
+}
+
+check_grant "file_grant_pattern_refused" \
+'readCfg : String -> <FileRead "cfg/*"> Result String String
+readCfg name = readFile ("cfg/" ++ name)
+
+main = println (readCfg "../secret.txt")' \
+  "file_grant_pattern_refused.mdk:2:24: \`readFile\` is given the file grant [\"cfg/*\"], but a wasm build cannot confine a file operation to a grant"
+
+check_grant "file_grant_wrapper_refused" \
+'import io.{readLines}
+
+main = println (readLines "cfg/a.txt")' \
+  "io.mdk:75:42: \`readFile\` is given a file grant its caller supplies, but a wasm build cannot confine a file operation to a grant"
+
+check_grant "file_grant_literal_element_built" \
+'readData : Unit -> <FileRead "data.txt"> Result String String
+readData _ = readFile "data.txt"
+
+main = println (readData ())' \
+  ""
+
+check_grant "file_grant_whole_domain_built" \
+'readAny : String -> <FileRead> Result String String
+readAny p = readFile p
+
+main = println (readAny "data.txt")' \
+  ""
+
 if [ "$fail" -eq 0 ]; then
-  echo "3 ok, 0 failing"
+  echo "7 ok, 0 failing"
   exit 0
 else
   echo "diff_wasm_ffi_wall: FAILURES ABOVE"

@@ -2818,9 +2818,18 @@ joinComponents absolute cs =
 appendComponent : String -> String -> String
 appendComponent dir name = if dir == "/" then "/" ++ name else "\{dir}/\{name}"
 
--- realpath(3) of a path when every component resolves.
+-- realpath(3) of a path, or None when realpath fails, which is when
+-- `mdk_canon_path` (runtime/medaka_rt.c) finds no canonical form.
+-- `canonicalizePath` returns its input unchanged on failure, so the input is
+-- given a form no resolved path has: a relative path is not absolute, and an
+-- absolute one is prefixed with `/.`, which realpath removes.
 resolvePath : String -> <FileRead | e> Option String
-resolvePath p = if fileExists p then Some (canonicalizePath p) else None
+resolvePath p =
+  if fileExists p then
+    let r = canonicalizePath (if startsWith "/" p then "/." ++ p else p)
+    if startsWith "/" r && not (startsWith "/./" r) then Some r else None
+  else
+    None
 
 -- The canonical form of a path, or None when it has none.  In entry mode the
 -- last component is appended to its directory's canonical form unresolved.

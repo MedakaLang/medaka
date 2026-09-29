@@ -262,14 +262,18 @@ wallTimeSec	wasm	WASM-GAP	real gettimeofday FFI in llvm (isPerfExtern), no wasm 
 # Confinement is unsupported on wasm, and no row can say so: the five file
 # externs wasm does port (readFile, fileExists, canonicalizePath, readFileBytes,
 # writeFileBytes) are implemented, so a row here would read as an accidental
-# fix.  Each takes the grant its call is given and does not emit it, because
-# the host import carries only the path (`mdk_path_push`) and has no channel
-# for the granted elements, so a wasm host cannot refuse a path outside them
-# (EFFECTS-SEMANTICS §7).  The browser playground's host has no file system at
-# all (every file import is a capability error), which is where this matters
-# least; test/wasm/run.js reads the host file system unconfined.  The
-# confinement fixtures (test/native_fixtures/confinement/) therefore run under
-# `medaka run` and a native build only.
+# fix.  The host import carries only the path (`mdk_path_push`) and has no
+# channel for the granted elements, so a wasm host cannot refuse a path outside
+# them (EFFECTS-SEMANTICS §7).  `medaka build --target wasm` therefore builds a
+# call only when no check is needed: its grant is the whole domain, or its path
+# is a string literal the grant names exactly (`wasmGrantConfined`,
+# compiler/backend/wasm_emit.mdk).  Any other call is a located compile-time
+# error, T-WASM-FILE-GRANT, including a call through a library wrapper that
+# forwards its caller's grant (`io.readLines`, `fs.isFile`, …), which is
+# refused even when that caller grants the whole domain.  Pinned by
+# test/wasm/diff_wasm_ffi_wall.sh.  The confinement fixtures
+# (test/native_fixtures/confinement/) run under `medaka run` and a native build
+# only.
 appendFile	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-fs seam
 executablePath	wasm	WASM-GAP	ported in llvm (isEnvExtern), not yet in wasm
 buildFingerprint	wasm	PERMANENT	build-provenance (issue #89 staleness guard) is meaningless in the WasmGC playground — there is no build-provenance object linked in and no host filesystem to re-hash compiler/ against; the compiler is only ever built via the LLVM backend, never wasm

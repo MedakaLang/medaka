@@ -278,8 +278,22 @@ not created yet: a new file under `cfg/` resolves through the part of its path
 that exists. A function that returns a `Result` answers with that `Err`;
 `fileExists` and `canonicalizePath`, which have no error to return, panic with the
 same message. The grant is also what the manifest records, so a host that trusts
-`cfg/*` from the manifest and the program that runs agree on what it means. A
-bare `<FileRead>` grants every path, and confines nothing.
+`cfg/*` from the manifest reads it as the program does. A bare `<FileRead>`
+grants every path, and confines nothing.
+
+The check has limits, each listed under "Open edges" in the
+[reference](effects-7-reference.md):
+
+- The runtime checks the path, and the operating system then opens it. A
+  symlink swapped inside `cfg/` between those two steps can reach a file
+  outside it.
+- A wasm build cannot check a path at all, so `medaka build --target wasm`
+  refuses a file call whose grant is narrower than the whole domain, unless
+  its path is a string literal the grant names exactly. That includes a call
+  through `io.readLines` or `fs.isFile`, which pass on their caller's grant.
+- An authority opened from an existential, and an instance head's index
+  inside a method body, are granted the whole domain. The declaration that
+  reaches them is held to its own row, so that row bounds them.
 
 ## Sets and products
 

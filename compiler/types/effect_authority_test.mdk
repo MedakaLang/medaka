@@ -1548,9 +1548,9 @@ test "an extension of an authority variable is the whole domain" = expectAll [
         ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load p\n")),
 ]
 
--- #3559: a named argument may write its domain, `(dir : String @Store)`, so a
--- helper that performs nothing can return a value at the argument's authority.
--- The domain belongs to the binder; the argument's type stays `String`.
+-- A named argument may write its domain, `(dir : String @Store)`, so a helper
+-- that performs nothing can return a value at the argument's authority. The
+-- domain belongs to the binder; the argument's type stays `String` (#3559).
 test "a binder's written domain gives a qualifier a domain and charges nothing" = expectAll
   [
     expectTrue

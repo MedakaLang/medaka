@@ -1,5 +1,5 @@
 # META
-source_lines=5065
+source_lines=5074
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -2822,9 +2822,18 @@ joinComponents absolute cs =
 appendComponent : String -> String -> String
 appendComponent dir name = if dir == "/" then "/" ++ name else "\{dir}/\{name}"
 
--- realpath(3) of a path when every component resolves.
+-- realpath(3) of a path, or None when realpath fails, which is when
+-- `mdk_canon_path` (runtime/medaka_rt.c) finds no canonical form.
+-- `canonicalizePath` returns its input unchanged on failure, so the input is
+-- given a form no resolved path has: a relative path is not absolute, and an
+-- absolute one is prefixed with `/.`, which realpath removes.
 resolvePath : String -> <FileRead | e> Option String
-resolvePath p = if fileExists p then Some (canonicalizePath p) else None
+resolvePath p =
+  if fileExists p then
+    let r = canonicalizePath (if startsWith "/" p then "/." ++ p else p)
+    if startsWith "/" r && not (startsWith "/./" r) then Some r else None
+  else
+    None
 
 -- The canonical form of a path, or None when it has none.  In entry mode the
 -- last component is appended to its directory's canonical form unresolved.
@@ -6064,7 +6073,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "appendComponent" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "appendComponent" ((PVar "dir") (PVar "name")) (EIf (EBinOp "==" (EVar "dir") (ELit (LString "/"))) (EBinOp "++" (ELit (LString "/")) (EVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))))
 (DTypeSig false "resolvePath" (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "resolvePath" ((PVar "p")) (EIf (EApp (EVar "fileExists") (EVar "p")) (EApp (EVar "Some") (EApp (EVar "canonicalizePath") (EVar "p"))) (EVar "None")))
+(DFunDef false "resolvePath" ((PVar "p")) (EIf (EApp (EVar "fileExists") (EVar "p")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "canonicalizePath") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "p")) (EBinOp "++" (ELit (LString "/.")) (EVar "p")) (EVar "p")))) (DoExpr (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "r")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "/./"))) (EVar "r")))) (EApp (EVar "Some") (EVar "r")) (EVar "None")))) (EVar "None")))
 (DTypeSig false "canonPath" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "canonPath" ((PVar "entry") (PVar "p")) (EIf (EBinOp "==" (EVar "p") (ELit (LString ""))) (EVar "None") (EBlock (DoLet false false (PVar "absolute") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "p"))) (DoLet false false (PVar "cs") (EApp (EVar "pathComponents") (EVar "p"))) (DoExpr (EMatch (EApp (EVar "reverseL") (EVar "cs")) (arm (PCons (PVar "final") (PVar "revInit")) () (EIf (EBinOp "&&" (EVar "entry") (EBinOp "/=" (EVar "final") (ELit (LString "..")))) (EApp (EApp (EVar "mapOption") (ELam ((PVar "d")) (EApp (EApp (EVar "appendComponent") (EVar "d")) (EVar "final")))) (EApp (EApp (EVar "canonPath") (EVar "False")) (EApp (EApp (EVar "joinComponents") (EVar "absolute")) (EApp (EVar "reverseL") (EVar "revInit"))))) (EApp (EApp (EApp (EVar "canonFrom") (EVar "absolute")) (EVar "cs")) (EApp (EVar "listLen") (EVar "cs"))))) (arm (PList) () (EApp (EApp (EApp (EVar "canonFrom") (EVar "absolute")) (EVar "cs")) (ELit (LInt 0)))))))))
 (DTypeSig false "canonFrom" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String")))))))
@@ -7750,7 +7759,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "appendComponent" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "appendComponent" ((PVar "dir") (PVar "name")) (EIf (EBinOp "==" (EVar "dir") (ELit (LString "/"))) (EBinOp "++" (ELit (LString "/")) (EVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))))
 (DTypeSig false "resolvePath" (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "resolvePath" ((PVar "p")) (EIf (EApp (EVar "fileExists") (EVar "p")) (EApp (EVar "Some") (EApp (EVar "canonicalizePath") (EVar "p"))) (EVar "None")))
+(DFunDef false "resolvePath" ((PVar "p")) (EIf (EApp (EVar "fileExists") (EVar "p")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "canonicalizePath") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "p")) (EBinOp "++" (ELit (LString "/.")) (EVar "p")) (EVar "p")))) (DoExpr (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "r")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "/./"))) (EVar "r")))) (EApp (EVar "Some") (EVar "r")) (EVar "None")))) (EVar "None")))
 (DTypeSig false "canonPath" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "canonPath" ((PVar "entry") (PVar "p")) (EIf (EBinOp "==" (EVar "p") (ELit (LString ""))) (EVar "None") (EBlock (DoLet false false (PVar "absolute") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "p"))) (DoLet false false (PVar "cs") (EApp (EVar "pathComponents") (EVar "p"))) (DoExpr (EMatch (EApp (EVar "reverseL") (EVar "cs")) (arm (PCons (PVar "final") (PVar "revInit")) () (EIf (EBinOp "&&" (EVar "entry") (EBinOp "/=" (EVar "final") (ELit (LString "..")))) (EApp (EApp (EVar "mapOption") (ELam ((PVar "d")) (EApp (EApp (EVar "appendComponent") (EVar "d")) (EVar "final")))) (EApp (EApp (EVar "canonPath") (EVar "False")) (EApp (EApp (EVar "joinComponents") (EVar "absolute")) (EApp (EVar "reverseL") (EVar "revInit"))))) (EApp (EApp (EApp (EVar "canonFrom") (EVar "absolute")) (EVar "cs")) (EApp (EVar "listLen") (EVar "cs"))))) (arm (PList) () (EApp (EApp (EApp (EVar "canonFrom") (EVar "absolute")) (EVar "cs")) (ELit (LInt 0)))))))))
 (DTypeSig false "canonFrom" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Option") (TyCon "String")))))))

@@ -349,6 +349,39 @@ Err cfg/../secret.txt $outside [\"cfg/*\"]"
 confine_case alias_method . "in: Ok granted
 out: Err cfg/../secret.txt $outside [\"cfg/*\"]"
 
+# realpath(3) fails under a working directory longer than PATH_MAX, so no path
+# has a canonical form there and each engine refuses every path, granted or not,
+# rather than compare the unresolved strings.  The tree is 22 directories of 200
+# characters, built and entered one relative component at a time by perl, since
+# the shell's `cd` keeps the whole logical path and fails past PATH_MAX.
+deep_in() {
+  perl -e '$t = shift; chdir $t or die "$t: $!";
+    for (1 .. 22) { chdir("d" x 200) or die "$!" }
+    alarm 60; exec @ARGV or die "$!"' -- "$@"
+}
+deep_case() {
+  tree="${TMPDIR:-/tmp}/medaka_deep_$$"
+  bin="${TMPDIR:-/tmp}/medaka_deep_$$_bin"
+  rm -rf "$tree"
+  mkdir -p "$tree"
+  perl -e 'chdir shift or die "$!";
+    for (1 .. 22) { mkdir("d" x 200) or die "$!"; chdir("d" x 200) or die "$!" }
+    mkdir "cfg" or die "$!";
+    open(my $a, ">", "cfg/a.txt") or die "$!"; print $a "granted"; close $a;
+    open(my $s, ">", "secret.txt") or die "$!"; print $s "top secret"; close $s' "$tree"
+  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$CONFINE/deep_cwd.mdk" -o "$bin" >/dev/null 2>&1)
+  out_run="$(deep_in "$tree" "$M" run "$CONFINE/deep_cwd.mdk" 2>&1)"
+  out_build="$(deep_in "$tree" "$bin" 2>&1)"
+  rm -rf "$tree" "$bin" "$bin.ll"
+  if [ "$out_run" = "$1" ] && [ "$out_build" = "$1" ]; then
+    ok "confine_deep_cwd"
+  else
+    bad "confine_deep_cwd" "expected [$1], run printed [$out_run], build printed [$out_build]"
+  fi
+}
+deep_case "Err cfg/a.txt $outside [\"cfg/*\"]
+Err cfg/../secret.txt $outside [\"cfg/*\"]"
+
 echo
 
 # ── The ledger bites in BOTH directions ───────────────────────────────────────

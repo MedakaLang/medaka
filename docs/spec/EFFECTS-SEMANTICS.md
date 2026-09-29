@@ -1264,11 +1264,31 @@ type-checks with manifest `M`, then for every label `L`, every authority
 it can exercise at `L` is `⊑ M(L)`. In particular a parameterized bound confines
 *which* hosts/paths/resources, not merely *whether* the label is used — and the
 α ⊤-fallback guarantees runtime-chosen targets cannot escape the bound. This is the
-theorem the whole apparatus exists to deliver. For the file labels it holds of
-files, not only of strings, because the runtime refuses a path whose canonical
-form the granted authority does not admit (§2.3): a runtime-chosen suffix cannot
-walk out of `"cfg/*"` through `..` or a symlink. For `Net` it holds of the
-strings a program passes, and host normalization is open (§2.3).
+theorem the whole apparatus exists to deliver. For the file labels the native
+runtime and `medaka run` extend it from strings to files: each refuses a path
+whose canonical form the granted authority does not admit (§2.3), so a
+runtime-chosen suffix cannot walk out of `"cfg/*"` through `..` or a symlink
+that is in place when the path is checked. Four edges bound that claim:
+
+- **Check, then use.** The runtime resolves the path string once to check it
+  and the operating system resolves it again to perform the operation. A
+  symlink swapped inside the granted tree between the two can escape it.
+  Closing that needs the operation itself to resolve beneath the granted
+  directory (`openat` with `O_NOFOLLOW`, or `openat2` with `RESOLVE_BENEATH`),
+  which the runtime does not do.
+- **The wasm target.** Its host reads the path alone and cannot refuse one, so
+  `medaka build --target wasm` builds a file operation only when no check is
+  needed: its grant is the whole domain, or its path is a string literal the
+  grant names exactly. Any other call is a compile-time error, including one
+  through a library wrapper that forwards its caller's grant (`io.readLines`,
+  `fs.isFile`), even when that caller grants the whole domain.
+- **Sourceless authorities.** An authority opened from an existential, and an
+  instance head's index inside a method body, have no caller to supply them
+  and are granted the whole domain. The escape check holds the declaration
+  that reaches them to its declared row, so they are bounded by that row, not
+  by the value's index.
+- **`Net`.** The claim holds of the strings a program passes, and host
+  normalization is open (§2.3).
 
 ---
 
@@ -1315,7 +1335,10 @@ the extern catalog is trusted, like any FFI boundary.
   `⟦e_k⟧ ∈ γ(α(e_k))`. (Over-approximation; §4.)
 - **Capability confinement.** If a module type-checks with manifest `M`, every
   authority it exercises at a label `L` is `⊑ M(L)` (§7). With a host that
-  honors `M`, the module cannot act outside its declared capabilities.
+  honors `M`, the module cannot act outside its declared capabilities. For the
+  file labels this is a statement about the path checked, not the file finally
+  opened: a symlink swapped between the check and the operation is outside it
+  (§7, "Check, then use").
 - **Index fidelity (effect-indexed data).** For a constructor of kind
   `Effect → Type → Type`, the index is part of the type and is checked as such:
   `F φ₁ τ̄` and `F φ₂ τ̄` are interchangeable only when `φ₁ = φ₂`. **The index is

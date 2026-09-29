@@ -29,14 +29,20 @@
 -- to lowerProgramEmit (loader, mangle, elaborateModules, dceFilter) is identical to
 -- the LLVM modules driver.
 
-import frontend.ast.{Decl}
+import frontend.ast.{Decl(..), Expr(..), Lit(..), Loc}
+import frontend.desugar.{mapChildren}
 import types.typecheck.{
+  TcDiag(..),
   constrainedSigNames,
   preludeReturnPosDictNames,
   preludeArgPosDictNames,
   mainTypeIsFloat,
   checkedFfiExternTypeNamesModules,
+  mapDeclBodies,
 }
+import driver.diagnostics.{emitDiagExitCode, renderTcDiags}
+import driver.loader.{modIdToPath}
+import support.ordmap.{OrdMap, omEmpty, omFromNames, omHasKey}
 import ir.core_ir.{CProgram(..)}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
@@ -48,18 +54,27 @@ import ir.core_ir_lower.{
   validateFfiExternTypeNames,
 }
 import ir.dce.{dceFilter}
-import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
+import backend.wasm_emit.{
+  emitProgram,
+  makeWasmEmitInputFull,
+  WasmGrant(..),
+  wasmFileGrantArity,
+  wasmGrantConfined,
+  wasmFileGrantMsg,
+}
 import backend.wasm_reach.{wasmReachFilter}
 import entries.entry_support.{driveModulesLocated, runEmitWith}
 import support.timer.{statsEnabled, emitStats}
-import support.util.{listLen}
+import support.util.{listLen, reverseL}
+import list.{last}
 
 main : <IO> Unit
 -- WasmGC has no clock host-imports yet (`sleepMs`/`monotonicSec` are WASM-GAP
 -- rows), so an `Async` main is driven by the sequential `runAsync` here.  The
 -- `*Main` variant declares a `Unit` result, which is how the emitter's
 -- `mainBodyIsUnit` knows not to auto-print it.
-main = driveModulesLocated (runEmitWith "runAsyncMain" emitTail)
+main =
+  driveModulesLocated (mods => runEmitWith "runAsyncMain" (emitTail mods) mods)
 
 -- COMPOSITE-MAIN AUTO-PRINT (design §10, WasmGC peer of llvm_emit_modules_main):
 -- the shared mangle+elaborate+auto-print-wrap glue lives once in
@@ -70,10 +85,15 @@ main = driveModulesLocated (runEmitWith "runAsyncMain" emitTail)
 -- compiler-graph main) is unchanged → emitter output byte-identical.
 
 -- Build the explicit WasmGC input and emit an already-elaborated program.
-emitTail : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
-emitTail runtimeDecls coreD modules2 =
+emitTail : List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+emitTail mods runtimeDecls coreD modules2 =
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
+  let _ = refuseNarrowFileGrants mods allDecls modules2
   let _ =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
@@ -113,3 +133,107 @@ emitTail runtimeDecls coreD modules2 =
 -- notion of reachable S1 computes — not a re-derived one.
 programUnitCount : CProgram -> Int
 programUnitCount (CProgram groups _ _ impls) = listLen groups + listLen impls
+
+-- A file operation the wasm host cannot confine (`wasmGrantConfined`) stops the
+-- build with one located error per such call.  Only the declarations that survive
+-- DCE are read, so an unreached library wrapper does not refuse the program; the
+-- emitter refuses the same calls again at its leaves, unlocated, for any shape
+-- this scan does not recognise.
+refuseNarrowFileGrants : List (String, String, List Decl) ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+refuseNarrowFileGrants mods kept modules =
+  let live = omFromNames (keptFunNames kept []) omEmpty
+  match flatMap (m => moduleGrantDiags live m) modules
+    [] => ()
+    diags =>
+      let _ = map ePutStrLn (renderTcDiags (map modIdToPath mods) diags)
+      exit emitDiagExitCode
+
+keptFunNames : List Decl -> List String -> List String
+keptFunNames [] acc = acc
+keptFunNames ((DFunDef _ n _ _) :: rest) acc = keptFunNames rest (n :: acc)
+keptFunNames ((DAttrib _ d) :: rest) acc = keptFunNames (d :: rest) acc
+keptFunNames (_ :: rest) acc = keptFunNames rest acc
+
+-- DCE drops only plain functions, so every other declaration is read.
+isLiveDecl : OrdMap Unit -> Decl -> Bool
+isLiveDecl live (DFunDef _ n _ _) = omHasKey n live
+isLiveDecl live (DAttrib _ d) = isLiveDecl live d
+isLiveDecl _ _ = True
+
+moduleGrantDiags : OrdMap Unit -> (String, List Decl) -> List (String, TcDiag)
+moduleGrantDiags live (mid, decls) =
+  let sites = Ref []
+  let _ =
+    map
+      (d =>
+        if isLiveDecl live d then
+          mapDeclBodies (scanGrantSites sites None) d
+        else
+          d)
+      decls
+  map
+    (site => match site
+      (loc, name, grant) => (
+        mid,
+        TcDiag "T-WASM-FILE-GRANT" 1 loc (wasmFileGrantMsg name grant) None None,
+      ))
+    (reverseL sites.value)
+
+-- Records each file-extern application that is not confined, at the first
+-- location its path argument carries, else the innermost one around it.
+scanGrantSites : Ref (List (Option Loc, String, WasmGrant)) ->
+  Option Loc ->
+  Expr ->
+  Expr
+scanGrantSites sites _ (ELoc l e) = ELoc l (scanGrantSites sites (Some l) e)
+scanGrantSites sites around (e@(EApp _ _)) =
+  let _ = match appSpine e []
+    (EVar n, args) => match wasmFileGrantArity n
+      Some arity =>
+        if listLen args == arity + 1 then match (args, last args)
+          (path :: _, Some g) =>
+            let grant = grantOf g
+            if wasmGrantConfined (pathLit path) grant then
+              ()
+            else
+              sites := (orElse (leftLoc path) around, n, grant) :: sites.value
+          _ => ()
+      None => ()
+    _ => ()
+  mapChildren (scanGrantSites sites around) e
+scanGrantSites sites around e = mapChildren (scanGrantSites sites around) e
+
+appSpine : Expr -> List Expr -> (Expr, List Expr)
+appSpine (EApp f x) args = appSpine f (x :: args)
+appSpine (ELoc _ f) args = appSpine f args
+appSpine h args = (h, args)
+
+pathLit : Expr -> Option String
+pathLit (ELoc _ e) = pathLit e
+pathLit (ELit (LString s)) = Some s
+pathLit _ = None
+
+-- The leftmost location inside an expression, which is where its source text starts.
+leftLoc : Expr -> Option Loc
+leftLoc (ELoc l _) = Some l
+leftLoc (EApp f _) = leftLoc f
+leftLoc (EBinOp _ a _ _) = leftLoc a
+leftLoc _ = None
+
+grantOf : Expr -> WasmGrant
+grantOf (ELoc _ e) = grantOf e
+grantOf (EListLit []) = GrantWhole
+grantOf (EListLit es) = match stringLits es []
+  Some ss => GrantElems ss
+  None => GrantComputed
+grantOf (EVar _) = GrantParam
+grantOf _ = GrantComputed
+
+stringLits : List Expr -> List String -> Option (List String)
+stringLits [] acc = Some (reverseL acc)
+stringLits ((ELoc _ e) :: rest) acc = stringLits (e :: rest) acc
+stringLits ((ELit (LString s)) :: rest) acc = stringLits rest (s :: acc)
+stringLits _ _ = None

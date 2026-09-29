@@ -1,5 +1,5 @@
 # META
-source_lines=52319
+source_lines=52322
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -15867,6 +15867,7 @@ wholeDomainExpr (EVar n) = match omLookup n fileGrantExterns
 wholeDomainExpr e = mapChildren wholeDomainExpr e
 
 -- Apply [f] once to the root of every expression a declaration holds.
+export
 mapDeclBodies : (Expr -> Expr) -> Decl -> Decl
 mapDeclBodies f (DFunDef pub n ps e) = DFunDef pub n ps (f e)
 mapDeclBodies f (DLetGroup pub binds) =
@@ -33020,10 +33021,12 @@ topAbsorbs : String -> Expr -> Expr
 topAbsorbs param join =
   EMatch (EVar param) [Arm (PList []) [] (EListLit []), Arm PWild [] join]
 
+-- A recursive use forwards its enclosing binder's parameters; one whose binder is
+-- not found is the empty authority, as in `grantTerm`.
 grantIdTerm : List GrantBinder -> Int -> Expr
 grantIdTerm chain i = match grantParamFor chain i
   Some p => EVar p
-  None => EListLit []
+  None => bottomGrant
 
 -- The parameter of the innermost enclosing binder that quantifies authority [i].
 grantParamFor : List GrantBinder -> Int -> Option String
@@ -55089,7 +55092,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "wholeDomainExpr" ((PAs "e" (PCon "EApp" PWild PWild))) (EMatch (EApp (EApp (EVar "grantSpine") (EVar "e")) (EListLit)) (arm (PTuple (PCon "EVar" (PVar "n")) (PVar "args")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "fileGrantExterns")) (arm (PCon "Some" (PTuple (PVar "arity") (PVar "paths"))) () (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EApp (EVar "EVar") (EVar "n"))) (EVar "arity")) (EApp (EApp (EVar "replicate") (EVar "paths")) (EApp (EVar "EListLit") (EListLit)))) (EApp (EApp (EVar "map") (EVar "wholeDomainExpr")) (EVar "args")))) (arm (PCon "None") () (EApp (EApp (EVar "mapChildren") (EVar "wholeDomainExpr")) (EVar "e"))))) (arm PWild () (EApp (EApp (EVar "mapChildren") (EVar "wholeDomainExpr")) (EVar "e")))))
 (DFunDef false "wholeDomainExpr" ((PCon "EVar" (PVar "n"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "fileGrantExterns")) (arm (PCon "Some" (PTuple (PVar "arity") (PVar "paths"))) () (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EApp (EVar "EVar") (EVar "n"))) (EVar "arity")) (EApp (EApp (EVar "replicate") (EVar "paths")) (EApp (EVar "EListLit") (EListLit)))) (EListLit))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))))
 (DFunDef false "wholeDomainExpr" ((PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "wholeDomainExpr")) (EVar "e")))
-(DTypeSig false "mapDeclBodies" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DTypeSig true "mapDeclBodies" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "mapDeclBodies" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EVar "f") (EVar "e"))))
 (DFunDef false "mapDeclBodies" ((PVar "f") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") (PVar "clauses")) () (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "e")) () (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EVar "f") (EVar "e"))))))) (EVar "clauses"))))))) (EVar "binds"))))
 (DFunDef false "mapDeclBodies" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PVar "def") (PVar "mloc")) () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EApp (EVar "map") (ELam ((PVar "dm")) (EMatch (EVar "dm") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EVar "f") (EVar "e"))))))) (EVar "def"))) (EVar "mloc")))))) (EVar "methods"))))))
@@ -58036,7 +58039,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "topAbsorbs" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "topAbsorbs" ((PVar "param") (PVar "join")) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (EVar "param"))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EApp (EVar "PList") (EListLit))) (EListLit)) (EApp (EVar "EListLit") (EListLit))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "join")))))
 (DTypeSig false "grantIdTerm" (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyCon "Int") (TyCon "Expr"))))
-(DFunDef false "grantIdTerm" ((PVar "chain") (PVar "i")) (EMatch (EApp (EApp (EVar "grantParamFor") (EVar "chain")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "EVar") (EVar "p"))) (arm (PCon "None") () (EApp (EVar "EListLit") (EListLit)))))
+(DFunDef false "grantIdTerm" ((PVar "chain") (PVar "i")) (EMatch (EApp (EApp (EVar "grantParamFor") (EVar "chain")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "EVar") (EVar "p"))) (arm (PCon "None") () (EVar "bottomGrant"))))
 (DTypeSig false "grantParamFor" (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "grantParamFor" ((PList) PWild) (EVar "None"))
 (DFunDef false "grantParamFor" ((PCons (PVar "b") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PTuple (PVar "name") (PVar "ids")) (EMatch (EVar "b") (arm (PCon "TopGrantBinder" (PVar "mid") (PVar "n")) () (ETuple (EVar "n") (EApp (EApp (EVar "topGrantIds") (EVar "mid")) (EVar "n")))) (arm (PCon "LocalGrantBinder" (PVar "n")) () (ETuple (EVar "n") (EApp (EVar "localGrantIds") (EVar "n")))) (arm (PCon "BodyGrantBinder" (PVar "n") (PVar "bound")) () (ETuple (EVar "n") (EVar "bound"))))) (DoExpr (EMatch (EApp (EApp (EVar "indexOfId") (EVar "i")) (EVar "ids")) (arm (PCon "Some" (PVar "k")) () (EApp (EVar "Some") (EApp (EApp (EVar "grantParamName") (EVar "name")) (EVar "k")))) (arm (PCon "None") () (EApp (EApp (EVar "grantParamFor") (EVar "rest")) (EVar "i")))))))
@@ -63551,7 +63554,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "wholeDomainExpr" ((PAs "e" (PCon "EApp" PWild PWild))) (EMatch (EApp (EApp (EVar "grantSpine") (EVar "e")) (EListLit)) (arm (PTuple (PCon "EVar" (PVar "n")) (PVar "args")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "fileGrantExterns")) (arm (PCon "Some" (PTuple (PVar "arity") (PVar "paths"))) () (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EApp (EVar "EVar") (EVar "n"))) (EVar "arity")) (EApp (EApp (EVar "replicate") (EVar "paths")) (EApp (EVar "EListLit") (EListLit)))) (EApp (EApp (EMethodRef "map") (EVar "wholeDomainExpr")) (EVar "args")))) (arm (PCon "None") () (EApp (EApp (EVar "mapChildren") (EVar "wholeDomainExpr")) (EVar "e"))))) (arm PWild () (EApp (EApp (EVar "mapChildren") (EVar "wholeDomainExpr")) (EVar "e")))))
 (DFunDef false "wholeDomainExpr" ((PCon "EVar" (PVar "n"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "fileGrantExterns")) (arm (PCon "Some" (PTuple (PVar "arity") (PVar "paths"))) () (EApp (EApp (EApp (EApp (EVar "saturateGrants") (EApp (EVar "EVar") (EVar "n"))) (EVar "arity")) (EApp (EApp (EVar "replicate") (EVar "paths")) (EApp (EVar "EListLit") (EListLit)))) (EListLit))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))))
 (DFunDef false "wholeDomainExpr" ((PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "wholeDomainExpr")) (EVar "e")))
-(DTypeSig false "mapDeclBodies" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DTypeSig true "mapDeclBodies" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "mapDeclBodies" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EVar "f") (EVar "e"))))
 (DFunDef false "mapDeclBodies" ((PVar "f") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") (PVar "clauses")) () (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "e")) () (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EVar "f") (EVar "e"))))))) (EVar "clauses"))))))) (EVar "binds"))))
 (DFunDef false "mapDeclBodies" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PVar "def") (PVar "mloc")) () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "dm")) (EMatch (EVar "dm") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EVar "f") (EVar "e"))))))) (EVar "def"))) (EVar "mloc")))))) (EVar "methods"))))))
@@ -66498,7 +66501,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "topAbsorbs" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "topAbsorbs" ((PVar "param") (PVar "join")) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (EVar "param"))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EApp (EVar "PList") (EListLit))) (EListLit)) (EApp (EVar "EListLit") (EListLit))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "join")))))
 (DTypeSig false "grantIdTerm" (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyCon "Int") (TyCon "Expr"))))
-(DFunDef false "grantIdTerm" ((PVar "chain") (PVar "i")) (EMatch (EApp (EApp (EVar "grantParamFor") (EVar "chain")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "EVar") (EVar "p"))) (arm (PCon "None") () (EApp (EVar "EListLit") (EListLit)))))
+(DFunDef false "grantIdTerm" ((PVar "chain") (PVar "i")) (EMatch (EApp (EApp (EVar "grantParamFor") (EVar "chain")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "EVar") (EVar "p"))) (arm (PCon "None") () (EVar "bottomGrant"))))
 (DTypeSig false "grantParamFor" (TyFun (TyApp (TyCon "List") (TyCon "GrantBinder")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "grantParamFor" ((PList) PWild) (EVar "None"))
 (DFunDef false "grantParamFor" ((PCons (PVar "b") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PTuple (PVar "name") (PVar "ids")) (EMatch (EVar "b") (arm (PCon "TopGrantBinder" (PVar "mid") (PVar "n")) () (ETuple (EVar "n") (EApp (EApp (EVar "topGrantIds") (EVar "mid")) (EVar "n")))) (arm (PCon "LocalGrantBinder" (PVar "n")) () (ETuple (EVar "n") (EApp (EVar "localGrantIds") (EVar "n")))) (arm (PCon "BodyGrantBinder" (PVar "n") (PVar "bound")) () (ETuple (EVar "n") (EVar "bound"))))) (DoExpr (EMatch (EApp (EApp (EVar "indexOfId") (EVar "i")) (EVar "ids")) (arm (PCon "Some" (PVar "k")) () (EApp (EVar "Some") (EApp (EApp (EVar "grantParamName") (EVar "name")) (EVar "k")))) (arm (PCon "None") () (EApp (EApp (EVar "grantParamFor") (EVar "rest")) (EVar "i")))))))
