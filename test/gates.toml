@@ -3451,7 +3451,7 @@ kind = "native"
 migration = "done"
 run = "pds/test/lib_boundary_test.mdk"
 oracles = []
-sources = ["pds/lib/*"]
+sources = ["pds/lib/*", "pds/shell/*", "pds/serve.mdk"]
 corpus = []
 toolchain = []
 

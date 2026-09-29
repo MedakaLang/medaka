@@ -9,30 +9,30 @@
    skipping the Wasm arm.
 
    The scaling test builds `performance_resource_main.mdk` once and times
-   four routes at 1000 and 2000 rows: `mstValidateBlocks` rejecting a
-   hostile corpus, `mstInsert`, `repoExportGraph` and `repoFromBlocks`. Each
-   time is the wall clock around the spawn, so it includes process start-up.
-   The larger run must stay under an absolute ceiling and within a ratio of
-   the smaller one; the export block counts and the rehydrated root CIDs are
-   pinned, so a walk that dropped nodes fails even when it is fast. The same
-   test measures the inbound request path's allocation (`inbound-alloc`) and
-   requires it under a fixed byte threshold.
+   three routes at 1000 and 2000 rows: `mstValidateBlocks` rejecting a
+   hostile corpus, `repoExportGraph` and `repoFromBlocks`. Each time is the
+   wall clock around the spawn, so it includes process start-up. The larger
+   run must stay under an absolute ceiling and within a ratio of the smaller
+   one; the export block counts and the rehydrated root CIDs are pinned, so a
+   walk that dropped nodes fails even when it is fast. `mstInsert` is graded
+   on bytes allocated by the insert loop, which a busy host cannot move,
+   rather than on time: the 2000-row figure must stay within a ratio of the
+   1000-row one. The same test measures the inbound request path's
+   allocation (`inbound-alloc`) and requires it under a fixed byte
+   threshold.
 
    The page-cost test builds `synth_repo_main.mdk` corpora of 1000 and 10000
    records and reads the per-request microsecond figures
    `cost_curve_main.mdk` prints for `listRecords`, `listBlobs` and the
-   `persistTransition` seam. Each figure must stay under an absolute cap and
-   within a ratio of the small corpus's figure.
+   `persistTransition` seam. `listBlobs` is graded on a ratio alone, each
+   corpus's figure being the best of `pageCostRuns` runs of the probe, so a
+   load spike during one run cannot fail it; `listRecords` and
+   `persistTransition` keep an absolute ceiling beside their ratio.
 
-   How flaky the bounds are, measured on a shared 12-core host at load
-   average 7 to 8. The `mst-insert` ratio sits closest to its bound: six
-   runs measured 2.37 to 3.45 against 3.5, and one run measured 3.62 and
-   failed. The absolute microsecond caps are the other weak point, since a
-   loaded host inflates every request uniformly: `listBlobs` measured 307
-   against its cap of 400, `listRecords` 1142 against 6000. A red naming
-   one of these with every other bound in range is load until a rerun on a
-   quieter host says otherwise; a red on a ratio far past its bound, or on
-   a pinned count or root, is not. -}
+   A red naming a wall-clock bound with every other bound in range is load
+   until a rerun on a quieter host says otherwise; a red on a ratio far past
+   its bound, on an allocation figure, or on a pinned count or root, is
+   not. -}
 
 import test.vector_runner.{
   Arm(..),
@@ -47,7 +47,7 @@ import test.vector_runner.{
   spawn,
   spawnFindings,
 }
-import list.{somes}
+import list.{replicate, somes}
 import string.{contains, lines, startsWith, toInt, words}
 import test.{Expectation, expectNoFindings}
 import test_process.{medakaRoot}
@@ -183,6 +183,21 @@ boundFindings what small large ceiling ratio =
 
 -- # Scaling and footprint
 
+-- The figure `label` names at the end of a line of `out`, read off a
+-- `key=value` word: `wordFigure "allocBytes=" out` reads the `57` in
+-- `MSTINSERT 1000 1000 allocBytes=57`.
+wordFigure : String -> String -> Option Int
+wordFigure key out = match somes (map (figureInWord key) (words out))
+  [] => None
+  n :: _ => Some n
+
+figureInWord : String -> String -> Option Int
+figureInWord key w =
+  if startsWith key w then
+    toInt (stringSlice (stringLength key) (stringLength w) w)
+  else
+    None
+
 {- | One route of `performance_resource_main.mdk` timed at two sizes.
 
    `needs n` is what the run at `n` rows must print; `ceiling` bounds the
@@ -205,12 +220,6 @@ timedRoutes = [
     needs = n => ["MST \{intToString n} UNREACHABLE"],
     ceiling = 3.5,
     ratio = 3.2,
-  },
-  TimedRoute {
-    mode = "mst-insert",
-    needs = n => ["MSTINSERT \{intToString n} \{intToString n}"],
-    ceiling = 3.5,
-    ratio = 3.5,
   },
   TimedRoute {
     mode = "export",
@@ -254,12 +263,24 @@ timedRun bin route n =
   let (_, fs) = ranWith label bin [route.mode, intToString n] (route.needs n)
   (elapsedSince t0, fs)
 
+-- Runs of one route at one size; its time is the smallest of them, so a load
+-- spike during one run cannot fail the ratio.
+timedRuns : Int
+timedRuns = 3
+
+bestTimedRun : String -> TimedRoute -> Int -> <Clock, Exec> (Float, List String)
+bestTimedRun bin route n =
+  let runs = map (_ => timedRun bin route n) (replicate timedRuns ())
+  match map fst runs
+    [] => (0.0, [])
+    t :: ts => (fold min t ts, flatMap snd runs)
+
 routeFindings : String -> TimedRoute -> <Clock, Exec> List String
-routeFindings bin route = match timedRun bin route 1000
-  (small, []) => match timedRun bin route 2000
+routeFindings bin route = match bestTimedRun bin route 1000
+  (small, []) => match bestTimedRun bin route 2000
     (large, []) =>
       boundFindings
-        "\{route.mode} scaling (seconds, 1000 vs 2000 rows)"
+        "\{route.mode} scaling (seconds, 1000 vs 2000 rows, best of \{intToString timedRuns})"
         small
         large
         route.ceiling
@@ -292,12 +313,46 @@ inboundAllocFindings bin =
           ]
     (_, fs) => fs
 
+-- Bytes allocated by `mstInsert` building a tree of 1000 and of 2000 keys are
+-- deterministic, so the ratio between them is a property of the code and not
+-- of the host: 3.18 when the bound was set. A linear insert would sit near
+-- 2.0; the bound leaves 7% headroom over today's figure and trips on an
+-- insert that has grown a further O(n) factor.
+insertAllocRatio : Float
+insertAllocRatio = 3.4
+
+insertAllocAt : String -> Int -> <Exec> Result (List String) Int
+insertAllocAt bin n =
+  let label = "\{gate} (native mst-insert \{intToString n})"
+  let needs = ["MSTINSERT \{intToString n} \{intToString n} "]
+  match ranWith label bin ["mst-insert", intToString n] needs
+    (out, []) => match wordFigure "allocBytes=" out
+      None => Err ["\{label}: the probe printed no allocBytes figure"]
+      Some bytes => Ok bytes
+    (_, fs) => Err fs
+
+insertAllocFindings : String -> <Exec> List String
+insertAllocFindings bin = match (insertAllocAt bin 1000, insertAllocAt bin 2000)
+  (Ok small, Ok large) =>
+    if intToFloat large / intToFloat small <= insertAllocRatio then
+      []
+    else
+      [
+        "\{gate}: mst-insert scaling (allocated bytes, 1000 vs 2000 rows) exceeded its bound: small=\{intToString small} large=\{intToString large} (at most \{floatToString insertAllocRatio}x)",
+      ]
+  (Err fs1, Err fs2) => fs1 ++ fs2
+  (Err fs, _) => fs
+  (_, Err fs) => fs
+
 resourceFindings : String -> <Clock, Exec, IO> List String
 resourceFindings scratch =
   let bin = "\{scratch}/performance_resource"
   let driver = "\{medakaRoot}/pds/test/performance_resource_main.mdk"
   match buildNative "\{gate} (native scaling)" driver bin
-    [] => flatMap (routeFindings bin) timedRoutes ++ inboundAllocFindings bin
+    [] =>
+      flatMap (routeFindings bin) timedRoutes
+        ++ insertAllocFindings bin
+        ++ inboundAllocFindings bin
     fs => fs
 
 -- # Page cost against repository size
@@ -305,15 +360,20 @@ resourceFindings scratch =
 {- | One per-request figure `cost_curve_main.mdk` prints, graded between a
    small and a large corpus: `ceiling` bounds the large corpus's figure in
    microseconds and `ratio` it against the small corpus's. -}
-data PageCost = PageCost { route : String, ceiling : Int, ratio : Float }
+data PageCost = PageCost { route : String, ceiling : Option Int, ratio : Float }
+
+-- Runs of the cost-curve probe per corpus for the routes graded on a ratio
+-- alone; each corpus's figure is the smallest of them.
+pageCostRuns : Int
+pageCostRuns = 5
 
 -- The small corpus holds 1000 records and 200 blobs, the large one 10000
 -- records and 12800 blobs, so a route whose cost followed the repository
 -- rather than the page fails the ratio.
 pageRoutes : List PageCost
 pageRoutes = [
-  PageCost { route = "listRecords", ceiling = 6000, ratio = 3.0 },
-  PageCost { route = "listBlobs", ceiling = 400, ratio = 3.0 },
+  PageCost { route = "listRecords", ceiling = Some 6000, ratio = 3.0 },
+  PageCost { route = "listBlobs", ceiling = None, ratio = 3.0 },
 ]
 
 -- `persist` times the `persistTransition` seam with the same store on both
@@ -321,20 +381,41 @@ pageRoutes = [
 -- included, is measured.
 persistRoute : PageCost
 persistRoute =
-  PageCost { route = "persistTransition", ceiling = 60, ratio = 4.0 }
+  PageCost { route = "persistTransition", ceiling = Some 60, ratio = 4.0 }
 
-pageCostFindings : PageCost -> String -> String -> List String
-pageCostFindings pc smallOut largeOut = match (
-  figureAfter "\{pc.route} us=" smallOut,
-  figureAfter "\{pc.route} us=" largeOut,
+-- The smallest of the figures `route` printed across `outs`; a run that
+-- printed none makes the whole measurement absent.
+bestFigure : String -> List String -> Option Int
+bestFigure route outs = match somes (map (figureAfter "\{route} us=") outs)
+  [] => None
+  x :: xs => if length xs + 1 == length outs then Some (fold min x xs) else None
+
+ratioFindings : String -> Float -> Float -> Float -> List String
+ratioFindings what small large ratio =
+  if large / small <= ratio then
+    []
+  else
+    [
+      "\{gate}: \{what} exceeded its bound: small=\{floatToString small} large=\{floatToString large} (at most \{floatToString ratio}x)",
+    ]
+
+pageCostFindings : PageCost -> List String -> List String -> List String
+pageCostFindings pc smallOuts largeOuts = match (
+  bestFigure pc.route smallOuts,
+  bestFigure pc.route largeOuts,
 )
   (Some small, Some large) =>
-    boundFindings
+    let what =
       "\{pc.route} cost (microseconds per request, small vs large corpus)"
-      (intToFloat small)
-      (intToFloat large)
-      (intToFloat pc.ceiling)
-      pc.ratio
+    match pc.ceiling
+      Some ceiling =>
+        boundFindings
+          what
+          (intToFloat small)
+          (intToFloat large)
+          (intToFloat ceiling)
+          pc.ratio
+      None => ratioFindings what (intToFloat small) (intToFloat large) pc.ratio
   _ => ["\{gate}: cost-curve output has no \{pc.route} us= figure"]
 
 -- The cost-curve binary's stdout at `args`, and the findings against it.
@@ -360,6 +441,13 @@ synthCorpus synth dir records blobs =
           ]))
     (_, fs) => fs
 
+-- `pageCostRuns` runs of the probe at `args`: every output, and the findings
+-- of every run that failed.
+costRuns : String -> List String -> <Exec, IO> (List String, List String)
+costRuns bin args =
+  let runs = map (_ => costCurve bin args) (replicate pageCostRuns ())
+  (map fst runs, flatMap snd runs)
+
 costCorpora : String -> String -> <Exec, IO> List String
 costCorpora scratch synth =
   let small = "\{scratch}/cost-corpus-small"
@@ -368,15 +456,15 @@ costCorpora scratch synth =
   match (synthCorpus synth small "1000" "200"
     ++ synthCorpus synth large "10000" "12800")
     [] => match (
-      costCurve cost [small, "bulk.synth.record", "50"],
-      costCurve cost [large, "bulk.synth.record", "50"],
+      costRuns cost [small, "bulk.synth.record", "50"],
+      costRuns cost [large, "bulk.synth.record", "50"],
     )
-      ((smallOut, []), (largeOut, [])) =>
+      ((smallOuts, []), (largeOuts, [])) =>
         let pages =
-          flatMap (pc => pageCostFindings pc smallOut largeOut) pageRoutes
+          flatMap (pc => pageCostFindings pc smallOuts largeOuts) pageRoutes
         match (
-          costCurve cost ["persist", small, "1000"],
-          costCurve cost ["persist", large, "1000"],
+          costRuns cost ["persist", small, "1000"],
+          costRuns cost ["persist", large, "1000"],
         )
           ((smallP, []), (largeP, [])) =>
             pages ++ pageCostFindings persistRoute smallP largeP
