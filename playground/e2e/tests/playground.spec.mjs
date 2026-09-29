@@ -272,6 +272,9 @@ async function main() {
       // the same shape: an apex link, a landing page, a bare route, and a
       // cross-link INTO the guide that must resolve on this origin (the
       // renderer's --sibling rewrite) rather than leaving for GitHub.
+      // The `.links` header exists only on the apex page; the guide chapter the
+      // previous check left us on has the doc-set nav instead, so go back first.
+      await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
       const advHref = await page.evaluate(() => document.querySelector('.links a[href*="advanced/"]')?.getAttribute('href') ?? null);
       check('apex header links into the advanced topics', !!advHref, String(advHref));
       const advStatus = (await page.goto(base + '/advanced/00-about.html', { waitUntil: 'domcontentloaded' })).status();
