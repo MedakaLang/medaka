@@ -102,7 +102,14 @@ test "manifest grants an interpolated pattern-ranging directory's instantiation"
 test "a `..` after a written directory is outside a FileWrite bound on it" = expectCheckReject
   (fixture "filewrite_dotdot_bound_reject.mdk")
   [
-    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"./*\">",
+    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"data/../*\">",
+  ]
+
+test "a `..` that pops a named component is outside a narrower FileWrite bound" = expectCheckReject
+  (fixture "filewrite_popped_bound_reject.mdk")
+  [
+    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"a/../data/*\">",
+    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"data/sub/../*\">",
   ]
 
 test "`.` and empty components keep a FileWrite path under its directory" =
@@ -111,22 +118,22 @@ test "`.` and empty components keep a FileWrite path under its directory" =
 test "a user Prefix label compares text, so its `..` is two characters" =
   expectCheckAccept (fixture "store_dotdot_textual_accept.mdk")
 
-test "manifest names the working directory for a write under `data/../`" =
+test "manifest keeps a write under `data/../` apart from one under `data/`" =
   expectManifest
     "filewrite_dotdot_manifest_accept.mdk"
     "both"
-    "[package.capabilities]\nFileWrite = \"./*\""
+    "[package.capabilities]\nFileWrite = [\"data/*\", \"data/../*\"]"
 
-test "manifest names the working directory for a data directory `data/../`" =
+test "manifest spells a popping path raw, less `.` and empty components" =
   expectManifest
     "filewrite_dotdot_manifest_accept.mdk"
-    "viaDir"
-    "[package.capabilities]\nFileWrite = \"./*\""
+    "popped"
+    "[package.capabilities]\nFileWrite = \"a/../data/*\""
 
-test "manifest names a path's canonical form" =
+test "manifest names a path less its `.` and empty components" =
   expectManifest
     "filewrite_dotdot_manifest_accept.mdk"
-    "canonical"
+    "normalized"
     "[package.capabilities]\nFileWrite = \"data/x.txt\""
 
 test "manifest grants the bare label for a path above the working directory" =

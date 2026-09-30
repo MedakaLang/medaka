@@ -352,13 +352,13 @@ out: Err cfg/../secret.txt $outside [\"cfg/*\"]"
 # granted the call site's pattern, and a name climbing out of it is refused.
 confine_case pattern_binder . "in: Ok
 out: Err data/../pwned.txt $outside [\"data/*\"]"
-# A `..` in a path's constant part is refused before any grant exists: the
-# checker compares canonical paths, so a `data/*` bound does not cover a write
-# under `data/../`, and the program does not check.
+# A `..` in a path's constant part is refused before any grant exists: a `..`
+# after a named component is never within a narrower bound, so a `data/*` bound
+# does not cover a write under `data/../`, and the program does not check.
 out="$(perl -e 'alarm 60; exec @ARGV' -- "$M" check "$CONFINE/constant_dotdot.mdk" 2>&1)"
 status=$?
 case "$status:$out" in
-  1:*'where <FileWrite "data/*"> is allowed, but it performs <FileWrite "./*">'*)
+  1:*'where <FileWrite "data/*"> is allowed, but it performs <FileWrite "data/../*">'*)
     ok confine_constant_dotdot ;;
   *) bad confine_constant_dotdot "exit $status, got [$out]" ;;
 esac

@@ -8,6 +8,6 @@ store : String -> <FileWrite "data/*"> Result String Unit
 store leaf = writeFile ("data/./" ++ leaf) "x"
 
 storeTwice : String -> <FileWrite "data/*"> Result String Unit
-storeTwice leaf = writeFile ("data//sub/../" ++ leaf) "x"
+storeTwice leaf = writeFile ("./data//sub/./" ++ leaf) "x"
 
 main = println (said (store "inside.txt"))

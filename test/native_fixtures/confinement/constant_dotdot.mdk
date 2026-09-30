@@ -1,7 +1,7 @@
--- A `..` in the constant part of a path climbs out of the directory written
--- before it, and the checker reads it as the runtime does, by canonical path:
--- a write under `data/../` is the working directory's pattern, which a
--- `data/*` bound does not cover, so this program does not check.
+-- A `..` in the constant part of a path pops the directory written before it,
+-- and a symlink can make that any directory, so a write under `data/../` lies
+-- within no bound but its own spelling and the whole domain; a `data/*` bound
+-- does not cover it, so this program does not check.
 said : Result String a -> String
 said (Ok _) = "Ok"
 said (Err e) = "Err \{e}"

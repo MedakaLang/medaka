@@ -28,11 +28,29 @@ test "a path label's order compares canonical paths" = expectAll [
   expectFalse
     (dsub (extendParam (PPath (Some "data/../"))) (PPath (Some "data/*"))),
   expectTrue (dsub (PPath (Some "data/./x")) (PPath (Some "data/*"))),
-  expectTrue (dsub (PPath (Some "data/sub/../x")) (PPath (Some "data/*"))),
-  expectTrue (dsub (PPath (Some "x")) (PPath (Some "data/../x"))),
-  expectEqual " \"x\"" (drender (PPath (Some "data/../x"))),
-  expectEqual " \"./*\"" (drender (PPath (Some "data/../*"))),
+  expectTrue (dsub (PPath (Some "./data//x")) (PPath (Some "data/*"))),
+  expectTrue (dsub (PPath (Some "data")) (PPath (Some "data/"))),
 ]
+
+-- a symlink can make `x/..` any directory, so a `..` after a named component
+-- is never resolved
+test "a path that pops a named component is within only itself and the top" = expectAll
+  [
+    expectFalse (dsub (PPath (Some "a/../data/x")) (PPath (Some "data/*"))),
+    expectFalse (dsub (PPath (Some "data/sub/../x")) (PPath (Some "data/*"))),
+    expectFalse (dsub (PPath (Some "data/../*")) (PPath (Some "./*"))),
+    expectFalse (dsub (PPath (Some "x")) (PPath (Some "data/../x"))),
+    expectFalse (dsub (PPath (Some "data/../x")) (PPath (Some "data/../*"))),
+    expectTrue (dsub (PPath (Some "a/../data/x")) (PPath (Some "a/../data/x"))),
+    expectTrue
+      (dsub (PPath (Some "a/./../data/x")) (PPath (Some "a/../data/x"))),
+    expectTrue (dsub (PPath (Some "a/../data/x")) (PPath (Some "*"))),
+    expectTrue (dsub (PPath (Some "a/../data/x")) (PPath None)),
+    expectEqual " \"data/../x\"" (drender (PPath (Some "data/../x"))),
+    expectEqual
+      " \"a/../data/*\""
+      (drender (extendParam (PPath (Some "./a//../data/")))),
+  ]
 
 test "a path above the working directory is under no bound within it" = expectAll
   [
@@ -40,8 +58,9 @@ test "a path above the working directory is under no bound within it" = expectAl
     expectFalse (dsub (PPath (Some "../x")) (PPath (Some "./*"))),
     expectFalse (dsub (PPath (Some "data/../../x")) (PPath (Some ".*"))),
     expectFalse (dsub (PPath (Some "data/../../*")) (PPath (Some "./*"))),
-    expectTrue (dsub (PPath (Some "data/../../x")) (PPath (Some "../*"))),
+    expectTrue (dsub (PPath (Some "../y/x")) (PPath (Some "../*"))),
     expectTrue (dsub (PPath (Some "../x")) (PPath (Some "*"))),
+    expectTrue (dsub (PPath (Some "/../x")) (PPath (Some "/x"))),
   ]
 
 test "a path keeps its last component as written, so a suffix extends it" = expectAll
@@ -54,10 +73,28 @@ test "a path keeps its last component as written, so a suffix extends it" = expe
       [" \"data\"", " \"data/\""]
       (map drender (dantichain [PPath (Some "data/"), PPath (Some "data")])),
     expectEqual
-      [" \"./*\""]
+      [" \"data/*\"", " \"data/../*\""]
       (map
         drender
         (dantichain [PPath (Some "data/*"), PPath (Some "data/../*")])),
+    expectEqual
+      [" \"data/*\""]
+      (map
+        drender
+        (dantichain [
+          PPath (Some "data/x"),
+          PPath (Some "./data/*"),
+          PPath (Some "data/sub/*"),
+          PPath (Some "data/*"),
+        ])),
+    expectEqual
+      [" \"../x\"", " \"./*\""]
+      (map drender (dantichain [PPath (Some "../x"), PPath (Some "./*")])),
+    expectEqual
+      [" \"a/../x\""]
+      (map
+        drender
+        (dantichain [PPath (Some "a/../x"), PPath (Some "a/./../x")])),
   ]
 
 test "a path join covers both paths canonically, else is the whole domain" = expectAll

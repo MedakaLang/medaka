@@ -285,18 +285,19 @@ same message. The grant is also what the manifest records, so a host that trusts
 `cfg/*` from the manifest reads it as the program does. A bare `<FileRead>`
 grants every path, and confines nothing.
 
-The compiler reads the part of a path it can see the same way. For `FileRead`
-and `FileWrite`, whose file functions resolve the path, a bound is checked
-against the path's canonical form: `.` and empty components are dropped, and
-`..` removes the directory before it. So `"cfg/./" ++ name` is within
-`"cfg/*"`, and `"cfg/../" ++ name` is not. It is `"./*"`, every path under
-the working directory:
+The compiler reads the part of a path it can see, as far as it can without
+the file system. For `FileRead` and `FileWrite`, whose file functions resolve
+the path, `.` and empty components are dropped before a bound is checked, so
+`"cfg/./" ++ name` is within `"cfg/*"`. A `..` after a named directory is left
+as written, because only the file system knows where it leads: when `cfg` is a
+symlink, `cfg/..` is the parent of whatever it points to. So `"cfg/../" ++ name`
+is within no bound but its own spelling and the bare label:
 
 ```medaka
 readIn : String -> <FileRead "cfg/*"> Result String String
 readIn name = readFile ("cfg/./" ++ name)
 
-readBeside : String -> <FileRead "./*"> Result String String
+readBeside : String -> <FileRead "cfg/../*"> Result String String
 readBeside name = readFile ("cfg/../" ++ name)
 
 main = println "checked"
@@ -306,20 +307,25 @@ main = println "checked"
 checked
 ```
 
-Bounding `readBeside` to `"cfg/*"` instead is refused before anything runs:
+Bounding `readBeside` to `"cfg/*"`, or even to `"./*"`, is refused before
+anything runs:
 
 ```
-error: authority.mdk:5:27: Effectful value used where <FileRead "cfg/*"> is allowed, but it performs <FileRead "./*">
+error: authority.mdk:5:27: Effectful value used where <FileRead "cfg/*"> is allowed, but it performs <FileRead "cfg/../*">
   |
 5 | readBeside name = readFile ("cfg/../" ++ name)
   |                            ^
 ```
 
 A path that climbs above the working directory, such as `"../x"`, is within
-no bound inside it, and a manifest grants it as the bare label. The compiler
-resolves only what the program spells: a `..` inside `name` and a symlink are
-the runtime's, as above. Every other label compares text, `Net` and your own
-`effect Store Prefix` included, and there `..` is two characters.
+no bound inside it, and a manifest grants it as the bare label. The runtime
+checks a call only against the grant made at that call, which comes from the
+path the program spells, never against the declared bound. So it confines the
+part of the path that arrives at run time, `name` here, and a symlink under a
+directory the program spells, such as a `cfg/link` pointing elsewhere in
+`"cfg/link/" ++ name`, is followed wherever it leads. Every other label compares
+text, `Net` and your own `effect Store Prefix` included, and there `..` is two
+characters.
 
 The check has limits, each listed under "Open edges" in the
 [reference](effects-7-reference.md):
