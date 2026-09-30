@@ -282,7 +282,7 @@ pAcos : Value a -> <a> Value a
 pAllocBytes : Value a -> <a> Value a
 pAllocBytesIO : Value a -> <IO | a> Value a
 pAppendFile : Value a -> Value a -> <FileWrite | a> Value a
-pArgs : Value a -> <Env | a> Value a
+pArgs : Value a -> Value a
 pArrayBlit : Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a
 pArrayCopy : Value a -> <a> Value a
 pArrayFill : Value a -> Value a -> <a> Value a
@@ -299,9 +299,9 @@ pBitAnd : Value a -> Value a -> <a> Value a
 pBitNot : Value a -> <a> Value a
 pBitOr : Value a -> Value a -> <a> Value a
 pBitXor : Value a -> Value a -> <a> Value a
-pBuildCommit : Value a -> <Env | a> Value a
-pBuildDate : Value a -> <Env | a> Value a
-pBuildFingerprint : Value a -> <Env | a> Value a
+pBuildCommit : Value a -> Value a
+pBuildDate : Value a -> Value a
+pBuildFingerprint : Value a -> Value a
 pByteBlockBlit : Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a
 pByteBlockCopyUnsafe : Value a -> Value a -> <a> Value a
 pByteBlockFromIntArray : Value a -> <a> Value a

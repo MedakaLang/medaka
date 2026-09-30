@@ -1,5 +1,5 @@
 # META
-source_lines=52378
+source_lines=52379
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -718,14 +718,15 @@ ioAliasLabels = [
   "Net",
   "FileRead",
   "FileWrite",
+  "Signal",
 ]
 -- NOTE: `FFI` is deliberately NOT a member. #2071/#2070 (epic, Layer 1, R1):
 -- an `<IO>` bound must NOT subsume an `<FFI>`-performing body — FFI crosses a
 -- trust boundary the IO alias is not meant to paper over. Do not "complete"
 -- this list by adding FFI.
 
--- `IO` is the join of the ten security labels, so it widens on either side of an
--- escape check.  On the bound side a NARROW inferred row is subsumed by an `<IO>`
+-- `IO` is the join of the eleven security labels, so it widens on either side of
+-- an escape check.  On the bound side a NARROW inferred row is subsumed by an `<IO>`
 -- bound (narrow ⊑ IO); `IO` stays in the expansion (atomsNorm keeps it) so an
 -- inferred IO matches a bound IO.
 expandIoInBound : List Atom -> List Atom
@@ -733,8 +734,8 @@ expandIoInBound b = match findAtom (labelKey ioLabel) b
   None => b
   Some _ => atomsNorm (b ++ map atomOfLabel ioAliasLabels)
 
--- A performed `IO` left over against a bound without `IO` stands for the ten
--- labels: a bound naming all ten admits it, a bound naming some refuses it
+-- A performed `IO` left over against a bound without `IO` stands for the eleven
+-- labels: a bound naming all eleven admits it, a bound naming some refuses it
 -- naming the labels it lacks, and a bound naming none leaves it as `IO`.
 narrowPerformedIo : List Atom -> List Atom -> List Atom
 narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
@@ -52457,7 +52458,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ioLabel" (TyCon "EffLabel"))
 (DFunDef false "ioLabel" () (EApp (EVar "builtinLabel") (ELit (LString "IO"))))
 (DTypeSig true "ioAliasLabels" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
+(DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "Signal"))))
 (DTypeSig false "expandIoInBound" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "expandIoInBound" ((PVar "b")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "b")) (arm (PCon "None") () (EVar "b")) (arm (PCon "Some" PWild) () (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "b") (EApp (EApp (EVar "map") (EVar "atomOfLabel")) (EVar "ioAliasLabels")))))))
 (DTypeSig false "narrowPerformedIo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
@@ -60941,7 +60942,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ioLabel" (TyCon "EffLabel"))
 (DFunDef false "ioLabel" () (EApp (EVar "builtinLabel") (ELit (LString "IO"))))
 (DTypeSig true "ioAliasLabels" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
+(DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "Signal"))))
 (DTypeSig false "expandIoInBound" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "expandIoInBound" ((PVar "b")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "b")) (arm (PCon "None") () (EVar "b")) (arm (PCon "Some" PWild) () (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "b") (EApp (EApp (EMethodRef "map") (EVar "atomOfLabel")) (EVar "ioAliasLabels")))))))
 (DTypeSig false "narrowPerformedIo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))

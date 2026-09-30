@@ -1,0 +1,7 @@
+-- `Signal` is a member of the `IO` join, so an `<IO>` bound admits a body
+-- that performs it.
+stopping : Unit -> <IO> Bool
+stopping _ = pdsSignalRequested ()
+
+main : <IO> Unit
+main = println "signal io accept"

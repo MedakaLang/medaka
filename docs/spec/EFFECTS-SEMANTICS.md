@@ -1178,7 +1178,7 @@ grants for runtime checks (§8). There is no in-language effect handler.
 class — a label is a host-granted authority; the platform supplies the primitive
 that performs it; **parameterizable** (carries a domain); **emitted to the
 manifest**. Examples: `Net, FileRead, FileWrite, Env, Exec, Stdout, Stderr,
-Stdin, Clock, Rand`, and every user `effect Foo`. (An earlier design carved out
+Stdin, Clock, Rand, Signal`, and every user `effect Foo`. (An earlier design carved out
 an "internal" class — `Mut` for mutable state, `Panic` for divergence — with no
 host meaning and no manifest entry. That class was removed 2026-07-14: mutation
 is now untracked and `panic` is an ordinary control-flow primitive, not an
@@ -1189,8 +1189,8 @@ the history.)
 security labels at `⊤`** (`Stdout ⊔ Stderr ⊔ … ⊔ Net⊤`). An inferred narrow row is
 `≤ <IO>`, so any `<IO>` annotation still typechecks (it widens), while inference
 yields tight narrow rows for the manifest. The join holds on both sides of the order: a
-performed `<IO>` fits a bound that names all ten labels, and a policy that allows all ten
-admits an `<IO>` entry. `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
+performed `<IO>` fits a bound that names all eleven labels, and a policy that allows all
+eleven admits an `<IO>` entry. `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
 is deliberately EXCLUDED from this join by design — `<IO>` does not subsume
 `<FFI>` — because FFI crosses a trust boundary the IO alias is not meant to
 paper over; see [`CAPABILITY-PLATFORM.md`](../design/CAPABILITY-PLATFORM.md) §8
@@ -1213,12 +1213,13 @@ tables for a Product. A policy may give a label several entries, which admit
 together what any one admits. A `Net` authority names an endpoint the program
 may dial or bind; a socket accepted through a bound endpoint is exercised at
 that endpoint's authority, and waiting for a descriptor to become ready is a
-timed wait (`Clock`), not an operation on an endpoint. The one exception is
-deliberate: the runtime's signal externs (`pdsSignalStart`,
-`pdsSignalRequested`) reach no endpoint but are charged `Net` at the top of its
-domain until process signals have a label of their own. That over-charges,
-which is safe, and the only program using them already holds that grant
-because it binds.
+timed wait (`Clock`), not an operation on an endpoint. Observing a process
+signal reaches no endpoint either: the runtime's signal externs
+(`pdsSignalStart`, `pdsSignalRequested`) perform `Signal`, an atomic label that
+`IO` includes and `Net` does not. Reading the command line (`args`) and the
+build stamps (`buildCommit`, `buildDate`, `buildFingerprint`) performs no label:
+the command line is fixed when the process starts and the stamps are constants
+in the binary, so there is nothing for a host to grant or refuse.
 
 **The invocation summary.** The host forces the entry, calls it, and may invoke
 any function value the entry hands back; a function value the host supplies is

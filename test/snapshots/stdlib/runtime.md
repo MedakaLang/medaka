@@ -1,5 +1,5 @@
 # META
-source_lines=942
+source_lines=938
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -163,7 +163,7 @@ extern statFile : (path : String) ->
 
 -- | The command-line arguments after the program name. Bytes that are not
 -- valid UTF-8 read as U+FFFD, one per ill-formed sequence.
-extern args : Unit -> <Env> List String
+extern args : Unit -> List String
 
 -- | The value of an environment variable, or `None` when it is unset.
 -- Bytes that are not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
@@ -179,16 +179,16 @@ extern executablePath : Unit -> <Env> String
 -- builds, `medaka build`, a shipped binary).  The CLI recomputes the same
 -- fingerprint over the live compiler/ sources and warns when they diverge (the
 -- staleness guard).  Native-only.
-extern buildFingerprint : Unit -> <Env> String
+extern buildFingerprint : Unit -> String
 
 -- Short commit hash this binary was built from, stamped the same way as
 -- `buildFingerprint`. "" when not stamped, or when the build tree had no
 -- `.git` (e.g. a packaged dist tarball). Native-only.
-extern buildCommit : Unit -> <Env> String
+extern buildCommit : Unit -> String
 
 -- UTC build date (YYYY-MM-DD) this binary was built on, stamped the same way
 -- as `buildFingerprint`. "" when not stamped. Native-only.
-extern buildDate : Unit -> <Env> String
+extern buildDate : Unit -> String
 
 -- | Runs a program with arguments and waits for it. `Ok` carries the exit
 -- code, the captured standard output, and the captured standard error; a
@@ -334,15 +334,11 @@ extern listenSocketFd : ListenSocket a -> Int
 -- | Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
 -- descriptor readable on shutdown. A binary that never calls this retains
 -- the operating system's default signal behavior. Call once after bind.
---
--- It reaches no endpoint. It is charged `Net` at the top of its domain
--- until process signals have a label of their own: an over-charge, borne
--- by a program that already binds.
-extern pdsSignalStart : Unit -> <Net> Result String Int
+extern pdsSignalStart : Unit -> <Signal> Result String Int
 
 -- | Whether SIGTERM has been observed since `pdsSignalStart`. Stays true;
 -- the descriptor remains readable. Only call from ordinary task context.
-extern pdsSignalRequested : Unit -> <Net> Bool
+extern pdsSignalRequested : Unit -> <Signal> Bool
 
 -- | Waits until any of the descriptors is ready, or the timeout in
 -- milliseconds passes (`-1` waits forever). The interests are parallel to the
@@ -972,12 +968,12 @@ extern stringToLower : String -> String
 (DExtern false "fsync" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "removeDir" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "statFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "Bool") (TyCon "Bool") (TyCon "Float"))))))
-(DExtern false "args" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyApp (TyCon "List") (TyCon "String")))))
+(DExtern false "args" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String"))))
 (DExtern false "getEnv" (TyFun (TyNamed "name" (TyCon "String")) (TyEffect ((atom "Env" (name "name"))) None (TyApp (TyCon "Option") (TyCon "String")))))
 (DExtern false "executablePath" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
-(DExtern false "buildFingerprint" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
-(DExtern false "buildCommit" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
-(DExtern false "buildDate" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
+(DExtern false "buildFingerprint" (TyFun (TyCon "Unit") (TyCon "String")))
+(DExtern false "buildCommit" (TyFun (TyCon "Unit") (TyCon "String")))
+(DExtern false "buildDate" (TyFun (TyCon "Unit") (TyCon "String")))
 (DExtern false "runCommand" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
@@ -1002,8 +998,8 @@ extern stringToLower : String -> String
 (DExtern false "netSetTimeout" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "socketFd" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyCon "Int")))
 (DExtern false "listenSocketFd" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyCon "Int")))
-(DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyCon "Bool"))))
+(DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ("Signal") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ("Signal") None (TyCon "Bool"))))
 (DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
 (DExtern false "netSetNonblock" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Bool") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netSetNonblockListener" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyFun (TyCon "Bool") (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
@@ -1169,12 +1165,12 @@ extern stringToLower : String -> String
 (DExtern false "fsync" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "removeDir" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "statFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "Bool") (TyCon "Bool") (TyCon "Float"))))))
-(DExtern false "args" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyApp (TyCon "List") (TyCon "String")))))
+(DExtern false "args" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String"))))
 (DExtern false "getEnv" (TyFun (TyNamed "name" (TyCon "String")) (TyEffect ((atom "Env" (name "name"))) None (TyApp (TyCon "Option") (TyCon "String")))))
 (DExtern false "executablePath" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
-(DExtern false "buildFingerprint" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
-(DExtern false "buildCommit" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
-(DExtern false "buildDate" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
+(DExtern false "buildFingerprint" (TyFun (TyCon "Unit") (TyCon "String")))
+(DExtern false "buildCommit" (TyFun (TyCon "Unit") (TyCon "String")))
+(DExtern false "buildDate" (TyFun (TyCon "Unit") (TyCon "String")))
 (DExtern false "runCommand" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
@@ -1199,8 +1195,8 @@ extern stringToLower : String -> String
 (DExtern false "netSetTimeout" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "socketFd" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyCon "Int")))
 (DExtern false "listenSocketFd" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyCon "Int")))
-(DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyCon "Bool"))))
+(DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ("Signal") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ("Signal") None (TyCon "Bool"))))
 (DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
 (DExtern false "netSetNonblock" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Bool") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netSetNonblockListener" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyFun (TyCon "Bool") (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))

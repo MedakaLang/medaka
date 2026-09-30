@@ -619,6 +619,7 @@ builtInEffects = [
   "Net",
   "FileRead",
   "FileWrite",
+  "Signal",
   "FFI",
 ]
 

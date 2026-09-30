@@ -159,7 +159,7 @@ extern statFile : (path : String) ->
 
 -- | The command-line arguments after the program name. Bytes that are not
 -- valid UTF-8 read as U+FFFD, one per ill-formed sequence.
-extern args : Unit -> <Env> List String
+extern args : Unit -> List String
 
 -- | The value of an environment variable, or `None` when it is unset.
 -- Bytes that are not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
@@ -175,16 +175,16 @@ extern executablePath : Unit -> <Env> String
 -- builds, `medaka build`, a shipped binary).  The CLI recomputes the same
 -- fingerprint over the live compiler/ sources and warns when they diverge (the
 -- staleness guard).  Native-only.
-extern buildFingerprint : Unit -> <Env> String
+extern buildFingerprint : Unit -> String
 
 -- Short commit hash this binary was built from, stamped the same way as
 -- `buildFingerprint`. "" when not stamped, or when the build tree had no
 -- `.git` (e.g. a packaged dist tarball). Native-only.
-extern buildCommit : Unit -> <Env> String
+extern buildCommit : Unit -> String
 
 -- UTC build date (YYYY-MM-DD) this binary was built on, stamped the same way
 -- as `buildFingerprint`. "" when not stamped. Native-only.
-extern buildDate : Unit -> <Env> String
+extern buildDate : Unit -> String
 
 -- | Runs a program with arguments and waits for it. `Ok` carries the exit
 -- code, the captured standard output, and the captured standard error; a
@@ -330,15 +330,11 @@ extern listenSocketFd : ListenSocket a -> Int
 -- | Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
 -- descriptor readable on shutdown. A binary that never calls this retains
 -- the operating system's default signal behavior. Call once after bind.
---
--- It reaches no endpoint. It is charged `Net` at the top of its domain
--- until process signals have a label of their own: an over-charge, borne
--- by a program that already binds.
-extern pdsSignalStart : Unit -> <Net> Result String Int
+extern pdsSignalStart : Unit -> <Signal> Result String Int
 
 -- | Whether SIGTERM has been observed since `pdsSignalStart`. Stays true;
 -- the descriptor remains readable. Only call from ordinary task context.
-extern pdsSignalRequested : Unit -> <Net> Bool
+extern pdsSignalRequested : Unit -> <Signal> Bool
 
 -- | Waits until any of the descriptors is ready, or the timeout in
 -- milliseconds passes (`-1` waits forever). The interests are parallel to the

@@ -880,6 +880,8 @@ compared when the signature has more than one.
   measurement, and this branch adds about 6.5M, so the merge takes N4's block.
 - `pdsSignalStart`/`pdsSignalRequested` keep `<Net>`, documented in §7 and
   the catalog as a deliberate over-charge until signals have a label.
+  Superseded 2026-09-29: they now perform the `Signal` label, a member of
+  `IO`, and the over-charge is gone (`docs/spec/EFFECTS-SEMANTICS.md` §7).
 - `Socket`/`ListenSocket` keep their names; the fix is general: a program's
   own type may shadow a prelude type. Its own issue and PR.
 - A redeclaration may not widen an argument-bound index to `*`; the rule

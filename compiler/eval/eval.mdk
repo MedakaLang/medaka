@@ -4883,7 +4883,7 @@ export
 progArgsRef : Ref (List String)
 progArgsRef = Ref []
 
-pArgs : Value e -> <Env | e> Value e
+pArgs : Value e -> Value e
 pArgs _ = vStringList !progArgsRef
 
 pGetEnv : Value e -> <Env | e> Value e
@@ -4893,13 +4893,13 @@ pGetEnv _ = panic "getEnv: not a String"
 pExecutablePath : Value e -> <Env | e> Value e
 pExecutablePath _ = VString (executablePath ())
 
-pBuildFingerprint : Value e -> <Env | e> Value e
+pBuildFingerprint : Value e -> Value e
 pBuildFingerprint _ = VString (buildFingerprint ())
 
-pBuildCommit : Value e -> <Env | e> Value e
+pBuildCommit : Value e -> Value e
 pBuildCommit _ = VString (buildCommit ())
 
-pBuildDate : Value e -> <Env | e> Value e
+pBuildDate : Value e -> Value e
 pBuildDate _ = VString (buildDate ())
 
 -- ── Stdin ─────────────────────────────────────────────────────────────────

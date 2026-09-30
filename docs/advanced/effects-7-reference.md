@@ -9,7 +9,7 @@ where the system is known not to express something yet.
 | Written | Meaning | Chapter |
 |---|---|---|
 | `f : A -> B` | pure function, the row is `<>` | [I](effects-1-rows.md) |
-| `f : A -> <IO> B` | may perform any of the ten host labels | [I](effects-1-rows.md) |
+| `f : A -> <IO> B` | may perform any of the eleven host labels | [I](effects-1-rows.md) |
 | `f : A -> <Stdout, Clock> B` | may perform exactly those labels | [I](effects-1-rows.md) |
 | `v : <Stdout> Int` | a value whose computation performs `Stdout` | [I](effects-1-rows.md) |
 | `v : <> Int` | a value computed purely (checked) | [I](effects-1-rows.md) |
