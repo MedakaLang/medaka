@@ -1,0 +1,10 @@
+interface Same a b where
+  same : a -> b
+
+impl Same a a where
+  same x = x
+
+keepSocket : Socket h -> Socket h
+keepSocket s = same s
+
+main = println 1

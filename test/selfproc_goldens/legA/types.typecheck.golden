@@ -1819,6 +1819,11 @@ markSourceless : List Int -> Unit
 markTailDecl : ArgRw -> Decl -> Decl
 markTailDecls : MarkCtx -> Map String Unit -> (String -> Bool) -> List Decl -> List Decl
 matchCol0Type : Mono -> Option TabKey
+matchEqAuth : Authority -> Authority -> Bool
+matchEqMono : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
+matchEqPairs : List (Mono, Mono) -> Bool
+matchEqR : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
+matchEqRow : EffRow -> EffRow -> Bool
 matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) -> List (a, b) -> List (c, b) -> Option (List (c, b))
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))

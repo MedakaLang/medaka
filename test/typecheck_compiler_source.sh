@@ -726,6 +726,8 @@ echo "checking #1110 Mono.TCon mint set ..."
 #     absent-origin rule. In source order: `unifyN`, `cohGoR`, `cohStep` (two
 #     lines: the general-side match and its `TCon`/`TCon` inner arm), `cohEqR`,
 #     `matchStep`, `monoSameGiven` (two lines, same reason as `cohStep`).
+#   `matchEqR` — checks the full type of repeated impl-head bindings, while
+#     keeping the same origin-sensitive constructor identity rule.
 #   `(TCon n1 o1, TCon n2 o2) =>`  — `tconIdConflict` (read by `firstIdConflict` and `headIdConflict`), #1111 A-2.10: the DIAGNOSTIC
 #     side of the same rule. It finds the head whose two identities conflict so the
 #     otherwise-unreadable `Type mismatch: T vs T` can name the two modules. It is a
@@ -749,6 +751,7 @@ cohGoR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
 TCon a oa => match s
 TCon b ob => if sameTyConHead a oa b ob then MOk else MFail
 cohEqR (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+matchEqR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
 TCon n2 o2 => if sameTyConHead n o n2 o2 then MOk else MFail
 TCon x ox => match peelQual b
 TCon y oy => sameTyConHead x ox y oy

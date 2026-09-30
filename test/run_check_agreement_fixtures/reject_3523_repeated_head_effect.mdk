@@ -1,0 +1,18 @@
+interface Same a b where
+  same : a -> b
+
+impl Same a a where
+  same x = x
+
+noisy : Int -> <IO> Int
+noisy n =
+  println "side effect"
+  n + 1
+
+launder : (Int -> <IO> Int) -> (Int -> Int)
+launder f = same f
+
+pureF : Int -> Int
+pureF = launder noisy
+
+main = println (pureF 3)

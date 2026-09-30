@@ -27455,7 +27455,9 @@ cohOccurs subst id m = match cohResolve subst m
 -- pattern vs Mono) are the SAME one-sided, consistency-enforcing structural match
 -- in three node spaces: only the GENERAL side's vars bind, a var bound twice must
 -- be CONSISTENT (its two specific bindings structurally equal), and effect rows
--- are IGNORED (row-blind — §7's single-meaning law).  They differ only in (a) how
+-- are ignored for coherence/ranking (§7's single-meaning law).  Impl-goal
+-- matching supplies matchEqMono instead, because repeated variables are full
+-- typing equations, including rows and authorities.  The frontends differ in (a) how
 -- a node is destructured into a var / children / leaf and (b) the specific-side
 -- equality used for the consistency check.  [matchOneSided] is that shared core:
 -- it walks a worklist of (general, specific) pairs, threads a key→specific subst,
@@ -27566,6 +27568,49 @@ cohEqR (TAuth _) (TAuth _) = True
 cohEqR (TQual a _) b = cohEqR (normalize a) b
 cohEqR a (TQual b _) = cohEqR a (normalize b)
 cohEqR _ _ = False
+
+-- A repeated impl-head variable is one full type.  Coherence and dispatch
+-- deliberately ignore rows and authorities when ranking heads; that comparison
+-- cannot prove that two bindings of the same variable agree.  Keep type-variable
+-- equations in a matcher-local substitution only where the caller already
+-- solved them (implHeadSubst).  The one-sided matcher keeps goal variables rigid.
+-- Compare the remaining indices without touching the goal's inference cells.
+matchEqMono : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
+matchEqMono subst a b = matchEqR subst (cohResolve subst a) (cohResolve subst b)
+
+matchEqR : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
+matchEqR _ (TVar c1) (TVar c2) = tyvarId c1 == tyvarId c2
+matchEqR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+matchEqR _ (TRigid a) (TRigid b) = a == b
+matchEqR _ (TCon a _) (TRigid b) = a == b
+matchEqR _ (TRigid a) (TCon b _) = a == b
+matchEqR subst (TApp f1 a1) (TApp f2 a2) =
+  matchEqMono subst f1 f2 && matchEqMono subst a1 a2
+matchEqR subst (TFun a1 r1 b1) (TFun a2 r2 b2) =
+  matchEqMono subst a1 a2 && matchEqRow r1 r2 && matchEqMono subst b1 b2
+matchEqR _ (TEff r1) (TEff r2) = matchEqRow r1 r2
+matchEqR _ (TAuth q1) (TAuth q2) = matchEqAuth q1 q2
+matchEqR subst (TQual a q1) (TQual b q2) =
+  matchEqAuth q1 q2 && matchEqMono subst a b
+matchEqR subst (TQual a q) b = authIsTop q && matchEqMono subst a b
+matchEqR subst a (TQual b q) = authIsTop q && matchEqMono subst a b
+matchEqR _ _ _ = False
+
+matchEqAuth : Authority -> Authority -> Bool
+matchEqAuth a b = authSub a b && authSub b a
+
+matchEqRow : EffRow -> EffRow -> Bool
+matchEqRow a b =
+  let (atomsA, tailsA) = rowFlat a
+  let (atomsB, tailsB) = rowFlat b
+  listLen atomsA == listLen atomsB
+    && listLen tailsA == listLen tailsB
+    && allList
+      (x => match findAtom (atomKey x) atomsB
+        Some y => matchEqAuth (atomAuth x) (atomAuth y)
+        None => False)
+      atomsA
+    && allList (x => anyList (y => effvarId x == effvarId y) tailsB) tailsA
 
 -- [a] strictly more specific than [b]: b subsumes a but not a subsumes b
 cohStrictlyMoreSpecific : List Mono -> List Mono -> Bool
@@ -31378,10 +31423,16 @@ implHeadSubst pats concretes
   | otherwise = match positionBindings pats concretes []
     None => None
     Some binds =>
-      if cohOverlapGo (Ref []) (repeatedBindings binds []) then
+      if matchEqPairs (repeatedBindings binds []) then
         Some (fold (acc b => mergeOne acc (fst b) (snd b)) [] binds)
       else
         None
+
+matchEqPairs : List (Mono, Mono) -> Bool
+matchEqPairs pairs =
+  let subst = Ref []
+  cohOverlapGo subst pairs
+    && allList (p => matchEqMono subst (fst p) (snd p)) pairs
 
 -- Each head position matched on its own, its bindings in position order.
 positionBindings : List Ty ->
@@ -31431,12 +31482,12 @@ preferConcrete a b = match headTyconNameMono a
 -- type-variable names to monos (single-level: the pattern's args are bare vars).
 -- #156 S1 / Fork B: matchTyMono is now a CONSISTENCY-ENFORCING frontend of the
 -- shared matchOneSided core (specific side = Mono, so the consistency equality is
--- cohEqMono).  The old body combined element substs with `xs ++ ys` and NEVER
+-- matchEqMono).  The old body combined element substs with `xs ++ ys` and NEVER
 -- checked a var bound twice, so a non-linear impl head (`Get (Box a) a`) could
 -- "match" `Get (Box Int) Bool` (binding a↦Int AND a↦Bool) even though NO
 -- substitution exists — violating §3 `inst`'s "φ a most-general MATCHER" premise
 -- and letting findImplEntryGo (iface=="") select the wrong impl's requires.  Now
--- a↦Int, a↦Bool fails cohEqMono ⇒ None (no false match); a CONSISTENT non-linear
+-- a↦Int, a↦Bool fails matchEqMono ⇒ None (no false match); a CONSISTENT non-linear
 -- head (`Get (Box Int) Int`, a↦Int twice) still matches (the live canary in
 -- test/eval_typed_fixtures/return_only_param_dispatch.mdk).  The recovered subst
 -- is consumed only by key-lookup (fromAstType / paramMonoOf), so dropping the
@@ -31444,18 +31495,21 @@ preferConcrete a b = match headTyconNameMono a
 -- match.
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
 matchTyMono headTy resultMono =
-  matchOneSided matchStep eqStr cohEqMono [(headTy, resultMono)] []
+  let subst = Ref []
+  matchOneSided matchStep eqStr (matchEqMono subst) [(headTy, resultMono)] []
 
 -- #609: the §3 matching judgement over a head VECTOR —
 --     match(IE, C τ̄) = { I | ∃φ. φ(head(I)) = C τ̄ }
 -- ONE most-general matcher φ for the whole vector, so a var appearing in several
--- argument positions must receive the same mono (matchOneSided's cohEqMono
+-- argument positions must receive the same mono (matchOneSided's matchEqMono
 -- consistency check, the same one matchTyMono relies on).  n=1 reduces to
 -- matchTyMono term for term: `zipL [t] [m] == [(t, m)]`.
 matchTyMonos : List Ty -> List Mono -> Option (List (String, Mono))
 matchTyMonos pats goals
   | listLen pats /= listLen goals = None
-  | otherwise = matchOneSided matchStep eqStr cohEqMono (zipL pats goals) []
+  | otherwise =
+    let subst = Ref []
+    matchOneSided matchStep eqStr (matchEqMono subst) (zipL pats goals) []
 
 -- Does an impl whose head vector is [itys] (arg-0 pattern [hty]) match the goal
 -- vector [goals]?  When the caller recovered the interface's FULL param monos the
@@ -35477,7 +35531,9 @@ methodPredicateTemplateMatchesRow : MethodPredicateTemplate -> ImplRow -> Bool
 methodPredicateTemplateMatchesRow template (ImplRow _ _ iface tys _ _) =
   sameIfaceDecl template.mptInterface iface
     && (match methodPredicateTemplateHeadPairs template.mptArguments tys
-      Some pairs => isSome (matchOneSided matchStep eqStr cohEqMono pairs [])
+      Some pairs =>
+        let subst = Ref []
+        isSome (matchOneSided matchStep eqStr (matchEqMono subst) pairs [])
       None => False)
 
 methodPredicateTemplateHeadPairs : List (Option Mono) ->
