@@ -16,8 +16,9 @@ describes how, not a completed deployment.
 ## What this deploys
 
 `pds serve` (`pds/serve.mdk`) binds **loopback only by default** — `--bind`
-defaults to `127.0.0.1`, and a non-loopback bind is refused before anything
-is read or written unless `--trusted-proxy` is also given
+defaults to `127.0.0.1` and accepts one other value, `0.0.0.0`; any other
+address is refused, and `0.0.0.0` is refused unless `--trusted-proxy` is also
+given, both before anything is read or written
 (`requireTrustedBind`, `docs/design/ATPROTO-PDS-DESIGN.md` § "Loopback by
 default"). This deployment keeps the default: `pds serve` binds loopback,
 and Caddy (`pds/Caddyfile`) is the only thing that terminates TLS and is

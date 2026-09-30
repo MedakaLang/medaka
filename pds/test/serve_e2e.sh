@@ -1406,6 +1406,32 @@ fi
 [ ! -e "$DATA31/credential" ] \
   || fail 'case 31: a refused non-loopback bind left a generated credential behind'
 
+# 31b. an address that is neither loopback nor the wildcard is refused
+#    outright, --trusted-proxy notwithstanding: `--bind` accepts exactly
+#    127.0.0.1 and 0.0.0.0. --trusted-proxy and a --password-file are both
+#    given so that neither of the other two refusals above can be the one that
+#    fires, and the refusal still lands before the credential or session
+#    secret reach disk.
+DATA31B="$WORK/data31b"
+mkdir -p "$DATA31B"
+run_until_exit "$WORK/serve31b.out" "$WORK/serve31b.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" --data "$DATA31B" --port 0 \
+  --bind 203.0.113.7 --trusted-proxy --init
+[ "$RC" -ne 0 ] \
+  || fail 'case 31b: a --bind outside {127.0.0.1, 0.0.0.0} was accepted'
+grep -F 'refusing to bind 203.0.113.7: --bind accepts only 127.0.0.1 (loopback, the default) or 0.0.0.0 (every interface)' \
+  "$WORK/serve31b.err" >/dev/null \
+  || fail 'case 31b: the refusal did not name the address and the two accepted values'
+if grep -F 'serve: listening on' "$WORK/serve31b.out" >/dev/null 2>&1; then
+  fail 'case 31b: the listener bound an address outside the accepted two'
+fi
+[ ! -e "$DATA31B/session-secret" ] \
+  || fail 'case 31b: a refused bind address left a generated session secret behind'
+[ ! -e "$DATA31B/credential" ] \
+  || fail 'case 31b: a refused bind address left a generated credential behind'
+
 # 32. the accepted combination: non-loopback bind + --trusted-proxy + a real
 #    credential actually binds and serves. The client still connects over
 #    127.0.0.1 (its only address), which 0.0.0.0 accepts along with every

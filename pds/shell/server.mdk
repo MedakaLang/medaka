@@ -183,6 +183,7 @@ import shell.eventlog.{
   eventLogStage,
   eventLogStaged,
 }
+import shell.rows.{Serve, Wire}
 import shell.persist.{
   persistCredential,
   persistPreferences,
@@ -2027,7 +2028,7 @@ runServer : Server ->
   Serving ->
   Duration ->
   Int ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
+  Serve e (Result String Unit)
 runServer server dir storeRef lis serving statsInterval signalFd = defer
   active <- liftIO (u => Ref 0)
   unframed <- liftIO (u => Ref 0)
@@ -2094,7 +2095,7 @@ drainPending active until = defer
 -- The signal pipe and listener share the same scheduler poller and wait set.
 acceptOrSignal : Listener * ->
   Int ->
-  Async <Clock, Net | e> (Result String (Option (Connection *)))
+  Wire * e (Result String (Option (Connection *)))
 acceptOrSignal lis signalFd = defer
   requested <- liftIO (u => pdsSignalRequested ())
   if requested then
@@ -2131,7 +2132,7 @@ acceptLoop : Server ->
   SubscriptionCensus ->
   Serving ->
   Int ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
+  Serve e (Result String Unit)
 acceptLoop server dir storeRef lis active unframed limiterRef census serving signalFd =
   defer
     accepted <- acceptOrSignal lis signalFd
@@ -2159,7 +2160,7 @@ acceptStep : Server ->
   Serving ->
   Int ->
   Result String (Option (Connection *)) ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
+  Serve e (Result String Unit)
 acceptStep _ _ _ _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
 acceptStep _ _ _ lis _ _ _ _ serving _ (Ok None) = defer
   _ <- liftIO (u => servingStopping serving := True)
@@ -2230,7 +2231,7 @@ serveConnection : Server ->
   Connection * ->
   Ref Int ->
   Ref Int ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
+  Serve e Unit
 serveConnection server dir storeRef limiterRef census serving conn active unframed =
   defer
     held <- liftIO (u => Ref True)
@@ -2531,9 +2532,9 @@ reserveReadBuffer census buf scan =
 
    Either way the connection closes and its retirement gives its whole charge
    back, which is what lets the waiters behind it proceed. -}
-refuseOverBudget : Connection * ->
+refuseOverBudget : Connection h ->
   HttpScan ->
-  Async <Clock, Net, Stdout | e> (Result String Unit)
+  Async <Clock, Net h, Stdout | e> (Result String Unit)
 refuseOverBudget conn scan =
   if httpScanInHeaders scan then
     deferPure (Err "in-flight request buffer budget exceeded")
@@ -2561,7 +2562,7 @@ refuseOverBudget conn scan =
    reads and the one short wait that finds the queue already empty. A peer
    still sending past that is told by the reset instead, which is the answer
    it left this server no room for. -}
-drainRefused : Connection * -> Int -> Async <Clock, Net | e> Unit
+drainRefused : Connection h -> Int -> Async <Clock, Net h | e> Unit
 drainRefused conn left =
   if left <= 0 then
     deferPure ()
@@ -3609,10 +3610,10 @@ rejectBuffer : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Connection * ->
+  Connection h ->
   ReadBuffer ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net h, Rand, Stderr, Stdout | e> (Result String Unit)
 rejectBuffer server dir storeRef limiterRef conn buf firstRequest = defer
   nowSeconds <- liftIO (u => floatToInt (now ()))
   startedAt <- liftIO (u => monotonic ())
@@ -3631,12 +3632,12 @@ rejectBufferAt : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Connection * ->
+  Connection h ->
   ReadBuffer ->
   Bool ->
   Int ->
   Float ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net h, Rand, Stderr, Stdout | e> (Result String Unit)
 rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds startedAt =
   let charged =
     applyRateLimit

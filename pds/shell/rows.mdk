@@ -1,0 +1,38 @@
+{- | Named effect rows for the socket shell.
+
+   Every alias here is an exact row, not a ceiling: a function that needs less
+   than one of them spells its own narrower row rather than borrowing a wider
+   one, because the row a function declares is what `medaka manifest` and the
+   typechecker hold it to.
+
+   `Wire`, `Streaming` and `Serve` nest because the code they describe does.
+   The serving loop hands an upgraded connection to the subscription loop, so
+   whatever the subscription loop may do the serving loop may do too; and both
+   move bytes over a socket.
+
+   An alias with an `Effect` parameter cannot yet appear on the signatures of a
+   recursion group with more than one back edge (#3623), so the connection
+   loop in `pds/shell/server.mdk` and the tail loop in
+   `pds/shell/subscribe.mdk` spell these rows out. -}
+
+import async.{Async, Wait}
+
+-- | A computation that moves bytes over a socket at authority `h`, and may
+-- wait on the clock while it does. A helper that holds one indexed connection
+-- is `Wire h`; a loop that dials or accepts at the whole domain is `Wire *`.
+export type Wire (h : Authority Net) (e : Effect) a = Async <Clock, Net h | e> a
+
+-- | A deadline a `Wire h e` computation checks. It restates `Wire`'s row
+-- because a `Wait` is indexed by the row itself and a row cannot be named on
+-- its own; naming it through this alias also binds `h` in a signature whose
+-- first mention of the authority is the deadline.
+export type WireDeadline (h : Authority Net) (e : Effect) = Wait <Clock, Net h | e>
+
+-- | The subscription loop's row (`pds/shell/subscribe.mdk`): the wire, plus
+-- reading the event log it replays and tails.
+export type Streaming (e : Effect) a = Wire * <FileRead | e> a
+
+-- | The serving loop's row (`pds/shell/server.mdk`, `pds/serve.mdk`): the
+-- subscription loop's, plus persisting what a request changed, drawing nonces,
+-- and the access and diagnostic logs.
+export type Serve (e : Effect) a = Streaming <FileWrite, Rand, Stderr, Stdout | e> a

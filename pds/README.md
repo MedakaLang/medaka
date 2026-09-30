@@ -21,7 +21,8 @@ idle-connection timeout, and restart-and-resume across a process boundary), and
 `pds/lib` import of `pds/shell`, every `pds/lib` export explicitly signed, and no
 such signature effect-bearing — the signature check is what stops an unannotated
 export from carrying an inferred effect row past the effect check). The bind
-address is `--bind`, defaulting to `127.0.0.1`; a non-loopback value is refused
+address is `--bind`, which accepts exactly `127.0.0.1` (the default) and
+`0.0.0.0`; any other value is refused (`bindAddressOf`), and `0.0.0.0` is refused
 unless `--trusted-proxy` also asserts that a reverse proxy terminates TLS in
 front of this process (`requireTrustedBind`), because nothing here terminates TLS
 itself.
@@ -109,10 +110,11 @@ the shell is native-bound.
   signing key, and hands `pds/shell/server.mdk` a listener and the one
   `Ref Store` all connection tasks share. Its `main` is an `Async` value, so
   `medaka build pds/serve.mdk` produces a program the async scheduler drives.
-  The bind address comes from `--bind` (`bindAddressOf`, default `127.0.0.1`)
-  and is handed to `shell.server`'s `bindAddress`; `requireTrustedBind` refuses
-  a non-loopback value that `--trusted-proxy` has not vouched for, before any
-  secret is read or generated.
+  The bind address comes from `--bind` (`bindAddressOf`, which accepts exactly
+  `127.0.0.1`, the default, and `0.0.0.0`) and is handed to `shell.server`'s
+  `bindAddress`; `requireTrustedBind` refuses `0.0.0.0` unless `--trusted-proxy`
+  has vouched for it. Both refusals land before any secret is read or
+  generated.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). Every gate must be placed explicitly in
   exactly one `ci.yml` shard by measured cost; directory location alone does

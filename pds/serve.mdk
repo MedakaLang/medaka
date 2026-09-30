@@ -10,10 +10,11 @@
    default for any of them, so a misconfigured server never starts serving
    something other than what was asked for.
 
-   The bind address is `--bind`, defaulting to `127.0.0.1` (loopback). A
-   non-loopback address is refused before anything is read or written unless
-   `--trusted-proxy` is also given (`requireTrustedBind`): this process has no
-   way to observe whether the peer on the other end of an accepted connection
+   The bind address is `--bind`, which accepts exactly `127.0.0.1` (loopback,
+   the default) and `0.0.0.0` (every interface); any other value is refused
+   before anything is read or written (`bindAddressOf`). `0.0.0.0` is refused
+   too unless `--trusted-proxy` is also given (`requireTrustedBind`): this
+   process has no way to observe whether the peer on the other end of an accepted connection
    is actually the reverse proxy `--trusted-proxy` says it is — there is no
    `getpeername` in the runtime — so the flag is an operator assertion about
    the deployment, not a verified fact, and the refusal is what makes an
@@ -149,6 +150,7 @@ import shell.keygen.{
   keygenTokenSecret,
   tokenSecretBytes,
 }
+import shell.rows.{Serve}
 import shell.persist.{
   credentialPath,
   persistCredential,
@@ -194,7 +196,7 @@ serveSpec = spec "serve" [
   value
     ["--bind"]
     "ADDR"
-    "address to bind, default 127.0.0.1 (loopback); a non-loopback address is refused unless --trusted-proxy is also given",
+    "address to bind: 127.0.0.1 (loopback, the default) or 0.0.0.0 (every interface); 0.0.0.0 is refused unless --trusted-proxy is also given",
   switch
     ["--init"]
     "create the genesis repository; refused if the data directory already holds a repository head",
@@ -289,13 +291,21 @@ statsIntervalOf parsed = match flagValue "--stats-interval-ms" parsed
 loopbackAddress : String
 loopbackAddress = "127.0.0.1"
 
--- `--bind`, defaulting to loopback when absent. There is no admission check
--- here — a malformed address is caught the same way it always was, by
--- `shell.server`'s `bindAddress` failing to bind it.
-bindAddressOf : Args -> String
+wildcardAddress : String
+wildcardAddress = "0.0.0.0"
+
+-- `--bind`, defaulting to loopback when absent. Only loopback and the wildcard
+-- are accepted: the addresses this process can listen on are a closed set,
+-- and this is where it is named.
+bindAddressOf : Args -> Result String String
 bindAddressOf parsed = match flagValue "--bind" parsed
-  Some given => given
-  None => loopbackAddress
+  None => Ok loopbackAddress
+  Some given =>
+    if given == loopbackAddress || given == wildcardAddress then
+      Ok given
+    else
+      Err
+        "refusing to bind \{given}: --bind accepts only \{loopbackAddress} (loopback, the default) or \{wildcardAddress} (every interface)"
 
 isLoopbackAddress : String -> Bool
 isLoopbackAddress addr = addr == loopbackAddress
@@ -808,12 +818,12 @@ configure parsed = do
   keyPath <- required "--key" parsed
   dir <- required "--data" parsed
   port <- requiredPort parsed
-  let bind = bindAddressOf parsed
+  bind <- bindAddressOf parsed
   statsInterval <- statsIntervalOf parsed
   let trustedProxy = TrustedProxy (flag "--trusted-proxy" parsed)
-  -- Before anything else is read or generated: a bind refusal must leave no
-  -- secret behind, same as every other refusal `configure` can raise
-  -- (#2659 item 4).
+  -- Before anything else is read or generated: a bind refusal, of either kind,
+  -- must leave no secret behind, same as every other refusal `configure` can
+  -- raise (#2659 item 4).
   () <- requireTrustedBind bind trustedProxy
   account <- makeAccount did handle hostname
   () <- requireDidHostnameCase (accountDid account) (accountHostname account)
@@ -1037,9 +1047,7 @@ reportOutcome (Err message) = abort "serve: accept loop ended: \{message}"
    or `abort`: an unreachable relay must not prevent startup and must leave
    no durable side effect from a run that reported failure (contract §7;
    #2906, #2659 item 4). -}
-announceToRelay : RelayTarget ->
-  String ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
+announceToRelay : RelayTarget -> String -> Serve e Unit
 announceToRelay target hostname = defer
   outcome <- requestCrawl target hostname
   match outcome
@@ -1057,7 +1065,7 @@ announce : String ->
   Option RelayTarget ->
   Duration ->
   Int ->
-  Async <Clock, Env, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
+  Serve <Env | e> Unit
 announce bind port lis store dir server serving relay statsInterval signalFd =
   defer
     _ <- liftIO (u => ready bind port)
@@ -1077,7 +1085,7 @@ bound : String ->
   Option RelayTarget ->
   Duration ->
   Result String (Listener *) ->
-  Async <Clock, Env, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
+  Serve <Env | e> Unit
 bound _ _ _ _ _ _ _ (Err message) =
   liftIO (u => abort "serve: bind failed: \{message}")
 bound bind server store dir serving relay statsInterval (Ok lis) = defer
@@ -1145,7 +1153,7 @@ reportBeat (LockLost message) =
   ePutStrLn "serve: data directory lock lost: \{message}"
 
 start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String) ->
-  Async <Clock, Env, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
+  Serve <Env | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
 start (Ok (server, store, dir, port, bind, serving, relay, statsInterval, lock, lines)) =
   defer
@@ -1165,7 +1173,7 @@ keygen rest = match parseArgs keygenSpec rest
     Err message => abort "keygen: \{message}"
     Ok () => ()
 
-main : Async <Clock, Env, FileRead, FileWrite, Net, Rand, Stderr, Stdout> Unit
+main : Serve <Env> Unit
 main = defer
   argv <- liftIO (u => args ())
   match argv
