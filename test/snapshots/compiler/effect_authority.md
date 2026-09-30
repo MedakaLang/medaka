@@ -1,5 +1,5 @@
 # META
-source_lines=523
+source_lines=533
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -15,7 +15,7 @@ stages=DESUGAR,MARK
 import types.effect_domain.{
   Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
   appendParam, dantichain, dsubAny, djoinN, setCardCap, productNorm,
-  renderAxisVal, lookupAxis, domainKey
+  renderAxisVal, lookupAxis, domainKey, retagParam
 }
 import support.util.{
   joinWith, reverseL, listLen, anyList, allList, dedupBy, filterList
@@ -257,6 +257,15 @@ termKey (AProduct axes) =
         "\{fst a}=\{renderAxisTerm (cell => "#" ++ intToString (authvarId cell)) (snd a)}")
       axes)
 termKey _ = ""
+
+-- A term read at a label whose domain's top is [top], its constants in that
+-- label's order (`retagParam`).
+export
+authRetag : Param -> Authority -> Authority
+authRetag top a = match authNorm a
+  AConst p => AConst (retagParam top p)
+  AJoin ms => authJoinAll (map (authRetag top) ms)
+  other => other
 
 -- A value's abstraction may over-approximate it, so a value whose authority
 -- would hold more than `setCardCap` constants is folded by the domain join
@@ -523,10 +532,11 @@ grantJoin _ _ _ = GrantTop
 -- member, or a Product element as a signature writes it.
 paramElements : Param -> List String
 paramElements (PPrefix (Some s)) = [s]
+paramElements (PPath (Some s)) = [s]
 paramElements (PSet (Some xs)) = xs
 paramElements p = [trimLeft (drender p)]
 # DESUGAR
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productNorm" false) (mem "renderAxisVal" false) (mem "lookupAxis" false) (mem "domainKey" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productNorm" false) (mem "renderAxisVal" false) (mem "lookupAxis" false) (mem "domainKey" false) (mem "retagParam" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "dedupBy" false) (mem "filterList" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
@@ -597,6 +607,8 @@ paramElements p = [trimLeft (drender p)]
 (DTypeSig false "termKey" (TyFun (TyCon "Authority") (TyCon "String")))
 (DFunDef false "termKey" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EApp (EVar "renderAxisTerm") (ELam ((PVar "cell")) (EBinOp "++" (ELit (LString "#")) (EApp (EVar "intToString") (EApp (EVar "authvarId") (EVar "cell")))))) (EApp (EVar "snd") (EVar "a"))))) (ELit (LString ""))))) (EVar "axes"))))
 (DFunDef false "termKey" (PWild) (ELit (LString "")))
+(DTypeSig true "authRetag" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "authRetag" ((PVar "top") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EApp (EVar "retagParam") (EVar "top")) (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EVar "authRetag") (EVar "top"))) (EVar "ms")))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig true "authWidenValue" (TyFun (TyCon "Authority") (TyCon "Authority")))
 (DFunDef false "authWidenValue" ((PVar "a")) (EBlock (DoLet false false (PTuple (PVar "consts") (PVar "tuples") (PVar "vars")) (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EApp (EApp (EApp (EVar "Parts") (EListLit)) (EListLit)) (EVar "Tip")))) (DoLet false false (PVar "cs") (EApp (EVar "dantichain") (EVar "consts"))) (DoExpr (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "cs")) (EVar "setCardCap")) (EApp (EApp (EApp (EVar "assemble") (EListLit (EApp (EApp (EApp (EVar "fold") (EVar "djoinN")) (EApp (EVar "headOr") (EVar "cs"))) (EVar "cs")))) (EVar "tuples")) (EVar "vars")) (EApp (EVar "authNorm") (EVar "a"))))))
 (DTypeSig false "headOr" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Param")))
@@ -684,10 +696,11 @@ paramElements p = [trimLeft (drender p)]
 (DFunDef false "grantJoin" (PWild PWild PWild) (EVar "GrantTop"))
 (DTypeSig false "paramElements" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "paramElements" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EListLit (EVar "s")))
+(DFunDef false "paramElements" ((PCon "PPath" (PCon "Some" (PVar "s")))) (EListLit (EVar "s")))
 (DFunDef false "paramElements" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EVar "xs"))
 (DFunDef false "paramElements" ((PVar "p")) (EListLit (EApp (EVar "trimLeft") (EApp (EVar "drender") (EVar "p")))))
 # MARK
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productNorm" false) (mem "renderAxisVal" false) (mem "lookupAxis" false) (mem "domainKey" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false) (mem "dantichain" false) (mem "dsubAny" false) (mem "djoinN" false) (mem "setCardCap" false) (mem "productNorm" false) (mem "renderAxisVal" false) (mem "lookupAxis" false) (mem "domainKey" false) (mem "retagParam" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "dedupBy" false) (mem "filterList" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
@@ -758,6 +771,8 @@ paramElements p = [trimLeft (drender p)]
 (DTypeSig false "termKey" (TyFun (TyCon "Authority") (TyCon "String")))
 (DFunDef false "termKey" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EApp (EVar "renderAxisTerm") (ELam ((PVar "cell")) (EBinOp "++" (ELit (LString "#")) (EApp (EVar "intToString") (EApp (EVar "authvarId") (EVar "cell")))))) (EApp (EVar "snd") (EVar "a"))))) (ELit (LString ""))))) (EVar "axes"))))
 (DFunDef false "termKey" (PWild) (ELit (LString "")))
+(DTypeSig true "authRetag" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "authRetag" ((PVar "top") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EApp (EVar "retagParam") (EVar "top")) (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EVar "authRetag") (EVar "top"))) (EVar "ms")))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig true "authWidenValue" (TyFun (TyCon "Authority") (TyCon "Authority")))
 (DFunDef false "authWidenValue" ((PVar "a")) (EBlock (DoLet false false (PTuple (PVar "consts") (PVar "tuples") (PVar "vars")) (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EApp (EApp (EApp (EVar "Parts") (EListLit)) (EListLit)) (EVar "Tip")))) (DoLet false false (PVar "cs") (EApp (EVar "dantichain") (EVar "consts"))) (DoExpr (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "cs")) (EVar "setCardCap")) (EApp (EApp (EApp (EVar "assemble") (EListLit (EApp (EApp (EApp (EMethodRef "fold") (EVar "djoinN")) (EApp (EVar "headOr") (EVar "cs"))) (EVar "cs")))) (EVar "tuples")) (EVar "vars")) (EApp (EVar "authNorm") (EVar "a"))))))
 (DTypeSig false "headOr" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Param")))
@@ -845,5 +860,6 @@ paramElements p = [trimLeft (drender p)]
 (DFunDef false "grantJoin" (PWild PWild PWild) (EVar "GrantTop"))
 (DTypeSig false "paramElements" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "paramElements" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EListLit (EVar "s")))
+(DFunDef false "paramElements" ((PCon "PPath" (PCon "Some" (PVar "s")))) (EListLit (EVar "s")))
 (DFunDef false "paramElements" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EVar "xs"))
 (DFunDef false "paramElements" ((PVar "p")) (EListLit (EApp (EVar "trimLeft") (EApp (EVar "drender") (EVar "p")))))

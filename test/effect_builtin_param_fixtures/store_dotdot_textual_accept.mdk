@@ -1,0 +1,11 @@
+-- #3636: a user Prefix label has no runtime that canonicalizes, so its order
+-- compares text and `..` is two characters: `"cfg/../x"` is under `"cfg/*"`.
+effect Store Prefix
+
+put : (p : String) -> <Store p> Unit
+put _ = ()
+
+keep : Unit -> <Store "cfg/*"> Unit
+keep _ = put "cfg/../x"
+
+main = println "store dotdot textual accept"

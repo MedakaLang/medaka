@@ -11,7 +11,7 @@
 import types.effect_domain.{
   Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
   appendParam, dantichain, dsubAny, djoinN, setCardCap, productNorm,
-  renderAxisVal, lookupAxis, domainKey
+  renderAxisVal, lookupAxis, domainKey, retagParam
 }
 import support.util.{
   joinWith, reverseL, listLen, anyList, allList, dedupBy, filterList
@@ -253,6 +253,15 @@ termKey (AProduct axes) =
         "\{fst a}=\{renderAxisTerm (cell => "#" ++ intToString (authvarId cell)) (snd a)}")
       axes)
 termKey _ = ""
+
+-- A term read at a label whose domain's top is [top], its constants in that
+-- label's order (`retagParam`).
+export
+authRetag : Param -> Authority -> Authority
+authRetag top a = match authNorm a
+  AConst p => AConst (retagParam top p)
+  AJoin ms => authJoinAll (map (authRetag top) ms)
+  other => other
 
 -- A value's abstraction may over-approximate it, so a value whose authority
 -- would hold more than `setCardCap` constants is folded by the domain join
@@ -519,5 +528,6 @@ grantJoin _ _ _ = GrantTop
 -- member, or a Product element as a signature writes it.
 paramElements : Param -> List String
 paramElements (PPrefix (Some s)) = [s]
+paramElements (PPath (Some s)) = [s]
 paramElements (PSet (Some xs)) = xs
 paramElements p = [trimLeft (drender p)]

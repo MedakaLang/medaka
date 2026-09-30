@@ -1,0 +1,13 @@
+-- #3636: `.` and empty components name no other directory, so a path under
+-- `data/./` and one under `data//` are both within a `data/*` bound.
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+store : String -> <FileWrite "data/*"> Result String Unit
+store leaf = writeFile ("data/./" ++ leaf) "x"
+
+storeTwice : String -> <FileWrite "data/*"> Result String Unit
+storeTwice leaf = writeFile ("data//sub/../" ++ leaf) "x"
+
+main = println (said (store "inside.txt"))

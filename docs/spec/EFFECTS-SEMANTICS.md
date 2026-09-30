@@ -148,7 +148,7 @@ realize a prefix of it — see the audit):
 | Domain | Elements | `⊑` | `⊔` | `⊓` |
 |---|---|---|---|---|
 | **`Unit`** | `()` only | trivial | `()` | `()` |
-| **`Prefix`** | a string pattern (an exact element, or one ending in `*`), or `⊤` | structural prefix-containment (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
+| **`Prefix`** | a string pattern (an exact element, or one ending in `*`), or `⊤` | structural prefix-containment, of canonical paths for `FileRead`/`FileWrite` (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
 | **`Set`** | a finite set of strings, or `⊤` | `⊆` | `∪` (saturating to `⊤` past a cardinality cap) | `∩` |
 | **`Product`** | a tuple of sub-domains, e.g. `Net = Host(Prefix) × Method(Set)` | pointwise | pointwise | pointwise (⊥ if any component ⊥) |
 
@@ -272,6 +272,37 @@ for a real one. The whole domain confines nothing. `Net` has the same problem
 and not yet the answer: a host part such as `a.com/../x`, a percent-encoded
 byte, or a `.` segment is not normalized, and the socket externs, which take a
 host and a port, receive no grant. That is open.
+
+**For the path labels, the order compares canonical forms.** `FileRead` and
+`FileWrite` are the labels whose externs receive a grant and canonicalize, so
+the checker reads their elements as the runtime does, as far as it can without
+the file system. Their canonical form is lexical: empty and `.` components are
+dropped, and `..` removes the component before it (at the root of an absolute
+path it stays at the root). A relative path whose `..` climbs above the working
+directory keeps it as a leading component. A pattern `d/s*` is `d`'s canonical
+form followed by the stem `s` as written, and `*` alone admits every path. Then:
+
+```
+p₁ ⊑ p₂   iff   p₂ = ⊤,  or  p₂ is `*`,
+             or  both are exact and their canonical forms are equal,
+             or  p₂ = d/s* and p₁'s canonical form is d itself (when s is empty),
+                 or lies under d with a next component that begins with s and is not `..`
+                 (for a pattern p₁ = d₁/s₁*: d₁ = d and s₁ begins with s, or d₁ lies so under d)
+```
+
+So `"data/../" ++ leaf`, `"data/./../x"`, `"data//../x"` and `"data/sub/../../x"`
+are not within `"data/*"`, and `"data/./x"` and `"data/sub/../x"` are. A path
+whose canonical form climbs above the working directory (`".."`, `"../x"`,
+`"data/../../x"`) is within no bound inside it, and a relative path is never
+compared with an absolute one. A symlink is resolved by the runtime alone, and
+a `..` in a part of the value the abstraction cannot see (`"data/" ++ name`)
+is refused by the runtime as before. An element keeps the spelling it was
+written or derived with, since a later suffix extends that spelling; it is
+rendered with every component before its last `/` canonical (`"./*"` for
+`"data/../*"`), and a manifest grants an element that climbs above the working
+directory as the bare label. Every other `Prefix` label keeps the textual order
+above, the built-in ones without path confinement (`Net`, `Exec`, `FFI`) and
+every user label (`effect Store Prefix`): there `..` is two characters.
 
 **Patterns.** Extending a value by an unknown suffix is the closure
 `π = extend` on the domain: `π(⊤) = ⊤`, `π(s*) = s*`, and `π(e) = e*` for an
@@ -1405,6 +1436,10 @@ runtime contract. The two parts are:
 - **The grant.** The authority the type checker grants a parameterized file extern
   at a call reaches the runtime as a hidden argument, for confinement only (§2.3).
   It can refuse the call, and cannot otherwise change a value a program computes.
+  The checker ordered the path labels' elements by the same canonical form the
+  runtime compares, resolved lexically (§2.3), so a grant the checker proved
+  within a bound names paths within it once `.` and `..` are resolved; what
+  only the file system can resolve, a symlink, the runtime alone decides.
 
 A corollary worth stating because it is easy to violate: a primitive's effect must
 be a faithful upper bound of what it *actually does* at runtime. Static checking
