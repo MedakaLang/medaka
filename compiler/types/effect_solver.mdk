@@ -6,7 +6,8 @@ import map as M
 import map.{Map(..)}
 import types.effect_authority.{
   renderAuthority, Authority(..), Authvar(..), authvarId, authvarLevel,
-  authNorm, authSub, authVars, authJoinAll, linkAuthvar, authIsTop, authSplit
+  authNorm, authSub, authVars, authJoinAll, linkAuthvar, authIsTop, authSplit,
+  authvarIsPattern, markAuthvarPattern
 }
 import types.effect_rows.{
   Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
@@ -751,13 +752,13 @@ closeSummaryScope solver protected rigidAuths roles retained borrowed escape mak
 -- scope's level and after its floor, and not a declaration universal.
 ownedFlexibleAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 ownedFlexibleAuth scope rigid cell = match !cell
-  AUnbound id level _ _ =>
+  AUnbound id level _ _ _ =>
     level >= scope.essLevel && id > scope.essEffvarFloor && not (M.has id rigid)
   ALink _ _ _ => False
 
 outerFlexibleAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 outerFlexibleAuth scope rigid cell = match !cell
-  AUnbound id level _ _ =>
+  AUnbound id level _ _ _ =>
     (level < scope.essLevel || id <= scope.essEffvarFloor)
       && not (M.has id rigid)
   ALink _ _ _ => False
@@ -767,7 +768,7 @@ outerFlexibleAuth scope rigid cell = match !cell
 -- over one is decided by the scope that saw it, never handed outward.
 localRigidAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 localRigidAuth _ rigid cell = match !cell
-  AUnbound id _ _ _ => M.has id rigid
+  AUnbound id _ _ _ _ => M.has id rigid
   ALink _ _ _ => False
 
 -- A binder of the closing group: a variable a member's type mentions that no
@@ -785,7 +786,7 @@ binderAuth : SummaryScope c ->
   Bool
 binderAuth scope rigid outward roles cell = match roles.rlTyped
   Some typed => match !cell
-    AUnbound id level _ _ =>
+    AUnbound id level _ _ _ =>
       M.has id typed
         && not (M.has id outward)
         && (M.has id rigid && level >= scope.essLevel
@@ -833,7 +834,7 @@ withoutRigid rigid outward =
 -- may mention it as it stands, as a scheme mentions its environment.
 outsideAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
 outsideAuth scope outward cell = match !cell
-  AUnbound id level _ _ =>
+  AUnbound id level _ _ _ =>
     M.has id outward || level < scope.essLevel || id <= scope.essEffvarFloor
   ALink _ _ _ => False
 
@@ -1086,7 +1087,7 @@ bottomUnbounded owned wanteds =
 
 isUnboundAuth : Ref Authvar -> Bool
 isUnboundAuth cell = match !cell
-  AUnbound _ _ _ _ => True
+  AUnbound _ _ _ _ _ => True
   ALink _ _ _ => False
 
 lowersOf : Int -> Map Int (Ref Authvar, List Authority) -> List Authority
@@ -1137,6 +1138,14 @@ solveClass nodes idOfName widen (first :: rest) =
         min acc (authvarLevel cell))
       (authvarLevel rep)
       members
+  -- one pattern-ranging member makes the class pattern-ranging: every member
+  -- reads the representative, so its solution is the least pattern above the
+  -- lower bounds (`linkAuthvar`)
+  let _ =
+    if anyList
+      (id => authvarIsPattern (fst (nodeOf id nodes)))
+      (repId :: members) then
+      markAuthvarPattern rep
   let _ =
     fold
       (_ id =>

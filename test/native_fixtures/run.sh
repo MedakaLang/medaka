@@ -222,7 +222,7 @@ Ok ()"
 CONFINE="$FIX/confinement"
 confine_tree() {
   rm -rf "$1"
-  mkdir -p "$1/cfg/sub" "$1/outdir" "$1/other/cfg"
+  mkdir -p "$1/cfg/sub" "$1/outdir" "$1/other/cfg" "$1/data"
   printf 'top secret' > "$1/secret.txt"
   printf 'granted' > "$1/cfg/a.txt"
   printf 'other granted' > "$1/other/cfg/a.txt"
@@ -348,6 +348,10 @@ Ok [\"granted\"]
 Err cfg/../secret.txt $outside [\"cfg/*\"]"
 confine_case alias_method . "in: Ok granted
 out: Err cfg/../secret.txt $outside [\"cfg/*\"]"
+# A pattern-ranging binder (`Authority FileWrite*`) extended in a body is
+# granted the call site's pattern, and a name climbing out of it is refused.
+confine_case pattern_binder . "in: Ok
+out: Err data/../pwned.txt $outside [\"data/*\"]"
 
 # realpath(3) fails under a working directory longer than PATH_MAX, so no path
 # has a canonical form there and each engine refuses every path, granted or not,

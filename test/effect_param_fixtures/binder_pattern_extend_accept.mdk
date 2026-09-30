@@ -1,0 +1,11 @@
+-- The sibling of binder_domain_extend_reject.mdk: a binder whose written
+-- domain carries a `*` ranges over patterns only, so `dir ++ "/index"` stays
+-- within `dir`'s authority and the result may carry it (#3620).
+withSuffix : (dir : String @FileRead*) -> String @dir
+withSuffix dir = dir ++ "/index"
+
+readIndex : (dir : String @FileRead*) -> <FileRead dir> Result String String
+readIndex dir = readFile (withSuffix dir)
+
+main : <IO> Unit
+main = println "binder pattern extend accept"

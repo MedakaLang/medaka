@@ -44,3 +44,6 @@ test "A binder's written domain lets a pure helper return at its authority" =
 test "An extension of a domain-annotated binder in a result is the whole domain" = expectCheckReject
   (fixture "binder_domain_extend_reject.mdk")
   ["reaches the whole domain where only dir is admitted"]
+
+test "An extension of a pattern-ranging binder in a result stays within it" =
+  expectCheckAccept (fixture "binder_pattern_extend_accept.mdk")

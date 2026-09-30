@@ -2632,8 +2632,10 @@ binderDomainP TAt (TUpper _) = defer
   s <- getPos
   advance
   l <- upperNameP
+  pat <- patternMarkP
   q <- getPos
-  deferPure (Some (effAtomAt l EPTop (locOfSpan s q)))
+  let atom = effAtomAt l EPTop (locOfSpan s q)
+  deferPure (Some EffAtomTy { atom | eatPattern = pat })
 binderDomainP TAsAt (TUpper l) = defer
   pos <- getPos
   fatalAtP
@@ -3775,7 +3777,7 @@ kindAtomFor _ = failP kindExpectedMsg
 
 kindExpectedMsg : String
 kindExpectedMsg =
-  "expected a kind: `Type`, `Effect`, `Authority <Label>`, or an arrow between them"
+  "expected a kind: `Type`, `Effect`, `Authority <Label>` (or `Authority <Label>*`), or an arrow between them"
 
 -- `Authority FileRead`: the parameter ranges over the declared domain of the
 -- named effect label (EFFECTS-SEMANTICS §6.1).
@@ -3784,8 +3786,22 @@ kindAuthorityP = defer
   advance
   s <- getPos
   l <- upperNameP
+  pat <- patternMarkP
   q <- getPos
-  deferPure (kindAuthorityUnstamped l (Some (locOfSpan s q)))
+  deferPure (kindAuthorityUnstamped l pat (Some (locOfSpan s q)))
+
+-- The `*` after a label that makes a binder range over the domain's patterns
+-- only: `Authority FileWrite*`, `(dir : String @FileWrite*)`.
+patternMarkP : Parser Bool
+patternMarkP = defer
+  t <- peekP
+  patternMarkFor t
+
+patternMarkFor : Token -> Parser Bool
+patternMarkFor TStar = defer
+  advance
+  deferPure True
+patternMarkFor _ = deferPure False
 
 kindAtomEmit : KindAnn -> Parser KindAnn
 kindAtomEmit k = defer
@@ -3997,7 +4013,7 @@ ctorBinderColon TColon = defer
 ctorBinderColon _ = failP "expected a constructor binder"
 
 ctorBinderKind : String -> KindAnn -> Parser (String, KindAnn)
-ctorBinderKind n (k@(KindAuthority _ _ _)) = deferPure (n, k)
+ctorBinderKind n (k@(KindAuthority _ _ _ _)) = deferPure (n, k)
 ctorBinderKind n k = defer
   pos <- getPos
   fatalAtP

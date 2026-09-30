@@ -48,6 +48,8 @@
 import frontend.ast.{
   defaultReceiverDict,
   qualifierSource,
+  kindAnnSource,
+  patternMark,
   Lit(..),
   negateLiteral,
   isU64Head,
@@ -156,6 +158,7 @@ import frontend.ast.{
 import types.repr.{
   AuthResidual(..),
   ppAuthority,
+  ppAuthArg,
   normalize,
   ppScheme,
   tupleSpine,
@@ -226,6 +229,7 @@ import types.effect_domain.{
   renderAxisVal,
   prefixConcrete,
   dsub,
+  extendParam,
   Param(..),
 }
 import types.effect_authority.{
@@ -247,6 +251,11 @@ import types.effect_authority.{
   authDomainTop,
   authHasVars,
   linkAuthvar,
+  authvarIsPattern,
+  markAuthvarPattern,
+  authIsPattern,
+  authPatternClose,
+  isPatternParam,
   GrantShape(..),
   authGrantShape,
 }
@@ -1255,8 +1264,48 @@ unifyIndex qa qb = match (authNorm qa, authNorm qb)
     let _ = wantAuthorityWith True a b
     wantAuthorityWith True b a
 
+-- A pattern-ranging cell takes only a pattern-ranging term (EFFECTS-SEMANTICS
+-- §4.1): the term's flexible variables are narrowed to patterns with it,
+-- since the equation makes them one authority, but an exact element or a
+-- variable a caller chooses over the whole domain cannot be, and the
+-- equation is refused.
 substituteIndex : Ref Authvar -> Authority -> Unit
 substituteIndex cell term =
+  let _ =
+    if authvarIsPattern cell && not (authIsPattern term) then
+      let fixed = indexOutsidePatterns term
+      if isEmptyL fixed then
+        fold
+          (_ v => if authvarIsPattern v then () else markAuthvarPattern v)
+          ()
+          (authVars term)
+      else
+        pushTypeError "T-AUTHORITY-PATTERN" (patternIndexMsg term)
+  substituteIndexLinked cell term
+
+-- The operands of [term] no narrowing brings into the pattern range: a
+-- constant that is not a pattern, and a rigid variable that is not
+-- pattern-ranging.
+indexOutsidePatterns : Authority -> List Authority
+indexOutsidePatterns term =
+  let members = match authNorm term
+    AJoin ms => ms
+    other => [other]
+  filterList
+    (m => match m
+      AVar c =>
+        not (authvarIsPattern c)
+          && IdMap.has (authvarId c) perRun.value.rigidAuthvarsRef.value
+      other => not (authIsPattern other))
+    members
+
+patternIndexMsg : Authority -> String
+patternIndexMsg term =
+  let t = authorityTermTextIn (Ref []) (Ref 0) term
+  "A pattern-ranging authority index (an `Authority L*` slot) is equated with \{t}, which is not a pattern: an exact element admits no extension of itself, and an authority the caller chooses may be one. An index is invariant, so the two sides must be equal; write a pattern (`\"data/*\"`) or `*` for it, or declare the other binder pattern-ranging (`@L*`)"
+
+substituteIndexLinked : Ref Authvar -> Authority -> Unit
+substituteIndexLinked cell term =
   let _ = lowerAuthLevels (authvarLevel cell) term
   let _ =
     if authHasVars term then
@@ -1775,7 +1824,7 @@ checkDeclAuthorityDomains heads bs (t :: ts) =
   if isEmptyL uses then () else reportBinderDomains t (declared ++ uses)
 
 declaredAuthority : (String, Option KindAnn) -> List (String, Param)
-declaredAuthority (p, Some (KindAuthority l o _)) =
+declaredAuthority (p, Some (KindAuthority l o _ _)) =
   [(p, dtopFor (EffLabel l o))]
 declaredAuthority _ = []
 
@@ -1914,14 +1963,32 @@ checkAuthorityKindLabels anns =
     anns
 
 checkAuthorityKindLabel : KindAnn -> Unit
-checkAuthorityKindLabel (KindAuthority l o loc) = match dtopFor (EffLabel l o)
-  PUnit =>
-    pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (authorityAtomicLabelMsg l)
-  _ => ()
+checkAuthorityKindLabel (KindAuthority l o pat loc) =
+  match dtopFor (EffLabel l o)
+    PUnit =>
+      pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (authorityAtomicLabelMsg l)
+    top =>
+      if pat && not (domainHasPatterns top) then
+        pushTypeErrorOnceAt
+          "T-AUTHORITY-PATTERN"
+          loc
+          (patternDomainMsg ("Authority " ++ l ++ "*") l)
 checkAuthorityKindLabel (KindArrow a b) =
   let _ = checkAuthorityKindLabel a
   checkAuthorityKindLabel b
 checkAuthorityKindLabel _ = ()
+
+-- A pattern-ranging binder needs a domain whose patterns are more than its
+-- top and bottom: a Prefix domain, or a Product whose primary axis is one.
+-- In a Set domain every element is exact, so the only pattern is the top.
+domainHasPatterns : Param -> Bool
+domainHasPatterns (PPrefix _) = True
+domainHasPatterns (PProduct ((_, axis) :: _)) = domainHasPatterns axis
+domainHasPatterns _ = False
+
+patternDomainMsg : String -> String -> String
+patternDomainMsg written l =
+  "`\{written}` ranges over the patterns of `\{l}`'s domain, but `\{l}` is not a path-prefix domain: its elements are exact names, so the only pattern among them is the whole domain. A pattern-ranging binder needs a `Prefix` label, or a `Product` whose first axis is `Prefix`; drop the `*`"
 
 authorityAtomicLabelMsg : String -> String
 authorityAtomicLabelMsg l =
@@ -1966,7 +2033,7 @@ authorityParamNames : List String -> List (Option KindAnn) -> List String
 authorityParamNames params anns =
   flatMap
     (pk => match snd pk
-      Some (KindAuthority _ _ _) => [fst pk]
+      Some (KindAuthority _ _ _ _) => [fst pk]
       _ => [])
     (zipL params (padAnns params anns))
 
@@ -2086,7 +2153,7 @@ checkHeadKindsGo name rowNames fieldTys (p :: ps) (a :: anns) =
           "T-EFFECT-KIND-MISMATCH"
           loc
           (typeParamAsRowMsg name p)
-    Some (KindAuthority _ _ _) =>
+    Some (KindAuthority _ _ _ _) =>
       if contains p rowNames then
         pushTypeErrorOnceAt
           "T-AUTHORITY-KIND"
@@ -2124,7 +2191,7 @@ tyVarTypeOcc _ _ = False
 -- else is walked as a type.
 tyVarTypeOccSlots : String -> List Kind -> List Ty -> Bool
 tyVarTypeOccSlots p (KRow :: ks) ((TyVar _) :: ts) = tyVarTypeOccSlots p ks ts
-tyVarTypeOccSlots p ((KAuth _) :: ks) ((TyVar _) :: ts) =
+tyVarTypeOccSlots p ((KAuth _ _) :: ks) ((TyVar _) :: ts) =
   tyVarTypeOccSlots p ks ts
 tyVarTypeOccSlots p (_ :: ks) (t :: ts) =
   tyVarTypeOcc p t || tyVarTypeOccSlots p ks ts
@@ -2155,7 +2222,7 @@ checkIfaceHeadKinds name (p :: ps) (a :: anns) methods =
         "T-EFFECT-KIND-MISMATCH"
         loc
         (ifaceParamEffectKindMsg name p)
-    Some (KindAuthority _ _ _) =>
+    Some (KindAuthority _ _ _ _) =>
       pushTypeErrorOnceAt
         "T-AUTHORITY-KIND"
         loc
@@ -2247,11 +2314,11 @@ effectParamAsTypeMsg name p =
 
 effectArrowOnDataHeadMsg : String -> String -> KindAnn -> String
 effectArrowOnDataHeadMsg name p k =
-  "Type parameter `\{p}` of `\{name}` is declared with kind `\{renderKindAnn k}`. An arrow kind containing `Effect` is supported on interface heads only; a data, newtype, or type-alias parameter may be `Effect` or an ordinary (Effect-free) kind."
+  "Type parameter `\{p}` of `\{name}` is declared with kind `\{kindAnnSource k}`. An arrow kind containing `Effect` is supported on interface heads only; a data, newtype, or type-alias parameter may be `Effect` or an ordinary (Effect-free) kind."
 
 ifaceSlotDeclaredTypeMsg : String -> String -> KindAnn -> String
 ifaceSlotDeclaredTypeMsg name p k =
-  "Type parameter `\{p}` of interface `\{name}` is declared `(\{p} : \{renderKindAnn k})`, but a method signature uses one of its `Type` slots as an effect row (the same name appears in that slot and in an effect tail). Declare that slot `Effect`, or use a different variable in the effect tail."
+  "Type parameter `\{p}` of interface `\{name}` is declared `(\{p} : \{kindAnnSource k})`, but a method signature uses one of its `Type` slots as an effect row (the same name appears in that slot and in an effect tail). Declare that slot `Effect`, or use a different variable in the effect tail."
 
 ifaceParamEffectKindMsg : String -> String -> String
 ifaceParamEffectKindMsg name p =
@@ -2890,7 +2957,7 @@ renderKindArrow ks = joinWith " -> " (map kindName ks ++ ["Type"])
 kindName : Kind -> String
 kindName KType = "Type"
 kindName KRow = "Effect"
-kindName (KAuth l) = "Authority \{effLabelName l}"
+kindName (KAuth l pat) = "Authority \{effLabelName l}\{patternMark pat}"
 
 -- ⚠️ [ctor] is a RAW head tag and must reach the reader through `ppConName` — a tuple
 -- head arrives as `__tuple2__`, and leaking that is exactly what ppConName exists to
@@ -3117,7 +3184,11 @@ checkBinderDomain n a (Some l) =
         pushTypeError
           "T-EFFECT-PARAM"
           (effectParamMsg l.eatLabel (atomicLabelParamText l.eatLabel))
-      _ => ()
+      top =>
+        if l.eatPattern && not (domainHasPatterns top) then
+          pushTypeError
+            "T-AUTHORITY-PATTERN"
+            (patternDomainMsg ("@" ++ l.eatLabel ++ "*") l.eatLabel)
     else
       pushTypeError "T-AUTHORITY-BINDER" (binderDomainTypeMsg n (ppTy a))
   currentLoc := saved
@@ -3375,7 +3446,9 @@ data RecordInfo =
 -- appears in a field's effect-tail position (`<e>`), else KType.  Drives
 -- kind-aware type-app elaboration (a KRow arg becomes a TEff row, not a TApp
 -- tyvar) and ctor-result-type construction.  Per-type, positional.
-data Kind = KType | KRow | KAuth EffLabel
+-- A `KAuth` slot's flag is the `*` of `Authority L*`: the slot takes only a
+-- pattern of the label's domain (EFFECTS-SEMANTICS §4.1).
+data Kind = KType | KRow | KAuth EffLabel Bool
 
 -- ── #1119 D-2 (#1098 / #1121): per-parameter VARIANCE ─────────────────────
 -- Variance of a data-type parameter, inferred from how it OCCURS in the
@@ -10605,6 +10678,10 @@ data GraphRun = GraphRun {
   -- seeds into a later module carries cells minted here, and their ids must
   -- still answer there.
   ctorExistentialsRef : Ref (Map Int Unit),
+  -- The ids of every authority variable minted pattern-ranging, kept beside
+  -- the counter for the same reason: an instantiation checks that such an id
+  -- still has its cell (`freshInferenceAuthvar`).
+  patternAuthIdsRef : Ref (Map Int Unit),
   -- set once any constructor with an existential binder is registered, so a
   -- program without one pays nothing per pattern
   anyExistentialsRef : Ref Bool,
@@ -10668,6 +10745,7 @@ freshGraphRun _ = GraphRun {
   tyvarCounter = Ref 0,
   effvarCounter = Ref 0,
   ctorExistentialsRef = Ref Tip,
+  patternAuthIdsRef = Ref Tip,
   anyExistentialsRef = Ref False,
   goals = Ref [],
   numlitRefs = Ref [],
@@ -10852,6 +10930,7 @@ copyGraphRun g = GraphRun {
   tyvarCounter = Ref g.tyvarCounter.value,
   effvarCounter = Ref g.effvarCounter.value,
   ctorExistentialsRef = Ref g.ctorExistentialsRef.value,
+  patternAuthIdsRef = Ref g.patternAuthIdsRef.value,
   anyExistentialsRef = Ref g.anyExistentialsRef.value,
   goals = Ref g.goals.value,
   numlitRefs = Ref g.numlitRefs.value,
@@ -11732,8 +11811,10 @@ boundFailureMsg : String ->
 boundFailureMsg name lower lo hi upper written =
   if mentionsOpened upper then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is the authority of the value this arm or clause opened, which nothing but that value and what derives from it is known to lie within. Relate the operation to the opened value, or widen the declared row to the label bare"
+  else if authHasVars upper && allList authvarIsPattern (authVars upper) then
+    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is a pattern-ranging authority the caller chooses, so a body may forward the named argument or append to it on the right (`root ++ suffix`), which stays within it, never reach a value it does not derive that way. Build the value by appending to the named argument, or widen the declared row to the label bare"
   else if authHasVars upper then
-    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from; an extension of it is the whole domain. Perform the operation on the named argument and build any extended value at the call site, or widen the declared row to the label bare"
+    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from; an extension of it is the whole domain, since the caller may choose an exact element, which admits no extension of itself. Perform the operation on the named argument and build any extended value at the call site, declare the binder pattern-ranging with a `*` on its label (`(p : String @FileWrite*)`, `(d : Authority FileWrite*)`) so an extension stays within it, or widen the declared row to the label bare"
   else if solvedUpper written then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is not a written bound but what this binding's other uses of the same authority determined together. Make every use lie within one bound, or write the bound the binding means"
   else
@@ -11759,7 +11840,7 @@ solvedUpper : Option Authority -> Bool
 solvedUpper (Some (AVar cell)) = match !cell
   ALink _ _ _ =>
     not (IdMap.has (authvarId cell) perRun.value.indexSubstitutedRef.value)
-  AUnbound _ _ _ _ => False
+  AUnbound _ _ _ _ _ => False
 solvedUpper _ = False
 
 -- ── #1119 D-2: the per-parameter VARIANCE gate (#1098, #1121) ─────────────
@@ -11913,7 +11994,7 @@ slotVariances pols kinds =
 
 slotVariance : Option Polarity -> Option Kind -> Variance
 slotVariance _ (Some KRow) = VInv
-slotVariance _ (Some (KAuth _)) = VInv
+slotVariance _ (Some (KAuth _ _)) = VInv
 slotVariance (Some p) _ = varianceOf p
 slotVariance None _ = VInv
 
@@ -12565,7 +12646,7 @@ freshAuthSubstOpeningIn ids cells =
   let pairs =
     map
       (id =>
-        let cell = freshInferenceAuthvar (IdMap.get id cells)
+        let cell = freshInferenceAuthvar id (IdMap.get id cells)
         (id, cell, IdMap.has id graphRun.value.ctorExistentialsRef.value))
       ids
   let opened = flatMap (p => if third3 p then [second3 p] else []) pairs
@@ -12624,14 +12705,27 @@ freshAuthSubstFor : List Int -> Mono -> EffRow -> List (Int, Authority)
 freshAuthSubstFor [] _ _ = []
 freshAuthSubstFor ids body force =
   let cells = authCellsIn body (authRowCells force Tip)
-  map (id => (id, AVar (freshInferenceAuthvar (IdMap.get id cells)))) ids
+  map (id => (id, AVar (freshInferenceAuthvar id (IdMap.get id cells)))) ids
 
 -- An instantiation's authority choice belongs to the current scope, at the
--- current level, like an instantiated row tail.
-freshInferenceAuthvar : Option (Ref Authvar) -> Ref Authvar
-freshInferenceAuthvar (Some source) =
-  freshAuthvar (authvarDomain source) (authvarName source)
-freshInferenceAuthvar None = freshAuthvar PUnit None
+-- current level, like an instantiated row tail.  The fresh cell keeps the
+-- binder's range: a pattern-ranging binder instantiates to a pattern-ranging
+-- variable, or an exact element could reach it.  A quantified id with no
+-- cell in the scheme is dead (nothing it would substitute remains), except
+-- one minted pattern-ranging (`patternAuthIdsRef`): losing its source would
+-- lose its range, so that is an internal error rather than a default.
+freshInferenceAuthvar : Int -> Option (Ref Authvar) -> Ref Authvar
+freshInferenceAuthvar _ (Some source) =
+  freshAuthvarRanged
+    (authvarDomain source)
+    (authvarIsPattern source)
+    (authvarName source)
+freshInferenceAuthvar id None =
+  if IdMap.has id graphRun.value.patternAuthIdsRef.value then
+    panic
+      "internal error: the pattern-ranging authority variable #\{intToString id} has no cell in the scheme that quantifies it, so its range would be lost at instantiation"
+  else
+    freshAuthvar PUnit None
 
 -- Every unbound authority cell reachable in a type: the qualifiers and the
 -- atoms of every row.
@@ -12726,8 +12820,8 @@ lowerAuthLevels _ (AConst _) = ()
 lowerAuthLevels level q =
   fold
     (_ cell => match !cell
-      AUnbound id lvl top name =>
-        if lvl > level then cell := AUnbound id level top name
+      AUnbound id lvl top pat name =>
+        if lvl > level then cell := AUnbound id level top pat name
       ALink _ _ _ => ())
     ()
     (authVars q)
@@ -13129,11 +13223,12 @@ sigVarsForWith ty rowNames auths =
   let authNames = map fst auths
   let uses = binderDomainsIn ty ++ namedAtomBinders ty ++ auths
   let _ = reportBinderDomains ty uses
+  let ranged = binderIsPattern (namedArgDomains ty) (patternSlotNamesIn ty)
   let sv = SigVars {
     svRows = freshEffMap rowNames,
     svAuths =
       map
-        freshAuthBinder
+        (b => freshAuthBinderRanged (ranged (fst b)) b)
         (filterList
           (b => authorityBinderBound named authNames (fst b))
           (dedupBinders uses [])),
@@ -13309,12 +13404,45 @@ namedArgTypes (TyFun _ b) = namedArgTypes b
 namedArgTypes (TyConstrained _ t) = namedArgTypes t
 namedArgTypes _ = []
 
-freshAuthBinder : (String, Param) -> (String, Ref Authvar)
-freshAuthBinder (n, top) = (n, freshAuthvar top (Some n))
+freshAuthBinderRanged : Bool -> (String, Param) -> (String, Ref Authvar)
+freshAuthBinderRanged pat (n, top) = (n, freshAuthvarRanged top pat (Some n))
+
+-- Whether a signature's binder ranges over patterns (EFFECTS-SEMANTICS
+-- §4.1).  A named argument says so itself, with the `*` of its written
+-- domain; one without it ranges over the whole domain wherever it is used,
+-- and a pattern slot it fills refuses it (`authArgOf`).  A bare name nothing
+-- writes a range for inherits the range of the slots it fills: a pattern
+-- slot anywhere makes it pattern-ranging, the meet of its slots' ranges.
+binderIsPattern : List (String, Option EffAtomTy) ->
+  List String ->
+  String ->
+  Bool
+binderIsPattern domains pats n = match lookupAssoc n domains
+  Some (Some d) => d.eatPattern
+  Some None => False
+  None => contains n pats
+
+-- Every named argument with its written domain, if any.
+namedArgDomains : Ty -> List (String, Option EffAtomTy)
+namedArgDomains (TyFun (TyNamed n _ d) b) = (n, d) :: namedArgDomains b
+namedArgDomains (TyFun _ b) = namedArgDomains b
+namedArgDomains (TyConstrained _ t) = namedArgDomains t
+namedArgDomains _ = []
 
 freshAuthvar : Param -> Option String -> Ref Authvar
-freshAuthvar top name =
-  Ref (AUnbound (newEffvarId ()) perRun.value.currentLevel.value top name)
+freshAuthvar top name = freshAuthvarRanged top False name
+
+-- [pat]: the variable ranges over the domain's patterns only (a binder
+-- written `@L*` or `Authority L*`); its id is recorded so an instantiation
+-- that cannot find its cell fails loudly (`freshInferenceAuthvar`).
+freshAuthvarRanged : Param -> Bool -> Option String -> Ref Authvar
+freshAuthvarRanged top pat name =
+  let id = newEffvarId ()
+  let _ =
+    if pat then
+      graphRun.value.patternAuthIdsRef :=
+        IdMap.set id () graphRun.value.patternAuthIdsRef.value
+  Ref (AUnbound id perRun.value.currentLevel.value top pat name)
 
 authvarIdOf : (String, Ref Authvar) -> Int
 authvarIdOf (_, cell) = authvarId cell
@@ -13350,25 +13478,44 @@ binderDomainsIn _ = []
 -- The bare names sitting in `Authority`-kinded argument slots of registered
 -- heads, with the slot's domain: the twin of `rowArgNamesIn` for authorities.
 authArgBindersIn : Ty -> List (String, Param)
-authArgBindersIn (TyApp a b) = match tyAppSpine (TyApp a b)
+authArgBindersIn ty = authSlotNamesIn kauthArgVarNames ty
+
+-- The names sitting in pattern-ranging `Authority L*` slots, the slots a
+-- bare name inherits its range from (`binderIsPattern`).
+patternSlotNamesIn : Ty -> List String
+patternSlotNamesIn ty = authSlotNamesIn patternArgVarNames ty
+
+-- What [readSlots] reads off every registered head's argument list, given
+-- the head's declared kinds.
+authSlotNamesIn : (List Kind -> List Ty -> List a) -> Ty -> List a
+authSlotNamesIn readSlots (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
       Some kinds if listLen kinds == listLen args =>
-        kauthArgVarNames kinds args ++ flatMap authArgBindersIn args
-      _ => authArgBindersIn a ++ authArgBindersIn b
-  _ => authArgBindersIn a ++ authArgBindersIn b
-authArgBindersIn (TyFun a b) = authArgBindersIn a ++ authArgBindersIn b
-authArgBindersIn (TyTuple ts) = flatMap authArgBindersIn ts
-authArgBindersIn (TyEffect _ _ t) = authArgBindersIn t
-authArgBindersIn (TyConstrained _ t) = authArgBindersIn t
-authArgBindersIn (TyNamed _ t _) = authArgBindersIn t
-authArgBindersIn (TyQual t _ _) = authArgBindersIn t
-authArgBindersIn _ = []
+        readSlots kinds args ++ flatMap (authSlotNamesIn readSlots) args
+      _ => authSlotNamesIn readSlots a ++ authSlotNamesIn readSlots b
+  _ => authSlotNamesIn readSlots a ++ authSlotNamesIn readSlots b
+authSlotNamesIn readSlots (TyFun a b) =
+  authSlotNamesIn readSlots a ++ authSlotNamesIn readSlots b
+authSlotNamesIn readSlots (TyTuple ts) = flatMap (authSlotNamesIn readSlots) ts
+authSlotNamesIn readSlots (TyEffect _ _ t) = authSlotNamesIn readSlots t
+authSlotNamesIn readSlots (TyConstrained _ t) = authSlotNamesIn readSlots t
+authSlotNamesIn readSlots (TyNamed _ t _) = authSlotNamesIn readSlots t
+authSlotNamesIn readSlots (TyQual t _ _) = authSlotNamesIn readSlots t
+authSlotNamesIn _ _ = []
+
+patternArgVarNames : List Kind -> List Ty -> List String
+patternArgVarNames ((KAuth _ True) :: ks) ((TyVar n) :: as2) =
+  n :: patternArgVarNames ks as2
+patternArgVarNames ((KAuth _ True) :: ks) ((TyAuth ps _) :: as2) =
+  authTermNames ps ++ patternArgVarNames ks as2
+patternArgVarNames (_ :: ks) (_ :: as2) = patternArgVarNames ks as2
+patternArgVarNames _ _ = []
 
 kauthArgVarNames : List Kind -> List Ty -> List (String, Param)
-kauthArgVarNames ((KAuth l) :: ks) ((TyVar n) :: as2) =
+kauthArgVarNames ((KAuth l _) :: ks) ((TyVar n) :: as2) =
   (n, dtopFor l) :: kauthArgVarNames ks as2
-kauthArgVarNames ((KAuth l) :: ks) ((TyAuth ps _) :: as2) =
+kauthArgVarNames ((KAuth l _) :: ks) ((TyAuth ps _) :: as2) =
   map (n => (n, dtopFor l)) (authTermNames ps) ++ kauthArgVarNames ks as2
 kauthArgVarNames (_ :: ks) (_ :: as2) = kauthArgVarNames ks as2
 kauthArgVarNames _ _ = []
@@ -13768,9 +13915,9 @@ aliasArgBindings etbl tvs (p :: ps) (KRow :: ks) (arg :: args) =
 -- An `Authority` alias parameter stands for the written argument wherever
 -- the right-hand side names it: a cell linked to the term, so expansion is a
 -- substitution and records no obligation.
-aliasArgBindings etbl tvs (p :: ps) ((KAuth l) :: ks) (arg :: args) =
-  let cell = freshAuthvar (dtopFor l) (Some p)
-  let _ = linkAuthvar cell (authArgOf etbl tvs l arg)
+aliasArgBindings etbl tvs (p :: ps) ((KAuth l pat) :: ks) (arg :: args) =
+  let cell = freshAuthvarRanged (dtopFor l) pat (Some p)
+  let _ = linkAuthvar cell (authArgOf etbl tvs l pat arg)
   let rest = aliasArgBindings etbl tvs ps ks args
   (sigVarsWithAuths [(p, cell)] (fst rest), snd rest)
 aliasArgBindings etbl tvs (p :: ps) (_ :: ks) (arg :: args) =
@@ -13870,16 +14017,32 @@ foldAppKinds _ _ acc _ _ = acc
 kindArgMono : SigVars -> List (String, Mono) -> Kind -> Ty -> Mono
 kindArgMono etbl tvs KType arg = fromAstTypeE etbl tvs arg
 kindArgMono etbl tvs KRow arg = TEff (rowArgOf etbl arg)
-kindArgMono etbl tvs (KAuth l) arg = TAuth (authArgOf etbl tvs l arg)
+-- A pattern slot holds a pattern whatever was written in it: a term outside
+-- the range is reported (`authArgOf`) and read as the least pattern above it,
+-- so the report is not repeated at every use of the type.
+kindArgMono etbl tvs (KAuth l pat) arg =
+  let q = authArgOf etbl tvs l pat arg
+  TAuth (if pat then authPatternClose q else q)
 
 -- An authority sitting in an `Authority`-kinded slot: a bare name resolves
 -- through the signature's binders (a named argument, another index slot, or
 -- the enclosing data declaration's parameter); a written term is the
 -- element of the slot's domain it spells (`*` the top); anything else is a
 -- kind error recovered as the top.
-authArgOf : SigVars -> List (String, Mono) -> EffLabel -> Ty -> Authority
-authArgOf etbl tvs l (TyVar n) = match lookupAssoc n etbl.svAuths
-  Some cell => AVar cell
+authArgOf : SigVars ->
+  List (String, Mono) ->
+  EffLabel ->
+  Bool ->
+  Ty ->
+  Authority
+authArgOf etbl tvs l pat (TyVar n) = match lookupAssoc n etbl.svAuths
+  Some cell =>
+    let _ =
+      if pat && not (authvarIsPattern cell) then
+        pushTypeErrorOnce
+          "T-AUTHORITY-PATTERN"
+          (ordinaryInPatternSlotMsg n (effLabelName l))
+    AVar cell
   None =>
     let _ = pushTypeErrorOnce "T-AUTHORITY-KIND" (if isSome
       (lookupAssoc n tvs) then
@@ -13887,7 +14050,10 @@ authArgOf etbl tvs l (TyVar n) = match lookupAssoc n etbl.svAuths
     else
       nameNotAuthorityMsg n)
     authTop (dtopFor l)
-authArgOf etbl tvs l (TyAuth ps loc) =
+authArgOf etbl tvs l pat (TyAuth ps loc) =
+  let top = dtopFor l
+  let lits = filterList (p => not (isEPName p)) ps
+  let problems = writtenTermProblems (effLabelName l) top lits
   let _ =
     fold
       (_ why =>
@@ -13896,12 +14062,26 @@ authArgOf etbl tvs l (TyAuth ps loc) =
           loc
           (effectParamMsg (effLabelName l) why))
       ()
-      (writtenTermProblems
-        (effLabelName l)
-        (dtopFor l)
-        (filterList (p => not (isEPName p)) ps))
-  authJoinAll (map (authTermOf etbl tvs l) ps)
-authArgOf _ _ l ty =
+      problems
+  let _ =
+    if pat && isEmptyL problems then
+      fold
+        (_ lit =>
+          let written = writtenParam top lit
+          if isPatternParam written then
+            ()
+          else
+            pushTypeErrorOnceAt
+              "T-AUTHORITY-PATTERN"
+              loc
+              (exactInPatternSlotMsg
+                (effLabelName l)
+                (authTermsSurface escStr [lit])
+                (ppAuthArg (Ref []) (Ref 0) (AConst (extendParam written)))))
+        ()
+        lits
+  authJoinAll (map (authTermOf etbl tvs l pat) ps)
+authArgOf _ _ l _ ty =
   let _ =
     pushTypeErrorOnceAt
       "T-AUTHORITY-KIND"
@@ -13914,10 +14094,22 @@ authArgOf _ _ l ty =
 authTermOf : SigVars ->
   List (String, Mono) ->
   EffLabel ->
+  Bool ->
   EffParamTy ->
   Authority
-authTermOf etbl tvs l (EPName n) = authArgOf etbl tvs l (TyVar n)
-authTermOf _ _ l p = AConst (writtenParam (dtopFor l) p)
+authTermOf etbl tvs l pat (EPName n) = authArgOf etbl tvs l pat (TyVar n)
+authTermOf _ _ l _ p = AConst (writtenParam (dtopFor l) p)
+
+-- A pattern slot (`Authority L*`) filled by a binder that ranges over the
+-- whole domain: the caller could choose an exact element for it.
+ordinaryInPatternSlotMsg : String -> String -> String
+ordinaryInPatternSlotMsg n l =
+  "'\{n}' ranges over every authority of `\{l}`, but it fills an `Authority \{l}*` slot, which takes only patterns: a caller could choose an exact element for '\{n}', and an exact element admits no extension of itself. Declare '\{n}' pattern-ranging, `(\{n} : String @\{l}*)` on a named argument or `(\{n} : Authority \{l}*)` on a type parameter"
+
+-- A pattern slot filled by a written exact element.
+exactInPatternSlotMsg : String -> String -> String -> String
+exactInPatternSlotMsg l written closed =
+  "`\{written}` is an exact element of `\{l}`'s domain, but it fills an `Authority \{l}*` slot, which takes only patterns: a value within this authority may be extended, and an exact element admits no extension of itself. Write the pattern it begins, `\{closed}`, or the whole domain, `*`"
 
 authorityAsTypeMsg : String -> String
 authorityAsTypeMsg n =
@@ -23059,7 +23251,7 @@ openExistentialScope opened =
 
 raiseAuthvarLevel : Int -> Ref Authvar -> Unit
 raiseAuthvarLevel level cell = match !cell
-  AUnbound id _ top name => cell := AUnbound id level top name
+  AUnbound id _ top pat name => cell := AUnbound id level top pat name
   ALink _ _ _ => ()
 
 -- A cell in the scope's value, or lowered below the scope's level, escaped
@@ -23317,14 +23509,14 @@ updateAuthority rname fields assigned id source
     if isEmptyL replaced then
       sharedAuthority id source
     else if listLen replaced == listLen mentioning then
-      AVar (freshInferenceAuthvar source)
+      AVar (freshInferenceAuthvar id source)
     else
       let _ =
         pushTypeError
           "T-AUTHORITY-EXISTENTIAL-SCOPE"
           (partialExistentialUpdateMsg rname mentioning)
-      AVar (freshInferenceAuthvar source)
-  | otherwise = AVar (freshInferenceAuthvar source)
+      AVar (freshInferenceAuthvar id source)
+  | otherwise = AVar (freshInferenceAuthvar id source)
 
 partialExistentialUpdateMsg : String -> List String -> String
 partialExistentialUpdateMsg rname names =
@@ -23339,7 +23531,7 @@ sharedAuthority id source
   | IdMap.has id graphRun.value.ctorExistentialsRef.value = match source
     Some cell => authTop (authvarDomain cell)
     None => authTop PUnit
-  | otherwise = AVar (freshInferenceAuthvar source)
+  | otherwise = AVar (freshInferenceAuthvar id source)
 
 -- One record instantiation's substitution: its type params and its
 -- authorities, applied together to any field on demand.
@@ -23488,7 +23680,7 @@ padAnns (_ :: ps) [] = None :: padAnns ps []
 
 kindOfAnn : Option KindAnn -> Kind
 kindOfAnn (Some KindEffect) = KRow
-kindOfAnn (Some (KindAuthority l o _)) = KAuth (EffLabel l o)
+kindOfAnn (Some (KindAuthority l o pat _)) = KAuth (EffLabel l o) pat
 kindOfAnn _ = KType
 
 -- an INTERFACE parameter's slot kinds from its declared arrow kind: `Effect ->
@@ -23500,26 +23692,16 @@ kindAnnSlots _ = []
 
 kindAnnAtom : KindAnn -> Kind
 kindAnnAtom KindEffect = KRow
-kindAnnAtom (KindAuthority l o _) = KAuth (EffLabel l o)
+kindAnnAtom (KindAuthority l o pat _) = KAuth (EffLabel l o) pat
 kindAnnAtom _ = KType
 
 -- A kind that is not `Type` and must therefore be written (§6.3): `Effect`
 -- or `Authority`.
 kindAnnHasEffect : KindAnn -> Bool
 kindAnnHasEffect KindEffect = True
-kindAnnHasEffect (KindAuthority _ _ _) = True
+kindAnnHasEffect (KindAuthority _ _ _ _) = True
 kindAnnHasEffect (KindArrow a b) = kindAnnHasEffect a || kindAnnHasEffect b
 kindAnnHasEffect _ = False
-
-renderKindAnn : KindAnn -> String
-renderKindAnn KindType = "Type"
-renderKindAnn KindEffect = "Effect"
-renderKindAnn (KindAuthority l _ _) = "Authority \{l}"
-renderKindAnn (KindArrow a b) = "\{renderKindAnnAtomic a} -> \{renderKindAnn b}"
-
-renderKindAnnAtomic : KindAnn -> String
-renderKindAnnAtomic (k@(KindArrow _ _)) = "(\{renderKindAnn k})"
-renderKindAnnAtomic k = renderKindAnn k
 
 -- ── #1119 D-2 (#1098 / #1121): the VARIANCE half of `recordParamKinds` ────
 -- Sibling of `recordParamKinds` immediately above, sharing its key (`tyTabKey
@@ -23654,7 +23836,7 @@ inferParamPolarities tab params anns variants =
       -- An authority index is invariant by kind (§6.4), whatever its
       -- occurrences: a qualifier or an atom is not a type position this
       -- walk could read a variance off.
-      Some (KindAuthority _ _ _) => PInv
+      Some (KindAuthority _ _ _ _) => PInv
       _ =>
         joinPolarities
           (flatMap (t => paramOccPolarities tab (fst pk) PCo t) fieldTys))
@@ -23826,8 +24008,8 @@ kindsEq : List Kind -> List Kind -> Bool
 kindsEq [] [] = True
 kindsEq (KType :: a) (KType :: b) = kindsEq a b
 kindsEq (KRow :: a) (KRow :: b) = kindsEq a b
-kindsEq ((KAuth l1) :: a) ((KAuth l2) :: b) =
-  labelKey l1 == labelKey l2 && kindsEq a b
+kindsEq ((KAuth l1 p1) :: a) ((KAuth l2 p2) :: b) =
+  labelKey l1 == labelKey l2 && p1 == p2 && kindsEq a b
 kindsEq _ _ = False
 
 -- ── #1557 A-3.5c: `insertIfaceParamKinds`/`ifaceSlotKey` STOOD HERE ──────────
@@ -23963,8 +24145,9 @@ mintParamReprs : List String -> List Kind -> List Mono
 mintParamReprs (_ :: ps) (KType :: ks) = freshVar () :: mintParamReprs ps ks
 mintParamReprs (_ :: ps) (KRow :: ks) =
   TEff (EffRow [] (Some (freshEffvar ()))) :: mintParamReprs ps ks
-mintParamReprs (p :: ps) ((KAuth l) :: ks) =
-  TAuth (AVar (freshAuthvar (dtopFor l) (Some p))) :: mintParamReprs ps ks
+mintParamReprs (p :: ps) ((KAuth l pat) :: ks) =
+  TAuth (AVar (freshAuthvarRanged (dtopFor l) pat (Some p)))
+    :: mintParamReprs ps ks
 mintParamReprs _ _ = []
 
 -- KType param names → their TVar (the tvs map fromAstTypeE consults for tyvars)
@@ -23984,7 +24167,7 @@ paramEtbl params kinds reprs = SigVars {
 }
 
 kauthCells : List String -> List Kind -> List Mono -> List (String, Ref Authvar)
-kauthCells (p :: ps) ((KAuth _) :: ks) ((TAuth (AVar cell)) :: rs) =
+kauthCells (p :: ps) ((KAuth _ _) :: ks) ((TAuth (AVar cell)) :: rs) =
   (p, cell) :: kauthCells ps ks rs
 kauthCells (p :: ps) (_ :: ks) (_ :: rs) = kauthCells ps ks rs
 kauthCells _ _ _ = []
@@ -24003,8 +24186,10 @@ existentialCells : List (String, KindAnn) -> List (String, Ref Authvar)
 existentialCells binders =
   map
     (b => match snd b
-      KindAuthority l o _ =>
-        (fst b, freshAuthvar (dtopFor (EffLabel l o)) (Some (fst b)))
+      KindAuthority l o pat _ => (
+        fst b,
+        freshAuthvarRanged (dtopFor (EffLabel l o)) pat (Some (fst b)),
+      )
       _ => (fst b, freshAuthvar PUnit (Some (fst b))))
     binders
 
@@ -24107,7 +24292,14 @@ addVariants env tvs etbl paramTyIds rowEffvarIds authvarIds result ((Variant cna
   let _ = recordExistentials opened
   let ctorEtbl = sigVarsWithAuths opened etbl
   let _ = reportUnboundAuthorityNamesIn (payloadAstTypes payload) ctorEtbl
+  -- a report from elaborating a field (a pattern slot a binder cannot fill)
+  -- points at the constructor's fields
+  let saved = !currentLoc
+  let _ = match firstTyLocList (payloadAstTypes payload)
+    Some l => currentLoc := Some l
+    None => ()
   let ctorType = foldrFun (payloadTypesE ctorEtbl tvs payload) result
+  currentLoc := saved
   let env2 =
     addCtor
       env
@@ -27283,9 +27475,13 @@ implHeadMonos : List Ty -> (List (String, Mono), List Mono)
 implHeadMonos tys =
   let _ = fold (_ ty => checkImplHeadIndices ty) () tys
   let auths = dedupBinders (flatMap authArgBindersIn tys) []
+  let pats = flatMap patternSlotNamesIn tys
   let tvMap =
     freshTvMap (removeAllS (map fst auths) (dedup (flatMap tyVarNames tys)))
-  let etbl = sigVarsWithAuths (map freshAuthBinder auths) emptySigVars
+  let etbl =
+    sigVarsWithAuths
+      (map (b => freshAuthBinderRanged (contains (fst b) pats) b) auths)
+      emptySigVars
   (tvMap, map (fromAstTypeE etbl tvMap) tys)
 
 -- An instance is chosen by its head's type constructor and the index is
@@ -27298,7 +27494,7 @@ checkImplHeadIndices (TyApp a b) = match tyAppSpine (TyApp a b)
       Some kinds if listLen kinds == listLen args =>
         fold
           (_ ka => match ka
-            (KAuth _, TyAuth ps loc) =>
+            (KAuth _ _, TyAuth ps loc) =>
               pushTypeErrorOnceAt
                 "T-AUTHORITY-KIND"
                 loc

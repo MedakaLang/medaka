@@ -127,7 +127,7 @@ substituted its literal for the name, so the row `main` is charged with is exact
 And the compiler holds the body of `under` to its promise:
 
 ```
-error: authority.mdk:7:18: Binding 'sneaky' reaches "secrets/key" where only dir is admitted: dir is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from; an extension of it is the whole domain. Perform the operation on the named argument and build any extended value at the call site, or widen the declared row to the label bare
+error: authority.mdk:7:18: Binding 'sneaky' reaches "secrets/key" where only dir is admitted: dir is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from; an extension of it is the whole domain, since the caller may choose an exact element, which admits no extension of itself. Perform the operation on the named argument and build any extended value at the call site, declare the binder pattern-ranging with a `*` on its label (`(p : String @FileWrite*)`, `(d : Authority FileWrite*)`) so an extension stays within it, or widen the declared row to the label bare
   |
 7 | sneaky dir = load "secrets/key"
   |                   ^
@@ -141,7 +141,8 @@ used to the right of the argument that binds it, and only in the same signature.
 An extension of a named argument is the whole domain: a caller may pass an exact
 element such as `"cfg/app.toml"`, which admits only itself, so
 `load (dir ++ "/x")` is refused inside `under`. Forward the argument, and build
-the longer path at the call site:
+the longer path at the call site (or, when the body must extend it, declare the
+argument pattern-ranging, [below](#pattern-ranging-binders)):
 
 ```medaka
 effect Store Prefix
@@ -481,7 +482,57 @@ error: authority.mdk:6:32: The qualifier names 'dir', but no binder domain, effe
 
 A helper like `same` may return its argument, or a value derived from it that
 keeps its authority, but not an extension of it: `dir ++ "/index"` in the
-result is the whole domain, for the reason an extension in a row is.
+result is the whole domain, for the reason an extension in a row is, unless
+the binder ranges over patterns.
+
+### Pattern-ranging binders
+
+The extension rule exists because a caller may choose an exact element. A
+binder that can only ever stand for a *pattern* (`"cfg/*"`, `*`, a join of
+patterns) has no such caller: every pattern admits every right extension of a
+value within it. A `*` after the label says so, `(dir : String @Store*)`:
+
+```medaka
+effect Store Prefix
+
+load : (path : String) -> <Store path> Int
+load _ = 1
+
+under : (dir : String @Store*) -> String -> <Store dir> Int
+under dir name = load (dir ++ name)
+
+withIndex : (dir : String @Store*) -> String @dir
+withIndex dir = dir ++ "/index"
+
+inConfig : String -> <Store "cfg/*"> Int
+inConfig name = under "cfg/" name
+
+main =
+  println (inConfig "app.toml")
+  println (load (withIndex "notes/"))
+```
+
+```medaka-expect
+1
+1
+```
+
+Both bodies extend `dir` on the right and stay within it. A caller that passes
+an exact element is charged the pattern it begins: `under "cfg/" name` is
+charged `Store "cfg/*"`, and `check` prints `main : <Stdout, Store "cfg/*",
+Store "notes/*"> Unit`. So a caller bounded by one exact file, `<Store
+"cfg/app.toml">`, cannot call `under "cfg/app.toml" ""`: it is charged
+`"cfg/app.toml*"`. An extension on the left, `name ++ dir`, is still the
+whole domain.
+
+A data parameter takes the same `*` in its kind, `(d : Authority Store*)`
+([chapter 5](effects-5-data.md) builds a data directory this way), and a bare
+index variable in a signature (`Dir d`) takes the range of the slot it fills.
+Three things are refused, each as `T-AUTHORITY-PATTERN`: a written exact
+element in such a slot (`Dir "cfg/app.toml"`), a binder written without the
+`*` filling one (`(dir : String @Store) -> Dir dir`, whose report names
+`@Store*`), and a `*` on a label whose domain has no patterns but the whole
+domain, a `Set` label or a `Product` whose first axis is a `Set`.
 
 ## Relations the compiler keeps
 
