@@ -34,9 +34,11 @@ definerShadowArgHead	Expr	2/42
 definerShadowVarHead	Expr	3/42
 dictPassDecl	Decl	3/14
 directIfaceSchemeRows	Decl	1/14
+displayOperands	Expr	3/42
 doChainIsDeferred	Expr	3/42
 eagerRefs	Expr	36/42
 exprLoc	Expr	2/42
+extensionBase	Expr	1/42
 grantDecl	Decl	5/14
 grantExpr	Expr	5/42
 grantSpine	Expr	2/42
@@ -57,11 +59,14 @@ inferOneIfaceDefaults	Decl	2/14
 inferOneImpl	Decl	2/14
 isCtorAppSpine	Expr	5/42
 isDirectInterfaceDecl	Decl	1/14
+isDisplayHead	Expr	6/42
 isDoLoweredAndThenCallee	Expr	1/42
 isDoLoweredAndThenCalleeExpr	Expr	2/42
+isEmptyStringLit	Expr	2/42
 isNonexpansive	Expr	14/42
 isSyntacticLambda	Expr	1/42
 lamUnderLoc	Expr	2/42
+leftmostPart	Expr	1/42
 localAbsCandidate	Expr	14/42
 localAbsCtorSpine	Expr	5/42
 mapDeclBodies	Decl	5/14
