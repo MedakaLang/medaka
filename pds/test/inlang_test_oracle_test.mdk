@@ -123,7 +123,7 @@ suites = [
   ("lexicon_schemas_test", (3, NativeCapability)),
   ("lexicon_write_test", (14, NativeCapability)),
   -- these two spawn `medaka`, and the interpreter binds no subprocess extern
-  ("authority_pins_test", (8, NativeCapability)),
+  ("authority_pins_test", (14, NativeCapability)),
   ("sandbox_agreement_test", (7, NativeCapability)),
 ]
 
@@ -621,7 +621,7 @@ test "pds/test/lexicon_schemas_test.mdk executed >= 3 assertions" =
 test "pds/test/lexicon_write_test.mdk executed >= 14 assertions" =
   floorExpectation "lexicon_write_test"
 
-test "pds/test/authority_pins_test.mdk executed >= 8 assertions" =
+test "pds/test/authority_pins_test.mdk executed >= 14 assertions" =
   floorExpectation "authority_pins_test"
 
 test "pds/test/sandbox_agreement_test.mdk executed >= 7 assertions" =

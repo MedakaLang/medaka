@@ -99,6 +99,35 @@ test "refused: a pure caller of signCommitDigest" =
 test "accepted twin: a <Sign \"commit\"> caller of signCommitDigest" =
   expectEqual accepted (checkCodes "sign_labelled")
 
+-- `signServiceAuthDigest` carries `<Sign "service-auth">`, so the label a
+-- service-auth token spends is pinned the same way.
+
+test "refused: a pure caller of signServiceAuthDigest" =
+  expectEqual (refused ["T-EFFECT-LEAK"]) (checkCodes "service_auth_pure")
+
+test "accepted twin: a <Sign \"service-auth\"> caller of signServiceAuthDigest" =
+  expectEqual accepted (checkCodes "service_auth_labelled")
+
+-- # Minting and key derivation are labelled effects
+--
+-- `mintAccessToken` carries `<Mint "access">` and `pbkdf2HmacSha256` carries
+-- `<Kdf>`. The rows that declare those labels higher up (`pdsHandler`,
+-- `configure`, `serve`) would still type if either primitive lost its label,
+-- since a row that over-declares is accepted, so only a caller that declares
+-- nothing can show the label is on the primitive.
+
+test "refused: a pure caller of mintAccessToken" =
+  expectEqual (refused ["T-EFFECT-LEAK"]) (checkCodes "mint_pure")
+
+test "accepted twin: a <Mint \"access\"> caller of mintAccessToken" =
+  expectEqual accepted (checkCodes "mint_labelled")
+
+test "refused: a pure caller of pbkdf2HmacSha256" =
+  expectEqual (refused ["T-EFFECT-LEAK"]) (checkCodes "kdf_pure")
+
+test "accepted twin: a <Kdf> caller of pbkdf2HmacSha256" =
+  expectEqual accepted (checkCodes "kdf_labelled")
+
 -- # A data directory carries its path's authority
 --
 -- `blockFileWrite` writes beneath its `DataDir`'s root, and the root is a

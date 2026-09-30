@@ -111,11 +111,20 @@ sets it against anything but Caddy on the same box.
    `#3091`).
 
 4. **Write the account password to a file, never an argument** — an
-   argument is visible in `ps` output to every account on the box:
+   argument is visible in `ps` output to every account on the box. `printf`
+   is a shell builtin, so the password never appears in `ps` either:
 
    ```sh
-   umask 077 && printf '%s\n' 'the account password' > secrets/password
+   cd /opt/pds && (umask 077 && printf '%s\n' 'the account password' > secrets/password)
+   chown pds:pds secrets/password && chmod 0600 secrets/password
    ```
+
+   The `chown` is not optional. Written by root, the file is `root:root`, and
+   step 5's genesis runs as `pds`: it passes the mode check and then fails to
+   read the file (`unreadable password file secrets/password: Permission
+   denied`). `secrets/` itself is `pds:pds` at `0700` from step 1, which is
+   what lets the `pds` user reach the file at all, and what lets step 3's
+   `keygen` write into it.
 
 5. **Genesis run**, on the loopback default, to create the repository
    (`--init`) and bootstrap the credential from `secrets/password`. Run it
@@ -817,6 +826,70 @@ Paste the notification you received on #1697 — that, not the unit existing, is
 what closes the criterion. Once service health and delivery are verified,
 acknowledge and reset/stop the instance as described above; otherwise the
 manual test push would suppress the next real failure.
+
+## Upgrading from the flag layout
+
+A box deployed before the secrets and the data directory moved to fixed
+paths runs a unit whose `ExecStart` passes `--key` and `--data`, and its
+genesis run passed `--token-secret` and `--password-file` too. The current
+binary refuses all four, and `--bind`, as unknown flags (`unrecognized flag
+'--key'`), so the old unit cannot start it. Nothing is migrated
+automatically. With the server stopped (`systemctl stop pds`), from
+`/opt/pds`:
+
+1. **Put the files where the code reads them.** The working directory is
+   `/opt/pds`. The server serves `data/` beneath it and reads
+   `secrets/key.hex` (the signing key), `secrets/token.hex` (the session-token
+   secret, when present) and `secrets/password` (only while bootstrapping a
+   credential). The old procedure already used `/opt/pds/data`,
+   `/opt/pds/secrets/key.hex` and `/opt/pds/secrets/token.hex`, so a box that
+   followed it has nothing to move. Anything the old unit named elsewhere
+   moves to those names, owned by `pds` at `0600` (the directories at
+   `0700`):
+
+   ```sh
+   mv <the old --data directory> data
+   mv <the old --key file> secrets/key.hex
+   chown -R pds:pds data secrets && chmod 0600 secrets/key.hex
+   ```
+
+2. **Delete `secrets/password` once the credential exists.** The old
+   procedure said only to stop passing `--password-file`, so the file is
+   usually still there. The new server refuses to start with it beside
+   `data/credential` (`serve: refusing to start: data/credential already
+   exists and secrets/password is still present; …`), because the password is
+   never stored and a plaintext copy left on disk would be:
+
+   ```sh
+   test -f data/credential && rm -f secrets/password
+   ```
+
+3. **Reinstall the unit from `pds/pds.service`**, rather than editing the old
+   one: copy it to `/etc/systemd/system/pds.service`, replace its
+   placeholders as step 6 of the procedure says, then `systemctl daemon-reload
+   && systemctl start pds`. The template names no file: every path above is
+   fixed.
+
+4. **Expect every open session to be logged out once.** Each client signs in
+   again with the password; nothing else is lost. The reason is which secret
+   signs session tokens. The old unit passed no `--token-secret`, so the old
+   server signed them with the secret it generated into
+   `data/session-secret`. The new server uses `secrets/token.hex` whenever
+   that file exists, ahead of `data/session-secret`, and the old procedure's
+   `keygen` step wrote `secrets/token.hex`. A token verifies only under the
+   secret that signed it, so every token the old server issued is refused
+   (`401 InvalidToken`). The startup log names the source each run chose:
+
+   ```text
+   serve: session-token secret: secrets/token.hex
+   ```
+
+   A server that signs with the generated secret prints
+   `serve: session-token secret: data/session-secret` instead, so a logout
+   caused by a change of source is visible in the journal.
+
+Then wait for `serve: listening on` in the journal, as "Versioned releases
+and rollback" describes, before checking anything.
 
 ## Upgrade note: pre-existing secrets at a wider mode
 

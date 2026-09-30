@@ -2,7 +2,7 @@
    secret-containment properties that share its source, migrated from the
    retired shell gate of the same name under #3148.
 
-   Five source-shape checks, each a fold over a file's lines:
+   Six source-shape checks, each a fold over a file's lines:
 
    1. `pds/lib/*.mdk` must never import `pds/shell/` — the pure core
       performs no I/O (`pds/README.md`'s "Layout").
@@ -28,6 +28,14 @@
       as a secret-named interpolation check 4 would match. The record
       literal spans lines, so this check tracks the block rather than
       grading one line at a time.
+   6. The unlabelled signers stay behind the labelled ones. Outside
+      `pds/lib/sign.mdk` and `pds/lib/secp256k1.mdk`, no module imports the
+      raw ECDSA signers or `scFromBytes`; outside `pds/lib/jwt.mdk`, none
+      imports `hs256Signature`. With those out of reach, the only way to sign
+      with the repo key or the session-token secret is a function whose row
+      carries `Sign` or `Mint`. Test and vector files that grade the raw
+      primitives are allowed by file and name, each with its reason. Its
+      scope is every `.mdk` file under `pds/`.
 
    These are source-shape properties, so they are graded here rather than in
    `pds/test/trust_boundary_guards_test.mdk`, whose cells run one probe
@@ -65,9 +73,11 @@ import string.{
   fromChars,
   indexOf,
   isAlphaNum,
+  join,
   lines,
   replaceAll,
   startsWith,
+  stripPrefix,
   stripSuffix,
   take,
   toChars,
@@ -108,6 +118,9 @@ libDir = underRoot "pds/lib"
 shellDir : <IO> String
 shellDir = underRoot "pds/shell"
 
+pdsDir : <IO> String
+pdsDir = underRoot "pds"
+
 entryPath : <IO> String
 entryPath = underRoot "pds/serve.mdk"
 
@@ -116,6 +129,9 @@ libSources = sourcesUnder libDir
 
 shellSources : <FileRead, IO> Result String (List (String, String))
 shellSources = sourcesUnder shellDir
+
+pdsSources : <FileRead, IO> Result String (List (String, String))
+pdsSources = sourcesUnder pdsDir
 
 entrySources : <FileRead, IO> Result String (List (String, String))
 entrySources = sourceFile entryPath
@@ -523,6 +539,222 @@ charAt cs n i = if i < n then Some (arrayGetUnsafe i cs) else None
 keeping : Int -> Char -> List Char -> List Char
 keeping depth c kept = if depth == 0 then c :: kept else kept
 
+-- # Check 6 — the raw signers stay behind their labelled wrappers
+
+{- | Each module whose exports can sign without a label, the exports that
+   can, and the files that may import them.
+
+   `ecdsaSignDigest` signs a digest with a bare scalar and `scFromBytes`
+   turns key bytes into one, so together they make a commit signature with
+   no `Sign` in any row. `hs256Signature` does the same for a session token
+   and `Mint`. `lib.sign` and `lib.jwt` are the modules that wrap them in
+   labelled functions; `lib.secp256k1` is where the ECDSA signer is built
+   from the scalar arithmetic. -}
+rawSignerRules : List (String, List String, List String)
+rawSignerRules = [
+  (
+    "lib.secp256k1",
+    [
+      "ecdsaSignDigest",
+      "ecdsaSignDigestForTest",
+      "ecdsaInjectedSignProbeForTest",
+    ],
+    ["pds/lib/sign.mdk", "pds/lib/secp256k1.mdk"],
+  ),
+  (
+    "lib.scalar",
+    ["scFromBytes"],
+    ["pds/lib/sign.mdk", "pds/lib/secp256k1.mdk"],
+  ),
+  ("lib.jwt", ["hs256Signature"], ["pds/lib/jwt.mdk"]),
+]
+
+{- | The test and vector files allowed to import one raw signer: file, name,
+   and why. A row allows that one name in that one file, so a listed file
+   that starts importing a second raw signer is still caught. -}
+rawSignerLedger : List (String, String, String)
+rawSignerLedger = [
+  (
+    "pds/test/constant_time_signing_main.mdk",
+    "ecdsaSignDigestForTest",
+    "the constant-time audit's value carrier for the signing closure",
+  ),
+  (
+    "pds/test/constant_time_signing_main.mdk",
+    "ecdsaInjectedSignProbeForTest",
+    "drives the candidate-1 and exhaustion seam the audit grades",
+  ),
+  (
+    "pds/test/ecdsa_vectors_main.mdk",
+    "scFromBytes",
+    "reads each signing vector's published secret scalar",
+  ),
+  (
+    "pds/test/ecdsa_vectors_main.mdk",
+    "ecdsaSignDigestForTest",
+    "grades the raw signer against the published signing rows",
+  ),
+  (
+    "pds/test/ecdsa_vectors_main.mdk",
+    "ecdsaInjectedSignProbeForTest",
+    "grades the injected candidate-selection routes",
+  ),
+  (
+    "pds/test/jwt_test.mdk",
+    "hs256Signature",
+    "the RFC 7520 §4.4 worked example",
+  ),
+  (
+    "pds/test/rfc6979_test.mdk",
+    "scFromBytes",
+    "builds the fixed scalar the nonce-schedule tests run on",
+  ),
+  (
+    "pds/test/rfc6979_vectors_main.mdk",
+    "scFromBytes",
+    "reads each RFC 6979 corpus row's secret scalar",
+  ),
+  (
+    "pds/test/scalar_test.mdk",
+    "scFromBytes",
+    "`scFromBytes`'s rejection boundary is this file's subject",
+  ),
+  (
+    "pds/test/scalar_vectors_main.mdk",
+    "scFromBytes",
+    "grades `scFromBytes`'s rejection column against the reference corpus",
+  ),
+  (
+    "pds/test/secp256k1_point_vectors_main.mdk",
+    "scFromBytes",
+    "reads each point vector's scalar multiplier",
+  ),
+]
+
+-- | The prefix `repoRelative` strips: the repository root and a separator.
+rootPrefix : <IO> String
+rootPrefix = underRoot ""
+
+-- | `path` relative to `root`, as the rule tables spell it.
+repoRelative : String -> String -> String
+repoRelative root path = optionOr path (stripPrefix root path)
+
+{- | Every import statement in `ls`, with the line it starts on, joined onto
+   one line: a selective list may wrap across indented lines until the line
+   holding its closing `}`. -}
+importStatements : Int -> List String -> List (Int, String)
+importStatements _ [] = []
+importStatements n (line :: rest) =
+  if startsWith "import " line
+    && contains "{" line
+    && not (contains "}" line) then
+    wrappedImport n line 1 rest
+  else if startsWith "import " line then
+    (n, line) :: importStatements (n + 1) rest
+  else
+    importStatements (n + 1) rest
+
+-- The rest of a wrapped import that started on line `n` and has spanned
+-- `used` lines so far, up to and including the line holding its `}`.
+wrappedImport : Int -> String -> Int -> List String -> List (Int, String)
+wrappedImport n stmt _ [] = [(n, stmt)]
+wrappedImport n stmt used (line :: rest) =
+  let joined = "\{stmt} \{trimLeft line}"
+  if contains "}" line then
+    (n, joined) :: importStatements (n + used + 1) rest
+  else
+    wrappedImport n joined (used + 1) rest
+
+{- | The module one import statement names, and what it brings into scope
+   from it: the named exports of a selective import, or `None` for a
+   wildcard or an alias, which reach every export. A bare `import m` binds
+   no names, so it is `Some []`. -}
+importedFrom : String -> (String, Option (List String))
+importedFrom stmt =
+  let rest = drop 7 stmt
+  match indexOf ".{" rest
+    Some i => (take i rest, Some (identRuns (drop (i + 2) rest)))
+    None => match words rest
+      [] => ("", Some [])
+      [name] => wildcardOrBare name
+      name :: _ => (name, None)
+
+-- A one-word import: `m.*` reaches every export, `m` binds nothing.
+wildcardOrBare : String -> (String, Option (List String))
+wildcardOrBare name = match stripSuffix ".*" name
+  Some modName => (modName, None)
+  None => (name, Some [])
+
+-- | Whether the ledger allows the file `rel` to import `name`.
+ledgered : String -> String -> Bool
+ledgered rel name = any (row => ledgerRowIs rel name row) rawSignerLedger
+
+ledgerRowIs : String -> String -> (String, String, String) -> Bool
+ledgerRowIs rel name (file, allowed, _) = file == rel && allowed == name
+
+{- | One violation line per import, in a file outside a rule's owners, that
+   reaches one of that rule's raw signers and is not in the ledger. -}
+rawSignerHits : String -> (String, String) -> List String
+rawSignerHits root (path, content) =
+  let rel = repoRelative root path
+  flatMap
+    (stmt => statementHits path rel stmt)
+    (importStatements 1 (lines content))
+
+statementHits : String -> String -> (Int, String) -> List String
+statementHits path rel (n, stmt) =
+  flatMap (ruleHits path rel n stmt) rawSignerRules
+
+ruleHits : String ->
+  String ->
+  Int ->
+  String ->
+  (String, List String, List String) ->
+  List String
+ruleHits path rel n stmt (ruleModule, names, owners) =
+  let (modName, bound) = importedFrom stmt
+  let at = "\{path}:\{intToString n}"
+  if ruleModule /= modName || elem rel owners then
+    []
+  else match bound
+    None => [
+      "\{at}: reaches every export of \{modName}, including \{join ", " names}: \{stmt}",
+    ]
+    Some imported =>
+      map
+        (name =>
+          "\{at}: imports \{name} from \{modName} outside \{join " and " owners}")
+        (filter (name => elem name imported && not (ledgered rel name)) names)
+
+{- | One line per ledger row whose file no longer imports its name. A row
+   nothing needs is an allowance waiting for a new import to use it, and a
+   walk that never reached `pds/test` leaves every row stale, so this is
+   also the scan's floor. -}
+staleLedgerRows : String -> List (String, String) -> List String
+staleLedgerRows root sources =
+  let imported = flatMap (importedNames root) sources
+  flatMap (row => staleRow imported row) rawSignerLedger
+
+-- Every (file, name) a selective import in one source brings into scope.
+importedNames : String -> (String, String) -> List (String, String)
+importedNames root (path, content) =
+  let rel = repoRelative root path
+  flatMap
+    (stmt => map (name => (rel, name)) (selectiveNames stmt))
+    (importStatements 1 (lines content))
+
+selectiveNames : (Int, String) -> List String
+selectiveNames (_, stmt) = match importedFrom stmt
+  (_, Some names) => names
+  (_, None) => []
+
+staleRow : List (String, String) -> (String, String, String) -> List String
+staleRow imported (file, name, _) =
+  if elem (file, name) imported then
+    []
+  else
+    ["ledger row \{file} / \{name}: the file no longer imports it"]
+
 -- # Grading
 
 {- | Every violation line a check reports over a source set, or the reason
@@ -579,6 +811,16 @@ test "no secret reaches the access log in pds/shell" =
   expectNoFindings
     "real tree: a secret reaches the access log in pds/shell"
     (sweep (overFiles accessLogHits) (plusEntry shellSources))
+
+test "no module outside lib.sign, lib.secp256k1 and lib.jwt imports a raw signer" =
+  expectNoFindings
+    "real tree: a raw signer is imported outside its labelled wrapper"
+    (sweep (overFiles (rawSignerHits rootPrefix)) pdsSources)
+
+test "every raw-signer ledger row is still used" =
+  expectNoFindings
+    "real tree: a raw-signer ledger row allows an import nothing makes"
+    (sweep (staleLedgerRows rootPrefix) pdsSources)
 
 -- # Mutation controls
 --
@@ -842,6 +1084,66 @@ test "mutation control: a secret at a real pds/shell call site is caught" = expe
           serverPath,
           replaceAll realCallSite "logAccessBytes trace sessionSecret" content,
         )))
+
+{- | The forging probe from the sprint review, in the import position of a
+   real `pds/shell` module: with `scFromBytes` and `ecdsaSignDigest` in
+   scope, a commit signature needs no `Sign` in any row. -}
+rawSignImports : List String
+rawSignImports = [
+  "import lib.scalar.{scFromBytes}",
+  "import lib.secp256k1.{ecdsaSignDigest, ecdsaSignatureCompact}",
+]
+
+-- | `path`'s real content with `extra` inserted before its first import,
+-- as a one-element source set.
+withImports : String ->
+  List String ->
+  <FileRead> Result String (List (String, String))
+withImports path extra = match readFile path
+  Err e => Err "could not read \{path}: \{e}"
+  Ok content =>
+    let (before, after) =
+      span (l => not (startsWith "import " l)) (lines content)
+    Ok [(path, unlines (before ++ extra ++ after))]
+
+rawSignerSweep : Result String (List (String, String)) ->
+  <IO> Result String (List String)
+rawSignerSweep sources = sweep (overFiles (rawSignerHits rootPrefix)) sources
+
+test "mutation control: the raw ECDSA signer imported into pds/shell is caught" =
+  expectFindings
+    "the forging probe's imports in pds/shell/server.mdk"
+    (rawSignerSweep (withImports serverPath rawSignImports))
+
+test "mutation control: hs256Signature imported into pds/serve.mdk is caught" =
+  expectFindings
+    "hs256Signature imported into the entry point"
+    (rawSignerSweep (withImports entryPath ["import lib.jwt.{hs256Signature}"]))
+
+-- A wildcard reaches every export, the raw signer included.
+test "mutation control: a wildcard import of lib.secp256k1 is caught" =
+  expectFindings
+    "a wildcard import of lib.secp256k1 in pds/shell/server.mdk"
+    (rawSignerSweep (withImports serverPath ["import lib.secp256k1.*"]))
+
+-- The module that wraps the raw signer may import it.
+test "mutation control: lib.sign importing scFromBytes is allowed" =
+  expectNoFindings
+    "the owner of the raw signer was flagged for importing it"
+    (rawSignerSweep
+      (withImports (underRoot "pds/lib/sign.mdk") [
+        "import lib.scalar.{scFromBytes}",
+      ]))
+
+-- A ledger row allows one name in one file, so the file jwt_test.mdk is
+-- still caught importing a raw signer its row does not name.
+test "mutation control: the raw-signer ledger is per name, not per file" =
+  expectFindings
+    "a ledgered file importing a name its row does not allow"
+    (rawSignerSweep
+      (withImports (underRoot "pds/test/jwt_test.mdk") [
+        "import lib.secp256k1.{ecdsaSignDigest}",
+      ]))
 
 -- # Non-vacuity
 

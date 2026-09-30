@@ -1198,11 +1198,18 @@ Caddy on the same box a socket peer address reads `127.0.0.1` regardless of
 who is really asking, so the last `X-Forwarded-For` hop is already the
 better identity available. `#2757` closes as accepted-risk on that basis,
 and **a direct, unproxied bind is not possible at all**: the server listens on
-loopback only and has no flag to change that, so every caller arrives through
-a proxy on the same box, and the "whole world sharing one bucket" state
+loopback only and has no flag to change that, so every caller from OFF the box
+arrives through a proxy on it, and the "whole world sharing one bucket" state
 described above can only be reached by a deployment that runs that proxy
-without `--trusted-proxy`. `pds/README.md` documents the operator-facing half of this:
-when to pass the flag and what happens without it.
+without `--trusted-proxy`. Loopback does not stop a caller ON the box: any
+local process can connect to `127.0.0.1:<port>` directly, and under
+`--trusted-proxy` it writes its own `X-Forwarded-For`, and with it chooses its
+own rate-limit identity. The limiter's per-identity accounting therefore
+assumes a single-operator box, where every local process is the operator's
+own. A box that runs other people's code needs the port closed to them by
+some other means, which this design does not provide. `pds/README.md` documents the
+operator-facing half of this: when to pass the flag and what happens without
+it.
 
 **Blob-storage policy (P14).** One blob per file under `<data>/blobs`, a
 sibling of (never inside) the repository's `<data>/blocks`, sharded on the

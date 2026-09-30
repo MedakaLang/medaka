@@ -36,9 +36,14 @@
    Minting is charged to `Mint`, indexed by the token class: an access token
    performs `<Mint "access">` and a refresh token `<Mint "refresh">`. The
    session key is abstract and has no accessor, so the only functions that
-   can sign with one are the two whose rows say which class they mint, and
-   `verifyToken`, which mints nothing. Service auth spends the repo key, and
-   is charged to `lib.sign`'s `Sign "service-auth"` instead.
+   can sign with a `SessionKey` are the two whose rows say which class they
+   mint, and `verifyToken`, which mints nothing. The type system enforces
+   that much. `hs256Signature` signs raw bytes with no label; it is exported
+   for the RFC 7520 test, and `pds/test/lib_boundary_test.mdk` (check 6)
+   refuses an import of it anywhere else outside this module. `pds/serve.mdk`
+   turns the secret's bytes into a `SessionKey` in the function that reads
+   or generates them. Service auth spends the repo key, and is charged to
+   `lib.sign`'s `Sign "service-auth"` instead.
 
    `HS256` is pinned by the verifier, not read from the token. A token's own
    `alg` header is attacker-controlled input; selecting the verification
@@ -154,8 +159,9 @@ b64uDecode s = match stringLength s % 4
      Exported so the RFC 7520 §4.4 worked example can grade this module
      against a published signing input and signature directly, independently
      of the header and claim shapes `mintAccessToken` chooses. It takes raw
-     bytes, and no `SessionKey` yields its bytes, so this cannot spend the
-     server's session key. -}
+     bytes, and no `SessionKey` yields its bytes, so this cannot spend a
+     `SessionKey`. Only `pds/test/jwt_test.mdk` imports it
+     (`pds/test/lib_boundary_test.mdk`, check 6). -}
 export
 hs256Signature : Bytes -> String -> String
 hs256Signature secret signingInput =

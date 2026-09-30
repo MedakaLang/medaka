@@ -8,24 +8,36 @@
    reviewer reads.
 
    The sandbox half derives a `check-policy --allow` list from
-   `pds/pds.service` and checks `serve` against it. `ProtectSystem=strict`
-   and `IPAddressDeny=any`, pinned by `deploy_config_lint_test.mdk`, make
-   the unit's allow lines the whole of what the process may write and dial,
-   so the derivation reads only those:
+   `pds/pds.service` and checks `serve` against it. It makes two claims of
+   different kinds.
 
-   - each `ReadWritePaths=` directory gives `FileRead` and `FileWrite` of
-     everything beneath it,
-   - each `ReadOnlyPaths=` directory gives `FileRead` of everything beneath
-     it,
+   Writes and dials are an agreement. `ProtectSystem=strict` and
+   `IPAddressDeny=any`, pinned by `deploy_config_lint_test.mdk`, make the
+   unit's allow lines the whole of what the process may write and dial, so
+   `serve`'s manifest is inside the sandbox exactly when it is inside these:
+
+   - each `ReadWritePaths=` directory gives `FileWrite` of everything
+     beneath it,
    - each `IPAddressAllow=` address gives `Net` of that address, with
      `localhost` read as `127.0.0.1`, the one address `serve` dials.
+
+   Reads are not. `ProtectSystem=strict` leaves most of the filesystem
+   readable (`/usr`, `/etc`, `/opt`), and `ReadOnlyPaths=` grants nothing
+   that was not already readable, so no line of the unit bounds what the
+   process may read. What the derivation checks instead is that the
+   manifest's reads fall within the directories the unit NAMES: each
+   `ReadWritePaths=` and `ReadOnlyPaths=` directory gives `FileRead` of
+   everything beneath it. That is a claim that the manifest is narrower than
+   the sandbox, not that the two agree.
 
    Paths are written relative to `WorkingDirectory=`, as the program's own
    rows are. The labels systemd does not govern are allowed whole.
 
-   Each mutation control narrows one line of the unit in memory and must
-   turn the verdict to `rejected.`, so the accepted row cannot pass by the
-   derivation allowing everything.
+   The two mutation controls narrow one allow line of the unit in memory and
+   must turn the verdict to `rejected.`, so the accepted row cannot pass by
+   the derivation allowing everything. The third checks `runKeygen`, which
+   writes under `secrets/`, with every read allowed: it must be rejected for
+   its writes alone.
 
    Runs under `medaka test --native`: every assertion but the derivation's
    own spawns `medaka`, and the interpreter binds no subprocess extern. -}
@@ -86,8 +98,10 @@ ungoverned = [
 directiveValues : String -> List String -> List String
 directiveValues key ls = somes (map (stripPrefix "\{key}=") ls)
 
-{- | The `check-policy --allow` entries the unit's lines grant, or why they
-   cannot be read.
+{- | The `check-policy --allow` entries the unit's lines give, or why they
+   cannot be read. The `FileWrite` and `Net` entries are what the sandbox
+   permits; the `FileRead` entries are the directories the unit names, which
+   is narrower than what it permits.
 
    A path outside `WorkingDirectory=` is an `Err` rather than skipped: the
    program names no path outside it, so such a line is one this derivation
@@ -99,13 +113,13 @@ unitPolicy ls = match directiveValues "WorkingDirectory" ls
       root
       (rel => ["FileRead=\{rel}/*", "FileWrite=\{rel}/*"])
       (flatMap words (directiveValues "ReadWritePaths" ls))
-    read <- beneath
+    named <- beneath
       root
       (rel => ["FileRead=\{rel}/*"])
       (flatMap words (directiveValues "ReadOnlyPaths" ls))
     let dialled =
       map netEntry (flatMap words (directiveValues "IPAddressAllow" ls))
-    Ok (written ++ read ++ dialled ++ ungoverned)
+    Ok (written ++ named ++ dialled ++ ungoverned)
   [] => Err "the unit sets no WorkingDirectory="
   _ => Err "the unit sets WorkingDirectory= more than once"
 
@@ -138,10 +152,6 @@ policyOf rewrite = match unitLines
 replacing : String -> String -> List String -> List String
 replacing old new ls = map (l => if l == old then new else l) ls
 
--- | Every line but the ones starting with `prefix`.
-dropping : String -> List String -> List String
-dropping prefix ls = filter (l => not (startsWith prefix l)) ls
-
 test "the unit's sandbox derives the expected policy" =
   expectEqual
     (Ok
@@ -154,26 +164,42 @@ test "the unit's sandbox derives the expected policy" =
 
 -- # Checking serve against it
 
-{- | The exit status of `medaka check-policy pds/serve.mdk --fn serve` under
-   `policy`, and the first word of its verdict line.
+{- | The exit status of `medaka check-policy pds/serve.mdk --fn <entry>`
+   under `policy`, and the first word of its verdict line.
 
    The verdict word, not only the status, is graded: a run that could not
    read the policy also exits nonzero. -}
-verdictUnder : Result String (List String) ->
+verdictOf : String ->
+  Result String (List String) ->
   <Exec, IO> Result String (Int, String)
-verdictUnder (Err e) = Err e
-verdictUnder (Ok policy) =
+verdictOf _ (Err e) = Err e
+verdictOf entry (Ok policy) =
   let args = [
     "check-policy",
     serveSource,
     "--fn",
-    "serve",
+    entry,
     "--allow",
     join "," policy,
   ]
   match boundedVerb medakaBin args
     Err e => Err "could not run medaka check-policy: \{e}"
     Ok (code, out, err) => Ok (code, verdictWord (lines (out ++ err)))
+
+-- | `serve`'s verdict under `policy`.
+verdictUnder : Result String (List String) ->
+  <Exec, IO> Result String (Int, String)
+verdictUnder policy = verdictOf "serve" policy
+
+{- | `policy` with its `FileRead` entries replaced by `FileRead` whole: every
+   read allowed, which is closer to what `ProtectSystem=strict` permits than
+   the named directories are. -}
+everyReadAllowed : Result String (List String) -> Result String (List String)
+everyReadAllowed policy =
+  map
+    (entries =>
+      "FileRead" :: filter (e => not (startsWith "FileRead=" e)) entries)
+    policy
 
 verdictWord : List String -> String
 verdictWord [] = "no verdict"
@@ -204,7 +230,10 @@ test "mutation control: IPAddressAllow=10.0.0.1 is rejected" =
       (policyOf
         (replacing "IPAddressAllow=localhost" "IPAddressAllow=10.0.0.1")))
 
-test "mutation control: a unit without ReadOnlyPaths is rejected" =
+-- `runKeygen` writes `secrets/key.hex` and `secrets/token.hex`, outside the
+-- one directory the unit lets the process write. With every read allowed,
+-- the writes are the only thing left to reject it for.
+test "control: runKeygen, which writes under secrets/, is rejected with every read allowed" =
   expectEqual
     (Ok (1, "rejected."))
-    (verdictUnder (policyOf (dropping "ReadOnlyPaths=")))
+    (verdictOf "runKeygen" (everyReadAllowed (policyOf identity)))

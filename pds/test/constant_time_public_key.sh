@@ -36,7 +36,9 @@ source_closure_ok() {
   # Re-audited 2026-09-30 for the `Sign` label: `signDigest` became private
   # with an unchanged body, and two exported signers that only delegate to it
   # were added. `publicKeyForSecret` and `secretScalar` did not move.
-  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '1254565361 5616' ] || return 1
+  # Re-pinned 2026-09-30 again for a header-comment rewrite only; no
+  # definition changed.
+  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '2451873097 6303' ] || return 1
   # Re-audited when Int began trapping on overflow (#3377): secp256k1.mdk's
   # secret condition bits combine through bitAnd/bitOr/bitXor instead of
   # `+ - *`, and the RFC 6979 byte blend runs on U64, so no Int overflow

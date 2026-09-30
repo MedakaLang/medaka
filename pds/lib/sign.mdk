@@ -7,9 +7,19 @@
 
    Every signature a `SecretKey` makes is charged to `Sign`, indexed by what
    the signature is for: `signCommitDigest` performs `<Sign "commit">` and
-   `signServiceAuthDigest` performs `<Sign "service-auth">`. The raw signer
-   is private, so the only way to spend the key is through a function whose
-   row names its purpose. -}
+   `signServiceAuthDigest` performs `<Sign "service-auth">`. `signDigest`,
+   the unlabelled signer behind both, is private, and a `SecretKey` exposes
+   no bytes, so code holding a `SecretKey` can sign only through a function
+   whose row names its purpose. The type system enforces that much.
+
+   The key's BYTES are kept away from the unlabelled signers by a source
+   scan, not by the types: `lib.secp256k1`'s `ecdsaSignDigest` signs with a
+   bare scalar and `lib.scalar`'s `scFromBytes` makes one from bytes.
+   `pds/test/lib_boundary_test.mdk` (check 6) refuses an import of either
+   outside this module and `lib.secp256k1`, except in the test and vector
+   files its ledger names. `pds/serve.mdk` admits `secrets/key.hex` as a
+   `SecretKey` in the function that reads it (`readSigningKey`), so no
+   binding in the server holds the bytes after that read. -}
 
 import bytes as B
 import lib.scalar.{Sc, scFromFixedBytesReduce, scSecretCandidate, scToBytes}

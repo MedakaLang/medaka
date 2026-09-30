@@ -1,0 +1,8 @@
+-- Accepted twin of `kdf_pure.mdk`: the row names `Kdf`.
+
+import bytes.{Bytes}
+import lib.pbkdf2.{Kdf, pbkdf2HmacSha256}
+
+export
+deriveIt : Bytes -> Bytes -> <Kdf> Bytes
+deriveIt password salt = pbkdf2HmacSha256 password salt 1 32

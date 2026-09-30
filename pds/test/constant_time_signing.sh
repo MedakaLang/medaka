@@ -119,6 +119,9 @@ EOF
 # `signServiceAuthDigest` each delegate to it and differ only in the row they
 # declare, which is erased. The public driver signs through
 # `signCommitDigest`, so that is the root below.
+# sign.mdk re-pinned 2026-09-30 again for a header-comment rewrite only: the
+# module doc now states which property the types enforce and which the
+# lib_boundary import scan does. No definition changed.
 expected_public_source_manifest() {
   cat <<'EOF'
 3731538746 28626  pds/lib/field.mdk
@@ -129,7 +132,7 @@ expected_public_source_manifest() {
 2001432321 10382  stdlib/u64.mdk
 2873386462 1355  pds/lib/hmac_sha256.mdk
 2537316894 24171  pds/lib/secp256k1.mdk
-1254565361 5616  pds/lib/sign.mdk
+2451873097 6303  pds/lib/sign.mdk
 1008417625 3197  pds/test/constant_time_signing_public_main.mdk
 EOF
 }

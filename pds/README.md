@@ -166,7 +166,8 @@ Stderr = true
 Stdout = true
 ```
 
-The unit's sandbox grants the same thing from the operating system's side:
+The unit's sandbox confines the writes and the dials from the operating
+system's side:
 
 ```ini
 WorkingDirectory=/opt/pds
@@ -177,28 +178,45 @@ IPAddressDeny=any
 IPAddressAllow=localhost
 ```
 
-`ReadWritePaths` is the `data/*` reads and writes, `ReadOnlyPaths` is the
-`secrets/` reads, and `IPAddressAllow` is `Net "127.0.0.1"`. `serve` writes
-nothing under `secrets/`. Only `keygen` does, and the unit never runs it, so
-`main`'s manifest (`pds/capabilities/main.toml`) is wider than the unit allows
-and `serve`'s is not. The remaining labels are the clock, randomness, output,
-signal handling and the three secret-spending labels, which systemd does not
-govern.
+For writes and dials the two sides agree. `ReadWritePaths` is the only place
+the process may write, which covers the `data/*` writes, and `IPAddressAllow`
+is `Net "127.0.0.1"`. `serve` writes nothing under `secrets/`. Only `keygen`
+does, and the unit never runs it, so `main`'s manifest
+(`pds/capabilities/main.toml`) is wider than the unit allows and `serve`'s is
+not.
 
-`pds/test/sandbox_agreement_test.mdk` keeps the two sides in agreement. It
-compares both checked-in manifests with a fresh `medaka manifest` run byte for
-byte, derives a `check-policy --allow` list from `pds/pds.service`, and
-requires `medaka check-policy pds/serve.mdk --fn serve` to answer `accepted.`
-under it. Three mutation controls narrow the unit (`ReadWritePaths` to
-`data/blocks`, `IPAddressAllow` to `10.0.0.1`, no `ReadOnlyPaths`) and each
-must turn the verdict to `rejected.`.
+For reads they do not agree, and the manifest is the narrower of the two.
+`ProtectSystem=strict` leaves most of the filesystem readable (`ProtectHome`
+hides `/home` and `/root`, and `/tmp` and `/dev` are private), so the sandbox
+lets the process read `/usr`, `/etc` and the rest of `/opt`. `ReadOnlyPaths`
+grants no read that was not already allowed; it records that the `secrets/`
+reads are intended. What bounds `serve`'s reads is its row: everything it
+reads is beneath one of the two directories the unit names, `data/` and
+`secrets/`.
+
+The remaining labels are the clock, randomness, output, signal handling and
+the three secret-spending labels, which systemd does not govern.
+
+`pds/test/sandbox_agreement_test.mdk` checks both claims. It compares both
+checked-in manifests with a fresh `medaka manifest` run byte for byte, derives
+a `check-policy --allow` list from `pds/pds.service` (`FileWrite` and `Net`
+from the lines that confine them, `FileRead` from the directories the unit
+names), and requires `medaka check-policy pds/serve.mdk --fn serve` to answer
+`accepted.` under it. Two mutation controls narrow the unit (`ReadWritePaths`
+to `data/blocks`, `IPAddressAllow` to `10.0.0.1`) and each must turn the
+verdict to `rejected.`. A third control checks `runKeygen`, which writes under
+`secrets/`, with every read allowed: it must be `rejected.` for its writes
+alone.
 
 `pds/test/authority_pins_test.mdk` pins the signatures that row rests on. Each
 program under `pds/test/authority_pins/` imports the real modules and must be
 refused with a named error code, beside an accepted twin: an `egressCall`
-caller whose row names `Net "10.0.0.1"`, a pure caller of `signCommitDigest`,
-a `DataDir` rooted at `secrets/` passed to `blockFileWrite` under a `data/*`
-row, and a `Server <>` built from `pdsHandler`.
+caller whose row names `Net "10.0.0.1"`, pure callers of `signCommitDigest`,
+`signServiceAuthDigest`, `mintAccessToken` and `pbkdf2HmacSha256`, a `DataDir`
+rooted at `secrets/` passed to `blockFileWrite` under a `data/*` row, and a
+`Server <>` built from `pdsHandler`. A pure caller is what pins a label to its
+primitive: every production row above the primitive still declares the label,
+and a row that declares more than it needs is accepted.
 
 ## Running the gate locally
 
