@@ -658,7 +658,12 @@ area = "engines"
 shard = "gates_4"
 project = "pds"
 tiers = ["merge"]
-cost = "medium"
+# "heavy", not "medium": its measured median was already 753s (max 862s) against
+# medium's 900s kill timeout, and sandbox_agreement_test/authority_pins_test run
+# under it, each row spawning `medaka` on pds/serve.mdk or a pin fixture that
+# imports the real pds modules (`check` takes one file, so they cannot batch).
+# Together they pushed a CI run past 900s (run 36722457415, exit 124).
+cost = "heavy"
 kind = "native"
 migration = "done"
 run = "pds/test/inlang_test_oracle_test.mdk"
