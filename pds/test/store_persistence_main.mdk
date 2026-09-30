@@ -61,7 +61,7 @@ import lib.blob.{admitBlob, blobCid}
 import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode}
 import lib.cid.{Cid, cidDigest, cidEqual, cidToBytes, cidToString}
-import lib.credential.{CredentialRecord, makeCredential}
+import lib.credential.{CredentialRecord, makeCredential, passwordFromText}
 import lib.dagcbor.{DagCbor(..)}
 import lib.event_log_record.{
   EventLogEntry(..),
@@ -123,6 +123,7 @@ import shell.persist.{
   persistSweepStagedBlocks,
 }
 import shell.server.{completeGenesisEvents, persistTransition}
+import lib.pbkdf2.{Kdf}
 
 -- The gate greps every persisted file for this hex and for its raw bytes; it is
 -- the signing key the adapter must never be able to write.
@@ -157,7 +158,7 @@ post text = DcMap [
   ("createdAt", DcString "2026-09-02T00:00:00.000Z"),
 ]
 
-write : String -> String -> String -> Repo -> Repo
+write : String -> String -> String -> Repo -> <Sign "commit"> Repo
 write path text rev repo =
   mustRepo
     (map
@@ -217,7 +218,7 @@ blocksOf : Repo -> List (Cid, Bytes)
 blocksOf repo =
   resultOrPanic "store_persistence: block export failed" (repoExportBlocks repo)
 
-runSave : String -> <IO, FileRead, FileWrite> Unit
+runSave : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runSave dir =
   let repo = fixtureRepo
   match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
@@ -229,7 +230,7 @@ runSave dir =
 {- | Persist the EARLIER generation, so a later `save` into the same directory
    leaves both generations' blocks on disk and only the head distinguishes
    them. The summary is the one a rewound head must reproduce exactly. -}
-runCrashSaveOld : String -> <IO, FileRead, FileWrite> Unit
+runCrashSaveOld : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runCrashSaveOld dir =
   let repo = olderRepo
   match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
@@ -421,12 +422,12 @@ fixtureCredential =
   match (makeCredential
     fixtureCredentialSalt
     100000
-    "correct horse battery staple")
+    (passwordFromText "correct horse battery staple"))
     Err message =>
       panic "store_persistence: malformed credential fixture: \{message}"
     Ok record => record
 
-runCredentialSave : String -> <IO, FileWrite> Unit
+runCredentialSave : String -> <FileWrite, IO, Kdf> Unit
 runCredentialSave dir = match persistCredential dir fixtureCredential
   Err message => panic "store_persistence: credential save failed: \{message}"
   Ok () => println "CREDENTIAL SAVE: PASS"
@@ -619,7 +620,7 @@ eventSurvey label dir =
      one. -}
 runEventRecover : String ->
   (Repo -> String -> Option String) ->
-  <IO, FileRead, FileWrite> Unit
+  <FileRead, FileWrite, IO, Sign "commit"> Unit
 runEventRecover dir anchorFor =
   let repo = fixtureRepo
   let () =
@@ -684,7 +685,7 @@ putBlobs ((cid, mimeType, bytes) :: rest) store =
 
    The gate persists the earlier generation through `crash-save-old` BEFORE it
    starts tracing, so what the trace holds is this transition alone. -}
-runTransition : String -> <IO, FileRead, FileWrite> Unit
+runTransition : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runTransition dir =
   let before = storeFromRepo olderRepo
   let after = putBlobs blobFixtures (storeWithRepo fixtureRepo before)
@@ -732,7 +733,7 @@ churnSeed dir index limit store =
       Err message => Err message
       Ok () => churnSeed dir (index + 1) limit next
 
-runBlobChurnSeed : String -> <IO, FileRead, FileWrite> Unit
+runBlobChurnSeed : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobChurnSeed dir =
   match churnSeed dir 1 (churnCount - 1) (storeFromRepo olderRepo)
     Err message => panic "store_persistence: churn seed failed: \{message}"
@@ -754,7 +755,7 @@ reportChurnAdd (cid, mimeType, bytes) =
    published — a store rebuilt by reading the blob area would hold the same
    blobs, but reading it would also be the whole-account walk this route is
    here to show is gone. -}
-runBlobChurnAdd : String -> <IO, FileRead, FileWrite> Unit
+runBlobChurnAdd : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobChurnAdd dir =
   let before = putBlobs (churnRows 1 (churnCount - 1)) (storeFromRepo olderRepo)
   let row = churnRow churnCount
@@ -782,19 +783,19 @@ blockChurnRev index =
       "store_persistence: malformed churn TID"
       (tidEncode (1800000000000000 + index) 0))
 
-blockChurnWrite : Int -> Repo -> Repo
+blockChurnWrite : Int -> Repo -> <Sign "commit"> Repo
 blockChurnWrite index repo =
   let rev = blockChurnRev index
   write "app.bsky.feed.post/\{rev}" "churn \{intToString index}" rev repo
 
-blockChurnRepo : Int -> Repo -> Repo
+blockChurnRepo : Int -> Repo -> <Sign "commit"> Repo
 blockChurnRepo index repo =
   if index > blockChurnCount then
     repo
   else
     blockChurnRepo (index + 1) (blockChurnWrite index repo)
 
-runBlockChurnSeed : String -> <IO, FileRead, FileWrite> Unit
+runBlockChurnSeed : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlockChurnSeed dir =
   let repo = blockChurnRepo 1 olderRepo
   match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
@@ -812,7 +813,7 @@ runBlockChurnSeed dir =
    `blob-churn-add`'s reason: it is the store a server would have published,
    and reading it back would be the whole-repository walk this route is here
    to show is gone. -}
-runBlockChurnAdd : String -> <IO, FileRead, FileWrite> Unit
+runBlockChurnAdd : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlockChurnAdd dir =
   let prior = blockChurnRepo 1 olderRepo
   let next = blockChurnWrite (blockChurnCount + 1) prior
@@ -843,7 +844,7 @@ retypeSecondType = "application/json"
 retypeRow : String -> (Cid, String, Bytes)
 retypeRow mimeType = (blobCid retypeBytes, mimeType, retypeBytes)
 
-runBlobRetypeSeed : String -> <IO, FileRead, FileWrite> Unit
+runBlobRetypeSeed : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobRetypeSeed dir =
   let before = storeFromRepo olderRepo
   let after = putBlobs [retypeRow retypeFirstType] before
@@ -861,7 +862,7 @@ runBlobRetypeSeed dir =
    The seed's upload is replayed into memory rather than read back, for
    `blob-churn-add`'s reason — a `before` rebuilt by reading the blob area
    would be the whole-account walk these routes exist to show is gone. -}
-runBlobRetypeAdd : String -> <IO, FileRead, FileWrite> Unit
+runBlobRetypeAdd : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobRetypeAdd dir =
   let before = putBlobs [retypeRow retypeFirstType] (storeFromRepo olderRepo)
   let after = putBlobs [retypeRow retypeSecondType] before
@@ -1019,7 +1020,8 @@ plantAndSweep dir =
    Shared by every route that plants something beside legitimate content, so
    that "the readers still answer with everything real" is a claim about all
    three halves and not a vacuous one over an empty directory. -}
-persistFixtureTree : String -> <FileRead, FileWrite> Result String Unit
+persistFixtureTree : String ->
+  <FileRead, FileWrite, Sign "commit"> Result String Unit
 persistFixtureTree dir =
   let repo = fixtureRepo
   do
@@ -1039,7 +1041,7 @@ persistFixtureTree dir =
    must be gone afterward; the legitimate content it sat beside must not be,
    since a sweep that cannot tell staged residue from a directory it should
    never touch is not the sweep #2572 part 2 asked for. -}
-runSweepStaging : String -> <IO, FileRead, FileWrite> Unit
+runSweepStaging : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runSweepStaging dir = match persistFixtureTree dir
   Err message =>
     panic "store_persistence: sweep-staging setup failed: \{message}"
@@ -1134,8 +1136,8 @@ straySurvey label dir =
 -- survey of what every reader then answers.
 strayCase : String ->
   String ->
-  (String -> <FileRead, FileWrite> Result String String) ->
-  <IO, FileRead, FileWrite> Unit
+  (String -> <FileRead, FileWrite, Sign "commit"> Result String String) ->
+  <IO, FileRead, FileWrite, Sign "commit"> Unit
 strayCase root label plant =
   let dir = "\{root}/\{label}"
   match persistFixtureTree dir
@@ -1148,7 +1150,7 @@ strayCase root label plant =
         let () = println "STRAYPLANT \{label} \{planted}"
         straySurvey label dir
 
-blockShardPath : String -> String
+blockShardPath : String -> <Sign "commit"> String
 blockShardPath dir = "\{dir}/blocks/\{shardOf (repoRootCid fixtureRepo)}"
 
 blobShardPath : String -> String
@@ -1157,7 +1159,8 @@ blobShardPath dir = "\{blobDir dir}/\{shardOf firstBlobCid}"
 -- A bytes-file name spelling a valid CID, beside a sidecar of its own, but
 -- carried by a DIRECTORY. Name arithmetic alone reads it as a blob, which is
 -- why `blobFileCount` used to report one the reader skips.
-plantBlobLeafCid : String -> <FileRead, FileWrite> Result String String
+plantBlobLeafCid : String ->
+  <FileRead, FileWrite, Sign "commit"> Result String String
 plantBlobLeafCid dir =
   let name = cidName (repoRootCid fixtureRepo)
   do
@@ -1182,7 +1185,7 @@ mimeSuffixText = ".mime"
    and, for a refusal, the message; `store_persistence_test.mdk` decides
    which of those is correct, so that the expected disposition lives beside
    the prose that states the rule rather than inside the driver. -}
-runStrayEntries : String -> <IO, FileRead, FileWrite> Unit
+runStrayEntries : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runStrayEntries root =
   let () = strayCase root "none" (_ => Ok "nothing")
   let () = strayCase root "blocks-top-file" (dir =>
@@ -1293,14 +1296,14 @@ runGenesisGuard dir = match reload dir
    the same bytes whenever the log is. What the gate compares is a log nothing
    interrupted against one it truncated and let this finish, and the
    comparison would otherwise be grading the reload as well. -}
-runGenesisInit : String -> <IO, FileRead, FileWrite> Unit
+runGenesisInit : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runGenesisInit dir =
   let repo = fixtureRepo
   match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
     Err message => panic "store_persistence: genesis save failed: \{message}"
     Ok () => runGenesisResume dir
 
-main : <IO, Env, FileRead, FileWrite> Unit
+main : <Env, FileRead, FileWrite, IO, Kdf, Sign "commit"> Unit
 main = match args ()
   ["save", dir] => runSave dir
   ["crash-save-old", dir] => runCrashSaveOld dir

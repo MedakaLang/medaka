@@ -84,6 +84,8 @@ import lib.tid.{Tid, tidClockId, tidEncode, tidMicros, tidParse}
 import test.request_support.{queryRequest}
 import test.response_support.{bodyText, headText, rawBodyOf}
 import u8 as U8
+import lib.sign.{Sign}
+import lib.jwt.{Mint}
 
 {- | The secret every row in this corpus was signed with
    (`pds/tools/gen_sync_event_corpus.mjs`): an exportable secp256k1 key of one.
@@ -200,7 +202,7 @@ mustAccount did =
     "sync_car_shapes: account setup failed"
     (makeAccount did accountHandleText accountHostText)
 
-mustServer : Account -> Server
+mustServer : Account -> Server <Mint {"access", "refresh"}, Sign "commit">
 mustServer account =
   resultOrPanic
     "sync_car_shapes: server setup failed"
@@ -220,7 +222,7 @@ mustServer account =
    the one the record commit carries. The genesis commit and the empty tree's
    node stay in the block store afterwards, which is what makes a route that
    over-answers visible here. -}
-fixtureRepo : String -> List (Bytes, DagCbor) -> Tid -> Repo
+fixtureRepo : String -> List (Bytes, DagCbor) -> Tid -> <Sign "commit"> Repo
 fixtureRepo did records rev =
   let genesis = match tidEncode (tidMicros rev - 1) (tidClockId rev)
     Ok tid => tid
@@ -244,7 +246,7 @@ responseStatus bytes = match split " " (headText bytes)
 
 -- | One route call against the fixture store. No route here can transition
 -- it, so the successor store is discarded rather than threaded.
-call : Server -> Store -> String -> Bytes
+call : Server e -> Store -> String -> <e> Bytes
 call server store target =
   let (_, bytes) =
     handleBytes server testContext store (queryRequest accountHostText target)
@@ -284,12 +286,12 @@ emittedRootCount bytes =
 
 -- | Every probe in `recordProbeTags`, all of them graded even after one fails,
 -- so one divergence does not hide the rest.
-gradeRecordProbes : Server ->
+gradeRecordProbes : Server e ->
   Store ->
   String ->
   List (String, String) ->
   List String ->
-  <IO> Bool
+  <IO | e> Bool
 gradeRecordProbes _ _ _ _ [] = True
 gradeRecordProbes server store did rows (tag :: rest) =
   let here = gradeRecordShape server store did rows tag
@@ -303,12 +305,12 @@ gradeRecordProbes server store did rows (tag :: rest) =
    beside it but not claimed here, because whether each holds depends on where
    the key sits in the tree — `pds/test/repo_vectors_test.mdk` asserts the ones that
    actually hold, per probe. -}
-gradeRecordShape : Server ->
+gradeRecordShape : Server e ->
   Store ->
   String ->
   List (String, String) ->
   String ->
-  <IO> Bool
+  <IO | e> Bool
 gradeRecordShape server store did rows tag =
   let rkey = rkeyOf (rowValue rows "\{tag}-PATH")
   let target =
@@ -377,11 +379,11 @@ blocksTarget did cids =
 
 {- | The present block set: exactly the CIDs the corpus names, requested in
    the corpus's own order, answered in a CAR that names no root. -}
-gradeBlocksPresent : Server ->
+gradeBlocksPresent : Server e ->
   Store ->
   String ->
   List (String, String) ->
-  <IO> Bool
+  <IO | e> Bool
 gradeBlocksPresent server store did rows =
   let wanted = rowCids rows "GETBLOCKS-PRESENT-BLOCKS"
   let response = call server store (blocksTarget did wanted)
@@ -404,11 +406,11 @@ gradeBlocksPresent server store did rows =
    the pinned message naming every missing CID. A partial CAR would be the
    silent wrong answer here, so the body is graded as text rather than
    searched for a substring. -}
-gradeBlocksMissing : Server ->
+gradeBlocksMissing : Server e ->
   Store ->
   String ->
   List (String, String) ->
-  <IO> Bool
+  <IO | e> Bool
 gradeBlocksMissing server store did rows =
   let requested = rowCids rows "GETBLOCKS-PARTLY-MISSING-REQUESTED"
   let response = call server store (blocksTarget did requested)
@@ -426,7 +428,8 @@ gradeBlocksMissing server store did rows =
 {- | The corpus's own repository, rebuilt from the two `FIXTURE-RECORD-*` rows,
    with its DID and revision read off the commit block the
    `GETRECORD-PRESENT-D0` CAR is rooted at. -}
-fixtureFromCorpus : List (String, String) -> (String, Repo, String)
+fixtureFromCorpus : List (String, String) ->
+  <Sign "commit"> (String, Repo, String)
 fixtureFromCorpus rows =
   let carBytes = mustHex (rowValue rows "GETRECORD-PRESENT-D0-CAR")
   let car = match carDecode carBytes
@@ -465,7 +468,7 @@ namedBlockBytes wanted [] =
 namedBlockBytes wanted ((cid, bytes) :: rest) =
   if cidToString cid == wanted then bytes else namedBlockBytes wanted rest
 
-main : <IO, Env, FileRead> Unit
+main : <Env, FileRead, IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message => panic "sync_car_shapes: cannot read corpus: \{message}"

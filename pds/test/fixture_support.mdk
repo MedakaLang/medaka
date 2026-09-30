@@ -11,6 +11,7 @@ import u8 as U8
 import json.{Json(..), get}
 import string.{startsWith}
 import lib.cid.{cidToString}
+import lib.jwt.{SessionKey, sessionKeyFromBytes}
 import lib.repo.{repoCommitCid, repoLatestCommit, repoRootCid}
 import lib.server_core.{RequestContext(..)}
 import lib.store.{Store, storeRepo}
@@ -24,6 +25,20 @@ testSecret = B.fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 7 + 3)))
 export
 altTestSecret : Bytes
 altTestSecret = B.fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 7 + 1)))
+
+-- | `testSecret` admitted as the server's session-token key.
+export
+testKey : SessionKey
+testKey =
+  resultOrPanic "fixture_support: session key" (sessionKeyFromBytes testSecret)
+
+-- | `altTestSecret` admitted as the server's session-token key.
+export
+altTestKey : SessionKey
+altTestKey =
+  resultOrPanic
+    "fixture_support: session key"
+    (sessionKeyFromBytes altTestSecret)
 
 export
 testNonce : Bytes

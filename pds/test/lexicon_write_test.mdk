@@ -19,7 +19,7 @@ import json.{Json(..), get, jArray, jObject, parse, stringify}
 import string.{repeat, startsWith}
 import test.{Expectation, expectEach, expectEqual, expectTrue}
 import lib.handlers.{pdsServer, recordServer, serverLinksEmpty}
-import lib.jwt.{mintToken}
+import lib.jwt.{Mint, mintAccessToken}
 import lib.repo.{repoInitFromKeyBytes}
 import lib.server_core.{
   Account,
@@ -37,9 +37,16 @@ import lib.store.{
   storeWithServerSecret,
 }
 import lib.tid.{tidParse}
-import test.fixture_support.{fieldText, storeFingerprint, testNonce, testSecret}
+import test.fixture_support.{
+  fieldText,
+  storeFingerprint,
+  testKey,
+  testNonce,
+  testSecret,
+}
 import test.request_support.{postJson, procedureRequest}
 import test.response_support.{bodyText}
+import lib.sign.{Sign}
 
 -- The account and signing key of the Phase-1 transcript
 -- (`pds/test/vectors/repo_reference_corpus.txt`'s META row).
@@ -65,14 +72,14 @@ account =
     "lexicon_write_test: account setup failed"
     (makeAccount accountDidText "medaka.example" hostText)
 
-server : Server
+server : Server <Sign "commit">
 server =
   resultOrPanic "lexicon_write_test: server setup failed" (recordServer account)
 
 token : String
 token =
-  mintToken
-    testSecret
+  mintAccessToken
+    testKey
     accountDidText
     hostText
     "lexicon_write_test-token"
@@ -90,20 +97,21 @@ initialStore =
     resultOrPanic
       "lexicon_write_test: repository init failed"
       (repoInitFromKeyBytes accountDidText secret rev)
-  match storeWithServerSecret testSecret (storeFromRepo repo)
-    Ok store =>
-      storeSessionOpen
-        (sessionFingerprint token)
-        (sessionFingerprint "lexicon_write_test: no refresh token")
-        (testInstant + 3600)
-        store
-    Err message => panic "lexicon_write_test: session setup failed: \{message}"
+  let store = storeWithServerSecret testKey (storeFromRepo repo)
+  storeSessionOpen
+    (sessionFingerprint token)
+    (sessionFingerprint "lexicon_write_test: no refresh token")
+    (testInstant + 3600)
+    store
 
 -- ── requests ────────────────────────────────────────────────────────────────
 
 data Answer = Answer { store : Store, body : Json }
 
-send : Store -> String -> List (String, Json) -> Answer
+send : Store ->
+  String ->
+  List (String, Json) ->
+  <Mint "access", Sign "commit"> Answer
 send store nsid fields =
   let (next, bytes) =
     handleBytes
@@ -119,7 +127,11 @@ send store nsid fields =
         (parse (bodyText bytes)),
   }
 
-createRecord : String -> String -> Json -> List (String, Json) -> Answer
+createRecord : String ->
+  String ->
+  Json ->
+  List (String, Json) ->
+  <Mint "access", Sign "commit"> Answer
 createRecord collection rkey record flags =
   send
     initialStore
@@ -132,10 +144,14 @@ createRecord collection rkey record flags =
       ]
       ++ flags)
 
-putRecord : String -> String -> Json -> Answer
+putRecord : String -> String -> Json -> <Mint "access", Sign "commit"> Answer
 putRecord collection rkey record = putRecordWith collection rkey record []
 
-putRecordWith : String -> String -> Json -> List (String, Json) -> Answer
+putRecordWith : String ->
+  String ->
+  Json ->
+  List (String, Json) ->
+  <Mint "access", Sign "commit"> Answer
 putRecordWith collection rkey record flags =
   send
     initialStore
@@ -156,7 +172,9 @@ createElement rkey record = jObject [
   ("value", record),
 ]
 
-applyWrites : List Json -> List (String, Json) -> Answer
+applyWrites : List Json ->
+  List (String, Json) ->
+  <Mint "access", Sign "commit"> Answer
 applyWrites writes flags =
   send
     initialStore
@@ -196,13 +214,15 @@ statusOf answer = fieldText "validationStatus" answer.body
 errorOf : Answer -> String
 errorOf answer = fieldText "error" answer.body
 
-unchanged : Answer -> Bool
+unchanged : Answer -> <Mint "access", Sign "commit"> Bool
 unchanged answer =
   storeFingerprint answer.store == storeFingerprint initialStore
 
 -- A refusal: the error code, whether its message begins as the reference's
 -- does, and whether the store was left as it was.
-refusal : String -> Answer -> (String, Bool, Bool)
+refusal : String ->
+  Answer ->
+  <Mint "access", Sign "commit"> (String, Bool, Bool)
 refusal prefix answer = (
   errorOf answer,
   startsWith prefix (fieldText "message" answer.body),
@@ -304,7 +324,7 @@ test "a collection with no schema is written and reported unknown, validate abse
   ]
 
 -- The answer to a post carrying `text`.
-postTextAnswer : String -> Answer
+postTextAnswer : String -> <Mint "access", Sign "commit"> Answer
 postTextAnswer text =
   createRecord "app.bsky.feed.post" "3ke6kg3wk2c2b" (postWith text) []
 
@@ -603,7 +623,7 @@ test "a __proto__ key anywhere is refused under validate false" =
   ]
 
 -- A `$type` that is not a string is named as a JavaScript template renders it.
-typeMessage : Json -> String
+typeMessage : Json -> <Mint "access", Sign "commit"> String
 typeMessage given =
   let record = jObject [("$type", given), ("text", JString "hello")]
   fieldText
@@ -685,7 +705,7 @@ test "a __proto__ key in the request body outside the record is refused under va
 currentHandle : String
 currentHandle = "medaka.dev"
 
-fullServer : Server
+fullServer : Server <Mint {"access", "refresh"}, Sign "commit">
 fullServer =
   let handleAccount =
     resultOrPanic
@@ -697,7 +717,8 @@ fullServer =
 
 -- The status an `updateHandle` call is answered, its error name, and whether
 -- it asked the shell to announce an `#identity` event.
-updateHandleOutcome : List (String, Json) -> (Int, String, Bool)
+updateHandleOutcome : List (String, Json) ->
+  <Mint {"access", "refresh"}, Sign "commit"> (Int, String, Bool)
 updateHandleOutcome fields =
   let request =
     resultOrPanic
@@ -731,7 +752,9 @@ test "updateHandle with a __proto__ key is refused and announces nothing" =
 
 -- The DID an `updateHandle` call asks the shell to charge, for the verbatim
 -- JSON `bodyJson` sent with `bearer` ("" sends no credential at all).
-updateHandleCharge : String -> String -> Option String
+updateHandleCharge : String ->
+  String ->
+  <Mint {"access", "refresh"}, Sign "commit"> Option String
 updateHandleCharge bearer bodyJson =
   let request =
     resultOrPanic

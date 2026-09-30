@@ -175,7 +175,9 @@ egressSigningKey (Egress _ signingKey) = signingKey
    nonce schedule exhausts its retry bound — which no input chooses and no
    caller can provoke. -}
 export
-egressMintToken : Egress -> ServiceAuthRequest -> Result String String
+egressMintToken : Egress ->
+  ServiceAuthRequest ->
+  <Sign "service-auth"> Result String String
 egressMintToken egress claims =
   mintServiceToken (egressSigningKey egress) claims
 
@@ -415,7 +417,7 @@ export
 egressCall : Egress ->
   (Int -> Wire "127.0.0.1" e Bool) ->
   ProxyAdmission ->
-  Wire "127.0.0.1" e (Result String UpstreamAnswer)
+  <Sign "service-auth"> Wire "127.0.0.1" e (Result String UpstreamAnswer)
 egressCall egress mayHold admission =
   match appviewRouteFor (egressAppviews egress) admission.audience
     None =>

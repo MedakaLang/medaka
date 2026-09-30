@@ -6,7 +6,12 @@
 
    1. `pds/lib/*.mdk` must never import `pds/shell/` — the pure core
       performs no I/O (`pds/README.md`'s "Layout").
-   2. No exported `pds/lib` signature may declare an effect row (`<...>`).
+   2. No exported `pds/lib` signature may declare a row naming anything but
+      `Sign`, `Mint` and `Kdf`, the three labels the core declares for
+      spending its secrets. A host label (any built-in, `IO`, `FFI`) in a
+      `pds/lib` row is a violation; a row variable is not a label and is
+      allowed, since a function generic in its row performs only what its
+      caller hands it.
    3. Every `pds/lib` export must carry an explicit type signature. This is
       what makes check 2 non-bypassable: an unannotated export gets an
       INFERRED row, which no scan over declared rows can see.
@@ -185,11 +190,74 @@ opensExport line = line == "export" || line == "public export"
 isIndented : String -> Bool
 isIndented line = startsWith " " line || startsWith "\t" line
 
-{- | One violation line per exported signature that declares an effect row.
+-- | The labels a `pds/lib` row may name.
+coreLabels : List String
+coreLabels = ["Sign", "Mint", "Kdf"]
+
+{- | Every row written in `sig`: the text between each `<` and the `>` that
+   closes it. The `>` of an arrow (`->`) closes nothing. -}
+rowsIn : String -> List String
+rowsIn sig = rowScan (toList (toChars sig)) ' ' 0 [] []
+
+-- `prev` is the character before `cs`, `depth` the open-row nesting, `cur`
+-- the current row's characters reversed and `acc` the finished rows
+-- reversed.
+rowScan : List Char -> Char -> Int -> List Char -> List String -> List String
+rowScan [] _ _ _ acc = reverse acc
+rowScan (c :: rest) prev depth cur acc =
+  if depth == 0 then
+    rowScan rest c (if c == '<' then 1 else 0) [] acc
+  else if c == '<' then
+    rowScan rest c (depth + 1) (c :: cur) acc
+  else if c == '>' && prev /= '-' && depth == 1 then
+    rowScan rest c 0 [] (fromChars (reverse cur) :: acc)
+  else if c == '>' && prev /= '-' then
+    rowScan rest c (depth - 1) (c :: cur) acc
+  else
+    rowScan rest c depth (c :: cur) acc
+
+{- | The atoms of one row, split at the commas and the `|` that separate
+   them. A label's parameter (`{"access", "refresh"}`, `"commit"`) is part
+   of its atom, so a comma inside braces or quotes splits nothing. -}
+rowAtoms : String -> List String
+rowAtoms row = atomScan (toList (toChars row)) False 0 [] []
+
+atomScan : List Char -> Bool -> Int -> List Char -> List String -> List String
+atomScan [] _ _ cur acc = reverse (fromChars (reverse cur) :: acc)
+atomScan (c :: rest) inQuote braces cur acc =
+  if inQuote then
+    atomScan rest (c /= '"') braces (c :: cur) acc
+  else if c == '"' then
+    atomScan rest True braces (c :: cur) acc
+  else if c == '{' then
+    atomScan rest False (braces + 1) (c :: cur) acc
+  else if c == '}' then
+    atomScan rest False (braces - 1) (c :: cur) acc
+  else if braces == 0 && (c == ',' || c == '|') then
+    atomScan rest False 0 [] (fromChars (reverse cur) :: acc)
+  else
+    atomScan rest False braces (c :: cur) acc
+
+{- | The labels `sig`'s rows name that a `pds/lib` row may not.
+
+   An atom's first word is its label. A lowercase first word is a row
+   variable, which names no label. -}
+forbiddenLabels : String -> List String
+forbiddenLabels sig =
+  flatMap (row => flatMap forbiddenAtom (rowAtoms row)) (rowsIn sig)
+
+forbiddenAtom : String -> List String
+forbiddenAtom atom = match words atom
+  [] => []
+  label :: _ =>
+    if elem label coreLabels || toLower label == label then [] else [label]
+
+{- | One violation line per exported signature whose rows name a label other
+   than `coreLabels`.
 
    The signature starts on the line after `export` and may wrap across
    further indented lines; the block ends at the next line at column 0,
-   which is where the accumulated text is examined for a `<`. -}
+   which is where the accumulated text is examined. -}
 effectExportHits : (String, String) -> List String
 effectExportHits (path, content) =
   effectScan path (lines content) False "" False
@@ -202,7 +270,7 @@ effectScan path (line :: rest) collecting sig first =
   else if not collecting then
     effectScan path rest False sig first
   else if not first && not (isIndented line) then
-    let closed = if contains "<" sig then ["\{path}: \{sig}"] else []
+    let closed = if forbiddenLabels sig /= [] then ["\{path}: \{sig}"] else []
     closed ++ effectScan path rest False "" False
   else
     effectScan path rest True "\{sig} \{line}" False
@@ -478,9 +546,9 @@ test "no pds/lib module imports pds/shell" =
     "real tree: pds/lib imports pds/shell"
     (sweep (overFiles shellImportHits) libSources)
 
-test "no pds/lib export declares an effect row" =
+test "no pds/lib export declares a row naming a host label" =
   expectNoFindings
-    "real tree: pds/lib exports an effect-bearing signature"
+    "real tree: pds/lib exports a signature whose row names a host label"
     (sweep (overFiles effectExportHits) libSources)
 
 test "every pds/lib export carries an explicit type signature" =
@@ -557,6 +625,53 @@ test "mutation control: an injected effect-bearing export is caught" =
   expectFindings
     "injected effect-bearing export"
     (sweep (overFiles effectExportHits) (injected repoPath effectProbe))
+
+-- A host label beside the core's own labels, in a row that also carries a
+-- set-valued parameter: the core labels do not launder the host one.
+mixedProbe : List String
+mixedProbe = [
+  "",
+  "export",
+  "mixedProbeForTest : Int ->",
+  "  <Kdf, Mint {\"access\", \"refresh\"}, FileRead> Int",
+  "mixedProbeForTest x = x",
+]
+
+test "mutation control: a host label beside the core labels is caught" =
+  expectFindings
+    "injected export naming FileRead beside Kdf and Mint"
+    (sweep (overFiles effectExportHits) (injected repoPath mixedProbe))
+
+-- A host row written as a type argument rather than on an arrow.
+typeArgumentProbe : List String
+typeArgumentProbe = [
+  "",
+  "export",
+  "typeArgumentProbeForTest : Account -> Handler <Stdout>",
+  "typeArgumentProbeForTest _ = panic \"probe\"",
+]
+
+test "mutation control: a host label in a type-argument row is caught" =
+  expectFindings
+    "injected export naming Stdout in a type-argument row"
+    (sweep (overFiles effectExportHits) (injected repoPath typeArgumentProbe))
+
+-- The allowed side: every core label, parameterized and bare, on an arrow
+-- and as a type argument, and a row variable.
+coreLabelProbe : List String
+coreLabelProbe = [
+  "",
+  "export",
+  "coreLabelProbeForTest : Server e ->",
+  "  Handler <Mint {\"access\", \"refresh\"}, Sign \"commit\"> ->",
+  "  <Kdf, Sign {\"commit\", \"service-auth\"} | e> Int",
+  "coreLabelProbeForTest _ _ = 0",
+]
+
+test "mutation control: rows naming only Sign, Mint and Kdf are allowed" =
+  expectNoFindings
+    "a row naming only the core labels and a row variable was flagged"
+    (sweep (overFiles effectExportHits) (injected repoPath coreLabelProbe))
 
 {- | The same violation one directory below a populated `pds/lib`-shaped
    tree, which is the shape #3140 was about.

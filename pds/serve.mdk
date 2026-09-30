@@ -97,13 +97,17 @@ import io.{isPrivateMode, writeFilePrivate}
 import lib.blob.{validMimeShape}
 import lib.credential.{
   CredentialRecord,
+  Password,
   credentialFromParts,
   defaultIterations,
   makeCredential,
+  passwordFromText,
   saltBytes,
 }
 import lib.ratelimit.{TrustedProxy(..)}
 import lib.handlers.{makeServerLinks, pdsServer}
+import lib.jwt.{SessionKey, sessionKeyFromBytes}
+import lib.pbkdf2.{Kdf}
 import lib.proxy.{AppviewRoute, makeAppviewRoute, makeAppviewTable}
 import lib.repo.{
   Repo,
@@ -492,20 +496,20 @@ distinctByteValues bytes = distinctSeen bytes (arrayMake 256 False) 0 0
    count of distinct bytes is a property of the value, and the value is a
    secret even while it is being refused. The message names the file and the
    remedy, which is all an operator needs. -}
-admitSessionSecret : String -> Bytes -> Result String Bytes
+admitSessionSecret : String -> Bytes -> Result String SessionKey
 admitSessionSecret path bytes =
   if distinctByteValues bytes < minSecretDistinctBytes then
     Err
       "refusing to start: session-token secret \{path} is a constant or near-constant value, not a generated secret; every session token this server issues would be forgeable from it (move it aside and generate one with: pds keygen --token-secret, which writes secrets/token.hex)"
   else
-    Ok bytes
+    mapErr (message => "\{path}: \{message}") (sessionKeyFromBytes bytes)
 
 {- | Generate this server's session-token secret and keep it, at mode 0600. It
    is drawn from `osEntropyBytes`, the OS entropy source, and never from
    `randomInt`, whose SplitMix64 generator is seeded deterministically and
    would make every session token on every deployment forgeable from a public
    constant. -}
-generateSessionSecret : String -> <FileWrite, Rand> Result String Bytes
+generateSessionSecret : String -> <FileWrite, Rand> Result String SessionKey
 generateSessionSecret dir = do
   let bytes = tokenSecretBytes ()
   let line = "\{encode bytes}\n"
@@ -513,7 +517,7 @@ generateSessionSecret dir = do
     Err message =>
       Err "unwritable session secret \{sessionSecretPath dir}: \{message}"
     Ok () => Ok ()
-  Ok bytes
+  sessionKeyFromBytes bytes
 
 {- | The session-token secret this run already has: `secrets/token.hex`, else
    the one kept in the data directory, else `None` — meaning one must be
@@ -523,7 +527,7 @@ generateSessionSecret dir = do
    strand a secret it created. A PRESENT but unusable secret IS an error,
    refused before the listener binds rather than at the first request that
    needed it. -}
-suppliedSessionSecret : String -> <FileRead> Result String (Option Bytes)
+suppliedSessionSecret : String -> <FileRead> Result String (Option SessionKey)
 suppliedSessionSecret dir = do
   supplied <- suppliedTokenSecret ()
   match supplied
@@ -537,7 +541,7 @@ suppliedSessionSecret dir = do
 -- `secrets/token.hex` when it is present. It is optional, so an absent file
 -- is `None` rather than an error.
 suppliedTokenSecret : Unit ->
-  <FileRead "secrets/token.hex"> Result String (Option Bytes)
+  <FileRead "secrets/token.hex"> Result String (Option SessionKey)
 suppliedTokenSecret () =
   if fileExists "secrets/token.hex" then
     map Some (readSessionSecret "secrets/token.hex")
@@ -547,16 +551,16 @@ suppliedTokenSecret () =
 -- Both sources above hold a secret somebody else chose — the operator's file,
 -- or one a previous run left in the data directory — so both are graded, and
 -- the one this program generates below is graded by construction instead.
-readSessionSecret : (path : String) -> <FileRead path> Result String Bytes
+readSessionSecret : (path : String) -> <FileRead path> Result String SessionKey
 readSessionSecret path = do
   bytes <- readHexBytes "session-token secret" path
   admitSessionSecret path bytes
 
 -- The WRITE half: generate the secret only when the read half found none.
 establishSessionSecret : String ->
-  Option Bytes ->
-  <FileWrite, Rand> Result String Bytes
-establishSessionSecret _ (Some bytes) = Ok bytes
+  Option SessionKey ->
+  <FileWrite, Rand> Result String SessionKey
+establishSessionSecret _ (Some key) = Ok key
 establishSessionSecret dir None = generateSessionSecret dir
 
 {- | The account password, as the file holds it: everything in the file with
@@ -577,14 +581,14 @@ passwordOf text =
 -- Neither arm is a failure, so `Result` would be the wrong shape: it would
 -- read a supplied password as an error to be recovered from.
 -- lint-disable-next-line rule-clone-type
-data CredentialSource = Kept CredentialRecord | Bootstrap String
+data CredentialSource = Kept CredentialRecord | Bootstrap Password
 
 {- | Derive the account credential from an admitted password and keep it, at
    mode 0600. The salt is drawn here, from `osEntropyBytes`: `lib.credential`
    takes a caller-supplied salt and draws no entropy of its own. -}
 bootstrapCredential : String ->
-  String ->
-  <FileWrite, Rand> Result String CredentialRecord
+  Password ->
+  <FileWrite, Kdf, Rand> Result String CredentialRecord
 bootstrapCredential dir password = do
   -- Door (FFI), checked: `osEntropyBytes` answers the runtime's integer
   -- array, and an element outside 0..255 aborts rather than being masked.
@@ -647,7 +651,7 @@ passwordSupplied () = fileExists "secrets/password"
 
 -- The supplied password, admitted: unreadable or empty is a rejection here,
 -- where nothing has been written yet.
-readPassword : Unit -> <FileRead "secrets/password"> Result String String
+readPassword : Unit -> <FileRead "secrets/password"> Result String Password
 readPassword () = do
   () <- requirePrivateMode "password file" "secrets/password"
   text <- match readFile "secrets/password"
@@ -655,12 +659,12 @@ readPassword () = do
     Ok given => Ok given
   match passwordOf text
     Err message => Err "secrets/password: \{message}"
-    Ok given => Ok given
+    Ok given => Ok (passwordFromText given)
 
 -- The WRITE half: derive and keep only the password the read half admitted.
 establishCredential : String ->
   CredentialSource ->
-  <FileWrite, Rand> Result String CredentialRecord
+  <FileWrite, Kdf, Rand> Result String CredentialRecord
 establishCredential _ (Kept record) = Ok record
 establishCredential dir (Bootstrap password) = bootstrapCredential dir password
 
@@ -723,7 +727,7 @@ genesisTid u = tidEncode (floatToInt (now u * 1000000.0)) 0
 initRepo : String ->
   String ->
   Bytes ->
-  <Clock, FileRead, FileWrite> Result String Repo
+  <Clock, FileRead, FileWrite, Sign "commit"> Result String Repo
 initRepo dir did keyBytes = do
   genesis <- genesisTid ()
   repo <- repoInitFromKeyBytes did keyBytes genesis
@@ -770,7 +774,7 @@ openRepo : Bool ->
   String ->
   Bytes ->
   SecretKey ->
-  <Clock, FileRead, FileWrite> Result String Repo
+  <Clock, FileRead, FileWrite, Sign "commit"> Result String Repo
 openRepo False dir did _ secret = loadRepo dir did secret
 openRepo True dir did keyBytes secret =
   if persistHasHead dir then match loadRepo dir did secret
@@ -792,7 +796,7 @@ openRepo True dir did keyBytes secret =
    after the banner, so that a log still begins by saying which build produced
    everything under it. -}
 configure : Args ->
-  <Clock, FileRead, FileWrite, Rand> Result String (Server, Store, String, Int, Serving, Option RelayTarget, Duration, DataLock, List String)
+  <Clock, FileRead, FileWrite, Kdf, Rand, Sign "commit"> Result String (Server <Mint {"access", "refresh"}, Sign "commit">, Store, String, Int, Serving, Option RelayTarget, Duration, DataLock, List String)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -886,7 +890,7 @@ configure parsed = do
   sessionSecret <- establishSessionSecret dir suppliedSecret
   credential <- establishCredential dir credentialSource
   withBlobs <- loadBlobs (storeFromRepo repo) dir
-  withSecret <- storeWithServerSecret sessionSecret withBlobs
+  let withSecret = storeWithServerSecret sessionSecret withBlobs
   let withCredential = storeWithCredential credential withSecret
   prefs <- persistLoadPreferences dir
   -- Last, after the final step that can still refuse: the log is now
@@ -1033,7 +1037,7 @@ announce : Int ->
   Listener h ->
   Store ->
   String ->
-  Server ->
+  Server e ->
   Serving ->
   Option RelayTarget ->
   Duration ->
@@ -1049,7 +1053,7 @@ announce port lis store dir server serving relay statsInterval signalFd = defer
   outcome <- runServer server dir storeRef lis serving statsInterval signalFd
   liftIO (u => reportOutcome outcome)
 
-bound : Server ->
+bound : Server e ->
   Store ->
   String ->
   Serving ->
@@ -1122,8 +1126,8 @@ reportBeat (LockBeatFailed message) =
 reportBeat (LockLost message) =
   ePutStrLn "serve: data directory lock lost: \{message}"
 
-start : Result String (Server, Store, String, Int, Serving, Option RelayTarget, Duration, DataLock, List String) ->
-  Serve "127.0.0.1" e Unit
+start : Result String (Server <Mint {"access", "refresh"}, Sign "commit">, Store, String, Int, Serving, Option RelayTarget, Duration, DataLock, List String) ->
+  Serve "127.0.0.1" <Mint {"access", "refresh"}, Sign "commit"> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
 start (Ok (server, store, dir, port, serving, relay, statsInterval, lock, lines)) =
   defer
@@ -1144,7 +1148,7 @@ keygen rest = match parseArgs keygenSpec rest
     Err message => abort "keygen: \{message}"
     Ok () => ()
 
-main : Serve "127.0.0.1" <> Unit
+main : Serve "127.0.0.1" <Mint {"access", "refresh"}, Sign "commit"> Unit
 main = defer
   argv <- liftIO (u => args ())
   match argv

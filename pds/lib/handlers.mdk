@@ -187,7 +187,7 @@ import lib.credential.{
   LoginVerdict,
   loginOutcome,
 }
-import lib.jwt.{mintToken}
+import lib.jwt.{SessionKey, mintAccessToken, mintRefreshToken}
 import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{PublicKey}
 import lib.server_core.{
@@ -758,7 +758,7 @@ applyCreateRecord : Account ->
   RequestContext ->
   Store ->
   Json ->
-  Result Response (Repo, Json)
+  <Sign "commit"> Result Response (Repo, Json)
 applyCreateRecord account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
@@ -793,7 +793,7 @@ applyPutRecord : Account ->
   RequestContext ->
   Store ->
   Json ->
-  Result Response (Repo, Json)
+  <Sign "commit"> Result Response (Repo, Json)
 applyPutRecord account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
@@ -843,7 +843,7 @@ applyDeleteRecord : Account ->
   RequestContext ->
   Store ->
   Json ->
-  Result Response (Repo, Json)
+  <Sign "commit"> Result Response (Repo, Json)
 applyDeleteRecord account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
@@ -1019,7 +1019,7 @@ applyBatchWrites : Account ->
   RequestContext ->
   Store ->
   Json ->
-  Result Response (Repo, Json)
+  <Sign "commit"> Result Response (Repo, Json)
 applyBatchWrites account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
@@ -1075,7 +1075,7 @@ recordHandled : Account ->
   RequestContext ->
   Store ->
   XrpcCall ->
-  Option (Store, Response)
+  <Sign "commit"> Option (Store, Response)
 recordHandled account context store (ProcedureJsonCall nsid _ body)
   | nsid == createRecordNsid =
     Some (finishWrite store (applyCreateRecord account context store body))
@@ -1100,7 +1100,7 @@ recordHandled _ _ _ HealthCall = None
    is not one of the five record-write procedures is answered 501 with the
    input `Store` intact. -}
 export
-recordHandler : Account -> Handler
+recordHandler : Account -> Handler <Sign "commit">
 recordHandler account context _ store call =
   match recordHandled account context store call
     Some result => result
@@ -1153,7 +1153,7 @@ recordEndpoints = do
 
 -- | A configured record-write server for one account.
 export
-recordServer : Account -> Result String Server
+recordServer : Account -> Result String (Server <Sign "commit">)
 recordServer account = do
   registry <- recordRegistry
   Ok (makeServer account registry (recordHandler account))
@@ -2240,19 +2240,22 @@ refreshGraceSeconds = 7200
    the token that replaced it — distinct values. They differ from each other in
    audience and lifetime, which is what stops either being presented as the
    other. -}
-mintSessionTokens : Account -> Bytes -> RequestContext -> (String, String)
+mintSessionTokens : Account ->
+  SessionKey ->
+  RequestContext ->
+  <Mint {"access", "refresh"}> (String, String)
 mintSessionTokens account secret context =
   let tokenId = Hex.encode context.nonce
   let issued = context.nowSeconds
   (
-    mintToken
+    mintAccessToken
       secret
       (accountDid account)
       (accessAudience account)
       tokenId
       issued
       (issued + accessTokenSeconds),
-    mintToken
+    mintRefreshToken
       secret
       (accountDid account)
       (refreshAudience account)
@@ -2324,7 +2327,7 @@ applyCreateSession : Account ->
   RequestContext ->
   Store ->
   Json ->
-  Result Response (Store, Json)
+  <Mint {"access", "refresh"}> Result Response (Store, Json)
 applyCreateSession account context store body = do
   () <- requireObject body
   identifier <- requiredString "identifier" body
@@ -2374,7 +2377,7 @@ applyRefreshSession : Account ->
   RequestContext ->
   Bytes ->
   Store ->
-  (Store, Response)
+  <Mint {"access", "refresh"}> (Store, Response)
 applyRefreshSession account context presented store =
   match storeServerSecret store
     None => (
@@ -2451,7 +2454,7 @@ sessionHandled : Account ->
   AuthOutcome ->
   Store ->
   XrpcCall ->
-  Option (Store, Response)
+  <Mint {"access", "refresh"}> Option (Store, Response)
 sessionHandled account context _ store (ProcedureJsonCall nsid _ body)
   | nsid == createSessionNsid =
     Some (finishSession store (applyCreateSession account context store body))
@@ -2672,7 +2675,10 @@ preferencesHandled _ _ _ = None
    health probe — so the order below is a formality rather than a
    precedence. -}
 export
-pdsHandler : Account -> ServerLinks -> String -> Handler
+pdsHandler : Account ->
+  ServerLinks ->
+  String ->
+  Handler <Mint {"access", "refresh"}, Sign "commit">
 pdsHandler account links version context outcome store call =
   match recordHandled account context store call
     Some result => result
@@ -2767,7 +2773,10 @@ concatEndpoints (endpoint :: more) rest = endpoint :: concatEndpoints more rest
 -- | A configured full-API server for one account, with the operator's
 -- `describeServer` links and its own version stamp for `_health`.
 export
-pdsServer : Account -> ServerLinks -> String -> Result String Server
+pdsServer : Account ->
+  ServerLinks ->
+  String ->
+  Result String (Server <Mint {"access", "refresh"}, Sign "commit">)
 pdsServer account links version = do
   registry <- pdsRegistry
   Ok (makeServer account registry (pdsHandler account links version))

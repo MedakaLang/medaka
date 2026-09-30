@@ -71,6 +71,7 @@ import shell.eventlog.{
   eventLogStaged,
   eventLogSweep,
 }
+import lib.sign.{Sign}
 
 -- # The record format
 
@@ -708,7 +709,7 @@ opShape (DcMap fields) = match (lookup "action" fields, lookup "path" fields)
   _ => None
 opShape _ = None
 
-endToEndDir : <Exec, FileRead, FileWrite, IO> String
+endToEndDir : <Exec, FileRead, FileWrite, IO, Sign "commit"> String
 endToEndDir =
   let dir = caseDir "end-to-end"
   let entry = EventLogEntry {

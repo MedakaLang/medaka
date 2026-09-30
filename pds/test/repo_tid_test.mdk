@@ -55,6 +55,7 @@ import lib.tid.{
   tidParse,
   tidToString,
 }
+import lib.sign.{Sign}
 
 errContains : String -> Result String a -> Bool
 errContains witness (Err message) = contains witness message
@@ -249,7 +250,7 @@ threeCreates = jObject [
   ("writes", JArray (arrayFromList [batchCreate, batchCreate, batchCreate])),
 ]
 
-writeAt : Int -> String -> Json -> Store -> Store
+writeAt : Int -> String -> Json -> Store -> <Sign "commit"> Store
 writeAt seconds nsid body store =
   let (next, _) =
     recordHandler
@@ -260,7 +261,7 @@ writeAt seconds nsid body store =
       (ProcedureJsonCall nsid [] body)
   next
 
-createAt : Int -> Store -> Store
+createAt : Int -> Store -> <Sign "commit"> Store
 createAt seconds =
   writeAt seconds "com.atproto.repo.createRecord" createWithoutRkey
 
@@ -351,17 +352,17 @@ mutated result =
   repoMutationState
     (resultOrPanic "repo_tid_test: ceiling mutation failed" result)
 
-createText : Int -> String -> String -> Repo -> Repo
+createText : Int -> String -> String -> Repo -> <Sign "commit"> Repo
 createText step rkey text repo =
   mutated
     (repoCreate (ceilingPath rkey) (ceilingRecord text) (ceilingTid step) repo)
 
-updateText : Int -> String -> String -> Repo -> Repo
+updateText : Int -> String -> String -> Repo -> <Sign "commit"> Repo
 updateText step rkey text repo =
   mutated
     (repoUpdate (ceilingPath rkey) (ceilingRecord text) (ceilingTid step) repo)
 
-deletePath : Int -> String -> Repo -> Repo
+deletePath : Int -> String -> Repo -> <Sign "commit"> Repo
 deletePath step rkey repo =
   mutated (repoDelete (ceilingPath rkey) (ceilingTid step) repo)
 

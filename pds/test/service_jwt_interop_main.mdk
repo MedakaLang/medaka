@@ -84,7 +84,7 @@ request audience lxm jti exp = ServiceAuthRequest {
   exp = exp,
 }
 
-mint : SecretKey -> ServiceAuthRequest -> String
+mint : SecretKey -> ServiceAuthRequest -> <Sign "service-auth"> String
 mint key claims =
   resultOrPanic "service_jwt_interop" (mintServiceToken key claims)
 

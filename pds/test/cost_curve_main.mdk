@@ -30,7 +30,6 @@ import json.{Json(..), jObject, stringify}
 import string.{toInt}
 import lib.cid.{Cid}
 import lib.handlers.{pdsServer, serverLinksEmpty}
-import lib.jwt.{mintToken}
 import lib.repo.{Repo, repoFromBlocks}
 import lib.server_core.{
   Account,
@@ -53,8 +52,9 @@ import lib.sync_event.{syncCommitEventFor}
 import shell.blobfile.{blobFileRead}
 import shell.persist.{persistLoad}
 import shell.server.{persistTransition}
-import test.fixture_support.{testNonce, testSecret}
+import test.fixture_support.{testKey, testNonce}
 import test.response_support.{firstLineText}
+import lib.jwt.{mintAccessToken}
 
 -- ── the corpus account, matching `synth_repo_main.mdk`'s fixed identity ─────
 
@@ -95,20 +95,18 @@ admitBlobs ((cid, mimeType, bytes) :: rest) store =
     Ok next => admitBlobs rest next
     Err message => panic "cost_curve: corpus blob rejected: \{message}"
 
-loadStore : String -> <FileRead> Store
+loadStore : String -> <FileRead, Mint "access"> Store
 loadStore dir =
   let base = storeFromRepo (loadRepo dir)
   let withBlobs = match blobFileRead dir
     Ok rows => admitBlobs rows base
     Err message => panic "cost_curve: corpus blobs unreadable: \{message}"
-  match storeWithServerSecret testSecret withBlobs
-    Ok next =>
-      storeSessionOpen
-        (sessionFingerprint benchToken)
-        (sessionFingerprint "cost_curve: no refresh token in this probe")
-        (benchInstant + 3600)
-        next
-    Err message => panic "cost_curve: session secret setup failed: \{message}"
+  let next = storeWithServerSecret testKey withBlobs
+  storeSessionOpen
+    (sessionFingerprint benchToken)
+    (sessionFingerprint "cost_curve: no refresh token in this probe")
+    (benchInstant + 3600)
+    next
 
 -- ── the fixed credential every timed write presents ─────────────────────────
 
@@ -121,8 +119,8 @@ benchContext =
 
 benchToken : String
 benchToken =
-  mintToken
-    testSecret
+  mintAccessToken
+    testKey
     corpusDid
     hostText
     "cost_curve-probe-token"
@@ -135,7 +133,7 @@ queryRequest : String -> Bytes
 queryRequest target =
   encodeUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{hostText}\r\n\r\n"
 
-procedureRequest : String -> String -> Bytes
+procedureRequest : String -> String -> <Mint "access"> Bytes
 procedureRequest nsid body =
   let bytes = encodeUtf8 body
   encodeUtf8
@@ -166,7 +164,7 @@ createRequest =
 {- | Answer the same request `n` times against the same store, summing each
    answer's length so no repetition can be discarded unevaluated. The store a
    write returns is dropped on purpose — see the module header. -}
-repeatRequest : Server -> Store -> Bytes -> Int -> Int -> Int
+repeatRequest : Server e -> Store -> Bytes -> Int -> Int -> <e> Int
 repeatRequest server store request n acc =
   if n <= 0 then
     acc
@@ -177,7 +175,7 @@ repeatRequest server store request n acc =
 micros : Float -> Int -> Int
 micros elapsed reps = floatToInt (elapsed * 1000000.0 / intToFloat reps)
 
-measure : String -> Server -> Store -> Bytes -> Int -> <IO, Clock> Unit
+measure : String -> Server e -> Store -> Bytes -> Int -> <Clock, IO | e> Unit
 measure label server store request reps =
   let (_, first) = handleBytes server benchContext store request
   let start = monotonicSec ()
@@ -186,7 +184,10 @@ measure label server store request reps =
   println
     "\{label} us=\{intToString (micros elapsed reps)} reps=\{intToString reps} bytes=\{intToString (checksum / reps)} status=\{firstLineText first}"
 
-run : String -> String -> Int -> <IO, Clock, FileRead> Unit
+run : String ->
+  String ->
+  Int ->
+  <Clock, FileRead, IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 run dir collection reps =
   let store = loadStore dir
   let server = match pdsServer (mustAccount ()) serverLinksEmpty "cost-curve"
@@ -246,7 +247,9 @@ measurePersist dir store reps =
   println
     "persistTransition us=\{intToString (micros elapsed reps)} reps=\{intToString reps}"
 
-runPersist : String -> Int -> <IO, Clock, FileRead, FileWrite> Unit
+runPersist : String ->
+  Int ->
+  <Clock, FileRead, FileWrite, IO, Mint "access"> Unit
 runPersist dir reps = measurePersist dir (loadStore dir) reps
 
 -- ── the `#commit` event one write stages ─────────────────────────────────────
@@ -264,7 +267,9 @@ repeatCommitEvent before after n acc =
     Ok event => repeatCommitEvent before after (n - 1) (acc + length event.ops)
     Err message => panic "cost_curve: commit event failed: \{message}"
 
-runCommitEvent : String -> Int -> <IO, Clock, FileRead> Unit
+runCommitEvent : String ->
+  Int ->
+  <Clock, FileRead, IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 runCommitEvent dir reps =
   let store = loadStore dir
   let server = match pdsServer (mustAccount ()) serverLinksEmpty "cost-curve"
@@ -280,7 +285,7 @@ runCommitEvent dir reps =
   println
     "commitEvent us=\{intToString (micros elapsed reps)} reps=\{intToString reps} ops=\{intToString (opCount / reps)} status=\{firstLineText response}"
 
-main : <IO, Env, Clock, FileRead, FileWrite> Unit
+main : <Clock, Env, FileRead, FileWrite, IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 main = match args ()
   ["persist", dir, repsText] => runPersist dir (mustInt repsText)
   ["commit-event", dir, repsText] => runCommitEvent dir (mustInt repsText)

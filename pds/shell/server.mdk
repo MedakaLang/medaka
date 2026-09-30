@@ -130,6 +130,8 @@ import lib.proxy.{
 }
 import lib.handlers.{serviceAuthTokenResponse}
 import lib.jwt.{ServiceAuthRequest}
+import lib.pbkdf2.{Kdf}
+import lib.sign.{Sign}
 import lib.server_core.{
   ProxyAdmission(..),
   ProxyDecision(..),
@@ -560,13 +562,13 @@ persistFailureBytes =
    verdict. The handler accepts that verdict only against the credential the
    store read here still holds, so a verdict that a concurrent request made
    stale while it was being derived is refused rather than applied. -}
-applyRequest : Server ->
+applyRequest : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
   Option LoginVerdict ->
   Bytes ->
-  <Clock, FileRead, FileWrite, Rand, Stderr> Bytes
+  <Clock, FileRead, FileWrite, Rand, Stderr | e> Bytes
 applyRequest server dir storeRef limiterRef login bytes =
   let store = !storeRef
   let nowSeconds = floatToInt (now ())
@@ -2022,7 +2024,7 @@ statsLoop dir storeRef active unframed subs interval stopping = defer
 -- `statsInterval` is `pds/serve.mdk`'s `--stats-interval-ms`, or
 -- `defaultStatsInterval` when the flag is absent.
 export
-runServer : Server ->
+runServer : Server e ->
   String ->
   Ref Store ->
   Listener h ->
@@ -2123,7 +2125,7 @@ acceptOrSignal lis signalFd = defer
         () <- awaitAny [waitRead (listenSocketFd lis), waitRead signalFd]
         acceptOrSignal lis signalFd
 
-acceptLoop : Server ->
+acceptLoop : Server e ->
   String ->
   Ref Store ->
   Listener h ->
@@ -2150,7 +2152,7 @@ acceptLoop server dir storeRef lis active unframed limiterRef census serving sig
       signalFd
       accepted
 
-acceptStep : Server ->
+acceptStep : Server e ->
   String ->
   Ref Store ->
   Listener h ->
@@ -2223,7 +2225,7 @@ acceptStep server dir storeRef lis active unframed limiterRef census serving sig
 -- un-framed one is USUALLY retired earlier, the moment the header section
 -- ends; `releaseUnframed` is idempotent so that this path can retire it
 -- unconditionally without having to know whether that already happened.
-serveConnection : Server ->
+serveConnection : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -2269,7 +2271,7 @@ serveConnection server dir storeRef limiterRef census serving conn active unfram
    Both budgets are armed here, once per request rather than once per
    connection: a kept-alive connection's second request gets its own header
    and request budgets, exactly as a fresh connection's first one does. -}
-connectionLoop : Server ->
+connectionLoop : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -2308,7 +2310,7 @@ connectionLoop server dir storeRef limiterRef census serving conn slot pending f
 -- what it sent rather than what it has sent so far; it is opaque here, and a
 -- new request starts from `httpScanStart` in `connectionLoop` because
 -- `respond` hands the next request a buffer rebased on its own first byte.
-frameLoop : Server ->
+frameLoop : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -2363,7 +2365,7 @@ frameLoop server dir storeRef limiterRef census serving conn slot deadlines buf 
 
 -- The header budget is tested only while the header section is unterminated,
 -- so a legitimate body that outlives it is not closed on it.
-framePending : Server ->
+framePending : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -2400,7 +2402,7 @@ framePending server dir storeRef limiterRef census serving conn slot deadlines b
           scan
           firstRequest
 
-readMore : Server ->
+readMore : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -2683,7 +2685,7 @@ logAccessBytes trace responseBytes =
 -- `identifyClient`, and target, for the routed NSID) and the point of
 -- admission: a refusal is answered without ever calling `applyRequest`, so a
 -- rate-limited request costs a parse and a `step`, not a store transition.
-respond : Server ->
+respond : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -2716,7 +2718,7 @@ respond server dir storeRef limiterRef census serving conn slot buf boundary fir
       nowSeconds
       startedAt
 
-respondAt : Server ->
+respondAt : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -2963,7 +2965,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
    Nothing about that transitions the store, so it does not belong inside
    `applyRequest`'s indivisible sequence, and an admitted forward never reaches
    `applyRequest` at all. -}
-proxyDecisionFor : Server ->
+proxyDecisionFor : Server s ->
   Serving ->
   Ref Store ->
   Int ->
@@ -3002,7 +3004,7 @@ proxyDecisionFor server serving storeRef nowSeconds (Ok request) =
    gated on the caller's own access token, which is resolved against the open
    sessions. Nothing about that transitions the store, and a minted credential
    never reaches `applyRequest` at all. -}
-serviceAuthDecisionFor : Server ->
+serviceAuthDecisionFor : Server s ->
   Serving ->
   Ref Store ->
   Int ->
@@ -3044,7 +3046,7 @@ gateVerdict LoginOverCeiling = None
    read for the record the password is graded against, and the verdict names
    that record, which is what lets `applyRequest` refuse the verdict if the
    record has been replaced by the time it runs. -}
-loginCheckFor : Server ->
+loginCheckFor : Server s ->
   Ref Store ->
   Result HttpParseFailure Request ->
   <Rand> Option LoginCheck
@@ -3160,7 +3162,7 @@ derivationCeilingResponse =
 {- | A login check run to its verdict, `kdfSliceIterations` HMAC calls at a
    time, yielding to the scheduler before every slice so that every other
    connection runs between two slices of it. -}
-deriveLogin : LoginCheck -> Async e LoginVerdict
+deriveLogin : LoginCheck -> Async <Kdf | e> LoginVerdict
 deriveLogin check = match loginCheckVerdict check
   Some verdict => deferPure verdict
   None => defer
@@ -3177,12 +3179,12 @@ deriveLogin check = match loginCheckVerdict check
    between them, for the reason `admitSubscription`'s are: the derivation is
    pure and cannot fail, so there is no exit between the two that skips the
    release. -}
-settleLogin : Server ->
+settleLogin : Server s ->
   Serving ->
   Ref Store ->
   Result HttpParseFailure Request ->
   ClientIdentity ->
-  Async <Rand | e> LoginGate
+  Async <Kdf, Rand | e> LoginGate
 settleLogin server serving storeRef parsed identity = defer
   started <- liftIO (u => loginCheckFor server storeRef parsed)
   match started
@@ -3216,7 +3218,7 @@ settleLogin server serving storeRef parsed identity = defer
    An `Err` from the mint is 500 and not 501: the key IS configured and the
    signature did not come out, which is this server failing rather than this
    server declining. -}
-mintedTokenBytes : Serving -> ServiceAuthRequest -> Bytes
+mintedTokenBytes : Serving -> ServiceAuthRequest -> <Sign "service-auth"> Bytes
 mintedTokenBytes serving claims = match servingEgress serving
   None => serializeResponse (withAllowOrigin serviceAuthUnavailableResponse)
   Some egress => match egressMintToken egress claims
@@ -3255,7 +3257,7 @@ serviceAuthMintFailureResponse =
    a configured `Egress` — and it is answered 502 rather than by a panic: a
    reachability argument is not a reason to add a crash path to the one
    function a client can reach over the network. -}
-forwardProxied : Server ->
+forwardProxied : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -3418,7 +3420,7 @@ proxyAnswerBytes _ (Ok answer) = match proxyUpstreamResponse answer
    transitions the store, so it does not belong inside the indivisible
    sequence `applyRequest`'s own header describes. An admitted upgrade never
    reaches `applyRequest` at all. -}
-upgradeDecision : Server ->
+upgradeDecision : Server s ->
   Ref Store ->
   Int ->
   Result HttpParseFailure Request ->
@@ -3454,7 +3456,7 @@ upgradeDecision server storeRef nowSeconds (Ok request) =
    carry over, threaded into the loop as its per-write budget.
    `serveConnection` still closes the socket and retires `active` when this
    returns, so an upgraded connection's teardown needs no special case. -}
-admitSubscription : Server ->
+admitSubscription : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -3525,7 +3527,7 @@ subscriptionCeilingResponse =
 
 -- ── sending a response ──────────────────────────────────────────────────────
 
-sendAndContinue : Server ->
+sendAndContinue : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -3559,7 +3561,7 @@ sendAndContinue server dir storeRef limiterRef census serving conn slot rest kee
 
 -- `sendAndContinue` from the point the write has returned, for the caller
 -- (`forwardProxied`) that has something to give back between the two.
-continueAfterSend : Server ->
+continueAfterSend : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -3607,14 +3609,14 @@ continueAfterSend server dir storeRef limiterRef census serving conn slot rest k
 -- can complete carries nothing this module may trust as an identity, and
 -- answering it is still work. `baseClasses` and not `admissionClasses` because
 -- there is no routed procedure to add a class for.
-rejectBuffer : Server ->
+rejectBuffer : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
   Connection h ->
   ReadBuffer ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net h, Rand, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 rejectBuffer server dir storeRef limiterRef conn buf firstRequest = defer
   nowSeconds <- liftIO (u => floatToInt (now ()))
   startedAt <- liftIO (u => monotonic ())
@@ -3629,7 +3631,7 @@ rejectBuffer server dir storeRef limiterRef conn buf firstRequest = defer
     nowSeconds
     startedAt
 
-rejectBufferAt : Server ->
+rejectBufferAt : Server e ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
@@ -3638,7 +3640,7 @@ rejectBufferAt : Server ->
   Bool ->
   Int ->
   Float ->
-  Async <Clock, FileRead, FileWrite, Net h, Rand, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds startedAt =
   let charged =
     applyRateLimit

@@ -27,7 +27,6 @@ import test.{
   pass,
 }
 import lib.cid.{cidForRaw}
-import lib.jwt.{mintToken}
 import lib.proxy.{AppviewTable, makeAppviewRoute, makeAppviewTable}
 import lib.server_core.{
   Account,
@@ -54,7 +53,7 @@ import lib.store.{
   storeSize,
   storeWithServerSecret,
 }
-import test.fixture_support.{testNonce, testSecret}
+import test.fixture_support.{testKey, testNonce}
 import test.request_support.{resourceRequest}
 import test.response_support.{expectedError, expectedTextResponse}
 import lib.xrpc.{
@@ -68,6 +67,7 @@ import lib.xrpc.{
   queryEndpoint,
   subscriptionEndpoint,
 }
+import lib.jwt.{mintAccessToken}
 
 mustHeader : String -> String -> Header
 mustHeader name value =
@@ -104,7 +104,7 @@ registry =
         (procedureEndpoint "com.example.block.put" RawInput PublicRoute),
     ])
 
-handler : Handler
+handler : Handler <>
 handler _ _ store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
 handler _ _ store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
@@ -129,7 +129,7 @@ testContext : RequestContext
 testContext =
   RequestContext { nowSeconds = 1700000000, nonce = testNonce, login = None }
 
-server : Server
+server : Server <>
 server = makeServer account registry handler
 
 seedBytes : Bytes
@@ -337,7 +337,7 @@ test "resource excess returns exact 413 and preserves Store" =
 
 -- `server` with a subscription route to upgrade to. Neither registry holds
 -- an `app.bsky.*` method, so a request for one is the proxy's to classify.
-seamServer : Server
+seamServer : Server <>
 seamServer =
   makeServer
     account
@@ -417,8 +417,8 @@ test "a WebSocket version of 13 and an overlong space is refused 426" = expectEa
 
 liveToken : String
 liveToken =
-  mintToken
-    testSecret
+  mintAccessToken
+    testKey
     "did:plc:medakaservertest"
     (accessAudience account)
     "server_core_test"
@@ -431,9 +431,7 @@ sessionStore =
     (sessionFingerprint liveToken)
     (sessionFingerprint "server_core_test-refresh")
     1700090000
-    (resultOrPanic
-      "server_core_test: session secret setup failed"
-      (storeWithServerSecret testSecret storeEmpty))
+    (storeWithServerSecret testKey storeEmpty)
 
 appviewTable : Option AppviewTable
 appviewTable =
@@ -452,7 +450,7 @@ proxyOutcome (ProxyRefused response) = refusalOf response
 proxyOutcome (ProxyAdmitted admission) =
   "admitted aud=\{admission.serviceAuth.aud}"
 
-proxiedWith : Bytes -> String
+proxiedWith : Bytes -> <Mint "access"> String
 proxiedWith header =
   let request = getWith "/xrpc/app.bsky.feed.getTimeline" [
     headerLine "authorization" (encodeUtf8 "Bearer \{liveToken}"),

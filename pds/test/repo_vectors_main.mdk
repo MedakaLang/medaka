@@ -137,7 +137,7 @@ gradeCommit _ line _ commit = match split "\t" line
       0
   _ => panic "repo_vectors: malformed commit row"
 
-applyOperation : String -> Repo -> RepoMutation
+applyOperation : String -> Repo -> <Sign "commit"> RepoMutation
 applyOperation line repo = match split "\t" line
   ["OP", "CREATE", pathHex, recordHex, _, revText] =>
     mustMutation
@@ -223,7 +223,7 @@ uppercaseFirst path =
       MB.setInPlace 0 (U8.truncate (byte - 32)) changed
   MB.freeze changed
 
-repoIdentityControl : Repo -> Bytes -> DagCbor -> <IO> Int
+repoIdentityControl : Repo -> Bytes -> DagCbor -> <IO, Sign "commit"> Int
 repoIdentityControl repo lowerPath record =
   let mixedPath = uppercaseFirst lowerPath
   let next = futureTid (repoLatestCommit repo) 1
@@ -333,7 +333,12 @@ futureTid commit offset =
     Ok value => value
     Err message => panic "repo_vectors: future TID failed: \{message}"
 
-runHostile : String -> SecretKey -> Repo -> Bytes -> DagCbor -> <IO> Int
+runHostile : String ->
+  SecretKey ->
+  Repo ->
+  Bytes ->
+  DagCbor ->
+  <IO, Sign "commit"> Int
 runHostile did secret repo path presentRecord =
   let commit = repoLatestCommit repo
   let publicKey = repoPublicKey repo
@@ -443,10 +448,10 @@ runHostile did secret repo path presentRecord =
         (repoStore repo)),
   ]
 
-main : <IO, Env, FileRead> Unit
+main : <Env, FileRead, IO, Sign "commit"> Unit
 main = runMain (args ())
 
-runMain : List String -> <IO, Env, FileRead> Unit
+runMain : List String -> <Env, FileRead, IO, Sign "commit"> Unit
 runMain ["--final-review"] = runFinalReview
 runMain [corpusPath] = runRead (readLines corpusPath)
 runMain [corpusPath, "--representative"] =
@@ -459,16 +464,16 @@ runMain _ =
   panic
     "usage: repo_vectors_main <ledger-owned-corpus> [--representative]; the flag may also come first"
 
-runRead : Result String (List String) -> <IO, Env, FileRead> Unit
+runRead : Result String (List String) -> <Env, FileRead, IO, Sign "commit"> Unit
 runRead (Err message) = panic "repo_vectors: cannot read corpus: \{message}"
 runRead (Ok raw) = runRows (filter meaningful raw)
 
-runRepresentativeRead : Result String (List String) -> <IO> Unit
+runRepresentativeRead : Result String (List String) -> <IO, Sign "commit"> Unit
 runRepresentativeRead (Err message) =
   panic "repo_vectors: cannot read corpus: \{message}"
 runRepresentativeRead (Ok raw) = runRepresentativeRows (filter meaningful raw)
 
-runRepresentativeRows : List String -> <IO> Unit
+runRepresentativeRows : List String -> <IO, Sign "commit"> Unit
 runRepresentativeRows [meta, t0, t1, _, _, _, initLine, op1, c1, createOrder, createCar, _, _, _, _, _, _, _, _, "END"] =
   match split "\t" meta
     ["META", did, secretHex] =>
@@ -537,7 +542,7 @@ runRepresentative : String ->
   String ->
   String ->
   String ->
-  <IO> Unit
+  <IO, Sign "commit"> Unit
 runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
   let tids = gradeTid t0 + gradeTid t1
   let initialTid = initialTidFrom t0
@@ -776,7 +781,7 @@ firstTidRow : List String -> String
 firstTidRow (row :: _) = row
 firstTidRow [] = panic "repo_vectors: missing TID rows"
 
-runRows : List String -> <IO, Env, FileRead> Unit
+runRows : List String -> <Env, FileRead, IO, Sign "commit"> Unit
 runRows [meta, t0, t1, t2, t3, t4, initLine, op1, c1, _, _, op2, c2, op3, c3, op4, c4, orderLine, carLine, "END"] =
   runTranscript
     (split "\t" meta)
@@ -807,7 +812,7 @@ runTranscript : List String ->
   String ->
   String ->
   String ->
-  <IO, Env, FileRead> Unit
+  <Env, FileRead, IO, Sign "commit"> Unit
 runTranscript ["META", did, secretHex] tidsRows initLine op1 c1 op2 c2 op3 c3 op4 c4 orderLine carLine =
   let tids = sum (map gradeTid tidsRows)
   let secret = mustSecret secretHex

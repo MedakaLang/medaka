@@ -56,7 +56,7 @@ import lib.sign.{
   Signature,
   publicKeyForSecret,
   secretKeyFromBytes,
-  signDigest,
+  signCommitDigest,
   signatureCompact,
   signatureFromCompact,
   verifyDigest,
@@ -272,12 +272,12 @@ buildCommit : String ->
   Tid ->
   Mst ->
   BlockStore ->
-  Result String (RepoCommit, BlockStore)
+  <Sign "commit"> Result String (RepoCommit, BlockStore)
 buildCommit did secret rev tree store = do
   unsigned <- encodeCommit "unsigned" (unsignedValue did (mstRootCid tree) rev)
   signature <- mapErr
     (message => "repo: signing failed: \{message}")
-    (signDigest secret (sha256 unsigned))
+    (signCommitDigest secret (sha256 unsigned))
   signed <- encodeCommit
     "signed"
     (signedValue did (mstRootCid tree) rev signature)
@@ -297,7 +297,7 @@ buildCommit did secret rev tree store = do
 
 -- | Initialize an empty repository at an explicit deterministic revision.
 export
-repoInit : String -> SecretKey -> Tid -> Result String Repo
+repoInit : String -> SecretKey -> Tid -> <Sign "commit"> Result String Repo
 repoInit did secret rev = do
   () <- validateDid did
   (commit, store) <- buildCommit did secret rev mstEmpty blockStoreEmpty
@@ -314,7 +314,10 @@ repoInit did secret rev = do
 
 -- | Key-byte convenience boundary; malformed signing keys fail loudly.
 export
-repoInitFromKeyBytes : String -> Bytes -> Tid -> Result String Repo
+repoInitFromKeyBytes : String ->
+  Bytes ->
+  Tid ->
+  <Sign "commit"> Result String Repo
 repoInitFromKeyBytes did keyBytes rev = match secretKeyFromBytes keyBytes
   Err message => Err "repo: bad signing key: \{message}"
   Ok secret => repoInit did secret rev
@@ -468,7 +471,7 @@ finishMutation : String ->
   RepoFootprint ->
   Mst ->
   BlockStore ->
-  Result String RepoMutation
+  <Sign "commit"> Result String RepoMutation
 finishMutation did secret publicKey rev priorTree prior tree store = do
   (commit, complete) <- buildCommit did secret rev tree store
   footprint <- footprintStep prior priorTree tree complete
@@ -492,7 +495,11 @@ stageRecord record store = do
 
 -- | Create a previously absent record.
 export
-repoCreate : Bytes -> DagCbor -> Tid -> Repo -> Result String RepoMutation
+repoCreate : Bytes ->
+  DagCbor ->
+  Tid ->
+  Repo ->
+  <Sign "commit"> Result String RepoMutation
 repoCreate path record rev (Repo did secret publicKey tree store prior footprint) =
   do
     () <- validatePath path
@@ -506,7 +513,11 @@ repoCreate path record rev (Repo did secret publicKey tree store prior footprint
 
 -- | Replace an existing record.
 export
-repoUpdate : Bytes -> DagCbor -> Tid -> Repo -> Result String RepoMutation
+repoUpdate : Bytes ->
+  DagCbor ->
+  Tid ->
+  Repo ->
+  <Sign "commit"> Result String RepoMutation
 repoUpdate path record rev (Repo did secret publicKey tree store prior footprint) =
   do
     () <- validatePath path
@@ -520,7 +531,7 @@ repoUpdate path record rev (Repo did secret publicKey tree store prior footprint
 
 -- | Delete an existing record.
 export
-repoDelete : Bytes -> Tid -> Repo -> Result String RepoMutation
+repoDelete : Bytes -> Tid -> Repo -> <Sign "commit"> Result String RepoMutation
 repoDelete path rev (Repo did secret publicKey tree store prior footprint) = do
   () <- validatePath path
   () <- ensureNewer rev prior
@@ -596,7 +607,10 @@ applyWriteList (write :: rest) tree store = do
    a change that never happened, which a relay reading the log could not
    distinguish from a real one. -}
 export
-repoApplyWrites : List RepoWrite -> Tid -> Repo -> Result String RepoMutation
+repoApplyWrites : List RepoWrite ->
+  Tid ->
+  Repo ->
+  <Sign "commit"> Result String RepoMutation
 repoApplyWrites [] _ repo = Ok (RepoMutation repo (repoLatestCommit repo))
 repoApplyWrites writes rev (Repo did secret publicKey tree store prior footprint) =
   do

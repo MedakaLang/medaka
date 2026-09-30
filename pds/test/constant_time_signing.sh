@@ -114,6 +114,11 @@ EOF
 # sign.mdk re-pinned 2026-09-27: the transitional `Array Int` secret-key
 # ingress and its byte-domain fold were deleted once every caller passed
 # `Bytes`; neither signing driver reached them.
+# sign.mdk re-pinned 2026-09-30 for the `Sign` label: `signDigest` is private
+# and unchanged in body, and the two exported signers `signCommitDigest` and
+# `signServiceAuthDigest` each delegate to it and differ only in the row they
+# declare, which is erased. The public driver signs through
+# `signCommitDigest`, so that is the root below.
 expected_public_source_manifest() {
   cat <<'EOF'
 3731538746 28626  pds/lib/field.mdk
@@ -124,8 +129,8 @@ expected_public_source_manifest() {
 2001432321 10382  stdlib/u64.mdk
 2873386462 1355  pds/lib/hmac_sha256.mdk
 2537316894 24171  pds/lib/secp256k1.mdk
-117756289 4527  pds/lib/sign.mdk
-3773914323 3185  pds/test/constant_time_signing_public_main.mdk
+1254565361 5616  pds/lib/sign.mdk
+1008417625 3197  pds/test/constant_time_signing_public_main.mdk
 EOF
 }
 
@@ -255,7 +260,7 @@ public_source_routes_ok() {
   if grep -F -q 'ForTest' "$driver"; then return 1; fi
   for wrapper in \
     secretKeyFromBytes publicKeyFromCompressed publicKeyCompressed publicKeyForSecret \
-    signatureFromCompact signatureCompact signDigest verifyDigest
+    signatureFromCompact signatureCompact signCommitDigest verifyDigest
   do
     grep -F -q "$wrapper" "$driver" || return 1
   done
@@ -982,21 +987,21 @@ for symbol in \
   mdk_lib_sign__publicKeyForSecret \
   mdk_lib_sign__signatureFromCompact \
   mdk_lib_sign__signatureCompact \
-  mdk_lib_sign__signDigest \
+  mdk_lib_sign__signCommitDigest \
   mdk_lib_sign__verifyDigest
 do
   grep -F -q "define i64 @$symbol(" "$IR" || fail "public driver IR defines wrapper $symbol"
 done
 pass 'public driver IR defines all eight consumer wrappers'
 
-collect_full_closure mdk_lib_sign__signDigest
+collect_full_closure mdk_lib_sign__signCommitDigest
 cp "$WORK/full-closure.lst" "$WORK/public-signing-closure.lst"
 collect_full_closure mdk_lib_sign__publicKeyForSecret
 cp "$WORK/full-closure.lst" "$WORK/public-key-closure.lst"
 LC_ALL=C sort -u "$WORK/public-signing-closure.lst" "$WORK/public-key-closure.lst" > "$WORK/public-union-closure.lst"
 cp "$WORK/public-union-closure.lst" "$WORK/full-closure.lst"
 
-grep -F -x -q 'mdk_lib_sign__signDigest' "$WORK/full-closure.lst" || fail 'public union contains signDigest root'
+grep -F -x -q 'mdk_lib_sign__signCommitDigest' "$WORK/full-closure.lst" || fail 'public union contains signCommitDigest root'
 grep -F -x -q 'mdk_lib_sign__publicKeyForSecret' "$WORK/full-closure.lst" || fail 'public union contains publicKeyForSecret root'
 if grep -F -q 'ForTest' "$WORK/full-closure.lst"; then
   fail 'public consumer closure reaches a ForTest symbol'
@@ -1075,7 +1080,11 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # only its public length test; secretScalar falls 2 -> 1 calls, since the
 # at-rest key is passed to the reducer as it is stored, with no `toArray`.
 # 136 -> 138 definitions.
-if [ "$public_closure_grade" != '78090211 4034' ] || [ "$public_control_grade" != '3211431579 6277' ]; then
+# Re-derived 2026-09-30 for the `Sign` label, against the base union run
+# side by side: the root moved to `signCommitDigest`, whose one row enters
+# (0 branches, 1 call, to `signDigest`), and no other row moved in any
+# column. 138 -> 139 definitions.
+if [ "$public_closure_grade" != '2151910788 4065' ] || [ "$public_control_grade" != '1733750442 6324' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

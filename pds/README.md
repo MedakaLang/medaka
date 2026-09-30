@@ -19,8 +19,8 @@ driven over the socket, a malformed request, an over-cap body, the
 idle-connection timeout, and restart-and-resume across a process boundary), and
 `pds/test/lib_boundary_test.mdk` proves the `pds/lib` ⇄ `pds/shell` boundary holds (no
 `pds/lib` import of `pds/shell`, every `pds/lib` export explicitly signed, and no
-such signature effect-bearing — the signature check is what stops an unannotated
-export from carrying an inferred effect row past the effect check). The server
+such signature naming a host effect — the signature check is what stops an
+unannotated export from carrying an inferred effect row past the effect check). The server
 listens on loopback, `127.0.0.1`, and nowhere else: the address is
 `shell.server`'s `listenAddress`, not a flag, and a reverse proxy on the same
 box terminates TLS in front of it, because nothing here terminates TLS itself.
@@ -66,7 +66,13 @@ the shell is native-bound.
 
 - `pds/medaka.toml` — project root marker (`[package]` only; no `entry` — see
   below).
-- `pds/lib/` — pure library modules. Production modules under this directory
+- `pds/lib/` — pure library modules. Pure means no host effect: an exported
+  signature's row may name only the three labels the core declares for
+  spending its secrets, `Sign` (`pds/lib/sign.mdk`, the repo key, indexed by
+  `"commit"` or `"service-auth"`), `Mint` (`pds/lib/jwt.mdk`, the session key,
+  indexed by `"access"` or `"refresh"`) and `Kdf` (`pds/lib/pbkdf2.mdk`, every
+  PBKDF2 iteration), plus row variables; `lib_boundary_test.mdk` check 2
+  enforces it. Production modules under this directory
   may not import exported identifiers
   ending in `ForTest`, selectively or through `.*`, nor alias a module that
   exports any such identifier; `opaque_field_scalar_test.mdk` derives and enforces
@@ -757,16 +763,18 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/s
 
 `pds/lib/sign.mdk` completes that eight-function consumer boundary with an
 opaque `Signature`, exact 64-byte P1363 compact parsing/serialization, fixed
-two-candidate RFC 6979 signing, and public verification. `signDigest` accepts
-only a 32-byte SHA-256 digest whose elements are in `0..255`; compact parsing
-rejects zero, out-of-range, and high-S components.
+two-candidate RFC 6979 signing, and public verification. The signer is
+private: a key signs through `signCommitDigest` (`<Sign "commit">`) or
+`signServiceAuthDigest` (`<Sign "service-auth">`), each of which accepts
+only a 32-byte SHA-256 digest; compact parsing rejects zero, out-of-range,
+and high-S components.
 
 Production receives only the fixed signer's aggregate validity bit and opaque
 selected signature. Nonce and intermediate scalar observations remain on the
 internal corpus-test routes in `lib.secp256k1`.
 
 `constant_time_signing_public_main.mdk` imports only `lib.sign`, exercises all
-eight public APIs, and roots the native P15 audit at `signDigest` and
+eight public APIs, and roots the native P15 audit at `signCommitDigest` and
 `publicKeyForSecret`. The separate internal carrier remains only for injected
 candidate-1/exhaustion and raw negative evidence.
 
