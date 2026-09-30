@@ -1,0 +1,9 @@
+-- A lambda body checked against a qualified result, and an expression under a
+-- qualified annotation, are each bounded by the qualifier.
+lambda : Unit -> String @"cfg/*"
+lambda = _ => "etc/passwd"
+
+annotated : String
+annotated = ("etc/a" : String @"cfg/*")
+
+main = println annotated

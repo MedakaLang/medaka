@@ -1,0 +1,6 @@
+-- A returned literal outside the declared qualifier is still refused: the
+-- join of the branches is not within "x/*".
+pick : Bool -> String @"x/*"
+pick c = if c then "x/a" else "y/b"
+
+main = println (pick True)

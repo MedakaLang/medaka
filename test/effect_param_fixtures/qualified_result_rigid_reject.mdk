@@ -1,0 +1,8 @@
+-- A literal does not lie within an authority the caller chooses, so it cannot
+-- be returned at that authority.
+effect Store Prefix
+
+at : (p : String @Store) -> String @p
+at _ = "x/a"
+
+main = println (at "x/b")

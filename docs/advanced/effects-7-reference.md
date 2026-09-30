@@ -34,6 +34,7 @@ where the system is known not to express something yet.
 | `(dir : String @Store) -> String @dir` | a named argument with its domain written; charges nothing | [IV](effects-4-authority.md) |
 | `String @p` | a string known to lie within `p` | [IV](effects-4-authority.md) |
 | `String @(a \| b)` | a string within either authority | [IV](effects-4-authority.md) |
+| `v : String @"cfg/*"` | a value within a written bound; a use carries the bound | [IV](effects-4-authority.md) |
 | `(a <= d) => …` | a relation `check` prints on an unsigned binding | [IV](effects-4-authority.md) |
 | `data H (p : Authority Store) = H (String @p)` | a type indexed by an authority | [V](effects-5-data.md) |
 | `H path` / `H p` / `H "cfg/*"` / `H *` | index forms: named argument, variable, literal, whole domain | [V](effects-5-data.md) |
@@ -67,7 +68,7 @@ The first words of each message, and where the rule behind it is explained.
 | `Foreign declaration '…' redeclares a built-in runtime name with a NARROWER effect row` | a catalog name redeclared too narrowly | [III](effects-3-labels.md) |
 | `Invalid effect parameter on <…>` | a written element the domain refuses: an empty element, or more than 16 members | [IV](effects-4-authority.md) |
 | `Binding '…' reaches "…" where only … is admitted` | a body under a named authority reaches a value it did not derive from it | [IV](effects-4-authority.md) |
-| `Binding '…' reaches … where its declared bound admits only …` | a constructor or existential exceeds a literal bound | [V](effects-5-data.md) |
+| `Binding '…' reaches … where its declared bound admits only …` | a returned value, constructor or existential exceeds a written bound | [IV](effects-4-authority.md), [V](effects-5-data.md) |
 | `The qualifier names '…', but no binder domain, effect atom or index in this signature names '…'` | a qualifier with no domain | [IV](effects-4-authority.md) |
 | `'…' needs "…" to lie within "…" here` | a use violates a relation the binding's inferred type carries | [IV](effects-4-authority.md) |
 | `Authority index mismatch` | an authority index is invariant | [V](effects-5-data.md) |
@@ -102,9 +103,6 @@ search for.
   passes. A host part such as `a.com/../x`, a percent-encoded byte, or a `.`
   segment is not normalized, and the socket externs receive no grant.
 
-- **A qualified result cannot return a literal its qualifier admits.** A
-  return is checked by its type, not by the literal's authority.
-  [#3532](https://github.com/MedakaLang/medaka/issues/3532)
 - **There is no written syntax for a relation.** A binding whose inferred type
   carries a context such as `(a <= d) =>` (the relation the compiler kept, see
   chapter IV) must stay unsigned.

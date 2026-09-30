@@ -10,7 +10,8 @@ import types.effect_authority.{
 }
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
-  Expr(..), Lit(..), Pat(..), Arm(..), LetBind(..), FunClause(..), patBoundNames
+  Expr(..), Lit(..), Pat(..), Arm(..), LetBind(..), FunClause(..), DoStmt(..),
+  patBoundNames
 }
 import support.util.{reverseL, lookupAssoc, mapOption}
 
@@ -105,11 +106,35 @@ alphaSyntax top vt lets (ELetGroup binds body) =
     vt
     (collectBinds binds (shadowed (flatMap letBindName binds) lets))
     body
+alphaSyntax top vt lets (EBlock stmts) = blockAuthority top vt lets stmts
 alphaSyntax top vt lets (EIf _ t f) =
   joinBranches [alphaSyntax top vt lets t, alphaSyntax top vt lets f]
 alphaSyntax top vt lets (EMatch scrut arms) =
   joinBranches (map (armAuthority top vt lets scrut) arms)
 alphaSyntax _ _ _ _ = None
+
+-- A block is its last statement, read in the scope its statements build: a
+-- `let` of a name reads its definition, as the `let` expression does; a
+-- patterned let, a bind or an assignment introduces names whose values the
+-- abstraction cannot see. A block ending in a statement that is not an
+-- expression has no string value to abstract.
+blockAuthority : Param ->
+  (String -> Option Mono) ->
+  List (String, AlphaBinder) ->
+  List DoStmt ->
+  Option Authority
+blockAuthority top vt lets [DoExpr e] = alphaSyntax top vt lets e
+blockAuthority top vt lets (s :: rest@(_ :: _)) =
+  blockAuthority top vt (stmtScope s lets) rest
+blockAuthority _ _ _ _ = None
+
+stmtScope : DoStmt -> List (String, AlphaBinder) -> List (String, AlphaBinder)
+stmtScope (DoLet _ _ (PVar x _) e) lets = (x, ALet e) :: lets
+stmtScope (DoLet _ _ pat _) lets = shadowed (patBoundNames pat) lets
+stmtScope (DoBind pat _) lets = shadowed (patBoundNames pat) lets
+stmtScope (DoAssign x _) lets = shadowed [x] lets
+stmtScope (DoExpr _) lets = lets
+stmtScope (DoFieldAssign _ _ _) lets = lets
 
 -- An arm that merely renames the scrutinee reads it; any other pattern binds
 -- names whose values the abstraction cannot see, so they shadow to the top.
