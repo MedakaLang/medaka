@@ -32,7 +32,7 @@
    residue for that reason.
 
    **Directory barriers.** A directory this module creates is barriered into
-   the directory `mkdirAllDurably` wrote its dentry into, on `pds/shell/blockfile.mdk`'s
+   the directory its dentry was written into, on `pds/shell/blockfile.mdk`'s
    rule and for its reason — a shard whose own entry a crash loses takes every
    blob beneath it, however durable those blobs' bytes already are. Only a
    creation owes it, so a shard costs one fsync once in the life of the store
@@ -102,14 +102,15 @@
 import bytes as B
 import bytes.{Bytes}
 import hex.{decode, encode}
-import string.{endsWith, stripSuffix, take}
-import fs.{isDir, mkdirAllDurably}
+import string.{endsWith, stripSuffix}
+import fs.{isDir}
 import io.{writeFilePrivate}
-import lib.cid.{Cid, cidDigest, cidFromBytes, cidToBytes}
+import lib.cid.{Cid, cidFromBytes, cidToBytes}
 import lib.resource_limits.{checkBlobBytes}
 -- The shard layout is `shell.blockfile`'s, so the two predicates that decide
 -- which entries beneath it a store can own are its too — see `isShardName`.
-import shell.blockfile.{fileLeaves, isShardName}
+import shell.blockfile.{ensureShard, fileLeaves, isShardName, shardName}
+import shell.datadir.{DataDir(..), ensureDirIn}
 
 -- Temporary writes are promoted out of this directory, which is therefore the
 -- one entry under the blob directory that is not a shard.
@@ -119,21 +120,14 @@ stagingName = ".staging"
 mimeSuffix : String
 mimeSuffix = ".mime"
 
--- | The blob area beneath one `--data` directory.
+-- | The blob area beneath a data directory. Every function below but the
+-- exported ones takes this area, not the data directory, as its `dir`.
 export
-blobDir : String -> String
-blobDir dir = "\{dir}/blobs"
+blobDir : DataDir d -> String @d
+blobDir (DataDir root) = "\{root}blobs"
 
 cidKey : Cid -> String
 cidKey cid = encode (cidToBytes cid)
-
--- | Directory holding one blob's shard.
-blobShardDir : String -> Cid -> String
-blobShardDir dir cid = "\{blobDir dir}/\{take 2 (encode (cidDigest cid))}"
-
--- | Absolute path of one blob's bytes.
-blobFilePath : String -> Cid -> String
-blobFilePath dir cid = "\{blobShardDir dir cid}/\{cidKey cid}"
 
 -- The pure layer already refused an oversize blob, so reaching this is a bug
 -- in the caller rather than a rejected upload; it fails rather than writing.
@@ -144,65 +138,58 @@ admitted bytes = match checkBlobBytes (B.length bytes)
       "blobfile: refusing to persist a blob pds/lib/blob.mdk would not have admitted: \{message}"
   Ok () => Ok ()
 
--- One shard directory, created if it is not there, with the dentry that
--- created barriered into `blobs/`, and `blobs/` itself created first and
--- barriered into the data directory when it is missing. See the header's
--- "Directory barriers".
-ensureShard : String -> Cid -> <FileRead, FileWrite> Result String Unit
-ensureShard dir cid = mkdirAllDurably (blobShardDir dir cid)
-
 -- Not `fs.replaceDurably`: the sidecar and the bytes file share ONE shard
 -- barrier after both renames (see "Write order" above), which the composite's
 -- one-write-one-barrier shape cannot express. The sidecar is fixed-mode
 -- (`writeFilePrivate`); the bytes half has no mode-setting counterpart and
 -- stays at whatever the process umask gives it (0600 only under
 -- `pds.service`'s `UMask=0077`; see `PDS-DEPLOY.md` step 5).
-writeOne : String ->
+writeOne : (dir : String @FileWrite*) ->
   Cid ->
   String ->
   Bytes ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead dir, FileWrite dir> Result String Unit
 writeOne dir cid mimeType bytes = do
   () <- admitted bytes
   () <- ensureShard dir cid
-  let stagedMime = "\{blobDir dir}/\{stagingName}/\{cidKey cid}\{mimeSuffix}"
+  let shard = "\{dir}/\{shardName cid}"
+  let stagedMime = "\{dir}/\{stagingName}/\{cidKey cid}\{mimeSuffix}"
   () <- writeFilePrivate stagedMime mimeType
   () <- fsync stagedMime
-  () <- rename stagedMime "\{blobFilePath dir cid}\{mimeSuffix}"
-  let staged = "\{blobDir dir}/\{stagingName}/\{cidKey cid}"
+  () <- rename stagedMime "\{shard}/\{cidKey cid}\{mimeSuffix}"
+  let staged = "\{dir}/\{stagingName}/\{cidKey cid}"
   -- Door (FFI): `writeFileBytes` takes the runtime's integer array; `toArray`
   -- is total.
   () <- writeFileBytes staged (B.toArray bytes)
   () <- fsync staged
-  () <- rename staged (blobFilePath dir cid)
-  fsync (blobShardDir dir cid)
+  () <- rename staged "\{shard}/\{cidKey cid}"
+  fsync shard
 
--- The staging directory, created if it is not there, with the dentry that
--- created barriered into `blobs/`, and `blobs/` itself created first and
--- barriered into the data directory when it is missing: each dentry is
--- barriered into its own parent.
-ensureStaging : String -> <FileRead, FileWrite> Result String Unit
-ensureStaging dir = mkdirAllDurably "\{blobDir dir}/\{stagingName}"
-
-writeRows : String ->
+writeRows : (dir : String @FileWrite*) ->
   List (Cid, String, Bytes) ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead dir, FileWrite dir> Result String Unit
 writeRows _ [] = Ok ()
 writeRows dir ((cid, mimeType, bytes) :: rest) =
   match writeOne dir cid mimeType bytes
     Err message => Err message
     Ok () => writeRows dir rest
 
-{- | Write every blob durably beneath `<dir>/blobs`. Writing a blob that is
-   already present is idempotent for its bytes — a blob's name is its content —
-   and its sidecar is rewritten, which is what lets the declared type of
-   already-stored bytes be corrected by a later upload. -}
+{- | Write every blob durably beneath the data directory's `blobs/`. Writing a
+   blob that is already present is idempotent for its bytes — a blob's name
+   is its content — and its sidecar is rewritten, which is what lets the
+   declared type of already-stored bytes be corrected by a later upload.
+
+   `blobs/` and its `.staging` are created first when missing, each dentry
+   barriered into its own parent: `blobs/`'s into the data directory, and
+   `.staging`'s into `blobs/`. -}
 export
-blobFileWrite : String ->
+blobFileWrite : DataDir d ->
   List (Cid, String, Bytes) ->
-  <FileRead, FileWrite> Result String Unit
-blobFileWrite dir rows = do
-  () <- ensureStaging dir
+  <FileRead d, FileWrite d> Result String Unit
+blobFileWrite (DataDir root) rows = do
+  let dir = "\{root}blobs"
+  () <- ensureDirIn root dir
+  () <- ensureDirIn dir "\{dir}/\{stagingName}"
   writeRows dir rows
 
 cidForName : String -> String -> Result String Cid
@@ -221,10 +208,10 @@ sidecarOk path leaf = match stripSuffix mimeSuffix leaf
   None => Err "blobfile: \{path}: not a MIME sidecar"
   Some base => map (_ => ()) (cidForName path base)
 
-readLeaves : String ->
+readLeaves : (shardPath : String @FileRead*) ->
   List String ->
   List (Cid, String, Bytes) ->
-  <FileRead> Result String (List (Cid, String, Bytes))
+  <FileRead shardPath> Result String (List (Cid, String, Bytes))
 readLeaves _ [] acc = Ok acc
 readLeaves shardPath (leaf :: rest) acc =
   let path = "\{shardPath}/\{leaf}"
@@ -249,13 +236,13 @@ readLeaves shardPath (leaf :: rest) acc =
           Some bytes =>
             readLeaves shardPath rest ((cid, mimeType, bytes) :: acc)
 
-readShards : String ->
+readShards : (dir : String @FileRead*) ->
   List String ->
   List (Cid, String, Bytes) ->
-  <FileRead> Result String (List (Cid, String, Bytes))
+  <FileRead dir> Result String (List (Cid, String, Bytes))
 readShards _ [] acc = Ok acc
 readShards dir (shard :: rest) acc =
-  let path = "\{blobDir dir}/\{shard}"
+  let path = "\{dir}/\{shard}"
   -- `.staging` is skipped because this module writes it; anything else whose
   -- name is not a shard name, or that is not a directory at all, is skipped
   -- because this module could not have written it. See the header's "An entry
@@ -271,7 +258,7 @@ readShards dir (shard :: rest) acc =
         Err message => Err message
         Ok next => readShards dir rest next
 
-{- | Read every persisted blob beneath `<dir>/blobs`, in unspecified order. A
+{- | Read every persisted blob beneath `blobs/`, in unspecified order. A
    data directory that has never held a blob reads as no blobs, not as a
    failure: `blobs/` is created by the first write and by nothing else.
 
@@ -280,13 +267,14 @@ readShards dir (shard :: rest) acc =
    is what proves each row's bytes hash to that CID, and a tampered file fails
    there. -}
 export
-blobFileRead : String -> <FileRead> Result String (List (Cid, String, Bytes))
-blobFileRead dir =
-  if not (fileExists (blobDir dir)) then
+blobFileRead : DataDir d ->
+  <FileRead d> Result String (List (Cid, String, Bytes))
+blobFileRead (DataDir root) =
+  let dir = "\{root}blobs"
+  if not (fileExists dir) then
     Ok []
-  else match listDir (blobDir dir)
-    Err message =>
-      Err "blobfile: \{blobDir dir}: unreadable blob directory: \{message}"
+  else match listDir dir
+    Err message => Err "blobfile: \{dir}: unreadable blob directory: \{message}"
     Ok shards => readShards dir shards []
 
 -- Bytes files among one shard's FILE leaves that also have a sidecar present
@@ -316,10 +304,12 @@ countLeaves all (leaf :: rest) =
   else
     countLeaves all rest
 
-countShards : String -> List String -> <FileRead> Result String Int
+countShards : (dir : String @FileRead*) ->
+  List String ->
+  <FileRead dir> Result String Int
 countShards _ [] = Ok 0
 countShards dir (shard :: rest) =
-  let path = "\{blobDir dir}/\{shard}"
+  let path = "\{dir}/\{shard}"
   if shard == stagingName || not (isShardName shard) then
     countShards dir rest
   else match isDir path
@@ -331,15 +321,15 @@ countShards dir (shard :: rest) =
         let files = fileLeaves path leaves
         map (countLeaves files files + _) (countShards dir rest)
 
--- Every file left behind under `<dir>/blobs/.staging` by a process that
+-- Every file left behind under `blobs/.staging` by a process that
 -- crashed between staging a file and its `rename`. `.staging` never holds a
 -- subdirectory in this module's own write path (`writeOne` stages the
 -- sidecar and the bytes as two leaf files, never a directory), but this
 -- sweep also tolerates residue it did not write — a stray subdirectory is
 -- skipped rather than passed to `removeFile`, which fails on a directory.
-removeStagingResidue : String ->
+removeStagingResidue : (dir : String @FileWrite*) ->
   List String ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead dir, FileWrite dir> Result String Unit
 removeStagingResidue _ [] = Ok ()
 removeStagingResidue dir (leaf :: rest) = match isDir "\{dir}/\{leaf}"
   Ok True => removeStagingResidue dir rest
@@ -348,7 +338,7 @@ removeStagingResidue dir (leaf :: rest) = match isDir "\{dir}/\{leaf}"
       Err "blobfile: \{dir}/\{leaf}: undeletable staging residue: \{message}"
     Ok () => removeStagingResidue dir rest
 
-{- | Remove every file staged beneath `<dir>/blobs/.staging` and never
+{- | Remove every file staged beneath `blobs/.staging` and never
    promoted or cleaned up — the residue a crash between staging a sidecar or
    bytes file and its `rename` leaves behind. Nothing else in this module
    ever removes from `.staging`, so this is the only place stale entries go
@@ -360,9 +350,9 @@ removeStagingResidue dir (leaf :: rest) = match isDir "\{dir}/\{leaf}"
    than a promotion this process has in flight. A data directory that has
    never staged a blob reads as nothing to sweep, not as a failure. -}
 export
-blobFileSweepStaging : String -> <FileRead, FileWrite> Result String Unit
-blobFileSweepStaging dir =
-  let staging = "\{blobDir dir}/\{stagingName}"
+blobFileSweepStaging : DataDir d -> <FileRead d, FileWrite d> Result String Unit
+blobFileSweepStaging (DataDir root) =
+  let staging = "\{root}blobs/\{stagingName}"
   if not (fileExists staging) then
     Ok ()
   else match listDir staging
@@ -370,7 +360,7 @@ blobFileSweepStaging dir =
       Err "blobfile: \{staging}: unreadable staging directory: \{message}"
     Ok leaves => removeStagingResidue staging leaves
 
-{- | How many blobs are persisted beneath `<dir>/blobs`, without reading any
+{- | How many blobs are persisted beneath `blobs/`, without reading any
    of their bytes: `pds/shell/server.mdk`'s periodic stats line wants a count
    on an interval, and `blobFileRead`'s full verify-by-read pass is too much
    work to repeat that often. A data directory that has never held a blob
@@ -386,11 +376,11 @@ blobFileSweepStaging dir =
    it serves any and this count is a stats line on an interval — the refusal
    has already happened somewhere a caller acts on. -}
 export
-blobFileCount : String -> <FileRead> Result String Int
-blobFileCount dir =
-  if not (fileExists (blobDir dir)) then
+blobFileCount : DataDir d -> <FileRead d> Result String Int
+blobFileCount (DataDir root) =
+  let dir = "\{root}blobs"
+  if not (fileExists dir) then
     Ok 0
-  else match listDir (blobDir dir)
-    Err message =>
-      Err "blobfile: \{blobDir dir}: unreadable blob directory: \{message}"
+  else match listDir dir
+    Err message => Err "blobfile: \{dir}: unreadable blob directory: \{message}"
     Ok shards => countShards dir shards

@@ -15,6 +15,11 @@
    literal because it is what `egressAddress` (`pds/shell/egress.mdk`) is
    declared to be, and every outbound call is charged at it.
 
+   Every file atom is indexed too, by the data directory `d`
+   (`pds/shell/datadir.mdk`): the event log the subscription loop reads and
+   everything the serving loop persists live beneath it, so `FileRead d` and
+   `FileWrite d` say which subtree, not merely that there is a file.
+
    `Serve` also names the two secret-spending labels the serving loop
    performs itself: `Kdf`, for the login derivations it pays for a slice at
    a time, and `Sign "service-auth"`, for the credentials the egress proxy
@@ -36,17 +41,18 @@ export type Wire (h : Authority Net) (e : Effect) a = Async <Clock, Net h | e> a
 export type WireDeadline (h : Authority Net) (e : Effect) = Wait <Clock, Net h | e>
 
 -- | The subscription loop's row (`pds/shell/subscribe.mdk`) over a connection
--- accepted at `h`: the wire, plus reading the event log it replays and tails,
--- and polling the shutdown signal that ends the tail.
-export type Streaming (h : Authority Net) (e : Effect) a = Wire h <FileRead, Signal | e> a
+-- accepted at `h`: the wire, plus reading the event log it replays and tails
+-- beneath the data directory `d`, and polling the shutdown signal that ends
+-- the tail.
+export type Streaming (h : Authority Net) (d : Authority FileWrite*) (e : Effect) a = Wire h <FileRead d, Signal | e> a
 
 -- | The serving loop's row (`pds/shell/server.mdk`, `pds/serve.mdk`) over a
--- listener at `h`: the subscription loop's, plus the outbound calls a request
--- may forward and the service credentials they carry, the login derivations,
--- persisting what a request changed, drawing nonces, and the access and
--- diagnostic logs.
-export type Serve (h : Authority Net) (e : Effect) a = Streaming h <FileWrite, Kdf, Net "127.0.0.1", Rand, Sign "service-auth", Stderr, Stdout | e> a
+-- listener at `h` and the data directory `d`: the subscription loop's, plus
+-- the outbound calls a request may forward and the service credentials they
+-- carry, the login derivations, persisting what a request changed beneath
+-- `d`, drawing nonces, and the access and diagnostic logs.
+export type Serve (h : Authority Net) (d : Authority FileWrite*) (e : Effect) a = Streaming h d <FileWrite d, Kdf, Net "127.0.0.1", Rand, Sign "service-auth", Stderr, Stdout | e> a
 
--- | A deadline a `Serve h e` computation checks, for the reason
+-- | A deadline a `Serve h d e` computation checks, for the reason
 -- `WireDeadline` restates `Wire`: its row is `Serve`'s, written out.
-export type ServeDeadline (h : Authority Net) (e : Effect) = WireDeadline h <FileRead, FileWrite, Kdf, Net "127.0.0.1", Rand, Sign "service-auth", Signal, Stderr, Stdout | e>
+export type ServeDeadline (h : Authority Net) (d : Authority FileWrite*) (e : Effect) = WireDeadline h <FileRead d, FileWrite d, Kdf, Net "127.0.0.1", Rand, Sign "service-auth", Signal, Stderr, Stdout | e>

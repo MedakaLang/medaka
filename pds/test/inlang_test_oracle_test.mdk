@@ -330,11 +330,13 @@ libExempt = [
   ("xrpc", "0 assertions"),
   ("blockfile", "0 assertions"),
   ("crawl", "0 assertions"),
+  ("datadir", "0 assertions"),
   ("dirlock", "0 assertions"),
   ("egress", "0 assertions"),
   ("eventlog", "0 assertions"),
   ("keygen", "0 assertions"),
   ("persist", "0 assertions"),
+  ("rows", "0 assertions"),
   ("server", "0 assertions"),
   ("subscribe", "0 assertions"),
 ]

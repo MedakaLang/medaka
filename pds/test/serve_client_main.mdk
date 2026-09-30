@@ -2439,7 +2439,7 @@ runUploadBlob port token mimeType text =
    SHA-256 digest, which together name its exact bytes.
 
    The gate reads that one line from two different servers — one over the
-   original `--data` directory and one over a directory restored from a backup
+   original data directory and one over a directory restored from a backup
    of it — and requires the two to be equal, which is what "the restored
    server's export byte-matches" means. Printing a digest rather than the CAR
    keeps the comparison a string comparison, exactly as

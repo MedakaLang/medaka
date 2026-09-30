@@ -1,8 +1,8 @@
 {- | `pds/serve.mdk` — the PDS entry point: admit a configuration, rehydrate the
    account repository from disk, bind the listener, and serve.
 
-   Every configuration value arrives as a command-line flag or as a secret file
-   at a fixed path, and is admitted before anything is bound: a bad DID,
+   Every configuration value arrives as a command-line flag or as a file at a
+   fixed path, and is admitted before anything is bound: a bad DID,
    handle, or hostname is rejected by `lib.server_core`'s `makeAccount`, an
    unreadable or non-hex signing key by `readHexBytes`, a data directory that
    is not a directory by `requireDir`,
@@ -19,7 +19,13 @@
    it says whether that proxy's `X-Forwarded-For` names the client identity
    rate limiting keys on.
 
-   One data directory is served by one process. `--data` is locked
+   The data directory is `data/`, relative to the working directory
+   (`shell.datadir`), and no flag names it: it must exist before the server
+   starts, and a run whose `data/` is missing or is not a directory is
+   refused. Every function that reaches it takes a `DataDir`, so the rows name
+   the `data/*` subtree and not the bare file labels.
+
+   One data directory is served by one process. `data/` is locked
    (`shell.dirlock`) before anything beneath it is read or written, so a second
    server started over a live directory is refused rather than sweeping the
    staged files the first one has in flight. A killed process leaves its lock
@@ -43,7 +49,7 @@
    key: the signing key authenticates commits to every other implementation on
    the network and has exactly one job. `secrets/token.hex` supplies it when
    present; when absent, the secret is generated from `osEntropyBytes` on first
-   run and kept in `<data>/session-secret` for every run after.
+   run and kept in `data/session-secret` for every run after.
 
    The account password is the THIRD, and it is what `com.atproto.server.
    createSession` grades a login against. It arrives in `secrets/password` and
@@ -53,7 +59,7 @@
    that echoed the password to the terminal would be worse than the file, not
    better. The password is read once, by a run whose data directory holds no
    credential yet, turned into a PBKDF2 credential record (`lib.credential`),
-   and never stored: `<data>/credential` holds a salt, an iteration count, and
+   and never stored: `data/credential` holds a salt, an iteration count, and
    a derived key. Once that record exists `secrets/password` must be deleted: a
    run that finds both refuses to start rather than leave a plaintext copy of
    the password beside the credential derived from it.
@@ -88,7 +94,7 @@ import args.{
   value,
 }
 import array as A
-import async.{Async, liftIO, sleep, spawn}
+import async.{Async, liftIO, runAsyncMain, sleep, spawn}
 import bytes as B
 import bytes.{Bytes, fromArray}
 import fs.{isDir}
@@ -137,6 +143,7 @@ import lib.tid.{Tid, tidEncode}
 import net.{Listener, listenPort}
 import shell.blobfile.{blobFileRead, blobFileSweepStaging}
 import shell.crawl.{RelayTarget, makeRelayTarget, requestCrawl}
+import shell.datadir.{DataDir(..), dataDir}
 import shell.dirlock.{
   DataLock,
   LockBeat(..),
@@ -183,7 +190,16 @@ import shell.server.{
   servingStopping,
 }
 import string.{
-  drop, indexOf, lines, startsWith, stripSuffix, take, toInt, toLower, trim
+  contains,
+  drop,
+  indexOf,
+  lines,
+  startsWith,
+  stripSuffix,
+  take,
+  toInt,
+  toLower,
+  trim,
 }
 import time.{Duration, millis, now}
 import u8 as U8
@@ -193,7 +209,6 @@ serveSpec = spec "serve" [
   value ["--did"] "DID" "the repository owner's DID",
   value ["--handle"] "HANDLE" "the repository owner's handle",
   value ["--hostname"] "HOST" "this PDS's own hostname",
-  value ["--data"] "DIR" "existing directory holding the persisted repository",
   intValue ["--port"] "N" "TCP port to bind; 0 picks a free one",
   switch
     ["--init"]
@@ -461,8 +476,8 @@ readHexBytes label path = do
 readSigningKey : Unit -> <FileRead "secrets/key.hex"> Result String Bytes
 readSigningKey () = readHexBytes "signing key" "secrets/key.hex"
 
-sessionSecretPath : String -> String
-sessionSecretPath dir = "\{dir}/session-secret"
+sessionSecretPath : DataDir d -> String @d
+sessionSecretPath (DataDir root) = "\{root}session-secret"
 
 {- | How many distinct byte values a 32-byte session-token secret must carry.
 
@@ -509,7 +524,8 @@ admitSessionSecret path bytes =
    `randomInt`, whose SplitMix64 generator is seeded deterministically and
    would make every session token on every deployment forgeable from a public
    constant. -}
-generateSessionSecret : String -> <FileWrite, Rand> Result String SessionKey
+generateSessionSecret : DataDir d ->
+  <FileWrite d, Rand> Result String SessionKey
 generateSessionSecret dir = do
   let bytes = tokenSecretBytes ()
   let line = "\{encode bytes}\n"
@@ -527,7 +543,8 @@ generateSessionSecret dir = do
    strand a secret it created. A PRESENT but unusable secret IS an error,
    refused before the listener binds rather than at the first request that
    needed it. -}
-suppliedSessionSecret : String -> <FileRead> Result String (Option SessionKey)
+suppliedSessionSecret : DataDir d ->
+  <FileRead d, FileRead "secrets/token.hex"> Result String (Option SessionKey)
 suppliedSessionSecret dir = do
   supplied <- suppliedTokenSecret ()
   match supplied
@@ -557,9 +574,9 @@ readSessionSecret path = do
   admitSessionSecret path bytes
 
 -- The WRITE half: generate the secret only when the read half found none.
-establishSessionSecret : String ->
+establishSessionSecret : DataDir d ->
   Option SessionKey ->
-  <FileWrite, Rand> Result String SessionKey
+  <FileWrite d, Rand> Result String SessionKey
 establishSessionSecret _ (Some key) = Ok key
 establishSessionSecret dir None = generateSessionSecret dir
 
@@ -586,9 +603,9 @@ data CredentialSource = Kept CredentialRecord | Bootstrap Password
 {- | Derive the account credential from an admitted password and keep it, at
    mode 0600. The salt is drawn here, from `osEntropyBytes`: `lib.credential`
    takes a caller-supplied salt and draws no entropy of its own. -}
-bootstrapCredential : String ->
+bootstrapCredential : DataDir d ->
   Password ->
-  <FileWrite, Kdf, Rand> Result String CredentialRecord
+  <FileWrite d, Kdf, Rand> Result String CredentialRecord
 bootstrapCredential dir password = do
   -- Door (FFI), checked: `osEntropyBytes` answers the runtime's integer
   -- array, and an element outside 0..255 aborts rather than being masked.
@@ -600,7 +617,7 @@ bootstrapCredential dir password = do
   () <- persistCredential dir record
   Ok record
 
-loadCredential : String -> <FileRead> Result String CredentialRecord
+loadCredential : DataDir d -> <FileRead d> Result String CredentialRecord
 loadCredential dir = do
   () <- requirePrivateMode "credential" (credentialPath dir)
   text <- match readFile (credentialPath dir)
@@ -633,7 +650,8 @@ loadCredential dir = do
    copy left beside the credential derived from it would be; it is also what
    an operator who means to replace the password would write, and a run that
    silently kept the old credential would leave them believing otherwise. -}
-planCredential : String -> <FileRead> Result String CredentialSource
+planCredential : DataDir d ->
+  <FileRead d, FileRead "secrets/password"> Result String CredentialSource
 planCredential dir =
   let exists = fileExists (credentialPath dir)
   match (exists, passwordSupplied ())
@@ -662,9 +680,9 @@ readPassword () = do
     Ok given => Ok (passwordFromText given)
 
 -- The WRITE half: derive and keep only the password the read half admitted.
-establishCredential : String ->
+establishCredential : DataDir d ->
   CredentialSource ->
-  <FileWrite, Kdf, Rand> Result String CredentialRecord
+  <FileWrite d, Kdf, Rand> Result String CredentialRecord
 establishCredential _ (Kept record) = Ok record
 establishCredential dir (Bootstrap password) = bootstrapCredential dir password
 
@@ -712,10 +730,17 @@ runKeygenChosen parsed = match (
     () <- keygenSecretsDir ()
     keygenSigningKeyAndTokenSecret ()
 
-requireDir : String -> <FileRead> Result String Unit
-requireDir dir = match isDir dir
-  Err message => Err "data directory \{dir}: \{message}"
-  Ok False => Err "data directory \{dir} is not a directory"
+-- The root is spelled with its trailing separator (`shell.datadir`), so a
+-- plain file there fails the stat itself with "Not a directory" rather than
+-- answering `Ok False`; both are the same refusal.
+requireDir : DataDir d -> <FileRead d> Result String Unit
+requireDir (DataDir root) = match isDir root
+  Err message =>
+    if contains "Not a directory" message then
+      Err "data directory \{root} is not a directory"
+    else
+      Err "data directory \{root}: \{message}"
+  Ok False => Err "data directory \{root} is not a directory"
   Ok True => Ok ()
 
 genesisTid : Unit -> <Clock> Result String Tid
@@ -724,10 +749,10 @@ genesisTid u = tidEncode (floatToInt (now u * 1000000.0)) 0
 {- | Create and persist the genesis repository. `--init` refuses a directory
    that already holds one rather than writing over it, so a rerun of a serving
    command cannot silently discard an account's history. -}
-initRepo : String ->
+initRepo : DataDir d ->
   String ->
   Bytes ->
-  <Clock, FileRead, FileWrite, Sign "commit"> Result String Repo
+  <Clock, FileRead d, FileWrite d, Sign "commit"> Result String Repo
 initRepo dir did keyBytes = do
   genesis <- genesisTid ()
   repo <- repoInitFromKeyBytes did keyBytes genesis
@@ -743,7 +768,7 @@ initRepo dir did keyBytes = do
    file name spells (`blockStorePut`, the very check `blockStoreFromBlocks`
    folds over the repository half), so a tampered blob file refuses the whole
    startup rather than being served. -}
-loadBlobs : Store -> String -> <FileRead> Result String Store
+loadBlobs : Store -> DataDir d -> <FileRead d> Result String Store
 loadBlobs store dir = do
   rows <- blobFileRead dir
   admitBlobRows rows store
@@ -764,24 +789,24 @@ admitBlobRows ((cid, mimeType, bytes) :: rest) store =
     Err message => Err "persisted blob \{cidToString cid} rejected: \{message}"
     Ok next => admitBlobRows rest next
 
-loadRepo : String -> String -> SecretKey -> <FileRead> Result String Repo
+loadRepo : DataDir d -> String -> SecretKey -> <FileRead d> Result String Repo
 loadRepo dir did secret = do
   (head, blocks) <- persistLoad dir
   repoFromBlocks did secret head blocks
 
 openRepo : Bool ->
-  String ->
+  DataDir d ->
   String ->
   Bytes ->
   SecretKey ->
-  <Clock, FileRead, FileWrite, Sign "commit"> Result String Repo
+  <Clock, FileRead d, FileWrite d, Sign "commit"> Result String Repo
 openRepo False dir did _ secret = loadRepo dir did secret
-openRepo True dir did keyBytes secret =
+openRepo True (dir@(DataDir root)) did keyBytes secret =
   if persistHasHead dir then match loadRepo dir did secret
-    Ok _ => Err "--init refuses \{dir}: it already holds a repository"
+    Ok _ => Err "--init refuses \{root}: it already holds a repository"
     Err message =>
       Err
-        "--init refuses \{dir}: it already holds a repository, but its head does not load under the configured --did and secrets/key.hex (\{message}); check those rather than reinitializing"
+        "--init refuses \{root}: it already holds a repository, but its head does not load under the configured --did and secrets/key.hex (\{message}); check those rather than reinitializing"
   else
     initRepo dir did keyBytes
 
@@ -796,12 +821,12 @@ openRepo True dir did keyBytes secret =
    after the banner, so that a log still begins by saying which build produced
    everything under it. -}
 configure : Args ->
-  <Clock, FileRead, FileWrite, Kdf, Rand, Sign "commit"> Result String (Server <Mint {"access", "refresh"}, Sign "commit">, Store, String, Int, Serving, Option RelayTarget, Duration, DataLock, List String)
+  <Clock, FileRead "data/*", FileRead "secrets/key.hex", FileRead "secrets/password", FileRead "secrets/token.hex", FileWrite "data/*", Kdf, Rand, Sign "commit"> Result String (Server <Mint {"access", "refresh"}, Sign "commit">, Store, DataDir "data/*", Int, Serving, Option RelayTarget, Duration, DataLock "data/*", List String)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
   hostname <- required "--hostname" parsed
-  dir <- required "--data" parsed
+  let dir = dataDir
   port <- requiredPort parsed
   statsInterval <- statsIntervalOf parsed
   let trustedProxy = TrustedProxy (flag "--trusted-proxy" parsed)
@@ -844,11 +869,9 @@ configure parsed = do
   -- than the whole of `configure`, which on a large store is many times the
   -- stale window.
   --
-  -- Between the phases and no finer: `configure` runs as ONE synchronous step
-  -- (`liftIO (u => configure parsed)`) and `async.liftIO` runs it to
-  -- completion, so a spawned beat cannot interleave with it — MEASURED, a
-  -- 3596ms step with a 100ms beat loop spawned beside it wrote one beat, the
-  -- one before the step began. The phases that are unbounded in store size and
+  -- Between the phases and no finer: `configure` runs to completion before
+  -- `main` starts the scheduler, so the beat loop `start` spawns does not
+  -- exist yet and nothing can beat inside it. The phases that are unbounded in store size and
   -- still uncovered (`repoFromBlocks`, `loadBlobs`) only READ, so the worst a
   -- store big enough to outlast the window costs is this process's own lock,
   -- which the next beat reports rather than writing through.
@@ -937,11 +960,15 @@ configure parsed = do
     statsInterval,
     lock,
     [
-      "serve: config did=\{did} handle=\{handle} hostname=\{hostname} data=\{dir} bind=\{listenAddress} trusted-proxy=\{yesNo (flag "--trusted-proxy" parsed)} appview=\{yesNo (isSome egress)} relay=\{yesNo (isSome relay)}",
+      "serve: config did=\{did} handle=\{handle} hostname=\{hostname} data=\{dataRoot dir} bind=\{listenAddress} trusted-proxy=\{yesNo (flag "--trusted-proxy" parsed)} appview=\{yesNo (isSome egress)} relay=\{yesNo (isSome relay)}",
       "serve: data directory lock: \{lockOutcome}",
       "serve: event log recovery: \{recoveryOutcome recovery}",
     ],
   )
+
+-- The data directory's path, for the startup line.
+dataRoot : DataDir d -> String
+dataRoot (DataDir root) = root
 
 yesNo : Bool -> String
 yesNo True = "yes"
@@ -1036,13 +1063,13 @@ announceToRelay target hostname = defer
 announce : Int ->
   Listener h ->
   Store ->
-  String ->
+  DataDir d ->
   Server e ->
   Serving ->
   Option RelayTarget ->
   Duration ->
   Int ->
-  Serve h e Unit
+  Serve h d e Unit
 announce port lis store dir server serving relay statsInterval signalFd = defer
   _ <- liftIO (u => ready port)
   _ <- match relay
@@ -1055,12 +1082,12 @@ announce port lis store dir server serving relay statsInterval signalFd = defer
 
 bound : Server e ->
   Store ->
-  String ->
+  DataDir d ->
   Serving ->
   Option RelayTarget ->
   Duration ->
   Result String (Listener h) ->
-  Serve h e Unit
+  Serve h d e Unit
 bound _ _ _ _ _ _ (Err message) =
   liftIO (u => abort "serve: bind failed: \{message}")
 bound server store dir serving relay statsInterval (Ok lis) = defer
@@ -1095,9 +1122,9 @@ bound server store dir serving relay statsInterval (Ok lis) = defer
    accept loop rather than between two requests, so the sleep is `async.sleep`,
    which parks this one task, and not `time.sleep`, which blocks the thread
    every other task shares. -}
-lockBeatLoop : DataLock ->
+lockBeatLoop : DataLock d ->
   Ref Bool ->
-  Async <Clock, FileRead, FileWrite, Stderr | e> Unit
+  Async <Clock, FileRead d, FileWrite d, Stderr | e> Unit
 lockBeatLoop lock stopping = defer
   if !stopping then
     deferPure ()
@@ -1126,8 +1153,8 @@ reportBeat (LockBeatFailed message) =
 reportBeat (LockLost message) =
   ePutStrLn "serve: data directory lock lost: \{message}"
 
-start : Result String (Server <Mint {"access", "refresh"}, Sign "commit">, Store, String, Int, Serving, Option RelayTarget, Duration, DataLock, List String) ->
-  Serve "127.0.0.1" <Mint {"access", "refresh"}, Sign "commit"> Unit
+start : Result String (Server <Mint {"access", "refresh"}, Sign "commit">, Store, DataDir "data/*", Int, Serving, Option RelayTarget, Duration, DataLock "data/*", List String) ->
+  Serve "127.0.0.1" "data/*" <Mint {"access", "refresh"}, Sign "commit"> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
 start (Ok (server, store, dir, port, serving, relay, statsInterval, lock, lines)) =
   defer
@@ -1148,18 +1175,21 @@ keygen rest = match parseArgs keygenSpec rest
     Err message => abort "keygen: \{message}"
     Ok () => ()
 
-main : Serve "127.0.0.1" <Mint {"access", "refresh"}, Sign "commit"> Unit
-main = defer
-  argv <- liftIO (u => args ())
-  match argv
-    "keygen" :: rest => liftIO (u => keygen rest)
-    -- Read off raw argv, like `keygen`: `--version` is not a `serve` flag, so
-    -- routing it through `parseArgs` would answer a version request with an
-    -- unknown-flag rejection.
-    "--version" :: _ => liftIO (u => putStrLn (versionString ()))
-    _ => defer
-      match parseArgs serveSpec argv
-        Err message => liftIO (u => abort message)
-        Ok parsed => defer
-          configured <- liftIO (u => configure parsed)
-          start configured
+{- | Everything this program may do, which is what `medaka manifest` reports:
+   `serve`'s row, plus the `secrets/` files `configure` reads and `keygen`
+   reads and writes.
+
+   Only `serve` enters the scheduler. `keygen`, `--version` and `configure`
+   each finish inside one synchronous step, so they run before it, in the
+   plain row: an `Async` row is exact, and the serving loop's row names no
+   `secrets/` file. -}
+main : <Clock, FileRead "data/*", FileRead "secrets", FileRead "secrets/key.hex", FileRead "secrets/password", FileRead "secrets/token.hex", FileWrite "data/*", FileWrite "secrets", FileWrite "secrets/key.hex", FileWrite "secrets/token.hex", Kdf, Mint {"access", "refresh"}, Net "127.0.0.1", Rand, Sign "commit", Sign "service-auth", Signal, Stderr, Stdout> Unit
+main = match args ()
+  "keygen" :: rest => keygen rest
+  -- Read off raw argv, like `keygen`: `--version` is not a `serve` flag, so
+  -- routing it through `parseArgs` would answer a version request with an
+  -- unknown-flag rejection.
+  "--version" :: _ => putStrLn (versionString ())
+  argv => match parseArgs serveSpec argv
+    Err message => abort message
+    Ok parsed => runAsyncMain (start (configure parsed))

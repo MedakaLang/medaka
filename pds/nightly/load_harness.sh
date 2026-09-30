@@ -181,8 +181,10 @@ prepare_workload() {
     fail 'corpus build failed'
   }
   cat "$WORK/corpus.out"
-  cp -R "$WORK/corpus" "$WORK/data-loaded"
-  cp -R "$WORK/corpus" "$WORK/data-control"
+  # Each server serves `data/` under its own working directory.
+  mkdir -p "$WORK/root-loaded" "$WORK/root-control"
+  cp -R "$WORK/corpus" "$WORK/root-loaded/data"
+  cp -R "$WORK/corpus" "$WORK/root-control/data"
   printf 'phase corpus seconds=%s\n' "$(($(now_seconds) - CORPUS_START))"
 
   printf '%s\n' "$SECRET_HEX" > "$WORK/key.hex"
@@ -193,10 +195,12 @@ prepare_workload() {
   chmod 600 "$WORK/key.hex" "$WORK/token.hex" "$WORK/password"
   # The server reads its secrets from fixed paths under its working
   # directory; `cp -p` keeps the modes it grades.
-  mkdir -p "$WORK/root/secrets"
-  cp -p "$WORK/key.hex" "$WORK/root/secrets/key.hex"
-  cp -p "$WORK/token.hex" "$WORK/root/secrets/token.hex"
-  cp -p "$WORK/password" "$WORK/root/secrets/password"
+  for root in "$WORK/root-loaded" "$WORK/root-control"; do
+    mkdir -p "$root/secrets"
+    cp -p "$WORK/key.hex" "$root/secrets/key.hex"
+    cp -p "$WORK/token.hex" "$root/secrets/token.hex"
+    cp -p "$WORK/password" "$root/secrets/password"
+  done
 }
 
 # ── the two servers ─────────────────────────────────────────────────────────
@@ -212,10 +216,9 @@ prepare_workload() {
 # yet, so this start derives one. Each data directory is started exactly once.
 start_server() {
   tag=$1
-  datadir=$2
-  (cd "$WORK/root" && exec "$WORK/pdsd" \
+  (cd "$WORK/root-$tag" && exec "$WORK/pdsd" \
     --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-    --data "$datadir" --port 0 --trusted-proxy) \
+    --port 0 --trusted-proxy) \
     > "$WORK/$tag.out" 2> "$WORK/$tag.err" &
   echo $! > "$WORK/$tag.pid"
   SERVER_PIDS="$SERVER_PIDS $!"
@@ -262,7 +265,7 @@ record_resource_sample() {
   case "$rss" in
     ''|*[!0-9]*) fail "could not sample RSS for loaded server PID $LOADED_PID" ;;
   esac
-  disk=$(du -sk "$WORK/data-loaded" | awk '{print $1}')
+  disk=$(du -sk "$WORK/root-loaded/data" | awk '{print $1}')
   case "$disk" in
     ''|*[!0-9]*) fail 'could not sample loaded data-directory size' ;;
   esac
@@ -442,8 +445,8 @@ fi
 
 prepare_workload
 SERVER_START=$(now_seconds)
-start_server loaded "$WORK/data-loaded"
-start_server control "$WORK/data-control"
+start_server loaded
+start_server control
 LOADED_PORT=$(wait_for_port loaded) || {
   cat "$WORK/loaded.err" >&2
   fail 'loaded server did not report readiness'

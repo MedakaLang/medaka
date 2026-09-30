@@ -53,14 +53,14 @@
 import bytes as B
 import u8 as U8
 import bytes.{Bytes, encodeUtf8, fromU8Array}
-import fs.{mkdirAll}
+import fs.{mkdirAll, mkdirAllDurably}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
-import string.{repeat, take}
+import string.{repeat}
 import lib.blob.{admitBlob, blobCid}
 import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode}
-import lib.cid.{Cid, cidDigest, cidEqual, cidToBytes, cidToString}
+import lib.cid.{Cid, cidEqual, cidToBytes, cidToString}
 import lib.credential.{CredentialRecord, makeCredential, passwordFromText}
 import lib.dagcbor.{DagCbor(..)}
 import lib.event_log_record.{
@@ -103,7 +103,10 @@ import shell.blobfile.{
   blobFileSweepStaging,
   blobFileWrite,
 }
-import shell.blockfile.{blockFileRead}
+-- The gate has to plant INSIDE a shard that really exists for a leaf-level
+-- case to be a leaf-level case, so it names shards the way both stores do.
+import shell.blockfile.{blockFileRead, shardName}
+import shell.datadir.{dataDirAt}
 import shell.eventlog.{
   eventLogApplyRecovery,
   eventLogPlanRecovery,
@@ -221,7 +224,10 @@ blocksOf repo =
 runSave : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runSave dir =
   let repo = fixtureRepo
-  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+  match (persistSave
+    (dataDirAt dir)
+    (repoCommitCid (repoLatestCommit repo))
+    (blocksOf repo))
     Err message => panic "store_persistence: save failed: \{message}"
     Ok () =>
       let () = summary "SAVE" repo
@@ -233,7 +239,10 @@ runSave dir =
 runCrashSaveOld : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runCrashSaveOld dir =
   let repo = olderRepo
-  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+  match (persistSave
+    (dataDirAt dir)
+    (repoCommitCid (repoLatestCommit repo))
+    (blocksOf repo))
     Err message =>
       panic "store_persistence: old-generation save failed: \{message}"
     Ok () =>
@@ -242,7 +251,7 @@ runCrashSaveOld dir =
 
 reload : String -> <FileRead> Result String Repo
 reload dir = do
-  (head, blocks) <- persistLoad dir
+  (head, blocks) <- persistLoad (dataDirAt dir)
   repoFromBlocks accountDid mustSecret head blocks
 
 runLoad : String -> <IO, FileRead> Unit
@@ -299,7 +308,7 @@ printBlobs label (row :: rest) =
   printBlobs label rest
 
 runBlobSave : String -> <IO, FileRead, FileWrite> Unit
-runBlobSave dir = match blobFileWrite dir blobFixtures
+runBlobSave dir = match blobFileWrite (dataDirAt dir) blobFixtures
   Err message => panic "store_persistence: blob save failed: \{message}"
   Ok () =>
     let () = printBlobs "BLOBSAVE" blobFixtures
@@ -310,7 +319,7 @@ runBlobSave dir = match blobFileWrite dir blobFixtures
 -- repository's are until `repoFromBlocks` runs.
 verifiedBlobs : String -> <FileRead> Result String (List (Cid, String, Bytes))
 verifiedBlobs dir = do
-  rows <- blobFileRead dir
+  rows <- blobFileRead (dataDirAt dir)
   _ <- blockStoreFromBlocks (map ((cid, _, bytes) => (cid, bytes)) rows)
   Ok rows
 
@@ -373,7 +382,7 @@ runBlobOversize dir =
       exit 1
     Err message =>
       let () = println "BLOB-OVERSIZE refused \{message}"
-      match blobFileRead dir
+      match blobFileRead (dataDirAt dir)
         Err readMessage =>
           panic "store_persistence: blob directory unreadable: \{readMessage}"
         Ok rows =>
@@ -402,7 +411,7 @@ fixturePrefs = [
 ]
 
 runPrefsSave : String -> <IO, FileRead, FileWrite> Unit
-runPrefsSave dir = match persistPreferences dir fixturePrefs
+runPrefsSave dir = match persistPreferences (dataDirAt dir) fixturePrefs
   Err message => panic "store_persistence: preferences save failed: \{message}"
   Ok () => println "PREFS SAVE: PASS"
 
@@ -428,12 +437,13 @@ fixtureCredential =
     Ok record => record
 
 runCredentialSave : String -> <FileWrite, IO, Kdf> Unit
-runCredentialSave dir = match persistCredential dir fixtureCredential
-  Err message => panic "store_persistence: credential save failed: \{message}"
-  Ok () => println "CREDENTIAL SAVE: PASS"
+runCredentialSave dir =
+  match persistCredential (dataDirAt dir) fixtureCredential
+    Err message => panic "store_persistence: credential save failed: \{message}"
+    Ok () => println "CREDENTIAL SAVE: PASS"
 
 runPrefsLoad : String -> <IO, FileRead> Unit
-runPrefsLoad dir = match persistLoadPreferences dir
+runPrefsLoad dir = match persistLoadPreferences (dataDirAt dir)
   Err message => panic "store_persistence: preferences load failed: \{message}"
   Ok prefs =>
     if prefs == fixturePrefs then
@@ -511,7 +521,7 @@ legacyExpires = 2000000000
    one-session family named by its own refresh fingerprint and ending at its
    own expiry, and its access token must still verify after the admission. -}
 runSessionsLegacy : String -> <IO, FileRead> Unit
-runSessionsLegacy dir = match persistLoadSessions dir
+runSessionsLegacy dir = match persistLoadSessions (dataDirAt dir)
   Err message =>
     let () = println "SESSIONS LEGACY: FAIL startup refused: \{message}"
     exit 1
@@ -540,7 +550,7 @@ runSessionsLegacy dir = match persistLoadSessions dir
 -- Admit a sessions file in the text a build without superseded rows wrote:
 -- every row must come back exactly as that build meant it.
 runSessionsBase : String -> <IO, FileRead> Unit
-runSessionsBase dir = match persistLoadSessions dir
+runSessionsBase dir = match persistLoadSessions (dataDirAt dir)
   Err message =>
     let () = println "SESSIONS BASE: FAIL startup refused: \{message}"
     exit 1
@@ -552,12 +562,12 @@ runSessionsBase dir = match persistLoadSessions dir
       exit 1
 
 runSessionsSave : String -> <IO, FileRead, FileWrite> Unit
-runSessionsSave dir = match persistSessions dir fixtureSessions
+runSessionsSave dir = match persistSessions (dataDirAt dir) fixtureSessions
   Err message => panic "store_persistence: sessions save failed: \{message}"
   Ok () => println "SESSIONS SAVE: PASS"
 
 runSessionsLoad : String -> <IO, FileRead> Unit
-runSessionsLoad dir = match persistLoadSessions dir
+runSessionsLoad dir = match persistLoadSessions (dataDirAt dir)
   Err message => panic "store_persistence: sessions load failed: \{message}"
   Ok rows =>
     if rows == fixtureSessions then
@@ -593,11 +603,11 @@ anchorLabel (Some cid) = cid
 -- entries have been promoted.
 eventSurvey : String -> String -> <IO, FileRead> Unit
 eventSurvey label dir =
-  let staged = match eventLogStaged dir
+  let staged = match eventLogStaged (dataDirAt dir)
     Err message => "staged-unreadable(\{message})"
     Ok None => "staged none"
     Ok (Some entry) => "staged \{anchorLabel entry.anchorCommitCid}"
-  let promoted = match eventLogRead dir 0
+  let promoted = match eventLogRead (dataDirAt dir) 0
     Err message => "entries-unreadable(\{message})"
     Ok entries => "entries \{intToString (length entries)}"
   println "\{label} \{staged} \{promoted}"
@@ -625,27 +635,27 @@ runEventRecover dir anchorFor =
   let repo = fixtureRepo
   let () =
     match (persistSave
-      dir
+      (dataDirAt dir)
       (repoCommitCid (repoLatestCommit repo))
       (blocksOf repo))
       Err message =>
         panic "store_persistence: event-log save failed: \{message}"
       Ok () => ()
-  let onDisk = match persistLoad dir
+  let onDisk = match persistLoad (dataDirAt dir)
     Err message =>
       panic "store_persistence: event-log head unreadable: \{message}"
     Ok (head, _) => cidToString head
   let anchor = anchorFor repo onDisk
-  match eventLogStage dir (eventFixture anchor (frameFor anchor))
+  match eventLogStage (dataDirAt dir) (eventFixture anchor (frameFor anchor))
     Err message => panic "store_persistence: event stage failed: \{message}"
     Ok () =>
       let () = eventSurvey "EVENTBEFORE" dir
-      match eventLogPlanRecovery dir (Some onDisk)
+      match eventLogPlanRecovery (dataDirAt dir) (Some onDisk)
         Err message => println "EVENT-RECOVER: ERR \{message}"
         Ok plan =>
           let () = eventSurvey "EVENTPLANNED" dir
           match (eventLogApplyRecovery
-            dir
+            (dataDirAt dir)
             plan
             eventLogRetentionSeconds
             eventFixtureTime)
@@ -689,7 +699,12 @@ runTransition : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runTransition dir =
   let before = storeFromRepo olderRepo
   let after = putBlobs blobFixtures (storeWithRepo fixtureRepo before)
-  match persistTransition dir accountDid eventFixtureTime before after
+  match (persistTransition
+    (dataDirAt dir)
+    accountDid
+    eventFixtureTime
+    before
+    after)
     Err message => panic "store_persistence: transition failed: \{message}"
     Ok () => println "TRANSITION: PASS"
 
@@ -729,7 +744,12 @@ churnSeed dir index limit store =
     Ok store
   else
     let next = putBlobs [churnRow index] store
-    match persistTransition dir accountDid eventFixtureTime store next
+    match (persistTransition
+      (dataDirAt dir)
+      accountDid
+      eventFixtureTime
+      store
+      next)
       Err message => Err message
       Ok () => churnSeed dir (index + 1) limit next
 
@@ -760,7 +780,12 @@ runBlobChurnAdd dir =
   let before = putBlobs (churnRows 1 (churnCount - 1)) (storeFromRepo olderRepo)
   let row = churnRow churnCount
   let after = putBlobs [row] before
-  match persistTransition dir accountDid eventFixtureTime before after
+  match (persistTransition
+    (dataDirAt dir)
+    accountDid
+    eventFixtureTime
+    before
+    after)
     Err message => panic "store_persistence: churn add failed: \{message}"
     Ok () => reportChurnAdd row
 
@@ -798,7 +823,10 @@ blockChurnRepo index repo =
 runBlockChurnSeed : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlockChurnSeed dir =
   let repo = blockChurnRepo 1 olderRepo
-  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+  match (persistSave
+    (dataDirAt dir)
+    (repoCommitCid (repoLatestCommit repo))
+    (blocksOf repo))
     Err message =>
       panic "store_persistence: block churn seed failed: \{message}"
     Ok () =>
@@ -819,7 +847,12 @@ runBlockChurnAdd dir =
   let next = blockChurnWrite (blockChurnCount + 1) prior
   let before = storeFromRepo prior
   let after = storeWithRepo next before
-  match persistTransition dir accountDid eventFixtureTime before after
+  match (persistTransition
+    (dataDirAt dir)
+    accountDid
+    eventFixtureTime
+    before
+    after)
     Err message => panic "store_persistence: block churn add failed: \{message}"
     Ok () =>
       let () =
@@ -848,7 +881,12 @@ runBlobRetypeSeed : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobRetypeSeed dir =
   let before = storeFromRepo olderRepo
   let after = putBlobs [retypeRow retypeFirstType] before
-  match persistTransition dir accountDid eventFixtureTime before after
+  match (persistTransition
+    (dataDirAt dir)
+    accountDid
+    eventFixtureTime
+    before
+    after)
     Err message => panic "store_persistence: retype seed failed: \{message}"
     Ok () =>
       let () =
@@ -866,7 +904,12 @@ runBlobRetypeAdd : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobRetypeAdd dir =
   let before = putBlobs [retypeRow retypeFirstType] (storeFromRepo olderRepo)
   let after = putBlobs [retypeRow retypeSecondType] before
-  match persistTransition dir accountDid eventFixtureTime before after
+  match (persistTransition
+    (dataDirAt dir)
+    accountDid
+    eventFixtureTime
+    before
+    after)
     Err message => panic "store_persistence: retype add failed: \{message}"
     Ok () =>
       let () = println "BLOB-RETYPE-ADD mime \{retypeSecondType}"
@@ -916,7 +959,7 @@ reportSweep dir blockResidue blobResidue eventResidue strayBlockFile strayBlobFi
             "store_persistence: sweep-staging blob reload failed: \{message}"
         Ok rows =>
           let () = println "SWEEP blobs \{intToString (length rows)}"
-          match eventLogRead dir 0
+          match eventLogRead (dataDirAt dir) 0
             Err message =>
               panic
                 "store_persistence: sweep-staging event reload failed: \{message}"
@@ -935,13 +978,13 @@ sweepAndReport : String ->
   String ->
   <IO, FileRead, FileWrite> Unit
 sweepAndReport dir blockResidue blobResidue eventResidue strayBlockFile strayBlobFile strayEventFile =
-  match persistSweepStagedBlocks dir
+  match persistSweepStagedBlocks (dataDirAt dir)
     Err message =>
       panic "store_persistence: block staging sweep failed: \{message}"
-    Ok () => match blobFileSweepStaging dir
+    Ok () => match blobFileSweepStaging (dataDirAt dir)
       Err message =>
         panic "store_persistence: blob staging sweep failed: \{message}"
-      Ok () => match eventLogSweepStaging dir
+      Ok () => match eventLogSweepStaging (dataDirAt dir)
         Err message =>
           panic "store_persistence: event staging sweep failed: \{message}"
         Ok () =>
@@ -1025,14 +1068,19 @@ persistFixtureTree : String ->
 persistFixtureTree dir =
   let repo = fixtureRepo
   do
+    () <- mkdirAllDurably dir
     () <- persistSave
-      dir
+      (dataDirAt dir)
       (repoCommitCid (repoLatestCommit repo))
       (blocksOf repo)
-    () <- blobFileWrite dir blobFixtures
-    () <- eventLogStage dir (eventFixture None (frameFor None))
-    plan <- eventLogPlanRecovery dir None
-    eventLogApplyRecovery dir plan eventLogRetentionSeconds eventFixtureTime
+    () <- blobFileWrite (dataDirAt dir) blobFixtures
+    () <- eventLogStage (dataDirAt dir) (eventFixture None (frameFor None))
+    plan <- eventLogPlanRecovery (dataDirAt dir) None
+    eventLogApplyRecovery
+      (dataDirAt dir)
+      plan
+      eventLogRetentionSeconds
+      eventFixtureTime
 
 {- | Persist a repository, blobs and one promoted event entry — the
    legitimate content a normal, uninterrupted run leaves behind — then plant
@@ -1064,12 +1112,6 @@ plantDir path = do
   () <- mkdirAll path
   _ <- plantFile "\{path}/inner"
   Ok path
-
--- The shard a CID's bytes land in. Re-derived here rather than imported: both
--- stores keep this arithmetic private, and the gate has to plant INSIDE a
--- shard that really exists for a leaf-level case to be a leaf-level case.
-shardOf : Cid -> String
-shardOf cid = take 2 (encode (cidDigest cid))
 
 cidName : Cid -> String
 cidName cid = encode (cidToBytes cid)
@@ -1120,10 +1162,10 @@ strayMessage label reader (Err message) =
    server cannot serve. -}
 straySurvey : String -> String -> <IO, FileRead> Unit
 straySurvey label dir =
-  let blocks = map length (blockFileRead "\{dir}/blocks")
-  let blobs = map length (blobFileRead dir)
-  let counted = blobFileCount dir
-  let events = map length (eventLogRead dir 0)
+  let blocks = map length (blockFileRead (dataDirAt dir))
+  let blobs = map length (blobFileRead (dataDirAt dir))
+  let counted = blobFileCount (dataDirAt dir)
+  let events = map length (eventLogRead (dataDirAt dir) 0)
   let () =
     println
       "STRAY \{label} blocks \{strayVerdict blocks} blobs \{strayVerdict blobs} count \{strayVerdict counted} events \{strayVerdict events}"
@@ -1151,10 +1193,10 @@ strayCase root label plant =
         straySurvey label dir
 
 blockShardPath : String -> <Sign "commit"> String
-blockShardPath dir = "\{dir}/blocks/\{shardOf (repoRootCid fixtureRepo)}"
+blockShardPath dir = "\{dir}/blocks/\{shardName (repoRootCid fixtureRepo)}"
 
 blobShardPath : String -> String
-blobShardPath dir = "\{blobDir dir}/\{shardOf firstBlobCid}"
+blobShardPath dir = "\{blobDir (dataDirAt dir)}/\{shardName firstBlobCid}"
 
 -- A bytes-file name spelling a valid CID, beside a sidecar of its own, but
 -- carried by a DIRECTORY. Name arithmetic alone reads it as a blob, which is
@@ -1200,10 +1242,11 @@ runStrayEntries root =
   let () = strayCase root "blocks-leaf-cid" (dir =>
     plantDir "\{blockShardPath dir}/\{cidName firstBlobCid}")
   let () = strayCase root "blobs-top-file" (dir =>
-    plantFile "\{blobDir dir}/.DS_Store")
-  let () =
-    strayCase root "blobs-top-dir" (dir => plantDir "\{blobDir dir}/stray-dir")
-  let () = strayCase root "blobs-top-shard" (dir => plantShard (blobDir dir))
+    plantFile "\{blobDir (dataDirAt dir)}/.DS_Store")
+  let () = strayCase root "blobs-top-dir" (dir =>
+    plantDir "\{blobDir (dataDirAt dir)}/stray-dir")
+  let () = strayCase root "blobs-top-shard" (dir =>
+    plantShard (blobDir (dataDirAt dir)))
   let () = strayCase root "blobs-leaf-file" (dir =>
     plantFile "\{blobShardPath dir}/.DS_Store")
   let () = strayCase root "blobs-leaf-dir" (dir =>
@@ -1237,7 +1280,7 @@ printGenesis (entry :: rest) =
   printGenesis rest
 
 genesisSurvey : String -> <IO, FileRead> Unit
-genesisSurvey dir = match eventLogRead dir 0
+genesisSurvey dir = match eventLogRead (dataDirAt dir) 0
   Err message => panic "store_persistence: genesis log unreadable: \{message}"
   Ok entries =>
     let () = printGenesis entries
@@ -1254,7 +1297,7 @@ runGenesisResume dir = match reload dir
   Err message => panic "store_persistence: genesis reload failed: \{message}"
   Ok repo =>
     match (completeGenesisEvents
-      dir
+      (dataDirAt dir)
       accountDid
       genesisHandle
       eventFixtureTime
@@ -1278,7 +1321,7 @@ runGenesisGuard dir = match reload dir
   Err message => panic "store_persistence: genesis reload failed: \{message}"
   Ok repo =>
     match (completeGenesisEvents
-      dir
+      (dataDirAt dir)
       accountDid
       genesisHandle
       genesisSecondStartTime
@@ -1299,44 +1342,61 @@ runGenesisGuard dir = match reload dir
 runGenesisInit : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runGenesisInit dir =
   let repo = fixtureRepo
-  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+  match (persistSave
+    (dataDirAt dir)
+    (repoCommitCid (repoLatestCommit repo))
+    (blocksOf repo))
     Err message => panic "store_persistence: genesis save failed: \{message}"
     Ok () => runGenesisResume dir
 
+{- | Every mode runs over a data directory that exists, created here when the
+   gate names a fresh path: the shell's stores never create the data
+   directory itself, and `pds/serve.mdk` refuses to start without one. It is
+   created durably, because the barrier test grades every directory a route
+   creates. -}
 main : <Env, FileRead, FileWrite, IO, Kdf, Sign "commit"> Unit
 main = match args ()
-  ["save", dir] => runSave dir
-  ["crash-save-old", dir] => runCrashSaveOld dir
-  ["load", dir] => runLoad dir
-  ["reject", dir] => runReject dir
-  ["blob-save", dir] => runBlobSave dir
-  ["blob-load", dir] => runBlobLoad dir
-  ["blob-survey", dir] => runBlobSurvey dir
-  ["blob-reject", dir] => runBlobReject dir
-  ["blob-oversize", dir] => runBlobOversize dir
-  ["prefs-save", dir] => runPrefsSave dir
-  ["prefs-load", dir] => runPrefsLoad dir
-  ["sessions-save", dir] => runSessionsSave dir
-  ["sessions-load", dir] => runSessionsLoad dir
-  ["sessions-legacy", dir] => runSessionsLegacy dir
-  ["sessions-base", dir] => runSessionsBase dir
-  ["credential-save", dir] => runCredentialSave dir
-  ["event-recover-owed", dir] => runEventRecover dir (_ head => Some head)
-  ["event-recover-orphan", dir] =>
-    runEventRecover dir (repo _ => Some (cidToString (repoRootCid repo)))
-  ["event-recover-unanchored", dir] => runEventRecover dir (_ _ => None)
-  ["transition", dir] => runTransition dir
-  ["blob-churn-seed", dir] => runBlobChurnSeed dir
-  ["blob-churn-add", dir] => runBlobChurnAdd dir
-  ["block-churn-seed", dir] => runBlockChurnSeed dir
-  ["block-churn-add", dir] => runBlockChurnAdd dir
-  ["blob-retype-seed", dir] => runBlobRetypeSeed dir
-  ["blob-retype-add", dir] => runBlobRetypeAdd dir
-  ["sweep-staging", dir] => runSweepStaging dir
-  ["stray-entries", dir] => runStrayEntries dir
-  ["genesis-init", dir] => runGenesisInit dir
-  ["genesis-resume", dir] => runGenesisResume dir
-  ["genesis-guard", dir] => runGenesisGuard dir
-  _ =>
-    panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|sessions-save|sessions-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|blob-churn-seed|blob-churn-add|block-churn-seed|block-churn-add|blob-retype-seed|blob-retype-add|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"
+  [mode, dir] => match mkdirAllDurably dir
+    Err message =>
+      panic "store_persistence: cannot create data directory \{dir}: \{message}"
+    Ok () => runMode mode dir
+  _ => panic usage
+
+usage : String
+usage =
+  "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|sessions-save|sessions-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|blob-churn-seed|blob-churn-add|block-churn-seed|block-churn-add|blob-retype-seed|blob-retype-add|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"
+
+runMode : String -> String -> <FileRead, FileWrite, IO, Kdf, Sign "commit"> Unit
+runMode "save" dir = runSave dir
+runMode "crash-save-old" dir = runCrashSaveOld dir
+runMode "load" dir = runLoad dir
+runMode "reject" dir = runReject dir
+runMode "blob-save" dir = runBlobSave dir
+runMode "blob-load" dir = runBlobLoad dir
+runMode "blob-survey" dir = runBlobSurvey dir
+runMode "blob-reject" dir = runBlobReject dir
+runMode "blob-oversize" dir = runBlobOversize dir
+runMode "prefs-save" dir = runPrefsSave dir
+runMode "prefs-load" dir = runPrefsLoad dir
+runMode "sessions-save" dir = runSessionsSave dir
+runMode "sessions-load" dir = runSessionsLoad dir
+runMode "sessions-legacy" dir = runSessionsLegacy dir
+runMode "sessions-base" dir = runSessionsBase dir
+runMode "credential-save" dir = runCredentialSave dir
+runMode "event-recover-owed" dir = runEventRecover dir (_ head => Some head)
+runMode "event-recover-orphan" dir =
+  runEventRecover dir (repo _ => Some (cidToString (repoRootCid repo)))
+runMode "event-recover-unanchored" dir = runEventRecover dir (_ _ => None)
+runMode "transition" dir = runTransition dir
+runMode "blob-churn-seed" dir = runBlobChurnSeed dir
+runMode "blob-churn-add" dir = runBlobChurnAdd dir
+runMode "block-churn-seed" dir = runBlockChurnSeed dir
+runMode "block-churn-add" dir = runBlockChurnAdd dir
+runMode "blob-retype-seed" dir = runBlobRetypeSeed dir
+runMode "blob-retype-add" dir = runBlobRetypeAdd dir
+runMode "sweep-staging" dir = runSweepStaging dir
+runMode "stray-entries" dir = runStrayEntries dir
+runMode "genesis-init" dir = runGenesisInit dir
+runMode "genesis-resume" dir = runGenesisResume dir
+runMode "genesis-guard" dir = runGenesisGuard dir
+runMode _ _ = panic usage

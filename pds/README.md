@@ -92,13 +92,17 @@ the shell is native-bound.
   eight read/sync/identity queries (`getRecord`/`listRecords`/`describeRepo`/
   `sync.getRepo`/`sync.getLatestCommit`/`sync.getBlob`/`sync.listBlobs`/
   `identity.resolveHandle`), and the two non-XRPC well-known paths.
-- `pds/shell/` — native-only effectful adapters. `pds/shell/blockfile.mdk`
+- `pds/shell/` — native-only effectful adapters. `pds/shell/datadir.mdk` is
+  the data directory, fixed at `data/` under the working directory: every
+  shell function that reaches the disk takes its `DataDir`, so their rows
+  name the `data/*` subtree rather than the bare file labels.
+  `pds/shell/blockfile.mdk`
   stores blocks as flat sharded CID-to-bytes files (design row P7),
   `pds/shell/persist.mdk` persists and reloads the account repository's head
   commit, `pds/shell/blobfile.mdk` does the same for the blob half under a
   `blobs/` directory SIBLING to `blocks/` (a blob is not part of the signed
   block graph), `pds/shell/dirlock.mdk` is the single-writer lock that keeps
-  two processes off one `--data` directory, and `pds/shell/server.mdk` is the
+  two processes off one data directory, and `pds/shell/server.mdk` is the
   accept loop and the
   per-connection HTTP/1.1 lifecycle. The dependency runs one way only: a shell
   module may import `pds/lib/`, and no `pds/lib/` module may ever import
@@ -112,8 +116,11 @@ the shell is native-bound.
 - `pds/serve.mdk` — the entry point. It admits every configuration value before
   binding anything, rehydrates the repository from disk under the configured
   signing key, and hands `pds/shell/server.mdk` a listener and the one
-  `Ref Store` all connection tasks share. Its `main` is an `Async` value, so
-  `medaka build pds/serve.mdk` produces a program the async scheduler drives.
+  `Ref Store` all connection tasks share. Its `main` runs `configure` (or
+  `keygen`) in one synchronous step and then hands the serving loop to the
+  async scheduler (`runAsyncMain`), so `medaka build pds/serve.mdk` produces a
+  program the scheduler drives. There is no `--data` flag: the server serves
+  `data/` under its working directory, which must already exist.
   The listener is bound by `shell.server`'s `bindAddress` at the fixed
   loopback address, so its type is `Listener "127.0.0.1"` and every
   connection it accepts is charged `Net "127.0.0.1"`; there is no bind flag.

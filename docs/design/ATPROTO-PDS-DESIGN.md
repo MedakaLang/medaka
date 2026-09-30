@@ -14,7 +14,7 @@ domain at a real key is a manual, deliberate act still to be taken. Backup and
 restore are now rehearsed rather than merely described (`#2613`): §3.1 below
 states the procedure's consistency rule and `docs/ops/PDS-DEPLOY.md`
 § "Backup and restore" carries the steps, with case 33 of
-`pds/test/serve_e2e.sh` restoring a backup into a separate `--data` directory
+`pds/test/serve_e2e.sh` restoring a backup into a separate data directory
 and grading the server that starts on it. Still open, tracked separately rather
 than blocking that act: `#2572` (the block store never collects unreferenced
 blocks, and a stray non-directory file under the store directory hard-fails
@@ -145,7 +145,7 @@ explicit successor `Store`.
 
 ### 3.1 Backup, restore, and the torn-copy hazard
 
-**A file-level backup of `--data` must be taken with the server stopped (or from
+**A file-level backup of `data/` must be taken with the server stopped (or from
 an atomic filesystem or volume snapshot); the online alternative is to snapshot
 the repository through the server's own request path
 (`com.atproto.sync.getRepo`), which is serialized with writes and therefore
@@ -162,7 +162,7 @@ restore" documents is the stopped-server file copy, with the CAR export as the
 consistent online snapshot of the repository half and as the format a restore
 into a different implementation would use. Case 33 of `pds/test/serve_e2e.sh`
 rehearses the documented procedure end to end: a backup, a restore into a
-SEPARATE `--data` directory, and a server started on the restored copy whose
+SEPARATE data directory, and a server started on the restored copy whose
 `getRepo` export byte-matches the original's, serves both blobs under their
 declared media types, and accepts a new signed write.
 
@@ -874,7 +874,7 @@ pipelined, and keep-alive requests; a chunked-transfer write; each of the nine X
 NSIDs and both well-knowns, every one driven over the socket rather than read off the
 registry; a malformed request and an over-cap body, both rejected rather than hung;
 the idle-connection timeout; and restart-and-resume across a process boundary against
-the same `--data` directory. `pds/test/lib_boundary_test.mdk` closes out #2481 itself:
+the same data directory. `pds/test/lib_boundary_test.mdk` closes out #2481 itself:
 `pds/lib/` never imports `pds/shell/`, every `pds/lib/*.mdk` export carries an
 explicit type signature, and none of those signatures declares an effect row, so the
 pure core stays reachable from every engine Phase 3 does not run on. The signature
@@ -882,7 +882,7 @@ half is load-bearing rather than stylistic: an export with no signature gets an
 inferred effect row, which a check that reads declared rows cannot see.
 
 **One writer per data directory, and the reuse that IS blessed is sequential.**
-The restart-and-resume case above — a second process over the same `--data`
+The restart-and-resume case above — a second process over the same `data/`
 directory once the first has exited — is supported and gated. CONCURRENT reuse
 is not, and the difference is destructive rather than merely racy: every start
 sweeps the three `.staging` directories, which is sound only because a file
@@ -891,7 +891,7 @@ other process is between a write and its `rename`. A second concurrent server
 turns the first one's in-flight promotion into residue and deletes it. Nothing
 in the on-disk layout made the window exclusive, so `pds/shell/dirlock.mdk`
 does: `configure` takes `<data>/.lock` after `requireDir` and before the first
-thing that reads or writes anything beneath `--data` — ahead of both `openRepo`
+thing that reads or writes anything beneath `data/` — ahead of both `openRepo`
 and the three sweeps — so a second process is refused before it can destroy
 what it was refused for (`#3059`). `<data>/.lock` itself is not the lock and
 owns nothing: any number of processes may create that directory, and its

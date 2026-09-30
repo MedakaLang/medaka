@@ -48,6 +48,7 @@ import lib.websocket.{
 import net.{Connection}
 import net_async as A
 import shell.eventlog.{eventLogLast, eventLogRead}
+import shell.datadir.{DataDir}
 import shell.rows.{Streaming}
 import time.{Duration, millis}
 
@@ -136,13 +137,13 @@ messageTooBigCloseCode = 1009
    is the one bound that still applies to it. A reader that stops reading
    stalls exactly one write and is then closed. -}
 export
-runSubscription : String ->
+runSubscription : DataDir d ->
   Duration ->
   Connection h ->
   String ->
   Option Int ->
   Bytes ->
-  Streaming h e (Result String Unit)
+  Streaming h d e (Result String Unit)
 runSubscription dir budget conn accept cursor pending = defer
   opened <- A.sendAllWithin budget conn (handshakeResponseBytes accept)
   match opened
@@ -156,12 +157,12 @@ newestSeq : Option Int -> Int
 newestSeq None = 0
 newestSeq (Some seq) = seq
 
-openStream : String ->
+openStream : DataDir d ->
   Duration ->
   Connection h ->
   Option Int ->
   Bytes ->
-  Streaming h e (Result String Unit)
+  Streaming h d e (Result String Unit)
 openStream dir budget conn cursor pending = defer
   last <- liftIO (u => eventLogLast dir)
   match last
@@ -181,13 +182,13 @@ openStream dir budget conn cursor pending = defer
 
    A client that sent no cursor at all asks for the live tail and gets it: no
    replay, no gap, nothing to announce. -}
-gradeCursor : String ->
+gradeCursor : DataDir d ->
   Duration ->
   Connection h ->
   Option Int ->
   Bytes ->
   Int ->
-  Streaming h e (Result String Unit)
+  Streaming h d e (Result String Unit)
 gradeCursor dir budget conn None pending newest =
   tailFrom dir budget conn newest noReassembly pending
 gradeCursor dir budget conn (Some wanted) pending newest =
@@ -227,13 +228,13 @@ refuseFuture budget conn wanted newest =
     Err message => deferPure (Err message)
     Ok payload => sendPayloadThenClose budget conn payload
 
-announceOutdated : String ->
+announceOutdated : DataDir d ->
   Duration ->
   Connection h ->
   Int ->
   Bytes ->
   List EventLogEntry ->
-  Streaming h e (Result String Unit)
+  Streaming h d e (Result String Unit)
 announceOutdated dir budget conn wanted pending replay =
   let framed =
     syncInfoFrame
@@ -247,13 +248,13 @@ announceOutdated dir budget conn wanted pending replay =
         Err message => deferPure (Err message)
         Ok () => replayThenTail dir budget conn wanted pending replay
 
-replayThenTail : String ->
+replayThenTail : DataDir d ->
   Duration ->
   Connection h ->
   Int ->
   Bytes ->
   List EventLogEntry ->
-  Streaming h e (Result String Unit)
+  Streaming h d e (Result String Unit)
 replayThenTail dir budget conn wanted pending replay = defer
   delivered <- sendEntries budget conn wanted replay
   match delivered
@@ -320,13 +321,13 @@ sendClose budget conn code = defer
    the poll cheap: the log is read from it, not from the connection's opening
    cursor, so a long-lived subscriber never re-reads what it has already been
    sent. -}
-tailFrom : String ->
+tailFrom : DataDir d ->
   Duration ->
   Connection h ->
   Int ->
   Reassembly ->
   Bytes ->
-  Streaming h e (Result String Unit)
+  Streaming h d e (Result String Unit)
 tailFrom dir budget conn lastSeq pending buffered = defer
   stopping <- liftIO (u => pdsSignalRequested ())
   if stopping then
@@ -334,13 +335,13 @@ tailFrom dir budget conn lastSeq pending buffered = defer
   else
     tailStep dir budget conn lastSeq pending buffered
 
-tailStep : String ->
+tailStep : DataDir d ->
   Duration ->
   Connection h ->
   Int ->
   Reassembly ->
   Bytes ->
-  Streaming h e (Result String Unit)
+  Streaming h d e (Result String Unit)
 tailStep dir budget conn lastSeq pending buffered =
   let step = clientStep pending buffered
   match step
@@ -368,13 +369,13 @@ tailStep dir budget conn lastSeq pending buffered =
           else
             deferPure (Err message)
 
-pollLog : String ->
+pollLog : DataDir d ->
   Duration ->
   Connection h ->
   Int ->
   Reassembly ->
   Bytes ->
-  Streaming h e (Result String Unit)
+  Streaming h d e (Result String Unit)
 pollLog dir budget conn lastSeq pending buffered = defer
   last <- liftIO (u => eventLogLast dir)
   match last
@@ -385,13 +386,13 @@ pollLog dir budget conn lastSeq pending buffered = defer
       else
         deliverNew dir budget conn lastSeq pending buffered
 
-deliverNew : String ->
+deliverNew : DataDir d ->
   Duration ->
   Connection h ->
   Int ->
   Reassembly ->
   Bytes ->
-  Streaming h e (Result String Unit)
+  Streaming h d e (Result String Unit)
 deliverNew dir budget conn lastSeq pending buffered = defer
   fresh <- liftIO (u => eventLogRead dir lastSeq)
   match fresh

@@ -34,6 +34,7 @@ import lib.sign.{
 import lib.tid.{Tid, tidParse, tidToString}
 import crypto.sha256.{sha256}
 import shell.blobfile.{blobFileWrite}
+import shell.datadir.{dataDirAt}
 import shell.persist.{persistSave}
 
 -- ── fixed account identity ──────────────────────────────────────────────────
@@ -219,11 +220,11 @@ runBuild shape dir count blobCount seed =
     signedCommit corpusDid corpusSecret corpusRev dataCid
   let allBlocks =
     (commitCid, signed) :: mstNodeBlocks tree ++ recordBlocksOf rows
-  match persistSave dir commitCid allBlocks
+  match persistSave (dataDirAt dir) commitCid allBlocks
     Err message => panic "synth_repo: persist failed: \{message}"
     Ok () =>
       let blobRows = buildBlobRows seed blobCount
-      match blobFileWrite dir blobRows
+      match blobFileWrite (dataDirAt dir) blobRows
         Err message => panic "synth_repo: blob persist failed: \{message}"
         Ok () =>
           let () = println "shape \{shape}"

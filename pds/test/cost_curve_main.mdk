@@ -50,6 +50,7 @@ import lib.store.{
 }
 import lib.sync_event.{syncCommitEventFor}
 import shell.blobfile.{blobFileRead}
+import shell.datadir.{dataDirAt}
 import shell.persist.{persistLoad}
 import shell.server.{persistTransition}
 import test.fixture_support.{testKey, testNonce}
@@ -81,7 +82,7 @@ corpusSecret =
 
 loadRepo : String -> <FileRead> Repo
 loadRepo dir =
-  let (head, blocks) = match persistLoad dir
+  let (head, blocks) = match persistLoad (dataDirAt dir)
     Ok value => value
     Err message => panic "cost_curve: corpus load failed: \{message}"
   match repoFromBlocks corpusDid corpusSecret head blocks
@@ -98,7 +99,7 @@ admitBlobs ((cid, mimeType, bytes) :: rest) store =
 loadStore : String -> <FileRead, Mint "access"> Store
 loadStore dir =
   let base = storeFromRepo (loadRepo dir)
-  let withBlobs = match blobFileRead dir
+  let withBlobs = match blobFileRead (dataDirAt dir)
     Ok rows => admitBlobs rows base
     Err message => panic "cost_curve: corpus blobs unreadable: \{message}"
   let next = storeWithServerSecret testKey withBlobs
@@ -235,7 +236,12 @@ repeatPersist : String -> Store -> Int -> <FileRead, FileWrite> Unit
 repeatPersist dir store n =
   if n <= 0 then
     ()
-  else match persistTransition dir corpusDid benchInstant store store
+  else match (persistTransition
+    (dataDirAt dir)
+    corpusDid
+    benchInstant
+    store
+    store)
     Ok () => repeatPersist dir store (n - 1)
     Err message => panic "cost_curve: persistTransition failed: \{message}"
 
