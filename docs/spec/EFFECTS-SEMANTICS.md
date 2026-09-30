@@ -573,7 +573,13 @@ the suffix, a same-body
 `let`, a branch join) and otherwise the argument's checked type: the qualifier
 of a `τ @q` when `q` is an element of the domain, else the domain's top (a
 qualifier of another domain, such as another schema's Product, bounds
-nothing here). A flexible `κ` accumulates lower bounds by
+nothing here). The same judgment checks every expression that flows into a
+declared qualified type: a signed binding's body against its declared result
+(a value binding's against its whole signature, `v : String @"cfg/*"`), a
+lambda or method body against the arrow it is checked against, and an
+annotated expression against its annotation. The expression then has the
+declared type, so a use of the binding reads the declared qualifier, never the
+body's abstraction. A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the
 least solution, variables bounded by each other collapsing to one representative
 first. A pattern-ranging `κ` takes the least solution among patterns, `π` of

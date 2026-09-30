@@ -20234,11 +20234,7 @@ inferExpected env (ELam pats body) expected = match normalize expected
     let _ = match exprLoc body
       Some l => currentLoc := Some l
       None => ()
-    inferLamChecked
-      env
-      (expectedParamTypes (normalize expected) (listLen pats))
-      pats
-      body
+    inferLamChecked env (Some (normalize expected)) pats body
   _ => infer env (ELam pats body)
 inferExpected env e expected =
   -- The order only matters when an ARROW ROW sits inside a type-constructor
@@ -20306,11 +20302,7 @@ inferAppArgsAgainst env appSoFar ft (x :: rest) =
   let xt = match lamUnderLoc x
     Some (loc, pats, body) =>
       let _ = setLocIfSome loc
-      inferLamChecked
-        env
-        (expectedParamTypes (funDomain (normalize ft)) (listLen pats))
-        pats
-        body
+      inferLamChecked env (Some (funDomain (normalize ft))) pats body
     None => inferExpected env x (funDomain (normalize ft))
   let res = inferApp env (EApp appSoFar x) ft xt
   inferAppArgsAgainst env (EApp appSoFar x) res rest
@@ -20327,13 +20319,10 @@ inferAppArgsAgainst env appSoFar ft (x :: rest) =
 -- than copying the first value's closed rows. Other shape equations use ordinary
 -- `unify`, including the order a plain type mismatch names the two sides in:
 -- `unifyInto` names the slot first,
--- as a call argument's `unify` did; `unifyIntoValueFirst` names the value first,
--- as an annotation's and a supplied field's did.
+-- as a call argument's `unify` did; `unifyIntoOrd True` names the value first,
+-- as an annotation and a supplied field do (through `argumentIntoOrd`).
 unifyInto : Bool -> Mono -> Mono -> Unit
 unifyInto pos e a = unifyIntoOrd False pos e a
-
-unifyIntoValueFirst : Bool -> Mono -> Mono -> Unit
-unifyIntoValueFirst pos e a = unifyIntoOrd True pos e a
 
 -- [valueFirst] is only the operand order of the fallback `unify`.
 unifyIntoOrd : Bool -> Bool -> Mono -> Mono -> Unit
@@ -20495,12 +20484,7 @@ inferAppExpr env f x = match lamUnderLoc x
     -- ft is `(lamType) -> result`; its FIRST domain is the lambda's expected
     -- type.  Peel that, then peel the lambda type itself for its per-param types.
     let lamExpected = funDomain (normalize ft)
-    let xt =
-      inferLamChecked
-        env
-        (expectedParamTypes lamExpected (listLen pats))
-        pats
-        body
+    let xt = inferLamChecked env (Some lamExpected) pats body
     inferApp env (EApp f x) ft xt
   None => match shadowStandaloneSpineHeadAt env f
     -- #2154: the IMPORTER-side spine arm, mirroring #1815's definer spine arms — it
@@ -21977,22 +21961,33 @@ expectedParamTypes (TFun a _ b) n =
   a :: expectedParamTypes (normalize b) (n - 1)
 expectedParamTypes _ _ = []
 
--- like inferLam, but each lambda param is unified with the corresponding expected
--- param type (from the function being applied) right after inferPat — so the body
--- and the hover side-channel see the expected type, not a bare fresh var.
-inferLamChecked : TcEnv -> List Mono -> List Pat -> Expr -> Mono
+-- like inferLam, but checked against the arrow [expected] it flows into, when
+-- one is known: each lambda param is unified with the corresponding expected
+-- param type right after inferPat — so the body and the hover side-channel see
+-- the expected type, not a bare fresh var — and the body flows into the
+-- expected result (`checkedInto`).
+inferLamChecked : TcEnv -> Option Mono -> List Pat -> Expr -> Mono
 inferLamChecked env expected pats body =
   fst (inferBindingChecked env expected pats body)
 
-inferBindingChecked : TcEnv -> List Mono -> List Pat -> Expr -> (Mono, EffRow)
+inferBindingChecked : TcEnv -> Option Mono -> List Pat -> Expr -> (Mono, EffRow)
 inferBindingChecked env expected pats body =
   let lits = takePatLits ()
   let pr = inferPats env pats
-  let _ = unifyParamsExpected (fst pr) expected
+  let arity = listLen pats
+  let _ = match expected
+    Some want => unifyParamsExpected (fst pr) (expectedParamTypes want arity)
+    None => ()
   let scope = openExistentialScope (takeOpenedExistentials ())
   let _ = settlePatLits lits
   let (bodyTy, bodyEff) = captureEffects perRun.value.curEffect joinCellOf (_ =>
-    infer (extendLocalVars env (snd pr)) body)
+    let bodyEnv = extendLocalVars env (snd pr)
+    let actual = infer bodyEnv body
+    match expected
+      Some want => match resultAfterArrows arity want
+        Some result => checkedInto bodyEnv body result actual
+        None => actual
+      None => actual)
   let _ = closeExistentialScope scope bodyTy (exprLoc body)
   let force = if isEmptyL pats then bodyEff else pureRow
   (arrowsWithLastEffect (fst pr) bodyEff bodyTy, force)
@@ -22372,6 +22367,20 @@ argumentIntoOrd valueFirst env arg dom xt = match normalize dom
     wantAuthority (argumentAuthority env (authDomainTop q) arg xt) q
   _ => unifyIntoOrd valueFirst True dom xt
 
+-- The same judgment for an expression that flows into a declared type rather
+-- than a parameter: a signed body into its result, a lambda or method body into
+-- the arrow it is checked against. A qualified declared type bounds the
+-- expression's abstraction, and the expression then has the declared type, so
+-- every use reads the declared qualifier. Any other declared type is left to
+-- the caller's own directed check, and [actual] is returned unchanged.
+checkedInto : TcEnv -> Expr -> Mono -> Mono -> Mono
+checkedInto env e expected actual = match normalize expected
+  TQual _ _ =>
+    let _ = setLocIfSome (exprLoc e)
+    let _ = argumentInto env (Some e) expected actual
+    expected
+  _ => actual
+
 -- The same judgment where only the argument's type is at hand (a pipe, a
 -- composition, a dispatch spine): the type's own qualifier or the top.
 applicationRowTyped : Mono -> Mono -> Mono -> EffRow
@@ -22467,7 +22476,7 @@ inferLam env pats body =
   let _ = match exprLoc body
     Some l => currentLoc := Some l
     None => ()
-  inferLamChecked env [] pats body
+  inferLamChecked env None pats body
 
 -- The first Bool (`mut`) is always False — `let mut` is a parser error (beta
 -- mutability model), so no inline mut-let path remains here.
@@ -22888,7 +22897,9 @@ inferAnnot env e ty =
   let t = infer env e
   let pair = astTypeFreshTbl ty
   let annot = fst pair
-  let _ = unifyIntoValueFirst True annot t
+  -- The annotated expression flows into the written type as an argument
+  -- into its parameter: a qualified annotation bounds its abstraction.
+  let _ = argumentIntoOrd True env (Some e) annot t
   let _ = checkAnnotTooGeneral ty (map snd (snd pair))
   annot
 
@@ -37704,11 +37715,7 @@ checkMethodBodyAgainst : TcEnv ->
 checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats body =
   let oblSnapshot = wSnapshot perRun.value.implObls
   let (inferErred, inferred) = erredDuring (_ =>
-    inferBindingChecked
-      env
-      (expectedParamTypes (normalize inst.mbiExpected) (listLen pats))
-      pats
-      body)
+    inferBindingChecked env (Some (normalize inst.mbiExpected)) pats body)
   let actual = fst inferred
   let check =
     if inferErred && gatesBodyCascade kind then
@@ -41562,7 +41569,7 @@ preunifySigsEx sigs (member :: rest) =
         ebMethodRow = None,
         ebStandalone = None,
       }
-      let _ = unify v signedMono
+      let _ = bindFrom v signedMono
       let regs = [
         ConstraintReg {
           crName = m,
@@ -42082,7 +42089,12 @@ inferClauseEff env peel (pats, body) =
     (_ => match peel
       Some src => match resultAfterArrows (listLen pats) src
         Some expected =>
-          inferExpected (extendLocalVars env (snd pr)) body expected
+          let bodyEnv = extendLocalVars env (snd pr)
+          checkedInto
+            bodyEnv
+            body
+            expected
+            (inferExpected bodyEnv body expected)
         None => infer (extendLocalVars env (snd pr)) body
       None => infer (extendLocalVars env (snd pr)) body)
   let _ = closeExistentialScope scope bodyTy (exprLoc body)

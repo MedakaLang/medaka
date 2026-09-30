@@ -483,7 +483,50 @@ error: authority.mdk:6:32: The qualifier names 'dir', but no binder domain, effe
 A helper like `same` may return its argument, or a value derived from it that
 keeps its authority, but not an extension of it: `dir ++ "/index"` in the
 result is the whole domain, for the reason an extension in a row is, unless
-the binder ranges over patterns.
+the binder ranges over patterns ([below](#pattern-ranging-binders)).
+
+A qualifier may also be a literal, `String @"cfg/*"`. The written qualifier
+of a result or a value is a bound. The body is abstracted by the rules in "How
+the compiler reads a path", as an argument is, and the result must lie within
+the bound. A use then sees the qualifier the signature wrote, not the body:
+
+```medaka
+effect Store Prefix
+
+load : (path : String) -> <Store path> Int
+load _ = 1
+
+configFile : String @"cfg/*"
+configFile = "cfg/app.toml"
+
+pickConfig : Bool -> String @"cfg/*"
+pickConfig useApp = if useApp then "cfg/app.toml" else "cfg/db.toml"
+
+main =
+  println (load configFile)
+  println (load (pickConfig True))
+```
+
+```medaka-expect
+1
+1
+```
+
+`check` prints `configFile : String @"cfg/*"` and
+`main : <Stdout, Store "cfg/*"> Unit`. A use of `configFile` is charged the
+pattern its signature promises, not the one file its body names, so the body
+can change within `cfg/` without changing any caller's row. The same holds
+across modules, which is how one module hands another an address it may
+reach: an exported `loopback : String @"127.0.0.1"` passed to
+`netTcpConnect` is charged `<Net "127.0.0.1">` in the importing module. A
+body outside the bound is refused where it is written:
+
+```
+error: authority.mdk:7:13: Binding 'configFile' reaches "secrets/key" where its declared bound admits only "cfg/*". Stay within the declared bound, or widen it to cover what the body reaches
+  |
+7 | configFile = "secrets/key"
+  |              ^
+```
 
 ### Pattern-ranging binders
 

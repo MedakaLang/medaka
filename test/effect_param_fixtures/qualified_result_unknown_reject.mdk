@@ -1,0 +1,6 @@
+-- A returned value of unknown origin is the whole domain, which no narrower
+-- qualifier admits.
+passThrough : String -> String @"cfg/*"
+passThrough s = s
+
+main = println (passThrough "cfg/a")

@@ -8,11 +8,19 @@
 import compiler_cli_test_support.{
   expectCheckAccept,
   expectCheckReject,
+  expectVerbExitStartsWithAndContains,
   fixtureIn,
 }
+import test.{Expectation}
 
 fixture : String -> <IO> String
 fixture name = fixtureIn "test/effect_param_fixtures" name
+
+-- `check` accepts the fixture and prints each of [needles], the schemes its
+-- accepted bindings must have.
+expectCheckTypes : String -> List String -> <Exec, IO> Expectation
+expectCheckTypes name needles =
+  expectVerbExitStartsWithAndContains "check" [fixture name] 0 "" needles
 
 test "Env fills a singleton inside the declared Set bound" =
   expectCheckAccept (fixture "env_hole_accept.mdk")
@@ -47,3 +55,86 @@ test "An extension of a domain-annotated binder in a result is the whole domain"
 
 test "An extension of a pattern-ranging binder in a result stays within it" =
   expectCheckAccept (fixture "binder_pattern_extend_accept.mdk")
+
+test "A qualified result bounds the returned expression's abstraction" = expectCheckTypes
+  "qualified_result_accept.mdk"
+  [
+    "pick : Bool -> String @\"x/*\"",
+    "viaLet : Unit -> String @\"cfg/*\"",
+    "usePick : Unit -> <Store \"x/*\"> Int",
+    "useSet : Unit -> <Var {\"HOME\", \"PATH\"}> String",
+  ]
+
+test "A returned literal outside the qualifier is refused" = expectCheckReject
+  (fixture "qualified_result_outside_reject.mdk")
+  [
+    "Binding 'pick' reaches (\"x/a\" | \"y/b\") where its declared bound admits only \"x/*\"",
+  ]
+
+test "A returned value of unknown origin is the whole domain" = expectCheckReject
+  (fixture "qualified_result_unknown_reject.mdk")
+  [
+    "Binding 'passThrough' reaches the whole domain where its declared bound admits only \"cfg/*\"",
+  ]
+
+test "A returned literal does not lie within a caller-chosen authority" = expectCheckReject
+  (fixture "qualified_result_rigid_reject.mdk")
+  ["Binding 'at' reaches \"x/a\" where only p is admitted"]
+
+test "A qualified result naming a binder with no domain is ill-formed" = expectCheckReject
+  (fixture "qualified_result_no_domain_reject.mdk")
+  ["The qualifier names 'dir'", "so its authority has no domain"]
+
+test "A Set qualifier on a result admits exactly its members" = expectCheckReject
+  (fixture "qualified_result_set_reject.mdk")
+  [
+    "Binding 'name' reaches {\"HOME\", \"SECRET\"} where its declared bound admits only {\"HOME\", \"PATH\"}",
+  ]
+
+test "A returned literal lifts into a Product binder's primary axis" = expectCheckTypes
+  "qualified_result_product_accept.mdk"
+  ["hostOr : Bool -> (h : String) -> String @(\"api.example.com/*\" | h)"]
+
+test "A returned literal outside a Product binder's qualifier is refused" = expectCheckReject
+  (fixture "qualified_result_product_reject.mdk")
+  ["Binding 'hostOr' reaches (\"other.com/v1\" | h)"]
+
+test "A lambda body and an annotated expression are bounded by their qualifier" = expectCheckReject
+  (fixture "qualified_checked_body_reject.mdk")
+  [
+    "Binding 'lambda' reaches \"etc/passwd\" where its declared bound admits only \"cfg/*\"",
+    "Binding 'annotated' reaches \"etc/a\" where its declared bound admits only \"cfg/*\"",
+  ]
+
+test "A qualified value keeps its qualifier, and a use carries it" = expectCheckTypes
+  "qualified_value_accept.mdk"
+  [
+    "configFile : String @\"cfg/*\"",
+    "useConfig : Unit -> <Store \"cfg/*\"> Int",
+    "useExact : Unit -> <Store \"cfg/app\"> Int",
+  ]
+
+test "A qualified value's definition is checked against its qualifier" = expectCheckReject
+  (fixture "qualified_value_outside_reject.mdk")
+  [
+    "Binding 'configFile' reaches \"secrets/key\" where its declared bound admits only \"cfg/*\"",
+  ]
+
+test "An exact qualifier does not admit an extension of its element" = expectCheckReject
+  (fixture "qualified_value_exact_reject.mdk")
+  [
+    "Binding 'configFile' reaches \"cfg/app.bak\" where its declared bound admits only \"cfg/app\"",
+  ]
+
+test "An imported qualified value charges its qualifier in the importer" = expectCheckTypes
+  "qualified_value_modules/main_accept.mdk"
+  [
+    "dial : Unit -> <Net \"127.0.0.1\"> Result String (Socket \"127.0.0.1\")",
+    "readConfig : Unit -> <FileRead \"cfg/*\"> Result String String",
+  ]
+
+test "An imported qualified value does not fit a bound on another subtree" = expectCheckReject
+  (fixture "qualified_value_modules/main_reject.mdk")
+  [
+    "Effectful value used where <FileRead \"secrets/*\"> is allowed, but it performs <FileRead \"cfg/*\">",
+  ]

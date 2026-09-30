@@ -1,0 +1,5 @@
+-- A Set qualifier admits exactly its members.
+name : Bool -> String @({"HOME", "PATH"})
+name c = if c then "HOME" else "SECRET"
+
+main = println (name True)

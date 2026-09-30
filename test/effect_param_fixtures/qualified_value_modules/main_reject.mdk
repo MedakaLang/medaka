@@ -1,0 +1,8 @@
+-- An imported qualified value is charged at its declared qualifier, which a
+-- bound on another subtree does not admit.
+import egress.{configFile}
+
+readSecret : Unit -> <FileRead "secrets/*"> Result String String
+readSecret () = readFile configFile
+
+main = println 1

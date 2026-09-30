@@ -1,0 +1,6 @@
+-- A qualifier naming a binder that nothing gives a domain is ill-formed, even
+-- when the body returns a literal.
+same : (dir : String) -> String @dir
+same _ = "x"
+
+main = println (same "y")
