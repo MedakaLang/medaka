@@ -191,6 +191,12 @@ prepare_workload() {
   # The server refuses a group- or world-readable signing key, session-token
   # secret or password file before it binds.
   chmod 600 "$WORK/key.hex" "$WORK/token.hex" "$WORK/password"
+  # The server reads its secrets from fixed paths under its working
+  # directory; `cp -p` keeps the modes it grades.
+  mkdir -p "$WORK/root/secrets"
+  cp -p "$WORK/key.hex" "$WORK/root/secrets/key.hex"
+  cp -p "$WORK/token.hex" "$WORK/root/secrets/token.hex"
+  cp -p "$WORK/password" "$WORK/root/secrets/password"
 }
 
 # ── the two servers ─────────────────────────────────────────────────────────
@@ -201,16 +207,15 @@ prepare_workload() {
 # repository — a rate-limited run measures the limiter instead of the read
 # path. It is also how this server is deployed (`pds/Caddyfile`).
 #
-# `--password-file` and no `--init`: the data directory already holds the
-# repository the corpus builder wrote, and it holds no credential yet.
+# `secrets/password` present and no `--init`: the data directory already
+# holds the repository the corpus builder wrote, and it holds no credential
+# yet, so this start derives one. Each data directory is started exactly once.
 start_server() {
   tag=$1
   datadir=$2
-  "$WORK/pdsd" \
+  (cd "$WORK/root" && exec "$WORK/pdsd" \
     --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-    --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-    --password-file "$WORK/password" \
-    --data "$datadir" --port 0 --trusted-proxy \
+    --data "$datadir" --port 0 --trusted-proxy) \
     > "$WORK/$tag.out" 2> "$WORK/$tag.err" &
   echo $! > "$WORK/$tag.pid"
   SERVER_PIDS="$SERVER_PIDS $!"

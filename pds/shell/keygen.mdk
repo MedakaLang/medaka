@@ -4,14 +4,19 @@
    This is shell work, not `pds/lib` work: it reads OS entropy and writes
    files, and `pds/lib` draws no entropy and performs no I/O. What it does NOT
    own is the flag vocabulary — `pds/serve.mdk` holds `keygen`'s roster beside
-   `serve`'s, so the file a key is written to is named the same way the file a
-   key is read from is.
+   `serve`'s.
+
+   Both secrets live at fixed paths relative to the working directory,
+   `secrets/key.hex` and `secrets/token.hex`, the same paths `serve` reads
+   them back from. Each path is written out literally at every call that
+   touches it, so the rows below name exactly the files they read and write.
 
    Nothing here renders a secret. A generated scalar reaches its file and the
    two public values derived from it, and no other output; the failure paths
    name the file and the rule and never the value. -}
 
 import bytes.{Bytes, fromArrayAssumeByteDomain}
+import fs.{isDir}
 import hex.{encode}
 import io.{writeFilePrivate}
 import lib.did_key.{didKeyFromPublicKey}
@@ -44,7 +49,7 @@ secretKeyDoor raw =
     Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
 
 -- A candidate admitted as a key, through `secretKeyDoor` and then the same
--- `secretKeyFromBytes` the server admits `--key` with.
+-- `secretKeyFromBytes` the server admits `secrets/key.hex` with.
 admitCandidate : Array Int -> Result String Bytes
 admitCandidate raw = do
   bytes <- secretKeyDoor raw
@@ -61,7 +66,7 @@ outOfByteRange raw i acc =
     outOfByteRange raw (i + 1) (bitOr acc (shiftRight raw[i] 8))
 
 {- | A fresh secp256k1 secret scalar, admitted by the same
-   `lib.sign.secretKeyFromBytes` the server admits `--key` with — so
+   `lib.sign.secretKeyFromBytes` the server admits `secrets/key.hex` with — so
    `keygen` can produce no value `serve` would later refuse, and admits `d`
    only in `[1, n)`.
 
@@ -126,7 +131,9 @@ keygenSummary bytes = do
    disk under a failure exit code, which an operator reading the exit code
    would take as "nothing happened". -}
 export
-keygenRefusePath : String -> String -> <FileRead> Result String Unit
+keygenRefusePath : String ->
+  (path : String) ->
+  <FileRead path> Result String Unit
 keygenRefusePath label path =
   if fileExists path then
     Err
@@ -134,39 +141,62 @@ keygenRefusePath label path =
   else
     Ok ()
 
+{- | Create `secrets/` when it is absent, and refuse a `secrets` that exists
+   but is not a directory.
+
+   The directory is created at the runtime's `makeDir` mode (0755 before the
+   umask): no primitive can create or narrow a directory's mode. Every file
+   written into it is 0600, which is what `serve` grades. -}
+export
+keygenSecretsDir : Unit ->
+  <FileRead "secrets", FileWrite "secrets"> Result String Unit
+keygenSecretsDir () =
+  if fileExists "secrets" then match isDir "secrets"
+    Ok True => Ok ()
+    Ok False => Err "refusing secrets: it exists and is not a directory"
+    Err message => Err "unreadable secrets: \{message}"
+  else match makeDir "secrets"
+    Ok () => Ok ()
+    Err message => Err "cannot create secrets: \{message}"
+
 -- | Write one generated secret to `path` at mode 0600. The existence refusal
 -- is re-applied here so no write path can bypass it, whatever the caller did.
 keygenWrite : String ->
-  String ->
+  (path : String) ->
   Bytes ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead path, FileWrite path> Result String Unit
 keygenWrite label path bytes = match keygenRefusePath label path
   Err message => Err message
   Ok () => match writeFilePrivate path "\{encode bytes}\n"
     Err message => Err "unwritable \{label} \{path}: \{message}"
     Ok () => Ok ()
 
--- | Generate the signing key `--key` names, and report the two public values
--- that identify it. The scalar itself goes to the file and nowhere else.
+-- | Generate the signing key at `secrets/key.hex`, and report the two public
+-- values that identify it. The scalar itself goes to the file and nowhere
+-- else.
 export
-keygenSigningKey : String ->
-  <FileRead, FileWrite, Rand, Stdout> Result String Unit
-keygenSigningKey path = do
+keygenSigningKey : Unit ->
+  <FileRead "secrets/key.hex", FileWrite "secrets/key.hex", Rand, Stdout> Result String Unit
+keygenSigningKey () = do
   bytes <- keygenSecretBytes keygenAttempts
   (publicHex, did) <- keygenSummary bytes
-  () <- keygenWrite "signing key" path bytes
-  let () = putStrLn "keygen: wrote signing key \{path} (mode 0600)"
+  () <- keygenWrite "signing key" "secrets/key.hex" bytes
+  let () = putStrLn "keygen: wrote signing key secrets/key.hex (mode 0600)"
   let () = putStrLn "keygen: public key \{publicHex}"
   let () = putStrLn "keygen: did:key \{did}"
   Ok ()
 
--- | Generate the session-token secret `--token-secret` names.
+-- | Generate the session-token secret at `secrets/token.hex`.
 export
-keygenTokenSecret : String ->
-  <FileRead, FileWrite, Rand, Stdout> Result String Unit
-keygenTokenSecret path = do
-  () <- keygenWrite "session-token secret" path (tokenSecretBytes ())
-  let () = putStrLn "keygen: wrote session-token secret \{path} (mode 0600)"
+keygenTokenSecret : Unit ->
+  <FileRead "secrets/token.hex", FileWrite "secrets/token.hex", Rand, Stdout> Result String Unit
+keygenTokenSecret () = do
+  () <- keygenWrite
+    "session-token secret"
+    "secrets/token.hex"
+    (tokenSecretBytes ())
+  let () =
+    putStrLn "keygen: wrote session-token secret secrets/token.hex (mode 0600)"
   Ok ()
 
 {- | Generate both secrets, publish neither success summary until both writes
@@ -176,24 +206,24 @@ keygenTokenSecret path = do
    cleanup failure preserves the original write error and also names the
    signing-key residue that may remain. -}
 export
-keygenSigningKeyAndTokenSecret : String ->
-  String ->
-  <FileRead, FileWrite, Rand, Stdout> Result String Unit
-keygenSigningKeyAndTokenSecret keyPath secretPath = do
+keygenSigningKeyAndTokenSecret : Unit ->
+  <FileRead "secrets/key.hex", FileRead "secrets/token.hex", FileWrite "secrets/key.hex", FileWrite "secrets/token.hex", Rand, Stdout> Result String Unit
+keygenSigningKeyAndTokenSecret () = do
   keyBytes <- keygenSecretBytes keygenAttempts
   (publicHex, did) <- keygenSummary keyBytes
   let secretBytes = tokenSecretBytes ()
-  () <- keygenWrite "signing key" keyPath keyBytes
-  match keygenWrite "session-token secret" secretPath secretBytes
-    Err message => match removeFile keyPath
+  () <- keygenWrite "signing key" "secrets/key.hex" keyBytes
+  match keygenWrite "session-token secret" "secrets/token.hex" secretBytes
+    Err message => match removeFile "secrets/key.hex"
       Ok () => Err message
       Err cleanup =>
         Err
-          "\{message}; cleanup of signing key \{keyPath} also failed: \{cleanup}; the signing key may remain"
+          "\{message}; cleanup of signing key secrets/key.hex also failed: \{cleanup}; the signing key may remain"
     Ok () =>
-      let () = putStrLn "keygen: wrote signing key \{keyPath} (mode 0600)"
+      let () = putStrLn "keygen: wrote signing key secrets/key.hex (mode 0600)"
       let () = putStrLn "keygen: public key \{publicHex}"
       let () = putStrLn "keygen: did:key \{did}"
       let () =
-        putStrLn "keygen: wrote session-token secret \{secretPath} (mode 0600)"
+        putStrLn
+          "keygen: wrote session-token secret secrets/token.hex (mode 0600)"
       Ok ()

@@ -10,7 +10,9 @@
 # to verify it.
 #
 # Replace the placeholders (WorkingDirectory, ExecStart's --did/--handle/
-# --hostname/paths, User/Group) before installing. Copy to
+# --hostname/--data, User/Group) before installing. The secrets are not named
+# here: `pdsd` reads them from `secrets/` under WorkingDirectory
+# (`secrets/key.hex`, and `secrets/token.hex` when present). Copy to
 # /etc/systemd/system/pds.service, then:
 #   systemctl daemon-reload && systemctl enable --now pds
 #
@@ -19,7 +21,7 @@
 # before the first `systemctl enable --now pds`.
 #
 # `/opt/pds/secrets` is deliberately `ReadOnlyPaths`, not `ReadWritePaths`:
-# the process only ever reads its signing key from there, and
+# the process only ever reads its secrets from there, and
 # `ProtectSystem=strict` already makes every other path read-only by
 # default, so this entry exists to say the read is intentional rather than
 # to grant it.
@@ -40,6 +42,7 @@
 #     -p User=nobody -p Group=nogroup -p ReadWritePaths=$DIR/data \
 #     -p NoNewPrivileges=true -p ProtectSystem=strict -p ProtectHome=true \
 #     -p PrivateDevices=true -p PrivateTmp=true -p CapabilityBoundingSet= \
+#     -p WorkingDirectory=$DIR \
 #     -p UMask=0077 -p LimitCORE=0 -p IPAddressDeny=any \
 #     -p IPAddressAllow=localhost -p MemoryMax=512M -p TasksMax=256 \
 #     -p LimitNOFILE=65536 -p CPUWeight=20 -p Environment=GC_MARKERS=1 \
@@ -47,7 +50,7 @@
 #     -p SystemCallFilter=@system-service \
 #     -p 'SystemCallFilter=~@privileged @resources' \
 #     -p SystemCallErrorNumber=EPERM -p OOMPolicy=kill \
-#     $DIR/pdsd --did ... --key $DIR/key.hex --data $DIR/data --port 0 \
+#     $DIR/pdsd --did ... --data $DIR/data --port 0 \
 #     --init --trusted-proxy --appview-did ... --egress-port $STUB_PORT
 
 [Unit]
@@ -74,7 +77,6 @@ ExecStart=/opt/pds/pdsd \
 	--did did:web:pds.example.com \
 	--handle alice.pds.example.com \
 	--hostname pds.example.com \
-	--key /opt/pds/secrets/key.hex \
 	--data /opt/pds/data \
 	--port 8080 \
 	--trusted-proxy

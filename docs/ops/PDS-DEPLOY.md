@@ -68,17 +68,26 @@ never sets it against anything but Caddy on the same box.
    ```
 
 3. **Generate the secrets, with `pds keygen`** (`shell/keygen.mdk`) — not by
-   hand and not with `chmod`-and-hope. It writes both files at mode `0600`
-   and prints the `did:key` the signing key corresponds to:
+   hand and not with `chmod`-and-hope. `pdsd` reads its secrets from fixed
+   paths under its working directory, and no flag names them:
+   `secrets/key.hex` (the signing key, required), `secrets/token.hex` (the
+   session-token secret; when absent the server generates one into
+   `data/session-secret` instead) and `secrets/password` (step 4). `keygen`
+   writes the first two at mode `0600`, refuses to overwrite either, and
+   prints the `did:key` the signing key corresponds to. `--key` and
+   `--token-secret` are switches choosing which to generate.
 
-   Run it **as the service account**, so the files it writes are owned by the
-   user that has to read them (step 1):
+   Run it **as the service account**, from `/opt/pds`, so the files it writes
+   are owned by the user that has to read them (step 1):
 
    ```sh
-   runuser -u pds -- /opt/pds/current/pdsd keygen \
-     --key /opt/pds/secrets/key.hex \
-     --token-secret /opt/pds/secrets/token.hex
+   cd /opt/pds && runuser -u pds -- /opt/pds/current/pdsd keygen \
+     --key --token-secret
    ```
+
+   `keygen` creates `secrets/` when it is absent, but only at the runtime's
+   default directory mode (`0755` before the umask; nothing in the runtime can
+   set a directory's mode), so create it yourself at `0700` as step 1 does.
 
    The printed `did:key` names the signing key itself; it is not the
    account DID this deployment serves. `did:web` is the identity method
@@ -106,22 +115,31 @@ never sets it against anything but Caddy on the same box.
    umask 077 && printf '%s\n' 'the account password' > secrets/password
    ```
 
-5. **Genesis run**, on the loopback default, to create the repository and
-   bootstrap the credential (`--init`, `--password-file`). Run it **as the
-   service account**, same as step 3's `keygen` — a root-run genesis leaves
-   `data/`'s contents `root`-owned, which the `pds` user cannot read any
-   better than the wrong-owner signing key step 1 warns about:
+5. **Genesis run**, on the loopback default, to create the repository
+   (`--init`) and bootstrap the credential from `secrets/password`. Run it
+   **as the service account**, from `/opt/pds`, same as step 3's `keygen` — a
+   root-run genesis leaves `data/`'s contents `root`-owned, which the `pds`
+   user cannot read any better than the wrong-owner signing key step 1 warns
+   about:
 
    ```sh
-   runuser -u pds -- sh -c 'umask 077 && exec /opt/pds/current/pdsd \
+   cd /opt/pds && runuser -u pds -- sh -c 'umask 077 && exec /opt/pds/current/pdsd \
      --did <did> --handle <handle> --hostname <hostname> \
-     --key secrets/key.hex --token-secret secrets/token.hex \
-     --password-file secrets/password --data data --port 8080 --init'
+     --data data --port 8080 --init'
    ```
 
-   Stop it once it reports readiness (`serve: listening on 127.0.0.1:8080`).
-   Every subsequent run omits `--init` and `--password-file`: the data
-   directory now holds both the repository and the credential.
+   Stop it once it reports readiness (`serve: listening on 127.0.0.1:8080`),
+   then **delete `secrets/password`**: the data directory now holds both the
+   repository and the credential, the password itself is never stored, and a
+   start that finds `secrets/password` beside an existing credential refuses
+   rather than leave a plaintext copy of it on disk. Every subsequent run
+   omits `--init`.
+
+   Replacing the password later is the same bootstrap without `--init`: stop
+   the server, remove `data/credential`, write the new password to
+   `secrets/password`, start once, then delete `secrets/password` again. A
+   start with no credential and no `secrets/password` refuses rather than
+   serving an account nobody can log in to.
 
    `head`, `preferences`, everything under `events/**` (minus raw block/blob
    bytes), and every `blobs/**/*.mime` sidecar are written at mode `0600`
@@ -537,8 +555,8 @@ What has to be in a backup, and why `getRepo` alone is not one: the repository
 blocks (`<data>/blocks`), the blobs (`<data>/blobs` — not in the CAR; a blob is
 not part of the signed block graph), the head pointer (`<data>/head`), the
 account credential (`<data>/credential`), the session-token secret (whichever of
-`--token-secret` or `<data>/session-secret` this deployment uses), and **the
-signing key** (`--key`). Losing the signing key loses the ability to sign any
+`secrets/token.hex` or `<data>/session-secret` this deployment uses), and **the
+signing key** (`secrets/key.hex`). Losing the signing key loses the ability to sign any
 future commit for this DID; it is the one file no later work can reconstruct.
 
 An archive taken this way also carries `<data>/.lock` and whatever
@@ -580,8 +598,9 @@ chmod 0600 /opt/pds-restored/secrets/key.hex \
   /opt/pds-restored/secrets/token.hex /opt/pds-restored/data/credential
 ```
 
-Then start `pds serve` against the restored paths (`--data`, `--key`,
-`--token-secret`) **without `--init`** — the restored directory already holds a
+Then start `pds serve` from `/opt/pds-restored` as its working directory, so it
+reads the restored `secrets/`, with `--data` pointing at the restored `data`,
+**without `--init`** — the restored directory already holds a
 repository, and a second genesis against one is refused (`#2481`). Verify the
 restore rather than assuming it:
 
@@ -801,8 +820,8 @@ manual test push would suppress the next real failure.
 
 A secret file written before the KDF-and-keygen slice (`#2659`'s
 `readHexBytes` hardening) may be world- or group-readable. `pds serve` now
-refuses to start on any hex secret file (`--key`, `--token-secret`) wider
-than `0600`, and on `<data>/session-secret` the same way. The remedy is
+refuses to start on any hex secret file (`secrets/key.hex`,
+`secrets/token.hex`) wider than `0600`, and on `<data>/session-secret` the same way. The remedy is
 `chmod 0600 <path>` — or regeneration, since a secret that was ever
 world-readable is a leaked secret, not merely a permission bug.
 

@@ -1,10 +1,11 @@
 {- | `pds/serve.mdk` — the PDS entry point: admit a configuration, rehydrate the
    account repository from disk, bind the listener, and serve.
 
-   Every configuration value arrives as a command-line flag and is admitted
-   before anything is bound: a bad DID, handle, or hostname is rejected by
-   `lib.server_core`'s `makeAccount`, an unreadable or non-hex signing key by
-   `readHexBytes`, a data directory that is not a directory by `requireDir`,
+   Every configuration value arrives as a command-line flag or as a secret file
+   at a fixed path, and is admitted before anything is bound: a bad DID,
+   handle, or hostname is rejected by `lib.server_core`'s `makeAccount`, an
+   unreadable or non-hex signing key by `readHexBytes`, a data directory that
+   is not a directory by `requireDir`,
    and a repository whose head does not verify under the configured key by
    `lib.repo`'s `repoFromBlocks`. Every one of those exits nonzero. There is no
    default for any of them, so a misconfigured server never starts serving
@@ -30,28 +31,36 @@
    holder's heartbeat and not by its existence, and an ordinary restart
    reclaims an abandoned one on its own. `--force-lock` skips that wait.
 
-   The signing key is read here and handed to `lib.repo`, which is the only
-   thing that needs it, and to nothing else. It is never printed, and neither is
-   the `Store` that transitively holds it.
+   The secrets live at fixed paths under `secrets/`, relative to the working
+   directory, and no flag names them: `secrets/key.hex`, `secrets/token.hex`
+   and `secrets/password`. Each path is written out literally at the call that
+   reads it, so the rows of the functions that read them name exactly those
+   files.
+
+   The signing key, `secrets/key.hex`, is required. It is read here and handed
+   to `lib.repo`, which is the only thing that needs it, and to nothing else.
+   It is never printed, and neither is the `Store` that transitively holds it.
 
    The session-token secret is the SECOND secret this entry point holds: the
    server's own 32-byte HS256 key, which `lib.server_core`'s seam verifies
-   bearer tokens against. It is deliberately a different key from `--key`: the
-   signing key authenticates commits to every other implementation on the
-   network and has exactly one job. `--token-secret PATH` supplies it; with no
-   flag, the secret is generated from `osEntropyBytes` on first run and kept in
-   `<data>/session-secret` for every run after.
+   bearer tokens against. It is deliberately a different key from the signing
+   key: the signing key authenticates commits to every other implementation on
+   the network and has exactly one job. `secrets/token.hex` supplies it when
+   present; when absent, the secret is generated from `osEntropyBytes` on first
+   run and kept in `<data>/session-secret` for every run after.
 
    The account password is the THIRD, and it is what `com.atproto.server.
-   createSession` grades a login against. It arrives as `--password-file PATH`
-   and NEVER as an argument value: an argument is visible in `ps` output to
-   every user on the box. There is no interactive prompt either — no termios,
-   tty, or echo-suppression primitive exists in the runtime or the stdlib, and
-   a prompt that echoed the password to the terminal would be worse than the
-   file, not better. The password is read once, at bootstrap, turned into a
-   PBKDF2 credential record (`lib.credential`), and never stored: `<data>/
-   credential` holds a salt, an iteration count, and a derived key. A run whose
-   data directory already holds that record needs no `--password-file` at all.
+   createSession` grades a login against. It arrives in `secrets/password` and
+   NEVER as an argument value: an argument is visible in `ps` output to every
+   user on the box. There is no interactive prompt either — no termios, tty, or
+   echo-suppression primitive exists in the runtime or the stdlib, and a prompt
+   that echoed the password to the terminal would be worse than the file, not
+   better. The password is read once, by a run whose data directory holds no
+   credential yet, turned into a PBKDF2 credential record (`lib.credential`),
+   and never stored: `<data>/credential` holds a salt, an iteration count, and
+   a derived key. Once that record exists `secrets/password` must be deleted: a
+   run that finds both refuses to start rather than leave a plaintext copy of
+   the password beside the credential derived from it.
 
    Every file this program creates holding a secret — the generated session
    secret and the credential record — is written at mode 0600, and a secret
@@ -61,8 +70,8 @@
    indistinguishable from a correctly permissioned deployment right up until
    somebody used it.
 
-   A failed configuration leaves nothing behind either: every secret the flags
-   SUPPLY is read and admitted before any secret this program GENERATES is
+   A failed configuration leaves nothing behind either: every secret `secrets/`
+   SUPPLIES is read and admitted before any secret this program GENERATES is
    written, so a run rejected for a bad password file leaves no session secret
    on disk for the next run to adopt. That invariant covers the durable EVENT
    LOG as well as the secrets: recovering a half-finished append is decided
@@ -145,6 +154,7 @@ import shell.eventlog.{
 }
 import shell.keygen.{
   keygenRefusePath,
+  keygenSecretsDir,
   keygenSigningKey,
   keygenSigningKeyAndTokenSecret,
   keygenTokenSecret,
@@ -182,15 +192,6 @@ serveSpec = spec "serve" [
   value ["--did"] "DID" "the repository owner's DID",
   value ["--handle"] "HANDLE" "the repository owner's handle",
   value ["--hostname"] "HOST" "this PDS's own hostname",
-  value ["--key"] "PATH" "file holding the hex-encoded secp256k1 signing key",
-  value
-    ["--token-secret"]
-    "PATH"
-    "file holding the hex-encoded 32-byte session-token secret",
-  value
-    ["--password-file"]
-    "PATH"
-    "file holding the account password, for first-run credential bootstrap",
   value ["--data"] "DIR" "existing directory holding the persisted repository",
   intValue ["--port"] "N" "TCP port to bind; 0 picks a free one",
   value
@@ -240,19 +241,18 @@ serveSpec = spec "serve" [
     "how often to emit the periodic stats line (active/unframed connections, subscriptions, repo rev, blocks and blobs on disk); default 60000",
 ]
 
-{- | `pds keygen`'s roster. Both flags name a file to CREATE, and both are
-   spelled exactly as `serve` spells the file it later reads back, so a
-   generated key is passed to `serve` under the same name it was generated
-   under. Neither takes a value that is a secret: a secret in an argument is
-   visible in `ps` output to every account on the box, which is why every
-   secret in this program travels as a file. -}
+{- | `pds keygen`'s roster. Each switch chooses one secret to CREATE, at the
+   fixed path `serve` later reads it back from. Neither takes a value: a
+   secret in an argument is visible in `ps` output to every account on the
+   box, which is why every secret in this program travels as a file. -}
 keygenSpec : ArgSpec
 keygenSpec = spec "keygen" [
-  value ["--key"] "PATH" "write a new hex-encoded secp256k1 signing key here",
-  value
+  switch
+    ["--key"]
+    "write a new hex-encoded secp256k1 signing key to secrets/key.hex",
+  switch
     ["--token-secret"]
-    "PATH"
-    "write a new hex-encoded 32-byte session-token secret here",
+    "write a new hex-encoded 32-byte session-token secret to secrets/token.hex",
 ]
 
 abort : String -> <Stderr> Unit
@@ -474,7 +474,9 @@ octalMode mode =
    This is a startup check, not a warning: a group- or world-readable signing
    key has already been exposed to every other account on the box for as long
    as it has been there, and a server that serves anyway hides that. -}
-requirePrivateMode : String -> String -> <FileRead> Result String Unit
+requirePrivateMode : String ->
+  (path : String) ->
+  <FileRead path> Result String Unit
 requirePrivateMode label path = do
   mode <- match fileMode path
     Err message => Err "unreadable \{label} \{path}: \{message}"
@@ -487,7 +489,7 @@ requirePrivateMode label path = do
 
 -- Neither key reaches a diagnostic: the mode and read errors name the path,
 -- and `hex.decode`'s own messages do not echo what they were given.
-readHexBytes : String -> String -> <FileRead> Result String Bytes
+readHexBytes : String -> (path : String) -> <FileRead path> Result String Bytes
 readHexBytes label path = do
   () <- requirePrivateMode label path
   text <- match readFile path
@@ -496,6 +498,10 @@ readHexBytes label path = do
   match decode (trim text)
     Err message => Err "\{label} \{path} is not hex: \{message}"
     Ok bytes => Ok bytes
+
+-- The signing key, which every run needs.
+readSigningKey : Unit -> <FileRead "secrets/key.hex"> Result String Bytes
+readSigningKey () = readHexBytes "signing key" "secrets/key.hex"
 
 sessionSecretPath : String -> String
 sessionSecretPath dir = "\{dir}/session-secret"
@@ -536,7 +542,7 @@ admitSessionSecret : String -> Bytes -> Result String Bytes
 admitSessionSecret path bytes =
   if distinctByteValues bytes < minSecretDistinctBytes then
     Err
-      "refusing to start: session-token secret \{path} is a constant or near-constant value, not a generated secret; every session token this server issues would be forgeable from it (generate one with: pds keygen --token-secret \{path})"
+      "refusing to start: session-token secret \{path} is a constant or near-constant value, not a generated secret; every session token this server issues would be forgeable from it (move it aside and generate one with: pds keygen --token-secret, which writes secrets/token.hex)"
   else
     Ok bytes
 
@@ -555,29 +561,39 @@ generateSessionSecret dir = do
     Ok () => Ok ()
   Ok bytes
 
-{- | The session-token secret this run already has: the one `--token-secret`
-   names, else the one kept in the data directory, else `None` — meaning one
-   must be generated.
+{- | The session-token secret this run already has: `secrets/token.hex`, else
+   the one kept in the data directory, else `None` — meaning one must be
+   generated.
 
    This is the READ half, and it writes nothing, so a later failure cannot
    strand a secret it created. A PRESENT but unusable secret IS an error,
    refused before the listener binds rather than at the first request that
    needed it. -}
-suppliedSessionSecret : Args ->
-  String ->
-  <FileRead> Result String (Option Bytes)
-suppliedSessionSecret parsed dir = match flagValue "--token-secret" parsed
-  Some path => map Some (readSessionSecret path)
-  None =>
-    if fileExists (sessionSecretPath dir) then
-      map Some (readSessionSecret (sessionSecretPath dir))
-    else
-      Ok None
+suppliedSessionSecret : String -> <FileRead> Result String (Option Bytes)
+suppliedSessionSecret dir = do
+  supplied <- suppliedTokenSecret ()
+  match supplied
+    Some bytes => Ok (Some bytes)
+    None =>
+      if fileExists (sessionSecretPath dir) then
+        map Some (readSessionSecret (sessionSecretPath dir))
+      else
+        Ok None
 
--- Both arms above read a secret somebody else chose — the flag's file, or one
--- a previous run left in the data directory — so both are graded, and the one
--- this program generates below is graded by construction instead.
-readSessionSecret : String -> <FileRead> Result String Bytes
+-- `secrets/token.hex` when it is present. It is optional, so an absent file
+-- is `None` rather than an error.
+suppliedTokenSecret : Unit ->
+  <FileRead "secrets/token.hex"> Result String (Option Bytes)
+suppliedTokenSecret () =
+  if fileExists "secrets/token.hex" then
+    map Some (readSessionSecret "secrets/token.hex")
+  else
+    Ok None
+
+-- Both sources above hold a secret somebody else chose — the operator's file,
+-- or one a previous run left in the data directory — so both are graded, and
+-- the one this program generates below is graded by construction instead.
+readSessionSecret : (path : String) -> <FileRead path> Result String Bytes
 readSessionSecret path = do
   bytes <- readHexBytes "session-token secret" path
   admitSessionSecret path bytes
@@ -601,7 +617,7 @@ passwordOf text =
     None => text
   if password == "" then Err "the password file is empty" else Ok password
 
--- The password `--password-file` supplies, read and admitted but not yet
+-- The password `secrets/password` supplies, read and admitted but not yet
 -- turned into anything: `planCredential` returns it so the derive-and-keep
 -- can happen after every other supplied secret has been admitted too.
 -- Neither arm is a failure, so `Result` would be the wrong shape: it would
@@ -647,36 +663,44 @@ loadCredential dir = do
         "credential \{credentialPath dir}: expected three lines (iterations, salt, derived key)"
 
 {- | Where the account's password credential comes from: the one the data
-   directory already holds, else the password `--password-file` supplies.
+   directory already holds, else the password `secrets/password` supplies.
 
    This is the READ half, and it writes nothing. With neither, the server
    refuses to start. The alternative — starting with no credential and
    refusing every login — would look identical to a correctly configured
    server right up until somebody tried to use it, and the fix would be
-   invisible from the outside. -}
-planCredential : Args -> String -> <FileRead> Result String CredentialSource
-planCredential parsed dir =
+   invisible from the outside.
+
+   With both, it refuses too. The password is never stored, and a plaintext
+   copy left beside the credential derived from it would be; it is also what
+   an operator who means to replace the password would write, and a run that
+   silently kept the old credential would leave them believing otherwise. -}
+planCredential : String -> <FileRead> Result String CredentialSource
+planCredential dir =
   let exists = fileExists (credentialPath dir)
-  match (exists, flagValue "--password-file" parsed)
-    (True, None) => map Kept (loadCredential dir)
-    (True, Some _) =>
+  match (exists, passwordSupplied ())
+    (True, False) => map Kept (loadCredential dir)
+    (True, True) =>
       Err
-        "refusing to start: \{credentialPath dir} already exists and --password-file was given; in-place rotation is not supported, so remove \{credentialPath dir} first if you intend to replace the password"
-    (False, None) =>
+        "refusing to start: \{credentialPath dir} already exists and secrets/password is still present; the password is never stored, so delete secrets/password now that the credential holds it (to replace the password instead, remove \{credentialPath dir} as well and start once with the new password in secrets/password)"
+    (False, False) =>
       Err
-        "no account credential in \{credentialPath dir}: pass --password-file PATH once, holding the account password, to bootstrap one (the password is never taken from an argument value, and there is no terminal prompt)"
-    (False, Some path) => map Bootstrap (readPassword path)
+        "no account credential in \{credentialPath dir}: write the account password to secrets/password (mode 0600) and start once to bootstrap one, then delete secrets/password (the password is never taken from an argument value, and there is no terminal prompt)"
+    (False, True) => map Bootstrap (readPassword ())
+
+passwordSupplied : Unit -> <FileRead "secrets/password"> Bool
+passwordSupplied () = fileExists "secrets/password"
 
 -- The supplied password, admitted: unreadable or empty is a rejection here,
 -- where nothing has been written yet.
-readPassword : String -> <FileRead> Result String String
-readPassword path = do
-  () <- requirePrivateMode "password file" path
-  text <- match readFile path
-    Err message => Err "unreadable password file \{path}: \{message}"
+readPassword : Unit -> <FileRead "secrets/password"> Result String String
+readPassword () = do
+  () <- requirePrivateMode "password file" "secrets/password"
+  text <- match readFile "secrets/password"
+    Err message => Err "unreadable password file secrets/password: \{message}"
     Ok given => Ok given
   match passwordOf text
-    Err message => Err "\{path}: \{message}"
+    Err message => Err "secrets/password: \{message}"
     Ok given => Ok given
 
 -- The WRITE half: derive and keep only the password the read half admitted.
@@ -689,42 +713,46 @@ establishCredential dir (Bootstrap password) = bootstrapCredential dir password
 {- | `pds keygen` — generate the secrets `pds serve` will not generate for an
    operator: the account signing key, and, when asked, a session-token secret.
 
-   Neither flag has a default, and a run naming neither is an error rather
-   than a no-op: a `keygen` that silently generated nothing would look exactly
-   like one whose output the operator was about to configure.
+   Each switch chooses one secret, written to its fixed path under `secrets/`
+   (created when absent). A run naming neither is an error rather than a
+   no-op: a `keygen` that silently generated nothing would look exactly like
+   one whose output the operator was about to configure. So is a stray
+   argument: a path given after `--key` would otherwise be dropped and the key
+   written to `secrets/key.hex`, somewhere its operator did not ask for.
 
    EVERY destination is refused-or-admitted before ANY of them is written, the
    shape `configure` takes for #2659 item 4: a run rejected for its second
    file must leave no secret behind from its first. -}
-runKeygen : Args -> <FileRead, FileWrite, Rand, Stdout> Result String Unit
-runKeygen parsed = match (
-  flagValue "--key" parsed,
-  flagValue "--token-secret" parsed,
-)
-  (None, None) =>
+runKeygen : Args ->
+  <FileRead "secrets", FileRead "secrets/key.hex", FileRead "secrets/token.hex", FileWrite "secrets", FileWrite "secrets/key.hex", FileWrite "secrets/token.hex", Rand, Stdout> Result String Unit
+runKeygen parsed = match parsed.positionals
+  stray :: _ =>
     Err
-      "name at least one file to write (--key PATH for the signing key, --token-secret PATH for the session-token secret)"
-  (Some keyPath, None) => do
-    () <- keygenRefusePath "signing key" keyPath
-    keygenSigningKey keyPath
-  (None, Some secretPath) => do
-    () <- keygenRefusePath "session-token secret" secretPath
-    keygenTokenSecret secretPath
-  (Some keyPath, Some secretPath) => do
-    -- Two names for one file pass both existence checks and would still write
-    -- twice, so distinctness is part of admitting the destinations.
-    () <- requireDistinctDestinations keyPath secretPath
-    () <- keygenRefusePath "signing key" keyPath
-    () <- keygenRefusePath "session-token secret" secretPath
-    keygenSigningKeyAndTokenSecret keyPath secretPath
+      "unexpected argument \{stray}: --key and --token-secret take no value; they write secrets/key.hex and secrets/token.hex"
+  [] => runKeygenChosen parsed
 
-requireDistinctDestinations : String -> String -> Result String Unit
-requireDistinctDestinations keyPath secretPath =
-  if keyPath == secretPath then
+runKeygenChosen : Args ->
+  <FileRead "secrets", FileRead "secrets/key.hex", FileRead "secrets/token.hex", FileWrite "secrets", FileWrite "secrets/key.hex", FileWrite "secrets/token.hex", Rand, Stdout> Result String Unit
+runKeygenChosen parsed = match (
+  flag "--key" parsed,
+  flag "--token-secret" parsed,
+)
+  (False, False) =>
     Err
-      "refusing \{keyPath}: --key and --token-secret name the same file, and the two secrets are not interchangeable; name two files"
-  else
-    Ok ()
+      "name at least one secret to generate (--key for the signing key, secrets/key.hex; --token-secret for the session-token secret, secrets/token.hex)"
+  (True, False) => do
+    () <- keygenRefusePath "signing key" "secrets/key.hex"
+    () <- keygenSecretsDir ()
+    keygenSigningKey ()
+  (False, True) => do
+    () <- keygenRefusePath "session-token secret" "secrets/token.hex"
+    () <- keygenSecretsDir ()
+    keygenTokenSecret ()
+  (True, True) => do
+    () <- keygenRefusePath "signing key" "secrets/key.hex"
+    () <- keygenRefusePath "session-token secret" "secrets/token.hex"
+    () <- keygenSecretsDir ()
+    keygenSigningKeyAndTokenSecret ()
 
 requireDir : String -> <FileRead> Result String Unit
 requireDir dir = match isDir dir
@@ -795,7 +823,7 @@ openRepo True dir did keyBytes secret =
     Ok _ => Err "--init refuses \{dir}: it already holds a repository"
     Err message =>
       Err
-        "--init refuses \{dir}: it already holds a repository, but its head does not load under the configured --did and --key (\{message}); check those flags rather than reinitializing"
+        "--init refuses \{dir}: it already holds a repository, but its head does not load under the configured --did and secrets/key.hex (\{message}); check those rather than reinitializing"
   else
     initRepo dir did keyBytes
 
@@ -815,7 +843,6 @@ configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
   hostname <- required "--hostname" parsed
-  keyPath <- required "--key" parsed
   dir <- required "--data" parsed
   port <- requiredPort parsed
   bind <- bindAddressOf parsed
@@ -836,9 +863,9 @@ configure parsed = do
   -- own provenance, which cannot change while the process is running.
   let version = versionString ()
   server <- pdsServer account links version
-  keyBytes <- readHexBytes "signing key" keyPath
+  keyBytes <- readSigningKey ()
   secret <- secretKeyFromBytes keyBytes
-  -- Admitted here, beside the other flag-supplied configuration and ahead of
+  -- Admitted here, beside the other supplied configuration and ahead of
   -- every generated secret, for the same reason `requireTrustedBind` is: a run
   -- refused for a malformed appview DID must leave no session secret on disk
   -- for the next run to adopt (#2659 item 4).
@@ -903,10 +930,10 @@ configure parsed = do
   recovery <- eventLogPlanRecovery dir head
   -- Every SUPPLIED secret is read and admitted first, and only then may a
   -- GENERATED one reach the disk: a run rejected for a bad password file or a
-  -- world-readable --token-secret must leave no session secret behind for the
-  -- next run to adopt as its own (#2659).
-  suppliedSecret <- suppliedSessionSecret parsed dir
-  credentialSource <- planCredential parsed dir
+  -- world-readable secrets/token.hex must leave no session secret behind for
+  -- the next run to adopt as its own (#2659).
+  suppliedSecret <- suppliedSessionSecret dir
+  credentialSource <- planCredential dir
   () <- requireDataLock lock
   sessionSecret <- establishSessionSecret dir suppliedSecret
   credential <- establishCredential dir credentialSource
@@ -1165,7 +1192,8 @@ start (Ok (server, store, dir, port, bind, serving, relay, statsInterval, lock, 
 
 -- A `keygen` run touches no socket and no repository, so it finishes inside
 -- one synchronous step rather than entering the scheduler.
-keygen : List String -> <FileRead, FileWrite, Rand, Stderr, Stdout> Unit
+keygen : List String ->
+  <FileRead "secrets", FileRead "secrets/key.hex", FileRead "secrets/token.hex", FileWrite "secrets", FileWrite "secrets/key.hex", FileWrite "secrets/token.hex", Rand, Stderr, Stdout> Unit
 keygen rest = match parseArgs keygenSpec rest
   -- `args` already renders a finished sentence naming the verb.
   Err message => abort message

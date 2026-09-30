@@ -157,7 +157,7 @@ cannot observe a torn state** — because `applyRequest`'s indivisibility
 
 The repository's CAR export is portable and consistent, and it is also *not a
 complete backup*: blobs live beside the signed block graph rather than inside
-it, and the three secrets (`--key`, `--token-secret`, `<data>/credential`) are
+it, and the three secrets (`secrets/key.hex`, `secrets/token.hex`, `<data>/credential`) are
 not in it either. So the procedure `docs/ops/PDS-DEPLOY.md` § "Backup and
 restore" documents is the stopped-server file copy, with the CAR export as the
 consistent online snapshot of the repository half and as the format a restore
@@ -444,7 +444,7 @@ Passphrase encryption at rest is **deferred past 0.1.0**, deliberately. It needs
 and a symmetric cipher written in pure Medaka with no protocol-level answer key to
 grade either against — the opposite of the corpus discipline every other primitive
 here rests on (G5) — and it defends a threat model a single-operator server behind
-Caddy does not face: an attacker who can read `<data>/key.hex` as its owner is already
+Caddy does not face: an attacker who can read `secrets/key.hex` as its owner is already
 the operator, and one who cannot read it gains nothing from its being encrypted at
 rest by a passphrase that would have to live on the same box to start unattended.
 
@@ -452,27 +452,35 @@ rest by a passphrase that would have to live on the same box to start unattended
 identity change, not a maintenance operation — the DID document must be updated and
 every other implementation on the network re-resolves it. The procedure:
 
-1. `pds keygen --key <data>/key.hex.new` — writes a new scalar at `0600` and prints
-   the compressed public key and the `did:key` it will be known by.
+1. `mv secrets/key.hex secrets/key.hex.old`, then `pds keygen --key` — writes a new
+   scalar to `secrets/key.hex` at `0600` and prints the compressed public key and the
+   `did:key` it will be known by. The running server read its key at startup and is
+   unaffected.
 2. Update the account's DID document to name that `did:key`, and wait for it to
    propagate.
-3. Stop the server, `mv <data>/key.hex.new <data>/key.hex`, restart.
+3. Restart the server, which reads the new `secrets/key.hex`. Keep
+   `secrets/key.hex.old` until the new identity has propagated.
 
-`keygen` refuses to write over an existing file, so step 1 cannot destroy the running
-key by a typo.
+`keygen` refuses to write over an existing file, so it cannot destroy the running key
+by a typo; moving the old key aside is the operator saying the rotation is meant.
 
 *Rotating the session-token secret.* This is a maintenance operation and costs only
 the open sessions: every token this server has issued is verified against it, so
 replacing it logs everybody out and nothing else.
 
-1. `pds keygen --token-secret <data>/session-secret.new`.
-2. Stop the server, `mv <data>/session-secret.new <data>/session-secret`, restart.
+1. Move `secrets/token.hex` aside if there is one, then `pds keygen --token-secret`,
+   which writes a new `secrets/token.hex`. A server that has been running on a
+   generated `<data>/session-secret` switches to `secrets/token.hex` on its next
+   start, since the supplied secret takes precedence over the generated one.
+2. Restart the server.
 
-*Rotating the account password.* `serve` refuses `--password-file` against a data
-directory that already holds a credential rather than rotating in place: remove
-`<data>/credential` and start once with `--password-file`.
+*Rotating the account password.* `serve` refuses to start when `secrets/password` is
+present beside a data directory that already holds a credential, rather than rotating
+in place or leaving a plaintext copy of the password on disk: stop the server, remove
+`<data>/credential`, write the new password to `secrets/password`, start once, and
+delete `secrets/password`.
 
-*What is graded, and what is not.* A supplied `--token-secret` is refused when it
+*What is graded, and what is not.* A supplied `secrets/token.hex` is refused when it
 carries fewer than 8 distinct byte values across its 32 (`admitSessionSecret`,
 `pds/serve.mdk`) — 32 random bytes carry ~28, and fewer than 8 with probability far
 below 1 in 2^60, so this refuses a placeholder without ever refusing a real secret. It
@@ -616,18 +624,18 @@ the stored credential record through `fs.replaceDurably`, both over the same
 first byte is written — so the contents never exist at a wider mode, and neither the
 process umask nor a pre-existing file's own mode can widen them. In the other
 direction, `pds/serve.mdk` grades every hex secret file it
-READS (`--key` and `--token-secret`) with `fileMode` and refuses to start when any
+READS (`secrets/key.hex` and `secrets/token.hex`) with `fileMode` and refuses to start when any
 account but the owner can read one: a signing key the rest of the box can read has
 already been exposed, and serving anyway would hide that. The refusal names the path
 and the mode and never the contents. Encryption at rest is a separate question and is
 deferred past 0.1.0: these are plaintext files under restrictive permissions.
 
-**The password never appears in an argument.** `--password-file PATH` is the only way
+**The password never appears in an argument.** `secrets/password` is the only way
 one reaches the server: an argument value is visible in `ps` output to every user on
 the box. There is no interactive prompt, because no termios, tty, or echo-suppression
 primitive exists in the runtime or the stdlib and a prompt that echoed the password to
 the terminal would be worse than the file. A server with neither a stored credential
-nor `--password-file` refuses to start rather than starting and refusing every login,
+nor `secrets/password` refuses to start rather than starting and refusing every login,
 which would be indistinguishable from a working server until somebody tried to use it.
 
 **Every secret this server generates comes from `osEntropyBytes`** — the session

@@ -122,7 +122,7 @@ the evidence rather than silently merging criteria.
     where the harness permits and test absolute lifetime. Confirm the known
     missing controls in #2943 without weakening the observed rejection path.
 25. **B11, private input modes.** Repeat item 4 specifically for
-    `<data>/credential` and `--password-file`; both widened files must refuse
+    `<data>/credential` and `secrets/password`; both widened files must refuse
     startup, while `0600` inputs must start normally.
 
 ## Request-path regression focus

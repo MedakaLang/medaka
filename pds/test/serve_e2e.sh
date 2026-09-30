@@ -148,12 +148,12 @@ HTML_BLOB_MIME='text/html'
 
 # The session-token secret, which is NOT the repository signing key: the two
 # are separate secrets by design, and this gate proves the server accepts a
-# token minted from the one it was handed at `--token-secret`.
+# token minted from the one it was handed in `secrets/token.hex`.
 TOKEN_SECRET_HEX='7f1c0a6d2b93e45880ac31f6d5e27b04913ca8e6f27d4b51a03c8e19d6b4720f'
 
 # The account password. It reaches the server in a FILE and never as an
 # argument value: an argument is visible in `ps` output to every user on the
-# box, which is why `pds/serve.mdk` takes `--password-file` and no
+# box, which is why `pds/serve.mdk` reads `secrets/password` and takes no
 # `--password`. The trailing newline is deliberate — it is what every editor
 # and `printf %s\n` leaves, and the server strips exactly one.
 PASSWORD='s-sessions e2e gate password'
@@ -185,6 +185,29 @@ printf '%s\n' "$PASSWORD" > "$WORK/password"
 # secret this gate hands it is owner-only. `mktemp -d` already made $WORK 0700;
 # these are the files inside it the server actually grades.
 chmod 600 "$WORK/key.hex" "$WORK/token.hex" "$WORK/password"
+
+# secrets_root <dir> <key file> <token file> <password file>: make <dir> a
+# working directory the server can run in, holding copies of the given files
+# at the fixed paths it reads (`secrets/key.hex`, `secrets/token.hex`,
+# `secrets/password`). `-` leaves that file out. `cp -p` keeps each file's
+# mode, which is what the private-mode cases below grade.
+secrets_root() {
+  mkdir -p "$1/secrets"
+  [ "$2" = - ] || cp -p "$2" "$1/secrets/key.hex"
+  [ "$3" = - ] || cp -p "$3" "$1/secrets/token.hex"
+  [ "$4" = - ] || cp -p "$4" "$1/secrets/password"
+}
+
+# Two working directories carry almost every case. RUN is the steady-state
+# layout: a signing key and a session-token secret, and no password, because
+# a server that finds `secrets/password` beside an existing credential refuses
+# to start. BOOT adds the password, for a run over a data directory that holds
+# no credential yet. The gate runs from RUN unless a case says otherwise.
+RUN="$WORK/run"
+BOOT="$WORK/boot"
+secrets_root "$RUN" "$WORK/key.hex" "$WORK/token.hex" -
+secrets_root "$BOOT" "$WORK/key.hex" "$WORK/token.hex" "$WORK/password"
+cd "$RUN"
 
 # Prints the readiness port once `pattern` (readiness line) appears in
 # `logfile`, or fails after ~10s. `pattern` is matched with grep -F.
@@ -262,21 +285,19 @@ start_server() {
   extra=$1
   outfile=$2
   errfile=$3
-  # --password-file is only passed on a genesis (--init) run over a directory
+  # The password is only present on a genesis (--init) run over a directory
   # that holds no credential yet: a resumed run, or a genesis run over a
   # directory `seed_credential` already wrote one into, finds an existing
-  # credential, and passing --password-file against one gets refused (F1,
-  # #2604) rather than silently keeping the old password.
-  pwflag=""
+  # credential, and a `secrets/password` beside one gets refused (F1, #2604)
+  # rather than silently keeping the old password.
+  cwd="$RUN"
   if [ "$extra" = "--init" ] && [ ! -e "$DATA/credential" ]; then
-    pwflag="--password-file $WORK/password"
+    cwd="$BOOT"
   fi
-  # shellcheck disable=SC2086 # $extra/$pwflag are single optional flags, no quoting needed
-  "$WORK/pdsd" \
+  # shellcheck disable=SC2086 # $extra is a single optional flag, no quoting needed
+  (cd "$cwd" && exec "$WORK/pdsd" \
     --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-    --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-    $pwflag \
-    --data "$DATA" --port 0 $extra \
+    --data "$DATA" --port 0 $extra) \
     >"$outfile" 2>"$errfile" &
   SERVER_PID=$!
 }
@@ -291,8 +312,9 @@ client() {
 # shipped count, which is a cost this gate would otherwise pay once per data
 # directory and pay more of with every raise of `defaultIterations`. The first
 # successful login still re-derives the record at the shipped count, once.
-# Only the cases about the bootstrap itself start without one: they pass
-# --password-file, and a server given both refuses to start.
+# Only the cases about the bootstrap itself start without one: they run in a
+# working directory holding secrets/password, and a server given both refuses
+# to start.
 seed_credential() {
   client credential-at 4 "$PASSWORD" > "$1/credential" \
     || fail "could not seed a credential into $1"
@@ -435,7 +457,6 @@ mkdir -p "$DATACORS"
 seed_credential "$DATACORS"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATACORS" --port 0 --init \
   >"$WORK/servecors.out" 2>"$WORK/servecors.err" &
 SERVER_PID=$!
@@ -751,21 +772,20 @@ blob1_sidecar() {
   grep -l -F -x "$BLOB_MIME" "$1"/blobs/*/*.mime 2>/dev/null | head -1
 }
 
-# start_resume_with <data> <key file> <token-secret file> <out> <err>: a resumed
-# run (no --init) over that data directory, on those two secret files. Case 33
-# runs one on RESTORED copies of all three, so neither secret can be the
-# original by default.
+# start_resume_with <data> <working dir> <out> <err>: a resumed run (no
+# --init) over that data directory, on the secrets under that working
+# directory. Case 33 runs one on RESTORED copies of the data and both secrets,
+# so neither secret can be the original by default.
 start_resume_with() {
-  "$WORK/pdsd" \
+  (cd "$2" && exec "$WORK/pdsd" \
     --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-    --key "$2" --token-secret "$3" \
-    --data "$1" --port 0 \
-    >"$4" 2>"$5" &
+    --data "$1" --port 0) \
+    >"$3" 2>"$4" &
   SERVER_PID=$!
 }
 
 start_resume_at() {
-  start_resume_with "$1" "$WORK/key.hex" "$WORK/token.hex" "$2" "$3"
+  start_resume_with "$1" "$RUN" "$2" "$3"
 }
 
 # residue_case <label> <data dir> <served|skipped>: start over that directory,
@@ -881,16 +901,18 @@ echo 'case 15b: started over stray blocks/ residue, repository and blob intact'
 BACKUP="$WORK/backup"
 mkdir -p "$BACKUP"
 cp -R "$DATA" "$BACKUP/data"
-cp "$WORK/key.hex" "$BACKUP/key.hex"
-cp "$WORK/token.hex" "$BACKUP/token.hex"
+cp "$RUN/secrets/key.hex" "$BACKUP/key.hex"
+cp "$RUN/secrets/token.hex" "$BACKUP/token.hex"
 
 # The restore is a THIRD location, not the backup read in place: restoring over
 # the backup would leave the rehearsal with nothing to fall back to, and it is
 # the restored copy's own files this case grades.
 RESTORED="$WORK/restored"
-RESTORED_KEY="$WORK/restored-key.hex"
-RESTORED_TOKEN="$WORK/restored-token.hex"
+RESTORED_ROOT="$WORK/restored-root"
+RESTORED_KEY="$RESTORED_ROOT/secrets/key.hex"
+RESTORED_TOKEN="$RESTORED_ROOT/secrets/token.hex"
 cp -R "$BACKUP/data" "$RESTORED"
+mkdir -p "$RESTORED_ROOT/secrets"
 cp "$BACKUP/key.hex" "$RESTORED_KEY"
 cp "$BACKUP/token.hex" "$RESTORED_TOKEN"
 # A restore has to reproduce the MODES as well as the bytes: `pds serve` refuses
@@ -909,7 +931,7 @@ fi
 # is a second server over its own files, not a second handle on these.
 ORIGINAL_HEAD=$(cksum "$DATA/head")
 
-start_resume_with "$RESTORED" "$RESTORED_KEY" "$RESTORED_TOKEN" \
+start_resume_with "$RESTORED" "$RESTORED_ROOT" \
   "$WORK/serve33.out" "$WORK/serve33.err"
 PORT33=$(wait_for_port "$WORK/serve33.out") || {
   cat "$WORK/serve33.err" >&2
@@ -958,7 +980,7 @@ echo "case 33: restored from backup, getRepo export byte-identical ($RESTORED_RE
 
 # 10. `--init` against a directory that already holds a repository must
 #    refuse rather than silently overwriting `head` — even when the second
-#    `--init` is given a different (but still valid) --key, the exact
+#    `--init` is given a different (but still valid) signing key, the exact
 #    misconfiguration #2481 showed used to be discriminated by whether
 #    `loadRepo` happened to succeed rather than by whether a head file
 #    exists. A second genesis under the wrong key must exit nonzero AND
@@ -971,11 +993,14 @@ KEY10B_HEX='29988895eae3bb77b1ec1be453a7168eba4422c3897bc846a168a1495a67fa99'
 printf '%s\n' "$KEY10A_HEX" > "$WORK/key10a.hex"
 printf '%s\n' "$KEY10B_HEX" > "$WORK/key10b.hex"
 chmod 600 "$WORK/key10a.hex" "$WORK/key10b.hex"
+# No `secrets/token.hex` in either: case 13 below is about the session secret
+# the server generates when none is supplied.
+secrets_root "$WORK/root10a" "$WORK/key10a.hex" - "$WORK/password"
+secrets_root "$WORK/root10b" "$WORK/key10b.hex" - "$WORK/password"
 
-"$WORK/pdsd" \
+(cd "$WORK/root10a" && exec "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key10a.hex" --password-file "$WORK/password" \
-  --data "$DATA10" --port 0 --init \
+  --data "$DATA10" --port 0 --init) \
   >"$WORK/serve10a.out" 2>"$WORK/serve10a.err" &
 SERVER_PID=$!
 PORT10A=$(wait_for_port "$WORK/serve10a.out") || {
@@ -988,7 +1013,7 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 
 # 13. first-run bootstrap, observed on the one server this gate starts with
-#    no --token-secret: it generates its own session secret and keeps it in
+#    no secrets/token.hex: it generates its own session secret and keeps it in
 #    the data directory, alongside the credential it derived from the password
 #    file. BOTH are owner-only, 0600 — that is the property, not the mere
 #    existence of the files, and the umask this gate happens to run under must
@@ -1024,10 +1049,9 @@ HEAD_BEFORE=$(cksum "$DATA10/head")
 # rather than fail, so this bounds the wait the same way wait_for_port
 # does — refusing (fast exit) is the only outcome that must happen within
 # it, not "eventually exits or listens".
-"$WORK/pdsd" \
+(cd "$WORK/root10b" && exec "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key10b.hex" --password-file "$WORK/password" \
-  --data "$DATA10" --port 0 --init \
+  --data "$DATA10" --port 0 --init) \
   >"$WORK/serve10b.out" 2>"$WORK/serve10b.err" &
 SERVER_PID=$!
 i=0
@@ -1053,14 +1077,16 @@ HEAD_AFTER=$(cksum "$DATA10/head")
 
 # ── fifth and sixth --data dirs: secrets at rest (#2611, #2659 item 4) ─────
 
-# Runs pdsd to completion (it must NOT bind) with the flags given, and stores
-# the exit code in RC. A refusal that instead started serving would hang a
-# plain synchronous run, so this bounds the wait the way case 10 does.
+# run_until_exit <working dir> <out> <err> <flags...>: runs pdsd to completion
+# (it must NOT bind) from that working directory with the flags given, and
+# stores the exit code in RC. A refusal that instead started serving would
+# hang a plain synchronous run, so this bounds the wait the way case 10 does.
 run_until_exit() {
-  outfile=$1
-  errfile=$2
-  shift 2
-  "$WORK/pdsd" "$@" >"$outfile" 2>"$errfile" &
+  rundir=$1
+  outfile=$2
+  errfile=$3
+  shift 3
+  (cd "$rundir" && exec "$WORK/pdsd" "$@") >"$outfile" 2>"$errfile" &
   SERVER_PID=$!
   i=0
   while [ "$i" -lt 100 ]; do
@@ -1079,20 +1105,20 @@ run_until_exit() {
   SERVER_PID=""
 }
 
-# 25. a --key file any other account on the box can read is refused BEFORE the
-#    listener binds. The exit status alone would also be produced by a
-#    malformed DID or an unreadable file, so this asserts the refusal's own
-#    identity — its message — and that the readiness line never appeared.
+# 25. a secrets/key.hex any other account on the box can read is refused
+#    BEFORE the listener binds. The exit status alone would also be produced
+#    by a malformed DID or an unreadable file, so this asserts the refusal's
+#    own identity — its message — and that the readiness line never appeared.
 DATA25="$WORK/data25"
 mkdir -p "$DATA25"
 cp "$WORK/key.hex" "$WORK/key25.hex"
 chmod 644 "$WORK/key25.hex"
-run_until_exit "$WORK/serve25.out" "$WORK/serve25.err" \
+secrets_root "$WORK/root25" "$WORK/key25.hex" - "$WORK/password"
+run_until_exit "$WORK/root25" "$WORK/serve25.out" "$WORK/serve25.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key25.hex" --password-file "$WORK/password" \
   --data "$DATA25" --port 0 --init
 [ "$RC" -ne 0 ] || fail 'case 25: a 0644 signing key was accepted'
-grep -F "signing key $WORK/key25.hex is mode 0644, readable by accounts other than its owner" \
+grep -F "signing key secrets/key.hex is mode 0644, readable by accounts other than its owner" \
   "$WORK/serve25.err" >/dev/null \
   || fail 'case 25: the refusal did not name the mode and the path'
 if grep -F 'serve: listening on' "$WORK/serve25.out" >/dev/null 2>&1; then
@@ -1102,18 +1128,18 @@ if grep -F "$SECRET_HEX" "$WORK/serve25.err" >/dev/null 2>&1; then
   fail 'case 25: the refusal printed the signing key itself'
 fi
 
-# 25a. a --password-file any other account on the box can read is refused
+# 25a. a secrets/password any other account on the box can read is refused
 #    BEFORE the listener binds, the same way case 25's signing key is.
 DATA25A="$WORK/data25a"
 mkdir -p "$DATA25A"
 cp "$WORK/password" "$WORK/password25a"
 chmod 644 "$WORK/password25a"
-run_until_exit "$WORK/serve25a.out" "$WORK/serve25a.err" \
+secrets_root "$WORK/root25a" "$WORK/key.hex" - "$WORK/password25a"
+run_until_exit "$WORK/root25a" "$WORK/serve25a.out" "$WORK/serve25a.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --password-file "$WORK/password25a" \
   --data "$DATA25A" --port 0 --init
 [ "$RC" -ne 0 ] || fail 'case 25a: a 0644 password file was accepted'
-grep -F "password file $WORK/password25a is mode 0644, readable by accounts other than its owner" \
+grep -F "password file secrets/password is mode 0644, readable by accounts other than its owner" \
   "$WORK/serve25a.err" >/dev/null \
   || fail 'case 25a: the refusal did not name the mode and the path'
 if grep -F 'serve: listening on' "$WORK/serve25a.out" >/dev/null 2>&1; then
@@ -1123,13 +1149,15 @@ fi
   || fail 'case 25a: a refused password file still produced a credential'
 
 # 25b. a --data/credential any other account on the box can read is refused
-#    BEFORE the listener binds, on a RESUME (no --password-file): first
+#    BEFORE the listener binds, on a RESUME (no secrets/password): first
 #    bootstrap a real credential, then widen its mode and start again.
 DATA25B="$WORK/data25b"
 mkdir -p "$DATA25B"
-"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --password-file "$WORK/password" \
-  --data "$DATA25B" --port 0 --init \
+secrets_root "$WORK/root25b-boot" "$WORK/key.hex" - "$WORK/password"
+secrets_root "$WORK/root25b" "$WORK/key.hex" - -
+(cd "$WORK/root25b-boot" && exec "$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --data "$DATA25B" --port 0 --init) \
   > "$WORK/serve25b_bootstrap.out" 2> "$WORK/serve25b_bootstrap.err" &
 SERVER_PID=$!
 wait_for_port "$WORK/serve25b_bootstrap.out" >/dev/null \
@@ -1138,9 +1166,9 @@ kill "$SERVER_PID" 2>/dev/null
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 chmod 644 "$DATA25B/credential"
-run_until_exit "$WORK/serve25b.out" "$WORK/serve25b.err" \
+run_until_exit "$WORK/root25b" "$WORK/serve25b.out" "$WORK/serve25b.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --data "$DATA25B" --port 0
+  --data "$DATA25B" --port 0
 [ "$RC" -ne 0 ] || fail 'case 25b: a 0644 credential file was accepted'
 grep -F "credential $DATA25B/credential is mode 0644, readable by accounts other than its owner" \
   "$WORK/serve25b.err" >/dev/null \
@@ -1156,9 +1184,8 @@ fi
 #    use to verify this account.
 DATA25C="$WORK/data25c"
 mkdir -p "$DATA25C"
-run_until_exit "$WORK/serve25c.out" "$WORK/serve25c.err" \
+run_until_exit "$BOOT" "$WORK/serve25c.out" "$WORK/serve25c.err" \
   --did "did:web:PDS.Test" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --password-file "$WORK/password" \
   --data "$DATA25C" --port 0 --init
 [ "$RC" -ne 0 ] || fail 'case 25c: a case-mismatched did:web was accepted'
 grep -F -e "did:web:PDS.Test and --hostname $HOSTNAME name the same did:web host in different case" \
@@ -1178,9 +1205,10 @@ fi
 DATA26="$WORK/data26"
 mkdir -p "$DATA26"
 : > "$WORK/password26"
-run_until_exit "$WORK/serve26.out" "$WORK/serve26.err" \
+chmod 600 "$WORK/password26"
+secrets_root "$WORK/root26" "$WORK/key.hex" - "$WORK/password26"
+run_until_exit "$WORK/root26" "$WORK/serve26.out" "$WORK/serve26.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --password-file "$WORK/password26" \
   --data "$DATA26" --port 0 --init
 [ "$RC" -ne 0 ] || fail 'case 26: an empty password file was accepted'
 [ ! -e "$DATA26/session-secret" ] \
@@ -1188,7 +1216,7 @@ run_until_exit "$WORK/serve26.out" "$WORK/serve26.err" \
 [ ! -e "$DATA26/credential" ] \
   || fail 'case 26: a failed configuration left a credential behind'
 
-# 27. a --token-secret with no entropy in it is refused before the bind.
+# 27. a secrets/token.hex with no entropy in it is refused before the bind.
 #    Thirty-two zero bytes is a well-formed 32-byte hex secret at mode 0600,
 #    so every check that came before this one passes it; what refuses it is
 #    that every session token the server issued would be forgeable from a
@@ -1199,12 +1227,12 @@ mkdir -p "$DATA27"
 ZERO_SECRET_HEX='0000000000000000000000000000000000000000000000000000000000000000'
 printf '%s\n' "$ZERO_SECRET_HEX" > "$WORK/token27.hex"
 chmod 600 "$WORK/token27.hex"
-run_until_exit "$WORK/serve27.out" "$WORK/serve27.err" \
+secrets_root "$WORK/root27" "$WORK/key.hex" "$WORK/token27.hex" "$WORK/password"
+run_until_exit "$WORK/root27" "$WORK/serve27.out" "$WORK/serve27.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token27.hex" \
-  --password-file "$WORK/password" --data "$DATA27" --port 0 --init
+  --data "$DATA27" --port 0 --init
 [ "$RC" -ne 0 ] || fail 'case 27: a 32-zero-byte session-token secret was accepted'
-grep -F "session-token secret $WORK/token27.hex is a constant or near-constant value" \
+grep -F "session-token secret secrets/token.hex is a constant or near-constant value" \
   "$WORK/serve27.err" >/dev/null \
   || fail 'case 27: the refusal did not name the constant session-token secret'
 if grep -F 'serve: listening on' "$WORK/serve27.out" >/dev/null 2>&1; then
@@ -1213,83 +1241,105 @@ fi
 [ ! -e "$DATA27/session-secret" ] \
   || fail 'case 27: the refused run left a generated session secret behind'
 
+# 27b. the flags that used to name the secret files are gone: the secrets live
+#    at fixed paths under the working directory, so an old invocation that
+#    still passes one is refused by the argument parser before anything is
+#    read, rather than having its path silently ignored.
+DATA27B="$WORK/data27b"
+mkdir -p "$DATA27B"
+for OLDFLAG in --key --token-secret --password-file; do
+  run_until_exit "$BOOT" "$WORK/serve27b.out" "$WORK/serve27b.err" \
+    --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+    "$OLDFLAG" "$BOOT/secrets/key.hex" --data "$DATA27B" --port 0 --init
+  [ "$RC" -ne 0 ] || fail "case 27b: an invocation passing $OLDFLAG was accepted"
+  grep -F -e "unrecognized flag '$OLDFLAG'" "$WORK/serve27b.err" >/dev/null \
+    || fail "case 27b: $OLDFLAG was not refused as an unknown flag"
+  if grep -F 'serve: listening on' "$WORK/serve27b.out" >/dev/null 2>&1; then
+    fail "case 27b: the listener bound despite $OLDFLAG"
+  fi
+  [ ! -e "$DATA27B/head" ] \
+    || fail "case 27b: a run refused for $OLDFLAG still created a repository"
+done
+
 # 28. `pds keygen` writes the secrets `serve` will not generate, at a mode
 #    `serve` will read back. A key written any wider would be refused by case
 #    25's own check on the next start, so the mode is asserted here directly.
+#    It runs in a working directory with no `secrets/` yet, which it creates.
 KEYGEN_DIR="$WORK/keygen"
 mkdir -p "$KEYGEN_DIR"
-"$WORK/pdsd" keygen --key "$KEYGEN_DIR/key.hex" \
-  --token-secret "$KEYGEN_DIR/token.hex" \
+(cd "$KEYGEN_DIR" && exec "$WORK/pdsd" keygen --key --token-secret) \
   > "$WORK/keygen.out" 2> "$WORK/keygen.err" \
   || {
     cat "$WORK/keygen.err" >&2
     fail 'case 28: keygen exited nonzero'
   }
 require_empty "$WORK/keygen.err" 'case 28 keygen'
-require_owner_only "$KEYGEN_DIR/key.hex" 'case 28: generated signing key'
-require_owner_only "$KEYGEN_DIR/token.hex" 'case 28: generated session-token secret'
+[ -d "$KEYGEN_DIR/secrets" ] || fail 'case 28: keygen did not create secrets/'
+require_owner_only "$KEYGEN_DIR/secrets/key.hex" 'case 28: generated signing key'
+require_owner_only "$KEYGEN_DIR/secrets/token.hex" 'case 28: generated session-token secret'
 grep -E -q '^keygen: did:key did:key:zQ3s[1-9A-HJ-NP-Za-km-z]+$' "$WORK/keygen.out" \
   || fail 'case 28: keygen did not report a secp256k1 did:key'
 grep -E -q '^keygen: public key 0[23][0-9a-f]{64}$' "$WORK/keygen.out" \
   || fail 'case 28: keygen did not report a compressed public key'
 # The scalar reaches its file and nothing else: what keygen printed must not
 # contain the bytes it wrote.
-KEYGEN_SECRET=$(tr -d '\n' < "$KEYGEN_DIR/key.hex")
-KEYGEN_TOKEN_SECRET=$(tr -d '\n' < "$KEYGEN_DIR/token.hex")
+KEYGEN_SECRET=$(tr -d '\n' < "$KEYGEN_DIR/secrets/key.hex")
+KEYGEN_TOKEN_SECRET=$(tr -d '\n' < "$KEYGEN_DIR/secrets/token.hex")
 if grep -F "$KEYGEN_SECRET" "$WORK/keygen.out" "$WORK/keygen.err" >/dev/null 2>&1 \
   || grep -F "$KEYGEN_TOKEN_SECRET" "$WORK/keygen.out" "$WORK/keygen.err" >/dev/null 2>&1
 then
   fail 'case 28: keygen printed a secret it generated'
 fi
 # A second run over the same path must refuse rather than destroy the key.
-"$WORK/pdsd" keygen --key "$KEYGEN_DIR/key.hex" \
+(cd "$KEYGEN_DIR" && exec "$WORK/pdsd" keygen --key) \
   > "$WORK/keygen2.out" 2> "$WORK/keygen2.err" \
   && fail 'case 28: keygen overwrote an existing signing key'
 # Exactly one `keygen:` prefix: the wrapper in `pds/serve.mdk` adds it, so a
 # message that also carries its own reads `keygen: keygen refuses ...`.
-grep -F "keygen: refusing $KEYGEN_DIR/key.hex" "$WORK/keygen2.err" >/dev/null \
+grep -F "keygen: refusing secrets/key.hex" "$WORK/keygen2.err" >/dev/null \
   || fail 'case 28: the overwrite refusal did not name the path'
 grep -E -q '^keygen: keygen' "$WORK/keygen2.err" \
   && fail 'case 28: the refusal carries a doubled keygen: prefix'
-[ "$(tr -d '\n' < "$KEYGEN_DIR/key.hex")" = "$KEYGEN_SECRET" ] \
+[ "$(tr -d '\n' < "$KEYGEN_DIR/secrets/key.hex")" = "$KEYGEN_SECRET" ] \
   || fail 'case 28: the refused second keygen changed the key on disk'
 # A run that names one new destination and one that already exists must write
 # NEITHER. Refusing after the first write would leave a valid 0600 signing key
 # on disk under a failure exit code, and the operator has no way to tell that
 # half-finished state from a run that wrote nothing.
-"$WORK/pdsd" keygen --key "$KEYGEN_DIR/fresh.hex" \
-  --token-secret "$KEYGEN_DIR/token.hex" \
+KEYGEN3_DIR="$WORK/keygen3"
+secrets_root "$KEYGEN3_DIR" - "$KEYGEN_DIR/secrets/token.hex" -
+(cd "$KEYGEN3_DIR" && exec "$WORK/pdsd" keygen --key --token-secret) \
   > "$WORK/keygen3.out" 2> "$WORK/keygen3.err" \
-  && fail 'case 28: keygen accepted an existing --token-secret destination'
-[ ! -e "$KEYGEN_DIR/fresh.hex" ] \
+  && fail 'case 28: keygen accepted an existing secrets/token.hex destination'
+[ ! -e "$KEYGEN3_DIR/secrets/key.hex" ] \
   || fail 'case 28: keygen left a signing key behind after refusing the run'
-# A destination can pass the existence precheck and still fail to be written.
-# The first write is then cleaned up, and no success summary is published.
-"$WORK/pdsd" keygen --key "$KEYGEN_DIR/fresh-write-failure.hex" \
-  --token-secret "$KEYGEN_DIR/missing-parent/token.hex" \
-  > "$WORK/keygen4.out" 2> "$WORK/keygen4.err" \
-  && fail 'case 28: keygen accepted an unwritable --token-secret destination'
-[ ! -e "$KEYGEN_DIR/fresh-write-failure.hex" ] \
-  || fail 'case 28: a second-write failure left the signing key behind'
-[ ! -e "$KEYGEN_DIR/missing-parent/token.hex" ] \
-  || fail 'case 28: a second-write failure left the token secret behind'
-grep -F "unwritable session-token secret $KEYGEN_DIR/missing-parent/token.hex" \
-  "$WORK/keygen4.err" >/dev/null \
-  || fail 'case 28: the second-write failure did not name the token path'
-if grep -E 'keygen: (wrote|public key|did:key)' \
-  "$WORK/keygen4.out" "$WORK/keygen4.err" >/dev/null 2>&1
-then
-  fail 'case 28: a failed paired write published a success summary'
-fi
+# Neither switch is an error rather than a run that generates nothing.
+(cd "$KEYGEN3_DIR" && exec "$WORK/pdsd" keygen) \
+  > "$WORK/keygen5.out" 2> "$WORK/keygen5.err" \
+  && fail 'case 28: keygen with neither switch exited 0'
+grep -F "keygen: name at least one secret to generate" "$WORK/keygen5.err" \
+  >/dev/null \
+  || fail 'case 28: keygen with neither switch did not say what to name'
+# The removed path-valued spelling is refused rather than read as the switch:
+# `--key` takes no value now, so the old form leaves a stray argument, and a
+# run that dropped it would write the key somewhere nobody asked for.
+(cd "$KEYGEN3_DIR" && exec "$WORK/pdsd" keygen --key "$KEYGEN3_DIR/key.hex") \
+  > "$WORK/keygen6.out" 2> "$WORK/keygen6.err" \
+  && fail 'case 28: keygen accepted a path after --key'
+grep -F "keygen: unexpected argument $KEYGEN3_DIR/key.hex" "$WORK/keygen6.err" \
+  >/dev/null \
+  || fail 'case 28: keygen given a path after --key did not name the stray argument'
+[ ! -e "$KEYGEN3_DIR/key.hex" ] && [ ! -e "$KEYGEN3_DIR/secrets/key.hex" ] \
+  || fail 'case 28: keygen given a path after --key still wrote a key'
 # 28b. and what keygen wrote is what serve accepts: a whole genesis server
 #    stands up on the generated key and the generated token secret, which is
 #    the only proof that keygen and serve agree on the file format and mode.
 DATA28="$WORK/data28"
 mkdir -p "$DATA28"
 seed_credential "$DATA28"
-"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$KEYGEN_DIR/key.hex" --token-secret "$KEYGEN_DIR/token.hex" \
-  --data "$DATA28" --port 0 --init \
+(cd "$KEYGEN_DIR" && exec "$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --data "$DATA28" --port 0 --init) \
   > "$WORK/serve28.out" 2> "$WORK/serve28.err" &
 SERVER_PID=$!
 PORT28=$(wait_for_port "$WORK/serve28.out") \
@@ -1312,9 +1362,9 @@ SERVER_PID=""
 #    bootstrapped before the count moved is in.
 DATA29="$WORK/data29"
 mkdir -p "$DATA29"
-"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" --data "$DATA29" --port 0 --init \
+(cd "$BOOT" && exec "$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --data "$DATA29" --port 0 --init) \
   > "$WORK/serve29a.out" 2> "$WORK/serve29a.err" &
 SERVER_PID=$!
 wait_for_port "$WORK/serve29a.out" >/dev/null \
@@ -1332,7 +1382,6 @@ client credential-at "$OLD_ITERATIONS" "$PASSWORD" > "$WORK/credential29.old" \
 cp "$WORK/credential29.old" "$DATA29/credential"
 chmod 600 "$DATA29/credential"
 "$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATA29" --port 0 \
   > "$WORK/serve29b.out" 2> "$WORK/serve29b.err" &
 SERVER_PID=$!
@@ -1362,15 +1411,14 @@ require_empty "$WORK/serve29b.err" 'case 29 resumed server'
 
 # 30. non-loopback with NO auth: --trusted-proxy IS set, so the bind check
 #    passes, and what actually refuses the run is the ALREADY-unconditional
-#    credential requirement (A1: no --password-file and no existing
+#    credential requirement (A1: no secrets/password and no existing
 #    credential in a fresh --data dir) — this asserts THAT diagnostic, not
 #    an invented bind-specific one, and that the bind-specific message did
 #    NOT fire instead.
 DATA30="$WORK/data30"
 mkdir -p "$DATA30"
-run_until_exit "$WORK/serve30.out" "$WORK/serve30.err" \
+run_until_exit "$RUN" "$WORK/serve30.out" "$WORK/serve30.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATA30" --port 0 --bind 0.0.0.0 --trusted-proxy --init
 [ "$RC" -ne 0 ] \
   || fail 'case 30: a non-loopback bind with no account credential was accepted'
@@ -1383,15 +1431,14 @@ if grep -F 'serve: listening on' "$WORK/serve30.out" >/dev/null 2>&1; then
   fail 'case 30: the listener bound before the credential was graded'
 fi
 
-# 31. non-loopback WITH auth (a --password-file is given, bootstrapping a
+# 31. non-loopback WITH auth (secrets/password is present, bootstrapping a
 #    credential) but no --trusted-proxy: refused by the NEW bind-specific
 #    diagnostic, before the credential or session secret reach disk.
 DATA31="$WORK/data31"
 mkdir -p "$DATA31"
-run_until_exit "$WORK/serve31.out" "$WORK/serve31.err" \
+run_until_exit "$BOOT" "$WORK/serve31.out" "$WORK/serve31.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" --data "$DATA31" --port 0 \
+  --data "$DATA31" --port 0 \
   --bind 0.0.0.0 --init
 [ "$RC" -ne 0 ] \
   || fail 'case 31: a non-loopback bind with no --trusted-proxy was accepted'
@@ -1408,16 +1455,15 @@ fi
 
 # 31b. an address that is neither loopback nor the wildcard is refused
 #    outright, --trusted-proxy notwithstanding: `--bind` accepts exactly
-#    127.0.0.1 and 0.0.0.0. --trusted-proxy and a --password-file are both
+#    127.0.0.1 and 0.0.0.0. --trusted-proxy and a secrets/password are both
 #    given so that neither of the other two refusals above can be the one that
 #    fires, and the refusal still lands before the credential or session
 #    secret reach disk.
 DATA31B="$WORK/data31b"
 mkdir -p "$DATA31B"
-run_until_exit "$WORK/serve31b.out" "$WORK/serve31b.err" \
+run_until_exit "$BOOT" "$WORK/serve31b.out" "$WORK/serve31b.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" --data "$DATA31B" --port 0 \
+  --data "$DATA31B" --port 0 \
   --bind 203.0.113.7 --trusted-proxy --init
 [ "$RC" -ne 0 ] \
   || fail 'case 31b: a --bind outside {127.0.0.1, 0.0.0.0} was accepted'
@@ -1441,7 +1487,6 @@ DATA32="$WORK/data32"
 mkdir -p "$DATA32"
 seed_credential "$DATA32"
 "$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATA32" --port 0 \
   --bind 0.0.0.0 --trusted-proxy --init \
   >"$WORK/serve32.out" 2>"$WORK/serve32.err" &
@@ -1481,7 +1526,6 @@ mkdir -p "$DATASUB"
 seed_credential "$DATASUB"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATASUB" --port 0 --init \
   >"$WORK/servesub.out" 2>"$WORK/servesub.err" &
 SERVER_PID=$!
@@ -1657,7 +1701,6 @@ mkdir -p "$DATARL"
 seed_credential "$DATARL"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATARL" --port 0 --init --trusted-proxy \
   >"$WORK/serverl.out" 2>"$WORK/serverl.err" &
 SERVER_PID=$!
@@ -1839,7 +1882,6 @@ mkdir -p "$DATAXFF"
 seed_credential "$DATAXFF"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATAXFF" --port 0 --init --trusted-proxy \
   >"$WORK/servexff.out" 2>"$WORK/servexff.err" &
 SERVER_PID=$!
@@ -1930,10 +1972,9 @@ CHATPORT=$(wait_for_stub_port "$WORK/chatstub.out" "$STUB_CHAT_PID") || {
 DATA58="$WORK/data58"
 mkdir -p "$DATA58"
 for BADROW in "$CHAT_DID" "$CHAT_DID=" "=3129"; do
-  run_until_exit "$WORK/serve58.out" "$WORK/serve58.err" \
+  run_until_exit "$BOOT" "$WORK/serve58.out" "$WORK/serve58.err" \
     --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-    --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-    --password-file "$WORK/password" --data "$DATA58" --port 0 --init \
+    --data "$DATA58" --port 0 --init \
     --appview-did "$APPVIEW_DID" --egress-port 3128 \
     --proxy-audience "$BADROW"
   [ "$RC" -ne 0 ] \
@@ -1948,10 +1989,9 @@ done
 # 58b. an additional audience with no DEFAULT pair is refused rather than
 #    promoted to the default: a header-absent read has to go somewhere, and
 #    which of an operator's audiences receives it is not this program's choice.
-run_until_exit "$WORK/serve58b.out" "$WORK/serve58b.err" \
+run_until_exit "$BOOT" "$WORK/serve58b.out" "$WORK/serve58b.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" --data "$DATA58" --port 0 --init \
+  --data "$DATA58" --port 0 --init \
   --proxy-audience "$CHAT_DID=3129"
 [ "$RC" -ne 0 ] \
   || fail 'case 58b: --proxy-audience with no default audience was accepted'
@@ -1962,10 +2002,9 @@ grep -F -- '--proxy-audience requires --appview-did and --egress-port' \
 # 58c. the same audience twice is refused. Two rows for one DID are two ports a
 #    token minted for it could be sent to, and picking between them is picking
 #    which upstream an operator's credential reaches.
-run_until_exit "$WORK/serve58c.out" "$WORK/serve58c.err" \
+run_until_exit "$BOOT" "$WORK/serve58c.out" "$WORK/serve58c.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" --data "$DATA58" --port 0 --init \
+  --data "$DATA58" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port 3128 \
   --proxy-audience "$APPVIEW_DID=3129"
 [ "$RC" -ne 0 ] \
@@ -1983,7 +2022,6 @@ seed_credential "$DATAPX"
 # bucket, exactly as they would on a server without the flag.
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATAPX" --port 0 --init --trusted-proxy \
   --appview-did "$APPVIEW_DID" --egress-port "$STUBPORT" \
   --proxy-audience "$CHAT_DID=$CHATPORT" \
@@ -2423,7 +2461,6 @@ mkdir -p "$DATAHOL"
 seed_credential "$DATAHOL"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATAHOL" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port "$STALLPORT" \
   >"$WORK/servehol.out" 2>"$WORK/servehol.err" &
@@ -2492,7 +2529,6 @@ mkdir -p "$DATALNG"
 seed_credential "$DATALNG"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATALNG" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port "$LINGERPORT" \
   >"$WORK/servelng.out" 2>"$WORK/servelng.err" &
@@ -2565,7 +2601,6 @@ mkdir -p "$DATADEAF"
 seed_credential "$DATADEAF"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATADEAF" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port "$DEAFPORT" \
   >"$WORK/servedeaf.out" 2>"$WORK/servedeaf.err" &
@@ -2723,7 +2758,6 @@ mkdir -p "$DATABULK"
 seed_credential "$DATABULK"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATABULK" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port "$BULKPORT" \
   >"$WORK/servebulk.out" 2>"$WORK/servebulk.err" &
@@ -2827,7 +2861,6 @@ mkdir -p "$DATAQUEUE"
 seed_credential "$DATAQUEUE"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATAQUEUE" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port "$QUEUEPORT" \
   >"$WORK/servequeue.out" 2>"$WORK/servequeue.err" &
@@ -2885,7 +2918,6 @@ mkdir -p "$DATACRAWL"
 seed_credential "$DATACRAWL"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATACRAWL" --port 0 --init --relay-port "$CRAWLPORT" \
   >"$WORK/servecrawl.out" 2>"$WORK/servecrawl.err" &
 SERVER_PID=$!
@@ -2945,7 +2977,6 @@ mkdir -p "$DATANOCRAWL"
 seed_credential "$DATANOCRAWL"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATANOCRAWL" --port 0 --init --relay-port "$DEADPORT" \
   >"$WORK/servenocrawl.out" 2>"$WORK/servenocrawl.err" &
 SERVER_PID=$!
@@ -2990,7 +3021,6 @@ mkdir -p "$DATASTATS"
 seed_credential "$DATASTATS"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATASTATS" --port 0 --init --stats-interval-ms 200 \
   >"$WORK/servestats.out" 2>"$WORK/servestats.err" &
 SERVER_PID=$!
@@ -3068,7 +3098,6 @@ mkdir -p "$DATALOCK"
 seed_credential "$DATALOCK"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATALOCK" --port 0 --init \
   >"$WORK/servelock.out" 2>"$WORK/servelock.err" &
 SERVER_PID=$!
@@ -3092,9 +3121,8 @@ printf 'in-flight\n' > "$DATALOCK/blocks/.staging/inflight"
 # `run_until_exit` binds $SERVER_PID to the process it runs, so the live
 # holder's pid is saved across it the way case 4f saves the main instance's.
 LOCK_HOLDER_PID="$SERVER_PID"
-run_until_exit "$WORK/serve61.out" "$WORK/serve61.err" \
+run_until_exit "$RUN" "$WORK/serve61.out" "$WORK/serve61.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATALOCK" --port 0
 SERVER_PID="$LOCK_HOLDER_PID"
 [ "$RC" -ne 0 ] \
@@ -3127,7 +3155,6 @@ require_empty "$WORK/servelock.err" 'case 61 (post-run)'
   || fail 'case 62: a killed holder released its lock, so nothing is being tested'
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATALOCK" --port 0 --force-lock \
   >"$WORK/serve62.out" 2>"$WORK/serve62.err" &
 SERVER_PID=$!
@@ -3153,7 +3180,6 @@ require_empty "$WORK/serve62.err" 'case 62 (post-run)'
 #    which is a lock nobody has.
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATALOCK" --port 0 \
   >"$WORK/serve63.out" 2>"$WORK/serve63.err" &
 SERVER_PID=$!
@@ -3188,7 +3214,6 @@ cp "$DATALOCK/events/entries/$LOCK_LAST_ENTRY" "$DATALOCK/events/.staged"
 rm -f "$DATALOCK/events/.last"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATALOCK" --port 0 --force-lock \
   >"$WORK/serve64.out" 2>"$WORK/serve64.err" &
 SERVER_PID=$!
@@ -3270,7 +3295,6 @@ printf 'left by something that is not a server\n' > "$WEDGE/.lock/README"
 seed_credential "$WEDGE"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$WEDGE" --port 0 --init \
   >"$WORK/serve66a.out" 2>"$WORK/serve66a.err" &
 SERVER_PID=$!
@@ -3293,10 +3317,8 @@ SERVER_PID=""
 FWEDGE="$WORK/data-wedge-file"
 mkdir -p "$FWEDGE"
 printf 'not a lock\n' > "$FWEDGE/.lock"
-run_until_exit "$WORK/serve66b.out" "$WORK/serve66b.err" \
+run_until_exit "$BOOT" "$WORK/serve66b.out" "$WORK/serve66b.err" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$FWEDGE" --port 0 --init
 [ "$RC" -ne 0 ] \
   || fail 'case 66: a start over a .lock that is a plain file was accepted'
@@ -3309,7 +3331,6 @@ grep -Fq -e '--force-lock' "$WORK/serve66b.err" \
 seed_credential "$FWEDGE"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$FWEDGE" --port 0 --init --force-lock \
   >"$WORK/serve66c.out" 2>"$WORK/serve66c.err" &
 SERVER_PID=$!
@@ -3338,7 +3359,6 @@ mkdir -p "$LOSER"
 seed_credential "$LOSER"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$LOSER" --port 0 --init \
   >"$WORK/serve67a.out" 2>"$WORK/serve67a.err" &
 SERVER_PID=$!
@@ -3352,7 +3372,6 @@ wait_for_port "$WORK/serve67a.out" >/dev/null || {
 LOSER_PID="$SERVER_PID"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$LOSER" --port 0 --force-lock \
   >"$WORK/serve67b.out" 2>"$WORK/serve67b.err" &
 SERVER_PID=$!
@@ -3601,7 +3620,6 @@ cp "$WORK/credential74.slow" "$DATA74/credential"
 chmod 600 "$DATA74/credential"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
   --data "$DATA74" --port 0 --trusted-proxy \
   >"$WORK/serve74.out" 2>"$WORK/serve74.err" &
 SERVER_PID=$!
@@ -3622,4 +3640,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serve74.err" 'case 74'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and a grace-window replay, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a stalled-body flood (#2815, the body-phase half of #2772) answered rather than shutting other callers out, restart-and-resume, sync.getRecord answering a rooted CAR carrying a record the repository holds and a same-status proof of ABSENCE for a key it does not, sync.getBlocks answering a CAR with an EMPTY roots list carrying exactly the block asked for, and a partly-missing block set refused whole with every absent CID named, a freshly created repository announcing itself with #identity, #account, #commit and #sync at seq 1-4 and nothing else before its first write, a subscribeRepos subscription receiving live events in order, a future cursor refused, a negative and an unparsable one each refused at the handshake under their own distinct wording, and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, updateHandle naming the current handle announcing exactly one #identity event per accepted call while every refused call emits nothing, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded once its wait runs out while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, a twelve-call fan-out against an upstream that answers none of the first eight until all eight have arrived served in full rather than four of it refused, and a read past the in-flight ceiling AND a full admission queue refused 503 ProxyLimitExceeded within 300ms rather than after the queue'"'"'s own two-second deadline, a second large proxied answer refused 503 ProxyEgressLimitExceeded while a first holds the egress byte budget, with an ordinary read still answered and the budget given back once the first is relayed, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable, a SECOND configured audience on its own egress port receiving the reads a header audiences for it while the appview sees none of them and the converse also holding, a chat.bsky.* method routed by the audience the header named rather than by its own namespace, an audience in neither row still refused with neither proxy reached, and an additional audience row missing either half, given without a default pair, or repeating a DID already configured refused before the bind, and a client asking for the credential ITSELF handed one the chat service reads as naming that service and the requested method, which appears nowhere in this server'"'"'s own output, and a stamped build reporting its own commit and build date on --version, and one access-log line per request — a routed 401, an unparsable buffer and a framer-refused over-cap body each logged as surely as a served read, with the query string stripped and neither the account password nor an access token anywhere in the log — under a startup that reports its configuration and its event-log recovery outcome, and a periodic stats line carrying active/un-framed connections, open subscriptions, the account repo'"'"'s revision, and blocks and blobs on disk, at an operator-configurable interval, and a second server over a LIVE data directory refused before its sweep could delete the staged file the live one had in flight while that live one kept answering, a lock its killed holder left behind taken by --force-lock and reclaimed with no flag at all once its heartbeat stopped, and a lost last-promoted pointer over a still-owed staged entry recovered into a clean start rather than refused, which is the startup order the genesis guard depends on, eight servers started at once over a directory whose holder is gone leaving exactly one of them holding it five rounds running, a stray file beside the lock ignored rather than wedging the directory while a .lock that is not a directory at all is refused by a message naming the path and the remedy and then cured by that remedy, and a holder whose lock is forced away under it ending its run rather than going on writing beneath the directory, and a read answered in a fraction of the time a concurrent login spends deriving, a login flood past the derivation ceiling refused 429 without deriving while reads are still answered, and of two logins graded against one credential record only the first let in once that record was replaced, and a wrong-password flood from one forwarded-for identity capped at its own per-identity derivation ceiling while a different identity'"'"'s legitimate login still succeeds'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and a grace-window replay, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a stalled-body flood (#2815, the body-phase half of #2772) answered rather than shutting other callers out, restart-and-resume, sync.getRecord answering a rooted CAR carrying a record the repository holds and a same-status proof of ABSENCE for a key it does not, sync.getBlocks answering a CAR with an EMPTY roots list carrying exactly the block asked for, and a partly-missing block set refused whole with every absent CID named, a freshly created repository announcing itself with #identity, #account, #commit and #sync at seq 1-4 and nothing else before its first write, a subscribeRepos subscription receiving live events in order, a future cursor refused, a negative and an unparsable one each refused at the handshake under their own distinct wording, and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, updateHandle naming the current handle announcing exactly one #identity event per accepted call while every refused call emits nothing, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, every removed secret-path flag refused as an unknown flag, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite and refusing a stray path argument, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded once its wait runs out while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, a twelve-call fan-out against an upstream that answers none of the first eight until all eight have arrived served in full rather than four of it refused, and a read past the in-flight ceiling AND a full admission queue refused 503 ProxyLimitExceeded within 300ms rather than after the queue'"'"'s own two-second deadline, a second large proxied answer refused 503 ProxyEgressLimitExceeded while a first holds the egress byte budget, with an ordinary read still answered and the budget given back once the first is relayed, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable, a SECOND configured audience on its own egress port receiving the reads a header audiences for it while the appview sees none of them and the converse also holding, a chat.bsky.* method routed by the audience the header named rather than by its own namespace, an audience in neither row still refused with neither proxy reached, and an additional audience row missing either half, given without a default pair, or repeating a DID already configured refused before the bind, and a client asking for the credential ITSELF handed one the chat service reads as naming that service and the requested method, which appears nowhere in this server'"'"'s own output, and a stamped build reporting its own commit and build date on --version, and one access-log line per request — a routed 401, an unparsable buffer and a framer-refused over-cap body each logged as surely as a served read, with the query string stripped and neither the account password nor an access token anywhere in the log — under a startup that reports its configuration and its event-log recovery outcome, and a periodic stats line carrying active/un-framed connections, open subscriptions, the account repo'"'"'s revision, and blocks and blobs on disk, at an operator-configurable interval, and a second server over a LIVE data directory refused before its sweep could delete the staged file the live one had in flight while that live one kept answering, a lock its killed holder left behind taken by --force-lock and reclaimed with no flag at all once its heartbeat stopped, and a lost last-promoted pointer over a still-owed staged entry recovered into a clean start rather than refused, which is the startup order the genesis guard depends on, eight servers started at once over a directory whose holder is gone leaving exactly one of them holding it five rounds running, a stray file beside the lock ignored rather than wedging the directory while a .lock that is not a directory at all is refused by a message naming the path and the remedy and then cured by that remedy, and a holder whose lock is forced away under it ending its run rather than going on writing beneath the directory, and a read answered in a fraction of the time a concurrent login spends deriving, a login flood past the derivation ceiling refused 429 without deriving while reads are still answered, and of two logins graded against one credential record only the first let in once that record was replaced, and a wrong-password flood from one forwarded-for identity capped at its own per-identity derivation ceiling while a different identity'"'"'s legitimate login still succeeds'
