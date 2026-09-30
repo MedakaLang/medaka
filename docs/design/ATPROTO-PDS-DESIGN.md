@@ -5,11 +5,10 @@ Phase 4 (#1697) has landed record CRUD, `applyWrites` as one signed commit,
 session authentication, and the blob half (`uploadBlob`/`getBlob`/`listBlobs`
 with on-disk persistence across restarts) — the Async v2 runtime arc (#500)
 and the graded-interface work (#823/#824) that Phase 3 depended on are both
-landed, so nothing in Phase 4 remains gated on them either. The bind is now
-configuration (`--bind`, default `127.0.0.1`) rather than a literal, a
-non-loopback bind is refused unless `--trusted-proxy` is also set (`#2757`,
-accepted-risk plus this refusal — a peer-address extern was proposed and
-declined), and `pds/Caddyfile` + `pds/pds.service` + `docs/ops/PDS-DEPLOY.md`
+landed, so nothing in Phase 4 remains gated on them either. The server
+listens on loopback only (`listenAddress`, `pds/shell/server.mdk`; there is no
+`--bind` flag, and `#2757` closed as accepted-risk — a peer-address extern was
+proposed and declined), and `pds/Caddyfile` + `pds/pds.service` + `docs/ops/PDS-DEPLOY.md`
 carry the deploy procedure — but no live deploy has happened: pointing a real
 domain at a real key is a manual, deliberate act still to be taken. Backup and
 restore are now rehearsed rather than merely described (`#2613`): §3.1 below
@@ -942,12 +941,13 @@ operator's data. `pds/test/serve_e2e.sh` case 64 grades the legitimate case the
 order exists for — a lost pointer over a still-owed staged entry recovering
 into a clean start.
 
-**Loopback by default, and a non-loopback bind is a deliberate act.** `--bind`
-(`pds/serve.mdk`) defaults to `127.0.0.1`; a bind to anything else is refused
-before any secret is read or generated and before the listener binds, unless
-`--trusted-proxy` is also given (`requireTrustedBind`, `#2757`) — see the
-paragraph below for why that flag is the enforcement rather than a peer-address
-check this process could make instead. §4.2-4.4 below describe the auth seam
+**Loopback only.** The listener binds `127.0.0.1` and nothing else
+(`bindAddress`, `pds/shell/server.mdk`), and no flag changes the address, so
+the listener's type is `Listener "127.0.0.1"` and every connection it accepts
+is charged `Net "127.0.0.1"` — the only way in from off the box is the
+reverse proxy in front of it. See the rate-limiting paragraph below for why
+`--trusted-proxy` names the client identity rather than a peer-address check
+this process could make instead. §4.2-4.4 below describe the auth seam
 this server now has: the three record writes and `getSession` require a valid
 access token, `refreshSession`/`deleteSession` require a valid refresh token,
 `createSession` is the public login that issues both, and the six reads,
@@ -956,7 +956,7 @@ implemented here (P5) — Caddy terminates it and reverse-proxies to the
 loopback port, which is the deployment `docs/ops/PDS-DEPLOY.md` describes.
 
 **Phase 4 — a standalone PDS.** *Landed in the current tree (#1697), including
-the configurable bind, the refusal, and the deployment artifacts
+the loopback-only listener and the deployment artifacts
 (`pds/Caddyfile`, `pds/pds.service`, `docs/ops/PDS-DEPLOY.md`) — except the
 live deploy itself, which is a manual act still to be taken.*
 
@@ -1197,12 +1197,11 @@ needs its peer address, which this runtime cannot obtain — there is no
 Caddy on the same box a socket peer address reads `127.0.0.1` regardless of
 who is really asking, so the last `X-Forwarded-For` hop is already the
 better identity available. `#2757` closes as accepted-risk on that basis,
-plus the refusal `requireTrustedBind` (`pds/serve.mdk`) now enforces: **a
-direct, unproxied non-loopback bind is unsupported** — `configure` refuses to
-start one at all, so the "whole world sharing one bucket" state described
-above can only be reached by a deployment that has itself already asserted
-`--trusted-proxy` while lacking a real proxy, which the flag's own name
-argues against. `pds/README.md` documents the operator-facing half of this:
+and **a direct, unproxied bind is not possible at all**: the server listens on
+loopback only and has no flag to change that, so every caller arrives through
+a proxy on the same box, and the "whole world sharing one bucket" state
+described above can only be reached by a deployment that runs that proxy
+without `--trusted-proxy`. `pds/README.md` documents the operator-facing half of this:
 when to pass the flag and what happens without it.
 
 **Blob-storage policy (P14).** One blob per file under `<data>/blobs`, a

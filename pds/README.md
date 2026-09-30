@@ -20,12 +20,10 @@ idle-connection timeout, and restart-and-resume across a process boundary), and
 `pds/test/lib_boundary_test.mdk` proves the `pds/lib` ⇄ `pds/shell` boundary holds (no
 `pds/lib` import of `pds/shell`, every `pds/lib` export explicitly signed, and no
 such signature effect-bearing — the signature check is what stops an unannotated
-export from carrying an inferred effect row past the effect check). The bind
-address is `--bind`, which accepts exactly `127.0.0.1` (the default) and
-`0.0.0.0`; any other value is refused (`bindAddressOf`), and `0.0.0.0` is refused
-unless `--trusted-proxy` also asserts that a reverse proxy terminates TLS in
-front of this process (`requireTrustedBind`), because nothing here terminates TLS
-itself.
+export from carrying an inferred effect row past the effect check). The server
+listens on loopback, `127.0.0.1`, and nowhere else: the address is
+`shell.server`'s `listenAddress`, not a flag, and a reverse proxy on the same
+box terminates TLS in front of it, because nothing here terminates TLS itself.
 
 Authentication gates the writes, `updateHandle`, and the three session routes that need it — the
 five record/blob writes, `updateHandle` and `getSession` require a valid access token,
@@ -110,11 +108,9 @@ the shell is native-bound.
   signing key, and hands `pds/shell/server.mdk` a listener and the one
   `Ref Store` all connection tasks share. Its `main` is an `Async` value, so
   `medaka build pds/serve.mdk` produces a program the async scheduler drives.
-  The bind address comes from `--bind` (`bindAddressOf`, which accepts exactly
-  `127.0.0.1`, the default, and `0.0.0.0`) and is handed to `shell.server`'s
-  `bindAddress`; `requireTrustedBind` refuses `0.0.0.0` unless `--trusted-proxy`
-  has vouched for it. Both refusals land before any secret is read or
-  generated.
+  The listener is bound by `shell.server`'s `bindAddress` at the fixed
+  loopback address, so its type is `Listener "127.0.0.1"` and every
+  connection it accepts is charged `Net "127.0.0.1"`; there is no bind flag.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). Every gate must be placed explicitly in
   exactly one `ci.yml` shard by measured cost; directory location alone does

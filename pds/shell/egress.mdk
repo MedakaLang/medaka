@@ -81,9 +81,11 @@ import time.{Duration, seconds}
 {- | The loopback address every outbound call this shell makes is reached at.
    See the module header for why this is a constant and not a flag — it holds
    just as much for `pds/shell/crawl.mdk`'s relay announce as it does for a
-   proxied read: this process dials no address but its own box. -}
+   proxied read: this process dials no address but its own box. The declared
+   qualifier is what charges every outbound call `Net "127.0.0.1"`, in this
+   module and in every module that dials it. -}
 export
-egressAddress : String
+egressAddress : String @"127.0.0.1"
 egressAddress = "127.0.0.1"
 
 {- | How long one outbound read may find nothing before the call is abandoned.
@@ -360,20 +362,20 @@ opened mayHold conn bytes = defer
    is one call, made once at startup, so no number of callers can multiply
    what it holds. -}
 export
-egressConnect : String ->
+egressConnect : (host : String) ->
   Int ->
   Bytes ->
-  Wire * e (Result String UpstreamAnswer)
+  Wire host e (Result String UpstreamAnswer)
 egressConnect host port bytes =
   egressConnectHolding host port (_ => deferPure True) bytes
 
 -- `egressConnect`, asking `mayHold` before each chunk of the answer is kept
 -- (`collectUpstream`).
-egressConnectHolding : String ->
+egressConnectHolding : (host : String) ->
   Int ->
-  (Int -> Wire * e Bool) ->
+  (Int -> Wire host e Bool) ->
   Bytes ->
-  Wire * e (Result String UpstreamAnswer)
+  Wire host e (Result String UpstreamAnswer)
 egressConnectHolding host port mayHold bytes = defer
   connected <- A.connectWithin upstreamConnectTimeout host port
   match connected
@@ -411,9 +413,9 @@ egressConnectHolding host port mayHold bytes = defer
    which of the rest happened is this server's business and not the client's. -}
 export
 egressCall : Egress ->
-  (Int -> Wire * e Bool) ->
+  (Int -> Wire "127.0.0.1" e Bool) ->
   ProxyAdmission ->
-  Wire * e (Result String UpstreamAnswer)
+  Wire "127.0.0.1" e (Result String UpstreamAnswer)
 egressCall egress mayHold admission =
   match appviewRouteFor (egressAppviews egress) admission.audience
     None =>

@@ -15,20 +15,18 @@ describes how, not a completed deployment.
 
 ## What this deploys
 
-`pds serve` (`pds/serve.mdk`) binds **loopback only by default** — `--bind`
-defaults to `127.0.0.1` and accepts one other value, `0.0.0.0`; any other
-address is refused, and `0.0.0.0` is refused unless `--trusted-proxy` is also
-given, both before anything is read or written
-(`requireTrustedBind`, `docs/design/ATPROTO-PDS-DESIGN.md` § "Loopback by
-default"). This deployment keeps the default: `pds serve` binds loopback,
-and Caddy (`pds/Caddyfile`) is the only thing that terminates TLS and is
-reachable from the public internet, reverse-proxying to the loopback port.
+`pds serve` (`pds/serve.mdk`) binds **loopback only**: it listens on
+`127.0.0.1` and nowhere else, and no flag changes that — there is no
+`--bind` (`docs/design/ATPROTO-PDS-DESIGN.md` § "Loopback only"). Caddy
+(`pds/Caddyfile`) is the only thing that terminates TLS and is reachable from
+the public internet, reverse-proxying to the loopback port.
 
-**A direct, unproxied non-loopback bind is unsupported** (`#2757`): this
+`--trusted-proxy` does not choose an address. It tells `pds serve` to read the
+client identity rate limiting keys on from `X-Forwarded-For`, and this
 process cannot verify that its peer really is a reverse proxy — there is no
-`getpeername`-equivalent in the runtime — so `--trusted-proxy` is an
-operator assertion about the deployment, not a checked fact. This procedure
-never sets it against anything but Caddy on the same box.
+`getpeername`-equivalent in the runtime — so the flag is an operator
+assertion about the deployment, not a checked fact. This procedure never
+sets it against anything but Caddy on the same box.
 
 ## Procedure
 

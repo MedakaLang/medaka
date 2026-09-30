@@ -1,7 +1,7 @@
 # pds/pds.service — a systemd unit template for the built `pds serve` binary.
 #
-# This deployment binds LOOPBACK (the default `--bind`, no `--bind` flag
-# here) with Caddy reverse-proxying to it — see pds/Caddyfile and
+# `pdsd` listens on loopback, 127.0.0.1, and nowhere else — the address is
+# not a flag — with Caddy reverse-proxying to it: see pds/Caddyfile and
 # docs/ops/PDS-DEPLOY.md. `--trusted-proxy` is still passed: Caddy forwards
 # `X-Forwarded-For`, and this process's peer really is Caddy on the same
 # box, so per-identity rate limiting can use that header

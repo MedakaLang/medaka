@@ -8,10 +8,9 @@
    and `shell.blobfile` and then published into the one `Ref Store` every
    connection task shares.
 
-   The listener binds whatever address `bindAddress` is given — `pds/serve.mdk`
-   defaults it to loopback and refuses any other address unless
-   `--trusted-proxy` is also set, but that refusal lives in `configure`, not
-   here: this module binds the socket it is told to bind.
+   The listener binds loopback and nothing else (`bindAddress`): the address
+   is a constant, not a flag, so the listener's type names it and every
+   accepted connection is charged at it.
 
    Every per-connection bound lives here rather than in `lib.resource_limits`
    because each is a `Duration` or a socket-scheduling count, neither of which
@@ -40,7 +39,6 @@ import http.{
 }
 import async.{
   Async,
-  Wait,
   awaitAny,
   deadlineAfter,
   expired,
@@ -183,7 +181,7 @@ import shell.eventlog.{
   eventLogStage,
   eventLogStaged,
 }
-import shell.rows.{Serve, Wire}
+import shell.rows.{Serve, ServeDeadline, Wire}
 import shell.persist.{
   persistCredential,
   persistPreferences,
@@ -498,16 +496,18 @@ egressQueueWait = seconds 5
 headerTimeout : Duration
 headerTimeout = seconds 5
 
-{- | Bind the listening socket to the given address and port.
-
-   `pds/serve.mdk`'s `configure` is the only caller, and it refuses to reach
-   here at all for a non-loopback address unless `--trusted-proxy` is also
-   set (`requireTrustedBind`) — this function itself performs no such check,
-   because it cannot: a bind address is a deployment fact, not something this
-   process can verify about its own socket. -}
+-- | The one address this server listens on. It is not configurable: the
+-- server is reached only through a reverse proxy on the same box
+-- (`docs/ops/PDS-DEPLOY.md`), and the declared qualifier is what charges every
+-- accepted connection `Net "127.0.0.1"`.
 export
-bindAddress : String -> Int -> <Net> Result String (Listener *)
-bindAddress addr port = listen addr port
+listenAddress : String @"127.0.0.1"
+listenAddress = "127.0.0.1"
+
+-- | Bind the listening socket to `listenAddress` on `port`.
+export
+bindAddress : Int -> <Net "127.0.0.1"> Result String (Listener "127.0.0.1")
+bindAddress port = listen listenAddress port
 
 -- ── applying a request and persisting the store ─────────────────────────────
 
@@ -1196,7 +1196,8 @@ applyRateLimit limiterRef identity classes nowSeconds =
    the whole request's. They travel as a pair rather than as two `Wait`
    arguments so that a call site cannot silently swap them — they have the
    same type and opposite meanings. -}
-data Deadlines (e : Effect) = Deadlines (Wait e) (Wait e)
+data Deadlines (h : Authority Net) (e : Effect) =
+  | Deadlines (ServeDeadline h e) (ServeDeadline h e)
 
 {- | One connection's place in the un-framed census: the process-wide count,
    and whether THIS connection is still one of the connections it counts.
@@ -2024,11 +2025,11 @@ export
 runServer : Server ->
   String ->
   Ref Store ->
-  Listener * ->
+  Listener h ->
   Serving ->
   Duration ->
   Int ->
-  Serve e (Result String Unit)
+  Serve h e (Result String Unit)
 runServer server dir storeRef lis serving statsInterval signalFd = defer
   active <- liftIO (u => Ref 0)
   unframed <- liftIO (u => Ref 0)
@@ -2093,9 +2094,9 @@ drainPending active until = defer
 
 -- Closing the listening fd from another task would not reliably wake poll(2).
 -- The signal pipe and listener share the same scheduler poller and wait set.
-acceptOrSignal : Listener * ->
+acceptOrSignal : Listener h ->
   Int ->
-  Wire * <Signal | e> (Result String (Option (Connection *)))
+  Wire h <Signal | e> (Result String (Option (Connection h)))
 acceptOrSignal lis signalFd = defer
   requested <- liftIO (u => pdsSignalRequested ())
   if requested then
@@ -2125,14 +2126,14 @@ acceptOrSignal lis signalFd = defer
 acceptLoop : Server ->
   String ->
   Ref Store ->
-  Listener * ->
+  Listener h ->
   Ref Int ->
   Ref Int ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
   Int ->
-  Serve e (Result String Unit)
+  Serve h e (Result String Unit)
 acceptLoop server dir storeRef lis active unframed limiterRef census serving signalFd =
   defer
     accepted <- acceptOrSignal lis signalFd
@@ -2152,15 +2153,15 @@ acceptLoop server dir storeRef lis active unframed limiterRef census serving sig
 acceptStep : Server ->
   String ->
   Ref Store ->
-  Listener * ->
+  Listener h ->
   Ref Int ->
   Ref Int ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
   Int ->
-  Result String (Option (Connection *)) ->
-  Serve e (Result String Unit)
+  Result String (Option (Connection h)) ->
+  Serve h e (Result String Unit)
 acceptStep _ _ _ _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
 acceptStep _ _ _ lis _ _ _ _ serving _ (Ok None) = defer
   _ <- liftIO (u => servingStopping serving := True)
@@ -2228,10 +2229,10 @@ serveConnection : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   Ref Int ->
   Ref Int ->
-  Serve e Unit
+  Serve h e Unit
 serveConnection server dir storeRef limiterRef census serving conn active unframed =
   defer
     held <- liftIO (u => Ref True)
@@ -2274,11 +2275,11 @@ connectionLoop : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 connectionLoop server dir storeRef limiterRef census serving conn slot pending firstRequest =
   defer
     stopping <- liftIO (u => pdsSignalRequested ())
@@ -2313,13 +2314,13 @@ frameLoop : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
-  Deadlines <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> ->
+  Deadlines h e ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 frameLoop server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   let scanned =
     scanRequestBoundaryWithin (readBufferBacking buf) (readBufferLen buf) 0 scan
@@ -2368,13 +2369,13 @@ framePending : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
-  Deadlines <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> ->
+  Deadlines h e ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 framePending server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   match deadlines
     Deadlines headerDeadline deadline => defer
@@ -2405,13 +2406,13 @@ readMore : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
-  Deadlines <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> ->
+  Deadlines h e ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 readMore server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   defer
     reserved <- reserveReadBuffer (servingBufferCensus serving) buf scan
@@ -2688,12 +2689,12 @@ respond : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Int ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 respond server dir storeRef limiterRef census serving conn slot buf boundary firstRequest =
   defer
     nowSeconds <- liftIO (u => floatToInt (now ()))
@@ -2721,14 +2722,14 @@ respondAt : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Int ->
   Bool ->
   Int ->
   Float ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 respondAt server dir storeRef limiterRef census serving conn slot buf boundary firstRequest nowSeconds startedAt =
   let parsed = parseRequestAt (readBufferBacking buf) 0 boundary
   let keepAlive = match parsed
@@ -3260,7 +3261,7 @@ forwardProxied : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
@@ -3268,7 +3269,7 @@ forwardProxied : Server ->
   ClientIdentity ->
   RequestTrace ->
   ProxyAdmission ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 forwardProxied server dir storeRef limiterRef census serving conn slot rest keepAlive nowSeconds identity trace admission =
   match applyRateLimit limiterRef identity [ProxyClass] nowSeconds
     Some refusal =>
@@ -3459,12 +3460,12 @@ admitSubscription : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   RequestTrace ->
   UpgradeAdmission ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 admitSubscription server dir storeRef limiterRef census serving conn slot rest trace admission =
   if not (claimSubscription census) then
     sendAndContinue
@@ -3530,13 +3531,13 @@ sendAndContinue : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
   RequestTrace ->
   Bytes ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 sendAndContinue server dir storeRef limiterRef census serving conn slot rest keepAlive trace responseBytes =
   defer
     sent <- A.sendAllWithin writeTimeout conn responseBytes
@@ -3564,7 +3565,7 @@ continueAfterSend : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
@@ -3572,7 +3573,7 @@ continueAfterSend : Server ->
   Int ->
   Int ->
   Result String Unit ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h e (Result String Unit)
 continueAfterSend server dir storeRef limiterRef census serving conn slot rest keepAlive trace statusCode byteLength sent =
   defer
     -- Logged after the write and whatever it returned: a response this server

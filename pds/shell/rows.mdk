@@ -10,16 +10,15 @@
    whatever the subscription loop may do the serving loop may do too; and both
    move bytes over a socket.
 
-   An alias with an `Effect` parameter cannot yet appear on the signatures of a
-   recursion group with more than one back edge (#3623), so the connection
-   loop in `pds/shell/server.mdk` and the tail loop in
-   `pds/shell/subscribe.mdk` spell these rows out. -}
+   Every `Net` atom here is indexed. The listener's authority is the
+   parameter `h`; the one outbound authority, `"127.0.0.1"`, is written as a
+   literal because it is what `egressAddress` (`pds/shell/egress.mdk`) is
+   declared to be, and every outbound call is charged at it. -}
 
 import async.{Async, Wait}
 
 -- | A computation that moves bytes over a socket at authority `h`, and may
--- wait on the clock while it does. A helper that holds one indexed connection
--- is `Wire h`; a loop that dials or accepts at the whole domain is `Wire *`.
+-- wait on the clock while it does.
 export type Wire (h : Authority Net) (e : Effect) a = Async <Clock, Net h | e> a
 
 -- | A deadline a `Wire h e` computation checks. It restates `Wire`'s row
@@ -28,12 +27,17 @@ export type Wire (h : Authority Net) (e : Effect) a = Async <Clock, Net h | e> a
 -- first mention of the authority is the deadline.
 export type WireDeadline (h : Authority Net) (e : Effect) = Wait <Clock, Net h | e>
 
--- | The subscription loop's row (`pds/shell/subscribe.mdk`): the wire, plus
--- reading the event log it replays and tails, and polling the shutdown signal
--- that ends the tail.
-export type Streaming (e : Effect) a = Wire * <FileRead, Signal | e> a
+-- | The subscription loop's row (`pds/shell/subscribe.mdk`) over a connection
+-- accepted at `h`: the wire, plus reading the event log it replays and tails,
+-- and polling the shutdown signal that ends the tail.
+export type Streaming (h : Authority Net) (e : Effect) a = Wire h <FileRead, Signal | e> a
 
--- | The serving loop's row (`pds/shell/server.mdk`, `pds/serve.mdk`): the
--- subscription loop's, plus persisting what a request changed, drawing nonces,
--- and the access and diagnostic logs.
-export type Serve (e : Effect) a = Streaming <FileWrite, Rand, Stderr, Stdout | e> a
+-- | The serving loop's row (`pds/shell/server.mdk`, `pds/serve.mdk`) over a
+-- listener at `h`: the subscription loop's, plus the outbound calls a request
+-- may forward, persisting what a request changed, drawing nonces, and the
+-- access and diagnostic logs.
+export type Serve (h : Authority Net) (e : Effect) a = Streaming h <FileWrite, Net "127.0.0.1", Rand, Stderr, Stdout | e> a
+
+-- | A deadline a `Serve h e` computation checks, for the reason
+-- `WireDeadline` restates `Wire`: its row is `Serve`'s, written out.
+export type ServeDeadline (h : Authority Net) (e : Effect) = WireDeadline h <FileRead, FileWrite, Net "127.0.0.1", Rand, Signal, Stderr, Stdout | e>

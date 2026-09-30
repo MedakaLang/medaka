@@ -528,22 +528,20 @@ firehoseTimeoutsIn : Result String String ->
 firehoseTimeoutsIn (Err e) = Err e
 firehoseTimeoutsIn (Ok path) = firehoseTimeouts path
 
-{- | One violation line per `--bind` on the unit's command line that names
-   anything but loopback, in both spellings the argument parser accepts
-   (`--bind ADDR` and `--bind=ADDR`).
+{- | One violation line per `--bind` on the unit's command line, in both
+   spellings an argument parser takes (`--bind ADDR` and `--bind=ADDR`).
 
-   A unit passing no `--bind` binds loopback, `pdsd`'s default, and that is
-   the proxied shape B13 was accepted for. Any other bind puts `pdsd`'s own
-   admission gate within reach of callers that never pass through the
-   proxy. `127.0.0.1` is the one address `pds/serve.mdk`'s
-   `isLoopbackAddress` accepts. Comment lines are skipped, since the unit's
-   header names the flag in prose. -}
-nonLoopbackBinds : String -> <FileRead> Result String (List String)
-nonLoopbackBinds path = match readFile path
+   `pdsd` has no `--bind`: it listens on loopback only, the proxied shape
+   B13 was accepted for, and refuses the flag as unknown, so a unit that
+   passes one, whatever address it names, is a unit that does not start.
+   Comment lines are skipped, since the unit's header names the flag in
+   prose. -}
+bindFlags : String -> <FileRead> Result String (List String)
+bindFlags path = match readFile path
   Err e => Err "could not read \{path}: \{e}"
   Ok content =>
     let tokens = flatMap words (filter (l => not (isComment l)) (lines content))
-    Ok (map (boundTo path) (filter (/= "127.0.0.1") (bindValues tokens)))
+    Ok (map (boundTo path) (bindValues tokens))
 
 isComment : String -> Bool
 isComment line = startsWith "#" (trim line)
@@ -557,14 +555,13 @@ bindValues (token :: rest) = match stripPrefix "--bind=" token
 
 boundTo : String -> String -> String
 boundTo path addr =
-  "\{path}: ExecStart passes --bind \{addr}, a non-loopback bind outside the proxied deploy shape B13 was accepted for"
+  "\{path}: ExecStart passes --bind \{addr}, a flag pdsd refuses: it listens on loopback only"
 
--- | `nonLoopbackBinds` over a mutant, with the mutant's own failure reported
--- as the check's.
-nonLoopbackBindsIn : Result String String ->
-  <FileRead> Result String (List String)
-nonLoopbackBindsIn (Err e) = Err e
-nonLoopbackBindsIn (Ok path) = nonLoopbackBinds path
+-- | `bindFlags` over a mutant, with the mutant's own failure reported as the
+-- check's.
+bindFlagsIn : Result String String -> <FileRead> Result String (List String)
+bindFlagsIn (Err e) = Err e
+bindFlagsIn (Ok path) = bindFlags path
 
 -- # The real tree
 
@@ -614,10 +611,10 @@ test "Caddyfile has no TCP pass-through in front of pdsd" =
     "pds/Caddyfile carries a layer4 pass-through"
     (presentForbidden caddyfile caddyForbidden)
 
-test "pds.service binds loopback only" =
+test "pds.service passes no --bind" =
   expectNoFindings
-    "pds/pds.service binds a non-loopback address"
-    (nonLoopbackBinds service)
+    "pds/pds.service passes a --bind flag pdsd refuses"
+    (bindFlags service)
 
 test "pds-egress.service carries every required hardening directive" =
   expectNoFindings
@@ -855,11 +852,12 @@ test "mutation control: a stripped OOMPolicy on pds.service is caught" =
         (without (startsWith "OOMPolicy=")))
       serviceDirectives)
 
--- The two spellings the argument parser accepts, each graded on its own.
+-- Both spellings, each graded on its own, and loopback as well as a wider
+-- address: the flag itself is what `pdsd` refuses.
 test "mutation control: a pds.service bound to the wildcard address is caught" =
   expectFindings
     "a --bind 0.0.0.0 on pds.service"
-    (nonLoopbackBindsIn
+    (bindFlagsIn
       (mutantOf
         service
         "pds.service.bind-wildcard"
@@ -868,16 +866,16 @@ test "mutation control: a pds.service bound to the wildcard address is caught" =
 test "mutation control: a pds.service bound with --bind= to a public address is caught" =
   expectFindings
     "a --bind=203.0.113.7 on pds.service"
-    (nonLoopbackBindsIn
+    (bindFlagsIn
       (mutantOf
         service
         "pds.service.bind-equals"
         (substituting "--port 8080" "--bind=203.0.113.7 --port 8080")))
 
-test "mutation control: an explicit loopback --bind still passes" =
-  expectNoFindings
-    "an explicit --bind 127.0.0.1 was expected to pass"
-    (nonLoopbackBindsIn
+test "mutation control: an explicit loopback --bind is caught too" =
+  expectFindings
+    "an explicit --bind 127.0.0.1 on pds.service"
+    (bindFlagsIn
       (mutantOf
         service
         "pds.service.bind-loopback"

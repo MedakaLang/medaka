@@ -138,11 +138,11 @@ messageTooBigCloseCode = 1009
 export
 runSubscription : String ->
   Duration ->
-  Connection * ->
+  Connection h ->
   String ->
   Option Int ->
   Bytes ->
-  Streaming e (Result String Unit)
+  Streaming h e (Result String Unit)
 runSubscription dir budget conn accept cursor pending = defer
   opened <- A.sendAllWithin budget conn (handshakeResponseBytes accept)
   match opened
@@ -158,10 +158,10 @@ newestSeq (Some seq) = seq
 
 openStream : String ->
   Duration ->
-  Connection * ->
+  Connection h ->
   Option Int ->
   Bytes ->
-  Streaming e (Result String Unit)
+  Streaming h e (Result String Unit)
 openStream dir budget conn cursor pending = defer
   last <- liftIO (u => eventLogLast dir)
   match last
@@ -183,11 +183,11 @@ openStream dir budget conn cursor pending = defer
    replay, no gap, nothing to announce. -}
 gradeCursor : String ->
   Duration ->
-  Connection * ->
+  Connection h ->
   Option Int ->
   Bytes ->
   Int ->
-  Streaming e (Result String Unit)
+  Streaming h e (Result String Unit)
 gradeCursor dir budget conn None pending newest =
   tailFrom dir budget conn newest noReassembly pending
 gradeCursor dir budget conn (Some wanted) pending newest =
@@ -229,11 +229,11 @@ refuseFuture budget conn wanted newest =
 
 announceOutdated : String ->
   Duration ->
-  Connection * ->
+  Connection h ->
   Int ->
   Bytes ->
   List EventLogEntry ->
-  Streaming e (Result String Unit)
+  Streaming h e (Result String Unit)
 announceOutdated dir budget conn wanted pending replay =
   let framed =
     syncInfoFrame
@@ -249,11 +249,11 @@ announceOutdated dir budget conn wanted pending replay =
 
 replayThenTail : String ->
   Duration ->
-  Connection * ->
+  Connection h ->
   Int ->
   Bytes ->
   List EventLogEntry ->
-  Streaming e (Result String Unit)
+  Streaming h e (Result String Unit)
 replayThenTail dir budget conn wanted pending replay = defer
   delivered <- sendEntries budget conn wanted replay
   match delivered
@@ -322,11 +322,11 @@ sendClose budget conn code = defer
    sent. -}
 tailFrom : String ->
   Duration ->
-  Connection * ->
+  Connection h ->
   Int ->
   Reassembly ->
   Bytes ->
-  Async <Clock, FileRead, Net, Signal | e> (Result String Unit)
+  Streaming h e (Result String Unit)
 tailFrom dir budget conn lastSeq pending buffered = defer
   stopping <- liftIO (u => pdsSignalRequested ())
   if stopping then
@@ -336,11 +336,11 @@ tailFrom dir budget conn lastSeq pending buffered = defer
 
 tailStep : String ->
   Duration ->
-  Connection * ->
+  Connection h ->
   Int ->
   Reassembly ->
   Bytes ->
-  Async <Clock, FileRead, Net, Signal | e> (Result String Unit)
+  Streaming h e (Result String Unit)
 tailStep dir budget conn lastSeq pending buffered =
   let step = clientStep pending buffered
   match step
@@ -370,11 +370,11 @@ tailStep dir budget conn lastSeq pending buffered =
 
 pollLog : String ->
   Duration ->
-  Connection * ->
+  Connection h ->
   Int ->
   Reassembly ->
   Bytes ->
-  Async <Clock, FileRead, Net, Signal | e> (Result String Unit)
+  Streaming h e (Result String Unit)
 pollLog dir budget conn lastSeq pending buffered = defer
   last <- liftIO (u => eventLogLast dir)
   match last
@@ -387,11 +387,11 @@ pollLog dir budget conn lastSeq pending buffered = defer
 
 deliverNew : String ->
   Duration ->
-  Connection * ->
+  Connection h ->
   Int ->
   Reassembly ->
   Bytes ->
-  Async <Clock, FileRead, Net, Signal | e> (Result String Unit)
+  Streaming h e (Result String Unit)
 deliverNew dir budget conn lastSeq pending buffered = defer
   fresh <- liftIO (u => eventLogRead dir lastSeq)
   match fresh

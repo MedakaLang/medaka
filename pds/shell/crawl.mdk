@@ -56,7 +56,7 @@ requestCrawlBytes target hostname = do
    must block nothing else this server does (contract §7; the shape of #2906
    and #2659 item 4). -}
 export
-requestCrawl : RelayTarget -> String -> Wire * e (Result String Unit)
+requestCrawl : RelayTarget -> String -> Wire "127.0.0.1" e (Result String Unit)
 requestCrawl target hostname = match requestCrawlBytes target hostname
   Err message =>
     deferPure (Err "crawl: outbound request is not serializable: \{message}")

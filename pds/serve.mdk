@@ -11,17 +11,13 @@
    default for any of them, so a misconfigured server never starts serving
    something other than what was asked for.
 
-   The bind address is `--bind`, which accepts exactly `127.0.0.1` (loopback,
-   the default) and `0.0.0.0` (every interface); any other value is refused
-   before anything is read or written (`bindAddressOf`). `0.0.0.0` is refused
-   too unless `--trusted-proxy` is also given (`requireTrustedBind`): this
-   process has no way to observe whether the peer on the other end of an accepted connection
-   is actually the reverse proxy `--trusted-proxy` says it is — there is no
-   `getpeername` in the runtime — so the flag is an operator assertion about
-   the deployment, not a verified fact, and the refusal is what makes an
-   unproxied direct bind require deliberately opting out of it rather than
-   silently exposing the server (`#2757`,
-   `docs/design/ATPROTO-PDS-DESIGN.md`).
+   The server listens on loopback, `127.0.0.1`, and on nothing else: the
+   address is `shell.server`'s `listenAddress`, not a flag, so the listener's
+   type names it and `medaka manifest` reports it. The only way to reach the
+   server from off the box is the reverse proxy in front of it
+   (`docs/ops/PDS-DEPLOY.md`). `--trusted-proxy` is separate from the address:
+   it says whether that proxy's `X-Forwarded-For` names the client identity
+   rate limiting keys on.
 
    One data directory is served by one process. `--data` is locked
    (`shell.dirlock`) before anything beneath it is read or written, so a second
@@ -160,7 +156,7 @@ import shell.keygen.{
   keygenTokenSecret,
   tokenSecretBytes,
 }
-import shell.rows.{Serve}
+import shell.rows.{Serve, Wire}
 import shell.persist.{
   credentialPath,
   persistCredential,
@@ -177,6 +173,7 @@ import shell.server.{
   bindAddress,
   completeGenesisEvents,
   defaultStatsInterval,
+  listenAddress,
   makeServing,
   runServer,
   servingStopping,
@@ -194,10 +191,6 @@ serveSpec = spec "serve" [
   value ["--hostname"] "HOST" "this PDS's own hostname",
   value ["--data"] "DIR" "existing directory holding the persisted repository",
   intValue ["--port"] "N" "TCP port to bind; 0 picks a free one",
-  value
-    ["--bind"]
-    "ADDR"
-    "address to bind: 127.0.0.1 (loopback, the default) or 0.0.0.0 (every interface); 0.0.0.0 is refused unless --trusted-proxy is also given",
   switch
     ["--init"]
     "create the genesis repository; refused if the data directory already holds a repository head",
@@ -287,45 +280,6 @@ statsIntervalOf parsed = match flagValue "--stats-interval-ms" parsed
         Err "--stats-interval-ms must be positive"
       else
         Ok (millis ms)
-
-loopbackAddress : String
-loopbackAddress = "127.0.0.1"
-
-wildcardAddress : String
-wildcardAddress = "0.0.0.0"
-
--- `--bind`, defaulting to loopback when absent. Only loopback and the wildcard
--- are accepted: the addresses this process can listen on are a closed set,
--- and this is where it is named.
-bindAddressOf : Args -> Result String String
-bindAddressOf parsed = match flagValue "--bind" parsed
-  None => Ok loopbackAddress
-  Some given =>
-    if given == loopbackAddress || given == wildcardAddress then
-      Ok given
-    else
-      Err
-        "refusing to bind \{given}: --bind accepts only \{loopbackAddress} (loopback, the default) or \{wildcardAddress} (every interface)"
-
-isLoopbackAddress : String -> Bool
-isLoopbackAddress addr = addr == loopbackAddress
-
-{- | Refuse a non-loopback bind unless `--trusted-proxy` is also set (`#2757`).
-
-   This process cannot observe whether the peer on the other end of an
-   accepted connection really is the reverse proxy `--trusted-proxy` claims —
-   there is no `getpeername` in the runtime — so the flag is an operator
-   assertion about the deployment, and this refusal is what makes skipping it
-   a deliberate act rather than a silent direct exposure. It fires before any
-   secret is read or generated and before the listener binds (`#2659` item
-   4's ordering; a refusal here must leave nothing behind either). -}
-requireTrustedBind : String -> TrustedProxy -> Result String Unit
-requireTrustedBind bind (TrustedProxy trusted) =
-  if isLoopbackAddress bind || trusted then
-    Ok ()
-  else
-    Err
-      "refusing to bind \{bind}: a non-loopback bind requires --trusted-proxy (see docs/ops/PDS-DEPLOY.md)"
 
 {- | Refuse a `--did` that names this server's own `did:web` hostname but
    disagrees with it only by case (`#3091`).
@@ -828,30 +782,25 @@ openRepo True dir did keyBytes secret =
     initRepo dir did keyBytes
 
 {- | Everything the server needs, or the first reason it may not run: the
-   configured server, its initial store, the data directory, the port, the
-   address to bind, where (if anywhere) to announce this repository to a
-   relay, how often to emit the periodic stats line, and the startup lines
-   `start` prints under the banner.
+   configured server, its initial store, the data directory, the port, where
+   (if anywhere) to announce this repository to a relay, how often to emit
+   the periodic stats line, and the startup lines `start` prints under the
+   banner.
 
    The startup lines are a VALUE and not a print: this function decides and
    refuses, and a run it refuses must narrate nothing. `start` prints them,
    after the banner, so that a log still begins by saying which build produced
    everything under it. -}
 configure : Args ->
-  <Clock, FileRead, FileWrite, Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String)
+  <Clock, FileRead, FileWrite, Rand> Result String (Server, Store, String, Int, Serving, Option RelayTarget, Duration, DataLock, List String)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
   hostname <- required "--hostname" parsed
   dir <- required "--data" parsed
   port <- requiredPort parsed
-  bind <- bindAddressOf parsed
   statsInterval <- statsIntervalOf parsed
   let trustedProxy = TrustedProxy (flag "--trusted-proxy" parsed)
-  -- Before anything else is read or generated: a bind refusal, of either kind,
-  -- must leave no secret behind, same as every other refusal `configure` can
-  -- raise (#2659 item 4).
-  () <- requireTrustedBind bind trustedProxy
   account <- makeAccount did handle hostname
   () <- requireDidHostnameCase (accountDid account) (accountHostname account)
   let links =
@@ -866,9 +815,8 @@ configure parsed = do
   keyBytes <- readSigningKey ()
   secret <- secretKeyFromBytes keyBytes
   -- Admitted here, beside the other supplied configuration and ahead of
-  -- every generated secret, for the same reason `requireTrustedBind` is: a run
-  -- refused for a malformed appview DID must leave no session secret on disk
-  -- for the next run to adopt (#2659 item 4).
+  -- every generated secret: a run refused for a malformed appview DID must
+  -- leave no session secret on disk for the next run to adopt (#2659 item 4).
   egress <- configureEgress parsed secret
   let serving = makeServing trustedProxy egress (Ref 0)
   relay <- configureRelay parsed
@@ -980,13 +928,12 @@ configure parsed = do
         (storeWithPreferences prefs withCredential)),
     dir,
     port,
-    bind,
     serving,
     relay,
     statsInterval,
     lock,
     [
-      "serve: config did=\{did} handle=\{handle} hostname=\{hostname} data=\{dir} bind=\{bind} trusted-proxy=\{yesNo (flag "--trusted-proxy" parsed)} appview=\{yesNo (isSome egress)} relay=\{yesNo (isSome relay)}",
+      "serve: config did=\{did} handle=\{handle} hostname=\{hostname} data=\{dir} bind=\{listenAddress} trusted-proxy=\{yesNo (flag "--trusted-proxy" parsed)} appview=\{yesNo (isSome egress)} relay=\{yesNo (isSome relay)}",
       "serve: data directory lock: \{lockOutcome}",
       "serve: event log recovery: \{recoveryOutcome recovery}",
     ],
@@ -1055,9 +1002,9 @@ startupLines (line :: rest) =
 -- The readiness line is flushed explicitly: stdout is block-buffered when it is
 -- a pipe or a file, and a supervisor that waits for this line before connecting
 -- would otherwise wait for a process that never exits.
-ready : String -> Int -> <Stdout> Unit
-ready bind port =
-  let () = putStrLn "serve: listening on \{bind}:\{intToString port}"
+ready : Int -> <Stdout> Unit
+ready port =
+  let () = putStrLn "serve: listening on \{listenAddress}:\{intToString port}"
   flushStdout ()
 
 reportOutcome : Result String Unit -> <Stderr> Unit
@@ -1074,7 +1021,7 @@ reportOutcome (Err message) = abort "serve: accept loop ended: \{message}"
    or `abort`: an unreachable relay must not prevent startup and must leave
    no durable side effect from a run that reported failure (contract §7;
    #2906, #2659 item 4). -}
-announceToRelay : RelayTarget -> String -> Serve e Unit
+announceToRelay : RelayTarget -> String -> Wire "127.0.0.1" <Stderr | e> Unit
 announceToRelay target hostname = defer
   outcome <- requestCrawl target hostname
   match outcome
@@ -1082,9 +1029,8 @@ announceToRelay target hostname = defer
     Err message =>
       liftIO (u => ePutStrLn "serve: relay announce failed: \{message}")
 
-announce : String ->
-  Int ->
-  Listener * ->
+announce : Int ->
+  Listener h ->
   Store ->
   String ->
   Server ->
@@ -1092,30 +1038,28 @@ announce : String ->
   Option RelayTarget ->
   Duration ->
   Int ->
-  Serve e Unit
-announce bind port lis store dir server serving relay statsInterval signalFd =
-  defer
-    _ <- liftIO (u => ready bind port)
-    _ <- match relay
-      None => deferPure ()
-      Some target =>
-        spawn (announceToRelay target (accountHostname (serverAccount server)))
-    storeRef <- liftIO (u => Ref store)
-    outcome <- runServer server dir storeRef lis serving statsInterval signalFd
-    liftIO (u => reportOutcome outcome)
+  Serve h e Unit
+announce port lis store dir server serving relay statsInterval signalFd = defer
+  _ <- liftIO (u => ready port)
+  _ <- match relay
+    None => deferPure ()
+    Some target =>
+      spawn (announceToRelay target (accountHostname (serverAccount server)))
+  storeRef <- liftIO (u => Ref store)
+  outcome <- runServer server dir storeRef lis serving statsInterval signalFd
+  liftIO (u => reportOutcome outcome)
 
-bound : String ->
-  Server ->
+bound : Server ->
   Store ->
   String ->
   Serving ->
   Option RelayTarget ->
   Duration ->
-  Result String (Listener *) ->
-  Serve e Unit
-bound _ _ _ _ _ _ _ (Err message) =
+  Result String (Listener h) ->
+  Serve h e Unit
+bound _ _ _ _ _ _ (Err message) =
   liftIO (u => abort "serve: bind failed: \{message}")
-bound bind server store dir serving relay statsInterval (Ok lis) = defer
+bound server store dir serving relay statsInterval (Ok lis) = defer
   port <- liftIO (u => listenPort lis)
   match port
     Err message =>
@@ -1127,7 +1071,6 @@ bound bind server store dir serving relay statsInterval (Ok lis) = defer
           liftIO (u => abort "serve: SIGTERM readiness failed: \{message}")
         Ok signalFd =>
           announce
-            bind
             given
             lis
             store
@@ -1179,16 +1122,16 @@ reportBeat (LockBeatFailed message) =
 reportBeat (LockLost message) =
   ePutStrLn "serve: data directory lock lost: \{message}"
 
-start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String) ->
-  Serve e Unit
+start : Result String (Server, Store, String, Int, Serving, Option RelayTarget, Duration, DataLock, List String) ->
+  Serve "127.0.0.1" e Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
-start (Ok (server, store, dir, port, bind, serving, relay, statsInterval, lock, lines)) =
+start (Ok (server, store, dir, port, serving, relay, statsInterval, lock, lines)) =
   defer
     _ <- liftIO (u => banner ())
     _ <- liftIO (u => startupLines lines)
     _ <- spawn (lockBeatLoop lock (servingStopping serving))
-    listener <- liftIO (u => bindAddress bind port)
-    bound bind server store dir serving relay statsInterval listener
+    listener <- liftIO (u => bindAddress port)
+    bound server store dir serving relay statsInterval listener
 
 -- A `keygen` run touches no socket and no repository, so it finishes inside
 -- one synchronous step rather than entering the scheduler.
@@ -1201,7 +1144,7 @@ keygen rest = match parseArgs keygenSpec rest
     Err message => abort "keygen: \{message}"
     Ok () => ()
 
-main : Serve <> Unit
+main : Serve "127.0.0.1" <> Unit
 main = defer
   argv <- liftIO (u => args ())
   match argv
