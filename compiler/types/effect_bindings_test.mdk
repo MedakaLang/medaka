@@ -1421,3 +1421,111 @@ test "an imported function-type alias signature declares the alias's row" =
           ),
         ])),
   ]
+
+-- #3623: an alias with an `Effect` parameter on the signatures of a recursion
+-- group with two back edges (g calls f, h calls f) means its expansion, as the
+-- spelled-out signatures do.  `Box` stands in for any row-indexed data type.
+rowAliasGroupSource : String
+rowAliasGroupSource =
+  "effect Clock\ndata Box (e : Effect) a = Box a\nboxPure : a -> Box e a\nboxPure x = Box x\n"
+
+twoBackEdges : String -> String -> String
+twoBackEdges sig base =
+  "f : Int -> \{sig}\nf n = if n > 3 then g (n - 1) else \{base}\ng : Int -> \{sig}\ng n = if n > 5 then f n else h n\nh : Int -> \{sig}\nh n = f (n + 1)\n"
+
+test "an Effect-parameter alias types a recursion group with two back edges" = expectAll
+  [
+    expectEqual
+      []
+      (messagesFor
+        (rowAliasGroupSource
+          ++ "type S (e : Effect) a = Box <Clock | e> a\n"
+          ++ twoBackEdges "S e Int" "boxPure n")),
+    expectEqual
+      []
+      (messagesFor
+        (rowAliasGroupSource
+          ++ "type S (e : Effect) a = Box e a\n"
+          ++ twoBackEdges "S e Int" "boxPure n")),
+    expectEqual
+      []
+      (messagesFor
+        (rowAliasGroupSource
+          ++ "type S (e : Effect) a = Box <Clock | e> a\n"
+          ++ twoBackEdges "S <Audit | e> Int" "boxPure n")),
+    expectEqual
+      []
+      (messagesFor
+        (rowAliasGroupSource
+          ++ "type T (e : Effect) a = Unit -> <Clock | e> a\n"
+          ++ twoBackEdges "T e Int" "(_ => n)")),
+    expectEqual
+      []
+      (messagesFor
+        (rowAliasGroupSource
+          ++ "type L (e : Effect) a = List (Unit -> <Clock | e> a)\n"
+          ++ twoBackEdges "L e Int" "[_ => n]")),
+    expectEqual
+      "Int -> Box <Clock | a> Int"
+      (renderedFor
+        (rowAliasGroupSource
+          ++ "type S (e : Effect) a = Box <Clock | e> a\n"
+          ++ twoBackEdges "S e Int" "boxPure n")
+        "h"),
+    expectEqual
+      []
+      (messagesFor
+        (rowAliasGroupSource
+          ++ "type S (e : Effect) a = Box <Clock | e> a\nf : Int -> S e Int\nf n = if n > 3 then g (n - 1) else boxPure n\ng : Int -> S e Int\ng n = h n\nh : Int -> S e Int\nh n = f (n + 1)\n")),
+    expectEqual
+      []
+      (messagesFor
+        (rowAliasGroupSource
+          ++ "type S (e : Effect) a = Box <Clock | e> a\nf : Int -> S e Int\nf n = if n > 3 then g (n - 1) else boxPure n\ng : Int -> S e Int\ng n = f n\n")),
+    expectEqual
+      [
+        "Binding 'f' performs <Audit>, but the row it must fit, <Clock | a>, is chosen by its caller: a caller may instantiate that row to <> and would then run <Audit> from a value typed pure. Declare <Audit> among that row's labels, or perform it only through an argument whose row the caller sees.",
+      ]
+      (messagesFor
+        (rowAliasGroupSource
+          ++ "type T (e : Effect) a = Unit -> <Clock | e> a\n"
+          ++ twoBackEdges "T e Int" "(u => let _ = emitAudit u in n)")),
+  ]
+
+-- #3626: an alias of a row-wrapped non-function type contributes its row
+-- wherever it is written: a value binding's force bound, and the row of the
+-- arrow whose result it is.
+rowWrappedAliasSource : String
+rowWrappedAliasSource =
+  "effect Sign\nextern emitSign : Unit -> <Sign> Int\ntype SS = <Sign> Int\ntype SE (e : Effect) = <Sign | e> Int\n"
+
+test "a row-wrapped alias contributes its row where it is written" = expectAll [
+  expectEqual
+    []
+    (messagesFor
+      (rowWrappedAliasSource
+        ++ "v : SS\nv = emitSign ()\nw : SE <Audit>\nw =\n  let _ = emitAudit ()\n  emitSign ()\nf : Int -> SS\nf n = n\n")),
+  expectEqual
+    ["Effectful value used where <Sign> is allowed, but it performs <Audit>"]
+    (messagesFor
+      (rowWrappedAliasSource ++ "v : SS\nv =\n  let _ = emitAudit ()\n  1\n")),
+  expectEqual
+    "Sign"
+    (forcingFor (rowWrappedAliasSource ++ "v : SS\nv = 1\n") "v"),
+  expectEqual
+    "Int -> <Sign> Int"
+    (renderedFor (rowWrappedAliasSource ++ "f : Int -> SS\nf n = n\n") "f"),
+  expectEqual
+    "Int -> <Sign | a> Int"
+    (renderedFor (rowWrappedAliasSource ++ "g : Int -> SE e\ng n = n\n") "g"),
+  expectEqual
+    ["Effectful value used where <> is allowed, but it performs <Sign>"]
+    (messagesFor
+      (rowWrappedAliasSource
+        ++ "f : Int -> SS\nf n = n\ncaller : Int -> <> Int\ncaller n = f n\n")),
+  expectEqual
+    ["Effectful value used where <Sign> is allowed, but it performs <Audit>"]
+    (messagesFor
+      (rowWrappedAliasSource
+        ++ "k : Int -> SE <>\nk n =\n  let _ = emitAudit ()\n  n\n")),
+]

@@ -3316,17 +3316,17 @@ generalizableEffvar v = match !v
   EJoin _ _ _ => []
   ESummary _ _ _ => []
 
--- The signature the declared-row walks below read: every function-type alias
--- on the return spine expanded, so the declared row is the row `fromAstTypeE`
--- elaborates.  `d : Tick` with `type Tick = Int -> <Stdout> Unit` declares
--- `<Stdout>`, not the `<>` a bare alias name would read as.  An alias that
--- expands to anything but an arrow stays unexpanded: elaboration takes an
--- arrow's row from the written node alone (`astEffrowE`), so a row-wrapped
--- alias (`type S = <Stdout> Int`) adds no row to the arrow it ends.
+-- The signature the declared-row walks below read: every alias on the return
+-- spine expanded, so the declared row is the row `fromAstTypeE` elaborates.
+-- `d : Tick` with `type Tick = Int -> <Stdout> Unit` declares `<Stdout>`, and
+-- so do `v : S` and `f : Int -> S` with `type S = <Stdout> Int`
+-- (`writtenBindingForce`, `returnRowE`).  An alias that expands to any other
+-- type stays unexpanded, since it carries no row to read.
 expandReturnSpine : Ty -> Ty
 expandReturnSpine ty = match expandAliasHeadTy ty
   TyFun a ret => TyFun a (expandReturnSpine ret)
   TyConstrained cs t => TyConstrained cs (expandReturnSpine t)
+  row@(TyEffect _ _ _) => row
   _ => ty
 
 -- the declared concrete effect set of a signature: labels on the first `<…>`
@@ -13108,7 +13108,7 @@ sigToSchemeTvsIn scope ty = atSignature ty (_ =>
       (map effvarIdOf etbl.svRows)
       (map authvarIdOf etbl.svAuths)
       []
-      (bindingForceFromAst etbl ty)
+      (bindingForceFromAst etbl tvs ty)
       (fromAstTypeE etbl tvs ty),
     tvs,
   ))
@@ -13495,14 +13495,30 @@ astEffrowE _ _ = pureRow
 
 -- Only a leading row describes forcing a binding. Rows reached through an
 -- arrow remain that arrow's latent effects, even for a function-valued binding.
-bindingForceFromAst : SigVars -> Ty -> EffRow
-bindingForceFromAst etbl (TyConstrained _ ty) = bindingForceFromAst etbl ty
-bindingForceFromAst etbl ty = astEffrowE etbl ty
+bindingForceFromAst : SigVars -> List (String, Mono) -> Ty -> EffRow
+bindingForceFromAst etbl tvs ty =
+  optionOr pureRow (writtenBindingForce etbl tvs ty)
 
-writtenBindingForce : SigVars -> Ty -> Option EffRow
-writtenBindingForce etbl (TyConstrained _ ty) = writtenBindingForce etbl ty
-writtenBindingForce etbl (ty@(TyEffect _ _ _)) = Some (astEffrowE etbl ty)
-writtenBindingForce _ _ = None
+-- The leading row of a binding's written type.  An alias means its expansion
+-- here as everywhere a type is written: `v : SS` with `type SS = <Sign> Int`
+-- is bounded by `<Sign>` exactly as `v : <Sign> Int` is.
+writtenBindingForce : SigVars -> List (String, Mono) -> Ty -> Option EffRow
+writtenBindingForce etbl tvs (TyConstrained _ ty) =
+  writtenBindingForce etbl tvs ty
+writtenBindingForce etbl _ (ty@(TyEffect _ _ _)) = Some (astEffrowE etbl ty)
+writtenBindingForce etbl tvs ty = match aliasScopeE etbl tvs ty
+  Some (etbl2, tvs2, rhs) => writtenBindingForce etbl2 tvs2 rhs
+  None => None
+
+-- The row an arrow's written result performs: the `<…>` it leads with, seen
+-- through aliases, so `Int -> SS` elaborates as `Int -> <Sign> Int`.  An alias
+-- whose expansion is an arrow or any other unwrapped type adds no row, as the
+-- written-out type would not.
+returnRowE : SigVars -> List (String, Mono) -> Ty -> EffRow
+returnRowE etbl _ (ty@(TyEffect _ _ _)) = astEffrowE etbl ty
+returnRowE etbl tvs ty = match aliasScopeE etbl tvs ty
+  Some (etbl2, tvs2, rhs) => returnRowE etbl2 tvs2 rhs
+  None => pureRow
 
 -- The tail cell of a written row.  No names is a closed row; one name is that
 -- var's shared cell; several (#821) is their JOIN, so `<Stdout | e | e2>`
@@ -13579,7 +13595,7 @@ fromAstTypeE etbl tvs (TyApp a b) = match tyAppSpine (TyApp a b)
 fromAstTypeE etbl tvs (TyFun a b) =
   TFun
     (fromAstDomainE etbl tvs a)
-    (astEffrowE etbl b)
+    (returnRowE etbl tvs b)
     (fromAstTypeE etbl tvs (stripEff b))
 fromAstTypeE etbl tvs (TyTuple ts) = tupleMono (map (fromAstTypeE etbl tvs) ts)
 fromAstTypeE etbl tvs (TyEffect _ _ t) = fromAstTypeE etbl tvs t
@@ -13791,12 +13807,8 @@ fromAstTypeApp etbl tvs o n args =
     -- kind — an `Effect` parameter binds a row cell in the effect table so the
     -- RHS's own occurrence of it (`Later e Int`) reads the written row.
     Some (params, rhs) if listLen params == listLen args =>
-      let kinds =
-        optionOr
-          (map (_ => KType) params)
-          (lookupTab key perRun.value.dataParamKindsRef.value)
-      let bound = aliasArgBindings etbl tvs params kinds args
-      fromAstTypeE (sigVarsUnion (fst bound) etbl) (snd bound ++ tvs) rhs
+      let (etbl2, tvs2) = aliasArgScope etbl tvs key params args
+      fromAstTypeE etbl2 tvs2 rhs
     -- Alias applied to the wrong arity: reject, keep the opaque fallback.
     Some (params, _) =>
       let _ =
@@ -13809,10 +13821,52 @@ fromAstTypeApp etbl tvs o n args =
         foldAppKinds etbl tvs (tconFrom o n) kinds args
       _ => appFallback etbl tvs o n args
 
+-- The scope an applied alias's right-hand side elaborates in: the caller's,
+-- with the alias's parameters bound to the arguments (alias parameters shadow
+-- the caller's names).
+aliasArgScope : SigVars ->
+  List (String, Mono) ->
+  TabKey ->
+  List String ->
+  List Ty ->
+  (SigVars, List (String, Mono))
+aliasArgScope etbl tvs key params args =
+  let kinds =
+    optionOr
+      (map (_ => KType) params)
+      (lookupTab key perRun.value.dataParamKindsRef.value)
+  let bound = aliasArgBindings etbl tvs params kinds args
+  (sigVarsUnion (fst bound) etbl, snd bound ++ tvs)
+
+-- A saturated alias's right-hand side with the scope it elaborates in, or
+-- `None` when the written type is not one.  The readers of a written row
+-- (`writtenBindingForce`, `returnRowE`) look through an alias with this, so
+-- they read the row `fromAstTypeE` elaborates.  A misapplied alias is not
+-- looked through; `fromAstTypeApp` reports it.
+aliasScopeE : SigVars ->
+  List (String, Mono) ->
+  Ty ->
+  Option (SigVars, List (String, Mono), Ty)
+aliasScopeE etbl tvs ty =
+  if isEmptyL perRun.value.aliasTableRef.value then
+    None
+  else match tyAppSpine ty
+    (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+      let key = tyTabKey o n
+      match lookupTab key perRun.value.aliasTableRef.value
+        Some (params, rhs) if listLen params == listLen args =>
+          let (etbl2, tvs2) = aliasArgScope etbl tvs key params args
+          Some (etbl2, tvs2, rhs)
+        _ => None
+    _ => None
+
 -- the alias parameters bound positionally at their declared kinds: (effect
--- table additions, type table additions).  A KRow parameter gets a fresh row
--- cell pinned to the written argument row by the index unifier (equality —
--- an alias slot is an index, §9); a KType parameter binds the elaborated Mono.
+-- table additions, type table additions).  Expansion is a substitution: each
+-- parameter denotes its argument, elaborated once in the caller's scope, so
+-- the right-hand side reads exactly what the caller would have written in its
+-- place.  A KType parameter binds the elaborated Mono; a KRow parameter binds
+-- the argument row itself (`aliasRowParamCell`).  Nothing is unified, so no
+-- variable the signature does not quantify can stand in for one it does.
 aliasArgBindings : SigVars ->
   List (String, Mono) ->
   List String ->
@@ -13820,8 +13874,7 @@ aliasArgBindings : SigVars ->
   List Ty ->
   (SigVars, List (String, Mono))
 aliasArgBindings etbl tvs (p :: ps) (KRow :: ks) (arg :: args) =
-  let cell = freshEffvar ()
-  let _ = unifyIndexRow (EffRow [] (Some cell)) (rowArgOf etbl arg)
+  let cell = aliasRowParamCell (rowArgOf etbl arg)
   let rest = aliasArgBindings etbl tvs ps ks args
   (sigVarsWithRows [(p, cell)] (fst rest), snd rest)
 -- An `Authority` alias parameter stands for the written argument wherever
@@ -13836,6 +13889,15 @@ aliasArgBindings etbl tvs (p :: ps) (_ :: ks) (arg :: args) =
   let rest = aliasArgBindings etbl tvs ps ks args
   (fst rest, (p, fromAstTypeE etbl tvs arg) :: snd rest)
 aliasArgBindings _ _ _ _ _ = (emptySigVars, [])
+
+-- The effect-table cell an `Effect` alias parameter reads as.  A bare row
+-- variable argument (`S e Int`) is the caller's own cell for `e`, the one the
+-- written-out signature reads.  Any other row (`S <Net | e> Int`, `S <> Int`)
+-- is a cell already solved to that row, the indirection every solved row
+-- variable already is.
+aliasRowParamCell : EffRow -> Ref Effvar
+aliasRowParamCell (EffRow [] (Some cell)) = cell
+aliasRowParamCell row = Ref (ELink (newEffvarId ()) row)
 
 -- #822: a spine headed by an interface typaram of GRADED kind — `f e b` must yield
 -- the SAME Mono shape a row-indexed data head does (`Async e b` =
@@ -37434,12 +37496,13 @@ instantiateMethodBody (ImplBody site) ifaceParams mty gscope =
   -- impl-body effect leak past a non-var bound is still enforced (#782).
   let effMap =
     sigVarsFor mty (dedup (effTailNames mty ++ rowArgNamesIn gscope mty))
-  let expected = fromAstTypeE effMap (baseMap ++ extraMap) mty
-  let contractForce = bindingForceFromAst effMap mty
+  let mtvs = baseMap ++ extraMap
+  let expected = fromAstTypeE effMap mtvs mty
+  let contractForce = bindingForceFromAst effMap mtvs mty
   MethodBodyInstance {
     mbiExpected = expected,
     mbiContractForce = contractForce,
-    mbiCheckedForce = _ => bindingForceFromAst effMap mty,
+    mbiCheckedForce = _ => bindingForceFromAst effMap mtvs mty,
     mbiEffVars = effMap.svRows,
     mbiSurvivors = extraMap,
     mbiNamedVars = extraMap,
@@ -41494,7 +41557,7 @@ instantiateSigTracked ty = atSignature ty (_ =>
   let auths = authArgBindersIn ty
   let tvs = freshTvMap (sigTyVarNames ty rows (map fst auths))
   let etbl = sigVarsForWith ty (dedup (effTailNames ty ++ rows)) auths
-  (fromAstTypeE etbl tvs ty, tvs, writtenBindingForce etbl ty))
+  (fromAstTypeE etbl tvs ty, tvs, writtenBindingForce etbl tvs ty))
 
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigTvMapUnboundIds (_, _, tvs) = flatMap (p => monoUnboundIds (snd p)) tvs
