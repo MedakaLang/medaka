@@ -373,6 +373,14 @@ recordWriteBody did collection rkey =
 writeGap : Duration
 writeGap = millis (rateLimitWindowSeconds * 1000 * 6 / (maxWritesPerWindow * 5))
 
+{- | The pause a writer asked for `intervalMs` takes, never below `writeGap`.
+
+   The server keeps every block it has ever committed in memory, so a long
+   soak's writer pace decides how much its RSS grows by design. A soak graded
+   for leaks paces its writer to keep that growth well under its bound. -}
+writePause : Int -> Duration
+writePause intervalMs = max writeGap (millis intervalMs)
+
 responseRoundTrip : Connection * ->
   Bytes ->
   Bytes ->
@@ -389,13 +397,14 @@ writeLoop : Connection * ->
   Int ->
   Float ->
   Float ->
+  Duration ->
   Int ->
   Int ->
   Int ->
   Int ->
   Int ->
   <Clock, IO, Net> (Bytes, Int, Int, Int, Int, Int)
-writeLoop conn pending did collection token clientId t0 budget i requests writes non200 errors =
+writeLoop conn pending did collection token clientId t0 budget pause i requests writes non200 errors =
   if elapsedSince t0 >= budget then
     (pending, requests, writes, non200, errors, i)
   else
@@ -412,7 +421,7 @@ writeLoop conn pending did collection token clientId t0 budget i requests writes
       Err _ => (pending, requests + 1, writes, non200, errors + 1, i)
       Ok (200, _, rest) =>
         let () = println "write-path \{collection}/\{rkey}"
-        let () = sleep writeGap
+        let () = sleep pause
         writeLoop
           conn
           rest
@@ -422,6 +431,7 @@ writeLoop conn pending did collection token clientId t0 budget i requests writes
           clientId
           t0
           budget
+          pause
           (i + 1)
           (requests + 1)
           (writes + 1)
@@ -435,8 +445,9 @@ runWrite : Int ->
   Int ->
   String ->
   String ->
+  Int ->
   <Clock, Env, IO, Net, FileRead> Unit
-runWrite port collection clientId durationMs did passwordPath =
+runWrite port collection clientId durationMs did passwordPath intervalMs =
   let password = match readFile passwordPath
     Err message =>
       panic "load_client: cannot read synthetic password file: \{message}"
@@ -459,7 +470,21 @@ runWrite port collection clientId durationMs did passwordPath =
   let t0 = monotonic ()
   let budget = intToFloat durationMs / 1000.0
   let (_, requests, writes, non200, errors, _) =
-    writeLoop conn pending did collection token clientId t0 budget 0 0 0 0 0
+    writeLoop
+      conn
+      pending
+      did
+      collection
+      token
+      clientId
+      t0
+      budget
+      (writePause intervalMs)
+      0
+      0
+      0
+      0
+      0
   let elapsed = elapsedSince t0
   let () = ignoreResult (close conn)
   println
@@ -792,7 +817,7 @@ mustInt text =
 
 usage : String
 usage =
-  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <blobCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <blobCount> <requests> <intervalMs>\n       load_client_main write <port> <collection> <clientId> <durationMs> <did> <passwordFile>"
+  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <blobCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <blobCount> <requests> <intervalMs>\n       load_client_main write <port> <collection> <clientId> <durationMs> <did> <passwordFile> <writeIntervalMs>"
 
 main : <Clock, Env, IO, Net, FileRead> Unit
 main = match args ()
@@ -809,7 +834,7 @@ main = match args ()
       (Plan scenario collection (mustInt recordCount) (mustInt blobCount))
       (mustInt requests)
       (mustInt intervalMs)
-  ["write", port, collection, clientId, durationMs, did, passwordPath] =>
+  ["write", port, collection, clientId, durationMs, did, passwordPath, intervalMs] =>
     runWrite
       (mustInt port)
       collection
@@ -817,4 +842,5 @@ main = match args ()
       (mustInt durationMs)
       did
       passwordPath
+      (mustInt intervalMs)
   _ => panic usage
