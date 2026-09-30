@@ -73,7 +73,7 @@ The first words of each message, and where the rule behind it is explained.
 | `Binding '…' reaches … where its declared bound admits only …` | a returned value, constructor or existential exceeds a written bound | [IV](effects-4-authority.md), [V](effects-5-data.md) |
 | `The qualifier names '…', but no binder domain, effect atom or index in this signature names '…'` | a qualifier with no domain | [IV](effects-4-authority.md) |
 | `'…' needs "…" to lie within "…" here` | a use violates a relation the binding's inferred type carries | [IV](effects-4-authority.md) |
-| `Authority index mismatch` | an authority index is invariant | [V](effects-5-data.md) |
+| `Authority index mismatch` | an authority index is invariant, and an index row must cover each atom its tail cannot take | [V](effects-5-data.md), [VI](effects-6-indexed.md) |
 | `` `"…"` is an exact element of `…`'s domain, but it fills an `Authority …*` slot `` | a written exact element where only a pattern goes | [V](effects-5-data.md) |
 | `` '…' ranges over every authority of `…`, but it fills an `Authority …*` slot `` | a binder without the `*` fills a pattern slot | [IV](effects-4-authority.md#pattern-ranging-binders), [V](effects-5-data.md) |
 | `` `Authority …*` ranges over the patterns of `…`'s domain `` / `` `@…*` ranges over … `` | a `*` on a `Set` label, or a `Product` whose first axis is a `Set` | [IV](effects-4-authority.md#pattern-ranging-binders) |

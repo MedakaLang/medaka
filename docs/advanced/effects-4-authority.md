@@ -127,7 +127,7 @@ substituted its literal for the name, so the row `main` is charged with is exact
 And the compiler holds the body of `under` to its promise:
 
 ```
-error: authority.mdk:7:18: Binding 'sneaky' reaches "secrets/key" where only dir is admitted: dir is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from; an extension of it is the whole domain, since the caller may choose an exact element, which admits no extension of itself. Perform the operation on the named argument and build any extended value at the call site, declare the binder pattern-ranging with a `*` on its label (`(p : String @FileWrite*)`, `(d : Authority FileWrite*)`) so an extension stays within it, or widen the declared row to the label bare
+error: authority.mdk:7:18: Binding 'sneaky' reaches "secrets/key" where only dir is admitted: dir is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare
   |
 7 | sneaky dir = load "secrets/key"
   |                   ^
