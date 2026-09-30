@@ -78,7 +78,7 @@ export
 authvarIsPattern : Ref Authvar -> Bool
 authvarIsPattern cell = match !cell
   AUnbound _ _ _ pat _ => pat
-  ALink _ _ _ => False
+  ALink _ _ target => authIsPattern target
 
 -- Narrow a flexible variable to its domain's patterns: it now stands for
 -- what a pattern-ranging variable it was equated with stands for. Only a

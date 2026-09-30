@@ -82,7 +82,7 @@ export
 authvarIsPattern : Ref Authvar -> Bool
 authvarIsPattern cell = match !cell
   AUnbound _ _ _ pat _ => pat
-  ALink _ _ _ => False
+  ALink _ _ target => authIsPattern target
 
 -- Narrow a flexible variable to its domain's patterns: it now stands for
 -- what a pattern-ranging variable it was equated with stands for. Only a
@@ -547,7 +547,7 @@ paramElements p = [trimLeft (drender p)]
 (DTypeSig true "authvarName" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "authvarName" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild PWild (PVar "name")) () (EVar "name")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "None"))))
 (DTypeSig true "authvarIsPattern" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")))
-(DFunDef false "authvarIsPattern" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "pat") PWild) () (EVar "pat")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "False"))))
+(DFunDef false "authvarIsPattern" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "pat") PWild) () (EVar "pat")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EVar "authIsPattern") (EVar "target")))))
 (DTypeSig true "markAuthvarPattern" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Unit")))
 (DFunDef false "markAuthvarPattern" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "level") (PVar "top") PWild (PVar "name")) () (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EApp (EApp (EVar "AUnbound") (EVar "id")) (EVar "level")) (EVar "top")) (EVar "True")) (EVar "name")))) (arm (PCon "ALink" PWild PWild PWild) () (ELit LUnit))))
 (DTypeSig true "linkAuthvar" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyCon "Unit"))))
@@ -708,7 +708,7 @@ paramElements p = [trimLeft (drender p)]
 (DTypeSig true "authvarName" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "authvarName" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild PWild (PVar "name")) () (EVar "name")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "None"))))
 (DTypeSig true "authvarIsPattern" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")))
-(DFunDef false "authvarIsPattern" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "pat") PWild) () (EVar "pat")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "False"))))
+(DFunDef false "authvarIsPattern" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "pat") PWild) () (EVar "pat")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EVar "authIsPattern") (EVar "target")))))
 (DTypeSig true "markAuthvarPattern" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Unit")))
 (DFunDef false "markAuthvarPattern" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "level") (PVar "top") PWild (PVar "name")) () (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EApp (EApp (EVar "AUnbound") (EVar "id")) (EVar "level")) (EVar "top")) (EVar "True")) (EVar "name")))) (arm (PCon "ALink" PWild PWild PWild) () (ELit LUnit))))
 (DTypeSig true "linkAuthvar" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyCon "Unit"))))

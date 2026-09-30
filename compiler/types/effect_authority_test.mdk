@@ -1617,10 +1617,11 @@ test "a binder's written domain gives a qualifier a domain and charges nothing" 
         "reaches the whole domain"
         (messagesOf
           "withSuffix : (dir : String @Store) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n")),
-    -- and the report points at the pattern-ranging spelling (#3574)
+    -- and the report points at the pattern-ranging spelling, on the
+    -- program's own label (#3574)
     expectTrue
       (anyMentions
-        "`(p : String @FileWrite*)`"
+        "`(dir : String @Store*)`"
         (messagesOf
           "withSuffix : (dir : String @Store) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n")),
     -- a pattern-ranging binder keeps its authority through the extension
@@ -1761,6 +1762,13 @@ test "an index row still refuses an atom its declaration does not cover" = expec
       ["T-EFFECT-LEAK"]
       (jobCodes
         "closed : Unit -> Job <Store \"cfg/*\"> Int\nclosed _ = thenJob (step \"cfg/app\") (a => varStep \"x\")\n"),
+    -- the report is coverage, not equality
+    expectTrue
+      (anyMentions
+        "is not covered by \"cfg/*\""
+        (messagesOf
+          (jobPrelude
+            ++ "out : Unit -> Job <Store \"cfg/*\" | e> Int\nout _ = thenJob (step \"cfg/app\") (a => step \"data/x\")\n"))),
   ]
 
 test "two written index rows must still be equal" = expectAll [
@@ -1771,6 +1779,12 @@ test "two written index rows must still be equal" = expectAll [
     ["T-AUTHORITY-INDEX-MISMATCH"]
     (jobCodes
       "narrow : Job <Store \"cfg/*\"> Int -> Job <Store \"data/*\"> Int\nnarrow j = j\n"),
+  expectTrue
+    (anyMentions
+      "must be EQUAL"
+      (messagesOf
+        (jobPrelude
+          ++ "narrow : Job <Store \"cfg/*\"> Int -> Job <Store \"data/*\"> Int\nnarrow j = j\n"))),
   expectTrue
     (contains
       "T-EFFECT-INDEX-MISMATCH"
@@ -1846,14 +1860,27 @@ test "an interpolated binder is read through the prelude's display only" =
   let ownDisplay =
     "interface Display a where\n  display : a -> String\nimpl Display String where\n  display s = \"../\" ++ s\n"
   let under = "under : (d : String @Store*) -> String -> <Store d> Int\n"
-  expectAll [
-    expectEqual
-      []
-      (codes (ownDisplay ++ under ++ "under d x = load (d ++ \"/\" ++ x)\n")),
-    expectEqual
-      ["T-AUTHORITY"]
-      (codes (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
-  ]
+  expectAll
+    [
+      expectEqual
+        []
+        (codes (ownDisplay ++ under ++ "under d x = load (d ++ \"/\" ++ x)\n")),
+      expectEqual
+        ["T-AUTHORITY"]
+        (codes (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
+      -- the report names the program's `display` as the cause, not the
+      -- appending the body already does
+      expectTrue
+        (anyMentions
+          "is this module's own"
+          (messagesOf
+            (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n"))),
+      expectFalse
+        (anyMentions
+          "appending to the named argument"
+          (messagesOf
+            (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n"))),
+    ]
 
 test "a pattern slot refuses what is not a pattern" = expectAll
   [
@@ -1916,6 +1943,90 @@ test "a pattern slot refuses what is not a pattern" = expectAll
     expectFalse
       (accepts
         "readUnder : (p : String @Store*) -> String -> <Store p> Int\nreadUnder p x = load (p ++ x)\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \"\"\n"),
+  ]
+
+test "a phantom pattern existential is constructed and matched like an ordinary one" = expectAll
+  [
+    expectEqual
+      []
+      (codes
+        "data AnyP = AnyP (d : Authority Store*) Int\nanyP : AnyP\nanyP = AnyP 1\nuseP : AnyP -> Int\nuseP a = match a\n  AnyP n => n\n"),
+    expectEqual
+      []
+      (codes
+        "data AnyI = AnyI (d : Authority Store) Int\nanyI : AnyI\nanyI = AnyI 1\n"),
+  ]
+
+test "an alias parameter of a pattern kind fills a pattern slot" = expectAll
+  [
+    expectEqual
+      []
+      (codes
+        (handleP
+          ++ "type D (p : Authority Store*) = H p\ncfgD : D \"cfg/*\"\ncfgD = H \"cfg/\"\n")),
+    expectEqual
+      []
+      (codes
+        (handleP
+          ++ "type D (p : Authority Store*) = H p\nreadU : D d -> String -> <Store d> Int\nreadU (H root) x = load (root ++ x)\n")),
+    -- the argument is still held to the parameter's range
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes
+        (handleP
+          ++ "type D (p : Authority Store*) = H p\nbad : D \"cfg/app\"\nbad = H \"cfg/app\"\n")),
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes
+        (handleP
+          ++ "type D (p : Authority Store*) = H p\nmk : (q : String @Store) -> D q\nmk q = H q\n")),
+    -- an ordinary-kinded parameter is refused at the declaration
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes (handleP ++ "type D (p : Authority Store) = H p\n")),
+    expectTrue
+      (anyMentions
+        "`(p : Authority Store*)`"
+        (messagesOf (handleP ++ "type D (p : Authority Store) = H p\n"))),
+  ]
+
+test "a malformed pattern-slot argument is reported by its most specific rule" = expectAll
+  [
+    -- an ordinary binder in a join of names
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes
+        (handleP
+          ++ "both : (p : String @Store*) -> (q : String) -> Bool -> H (p | q)\nboth p q b = if b then H p else H q\n")),
+    -- otherwise the kind error names the slot with its `*`
+    expectTrue
+      (anyMentions
+        "this argument slot is `Authority Store*`"
+        (messagesOf
+          (handleP
+            ++ "both : (p : String @Store*) -> (q : String @Store*) -> Bool -> H (p | q)\nboth p q b = if b then H p else H q\n"))),
+  ]
+
+test "the rule-A report offers the `*` only where it would help" = expectAll
+  [
+    -- no extension: nothing a pattern-ranging binder would admit
+    expectFalse
+      (anyMentions
+        "pattern-ranging"
+        (messagesOf
+          "sneaky : (dir : String) -> <Store dir> Int\nsneaky dir = load \"secrets/key\"\n")),
+    -- an extension in a Set domain, which has no patterns
+    expectFalse
+      (anyMentions
+        "pattern-ranging"
+        (messagesOf
+          "signAs : (p : String) -> <Var p> Int\nsignAs p = lookup (p ++ \"-v2\")\n")),
+    -- a refused Set-domain `*` leaves an ordinary binder behind
+    expectFalse
+      (anyMentions
+        "append to it on the right"
+        (messagesOf
+          "signAs : (p : String @Var*) -> <Var p> Int\nsignAs p = lookup (p ++ \"-v2\")\n")),
   ]
 
 test "a pattern-ranging binder needs a domain with patterns" = expectAll

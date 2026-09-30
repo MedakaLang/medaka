@@ -1009,12 +1009,28 @@ recordEffectBody : EffRow -> EffRow -> Unit
 recordEffectBody summary lower =
   EffectSolver.recordBodyLower perRun.value.effectSummaries summary lower
 
+-- Where an obligation the scoped solver holds was recorded, for its report:
+-- the location, the binding, and whether an authority obligation is an index
+-- row's coverage of an atom rather than one half of an index equality.
+data ObligationSite = ObligationSite {
+  osLoc : Option Loc,
+  osFn : String,
+  osCovering : Bool,
+}
+
+obligationSiteHere : Bool -> ObligationSite
+obligationSiteHere covering = ObligationSite {
+  osLoc = !currentLoc,
+  osFn = perRun.value.currentFn.value,
+  osCovering = covering,
+}
+
 deferEffectRelation : Bool -> EffRow -> EffRow -> Unit
 deferEffectRelation exact lower upper =
   EffectSolver.recordRelation
     perRun.value.effectSummaries
     exact
-    (!currentLoc, perRun.value.currentFn.value)
+    (obligationSiteHere False)
     lower
     upper
 
@@ -1059,27 +1075,28 @@ finishEffectSummaryScopeKeeping roles retained borrowed =
     ))
     outcome.esoResiduals
 
-reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
+reportEffectSummaryFailures : List (SummaryFailure ObligationSite) -> Unit
 reportEffectSummaryFailures [] = ()
 reportEffectSummaryFailures (failure :: rest) =
   let saved = !currentLoc
-  let fn = snd failure.esfContext
+  let fn = failure.esfContext.osFn
   currentLoc :=
     orElseLoc
       (effectSiteOf fn failure.esfLabel (failureBound failure))
-      (fst failure.esfContext)
+      failure.esfContext.osLoc
   let _ = match failure.esfAuthority
     Some (lo, hi) =>
       if mentionsEscaped lo || mentionsEscaped hi then
         ()
       else if failure.esfExact then
-        reportIndexFailure !currentLoc lo hi
+        reportIndexFailure failure.esfContext.osCovering !currentLoc lo hi
       else
         pushTypeErrorAt
           "T-AUTHORITY"
           !currentLoc
           (authorityFailureMsg
             fn
+            failure.esfLabel
             failure.esfResidualOf
             lo
             hi
@@ -1093,14 +1110,14 @@ reportEffectSummaryFailures (failure :: rest) =
 
 -- The authority the failing label was admitted at: the obligation's upper
 -- term, or the upper row's atom of that label.
-failureBound : SummaryFailure (Option Loc, String) -> Option Authority
+failureBound : SummaryFailure ObligationSite -> Option Authority
 failureBound failure = match failure.esfAuthority
   Some (_, hi) => Some hi
   None => match failure.esfLabel
     Some label => map atomAuth (findAtom label (fst (rowFlat failure.esfUpper)))
     None => None
 
-reportRowFailure : SummaryFailure (Option Loc, String) -> Unit
+reportRowFailure : SummaryFailure ObligationSite -> Unit
 reportRowFailure failure =
   let (upper, upperCells) = rowFlat failure.esfUpper
   let escaping = atomsEscape (fst (rowFlat failure.esfLower)) upper
@@ -1121,7 +1138,7 @@ reportRowFailure failure =
       pushTypeError
         "T-EFFECT-LAUNDER"
         (effectInclusionMsg
-          (snd failure.esfContext)
+          failure.esfContext.osFn
           escaping
           (ppEachShared (Ref []) (Ref 0) [
             TEff failure.esfLower,
@@ -1696,13 +1713,13 @@ indexOpenClosed lOpen v lClosed =
 -- The atoms of [escaping] whose label [bound] does not carry.  An escaping
 -- atom whose label the bound does carry is not missing from it: its
 -- authority must lie within the bound's, which is recorded as an index
--- obligation, so a variable is solved and a mismatch reads as an authority
--- index (`wantAuthorityWith True`).
+-- obligation, so a variable is solved and a mismatch reads as an atom the
+-- bound does not cover (`wantIndexCovered`).
 indexAtomsCovered : List Atom -> List Atom -> List Atom
 indexAtomsCovered [] _ = []
 indexAtomsCovered (x :: rest) bound = match findAtom (atomKey x) bound
   Some y =>
-    let _ = wantAuthorityWith True (atomAuth x) (atomAuth y)
+    let _ = wantIndexCovered (atomAuth x) (atomAuth y)
     indexAtomsCovered rest bound
   None => x :: indexAtomsCovered rest bound
 
@@ -1982,6 +1999,7 @@ checkDeclaredKindsDecl _ (DNewtype { newtypeName = n, newtypeParams = ps, newtyp
   checkHeadKinds n ps ks [fty]
 checkDeclaredKindsDecl _ (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) =
   let _ = checkAuthorityKindLabels ks
+  let _ = checkAliasPatternSlots (zipParamKinds ps ks) rhs
   checkHeadKinds n ps ks [rhs]
 checkDeclaredKindsDecl prog (DInterface { name, typarams, typaramKinds, supers, methods, ... }) =
   let _ =
@@ -1994,6 +2012,25 @@ checkDeclaredKindsDecl prog (DInterface { name, typarams, typaramKinds, supers, 
     methods
     supers
 checkDeclaredKindsDecl _ _ = ()
+
+-- An alias parameter of an ordinary `Authority L` kind admits an exact
+-- element, which an `Authority L*` slot of the right-hand side refuses, so
+-- the declaration is refused where it is written rather than at whichever
+-- use passes one.
+checkAliasPatternSlots : List (String, Option KindAnn) -> Ty -> Unit
+checkAliasPatternSlots params rhs =
+  let slots = patternSlotNamesIn rhs
+  fold
+    (_ pk => match pk
+      (p, Some (KindAuthority l _ False loc)) =>
+        if contains p slots then
+          pushTypeErrorOnceAt
+            "T-AUTHORITY-PATTERN"
+            loc
+            (ordinaryInPatternSlotMsg p l)
+      _ => ())
+    ()
+    params
 
 -- `Authority L` ranges over the domain `L` declares (§6.1); a label that
 -- declares none — an atomic one, `IO` included — has no authorities to range
@@ -2031,6 +2068,12 @@ domainHasPatterns : Param -> Bool
 domainHasPatterns (PPrefix _) = True
 domainHasPatterns (PProduct ((_, axis) :: _)) = domainHasPatterns axis
 domainHasPatterns _ = False
+
+-- Whether a binder written with [pat] on label [l] ranges over patterns. A
+-- `*` on a label with no patterns is refused where it is written; the binder
+-- then ranges over the whole domain, as it would without it.
+rangedOver : EffLabel -> Bool -> Bool
+rangedOver l pat = pat && domainHasPatterns (dtopFor l)
 
 patternDomainMsg : String -> String -> String
 patternDomainMsg written l =
@@ -11273,7 +11316,7 @@ data PerRun = PerRun {
   -- once the receiver has grounded.  See `recordImplObligation`.
   admittedOccObls : Ref (List (String, Mono, Option Loc)),
   curEffect : Ref (List EffRow),
-  effectSummaries : SummarySolver (Option Loc, String),
+  effectSummaries : SummarySolver ObligationSite,
   -- joins of alternatives that had no shape yet, newest first, decided when
   -- the binding scope they were recorded in closes (`resolvePendingJoins`)
   pendingJoinsRef : Ref (List PendingJoin),
@@ -11302,6 +11345,12 @@ data PerRun = PerRun {
   -- (`unifyIndex`): a report reads such a variable as the written bound it
   -- stands for, not as a bound the scope solved.
   indexSubstitutedRef : Ref (Map Int Unit),
+  -- Authority variables an argument extended on the right (`base ++ suffix`),
+  -- and those an interpolation hid behind a `display` that is not the
+  -- prelude's (`noteArgumentShape`): what a report of a failed bound over
+  -- one says the fix is, which the two terms alone do not show.
+  extendedBindersRef : Ref (Map Int Unit),
+  displayHiddenBindersRef : Ref (Map Int Unit),
   -- The retained post-hoc escape walk's findings, held until the group's
   -- solver scope has closed, so the scoped report (located at the call)
   -- wins and the walk adds only what the solver did not see.
@@ -11410,6 +11459,8 @@ freshPerRun _ = PerRun {
   escapedExistentialsRef = Ref Tip,
   openedAuthvarsRef = Ref Tip,
   indexSubstitutedRef = Ref Tip,
+  extendedBindersRef = Ref Tip,
+  displayHiddenBindersRef = Ref Tip,
   pendingEscapesRef = Ref [],
   openedExistentialsRef = Ref [],
   openedExistentialsStackRef = Ref [],
@@ -11717,18 +11768,33 @@ wantAuthorityWith exact lower upper = wantAuthorityFrom None exact lower upper
 wantAuthorityFrom : Option String -> Bool -> Authority -> Authority -> Unit
 wantAuthorityFrom origin exact lower upper =
   fold
-    (_ pair => wantAuthorityOne origin exact (fst pair) (snd pair))
+    (_ pair => wantAuthorityOne origin exact False (fst pair) (snd pair))
     ()
     (authSplit lower upper)
 
-wantAuthorityOne : Option String -> Bool -> Authority -> Authority -> Unit
-wantAuthorityOne origin exact lower upper
+-- An index row's atom that its other side must cover, having no tail to take
+-- it: an index obligation in one direction only, so a failure reads as the
+-- atom not covered rather than as two indices that differ.
+wantIndexCovered : Authority -> Authority -> Unit
+wantIndexCovered lower upper =
+  fold
+    (_ pair => wantAuthorityOne None True True (fst pair) (snd pair))
+    ()
+    (authSplit lower upper)
+
+wantAuthorityOne : Option String ->
+  Bool ->
+  Bool ->
+  Authority ->
+  Authority ->
+  Unit
+wantAuthorityOne origin exact covering lower upper
   | EffectSolver.hasSummaryScope perRun.value.effectSummaries =
     EffectSolver.recordAuthorityFrom
       perRun.value.effectSummaries
       origin
       exact
-      (!currentLoc, perRun.value.currentFn.value)
+      (obligationSiteHere covering)
       (authNorm lower)
       (authNorm upper)
   | authSub lower upper = ()
@@ -11736,7 +11802,7 @@ wantAuthorityOne origin exact lower upper
     True => ()
     False =>
       if exact then
-        reportIndexFailure !currentLoc lower upper
+        reportIndexFailure covering !currentLoc lower upper
       else
         reportAuthorityFailure !currentLoc origin lower upper
 
@@ -11806,6 +11872,7 @@ reportAuthorityFailure loc origin lower upper =
     loc
     (authorityFailureMsg
       perRun.value.currentFn.value
+      None
       origin
       lower
       upper
@@ -11813,10 +11880,13 @@ reportAuthorityFailure loc origin lower upper =
 
 -- Both halves of one index equality render the same message (the two terms
 -- in one order), so the second is the same (code, span, message) and is
--- recorded once.
-reportIndexFailure : Option Loc -> Authority -> Authority -> Unit
-reportIndexFailure loc a b =
-  pushTypeErrorAt "T-AUTHORITY-INDEX-MISMATCH" loc (authorityIndexMsg a b)
+-- recorded once.  [covering]: the obligation is an index row's coverage of
+-- an atom, which has one direction.
+reportIndexFailure : Bool -> Option Loc -> Authority -> Authority -> Unit
+reportIndexFailure covering loc a b = pushTypeErrorAt
+  "T-AUTHORITY-INDEX-MISMATCH"
+  loc
+  (if covering then authorityCoverMsg a b else authorityIndexMsg a b)
 
 authorityIndexMsg : Authority -> Authority -> String
 authorityIndexMsg a b =
@@ -11826,6 +11896,16 @@ authorityIndexMsg a b =
   let sb = authorityTermTextIn ctx cnt b
   let (x, y) = if sa <= sb then (sa, sb) else (sb, sa)
   "Authority index mismatch: \{x} vs \{y}. An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle \"cfg/app\"` is not a `Handle \"cfg/*\"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant"
+
+-- An index row's atom its other side cannot absorb must lie within that
+-- side's authority for the label: coverage, not equality.
+authorityCoverMsg : Authority -> Authority -> String
+authorityCoverMsg lower upper =
+  let ctx = Ref []
+  let cnt = Ref 0
+  let lo = authorityTermTextIn ctx cnt lower
+  let hi = authorityTermTextIn ctx cnt upper
+  "Authority index mismatch: \{lo} is not covered by \{hi}. An effect row written as a type argument must cover every atom the other side carries that its own tail cannot take, so the authority reached here must lie within \{hi}. Stay within \{hi}, or widen the row's authority for the label to cover what is reached"
 
 -- An authority as a message names it: the top as the whole domain, a term
 -- as it is written, under a naming context shared by every term of one
@@ -11839,20 +11919,23 @@ authorityTermTextIn ctx cnt q =
 -- bound; against a bound the scope SOLVED — an upper term recorded as a
 -- flexible variable that this binding's other uses determined — the remedy
 -- is to make every use lie within one bound, since nothing was written.
+-- [label]: the key of the label the obligation came from, when it came from
+-- a row's atom.
 authorityFailureMsg : String ->
+  Option String ->
   Option String ->
   Authority ->
   Authority ->
   Option Authority ->
   String
-authorityFailureMsg name origin lower upper written =
+authorityFailureMsg name label origin lower upper written =
   let ctx = Ref []
   let cnt = Ref 0
   let lo = authorityTermTextIn ctx cnt lower
   let hi = ppAuthority ctx cnt upper
   match origin
     Some callee => residualFailureMsg callee lo hi
-    None => boundFailureMsg name lower lo hi upper written
+    None => boundFailureMsg name label lower lo hi upper written
 
 -- A residual of [callee]'s inferred scheme that this use does not satisfy:
 -- the relation is the callee's, so the bound is not one this binding wrote.
@@ -11860,24 +11943,115 @@ residualFailureMsg : String -> String -> String -> String
 residualFailureMsg callee lo hi =
   "'\{callee}' needs \{lo} to lie within \{hi} here: its inferred type relates those authorities (a `<=` in its context), and this use does not satisfy the relation. Pass values whose authorities satisfy it"
 
+-- A bound over binders the caller chooses says what a body may do with
+-- them.  A `*` is offered only where it would help: the body extends a
+-- binder on the right, reaching the whole domain, and the binder's domain has
+-- patterns.  An interpolation through a `display` other than the prelude's
+-- is named as the cause, since the value is built as the advice says.
 boundFailureMsg : String ->
+  Option String ->
   Authority ->
   String ->
   String ->
   Authority ->
   Option Authority ->
   String
-boundFailureMsg name lower lo hi upper written =
+boundFailureMsg name label lower lo hi upper written =
   if mentionsOpened upper then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is the authority of the value this arm or clause opened, which nothing but that value and what derives from it is known to lie within. Relate the operation to the opened value, or widen the declared row to the label bare"
+  else if authHasVars upper
+    && binderIn perRun.value.displayHiddenBindersRef upper then
+    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: an interpolated part is converted by `display`, and the `display` used for interpolation here is this module's own, defined or imported, not the prelude's, so the interpolated string is not known to derive from \{hi}. Build the value with `++` from the named argument, or stop bringing another `display` into scope"
   else if authHasVars upper && allList authvarIsPattern (authVars upper) then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is a pattern-ranging authority the caller chooses, so a body may forward the named argument or append to it on the right (`root ++ suffix`), which stays within it, never reach a value it does not derive that way. Build the value by appending to the named argument, or widen the declared row to the label bare"
   else if authHasVars upper then
-    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from; an extension of it is the whole domain, since the caller may choose an exact element, which admits no extension of itself. Perform the operation on the named argument and build any extended value at the call site, declare the binder pattern-ranging with a `*` on its label (`(p : String @FileWrite*)`, `(d : Authority FileWrite*)`) so an extension stays within it, or widen the declared row to the label bare"
+    ordinaryBoundFailureMsg name label lower lo hi upper
   else if solvedUpper written then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is not a written bound but what this binding's other uses of the same authority determined together. Make every use lie within one bound, or write the bound the binding means"
   else
     "Binding '\{name}' reaches \{lo} where its declared bound admits only \{hi}. Stay within the declared bound, or widen it to cover what the body reaches"
+
+-- An ordinary binder: an extension of it is the whole domain.  The `*` is
+-- offered, spelled with the program's own label, only when the body
+-- extended one whose domain has patterns.
+ordinaryBoundFailureMsg : String ->
+  Option String ->
+  Authority ->
+  String ->
+  String ->
+  Authority ->
+  String
+ordinaryBoundFailureMsg name label lower lo hi upper =
+  let head =
+    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from"
+  let extended =
+    filterList
+      (c => IdMap.has (authvarId c) perRun.value.extendedBindersRef.value)
+      (authVars upper)
+  if authIsTop lower && isNonEmptyL extended then
+    let tail =
+      "; an extension of it is the whole domain, since the caller may choose an exact element, which admits no extension of itself. Perform the operation on the named argument and build any extended value at the call site"
+    match filterList (c => domainHasPatterns (authvarDomain c)) extended
+      c :: _ =>
+        let n = optionOr hi (authvarName c)
+        let star = starSpelling n (binderLabel name n label)
+        "\{head}\{tail}, declare \{star} so an extension stays within it, or widen the declared row to the label bare"
+      [] => "\{head}\{tail}, or widen the declared row to the label bare"
+  else
+    "\{head}. Perform the operation on the named argument, or widen the declared row to the label bare"
+
+-- The pattern-ranging spelling of binder [n], on label [l] when it is known.
+starSpelling : String -> Option String -> String
+starSpelling n (Some l) =
+  "'\{n}' pattern-ranging with a `*` on its label, `(\{n} : String @\{l}*)` on a named argument or `(\{n} : Authority \{l}*)` on a type parameter,"
+starSpelling n None =
+  "'\{n}' pattern-ranging with a `*` on its label (`@L*` on a named argument, `Authority L*` on a type parameter)"
+
+-- The label binder [n] of binding [fn] is written under: the binding's
+-- signature says, else the label of the atom the failed obligation came from
+-- ([key]).
+binderLabel : String -> String -> Option String -> Option String
+binderLabel fn n key =
+  let written = match omLookup fn driverState.value.sigTyMapRef.value
+    Some ty => binderLabelIn n ty
+    None => None
+  orElseOpt written (map labelKeyName key)
+
+-- The label a signature writes binder [n] under: its written domain
+-- (`(n : String @L)`), else the first atom naming it (`<L n>`), else the
+-- first `Authority L` index slot it fills.
+binderLabelIn : String -> Ty -> Option String
+binderLabelIn n ty = match lookupAssoc n (namedArgDomains ty)
+  Some (Some d) => Some d.eatLabel
+  _ =>
+    match (atomBindersIn (a => atomNaming n a) ty
+      ++ authSlotNamesIn (slotLabelsNaming n) ty)
+      l :: _ => Some l
+      [] => None
+
+slotLabelsNaming : String -> List Kind -> List Ty -> List String
+slotLabelsNaming n ((KAuth l _) :: ks) ((TyVar m) :: as2) =
+  if m == n then
+    effLabelName l :: slotLabelsNaming n ks as2
+  else
+    slotLabelsNaming n ks as2
+slotLabelsNaming n (_ :: ks) (_ :: as2) = slotLabelsNaming n ks as2
+slotLabelsNaming _ _ _ = []
+
+atomNaming : String -> EffAtomTy -> List String
+atomNaming n a = match a.eatParam
+  EPName m => if m == n then [a.eatLabel] else []
+  _ => []
+
+-- A label's name from its key (`labelKey`), without the defining module.
+labelKeyName : String -> String
+labelKeyName key = match reverseL (splitOnChar ':' key)
+  last :: _ => last
+  [] => key
+
+binderIn : Ref (Map Int Unit) -> Authority -> Bool
+binderIn table q =
+  anyList (c => IdMap.has (authvarId c) table.value) (authVars q)
 
 mentionsOpened : Authority -> Bool
 mentionsOpened q =
@@ -12772,7 +12946,10 @@ freshAuthSubstFor ids body force =
 -- variable, or an exact element could reach it.  A quantified id with no
 -- cell in the scheme is dead (nothing it would substitute remains), except
 -- one minted pattern-ranging (`patternAuthIdsRef`): losing its source would
--- lose its range, so that is an internal error rather than a default.
+-- lose its range, so that is an internal error rather than a default.  A
+-- constructor's existential binder is the one pattern-ranging id that may
+-- have no cell: its cells are the fields', so one no field mentions is
+-- phantom, and as dead as an ordinary phantom binder.
 freshInferenceAuthvar : Int -> Option (Ref Authvar) -> Ref Authvar
 freshInferenceAuthvar _ (Some source) =
   freshAuthvarRanged
@@ -12780,7 +12957,8 @@ freshInferenceAuthvar _ (Some source) =
     (authvarIsPattern source)
     (authvarName source)
 freshInferenceAuthvar id None =
-  if IdMap.has id graphRun.value.patternAuthIdsRef.value then
+  if IdMap.has id graphRun.value.patternAuthIdsRef.value
+    && not (IdMap.has id graphRun.value.ctorExistentialsRef.value) then
     panic
       "internal error: the pattern-ranging authority variable #\{intToString id} has no cell in the scheme that quantifies it, so its range would be lost at instantiation"
   else
@@ -13477,7 +13655,7 @@ binderIsPattern : List (String, Option EffAtomTy) ->
   String ->
   Bool
 binderIsPattern domains pats n = match lookupAssoc n domains
-  Some (Some d) => d.eatPattern
+  Some (Some d) => rangedOver (EffLabel d.eatLabel d.eatOrigin) d.eatPattern
   Some None => False
   None => contains n pats
 
@@ -13576,6 +13754,10 @@ kauthArgVarNames ((KAuth l _) :: ks) ((TyVar n) :: as2) =
   (n, dtopFor l) :: kauthArgVarNames ks as2
 kauthArgVarNames ((KAuth l _) :: ks) ((TyAuth ps _) :: as2) =
   map (n => (n, dtopFor l)) (authTermNames ps) ++ kauthArgVarNames ks as2
+-- A join of names only parses as a row (`authArgOf` refuses it there); its
+-- names are still authorities the slot's label ranges over.
+kauthArgVarNames ((KAuth l _) :: ks) ((TyRow [] names _) :: as2) =
+  map (n => (n, dtopFor l)) names ++ kauthArgVarNames ks as2
 kauthArgVarNames (_ :: ks) (_ :: as2) = kauthArgVarNames ks as2
 kauthArgVarNames _ _ = []
 
@@ -14202,13 +14384,34 @@ authArgOf etbl tvs l pat (TyAuth ps loc) =
         ()
         lits
   authJoinAll (map (authTermOf etbl tvs l pat) ps)
-authArgOf _ _ l _ ty =
-  let _ =
-    pushTypeErrorOnceAt
-      "T-AUTHORITY-KIND"
-      (firstTyLoc ty)
-      (typeAsAuthorityMsg (ppTy ty) (effLabelName l))
+authArgOf etbl _ l pat ty =
+  let _ = match ordinaryBinderIn etbl pat ty
+    Some n =>
+      pushTypeErrorOnceAt
+        "T-AUTHORITY-PATTERN"
+        (firstTyLoc ty)
+        (ordinaryInPatternSlotMsg n (effLabelName l))
+    None =>
+      pushTypeErrorOnceAt
+        "T-AUTHORITY-KIND"
+        (firstTyLoc ty)
+        (typeAsAuthorityMsg (ppTy ty) (effLabelName l ++ patternMark pat))
   authTop (dtopFor l)
+
+-- An ordinary authority binder a malformed argument of a pattern slot names
+-- (`(p | q)`, a join of names, is read as a row): that it ranges over the
+-- whole domain is the more specific report.
+ordinaryBinderIn : SigVars -> Bool -> Ty -> Option String
+ordinaryBinderIn etbl True (TyRow [] names _) =
+  match filterList (n => isOrdinaryBinder etbl n) names
+    n :: _ => Some n
+    [] => None
+ordinaryBinderIn _ _ _ = None
+
+isOrdinaryBinder : SigVars -> String -> Bool
+isOrdinaryBinder etbl n = match lookupAssoc n etbl.svAuths
+  Some cell => not (authvarIsPattern cell)
+  None => False
 
 -- One term of a written index join: a name through the signature's binders,
 -- a literal as the slot's domain element.
@@ -22524,8 +22727,84 @@ argumentIntoTyped dom xt = match normalize dom
 
 argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
 argumentAuthority env top (Some e) xt =
-  alphaOf top (envVarType env) (displayIsPrelude env) (envAlphaLets env) e xt
+  let prelude = displayIsPrelude env
+  let q = alphaOf top (envVarType env) prelude (envAlphaLets env) e xt
+  let _ = noteArgumentShape env top prelude q e xt
+  q
 argumentAuthority _ top None xt = typeAuthority top xt
+
+-- Record, for a report of a bound this argument fails (`boundFailureMsg`),
+-- the authority variables it extends on the right, and those it would reach
+-- through an interpolated part were `display` the prelude's.
+noteArgumentShape : TcEnv -> Param -> Bool -> Authority -> Expr -> Mono -> Unit
+noteArgumentShape env top prelude q e xt =
+  let lets = envAlphaLets env
+  let _ = match extensionBase e
+    Some base =>
+      markBinders
+        perRun.value.extendedBindersRef
+        (authVars
+          (alphaOf
+            top
+            (envVarType env)
+            prelude
+            lets
+            base
+            (tconBuiltin "String")))
+    None => ()
+  if prelude then
+    ()
+  else
+    let seen = fold (m c => IdMap.set (authvarId c) () m) Tip (authVars q)
+    markBinders
+      perRun.value.displayHiddenBindersRef
+      (filterList
+        (c => not (IdMap.has (authvarId c) seen))
+        (flatMap
+          (x => authVars (alphaOf top (envVarType env) prelude lets x xt))
+          (displayOperands e)))
+
+markBinders : Ref (Map Int Unit) -> List (Ref Authvar) -> Unit
+markBinders table cells =
+  table := fold (m c => IdMap.set (authvarId c) () m) table.value cells
+
+-- The operand a concatenation extends on the right: its leftmost part, past
+-- the empty literal an interpolation begins with.
+extensionBase : Expr -> Option Expr
+extensionBase (ELoc _ e) = extensionBase e
+extensionBase (e@(EBinOp op _ _ _))
+  | op == "++" = Some (leftmostPart e)
+extensionBase _ = None
+
+leftmostPart : Expr -> Expr
+leftmostPart (ELoc _ e) = leftmostPart e
+leftmostPart (e@(EBinOp op a b _))
+  | op == "++" = if isEmptyStringLit a then leftmostPart b else leftmostPart a
+  | otherwise = e
+leftmostPart e = e
+
+-- The operands of the `display` applications a concatenation's parts are,
+-- the parts an interpolation converts.
+displayOperands : Expr -> List Expr
+displayOperands (ELoc _ e) = displayOperands e
+displayOperands (EBinOp op a b _)
+  | op == "++" = displayOperands a ++ displayOperands b
+displayOperands (EApp f x) = if isDisplayHead f then [x] else []
+displayOperands _ = []
+
+isDisplayHead : Expr -> Bool
+isDisplayHead (ELoc _ f) = isDisplayHead f
+isDisplayHead (EVar x) = x == "display"
+isDisplayHead (EVarId x _) = x == "display"
+isDisplayHead (EVarAt x _) = x == "display"
+isDisplayHead (EDictAt x _) = x == "display"
+isDisplayHead (EMethodAt x _ _) = x == "display"
+isDisplayHead _ = False
+
+isEmptyStringLit : Expr -> Bool
+isEmptyStringLit (ELoc _ e) = isEmptyStringLit e
+isEmptyStringLit (ELit (LString s)) = s == ""
+isEmptyStringLit _ = False
 
 -- The checked type of a name in scope, for the abstraction's variable rule.
 envVarType : TcEnv -> String -> Option Mono
@@ -23828,7 +24107,8 @@ padAnns (_ :: ps) [] = None :: padAnns ps []
 
 kindOfAnn : Option KindAnn -> Kind
 kindOfAnn (Some KindEffect) = KRow
-kindOfAnn (Some (KindAuthority l o pat _)) = KAuth (EffLabel l o) pat
+kindOfAnn (Some (KindAuthority l o pat _)) =
+  KAuth (EffLabel l o) (rangedOver (EffLabel l o) pat)
 kindOfAnn _ = KType
 
 -- an INTERFACE parameter's slot kinds from its declared arrow kind: `Effect ->
@@ -23840,7 +24120,8 @@ kindAnnSlots _ = []
 
 kindAnnAtom : KindAnn -> Kind
 kindAnnAtom KindEffect = KRow
-kindAnnAtom (KindAuthority l o pat _) = KAuth (EffLabel l o) pat
+kindAnnAtom (KindAuthority l o pat _) =
+  KAuth (EffLabel l o) (rangedOver (EffLabel l o) pat)
 kindAnnAtom _ = KType
 
 -- A kind that is not `Type` and must therefore be written (§6.3): `Effect`
@@ -24336,7 +24617,10 @@ existentialCells binders =
     (b => match snd b
       KindAuthority l o pat _ => (
         fst b,
-        freshAuthvarRanged (dtopFor (EffLabel l o)) pat (Some (fst b)),
+        freshAuthvarRanged
+          (dtopFor (EffLabel l o))
+          (rangedOver (EffLabel l o) pat)
+          (Some (fst b)),
       )
       _ => (fst b, freshAuthvar PUnit (Some (fst b))))
     binders
@@ -41198,7 +41482,7 @@ unquantifiedAuthIds (Forall _ _ auths residual force mono) =
       residual)
     auths
 
-failureMentions : Map Int Unit -> SummaryFailure (Option Loc, String) -> Bool
+failureMentions : Map Int Unit -> SummaryFailure ObligationSite -> Bool
 failureMentions Tip _ = False
 failureMentions ids failure = match failure.esfAuthority
   Some (lo, hi) =>
