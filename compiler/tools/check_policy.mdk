@@ -83,7 +83,7 @@ import types.typecheck.{
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{
   sortUniqS, joinWith, reverseL, escStr, lookupAssoc, contains, filterList,
-  listLen
+  listLen, escOneHex2
 }
 import string.{toLower}
 import list.{replicate}
@@ -758,8 +758,8 @@ atomToToml keyOf a =
 
 paramToml : Param -> String
 paramToml p = match canonParam p
-  PPrefix (Some s) => "\"\{s}\""
-  PSet (Some xs) => "[\{joinWith ", " (map quoteTok xs)}]"
+  PPrefix (Some s) => tomlQuote s
+  PSet (Some xs) => "[\{joinWith ", " (map tomlQuote xs)}]"
   PProduct ax if not (isSubTop (PProduct ax)) => "{ \{productTomlInline ax} }"  -- WS-4 inline table
   _ => "true"
 
@@ -771,13 +771,30 @@ productTomlInline ax =
   joinWith ", " (map axisToToml (filterList (a => not (isSubTop (snd a))) ax))
 
 axisToToml : (String, Param) -> String
-axisToToml (name, PPrefix (Some s)) = "\{lowerFirst name} = \"\{s}\""
+axisToToml (name, PPrefix (Some s)) = "\{lowerFirst name} = \{tomlQuote s}"
 axisToToml (name, PSet (Some xs)) =
-  "\{lowerFirst name} = [\{joinWith ", " (map quoteTok xs)}]"
+  "\{lowerFirst name} = [\{joinWith ", " (map tomlQuote xs)}]"
 axisToToml (name, _) = lowerFirst name ++ " = true"
 
 quoteTok : String -> String
-quoteTok s = "\"" ++ s ++ "\""
+quoteTok s = escStr s
+
+-- TOML basic strings use four hex digits for control characters; Medaka's
+-- source-literal escStr uses braced \u{XX}, which TOML does not accept.
+tomlQuote : String -> String
+tomlQuote s = "\"" ++ stringConcat (tomlChars (stringToChars s) 0) ++ "\""
+
+tomlChars : Array Char -> Int -> List String
+tomlChars cs i
+  | i >= arrayLength cs = []
+  | otherwise = tomlChar (arrayGetUnsafe i cs) :: tomlChars cs (i + 1)
+
+tomlChar : Char -> String
+tomlChar c
+  | c == '\\' = "\\\\"
+  | c == '"' = "\\\""
+  | charCode c < 32 || charCode c == 127 = "\\u00\{escOneHex2 (charCode c)}"
+  | otherwise = charToStr c
 
 -- lowercase the first char of an axis name (Host → host) for TOML-key convention.
 lowerFirst : String -> String

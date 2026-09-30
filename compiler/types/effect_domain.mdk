@@ -4,7 +4,7 @@
 
 import support.util.{
   listLen, filterList, joinWith, sortUniqS, startsWith, contains, allList,
-  anyList, reverseL, lenKey
+  anyList, reverseL, lenKey, escStr
 }
 
 -- A Product element lists every axis of its label's declared schema, in
@@ -494,7 +494,7 @@ export
 drenderN : Param -> String
 drenderN PUnit = ""
 drenderN (PPrefix None) = ""
-drenderN (PPrefix (Some s)) = " \"" ++ s ++ "\""
+drenderN (PPrefix (Some s)) = " " ++ quoteStr s
 drenderN (PSet None) = ""
 drenderN (PSet (Some xs)) = " {" ++ joinWith ", " (map quoteStr xs) ++ "}"
 drenderN (PProduct ax) = match renderProductLit ax
@@ -503,7 +503,7 @@ drenderN (PProduct ax) = match renderProductLit ax
 
 export
 quoteStr : String -> String
-quoteStr s = "\"" ++ s ++ "\""
+quoteStr s = escStr s
 
 -- A Product's axes as written: a top axis is spelled by leaving it out.
 export
@@ -517,7 +517,7 @@ renderAxis (name, p) = "\{name}=\{renderAxisVal p}"
 
 export
 renderAxisVal : Param -> String
-renderAxisVal (PPrefix (Some s)) = "\"" ++ s ++ "\""
+renderAxisVal (PPrefix (Some s)) = quoteStr s
 renderAxisVal (PSet (Some xs)) = "{" ++ joinWith ", " (map quoteStr xs) ++ "}"
 renderAxisVal _ = ""
 
