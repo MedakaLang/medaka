@@ -63,6 +63,7 @@ import frontend.ast.{
   -- fixture that pins `dataEnvFromDeclsGo`'s deliberate `DAttrib` asymmetry.
   Attr(..),
   Ty(..),
+  mapTyFull,
   EffAtomTy(..),
   effAtomSurface,
   EffParamTy(..),
@@ -714,14 +715,15 @@ ioAliasLabels = [
   "Net",
   "FileRead",
   "FileWrite",
+  "Signal",
 ]
 -- NOTE: `FFI` is deliberately NOT a member. #2071/#2070 (epic, Layer 1, R1):
 -- an `<IO>` bound must NOT subsume an `<FFI>`-performing body — FFI crosses a
 -- trust boundary the IO alias is not meant to paper over. Do not "complete"
 -- this list by adding FFI.
 
--- `IO` is the join of the ten security labels, so it widens on either side of an
--- escape check.  On the bound side a NARROW inferred row is subsumed by an `<IO>`
+-- `IO` is the join of the eleven security labels, so it widens on either side of
+-- an escape check.  On the bound side a NARROW inferred row is subsumed by an `<IO>`
 -- bound (narrow ⊑ IO); `IO` stays in the expansion (atomsNorm keeps it) so an
 -- inferred IO matches a bound IO.
 expandIoInBound : List Atom -> List Atom
@@ -729,8 +731,8 @@ expandIoInBound b = match findAtom (labelKey ioLabel) b
   None => b
   Some _ => atomsNorm (b ++ map atomOfLabel ioAliasLabels)
 
--- A performed `IO` left over against a bound without `IO` stands for the ten
--- labels: a bound naming all ten admits it, a bound naming some refuses it
+-- A performed `IO` left over against a bound without `IO` stands for the eleven
+-- labels: a bound naming all eleven admits it, a bound naming some refuses it
 -- naming the labels it lacks, and a bound naming none leaves it as `IO`.
 narrowPerformedIo : List Atom -> List Atom -> List Atom
 narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
@@ -1340,6 +1342,11 @@ unifyJoinRows isIndex r1 r2 =
   let flexA = filterList (c => not (isRigidCell c)) onlyA
   let rigidB = filterList isRigidCell onlyB
   let flexB = filterList (c => not (isRigidCell c)) onlyB
+  -- An index with no flexible member on either side has no room for an
+  -- atom the other side lacks, so its shared labels are equal as indices.
+  let _ =
+    if isIndex && isEmptyL flexA && isEmptyL flexB && isEmptyL cflex then
+      unifyIndexAtomAuthorities (fst fa) (fst fb)
   let dA = atomsDiff (fst fa) (fst fb)
   let dB = atomsDiff (fst fb) (fst fa)
   -- A's leftovers (rigidA, dA) must be absorbed on B's side: by B's own
@@ -1389,10 +1396,10 @@ bindEach (c :: cs) row =
   bindEach cs row
 
 -- the open side's atoms [dOpen] escaping the closed side's bound: the plain
--- OPEN~CLOSED arm's leak check for arrows, equality for an index.
+-- OPEN~CLOSED arm's leak check for arrows, coverage for an index.
 joinSideCheck : Bool -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
-joinSideCheck True dOpen dClosed lOpen lClosed =
-  indexRowEqCheck dOpen dClosed lOpen lClosed
+joinSideCheck True dOpen _ lOpen lClosed =
+  indexRowEqCheck (indexAtomsCovered dOpen lClosed) [] lOpen lClosed
 joinSideCheck False _ _ lOpen lClosed =
   effectLeakCheck (atomsEscape lOpen lClosed) lClosed
 
@@ -1568,19 +1575,22 @@ unifyRowPlain (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck l1 l2
 --     `launderEscapeFromLog` trail depends on it.  Tightening the arrow side is a design
 --     decision with its own blast radius, tracked separately — not a copy-paste of this.
 unifyIndexRow : EffRow -> EffRow -> Unit
-unifyIndexRow r1 r2 =
-  let _ = unifyIndexAtomAuthorities r1 r2
-  unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
+unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
 
--- An index row is an equality, so an atom the two rows both carry names one
--- authority on both sides (`Async <Net host | e>` against `Async <Net κ |
--- e>`): the two authorities are unified as an index is (`unifyIndex`), a
--- flexible one substituted, two fixed ones compared for equality.  What is
+-- An index row is a set of atoms, and two index rows are equal when each
+-- covers the other (EFFECTS-SEMANTICS §6.4, §2.2).  Two atoms of one label at
+-- different authorities are two members of that set, not one authority to be
+-- equated: `<Net h | e1>` and `<Net "127.0.0.1" | e2>` are made equal by
+-- giving each open tail the other side's atom, and `<Net h | e1>` equals
+-- `<Net | e>` because the bare label covers `Net h`.  So an atom one side
+-- does not cover flows into the other side's flexible tail when there is one;
+-- only a side with no room must cover it, as an index obligation
+-- (`indexAtomsCovered`).  Where NEITHER side has a flexible tail, a shared
+-- label's two authorities are equal as indices (`unifyIndex`): a flexible
+-- one is substituted, two fixed ones are compared for equality, and what is
 -- left for the row comparison is which labels each side carries.
-unifyIndexAtomAuthorities : EffRow -> EffRow -> Unit
-unifyIndexAtomAuthorities r1 r2 =
-  let (a1, _) = rowFlat r1
-  let (a2, _) = rowFlat r2
+unifyIndexAtomAuthorities : List Atom -> List Atom -> Unit
+unifyIndexAtomAuthorities a1 a2 =
   fold
     (_ x => match findAtom (atomKey x) a2
       Some y => unifyIndex (atomAuth x) (atomAuth y)
@@ -1589,7 +1599,9 @@ unifyIndexAtomAuthorities r1 r2 =
     a1
 
 -- #821: an index row whose tail is a join is solved by the join unifier in
--- INDEX mode (equality, never subsumption).
+-- INDEX mode (equality, never subsumption).  A row with a summary cell goes
+-- to the scoped solver as two exact relations, whose coverage is already
+-- atom by atom.
 unifyIndexRowN : EffRow -> EffRow -> Unit
 unifyIndexRowN r1 r2 =
   if rowHasSummary r1 || rowHasSummary r2 then
@@ -1603,13 +1615,47 @@ unifyIndexRowN r1 r2 =
   else
     unifyIndexRowPlain r1 r2
 
+-- Both closed, or the same tail: nothing can absorb an atom, so the rows are
+-- equal label by label.  Open against closed: the closed side's extra atoms
+-- are the open tail's solution, and the open side's atoms must be covered by
+-- the closed side (the §5 leak check, with a shared label's authority an
+-- index obligation).  Two distinct open tails: each takes what the other
+-- side has that it does not cover, into one fresh shared tail.
 unifyIndexRowPlain : EffRow -> EffRow -> Unit
-unifyIndexRowPlain (EffRow l1 None) (EffRow l2 None) =
-  indexRowEqCheck (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
+unifyIndexRowPlain (EffRow l1 None) (EffRow l2 None) = indexRowEquate l1 l2
 unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
-  | effvarId v1 == effvarId v2 =
-    indexRowEqCheck (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
-unifyIndexRowPlain r1 r2 = unifyRowN r1 r2
+  | effvarId v1 == effvarId v2 = indexRowEquate l1 l2
+unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 None) =
+  indexOpenClosed l1 v1 l2
+unifyIndexRowPlain (EffRow l1 None) (EffRow l2 (Some v2)) =
+  indexOpenClosed l2 v2 l1
+unifyIndexRowPlain r1 r2 = unifyRowPlain r1 r2
+
+indexRowEquate : List Atom -> List Atom -> Unit
+indexRowEquate l1 l2 =
+  let _ = unifyIndexAtomAuthorities l1 l2
+  indexRowEqCheck (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
+
+indexOpenClosed : List Atom -> Ref Effvar -> List Atom -> Unit
+indexOpenClosed lOpen v lClosed =
+  let _ =
+    effectLeakCheck
+      (indexAtomsCovered (atomsEscape lOpen lClosed) lClosed)
+      lClosed
+  linkRow v (EffRow (atomsDiff lClosed lOpen) None)
+
+-- The atoms of [escaping] whose label [bound] does not carry.  An escaping
+-- atom whose label the bound does carry is not missing from it: its
+-- authority must lie within the bound's, which is recorded as an index
+-- obligation, so a variable is solved and a mismatch reads as an authority
+-- index (`wantAuthorityWith True`).
+indexAtomsCovered : List Atom -> List Atom -> List Atom
+indexAtomsCovered [] _ = []
+indexAtomsCovered (x :: rest) bound = match findAtom (atomKey x) bound
+  Some y =>
+    let _ = wantAuthorityWith True (atomAuth x) (atomAuth y)
+    indexAtomsCovered rest bound
+  None => x :: indexAtomsCovered rest bound
 
 -- The atoms of [l1] whose label [l2] does not carry.  A shared label's two
 -- authorities were already equated by `unifyIndexAtomAuthorities`, which
@@ -3269,6 +3315,19 @@ generalizableEffvar v = match !v
   ELink _ _ => []
   EJoin _ _ _ => []
   ESummary _ _ _ => []
+
+-- The signature the declared-row walks below read: every alias on the return
+-- spine expanded, so the declared row is the row `fromAstTypeE` elaborates.
+-- `d : Tick` with `type Tick = Int -> <Stdout> Unit` declares `<Stdout>`, and
+-- so do `v : S` and `f : Int -> S` with `type S = <Stdout> Int`
+-- (`writtenBindingForce`, `returnRowE`).  An alias that expands to any other
+-- type stays unexpanded, since it carries no row to read.
+expandReturnSpine : Ty -> Ty
+expandReturnSpine ty = match expandAliasHeadTy ty
+  TyFun a ret => TyFun a (expandReturnSpine ret)
+  TyConstrained cs t => TyConstrained cs (expandReturnSpine t)
+  row@(TyEffect _ _ _) => row
+  _ => ty
 
 -- the declared concrete effect set of a signature: labels on the first `<…>`
 -- reached walking down the return side (Phase 79e escape check)
@@ -13049,7 +13108,7 @@ sigToSchemeTvsIn scope ty = atSignature ty (_ =>
       (map effvarIdOf etbl.svRows)
       (map authvarIdOf etbl.svAuths)
       []
-      (bindingForceFromAst etbl ty)
+      (bindingForceFromAst etbl tvs ty)
       (fromAstTypeE etbl tvs ty),
     tvs,
   ))
@@ -13436,14 +13495,30 @@ astEffrowE _ _ = pureRow
 
 -- Only a leading row describes forcing a binding. Rows reached through an
 -- arrow remain that arrow's latent effects, even for a function-valued binding.
-bindingForceFromAst : SigVars -> Ty -> EffRow
-bindingForceFromAst etbl (TyConstrained _ ty) = bindingForceFromAst etbl ty
-bindingForceFromAst etbl ty = astEffrowE etbl ty
+bindingForceFromAst : SigVars -> List (String, Mono) -> Ty -> EffRow
+bindingForceFromAst etbl tvs ty =
+  optionOr pureRow (writtenBindingForce etbl tvs ty)
 
-writtenBindingForce : SigVars -> Ty -> Option EffRow
-writtenBindingForce etbl (TyConstrained _ ty) = writtenBindingForce etbl ty
-writtenBindingForce etbl (ty@(TyEffect _ _ _)) = Some (astEffrowE etbl ty)
-writtenBindingForce _ _ = None
+-- The leading row of a binding's written type.  An alias means its expansion
+-- here as everywhere a type is written: `v : SS` with `type SS = <Sign> Int`
+-- is bounded by `<Sign>` exactly as `v : <Sign> Int` is.
+writtenBindingForce : SigVars -> List (String, Mono) -> Ty -> Option EffRow
+writtenBindingForce etbl tvs (TyConstrained _ ty) =
+  writtenBindingForce etbl tvs ty
+writtenBindingForce etbl _ (ty@(TyEffect _ _ _)) = Some (astEffrowE etbl ty)
+writtenBindingForce etbl tvs ty = match aliasScopeE etbl tvs ty
+  Some (etbl2, tvs2, rhs) => writtenBindingForce etbl2 tvs2 rhs
+  None => None
+
+-- The row an arrow's written result performs: the `<…>` it leads with, seen
+-- through aliases, so `Int -> SS` elaborates as `Int -> <Sign> Int`.  An alias
+-- whose expansion is an arrow or any other unwrapped type adds no row, as the
+-- written-out type would not.
+returnRowE : SigVars -> List (String, Mono) -> Ty -> EffRow
+returnRowE etbl _ (ty@(TyEffect _ _ _)) = astEffrowE etbl ty
+returnRowE etbl tvs ty = match aliasScopeE etbl tvs ty
+  Some (etbl2, tvs2, rhs) => returnRowE etbl2 tvs2 rhs
+  None => pureRow
 
 -- The tail cell of a written row.  No names is a closed row; one name is that
 -- var's shared cell; several (#821) is their JOIN, so `<Stdout | e | e2>`
@@ -13520,7 +13595,7 @@ fromAstTypeE etbl tvs (TyApp a b) = match tyAppSpine (TyApp a b)
 fromAstTypeE etbl tvs (TyFun a b) =
   TFun
     (fromAstDomainE etbl tvs a)
-    (astEffrowE etbl b)
+    (returnRowE etbl tvs b)
     (fromAstTypeE etbl tvs (stripEff b))
 fromAstTypeE etbl tvs (TyTuple ts) = tupleMono (map (fromAstTypeE etbl tvs) ts)
 fromAstTypeE etbl tvs (TyEffect _ _ t) = fromAstTypeE etbl tvs t
@@ -13732,12 +13807,8 @@ fromAstTypeApp etbl tvs o n args =
     -- kind — an `Effect` parameter binds a row cell in the effect table so the
     -- RHS's own occurrence of it (`Later e Int`) reads the written row.
     Some (params, rhs) if listLen params == listLen args =>
-      let kinds =
-        optionOr
-          (map (_ => KType) params)
-          (lookupTab key perRun.value.dataParamKindsRef.value)
-      let bound = aliasArgBindings etbl tvs params kinds args
-      fromAstTypeE (sigVarsUnion (fst bound) etbl) (snd bound ++ tvs) rhs
+      let (etbl2, tvs2) = aliasArgScope etbl tvs key params args
+      fromAstTypeE etbl2 tvs2 rhs
     -- Alias applied to the wrong arity: reject, keep the opaque fallback.
     Some (params, _) =>
       let _ =
@@ -13750,10 +13821,52 @@ fromAstTypeApp etbl tvs o n args =
         foldAppKinds etbl tvs (tconFrom o n) kinds args
       _ => appFallback etbl tvs o n args
 
+-- The scope an applied alias's right-hand side elaborates in: the caller's,
+-- with the alias's parameters bound to the arguments (alias parameters shadow
+-- the caller's names).
+aliasArgScope : SigVars ->
+  List (String, Mono) ->
+  TabKey ->
+  List String ->
+  List Ty ->
+  (SigVars, List (String, Mono))
+aliasArgScope etbl tvs key params args =
+  let kinds =
+    optionOr
+      (map (_ => KType) params)
+      (lookupTab key perRun.value.dataParamKindsRef.value)
+  let bound = aliasArgBindings etbl tvs params kinds args
+  (sigVarsUnion (fst bound) etbl, snd bound ++ tvs)
+
+-- A saturated alias's right-hand side with the scope it elaborates in, or
+-- `None` when the written type is not one.  The readers of a written row
+-- (`writtenBindingForce`, `returnRowE`) look through an alias with this, so
+-- they read the row `fromAstTypeE` elaborates.  A misapplied alias is not
+-- looked through; `fromAstTypeApp` reports it.
+aliasScopeE : SigVars ->
+  List (String, Mono) ->
+  Ty ->
+  Option (SigVars, List (String, Mono), Ty)
+aliasScopeE etbl tvs ty =
+  if isEmptyL perRun.value.aliasTableRef.value then
+    None
+  else match tyAppSpine ty
+    (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+      let key = tyTabKey o n
+      match lookupTab key perRun.value.aliasTableRef.value
+        Some (params, rhs) if listLen params == listLen args =>
+          let (etbl2, tvs2) = aliasArgScope etbl tvs key params args
+          Some (etbl2, tvs2, rhs)
+        _ => None
+    _ => None
+
 -- the alias parameters bound positionally at their declared kinds: (effect
--- table additions, type table additions).  A KRow parameter gets a fresh row
--- cell pinned to the written argument row by the index unifier (equality —
--- an alias slot is an index, §9); a KType parameter binds the elaborated Mono.
+-- table additions, type table additions).  Expansion is a substitution: each
+-- parameter denotes its argument, elaborated once in the caller's scope, so
+-- the right-hand side reads exactly what the caller would have written in its
+-- place.  A KType parameter binds the elaborated Mono; a KRow parameter binds
+-- the argument row itself (`aliasRowParamCell`).  Nothing is unified, so no
+-- variable the signature does not quantify can stand in for one it does.
 aliasArgBindings : SigVars ->
   List (String, Mono) ->
   List String ->
@@ -13761,8 +13874,7 @@ aliasArgBindings : SigVars ->
   List Ty ->
   (SigVars, List (String, Mono))
 aliasArgBindings etbl tvs (p :: ps) (KRow :: ks) (arg :: args) =
-  let cell = freshEffvar ()
-  let _ = unifyIndexRow (EffRow [] (Some cell)) (rowArgOf etbl arg)
+  let cell = aliasRowParamCell (rowArgOf etbl arg)
   let rest = aliasArgBindings etbl tvs ps ks args
   (sigVarsWithRows [(p, cell)] (fst rest), snd rest)
 -- An `Authority` alias parameter stands for the written argument wherever
@@ -13777,6 +13889,15 @@ aliasArgBindings etbl tvs (p :: ps) (_ :: ks) (arg :: args) =
   let rest = aliasArgBindings etbl tvs ps ks args
   (fst rest, (p, fromAstTypeE etbl tvs arg) :: snd rest)
 aliasArgBindings _ _ _ _ _ = (emptySigVars, [])
+
+-- The effect-table cell an `Effect` alias parameter reads as.  A bare row
+-- variable argument (`S e Int`) is the caller's own cell for `e`, the one the
+-- written-out signature reads.  Any other row (`S <Net | e> Int`, `S <> Int`)
+-- is a cell already solved to that row, the indirection every solved row
+-- variable already is.
+aliasRowParamCell : EffRow -> Ref Effvar
+aliasRowParamCell (EffRow [] (Some cell)) = cell
+aliasRowParamCell row = Ref (ELink (newEffvarId ()) row)
 
 -- #822: a spine headed by an interface typaram of GRADED kind — `f e b` must yield
 -- the SAME Mono shape a row-indexed data head does (`Async e b` =
@@ -20042,11 +20163,7 @@ inferExpected env (ELam pats body) expected = match normalize expected
     let _ = match exprLoc body
       Some l => currentLoc := Some l
       None => ()
-    inferLamChecked
-      env
-      (expectedParamTypes (normalize expected) (listLen pats))
-      pats
-      body
+    inferLamChecked env (Some (normalize expected)) pats body
   _ => infer env (ELam pats body)
 inferExpected env e expected =
   -- The order only matters when an ARROW ROW sits inside a type-constructor
@@ -20114,11 +20231,7 @@ inferAppArgsAgainst env appSoFar ft (x :: rest) =
   let xt = match lamUnderLoc x
     Some (loc, pats, body) =>
       let _ = setLocIfSome loc
-      inferLamChecked
-        env
-        (expectedParamTypes (funDomain (normalize ft)) (listLen pats))
-        pats
-        body
+      inferLamChecked env (Some (funDomain (normalize ft))) pats body
     None => inferExpected env x (funDomain (normalize ft))
   let res = inferApp env (EApp appSoFar x) ft xt
   inferAppArgsAgainst env (EApp appSoFar x) res rest
@@ -20135,13 +20248,10 @@ inferAppArgsAgainst env appSoFar ft (x :: rest) =
 -- than copying the first value's closed rows. Other shape equations use ordinary
 -- `unify`, including the order a plain type mismatch names the two sides in:
 -- `unifyInto` names the slot first,
--- as a call argument's `unify` did; `unifyIntoValueFirst` names the value first,
--- as an annotation's and a supplied field's did.
+-- as a call argument's `unify` did; `unifyIntoOrd True` names the value first,
+-- as an annotation and a supplied field do (through `argumentIntoOrd`).
 unifyInto : Bool -> Mono -> Mono -> Unit
 unifyInto pos e a = unifyIntoOrd False pos e a
-
-unifyIntoValueFirst : Bool -> Mono -> Mono -> Unit
-unifyIntoValueFirst pos e a = unifyIntoOrd True pos e a
 
 -- [valueFirst] is only the operand order of the fallback `unify`.
 unifyIntoOrd : Bool -> Bool -> Mono -> Mono -> Unit
@@ -20303,12 +20413,7 @@ inferAppExpr env f x = match lamUnderLoc x
     -- ft is `(lamType) -> result`; its FIRST domain is the lambda's expected
     -- type.  Peel that, then peel the lambda type itself for its per-param types.
     let lamExpected = funDomain (normalize ft)
-    let xt =
-      inferLamChecked
-        env
-        (expectedParamTypes lamExpected (listLen pats))
-        pats
-        body
+    let xt = inferLamChecked env (Some lamExpected) pats body
     inferApp env (EApp f x) ft xt
   None => match shadowStandaloneSpineHeadAt env f
     -- #2154: the IMPORTER-side spine arm, mirroring #1815's definer spine arms — it
@@ -21785,22 +21890,33 @@ expectedParamTypes (TFun a _ b) n =
   a :: expectedParamTypes (normalize b) (n - 1)
 expectedParamTypes _ _ = []
 
--- like inferLam, but each lambda param is unified with the corresponding expected
--- param type (from the function being applied) right after inferPat — so the body
--- and the hover side-channel see the expected type, not a bare fresh var.
-inferLamChecked : TcEnv -> List Mono -> List Pat -> Expr -> Mono
+-- like inferLam, but checked against the arrow [expected] it flows into, when
+-- one is known: each lambda param is unified with the corresponding expected
+-- param type right after inferPat — so the body and the hover side-channel see
+-- the expected type, not a bare fresh var — and the body flows into the
+-- expected result (`checkedInto`).
+inferLamChecked : TcEnv -> Option Mono -> List Pat -> Expr -> Mono
 inferLamChecked env expected pats body =
   fst (inferBindingChecked env expected pats body)
 
-inferBindingChecked : TcEnv -> List Mono -> List Pat -> Expr -> (Mono, EffRow)
+inferBindingChecked : TcEnv -> Option Mono -> List Pat -> Expr -> (Mono, EffRow)
 inferBindingChecked env expected pats body =
   let lits = takePatLits ()
   let pr = inferPats env pats
-  let _ = unifyParamsExpected (fst pr) expected
+  let arity = listLen pats
+  let _ = match expected
+    Some want => unifyParamsExpected (fst pr) (expectedParamTypes want arity)
+    None => ()
   let scope = openExistentialScope (takeOpenedExistentials ())
   let _ = settlePatLits lits
   let (bodyTy, bodyEff) = captureEffects perRun.value.curEffect joinCellOf (_ =>
-    infer (extendLocalVars env (snd pr)) body)
+    let bodyEnv = extendLocalVars env (snd pr)
+    let actual = infer bodyEnv body
+    match expected
+      Some want => match resultAfterArrows arity want
+        Some result => checkedInto bodyEnv body result actual
+        None => actual
+      None => actual)
   let _ = closeExistentialScope scope bodyTy (exprLoc body)
   let force = if isEmptyL pats then bodyEff else pureRow
   (arrowsWithLastEffect (fst pr) bodyEff bodyTy, force)
@@ -22180,6 +22296,20 @@ argumentIntoOrd valueFirst env arg dom xt = match normalize dom
     wantAuthority (argumentAuthority env (authDomainTop q) arg xt) q
   _ => unifyIntoOrd valueFirst True dom xt
 
+-- The same judgment for an expression that flows into a declared type rather
+-- than a parameter: a signed body into its result, a lambda or method body into
+-- the arrow it is checked against. A qualified declared type bounds the
+-- expression's abstraction, and the expression then has the declared type, so
+-- every use reads the declared qualifier. Any other declared type is left to
+-- the caller's own directed check, and [actual] is returned unchanged.
+checkedInto : TcEnv -> Expr -> Mono -> Mono -> Mono
+checkedInto env e expected actual = match normalize expected
+  TQual _ _ =>
+    let _ = setLocIfSome (exprLoc e)
+    let _ = argumentInto env (Some e) expected actual
+    expected
+  _ => actual
+
 -- The same judgment where only the argument's type is at hand (a pipe, a
 -- composition, a dispatch spine): the type's own qualifier or the top.
 applicationRowTyped : Mono -> Mono -> Mono -> EffRow
@@ -22275,7 +22405,7 @@ inferLam env pats body =
   let _ = match exprLoc body
     Some l => currentLoc := Some l
     None => ()
-  inferLamChecked env [] pats body
+  inferLamChecked env None pats body
 
 -- The first Bool (`mut`) is always False — `let mut` is a parser error (beta
 -- mutability model), so no inline mut-let path remains here.
@@ -22696,7 +22826,9 @@ inferAnnot env e ty =
   let t = infer env e
   let pair = astTypeFreshTbl ty
   let annot = fst pair
-  let _ = unifyIntoValueFirst True annot t
+  -- The annotated expression flows into the written type as an argument
+  -- into its parameter: a qualified annotation bounds its abstraction.
+  let _ = argumentIntoOrd True env (Some e) annot t
   let _ = checkAnnotTooGeneral ty (map snd (snd pair))
   annot
 
@@ -37364,12 +37496,13 @@ instantiateMethodBody (ImplBody site) ifaceParams mty gscope =
   -- impl-body effect leak past a non-var bound is still enforced (#782).
   let effMap =
     sigVarsFor mty (dedup (effTailNames mty ++ rowArgNamesIn gscope mty))
-  let expected = fromAstTypeE effMap (baseMap ++ extraMap) mty
-  let contractForce = bindingForceFromAst effMap mty
+  let mtvs = baseMap ++ extraMap
+  let expected = fromAstTypeE effMap mtvs mty
+  let contractForce = bindingForceFromAst effMap mtvs mty
   MethodBodyInstance {
     mbiExpected = expected,
     mbiContractForce = contractForce,
-    mbiCheckedForce = _ => bindingForceFromAst effMap mty,
+    mbiCheckedForce = _ => bindingForceFromAst effMap mtvs mty,
     mbiEffVars = effMap.svRows,
     mbiSurvivors = extraMap,
     mbiNamedVars = extraMap,
@@ -37508,11 +37641,7 @@ checkMethodBodyAgainst : TcEnv ->
 checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats body =
   let oblSnapshot = wSnapshot perRun.value.implObls
   let (inferErred, inferred) = erredDuring (_ =>
-    inferBindingChecked
-      env
-      (expectedParamTypes (normalize inst.mbiExpected) (listLen pats))
-      pats
-      body)
+    inferBindingChecked env (Some (normalize inst.mbiExpected)) pats body)
   let actual = fst inferred
   let check =
     if inferErred && gatesBodyCascade kind then
@@ -39127,10 +39256,47 @@ expandAliasHeadTyWith aliases (t@(TyApp _ _)) = match tyAppSpine t
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     match lookupTab (tyTabKey o n) aliases
       Some (params, rhs) if listLen params == listLen args =>
-        expandAliasHeadTyWith aliases (substTyVars (zipL params args) rhs)
+        expandAliasHeadTyWith aliases (substAliasArgs (zipL params args) rhs)
       _ => t
   _ => t
 expandAliasHeadTyWith _ t = t
+
+-- An alias's arguments substituted into its right-hand side.  A type parameter
+-- occurs as a `TyVar` (`substTyVars`); an `Effect` parameter also occurs as a
+-- row tail (`<Stdout | e>`), where the written argument row is spliced in: its
+-- atoms join the row's and its tails replace the parameter's name, as
+-- `fromAstTypeApp` binds it.  Tails go first, so a tail name inside an argument
+-- that `substTyVars` then inserts is the caller's, never read as a parameter.
+-- An `Authority` parameter named in an atom stays a name, which these `Ty`
+-- walks read as the label's whole domain, as they read a signature's own binder.
+substAliasArgs : List (String, Ty) -> Ty -> Ty
+substAliasArgs sub rhs =
+  substTyVars sub (fst (mapTyFull (substRowTailsAt sub) rhs))
+
+substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
+substRowTailsAt sub (TyEffect atoms tails t) =
+  let (extra, tails2) = spliceRowTails sub tails
+  (TyEffect (atoms ++ extra) tails2 t, False)
+substRowTailsAt sub (TyRow atoms tails l) =
+  let (extra, tails2) = spliceRowTails sub tails
+  (TyRow (atoms ++ extra) tails2 l, False)
+substRowTailsAt _ t = (t, False)
+
+-- A row argument is written bare (`T <Net>`), in the degenerate wrapped
+-- spelling (`T (<Net> Unit)`), or as a signature's own row name (`T e2`).
+-- Anything else is ill-kinded, diagnosed where the signature elaborates, and
+-- keeps the parameter's name.
+spliceRowTails : List (String, Ty) ->
+  List String ->
+  (List EffAtomTy, List String)
+spliceRowTails _ [] = ([], [])
+spliceRowTails sub (n :: rest) =
+  let (atoms, names) = spliceRowTails sub rest
+  match lookupAssoc n sub
+    Some (TyRow written tails _) => (written ++ atoms, tails ++ names)
+    Some (TyEffect written tails _) => (written ++ atoms, tails ++ names)
+    Some (TyVar v) => (atoms, v :: names)
+    _ => (atoms, n :: names)
 
 -- Does a user extern's DECLARED signature already name `FFI` in its terminal
 -- result row?  `None` = there is no arrow in the signature, so the question cannot
@@ -41366,7 +41532,7 @@ preunifySigsEx sigs (member :: rest) =
         ebMethodRow = None,
         ebStandalone = None,
       }
-      let _ = unify v signedMono
+      let _ = bindFrom v signedMono
       let regs = [
         ConstraintReg {
           crName = m,
@@ -41391,7 +41557,7 @@ instantiateSigTracked ty = atSignature ty (_ =>
   let auths = authArgBindersIn ty
   let tvs = freshTvMap (sigTyVarNames ty rows (map fst auths))
   let etbl = sigVarsForWith ty (dedup (effTailNames ty ++ rows)) auths
-  (fromAstTypeE etbl tvs ty, tvs, writtenBindingForce etbl ty))
+  (fromAstTypeE etbl tvs ty, tvs, writtenBindingForce etbl tvs ty))
 
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigTvMapUnboundIds (_, _, tvs) = flatMap (p => monoUnboundIds (snd p)) tvs
@@ -41886,7 +42052,12 @@ inferClauseEff env peel (pats, body) =
     (_ => match peel
       Some src => match resultAfterArrows (listLen pats) src
         Some expected =>
-          inferExpected (extendLocalVars env (snd pr)) body expected
+          let bodyEnv = extendLocalVars env (snd pr)
+          checkedInto
+            bodyEnv
+            body
+            expected
+            (inferExpected bodyEnv body expected)
         None => infer (extendLocalVars env (snd pr)) body
       None => infer (extendLocalVars env (snd pr)) body)
   let _ = closeExistentialScope scope bodyTy (exprLoc body)
@@ -41919,7 +42090,8 @@ checkEffectEscape sigs m effs =
     -- whatever the body performs, which is what a free tail var MEANS.  Skipping
     -- here rather than widening `declaredEffects` keeps the CLOSED-row rejection
     -- (and its wording) byte-identical.
-    Some ty =>
+    Some written =>
+      let ty = expandReturnSpine written
       if declaredEffectsOpen ty then
         ()
       else match atomsEscape (filterList concreteAtom effs) (declaredEffects ty)
@@ -50230,10 +50402,6 @@ checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
 -- the module's own entry for the same bare name.
 -- `preludeKey`: the prelude key for the core-check memo (see `checkCoreMemoized`);
 -- `None` = unkeyed, no memo.
--- Exported (S-2, #3321) for `check_policy.mdk`'s `runManifest`: the one consumer
--- outside this file that needs BOTH halves (errs to refuse before a name lookup,
--- schemes to satisfy one) over a graph that may carry more than one module.
-export
 checkModulesEntryFullSplitK : Option (Int, Int) ->
   List Decl ->
   List Decl ->

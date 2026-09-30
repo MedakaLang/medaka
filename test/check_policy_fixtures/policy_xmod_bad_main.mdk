@@ -1,0 +1,7 @@
+-- check-policy gate fixture (#3331): the target is well-typed, but the sibling
+-- it imports (`policy_xmod_bad_helper.mdk`) is not.  The refusal must name the
+-- helper's own file and line, not this one.
+import policy_xmod_bad_helper.{shout}
+
+transform : String -> String
+transform s = shout s

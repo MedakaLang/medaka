@@ -3,7 +3,7 @@ import types.effect_authority.{
   Authority(..), authSub, authVars, authHasVars, authvarDefaultName,
   authJoinAll, authConsts
 }
-import types.effect_invocation.{invocationSummary}
+import types.effect_invocation.{invocationSummary, InvocationOps}
 import types.effect_rows.{
   effLabelOrigin,
   atomLabelOf,
@@ -21,13 +21,13 @@ import types.effect_rows.{
 -- A faithful port of bin/main.ml's `check-policy` arm (the §7c "minimal wow demo"
 -- from CAPABILITY-PLATFORM.md), byte-identical accept/reject output.  Given a
 -- plugin file, a policy (`--allow L1,L2,…`) and an entry function (`--fn name`):
---   1. parse + desugar the file;
+--   1. the CLI loads the file and its imports as `medaka check` does and refuses
+--      what `check` refuses; `analyzeProgram` elaborates the loaded program once,
+--      and `manifest` reads its row from the same analysis;
 --   2. build a call graph (name → set of called top-level names) from the
---      DESUGARED AST (conservative EVar collection, like collect_evars);
---   3. elaborate single-file (elaborateModulesWithSchemes, one drive) for inferred
---      schemes and the tree step 6 runs -- `--fn <name>` is arbitrary user input
---      looked up DIRECTLY in the effect table, so the schemes must include
---      prelude names too (see the call-site comments below);
+--      entry module's DESUGARED AST (conservative EVar collection);
+--   3. the inferred schemes include prelude names -- `--fn <name>` is arbitrary
+--      user input looked up DIRECTLY in the effect table (see `analyzeProgram`);
 --   4. read each fn's inferred effect row → its concrete labels
 --      (effrowLabels/atomLabel — the native analog of OCaml's effrow_labels);
 --   5. policy compare: a label is forbidden iff it is NOT in the policy set
@@ -63,27 +63,22 @@ import frontend.ast.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import frontend.desugar_cache.{desugaredPrelude}
-import tools.check.{checkHasErrors}
 import types.repr.{Scheme(..), Mono(..), normalize}
 import backend.private_mangle.{mangleCtorCollisionsPair}
 import types.typecheck.{
   ElabResult,
   elaborateModulesWithSchemes,
-  checkOneSchemeFull,
   lastInvocationOps,
-  checkModulesEntryFullSplitK,
   decodeSetParam,
   decodeWrittenParam,
   atomOfLabel,
   ioAliasLabels,
-  TcDiag,
   bindingGrantArity,
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{
   sortUniqS, joinWith, reverseL, escStr, lookupAssoc, contains, filterList,
-  listLen
+  listLen, escOneHex2
 }
 import string.{toLower}
 import list.{replicate}
@@ -467,9 +462,9 @@ permitOf a policy = match (atomLabel a == "IO", policyEntriesFor a policy)
         Forbidden
     Err m => Malformed m
 
--- `IO` is the join of the ten host labels, so an `IO` atom under a policy with no
--- `IO` entry is permitted exactly when the policy admits every one of the ten at
--- its top.
+-- `IO` is the join of the eleven host labels, so an `IO` atom under a policy with
+-- no `IO` entry is permitted exactly when the policy admits every one of the
+-- eleven at its top.
 permitIoAsJoin : List (String, EffParamTy) -> Permit
 permitIoAsJoin policy =
   firstNotPermitted (map (l => permitOf (atomOfLabel l) policy) ioAliasLabels)
@@ -612,11 +607,50 @@ lookupValue : String -> List (String, Value e) -> Option (Value e)
 lookupValue _ [] = None
 lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 
+-- ── the analysis `check-policy` and `manifest` share ───────────────────────
+-- One elaboration of a loaded, resolve-clean program: the loader's module
+-- list, each module DESUGARED, dependency-first with the entry last.  Both
+-- verbs read the entry's row from it, so a manifest's claim and a policy
+-- verdict over the same target come from one analysis, and the accepted
+-- sample run evaluates the same elaborated trees.  The caller refuses on the
+-- diagnostics `eaElab` carries before consulting anything else.
+--
+-- `eaSchemes` holds the entry module's own schemes FIRST, then the prelude's:
+-- `--fn <name>` is arbitrary CLI input looked up directly by bare name
+-- (`lookupAssoc` is a first-match scan), so an entry redefinition of a prelude
+-- name must win, and a prelude name (`--fn println`) must be present rather
+-- than read as effect-free.  `eaOps` is read straight after the drive, since
+-- `lastInvocationOps` describes whichever drive ran last.
+public export data EntryAnalysis = EntryAnalysis {
+  eaElab : ElabResult,
+  eaSchemes : List (String, Scheme),
+  eaOps : InvocationOps,
+  eaEntryDecls : List Decl,
+}
+
+export
+analyzeProgram : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  EntryAnalysis
+analyzeProgram rtD coreD modsD =
+  let (elaborated, preludeSchemes, ownSchemes) =
+    elaborateModulesWithSchemes rtD coreD modsD
+  let ops = lastInvocationOps ()
+  EntryAnalysis {
+    eaElab = elaborated,
+    eaSchemes = ownSchemes ++ preludeSchemes,
+    eaOps = ops,
+    eaEntryDecls = entryModuleDecls modsD,
+  }
+
+-- The entry module's decls: the last of the loader's dependency-first list.
+entryModuleDecls : List (String, List Decl) -> List Decl
+entryModuleDecls [] = []
+entryModuleDecls [(_, decls)] = decls
+entryModuleDecls (_ :: rest) = entryModuleDecls rest
+
 -- ── driver ──────────────────────────────────────────────────────────────────
--- runCheckPolicy returns (report, accepted?): the caller prints the report and
--- sets the exit code (0 accept / 1 reject) — mirroring the OCaml arm's exit
--- behaviour while keeping IO at the CLI boundary.  rtSrc/coreSrc are the prelude
--- sources (runtime.mdk/core.mdk); src is the plugin file.
 -- The outcome of a policy check.  Accept carries the verdict header and the
 -- sample run as a thunk: the verdict is decided from the static analysis alone,
 -- so the caller prints it BEFORE forcing the run, and a sample that panics
@@ -625,41 +659,22 @@ public export data PolicyOutcome =
   | PolicyAccept String (Unit -> String)
   | PolicyReject String
 
+-- The verdict for `fnName` under the `--allow` policy, over an analysis the
+-- caller already found free of diagnostics.  The caller prints the report and
+-- sets the exit code (0 accept / 1 reject).
 export
-runCheckPolicy : String -> String -> String -> String -> String -> PolicyOutcome
-runCheckPolicy rtSrc coreSrc src allowStr fnName =
-  if checkHasErrors rtSrc coreSrc src then
-    PolicyReject "rejected. compiler analysis failed before policy evaluation\n"
-  else match parsePolicy allowStr
-    Err m => PolicyReject "rejected. \{m}\n"
-    Ok policy => runCheckPolicyWith policy src rtSrc coreSrc fnName
+runCheckPolicy : EntryAnalysis -> String -> String -> PolicyOutcome
+runCheckPolicy analysis allowStr fnName = match parsePolicy allowStr
+  Err m => PolicyReject "rejected. \{m}\n"
+  Ok policy => policyVerdict policy analysis fnName
 
-runCheckPolicyWith : List (String, EffParamTy) ->
-  String ->
-  String ->
-  String ->
+policyVerdict : List (String, EffParamTy) ->
+  EntryAnalysis ->
   String ->
   PolicyOutcome
-runCheckPolicyWith policy src rtSrc coreSrc fnName =
-  let rawUser = parse src
-  let userD = desugar rawUser
-  let rtD = desugaredPrelude rtSrc
-  let coreD = desugaredPrelude coreSrc
-  let callGraph = buildCallGraph userD
-  -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
-  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
-  -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
-  -- traversal, so the schemes MUST include prelude names: `--fn println` missing
-  -- from the table would make the policy check silently ACCEPT an <IO> function as
-  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
-  -- which is why this site was parked on the Flat wrapper until #1116 grew
-  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
-  -- plugin that redefines a prelude name must win its own lookup.  The same drive
-  -- elaborates the program the plugin run evaluates (see `runPlugin`).
-  let (elaborated, preludeSchemes, ownSchemes) =
-    elaborateModulesWithSchemes rtD coreD [("__plugin__", userD)]
-  let schemes = ownSchemes ++ preludeSchemes
-  let ops = lastInvocationOps ()
+policyVerdict policy analysis fnName =
+  let callGraph = buildCallGraph analysis.eaEntryDecls
+  let schemes = analysis.eaSchemes
   let effTable = fnEffectsTable schemes
   -- Existence is checked against the complete scheme list, not effTable:
   -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
@@ -667,7 +682,7 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
   match lookupAssoc fnName schemes
     None => PolicyReject "rejected. no '\{fnName}' entry found\n"
     Some fnScheme =>
-      let fnEffects = invocationSummary ops fnScheme
+      let fnEffects = invocationSummary analysis.eaOps fnScheme
       let forbidden = forbiddenLabels fnEffects policy
       match forbidden
         [] =>
@@ -682,7 +697,10 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
           let pluginOutput =
             _ =>
               if takesAndReturnsString fnScheme then
-                runPlugin fnName (bindingGrantArity fnName fnScheme) elaborated
+                runPlugin
+                  fnName
+                  (bindingGrantArity fnName fnScheme)
+                  analysis.eaElab
               else
                 "   no sample run: '\{fnName}' is not a String -> String entry\n"
           PolicyAccept header pluginOutput
@@ -758,8 +776,8 @@ atomToToml keyOf a =
 
 paramToml : Param -> String
 paramToml p = match canonParam p
-  PPrefix (Some s) => "\"\{s}\""
-  PSet (Some xs) => "[\{joinWith ", " (map quoteTok xs)}]"
+  PPrefix (Some s) => tomlQuote s
+  PSet (Some xs) => "[\{joinWith ", " (map tomlQuote xs)}]"
   PProduct ax if not (isSubTop (PProduct ax)) => "{ \{productTomlInline ax} }"  -- WS-4 inline table
   _ => "true"
 
@@ -771,13 +789,30 @@ productTomlInline ax =
   joinWith ", " (map axisToToml (filterList (a => not (isSubTop (snd a))) ax))
 
 axisToToml : (String, Param) -> String
-axisToToml (name, PPrefix (Some s)) = "\{lowerFirst name} = \"\{s}\""
+axisToToml (name, PPrefix (Some s)) = "\{lowerFirst name} = \{tomlQuote s}"
 axisToToml (name, PSet (Some xs)) =
-  "\{lowerFirst name} = [\{joinWith ", " (map quoteTok xs)}]"
+  "\{lowerFirst name} = [\{joinWith ", " (map tomlQuote xs)}]"
 axisToToml (name, _) = lowerFirst name ++ " = true"
 
 quoteTok : String -> String
-quoteTok s = "\"" ++ s ++ "\""
+quoteTok s = escStr s
+
+-- TOML basic strings use four hex digits for control characters; Medaka's
+-- source-literal escStr uses braced \u{XX}, which TOML does not accept.
+tomlQuote : String -> String
+tomlQuote s = "\"" ++ stringConcat (tomlChars (stringToChars s) 0) ++ "\""
+
+tomlChars : Array Char -> Int -> List String
+tomlChars cs i
+  | i >= arrayLength cs = []
+  | otherwise = tomlChar (arrayGetUnsafe i cs) :: tomlChars cs (i + 1)
+
+tomlChar : Char -> String
+tomlChar c
+  | c == '\\' = "\\\\"
+  | c == '"' = "\\\""
+  | charCode c < 32 || charCode c == 127 = "\\u00\{escOneHex2 (charCode c)}"
+  | otherwise = charToStr c
 
 -- lowercase the first char of an axis name (Host → host) for TOML-key convention.
 lowerFirst : String -> String
@@ -827,55 +862,16 @@ joinTomlLines (x :: xs) = "\{x}\n\{joinTomlLines xs}"
 -- differs from check-policy's "transform" which is the plugin convention).
 public export data ManifestArgs = ManifestArgs (Option String) String
 
--- Outcome of a manifest lookup over an ELABORATED (already loader-resolved)
--- program: type errors REFUSE before `fnName` is ever looked up, and a name
--- absent from the scheme list refuses distinctly from a name whose scheme
--- carries no effect row (a pure/value binding, S-4's case — that one still
--- emits `ManifestOk "[package.capabilities]\n"`, not a refusal).
-public export data ManifestResult =
-  | ManifestOk String
-  | ManifestTypeErrors (List TcDiag)
-  | ManifestNoSuchFn String
-
--- Run manifest extraction over an elaborated program: `modsD` is the loader's
--- module list, each module's decls already DESUGARED, dependency-first with
--- the entry last (`lastModPair`'s convention in medaka_cli.mdk) — the same
--- shape `checkRoute`'s multi-module arm builds as `modsD`.  Resolve-phase
--- errors (bad/missing import) are the CALLER's job: `runManifestArgs` gates on
--- `resolveModulesErrorsByFile` before ever reaching this function, exactly
--- like `checkRoute` does, so `modsD` here is always resolve-clean.
+-- The manifest for `fnName`, read from the same analysis `check-policy`
+-- decides its verdict from (`analyzeProgram`), over an analysis the caller
+-- already found free of diagnostics.  A name absent from the scheme list is
+-- refused; a name whose scheme carries no effect row (a pure/value binding)
+-- still emits the bare `[package.capabilities]` header.
 export
-runManifest : Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  String ->
-  ManifestResult
-runManifest preludeKey rtD coreD modsD fnName =
-  -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
-  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in the scheme list
-  -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
-  -- traversal, so the schemes MUST include prelude names: `--fn println` missing
-  -- from the table would make manifest extraction silently answer "no effects" for
-  -- an <IO> function. `checkModulesEntryFullSplitK` returns the ENTRY module's own
-  -- schemes (terminal in `modsD`) separate from the prelude's, so this concats
-  -- OWN FIRST: `lookupAssoc` is a first-match scan, and an entry redefinition of a
-  -- prelude name must win its own lookup.
-  let (coreSchemes, entrySchemes, errs, _warns) =
-    checkModulesEntryFullSplitK preludeKey rtD coreD modsD
-  match errs
-    [] =>
-      let schemes = entrySchemes ++ coreSchemes
-      -- Existence is checked against the FULL scheme list, never `fnEffectsTable`
-      -- (see `runCheckPolicy`'s identical comment above): `fnEffectsTable`
-      -- deliberately omits verified-pure/arrowless bindings, so using it as a name
-      -- index would refuse a real pure entry exactly like an absent one.
-      match lookupAssoc fnName schemes
-        None => ManifestNoSuchFn fnName
-        Some sch =>
-          ManifestOk
-            (manifestToml (invocationSummary (lastInvocationOps ()) sch))
-    _ => ManifestTypeErrors errs
+runManifest : EntryAnalysis -> String -> Result String String
+runManifest analysis fnName = match lookupAssoc fnName analysis.eaSchemes
+  None => Err "no '\{fnName}' entry found"
+  Some sch => Ok (manifestToml (invocationSummary analysis.eaOps sch))
 
 -- Render the manifest as --allow tokens for round-trip through check-policy.
 -- PPrefix (Some s) → "Label=s"

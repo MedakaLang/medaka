@@ -4887,7 +4887,7 @@ export
 progArgsRef : Ref (List String)
 progArgsRef = Ref []
 
-pArgs : Value e -> <Env | e> Value e
+pArgs : Value e -> Value e
 pArgs _ = vStringList !progArgsRef
 
 pGetEnv : Value e -> <Env | e> Value e
@@ -4897,13 +4897,13 @@ pGetEnv _ = panic "getEnv: not a String"
 pExecutablePath : Value e -> <Env | e> Value e
 pExecutablePath _ = VString (executablePath ())
 
-pBuildFingerprint : Value e -> <Env | e> Value e
+pBuildFingerprint : Value e -> Value e
 pBuildFingerprint _ = VString (buildFingerprint ())
 
-pBuildCommit : Value e -> <Env | e> Value e
+pBuildCommit : Value e -> Value e
 pBuildCommit _ = VString (buildCommit ())
 
-pBuildDate : Value e -> <Env | e> Value e
+pBuildDate : Value e -> Value e
 pBuildDate _ = VString (buildDate ())
 
 -- ── Stdin ─────────────────────────────────────────────────────────────────
@@ -6718,18 +6718,18 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pFsync" (PWild) (EApp (EVar "panic") (ELit (LString "fsync: expected String"))))
 (DTypeSig true "progArgsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "progArgsRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig false "pArgs" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pArgs" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "pArgs" (PWild) (EApp (EVar "vStringList") (EUnOp "!" (EVar "progArgsRef"))))
 (DTypeSig false "pGetEnv" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pGetEnv" ((PCon "VString" (PVar "name"))) (EApp (EVar "vOptionString") (EApp (EVar "getEnv") (EVar "name"))))
 (DFunDef false "pGetEnv" (PWild) (EApp (EVar "panic") (ELit (LString "getEnv: not a String"))))
 (DTypeSig false "pExecutablePath" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pExecutablePath" (PWild) (EApp (EVar "VString") (EApp (EVar "executablePath") (ELit LUnit))))
-(DTypeSig false "pBuildFingerprint" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pBuildFingerprint" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "pBuildFingerprint" (PWild) (EApp (EVar "VString") (EApp (EVar "buildFingerprint") (ELit LUnit))))
-(DTypeSig false "pBuildCommit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pBuildCommit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "pBuildCommit" (PWild) (EApp (EVar "VString") (EApp (EVar "buildCommit") (ELit LUnit))))
-(DTypeSig false "pBuildDate" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pBuildDate" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "pBuildDate" (PWild) (EApp (EVar "VString") (EApp (EVar "buildDate") (ELit LUnit))))
 (DTypeSig false "pReadLine" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Stdin") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pReadLine" (PWild) (EApp (EVar "VString") (EApp (EVar "readLine") (ELit LUnit))))
@@ -8404,18 +8404,18 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pFsync" (PWild) (EApp (EVar "panic") (ELit (LString "fsync: expected String"))))
 (DTypeSig true "progArgsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "progArgsRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig false "pArgs" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pArgs" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "pArgs" (PWild) (EApp (EVar "vStringList") (EUnOp "!" (EVar "progArgsRef"))))
 (DTypeSig false "pGetEnv" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pGetEnv" ((PCon "VString" (PVar "name"))) (EApp (EVar "vOptionString") (EApp (EVar "getEnv") (EVar "name"))))
 (DFunDef false "pGetEnv" (PWild) (EApp (EVar "panic") (ELit (LString "getEnv: not a String"))))
 (DTypeSig false "pExecutablePath" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pExecutablePath" (PWild) (EApp (EVar "VString") (EApp (EVar "executablePath") (ELit LUnit))))
-(DTypeSig false "pBuildFingerprint" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pBuildFingerprint" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "pBuildFingerprint" (PWild) (EApp (EVar "VString") (EApp (EVar "buildFingerprint") (ELit LUnit))))
-(DTypeSig false "pBuildCommit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pBuildCommit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "pBuildCommit" (PWild) (EApp (EVar "VString") (EApp (EVar "buildCommit") (ELit LUnit))))
-(DTypeSig false "pBuildDate" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pBuildDate" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "pBuildDate" (PWild) (EApp (EVar "VString") (EApp (EVar "buildDate") (ELit LUnit))))
 (DTypeSig false "pReadLine" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Stdin") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pReadLine" (PWild) (EApp (EVar "VString") (EApp (EVar "readLine") (ELit LUnit))))

@@ -149,15 +149,52 @@ test "IO does not subsume an FFI-performing body" = expectCheckReject (fixture
 test "IO still subsumes an Exec-performing body" =
   expectCheckAccept (fixture "exec_io_accept.mdk")
 
-test "a performed IO fits a bound naming the ten host labels" =
+test "a performed IO fits a bound naming the eleven host labels" =
   expectCheckAccept (fixture "io_join_accept.mdk")
 
-test "a performed IO under nine host labels is refused naming the missing one" =
+test "a performed IO under ten host labels is refused naming the missing one" =
   expectCheckReject (fixture "io_join_reject.mdk") ["but it performs <Net>"]
 
-test "an IO value stored at ten labels is refused when applied under nine" = expectCheckReject
+test "an IO value stored at eleven labels is refused when applied under ten" = expectCheckReject
   (fixture "io_join_launder_reject.mdk")
   ["but it performs <Net>"]
+
+test "a Signal bound admits the runtime's signal externs" =
+  expectCheckAccept (fixture "signal_bound_accept.mdk")
+
+test "IO subsumes a Signal-performing body" =
+  expectCheckAccept (fixture "signal_io_accept.mdk")
+
+test "Net does not subsume a Signal-performing body" = expectCheckReject
+  (fixture "signal_net_reject.mdk")
+  ["but it performs <Signal>"]
+
+test "a bound naming every other host label refuses Signal, naming it" = expectCheckReject
+  (fixture "signal_ten_labels_reject.mdk")
+  ["but it performs <Signal>"]
+
+test "manifest renders a Signal grant" =
+  expectManifest
+    "signal_bound_accept.mdk"
+    "stopping"
+    "[package.capabilities]\nSignal = true"
+
+test "check-policy accepts a Signal-performing entry under --allow Signal" =
+  expectVerbExitStartsWith
+    "check-policy"
+    [fixture "signal_bound_accept.mdk", "--allow", "Signal", "--fn", "stopping"]
+    0
+    "accepted"
+
+test "check-policy refuses a Signal-performing entry under --allow Net" =
+  expectVerbExitStartsWith
+    "check-policy"
+    [fixture "signal_bound_accept.mdk", "--allow", "Net", "--fn", "stopping"]
+    1
+    "rejected"
+
+test "args and the build stamps read under a pure signature" =
+  expectCheckAccept (fixture "argv_stamps_pure_accept.mdk")
 
 -- The non-empty-row reject and the narrow accept distinguish the honesty
 -- rule from one that only rejects a bare empty row.
@@ -291,6 +328,13 @@ test "a direct alias does not hide a nullary extern" = expectCheckReject
 test "a constrained alias does not hide a nullary extern" = expectCheckReject
   (fixture "ffi_nullary_alias_constrained_reject.mdk")
   ["Foreign declaration 'k' has no arrow in its signature"]
+
+test "an alias's Effect argument is the row an extern declares" = expectAll [
+  expectCheckAccept (fixture "ffi_effect_alias_accept.mdk"),
+  expectCheckReject (fixture "ffi_effect_alias_reject.mdk") [
+    "Foreign declaration 'cCall' does not name the 'FFI' effect in its result row",
+  ],
+]
 
 -- #3463/#3468: the invocation summary.  An entry is charged for what the host
 -- can reach through it, read by variance; each charged entry has a control

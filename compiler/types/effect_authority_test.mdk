@@ -1628,3 +1628,106 @@ test "the formatter prints a binder's written domain back" =
   let source =
     "effect Store Prefix\n\nsame : (dir : String @Store) -> String @dir\nsame dir = dir\n"
   expectEqual source (formatSource source)
+
+-- An effect-indexed container sequenced the way a `defer` block sequences
+-- `Async` (`deferThen`), so its steps all share one index row, beside a
+-- handle carrying a Store authority index.
+jobPrelude : String
+jobPrelude =
+  "data Job (e : Effect) a =\n"
+    ++ "  | Done a\n"
+    ++ "  | Suspend (Unit -> <e> Job e a)\n"
+    ++ "thenJob : Job e a -> (a -> <e> Job e b) -> Job e b\n"
+    ++ "thenJob (Done a) k = Suspend (u => k a)\n"
+    ++ "thenJob (Suspend t) k = Suspend (u => thenJob (t u) k)\n"
+    ++ "data Key (k : Authority Store) = Key (String @k)\n"
+    ++ "step : (p : String) -> Job <Store p | e> Int\n"
+    ++ "step p = Suspend (u => Done (load p))\n"
+    ++ "readKey : Key k -> Job <Store k | e> Int\n"
+    ++ "readKey (Key p) = step p\n"
+    ++ "varStep : (n : String) -> Job <Var n | e> Int\n"
+    ++ "varStep n = Suspend (u => Done (lookup n))\n"
+
+jobCodes : String -> List String
+jobCodes source = codes (jobPrelude ++ source)
+
+test "an index row is a set of atoms: one label at two authorities is two atoms" = expectAll
+  [
+    -- a variable atom and a literal atom, both declared
+    expectEqual
+      []
+      (jobCodes
+        "pairA : Key k -> Job <Store k, Store \"cfg/*\" | e> Int\npairA key = thenJob (readKey key) (a => step \"cfg/app\")\n"),
+    -- a set-valued handle index and a step at one member
+    expectEqual
+      []
+      (jobCodes
+        "pairC : Key (\"cfg/*\" | \"data/*\") -> Job <Store \"cfg/*\", Store \"data/*\" | e> Int\npairC key = thenJob (readKey key) (a => step \"cfg/app\")\n"),
+    -- the same literal on both steps
+    expectEqual
+      []
+      (jobCodes
+        "pairB : Key \"cfg/*\" -> Job <Store \"cfg/*\" | e> Int\npairB key = thenJob (readKey key) (a => step \"cfg/app\")\n"),
+    -- two subtrees of a Prefix set, one step each
+    expectEqual
+      []
+      (jobCodes
+        "trees : Unit -> Job <Store \"cfg/*\", Store \"data/*\" | e> Int\ntrees _ = thenJob (step \"cfg/app\") (a => step \"data/x\")\n"),
+  ]
+
+test "a precise step under a bare label is covered by it" = expectAll [
+  expectEqual
+    []
+    (jobCodes "bare : Key k -> Job <Store | e> Int\nbare key = readKey key\n"),
+  expectEqual
+    []
+    (jobCodes
+      "both : Key k -> Job <Store, Store k | e> Int\nboth key = readKey key\n"),
+]
+
+test "sequencing does not solve an authority variable to a literal it meets" =
+  expectEqual
+    "Key k -> Job <Store \"cfg/app\", Store k | a> Int"
+    (schemeOf
+      (jobPrelude
+        ++ "inferred key = thenJob (readKey key) (a => step \"cfg/app\")\n")
+      "inferred")
+
+test "an index row still refuses an atom its declaration does not cover" = expectAll
+  [
+    -- a literal outside the declared literal
+    expectEqual
+      ["T-AUTHORITY-INDEX-MISMATCH"]
+      (jobCodes
+        "out : Unit -> Job <Store \"cfg/*\" | e> Int\nout _ = thenJob (step \"cfg/app\") (a => step \"data/x\")\n"),
+    -- a third subtree beside the two a Prefix set declares
+    expectEqual
+      ["T-AUTHORITY-INDEX-MISMATCH"]
+      (jobCodes
+        "third : Unit -> Job <Store \"cfg/*\", Store \"data/*\" | e> Int\nthird _ = thenJob (step \"cfg/app\") (a => thenJob (step \"data/x\") (b => step \"tmp/x\"))\n"),
+    -- a handle's authority the row does not declare
+    expectEqual
+      ["T-AUTHORITY-INDEX-MISMATCH"]
+      (jobCodes
+        "hide : Key k -> Job <Store \"cfg/*\" | e> Int\nhide key = thenJob (readKey key) (a => step \"cfg/app\")\n"),
+    -- a label a closed index does not name
+    expectEqual
+      ["T-EFFECT-LEAK"]
+      (jobCodes
+        "closed : Unit -> Job <Store \"cfg/*\"> Int\nclosed _ = thenJob (step \"cfg/app\") (a => varStep \"x\")\n"),
+  ]
+
+test "two written index rows must still be equal" = expectAll [
+  expectEqual
+    ["T-EFFECT-INDEX-MISMATCH"]
+    (jobCodes "quiet : Job <Stdout> Int -> Job <> Int\nquiet j = j\n"),
+  expectEqual
+    ["T-AUTHORITY-INDEX-MISMATCH"]
+    (jobCodes
+      "narrow : Job <Store \"cfg/*\"> Int -> Job <Store \"data/*\"> Int\nnarrow j = j\n"),
+  expectTrue
+    (contains
+      "T-EFFECT-INDEX-MISMATCH"
+      (jobCodes
+        "launder : Job <Store \"cfg/*\" | e> Int -> Job e Int\nlaunder j = j\n")),
+]

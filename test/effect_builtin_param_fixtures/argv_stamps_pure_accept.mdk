@@ -1,0 +1,11 @@
+-- The command line is fixed when the process starts and the build stamps are
+-- constants linked into the binary, so neither is host authority: each reads
+-- under a pure signature.
+argv : Unit -> <> List String
+argv _ = args ()
+
+stamps : Unit -> <> String
+stamps _ = buildCommit () ++ buildDate () ++ buildFingerprint ()
+
+main : <IO> Unit
+main = println "argv and stamps pure accept"

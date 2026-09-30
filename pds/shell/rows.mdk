@@ -29,8 +29,9 @@ export type Wire (h : Authority Net) (e : Effect) a = Async <Clock, Net h | e> a
 export type WireDeadline (h : Authority Net) (e : Effect) = Wait <Clock, Net h | e>
 
 -- | The subscription loop's row (`pds/shell/subscribe.mdk`): the wire, plus
--- reading the event log it replays and tails.
-export type Streaming (e : Effect) a = Wire * <FileRead | e> a
+-- reading the event log it replays and tails, and polling the shutdown signal
+-- that ends the tail.
+export type Streaming (e : Effect) a = Wire * <FileRead, Signal | e> a
 
 -- | The serving loop's row (`pds/shell/server.mdk`, `pds/serve.mdk`): the
 -- subscription loop's, plus persisting what a request changed, drawing nonces,

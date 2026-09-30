@@ -8,7 +8,7 @@ stages=DESUGAR,MARK
 
 import support.util.{
   listLen, filterList, joinWith, sortUniqS, startsWith, contains, allList,
-  anyList, reverseL, lenKey
+  anyList, reverseL, lenKey, escStr
 }
 
 -- A Product element lists every axis of its label's declared schema, in
@@ -498,7 +498,7 @@ export
 drenderN : Param -> String
 drenderN PUnit = ""
 drenderN (PPrefix None) = ""
-drenderN (PPrefix (Some s)) = " \"" ++ s ++ "\""
+drenderN (PPrefix (Some s)) = " " ++ quoteStr s
 drenderN (PSet None) = ""
 drenderN (PSet (Some xs)) = " {" ++ joinWith ", " (map quoteStr xs) ++ "}"
 drenderN (PProduct ax) = match renderProductLit ax
@@ -507,7 +507,7 @@ drenderN (PProduct ax) = match renderProductLit ax
 
 export
 quoteStr : String -> String
-quoteStr s = "\"" ++ s ++ "\""
+quoteStr s = escStr s
 
 -- A Product's axes as written: a top axis is spelled by leaving it out.
 export
@@ -521,7 +521,7 @@ renderAxis (name, p) = "\{name}=\{renderAxisVal p}"
 
 export
 renderAxisVal : Param -> String
-renderAxisVal (PPrefix (Some s)) = "\"" ++ s ++ "\""
+renderAxisVal (PPrefix (Some s)) = quoteStr s
 renderAxisVal (PSet (Some xs)) = "{" ++ joinWith ", " (map quoteStr xs) ++ "}"
 renderAxisVal _ = ""
 
@@ -577,7 +577,7 @@ subsetStr : List String -> List String -> Bool
 subsetStr [] _ = True
 subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lenKey" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lenKey" false) (mem "escStr" false))))
 (DData Public "Param" () ((variant "PUnit" (ConPos)) (variant "PPrefix" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "PSet" (ConPos (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))) (variant "PProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))) ())
 (DTypeSig true "canonParam" (TyFun (TyCon "Param") (TyCon "Param")))
 (DFunDef false "canonParam" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
@@ -740,18 +740,18 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DTypeSig true "drenderN" (TyFun (TyCon "Param") (TyCon "String")))
 (DFunDef false "drenderN" ((PCon "PUnit")) (ELit (LString "")))
 (DFunDef false "drenderN" ((PCon "PPrefix" (PCon "None"))) (ELit (LString "")))
-(DFunDef false "drenderN" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EBinOp "++" (EBinOp "++" (ELit (LString " \"")) (EVar "s")) (ELit (LString "\""))))
+(DFunDef false "drenderN" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EBinOp "++" (ELit (LString " ")) (EApp (EVar "quoteStr") (EVar "s"))))
 (DFunDef false "drenderN" ((PCon "PSet" (PCon "None"))) (ELit (LString "")))
 (DFunDef false "drenderN" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EBinOp "++" (EBinOp "++" (ELit (LString " {")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "quoteStr")) (EVar "xs")))) (ELit (LString "}"))))
 (DFunDef false "drenderN" ((PCon "PProduct" (PVar "ax"))) (EMatch (EApp (EVar "renderProductLit") (EVar "ax")) (arm (PLit (LString "")) () (ELit (LString ""))) (arm (PVar "r") () (EBinOp "++" (ELit (LString " ")) (EVar "r")))))
 (DTypeSig true "quoteStr" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "quoteStr" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EVar "s")) (ELit (LString "\""))))
+(DFunDef false "quoteStr" ((PVar "s")) (EApp (EVar "escStr") (EVar "s")))
 (DTypeSig true "renderProductLit" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
 (DFunDef false "renderProductLit" ((PVar "ax")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "renderAxis")) (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "snd") (EVar "a")))))) (EVar "ax")))))
 (DTypeSig true "renderAxis" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyCon "String")))
 (DFunDef false "renderAxis" ((PTuple (PVar "name") (PVar "p"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "renderAxisVal") (EVar "p")))) (ELit (LString ""))))
 (DTypeSig true "renderAxisVal" (TyFun (TyCon "Param") (TyCon "String")))
-(DFunDef false "renderAxisVal" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EVar "s")) (ELit (LString "\""))))
+(DFunDef false "renderAxisVal" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EApp (EVar "quoteStr") (EVar "s")))
 (DFunDef false "renderAxisVal" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "quoteStr")) (EVar "xs")))) (ELit (LString "}"))))
 (DFunDef false "renderAxisVal" (PWild) (ELit (LString "")))
 (DTypeSig true "prefixConcrete" (TyFun (TyCon "String") (TyCon "String")))
@@ -779,7 +779,7 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DFunDef false "subsetStr" ((PList) PWild) (EVar "True"))
 (DFunDef false "subsetStr" ((PCons (PVar "x") (PVar "xs")) (PVar "b")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "b")) (EApp (EApp (EVar "subsetStr") (EVar "xs")) (EVar "b")) (EVar "False")))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lenKey" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lenKey" false) (mem "escStr" false))))
 (DData Public "Param" () ((variant "PUnit" (ConPos)) (variant "PPrefix" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "PSet" (ConPos (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))) (variant "PProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))) ())
 (DTypeSig true "canonParam" (TyFun (TyCon "Param") (TyCon "Param")))
 (DFunDef false "canonParam" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
@@ -942,18 +942,18 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DTypeSig true "drenderN" (TyFun (TyCon "Param") (TyCon "String")))
 (DFunDef false "drenderN" ((PCon "PUnit")) (ELit (LString "")))
 (DFunDef false "drenderN" ((PCon "PPrefix" (PCon "None"))) (ELit (LString "")))
-(DFunDef false "drenderN" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EBinOp "++" (EBinOp "++" (ELit (LString " \"")) (EVar "s")) (ELit (LString "\""))))
+(DFunDef false "drenderN" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EBinOp "++" (ELit (LString " ")) (EApp (EVar "quoteStr") (EVar "s"))))
 (DFunDef false "drenderN" ((PCon "PSet" (PCon "None"))) (ELit (LString "")))
 (DFunDef false "drenderN" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EBinOp "++" (EBinOp "++" (ELit (LString " {")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "quoteStr")) (EVar "xs")))) (ELit (LString "}"))))
 (DFunDef false "drenderN" ((PCon "PProduct" (PVar "ax"))) (EMatch (EApp (EVar "renderProductLit") (EVar "ax")) (arm (PLit (LString "")) () (ELit (LString ""))) (arm (PVar "r") () (EBinOp "++" (ELit (LString " ")) (EVar "r")))))
 (DTypeSig true "quoteStr" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "quoteStr" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EVar "s")) (ELit (LString "\""))))
+(DFunDef false "quoteStr" ((PVar "s")) (EApp (EVar "escStr") (EVar "s")))
 (DTypeSig true "renderProductLit" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
 (DFunDef false "renderProductLit" ((PVar "ax")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "renderAxis")) (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "snd") (EVar "a")))))) (EVar "ax")))))
 (DTypeSig true "renderAxis" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyCon "String")))
 (DFunDef false "renderAxis" ((PTuple (PVar "name") (PVar "p"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "renderAxisVal") (EVar "p")))) (ELit (LString ""))))
 (DTypeSig true "renderAxisVal" (TyFun (TyCon "Param") (TyCon "String")))
-(DFunDef false "renderAxisVal" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EVar "s")) (ELit (LString "\""))))
+(DFunDef false "renderAxisVal" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EApp (EVar "quoteStr") (EVar "s")))
 (DFunDef false "renderAxisVal" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "quoteStr")) (EVar "xs")))) (ELit (LString "}"))))
 (DFunDef false "renderAxisVal" (PWild) (ELit (LString "")))
 (DTypeSig true "prefixConcrete" (TyFun (TyCon "String") (TyCon "String")))

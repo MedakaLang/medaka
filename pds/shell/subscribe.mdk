@@ -326,7 +326,7 @@ tailFrom : String ->
   Int ->
   Reassembly ->
   Bytes ->
-  Async <Clock, FileRead, Net | e> (Result String Unit)
+  Async <Clock, FileRead, Net, Signal | e> (Result String Unit)
 tailFrom dir budget conn lastSeq pending buffered = defer
   stopping <- liftIO (u => pdsSignalRequested ())
   if stopping then
@@ -340,7 +340,7 @@ tailStep : String ->
   Int ->
   Reassembly ->
   Bytes ->
-  Async <Clock, FileRead, Net | e> (Result String Unit)
+  Async <Clock, FileRead, Net, Signal | e> (Result String Unit)
 tailStep dir budget conn lastSeq pending buffered =
   let step = clientStep pending buffered
   match step
@@ -374,7 +374,7 @@ pollLog : String ->
   Int ->
   Reassembly ->
   Bytes ->
-  Async <Clock, FileRead, Net | e> (Result String Unit)
+  Async <Clock, FileRead, Net, Signal | e> (Result String Unit)
 pollLog dir budget conn lastSeq pending buffered = defer
   last <- liftIO (u => eventLogLast dir)
   match last
@@ -391,7 +391,7 @@ deliverNew : String ->
   Int ->
   Reassembly ->
   Bytes ->
-  Async <Clock, FileRead, Net | e> (Result String Unit)
+  Async <Clock, FileRead, Net, Signal | e> (Result String Unit)
 deliverNew dir budget conn lastSeq pending buffered = defer
   fresh <- liftIO (u => eventLogRead dir lastSeq)
   match fresh

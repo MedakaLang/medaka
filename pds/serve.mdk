@@ -838,7 +838,7 @@ openRepo True dir did keyBytes secret =
    after the banner, so that a log still begins by saying which build produced
    everything under it. -}
 configure : Args ->
-  <Clock, Env, FileRead, FileWrite, Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String)
+  <Clock, FileRead, FileWrite, Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -1023,7 +1023,7 @@ pdsVersion = "0.1.0"
    stamps is deliberately absent from this line: it is a 64-character digest,
    `buildFingerprint ()` still returns it for anything that wants to match a
    binary to a compiler, and `medaka --version` omits it for the same reason. -}
-versionString : Unit -> <Env> String
+versionString : Unit -> String
 versionString _ =
   let commit = buildCommit ()
   let date = buildDate ()
@@ -1040,7 +1040,7 @@ versionString _ =
    the readiness line so a log begins by saying which build produced
    everything under it — a bind failure's diagnostic included, which is why it
    is written before the bind rather than after it. -}
-banner : Unit -> <Env, Stdout> Unit
+banner : Unit -> <Stdout> Unit
 banner _ = putStrLn "serve: \{versionString ()}"
 
 -- The configuration summary and the event-log recovery outcome, under the
@@ -1092,7 +1092,7 @@ announce : String ->
   Option RelayTarget ->
   Duration ->
   Int ->
-  Serve <Env | e> Unit
+  Serve e Unit
 announce bind port lis store dir server serving relay statsInterval signalFd =
   defer
     _ <- liftIO (u => ready bind port)
@@ -1112,7 +1112,7 @@ bound : String ->
   Option RelayTarget ->
   Duration ->
   Result String (Listener *) ->
-  Serve <Env | e> Unit
+  Serve e Unit
 bound _ _ _ _ _ _ _ (Err message) =
   liftIO (u => abort "serve: bind failed: \{message}")
 bound bind server store dir serving relay statsInterval (Ok lis) = defer
@@ -1180,7 +1180,7 @@ reportBeat (LockLost message) =
   ePutStrLn "serve: data directory lock lost: \{message}"
 
 start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String) ->
-  Serve <Env | e> Unit
+  Serve e Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
 start (Ok (server, store, dir, port, bind, serving, relay, statsInterval, lock, lines)) =
   defer
@@ -1201,7 +1201,7 @@ keygen rest = match parseArgs keygenSpec rest
     Err message => abort "keygen: \{message}"
     Ok () => ()
 
-main : Serve <Env> Unit
+main : Serve <> Unit
 main = defer
   argv <- liftIO (u => args ())
   match argv

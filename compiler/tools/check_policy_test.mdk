@@ -22,3 +22,23 @@ test "manifest keys qualify a label only when two origins spell it" = expectAll
       (manifestToml [storeAt "m" "a/*", storeAt "n" "b/*"]),
     expectEqual "\"m.Store\"" (qualifiedKey (storeAt "m" "a/*")),
   ]
+
+test "manifest quotes effect parameters as valid TOML strings" = expectAll [
+  expectEqual
+    "[package.capabilities]\nStore = \"a\\\"\\\\b\"\n"
+    (manifestToml [storeAt "m" "a\"\\b"]),
+  expectEqual
+    "[package.capabilities]\nStore = \"a\\u0000b\"\n"
+    (manifestToml [storeAt "m" "a\0b"]),
+  expectEqual
+    "[package.capabilities]\nQ = { a = \"x/1\\\" B=\\\"y/*\", m = [\"POST\\\"\\\\GET\"] }\n"
+    (manifestToml [
+      Atom
+        (EffLabel "Q" (OriginModule "m"))
+        (AConst
+          (PProduct [
+            ("A", PPrefix (Some "x/1\" B=\"y/*")),
+            ("M", PSet (Some ["POST\"\\GET"])),
+          ])),
+    ]),
+]
