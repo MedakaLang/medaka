@@ -1,4 +1,6 @@
-import types.effect_domain.{canonParam, drender, isSubTop, Param(..)}
+import types.effect_domain.{
+  canonParam, drender, isSubTop, Param(..), pathClimbs, pathSpelling
+}
 import types.effect_authority.{
   Authority(..), authSub, authVars, authHasVars, authvarDefaultName,
   authJoinAll, authConsts
@@ -78,7 +80,7 @@ import types.typecheck.{
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{
   sortUniqS, joinWith, reverseL, escStr, lookupAssoc, contains, filterList,
-  listLen, escOneHex2
+  listLen, escOneHex2, anyList
 }
 import string.{toLower}
 import list.{replicate}
@@ -760,11 +762,14 @@ listIsEmpty _ = False
 -- element is itself an array of members.
 -- An authority left symbolic at the host boundary is reported conservatively
 -- as the bare grant (`Label = true`), never omitted, with a TOML comment
--- naming the variables that left it unresolved.
+-- naming the variables that left it unresolved. So is a path whose canonical
+-- form lies above the working directory, which no working-directory-relative
+-- grant admits.
 atomToToml : (Atom -> String) -> Atom -> String
 atomToToml keyOf a =
   let label = keyOf a
   match authConsts (atomAuth a)
+    Some ps if anyList pathClimbs ps => label ++ " = true"
     Some [p] => "\{label} = \{paramToml p}"
     Some (ps@(_ :: _ :: _)) =>
       "\{label} = [\{joinWith ", " (map paramToml ps)}]"
@@ -777,6 +782,7 @@ atomToToml keyOf a =
 paramToml : Param -> String
 paramToml p = match canonParam p
   PPrefix (Some s) => tomlQuote s
+  PPath (Some s) => tomlQuote (pathSpelling s)
   PSet (Some xs) => "[\{joinWith ", " (map tomlQuote xs)}]"
   PProduct ax if not (isSubTop (PProduct ax)) => "{ \{productTomlInline ax} }"  -- WS-4 inline table
   _ => "true"
@@ -888,12 +894,14 @@ atomToAllowToks : Atom -> List String
 atomToAllowToks a =
   let label = atomLabel a
   match authConsts (atomAuth a)
+    Some ps if anyList pathClimbs ps => [label]
     Some (ps@(_ :: _)) => map (paramAllowTok label) ps
     _ => [label]
 
 paramAllowTok : String -> Param -> String
 paramAllowTok label p = match canonParam p
   PPrefix (Some s) => "\{label}=\{s}"
+  PPath (Some s) => "\{label}=\{pathSpelling s}"
   PSet (Some xs) => "\{label}={\{joinWith "," xs}}"
   PProduct ax if not (isSubTop (PProduct ax)) =>
     "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form

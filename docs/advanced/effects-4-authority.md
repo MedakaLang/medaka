@@ -285,6 +285,42 @@ same message. The grant is also what the manifest records, so a host that trusts
 `cfg/*` from the manifest reads it as the program does. A bare `<FileRead>`
 grants every path, and confines nothing.
 
+The compiler reads the part of a path it can see the same way. For `FileRead`
+and `FileWrite`, whose file functions resolve the path, a bound is checked
+against the path's canonical form: `.` and empty components are dropped, and
+`..` removes the directory before it. So `"cfg/./" ++ name` is within
+`"cfg/*"`, and `"cfg/../" ++ name` is not. It is `"./*"`, every path under
+the working directory:
+
+```medaka
+readIn : String -> <FileRead "cfg/*"> Result String String
+readIn name = readFile ("cfg/./" ++ name)
+
+readBeside : String -> <FileRead "./*"> Result String String
+readBeside name = readFile ("cfg/../" ++ name)
+
+main = println "checked"
+```
+
+```medaka-expect
+checked
+```
+
+Bounding `readBeside` to `"cfg/*"` instead is refused before anything runs:
+
+```
+error: authority.mdk:5:27: Effectful value used where <FileRead "cfg/*"> is allowed, but it performs <FileRead "./*">
+  |
+5 | readBeside name = readFile ("cfg/../" ++ name)
+  |                            ^
+```
+
+A path that climbs above the working directory, such as `"../x"`, is within
+no bound inside it, and a manifest grants it as the bare label. The compiler
+resolves only what the program spells: a `..` inside `name` and a symlink are
+the runtime's, as above. Every other label compares text, `Net` and your own
+`effect Store Prefix` included, and there `..` is two characters.
+
 The check has limits, each listed under "Open edges" in the
 [reference](effects-7-reference.md):
 

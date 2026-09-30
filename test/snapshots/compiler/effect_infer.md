@@ -1,5 +1,5 @@
 # META
-source_lines=329
+source_lines=332
 stages=DESUGAR,MARK
 # SOURCE
 -- Scoped effect collection. A capture observes performed rows without solving
@@ -10,7 +10,7 @@ import types.effect_domain.{
 }
 import types.effect_authority.{
   Authority(..), authJoin, authTop, authExtend, authAppend, authWidenValue,
-  authDomainTop
+  authDomainTop, authRetag
 }
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
@@ -87,7 +87,7 @@ typeAuthority top ty = match normalize ty
   _ => authTop top
 
 qualifierIn : Param -> Authority -> Authority
-qualifierIn top q = if inDomain top q then q else authTop top
+qualifierIn top q = if inDomain top q then authRetag top q else authTop top
 
 inDomain : Param -> Authority -> Bool
 inDomain PUnit _ = True
@@ -233,6 +233,7 @@ letBindName (LetBind n _) = [n]
 -- product's primary axis; an atomic label abstracts every value to its top.
 literalAuthority : Param -> String -> Authority
 literalAuthority (PPrefix _) s = AConst (canonParam (PPrefix (Some s)))
+literalAuthority (PPath _) s = AConst (canonParam (PPath (Some s)))
 literalAuthority (PSet _) s = AConst (PSet (Some [s]))
 literalAuthority (PProduct schema) s = AConst (productPrimaryLift schema s)
 literalAuthority top _ = authTop top
@@ -249,6 +250,8 @@ concatAuthority : Param ->
   Expr ->
   Option Authority
 concatAuthority (top@(PPrefix _)) env lets a b =
+  mapOption (suffixed env lets b) (alphaSyntax top env lets a)
+concatAuthority (top@(PPath _)) env lets a b =
   mapOption (suffixed env lets b) (alphaSyntax top env lets a)
 concatAuthority (top@(PProduct _)) env lets a b =
   mapOption (suffixed env lets b) (alphaSyntax top env lets a)
@@ -334,7 +337,7 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 # DESUGAR
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "Effvar" false) (mem "collectRows" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productNorm" false) (mem "subTopOf" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false) (mem "authRetag" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "lookupAssoc" false) (mem "mapOption" false))))
@@ -350,7 +353,7 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 (DTypeSig true "typeAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "Mono") (TyCon "Authority"))))
 (DFunDef false "typeAuthority" ((PVar "top") (PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" PWild (PVar "q")) () (EApp (EApp (EVar "qualifierIn") (EVar "top")) (EVar "q"))) (arm PWild () (EApp (EVar "authTop") (EVar "top")))))
 (DTypeSig false "qualifierIn" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
-(DFunDef false "qualifierIn" ((PVar "top") (PVar "q")) (EIf (EApp (EApp (EVar "inDomain") (EVar "top")) (EVar "q")) (EVar "q") (EApp (EVar "authTop") (EVar "top"))))
+(DFunDef false "qualifierIn" ((PVar "top") (PVar "q")) (EIf (EApp (EApp (EVar "inDomain") (EVar "top")) (EVar "q")) (EApp (EApp (EVar "authRetag") (EVar "top")) (EVar "q")) (EApp (EVar "authTop") (EVar "top"))))
 (DTypeSig false "inDomain" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Bool"))))
 (DFunDef false "inDomain" ((PCon "PUnit") PWild) (EVar "True"))
 (DFunDef false "inDomain" ((PVar "top") (PVar "q")) (EMatch (EApp (EVar "authDomainTop") (EVar "q")) (arm (PCon "PUnit") () (EVar "True")) (arm (PVar "d") () (EBinOp "==" (EApp (EVar "domainKey") (EVar "d")) (EApp (EVar "domainKey") (EVar "top"))))))
@@ -408,11 +411,13 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 (DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild)) (EListLit (EVar "n")))
 (DTypeSig false "literalAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "String") (TyCon "Authority"))))
 (DFunDef false "literalAuthority" ((PCon "PPrefix" PWild) (PVar "s")) (EApp (EVar "AConst") (EApp (EVar "canonParam") (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s"))))))
+(DFunDef false "literalAuthority" ((PCon "PPath" PWild) (PVar "s")) (EApp (EVar "AConst") (EApp (EVar "canonParam") (EApp (EVar "PPath") (EApp (EVar "Some") (EVar "s"))))))
 (DFunDef false "literalAuthority" ((PCon "PSet" PWild) (PVar "s")) (EApp (EVar "AConst") (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "s"))))))
 (DFunDef false "literalAuthority" ((PCon "PProduct" (PVar "schema")) (PVar "s")) (EApp (EVar "AConst") (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "s"))))
 (DFunDef false "literalAuthority" ((PVar "top") PWild) (EApp (EVar "authTop") (EVar "top")))
 (DTypeSig false "concatAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Authority"))))))))
 (DFunDef false "concatAuthority" ((PAs "top" (PCon "PPrefix" PWild)) (PVar "env") (PVar "lets") (PVar "a") (PVar "b")) (EApp (EApp (EVar "mapOption") (EApp (EApp (EApp (EVar "suffixed") (EVar "env")) (EVar "lets")) (EVar "b"))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "a"))))
+(DFunDef false "concatAuthority" ((PAs "top" (PCon "PPath" PWild)) (PVar "env") (PVar "lets") (PVar "a") (PVar "b")) (EApp (EApp (EVar "mapOption") (EApp (EApp (EApp (EVar "suffixed") (EVar "env")) (EVar "lets")) (EVar "b"))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "a"))))
 (DFunDef false "concatAuthority" ((PAs "top" (PCon "PProduct" PWild)) (PVar "env") (PVar "lets") (PVar "a") (PVar "b")) (EApp (EApp (EVar "mapOption") (EApp (EApp (EApp (EVar "suffixed") (EVar "env")) (EVar "lets")) (EVar "b"))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "a"))))
 (DFunDef false "concatAuthority" (PWild PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "suffixed" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Authority") (TyCon "Authority"))))))
@@ -445,7 +450,7 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 # MARK
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "Effvar" false) (mem "collectRows" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productNorm" false) (mem "subTopOf" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false) (mem "authRetag" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "lookupAssoc" false) (mem "mapOption" false))))
@@ -461,7 +466,7 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 (DTypeSig true "typeAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "Mono") (TyCon "Authority"))))
 (DFunDef false "typeAuthority" ((PVar "top") (PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" PWild (PVar "q")) () (EApp (EApp (EVar "qualifierIn") (EVar "top")) (EVar "q"))) (arm PWild () (EApp (EVar "authTop") (EVar "top")))))
 (DTypeSig false "qualifierIn" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
-(DFunDef false "qualifierIn" ((PVar "top") (PVar "q")) (EIf (EApp (EApp (EVar "inDomain") (EVar "top")) (EVar "q")) (EVar "q") (EApp (EVar "authTop") (EVar "top"))))
+(DFunDef false "qualifierIn" ((PVar "top") (PVar "q")) (EIf (EApp (EApp (EVar "inDomain") (EVar "top")) (EVar "q")) (EApp (EApp (EVar "authRetag") (EVar "top")) (EVar "q")) (EApp (EVar "authTop") (EVar "top"))))
 (DTypeSig false "inDomain" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Bool"))))
 (DFunDef false "inDomain" ((PCon "PUnit") PWild) (EVar "True"))
 (DFunDef false "inDomain" ((PVar "top") (PVar "q")) (EMatch (EApp (EVar "authDomainTop") (EVar "q")) (arm (PCon "PUnit") () (EVar "True")) (arm (PVar "d") () (EBinOp "==" (EApp (EVar "domainKey") (EVar "d")) (EApp (EVar "domainKey") (EVar "top"))))))
@@ -519,11 +524,13 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 (DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild)) (EListLit (EVar "n")))
 (DTypeSig false "literalAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "String") (TyCon "Authority"))))
 (DFunDef false "literalAuthority" ((PCon "PPrefix" PWild) (PVar "s")) (EApp (EVar "AConst") (EApp (EVar "canonParam") (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s"))))))
+(DFunDef false "literalAuthority" ((PCon "PPath" PWild) (PVar "s")) (EApp (EVar "AConst") (EApp (EVar "canonParam") (EApp (EVar "PPath") (EApp (EVar "Some") (EVar "s"))))))
 (DFunDef false "literalAuthority" ((PCon "PSet" PWild) (PVar "s")) (EApp (EVar "AConst") (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "s"))))))
 (DFunDef false "literalAuthority" ((PCon "PProduct" (PVar "schema")) (PVar "s")) (EApp (EVar "AConst") (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "s"))))
 (DFunDef false "literalAuthority" ((PVar "top") PWild) (EApp (EVar "authTop") (EVar "top")))
 (DTypeSig false "concatAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Authority"))))))))
 (DFunDef false "concatAuthority" ((PAs "top" (PCon "PPrefix" PWild)) (PVar "env") (PVar "lets") (PVar "a") (PVar "b")) (EApp (EApp (EVar "mapOption") (EApp (EApp (EApp (EVar "suffixed") (EVar "env")) (EVar "lets")) (EVar "b"))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "a"))))
+(DFunDef false "concatAuthority" ((PAs "top" (PCon "PPath" PWild)) (PVar "env") (PVar "lets") (PVar "a") (PVar "b")) (EApp (EApp (EVar "mapOption") (EApp (EApp (EApp (EVar "suffixed") (EVar "env")) (EVar "lets")) (EVar "b"))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "a"))))
 (DFunDef false "concatAuthority" ((PAs "top" (PCon "PProduct" PWild)) (PVar "env") (PVar "lets") (PVar "a") (PVar "b")) (EApp (EApp (EVar "mapOption") (EApp (EApp (EApp (EVar "suffixed") (EVar "env")) (EVar "lets")) (EVar "b"))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "a"))))
 (DFunDef false "concatAuthority" (PWild PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "suffixed" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Authority") (TyCon "Authority"))))))

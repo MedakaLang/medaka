@@ -1,0 +1,34 @@
+-- #3636: a manifest names a path's canonical form. A write under `data/`
+-- beside one under `data/../` is the working directory's pattern, whether the
+-- `..` is in a literal or in a data directory's value (#3620); a path that
+-- climbs above the working directory is the bare label.
+data DataDir (d : Authority FileWrite*) = DataDir (String @d)
+
+writeUnder : DataDir d -> String -> <FileWrite d> Result String Unit
+writeUnder (DataDir root) name = writeFile (root ++ name) "x"
+
+leafFromArgs : Unit -> String
+leafFromArgs _ = match args ()
+  a :: _ => a
+  [] => "leaf.txt"
+
+both _ =
+  let _ = writeFile ("data/" ++ leafFromArgs ()) "x"
+  let _ = writeFile ("data/../" ++ leafFromArgs ()) "x"
+  ()
+
+viaDir _ =
+  let _ = writeUnder (DataDir "data/") "ok.txt"
+  let _ = writeUnder (DataDir "data/../") (leafFromArgs ())
+  ()
+
+canonical _ =
+  let _ = writeFile "data/sub/../x.txt" "x"
+  ()
+
+climb _ =
+  let _ = writeFile "data/../../x.txt" "x"
+  ()
+
+main : <IO> Unit
+main = println "filewrite dotdot manifest accept"

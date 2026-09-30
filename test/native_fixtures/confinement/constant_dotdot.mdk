@@ -1,0 +1,12 @@
+-- A `..` in the constant part of a path climbs out of the directory written
+-- before it, and the checker reads it as the runtime does, by canonical path:
+-- a write under `data/../` is the working directory's pattern, which a
+-- `data/*` bound does not cover, so this program does not check.
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+store : String -> <FileWrite "data/*"> Result String Unit
+store leaf = writeFile ("data/../" ++ leaf) "x"
+
+main = println (said (store "pwned.txt"))
