@@ -1,5 +1,5 @@
 # META
-source_lines=781
+source_lines=887
 stages=DESUGAR,MARK
 # SOURCE
 -- Concrete authority domains: the lattice each effect label's parameter is
@@ -18,8 +18,9 @@ import support.util.{
 -- (`domainKey`).
 --
 -- `PPath` is a Prefix element of a path label, a built-in label whose runtime
--- confines a path by its canonical form (`FileRead`, `FileWrite`): its order
--- compares canonical paths (`pathKey`), where `PPrefix`'s compares text. Both
+-- resolves a path with the file system (`FileRead`, `FileWrite`): its order
+-- compares lexically normalized paths (`pathKey`), where `PPrefix`'s compares
+-- text. Both
 -- are one domain (`domainKey`); where they meet, the covering side's order
 -- decides.
 public export data Param =
@@ -620,27 +621,32 @@ subsetStr [] _ = True
 subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 
 -- ── Path elements ──────────────────────────────────────────────────────────
--- A path label's runtime admits a path when its canonical form is admitted by
--- the canonical form of a granted element (EFFECTS-SEMANTICS §8), so the order
--- on its elements compares canonical forms. Canonicalization here is lexical:
--- empty and `.` components are dropped and `..` removes the component before
--- it; at the root of an absolute path it stays at the root, and a relative
--- path keeps a `..` that climbs above the working directory as a leading
--- component, which no path inside the working directory has. A pattern's text
--- after its last `/` is read as written, as the runtime reads it, and `*`
--- alone admits every path. A symlink is resolved only by the runtime.
+-- A path label's runtime confines each call's path against that call's own
+-- grant, resolving both with the file system (EFFECTS-SEMANTICS §8); it never
+-- re-checks the declared bound. The order here is lexical: empty and `.`
+-- components are dropped, a `..` at the root of an absolute path stays at the
+-- root, and a relative path keeps a `..` that climbs above the working
+-- directory as a leading component, which no path inside the working
+-- directory has. A pattern's text after its last `/` is read as written, as
+-- the runtime reads it, and `*` alone admits every path.
+--
+-- A `..` that follows a named component is not resolved: a symlink can make
+-- `x/..` any directory at all, so an element that pops a named component lies
+-- only within itself and the whole domain, and only its own spelling lies
+-- within it.
 --
 -- An element keeps the spelling it was written or derived with, which a
 -- grant passes to the runtime to resolve, and is rendered and told apart by
--- its append form: every component before the last `/` canonical, the last as
--- written. A suffix appended later extends the last component (`"data/"` and
--- `"data"` are one path, and not one prefix), so two spellings with one
+-- its append form: every component before the last `/` normalized, the last
+-- as written. A suffix appended later extends the last component (`"data/"`
+-- and `"data"` are one path, and not one prefix), so two spellings with one
 -- append form have the same extensions, and only the order reads the
--- canonical form (`pathKey`). A pattern's append form is its canonical form.
+-- normalized form (`pathKey`). A pattern's append form is its normalized form.
 data PathKey =
   | KAll
   | KExact Bool (List String)
   | KPattern Bool (List String) String
+  | KPopped String
 
 -- The append form of a path element's spelling.
 export
@@ -666,7 +672,8 @@ dirSpelling True d _ = "/" ++ joinWith "/" d ++ "/"
 dirSpelling False [] last = if last == "" then "./" else ""
 dirSpelling False d _ = joinWith "/" d ++ "/"
 
--- The canonical form of a path element's spelling.
+-- The normalized form of a path element's spelling. A popping element is
+-- told apart only by its spelling, pattern or exact.
 pathKey : String -> PathKey
 pathKey s =
   if isPrefixPattern s then
@@ -675,11 +682,23 @@ pathKey s =
     if c == "" then
       KAll
     else match splitLast (splitOnChar '/' c)
-      Some (dir, stem) => KPattern abs (lexicalPath abs dir) stem
+      Some (dir, stem) =>
+        let d = lexicalPath abs dir
+        if popsNamed False d then
+          KPopped ("p" ++ pathSpelling s)
+        else
+          KPattern abs d stem
       None => KAll
   else
     let abs = startsWith "/" s
-    KExact abs (lexicalPath abs (splitOnChar '/' s))
+    let xs = lexicalPath abs (splitOnChar '/' s)
+    if popsNamed False xs then
+      KPopped "e\{rootSlash abs}\{joinWith "/" xs}"
+    else
+      KExact abs xs
+
+rootSlash : Bool -> String
+rootSlash abs = if abs then "/" else ""
 
 lexicalPath : Bool -> List String -> List String
 lexicalPath abs parts = reverseL (fold (lexicalStep abs) [] parts)
@@ -687,13 +706,20 @@ lexicalPath abs parts = reverseL (fold (lexicalStep abs) [] parts)
 lexicalStep : Bool -> List String -> String -> List String
 lexicalStep abs acc c
   | c == "" || c == "." = acc
-  | c == ".." = match acc
-    top :: rest if top /= ".." => rest
-    [] if abs => []
-    _ => ".." :: acc
+  | c == ".." && abs && isEmptyList acc = acc
   | otherwise = c :: acc
 
--- Coverage of canonical forms: an exact path admits itself; a pattern admits
+isEmptyList : List a -> Bool
+isEmptyList [] = True
+isEmptyList _ = False
+
+-- Whether normalized components hold a `..` after a named component.
+popsNamed : Bool -> List String -> Bool
+popsNamed _ [] = False
+popsNamed named (c :: cs) =
+  if c == ".." then named || popsNamed named cs else popsNamed True cs
+
+-- Coverage of normalized forms: an exact path admits itself; a pattern admits
 -- its directory when its stem is empty, and every path under the directory
 -- whose next component begins with the stem, never a `..` that climbs out of
 -- it. A relative path is never compared with an absolute one: which one the
@@ -701,6 +727,9 @@ lexicalStep abs acc c
 pathSub : PathKey -> PathKey -> Bool
 pathSub _ KAll = True
 pathSub KAll _ = False
+pathSub (KPopped a) (KPopped b) = a == b
+pathSub (KPopped _) _ = False
+pathSub _ (KPopped _) = False
 pathSub (KExact a xs) (KExact b ys) = a == b && xs == ys
 pathSub (KExact a xs) (KPattern b dir stem) =
   a == b && (xs == dir && stem == "" || underDir dir stem xs)
@@ -746,9 +775,16 @@ isPathParam _ = False
 
 -- The maximal elements of a join that holds a path element. Two spellings of
 -- one exact path are both kept unless they are one append form, since a
--- suffix appended later extends each differently (`pathSpelling`).
+-- suffix appended later extends each differently (`pathSpelling`). Path
+-- elements alone are swept in order of key text (`pathKeyText`); a join that
+-- also holds a text element compares every pair, since there each pair takes
+-- its covering side's order.
 maximalPaths : List Param -> List Param
-maximalPaths ps = fold (acc p => keepMaximalPath p acc) [] ps
+maximalPaths ps =
+  if allList isPathParam ps then
+    pathSweep (sortByKey pathEntryOrder (map pathEntry ps)) [] None []
+  else
+    fold (acc p => keepMaximalPath p acc) [] ps
 
 keepMaximalPath : Param -> List Param -> List Param
 keepMaximalPath p acc =
@@ -766,7 +802,77 @@ paramSpelling (PPrefix (Some s)) = s
 paramSpelling (PPath (Some s)) = pathSpelling s
 paramSpelling _ = ""
 
--- Whether a path element's canonical form lies above the working directory:
+-- A path element for the sweep: its key's text, whether it can cover another
+-- element, its key, its append form, and the element.
+data PathEntry = PathEntry String Bool PathKey String Param
+
+pathEntry : Param -> PathEntry
+pathEntry (p@(PPath (Some s))) =
+  let k = pathKey s
+  PathEntry (pathKeyText k) (keyCoversOthers k) k (pathSpelling s) p
+pathEntry p = PathEntry "" True KAll "*" p
+
+-- A key's text begins with the text of every key that covers it (`pathSub`),
+-- so the elements a key covers follow it consecutively in text order.
+-- Components never hold `/`, which separates them.
+pathKeyText : PathKey -> String
+pathKeyText KAll = ""
+pathKeyText (KExact abs xs) = "\{rootTag abs}\{componentsText xs}/"
+pathKeyText (KPattern abs dir stem) =
+  "\{rootTag abs}\{componentsText dir}/\{stem}"
+pathKeyText (KPopped t) = "x" ++ t
+
+rootTag : Bool -> String
+rootTag abs = if abs then "a" else "r"
+
+componentsText : List String -> String
+componentsText xs = joinWith "" (map ("/" ++ _) xs)
+
+keyCoversOthers : PathKey -> Bool
+keyCoversOthers KAll = True
+keyCoversOthers (KPattern _ _ _) = True
+keyCoversOthers _ = False
+
+-- By key text; of one text, an element that can cover before one that
+-- cannot, then by append form, so repeats are adjacent.
+pathEntryOrder : PathEntry -> PathEntry -> Bool
+pathEntryOrder (PathEntry a ca _ sa _) (PathEntry b cb _ sb _) =
+  match stringCompare a b
+    Lt => True
+    Gt => False
+    Eq => if ca == cb then stringCompare sa sb /= Gt else ca
+
+-- One pass in key-text order. The open covering elements form a chain, each
+-- one's text beginning the next's; an element is dropped when one of them
+-- covers it, or when it repeats the last kept non-covering element's key text
+-- and append form.
+pathSweep : List PathEntry ->
+  List PathEntry ->
+  Option (String, String) ->
+  List Param ->
+  List Param
+pathSweep [] _ _ kept = kept
+pathSweep ((e@(PathEntry t covers _ sp p)) :: rest) open last kept =
+  let still = dropOpenNotPrefix t open
+  if anyList (entryCovers e) still || last == Some (t, sp) then
+    pathSweep rest still last kept
+  else if covers then
+    pathSweep rest (e :: still) last (p :: kept)
+  else
+    pathSweep rest still (Some (t, sp)) (p :: kept)
+
+dropOpenNotPrefix : String -> List PathEntry -> List PathEntry
+dropOpenNotPrefix _ [] = []
+dropOpenNotPrefix t ((o@(PathEntry ot _ _ _ _)) :: os) =
+  if startsWith ot t then o :: os else dropOpenNotPrefix t os
+
+-- Whether the open element [q] covers [e]: it contains it, and not only as
+-- another spelling of one path.
+entryCovers : PathEntry -> PathEntry -> Bool
+entryCovers (PathEntry _ _ k sp _) (PathEntry _ _ qk qsp _) =
+  pathSub k qk && (sp == qsp || not (pathSub qk k))
+
+-- Whether a path element's normalized form lies above the working directory:
 -- a relative path that begins by climbing out of it.
 export
 pathClimbs : Param -> Bool
@@ -1002,7 +1108,7 @@ retagParam _ p = p
 (DTypeSig true "subsetStr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "subsetStr" ((PList) PWild) (EVar "True"))
 (DFunDef false "subsetStr" ((PCons (PVar "x") (PVar "xs")) (PVar "b")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "b")) (EApp (EApp (EVar "subsetStr") (EVar "xs")) (EVar "b")) (EVar "False")))
-(DData Private "PathKey" () ((variant "KAll" (ConPos)) (variant "KExact" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))) (variant "KPattern" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
+(DData Private "PathKey" () ((variant "KAll" (ConPos)) (variant "KExact" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))) (variant "KPattern" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))) (variant "KPopped" (ConPos (TyCon "String")))) ())
 (DTypeSig true "pathSpelling" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "pathSpelling" ((PVar "s")) (EIf (EApp (EVar "isPrefixPattern") (EVar "s")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "prefixConcrete") (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LString ""))) (EVar "s") (EBinOp "++" (EApp (EVar "appendForm") (EVar "c")) (ELit (LString "*")))))) (EApp (EVar "appendForm") (EVar "s"))))
 (DTypeSig false "appendForm" (TyFun (TyCon "String") (TyCon "String")))
@@ -1013,14 +1119,25 @@ retagParam _ p = p
 (DFunDef false "dirSpelling" ((PCon "False") (PList) (PVar "last")) (EIf (EBinOp "==" (EVar "last") (ELit (LString ""))) (ELit (LString "./")) (ELit (LString ""))))
 (DFunDef false "dirSpelling" ((PCon "False") (PVar "d") PWild) (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "d")) (ELit (LString "/"))))
 (DTypeSig false "pathKey" (TyFun (TyCon "String") (TyCon "PathKey")))
-(DFunDef false "pathKey" ((PVar "s")) (EIf (EApp (EVar "isPrefixPattern") (EVar "s")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "prefixConcrete") (EVar "s"))) (DoLet false false (PVar "abs") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "c"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LString ""))) (EVar "KAll") (EMatch (EApp (EVar "splitLast") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "c"))) (arm (PCon "Some" (PTuple (PVar "dir") (PVar "stem"))) () (EApp (EApp (EApp (EVar "KPattern") (EVar "abs")) (EApp (EApp (EVar "lexicalPath") (EVar "abs")) (EVar "dir"))) (EVar "stem"))) (arm (PCon "None") () (EVar "KAll")))))) (EBlock (DoLet false false (PVar "abs") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "s"))) (DoExpr (EApp (EApp (EVar "KExact") (EVar "abs")) (EApp (EApp (EVar "lexicalPath") (EVar "abs")) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "s"))))))))
+(DFunDef false "pathKey" ((PVar "s")) (EIf (EApp (EVar "isPrefixPattern") (EVar "s")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "prefixConcrete") (EVar "s"))) (DoLet false false (PVar "abs") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "c"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LString ""))) (EVar "KAll") (EMatch (EApp (EVar "splitLast") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "c"))) (arm (PCon "Some" (PTuple (PVar "dir") (PVar "stem"))) () (EBlock (DoLet false false (PVar "d") (EApp (EApp (EVar "lexicalPath") (EVar "abs")) (EVar "dir"))) (DoExpr (EIf (EApp (EApp (EVar "popsNamed") (EVar "False")) (EVar "d")) (EApp (EVar "KPopped") (EBinOp "++" (ELit (LString "p")) (EApp (EVar "pathSpelling") (EVar "s")))) (EApp (EApp (EApp (EVar "KPattern") (EVar "abs")) (EVar "d")) (EVar "stem")))))) (arm (PCon "None") () (EVar "KAll")))))) (EBlock (DoLet false false (PVar "abs") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "s"))) (DoLet false false (PVar "xs") (EApp (EApp (EVar "lexicalPath") (EVar "abs")) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "s")))) (DoExpr (EIf (EApp (EApp (EVar "popsNamed") (EVar "False")) (EVar "xs")) (EApp (EVar "KPopped") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "e")) (EApp (EVar "display") (EApp (EVar "rootSlash") (EVar "abs")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "xs")))) (ELit (LString "")))) (EApp (EApp (EVar "KExact") (EVar "abs")) (EVar "xs")))))))
+(DTypeSig false "rootSlash" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "rootSlash" ((PVar "abs")) (EIf (EVar "abs") (ELit (LString "/")) (ELit (LString ""))))
 (DTypeSig false "lexicalPath" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "lexicalPath" ((PVar "abs") (PVar "parts")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "fold") (EApp (EVar "lexicalStep") (EVar "abs"))) (EListLit)) (EVar "parts"))))
 (DTypeSig false "lexicalStep" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "lexicalStep" ((PVar "abs") (PVar "acc") (PVar "c")) (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString ""))) (EBinOp "==" (EVar "c") (ELit (LString ".")))) (EVar "acc") (EIf (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EMatch (EVar "acc") (arm (PCons (PVar "top") (PVar "rest")) ((GBool (EBinOp "/=" (EVar "top") (ELit (LString ".."))))) (EVar "rest")) (arm (PList) ((GBool (EVar "abs"))) (EListLit)) (arm PWild () (EBinOp "::" (ELit (LString "..")) (EVar "acc")))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "lexicalStep" ((PVar "abs") (PVar "acc") (PVar "c")) (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString ""))) (EBinOp "==" (EVar "c") (ELit (LString ".")))) (EVar "acc") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EVar "abs")) (EApp (EVar "isEmptyList") (EVar "acc"))) (EVar "acc") (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "isEmptyList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
+(DFunDef false "isEmptyList" ((PList)) (EVar "True"))
+(DFunDef false "isEmptyList" (PWild) (EVar "False"))
+(DTypeSig false "popsNamed" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "popsNamed" (PWild (PList)) (EVar "False"))
+(DFunDef false "popsNamed" ((PVar "named") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EBinOp "||" (EVar "named") (EApp (EApp (EVar "popsNamed") (EVar "named")) (EVar "cs"))) (EApp (EApp (EVar "popsNamed") (EVar "True")) (EVar "cs"))))
 (DTypeSig false "pathSub" (TyFun (TyCon "PathKey") (TyFun (TyCon "PathKey") (TyCon "Bool"))))
 (DFunDef false "pathSub" (PWild (PCon "KAll")) (EVar "True"))
 (DFunDef false "pathSub" ((PCon "KAll") PWild) (EVar "False"))
+(DFunDef false "pathSub" ((PCon "KPopped" (PVar "a")) (PCon "KPopped" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "pathSub" ((PCon "KPopped" PWild) PWild) (EVar "False"))
+(DFunDef false "pathSub" (PWild (PCon "KPopped" PWild)) (EVar "False"))
 (DFunDef false "pathSub" ((PCon "KExact" (PVar "a") (PVar "xs")) (PCon "KExact" (PVar "b") (PVar "ys"))) (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "b")) (EBinOp "==" (EVar "xs") (EVar "ys"))))
 (DFunDef false "pathSub" ((PCon "KExact" (PVar "a") (PVar "xs")) (PCon "KPattern" (PVar "b") (PVar "dir") (PVar "stem"))) (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "b")) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EVar "xs") (EVar "dir")) (EBinOp "==" (EVar "stem") (ELit (LString "")))) (EApp (EApp (EApp (EVar "underDir") (EVar "dir")) (EVar "stem")) (EVar "xs")))))
 (DFunDef false "pathSub" ((PCon "KPattern" PWild PWild PWild) (PCon "KExact" PWild PWild)) (EVar "False"))
@@ -1037,7 +1154,7 @@ retagParam _ p = p
 (DFunDef false "isPathParam" ((PCon "PPath" PWild)) (EVar "True"))
 (DFunDef false "isPathParam" (PWild) (EVar "False"))
 (DTypeSig false "maximalPaths" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "maximalPaths" ((PVar "ps")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EVar "keepMaximalPath") (EVar "p")) (EVar "acc")))) (EListLit)) (EVar "ps")))
+(DFunDef false "maximalPaths" ((PVar "ps")) (EIf (EApp (EApp (EVar "allList") (EVar "isPathParam")) (EVar "ps")) (EApp (EApp (EApp (EApp (EVar "pathSweep") (EApp (EApp (EVar "sortByKey") (EVar "pathEntryOrder")) (EApp (EApp (EVar "map") (EVar "pathEntry")) (EVar "ps")))) (EListLit)) (EVar "None")) (EListLit)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EVar "keepMaximalPath") (EVar "p")) (EVar "acc")))) (EListLit)) (EVar "ps"))))
 (DTypeSig false "keepMaximalPath" (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param")))))
 (DFunDef false "keepMaximalPath" ((PVar "p") (PVar "acc")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "q")) (EApp (EApp (EVar "pathCovers") (EVar "q")) (EVar "p")))) (EVar "acc")) (EVar "acc") (EBinOp "::" (EVar "p") (EApp (EApp (EVar "filterList") (ELam ((PVar "q")) (EApp (EVar "not") (EApp (EApp (EVar "pathCovers") (EVar "p")) (EVar "q"))))) (EVar "acc")))))
 (DTypeSig false "pathCovers" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Bool"))))
@@ -1046,6 +1163,33 @@ retagParam _ p = p
 (DFunDef false "paramSpelling" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EVar "s"))
 (DFunDef false "paramSpelling" ((PCon "PPath" (PCon "Some" (PVar "s")))) (EApp (EVar "pathSpelling") (EVar "s")))
 (DFunDef false "paramSpelling" (PWild) (ELit (LString "")))
+(DData Private "PathEntry" () ((variant "PathEntry" (ConPos (TyCon "String") (TyCon "Bool") (TyCon "PathKey") (TyCon "String") (TyCon "Param")))) ())
+(DTypeSig false "pathEntry" (TyFun (TyCon "Param") (TyCon "PathEntry")))
+(DFunDef false "pathEntry" ((PAs "p" (PCon "PPath" (PCon "Some" (PVar "s"))))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "pathKey") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "PathEntry") (EApp (EVar "pathKeyText") (EVar "k"))) (EApp (EVar "keyCoversOthers") (EVar "k"))) (EVar "k")) (EApp (EVar "pathSpelling") (EVar "s"))) (EVar "p")))))
+(DFunDef false "pathEntry" ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "PathEntry") (ELit (LString ""))) (EVar "True")) (EVar "KAll")) (ELit (LString "*"))) (EVar "p")))
+(DTypeSig false "pathKeyText" (TyFun (TyCon "PathKey") (TyCon "String")))
+(DFunDef false "pathKeyText" ((PCon "KAll")) (ELit (LString "")))
+(DFunDef false "pathKeyText" ((PCon "KExact" (PVar "abs") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "rootTag") (EVar "abs")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "componentsText") (EVar "xs")))) (ELit (LString "/"))))
+(DFunDef false "pathKeyText" ((PCon "KPattern" (PVar "abs") (PVar "dir") (PVar "stem"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "rootTag") (EVar "abs")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "componentsText") (EVar "dir")))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "stem"))) (ELit (LString ""))))
+(DFunDef false "pathKeyText" ((PCon "KPopped" (PVar "t"))) (EBinOp "++" (ELit (LString "x")) (EVar "t")))
+(DTypeSig false "rootTag" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "rootTag" ((PVar "abs")) (EIf (EVar "abs") (ELit (LString "a")) (ELit (LString "r"))))
+(DTypeSig false "componentsText" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "componentsText" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "/")) (EVar "_s")))) (EVar "xs"))))
+(DTypeSig false "keyCoversOthers" (TyFun (TyCon "PathKey") (TyCon "Bool")))
+(DFunDef false "keyCoversOthers" ((PCon "KAll")) (EVar "True"))
+(DFunDef false "keyCoversOthers" ((PCon "KPattern" PWild PWild PWild)) (EVar "True"))
+(DFunDef false "keyCoversOthers" (PWild) (EVar "False"))
+(DTypeSig false "pathEntryOrder" (TyFun (TyCon "PathEntry") (TyFun (TyCon "PathEntry") (TyCon "Bool"))))
+(DFunDef false "pathEntryOrder" ((PCon "PathEntry" (PVar "a") (PVar "ca") PWild (PVar "sa") PWild) (PCon "PathEntry" (PVar "b") (PVar "cb") PWild (PVar "sb") PWild)) (EMatch (EApp (EApp (EVar "stringCompare") (EVar "a")) (EVar "b")) (arm (PCon "Lt") () (EVar "True")) (arm (PCon "Gt") () (EVar "False")) (arm (PCon "Eq") () (EIf (EBinOp "==" (EVar "ca") (EVar "cb")) (EBinOp "/=" (EApp (EApp (EVar "stringCompare") (EVar "sa")) (EVar "sb")) (EVar "Gt")) (EVar "ca")))))
+(DTypeSig false "pathSweep" (TyFun (TyApp (TyCon "List") (TyCon "PathEntry")) (TyFun (TyApp (TyCon "List") (TyCon "PathEntry")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param")))))))
+(DFunDef false "pathSweep" ((PList) PWild PWild (PVar "kept")) (EVar "kept"))
+(DFunDef false "pathSweep" ((PCons (PAs "e" (PCon "PathEntry" (PVar "t") (PVar "covers") PWild (PVar "sp") (PVar "p"))) (PVar "rest")) (PVar "open") (PVar "last") (PVar "kept")) (EBlock (DoLet false false (PVar "still") (EApp (EApp (EVar "dropOpenNotPrefix") (EVar "t")) (EVar "open"))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EVar "anyList") (EApp (EVar "entryCovers") (EVar "e"))) (EVar "still")) (EBinOp "==" (EVar "last") (EApp (EVar "Some") (ETuple (EVar "t") (EVar "sp"))))) (EApp (EApp (EApp (EApp (EVar "pathSweep") (EVar "rest")) (EVar "still")) (EVar "last")) (EVar "kept")) (EIf (EVar "covers") (EApp (EApp (EApp (EApp (EVar "pathSweep") (EVar "rest")) (EBinOp "::" (EVar "e") (EVar "still"))) (EVar "last")) (EBinOp "::" (EVar "p") (EVar "kept"))) (EApp (EApp (EApp (EApp (EVar "pathSweep") (EVar "rest")) (EVar "still")) (EApp (EVar "Some") (ETuple (EVar "t") (EVar "sp")))) (EBinOp "::" (EVar "p") (EVar "kept"))))))))
+(DTypeSig false "dropOpenNotPrefix" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PathEntry")) (TyApp (TyCon "List") (TyCon "PathEntry")))))
+(DFunDef false "dropOpenNotPrefix" (PWild (PList)) (EListLit))
+(DFunDef false "dropOpenNotPrefix" ((PVar "t") (PCons (PAs "o" (PCon "PathEntry" (PVar "ot") PWild PWild PWild PWild)) (PVar "os"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "ot")) (EVar "t")) (EBinOp "::" (EVar "o") (EVar "os")) (EApp (EApp (EVar "dropOpenNotPrefix") (EVar "t")) (EVar "os"))))
+(DTypeSig false "entryCovers" (TyFun (TyCon "PathEntry") (TyFun (TyCon "PathEntry") (TyCon "Bool"))))
+(DFunDef false "entryCovers" ((PCon "PathEntry" PWild PWild (PVar "k") (PVar "sp") PWild) (PCon "PathEntry" PWild PWild (PVar "qk") (PVar "qsp") PWild)) (EBinOp "&&" (EApp (EApp (EVar "pathSub") (EVar "k")) (EVar "qk")) (EBinOp "||" (EBinOp "==" (EVar "sp") (EVar "qsp")) (EApp (EVar "not") (EApp (EApp (EVar "pathSub") (EVar "qk")) (EVar "k"))))))
 (DTypeSig true "pathClimbs" (TyFun (TyCon "Param") (TyCon "Bool")))
 (DFunDef false "pathClimbs" ((PCon "PPath" (PCon "Some" (PVar "s")))) (EMatch (EApp (EVar "pathKey") (EVar "s")) (arm (PCon "KExact" (PCon "False") (PCons (PLit (LString "..")) PWild)) () (EVar "True")) (arm (PCon "KPattern" (PCon "False") (PCons (PLit (LString "..")) PWild) PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DFunDef false "pathClimbs" (PWild) (EVar "False"))
@@ -1271,7 +1415,7 @@ retagParam _ p = p
 (DTypeSig true "subsetStr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "subsetStr" ((PList) PWild) (EVar "True"))
 (DFunDef false "subsetStr" ((PCons (PVar "x") (PVar "xs")) (PVar "b")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "b")) (EApp (EApp (EVar "subsetStr") (EVar "xs")) (EVar "b")) (EVar "False")))
-(DData Private "PathKey" () ((variant "KAll" (ConPos)) (variant "KExact" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))) (variant "KPattern" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
+(DData Private "PathKey" () ((variant "KAll" (ConPos)) (variant "KExact" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))) (variant "KPattern" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))) (variant "KPopped" (ConPos (TyCon "String")))) ())
 (DTypeSig true "pathSpelling" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "pathSpelling" ((PVar "s")) (EIf (EApp (EVar "isPrefixPattern") (EVar "s")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "prefixConcrete") (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LString ""))) (EVar "s") (EBinOp "++" (EApp (EVar "appendForm") (EVar "c")) (ELit (LString "*")))))) (EApp (EVar "appendForm") (EVar "s"))))
 (DTypeSig false "appendForm" (TyFun (TyCon "String") (TyCon "String")))
@@ -1282,14 +1426,25 @@ retagParam _ p = p
 (DFunDef false "dirSpelling" ((PCon "False") (PList) (PVar "last")) (EIf (EBinOp "==" (EVar "last") (ELit (LString ""))) (ELit (LString "./")) (ELit (LString ""))))
 (DFunDef false "dirSpelling" ((PCon "False") (PVar "d") PWild) (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "d")) (ELit (LString "/"))))
 (DTypeSig false "pathKey" (TyFun (TyCon "String") (TyCon "PathKey")))
-(DFunDef false "pathKey" ((PVar "s")) (EIf (EApp (EVar "isPrefixPattern") (EVar "s")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "prefixConcrete") (EVar "s"))) (DoLet false false (PVar "abs") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "c"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LString ""))) (EVar "KAll") (EMatch (EApp (EVar "splitLast") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "c"))) (arm (PCon "Some" (PTuple (PVar "dir") (PVar "stem"))) () (EApp (EApp (EApp (EVar "KPattern") (EMethodRef "abs")) (EApp (EApp (EVar "lexicalPath") (EMethodRef "abs")) (EVar "dir"))) (EVar "stem"))) (arm (PCon "None") () (EVar "KAll")))))) (EBlock (DoLet false false (PVar "abs") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "s"))) (DoExpr (EApp (EApp (EVar "KExact") (EMethodRef "abs")) (EApp (EApp (EVar "lexicalPath") (EMethodRef "abs")) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "s"))))))))
+(DFunDef false "pathKey" ((PVar "s")) (EIf (EApp (EVar "isPrefixPattern") (EVar "s")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "prefixConcrete") (EVar "s"))) (DoLet false false (PVar "abs") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "c"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LString ""))) (EVar "KAll") (EMatch (EApp (EVar "splitLast") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "c"))) (arm (PCon "Some" (PTuple (PVar "dir") (PVar "stem"))) () (EBlock (DoLet false false (PVar "d") (EApp (EApp (EVar "lexicalPath") (EMethodRef "abs")) (EVar "dir"))) (DoExpr (EIf (EApp (EApp (EVar "popsNamed") (EVar "False")) (EVar "d")) (EApp (EVar "KPopped") (EBinOp "++" (ELit (LString "p")) (EApp (EVar "pathSpelling") (EVar "s")))) (EApp (EApp (EApp (EVar "KPattern") (EMethodRef "abs")) (EVar "d")) (EVar "stem")))))) (arm (PCon "None") () (EVar "KAll")))))) (EBlock (DoLet false false (PVar "abs") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "s"))) (DoLet false false (PVar "xs") (EApp (EApp (EVar "lexicalPath") (EMethodRef "abs")) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "s")))) (DoExpr (EIf (EApp (EApp (EVar "popsNamed") (EVar "False")) (EVar "xs")) (EApp (EVar "KPopped") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "e")) (EApp (EMethodRef "display") (EApp (EVar "rootSlash") (EMethodRef "abs")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "xs")))) (ELit (LString "")))) (EApp (EApp (EVar "KExact") (EMethodRef "abs")) (EVar "xs")))))))
+(DTypeSig false "rootSlash" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "rootSlash" ((PVar "abs")) (EIf (EMethodRef "abs") (ELit (LString "/")) (ELit (LString ""))))
 (DTypeSig false "lexicalPath" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "lexicalPath" ((PVar "abs") (PVar "parts")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "lexicalStep") (EMethodRef "abs"))) (EListLit)) (EVar "parts"))))
 (DTypeSig false "lexicalStep" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "lexicalStep" ((PVar "abs") (PVar "acc") (PVar "c")) (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString ""))) (EBinOp "==" (EVar "c") (ELit (LString ".")))) (EVar "acc") (EIf (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EMatch (EVar "acc") (arm (PCons (PVar "top") (PVar "rest")) ((GBool (EBinOp "/=" (EVar "top") (ELit (LString ".."))))) (EVar "rest")) (arm (PList) ((GBool (EMethodRef "abs"))) (EListLit)) (arm PWild () (EBinOp "::" (ELit (LString "..")) (EVar "acc")))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "lexicalStep" ((PVar "abs") (PVar "acc") (PVar "c")) (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString ""))) (EBinOp "==" (EVar "c") (ELit (LString ".")))) (EVar "acc") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EMethodRef "abs")) (EApp (EVar "isEmptyList") (EVar "acc"))) (EVar "acc") (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "isEmptyList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
+(DFunDef false "isEmptyList" ((PList)) (EVar "True"))
+(DFunDef false "isEmptyList" (PWild) (EVar "False"))
+(DTypeSig false "popsNamed" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "popsNamed" (PWild (PList)) (EVar "False"))
+(DFunDef false "popsNamed" ((PVar "named") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EBinOp "||" (EVar "named") (EApp (EApp (EVar "popsNamed") (EVar "named")) (EVar "cs"))) (EApp (EApp (EVar "popsNamed") (EVar "True")) (EVar "cs"))))
 (DTypeSig false "pathSub" (TyFun (TyCon "PathKey") (TyFun (TyCon "PathKey") (TyCon "Bool"))))
 (DFunDef false "pathSub" (PWild (PCon "KAll")) (EVar "True"))
 (DFunDef false "pathSub" ((PCon "KAll") PWild) (EVar "False"))
+(DFunDef false "pathSub" ((PCon "KPopped" (PVar "a")) (PCon "KPopped" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "pathSub" ((PCon "KPopped" PWild) PWild) (EVar "False"))
+(DFunDef false "pathSub" (PWild (PCon "KPopped" PWild)) (EVar "False"))
 (DFunDef false "pathSub" ((PCon "KExact" (PVar "a") (PVar "xs")) (PCon "KExact" (PVar "b") (PVar "ys"))) (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "b")) (EBinOp "==" (EVar "xs") (EVar "ys"))))
 (DFunDef false "pathSub" ((PCon "KExact" (PVar "a") (PVar "xs")) (PCon "KPattern" (PVar "b") (PVar "dir") (PVar "stem"))) (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "b")) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EVar "xs") (EVar "dir")) (EBinOp "==" (EVar "stem") (ELit (LString "")))) (EApp (EApp (EApp (EVar "underDir") (EVar "dir")) (EVar "stem")) (EVar "xs")))))
 (DFunDef false "pathSub" ((PCon "KPattern" PWild PWild PWild) (PCon "KExact" PWild PWild)) (EVar "False"))
@@ -1306,7 +1461,7 @@ retagParam _ p = p
 (DFunDef false "isPathParam" ((PCon "PPath" PWild)) (EVar "True"))
 (DFunDef false "isPathParam" (PWild) (EVar "False"))
 (DTypeSig false "maximalPaths" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "maximalPaths" ((PVar "ps")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EVar "keepMaximalPath") (EVar "p")) (EVar "acc")))) (EListLit)) (EVar "ps")))
+(DFunDef false "maximalPaths" ((PVar "ps")) (EIf (EApp (EApp (EVar "allList") (EVar "isPathParam")) (EVar "ps")) (EApp (EApp (EApp (EApp (EVar "pathSweep") (EApp (EApp (EVar "sortByKey") (EVar "pathEntryOrder")) (EApp (EApp (EMethodRef "map") (EVar "pathEntry")) (EVar "ps")))) (EListLit)) (EVar "None")) (EListLit)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EVar "keepMaximalPath") (EVar "p")) (EVar "acc")))) (EListLit)) (EVar "ps"))))
 (DTypeSig false "keepMaximalPath" (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param")))))
 (DFunDef false "keepMaximalPath" ((PVar "p") (PVar "acc")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "q")) (EApp (EApp (EVar "pathCovers") (EVar "q")) (EVar "p")))) (EVar "acc")) (EVar "acc") (EBinOp "::" (EVar "p") (EApp (EApp (EVar "filterList") (ELam ((PVar "q")) (EApp (EVar "not") (EApp (EApp (EVar "pathCovers") (EVar "p")) (EVar "q"))))) (EVar "acc")))))
 (DTypeSig false "pathCovers" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Bool"))))
@@ -1315,6 +1470,33 @@ retagParam _ p = p
 (DFunDef false "paramSpelling" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EVar "s"))
 (DFunDef false "paramSpelling" ((PCon "PPath" (PCon "Some" (PVar "s")))) (EApp (EVar "pathSpelling") (EVar "s")))
 (DFunDef false "paramSpelling" (PWild) (ELit (LString "")))
+(DData Private "PathEntry" () ((variant "PathEntry" (ConPos (TyCon "String") (TyCon "Bool") (TyCon "PathKey") (TyCon "String") (TyCon "Param")))) ())
+(DTypeSig false "pathEntry" (TyFun (TyCon "Param") (TyCon "PathEntry")))
+(DFunDef false "pathEntry" ((PAs "p" (PCon "PPath" (PCon "Some" (PVar "s"))))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "pathKey") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "PathEntry") (EApp (EVar "pathKeyText") (EVar "k"))) (EApp (EVar "keyCoversOthers") (EVar "k"))) (EVar "k")) (EApp (EVar "pathSpelling") (EVar "s"))) (EVar "p")))))
+(DFunDef false "pathEntry" ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "PathEntry") (ELit (LString ""))) (EVar "True")) (EVar "KAll")) (ELit (LString "*"))) (EVar "p")))
+(DTypeSig false "pathKeyText" (TyFun (TyCon "PathKey") (TyCon "String")))
+(DFunDef false "pathKeyText" ((PCon "KAll")) (ELit (LString "")))
+(DFunDef false "pathKeyText" ((PCon "KExact" (PVar "abs") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "rootTag") (EMethodRef "abs")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "componentsText") (EVar "xs")))) (ELit (LString "/"))))
+(DFunDef false "pathKeyText" ((PCon "KPattern" (PVar "abs") (PVar "dir") (PVar "stem"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "rootTag") (EMethodRef "abs")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "componentsText") (EVar "dir")))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "stem"))) (ELit (LString ""))))
+(DFunDef false "pathKeyText" ((PCon "KPopped" (PVar "t"))) (EBinOp "++" (ELit (LString "x")) (EVar "t")))
+(DTypeSig false "rootTag" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "rootTag" ((PVar "abs")) (EIf (EMethodRef "abs") (ELit (LString "a")) (ELit (LString "r"))))
+(DTypeSig false "componentsText" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "componentsText" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "/")) (EVar "_s")))) (EVar "xs"))))
+(DTypeSig false "keyCoversOthers" (TyFun (TyCon "PathKey") (TyCon "Bool")))
+(DFunDef false "keyCoversOthers" ((PCon "KAll")) (EVar "True"))
+(DFunDef false "keyCoversOthers" ((PCon "KPattern" PWild PWild PWild)) (EVar "True"))
+(DFunDef false "keyCoversOthers" (PWild) (EVar "False"))
+(DTypeSig false "pathEntryOrder" (TyFun (TyCon "PathEntry") (TyFun (TyCon "PathEntry") (TyCon "Bool"))))
+(DFunDef false "pathEntryOrder" ((PCon "PathEntry" (PVar "a") (PVar "ca") PWild (PVar "sa") PWild) (PCon "PathEntry" (PVar "b") (PVar "cb") PWild (PVar "sb") PWild)) (EMatch (EApp (EApp (EVar "stringCompare") (EVar "a")) (EVar "b")) (arm (PCon "Lt") () (EVar "True")) (arm (PCon "Gt") () (EVar "False")) (arm (PCon "Eq") () (EIf (EBinOp "==" (EVar "ca") (EVar "cb")) (EBinOp "/=" (EApp (EApp (EVar "stringCompare") (EVar "sa")) (EVar "sb")) (EVar "Gt")) (EVar "ca")))))
+(DTypeSig false "pathSweep" (TyFun (TyApp (TyCon "List") (TyCon "PathEntry")) (TyFun (TyApp (TyCon "List") (TyCon "PathEntry")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param")))))))
+(DFunDef false "pathSweep" ((PList) PWild PWild (PVar "kept")) (EVar "kept"))
+(DFunDef false "pathSweep" ((PCons (PAs "e" (PCon "PathEntry" (PVar "t") (PVar "covers") PWild (PVar "sp") (PVar "p"))) (PVar "rest")) (PVar "open") (PVar "last") (PVar "kept")) (EBlock (DoLet false false (PVar "still") (EApp (EApp (EVar "dropOpenNotPrefix") (EVar "t")) (EVar "open"))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EVar "anyList") (EApp (EVar "entryCovers") (EVar "e"))) (EVar "still")) (EBinOp "==" (EVar "last") (EApp (EVar "Some") (ETuple (EVar "t") (EVar "sp"))))) (EApp (EApp (EApp (EApp (EVar "pathSweep") (EVar "rest")) (EVar "still")) (EVar "last")) (EVar "kept")) (EIf (EVar "covers") (EApp (EApp (EApp (EApp (EVar "pathSweep") (EVar "rest")) (EBinOp "::" (EVar "e") (EVar "still"))) (EVar "last")) (EBinOp "::" (EVar "p") (EVar "kept"))) (EApp (EApp (EApp (EApp (EVar "pathSweep") (EVar "rest")) (EVar "still")) (EApp (EVar "Some") (ETuple (EVar "t") (EVar "sp")))) (EBinOp "::" (EVar "p") (EVar "kept"))))))))
+(DTypeSig false "dropOpenNotPrefix" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PathEntry")) (TyApp (TyCon "List") (TyCon "PathEntry")))))
+(DFunDef false "dropOpenNotPrefix" (PWild (PList)) (EListLit))
+(DFunDef false "dropOpenNotPrefix" ((PVar "t") (PCons (PAs "o" (PCon "PathEntry" (PVar "ot") PWild PWild PWild PWild)) (PVar "os"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "ot")) (EVar "t")) (EBinOp "::" (EVar "o") (EVar "os")) (EApp (EApp (EVar "dropOpenNotPrefix") (EVar "t")) (EVar "os"))))
+(DTypeSig false "entryCovers" (TyFun (TyCon "PathEntry") (TyFun (TyCon "PathEntry") (TyCon "Bool"))))
+(DFunDef false "entryCovers" ((PCon "PathEntry" PWild PWild (PVar "k") (PVar "sp") PWild) (PCon "PathEntry" PWild PWild (PVar "qk") (PVar "qsp") PWild)) (EBinOp "&&" (EApp (EApp (EVar "pathSub") (EVar "k")) (EVar "qk")) (EBinOp "||" (EBinOp "==" (EVar "sp") (EVar "qsp")) (EApp (EVar "not") (EApp (EApp (EVar "pathSub") (EVar "qk")) (EVar "k"))))))
 (DTypeSig true "pathClimbs" (TyFun (TyCon "Param") (TyCon "Bool")))
 (DFunDef false "pathClimbs" ((PCon "PPath" (PCon "Some" (PVar "s")))) (EMatch (EApp (EVar "pathKey") (EVar "s")) (arm (PCon "KExact" (PCon "False") (PCons (PLit (LString "..")) PWild)) () (EVar "True")) (arm (PCon "KPattern" (PCon "False") (PCons (PLit (LString "..")) PWild) PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DFunDef false "pathClimbs" (PWild) (EVar "False"))

@@ -1,6 +1,6 @@
--- #3636: a `..` after a written directory climbs back out of it. The runtime
--- confines by canonical path, so `"data/../" ++ leaf` is the working
--- directory's pattern, not one under `data/`, and the bound refuses it.
+-- #3636: a `..` after a written directory pops it, and a symlink can make that
+-- any directory, so `"data/../" ++ leaf` lies under no bound but its own
+-- spelling and the whole domain, and a `data/*` bound refuses it.
 said : Result String a -> String
 said (Ok _) = "Ok"
 said (Err e) = "Err \{e}"
