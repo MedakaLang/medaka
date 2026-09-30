@@ -315,14 +315,21 @@ checkXffTokens count =
    amplifier and the shared request allowance of 3000 would authorize 3000
    amplifications per window.
 
-   Sixty is reachable inside one window, without which no refusal is observable
-   — the count resets mid-flood and nothing witnesses it — and a loopback round
-   trip to the egress proxy is milliseconds, so reaching it costs no real wall
-   time. It is also the allowance a signed write gets, which is the right
-   company: both spend work a plain read does not. -}
+   The number is sized against the official app, which is the client this
+   server must serve. Its direct-message screen polls several
+   `chat.bsky.convo.*` methods at once and was measured at 64 proxied calls in
+   one minute from one client, so an allowance below that refuses ordinary use.
+   Three hundred is about five times that peak.
+
+   Only an authenticated caller spends it: `classifyProxy` refuses a request
+   without a good credential before any forward is admitted, and the charge is
+   taken after admission (`forwardProxied`, `pds/shell/server.mdk`). Each
+   admitted call also signs a service token, so a full window costs the
+   account's own token a few tens of seconds of signing work, and no anonymous
+   caller can spend any of it. -}
 export
 maxProxiedCallsPerWindow : Int
-maxProxiedCallsPerWindow = 60
+maxProxiedCallsPerWindow = 300
 
 {- | Compatibility names for the shared HTTP response ceilings. A response
    from an off-box appview is untrusted input; `stdlib/http.mdk` enforces these

@@ -1656,6 +1656,18 @@ wait_for_window_room() {
   done
 }
 
+# For a flood too long to be sure of finishing in the forty seconds
+# `wait_for_window_room` leaves: wait for the first seconds of a window. A flood
+# that crosses into the next window has part of its count carried at a
+# truncated share (`slidingUsed`), so its last call can be admitted.
+wait_for_window_start() {
+  i=0
+  while [ "$(($(date +%s) % 60))" -gt 2 ] && [ "$i" -lt 700 ]; do
+    i=$((i + 1))
+    sleep 0.1
+  done
+}
+
 wait_for_window_room
 
 # 22. createSession class: login itself is rate-limited, independent of
@@ -2338,10 +2350,12 @@ client cors-get SERVICEAUTHREFUSEDCORS "$PORTPX" '' \
 #    connection-per-request flood would observe that one instead), followed by a
 #    plain read from the SAME identity and a proxied read from a SECOND one —
 #    the class has to be independent and per-identity, not merely a lower global
-#    number.
-wait_for_window_room
+#    number. The count is `maxProxiedCallsPerWindow` (`pds/lib/resource_limits.mdk`)
+#    plus one. Every admitted call signs a service token, so the flood takes tens
+#    of seconds and starts at the top of a window.
+wait_for_window_start
 client rl-proxy "$PORTPX" 203.0.113.61 "$PXACCESS" "$APPVIEW_DID" \
-  "$TIMELINE" 61 429 \
+  "$TIMELINE" 301 429 \
   || fail 'case 47: the proxied-read class did not refuse at its ceiling'
 client rl-req "$PORTPX" 203.0.113.61 1 200 \
   || fail 'case 47: a plain read was refused by the proxied-read ceiling'
