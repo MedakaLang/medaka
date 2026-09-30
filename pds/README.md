@@ -453,8 +453,10 @@ by a server that starts and still serves every undamaged blob.
 its caller's identity exceeds one of six independent per-window allowances
 (`pds/lib/resource_limits.mdk`: `maxConnectionsPerWindow`,
 `maxRequestsPerWindow`, `maxWritesPerWindow`, `maxCreateSessionPerWindow`,
-`maxRepoExportsPerWindow`, `maxProxiedCallsPerWindow`, all placeholders
-pending real traffic data, refilled every `rateLimitWindowSeconds`), and
+`maxRepoExportsPerWindow`, `maxProxiedCallsPerWindow`, refilled every
+`rateLimitWindowSeconds`; all placeholders pending real traffic data except
+`maxProxiedCallsPerWindow`, which is sized from the official app's measured
+traffic), and
 refuses a `com.atproto.identity.updateHandle` call that authenticated and
 passed handle syntax once its account's DID has made 10 such calls in 5
 minutes or 50 in a day, as the reference does (`stepHandleUpdate`). Every
