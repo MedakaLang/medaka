@@ -751,10 +751,23 @@ long long mdk_float_to_string(double d) {
  * once via this raw write(2)). The buffer is plain malloc/realloc, NOT
  * GC_malloc/mdk_alloc — it holds no pointers, needs no scanning, and must
  * survive independent of the GC heap.
+ *
+ * The buffer holds only the bytes written since stdout was last flushed, so it
+ * stays bounded in a program that runs indefinitely. mdk_flushstdout empties
+ * it after its fflush, since those bytes have left libc and replaying them
+ * would print them twice. A program that never flushes is flushed here once
+ * the buffer passes MDK_BUILD_STDOUT_TRACK_MAX, which bounds its memory too;
+ * that program's replay can still repeat up to that many bytes libc wrote on
+ * its own when its buffer filled.
  * ------------------------------------------------------------------------- */
+#define MDK_BUILD_STDOUT_TRACK_MAX (1LL << 20)
 static char *mdk_build_stdout_buf = NULL;
 static long long mdk_build_stdout_len = 0;
 static long long mdk_build_stdout_cap = 0;
+
+/* Everything written so far has been handed to write(2) by fflush, so none of
+   it is left for the fatal-signal path to replay. */
+static void mdk_build_stdout_flushed(void) { mdk_build_stdout_len = 0; }
 
 /* Set once by `medaka run`'s driver (mdk_enable_run_stdout_flush, below).  In
    that mode the only stdout bytes this process writes during the program are
@@ -765,6 +778,11 @@ static volatile int mdk_run_stdout_flush_enabled = 0;
 
 static void mdk_build_stdout_track(const char *bytes, long long n) {
   if (n <= 0 || mdk_run_stdout_flush_enabled) return;
+  if (mdk_build_stdout_len > 0
+      && mdk_build_stdout_len + n > MDK_BUILD_STDOUT_TRACK_MAX) {
+    fflush(stdout);
+    mdk_build_stdout_flushed();
+  }
   if (mdk_build_stdout_len + n > mdk_build_stdout_cap) {
     long long newcap = mdk_build_stdout_cap == 0 ? 4096 : mdk_build_stdout_cap;
     while (newcap < mdk_build_stdout_len + n) newcap *= 2;
@@ -825,7 +843,11 @@ void mdk_putstr(long long w)    { mdk_fwrite_str(w, stdout, 0); }
 void mdk_putstrln(long long w)  { mdk_fwrite_str(w, stdout, 1); }
 void mdk_eputstr(long long w)   { mdk_fwrite_str(w, stderr, 0); }
 void mdk_eputstrln(long long w) { mdk_fwrite_str(w, stderr, 1); }
-void mdk_flushstdout(long long w) { (void)w; fflush(stdout); }
+void mdk_flushstdout(long long w) {
+  (void)w;
+  fflush(stdout);
+  mdk_build_stdout_flushed();
+}
 void mdk_print_unit(void)       { printf("()\n"); }
 
 /* ---------------------------------------------------------------------------
