@@ -1,0 +1,16 @@
+helper _ = writeFile "cfg/link/composed.txt" "x"
+
+produce _ = Some helper
+
+accept : Option (Unit -> <FileWrite "cfg/*"> Result String Unit) ->
+  Option (Unit -> <FileWrite "cfg/*"> Result String Unit)
+accept x = x
+
+composed = produce >> accept
+
+wide : Option (Unit -> <FileWrite> Result String Unit)
+wide = composed ()
+
+main = match wide
+  Some f => println (f ())
+  None => println "none"

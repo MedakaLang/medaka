@@ -315,12 +315,24 @@ directory as the bare label. Every other `Prefix` label keeps the textual order
 above, the built-in ones without path confinement (`Net`, `Exec`, `FFI`) and
 every user label (`effect Store Prefix`): there `..` is two characters.
 
-The runtime confines each call against that call's own grant, the element the
-checker derived at the call site, not against the declared bound. It therefore
-confines only the parts of a path that arrive at run time: a symlink under a
-component the program spells (`"data/link/" ++ name`, with `data/link` pointing
-elsewhere) is followed, and the bound is not re-checked
-([#3645](https://github.com/MedakaLang/medaka/issues/3645)).
+The runtime confines each call against its own grant, the element the checker
+derived at the call site, and every enclosing closed declared file row. These
+are separate checks: both the call's grant and each declared bound must admit
+the physical target. Thus `"data/link/" ++ name` under `<FileWrite "data/*">`
+cannot follow a symlink from `data/link` to a directory outside `data`, even
+though the call's own grant is `"data/link/*"`. A bound remains active through
+helpers and callbacks; a function value checked against a bounded arrow retains
+that bound when it is applied later. A row with an open tail does not impose a
+closed file bound, since the tail can admit additional authority.
+
+A function already stored inside a container cannot acquire a different narrowed
+file bound through covariance. For example, changing
+`Option (Unit -> <FileWrite "data/link/*"> Result String Unit)` into
+`Option (Unit -> <FileWrite "data/*"> Result String Unit)` is rejected with
+`T-FILE-BOUND-VALUE`: no wrapper can be installed around the packed function by
+changing its container's type. Annotate the function with the required bound
+before packing it. Equal file authorities, pure functions, and widening an
+already bounded function to a whole-domain row remain allowed.
 
 **Patterns.** Extending a value by an unknown suffix is the closure
 `π = extend` on the domain: `π(⊤) = ⊤`, `π(s*) = s*`, and `π(e) = e*` for an
@@ -1404,8 +1416,9 @@ it can exercise at `L` is `⊑ M(L)`. In particular a parameterized bound confin
 α ⊤-fallback guarantees runtime-chosen targets cannot escape the bound. This is the
 theorem the whole apparatus exists to deliver. For the file labels the native
 runtime and `medaka run` extend it from strings to files: each refuses a path
-whose canonical form the granted authority does not admit (§2.3), so a
-runtime-chosen suffix cannot walk out of `"cfg/*"` through `..` or a symlink
+whose canonical form its call grant or an enclosing declared bound does not
+admit (§2.3), so a named component or a runtime-chosen suffix cannot walk out
+of `"cfg/*"` through `..` or a symlink
 that is in place when the path is checked. Four edges bound that claim:
 
 - **Check, then use.** The runtime resolves the path string once to check it
@@ -1421,7 +1434,8 @@ that is in place when the path is checked. Four edges bound that claim:
   forwards (`io.readLines`, `fs.isFile`) is not written there, and holds only
   what its callers write, so a wrapper builds under a whole-domain caller. A
   narrower grant (`"cfg/*"`) is a compile-time error at the call that writes
-  it, in the program's own code.
+  it, in the program's own code. A closed declared file bound that needs a
+  physical check is refused as well, even when the call's own grant is exact.
 - **Sourceless authorities.** An authority opened from an existential, and an
   instance head's index inside a method body, have no caller to supply them
   and are granted the whole domain. The escape check holds the declaration
@@ -1437,8 +1451,8 @@ that is in place when the path is checked. Four edges bound that claim:
 Effect rows and authority qualifiers are checked before erasure. They do not
 select dictionaries or change the representation of an ordinary data value.
 File confinement retains a projection of the checked authority as hidden grant
-arguments, however, so complete erasure of every authority fact is not the
-runtime contract. The two parts are:
+arguments and scoped declared bounds, so complete erasure of every authority
+fact is not the runtime contract. The contract has three parts:
 
 - **Single-meaning law for admitted operations.** Effect annotations do not
   change instance selection or the value computed by an operation admitted
@@ -1454,13 +1468,13 @@ runtime contract. The two parts are:
 - **The grant.** The authority the type checker grants a parameterized file extern
   at a call reaches the runtime as a hidden argument, for confinement only (§2.3).
   It can refuse the call, and cannot otherwise change a value a program computes.
-  The runtime confines the call's path against that grant, which is the element
-  the checker derived at the call (its α), and never re-checks the declared
-  bound. The checker orders the path labels' elements lexically (§2.3), and a
-  `..` that pops a named component is never within a narrower bound, because a
-  symlink can make it mean anything. A symlink under a component the program
-  spells is still followed at run time, wherever it leads
-  ([#3645](https://github.com/MedakaLang/medaka/issues/3645)).
+  The runtime checks the call's path against that grant (its α) and against
+  every active closed declared row for the operation's file label. Declared
+  bounds apply during the body's execution, including helper calls, and checked
+  function values retain their arrow bounds for later application. The checker
+  orders path elements lexically (§2.3); the runtime checks their physical
+  interpretation. Both checks are necessary because a symlink can change the
+  relation between a call's grant and a declared bound.
 
 A corollary worth stating because it is easy to violate: a primitive's effect must
 be a faithful upper bound of what it *actually does* at runtime. Static checking

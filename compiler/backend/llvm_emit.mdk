@@ -7056,7 +7056,27 @@ emitApp e env app =
   let (hd, args) = flattenApp app []
   match hd
     CVar fname _ =>
-      if fname == "Ref" then
+      if fname == "$withFileReadBound"
+        || fname == "$withFileWriteBound" then match emitArgs e env args
+        [grant, thunk] =>
+          let r = freshReg e
+          let mode = if fname == "$withFileWriteBound" then "1" else "0"
+          let _ =
+            emit
+              e
+              "  \{r} = call i64 @mdk_with_file_bound(i64 \{mode}, i64 \{grant}, i64 \{thunk})"
+          let resultTy = match args
+            [_, CLam _ body] =>
+              typeOf
+                (sigMapOf e)
+                (map
+                  (n => (n, snd (optionOr ("", LTInt) (omLookup n env))))
+                  (omKeys env))
+                body
+            _ => LTInt
+          (r, resultTy)
+        _ => panic "llvm: file bound takes a grant and a thunk"
+      else if fname == "Ref" then
         emitRefAlloc e env args
       else if fname == "setRef" then
         emitSetRef e env args
@@ -13789,7 +13809,15 @@ typeOf sigs env (CDecision _ arms _) = armsRetTy sigs env arms
 typeOf sigs env app =
   let (hd, args) = flattenApp app []
   match hd
-    CVar fname _ => if hasArgs args then callRetTy sigs fname else LTInt
+    CVar fname _ =>
+      if fname == "$withFileReadBound"
+        || fname == "$withFileWriteBound" then match args
+        [_, CLam _ body] => typeOf sigs env body
+        _ => LTInt
+      else if hasArgs args then
+        callRetTy sigs fname
+      else
+        LTInt
     CDict fname _ => callRetTy sigs fname
     CMethod fname _ _ _ _ _ => callRetTy sigs fname
     _ => LTInt

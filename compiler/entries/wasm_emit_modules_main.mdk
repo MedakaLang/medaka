@@ -42,6 +42,7 @@ import frontend.ast.{
   Loc,
   MethodDefault(..),
   Pat(..),
+  Variant(..),
 }
 import frontend.desugar.{mapChildren}
 import types.typecheck.{
@@ -113,8 +114,8 @@ emitTail : List (String, String, List Decl) ->
   <IO> Unit
 emitTail mods runtimeDecls coreD modules2 =
   let allDecls0 = coreD ++ flatMap snd modules2
-  let allDecls = dceFilter allDecls0
-  let _ = refuseNarrowFileGrants mods allDecls modules2
+  let kept = dceFilter allDecls0
+  let allDecls = refuseNarrowFileGrants mods runtimeDecls kept modules2
   let _ =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
@@ -173,16 +174,18 @@ programUnitCount (CProgram groups _ _ impls) = listLen groups + listLen impls
 -- at all: a `Handle` constructor's authority, or a user effect's.
 refuseNarrowFileGrants : List (String, String, List Decl) ->
   List Decl ->
+  List Decl ->
   List (String, List Decl) ->
-  <IO> Unit
-refuseNarrowFileGrants mods kept modules =
+  <IO> List Decl
+refuseNarrowFileGrants mods runtimeDecls kept modules =
   let live = omFromNames (keptFunNames kept []) omEmpty
-  let reach = fileReach kept
+  let reach = fileReach (runtimeDecls ++ kept)
   match flatMap (m => moduleGrantDiags reach live m) modules
-    [] => ()
+    [] => map (mapDeclBodies (scanGrantSites reach (Ref []) None)) kept
     diags =>
       let _ = map ePutStrLn (renderTcDiags (map modIdToPath mods) diags)
-      exit emitDiagExitCode
+      let _ = exit emitDiagExitCode
+      []
 
 keptFunNames : List Decl -> List String -> List String
 keptFunNames [] acc = acc
@@ -231,6 +234,45 @@ scanGrantSites reach sites _ (ELoc l e) =
   ELoc l (scanGrantSites reach sites (Some l) e)
 scanGrantSites reach sites around (e@(EApp _ _)) =
   let (head, args) = appSpine e []
+  match (headName head, args)
+    (Some name, [bound, ELam [PWild] body]) =>
+      if name == "$withFileReadBound" || name == "$withFileWriteBound" then
+        if bodyMayReachFile reach (name == "$withFileWriteBound") body then
+          let _ = match grantElems bound
+            Some es =>
+              if not (wasmGrantConfined None es) then
+                sites :=
+                  (orElse (leftLoc body) around, calleeName head, es)
+                    :: sites.value
+            None => ()
+          EApp
+            (EApp head bound)
+            (ELam [PWild] (scanGrantSites reach sites around body))
+        else
+          scanGrantSites reach sites around body
+      else
+        scanOrdinaryGrantSites reach sites around e head args
+    _ => scanOrdinaryGrantSites reach sites around e head args
+
+-- A partial use is saturated under `let`s binding the arguments it was given, so
+-- the call inside reads as fresh names: locate it at the first bound argument.
+scanGrantSites reach sites around (e@(ELet _ _ _ rhs body)) =
+  let rhs2 = scanGrantSites reach sites around rhs
+  let body2 = scanGrantSites reach sites (orElse (leftLoc rhs) around) body
+  match e
+    ELet recursive mutable pat _ _ => ELet recursive mutable pat rhs2 body2
+    _ => e
+scanGrantSites reach sites around e =
+  mapChildren (scanGrantSites reach sites around) e
+
+scanOrdinaryGrantSites : Reach ->
+  Ref (List (Option Loc, String, List String)) ->
+  Option Loc ->
+  Expr ->
+  Expr ->
+  List Expr ->
+  Expr
+scanOrdinaryGrantSites reach sites around _ head args =
   let _ =
     if mayReachFile reach head then
       let path = leafPath head args
@@ -247,18 +289,9 @@ scanGrantSites reach sites around (e@(EApp _ _)) =
         args
     else
       []
-  let _ = scanGrantSites reach sites around head
-  let _ = map (scanGrantSites reach sites around) args
-  e
--- A partial use is saturated under `let`s binding the arguments it was given, so
--- the call inside reads as fresh names: locate it at the first bound argument.
-scanGrantSites reach sites around (e@(ELet _ _ _ rhs body)) =
-  let _ = scanGrantSites reach sites around rhs
-  let _ = scanGrantSites reach sites (orElse (leftLoc rhs) around) body
-  e
-scanGrantSites reach sites around e =
-  mapChildren (scanGrantSites reach sites around) e
-
+  let f = scanGrantSites reach sites around head
+  let xs = map (scanGrantSites reach sites around) args
+  fold EApp f xs
 -- ── which callees can reach a file extern ────────────────────────────────────
 -- The bindings the program defines (top-level, local, and interface methods by
 -- name, every impl and default of a method counted together) and those among
@@ -267,14 +300,39 @@ scanGrantSites reach sites around e =
 -- (`unmangled`), so two bindings sharing a spelling, or a method and the
 -- standalone binding its name shadows, count as one: that over-approximates
 -- what can reach a file, which only ever checks more.
-data Reach = Reach (OrdMap Unit) (OrdMap Unit)
+data Reach = Reach (OrdMap Unit) (OrdMap Unit) (OrdMap Unit)
 
 -- A written grant needs checking at a file extern, at a binding that can reach
 -- one, and at any head this analysis does not know.
 mayReachFile : Reach -> Expr -> Bool
-mayReachFile (Reach defined reaching) head = match headName head
-  Some n => omHasKey n reaching || not (omHasKey n defined)
+mayReachFile (Reach defined reads writes) head = match headName head
+  Some n => omHasKey n reads || omHasKey n writes || not (omHasKey n defined)
   None => True
+
+-- A declared bound constrains only operations of its own label. A pure
+-- body, or a body using only the other label, needs no host confinement.
+bodyMayReachFile : Reach -> Bool -> Expr -> Bool
+bodyMayReachFile reach write e =
+  let found = Ref False
+  let _ =
+    mapChildren
+      (child =>
+        let _ = if bodyMayReachFile reach write child then found := True
+        child)
+      e
+  found.value
+    || (match e
+      EApp _ _ =>
+        let (head, _) = appSpine e []
+        match (reach, headName head)
+          (Reach defined reads writes, Some n) =>
+            if n == "$withFileReadBound" || n == "$withFileWriteBound" then
+              False
+            else
+              omHasKey n (if write then writes else reads)
+                || not (omHasKey n defined)
+          _ => True
+      _ => False)
 
 headName : Expr -> Option String
 headName (EVar n) = Some (unmangled n)
@@ -289,9 +347,12 @@ fileReach decls =
   let users = Ref omEmpty
   let defined = Ref omEmpty
   let _ = map (d => declBindings users defined d) decls
-  let seeds = map fst wasmFileGrantExterns
-  let reaching = spread users.value seeds (omFromNames seeds omEmpty)
-  Reach defined.value reaching
+  let reads = ["readFile", "fileExists", "canonicalizePath", "readFileBytes"]
+  let writes = ["writeFileBytes"]
+  Reach
+    (omFromNames (map fst wasmFileGrantExterns) defined.value)
+    (spread users.value reads (omFromNames reads omEmpty))
+    (spread users.value writes (omFromNames writes omEmpty))
 
 -- Breadth-first over "is referenced by": every binding whose body names a
 -- reaching one reaches too.
@@ -324,6 +385,18 @@ declBindings users defined (DInterface { methods, ... }) =
         IfaceMethod _ _ None _ => ())
       methods
   ()
+declBindings _ defined (DExtern _ n _) =
+  defined := omInsert (unmangled n) () defined.value
+declBindings _ defined (DData { dataCtors, ... }) =
+  defined :=
+    omFromNames
+      (map
+        (v => match v
+          Variant n _ => unmangled n)
+        dataCtors)
+      defined.value
+declBindings _ defined (DNewtype { newtypeCtor, ... }) =
+  defined := omInsert (unmangled newtypeCtor) () defined.value
 declBindings users defined (DAttrib _ d) = declBindings users defined d
 declBindings _ _ _ = ()
 
@@ -418,6 +491,8 @@ pathLit _ = None
 -- The callee as the program spells it, without the module prefix mangling adds
 -- or the `$` suffix a renamed local carries.
 calleeName : Expr -> String
+calleeName (EVar "$withFileReadBound") = "declared FileRead bound"
+calleeName (EVar "$withFileWriteBound") = "declared FileWrite bound"
 calleeName (EVar n) = unmangled n
 calleeName (EDictAt n _) = unmangled n
 calleeName (EMethodAt n _ _) = unmangled n
@@ -435,6 +510,16 @@ unmangled n =
 -- The leftmost location inside an expression, which is where its source text starts.
 leftLoc : Expr -> Option Loc
 leftLoc (ELoc l _) = Some l
-leftLoc (EApp f _) = leftLoc f
-leftLoc (EBinOp _ a _ _) = leftLoc a
-leftLoc _ = None
+leftLoc (EApp f x) = orElse (leftLoc f) (leftLoc x)
+leftLoc (EBinOp _ a b _) = orElse (leftLoc a) (leftLoc b)
+leftLoc e =
+  let found = Ref None
+  let _ =
+    mapChildren
+      (child =>
+        let _ = match found.value
+          None => found := leftLoc child
+          Some _ => ()
+        child)
+      e
+  found.value

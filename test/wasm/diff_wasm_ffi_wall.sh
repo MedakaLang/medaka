@@ -114,7 +114,8 @@ check_grant() {
       echo "$out" | sed 's/^/  /'
       fail=1
     fi
-  elif [ "$st" -ne 0 ] && printf '%s' "$out" | grep -qF "$want"; then
+  elif [ "$st" -ne 0 ] && printf '%s' "$out" | grep -qF "$want" &&
+       printf '%s' "$out" | grep -qE "$name\\.mdk:[0-9]+:[0-9]+:"; then
     echo "ok   $name"
   else
     echo "FAIL $name: expected exit != 0 and a message containing:"
@@ -170,8 +171,50 @@ readAny p = readFile p
 main = println (readAny "data.txt")' \
   ""
 
+# An exact call grant cannot discharge a declared directory bound: its path
+# can name a symlink whose physical target is outside that directory.
+check_grant "file_declared_bound_exact_call_refused" \
+'readCfg : Unit -> <FileRead "cfg/*"> Result String String
+readCfg _ = readFile "cfg/link/a.txt"
+
+main = println (readCfg ())' \
+  '`declared FileRead bound` is given the file grant ["cfg/*"]'
+
+check_grant "file_declared_bound_alias_refused" \
+'helper _ = readFile "cfg/link/a.txt"
+
+readCfg : Unit -> <FileRead "cfg/*"> Result String String
+readCfg = helper
+
+main = println (readCfg ())' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_declared_bound_pure_built" \
+'quiet : Unit -> <FileRead "cfg/*"> Option Int
+quiet _ = Some 7
+
+main = println (quiet ())' \
+  ""
+
+check_grant "file_declared_read_bound_write_only_built" \
+'writeOnly : Unit -> <FileRead "cfg/*", FileWrite> Result String Unit
+writeOnly _ = writeFileBytes "data.txt" (arrayFromList [120])
+
+main = println (writeOnly ())' \
+  ""
+
+check_grant "file_declared_bound_newtype_built" \
+'newtype Wrapper = Wrapper Int
+
+quiet : Unit -> <FileRead "cfg/*"> Wrapper
+quiet _ = Wrapper 7
+
+main = match quiet ()
+  Wrapper n => println n' \
+  ""
+
 if [ "$fail" -eq 0 ]; then
-  echo "9 ok, 0 failing"
+  echo "14 ok, 0 failing"
   exit 0
 else
   echo "diff_wasm_ffi_wall: FAILURES ABOVE"

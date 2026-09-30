@@ -1,0 +1,16 @@
+helper _ = writeFile "cfg/link/nested-scope.txt" "x"
+
+accept : Option (Unit -> <FileWrite "cfg/*"> Result String Unit) ->
+  Option (Unit -> <FileWrite "cfg/*"> Result String Unit)
+accept x = x
+
+produce n =
+  let result = if n == 0 then Some helper else produce (n - 1)
+  accept result
+
+wide : Option (Unit -> <FileWrite> Result String Unit)
+wide = produce 0
+
+main = match wide
+  Some f => println (f ())
+  None => println "none"

@@ -1,0 +1,14 @@
+helper _ = writeFile "cfg/link/recursive.txt" "x"
+
+accept : Option (Unit -> <FileWrite "cfg/*"> Result String Unit) ->
+  Option (Unit -> <FileWrite "cfg/*"> Result String Unit)
+accept x = x
+
+produce n = if n == 0 then Some helper else accept (produce (n - 1))
+
+wide : Option (Unit -> <FileWrite> Result String Unit)
+wide = produce 0
+
+main = match wide
+  Some f => println (f ())
+  None => println "none"

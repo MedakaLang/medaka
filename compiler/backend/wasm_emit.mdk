@@ -2224,6 +2224,15 @@ confinedGrantW prog name p (CList (elems@(_ :: _))) = match stringLitsW elems []
   None => []
 confinedGrantW _ _ _ _ = []
 
+confinedFileBoundW : Prog -> String -> CExpr -> List String
+confinedFileBoundW prog name bound =
+  let label =
+    if name == "$withFileReadBound" then
+      "declared FileRead bound"
+    else
+      "declared FileWrite bound"
+  confinedGrantW prog label (CVar "$fileBoundPath" AGlobal) bound
+
 stringLitsW : List CExpr -> List String -> Option (List String)
 stringLitsW [] acc = Some (reverseL acc)
 stringLitsW ((CLit (LString s)) :: rest) acc = stringLitsW rest (s :: acc)
@@ -7553,7 +7562,12 @@ emitAppRef prog env d app =
       -- the desugared `__fallthrough__ ()` / `__ft__<label> ()` form: ignore the (unit)
       -- arg, lower the sentinel (br to the clause label, or trap stub).  The bare-CVar
       -- form is handled by emitVarRef; this catches the applied form guard chains make.
-      if isFtSentinel f0 then
+      if f0 == "$withFileReadBound"
+        || f0 == "$withFileWriteBound" then match args
+        [bound, CLam [PWild] body] =>
+          confinedFileBoundW prog f0 bound ++ emitRefExpr prog env d body
+        _ => gapLP prog "wasm: a file bound requires a grant and a thunk"
+      else if isFtSentinel f0 then
         ftSentinelInstrs f0
       else if contains f0 env then
         -- E24 (wasm peer): a LOCALLY-BOUND name (param / let-binding) SHADOWS any same-named
@@ -9715,7 +9729,12 @@ emitAppTail prog env arity app =
       let f = canonFn prog f0
       -- tail-position `__fallthrough__ ()` / `__ft__<label> ()`: lower the sentinel
       -- (a `br`, NOT a `return` — control leaves the clause, not the function).
-      if isFtSentinel f0 then
+      if f0 == "$withFileReadBound"
+        || f0 == "$withFileWriteBound" then match args
+        [bound, CLam [PWild] body] =>
+          confinedFileBoundW prog f0 bound ++ emitRefTail prog env arity body
+        _ => gapLP prog "wasm: a file bound requires a grant and a thunk"
+      else if isFtSentinel f0 then
         ftSentinelInstrs f0
       else if contains f0 env then
         -- E24 (wasm peer): a LOCALLY-BOUND name shadows any same-named ctor / known top-level

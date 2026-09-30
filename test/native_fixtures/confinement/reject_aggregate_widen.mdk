@@ -1,0 +1,11 @@
+helper _ = writeFile "cfg/link/aggregate-widened.txt" "x"
+
+narrowBox : Unit -> Option (Unit -> <FileWrite "cfg/*"> Result String Unit)
+narrowBox _ = Some helper
+
+wideBox : Option (Unit -> <FileWrite> Result String Unit)
+wideBox = narrowBox ()
+
+main = match wideBox
+  Some f => println (f ())
+  None => ()
