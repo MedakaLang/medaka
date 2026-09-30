@@ -148,7 +148,7 @@ realize a prefix of it — see the audit):
 | Domain | Elements | `⊑` | `⊔` | `⊓` |
 |---|---|---|---|---|
 | **`Unit`** | `()` only | trivial | `()` | `()` |
-| **`Prefix`** | a string pattern (an exact element, or one ending in `*`), or `⊤` | structural prefix-containment (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
+| **`Prefix`** | a string pattern (an exact element, or one ending in `*`), or `⊤` | structural prefix-containment, of lexically normalized paths for `FileRead`/`FileWrite` (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
 | **`Set`** | a finite set of strings, or `⊤` | `⊆` | `∪` (saturating to `⊤` past a cardinality cap) | `∩` |
 | **`Product`** | a tuple of sub-domains, e.g. `Net = Host(Prefix) × Method(Set)` | pointwise | pointwise | pointwise (⊥ if any component ⊥) |
 
@@ -272,6 +272,66 @@ for a real one. The whole domain confines nothing. `Net` has the same problem
 and not yet the answer: a host part such as `a.com/../x`, a percent-encoded
 byte, or a `.` segment is not normalized, and the socket externs, which take a
 host and a port, receive no grant. That is open.
+
+**For the path labels, the order compares normalized paths.** `FileRead` and
+`FileWrite` are the labels whose externs receive a grant and canonicalize, so
+the checker reads their elements as the runtime does, as far as it can without
+the file system. Their normal form is lexical: empty and `.` components are
+dropped, a `..` at the root of an absolute path stays at the root, and a
+relative path whose `..` climbs above the working directory keeps it as a
+leading component, which the runtime resolves the same way. A pattern `d/s*` is
+`d`'s normal form followed by the stem `s` as written, and `*` alone admits
+every path.
+
+A `..` that follows a named component is not resolved. Whether `x/..` is the
+directory holding `x` depends on the file system: when `x` is a symlink it is
+the parent of the link's target, which can be anything. So an element whose
+normal form holds a `..` after a named component (`"a/../data/x"`,
+`"data/sub/../x"`, `"data/../*"`) *pops*, and a popping element lies within
+exactly two things: itself (another spelling with the same normal form) and the
+whole domain. It is never within a narrower bound, and nothing narrower is
+within it but its own spelling. Then, for elements that do not pop:
+
+```
+p₁ ⊑ p₂   iff   p₂ = ⊤,  or  p₂ is `*`,
+             or  both are exact and their normal forms are equal,
+             or  p₂ = d/s* and p₁'s normal form is d itself (when s is empty),
+                 or lies under d with a next component that begins with s and is not `..`
+                 (for a pattern p₁ = d₁/s₁*: d₁ = d and s₁ begins with s, or d₁ lies so under d)
+```
+
+So `"data/./x"`, `"./data//x"` and `"data"` against `"data/"` are equal or
+within as expected, while `"data/../" ++ leaf`, `"a/../data/" ++ leaf` and
+`"data/sub/../x"` are not within `"data/*"`. A path whose normal form climbs
+above the working directory (`".."`, `"../x"`) is within no bound inside it, and
+a relative path is never compared with an absolute one. A `..` in a part of the
+value the abstraction cannot see (`"data/" ++ name`) is refused by the runtime,
+as before. An element keeps the spelling it was written or derived with, since a
+later suffix extends that spelling; it is rendered with every component before
+its last `/` normalized and a popping `..` kept as written (`"a/../data/*"` for
+`"./a//../data/" ++ leaf`), which a host that resolves it physically reads
+correctly, and a manifest grants an element that climbs above the working
+directory as the bare label. Every other `Prefix` label keeps the textual order
+above, the built-in ones without path confinement (`Net`, `Exec`, `FFI`) and
+every user label (`effect Store Prefix`): there `..` is two characters.
+
+The runtime confines each call against that call's own grant, the element the
+checker derived at the call site, not against the declared bound. It therefore
+confines only the parts of a path that arrive at run time: a symlink under a
+component the program spells (`"data/link/" ++ name`, with `data/link` pointing
+elsewhere) is followed, and the bound is not re-checked
+([#3645](https://github.com/MedakaLang/medaka/issues/3645)).
+
+**Patterns.** Extending a value by an unknown suffix is the closure
+`π = extend` on the domain: `π(⊤) = ⊤`, `π(s*) = s*`, and `π(e) = e*` for an
+exact element `e`, pointwise on an antichain and, in a `Product`, on the
+primary axis only. `π` is extensive, monotone and idempotent, so its fixed
+points, the **patterns**, form a `⊔`-closed sub-lattice containing `⊤` and
+the empty authority. A value within a pattern stays within it when extended
+on the right: `v ∈ γ(x)` implies `v ++ w ∈ γ(x)` for a pattern `x`, and no
+exact element has that property. In a `Set` domain every element is exact,
+so the only pattern is `⊤`. A binder may range over the patterns of a label
+(§4.1, `Authority L*` and `@L*`).
 
 ### 2.4 Sub-effecting (row order)
 
@@ -415,8 +475,8 @@ is the safe default):
 | Core form | `α` |
 |---|---|
 | string literal `"s"` | the singleton authority `s` (e.g. `Prefix` pattern from `s`) |
-| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays; an authority variable becomes its domain's top (below). In `Set`, non-literal concatenation gives `⊤` |
-| string interpolation `"s\{e}…"` | the `++`-chain rule: the leading literal `s` is the known prefix, extended to `s*` by the first interpolated expression |
+| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal, and an operand that is exactly `""` leaves the other operand's authority. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays; an authority variable becomes its domain's top, unless it ranges over patterns, when it stays (below). In `Set`, non-literal concatenation gives `⊤` |
+| string interpolation `"s\{e}…"` | the `++`-chain rule, with each part `\{e}` read like `e` written directly (the prelude's `display` is the identity at `String`; under a program's own `display` the part is `⊤`): the leading literal `s` is the known prefix, extended to `s*` by the first interpolated expression |
 | `let x = e₁ in …x…` | propagate `α(e₁)` to uses of `x` |
 | `if c then e₁ else e₂` | `α(e₁) ⊔ α(e₂)` (join of branch authorities) |
 | `match … { … ⇒ eᵢ }` | `⊔ᵢ α(eᵢ)` (join over arms) |
@@ -438,7 +498,15 @@ reads under a named argument's authority forwards the argument, or an operation
 that keeps its authority; a caller that wants a path below its own element
 builds it (`readUnder ("cfg/" ++ name)`) and passes it, and a constant left
 operand extends as the table says. A wrapper that must extend its argument
-declares the label bare.
+declares the binder pattern-ranging (§4.1), or declares the label bare.
+
+**A pattern-ranging variable extends to itself.** A binder written
+`(p : String @L*)` or a parameter of kind `Authority L*` ranges over the
+patterns of `L`'s domain only (§2.3), so whatever it stands for admits every
+right extension of a value within it: `α(p ++ x) = κ` for `p : String @κ`
+with `κ` pattern-ranging. A left extension, `x ++ p`, is still the left operand's extension. The
+enforcement that makes this sound is that no instantiation of `κ` is ever
+an exact element (§4.1).
 
 **The ⊤-fallback *is* the no-exfiltration guarantee.** A URL/path that is computed
 (a function result, a runtime input, an un-analyzable expression) abstracts to
@@ -554,10 +622,18 @@ the suffix, a same-body
 `let`, a branch join) and otherwise the argument's checked type: the qualifier
 of a `τ @q` when `q` is an element of the domain, else the domain's top (a
 qualifier of another domain, such as another schema's Product, bounds
-nothing here). A flexible `κ` accumulates lower bounds by
+nothing here). The same judgment checks every expression that flows into a
+declared qualified type: a signed binding's body against its declared result
+(a value binding's against its whole signature, `v : String @"cfg/*"`), a
+lambda or method body against the arrow it is checked against, and an
+annotated expression against its annotation. The expression then has the
+declared type, so a use of the binding reads the declared qualifier, never the
+body's abstraction. A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the
 least solution, variables bounded by each other collapsing to one representative
-first. A variable the owning scope decides that nothing bounds below (no
+first. A pattern-ranging `κ` takes the least solution among patterns, `π` of
+the join (§2.3), and one pattern-ranging member makes the whole class
+pattern-ranging. A variable the owning scope decides that nothing bounds below (no
 value ever reaches it: an unused partial application, a callback over an
 empty list) takes the least solution of all, the empty authority `⊥`, which
 every bound admits. It prints as the empty set, `{}` (`Dir {}`,
@@ -702,6 +778,39 @@ its type publishes the top for it (`mkRaw = Raw` is `Int -> Raw *`), while a
 written signature publishes as written.
 (`mkRaw = Raw` is
 `Int -> Raw *`), so a forwarder cannot republish a phantom constructor.
+
+**Pattern-ranging binders.** A `*` after the label makes a binder range over
+the patterns of the label's domain (§2.3) instead of the whole domain: a data
+parameter or an existential binder of kind `Authority L*`,
+`data DataDir (d : Authority FileWrite*) = DataDir (String @d)`, and a named
+argument whose written domain is `@L*`, `(dir : String @FileWrite*)`. A body
+may then extend a value within the binder on the right and stay within it
+(§4): `writeBlock (DataDir root) cid bytes = writeFileBytes (root ++ "blocks/"
+++ cid) bytes` is charged `FileWrite d`. The label's domain must have
+patterns other than `⊤`: `Prefix`, or a `Product` whose primary axis is
+`Prefix`; a `Set` label or a `Product` whose primary axis is `Set` is refused
+at the declaration (`T-AUTHORITY-PATTERN`). A bare signature variable that
+nothing writes a range for (`writeBlock : DataDir d -> …`) inherits its
+slots' range, the meet across them: a pattern slot anywhere makes it
+pattern-ranging. A written binder keeps its own range, so an ordinary binder
+in a pattern slot, `(dir : String @FileWrite) -> DataDir dir`, a head
+parameter `(p : Authority FileWrite)` in a field `DataDir p`, or an ordinary
+existential wrapping one, is refused (`T-AUTHORITY-PATTERN`, naming
+`@FileWrite*`); a pattern-ranging binder may fill an ordinary slot, since a
+pattern is an element. A written term in a pattern slot must be a pattern: a
+`*`-ending literal, `*`, a pattern-ranging binder or a join of these;
+`DataDir "data/app.db"` is refused (`T-AUTHORITY-PATTERN`). An exact element
+that reaches a pattern-ranging binder as a value is closed to the pattern it
+begins: `DataDir "data/"` is a `DataDir "data/*"`, and `writeUnder
+"data/app.db"` with `writeUnder : (p : String @FileWrite*) -> …` is charged
+`"data/app.db*"`, so a caller bounded by the exact element is refused. An
+index equality that would equate a pattern-ranging index with an exact
+element, or with a rigid binder over the whole domain, is refused
+(`T-AUTHORITY-PATTERN`). Instantiation keeps the range, and only an
+instantiation reaches a program's manifest: a server built on `DataDir
+"data/*"` is granted `FileWrite = "data/*"`. At run time the grant is
+forwarded through the variable as any authority's is (§8); an opened
+pattern existential grants the whole domain, as any opened authority does.
 
 An `Authority`-kinded type-argument slot takes an authority term, kind-directed
 as an `Effect` slot takes a row: a named argument's name (`open : (path :
@@ -947,7 +1056,7 @@ already performed while constructing its container.
 ### 6.1 Kinds
 
 ```
-Kind    ::= Type | Effect | Authority Label | Kind → Kind | (Kind)
+Kind    ::= Type | Effect | Authority Label | Authority Label* | Kind → Kind | (Kind)
 TyParam ::= name | (name : Kind)
 ```
 
@@ -955,7 +1064,10 @@ Kind arrows associate right. `Effect` classifies rows; `Authority Label`
 classifies a parameter in that label's declared domain, not a row. The label
 must declare a domain: an atomic label, `IO` included, has no authorities, so
 `Authority` over one is ill-formed. Compatible domain aliases give compatible
-authority kinds.
+authority kinds. `Authority Label*` classifies a parameter that ranges over
+the domain's patterns only (§2.3, §4.1); the label's domain must have
+patterns other than `⊤`. Two kinds agree only when both or neither carry the
+`*`.
 
 ### 6.2 Declaration sites
 
@@ -982,7 +1094,13 @@ does not itself store or discharge a computation.
 
 Effect and authority index slots are invariant. `F φ₁ a` and `F φ₂ a`
 require equal indices, not merely `φ₁ ≤ φ₂`; a flexible index variable
-takes the other side as its solution outright, as a substitution. An impl head
+takes the other side as its solution outright, as a substitution. Two effect
+index rows are equal when each covers the other (§2.2, §2.4). Two atoms of one
+label at different authorities are two members of the row, not one authority to
+equate: `<Net h | ρ₁>` and `<Net "a.com" | ρ₂>` are made equal by giving each
+open tail the atom the other side has, and `<Net h | ρ₁>` equals `<Net | ρ>`,
+since the bare label covers `Net h`. Only a row with no open tail to take an
+atom must cover it itself. An impl head
 abstracts over an authority index — `impl I (Handle p)` covers every index,
 since an instance is chosen by the type's head and the index is erased — so a
 written term in an impl head's `Authority` slot is refused. This remains true when ordinary
@@ -1178,7 +1296,7 @@ grants for runtime checks (§8). There is no in-language effect handler.
 class — a label is a host-granted authority; the platform supplies the primitive
 that performs it; **parameterizable** (carries a domain); **emitted to the
 manifest**. Examples: `Net, FileRead, FileWrite, Env, Exec, Stdout, Stderr,
-Stdin, Clock, Rand`, and every user `effect Foo`. (An earlier design carved out
+Stdin, Clock, Rand, Signal`, and every user `effect Foo`. (An earlier design carved out
 an "internal" class — `Mut` for mutable state, `Panic` for divergence — with no
 host meaning and no manifest entry. That class was removed 2026-07-14: mutation
 is now untracked and `panic` is an ordinary control-flow primitive, not an
@@ -1189,8 +1307,8 @@ the history.)
 security labels at `⊤`** (`Stdout ⊔ Stderr ⊔ … ⊔ Net⊤`). An inferred narrow row is
 `≤ <IO>`, so any `<IO>` annotation still typechecks (it widens), while inference
 yields tight narrow rows for the manifest. The join holds on both sides of the order: a
-performed `<IO>` fits a bound that names all ten labels, and a policy that allows all ten
-admits an `<IO>` entry. `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
+performed `<IO>` fits a bound that names all eleven labels, and a policy that allows all
+eleven admits an `<IO>` entry. `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
 is deliberately EXCLUDED from this join by design — `<IO>` does not subsume
 `<FFI>` — because FFI crosses a trust boundary the IO alias is not meant to
 paper over; see [`CAPABILITY-PLATFORM.md`](../design/CAPABILITY-PLATFORM.md) §8
@@ -1213,12 +1331,13 @@ tables for a Product. A policy may give a label several entries, which admit
 together what any one admits. A `Net` authority names an endpoint the program
 may dial or bind; a socket accepted through a bound endpoint is exercised at
 that endpoint's authority, and waiting for a descriptor to become ready is a
-timed wait (`Clock`), not an operation on an endpoint. The one exception is
-deliberate: the runtime's signal externs (`pdsSignalStart`,
-`pdsSignalRequested`) reach no endpoint but are charged `Net` at the top of its
-domain until process signals have a label of their own. That over-charges,
-which is safe, and the only program using them already holds that grant
-because it binds.
+timed wait (`Clock`), not an operation on an endpoint. Observing a process
+signal reaches no endpoint either: the runtime's signal externs
+(`pdsSignalStart`, `pdsSignalRequested`) perform `Signal`, an atomic label that
+`IO` includes and `Net` does not. Reading the command line (`args`) and the
+build stamps (`buildCommit`, `buildDate`, `buildFingerprint`) performs no label:
+the command line is fixed when the process starts and the stamps are constants
+in the binary, so there is nothing for a host to grant or refuse.
 
 **The invocation summary.** The host forces the entry, calls it, and may invoke
 any function value the entry hands back; a function value the host supplies is
@@ -1335,6 +1454,13 @@ runtime contract. The two parts are:
 - **The grant.** The authority the type checker grants a parameterized file extern
   at a call reaches the runtime as a hidden argument, for confinement only (§2.3).
   It can refuse the call, and cannot otherwise change a value a program computes.
+  The runtime confines the call's path against that grant, which is the element
+  the checker derived at the call (its α), and never re-checks the declared
+  bound. The checker orders the path labels' elements lexically (§2.3), and a
+  `..` that pops a named component is never within a narrower bound, because a
+  symlink can make it mean anything. A symlink under a component the program
+  spells is still followed at run time, wherever it leads
+  ([#3645](https://github.com/MedakaLang/medaka/issues/3645)).
 
 A corollary worth stating because it is easy to violate: a primitive's effect must
 be a faithful upper bound of what it *actually does* at runtime. Static checking

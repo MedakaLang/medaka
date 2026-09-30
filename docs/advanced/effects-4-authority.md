@@ -127,7 +127,7 @@ substituted its literal for the name, so the row `main` is charged with is exact
 And the compiler holds the body of `under` to its promise:
 
 ```
-error: authority.mdk:7:18: Binding 'sneaky' reaches "secrets/key" where only dir is admitted: dir is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from; an extension of it is the whole domain. Perform the operation on the named argument and build any extended value at the call site, or widen the declared row to the label bare
+error: authority.mdk:7:18: Binding 'sneaky' reaches "secrets/key" where only dir is admitted: dir is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare
   |
 7 | sneaky dir = load "secrets/key"
   |                   ^
@@ -141,7 +141,8 @@ used to the right of the argument that binds it, and only in the same signature.
 An extension of a named argument is the whole domain: a caller may pass an exact
 element such as `"cfg/app.toml"`, which admits only itself, so
 `load (dir ++ "/x")` is refused inside `under`. Forward the argument, and build
-the longer path at the call site:
+the longer path at the call site (or, when the body must extend it, declare the
+argument pattern-ranging, [below](#pattern-ranging-binders)):
 
 ```medaka
 effect Store Prefix
@@ -230,6 +231,9 @@ main =
 - A **concatenation** whose left operand is known extends it: `"cfg/" ++ name` is
   the pattern `"cfg/*"`, whatever `name` is. (Two literals concatenated are one
   literal.)
+- An **interpolated part** is read like its operand written directly, so
+  `"cfg/\{name}"` is `"cfg/" ++ name`, unless the program defines its own
+  `display`, which interpolation calls.
 - A **`let`-bound** name is whatever it was bound to, in the scope it was bound in.
 - An **`if` or `match`** is the join of its branches, one element per branch.
 - **Anything else** is the whole domain. A parameter of unknown origin, a function
@@ -280,6 +284,48 @@ that exists. A function that returns a `Result` answers with that `Err`;
 same message. The grant is also what the manifest records, so a host that trusts
 `cfg/*` from the manifest reads it as the program does. A bare `<FileRead>`
 grants every path, and confines nothing.
+
+The compiler reads the part of a path it can see, as far as it can without
+the file system. For `FileRead` and `FileWrite`, whose file functions resolve
+the path, `.` and empty components are dropped before a bound is checked, so
+`"cfg/./" ++ name` is within `"cfg/*"`. A `..` after a named directory is left
+as written, because only the file system knows where it leads: when `cfg` is a
+symlink, `cfg/..` is the parent of whatever it points to. So `"cfg/../" ++ name`
+is within no bound but its own spelling and the bare label:
+
+```medaka
+readIn : String -> <FileRead "cfg/*"> Result String String
+readIn name = readFile ("cfg/./" ++ name)
+
+readBeside : String -> <FileRead "cfg/../*"> Result String String
+readBeside name = readFile ("cfg/../" ++ name)
+
+main = println "checked"
+```
+
+```medaka-expect
+checked
+```
+
+Bounding `readBeside` to `"cfg/*"`, or even to `"./*"`, is refused before
+anything runs:
+
+```
+error: authority.mdk:5:27: Effectful value used where <FileRead "cfg/*"> is allowed, but it performs <FileRead "cfg/../*">
+  |
+5 | readBeside name = readFile ("cfg/../" ++ name)
+  |                            ^
+```
+
+A path that climbs above the working directory, such as `"../x"`, is within
+no bound inside it, and a manifest grants it as the bare label. The runtime
+checks a call only against the grant made at that call, which comes from the
+path the program spells, never against the declared bound. So it confines the
+part of the path that arrives at run time, `name` here, and a symlink under a
+directory the program spells, such as a `cfg/link` pointing elsewhere in
+`"cfg/link/" ++ name`, is followed wherever it leads. Every other label compares
+text, `Net` and your own `effect Store Prefix` included, and there `..` is two
+characters.
 
 The check has limits, each listed under "Open edges" in the
 [reference](effects-7-reference.md):
@@ -481,7 +527,100 @@ error: authority.mdk:6:32: The qualifier names 'dir', but no binder domain, effe
 
 A helper like `same` may return its argument, or a value derived from it that
 keeps its authority, but not an extension of it: `dir ++ "/index"` in the
-result is the whole domain, for the reason an extension in a row is.
+result is the whole domain, for the reason an extension in a row is, unless
+the binder ranges over patterns ([below](#pattern-ranging-binders)).
+
+A qualifier may also be a literal, `String @"cfg/*"`. The written qualifier
+of a result or a value is a bound. The body is abstracted by the rules in "How
+the compiler reads a path", as an argument is, and the result must lie within
+the bound. A use then sees the qualifier the signature wrote, not the body:
+
+```medaka
+effect Store Prefix
+
+load : (path : String) -> <Store path> Int
+load _ = 1
+
+configFile : String @"cfg/*"
+configFile = "cfg/app.toml"
+
+pickConfig : Bool -> String @"cfg/*"
+pickConfig useApp = if useApp then "cfg/app.toml" else "cfg/db.toml"
+
+main =
+  println (load configFile)
+  println (load (pickConfig True))
+```
+
+```medaka-expect
+1
+1
+```
+
+`check` prints `configFile : String @"cfg/*"` and
+`main : <Stdout, Store "cfg/*"> Unit`. A use of `configFile` is charged the
+pattern its signature promises, not the one file its body names, so the body
+can change within `cfg/` without changing any caller's row. The same holds
+across modules, which is how one module hands another an address it may
+reach: an exported `loopback : String @"127.0.0.1"` passed to
+`netTcpConnect` is charged `<Net "127.0.0.1">` in the importing module. A
+body outside the bound is refused where it is written:
+
+```
+error: authority.mdk:7:13: Binding 'configFile' reaches "secrets/key" where its declared bound admits only "cfg/*". Stay within the declared bound, or widen it to cover what the body reaches
+  |
+7 | configFile = "secrets/key"
+  |              ^
+```
+
+### Pattern-ranging binders
+
+The extension rule exists because a caller may choose an exact element. A
+binder that can only ever stand for a *pattern* (`"cfg/*"`, `*`, a join of
+patterns) has no such caller: every pattern admits every right extension of a
+value within it. A `*` after the label says so, `(dir : String @Store*)`:
+
+```medaka
+effect Store Prefix
+
+load : (path : String) -> <Store path> Int
+load _ = 1
+
+under : (dir : String @Store*) -> String -> <Store dir> Int
+under dir name = load (dir ++ name)
+
+withIndex : (dir : String @Store*) -> String @dir
+withIndex dir = dir ++ "/index"
+
+inConfig : String -> <Store "cfg/*"> Int
+inConfig name = under "cfg/" name
+
+main =
+  println (inConfig "app.toml")
+  println (load (withIndex "notes/"))
+```
+
+```medaka-expect
+1
+1
+```
+
+Both bodies extend `dir` on the right and stay within it. A caller that passes
+an exact element is charged the pattern it begins: `under "cfg/" name` is
+charged `Store "cfg/*"`, and `check` prints `main : <Stdout, Store "cfg/*",
+Store "notes/*"> Unit`. So a caller bounded by one exact file, `<Store
+"cfg/app.toml">`, cannot call `under "cfg/app.toml" ""`: it is charged
+`"cfg/app.toml*"`. An extension on the left, `name ++ dir`, is still the
+whole domain.
+
+A data parameter takes the same `*` in its kind, `(d : Authority Store*)`
+([chapter 5](effects-5-data.md) builds a data directory this way), and a bare
+index variable in a signature (`Dir d`) takes the range of the slot it fills.
+Three things are refused, each as `T-AUTHORITY-PATTERN`: a written exact
+element in such a slot (`Dir "cfg/app.toml"`), a binder written without the
+`*` filling one (`(dir : String @Store) -> Dir dir`, whose report names
+`@Store*`), and a `*` on a label whose domain has no patterns but the whole
+domain, a `Set` label or a `Product` whose first axis is a `Set`.
 
 ## Relations the compiler keeps
 

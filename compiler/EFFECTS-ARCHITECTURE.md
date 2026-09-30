@@ -827,11 +827,15 @@ source for an `extern data` head.
 3. **Declared kinds before the catalog.** `graphPreamble` records the
    prelude's declared kinds before elaborating extern signatures, so an index
    slot in a catalog signature binds an authority.
-4. **Index rows unify authorities.** `unifyIndexRow` first equates the
-   authorities of same-label atoms as an index (`unifyIndexAtomAuthorities`),
-   then compares labels (`labelsMissing`); the solver's exact relations mark
-   their authority obligations exact. `Async <Net host | e>` is an index like
-   any other.
+4. **Index rows unify by atoms.** An index row is a set of atoms, and two
+   atoms of one label at different authorities are two members (#3621). An
+   atom one side does not cover flows into the other side's flexible tail;
+   a side with no flexible tail must cover it, as an exact authority
+   obligation (`indexAtomsCovered`). Only when neither side has a flexible
+   tail are a shared label's authorities equated as an index
+   (`unifyIndexAtomAuthorities`) and the labels compared (`labelsMissing`).
+   The solver's exact relations mark their authority obligations exact.
+   `Async <Net host | e>` is an index like any other.
 5. **Printing.** A variable letter skips a name an authority binder already
    holds (`assignName`).
 

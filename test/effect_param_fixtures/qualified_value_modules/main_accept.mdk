@@ -1,0 +1,10 @@
+-- An imported qualified value charges its declared qualifier at a use in
+-- another module.
+import egress.{egressAddress, configFile}
+
+dial : Unit -> <Net "127.0.0.1"> Result String (Socket "127.0.0.1")
+dial () = netTcpConnect egressAddress 8080
+
+readConfig () = readFile configFile
+
+main = println 1

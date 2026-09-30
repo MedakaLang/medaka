@@ -568,7 +568,7 @@ checkTypesGo bound cur env (t :: ts) =
 -- The names a declaration head binds as authorities: its `Authority`-kinded
 -- parameters (positional with the name list, as the kinds are stored).
 authorityParams : List String -> List (Option KindAnn) -> List String
-authorityParams (p :: ps) ((Some (KindAuthority _ _ _)) :: ks) =
+authorityParams (p :: ps) ((Some (KindAuthority _ _ _ _)) :: ks) =
   p :: authorityParams ps ks
 authorityParams (_ :: ps) (_ :: ks) = authorityParams ps ks
 authorityParams _ _ = []
@@ -579,7 +579,7 @@ checkKindLabels : Env -> List (Option KindAnn) -> List ResError
 checkKindLabels env kinds = flatMap (checkKindLabel env) kinds
 
 checkKindLabel : Env -> Option KindAnn -> List ResError
-checkKindLabel env (Some (KindAuthority l _ loc)) = checkEffect loc env l
+checkKindLabel env (Some (KindAuthority l _ _ loc)) = checkEffect loc env l
 checkKindLabel _ _ = []
 
 checkBinderLabels : Env -> List (String, KindAnn) -> List ResError
@@ -619,6 +619,7 @@ builtInEffects = [
   "Net",
   "FileRead",
   "FileWrite",
+  "Signal",
   "FFI",
 ]
 
@@ -5548,10 +5549,10 @@ stampKindOpt scope (Some k) = Some (stampKind scope k)
 stampKindOpt _ None = None
 
 stampKind : OrdMap TyConOrigin -> KindAnn -> KindAnn
-stampKind scope (KindAuthority l OriginUnresolved loc) =
+stampKind scope (KindAuthority l OriginUnresolved pat loc) =
   match omLookup (effectKey l) scope
-    Some o => KindAuthority l o loc
-    None => KindAuthority l OriginUnresolved loc
+    Some o => KindAuthority l o pat loc
+    None => KindAuthority l OriginUnresolved pat loc
 stampKind scope (KindArrow a b) =
   KindArrow (stampKind scope a) (stampKind scope b)
 stampKind _ k = k

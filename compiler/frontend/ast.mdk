@@ -754,6 +754,10 @@ public export data EffAtomTy = EffAtomTy {
   -- atom rather than at the enclosing expression; `None` for an atom a tool
   -- synthesises
   eatLoc : Option Loc,
+  -- a binder's written domain spelled `@L*`: the binder ranges over the
+  -- domain's patterns only (EFFECTS-SEMANTICS §4.1). Always `False` on an
+  -- atom a row writes.
+  eatPattern : Bool,
 }
 
 -- The written parameter of an effect atom.  A bare label is the domain's top;
@@ -775,6 +779,7 @@ effAtomBare l = EffAtomTy {
   eatOrigin = OriginUnresolved,
   eatParam = EPTop,
   eatLoc = None,
+  eatPattern = False,
 }
 
 -- The names a pattern binds, in source order.
@@ -812,6 +817,7 @@ effAtomWith l p = EffAtomTy {
   eatOrigin = OriginUnresolved,
   eatParam = p,
   eatLoc = None,
+  eatPattern = False,
 }
 
 -- An atom as the parser reads it, with its span.
@@ -822,6 +828,7 @@ effAtomAt l p loc = EffAtomTy {
   eatOrigin = OriginUnresolved,
   eatParam = p,
   eatLoc = Some loc,
+  eatPattern = False,
 }
 
 -- The written spelling of an atom, given the string-literal escaper the caller
@@ -832,10 +839,11 @@ effAtomSurface : (String -> String) -> EffAtomTy -> String
 effAtomSurface esc a = a.eatLabel ++ effParamSurface esc a.eatParam
 
 -- A named argument's written domain as it follows the argument's type,
--- ` @Store`, or nothing when the binder writes none.
+-- ` @Store` (or ` @Store*` for a pattern-ranging binder), or nothing when the
+-- binder writes none.
 export
 binderDomainSurface : Option EffAtomTy -> String
-binderDomainSurface (Some a) = " @" ++ a.eatLabel
+binderDomainSurface (Some a) = " @\{a.eatLabel}\{patternMark a.eatPattern}"
 binderDomainSurface None = ""
 
 -- An authority term as an INDEX argument spells it (`Handle *`, `Handle
@@ -975,14 +983,23 @@ public export data KindAnn =
   -- `EffAtomTy`'s is; the parser leaves it unresolved.
   -- The span is the label's, so a diagnostic about it (an unknown label, a
   -- label with no domain to draw authorities from) points at it.
-  | KindAuthority String TyConOrigin (Option Loc)
+  -- The flag is the `*` of `Authority L*`: the parameter ranges over the
+  -- domain's patterns only, so an extension of a value within it stays
+  -- within it.
+  | KindAuthority String TyConOrigin Bool (Option Loc)
   | KindArrow KindAnn KindAnn
 
 -- The kind as the parser produces it: the label's origin is resolve's to
 -- stamp, so before resolve it carries none.
 export
-kindAuthorityUnstamped : String -> Option Loc -> KindAnn
-kindAuthorityUnstamped l loc = KindAuthority l OriginUnresolved loc
+kindAuthorityUnstamped : String -> Bool -> Option Loc -> KindAnn
+kindAuthorityUnstamped l pat loc = KindAuthority l OriginUnresolved pat loc
+
+-- The `*` a pattern-ranging binder writes after its label.
+export
+patternMark : Bool -> String
+patternMark True = "*"
+patternMark False = ""
 
 -- The SOURCE spelling of a kind, and of a whole declaration head's parameter
 -- list.  It lives HERE, beside the node, for the reason `firstTyLoc` below
@@ -994,7 +1011,7 @@ export
 kindAnnSource : KindAnn -> String
 kindAnnSource KindType = "Type"
 kindAnnSource KindEffect = "Effect"
-kindAnnSource (KindAuthority l _ _) = "Authority \{l}"
+kindAnnSource (KindAuthority l _ pat _) = "Authority \{l}\{patternMark pat}"
 kindAnnSource (KindArrow a b) = "\{kindAnnArg a} -> \{kindAnnSource b}"
 
 -- The source spelling of a qualifier's terms, `@p` or the joined `@(a | "b/*")`,

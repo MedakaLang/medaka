@@ -229,7 +229,29 @@ pathOf dir = dir
 
 An extension of a named argument (`path ++ "/x"`) is the label's whole domain,
 since the caller may pass an exact element that admits only itself: forward the
-argument and build the longer path at the call site, as `config` does.
+argument and build the longer path at the call site, as `config` does, or
+declare the binder pattern-ranging with a `*` on its label.
+
+A binder written `(dir : String @Store*)`, or a parameter of kind
+`Authority Store*`, ranges over the domain's patterns only, so an extension
+on the right stays within it.  A caller's exact element closes to the pattern
+it begins (`"cfg/"` is charged `"cfg/*"`).  The label must be a `Prefix`
+domain or a `Product` whose first axis is `Prefix`.  A bare index variable
+(`d` in `Dir d`) takes its slot's range; a written binder without the `*`
+cannot fill a pattern slot, and neither can an exact literal
+(`Dir "cfg/app"`), both `T-AUTHORITY-PATTERN`.
+
+```medaka
+effect Store Prefix
+extern load : (path : String) -> <FFI, Store path> Int
+under : (dir : String @Store*) -> String -> <FFI, Store dir> Int
+under dir name = load (dir ++ name)  -- stays within `dir`
+data Dir (d : Authority Store*) = Dir (String @d)
+readIn : Dir d -> String -> <FFI, Store d> Int
+readIn (Dir root) name = load (root ++ "blocks/" ++ name)
+cfg : Dir "cfg/*"
+cfg = Dir "cfg/"
+```
 
 A qualified value type is written with a spaced `@`: `String @path` names the
 argument's authority on a value derived from it.  A joined qualifier names
@@ -301,7 +323,7 @@ spelling the formatter prints back.
 
 Effect-label declarations (Phase 146 gap 2 — builtins are
 `IO, Rand, Stdout, Stderr, Stdin, Clock, Env, Exec, Net,
-FileRead, FileWrite, FFI`; declare more):
+FileRead, FileWrite, Signal, FFI`; declare more):
 
 ```medaka
 effect KV  -- a user/platform effect label, usable as <KV> in rows
@@ -778,7 +800,8 @@ newtype Age = Age Int deriving (Eq)
 ## Declared parameter kinds (`(p : Kind)` on a head)
 
 A type parameter's kind is written on the declaration head; `Kind ::= Type | Effect
-| Authority Label | Kind -> Kind | ( Kind )`, arrow right-associative. `Type`, `Effect`
+| Authority Label | Authority Label* | Kind -> Kind | ( Kind )`, arrow
+right-associative; the `*` makes the parameter range over the label's patterns. `Type`, `Effect`
 and `Authority` are ordinary identifiers recognised only in kind position (not
 keywords). Partial annotation is the common case. An UNANNOTATED parameter is never
 `Effect`- or `Authority`-kinded — a parameter used as an effect row (an arrow's `<e>`

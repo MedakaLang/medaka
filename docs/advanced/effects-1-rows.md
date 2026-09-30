@@ -145,19 +145,26 @@ vocabulary:
 | `Stdin` | `readLine`, `readLineOpt`, `readAll`, `readExactly` |
 | `FileRead` | `readFile`, `readFileBytes`, `fileExists`, `listDir`, `statFile`, `canonicalizePath`, … |
 | `FileWrite` | `writeFile`, `appendFile`, `makeDir`, `removeFile`, `rename`, `fsync`, … |
-| `Env` | `getEnv`, `args`, `executablePath`, … |
+| `Env` | `getEnv`, `executablePath` |
 | `Exec` | `runCommand` |
 | `Net` | `netResolve`, `netTcpConnect`, `netTcpListen`, `netSend`, `netRecv`, … |
 | `Clock` | `wallTimeSec`, `monotonicSec`, `sleepMs` |
 | `Rand` | `randomInt`, `randomBool`, `randomFloat`, `randomChar`, `setSeed`, `osEntropyBytes` |
+| `Signal` | `pdsSignalStart`, `pdsSignalRequested` |
 | `FFI` | any `extern` you declare yourself |
 
 `IO` is not on the list because it is their abbreviation: `<IO>` is the join of the
-ten labels. A bound of `<IO>` admits all ten, so a row that performs `<Stdout>` fits
-`<IO>`, and a function that performs `<IO>` fits a bound that spells the ten labels
-out (a bound that names only nine refuses it, naming the missing label). Two things
-it does not cover: `FFI`, which has to be named explicitly because it leaves the
-language, and any label you declare yourself ([chapter 3](effects-3-labels.md)).
+eleven labels above `FFI`. A bound of `<IO>` admits all eleven, so a row that performs
+`<Stdout>` fits `<IO>`, and a function that performs `<IO>` fits a bound that spells
+the eleven labels out (a bound that names only ten refuses it, naming the missing
+label). Two things it does not cover: `FFI`, which has to be named explicitly
+because it leaves the language, and any label you declare yourself
+([chapter 3](effects-3-labels.md)).
+
+Some runtime externs perform no label at all. `args` reads a command line that
+was fixed when the process started, and `buildCommit`, `buildDate` and
+`buildFingerprint` read constants linked into the binary. Neither is something a
+host grants or refuses, so all four are pure.
 
 Narrow labels let a signature say which part of the world a function touches:
 

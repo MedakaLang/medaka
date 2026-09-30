@@ -1,0 +1,7 @@
+-- A signal reaches no endpoint, so `Net` does not cover it: a `<Net>` bound
+-- refuses a body that performs `Signal`, naming it.
+stopping : Unit -> <Net> Bool
+stopping _ = pdsSignalRequested ()
+
+main : <IO> Unit
+main = println "signal net reject"

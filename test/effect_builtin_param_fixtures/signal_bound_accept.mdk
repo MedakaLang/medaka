@@ -1,0 +1,7 @@
+-- The runtime's signal externs perform `Signal`, a label of its own: a
+-- caller bounded by `<Signal>` alone admits them.
+stopping : Unit -> <Signal> Bool
+stopping _ = pdsSignalRequested ()
+
+main : <IO> Unit
+main = println "signal bound accept"

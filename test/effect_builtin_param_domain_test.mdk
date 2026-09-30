@@ -87,6 +87,61 @@ test "manifest grants a literal concatenation exactly" =
     "readFixed"
     "[package.capabilities]\nFileRead = \"/etc/app/config.toml\""
 
+test "manifest grants a pattern-ranging data directory's instantiation" =
+  expectManifest
+    "filewrite_pattern_binder_manifest_accept.mdk"
+    "serve"
+    "[package.capabilities]\nFileWrite = \"data/*\""
+
+test "manifest grants an interpolated pattern-ranging directory's instantiation" =
+  expectManifest
+    "filewrite_interp_binder_manifest_accept.mdk"
+    "serve"
+    "[package.capabilities]\nFileWrite = \"data/*\""
+
+test "a `..` after a written directory is outside a FileWrite bound on it" = expectCheckReject
+  (fixture "filewrite_dotdot_bound_reject.mdk")
+  [
+    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"data/../*\">",
+  ]
+
+test "a `..` that pops a named component is outside a narrower FileWrite bound" = expectCheckReject
+  (fixture "filewrite_popped_bound_reject.mdk")
+  [
+    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"a/../data/*\">",
+    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"data/sub/../*\">",
+  ]
+
+test "`.` and empty components keep a FileWrite path under its directory" =
+  expectCheckAccept (fixture "filewrite_dot_bound_accept.mdk")
+
+test "a user Prefix label compares text, so its `..` is two characters" =
+  expectCheckAccept (fixture "store_dotdot_textual_accept.mdk")
+
+test "manifest keeps a write under `data/../` apart from one under `data/`" =
+  expectManifest
+    "filewrite_dotdot_manifest_accept.mdk"
+    "both"
+    "[package.capabilities]\nFileWrite = [\"data/*\", \"data/../*\"]"
+
+test "manifest spells a popping path raw, less `.` and empty components" =
+  expectManifest
+    "filewrite_dotdot_manifest_accept.mdk"
+    "popped"
+    "[package.capabilities]\nFileWrite = \"a/../data/*\""
+
+test "manifest names a path less its `.` and empty components" =
+  expectManifest
+    "filewrite_dotdot_manifest_accept.mdk"
+    "normalized"
+    "[package.capabilities]\nFileWrite = \"data/x.txt\""
+
+test "manifest grants the bare label for a path above the working directory" =
+  expectManifest
+    "filewrite_dotdot_manifest_accept.mdk"
+    "climb"
+    "[package.capabilities]\nFileWrite = true"
+
 test "FileWrite builtin fills a concrete path inside its Prefix bound" =
   expectCheckAccept (fixture "filewrite_hole_accept.mdk")
 
@@ -149,15 +204,52 @@ test "IO does not subsume an FFI-performing body" = expectCheckReject (fixture
 test "IO still subsumes an Exec-performing body" =
   expectCheckAccept (fixture "exec_io_accept.mdk")
 
-test "a performed IO fits a bound naming the ten host labels" =
+test "a performed IO fits a bound naming the eleven host labels" =
   expectCheckAccept (fixture "io_join_accept.mdk")
 
-test "a performed IO under nine host labels is refused naming the missing one" =
+test "a performed IO under ten host labels is refused naming the missing one" =
   expectCheckReject (fixture "io_join_reject.mdk") ["but it performs <Net>"]
 
-test "an IO value stored at ten labels is refused when applied under nine" = expectCheckReject
+test "an IO value stored at eleven labels is refused when applied under ten" = expectCheckReject
   (fixture "io_join_launder_reject.mdk")
   ["but it performs <Net>"]
+
+test "a Signal bound admits the runtime's signal externs" =
+  expectCheckAccept (fixture "signal_bound_accept.mdk")
+
+test "IO subsumes a Signal-performing body" =
+  expectCheckAccept (fixture "signal_io_accept.mdk")
+
+test "Net does not subsume a Signal-performing body" = expectCheckReject
+  (fixture "signal_net_reject.mdk")
+  ["but it performs <Signal>"]
+
+test "a bound naming every other host label refuses Signal, naming it" = expectCheckReject
+  (fixture "signal_ten_labels_reject.mdk")
+  ["but it performs <Signal>"]
+
+test "manifest renders a Signal grant" =
+  expectManifest
+    "signal_bound_accept.mdk"
+    "stopping"
+    "[package.capabilities]\nSignal = true"
+
+test "check-policy accepts a Signal-performing entry under --allow Signal" =
+  expectVerbExitStartsWith
+    "check-policy"
+    [fixture "signal_bound_accept.mdk", "--allow", "Signal", "--fn", "stopping"]
+    0
+    "accepted"
+
+test "check-policy refuses a Signal-performing entry under --allow Net" =
+  expectVerbExitStartsWith
+    "check-policy"
+    [fixture "signal_bound_accept.mdk", "--allow", "Net", "--fn", "stopping"]
+    1
+    "rejected"
+
+test "args and the build stamps read under a pure signature" =
+  expectCheckAccept (fixture "argv_stamps_pure_accept.mdk")
 
 -- The non-empty-row reject and the narrow accept distinguish the honesty
 -- rule from one that only rejects a bare empty row.
@@ -291,6 +383,13 @@ test "a direct alias does not hide a nullary extern" = expectCheckReject
 test "a constrained alias does not hide a nullary extern" = expectCheckReject
   (fixture "ffi_nullary_alias_constrained_reject.mdk")
   ["Foreign declaration 'k' has no arrow in its signature"]
+
+test "an alias's Effect argument is the row an extern declares" = expectAll [
+  expectCheckAccept (fixture "ffi_effect_alias_accept.mdk"),
+  expectCheckReject (fixture "ffi_effect_alias_reject.mdk") [
+    "Foreign declaration 'cCall' does not name the 'FFI' effect in its result row",
+  ],
+]
 
 -- #3463/#3468: the invocation summary.  An entry is charged for what the host
 -- can reach through it, read by variance; each charged entry has a control

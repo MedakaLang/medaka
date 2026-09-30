@@ -1,0 +1,18 @@
+-- A pattern-ranging data directory: a body may extend its root on the right
+-- and stay within the directory's authority, and the call site grants the
+-- directory's pattern, so a name that climbs out of it is refused at runtime.
+data DataDir (d : Authority FileWrite*) = DataDir (String @d)
+
+writeUnder : DataDir d -> String -> String -> <FileWrite d> Result String Unit
+writeUnder (DataDir root) name contents = writeFile (root ++ name) contents
+
+dataDir : DataDir "data/*"
+dataDir = DataDir "data/"
+
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+main =
+  println "in: \{said (writeUnder dataDir "block.bin" "x")}"
+  println "out: \{said (writeUnder dataDir "../pwned.txt" "x")}"

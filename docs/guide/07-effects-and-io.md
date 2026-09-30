@@ -81,7 +81,7 @@ same reason you write the rest of the signature.
 
 Each label in a row names something in the host environment. The built-in labels
 are `Stdout`, `Stderr`, `Stdin`, `Clock`, `Env`, `Exec`, `Rand`, `Net`, `FileRead`,
-`FileWrite`, and `FFI`. A row can name them individually:
+`FileWrite`, `Signal`, and `FFI`. A row can name them individually:
 
 ```medaka
 nap : Int -> <Clock> Unit

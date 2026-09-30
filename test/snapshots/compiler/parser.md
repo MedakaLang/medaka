@@ -1,5 +1,5 @@
 # META
-source_lines=6097
+source_lines=6113
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -2636,8 +2636,10 @@ binderDomainP TAt (TUpper _) = defer
   s <- getPos
   advance
   l <- upperNameP
+  pat <- patternMarkP
   q <- getPos
-  deferPure (Some (effAtomAt l EPTop (locOfSpan s q)))
+  let atom = effAtomAt l EPTop (locOfSpan s q)
+  deferPure (Some EffAtomTy { atom | eatPattern = pat })
 binderDomainP TAsAt (TUpper l) = defer
   pos <- getPos
   fatalAtP
@@ -3779,7 +3781,7 @@ kindAtomFor _ = failP kindExpectedMsg
 
 kindExpectedMsg : String
 kindExpectedMsg =
-  "expected a kind: `Type`, `Effect`, `Authority <Label>`, or an arrow between them"
+  "expected a kind: `Type`, `Effect`, `Authority <Label>` (or `Authority <Label>*`), or an arrow between them"
 
 -- `Authority FileRead`: the parameter ranges over the declared domain of the
 -- named effect label (EFFECTS-SEMANTICS §6.1).
@@ -3788,8 +3790,22 @@ kindAuthorityP = defer
   advance
   s <- getPos
   l <- upperNameP
+  pat <- patternMarkP
   q <- getPos
-  deferPure (kindAuthorityUnstamped l (Some (locOfSpan s q)))
+  deferPure (kindAuthorityUnstamped l pat (Some (locOfSpan s q)))
+
+-- The `*` after a label that makes a binder range over the domain's patterns
+-- only: `Authority FileWrite*`, `(dir : String @FileWrite*)`.
+patternMarkP : Parser Bool
+patternMarkP = defer
+  t <- peekP
+  patternMarkFor t
+
+patternMarkFor : Token -> Parser Bool
+patternMarkFor TStar = defer
+  advance
+  deferPure True
+patternMarkFor _ = deferPure False
 
 kindAtomEmit : KindAnn -> Parser KindAnn
 kindAtomEmit k = defer
@@ -4001,7 +4017,7 @@ ctorBinderColon TColon = defer
 ctorBinderColon _ = failP "expected a constructor binder"
 
 ctorBinderKind : String -> KindAnn -> Parser (String, KindAnn)
-ctorBinderKind n (k@(KindAuthority _ _ _)) = deferPure (n, k)
+ctorBinderKind n (k@(KindAuthority _ _ _ _)) = deferPure (n, k)
 ctorBinderKind n k = defer
   pos <- getPos
   fatalAtP
@@ -6938,7 +6954,7 @@ parseResultWith src tokList offList =
 (DFunDef false "parseTyParenIdent" ((PCon "TPipe")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "v")) (EApp (EApp (EVar "deferThen") (EVar "authJoinTail")) (ELam ((PVar "rest")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "namesOrAuthJoin") (EVar "v")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))))
 (DFunDef false "parseTyParenIdent" (PWild) (EVar "parseTyParenTuple"))
 (DTypeSig false "binderDomainP" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "Option") (TyCon "EffAtomTy"))))))
-(DFunDef false "binderDomainP" ((PCon "TAt") (PCon "TUpper" PWild)) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "upperNameP")) (ELam ((PVar "l")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "deferPure") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "effAtomAt") (EVar "l")) (EVar "EPTop")) (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
+(DFunDef false "binderDomainP" ((PCon "TAt") (PCon "TUpper" PWild)) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "upperNameP")) (ELam ((PVar "l")) (EApp (EApp (EVar "deferThen") (EVar "patternMarkP")) (ELam ((PVar "pat")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (ELet false (PVar "atom") (EApp (EApp (EApp (EVar "effAtomAt") (EVar "l")) (EVar "EPTop")) (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))) (EApp (EVar "deferPure") (EApp (EVar "Some") (EVariantUpdate "EffAtomTy" (EVar "atom") ((fa "eatPattern" (EVar "pat"))))))))))))))))))
 (DFunDef false "binderDomainP" ((PCon "TAsAt") (PCon "TUpper" (PVar "l"))) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "a binder's domain is written with a space before the `@`: `String @")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "`")))) (EVar "pos")))))
 (DFunDef false "binderDomainP" (PWild PWild) (EApp (EVar "deferPure") (EVar "None")))
 (DTypeSig false "namesOrAuthJoin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty")))))
@@ -7261,9 +7277,14 @@ parseResultWith src tokList offList =
 (DFunDef false "kindAtomFor" ((PCon "TLParen")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "kindP")) (ELam ((PVar "k")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EVar "deferPure") (EVar "k")))))))))
 (DFunDef false "kindAtomFor" (PWild) (EApp (EVar "failP") (EVar "kindExpectedMsg")))
 (DTypeSig false "kindExpectedMsg" (TyCon "String"))
-(DFunDef false "kindExpectedMsg" () (ELit (LString "expected a kind: `Type`, `Effect`, `Authority <Label>`, or an arrow between them")))
+(DFunDef false "kindExpectedMsg" () (ELit (LString "expected a kind: `Type`, `Effect`, `Authority <Label>` (or `Authority <Label>*`), or an arrow between them")))
 (DTypeSig false "kindAuthorityP" (TyApp (TyCon "Parser") (TyCon "KindAnn")))
-(DFunDef false "kindAuthorityP" () (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "upperNameP")) (ELam ((PVar "l")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "deferPure") (EApp (EApp (EVar "kindAuthorityUnstamped") (EVar "l")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
+(DFunDef false "kindAuthorityP" () (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "upperNameP")) (ELam ((PVar "l")) (EApp (EApp (EVar "deferThen") (EVar "patternMarkP")) (ELam ((PVar "pat")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "kindAuthorityUnstamped") (EVar "l")) (EVar "pat")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))))
+(DTypeSig false "patternMarkP" (TyApp (TyCon "Parser") (TyCon "Bool")))
+(DFunDef false "patternMarkP" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "patternMarkFor") (EVar "t")))))
+(DTypeSig false "patternMarkFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Bool"))))
+(DFunDef false "patternMarkFor" ((PCon "TStar")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EVar "True")))))
+(DFunDef false "patternMarkFor" (PWild) (EApp (EVar "deferPure") (EVar "False")))
 (DTypeSig false "kindAtomEmit" (TyFun (TyCon "KindAnn") (TyApp (TyCon "Parser") (TyCon "KindAnn"))))
 (DFunDef false "kindAtomEmit" ((PVar "k")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EVar "k")))))
 (DTypeSig false "parseData" (TyFun (TyCon "DataVis") (TyApp (TyCon "Parser") (TyCon "Decl"))))
@@ -7317,7 +7338,7 @@ parseResultWith src tokList offList =
 (DFunDef false "ctorBinderColon" ((PCon "TColon")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "lowerNameP")) (ELam ((PVar "n")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "kindP")) (ELam ((PVar "k")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EVar "ctorBinderKind") (EVar "n")) (EVar "k")))))))))))))
 (DFunDef false "ctorBinderColon" (PWild) (EApp (EVar "failP") (ELit (LString "expected a constructor binder"))))
 (DTypeSig false "ctorBinderKind" (TyFun (TyCon "String") (TyFun (TyCon "KindAnn") (TyApp (TyCon "Parser") (TyTuple (TyCon "String") (TyCon "KindAnn"))))))
-(DFunDef false "ctorBinderKind" ((PVar "n") (PAs "k" (PCon "KindAuthority" PWild PWild PWild))) (EApp (EVar "deferPure") (ETuple (EVar "n") (EVar "k"))))
+(DFunDef false "ctorBinderKind" ((PVar "n") (PAs "k" (PCon "KindAuthority" PWild PWild PWild PWild))) (EApp (EVar "deferPure") (ETuple (EVar "n") (EVar "k"))))
 (DFunDef false "ctorBinderKind" ((PVar "n") (PVar "k")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a constructor may bind only an `Authority` existential: `(")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "kindAnnSource") (EVar "k")))) (ELit (LString ")` names a kind a match arm cannot open. Declare `"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` on the type's head instead")))) (EVar "pos")))))
 (DTypeSig false "parsePayload" (TyApp (TyCon "Parser") (TyCon "ConPayload")))
 (DFunDef false "parsePayload" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "payloadFor") (EVar "t")))))
@@ -8664,7 +8685,7 @@ parseResultWith src tokList offList =
 (DFunDef false "parseTyParenIdent" ((PCon "TPipe")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "v")) (EApp (EApp (EMethodRef "deferThen") (EVar "authJoinTail")) (ELam ((PVar "rest")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "namesOrAuthJoin") (EVar "v")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))))
 (DFunDef false "parseTyParenIdent" (PWild) (EVar "parseTyParenTuple"))
 (DTypeSig false "binderDomainP" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "Option") (TyCon "EffAtomTy"))))))
-(DFunDef false "binderDomainP" ((PCon "TAt") (PCon "TUpper" PWild)) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "upperNameP")) (ELam ((PVar "l")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "deferPure") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "effAtomAt") (EVar "l")) (EVar "EPTop")) (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
+(DFunDef false "binderDomainP" ((PCon "TAt") (PCon "TUpper" PWild)) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "upperNameP")) (ELam ((PVar "l")) (EApp (EApp (EMethodRef "deferThen") (EVar "patternMarkP")) (ELam ((PVar "pat")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (ELet false (PVar "atom") (EApp (EApp (EApp (EVar "effAtomAt") (EVar "l")) (EVar "EPTop")) (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Some") (EVariantUpdate "EffAtomTy" (EVar "atom") ((fa "eatPattern" (EVar "pat"))))))))))))))))))
 (DFunDef false "binderDomainP" ((PCon "TAsAt") (PCon "TUpper" (PVar "l"))) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "a binder's domain is written with a space before the `@`: `String @")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "`")))) (EVar "pos")))))
 (DFunDef false "binderDomainP" (PWild PWild) (EApp (EMethodRef "deferPure") (EVar "None")))
 (DTypeSig false "namesOrAuthJoin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty")))))
@@ -8987,9 +9008,14 @@ parseResultWith src tokList offList =
 (DFunDef false "kindAtomFor" ((PCon "TLParen")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "kindP")) (ELam ((PVar "k")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EVar "k")))))))))
 (DFunDef false "kindAtomFor" (PWild) (EApp (EVar "failP") (EVar "kindExpectedMsg")))
 (DTypeSig false "kindExpectedMsg" (TyCon "String"))
-(DFunDef false "kindExpectedMsg" () (ELit (LString "expected a kind: `Type`, `Effect`, `Authority <Label>`, or an arrow between them")))
+(DFunDef false "kindExpectedMsg" () (ELit (LString "expected a kind: `Type`, `Effect`, `Authority <Label>` (or `Authority <Label>*`), or an arrow between them")))
 (DTypeSig false "kindAuthorityP" (TyApp (TyCon "Parser") (TyCon "KindAnn")))
-(DFunDef false "kindAuthorityP" () (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "upperNameP")) (ELam ((PVar "l")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "kindAuthorityUnstamped") (EVar "l")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
+(DFunDef false "kindAuthorityP" () (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "upperNameP")) (ELam ((PVar "l")) (EApp (EApp (EMethodRef "deferThen") (EVar "patternMarkP")) (ELam ((PVar "pat")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "kindAuthorityUnstamped") (EVar "l")) (EVar "pat")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))))
+(DTypeSig false "patternMarkP" (TyApp (TyCon "Parser") (TyCon "Bool")))
+(DFunDef false "patternMarkP" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "patternMarkFor") (EVar "t")))))
+(DTypeSig false "patternMarkFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Bool"))))
+(DFunDef false "patternMarkFor" ((PCon "TStar")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EVar "True")))))
+(DFunDef false "patternMarkFor" (PWild) (EApp (EMethodRef "deferPure") (EVar "False")))
 (DTypeSig false "kindAtomEmit" (TyFun (TyCon "KindAnn") (TyApp (TyCon "Parser") (TyCon "KindAnn"))))
 (DFunDef false "kindAtomEmit" ((PVar "k")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EVar "k")))))
 (DTypeSig false "parseData" (TyFun (TyCon "DataVis") (TyApp (TyCon "Parser") (TyCon "Decl"))))
@@ -9043,7 +9069,7 @@ parseResultWith src tokList offList =
 (DFunDef false "ctorBinderColon" ((PCon "TColon")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "lowerNameP")) (ELam ((PVar "n")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "kindP")) (ELam ((PVar "k")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EVar "ctorBinderKind") (EVar "n")) (EVar "k")))))))))))))
 (DFunDef false "ctorBinderColon" (PWild) (EApp (EVar "failP") (ELit (LString "expected a constructor binder"))))
 (DTypeSig false "ctorBinderKind" (TyFun (TyCon "String") (TyFun (TyCon "KindAnn") (TyApp (TyCon "Parser") (TyTuple (TyCon "String") (TyCon "KindAnn"))))))
-(DFunDef false "ctorBinderKind" ((PVar "n") (PAs "k" (PCon "KindAuthority" PWild PWild PWild))) (EApp (EMethodRef "deferPure") (ETuple (EVar "n") (EVar "k"))))
+(DFunDef false "ctorBinderKind" ((PVar "n") (PAs "k" (PCon "KindAuthority" PWild PWild PWild PWild))) (EApp (EMethodRef "deferPure") (ETuple (EVar "n") (EVar "k"))))
 (DFunDef false "ctorBinderKind" ((PVar "n") (PVar "k")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a constructor may bind only an `Authority` existential: `(")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "kindAnnSource") (EVar "k")))) (ELit (LString ")` names a kind a match arm cannot open. Declare `"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` on the type's head instead")))) (EVar "pos")))))
 (DTypeSig false "parsePayload" (TyApp (TyCon "Parser") (TyCon "ConPayload")))
 (DFunDef false "parsePayload" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "payloadFor") (EVar "t")))))
