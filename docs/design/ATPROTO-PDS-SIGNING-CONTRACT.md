@@ -103,12 +103,14 @@ publicKeyCompressed      : PublicKey -> Bytes
 publicKeyForSecret       : SecretKey -> PublicKey
 signatureFromCompact     : Bytes -> Result String Signature
 signatureCompact         : Signature -> Bytes
-signDigest               : SecretKey -> Bytes -> Result String Signature
+signCommitDigest         : SecretKey -> Bytes -> <Sign "commit"> Result String Signature
+signServiceAuthDigest    : SecretKey -> Bytes -> <Sign "service-auth"> Result String Signature
 verifyDigest             : PublicKey -> Bytes -> Signature -> Bool
 ```
 
-Every PDS consumer imports `sign.mdk`, never `secp256k1.mdk`. `signDigest`
-rejects a digest whose length is not 32. Compact signatures are exactly 64
+Every PDS consumer imports `sign.mdk`, never `secp256k1.mdk`. The two signers
+share one private body, `signDigest`, and differ only in the `Sign` label
+their rows carry. Both reject a digest whose length is not 32. Compact signatures are exactly 64
 bytes, big-endian `r || s`, never DER. Parsing rejects `r = 0`, `s = 0`,
 `r >= n`, `s >= n`, and high-S; verification also returns `False` for them.
 Compressed public keys are exactly 33 bytes, prefix `0x02` or `0x03`, followed
@@ -444,7 +446,8 @@ and transactional mutations. It must prove red for:
     or its aggregate validity bit omitted;
 16. the gate-only candidate seam no longer reaches candidate 1 or exhaustion.
 
-The native structural gate starts at `publicKeyForSecret` and `signDigest`,
+The native structural gate starts at `publicKeyForSecret` and
+`signCommitDigest`, which calls the private `signDigest`,
 closes every local/transitive callee, and checks source, emitted LLVM helper
 bodies, final linked reducer/point/HMAC/signing topology, and runtime bit-helper
 disassembly. It rejects secret-derived conditional jumps, early exits,

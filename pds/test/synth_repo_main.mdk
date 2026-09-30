@@ -28,10 +28,13 @@ import lib.blob.{blobCid}
 import lib.cid.{Cid, cidForDagCbor, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import lib.mst.{Mst, mstFromEntries, mstNodeBlocks, mstRootCid}
-import lib.sign.{SecretKey, secretKeyFromBytes, signDigest, signatureCompact}
+import lib.sign.{
+  SecretKey, secretKeyFromBytes, signCommitDigest, signatureCompact
+}
 import lib.tid.{Tid, tidParse, tidToString}
 import crypto.sha256.{sha256}
 import shell.blobfile.{blobFileWrite}
+import shell.datadir.{dataDirAt}
 import shell.persist.{persistSave}
 
 -- ── fixed account identity ──────────────────────────────────────────────────
@@ -157,11 +160,11 @@ unsignedValue did dataCid rev = DcMap [
   ("prev", DcNull),
 ]
 
-signedCommit : String -> SecretKey -> Tid -> Cid -> (Cid, Bytes)
+signedCommit : String -> SecretKey -> Tid -> Cid -> <Sign "commit"> (Cid, Bytes)
 signedCommit did secret rev dataCid =
   let unsigned = mustEncode (unsignedValue did dataCid rev)
   let digest = sha256 unsigned
-  let signature = match signDigest secret digest
+  let signature = match signCommitDigest secret digest
     Ok value => value
     Err message => panic "synth_repo: signing failed: \{message}"
   let signed =
@@ -208,7 +211,7 @@ runBuild : String ->
   Int ->
   Int ->
   Int ->
-  <IO, FileRead, FileWrite> Unit
+  <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBuild shape dir count blobCount seed =
   let rows = buildRows shape seed count
   let tree = mustTree (entriesOf rows)
@@ -217,11 +220,11 @@ runBuild shape dir count blobCount seed =
     signedCommit corpusDid corpusSecret corpusRev dataCid
   let allBlocks =
     (commitCid, signed) :: mstNodeBlocks tree ++ recordBlocksOf rows
-  match persistSave dir commitCid allBlocks
+  match persistSave (dataDirAt dir) commitCid allBlocks
     Err message => panic "synth_repo: persist failed: \{message}"
     Ok () =>
       let blobRows = buildBlobRows seed blobCount
-      match blobFileWrite dir blobRows
+      match blobFileWrite (dataDirAt dir) blobRows
         Err message => panic "synth_repo: blob persist failed: \{message}"
         Ok () =>
           let () = println "shape \{shape}"
@@ -244,7 +247,7 @@ mustInt : String -> Int
 mustInt text =
   optionOrPanic "synth_repo: malformed integer: \{text}" (toInt text)
 
-main : <IO, Env, FileRead, FileWrite> Unit
+main : <Env, FileRead, FileWrite, IO, Sign "commit"> Unit
 main = match args ()
   ["build", shape, dir] =>
     runBuild shape dir defaultRecordCount defaultBlobCount defaultSeed

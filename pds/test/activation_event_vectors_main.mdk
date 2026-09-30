@@ -58,6 +58,7 @@ import lib.sync_event.{
   syncSyncFrame,
 }
 import lib.tid.{Tid, tidParse}
+import lib.sign.{Sign}
 
 {- | The frame header each activation event carries, as hex.
 
@@ -257,7 +258,7 @@ fixtureSecretHex : String
 fixtureSecretHex =
   "0000000000000000000000000000000000000000000000000000000000000001"
 
-genesisRepo : String -> Tid -> Repo
+genesisRepo : String -> Tid -> <Sign "commit"> Repo
 genesisRepo did rev =
   match repoInitFromKeyBytes did (mustHex fixtureSecretHex) rev
     Ok repo => repo
@@ -277,7 +278,7 @@ genesisRepo did rev =
    order; the lexicon fixes neither, so what is claimed against the reference
    is the SET. That ours is the sorted one is stated by
    `pds/test/sync_event_test.mdk` instead. -}
-gradeGenesisCommit : List (String, String) -> <IO> Bool
+gradeGenesisCommit : List (String, String) -> <IO, Sign "commit"> Bool
 gradeGenesisCommit rows =
   let did = textOf (mustCbor (rowValue rows "SYNC")) "did"
   let rev = mustTid (rowValue rows "GENESIS-COMMIT-REV")
@@ -332,7 +333,7 @@ soleBlockBytes _ blocks =
   panic
     "activation_event: corpus CAR holds \{intToString (length blocks)} blocks, expected 1"
 
-main : <IO, Env, FileRead> Unit
+main : <Env, FileRead, IO, Sign "commit"> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message => panic "activation_event: cannot read corpus: \{message}"

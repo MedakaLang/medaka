@@ -1,0 +1,12 @@
+[package.capabilities]
+Clock = true
+FileRead = ["data/*", "secrets", "secrets/key.hex", "secrets/password", "secrets/token.hex"]
+FileWrite = ["data/*", "secrets", "secrets/key.hex", "secrets/token.hex"]
+Kdf = true
+Mint = ["access", "refresh"]
+Net = "127.0.0.1"
+Rand = true
+Sign = ["commit", "service-auth"]
+Signal = true
+Stderr = true
+Stdout = true

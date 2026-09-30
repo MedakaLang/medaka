@@ -1,0 +1,8 @@
+-- Accepted twin of `mint_pure.mdk`: the row names `Mint "access"`.
+
+import lib.jwt.{Mint, SessionKey, mintAccessToken}
+
+export
+mintIt : SessionKey -> <Mint "access"> String
+mintIt key =
+  mintAccessToken key "did:web:pds.test" "did:web:pds.test" "jti" 0 60

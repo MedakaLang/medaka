@@ -245,7 +245,7 @@ wycheproofRows = match readLines wycheproofCorpusPath
   Err e => panic "pbkdf2_test: could not read \{wycheproofCorpusPath}: \{e}"
   Ok lns => somes (map parseKdfLine lns)
 
-kdfRowExpectation : KdfRow -> (String, Expectation)
+kdfRowExpectation : KdfRow -> <Kdf> (String, Expectation)
 kdfRowExpectation r = (
   "tcId \{intToString r.tcId}",
   expectEqual r.dk (pbkdf2HmacSha256 r.password r.salt r.iterations r.dkLen),

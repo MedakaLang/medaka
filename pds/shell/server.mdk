@@ -8,10 +8,9 @@
    and `shell.blobfile` and then published into the one `Ref Store` every
    connection task shares.
 
-   The listener binds whatever address `bindAddress` is given — `pds/serve.mdk`
-   defaults it to loopback and refuses any other address unless
-   `--trusted-proxy` is also set, but that refusal lives in `configure`, not
-   here: this module binds the socket it is told to bind.
+   The listener binds loopback and nothing else (`bindAddress`): the address
+   is a constant, not a flag, so the listener's type names it and every
+   accepted connection is charged at it.
 
    Every per-connection bound lives here rather than in `lib.resource_limits`
    because each is a `Duration` or a socket-scheduling count, neither of which
@@ -40,7 +39,6 @@ import http.{
 }
 import async.{
   Async,
-  Wait,
   awaitAny,
   deadlineAfter,
   expired,
@@ -132,6 +130,8 @@ import lib.proxy.{
 }
 import lib.handlers.{serviceAuthTokenResponse}
 import lib.jwt.{ServiceAuthRequest}
+import lib.pbkdf2.{Kdf}
+import lib.sign.{Sign}
 import lib.server_core.{
   ProxyAdmission(..),
   ProxyDecision(..),
@@ -183,6 +183,8 @@ import shell.eventlog.{
   eventLogStage,
   eventLogStaged,
 }
+import shell.datadir.{DataDir}
+import shell.rows.{Serve, ServeDeadline, Wire}
 import shell.persist.{
   persistCredential,
   persistPreferences,
@@ -497,16 +499,18 @@ egressQueueWait = seconds 5
 headerTimeout : Duration
 headerTimeout = seconds 5
 
-{- | Bind the listening socket to the given address and port.
-
-   `pds/serve.mdk`'s `configure` is the only caller, and it refuses to reach
-   here at all for a non-loopback address unless `--trusted-proxy` is also
-   set (`requireTrustedBind`) — this function itself performs no such check,
-   because it cannot: a bind address is a deployment fact, not something this
-   process can verify about its own socket. -}
+-- | The one address this server listens on. It is not configurable: the
+-- server is reached only through a reverse proxy on the same box
+-- (`docs/ops/PDS-DEPLOY.md`), and the declared qualifier is what charges every
+-- accepted connection `Net "127.0.0.1"`.
 export
-bindAddress : String -> Int -> <Net> Result String (Listener *)
-bindAddress addr port = listen addr port
+listenAddress : String @"127.0.0.1"
+listenAddress = "127.0.0.1"
+
+-- | Bind the listening socket to `listenAddress` on `port`.
+export
+bindAddress : Int -> <Net "127.0.0.1"> Result String (Listener "127.0.0.1")
+bindAddress port = listen listenAddress port
 
 -- ── applying a request and persisting the store ─────────────────────────────
 
@@ -531,7 +535,7 @@ persistFailureBytes =
    interleave tasks at an `Async` bind, and there is not one in this sequence —
    `handleBytes` is pure, the clock and entropy readings handed to it are plain
    synchronous `<Clock>`/`<Rand>` calls, and `persistTransition` performs plain
-   synchronous `<FileRead, FileWrite>` for both halves, not a suspension. So the four steps run
+   synchronous `<FileRead d, FileWrite d>` for both halves, not a suspension. So the four steps run
    as one indivisible unit, and two concurrent connections cannot both read the
    same store and each publish over the other's write. Wrapping the persist in
    `liftIO`, or splitting these steps across two `Async` steps, silently
@@ -559,13 +563,13 @@ persistFailureBytes =
    verdict. The handler accepts that verdict only against the credential the
    store read here still holds, so a verdict that a concurrent request made
    stale while it was being derived is refused rather than applied. -}
-applyRequest : Server ->
-  String ->
+applyRequest : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   Option LoginVerdict ->
   Bytes ->
-  <Clock, FileRead, FileWrite, Rand, Stderr> Bytes
+  <Clock, FileRead d, FileWrite d, Rand, Stderr | e> Bytes
 applyRequest server dir storeRef limiterRef login bytes =
   let store = !storeRef
   let nowSeconds = floatToInt (now ())
@@ -620,11 +624,11 @@ chargeHandleUpdate limiterRef (Some chargedDid) nowSeconds =
             handleUpdateCapacityMessage
             handleUpdateCapacityHeaderList))
 
-announceIdentity : String ->
+announceIdentity : DataDir d ->
   Int ->
   String ->
   String ->
-  <FileRead, FileWrite, Stderr> Unit
+  <FileRead d, FileWrite d, Stderr> Unit
 announceIdentity dir nowSeconds did handle =
   let identityFrame = seq time => syncIdentityFrame seq time did handle
   match emitUnanchored dir nowSeconds identityFrame
@@ -649,12 +653,12 @@ announceIdentity dir nowSeconds did handle =
    reference nothing, are referenced by nothing, and create no directory, so
    their position is free. -}
 export
-persistTransition : String ->
+persistTransition : DataDir d ->
   String ->
   Int ->
   Store ->
   Store ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 persistTransition dir did nowSeconds before after = do
   () <- if blobsMoved before after then
     persistBlobHalf dir before after
@@ -678,10 +682,10 @@ persistTransition dir did nowSeconds before after = do
    to recover with. The rows carry fingerprints rather than tokens
    (`lib.store`'s `sessionFingerprint`), so the file cannot be replayed
    against the server that wrote it. -}
-persistSessionsHalf : String ->
+persistSessionsHalf : DataDir d ->
   Store ->
   Store ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 persistSessionsHalf dir before after =
   if storeSessionRows before == storeSessionRows after then
     Ok ()
@@ -693,10 +697,10 @@ persistSessionsHalf dir before after =
    not. Comparing the two lists is exactly `persistCredentialHalf`'s shape,
    one level simpler: there is no re-derivation case to distinguish, only
    "moved" or "did not". -}
-persistPreferencesHalf : String ->
+persistPreferencesHalf : DataDir d ->
   Store ->
   Store ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 persistPreferencesHalf dir before after =
   if storePreferences before == storePreferences after then
     Ok ()
@@ -711,10 +715,10 @@ persistPreferencesHalf dir before after =
    A rewrite that failed would not publish the successor store either, so the
    next login re-derives against the record still on disk rather than against
    one nothing can verify. -}
-persistCredentialHalf : String ->
+persistCredentialHalf : DataDir d ->
   Store ->
   Store ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 persistCredentialHalf dir before after = match (
   storeCredential before,
   storeCredential after,
@@ -747,12 +751,12 @@ repoAdvanced before after = match (storeRepo before, storeRepo after)
    header sets out each crash point. A persist that fails takes the staged
    entry back down with it, so a write the client was told did not happen
    leaves no event behind claiming it did. -}
-persistRepoHalf : String ->
+persistRepoHalf : DataDir d ->
   String ->
   Int ->
   Store ->
   Store ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 persistRepoHalf dir did nowSeconds before after = match storeRepo after
   None => Ok ()
   Some next =>
@@ -770,12 +774,12 @@ persistRepoHalf dir did nowSeconds before after = match storeRepo after
 -- written. Its sequence number comes off disk rather than out of memory: a
 -- relay's cursor has to survive this process, so the counter it indexes has
 -- to as well.
-stageCommitEvent : String ->
+stageCommitEvent : DataDir d ->
   String ->
   Int ->
   Option Repo ->
   Repo ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 stageCommitEvent dir did nowSeconds before after = do
   seq <- eventLogNextSequence dir
   let time = formatIso (fromEpochSeconds nowSeconds)
@@ -827,12 +831,12 @@ stageCommitEvent dir did nowSeconds before after = do
    second identity, account, commit and sync beside the first, which no
    subscriber can reconcile. Such a start refuses instead. -}
 export
-completeGenesisEvents : String ->
+completeGenesisEvents : DataDir d ->
   String ->
   String ->
   Int ->
   Repo ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 completeGenesisEvents dir did handle nowSeconds repo = do
   () <- requireRecoveryApplied dir
   resumeAt <- eventLogNextSequence dir
@@ -854,7 +858,7 @@ completeGenesisEvents dir did handle nowSeconds repo = do
    in the caller: a precondition written into the caller moves when the two
    calls it orders are swapped, which is the one mutation it exists to
    catch. -}
-requireRecoveryApplied : String -> <FileRead> Result String Unit
+requireRecoveryApplied : DataDir d -> <FileRead d> Result String Unit
 requireRecoveryApplied dir = match eventLogStaged dir
   Err message => Err message
   Ok None => Ok ()
@@ -876,7 +880,7 @@ requireRecoveryApplied dir = match eventLogStaged dir
    Deciding only, like `eventLogPlanRecovery`: naming what an operator has to
    look at is the whole of the answer, because which of the two files is the
    damaged one is not something this process can know. -}
-refuseLostPointer : String -> Int -> <FileRead> Result String Unit
+refuseLostPointer : DataDir d -> Int -> <FileRead d> Result String Unit
 refuseLostPointer dir resumeAt =
   if resumeAt /= eventLogFirstSeq then
     Ok ()
@@ -906,12 +910,12 @@ refuseLostPointer dir resumeAt =
    time they are called, so re-running step 1 would mint a fifth event rather
    than replace the first. -}
 genesisFrom : Int ->
-  String ->
+  DataDir d ->
   String ->
   String ->
   Int ->
   Repo ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 genesisFrom 1 dir did handle nowSeconds repo = do
   let identityFrame = seq time => syncIdentityFrame seq time did handle
   () <- emitUnanchored dir nowSeconds identityFrame
@@ -948,10 +952,10 @@ headSyncFrame did repo seq time =
    the lexicon requires `seq` and `time` inside every event body and this log
    stores the finished bytes. The number comes off disk for the reason
    `stageCommitEvent` gives: a relay's cursor has to survive this process. -}
-emitUnanchored : String ->
+emitUnanchored : DataDir d ->
   Int ->
   (Int -> String -> Result String Bytes) ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 emitUnanchored dir nowSeconds build = do
   seq <- eventLogNextSequence dir
   frame <- build seq (formatIso (fromEpochSeconds nowSeconds))
@@ -1031,10 +1035,10 @@ blobRowsOwed before after (cid :: rest) =
 -- blob file's name is its content, so promoting one already on disk writes
 -- the same bytes over themselves, and doing that for every blob makes one
 -- upload cost the account's whole stored size.
-persistBlobHalf : String ->
+persistBlobHalf : DataDir d ->
   Store ->
   Store ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 persistBlobHalf dir before after = do
   rows <- blobRowsOwed before after (storeBlobCids after)
   blobFileWrite dir rows
@@ -1054,10 +1058,10 @@ headText repo = cidToString (repoCommitCid (repoLatestCommit repo))
    every block makes one write cost the whole repository. A persist that fails
    publishes nothing, so the next one is diffed against the same `prior` and
    writes again whatever this one did not finish. -}
-persistRepo : String ->
+persistRepo : DataDir d ->
   Option Repo ->
   Repo ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead d, FileWrite d> Result String Unit
 persistRepo dir prior repo = do
   blocks <- repoAddedBlocks prior repo
   persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
@@ -1195,7 +1199,8 @@ applyRateLimit limiterRef identity classes nowSeconds =
    the whole request's. They travel as a pair rather than as two `Wait`
    arguments so that a call site cannot silently swap them — they have the
    same type and opposite meanings. -}
-data Deadlines (e : Effect) = Deadlines (Wait e) (Wait e)
+data Deadlines (h : Authority Net) (d : Authority FileWrite*) (e : Effect) =
+  | Deadlines (ServeDeadline h d e) (ServeDeadline h d e)
 
 {- | One connection's place in the un-framed census: the process-wide count,
    and whether THIS connection is still one of the connections it counts.
@@ -1954,12 +1959,12 @@ servingDerivationCensus (Serving _ _ _ _ _ census _) = census
 -- count is the one field that costs a directory walk; a failed walk (an
 -- unreadable shard, mid-write residue) drops this ONE line rather than the
 -- server, since `statsLoop` tries again at the next interval regardless.
-emitStats : String ->
+emitStats : DataDir d ->
   Ref Store ->
   Ref Int ->
   Ref Int ->
   Ref Int ->
-  <FileRead, Stdout> Unit
+  <FileRead d, Stdout> Unit
 emitStats dir storeRef active unframed subs =
   let store = !storeRef
   let (rev, blocks) = match storeRepo store
@@ -1996,14 +2001,14 @@ emitStats dir storeRef active unframed subs =
 -- `async.sleep`, which parks this ONE task and lets the scheduler run every
 -- other one meanwhile, and not `time.sleep`/`sleepMs`, which blocks the
 -- single thread the whole scheduler — `acceptLoop` included — runs on.
-statsLoop : String ->
+statsLoop : DataDir d ->
   Ref Store ->
   Ref Int ->
   Ref Int ->
   Ref Int ->
   Duration ->
   Ref Bool ->
-  Async <Clock, FileRead, Stdout | e> Unit
+  Async <Clock, FileRead d, Stdout | e> Unit
 statsLoop dir storeRef active unframed subs interval stopping = defer
   if !stopping then
     deferPure ()
@@ -2020,14 +2025,14 @@ statsLoop dir storeRef active unframed subs interval stopping = defer
 -- `statsInterval` is `pds/serve.mdk`'s `--stats-interval-ms`, or
 -- `defaultStatsInterval` when the flag is absent.
 export
-runServer : Server ->
-  String ->
+runServer : Server e ->
+  DataDir d ->
   Ref Store ->
-  Listener * ->
+  Listener h ->
   Serving ->
   Duration ->
   Int ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 runServer server dir storeRef lis serving statsInterval signalFd = defer
   active <- liftIO (u => Ref 0)
   unframed <- liftIO (u => Ref 0)
@@ -2092,9 +2097,9 @@ drainPending active until = defer
 
 -- Closing the listening fd from another task would not reliably wake poll(2).
 -- The signal pipe and listener share the same scheduler poller and wait set.
-acceptOrSignal : Listener * ->
+acceptOrSignal : Listener h ->
   Int ->
-  Async <Clock, Net, Signal | e> (Result String (Option (Connection *)))
+  Wire h <Signal | e> (Result String (Option (Connection h)))
 acceptOrSignal lis signalFd = defer
   requested <- liftIO (u => pdsSignalRequested ())
   if requested then
@@ -2121,17 +2126,17 @@ acceptOrSignal lis signalFd = defer
         () <- awaitAny [waitRead (listenSocketFd lis), waitRead signalFd]
         acceptOrSignal lis signalFd
 
-acceptLoop : Server ->
-  String ->
+acceptLoop : Server e ->
+  DataDir d ->
   Ref Store ->
-  Listener * ->
+  Listener h ->
   Ref Int ->
   Ref Int ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
   Int ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 acceptLoop server dir storeRef lis active unframed limiterRef census serving signalFd =
   defer
     accepted <- acceptOrSignal lis signalFd
@@ -2148,18 +2153,18 @@ acceptLoop server dir storeRef lis active unframed limiterRef census serving sig
       signalFd
       accepted
 
-acceptStep : Server ->
-  String ->
+acceptStep : Server e ->
+  DataDir d ->
   Ref Store ->
-  Listener * ->
+  Listener h ->
   Ref Int ->
   Ref Int ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
   Int ->
-  Result String (Option (Connection *)) ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Result String (Option (Connection h)) ->
+  Serve h d e (Result String Unit)
 acceptStep _ _ _ _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
 acceptStep _ _ _ lis _ _ _ _ serving _ (Ok None) = defer
   _ <- liftIO (u => servingStopping serving := True)
@@ -2221,16 +2226,16 @@ acceptStep server dir storeRef lis active unframed limiterRef census serving sig
 -- un-framed one is USUALLY retired earlier, the moment the header section
 -- ends; `releaseUnframed` is idempotent so that this path can retire it
 -- unconditionally without having to know whether that already happened.
-serveConnection : Server ->
-  String ->
+serveConnection : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   Ref Int ->
   Ref Int ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> Unit
+  Serve h d e Unit
 serveConnection server dir storeRef limiterRef census serving conn active unframed =
   defer
     held <- liftIO (u => Ref True)
@@ -2267,17 +2272,17 @@ serveConnection server dir storeRef limiterRef census serving conn active unfram
    Both budgets are armed here, once per request rather than once per
    connection: a kept-alive connection's second request gets its own header
    and request budgets, exactly as a fresh connection's first one does. -}
-connectionLoop : Server ->
-  String ->
+connectionLoop : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 connectionLoop server dir storeRef limiterRef census serving conn slot pending firstRequest =
   defer
     stopping <- liftIO (u => pdsSignalRequested ())
@@ -2306,19 +2311,19 @@ connectionLoop server dir storeRef limiterRef census serving conn slot pending f
 -- what it sent rather than what it has sent so far; it is opaque here, and a
 -- new request starts from `httpScanStart` in `connectionLoop` because
 -- `respond` hands the next request a buffer rebased on its own first byte.
-frameLoop : Server ->
-  String ->
+frameLoop : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
-  Deadlines <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> ->
+  Deadlines h d e ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 frameLoop server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   let scanned =
     scanRequestBoundaryWithin (readBufferBacking buf) (readBufferLen buf) 0 scan
@@ -2361,19 +2366,19 @@ frameLoop server dir storeRef limiterRef census serving conn slot deadlines buf 
 
 -- The header budget is tested only while the header section is unterminated,
 -- so a legitimate body that outlives it is not closed on it.
-framePending : Server ->
-  String ->
+framePending : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
-  Deadlines <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> ->
+  Deadlines h d e ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 framePending server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   match deadlines
     Deadlines headerDeadline deadline => defer
@@ -2398,19 +2403,19 @@ framePending server dir storeRef limiterRef census serving conn slot deadlines b
           scan
           firstRequest
 
-readMore : Server ->
-  String ->
+readMore : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
-  Deadlines <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> ->
+  Deadlines h d e ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 readMore server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   defer
     reserved <- reserveReadBuffer (servingBufferCensus serving) buf scan
@@ -2531,9 +2536,9 @@ reserveReadBuffer census buf scan =
 
    Either way the connection closes and its retirement gives its whole charge
    back, which is what lets the waiters behind it proceed. -}
-refuseOverBudget : Connection * ->
+refuseOverBudget : Connection h ->
   HttpScan ->
-  Async <Clock, Net, Stdout | e> (Result String Unit)
+  Async <Clock, Net h, Stdout | e> (Result String Unit)
 refuseOverBudget conn scan =
   if httpScanInHeaders scan then
     deferPure (Err "in-flight request buffer budget exceeded")
@@ -2561,7 +2566,7 @@ refuseOverBudget conn scan =
    reads and the one short wait that finds the queue already empty. A peer
    still sending past that is told by the reset instead, which is the answer
    it left this server no room for. -}
-drainRefused : Connection * -> Int -> Async <Clock, Net | e> Unit
+drainRefused : Connection h -> Int -> Async <Clock, Net h | e> Unit
 drainRefused conn left =
   if left <= 0 then
     deferPure ()
@@ -2681,18 +2686,18 @@ logAccessBytes trace responseBytes =
 -- `identifyClient`, and target, for the routed NSID) and the point of
 -- admission: a refusal is answered without ever calling `applyRequest`, so a
 -- rate-limited request costs a parse and a `step`, not a store transition.
-respond : Server ->
-  String ->
+respond : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Int ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 respond server dir storeRef limiterRef census serving conn slot buf boundary firstRequest =
   defer
     nowSeconds <- liftIO (u => floatToInt (now ()))
@@ -2714,20 +2719,20 @@ respond server dir storeRef limiterRef census serving conn slot buf boundary fir
       nowSeconds
       startedAt
 
-respondAt : Server ->
-  String ->
+respondAt : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Int ->
   Bool ->
   Int ->
   Float ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 respondAt server dir storeRef limiterRef census serving conn slot buf boundary firstRequest nowSeconds startedAt =
   let parsed = parseRequestAt (readBufferBacking buf) 0 boundary
   let keepAlive = match parsed
@@ -2961,7 +2966,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
    Nothing about that transitions the store, so it does not belong inside
    `applyRequest`'s indivisible sequence, and an admitted forward never reaches
    `applyRequest` at all. -}
-proxyDecisionFor : Server ->
+proxyDecisionFor : Server s ->
   Serving ->
   Ref Store ->
   Int ->
@@ -3000,7 +3005,7 @@ proxyDecisionFor server serving storeRef nowSeconds (Ok request) =
    gated on the caller's own access token, which is resolved against the open
    sessions. Nothing about that transitions the store, and a minted credential
    never reaches `applyRequest` at all. -}
-serviceAuthDecisionFor : Server ->
+serviceAuthDecisionFor : Server s ->
   Serving ->
   Ref Store ->
   Int ->
@@ -3042,7 +3047,7 @@ gateVerdict LoginOverCeiling = None
    read for the record the password is graded against, and the verdict names
    that record, which is what lets `applyRequest` refuse the verdict if the
    record has been replaced by the time it runs. -}
-loginCheckFor : Server ->
+loginCheckFor : Server s ->
   Ref Store ->
   Result HttpParseFailure Request ->
   <Rand> Option LoginCheck
@@ -3158,7 +3163,7 @@ derivationCeilingResponse =
 {- | A login check run to its verdict, `kdfSliceIterations` HMAC calls at a
    time, yielding to the scheduler before every slice so that every other
    connection runs between two slices of it. -}
-deriveLogin : LoginCheck -> Async e LoginVerdict
+deriveLogin : LoginCheck -> Async <Kdf | e> LoginVerdict
 deriveLogin check = match loginCheckVerdict check
   Some verdict => deferPure verdict
   None => defer
@@ -3175,12 +3180,12 @@ deriveLogin check = match loginCheckVerdict check
    between them, for the reason `admitSubscription`'s are: the derivation is
    pure and cannot fail, so there is no exit between the two that skips the
    release. -}
-settleLogin : Server ->
+settleLogin : Server s ->
   Serving ->
   Ref Store ->
   Result HttpParseFailure Request ->
   ClientIdentity ->
-  Async <Rand | e> LoginGate
+  Async <Kdf, Rand | e> LoginGate
 settleLogin server serving storeRef parsed identity = defer
   started <- liftIO (u => loginCheckFor server storeRef parsed)
   match started
@@ -3214,7 +3219,7 @@ settleLogin server serving storeRef parsed identity = defer
    An `Err` from the mint is 500 and not 501: the key IS configured and the
    signature did not come out, which is this server failing rather than this
    server declining. -}
-mintedTokenBytes : Serving -> ServiceAuthRequest -> Bytes
+mintedTokenBytes : Serving -> ServiceAuthRequest -> <Sign "service-auth"> Bytes
 mintedTokenBytes serving claims = match servingEgress serving
   None => serializeResponse (withAllowOrigin serviceAuthUnavailableResponse)
   Some egress => match egressMintToken egress claims
@@ -3253,13 +3258,13 @@ serviceAuthMintFailureResponse =
    a configured `Egress` — and it is answered 502 rather than by a panic: a
    reachability argument is not a reason to add a crash path to the one
    function a client can reach over the network. -}
-forwardProxied : Server ->
-  String ->
+forwardProxied : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
@@ -3267,7 +3272,7 @@ forwardProxied : Server ->
   ClientIdentity ->
   RequestTrace ->
   ProxyAdmission ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 forwardProxied server dir storeRef limiterRef census serving conn slot rest keepAlive nowSeconds identity trace admission =
   match applyRateLimit limiterRef identity [ProxyClass] nowSeconds
     Some refusal =>
@@ -3416,7 +3421,7 @@ proxyAnswerBytes _ (Ok answer) = match proxyUpstreamResponse answer
    transitions the store, so it does not belong inside the indivisible
    sequence `applyRequest`'s own header describes. An admitted upgrade never
    reaches `applyRequest` at all. -}
-upgradeDecision : Server ->
+upgradeDecision : Server s ->
   Ref Store ->
   Int ->
   Result HttpParseFailure Request ->
@@ -3452,18 +3457,18 @@ upgradeDecision server storeRef nowSeconds (Ok request) =
    carry over, threaded into the loop as its per-write budget.
    `serveConnection` still closes the socket and retires `active` when this
    returns, so an upgraded connection's teardown needs no special case. -}
-admitSubscription : Server ->
-  String ->
+admitSubscription : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   RequestTrace ->
   UpgradeAdmission ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 admitSubscription server dir storeRef limiterRef census serving conn slot rest trace admission =
   if not (claimSubscription census) then
     sendAndContinue
@@ -3523,19 +3528,19 @@ subscriptionCeilingResponse =
 
 -- ── sending a response ──────────────────────────────────────────────────────
 
-sendAndContinue : Server ->
-  String ->
+sendAndContinue : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
   RequestTrace ->
   Bytes ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 sendAndContinue server dir storeRef limiterRef census serving conn slot rest keepAlive trace responseBytes =
   defer
     sent <- A.sendAllWithin writeTimeout conn responseBytes
@@ -3557,13 +3562,13 @@ sendAndContinue server dir storeRef limiterRef census serving conn slot rest kee
 
 -- `sendAndContinue` from the point the write has returned, for the caller
 -- (`forwardProxied`) that has something to give back between the two.
-continueAfterSend : Server ->
-  String ->
+continueAfterSend : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection * ->
+  Connection h ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
@@ -3571,7 +3576,7 @@ continueAfterSend : Server ->
   Int ->
   Int ->
   Result String Unit ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 continueAfterSend server dir storeRef limiterRef census serving conn slot rest keepAlive trace statusCode byteLength sent =
   defer
     -- Logged after the write and whatever it returned: a response this server
@@ -3605,14 +3610,14 @@ continueAfterSend server dir storeRef limiterRef census serving conn slot rest k
 -- can complete carries nothing this module may trust as an identity, and
 -- answering it is still work. `baseClasses` and not `admissionClasses` because
 -- there is no routed procedure to add a class for.
-rejectBuffer : Server ->
-  String ->
+rejectBuffer : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
-  Connection * ->
+  Connection h ->
   ReadBuffer ->
   Bool ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 rejectBuffer server dir storeRef limiterRef conn buf firstRequest = defer
   nowSeconds <- liftIO (u => floatToInt (now ()))
   startedAt <- liftIO (u => monotonic ())
@@ -3627,16 +3632,16 @@ rejectBuffer server dir storeRef limiterRef conn buf firstRequest = defer
     nowSeconds
     startedAt
 
-rejectBufferAt : Server ->
-  String ->
+rejectBufferAt : Server e ->
+  DataDir d ->
   Ref Store ->
   Ref RateLimitState ->
-  Connection * ->
+  Connection h ->
   ReadBuffer ->
   Bool ->
   Int ->
   Float ->
-  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
+  Serve h d e (Result String Unit)
 rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds startedAt =
   let charged =
     applyRateLimit

@@ -37,6 +37,7 @@ import lib.credential.{
   defaultIterations,
   loginOutcome,
   makeCredential,
+  passwordFromText,
 }
 import lib.handlers.{
   pdsServer,
@@ -59,11 +60,14 @@ import lib.store.{
   storeWithCredential,
   storeWithServerSecret,
 }
-import test.fixture_support.{altTestSecret, contextAt}
+import test.fixture_support.{altTestKey, contextAt}
 import test.request_support.{authOf, loginJson, postJson}
 import test.response_support.{
   jsonBody, outcome, responseText, settled, statusLineOf, stringField
 }
+import lib.sign.{Sign}
+import lib.jwt.{Mint}
+import lib.pbkdf2.{Kdf}
 
 accountDidText : String
 accountDidText = "did:plc:s-sessions-test-account"
@@ -83,7 +87,7 @@ account =
     "session_routes_test: account"
     (makeAccount accountDidText accountHandleText accountHostText)
 
-server : Server
+server : Server <Mint {"access", "refresh"}, Sign "commit">
 server =
   resultOrPanic
     "session_routes_test: server"
@@ -109,7 +113,7 @@ credential =
     makeCredential
       (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 13 + 3))))
       cheapIterations
-      password
+      (passwordFromText password)
   match derived
     Ok made => made
     Err message => panic "session_routes_test: credential: \{message}"
@@ -117,9 +121,9 @@ credential =
 -- | A configured server's store: session secret and account credential, no
 -- repository. No session route touches the repository.
 configuredStore : Store
-configuredStore = match storeWithServerSecret altTestSecret storeEmpty
-  Ok withSecret => storeWithCredential credential withSecret
-  Err message => panic "session_routes_test: session secret: \{message}"
+configuredStore =
+  let withSecret = storeWithServerSecret altTestKey storeEmpty
+  storeWithCredential credential withSecret
 
 -- | The same store holding a credential for the same password under another
 -- salt, which a successful login offered an upgrade moves onto the shipped
@@ -130,7 +134,7 @@ outdatedStore =
     makeCredential
       (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 5 + 9))))
       cheapIterations
-      password
+      (passwordFromText password)
   match older
     Ok made => storeWithCredential made configuredStore
     Err message => panic "session_routes_test: older credential: \{message}"
@@ -142,23 +146,20 @@ changedPasswordStore =
     makeCredential
       (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 13 + 3))))
       cheapIterations
-      "a different password"
+      (passwordFromText "a different password")
   match changed
     Ok made => storeWithCredential made configuredStore
     Err message => panic "session_routes_test: changed credential: \{message}"
 
 -- | The verdict the shell would derive for `bytes` against `store`, offering
 -- `salt` as the upgrade.
-verdictFor : Bytes -> Bytes -> Store -> Option LoginVerdict
+verdictFor : Bytes -> Bytes -> Store -> <Kdf> Option LoginVerdict
 verdictFor salt bytes store = verdictAgainst salt store bytes
 
 -- | The same store with no credential at all, which is what a server that was
 -- never given a password would hold.
 credentiallessStore : Store
-credentiallessStore =
-  resultOrPanic
-    "session_routes_test: session secret"
-    (storeWithServerSecret altTestSecret storeEmpty)
+credentiallessStore = storeWithServerSecret altTestKey storeEmpty
 
 testInstant : Int
 testInstant = 1700000000
@@ -202,7 +203,10 @@ fieldBool name bytes = match map (get name) (jsonBody bytes)
    verified and the record kept. The shell always offers one, and against
    this file's `cheapIterations` records it would re-derive at the shipped
    count on every successful login. -}
-send : RequestContext -> Store -> Bytes -> (Store, Bytes)
+send : RequestContext ->
+  Store ->
+  Bytes ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 send context store bytes =
   handleBytes
     server
@@ -222,14 +226,17 @@ noUpgradeSalt = empty
 -- | The verdict of `packed`'s password derivations against the credential
 -- `store` holds, offering `salt` as the upgrade, or `None` for a request that
 -- needs none.
-verdictAgainst : Bytes -> Store -> Bytes -> Option LoginVerdict
+verdictAgainst : Bytes -> Store -> Bytes -> <Kdf> Option LoginVerdict
 verdictAgainst salt store packed = match parseRequestClassified packed
   Err _ => None
   Ok request => map settled (classifyLogin server salt store request)
 
 -- | One request against `store`, carrying a verdict computed elsewhere rather
 -- than against `store` itself.
-sendWithVerdict : Option LoginVerdict -> Store -> Bytes -> (Store, Bytes)
+sendWithVerdict : Option LoginVerdict ->
+  Store ->
+  Bytes ->
+  <Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 sendWithVerdict verdict store bytes =
   handleBytes server { contextAt testInstant 40 | login = verdict } store bytes
 
@@ -249,7 +256,10 @@ createRecordNsid : String
 createRecordNsid = "com.atproto.repo.createRecord"
 
 -- | Log in with the right password at `instant`, identified by `seed`.
-login : Int -> Int -> Store -> (Store, Bytes)
+login : Int ->
+  Int ->
+  Store ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 login instant seed store =
   send
     (contextAt instant seed)
@@ -690,7 +700,11 @@ daySeconds = 86400
 
 -- | Refresh with `refresh` at `instant`, giving the store left behind and the
 -- pair the response carried.
-rotateAt : Int -> Int -> Store -> String -> (Store, String, String)
+rotateAt : Int ->
+  Int ->
+  Store ->
+  String ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, String, String)
 rotateAt instant seed store refresh =
   let (next, response) =
     send (contextAt instant seed) store (postNoInput refresh refreshSessionNsid)
@@ -775,7 +789,10 @@ test "a consumed refresh token replayed within the grace window still works" =
 
 -- | The original refresh token, consumed at +60, presented `count - step`
 -- more times a second apart from +120, each against the store the last left.
-replayBurst : Int -> Int -> Store -> (Store, List Bytes)
+replayBurst : Int ->
+  Int ->
+  Store ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, List Bytes)
 replayBurst step count store =
   if step >= count then
     (store, [])
@@ -789,7 +806,10 @@ replayBurst step count store =
     (final, response :: rest)
 
 -- | The outcome of one request, the store it left behind discarded.
-answerTo : RequestContext -> Store -> Bytes -> String
+answerTo : RequestContext ->
+  Store ->
+  Bytes ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> String
 answerTo context store bytes = match send context store bytes
   (_, response) => outcome response
 

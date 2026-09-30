@@ -1,0 +1,15 @@
+-- lint-disable-file rule-duplicate-body
+-- Refused: `pdsHandler` mints tokens and signs commits, so a server built
+-- from it is not a `Server <>`. Twin: `server_labelled.mdk`, whose body is
+-- identical: only the signatures differ.
+
+import lib.handlers.{ServerLinks, pdsHandler}
+import lib.jwt.{Mint}
+import lib.server_core.{Account, Server, makeServer}
+import lib.sign.{Sign}
+import lib.xrpc.{Registry}
+
+export
+serverOf : Account -> Registry -> ServerLinks -> Server <>
+serverOf account registry links =
+  makeServer account registry (pdsHandler account links "0.0.0")

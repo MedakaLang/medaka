@@ -11,7 +11,7 @@ import lib.sign.{
   publicKeyForSecret,
   publicKeyFromCompressed,
   secretKeyFromBytes,
-  signDigest,
+  signCommitDigest,
   signatureCompact,
   signatureFromCompact,
   verifyDigest,
@@ -60,7 +60,7 @@ main =
       ()
     else
       panic "constant_time_signing_public: compressed G did not round-trip"
-  let signed = match signDigest secret digestBytes
+  let signed = match signCommitDigest secret digestBytes
     Ok value => value
     Err message =>
       panic "constant_time_signing_public: signing failed: \{message}"

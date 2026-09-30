@@ -5,7 +5,10 @@
 
    This is the PDS's password KDF (`docs/design/ATPROTO-PDS-DESIGN.md`
    §4.2), not a general recommendation, which is why it is not in the
-   stdlib: a new password store should prefer a memory-hard KDF. -}
+   stdlib: a new password store should prefer a memory-hard KDF.
+
+   Every function that runs PBKDF2 iterations, here and in `lib.credential`,
+   performs `Kdf`, so a row that pays for a password derivation says so. -}
 
 import bytes.{Bytes}
 import crypto.hmac.{HmacSha256Key, hmacSha256Key, hmacSha256WithKey}
@@ -13,6 +16,10 @@ import mut_bytes as MB
 import mut_bytes.{MutBytes}
 import u32 as U32
 import u8 as U8
+
+-- | Running PBKDF2 iterations: the deliberately expensive part of a password
+-- derivation.
+export effect Kdf
 
 hashBytes : Int
 hashBytes = 32
@@ -82,7 +89,7 @@ buildBlocks key salt iterations dkLen total out blockIndex =
 
    Panics when `iterations` or `dkLen` is less than 1. -}
 export
-pbkdf2HmacSha256 : Bytes -> Bytes -> Int -> Int -> Bytes
+pbkdf2HmacSha256 : Bytes -> Bytes -> Int -> Int -> <Kdf> Bytes
 pbkdf2HmacSha256 password salt iterations dkLen =
   if iterations < 1 then
     panic "pbkdf2: iterations must be >= 1"

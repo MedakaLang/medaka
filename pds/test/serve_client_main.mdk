@@ -18,6 +18,7 @@ import lib.credential.{
   credentialIterations,
   credentialSalt,
   makeCredential,
+  passwordFromText,
   saltBytes,
 }
 import crypto.sha256.{sha256}
@@ -39,6 +40,7 @@ import time.{
 }
 import test.request_support.{deleteBody}
 import test.response_support.{closeAll, findHeaderEnd, report, textOrHex}
+import lib.pbkdf2.{Kdf}
 
 hexOf : Bytes -> String
 hexOf x = Hex.encode x
@@ -2207,7 +2209,7 @@ usage : String
 usage =
   "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-update-handle|update-handle|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|kdf-flood-xff|login-race> ..."
 
-main : <IO, Env, Net, Clock> Unit
+main : <Clock, Env, IO, Kdf, Net> Unit
 main = match args ()
   ["query", port, did] => runQuery (mustPort port) did
   ["health", port] => runHealth (mustPort port)
@@ -2399,13 +2401,13 @@ main = match args ()
 
    It is the only cell here that touches no socket, and it prints no password:
    what it emits is exactly what the server would have written to disk. -}
-runCredentialAt : Int -> String -> <IO, Rand> Unit
+runCredentialAt : Int -> String -> <IO, Kdf, Rand> Unit
 runCredentialAt count password =
   let salt =
     optionOrPanic
       "makeCredential: every element must be a byte in 0..255"
       (B.fromArray (osEntropyBytes saltBytes))
-  match makeCredential salt count password
+  match makeCredential salt count (passwordFromText password)
     Err message => panic "serve_client: credential-at: \{message}"
     Ok record =>
       let () = println (intToString (credentialIterations record))
@@ -2437,7 +2439,7 @@ runUploadBlob port token mimeType text =
    SHA-256 digest, which together name its exact bytes.
 
    The gate reads that one line from two different servers — one over the
-   original `--data` directory and one over a directory restored from a backup
+   original data directory and one over a directory restored from a backup
    of it — and requires the two to be equal, which is what "the restored
    server's export byte-matches" means. Printing a digest rather than the CAR
    keeps the comparison a string comparison, exactly as

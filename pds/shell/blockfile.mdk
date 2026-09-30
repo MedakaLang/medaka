@@ -2,7 +2,8 @@
 
    A block store is a content-addressed immutable key/value map, which is the one
    workload a filesystem already implements (`docs/design/ATPROTO-PDS-DESIGN.md`
-   row P7). A block lives at `<dir>/<shard>/<hex of its binary CID>`, sharded on
+   row P7). A block lives at `<dir>/<shard>/<hex of its binary CID>`, where
+   `dir` is `blocks/` beneath the data directory, sharded on
    the first byte of its multihash DIGEST — every binary CID starts with the same
    version and codec prefix, so sharding on the CID's own leading bytes would put
    the whole repository in one directory. Writes land in `<dir>/.staging` and are
@@ -71,8 +72,9 @@ import bytes as B
 import bytes.{Bytes}
 import hex.{decode, encode}
 import string.{take}
-import fs.{isDir, mkdirAllDurably}
+import fs.{isDir}
 import lib.cid.{Cid, cidDigest, cidFromBytes, cidToBytes}
+import shell.datadir.{DataDir(..), ensureDirIn}
 
 -- Temporary writes are promoted out of this directory, which is therefore the
 -- one entry under a block directory that is not a shard.
@@ -82,24 +84,37 @@ stagingName = ".staging"
 cidKey : Cid -> String
 cidKey cid = encode (cidToBytes cid)
 
--- | Directory holding one block's shard.
-blockShardDir : String -> Cid -> String
-blockShardDir dir cid = "\{dir}/\{take 2 (encode (cidDigest cid))}"
+{- | The name of the shard directory holding one block: the first byte of its
+   multihash digest, in lowercase hex.
 
--- | Absolute path of one block's file.
-blockFilePath : String -> Cid -> String
-blockFilePath dir cid = "\{blockShardDir dir cid}/\{cidKey cid}"
+   Exported for `shell.blobfile`, whose shard layout is this one, for
+   `isShardName`'s reason below. -}
+export
+shardName : Cid -> String
+shardName cid = take 2 (encode (cidDigest cid))
 
--- One shard directory, created if it is not there, with the dentry that
--- created barriered into `dir`. See the header's paragraph on directory
--- barriers for why only a creation owes one.
-ensureShard : String -> Cid -> <FileRead, FileWrite> Result String Unit
-ensureShard dir cid = mkdirAllDurably (blockShardDir dir cid)
+-- | Path of one block's file.
+blockFilePath : (dir : String @FileWrite*) -> Cid -> String @dir
+blockFilePath dir cid = "\{dir}/\{shardName cid}/\{cidKey cid}"
+
+{- | One shard directory beneath a store directory `dir`, created if it is not
+   there, with the dentry that created barriered into `dir`. See the header's
+   paragraph on directory barriers for why only a creation owes one.
+
+   Exported for `shell.blobfile`, which shards the same way. -}
+export
+ensureShard : (dir : String @FileWrite*) ->
+  Cid ->
+  <FileRead dir, FileWrite dir> Result String Unit
+ensureShard dir cid = ensureDirIn dir "\{dir}/\{shardName cid}"
 
 -- Not `fs.replaceDurably`: `writeFileBytes` has no mode-setting counterpart,
 -- so a block's bytes stay at whatever mode the process umask gives them
 -- (0600 only under `pds.service`'s `UMask=0077`; see `PDS-DEPLOY.md` step 5).
-writeOne : String -> Cid -> Bytes -> <FileRead, FileWrite> Result String Unit
+writeOne : (dir : String @FileWrite*) ->
+  Cid ->
+  Bytes ->
+  <FileRead dir, FileWrite dir> Result String Unit
 writeOne dir cid bytes = do
   () <- ensureShard dir cid
   let staged = "\{dir}/\{stagingName}/\{cidKey cid}"
@@ -109,46 +124,48 @@ writeOne dir cid bytes = do
   () <- fsync staged
   rename staged (blockFilePath dir cid)
 
--- Promote every row, answering the distinct shard directories they landed in.
--- At most 256 shard names exist, so membership over a list costs less than the
--- barrier it saves.
-writeRows : String ->
+-- Promote every row, answering the names of the distinct shard directories
+-- they landed in. At most 256 shard names exist, so membership over a list
+-- costs less than the barrier it saves.
+writeRows : (dir : String @FileWrite*) ->
   List (Cid, Bytes) ->
   List String ->
-  <FileRead, FileWrite> Result String (List String)
+  <FileRead dir, FileWrite dir> Result String (List String)
 writeRows _ [] shards = Ok shards
 writeRows dir ((cid, bytes) :: rest) shards = match writeOne dir cid bytes
   Err message => Err message
   Ok () =>
-    let shard = blockShardDir dir cid
+    let shard = shardName cid
     if elem shard shards then
       writeRows dir rest shards
     else
       writeRows dir rest (shard :: shards)
 
-fsyncShards : List String -> <FileRead, FileWrite> Result String Unit
-fsyncShards [] = Ok ()
-fsyncShards (shard :: rest) = match fsync shard
+fsyncShards : (dir : String @FileWrite*) ->
+  List String ->
+  <FileWrite dir> Result String Unit
+fsyncShards _ [] = Ok ()
+fsyncShards dir (shard :: rest) = match fsync "\{dir}/\{shard}"
   Err message => Err message
-  Ok () => fsyncShards rest
+  Ok () => fsyncShards dir rest
 
--- `.staging` and, on a store that has none yet, `dir` itself, each dentry
--- barriered into its own parent: `.staging`'s into `dir`, and `dir`'s into
--- the data directory above.
-ensureStaging : String -> <FileRead, FileWrite> Result String Unit
-ensureStaging dir = mkdirAllDurably "\{dir}/\{stagingName}"
+{- | Write every row durably beneath the data directory's `blocks/`. Writing a
+   block that is already present is idempotent: a block's name is its
+   content, so the promoted file carries exactly the bytes the old one did.
 
-{- | Write every row durably beneath `dir`. Writing a block that is already
-   present is idempotent: a block's name is its content, so the promoted file
-   carries exactly the bytes the old one did. -}
+   `blocks/` and its `.staging` are created first when missing, each dentry
+   barriered into its own parent: `blocks/`'s into the data directory, and
+   `.staging`'s into `blocks/`. -}
 export
-blockFileWrite : String ->
+blockFileWrite : DataDir d ->
   List (Cid, Bytes) ->
-  <FileRead, FileWrite> Result String Unit
-blockFileWrite dir rows = do
-  () <- ensureStaging dir
+  <FileRead d, FileWrite d> Result String Unit
+blockFileWrite (DataDir root) rows = do
+  let dir = "\{root}blocks"
+  () <- ensureDirIn root dir
+  () <- ensureDirIn dir "\{dir}/\{stagingName}"
   shards <- writeRows dir rows []
-  fsyncShards shards
+  fsyncShards dir shards
 
 cidForName : String -> String -> Result String Cid
 cidForName path name = match decode name
@@ -184,16 +201,18 @@ isShardName name = match decode name
    and its sidecar are leaf files in the same sense, and the two stores must
    not disagree about which entries a shard actually holds. -}
 export
-fileLeaves : String -> List String -> <FileRead> List String
+fileLeaves : (shardPath : String @FileRead*) ->
+  List String ->
+  <FileRead shardPath> List String
 fileLeaves _ [] = []
 fileLeaves shardPath (leaf :: rest) = match isDir "\{shardPath}/\{leaf}"
   Ok True => fileLeaves shardPath rest
   _ => leaf :: fileLeaves shardPath rest
 
-readLeaves : String ->
+readLeaves : (shardPath : String @FileRead*) ->
   List String ->
   List (Cid, Bytes) ->
-  <FileRead> Result String (List (Cid, Bytes))
+  <FileRead shardPath> Result String (List (Cid, Bytes))
 readLeaves _ [] acc = Ok acc
 readLeaves shardPath (leaf :: rest) acc =
   let path = "\{shardPath}/\{leaf}"
@@ -209,10 +228,10 @@ readLeaves shardPath (leaf :: rest) acc =
           Err "blockfile: \{path}: block element outside byte range 0..255"
         Some bytes => readLeaves shardPath rest ((cid, bytes) :: acc)
 
-readShards : String ->
+readShards : (dir : String @FileRead*) ->
   List String ->
   List (Cid, Bytes) ->
-  <FileRead> Result String (List (Cid, Bytes))
+  <FileRead dir> Result String (List (Cid, Bytes))
 readShards _ [] acc = Ok acc
 readShards dir (shard :: rest) acc =
   let path = "\{dir}/\{shard}"
@@ -231,7 +250,8 @@ readShards dir (shard :: rest) acc =
         Err message => Err message
         Ok next => readShards dir rest next
 
-{- | Read every persisted row beneath `dir`, in unspecified order.
+{- | Read every persisted row beneath the data directory's `blocks/`, in
+   unspecified order.
 
    The returned rows are UNVERIFIED bytes off disk paired with the CID their file
    name spells. `blockStoreFromBlocks` is what proves each row's bytes hash to
@@ -240,10 +260,12 @@ readShards dir (shard :: rest) acc =
    directory that IS named like a shard and cannot be listed still fails
    loudly, because that is one of ours. -}
 export
-blockFileRead : String -> <FileRead> Result String (List (Cid, Bytes))
-blockFileRead dir = match listDir dir
-  Err message => Err "blockfile: unreadable block directory: \{message}"
-  Ok shards => readShards dir shards []
+blockFileRead : DataDir d -> <FileRead d> Result String (List (Cid, Bytes))
+blockFileRead (DataDir root) =
+  let dir = "\{root}blocks"
+  match listDir dir
+    Err message => Err "blockfile: unreadable block directory: \{message}"
+    Ok shards => readShards dir shards []
 
 -- Every file left behind under `<dir>/.staging` by a process that crashed
 -- between staging a file and its `rename`. `.staging` never holds a
@@ -251,9 +273,9 @@ blockFileRead dir = match listDir dir
 -- file directly), but this sweep also tolerates residue it did not write —
 -- a stray subdirectory is skipped rather than passed to `removeFile`, which
 -- fails on a directory.
-removeStagingResidue : String ->
+removeStagingResidue : (dir : String @FileWrite*) ->
   List String ->
-  <FileRead, FileWrite> Result String Unit
+  <FileRead dir, FileWrite dir> Result String Unit
 removeStagingResidue _ [] = Ok ()
 removeStagingResidue dir (leaf :: rest) = match isDir "\{dir}/\{leaf}"
   Ok True => removeStagingResidue dir rest
@@ -262,7 +284,7 @@ removeStagingResidue dir (leaf :: rest) = match isDir "\{dir}/\{leaf}"
       Err "blockfile: \{dir}/\{leaf}: undeletable staging residue: \{message}"
     Ok () => removeStagingResidue dir rest
 
-{- | Remove every file staged beneath `<dir>/.staging` and never promoted or
+{- | Remove every file staged beneath `blocks/.staging` and never promoted or
    cleaned up — the residue a crash between `writeFileBytes staged` and its
    `rename` leaves behind. Nothing else in this module ever removes from
    `.staging`, so this is the only place stale entries go away.
@@ -273,9 +295,10 @@ removeStagingResidue dir (leaf :: rest) = match isDir "\{dir}/\{leaf}"
    than a promotion this process has in flight. A data directory that has
    never staged a block reads as nothing to sweep, not as a failure. -}
 export
-blockFileSweepStaging : String -> <FileRead, FileWrite> Result String Unit
-blockFileSweepStaging dir =
-  let staging = "\{dir}/\{stagingName}"
+blockFileSweepStaging : DataDir d ->
+  <FileRead d, FileWrite d> Result String Unit
+blockFileSweepStaging (DataDir root) =
+  let staging = "\{root}blocks/\{stagingName}"
   if not (fileExists staging) then
     Ok ()
   else match listDir staging

@@ -1,0 +1,12 @@
+-- Accepted twin of `blocks_into_secrets.mdk`: the `DataDir` is rooted at
+-- "data/".
+
+import bytes.{Bytes}
+import lib.cid.{Cid}
+import shell.blockfile.{blockFileWrite}
+import shell.datadir.{DataDir(..)}
+
+export
+store : List (Cid, Bytes) ->
+  <FileRead "data/*", FileWrite "data/*"> Result String Unit
+store rows = blockFileWrite (DataDir "data/") rows

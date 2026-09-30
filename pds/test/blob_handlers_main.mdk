@@ -26,7 +26,7 @@ import json.{Json(..), get, parse, stringify}
 import list.{sort}
 import string.{contains, split, startsWith}
 import lib.handlers.{pdsServer, serverLinksEmpty}
-import lib.jwt.{mintToken}
+import lib.jwt.{Mint, mintAccessToken}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -41,10 +41,11 @@ import lib.store.{
   storeSessionOpen,
   storeWithServerSecret,
 }
-import test.fixture_support.{field, meaningful, testNonce, testSecret}
+import test.fixture_support.{field, meaningful, testKey, testNonce}
 import test.response_support.{
   hasContentType, jsonBody, listedCids, rawBodyOf, statusLine
 }
+import lib.sign.{Sign}
 
 accountDidText : String
 accountDidText = "did:plc:s-blob-handlers-corpus"
@@ -83,7 +84,7 @@ account =
     "blob_handlers: account setup failed"
     (makeAccount accountDidText accountHandleText accountHostText)
 
-server : Server
+server : Server <Mint {"access", "refresh"}, Sign "commit">
 server =
   resultOrPanic
     "blob_handlers: server setup failed"
@@ -91,8 +92,8 @@ server =
 
 accessToken : String
 accessToken =
-  mintToken
-    testSecret
+  mintAccessToken
+    testKey
     accountDidText
     accountHostText
     "blob_handlers-fixture-token"
@@ -102,18 +103,17 @@ accessToken =
 -- | An empty store carrying the session this driver's uploads authenticate
 -- with. No repository: no blob route touches the repository half.
 authorizedStore : Store
-authorizedStore = match storeWithServerSecret testSecret storeEmpty
-  Ok next =>
-    storeSessionOpen
-      (sessionFingerprint accessToken)
-      (sessionFingerprint "blob_handlers: no refresh token in this fixture")
-      (testInstant + 3600)
-      next
-  Err message => panic "blob_handlers: session secret setup failed: \{message}"
+authorizedStore =
+  let next = storeWithServerSecret testKey storeEmpty
+  storeSessionOpen
+    (sessionFingerprint accessToken)
+    (sessionFingerprint "blob_handlers: no refresh token in this fixture")
+    (testInstant + 3600)
+    next
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
-postRaw : String -> Bytes -> Bytes
+postRaw : String -> Bytes -> <Mint "access"> Bytes
 postRaw mimeType body =
   encodeUtf8
       "POST /xrpc/\{uploadBlobNsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{accessToken}\r\nContent-Type: \{mimeType}\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
@@ -124,7 +124,9 @@ getQuery nsid query =
   encodeUtf8
     "GET /xrpc/\{nsid}\{query} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
 
-send : Store -> Bytes -> (Store, Bytes)
+send : Store ->
+  Bytes ->
+  <Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 send store bytes = handleBytes server testContext store bytes
 
 -- ── response reading ────────────────────────────────────────────────────────
@@ -170,7 +172,10 @@ check label ok detail =
 {- | Upload every corpus row through the real `uploadBlob` route, grading the
    response's CID and whole `blob` ref against the row's own columns. Returns
    the store every row has been uploaded into, and how many rows matched. -}
-uploadRows : List (List String) -> Store -> Int -> <IO> (Store, Int)
+uploadRows : List (List String) ->
+  Store ->
+  Int ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> (Store, Int)
 uploadRows [] store passed = (store, passed)
 uploadRows (row :: rest) store passed =
   let (next, response) =
@@ -187,7 +192,10 @@ uploadRows (row :: rest) store passed =
 
 {- | Read every corpus row back out through `getBlob`, addressed by the CID the
    corpus declares rather than by anything this process computed. -}
-readRows : List (List String) -> Store -> Int -> <IO> Int
+readRows : List (List String) ->
+  Store ->
+  Int ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Int
 readRows [] _ passed = passed
 readRows (row :: rest) store passed =
   let (_, response) =
@@ -204,7 +212,9 @@ readRows (row :: rest) store passed =
       "status=\{status} bytes=\{intToString (B.length (rawBodyOf response))}"
   readRows rest store (passed + matched)
 
-listCell : List (List String) -> Store -> <IO> Int
+listCell : List (List String) ->
+  Store ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Int
 listCell rows store =
   let (_, response) =
     send store (getQuery listBlobsNsid "?did=\{accountDidText}&limit=1000")
@@ -215,7 +225,8 @@ listCell rows store =
     (listed == expected)
     "listed=\{intToString (length listed)} expected=\{intToString (length expected)}"
 
-runRows : List (List String) -> <IO> Unit
+runRows : List (List String) ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 runRows [] = panic "blob_handlers: corpus carries no rows"
 runRows rows =
   let expected = length rows
@@ -233,14 +244,16 @@ runRows rows =
     let () = println "TOTAL: FAIL"
     exit 1
 
-runRead : Result String (List String) -> <IO> Unit
+runRead : Result String (List String) ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 runRead (Err message) = panic "blob_handlers: cannot read corpus: \{message}"
 runRead (Ok raw) =
   runRows (map (line => split "\t" line) (filter meaningful raw))
 
-runMain : List String -> <IO, Env, FileRead> Unit
+runMain : List String ->
+  <Env, FileRead, IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 runMain [corpusPath] = runRead (readLines corpusPath)
 runMain _ = panic "usage: blob_handlers_main <ledger-owned-blob-corpus>"
 
-main : <IO, Env, FileRead> Unit
+main : <Env, FileRead, IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 main = runMain (args ())

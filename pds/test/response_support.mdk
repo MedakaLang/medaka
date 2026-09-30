@@ -12,6 +12,7 @@ import string.{contains, drop, indexOf, split, startsWith, toInt, trim}
 import lib.credential.{
   LoginCheck, LoginVerdict, loginCheckAdvance, loginCheckVerdict
 }
+import lib.pbkdf2.{Kdf}
 
 headerTerminator : Bytes
 headerTerminator = encodeUtf8 "\r\n\r\n"
@@ -166,7 +167,7 @@ outcome bytes =
     code => "\{status} \{code}"
 
 export
-settled : LoginCheck -> LoginVerdict
+settled : LoginCheck -> <Kdf> LoginVerdict
 settled check = match loginCheckVerdict check
   Some verdict => verdict
   None => settled (loginCheckAdvance 256 check)

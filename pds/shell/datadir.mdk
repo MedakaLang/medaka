@@ -1,0 +1,78 @@
+{- | The data directory: the one place the server writes, and every path it
+   reads back from outside `secrets/`.
+
+   The directory is fixed at `data/`, relative to the working directory, and
+   no flag names it. `DataDir d` carries its path at the authority `d`, and
+   every shell function that reaches the disk takes one, so each is typed by
+   the directory it was given: `medaka manifest` of the server reports
+   `FileRead` and `FileWrite` as the pattern `data/*`, the same subtree
+   `pds.service` makes writable. `d` ranges over patterns (`FileWrite*`), so
+   a path built by appending to the root on the right stays inside it.
+
+   The root is spelled with its trailing separator. `"data/"` closes to the
+   pattern `data/*`; `"data"` would close to `data*`, which also admits a
+   sibling such as `database/`. So a child of the root is written
+   `"\{root}name"`, and anything deeper `"\{dir}/name"` as usual.
+
+   A path keeps the root's authority only when it is built by interpolating
+   the root, or a local already built from it in the same function. A path
+   returned by another function is used as it is and never extended: its
+   authority would be the whole domain.
+
+   The two durable helpers are `stdlib/fs`'s `mkdirAllDurably` and
+   `replaceDurably` with the directory to barrier passed in rather than
+   computed by `dirname`, which is what lets their rows name the paths they
+   touch instead of the bare labels. -}
+
+import io.{ownerOnlyMode}
+import string.{contains}
+
+-- | A data directory at the authority `d`: the root path, with its trailing
+-- separator.
+public export data DataDir (d : Authority FileWrite*) = DataDir (String @d)
+
+-- | The server's data directory, `data/` under the working directory.
+export
+dataDir : DataDir "data/*"
+dataDir = DataDir "data/"
+
+{- | A data directory at a path chosen at run time, such as a test's scratch
+   directory. Nothing bounds a run-time path, so it is charged the bare
+   labels; the server itself uses `dataDir`. -}
+export
+dataDirAt : String -> DataDir *
+dataDirAt path = DataDir "\{path}/"
+
+{- | Create `path` if it is not there, and barrier the new entry into
+   `parent`, the directory that holds it, which must already exist.
+
+   A path that already exists is left alone and nothing is flushed, the same
+   trade `mkdirAllDurably` makes: only a creation wrote a dentry. A creation
+   that loses a race to another creator is not an error. -}
+export
+ensureDirIn : (parent : String) ->
+  (path : String) ->
+  <FileRead path, FileWrite parent, FileWrite path> Result String Unit
+ensureDirIn parent path =
+  if fileExists path then
+    Ok ()
+  else match makeDir path
+    Ok () => fsync parent
+    Err message => if contains "exists" message then Ok () else Err message
+
+{- | Replace `target` with `content` so that a crash leaves either the old
+   file or the new one, `replaceDurably`'s order: written to `staged` at mode
+   0600, flushed, renamed onto `target`, then `parent`, the directory holding
+   `target`, flushed. The first step that fails returns its `Err` and the
+   rest do not run. -}
+export
+replaceDurablyIn : (parent : String) ->
+  (staged : String) ->
+  (target : String) ->
+  String ->
+  <FileWrite parent, FileWrite staged, FileWrite target> Result String Unit
+replaceDurablyIn parent staged target content = do
+  () <- writeFileMode staged ownerOnlyMode content
+  () <- fsync staged
+  () <- rename staged target
+  fsync parent

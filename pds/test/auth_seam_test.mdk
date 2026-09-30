@@ -37,7 +37,13 @@ import json.{Json(..), get, parse}
 import list.{sort}
 import test.{expectEach, expectEqual, expectNotEqual}
 import lib.handlers.{pdsRegistry, pdsServer, serverLinksEmpty}
-import lib.jwt.{mintToken}
+import lib.jwt.{
+  Mint,
+  SessionKey,
+  mintAccessToken,
+  mintRefreshToken,
+  sessionKeyFromBytes,
+}
 import lib.server_core.{
   Account,
   AuthOutcome(..),
@@ -71,6 +77,7 @@ import lib.xrpc.{
   registryEndpoints,
 }
 import test.response_support.{bodyText}
+import lib.sign.{Sign}
 
 -- ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -88,6 +95,14 @@ testSecret = fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 11 + 5)))
 
 otherSecret : Bytes
 otherSecret = fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 13 + 7)))
+
+testKey : SessionKey
+testKey =
+  resultOrPanic "auth_seam_test: session key" (sessionKeyFromBytes testSecret)
+
+otherKey : SessionKey
+otherKey =
+  resultOrPanic "auth_seam_test: session key" (sessionKeyFromBytes otherSecret)
 
 testInstant : Int
 testInstant = 1700000000
@@ -149,11 +164,11 @@ textHeader =
    with a good token is distinguishable from one reached with none. Reaching
    this handler at all on the gated route is itself the assertion that the
    credential was accepted. -}
-syntheticHandler : Handler
+syntheticHandler : Handler <>
 syntheticHandler _ Unauthenticated store _ = (store, mustResponse "anonymous")
 syntheticHandler _ (Authenticated did _) store _ = (store, mustResponse did)
 
-syntheticServer : Server
+syntheticServer : Server <>
 syntheticServer = makeServer account syntheticRegistry syntheticHandler
 
 -- ── stores ──────────────────────────────────────────────────────────────────
@@ -162,10 +177,7 @@ syntheticServer = makeServer account syntheticRegistry syntheticHandler
    verifies against it and none is a credential on it: a good signature inside
    its window is not on its own a session. -}
 secretOnlyStore : Store
-secretOnlyStore =
-  resultOrPanic
-    "auth_seam_test: session secret setup failed"
-    (storeWithServerSecret testSecret storeEmpty)
+secretOnlyStore = storeWithServerSecret testKey storeEmpty
 
 -- The same store with `goodToken`/`goodRefreshToken`'s session open, which is
 -- what makes those two credentials rather than merely well-formed tokens.
@@ -179,14 +191,20 @@ configuredStore =
 
 -- ── tokens ──────────────────────────────────────────────────────────────────
 
-tokenFor : Bytes -> String -> String -> String -> Int -> Int -> String
-tokenFor secret sub aud tokenId from until =
-  mintToken secret sub aud tokenId from until
+tokenFor : SessionKey ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  <Mint "access"> String
+tokenFor key sub aud tokenId from until =
+  mintAccessToken key sub aud tokenId from until
 
 goodToken : String
 goodToken =
   tokenFor
-    testSecret
+    testKey
     accountDidText
     accountHostText
     "good"
@@ -197,8 +215,8 @@ goodToken =
    audience, which is what stops each being presented as the other. -}
 goodRefreshToken : String
 goodRefreshToken =
-  tokenFor
-    testSecret
+  mintRefreshToken
+    testKey
     accountDidText
     (refreshAudience account)
     "good"
@@ -208,7 +226,7 @@ goodRefreshToken =
 expiredToken : String
 expiredToken =
   tokenFor
-    testSecret
+    testKey
     accountDidText
     accountHostText
     "expired"
@@ -218,7 +236,7 @@ expiredToken =
 futureToken : String
 futureToken =
   tokenFor
-    testSecret
+    testKey
     accountDidText
     accountHostText
     "future"
@@ -228,7 +246,7 @@ futureToken =
 wrongSecretToken : String
 wrongSecretToken =
   tokenFor
-    otherSecret
+    otherKey
     accountDidText
     accountHostText
     "wrong-secret"
@@ -238,7 +256,7 @@ wrongSecretToken =
 wrongSubjectToken : String
 wrongSubjectToken =
   tokenFor
-    testSecret
+    testKey
     "did:plc:somebodyelseentirely"
     accountHostText
     "wrong-subject"
@@ -248,7 +266,7 @@ wrongSubjectToken =
 wrongAudienceToken : String
 wrongAudienceToken =
   tokenFor
-    testSecret
+    testKey
     accountDidText
     "other.example"
     "wrong-audience"
@@ -310,7 +328,7 @@ refusal bytes = "\{statusOf bytes} \{errorCodeOf bytes}"
 
 -- ── the synthetic cells ─────────────────────────────────────────────────────
 
-gatedWith : String -> String
+gatedWith : String -> <Mint {"access", "refresh"}> String
 gatedWith auth =
   let (_, bytes) =
     handleBytes
@@ -320,7 +338,7 @@ gatedWith auth =
       (postRequest auth gatedNsid)
   refusal bytes
 
-gatedBody : String -> String
+gatedBody : String -> <Mint {"access", "refresh"}> String
 gatedBody auth =
   let (_, bytes) =
     handleBytes
@@ -330,7 +348,7 @@ gatedBody auth =
       (postRequest auth gatedNsid)
   bodyText bytes
 
-openWith : String -> String
+openWith : String -> <Mint {"access", "refresh"}> String
 openWith auth =
   let (_, bytes) =
     handleBytes
@@ -340,7 +358,7 @@ openWith auth =
       (getRequest auth "/xrpc/\{openNsid}")
   bodyText bytes
 
-openStatusWith : String -> String
+openStatusWith : String -> <Mint {"access", "refresh"}> String
 openStatusWith auth =
   let (_, bytes) =
     handleBytes
@@ -422,7 +440,7 @@ test "the Bearer scheme is matched case-insensitively" =
     (gatedBody "Authorization: bEaReR \{goodToken}\r\n")
     accountDidText
 
-refreshWith : String -> String
+refreshWith : String -> <Mint {"access", "refresh"}> String
 refreshWith auth =
   let (_, bytes) =
     handleBytes
@@ -432,7 +450,7 @@ refreshWith auth =
       (postNoInputRequest auth refreshNsid)
   refusal bytes
 
-refreshBody : String -> String
+refreshBody : String -> <Mint {"access", "refresh"}> String
 refreshBody auth =
   let (_, bytes) =
     handleBytes
@@ -497,7 +515,7 @@ test "a public route is not closed by an unusable token" = expectEach [
 
 -- ── the real registry ───────────────────────────────────────────────────────
 
-pdsServerValue : Server
+pdsServerValue : Server <Mint {"access", "refresh"}, Sign "commit">
 pdsServerValue =
   resultOrPanic
     "auth_seam_test: pdsServer setup failed"
@@ -571,13 +589,15 @@ test "refreshSession and deleteSession take the refresh token" = expectEqual
     "com.atproto.server.refreshSession",
   ]
 
-realPost : String -> String -> String
+realPost : String ->
+  String ->
+  <Mint {"access", "refresh"}, Sign "commit"> String
 realPost auth nsid =
   let (_, bytes) =
     handleBytes pdsServerValue testContext storeEmpty (postRequest auth nsid)
   refusal bytes
 
-realGet : String -> String
+realGet : String -> <Mint {"access", "refresh"}, Sign "commit"> String
 realGet target =
   let (_, bytes) =
     handleBytes pdsServerValue testContext storeEmpty (getRequest "" target)
