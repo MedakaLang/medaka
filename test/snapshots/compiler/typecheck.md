@@ -1,5 +1,5 @@
 # META
-source_lines=52430
+source_lines=52379
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -67,7 +67,6 @@ import frontend.ast.{
   -- fixture that pins `dataEnvFromDeclsGo`'s deliberate `DAttrib` asymmetry.
   Attr(..),
   Ty(..),
-  mapTyFull,
   EffAtomTy(..),
   effAtomSurface,
   EffParamTy(..),
@@ -719,14 +718,15 @@ ioAliasLabels = [
   "Net",
   "FileRead",
   "FileWrite",
+  "Signal",
 ]
 -- NOTE: `FFI` is deliberately NOT a member. #2071/#2070 (epic, Layer 1, R1):
 -- an `<IO>` bound must NOT subsume an `<FFI>`-performing body — FFI crosses a
 -- trust boundary the IO alias is not meant to paper over. Do not "complete"
 -- this list by adding FFI.
 
--- `IO` is the join of the ten security labels, so it widens on either side of an
--- escape check.  On the bound side a NARROW inferred row is subsumed by an `<IO>`
+-- `IO` is the join of the eleven security labels, so it widens on either side of
+-- an escape check.  On the bound side a NARROW inferred row is subsumed by an `<IO>`
 -- bound (narrow ⊑ IO); `IO` stays in the expansion (atomsNorm keeps it) so an
 -- inferred IO matches a bound IO.
 expandIoInBound : List Atom -> List Atom
@@ -734,8 +734,8 @@ expandIoInBound b = match findAtom (labelKey ioLabel) b
   None => b
   Some _ => atomsNorm (b ++ map atomOfLabel ioAliasLabels)
 
--- A performed `IO` left over against a bound without `IO` stands for the ten
--- labels: a bound naming all ten admits it, a bound naming some refuses it
+-- A performed `IO` left over against a bound without `IO` stands for the eleven
+-- labels: a bound naming all eleven admits it, a bound naming some refuses it
 -- naming the labels it lacks, and a bound naming none leaves it as `IO`.
 narrowPerformedIo : List Atom -> List Atom -> List Atom
 narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
@@ -3274,19 +3274,6 @@ generalizableEffvar v = match !v
   ELink _ _ => []
   EJoin _ _ _ => []
   ESummary _ _ _ => []
-
--- The signature the declared-row walks below read: every function-type alias
--- on the return spine expanded, so the declared row is the row `fromAstTypeE`
--- elaborates.  `d : Tick` with `type Tick = Int -> <Stdout> Unit` declares
--- `<Stdout>`, not the `<>` a bare alias name would read as.  An alias that
--- expands to anything but an arrow stays unexpanded: elaboration takes an
--- arrow's row from the written node alone (`astEffrowE`), so a row-wrapped
--- alias (`type S = <Stdout> Int`) adds no row to the arrow it ends.
-expandReturnSpine : Ty -> Ty
-expandReturnSpine ty = match expandAliasHeadTy ty
-  TyFun a ret => TyFun a (expandReturnSpine ret)
-  TyConstrained cs t => TyConstrained cs (expandReturnSpine t)
-  _ => ty
 
 -- the declared concrete effect set of a signature: labels on the first `<…>`
 -- reached walking down the return side (Phase 79e escape check)
@@ -39145,47 +39132,10 @@ expandAliasHeadTyWith aliases (t@(TyApp _ _)) = match tyAppSpine t
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     match lookupTab (tyTabKey o n) aliases
       Some (params, rhs) if listLen params == listLen args =>
-        expandAliasHeadTyWith aliases (substAliasArgs (zipL params args) rhs)
+        expandAliasHeadTyWith aliases (substTyVars (zipL params args) rhs)
       _ => t
   _ => t
 expandAliasHeadTyWith _ t = t
-
--- An alias's arguments substituted into its right-hand side.  A type parameter
--- occurs as a `TyVar` (`substTyVars`); an `Effect` parameter also occurs as a
--- row tail (`<Stdout | e>`), where the written argument row is spliced in: its
--- atoms join the row's and its tails replace the parameter's name, as
--- `fromAstTypeApp` binds it.  Tails go first, so a tail name inside an argument
--- that `substTyVars` then inserts is the caller's, never read as a parameter.
--- An `Authority` parameter named in an atom stays a name, which these `Ty`
--- walks read as the label's whole domain, as they read a signature's own binder.
-substAliasArgs : List (String, Ty) -> Ty -> Ty
-substAliasArgs sub rhs =
-  substTyVars sub (fst (mapTyFull (substRowTailsAt sub) rhs))
-
-substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
-substRowTailsAt sub (TyEffect atoms tails t) =
-  let (extra, tails2) = spliceRowTails sub tails
-  (TyEffect (atoms ++ extra) tails2 t, False)
-substRowTailsAt sub (TyRow atoms tails l) =
-  let (extra, tails2) = spliceRowTails sub tails
-  (TyRow (atoms ++ extra) tails2 l, False)
-substRowTailsAt _ t = (t, False)
-
--- A row argument is written bare (`T <Net>`), in the degenerate wrapped
--- spelling (`T (<Net> Unit)`), or as a signature's own row name (`T e2`).
--- Anything else is ill-kinded, diagnosed where the signature elaborates, and
--- keeps the parameter's name.
-spliceRowTails : List (String, Ty) ->
-  List String ->
-  (List EffAtomTy, List String)
-spliceRowTails _ [] = ([], [])
-spliceRowTails sub (n :: rest) =
-  let (atoms, names) = spliceRowTails sub rest
-  match lookupAssoc n sub
-    Some (TyRow written tails _) => (written ++ atoms, tails ++ names)
-    Some (TyEffect written tails _) => (written ++ atoms, tails ++ names)
-    Some (TyVar v) => (atoms, v :: names)
-    _ => (atoms, n :: names)
 
 -- Does a user extern's DECLARED signature already name `FFI` in its terminal
 -- result row?  `None` = there is no arrow in the signature, so the question cannot
@@ -41974,8 +41924,7 @@ checkEffectEscape sigs m effs =
     -- whatever the body performs, which is what a free tail var MEANS.  Skipping
     -- here rather than widening `declaredEffects` keeps the CLOSED-row rejection
     -- (and its wording) byte-identical.
-    Some written =>
-      let ty = expandReturnSpine written
+    Some ty =>
       if declaredEffectsOpen ty then
         ()
       else match atomsEscape (filterList concreteAtom effs) (declaredEffects ty)
@@ -52433,7 +52382,7 @@ schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []
 schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "defaultReceiverDict" false) (mem "qualifierSource" false) (mem "Lit" true) (mem "negateLiteral" false) (mem "isU64Head" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false) (mem "isFixedIntHead" false) (mem "taggedFixedRange" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "Attr" true) (mem "Ty" true) (mem "mapTyFull" false) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "authTermSurface" false) (mem "authTermsSurface" false) (mem "authTermNames" false) (mem "effParamNames" false) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "ifaceIdentity" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "defaultReceiverDict" false) (mem "qualifierSource" false) (mem "Lit" true) (mem "negateLiteral" false) (mem "isU64Head" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false) (mem "isFixedIntHead" false) (mem "taggedFixedRange" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "Attr" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "authTermSurface" false) (mem "authTermsSurface" false) (mem "authTermNames" false) (mem "effParamNames" false) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "ifaceIdentity" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "ppAuthority" false) (mem "normalize" false) (mem "ppScheme" false) (mem "tupleSpine" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "VecObl" true) (mem "assignName" false) (mem "commaStr" false) (mem "effStr" false) (mem "letters" false) (mem "lookupAssocI" false) (mem "nameOf" false) (mem "normalizeLink" false) (mem "ppApp" false) (mem "ppConName" false) (mem "ppConstraint" false) (mem "ppConstraints" false) (mem "ppEach" false) (mem "ppEachShared" false) (mem "ppEffArg" false) (mem "ppEffArgFmt" false) (mem "ppEffAtomTy" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppFun" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppSchemeCon" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "ppTyFunArg" false) (mem "ppVar" false) (mem "renderConstraintCtx" false) (mem "spineParts" false) (mem "tupleHeadTagTc" false) (mem "tupleTagArity" false) (mem "tupleTagArityGo" false) (mem "wrapIf" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false) (mem "superIfaceRef" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "subTopOf" false) (mem "lookupAxis" false) (mem "productPrimaryLift" false) (mem "productOver" false) (mem "productNorm" false) (mem "isSubTop" false) (mem "domainKey" false) (mem "setCardCap" false) (mem "writtenSetProblem" false) (mem "commonPrefixLen" false) (mem "drender" false) (mem "drenderN" false) (mem "quoteStr" false) (mem "renderProductLit" false) (mem "renderAxis" false) (mem "renderAxisVal" false) (mem "prefixConcrete" false) (mem "dsub" false) (mem "Param" true))))
@@ -52509,7 +52458,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ioLabel" (TyCon "EffLabel"))
 (DFunDef false "ioLabel" () (EApp (EVar "builtinLabel") (ELit (LString "IO"))))
 (DTypeSig true "ioAliasLabels" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
+(DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "Signal"))))
 (DTypeSig false "expandIoInBound" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "expandIoInBound" ((PVar "b")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "b")) (arm (PCon "None") () (EVar "b")) (arm (PCon "Some" PWild) () (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "b") (EApp (EApp (EVar "map") (EVar "atomOfLabel")) (EVar "ioAliasLabels")))))))
 (DTypeSig false "narrowPerformedIo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
@@ -53060,8 +53009,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rowFreeEffvars" ((PVar "r")) (EApp (EApp (EVar "flatMap") (EVar "generalizableEffvar")) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EVar "r")))))
 (DTypeSig false "generalizableEffvar" (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "generalizableEffvar" ((PVar "v")) (EMatch (EUnOp "!" (EVar "v")) (arm (PCon "EUnbound" (PVar "id") (PVar "lvl")) () (EIf (EBinOp ">" (EVar "lvl") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EListLit (EVar "id")) (EListLit))) (arm (PCon "ELink" PWild PWild) () (EListLit)) (arm (PCon "EJoin" PWild PWild PWild) () (EListLit)) (arm (PCon "ESummary" PWild PWild PWild) () (EListLit))))
-(DTypeSig false "expandReturnSpine" (TyFun (TyCon "Ty") (TyCon "Ty")))
-(DFunDef false "expandReturnSpine" ((PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PCon "TyFun" (PVar "a") (PVar "ret")) () (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "expandReturnSpine") (EVar "ret")))) (arm (PCon "TyConstrained" (PVar "cs") (PVar "t")) () (EApp (EApp (EVar "TyConstrained") (EVar "cs")) (EApp (EVar "expandReturnSpine") (EVar "t")))) (arm PWild () (EVar "ty"))))
 (DTypeSig false "declaredEffects" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "declaredEffects" ((PCon "TyFun" PWild (PVar "ret"))) (EApp (EVar "declaredEffects") (EVar "ret")))
 (DFunDef false "declaredEffects" ((PCon "TyEffect" (PVar "effs") PWild PWild)) (EApp (EVar "atomsOfWritten") (EVar "effs")))
@@ -59027,17 +58974,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "expandAliasHeadTy" ((PVar "ty")) (EApp (EApp (EVar "expandAliasHeadTyWith") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (EVar "ty")))
 (DTypeSig false "expandAliasHeadTyWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
 (DFunDef false "expandAliasHeadTyWith" ((PVar "aliases") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (ELit (LInt 0))))) (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "rhs"))) (arm PWild () (EVar "t"))))
-(DFunDef false "expandAliasHeadTyWith" ((PVar "aliases") (PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EApp (EApp (EVar "substAliasArgs") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
+(DFunDef false "expandAliasHeadTyWith" ((PVar "aliases") (PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EApp (EApp (EVar "substTyVars") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
 (DFunDef false "expandAliasHeadTyWith" (PWild (PVar "t")) (EVar "t"))
-(DTypeSig false "substAliasArgs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
-(DFunDef false "substAliasArgs" ((PVar "sub") (PVar "rhs")) (EApp (EApp (EVar "substTyVars") (EVar "sub")) (EApp (EVar "fst") (EApp (EApp (EVar "mapTyFull") (EApp (EVar "substRowTailsAt") (EVar "sub"))) (EVar "rhs")))))
-(DTypeSig false "substRowTailsAt" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
-(DFunDef false "substRowTailsAt" ((PVar "sub") (PCon "TyEffect" (PVar "atoms") (PVar "tails") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "extra") (PVar "tails2")) (EApp (EApp (EVar "spliceRowTails") (EVar "sub")) (EVar "tails"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EBinOp "++" (EVar "atoms") (EVar "extra"))) (EVar "tails2")) (EVar "t")) (EVar "False")))))
-(DFunDef false "substRowTailsAt" ((PVar "sub") (PCon "TyRow" (PVar "atoms") (PVar "tails") (PVar "l"))) (EBlock (DoLet false false (PTuple (PVar "extra") (PVar "tails2")) (EApp (EApp (EVar "spliceRowTails") (EVar "sub")) (EVar "tails"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TyRow") (EBinOp "++" (EVar "atoms") (EVar "extra"))) (EVar "tails2")) (EVar "l")) (EVar "False")))))
-(DFunDef false "substRowTailsAt" (PWild (PVar "t")) (ETuple (EVar "t") (EVar "False")))
-(DTypeSig false "spliceRowTails" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "spliceRowTails" (PWild (PList)) (ETuple (EListLit) (EListLit)))
-(DFunDef false "spliceRowTails" ((PVar "sub") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "atoms") (PVar "names")) (EApp (EApp (EVar "spliceRowTails") (EVar "sub")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sub")) (arm (PCon "Some" (PCon "TyRow" (PVar "written") (PVar "tails") PWild)) () (ETuple (EBinOp "++" (EVar "written") (EVar "atoms")) (EBinOp "++" (EVar "tails") (EVar "names")))) (arm (PCon "Some" (PCon "TyEffect" (PVar "written") (PVar "tails") PWild)) () (ETuple (EBinOp "++" (EVar "written") (EVar "atoms")) (EBinOp "++" (EVar "tails") (EVar "names")))) (arm (PCon "Some" (PCon "TyVar" (PVar "v"))) () (ETuple (EVar "atoms") (EBinOp "::" (EVar "v") (EVar "names")))) (arm PWild () (ETuple (EVar "atoms") (EBinOp "::" (EVar "n") (EVar "names"))))))))
 (DTypeSig false "ffiRowHasFFITy" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "Bool"))))
 (DFunDef false "ffiRowHasFFITy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "ffiRowHasFFITy") (EVar "t")))
 (DFunDef false "ffiRowHasFFITy" ((PCon "TyFun" PWild (PVar "r"))) (EApp (EVar "Some") (EApp (EVar "ffiResultRowHasFFI") (EVar "r"))))
@@ -59573,7 +59511,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "zipBindFrom" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "q") (PVar "qs"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "bindFrom") (EVar "p")) (EVar "q"))) (DoExpr (EApp (EApp (EVar "zipBindFrom") (EVar "ps")) (EVar "qs")))))
 (DFunDef false "zipBindFrom" (PWild PWild) (ELit LUnit))
 (DTypeSig false "checkEffectEscape" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
-(DFunDef false "checkEffectEscape" ((PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "written")) () (EBlock (DoLet false false (PVar "ty") (EApp (EVar "expandReturnSpine") (EVar "written"))) (DoExpr (EIf (EApp (EVar "declaredEffectsOpen") (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EVar "atomsEscape") (EApp (EApp (EVar "filterList") (EVar "concreteAtom")) (EVar "effs"))) (EApp (EVar "declaredEffects") (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef")) (EBinOp "::" (ETuple (EVar "m") (EUnOp "!" (EVar "currentLoc")) (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EVar "declaredEffects") (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef") "value")))))))))))
+(DFunDef false "checkEffectEscape" ((PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EVar "declaredEffectsOpen") (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EVar "atomsEscape") (EApp (EApp (EVar "filterList") (EVar "concreteAtom")) (EVar "effs"))) (EApp (EVar "declaredEffects") (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef")) (EBinOp "::" (ETuple (EVar "m") (EUnOp "!" (EVar "currentLoc")) (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EVar "declaredEffects") (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef") "value")))))))))
 (DTypeSig false "flushPendingEscapes" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "flushPendingEscapes" (PWild) (EBlock (DoLet false false (PVar "pending") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef")) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "entry")) (EBlock (DoLet false false (PTuple (PVar "m") (PVar "loc") (PVar "msg")) (EVar "entry")) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rowFailureReportedRef") "value")) (ELit LUnit) (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-EFFECT-LEAK"))) (EVar "loc")) (EVar "msg"))))))) (ELit LUnit)) (EVar "pending")))))
 (DTypeSig false "concreteAtom" (TyFun (TyCon "Atom") (TyCon "Bool")))
@@ -60928,7 +60866,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "schemeLines" ((PList)) (EListLit))
 (DFunDef false "schemeLines" ((PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EApp (EVar "ppSchemeNamed") (EVar "n")) (EVar "s")))) (ELit (LString ""))) (EApp (EVar "schemeLines") (EVar "rest"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "defaultReceiverDict" false) (mem "qualifierSource" false) (mem "Lit" true) (mem "negateLiteral" false) (mem "isU64Head" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false) (mem "isFixedIntHead" false) (mem "taggedFixedRange" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "Attr" true) (mem "Ty" true) (mem "mapTyFull" false) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "authTermSurface" false) (mem "authTermsSurface" false) (mem "authTermNames" false) (mem "effParamNames" false) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "ifaceIdentity" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "defaultReceiverDict" false) (mem "qualifierSource" false) (mem "Lit" true) (mem "negateLiteral" false) (mem "isU64Head" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false) (mem "isFixedIntHead" false) (mem "taggedFixedRange" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "Attr" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "authTermSurface" false) (mem "authTermsSurface" false) (mem "authTermNames" false) (mem "effParamNames" false) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "ifaceIdentity" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "ppAuthority" false) (mem "normalize" false) (mem "ppScheme" false) (mem "tupleSpine" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "Tyvar" true) (mem "VecObl" true) (mem "assignName" false) (mem "commaStr" false) (mem "effStr" false) (mem "letters" false) (mem "lookupAssocI" false) (mem "nameOf" false) (mem "normalizeLink" false) (mem "ppApp" false) (mem "ppConName" false) (mem "ppConstraint" false) (mem "ppConstraints" false) (mem "ppEach" false) (mem "ppEachShared" false) (mem "ppEffArg" false) (mem "ppEffArgFmt" false) (mem "ppEffAtomTy" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppFun" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppSchemeCon" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "ppTyFunArg" false) (mem "ppVar" false) (mem "renderConstraintCtx" false) (mem "spineParts" false) (mem "tupleHeadTagTc" false) (mem "tupleTagArity" false) (mem "tupleTagArityGo" false) (mem "wrapIf" false))))
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false) (mem "superIfaceRef" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "subTopOf" false) (mem "lookupAxis" false) (mem "productPrimaryLift" false) (mem "productOver" false) (mem "productNorm" false) (mem "isSubTop" false) (mem "domainKey" false) (mem "setCardCap" false) (mem "writtenSetProblem" false) (mem "commonPrefixLen" false) (mem "drender" false) (mem "drenderN" false) (mem "quoteStr" false) (mem "renderProductLit" false) (mem "renderAxis" false) (mem "renderAxisVal" false) (mem "prefixConcrete" false) (mem "dsub" false) (mem "Param" true))))
@@ -61004,7 +60942,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ioLabel" (TyCon "EffLabel"))
 (DFunDef false "ioLabel" () (EApp (EVar "builtinLabel") (ELit (LString "IO"))))
 (DTypeSig true "ioAliasLabels" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
+(DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "Signal"))))
 (DTypeSig false "expandIoInBound" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "expandIoInBound" ((PVar "b")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "b")) (arm (PCon "None") () (EVar "b")) (arm (PCon "Some" PWild) () (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "b") (EApp (EApp (EMethodRef "map") (EVar "atomOfLabel")) (EVar "ioAliasLabels")))))))
 (DTypeSig false "narrowPerformedIo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
@@ -61555,8 +61493,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rowFreeEffvars" ((PVar "r")) (EApp (EApp (EDictApp "flatMap") (EVar "generalizableEffvar")) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EVar "r")))))
 (DTypeSig false "generalizableEffvar" (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "generalizableEffvar" ((PVar "v")) (EMatch (EUnOp "!" (EVar "v")) (arm (PCon "EUnbound" (PVar "id") (PVar "lvl")) () (EIf (EBinOp ">" (EVar "lvl") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EListLit (EVar "id")) (EListLit))) (arm (PCon "ELink" PWild PWild) () (EListLit)) (arm (PCon "EJoin" PWild PWild PWild) () (EListLit)) (arm (PCon "ESummary" PWild PWild PWild) () (EListLit))))
-(DTypeSig false "expandReturnSpine" (TyFun (TyCon "Ty") (TyCon "Ty")))
-(DFunDef false "expandReturnSpine" ((PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PCon "TyFun" (PVar "a") (PVar "ret")) () (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "expandReturnSpine") (EVar "ret")))) (arm (PCon "TyConstrained" (PVar "cs") (PVar "t")) () (EApp (EApp (EVar "TyConstrained") (EVar "cs")) (EApp (EVar "expandReturnSpine") (EVar "t")))) (arm PWild () (EVar "ty"))))
 (DTypeSig false "declaredEffects" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "declaredEffects" ((PCon "TyFun" PWild (PVar "ret"))) (EApp (EVar "declaredEffects") (EVar "ret")))
 (DFunDef false "declaredEffects" ((PCon "TyEffect" (PVar "effs") PWild PWild)) (EApp (EVar "atomsOfWritten") (EVar "effs")))
@@ -67522,17 +67458,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "expandAliasHeadTy" ((PVar "ty")) (EApp (EApp (EVar "expandAliasHeadTyWith") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (EVar "ty")))
 (DTypeSig false "expandAliasHeadTyWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
 (DFunDef false "expandAliasHeadTyWith" ((PVar "aliases") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (ELit (LInt 0))))) (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "rhs"))) (arm PWild () (EVar "t"))))
-(DFunDef false "expandAliasHeadTyWith" ((PVar "aliases") (PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EApp (EApp (EVar "substAliasArgs") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
+(DFunDef false "expandAliasHeadTyWith" ((PVar "aliases") (PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EApp (EApp (EVar "substTyVars") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
 (DFunDef false "expandAliasHeadTyWith" (PWild (PVar "t")) (EVar "t"))
-(DTypeSig false "substAliasArgs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
-(DFunDef false "substAliasArgs" ((PVar "sub") (PVar "rhs")) (EApp (EApp (EVar "substTyVars") (EMethodRef "sub")) (EApp (EVar "fst") (EApp (EApp (EVar "mapTyFull") (EApp (EVar "substRowTailsAt") (EMethodRef "sub"))) (EVar "rhs")))))
-(DTypeSig false "substRowTailsAt" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
-(DFunDef false "substRowTailsAt" ((PVar "sub") (PCon "TyEffect" (PVar "atoms") (PVar "tails") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "extra") (PVar "tails2")) (EApp (EApp (EVar "spliceRowTails") (EMethodRef "sub")) (EVar "tails"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EBinOp "++" (EVar "atoms") (EVar "extra"))) (EVar "tails2")) (EVar "t")) (EVar "False")))))
-(DFunDef false "substRowTailsAt" ((PVar "sub") (PCon "TyRow" (PVar "atoms") (PVar "tails") (PVar "l"))) (EBlock (DoLet false false (PTuple (PVar "extra") (PVar "tails2")) (EApp (EApp (EVar "spliceRowTails") (EMethodRef "sub")) (EVar "tails"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TyRow") (EBinOp "++" (EVar "atoms") (EVar "extra"))) (EVar "tails2")) (EVar "l")) (EVar "False")))))
-(DFunDef false "substRowTailsAt" (PWild (PVar "t")) (ETuple (EVar "t") (EVar "False")))
-(DTypeSig false "spliceRowTails" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "spliceRowTails" (PWild (PList)) (ETuple (EListLit) (EListLit)))
-(DFunDef false "spliceRowTails" ((PVar "sub") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "atoms") (PVar "names")) (EApp (EApp (EVar "spliceRowTails") (EMethodRef "sub")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EMethodRef "sub")) (arm (PCon "Some" (PCon "TyRow" (PVar "written") (PVar "tails") PWild)) () (ETuple (EBinOp "++" (EVar "written") (EVar "atoms")) (EBinOp "++" (EVar "tails") (EVar "names")))) (arm (PCon "Some" (PCon "TyEffect" (PVar "written") (PVar "tails") PWild)) () (ETuple (EBinOp "++" (EVar "written") (EVar "atoms")) (EBinOp "++" (EVar "tails") (EVar "names")))) (arm (PCon "Some" (PCon "TyVar" (PVar "v"))) () (ETuple (EVar "atoms") (EBinOp "::" (EVar "v") (EVar "names")))) (arm PWild () (ETuple (EVar "atoms") (EBinOp "::" (EVar "n") (EVar "names"))))))))
 (DTypeSig false "ffiRowHasFFITy" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "Bool"))))
 (DFunDef false "ffiRowHasFFITy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "ffiRowHasFFITy") (EVar "t")))
 (DFunDef false "ffiRowHasFFITy" ((PCon "TyFun" PWild (PVar "r"))) (EApp (EVar "Some") (EApp (EVar "ffiResultRowHasFFI") (EVar "r"))))
@@ -68068,7 +67995,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "zipBindFrom" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "q") (PVar "qs"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "bindFrom") (EVar "p")) (EVar "q"))) (DoExpr (EApp (EApp (EVar "zipBindFrom") (EVar "ps")) (EVar "qs")))))
 (DFunDef false "zipBindFrom" (PWild PWild) (ELit LUnit))
 (DTypeSig false "checkEffectEscape" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
-(DFunDef false "checkEffectEscape" ((PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "written")) () (EBlock (DoLet false false (PVar "ty") (EApp (EVar "expandReturnSpine") (EVar "written"))) (DoExpr (EIf (EApp (EVar "declaredEffectsOpen") (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EVar "atomsEscape") (EApp (EApp (EVar "filterList") (EVar "concreteAtom")) (EVar "effs"))) (EApp (EVar "declaredEffects") (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef")) (EBinOp "::" (ETuple (EVar "m") (EUnOp "!" (EVar "currentLoc")) (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EVar "declaredEffects") (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef") "value")))))))))))
+(DFunDef false "checkEffectEscape" ((PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EVar "declaredEffectsOpen") (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EVar "atomsEscape") (EApp (EApp (EVar "filterList") (EVar "concreteAtom")) (EVar "effs"))) (EApp (EVar "declaredEffects") (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef")) (EBinOp "::" (ETuple (EVar "m") (EUnOp "!" (EVar "currentLoc")) (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EVar "declaredEffects") (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef") "value")))))))))
 (DTypeSig false "flushPendingEscapes" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "flushPendingEscapes" (PWild) (EBlock (DoLet false false (PVar "pending") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingEscapesRef")) (EListLit))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "entry")) (EBlock (DoLet false false (PTuple (PVar "m") (PVar "loc") (PVar "msg")) (EVar "entry")) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rowFailureReportedRef") "value")) (ELit LUnit) (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-EFFECT-LEAK"))) (EVar "loc")) (EVar "msg"))))))) (ELit LUnit)) (EVar "pending")))))
 (DTypeSig false "concreteAtom" (TyFun (TyCon "Atom") (TyCon "Bool")))

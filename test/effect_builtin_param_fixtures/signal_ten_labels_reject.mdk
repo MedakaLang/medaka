@@ -1,0 +1,7 @@
+-- Every built-in host label except `Signal`: the refusal names the missing one.
+stopping : Unit ->
+  <Clock, Env, Exec, FileRead, FileWrite, Net, Rand, Stderr, Stdin, Stdout> Bool
+stopping _ = pdsSignalRequested ()
+
+main : <IO> Unit
+main = println "signal ten labels reject"

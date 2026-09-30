@@ -1,5 +1,5 @@
 # META
-source_lines=6526
+source_lines=6527
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -623,6 +623,7 @@ builtInEffects = [
   "Net",
   "FileRead",
   "FileWrite",
+  "Signal",
   "FFI",
 ]
 
@@ -6645,7 +6646,7 @@ takeOriginTrace _ =
 (DTypeSig false "checkAuthorityName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkAuthorityName" ((PVar "bound") (PVar "cur") (PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")) (EListLit) (EListLit (EApp (EApp (EVar "UnboundAuthority") (EVar "n")) (EVar "cur")))))
 (DTypeSig false "builtInEffects" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "builtInEffects" () (EListLit (ELit (LString "IO")) (ELit (LString "Rand")) (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "FFI"))))
+(DFunDef false "builtInEffects" () (EListLit (ELit (LString "IO")) (ELit (LString "Rand")) (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "Signal")) (ELit (LString "FFI"))))
 (DTypeSig false "checkEffect" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkEffect" ((PVar "cur") (PVar "env") (PVar "e")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "e")) (EFieldAccess (EVar "env") "effectAmbiguous")) (arm (PCon "Some" (PVar "mods")) () (EListLit (EApp (EApp (EApp (EVar "AmbiguousEffect") (EVar "e")) (EVar "mods")) (EVar "cur")))) (arm (PCon "None") () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "e")) (EVar "builtInEffects")) (EApp (EApp (EVar "contains") (EVar "e")) (EFieldAccess (EVar "env") "effects"))) (EListLit) (EListLit (EApp (EApp (EVar "UnknownEffect") (EVar "e")) (EVar "cur")))))))
 (DTypeSig false "ambiguousTypeErrors" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -8223,7 +8224,7 @@ takeOriginTrace _ =
 (DTypeSig false "checkAuthorityName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkAuthorityName" ((PVar "bound") (PVar "cur") (PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")) (EListLit) (EListLit (EApp (EApp (EVar "UnboundAuthority") (EVar "n")) (EVar "cur")))))
 (DTypeSig false "builtInEffects" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "builtInEffects" () (EListLit (ELit (LString "IO")) (ELit (LString "Rand")) (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "FFI"))))
+(DFunDef false "builtInEffects" () (EListLit (ELit (LString "IO")) (ELit (LString "Rand")) (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "Signal")) (ELit (LString "FFI"))))
 (DTypeSig false "checkEffect" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkEffect" ((PVar "cur") (PVar "env") (PVar "e")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "e")) (EFieldAccess (EVar "env") "effectAmbiguous")) (arm (PCon "Some" (PVar "mods")) () (EListLit (EApp (EApp (EApp (EVar "AmbiguousEffect") (EVar "e")) (EVar "mods")) (EVar "cur")))) (arm (PCon "None") () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "e")) (EVar "builtInEffects")) (EApp (EApp (EVar "contains") (EVar "e")) (EFieldAccess (EVar "env") "effects"))) (EListLit) (EListLit (EApp (EApp (EVar "UnknownEffect") (EVar "e")) (EVar "cur")))))))
 (DTypeSig false "ambiguousTypeErrors" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "ResError"))))))

@@ -462,9 +462,9 @@ permitOf a policy = match (atomLabel a == "IO", policyEntriesFor a policy)
         Forbidden
     Err m => Malformed m
 
--- `IO` is the join of the ten host labels, so an `IO` atom under a policy with no
--- `IO` entry is permitted exactly when the policy admits every one of the ten at
--- its top.
+-- `IO` is the join of the eleven host labels, so an `IO` atom under a policy with
+-- no `IO` entry is permitted exactly when the policy admits every one of the
+-- eleven at its top.
 permitIoAsJoin : List (String, EffParamTy) -> Permit
 permitIoAsJoin policy =
   firstNotPermitted (map (l => permitOf (atomOfLabel l) policy) ioAliasLabels)

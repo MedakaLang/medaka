@@ -56,7 +56,7 @@ error: labels.mdk:1:19: Unknown effect: Audit
   |                    ^
 ```
 
-`IO` does not cover a label you declare. It is the join of the ten built-in host
+`IO` does not cover a label you declare. It is the join of the eleven built-in host
 labels and nothing else, so a function that calls `audit` under an `<IO>` bound is
 refused the same way:
 
@@ -276,7 +276,7 @@ error: ffi.mdk:4:17: Effectful value used where <IO> is allowed, but it performs
 ```
 
 The reason is the same as for user labels, sharpened: foreign code can do anything
-at all, including things the ten labels do not describe, so a boundary has to opt
+at all, including things the eleven labels do not describe, so a boundary has to opt
 into it by name.
 
 The externs in the standard library's runtime catalog are the exception. They are

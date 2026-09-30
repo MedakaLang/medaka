@@ -74,8 +74,8 @@ one_case "defaults-accept"    test/check_policy_fixtures/defaults_plugin.mdk "Lo
 # Accepted entries that are not `String -> String`: verdict, then a no-sample line.
 one_case "int-entry-accept"   test/check_policy_fixtures/int_entry_plugin.mdk "Audit" transfer int_entry_accept
 one_case "named-entry-sample" test/check_policy_fixtures/named_entry_plugin.mdk "FileRead" transform named_entry_accept
-# An <IO> entry under a policy that names the ten host labels.
-one_case "io-join-accept"     test/check_policy_fixtures/io_join_plugin.mdk "Clock,Env,Exec,FileRead,FileWrite,Net,Rand,Stderr,Stdin,Stdout" transform io_join_accept
+# An <IO> entry under a policy that names the eleven host labels.
+one_case "io-join-accept"     test/check_policy_fixtures/io_join_plugin.mdk "Clock,Env,Exec,FileRead,FileWrite,Net,Rand,Signal,Stderr,Stdin,Stdout" transform io_join_accept
 # The sample line follows `--fn`, not a fixed entry name.
 one_case "renamed-entry-sample" test/check_policy_fixtures/renamed_entry_plugin.mdk "Audit" rewrite renamed_entry_accept
 one_case "thunk-entry-accept" test/check_policy_fixtures/thunk_entry_plugin.mdk "Audit" tick thunk_entry_accept
@@ -209,7 +209,8 @@ refuse_case "analysis-unlabelled-ffi" "test/check_policy_fixtures/ffi_unlabelled
 refuse_case "analysis-import-type-error" "test/check_policy_fixtures/policy_xmod_bad_main.mdk" "Stdout" transform "rejected. compiler analysis failed" "policy_xmod_bad_helper.mdk:4:10: No impl of Num for String"
 refuse_case "analysis-unresolvable" "test/check_policy_fixtures/manifest_unresolvable_plugin.mdk" "Stdout" transform "rejected. compiler analysis failed" "has no exported name 'noSuchExport'"
 refuse_case "missing-entry-2047" "test/check_policy_fixtures/missing_entry_plugin.mdk" "Cache,Log" transform "rejected. no 'transform' entry found"
-refuse_case "io-join-nine-labels" "test/check_policy_fixtures/io_join_plugin.mdk" "Clock,Env,Exec,FileRead,FileWrite,Rand,Stderr,Stdin,Stdout" transform "rejected. transform requires <IO>"
+refuse_case "io-join-without-net" "test/check_policy_fixtures/io_join_plugin.mdk" "Clock,Env,Exec,FileRead,FileWrite,Rand,Signal,Stderr,Stdin,Stdout" transform "rejected. transform requires <IO>"
+refuse_case "io-join-without-signal" "test/check_policy_fixtures/io_join_plugin.mdk" "Clock,Env,Exec,FileRead,FileWrite,Net,Rand,Stderr,Stdin,Stdout" transform "rejected. transform requires <IO>"
 
 # Verdict first: the accepted verdict is printed before the sample run, so a
 # panicking sample leaves `accepted.` on stdout, then panics, exit 1.

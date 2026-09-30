@@ -220,3 +220,7 @@ exit	EXEMPT	terminates the process, produces no comparable value
 __fallthrough__	EXEMPT	compiler-generated guard-fallthrough sentinel, never user-evaluated
 enableRunStdoutFlush	EXEMPT	IO plumbing (stdout flush control), returns Unit
 stashRunStdout	EXEMPT	IO plumbing (stdout capture), returns Unit
+args	EXEMPT	the command line fixed at process start: an input of the invocation, not a function of its arguments
+buildCommit	EXEMPT	link-time build stamp: a constant of the binary that differs per build and per engine
+buildDate	EXEMPT	link-time build stamp: a constant of the binary that differs per build and per engine
+buildFingerprint	EXEMPT	link-time build stamp: a constant of the binary that differs per build and per engine

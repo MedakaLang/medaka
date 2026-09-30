@@ -432,9 +432,6 @@ IDENT "args"
 COLON
 UPPER "Unit"
 ARROW
-LT
-UPPER "Env"
-GT
 UPPER "List"
 UPPER "String"
 NEWLINE
@@ -469,9 +466,6 @@ IDENT "buildFingerprint"
 COLON
 UPPER "Unit"
 ARROW
-LT
-UPPER "Env"
-GT
 UPPER "String"
 NEWLINE
 EXTERN
@@ -479,9 +473,6 @@ IDENT "buildCommit"
 COLON
 UPPER "Unit"
 ARROW
-LT
-UPPER "Env"
-GT
 UPPER "String"
 NEWLINE
 EXTERN
@@ -489,9 +480,6 @@ IDENT "buildDate"
 COLON
 UPPER "Unit"
 ARROW
-LT
-UPPER "Env"
-GT
 UPPER "String"
 NEWLINE
 EXTERN
@@ -831,7 +819,7 @@ COLON
 UPPER "Unit"
 ARROW
 LT
-UPPER "Net"
+UPPER "Signal"
 GT
 UPPER "Result"
 UPPER "String"
@@ -843,7 +831,7 @@ COLON
 UPPER "Unit"
 ARROW
 LT
-UPPER "Net"
+UPPER "Signal"
 GT
 UPPER "Bool"
 NEWLINE
