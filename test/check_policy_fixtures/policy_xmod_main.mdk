@@ -1,0 +1,11 @@
+-- check-policy gate fixture (#3331): a multi-file target.  `transform` reaches
+-- the `<Stdout>` effect through a local helper and an imported sibling
+-- (`policy_xmod_logger.mdk`), so neither the verdict nor the sample run can be
+-- decided from this file alone.
+import policy_xmod_logger.{stamp}
+
+step : String -> <Stdout> String
+step s = stamp s
+
+transform : String -> <Stdout> String
+transform s = step (s ++ "!")

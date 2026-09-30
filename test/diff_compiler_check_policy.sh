@@ -79,6 +79,12 @@ one_case "io-join-accept"     test/check_policy_fixtures/io_join_plugin.mdk "Clo
 # The sample line follows `--fn`, not a fixed entry name.
 one_case "renamed-entry-sample" test/check_policy_fixtures/renamed_entry_plugin.mdk "Audit" rewrite renamed_entry_accept
 one_case "thunk-entry-accept" test/check_policy_fixtures/thunk_entry_plugin.mdk "Audit" tick thunk_entry_accept
+# Multi-file targets load through the module loader, as `manifest` does (#3331):
+# the effect arrives from an imported sibling, the sample run evaluates the
+# loaded program, and the chain is traced through the entry module's helpers.
+one_case "xmod-accept"        test/check_policy_fixtures/policy_xmod_main.mdk "Stdout" transform xmod_accept
+one_case "xmod-reject"        test/check_policy_fixtures/policy_xmod_main.mdk "Cache" transform xmod_reject
+one_case "stdlib-import-accept" test/check_policy_fixtures/policy_stdlib_import.mdk "Stdout" shout stdlib_import_accept
 #
 # NOTE: an ACCEPT case that admits Fetch (e.g. malicious + --allow Cache,Log,Fetch)
 # is deliberately NOT tested.  check-policy ACCEPT runs the plugin with stubs for
@@ -177,18 +183,18 @@ printf '%d param ok, %d param failing\n' "$ppass" "$pfail"
 # ── Fail-closed analysis, entry, and evaluation routes (#2127/#2047) ───────
 fpass=0; ffail=0
 
-# refuse_case LABEL FIXTURE ALLOW FN EXPECTED_SUBSTRING
+# refuse_case LABEL FIXTURE ALLOW FN EXPECTED_SUBSTRING [SECOND_SUBSTRING]
 refuse_case() {
-  rlabel="$1"; rfix="$2"; rallow="$3"; rfn="$4"; rsub="$5"
+  rlabel="$1"; rfix="$2"; rallow="$3"; rfn="$4"; rsub="$5"; rsub2="${6:-$5}"
   rmdk="$ROOT/$rfix"
   rtmp="$(mktemp)"
   perl -e 'alarm 90; exec @ARGV' \
       "$NATIVE" check-policy "$rmdk" --allow "$rallow" --fn "$rfn" > "$rtmp" 2>&1
   rrc=$?
-  if [ "$rrc" -ne 0 ] && ! grep -qF "accepted." "$rtmp" && grep -qF "$rsub" "$rtmp"; then
+  if [ "$rrc" -ne 0 ] && ! grep -qF "accepted." "$rtmp" && grep -qF "$rsub" "$rtmp" && grep -qF "$rsub2" "$rtmp"; then
     fpass=$((fpass+1)); printf 'ok   %s (rc=%s, no accepted verdict)\n' "$rlabel" "$rrc"
   else
-    ffail=$((ffail+1)); printf 'FAIL %s (rc=%s, want nonzero + <%s> + no accepted verdict)\n' "$rlabel" "$rrc" "$rsub"
+    ffail=$((ffail+1)); printf 'FAIL %s (rc=%s, want nonzero + <%s> + <%s> + no accepted verdict)\n' "$rlabel" "$rrc" "$rsub" "$rsub2"
     sed 's/^/  /' "$rtmp"
   fi
   rm -f "$rtmp"
@@ -196,8 +202,12 @@ refuse_case() {
 
 echo ""
 echo "-- fail-closed analysis, entry, and evaluation --"
-refuse_case "analysis-type-error" "test/check_policy_fixtures/type_error_plugin.mdk" "Panic" transform "rejected. compiler analysis failed"
+refuse_case "analysis-type-error" "test/check_policy_fixtures/type_error_plugin.mdk" "Panic" transform "rejected. compiler analysis failed" "type_error_plugin.mdk:5:14: No impl of Num for String"
 refuse_case "analysis-unlabelled-ffi" "test/check_policy_fixtures/ffi_unlabelled_plugin.mdk" "FFI,Net" transform "rejected. compiler analysis failed"
+# #3331: the refusal carries `check`'s diagnostics, located in the file that
+# failed — here an imported sibling, and an unresolvable import.
+refuse_case "analysis-import-type-error" "test/check_policy_fixtures/policy_xmod_bad_main.mdk" "Stdout" transform "rejected. compiler analysis failed" "policy_xmod_bad_helper.mdk:4:10: No impl of Num for String"
+refuse_case "analysis-unresolvable" "test/check_policy_fixtures/manifest_unresolvable_plugin.mdk" "Stdout" transform "rejected. compiler analysis failed" "has no exported name 'noSuchExport'"
 refuse_case "missing-entry-2047" "test/check_policy_fixtures/missing_entry_plugin.mdk" "Cache,Log" transform "rejected. no 'transform' entry found"
 refuse_case "io-join-nine-labels" "test/check_policy_fixtures/io_join_plugin.mdk" "Clock,Env,Exec,FileRead,FileWrite,Rand,Stderr,Stdin,Stdout" transform "rejected. transform requires <IO>"
 

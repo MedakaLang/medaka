@@ -1,0 +1,4 @@
+-- check-policy gate fixture (#3331): an ill-typed imported sibling.
+export
+shout : String -> String
+shout s = s + 1

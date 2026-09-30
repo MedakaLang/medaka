@@ -1,0 +1,7 @@
+-- check-policy gate fixture (#3331): the imported sibling whose `stamp`
+-- performs the `<Stdout>` effect `policy_xmod_main.mdk` reaches.
+export
+stamp : String -> <Stdout> String
+stamp s =
+  let _ = println s
+  "[" ++ s ++ "]"

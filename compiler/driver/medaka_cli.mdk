@@ -318,8 +318,9 @@ import tools.check_policy.{
   PolicyArgs(..),
   PolicyOutcome(..),
   runManifest,
-  ManifestResult(..),
   ManifestArgs(..),
+  analyzeProgram,
+  EntryAnalysis(..),
 }
 
 -- FLAG for user confirmation: exact version NUMBER not yet confirmed — using
@@ -3476,12 +3477,11 @@ writeLibraryFile outDir name contents =
 
 -- ── check-policy ───────────────────────────────────────────────────────────
 -- WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md.  Mirrors bin/main.ml's `check-policy`
--- arm: parse `--allow L1,L2,… / --fn name / <file>`, type-check the plugin, read
--- the named fn's inferred effect row, and accept (+ run on a sample request) or
--- reject (+ print the call chain) per the policy.  Prelude sources come from
--- MEDAKA_ROOT, as check/run/doc do.  runCheckPolicy returns (report, accepted?);
--- we print the report and exit 0 (accept) / 1 (reject) — the OCaml arm exits the
--- same way.  Defaults (allow "Cache,Log", fn "transform") match the oracle.
+-- arm: parse `--allow L1,L2,… / --fn name / <file>`, load and analyze the
+-- target as `manifest` does (`analyzeTarget`), read the named fn's inferred
+-- effect row, and accept (+ run on a sample request) or reject (+ print the
+-- call chain) per the policy.  We print the report and exit 0 (accept) / 1
+-- (reject).  Defaults (allow "Cache,Log", fn "transform") match the oracle.
 checkPolicyHelpText : String
 checkPolicyHelpText = stringConcat [
   "medaka check-policy — Check a plugin's inferred effects against an allow-list\n",
@@ -3539,17 +3539,15 @@ runCheckPolicyArgs (PolicyArgs None _ _) =
       "usage: medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]"
   exit 1
 runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let rtPath = root ++ "/stdlib/runtime.mdk"
-  let corePath = root ++ "/stdlib/core.mdk"
-  let r = do
-    rsrc <- readPreludeFile rtPath
-    csrc <- readPreludeFile corePath
-    tsrc <- readSource target
-    Ok (rsrc, csrc, tsrc)
-  match r
-    Err msg => dieMsg msg
-    Ok (rsrc, csrc, tsrc) => match runCheckPolicy rsrc csrc tsrc allow fn
+  match analyzeTarget target
+    -- A target `check` refuses has no row to judge: the refusal names what
+    -- failed and carries `check`'s own diagnostics.
+    Err diags =>
+      let _ =
+        ePutStrLn
+          "rejected. compiler analysis failed before policy evaluation; `medaka check \{target}` reports:"
+      dieMsg diags
+    Ok analysis => match runCheckPolicy analysis allow fn
       -- The accepted verdict prints before the sample run is forced, so a
       -- sample that panics leaves the verdict on stdout.
 
@@ -3564,6 +3562,72 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
       PolicyAccept header sample =>
         let _ = putStr header
         putStr (sample ())
+
+-- `manifest` and `check-policy` load and analyze their target exactly as
+-- `medaka check` does: the multi-file loader (project root, sibling and stdlib
+-- imports), `check`'s resolve diagnostics, then one elaboration of the graph
+-- (`analyzeProgram`), refusing on any error `check` would report for it.  The
+-- two verbs therefore read the entry's row from the same analysis, and a
+-- manifest's claim is one `check-policy` can verify.
+analyzeTarget : String -> <IO> Result String EntryAnalysis
+analyzeTarget target =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let stdlibDir = root ++ "/stdlib"
+  let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
+  -- An unreadable prelude or target is not an analysis result: exit here.
+  let rsrc = orExit (readPreludeFile (stdlibDir ++ "/runtime.mdk"))
+  let csrc = orExit (readPreludeFile (stdlibDir ++ "/core.mdk"))
+  let tsrc = orExit (readSource target)
+  match parseResult tsrc
+    Err e => Err (ppParseError tsrc target e)
+    Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
+      Err lerr => Err (moduleLoadErrText tsrc target stdlibDir lerr)
+      Ok modsWithPath =>
+        analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath
+
+-- Split out of `analyzeTarget` so the resolve gate and the typecheck gate each
+-- read as one thing.  The typecheck gate is `run`'s: the per-module
+-- diagnostics of the one elaboration, rendered located against each module's
+-- own file, then anything only the graph-end drain saw.
+analyzeLoaded : String ->
+  String ->
+  String ->
+  List String ->
+  String ->
+  List (String, String, List Decl) ->
+  <IO> Result String EntryAnalysis
+analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
+  let mods = map dropPathTriple modsWithPath
+  let pathMap = map modIdToPath modsWithPath
+  let trusted = projectTrustedMods target roots stdlibDir mods
+  let preludeKey = Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
+  let rtD = desugaredPrelude rsrc
+  let coreD = desugaredPrelude csrc
+  let modsD = map desugarPair mods
+  let resDiags =
+    ppResolveErrorsByFile
+      (resolveModulesErrorsByFile
+        pathMap
+        False
+        trusted
+        preludeKey
+        rtD
+        coreD
+        modsD)
+  match resDiags
+    "" =>
+      let _ = resetTypeErrorsSticky ()
+      let analysis = analyzeProgram rtD coreD modsD
+      let residualHit = hadTypeErrors ()
+      let (_, _, perMod, residual, _, _) = analysis.eaElab
+      match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
+        (Some errText, _, _) => Err errText
+        (None, _, _) =>
+          if residualHit then
+            Err (residualOrGeneric pathMap target residual)
+          else
+            Ok analysis
+    _ => Err resDiags
 
 -- ── manifest ─────────────────────────────────────────────────────────────────
 -- WS-1c of EFFECTS-CONFORMANCE-ROADMAP.md.  Emit a module's verified capability
@@ -3613,100 +3677,17 @@ runManifestCmd argv0 =
     (ManifestArgs (firstPositional a) (optDefault (lastValue "--fn" a) "main"))
 
 -- `medaka manifest` loads and analyzes the target exactly as `medaka check`
--- does (S-2, #3321): the multi-file loader, then `check`'s own resolve and
--- typecheck diagnostics, refusing on anything `check` would refuse — an
--- ill-typed target, an unresolvable import, or a missing `--fn` binding — all
--- to STDERR at exit 1, nothing on stdout.  A target that imports a sibling
--- module now resolves normally instead of never being reached (the old
--- `runManifest` read exactly one file).
+-- does (`analyzeTarget`), refusing on anything `check` would refuse — an
+-- ill-typed target or import, an unresolvable import, or a missing `--fn`
+-- binding — all to STDERR at exit 1, nothing on stdout.
 runManifestArgs : ManifestArgs -> <IO> Unit
 runManifestArgs (ManifestArgs None _) =
   dieMsg "usage: medaka manifest <file.mdk> [--fn name]"
-runManifestArgs (ManifestArgs (Some target) fn) =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let rtPath = root ++ "/stdlib/runtime.mdk"
-  let corePath = root ++ "/stdlib/core.mdk"
-  let stdlibDir = root ++ "/stdlib"
-  let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
-  match readPreludeFile rtPath
-    Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => match readSource target
-        Err msg => dieMsg msg
-        Ok tsrc => match parseResult tsrc
-          Err e => dieMsg (ppParseError tsrc target e)
-          Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
-            Err lerr =>
-              let _ = ePutStrLn (moduleLoadErrText tsrc target stdlibDir lerr)
-              exit 1
-            Ok modsWithPath =>
-              let mods = map dropPathTriple modsWithPath
-              let pathMap = map modIdToPath modsWithPath
-              let trusted = projectTrustedMods target roots stdlibDir mods
-              let preludeKey =
-                Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
-              let rtD = desugaredPrelude rsrc
-              let coreD = desugaredPrelude csrc
-              let modsD = map desugarPair mods
-              -- Resolve-phase errors (bad/missing import, private-name access) are
-              -- the loader's own diagnostics, not a typecheck concern — gate on
-              -- them exactly like `checkRoute`'s multi-module arm before ever
-              -- calling into `runManifest`'s typecheck.
-              runManifestResolveGate
-                pathMap
-                trusted
-                preludeKey
-                rtD
-                coreD
-                modsD
-                tsrc
-                target
-                fn
-
--- Split out of `runManifestArgs` so the resolve gate and the typecheck-then-
--- lookup step each read as one thing (S-2, #3321).
-runManifestResolveGate : List (String, String) ->
-  List String ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  String ->
-  String ->
-  String ->
-  <IO> Unit
-runManifestResolveGate pathMap trusted preludeKey rtD coreD modsD tsrc target fn =
-  let resDiags =
-    ppResolveErrorsByFile
-      (resolveModulesErrorsByFile
-        pathMap
-        False
-        trusted
-        preludeKey
-        rtD
-        coreD
-        modsD)
-  match resDiags
-    "" => match runManifest preludeKey rtD coreD modsD fn
-      ManifestOk toml =>
-        let _ = putStr toml
-        ()
-      ManifestTypeErrors errs =>
-        let _ =
-          ePutStrLn
-            (joinNl
-              (map
-                (d =>
-                  ppDiagCliLines (srcLinesArr tsrc) target (diagOfTypeError d))
-                errs))
-        exit 1
-      ManifestNoSuchFn name =>
-        let _ = ePutStrLn "no '\{name}' entry found"
-        exit 1
-    _ =>
-      let _ = ePutStrLn resDiags
-      exit 1
+runManifestArgs (ManifestArgs (Some target) fn) = match analyzeTarget target
+  Err diags => dieMsg diags
+  Ok analysis => match runManifest analysis fn
+    Ok toml => putStr toml
+    Err refusal => dieMsg refusal
 
 -- ── lint ──────────────────────────────────────────────────────────────────
 -- Parse target file(s) and run lint rules over the raw pre-desugar AST.
