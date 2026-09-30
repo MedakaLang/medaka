@@ -1,0 +1,6 @@
+-- A value's qualifier is a claim its definition is checked against: a literal
+-- outside it is refused where it is written.
+configFile : String @"cfg/*"
+configFile = "secrets/key"
+
+main = println configFile

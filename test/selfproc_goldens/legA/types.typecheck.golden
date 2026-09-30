@@ -504,6 +504,7 @@ checkedAxis : List (String, Param) -> (String, EffParamTy) -> (String, Param)
 checkedFfiExternTypeNames : List Decl -> List (String, (List String, String))
 checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List String, String))
 checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List String, String))
+checkedInto : TcEnv -> Expr -> Mono -> Mono -> Mono
 clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
 classEnvDeclFact : Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
 classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
@@ -1488,7 +1489,7 @@ inferArmGuards : TcEnv -> List Guard -> TcEnv
 inferArmOpening : TcEnv -> Mono -> Pat -> List Guard -> Expr -> Mono
 inferArms : TcEnv -> Mono -> List Arm -> List (Option Loc, Mono)
 inferArrayLit : TcEnv -> List Expr -> Mono
-inferBindingChecked : TcEnv -> List Mono -> List Pat -> Expr -> (Mono, EffRow)
+inferBindingChecked : TcEnv -> Option Mono -> List Pat -> Expr -> (Mono, EffRow)
 inferBinop : String -> Mono -> Mono -> Mono
 inferBinopE : TcEnv -> String -> Expr -> Expr -> Ref Route -> Mono
 inferBlock : TcEnv -> List DoStmt -> Mono
@@ -1521,7 +1522,7 @@ inferInfix : TcEnv -> String -> Expr -> Expr -> Mono
 inferIntLitPat : Int -> (Mono, List (String, Scheme))
 inferIntRange : TcEnv -> Expr -> Expr -> Mono -> Mono
 inferLam : TcEnv -> List Pat -> Expr -> Mono
-inferLamChecked : TcEnv -> List Mono -> List Pat -> Expr -> Mono
+inferLamChecked : TcEnv -> Option Mono -> List Pat -> Expr -> Mono
 inferLastStmt : TcEnv -> DoStmt -> Mono
 inferLet : TcEnv -> Bool -> Bool -> Pat -> Expr -> Expr -> Mono
 inferLetBinds : TcEnv -> List (LetBind, (String, BindingSummary)) -> List (Option ScopeId)
@@ -2922,7 +2923,6 @@ unifyIndexRowPlain : EffRow -> EffRow -> Unit
 unifyInto : Bool -> Mono -> Mono -> Unit
 unifyIntoN : Bool -> Bool -> Mono -> Mono -> Unit
 unifyIntoOrd : Bool -> Bool -> Mono -> Mono -> Unit
-unifyIntoValueFirst : Bool -> Mono -> Mono -> Unit
 unifyJoinRows : Bool -> EffRow -> EffRow -> Unit
 unifyN : Mono -> Mono -> Unit
 unifyOrdered : Bool -> Mono -> Mono -> Unit

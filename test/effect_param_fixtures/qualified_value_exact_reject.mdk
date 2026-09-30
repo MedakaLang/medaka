@@ -1,0 +1,5 @@
+-- An exact element admits only itself, never an extension of it.
+configFile : String @"cfg/app"
+configFile = "cfg/app.bak"
+
+main = println configFile
