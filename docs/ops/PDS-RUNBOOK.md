@@ -210,6 +210,7 @@ all three values below; the harness invents no resource bound or duration:
 ```sh
 LOAD_FULL_SOAK=1 LOAD_DURATION_MS=<operator-approved-ms> \
 LOAD_MAX_RSS_GROWTH_PCT=<operator-approved-percent> \
+LOAD_RSS_BASELINE_AFTER_S=<operator-approved-warm-up-seconds> \
 LOAD_MAX_DISK_GROWTH_KIB=<operator-approved-KiB> \
 LOAD_RECORDS=<operator-approved-record-count> LOAD_BLOBS=<operator-approved-blob-count> \
 LOAD_CLIENTS=<operator-approved-reader-count> LOAD_WRITE_CLIENTS=<operator-approved-writer-count> \
@@ -219,9 +220,12 @@ MEDAKA_ROOT=<isolated-checkout> MEDAKA=<isolated-checkout>/medaka \
 sh <isolated-checkout>/pds/nightly/load_harness.sh
 ```
 
-The RSS limit grades the highest sampled RSS against the initial sample as a
-percentage; the disk limit grades the highest sampled disk usage against the
-initial sample in KiB. A transient sampled breach is not forgiven by a later
+The RSS limit grades the highest sampled RSS against a baseline sample as a
+percentage. The baseline is the first sample taken at least
+`LOAD_RSS_BASELINE_AFTER_S` seconds into the load phase (0, the default, means
+the initial sample), so the heap's growth to its working size early in a run
+is not graded as drift. The disk limit grades the highest sampled disk usage
+against the initial sample in KiB. A transient sampled breach is not forgiven by a later
 drop. Set `LOAD_RESOURCE_SAMPLE_SECONDS` to
 an operator-chosen sampling cadence for the observation. No numerical limit,
 production/off-hours authorization, or live-run evidence is supplied by this
