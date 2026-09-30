@@ -53,6 +53,9 @@ test "An extension of a domain-annotated binder in a result is the whole domain"
   (fixture "binder_domain_extend_reject.mdk")
   ["reaches the whole domain where only dir is admitted"]
 
+test "An extension of a pattern-ranging binder in a result stays within it" =
+  expectCheckAccept (fixture "binder_pattern_extend_accept.mdk")
+
 test "A qualified result bounds the returned expression's abstraction" = expectCheckTypes
   "qualified_result_accept.mdk"
   [

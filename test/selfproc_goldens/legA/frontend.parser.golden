@@ -510,6 +510,8 @@ patAppFor : Token -> ParserE <> Pat
 patConsTail : Pat -> ParserE <> Pat
 patListFor : Token -> ParserE <> Pat
 patParenFor : Token -> ParserE <> Pat
+patternMarkFor : Token -> ParserE <> Bool
+patternMarkP : ParserE <> Bool
 payloadFor : Token -> ParserE <> ConPayload
 peek2P : ParserE <> Token
 peek3P : ParserE <> Token

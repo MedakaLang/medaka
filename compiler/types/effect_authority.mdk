@@ -31,25 +31,26 @@ public export data Authority =
   | AJoin (List Authority)
   | AProduct (List (String, Authority))
 
--- id, inference level, the domain's top, and the source binder's name when
--- the variable came from a written signature. Identity belongs to the cell
--- and survives linking, as an effect variable's does, and so does the domain:
--- a linked variable still has its label's declared schema, never the axes of
--- the constant it was linked to.
+-- id, inference level, the domain's top, whether the variable ranges over
+-- the domain's patterns only (a binder written `@L*` or `Authority L*`), and
+-- the source binder's name when the variable came from a written signature.
+-- Identity belongs to the cell and survives linking, as an effect variable's
+-- does, and so does the domain: a linked variable still has its label's
+-- declared schema, never the axes of the constant it was linked to.
 public export data Authvar =
-  | AUnbound Int Int Param (Option String)
+  | AUnbound Int Int Param Bool (Option String)
   | ALink Int Param Authority
 
 export
 authvarId : Ref Authvar -> Int
 authvarId cell = match !cell
-  AUnbound id _ _ _ => id
+  AUnbound id _ _ _ _ => id
   ALink id _ _ => id
 
 export
 authvarLevel : Ref Authvar -> Int
 authvarLevel cell = match !cell
-  AUnbound _ level _ _ => level
+  AUnbound _ level _ _ _ => level
   ALink _ _ a => authLevelOf a
 
 authLevelOf : Authority -> Int
@@ -62,18 +63,67 @@ authLevelOf _ = 0
 export
 authvarDomain : Ref Authvar -> Param
 authvarDomain cell = match !cell
-  AUnbound _ _ top _ => top
+  AUnbound _ _ top _ _ => top
   ALink _ top _ => top
 
 export
 authvarName : Ref Authvar -> Option String
 authvarName cell = match !cell
-  AUnbound _ _ _ name => name
+  AUnbound _ _ _ _ name => name
   ALink _ _ _ => None
 
+-- Whether an unbound variable ranges over its domain's patterns only. A
+-- linked cell is no longer a variable; its target answers for it.
+export
+authvarIsPattern : Ref Authvar -> Bool
+authvarIsPattern cell = match !cell
+  AUnbound _ _ _ pat _ => pat
+  ALink _ _ target => authIsPattern target
+
+-- Narrow a flexible variable to its domain's patterns: it now stands for
+-- what a pattern-ranging variable it was equated with stands for. Only a
+-- flexible variable may be narrowed, since a rigid one is a caller's choice.
+export
+markAuthvarPattern : Ref Authvar -> Unit
+markAuthvarPattern cell = match !cell
+  AUnbound id level top _ name => cell := AUnbound id level top True name
+  ALink _ _ _ => ()
+
+-- Every solution goes through here, so a pattern-ranging variable never
+-- links outside its range: the term is closed to the least pattern above it
+-- (`authPatternClose`), which leaves a term already in the range unchanged.
+-- A caller that must refuse a term outside the range (an index equality with
+-- an exact element) decides that before linking.
 export
 linkAuthvar : Ref Authvar -> Authority -> Unit
-linkAuthvar cell a = cell := ALink (authvarId cell) (authvarDomain cell) a
+linkAuthvar cell a =
+  let target = if authvarIsPattern cell then authPatternClose a else a
+  cell := ALink (authvarId cell) (authvarDomain cell) target
+
+-- The least term of the pattern range above [a] (the closure π of
+-- EFFECTS-SEMANTICS §4.1): each constant extended to the pattern it begins,
+-- a Product on its primary axis, a pattern-ranging variable kept, and any
+-- other variable the domain's top, since what it stands for may be an exact
+-- element.
+export
+authPatternClose : Authority -> Authority
+authPatternClose a = mapConstants extendParam a
+
+-- Whether [a] lies in the pattern range: every constant a pattern (a fixed
+-- point of `extendParam`, on a Product's primary axis) and every variable
+-- pattern-ranging.
+export
+authIsPattern : Authority -> Bool
+authIsPattern a = match authNorm a
+  AConst p => isPatternParam p
+  AVar cell => authvarIsPattern cell
+  AJoin ms => allList authIsPattern ms
+  AProduct ((_, t) :: _) => authIsPattern t
+  AProduct [] => True
+
+export
+isPatternParam : Param -> Bool
+isPatternParam p = dsub (extendParam p) p
 
 export
 authTop : Param -> Authority
@@ -83,7 +133,10 @@ authTop top = AConst (subTopOf top)
 -- through its domain, by the suffix when it is known (`authAppend`) and to
 -- the pattern it begins when it is not (`authExtend`). A variable extends to
 -- its domain's top: what it stands for is not known here, and an exact
--- element has no extension inside itself, so no narrower bound is sound.
+-- element has no extension inside itself, so no narrower bound is sound. A
+-- pattern-ranging variable is the exception: whatever it stands for is a
+-- pattern, which admits every extension of a value within it, so it extends
+-- to itself.
 export
 authExtend : Authority -> Authority
 authExtend a = mapConstants extendParam a
@@ -100,7 +153,8 @@ mapConstants f a = match authNorm a
   AJoin ms => authJoinAll (map (mapConstants f) ms)
   AProduct ((name, t) :: rest) =>
     authNorm (AProduct ((name, mapConstants f t) :: rest))
-  AVar cell => authTop (authvarDomain cell)
+  AVar cell =>
+    if authvarIsPattern cell then AVar cell else authTop (authvarDomain cell)
   v => v
 
 -- The domain's top for a term: from a constant's shape, or a variable's
@@ -148,7 +202,7 @@ collect ((AConst p) :: rest) (Parts consts tuples vars) =
   collect rest (Parts (p :: consts) tuples vars)
 collect ((AVar cell) :: rest) (Parts consts tuples vars) = match !cell
   ALink _ _ target => collect (target :: rest) (Parts consts tuples vars)
-  AUnbound id _ _ _ => collect rest (Parts consts tuples (M.set id cell vars))
+  AUnbound id _ _ _ _ => collect rest (Parts consts tuples (M.set id cell vars))
 collect ((AJoin ms) :: rest) parts = collect (ms ++ rest) parts
 collect ((AProduct axes) :: rest) (Parts consts tuples vars) =
   match productTerm axes

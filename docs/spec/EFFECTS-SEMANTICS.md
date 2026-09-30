@@ -273,6 +273,17 @@ and not yet the answer: a host part such as `a.com/../x`, a percent-encoded
 byte, or a `.` segment is not normalized, and the socket externs, which take a
 host and a port, receive no grant. That is open.
 
+**Patterns.** Extending a value by an unknown suffix is the closure
+`π = extend` on the domain: `π(⊤) = ⊤`, `π(s*) = s*`, and `π(e) = e*` for an
+exact element `e`, pointwise on an antichain and, in a `Product`, on the
+primary axis only. `π` is extensive, monotone and idempotent, so its fixed
+points, the **patterns**, form a `⊔`-closed sub-lattice containing `⊤` and
+the empty authority. A value within a pattern stays within it when extended
+on the right: `v ∈ γ(x)` implies `v ++ w ∈ γ(x)` for a pattern `x`, and no
+exact element has that property. In a `Set` domain every element is exact,
+so the only pattern is `⊤`. A binder may range over the patterns of a label
+(§4.1, `Authority L*` and `@L*`).
+
 ### 2.4 Sub-effecting (row order)
 
 The order on rows, `φ₁ ≤ φ₂` ("`φ₁` performs no more than `φ₂`"), lifts the domain
@@ -415,8 +426,8 @@ is the safe default):
 | Core form | `α` |
 |---|---|
 | string literal `"s"` | the singleton authority `s` (e.g. `Prefix` pattern from `s`) |
-| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays; an authority variable becomes its domain's top (below). In `Set`, non-literal concatenation gives `⊤` |
-| string interpolation `"s\{e}…"` | the `++`-chain rule: the leading literal `s` is the known prefix, extended to `s*` by the first interpolated expression |
+| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal, and an operand that is exactly `""` leaves the other operand's authority. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays; an authority variable becomes its domain's top, unless it ranges over patterns, when it stays (below). In `Set`, non-literal concatenation gives `⊤` |
+| string interpolation `"s\{e}…"` | the `++`-chain rule, with each part `\{e}` read like `e` written directly (the prelude's `display` is the identity at `String`; under a program's own `display` the part is `⊤`): the leading literal `s` is the known prefix, extended to `s*` by the first interpolated expression |
 | `let x = e₁ in …x…` | propagate `α(e₁)` to uses of `x` |
 | `if c then e₁ else e₂` | `α(e₁) ⊔ α(e₂)` (join of branch authorities) |
 | `match … { … ⇒ eᵢ }` | `⊔ᵢ α(eᵢ)` (join over arms) |
@@ -438,7 +449,15 @@ reads under a named argument's authority forwards the argument, or an operation
 that keeps its authority; a caller that wants a path below its own element
 builds it (`readUnder ("cfg/" ++ name)`) and passes it, and a constant left
 operand extends as the table says. A wrapper that must extend its argument
-declares the label bare.
+declares the binder pattern-ranging (§4.1), or declares the label bare.
+
+**A pattern-ranging variable extends to itself.** A binder written
+`(p : String @L*)` or a parameter of kind `Authority L*` ranges over the
+patterns of `L`'s domain only (§2.3), so whatever it stands for admits every
+right extension of a value within it: `α(p ++ x) = κ` for `p : String @κ`
+with `κ` pattern-ranging. A left extension, `x ++ p`, is still the left operand's extension. The
+enforcement that makes this sound is that no instantiation of `κ` is ever
+an exact element (§4.1).
 
 **The ⊤-fallback *is* the no-exfiltration guarantee.** A URL/path that is computed
 (a function result, a runtime input, an un-analyzable expression) abstracts to
@@ -563,7 +582,9 @@ declared type, so a use of the binding reads the declared qualifier, never the
 body's abstraction. A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the
 least solution, variables bounded by each other collapsing to one representative
-first. A variable the owning scope decides that nothing bounds below (no
+first. A pattern-ranging `κ` takes the least solution among patterns, `π` of
+the join (§2.3), and one pattern-ranging member makes the whole class
+pattern-ranging. A variable the owning scope decides that nothing bounds below (no
 value ever reaches it: an unused partial application, a callback over an
 empty list) takes the least solution of all, the empty authority `⊥`, which
 every bound admits. It prints as the empty set, `{}` (`Dir {}`,
@@ -708,6 +729,39 @@ its type publishes the top for it (`mkRaw = Raw` is `Int -> Raw *`), while a
 written signature publishes as written.
 (`mkRaw = Raw` is
 `Int -> Raw *`), so a forwarder cannot republish a phantom constructor.
+
+**Pattern-ranging binders.** A `*` after the label makes a binder range over
+the patterns of the label's domain (§2.3) instead of the whole domain: a data
+parameter or an existential binder of kind `Authority L*`,
+`data DataDir (d : Authority FileWrite*) = DataDir (String @d)`, and a named
+argument whose written domain is `@L*`, `(dir : String @FileWrite*)`. A body
+may then extend a value within the binder on the right and stay within it
+(§4): `writeBlock (DataDir root) cid bytes = writeFileBytes (root ++ "blocks/"
+++ cid) bytes` is charged `FileWrite d`. The label's domain must have
+patterns other than `⊤`: `Prefix`, or a `Product` whose primary axis is
+`Prefix`; a `Set` label or a `Product` whose primary axis is `Set` is refused
+at the declaration (`T-AUTHORITY-PATTERN`). A bare signature variable that
+nothing writes a range for (`writeBlock : DataDir d -> …`) inherits its
+slots' range, the meet across them: a pattern slot anywhere makes it
+pattern-ranging. A written binder keeps its own range, so an ordinary binder
+in a pattern slot, `(dir : String @FileWrite) -> DataDir dir`, a head
+parameter `(p : Authority FileWrite)` in a field `DataDir p`, or an ordinary
+existential wrapping one, is refused (`T-AUTHORITY-PATTERN`, naming
+`@FileWrite*`); a pattern-ranging binder may fill an ordinary slot, since a
+pattern is an element. A written term in a pattern slot must be a pattern: a
+`*`-ending literal, `*`, a pattern-ranging binder or a join of these;
+`DataDir "data/app.db"` is refused (`T-AUTHORITY-PATTERN`). An exact element
+that reaches a pattern-ranging binder as a value is closed to the pattern it
+begins: `DataDir "data/"` is a `DataDir "data/*"`, and `writeUnder
+"data/app.db"` with `writeUnder : (p : String @FileWrite*) -> …` is charged
+`"data/app.db*"`, so a caller bounded by the exact element is refused. An
+index equality that would equate a pattern-ranging index with an exact
+element, or with a rigid binder over the whole domain, is refused
+(`T-AUTHORITY-PATTERN`). Instantiation keeps the range, and only an
+instantiation reaches a program's manifest: a server built on `DataDir
+"data/*"` is granted `FileWrite = "data/*"`. At run time the grant is
+forwarded through the variable as any authority's is (§8); an opened
+pattern existential grants the whole domain, as any opened authority does.
 
 An `Authority`-kinded type-argument slot takes an authority term, kind-directed
 as an `Effect` slot takes a row: a named argument's name (`open : (path :
@@ -953,7 +1007,7 @@ already performed while constructing its container.
 ### 6.1 Kinds
 
 ```
-Kind    ::= Type | Effect | Authority Label | Kind → Kind | (Kind)
+Kind    ::= Type | Effect | Authority Label | Authority Label* | Kind → Kind | (Kind)
 TyParam ::= name | (name : Kind)
 ```
 
@@ -961,7 +1015,10 @@ Kind arrows associate right. `Effect` classifies rows; `Authority Label`
 classifies a parameter in that label's declared domain, not a row. The label
 must declare a domain: an atomic label, `IO` included, has no authorities, so
 `Authority` over one is ill-formed. Compatible domain aliases give compatible
-authority kinds.
+authority kinds. `Authority Label*` classifies a parameter that ranges over
+the domain's patterns only (§2.3, §4.1); the label's domain must have
+patterns other than `⊤`. Two kinds agree only when both or neither carry the
+`*`.
 
 ### 6.2 Declaration sites
 

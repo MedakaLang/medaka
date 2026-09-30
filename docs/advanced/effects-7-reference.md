@@ -32,11 +32,13 @@ where the system is known not to express something yet.
 | `<Http Host="a.com/*" Method={"GET"}>` | a product element; an unwritten axis is its whole axis | [IV](effects-4-authority.md) |
 | `(path : String) -> <Store path> B` | a named argument; the caller's path is the authority | [IV](effects-4-authority.md) |
 | `(dir : String @Store) -> String @dir` | a named argument with its domain written; charges nothing | [IV](effects-4-authority.md) |
+| `(dir : String @Store*) -> String @dir` | a pattern-ranging named argument; `dir ++ x` stays within `dir` | [IV](effects-4-authority.md#pattern-ranging-binders) |
 | `String @p` | a string known to lie within `p` | [IV](effects-4-authority.md) |
 | `String @(a \| b)` | a string within either authority | [IV](effects-4-authority.md) |
 | `v : String @"cfg/*"` | a value within a written bound; a use carries the bound | [IV](effects-4-authority.md) |
 | `(a <= d) => …` | a relation `check` prints on an unsigned binding | [IV](effects-4-authority.md) |
 | `data H (p : Authority Store) = H (String @p)` | a type indexed by an authority | [V](effects-5-data.md) |
+| `data DataDir (d : Authority Store*) = DataDir (String @d)` | an index that ranges over patterns; a bare `d` in a signature takes that range | [V](effects-5-data.md) |
 | `H path` / `H p` / `H "cfg/*"` / `H *` | index forms: named argument, variable, literal, whole domain | [V](effects-5-data.md) |
 | `data Any = Any (p : Authority Store) (H p)` | an existential index | [V](effects-5-data.md) |
 | `extern data Socket (h : Authority Net)` | an opaque indexed type produced only by the runtime | [V](effects-5-data.md) |
@@ -71,7 +73,11 @@ The first words of each message, and where the rule behind it is explained.
 | `Binding '…' reaches … where its declared bound admits only …` | a returned value, constructor or existential exceeds a written bound | [IV](effects-4-authority.md), [V](effects-5-data.md) |
 | `The qualifier names '…', but no binder domain, effect atom or index in this signature names '…'` | a qualifier with no domain | [IV](effects-4-authority.md) |
 | `'…' needs "…" to lie within "…" here` | a use violates a relation the binding's inferred type carries | [IV](effects-4-authority.md) |
-| `Authority index mismatch` | an authority index is invariant | [V](effects-5-data.md) |
+| `Authority index mismatch` | an authority index is invariant, and an index row must cover each atom its tail cannot take | [V](effects-5-data.md), [VI](effects-6-indexed.md) |
+| `` `"…"` is an exact element of `…`'s domain, but it fills an `Authority …*` slot `` | a written exact element where only a pattern goes | [V](effects-5-data.md) |
+| `` '…' ranges over every authority of `…`, but it fills an `Authority …*` slot `` | a binder without the `*` fills a pattern slot | [IV](effects-4-authority.md#pattern-ranging-binders), [V](effects-5-data.md) |
+| `` `Authority …*` ranges over the patterns of `…`'s domain `` / `` `@…*` ranges over … `` | a `*` on a `Set` label, or a `Product` whose first axis is a `Set` | [IV](effects-4-authority.md#pattern-ranging-binders) |
+| `` A pattern-ranging authority index (an `Authority L*` slot) is equated with `` | an index equality with an exact element | [V](effects-5-data.md) |
 | `Effect index mismatch` | an effect index is invariant | [VI](effects-6-indexed.md) |
 | `This pattern opens the existential authority '…'` | only a clause or arm can open one | [V](effects-5-data.md) |
 | `Constructor '…' of public type '…' carries its authority parameter '…' in no field` | a `public export data` constructor that proves nothing | [V](effects-5-data.md) |

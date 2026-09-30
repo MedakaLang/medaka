@@ -572,7 +572,7 @@ checkTypesGo bound cur env (t :: ts) =
 -- The names a declaration head binds as authorities: its `Authority`-kinded
 -- parameters (positional with the name list, as the kinds are stored).
 authorityParams : List String -> List (Option KindAnn) -> List String
-authorityParams (p :: ps) ((Some (KindAuthority _ _ _)) :: ks) =
+authorityParams (p :: ps) ((Some (KindAuthority _ _ _ _)) :: ks) =
   p :: authorityParams ps ks
 authorityParams (_ :: ps) (_ :: ks) = authorityParams ps ks
 authorityParams _ _ = []
@@ -583,7 +583,7 @@ checkKindLabels : Env -> List (Option KindAnn) -> List ResError
 checkKindLabels env kinds = flatMap (checkKindLabel env) kinds
 
 checkKindLabel : Env -> Option KindAnn -> List ResError
-checkKindLabel env (Some (KindAuthority l _ loc)) = checkEffect loc env l
+checkKindLabel env (Some (KindAuthority l _ _ loc)) = checkEffect loc env l
 checkKindLabel _ _ = []
 
 checkBinderLabels : Env -> List (String, KindAnn) -> List ResError
@@ -5553,10 +5553,10 @@ stampKindOpt scope (Some k) = Some (stampKind scope k)
 stampKindOpt _ None = None
 
 stampKind : OrdMap TyConOrigin -> KindAnn -> KindAnn
-stampKind scope (KindAuthority l OriginUnresolved loc) =
+stampKind scope (KindAuthority l OriginUnresolved pat loc) =
   match omLookup (effectKey l) scope
-    Some o => KindAuthority l o loc
-    None => KindAuthority l OriginUnresolved loc
+    Some o => KindAuthority l o pat loc
+    None => KindAuthority l OriginUnresolved pat loc
 stampKind scope (KindArrow a b) =
   KindArrow (stampKind scope a) (stampKind scope b)
 stampKind _ k = k
@@ -6631,13 +6631,13 @@ takeOriginTrace _ =
 (DFunDef false "checkTypesGo" ((PVar "bound") PWild PWild (PList)) (ETuple (EListLit) (EVar "bound")))
 (DFunDef false "checkTypesGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
 (DTypeSig false "authorityParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "authorityParams" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild PWild)) (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))))
+(DFunDef false "authorityParams" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild PWild PWild)) (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))))
 (DFunDef false "authorityParams" ((PCons PWild (PVar "ps")) (PCons PWild (PVar "ks"))) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))
 (DFunDef false "authorityParams" (PWild PWild) (EListLit))
 (DTypeSig false "checkKindLabels" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkKindLabels" ((PVar "env") (PVar "kinds")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkKindLabel") (EVar "env"))) (EVar "kinds")))
 (DTypeSig false "checkKindLabel" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkKindLabel" ((PVar "env") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild (PVar "loc")))) (EApp (EApp (EApp (EVar "checkEffect") (EVar "loc")) (EVar "env")) (EVar "l")))
+(DFunDef false "checkKindLabel" ((PVar "env") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild PWild (PVar "loc")))) (EApp (EApp (EApp (EVar "checkEffect") (EVar "loc")) (EVar "env")) (EVar "l")))
 (DFunDef false "checkKindLabel" (PWild PWild) (EListLit))
 (DTypeSig false "checkBinderLabels" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkBinderLabels" ((PVar "env") (PVar "binders")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "checkKindLabel") (EVar "env")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b")))))) (EVar "binders")))
@@ -7886,7 +7886,7 @@ takeOriginTrace _ =
 (DFunDef false "stampKindOpt" ((PVar "scope") (PCon "Some" (PVar "k"))) (EApp (EVar "Some") (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "k"))))
 (DFunDef false "stampKindOpt" (PWild (PCon "None")) (EVar "None"))
 (DTypeSig false "stampKind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "KindAnn") (TyCon "KindAnn"))))
-(DFunDef false "stampKind" ((PVar "scope") (PCon "KindAuthority" (PVar "l") (PCon "OriginUnresolved") (PVar "loc"))) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "effectKey") (EVar "l"))) (EVar "scope")) (arm (PCon "Some" (PVar "o")) () (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "o")) (EVar "loc"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "OriginUnresolved")) (EVar "loc")))))
+(DFunDef false "stampKind" ((PVar "scope") (PCon "KindAuthority" (PVar "l") (PCon "OriginUnresolved") (PVar "pat") (PVar "loc"))) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "effectKey") (EVar "l"))) (EVar "scope")) (arm (PCon "Some" (PVar "o")) () (EApp (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "o")) (EVar "pat")) (EVar "loc"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "OriginUnresolved")) (EVar "pat")) (EVar "loc")))))
 (DFunDef false "stampKind" ((PVar "scope") (PCon "KindArrow" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "KindArrow") (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "a"))) (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "b"))))
 (DFunDef false "stampKind" (PWild (PVar "k")) (EVar "k"))
 (DTypeSig false "stampTyHead" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))))))
@@ -8209,13 +8209,13 @@ takeOriginTrace _ =
 (DFunDef false "checkTypesGo" ((PVar "bound") PWild PWild (PList)) (ETuple (EListLit) (EVar "bound")))
 (DFunDef false "checkTypesGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
 (DTypeSig false "authorityParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "authorityParams" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild PWild)) (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))))
+(DFunDef false "authorityParams" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild PWild PWild)) (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))))
 (DFunDef false "authorityParams" ((PCons PWild (PVar "ps")) (PCons PWild (PVar "ks"))) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))
 (DFunDef false "authorityParams" (PWild PWild) (EListLit))
 (DTypeSig false "checkKindLabels" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkKindLabels" ((PVar "env") (PVar "kinds")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkKindLabel") (EVar "env"))) (EVar "kinds")))
 (DTypeSig false "checkKindLabel" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkKindLabel" ((PVar "env") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild (PVar "loc")))) (EApp (EApp (EApp (EVar "checkEffect") (EVar "loc")) (EVar "env")) (EVar "l")))
+(DFunDef false "checkKindLabel" ((PVar "env") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild PWild (PVar "loc")))) (EApp (EApp (EApp (EVar "checkEffect") (EVar "loc")) (EVar "env")) (EVar "l")))
 (DFunDef false "checkKindLabel" (PWild PWild) (EListLit))
 (DTypeSig false "checkBinderLabels" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkBinderLabels" ((PVar "env") (PVar "binders")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "checkKindLabel") (EVar "env")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b")))))) (EVar "binders")))
@@ -9464,7 +9464,7 @@ takeOriginTrace _ =
 (DFunDef false "stampKindOpt" ((PVar "scope") (PCon "Some" (PVar "k"))) (EApp (EVar "Some") (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "k"))))
 (DFunDef false "stampKindOpt" (PWild (PCon "None")) (EVar "None"))
 (DTypeSig false "stampKind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "KindAnn") (TyCon "KindAnn"))))
-(DFunDef false "stampKind" ((PVar "scope") (PCon "KindAuthority" (PVar "l") (PCon "OriginUnresolved") (PVar "loc"))) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "effectKey") (EVar "l"))) (EVar "scope")) (arm (PCon "Some" (PVar "o")) () (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "o")) (EVar "loc"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "OriginUnresolved")) (EVar "loc")))))
+(DFunDef false "stampKind" ((PVar "scope") (PCon "KindAuthority" (PVar "l") (PCon "OriginUnresolved") (PVar "pat") (PVar "loc"))) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "effectKey") (EVar "l"))) (EVar "scope")) (arm (PCon "Some" (PVar "o")) () (EApp (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "o")) (EVar "pat")) (EVar "loc"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "OriginUnresolved")) (EVar "pat")) (EVar "loc")))))
 (DFunDef false "stampKind" ((PVar "scope") (PCon "KindArrow" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "KindArrow") (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "a"))) (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "b"))))
 (DFunDef false "stampKind" (PWild (PVar "k")) (EVar "k"))
 (DTypeSig false "stampTyHead" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))))))

@@ -1,0 +1,17 @@
+-- #3620: a data directory whose authority ranges over patterns. The shell is
+-- parameterized by a `DataDir d`, a body extends the root on the right and
+-- stays within `d`, and only the instantiation reaches the manifest: `serve`
+-- is granted the pattern "data/*".
+data DataDir (d : Authority FileWrite*) = DataDir (String @d)
+
+writeBlock : DataDir d -> String -> String -> <FileWrite d> Result String Unit
+writeBlock (DataDir root) cid contents =
+  writeFile (root ++ "blocks/" ++ cid) contents
+
+dataDir : DataDir "data/*"
+dataDir = DataDir "data/"
+
+serve cid = writeBlock dataDir cid "block"
+
+main : <IO> Unit
+main = println "filewrite pattern binder manifest accept"

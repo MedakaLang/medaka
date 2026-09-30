@@ -141,6 +141,59 @@ handle at cfg/app.toml
 handle at anything
 ```
 
+## A directory: an index that ranges over patterns
+
+A handle names one file. A *directory* is a value under which a program builds
+many paths, `root ++ "blocks/" ++ cid`, and a `Handle`-style index cannot follow
+that: `root` may be an exact element, and an exact element admits nothing below
+itself, so the extension is the whole domain. A `*` on the kind makes the index
+range over patterns only, so an extension of the root on the right stays within
+it ([chapter 4](effects-4-authority.md#pattern-ranging-binders)):
+
+```medaka
+effect Store Prefix
+
+load : (path : String) -> <Store path> Int
+load _ = 1
+
+data DataDir (d : Authority Store*) = DataDir (String @d)
+
+readBlock : DataDir d -> String -> <Store d> Int
+readBlock (DataDir root) cid = load (root ++ "blocks/" ++ cid)
+
+sub : DataDir d -> String -> DataDir d
+sub (DataDir root) name = DataDir (root ++ name ++ "/")
+
+dataDir : DataDir "data/*"
+dataDir = DataDir "data/"
+
+main =
+  println (readBlock dataDir "b1")
+  println (readBlock (sub dataDir "scratch") "b2")
+```
+
+```medaka-expect
+1
+1
+```
+
+`readBlock` is charged `Store d`, whatever directory it was given, and `sub`
+returns a directory at the same authority. `DataDir "data/"` is a `DataDir
+"data/*"`: a root built from an exact string is closed to the pattern it
+begins, since the directory will be extended. So `check` prints `main :
+<Stdout, Store "data/*"> Unit`, and the program's manifest grants `"data/*"`.
+A test can pass a scratch directory instead, and only the instantiation
+reaches the row.
+
+`d` in `readBlock` is written bare, so it takes the range of the slot it fills.
+A written exact index, `DataDir "data/app.db"`, is refused, and so is a binder
+that ranges over the whole domain, `(p : String @Store) -> DataDir p`: either
+could stand for an exact element. Both are `T-AUTHORITY-PATTERN`, and the
+second names the fix, `(p : String @Store*)`. At run time the directory's
+grant is forwarded like any other, so a name that climbs out of it,
+`readBlock dataDir "../secret"` on a real file extern, is refused at the call:
+`data/../secret is outside the granted authority ["data/*"]`.
+
 ## Hiding the index
 
 Sometimes the authority is not known until runtime and does not need to be part
