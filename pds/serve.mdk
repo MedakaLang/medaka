@@ -1175,14 +1175,26 @@ keygen rest = match parseArgs keygenSpec rest
     Err message => abort "keygen: \{message}"
     Ok () => ()
 
-{- | Everything this program may do, which is what `medaka manifest` reports:
-   `serve`'s row, plus the `secrets/` files `configure` reads and `keygen`
-   reads and writes.
+{- | What the systemd unit runs: parse the `serve` flags, admit the
+   configuration, and serve. This row is what `medaka manifest --fn serve`
+   reports and what `pds.service`'s sandbox is checked against
+   (`pds/test/sandbox_agreement_test.mdk`). It reads the `secrets/` files and
+   writes none of them: `ReadOnlyPaths=/opt/pds/secrets`.
 
-   Only `serve` enters the scheduler. `keygen`, `--version` and `configure`
-   each finish inside one synchronous step, so they run before it, in the
-   plain row: an `Async` row is exact, and the serving loop's row names no
-   `secrets/` file. -}
+   Only `start` enters the scheduler. `configure` finishes inside one
+   synchronous step, so it runs before it, in the plain row: an `Async` row
+   is exact, and the serving loop's row names no `secrets/` file. -}
+serve : List String ->
+  <Clock, FileRead "data/*", FileRead "secrets/key.hex", FileRead "secrets/password", FileRead "secrets/token.hex", FileWrite "data/*", Kdf, Mint {"access", "refresh"}, Net "127.0.0.1", Rand, Sign "commit", Sign "service-auth", Signal, Stderr, Stdout> Unit
+serve argv = match parseArgs serveSpec argv
+  Err message => abort message
+  Ok parsed => runAsyncMain (start (configure parsed))
+
+{- | Everything this program may do, which is what `medaka manifest` reports:
+   `serve`'s row, plus the `secrets/` files `keygen` reads and writes.
+
+   `keygen` and `--version` each finish inside one synchronous step and never
+   reach `serve`. -}
 main : <Clock, FileRead "data/*", FileRead "secrets", FileRead "secrets/key.hex", FileRead "secrets/password", FileRead "secrets/token.hex", FileWrite "data/*", FileWrite "secrets", FileWrite "secrets/key.hex", FileWrite "secrets/token.hex", Kdf, Mint {"access", "refresh"}, Net "127.0.0.1", Rand, Sign "commit", Sign "service-auth", Signal, Stderr, Stdout> Unit
 main = match args ()
   "keygen" :: rest => keygen rest
@@ -1190,6 +1202,4 @@ main = match args ()
   -- routing it through `parseArgs` would answer a version request with an
   -- unknown-flag rejection.
   "--version" :: _ => putStrLn (versionString ())
-  argv => match parseArgs serveSpec argv
-    Err message => abort message
-    Ok parsed => runAsyncMain (start (configure parsed))
+  argv => serve argv

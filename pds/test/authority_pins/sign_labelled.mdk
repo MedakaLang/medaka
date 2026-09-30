@@ -1,0 +1,8 @@
+-- Accepted twin of `sign_pure.mdk`: the row names `Sign "commit"`.
+
+import bytes.{Bytes}
+import lib.sign.{SecretKey, Sign, Signature, signCommitDigest}
+
+export
+signIt : SecretKey -> Bytes -> <Sign "commit"> Result String Signature
+signIt key digest = signCommitDigest key digest

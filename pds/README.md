@@ -116,14 +116,17 @@ the shell is native-bound.
 - `pds/serve.mdk` — the entry point. It admits every configuration value before
   binding anything, rehydrates the repository from disk under the configured
   signing key, and hands `pds/shell/server.mdk` a listener and the one
-  `Ref Store` all connection tasks share. Its `main` runs `configure` (or
-  `keygen`) in one synchronous step and then hands the serving loop to the
-  async scheduler (`runAsyncMain`), so `medaka build pds/serve.mdk` produces a
-  program the scheduler drives. There is no `--data` flag: the server serves
+  `Ref Store` all connection tasks share. Its `main` dispatches to `keygen`,
+  `--version` or `serve`; `serve` runs `configure` in one synchronous step and
+  then hands the serving loop to the async scheduler (`runAsyncMain`), so
+  `medaka build pds/serve.mdk` produces a program the scheduler drives. There is no `--data` flag: the server serves
   `data/` under its working directory, which must already exist.
   The listener is bound by `shell.server`'s `bindAddress` at the fixed
   loopback address, so its type is `Listener "127.0.0.1"` and every
   connection it accepts is charged `Net "127.0.0.1"`; there is no bind flag.
+- `pds/capabilities/` — the checked-in capability manifests: `main.toml` is
+  `medaka manifest pds/serve.mdk`, and `serve.toml` is the same with
+  `--fn serve`. See "What the server is allowed to do".
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). Every gate must be placed explicitly in
   exactly one `ci.yml` shard by measured cost; directory location alone does
@@ -134,6 +137,68 @@ the shell is native-bound.
 the project root so `pds/test/*.mdk` and `pds/serve.mdk` can
 `import lib.<mod>`. `pds/serve.mdk` is therefore named by path, not by the
 manifest, and is not called `pds/main.mdk` for that reason.
+
+## What the server is allowed to do
+
+`pds.service` runs `pdsd` with no subcommand, which is `serve` in
+`pds/serve.mdk`. Its row is everything the running server may do:
+
+```text
+serve : List String ->
+  <Clock, FileRead "data/*", FileRead "secrets/key.hex", FileRead "secrets/password", FileRead "secrets/token.hex", FileWrite "data/*", Kdf, Mint {"access", "refresh"}, Net "127.0.0.1", Rand, Sign "commit", Sign "service-auth", Signal, Stderr, Stdout> Unit
+```
+
+`medaka manifest pds/serve.mdk --fn serve` prints that row as
+`pds/capabilities/serve.toml`:
+
+```toml
+[package.capabilities]
+Clock = true
+FileRead = ["data/*", "secrets/key.hex", "secrets/password", "secrets/token.hex"]
+FileWrite = "data/*"
+Kdf = true
+Mint = ["access", "refresh"]
+Net = "127.0.0.1"
+Rand = true
+Sign = ["commit", "service-auth"]
+Signal = true
+Stderr = true
+Stdout = true
+```
+
+The unit's sandbox grants the same thing from the operating system's side:
+
+```ini
+WorkingDirectory=/opt/pds
+ProtectSystem=strict
+ReadWritePaths=/opt/pds/data
+ReadOnlyPaths=/opt/pds/secrets
+IPAddressDeny=any
+IPAddressAllow=localhost
+```
+
+`ReadWritePaths` is the `data/*` reads and writes, `ReadOnlyPaths` is the
+`secrets/` reads, and `IPAddressAllow` is `Net "127.0.0.1"`. `serve` writes
+nothing under `secrets/`. Only `keygen` does, and the unit never runs it, so
+`main`'s manifest (`pds/capabilities/main.toml`) is wider than the unit allows
+and `serve`'s is not. The remaining labels are the clock, randomness, output,
+signal handling and the three secret-spending labels, which systemd does not
+govern.
+
+`pds/test/sandbox_agreement_test.mdk` keeps the two sides in agreement. It
+compares both checked-in manifests with a fresh `medaka manifest` run byte for
+byte, derives a `check-policy --allow` list from `pds/pds.service`, and
+requires `medaka check-policy pds/serve.mdk --fn serve` to answer `accepted.`
+under it. Three mutation controls narrow the unit (`ReadWritePaths` to
+`data/blocks`, `IPAddressAllow` to `10.0.0.1`, no `ReadOnlyPaths`) and each
+must turn the verdict to `rejected.`.
+
+`pds/test/authority_pins_test.mdk` pins the signatures that row rests on. Each
+program under `pds/test/authority_pins/` imports the real modules and must be
+refused with a named error code, beside an accepted twin: an `egressCall`
+caller whose row names `Net "10.0.0.1"`, a pure caller of `signCommitDigest`,
+a `DataDir` rooted at `secrets/` passed to `blockFileWrite` under a `data/*`
+row, and a `Server <>` built from `pdsHandler`.
 
 ## Running the gate locally
 
@@ -768,8 +833,8 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/s
 
 ### secp256k1 signatures
 
-`pds/lib/sign.mdk` completes that eight-function consumer boundary with an
-opaque `Signature`, exact 64-byte P1363 compact parsing/serialization, fixed
+`pds/lib/sign.mdk` completes that consumer boundary, nine functions in all,
+with an opaque `Signature`, exact 64-byte P1363 compact parsing/serialization, fixed
 two-candidate RFC 6979 signing, and public verification. The signer is
 private: a key signs through `signCommitDigest` (`<Sign "commit">`) or
 `signServiceAuthDigest` (`<Sign "service-auth">`), each of which accepts
@@ -780,8 +845,9 @@ Production receives only the fixed signer's aggregate validity bit and opaque
 selected signature. Nonce and intermediate scalar observations remain on the
 internal corpus-test routes in `lib.secp256k1`.
 
-`constant_time_signing_public_main.mdk` imports only `lib.sign`, exercises all
-eight public APIs, and roots the native P15 audit at `signCommitDigest` and
+`constant_time_signing_public_main.mdk` imports only `lib.sign`, exercises
+eight of the nine public functions (all but `signServiceAuthDigest`, which
+calls the same private signer as `signCommitDigest`), and roots the native P15 audit at `signCommitDigest` and
 `publicKeyForSecret`. The separate internal carrier remains only for injected
 candidate-1/exhaustion and raw negative evidence.
 

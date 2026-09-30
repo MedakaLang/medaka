@@ -1,0 +1,122 @@
+{- | The authority claims the PDS's own signatures make, each pinned by a
+   program the typechecker must refuse and an accepted twin that differs
+   from it only in the claim.
+
+   Each program under `pds/test/authority_pins/` imports the real `pds/lib`
+   and `pds/shell` modules, so a production signature that loses a label or
+   widens an authority turns its refused program into an accepted one, and
+   this suite fails. The twin is the other half: a change that made every
+   caller fail to check could not read as the refusal holding.
+
+   Every row grades the exit status and the error codes `medaka check --json`
+   reports against the program's own file, not the exit status alone: a
+   refusal that starts failing for an unrelated reason would otherwise stay
+   green. Warnings in the imported modules are not errors and are not
+   counted.
+
+   Runs under `medaka test --native`: every row spawns `medaka check`, and the
+   interpreter binds no subprocess extern. -}
+
+import json.{Json, asArray, asInt, asString, get, parse}
+import list.{somes}
+import string.{endsWith}
+import test.{Expectation(..), expectEqual}
+import test_process.{boundedVerb, medakaBin, underRoot}
+
+-- # Reading one program's verdict
+
+{- | The exit status of `medaka check --json` on
+   `pds/test/authority_pins/<name>.mdk`, and the codes of the errors it
+   reports against that file, in report order. -}
+checkCodes : String -> <Exec, IO> Result String (Int, List String)
+checkCodes name =
+  let rel = "pds/test/authority_pins/\{name}.mdk"
+  match boundedVerb medakaBin ["check", "--json", underRoot rel]
+    Err e => Err "could not run `medaka check --json \{rel}`: \{e}"
+    Ok (code, out, _) => match parse out
+      Err e => Err "`medaka check --json \{rel}` printed no JSON: \{e}"
+      Ok doc => Ok (code, errorCodesFor "/authority_pins/\{name}.mdk" doc)
+
+-- | The codes of every error-severity diagnostic in `doc` reported against a
+-- file whose path ends in `suffix`.
+errorCodesFor : String -> Json -> List String
+errorCodesFor suffix doc =
+  flatMap (fileErrorCodes suffix) (arrayField "files" doc)
+
+fileErrorCodes : String -> Json -> List String
+fileErrorCodes suffix file = match get "file" file
+  Some path if optionOr False (map (endsWith suffix) (asString path)) =>
+    somes (map errorCode (arrayField "diagnostics" file))
+  _ => []
+
+-- | A diagnostic's code when its severity is 1, the LSP severity for an
+-- error.
+errorCode : Json -> Option String
+errorCode diag = match get "severity" diag
+  Some severity if asInt severity == Some 1 => match get "code" diag
+    Some code => asString code
+    None => Some "<no code>"
+  _ => None
+
+-- | The elements of the array under `key`, or none when there is no such
+-- array.
+arrayField : String -> Json -> List Json
+arrayField key doc = match get key doc
+  Some value => match asArray value
+    Some items => toList items
+    None => []
+  None => []
+
+-- | What a refused program must report: exit 1 and exactly these codes.
+refused : List String -> Result String (Int, List String)
+refused codes = Ok (1, codes)
+
+-- | What an accepted twin must report: exit 0 and no error.
+accepted : Result String (Int, List String)
+accepted = Ok (0, [])
+
+-- # The egress call dials loopback
+--
+-- `egressCall`'s result is a `Wire "127.0.0.1"`, so a caller whose row names
+-- another host cannot hold it.
+
+test "refused: a Net \"10.0.0.1\" caller of egressCall" =
+  expectEqual
+    (refused ["T-AUTHORITY-INDEX-MISMATCH"])
+    (checkCodes "egress_wrong_host")
+
+test "accepted twin: a Net \"127.0.0.1\" caller of egressCall" =
+  expectEqual accepted (checkCodes "egress_right_host")
+
+-- # Signing is a labelled effect
+--
+-- `signCommitDigest` carries `<Sign "commit">`, and the unlabelled
+-- `signDigest` behind it is private to `lib.sign`.
+
+test "refused: a pure caller of signCommitDigest" =
+  expectEqual (refused ["T-EFFECT-LEAK"]) (checkCodes "sign_pure")
+
+test "accepted twin: a <Sign \"commit\"> caller of signCommitDigest" =
+  expectEqual accepted (checkCodes "sign_labelled")
+
+-- # A data directory carries its path's authority
+--
+-- `blockFileWrite` writes beneath its `DataDir`'s root, and the root is a
+-- `String @d`, so a directory rooted at `secrets/` charges `secrets/*`.
+
+test "refused: blocks written to a DataDir rooted at secrets/ under a data/* row" =
+  expectEqual (refused ["T-EFFECT-LEAK"]) (checkCodes "blocks_into_secrets")
+
+test "accepted twin: blocks written to a DataDir rooted at data/" =
+  expectEqual accepted (checkCodes "blocks_into_data")
+
+-- # A server's row is its handler's row
+--
+-- `pdsHandler` mints session tokens and signs commits, and `Server e`
+-- carries the handler's `e`.
+
+test "refused: a Server <> built from pdsHandler" =
+  expectEqual (refused ["T-EFFECT-LEAK"]) (checkCodes "server_pure")
+
+test "accepted twin: a Server <Mint, Sign> built from pdsHandler" =
+  expectEqual accepted (checkCodes "server_labelled")
