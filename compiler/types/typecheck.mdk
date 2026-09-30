@@ -1340,6 +1340,11 @@ unifyJoinRows isIndex r1 r2 =
   let flexA = filterList (c => not (isRigidCell c)) onlyA
   let rigidB = filterList isRigidCell onlyB
   let flexB = filterList (c => not (isRigidCell c)) onlyB
+  -- An index with no flexible member on either side has no room for an
+  -- atom the other side lacks, so its shared labels are equal as indices.
+  let _ =
+    if isIndex && isEmptyL flexA && isEmptyL flexB && isEmptyL cflex then
+      unifyIndexAtomAuthorities (fst fa) (fst fb)
   let dA = atomsDiff (fst fa) (fst fb)
   let dB = atomsDiff (fst fb) (fst fa)
   -- A's leftovers (rigidA, dA) must be absorbed on B's side: by B's own
@@ -1389,10 +1394,10 @@ bindEach (c :: cs) row =
   bindEach cs row
 
 -- the open side's atoms [dOpen] escaping the closed side's bound: the plain
--- OPEN~CLOSED arm's leak check for arrows, equality for an index.
+-- OPEN~CLOSED arm's leak check for arrows, coverage for an index.
 joinSideCheck : Bool -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
-joinSideCheck True dOpen dClosed lOpen lClosed =
-  indexRowEqCheck dOpen dClosed lOpen lClosed
+joinSideCheck True dOpen _ lOpen lClosed =
+  indexRowEqCheck (indexAtomsCovered dOpen lClosed) [] lOpen lClosed
 joinSideCheck False _ _ lOpen lClosed =
   effectLeakCheck (atomsEscape lOpen lClosed) lClosed
 
@@ -1568,19 +1573,22 @@ unifyRowPlain (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck l1 l2
 --     `launderEscapeFromLog` trail depends on it.  Tightening the arrow side is a design
 --     decision with its own blast radius, tracked separately — not a copy-paste of this.
 unifyIndexRow : EffRow -> EffRow -> Unit
-unifyIndexRow r1 r2 =
-  let _ = unifyIndexAtomAuthorities r1 r2
-  unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
+unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
 
--- An index row is an equality, so an atom the two rows both carry names one
--- authority on both sides (`Async <Net host | e>` against `Async <Net κ |
--- e>`): the two authorities are unified as an index is (`unifyIndex`), a
--- flexible one substituted, two fixed ones compared for equality.  What is
+-- An index row is a set of atoms, and two index rows are equal when each
+-- covers the other (EFFECTS-SEMANTICS §6.4, §2.2).  Two atoms of one label at
+-- different authorities are two members of that set, not one authority to be
+-- equated: `<Net h | e1>` and `<Net "127.0.0.1" | e2>` are made equal by
+-- giving each open tail the other side's atom, and `<Net h | e1>` equals
+-- `<Net | e>` because the bare label covers `Net h`.  So an atom one side
+-- does not cover flows into the other side's flexible tail when there is one;
+-- only a side with no room must cover it, as an index obligation
+-- (`indexAtomsCovered`).  Where NEITHER side has a flexible tail, a shared
+-- label's two authorities are equal as indices (`unifyIndex`): a flexible
+-- one is substituted, two fixed ones are compared for equality, and what is
 -- left for the row comparison is which labels each side carries.
-unifyIndexAtomAuthorities : EffRow -> EffRow -> Unit
-unifyIndexAtomAuthorities r1 r2 =
-  let (a1, _) = rowFlat r1
-  let (a2, _) = rowFlat r2
+unifyIndexAtomAuthorities : List Atom -> List Atom -> Unit
+unifyIndexAtomAuthorities a1 a2 =
   fold
     (_ x => match findAtom (atomKey x) a2
       Some y => unifyIndex (atomAuth x) (atomAuth y)
@@ -1589,7 +1597,9 @@ unifyIndexAtomAuthorities r1 r2 =
     a1
 
 -- #821: an index row whose tail is a join is solved by the join unifier in
--- INDEX mode (equality, never subsumption).
+-- INDEX mode (equality, never subsumption).  A row with a summary cell goes
+-- to the scoped solver as two exact relations, whose coverage is already
+-- atom by atom.
 unifyIndexRowN : EffRow -> EffRow -> Unit
 unifyIndexRowN r1 r2 =
   if rowHasSummary r1 || rowHasSummary r2 then
@@ -1603,13 +1613,47 @@ unifyIndexRowN r1 r2 =
   else
     unifyIndexRowPlain r1 r2
 
+-- Both closed, or the same tail: nothing can absorb an atom, so the rows are
+-- equal label by label.  Open against closed: the closed side's extra atoms
+-- are the open tail's solution, and the open side's atoms must be covered by
+-- the closed side (the §5 leak check, with a shared label's authority an
+-- index obligation).  Two distinct open tails: each takes what the other
+-- side has that it does not cover, into one fresh shared tail.
 unifyIndexRowPlain : EffRow -> EffRow -> Unit
-unifyIndexRowPlain (EffRow l1 None) (EffRow l2 None) =
-  indexRowEqCheck (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
+unifyIndexRowPlain (EffRow l1 None) (EffRow l2 None) = indexRowEquate l1 l2
 unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
-  | effvarId v1 == effvarId v2 =
-    indexRowEqCheck (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
-unifyIndexRowPlain r1 r2 = unifyRowN r1 r2
+  | effvarId v1 == effvarId v2 = indexRowEquate l1 l2
+unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 None) =
+  indexOpenClosed l1 v1 l2
+unifyIndexRowPlain (EffRow l1 None) (EffRow l2 (Some v2)) =
+  indexOpenClosed l2 v2 l1
+unifyIndexRowPlain r1 r2 = unifyRowPlain r1 r2
+
+indexRowEquate : List Atom -> List Atom -> Unit
+indexRowEquate l1 l2 =
+  let _ = unifyIndexAtomAuthorities l1 l2
+  indexRowEqCheck (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
+
+indexOpenClosed : List Atom -> Ref Effvar -> List Atom -> Unit
+indexOpenClosed lOpen v lClosed =
+  let _ =
+    effectLeakCheck
+      (indexAtomsCovered (atomsEscape lOpen lClosed) lClosed)
+      lClosed
+  linkRow v (EffRow (atomsDiff lClosed lOpen) None)
+
+-- The atoms of [escaping] whose label [bound] does not carry.  An escaping
+-- atom whose label the bound does carry is not missing from it: its
+-- authority must lie within the bound's, which is recorded as an index
+-- obligation, so a variable is solved and a mismatch reads as an authority
+-- index (`wantAuthorityWith True`).
+indexAtomsCovered : List Atom -> List Atom -> List Atom
+indexAtomsCovered [] _ = []
+indexAtomsCovered (x :: rest) bound = match findAtom (atomKey x) bound
+  Some y =>
+    let _ = wantAuthorityWith True (atomAuth x) (atomAuth y)
+    indexAtomsCovered rest bound
+  None => x :: indexAtomsCovered rest bound
 
 -- The atoms of [l1] whose label [l2] does not carry.  A shared label's two
 -- authorities were already equated by `unifyIndexAtomAuthorities`, which

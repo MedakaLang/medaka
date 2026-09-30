@@ -982,7 +982,13 @@ does not itself store or discharge a computation.
 
 Effect and authority index slots are invariant. `F φ₁ a` and `F φ₂ a`
 require equal indices, not merely `φ₁ ≤ φ₂`; a flexible index variable
-takes the other side as its solution outright, as a substitution. An impl head
+takes the other side as its solution outright, as a substitution. Two effect
+index rows are equal when each covers the other (§2.2, §2.4). Two atoms of one
+label at different authorities are two members of the row, not one authority to
+equate: `<Net h | ρ₁>` and `<Net "a.com" | ρ₂>` are made equal by giving each
+open tail the atom the other side has, and `<Net h | ρ₁>` equals `<Net | ρ>`,
+since the bare label covers `Net h`. Only a row with no open tail to take an
+atom must cover it itself. An impl head
 abstracts over an authority index — `impl I (Handle p)` covers every index,
 since an instance is chosen by the type's head and the index is erased — so a
 written term in an impl head's `Authority` slot is refused. This remains true when ordinary
