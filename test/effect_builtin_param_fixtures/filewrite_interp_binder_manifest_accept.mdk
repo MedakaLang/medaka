@@ -1,0 +1,14 @@
+-- #3629: an interpolated part is read as its operand written directly. A body
+-- that interpolates a pattern-ranging directory on the left extends it on the
+-- right and stays within it, as the concatenation `dir ++ "blocks/" ++ leaf`
+-- does, and only the caller's instantiation reaches the manifest: `serve`
+-- passes "data/" and is granted the pattern "data/*".
+writeUnder : (dir : String @FileWrite*) ->
+  String ->
+  <FileWrite dir> Result String Unit
+writeUnder dir leaf = writeFile "\{dir}blocks/\{leaf}" "block"
+
+serve leaf = writeUnder "data/" leaf
+
+main : <IO> Unit
+main = println "filewrite interp binder manifest accept"

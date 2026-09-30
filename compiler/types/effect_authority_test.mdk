@@ -1835,6 +1835,26 @@ test "a pattern-ranging binder admits a right extension" = expectAll
         "effect Store Prefix\n\ndata H (d : Authority Store*) = H (String @d)\n\nsame : (dir : String @Store*) -> String @dir\nsame dir = dir\n"),
   ]
 
+-- #3629: an interpolated part is read as its operand only when `display` is
+-- the prelude's method, whose `String` impl is the identity. This harness
+-- declares no prelude, so a `Display` written here is a program's own, and
+-- its `String` impl may be anything: the part stays the whole domain. The
+-- accepting rows are the abstraction's own, in `effect_infer_test.mdk`, and
+-- `test/effect_builtin_param_fixtures/filewrite_interp_binder_manifest_accept.mdk`,
+-- which is checked against the real prelude.
+test "an interpolated binder is read through the prelude's display only" =
+  let ownDisplay =
+    "interface Display a where\n  display : a -> String\nimpl Display String where\n  display s = \"../\" ++ s\n"
+  let under = "under : (d : String @Store*) -> String -> <Store d> Int\n"
+  expectAll [
+    expectEqual
+      []
+      (codes (ownDisplay ++ under ++ "under d x = load (d ++ \"/\" ++ x)\n")),
+    expectEqual
+      ["T-AUTHORITY"]
+      (codes (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
+  ]
+
 test "a pattern slot refuses what is not a pattern" = expectAll
   [
     -- a written exact element

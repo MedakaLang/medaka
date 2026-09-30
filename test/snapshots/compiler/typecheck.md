@@ -1,5 +1,5 @@
 # META
-source_lines=52742
+source_lines=52758
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -22528,13 +22528,29 @@ argumentIntoTyped dom xt = match normalize dom
 
 argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
 argumentAuthority env top (Some e) xt =
-  alphaOf top (envVarType env) (envAlphaLets env) e xt
+  alphaOf top (envVarType env) (displayIsPrelude env) (envAlphaLets env) e xt
 argumentAuthority _ top None xt = typeAuthority top xt
 
 -- The checked type of a name in scope, for the abstraction's variable rule.
 envVarType : TcEnv -> String -> Option Mono
 envVarType env x =
   map (b => schemeBodyOf b.ebValue.vsScheme) (lookupBinding env x)
+
+-- Whether `display` in [env] is the prelude `Display` method, the one an
+-- interpolated part applies: no local binder, no standalone this module
+-- defines or imports, and the method's interface is the prelude's.
+displayIsPrelude : TcEnv -> Bool
+displayIsPrelude env =
+  not (lookupLocalFlag env "display")
+    && isNone (lookupStandaloneValue env "display")
+    && not (omHasKey "display" perRun.value.definerShadowNamesRef.value)
+    && (match omLookup "display" perRun.value.methodIfaceParamsRef.value
+      Some (iface, _, _, _) => isPreludeDisplayIface iface
+      None => False)
+
+isPreludeDisplayIface : IfaceRef -> Bool
+isPreludeDisplayIface iface =
+  iface.irName == "Display" && isPreludeOrigin iface.irOrigin
 
 -- The argument node of an application, when the callee's syntax is an
 -- application at all; every other node is not one and has no argument to
@@ -56572,10 +56588,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "argumentIntoTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "argumentIntoTyped" ((PVar "dom") (PVar "xt")) (EMatch (EApp (EVar "normalize") (EVar "dom")) (arm (PCon "TQual" (PVar "d") (PVar "q")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "unifyInto") (EVar "True")) (EVar "d")) (EVar "xt"))) (DoExpr (EApp (EApp (EVar "wantAuthority") (EApp (EApp (EVar "typeAuthority") (EApp (EVar "authDomainTop") (EVar "q"))) (EVar "xt"))) (EVar "q"))))) (arm PWild () (EApp (EApp (EApp (EVar "unifyInto") (EVar "True")) (EVar "dom")) (EVar "xt")))))
 (DTypeSig false "argumentAuthority" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "Option") (TyCon "Expr")) (TyFun (TyCon "Mono") (TyCon "Authority"))))))
-(DFunDef false "argumentAuthority" ((PVar "env") (PVar "top") (PCon "Some" (PVar "e")) (PVar "xt")) (EApp (EApp (EApp (EApp (EApp (EVar "alphaOf") (EVar "top")) (EApp (EVar "envVarType") (EVar "env"))) (EApp (EVar "envAlphaLets") (EVar "env"))) (EVar "e")) (EVar "xt")))
+(DFunDef false "argumentAuthority" ((PVar "env") (PVar "top") (PCon "Some" (PVar "e")) (PVar "xt")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "alphaOf") (EVar "top")) (EApp (EVar "envVarType") (EVar "env"))) (EApp (EVar "displayIsPrelude") (EVar "env"))) (EApp (EVar "envAlphaLets") (EVar "env"))) (EVar "e")) (EVar "xt")))
 (DFunDef false "argumentAuthority" (PWild (PVar "top") (PCon "None") (PVar "xt")) (EApp (EApp (EVar "typeAuthority") (EVar "top")) (EVar "xt")))
 (DTypeSig false "envVarType" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Mono")))))
 (DFunDef false "envVarType" ((PVar "env") (PVar "x")) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EApp (EVar "schemeBodyOf") (EFieldAccess (EFieldAccess (EVar "b") "ebValue") "vsScheme")))) (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "x"))))
+(DTypeSig false "displayIsPrelude" (TyFun (TyCon "TcEnv") (TyCon "Bool")))
+(DFunDef false "displayIsPrelude" ((PVar "env")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "lookupLocalFlag") (EVar "env")) (ELit (LString "display")))) (EApp (EVar "isNone") (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (ELit (LString "display"))))) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (ELit (LString "display"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value")))) (EMatch (EApp (EApp (EVar "omLookup") (ELit (LString "display"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodIfaceParamsRef") "value")) (arm (PCon "Some" (PTuple (PVar "iface") PWild PWild PWild)) () (EApp (EVar "isPreludeDisplayIface") (EVar "iface"))) (arm (PCon "None") () (EVar "False")))))
+(DTypeSig false "isPreludeDisplayIface" (TyFun (TyCon "IfaceRef") (TyCon "Bool")))
+(DFunDef false "isPreludeDisplayIface" ((PVar "iface")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Display"))) (EApp (EVar "isPreludeOrigin") (EFieldAccess (EVar "iface") "irOrigin"))))
 (DTypeSig false "appArgExpr" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "appArgExpr" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "appArgExpr") (EVar "e")))
 (DFunDef false "appArgExpr" ((PCon "EApp" PWild (PVar "x"))) (EApp (EVar "Some") (EVar "x")))
@@ -65111,10 +65131,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "argumentIntoTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "argumentIntoTyped" ((PVar "dom") (PVar "xt")) (EMatch (EApp (EVar "normalize") (EVar "dom")) (arm (PCon "TQual" (PVar "d") (PVar "q")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "unifyInto") (EVar "True")) (EVar "d")) (EVar "xt"))) (DoExpr (EApp (EApp (EVar "wantAuthority") (EApp (EApp (EVar "typeAuthority") (EApp (EVar "authDomainTop") (EVar "q"))) (EVar "xt"))) (EVar "q"))))) (arm PWild () (EApp (EApp (EApp (EVar "unifyInto") (EVar "True")) (EVar "dom")) (EVar "xt")))))
 (DTypeSig false "argumentAuthority" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "Option") (TyCon "Expr")) (TyFun (TyCon "Mono") (TyCon "Authority"))))))
-(DFunDef false "argumentAuthority" ((PVar "env") (PVar "top") (PCon "Some" (PVar "e")) (PVar "xt")) (EApp (EApp (EApp (EApp (EApp (EVar "alphaOf") (EVar "top")) (EApp (EVar "envVarType") (EVar "env"))) (EApp (EVar "envAlphaLets") (EVar "env"))) (EVar "e")) (EVar "xt")))
+(DFunDef false "argumentAuthority" ((PVar "env") (PVar "top") (PCon "Some" (PVar "e")) (PVar "xt")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "alphaOf") (EVar "top")) (EApp (EVar "envVarType") (EVar "env"))) (EApp (EVar "displayIsPrelude") (EVar "env"))) (EApp (EVar "envAlphaLets") (EVar "env"))) (EVar "e")) (EVar "xt")))
 (DFunDef false "argumentAuthority" (PWild (PVar "top") (PCon "None") (PVar "xt")) (EApp (EApp (EVar "typeAuthority") (EVar "top")) (EVar "xt")))
 (DTypeSig false "envVarType" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Mono")))))
 (DFunDef false "envVarType" ((PVar "env") (PVar "x")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EApp (EVar "schemeBodyOf") (EFieldAccess (EFieldAccess (EVar "b") "ebValue") "vsScheme")))) (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "x"))))
+(DTypeSig false "displayIsPrelude" (TyFun (TyCon "TcEnv") (TyCon "Bool")))
+(DFunDef false "displayIsPrelude" ((PVar "env")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "lookupLocalFlag") (EVar "env")) (ELit (LString "display")))) (EApp (EVar "isNone") (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (ELit (LString "display"))))) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (ELit (LString "display"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value")))) (EMatch (EApp (EApp (EVar "omLookup") (ELit (LString "display"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodIfaceParamsRef") "value")) (arm (PCon "Some" (PTuple (PVar "iface") PWild PWild PWild)) () (EApp (EVar "isPreludeDisplayIface") (EVar "iface"))) (arm (PCon "None") () (EVar "False")))))
+(DTypeSig false "isPreludeDisplayIface" (TyFun (TyCon "IfaceRef") (TyCon "Bool")))
+(DFunDef false "isPreludeDisplayIface" ((PVar "iface")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Display"))) (EApp (EVar "isPreludeOrigin") (EFieldAccess (EVar "iface") "irOrigin"))))
 (DTypeSig false "appArgExpr" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "appArgExpr" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "appArgExpr") (EVar "e")))
 (DFunDef false "appArgExpr" ((PCon "EApp" PWild (PVar "x"))) (EApp (EVar "Some") (EVar "x")))

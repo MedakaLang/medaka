@@ -93,6 +93,12 @@ test "manifest grants a pattern-ranging data directory's instantiation" =
     "serve"
     "[package.capabilities]\nFileWrite = \"data/*\""
 
+test "manifest grants an interpolated pattern-ranging directory's instantiation" =
+  expectManifest
+    "filewrite_interp_binder_manifest_accept.mdk"
+    "serve"
+    "[package.capabilities]\nFileWrite = \"data/*\""
+
 test "FileWrite builtin fills a concrete path inside its Prefix bound" =
   expectCheckAccept (fixture "filewrite_hole_accept.mdk")
 

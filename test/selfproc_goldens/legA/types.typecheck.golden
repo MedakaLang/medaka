@@ -856,6 +856,7 @@ dispHeadTab : HeadKey -> TabKey
 dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> Option Int
 dispatchMonosOf : List String -> Ty -> Mono -> List Mono
 dispatchTyparams : List String -> List String
+displayIsPrelude : TcEnv -> Bool
 dispositionRowsOfImpl : ImplEnv -> ImplRow -> ClassEnv -> List (InstanceShape, String, MethodDisposition)
 dispositionRowsOfImpls : ImplEnv -> List ImplRow -> ClassEnv -> List (InstanceShape, String, MethodDisposition)
 dispositionRowsOfMethods : InstId -> IfaceRef -> List String -> List String -> List String -> List MethodDisposition
@@ -1686,6 +1687,7 @@ isMangledFor : String -> String -> Bool
 isMonoScheme : Scheme -> Bool
 isNonexpansive : TcEnv -> Expr -> Bool
 isOuterVariable : Int -> Mono -> Bool
+isPreludeDisplayIface : IfaceRef -> Bool
 isPreludeMid : String -> Bool
 isPreludeOrigin : TyConOrigin -> Bool
 isRigidCell : Ref Effvar -> Bool
