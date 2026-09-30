@@ -426,8 +426,8 @@ is the safe default):
 | Core form | `α` |
 |---|---|
 | string literal `"s"` | the singleton authority `s` (e.g. `Prefix` pattern from `s`) |
-| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays; an authority variable becomes its domain's top, unless it ranges over patterns, when it stays (below). In `Set`, non-literal concatenation gives `⊤` |
-| string interpolation `"s\{e}…"` | the `++`-chain rule: the leading literal `s` is the known prefix, extended to `s*` by the first interpolated expression |
+| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal, and an operand that is exactly `""` leaves the other operand's authority. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays; an authority variable becomes its domain's top, unless it ranges over patterns, when it stays (below). In `Set`, non-literal concatenation gives `⊤` |
+| string interpolation `"s\{e}…"` | the `++`-chain rule, with each part `\{e}` read like `e` written directly (the prelude's `display` is the identity at `String`; under a program's own `display` the part is `⊤`): the leading literal `s` is the known prefix, extended to `s*` by the first interpolated expression |
 | `let x = e₁ in …x…` | propagate `α(e₁)` to uses of `x` |
 | `if c then e₁ else e₂` | `α(e₁) ⊔ α(e₂)` (join of branch authorities) |
 | `match … { … ⇒ eᵢ }` | `⊔ᵢ α(eᵢ)` (join over arms) |

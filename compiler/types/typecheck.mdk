@@ -22524,13 +22524,29 @@ argumentIntoTyped dom xt = match normalize dom
 
 argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
 argumentAuthority env top (Some e) xt =
-  alphaOf top (envVarType env) (envAlphaLets env) e xt
+  alphaOf top (envVarType env) (displayIsPrelude env) (envAlphaLets env) e xt
 argumentAuthority _ top None xt = typeAuthority top xt
 
 -- The checked type of a name in scope, for the abstraction's variable rule.
 envVarType : TcEnv -> String -> Option Mono
 envVarType env x =
   map (b => schemeBodyOf b.ebValue.vsScheme) (lookupBinding env x)
+
+-- Whether `display` in [env] is the prelude `Display` method, the one an
+-- interpolated part applies: no local binder, no standalone this module
+-- defines or imports, and the method's interface is the prelude's.
+displayIsPrelude : TcEnv -> Bool
+displayIsPrelude env =
+  not (lookupLocalFlag env "display")
+    && isNone (lookupStandaloneValue env "display")
+    && not (omHasKey "display" perRun.value.definerShadowNamesRef.value)
+    && (match omLookup "display" perRun.value.methodIfaceParamsRef.value
+      Some (iface, _, _, _) => isPreludeDisplayIface iface
+      None => False)
+
+isPreludeDisplayIface : IfaceRef -> Bool
+isPreludeDisplayIface iface =
+  iface.irName == "Display" && isPreludeOrigin iface.irOrigin
 
 -- The argument node of an application, when the callee's syntax is an
 -- application at all; every other node is not one and has no argument to

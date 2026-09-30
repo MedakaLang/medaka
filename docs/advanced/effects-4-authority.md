@@ -231,6 +231,9 @@ main =
 - A **concatenation** whose left operand is known extends it: `"cfg/" ++ name` is
   the pattern `"cfg/*"`, whatever `name` is. (Two literals concatenated are one
   literal.)
+- An **interpolated part** is read like its operand written directly, so
+  `"cfg/\{name}"` is `"cfg/" ++ name`, unless the program defines its own
+  `display`, which interpolation calls.
 - A **`let`-bound** name is whatever it was bound to, in the scope it was bound in.
 - An **`if` or `match`** is the join of its branches, one element per branch.
 - **Anything else** is the whole domain. A parameter of unknown origin, a function

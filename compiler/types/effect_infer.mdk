@@ -11,7 +11,7 @@ import types.effect_authority.{
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
   Expr(..), Lit(..), Pat(..), Arm(..), LetBind(..), FunClause(..), DoStmt(..),
-  patBoundNames
+  TyConOrigin(..), patBoundNames, sameTyConHead
 }
 import support.util.{reverseL, lookupAssoc, mapOption}
 
@@ -39,18 +39,32 @@ captureEffects ambient makeJoin body =
 -- literal; any other prefix-domain concatenation is its left operand extended
 -- by the suffix (`concatAuthority`); `if`/`match` join their
 -- branches; a `let`-bound name reads its definition; a value whose checked
--- type is qualified reads the qualifier; anything else is the domain's top.
+-- type is qualified reads the qualifier; an interpolated part reads as its
+-- operand written directly (`displayHead`); anything else is the domain's top.
 -- Over-approximation is the only sound direction, so an unknown shape is top.
+-- [displayIsPrelude] says whether `display`, where no binder inside the
+-- argument rebinds it, is the prelude `Display` method.
 export
 alphaOf : Param ->
   (String -> Option Mono) ->
+  Bool ->
   List (String, AlphaBinder) ->
   Expr ->
   Mono ->
   Authority
-alphaOf top varType lets e ty = match alphaSyntax top varType lets e
-  Some q => q
-  None => typeAuthority top ty
+alphaOf top varType displayIsPrelude lets e ty =
+  let env =
+    AlphaEnv { aeVarType = varType, aeDisplayIsPrelude = displayIsPrelude }
+  match alphaSyntax top env lets e
+    Some q => q
+    None => typeAuthority top ty
+
+-- What the abstraction knows about the names an argument mentions: each
+-- name's checked type, and whether `display` is the prelude method.
+data AlphaEnv = AlphaEnv {
+  aeVarType : String -> Option Mono,
+  aeDisplayIsPrelude : Bool,
+}
 
 -- A binder in the abstraction's scope, innermost first: a let with its
 -- right-hand side, a parameter or pattern the environment types (read
@@ -78,40 +92,82 @@ inDomain top q = match authDomainTop q
   d => domainKey d == domainKey top
 
 alphaSyntax : Param ->
-  (String -> Option Mono) ->
+  AlphaEnv ->
   List (String, AlphaBinder) ->
   Expr ->
   Option Authority
-alphaSyntax top vt lets (ELoc _ e) = alphaSyntax top vt lets e
-alphaSyntax top vt lets (EDoOrigin _ e) = alphaSyntax top vt lets e
-alphaSyntax top vt lets (EAnnot e _) = alphaSyntax top vt lets e
-alphaSyntax top vt lets (EHeadAnnot e _) = alphaSyntax top vt lets e
+alphaSyntax top env lets (ELoc _ e) = alphaSyntax top env lets e
+alphaSyntax top env lets (EDoOrigin _ e) = alphaSyntax top env lets e
+alphaSyntax top env lets (EAnnot e _) = alphaSyntax top env lets e
+alphaSyntax top env lets (EHeadAnnot e _) = alphaSyntax top env lets e
 alphaSyntax top _ _ (ELit (LString s)) = Some (literalAuthority top s)
-alphaSyntax top vt lets (e@(EBinOp op a b _))
-  | op == "++" = match exactString e
+alphaSyntax top env lets (e@(EBinOp op a b _))
+  | op == "++" = match exactString env lets e
     Some s => Some (literalAuthority top s)
-    None => concatAuthority top vt lets a b
+    None =>
+      if emptyString env lets a then
+        alphaSyntax top env lets b
+      else if emptyString env lets b then
+        alphaSyntax top env lets a
+      else
+        concatAuthority top env lets a b
 alphaSyntax _ _ _ (EBinOp _ _ _ _) = None
-alphaSyntax top vt lets (EVar x) = varAuthority top vt lets x
-alphaSyntax top vt lets (EVarId x _) = varAuthority top vt lets x
-alphaSyntax top vt lets (EVarAt x _) = varAuthority top vt lets x
-alphaSyntax top vt lets (EDictAt x _) = varAuthority top vt lets x
-alphaSyntax top vt lets (ELet _ _ (PVar x _) e1 e2) =
-  alphaSyntax top vt ((x, ALet e1) :: lets) e2
-alphaSyntax top vt lets (ELet _ _ pat _ e2) =
-  alphaUnder top vt lets (patBoundNames pat) e2
-alphaSyntax top vt lets (ELetGroup binds body) =
+alphaSyntax top env lets (EVar x) = varAuthority top env lets x
+alphaSyntax top env lets (EVarId x _) = varAuthority top env lets x
+alphaSyntax top env lets (EVarAt x _) = varAuthority top env lets x
+alphaSyntax top env lets (EDictAt x _) = varAuthority top env lets x
+alphaSyntax top env lets (ELet _ _ (PVar x _) e1 e2) =
+  alphaSyntax top env ((x, ALet e1) :: lets) e2
+alphaSyntax top env lets (ELet _ _ pat _ e2) =
+  alphaUnder top env lets (patBoundNames pat) e2
+alphaSyntax top env lets (ELetGroup binds body) =
   alphaSyntax
     top
-    vt
+    env
     (collectBinds binds (shadowed (flatMap letBindName binds) lets))
     body
-alphaSyntax top vt lets (EBlock stmts) = blockAuthority top vt lets stmts
-alphaSyntax top vt lets (EIf _ t f) =
-  joinBranches [alphaSyntax top vt lets t, alphaSyntax top vt lets f]
-alphaSyntax top vt lets (EMatch scrut arms) =
-  joinBranches (map (armAuthority top vt lets scrut) arms)
+alphaSyntax top env lets (EBlock stmts) = blockAuthority top env lets stmts
+alphaSyntax top env lets (EIf _ t f) =
+  joinBranches [alphaSyntax top env lets t, alphaSyntax top env lets f]
+alphaSyntax top env lets (EMatch scrut arms) =
+  joinBranches (map (armAuthority top env lets scrut) arms)
+alphaSyntax top env lets (EApp f x)
+  | displayHead env lets f = alphaSyntax top (stringNames env) lets x
 alphaSyntax _ _ _ _ = None
+
+-- `display e`, which string interpolation lowers each part to, is `e` itself
+-- when `display` is the prelude method and `e` is a `String`: the prelude's
+-- `Display String` is the identity. A local, top-level or imported definition
+-- of `display` denotes some other function, so under one the part is top.
+displayHead : AlphaEnv -> List (String, AlphaBinder) -> Expr -> Bool
+displayHead env lets (ELoc _ f) = displayHead env lets f
+displayHead env lets (EVar x) = preludeDisplay env lets x
+displayHead env lets (EVarId x _) = preludeDisplay env lets x
+displayHead env lets (EMethodAt x seed _) =
+  seed == "" && preludeDisplay env lets x
+displayHead _ _ _ = False
+
+preludeDisplay : AlphaEnv -> List (String, AlphaBinder) -> String -> Bool
+preludeDisplay env lets x =
+  x == "display" && env.aeDisplayIsPrelude && isNone (letInScope x lets)
+
+-- The names a `display` operand is read through: only a qualified `String`
+-- keeps its qualifier, since a qualified value of another type displays as a
+-- different string. Every form the abstraction knows is then a `String`.
+stringNames : AlphaEnv -> AlphaEnv
+stringNames env = { env |
+  aeVarType =
+    x => match env.aeVarType x
+      Some ty => if qualifiedString ty then Some ty else None
+      None => None,
+}
+
+qualifiedString : Mono -> Bool
+qualifiedString ty = match normalize ty
+  TQual inner _ => match normalize inner
+    TCon n o => sameTyConHead n o "String" OriginBuiltin
+    _ => False
+  _ => False
 
 -- A block is its last statement, read in the scope its statements build: a
 -- `let` of a name reads its definition, as the `let` expression does; a
@@ -119,13 +175,13 @@ alphaSyntax _ _ _ _ = None
 -- abstraction cannot see. A block ending in a statement that is not an
 -- expression has no string value to abstract.
 blockAuthority : Param ->
-  (String -> Option Mono) ->
+  AlphaEnv ->
   List (String, AlphaBinder) ->
   List DoStmt ->
   Option Authority
-blockAuthority top vt lets [DoExpr e] = alphaSyntax top vt lets e
-blockAuthority top vt lets (s :: rest@(_ :: _)) =
-  blockAuthority top vt (stmtScope s lets) rest
+blockAuthority top env lets [DoExpr e] = alphaSyntax top env lets e
+blockAuthority top env lets (s :: rest@(_ :: _)) =
+  blockAuthority top env (stmtScope s lets) rest
 blockAuthority _ _ _ _ = None
 
 stmtScope : DoStmt -> List (String, AlphaBinder) -> List (String, AlphaBinder)
@@ -139,27 +195,27 @@ stmtScope (DoFieldAssign _ _ _) lets = lets
 -- An arm that merely renames the scrutinee reads it; any other pattern binds
 -- names whose values the abstraction cannot see, so they shadow to the top.
 armAuthority : Param ->
-  (String -> Option Mono) ->
+  AlphaEnv ->
   List (String, AlphaBinder) ->
   Expr ->
   Arm ->
   Option Authority
-armAuthority top vt lets scrut (Arm (PVar x _) _ rhs) =
-  alphaSyntax top vt ((x, ALet scrut) :: lets) rhs
-armAuthority top vt lets _ (Arm pat _ rhs) =
-  alphaUnder top vt lets (patBoundNames pat) rhs
+armAuthority top env lets scrut (Arm (PVar x _) _ rhs) =
+  alphaSyntax top env ((x, ALet scrut) :: lets) rhs
+armAuthority top env lets _ (Arm pat _ rhs) =
+  alphaUnder top env lets (patBoundNames pat) rhs
 
 -- The body of a binder whose names the abstraction cannot resolve: each name
 -- enters the scope with no value, so it shadows every outer let and every
 -- outer checked type of that name.
 alphaUnder : Param ->
-  (String -> Option Mono) ->
+  AlphaEnv ->
   List (String, AlphaBinder) ->
   List String ->
   Expr ->
   Option Authority
-alphaUnder top vt lets names body =
-  alphaSyntax top vt (shadowed names lets) body
+alphaUnder top env lets names body =
+  alphaSyntax top env (shadowed names lets) body
 
 shadowed : List String ->
   List (String, AlphaBinder) ->
@@ -183,50 +239,64 @@ literalAuthority top _ = authTop top
 -- A left operand that is an authority variable extends to its domain's top.
 -- In the Set domain appending changes the member, so the result is top.
 concatAuthority : Param ->
-  (String -> Option Mono) ->
+  AlphaEnv ->
   List (String, AlphaBinder) ->
   Expr ->
   Expr ->
   Option Authority
-concatAuthority (top@(PPrefix _)) vt lets a b =
-  mapOption (suffixed b) (alphaSyntax top vt lets a)
-concatAuthority (top@(PProduct _)) vt lets a b =
-  mapOption (suffixed b) (alphaSyntax top vt lets a)
+concatAuthority (top@(PPrefix _)) env lets a b =
+  mapOption (suffixed env lets b) (alphaSyntax top env lets a)
+concatAuthority (top@(PProduct _)) env lets a b =
+  mapOption (suffixed env lets b) (alphaSyntax top env lets a)
 concatAuthority _ _ _ _ _ = None
 
-suffixed : Expr -> Authority -> Authority
-suffixed b left = match exactString b
+suffixed : AlphaEnv ->
+  List (String, AlphaBinder) ->
+  Expr ->
+  Authority ->
+  Authority
+suffixed env lets b left = match exactString env lets b
   Some s => authAppend s left
   None => authExtend left
 
--- The string an expression denotes exactly: a literal, or a concatenation of
--- two such.
-exactString : Expr -> Option String
-exactString (ELoc _ e) = exactString e
-exactString (EDoOrigin _ e) = exactString e
-exactString (EAnnot e _) = exactString e
-exactString (EHeadAnnot e _) = exactString e
-exactString (ELit (LString s)) = Some s
-exactString (EBinOp op a b _)
-  | op == "++" = match (exactString a, exactString b)
+-- The string an expression denotes exactly: a literal, a concatenation of
+-- two such, or an interpolated part whose operand is one.
+exactString : AlphaEnv -> List (String, AlphaBinder) -> Expr -> Option String
+exactString env lets (ELoc _ e) = exactString env lets e
+exactString env lets (EDoOrigin _ e) = exactString env lets e
+exactString env lets (EAnnot e _) = exactString env lets e
+exactString env lets (EHeadAnnot e _) = exactString env lets e
+exactString _ _ (ELit (LString s)) = Some s
+exactString env lets (EBinOp op a b _)
+  | op == "++" = match (exactString env lets a, exactString env lets b)
     (Some x, Some y) => Some (x ++ y)
     _ => None
-exactString _ = None
+exactString env lets (EApp f x)
+  | displayHead env lets f = exactString env lets x
+exactString _ _ _ = None
+
+-- An operand that is exactly the empty string: appending it on either side
+-- leaves the other operand's value, and so its authority, unchanged. String
+-- interpolation lowers `"\{e}"` to `"" ++ display e ++ ""`.
+emptyString : AlphaEnv -> List (String, AlphaBinder) -> Expr -> Bool
+emptyString env lets e = match exactString env lets e
+  Some s => s == ""
+  None => False
 
 -- A name reads its same-body `let` definition first, then its checked type.
 varAuthority : Param ->
-  (String -> Option Mono) ->
+  AlphaEnv ->
   List (String, AlphaBinder) ->
   String ->
   Option Authority
-varAuthority top vt lets x = match letInScope x lets
-  Some (ALet rhs, older) => alphaSyntax top vt older rhs
+varAuthority top env lets x = match letInScope x lets
+  Some (ALet rhs, older) => alphaSyntax top env older rhs
   Some (AOpaque, _) => None
-  Some (AParam, _) => typedAuthority top vt x
-  None => typedAuthority top vt x
+  Some (AParam, _) => typedAuthority top env x
+  None => typedAuthority top env x
 
-typedAuthority : Param -> (String -> Option Mono) -> String -> Option Authority
-typedAuthority top vt x = match vt x
+typedAuthority : Param -> AlphaEnv -> String -> Option Authority
+typedAuthority top env x = match env.aeVarType x
   Some ty => match normalize ty
     TQual _ q => Some (qualifierIn top q)
     _ => None
