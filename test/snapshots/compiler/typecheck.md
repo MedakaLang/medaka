@@ -1,5 +1,5 @@
 # META
-source_lines=52322
+source_lines=52378
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -27459,7 +27459,9 @@ cohOccurs subst id m = match cohResolve subst m
 -- pattern vs Mono) are the SAME one-sided, consistency-enforcing structural match
 -- in three node spaces: only the GENERAL side's vars bind, a var bound twice must
 -- be CONSISTENT (its two specific bindings structurally equal), and effect rows
--- are IGNORED (row-blind — §7's single-meaning law).  They differ only in (a) how
+-- are ignored for coherence/ranking (§7's single-meaning law).  Impl-goal
+-- matching supplies matchEqMono instead, because repeated variables are full
+-- typing equations, including rows and authorities.  The frontends differ in (a) how
 -- a node is destructured into a var / children / leaf and (b) the specific-side
 -- equality used for the consistency check.  [matchOneSided] is that shared core:
 -- it walks a worklist of (general, specific) pairs, threads a key→specific subst,
@@ -27570,6 +27572,49 @@ cohEqR (TAuth _) (TAuth _) = True
 cohEqR (TQual a _) b = cohEqR (normalize a) b
 cohEqR a (TQual b _) = cohEqR a (normalize b)
 cohEqR _ _ = False
+
+-- A repeated impl-head variable is one full type.  Coherence and dispatch
+-- deliberately ignore rows and authorities when ranking heads; that comparison
+-- cannot prove that two bindings of the same variable agree.  Keep type-variable
+-- equations in a matcher-local substitution only where the caller already
+-- solved them (implHeadSubst).  The one-sided matcher keeps goal variables rigid.
+-- Compare the remaining indices without touching the goal's inference cells.
+matchEqMono : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
+matchEqMono subst a b = matchEqR subst (cohResolve subst a) (cohResolve subst b)
+
+matchEqR : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
+matchEqR _ (TVar c1) (TVar c2) = tyvarId c1 == tyvarId c2
+matchEqR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+matchEqR _ (TRigid a) (TRigid b) = a == b
+matchEqR _ (TCon a _) (TRigid b) = a == b
+matchEqR _ (TRigid a) (TCon b _) = a == b
+matchEqR subst (TApp f1 a1) (TApp f2 a2) =
+  matchEqMono subst f1 f2 && matchEqMono subst a1 a2
+matchEqR subst (TFun a1 r1 b1) (TFun a2 r2 b2) =
+  matchEqMono subst a1 a2 && matchEqRow r1 r2 && matchEqMono subst b1 b2
+matchEqR _ (TEff r1) (TEff r2) = matchEqRow r1 r2
+matchEqR _ (TAuth q1) (TAuth q2) = matchEqAuth q1 q2
+matchEqR subst (TQual a q1) (TQual b q2) =
+  matchEqAuth q1 q2 && matchEqMono subst a b
+matchEqR subst (TQual a q) b = authIsTop q && matchEqMono subst a b
+matchEqR subst a (TQual b q) = authIsTop q && matchEqMono subst a b
+matchEqR _ _ _ = False
+
+matchEqAuth : Authority -> Authority -> Bool
+matchEqAuth a b = authSub a b && authSub b a
+
+matchEqRow : EffRow -> EffRow -> Bool
+matchEqRow a b =
+  let (atomsA, tailsA) = rowFlat a
+  let (atomsB, tailsB) = rowFlat b
+  listLen atomsA == listLen atomsB
+    && listLen tailsA == listLen tailsB
+    && allList
+      (x => match findAtom (atomKey x) atomsB
+        Some y => matchEqAuth (atomAuth x) (atomAuth y)
+        None => False)
+      atomsA
+    && allList (x => anyList (y => effvarId x == effvarId y) tailsB) tailsA
 
 -- [a] strictly more specific than [b]: b subsumes a but not a subsumes b
 cohStrictlyMoreSpecific : List Mono -> List Mono -> Bool
@@ -31382,10 +31427,16 @@ implHeadSubst pats concretes
   | otherwise = match positionBindings pats concretes []
     None => None
     Some binds =>
-      if cohOverlapGo (Ref []) (repeatedBindings binds []) then
+      if matchEqPairs (repeatedBindings binds []) then
         Some (fold (acc b => mergeOne acc (fst b) (snd b)) [] binds)
       else
         None
+
+matchEqPairs : List (Mono, Mono) -> Bool
+matchEqPairs pairs =
+  let subst = Ref []
+  cohOverlapGo subst pairs
+    && allList (p => matchEqMono subst (fst p) (snd p)) pairs
 
 -- Each head position matched on its own, its bindings in position order.
 positionBindings : List Ty ->
@@ -31435,12 +31486,12 @@ preferConcrete a b = match headTyconNameMono a
 -- type-variable names to monos (single-level: the pattern's args are bare vars).
 -- #156 S1 / Fork B: matchTyMono is now a CONSISTENCY-ENFORCING frontend of the
 -- shared matchOneSided core (specific side = Mono, so the consistency equality is
--- cohEqMono).  The old body combined element substs with `xs ++ ys` and NEVER
+-- matchEqMono).  The old body combined element substs with `xs ++ ys` and NEVER
 -- checked a var bound twice, so a non-linear impl head (`Get (Box a) a`) could
 -- "match" `Get (Box Int) Bool` (binding a↦Int AND a↦Bool) even though NO
 -- substitution exists — violating §3 `inst`'s "φ a most-general MATCHER" premise
 -- and letting findImplEntryGo (iface=="") select the wrong impl's requires.  Now
--- a↦Int, a↦Bool fails cohEqMono ⇒ None (no false match); a CONSISTENT non-linear
+-- a↦Int, a↦Bool fails matchEqMono ⇒ None (no false match); a CONSISTENT non-linear
 -- head (`Get (Box Int) Int`, a↦Int twice) still matches (the live canary in
 -- test/eval_typed_fixtures/return_only_param_dispatch.mdk).  The recovered subst
 -- is consumed only by key-lookup (fromAstType / paramMonoOf), so dropping the
@@ -31448,18 +31499,21 @@ preferConcrete a b = match headTyconNameMono a
 -- match.
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
 matchTyMono headTy resultMono =
-  matchOneSided matchStep eqStr cohEqMono [(headTy, resultMono)] []
+  let subst = Ref []
+  matchOneSided matchStep eqStr (matchEqMono subst) [(headTy, resultMono)] []
 
 -- #609: the §3 matching judgement over a head VECTOR —
 --     match(IE, C τ̄) = { I | ∃φ. φ(head(I)) = C τ̄ }
 -- ONE most-general matcher φ for the whole vector, so a var appearing in several
--- argument positions must receive the same mono (matchOneSided's cohEqMono
+-- argument positions must receive the same mono (matchOneSided's matchEqMono
 -- consistency check, the same one matchTyMono relies on).  n=1 reduces to
 -- matchTyMono term for term: `zipL [t] [m] == [(t, m)]`.
 matchTyMonos : List Ty -> List Mono -> Option (List (String, Mono))
 matchTyMonos pats goals
   | listLen pats /= listLen goals = None
-  | otherwise = matchOneSided matchStep eqStr cohEqMono (zipL pats goals) []
+  | otherwise =
+    let subst = Ref []
+    matchOneSided matchStep eqStr (matchEqMono subst) (zipL pats goals) []
 
 -- Does an impl whose head vector is [itys] (arg-0 pattern [hty]) match the goal
 -- vector [goals]?  When the caller recovered the interface's FULL param monos the
@@ -35481,7 +35535,9 @@ methodPredicateTemplateMatchesRow : MethodPredicateTemplate -> ImplRow -> Bool
 methodPredicateTemplateMatchesRow template (ImplRow _ _ iface tys _ _) =
   sameIfaceDecl template.mptInterface iface
     && (match methodPredicateTemplateHeadPairs template.mptArguments tys
-      Some pairs => isSome (matchOneSided matchStep eqStr cohEqMono pairs [])
+      Some pairs =>
+        let subst = Ref []
+        isSome (matchOneSided matchStep eqStr (matchEqMono subst) pairs [])
       None => False)
 
 methodPredicateTemplateHeadPairs : List (Option Mono) ->
@@ -57224,6 +57280,26 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohEqR" ((PCon "TQual" (PVar "a") PWild) (PVar "b")) (EApp (EApp (EVar "cohEqR") (EApp (EVar "normalize") (EVar "a"))) (EVar "b")))
 (DFunDef false "cohEqR" ((PVar "a") (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EVar "cohEqR") (EVar "a")) (EApp (EVar "normalize") (EVar "b"))))
 (DFunDef false "cohEqR" (PWild PWild) (EVar "False"))
+(DTypeSig false "matchEqMono" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool")))))
+(DFunDef false "matchEqMono" ((PVar "subst") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "matchEqR") (EVar "subst")) (EApp (EApp (EVar "cohResolve") (EVar "subst")) (EVar "a"))) (EApp (EApp (EVar "cohResolve") (EVar "subst")) (EVar "b"))))
+(DTypeSig false "matchEqR" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool")))))
+(DFunDef false "matchEqR" (PWild (PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))))
+(DFunDef false "matchEqR" (PWild (PCon "TCon" (PVar "a") (PVar "oa")) (PCon "TCon" (PVar "b") (PVar "ob"))) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")))
+(DFunDef false "matchEqR" (PWild (PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "matchEqR" (PWild (PCon "TCon" (PVar "a") PWild) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "matchEqR" (PWild (PCon "TRigid" (PVar "a")) (PCon "TCon" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "matchEqR" ((PVar "subst") (PCon "TApp" (PVar "f1") (PVar "a1")) (PCon "TApp" (PVar "f2") (PVar "a2"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "f1")) (EVar "f2")) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "a1")) (EVar "a2"))))
+(DFunDef false "matchEqR" ((PVar "subst") (PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "matchEqRow") (EVar "r1")) (EVar "r2"))) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "b1")) (EVar "b2"))))
+(DFunDef false "matchEqR" (PWild (PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) (EApp (EApp (EVar "matchEqRow") (EVar "r1")) (EVar "r2")))
+(DFunDef false "matchEqR" (PWild (PCon "TAuth" (PVar "q1")) (PCon "TAuth" (PVar "q2"))) (EApp (EApp (EVar "matchEqAuth") (EVar "q1")) (EVar "q2")))
+(DFunDef false "matchEqR" ((PVar "subst") (PCon "TQual" (PVar "a") (PVar "q1")) (PCon "TQual" (PVar "b") (PVar "q2"))) (EBinOp "&&" (EApp (EApp (EVar "matchEqAuth") (EVar "q1")) (EVar "q2")) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "a")) (EVar "b"))))
+(DFunDef false "matchEqR" ((PVar "subst") (PCon "TQual" (PVar "a") (PVar "q")) (PVar "b")) (EBinOp "&&" (EApp (EVar "authIsTop") (EVar "q")) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "a")) (EVar "b"))))
+(DFunDef false "matchEqR" ((PVar "subst") (PVar "a") (PCon "TQual" (PVar "b") (PVar "q"))) (EBinOp "&&" (EApp (EVar "authIsTop") (EVar "q")) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "a")) (EVar "b"))))
+(DFunDef false "matchEqR" (PWild PWild PWild) (EVar "False"))
+(DTypeSig false "matchEqAuth" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
+(DFunDef false "matchEqAuth" ((PVar "a") (PVar "b")) (EBinOp "&&" (EApp (EApp (EVar "authSub") (EVar "a")) (EVar "b")) (EApp (EApp (EVar "authSub") (EVar "b")) (EVar "a"))))
+(DTypeSig false "matchEqRow" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Bool"))))
+(DFunDef false "matchEqRow" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "atomsA") (PVar "tailsA")) (EApp (EVar "rowFlat") (EVar "a"))) (DoLet false false (PTuple (PVar "atomsB") (PVar "tailsB")) (EApp (EVar "rowFlat") (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "atomsA")) (EApp (EVar "listLen") (EVar "atomsB"))) (EBinOp "==" (EApp (EVar "listLen") (EVar "tailsA")) (EApp (EVar "listLen") (EVar "tailsB")))) (EApp (EApp (EVar "allList") (ELam ((PVar "x")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "atomsB")) (arm (PCon "Some" (PVar "y")) () (EApp (EApp (EVar "matchEqAuth") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (arm (PCon "None") () (EVar "False"))))) (EVar "atomsA"))) (EApp (EApp (EVar "allList") (ELam ((PVar "x")) (EApp (EApp (EVar "anyList") (ELam ((PVar "y")) (EBinOp "==" (EApp (EVar "effvarId") (EVar "x")) (EApp (EVar "effvarId") (EVar "y"))))) (EVar "tailsB")))) (EVar "tailsA"))))))
 (DTypeSig false "cohStrictlyMoreSpecific" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "cohStrictlyMoreSpecific" ((PVar "a") (PVar "b")) (EBinOp "&&" (EApp (EApp (EVar "cohSubsumes") (EVar "b")) (EVar "a")) (EApp (EVar "not") (EApp (EApp (EVar "cohSubsumes") (EVar "a")) (EVar "b")))))
 (DTypeSig false "cohPpPair" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyTuple (TyCon "String") (TyCon "String")))))
@@ -57773,7 +57849,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "augmentWithParams" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "augmentWithParams" ((PVar "headSub") (PVar "implTys") (PVar "paramMonos")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "implTys")) (EApp (EVar "listLen") (EVar "paramMonos"))) (EBinOp ">" (EApp (EVar "listLen") (EVar "paramMonos")) (ELit (LInt 1)))) (EMatch (EApp (EApp (EVar "implHeadSubst") (EVar "implTys")) (EVar "paramMonos")) (arm (PCon "Some" (PVar "full")) () (EApp (EApp (EVar "mergeSubstPreferConcrete") (EVar "headSub")) (EVar "full"))) (arm (PCon "None") () (EVar "headSub"))) (EIf (EVar "otherwise") (EVar "headSub") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implHeadSubst" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "implHeadSubst" ((PVar "pats") (PVar "concretes")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "concretes"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "positionBindings") (EVar "pats")) (EVar "concretes")) (EListLit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "binds")) () (EIf (EApp (EApp (EVar "cohOverlapGo") (EApp (EVar "Ref") (EListLit))) (EApp (EApp (EVar "repeatedBindings") (EVar "binds")) (EListLit))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EApp (EVar "fst") (EVar "b"))) (EApp (EVar "snd") (EVar "b"))))) (EListLit)) (EVar "binds"))) (EVar "None")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implHeadSubst" ((PVar "pats") (PVar "concretes")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "concretes"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "positionBindings") (EVar "pats")) (EVar "concretes")) (EListLit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "binds")) () (EIf (EApp (EVar "matchEqPairs") (EApp (EApp (EVar "repeatedBindings") (EVar "binds")) (EListLit))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EApp (EVar "fst") (EVar "b"))) (EApp (EVar "snd") (EVar "b"))))) (EListLit)) (EVar "binds"))) (EVar "None")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "matchEqPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Mono"))) (TyCon "Bool")))
+(DFunDef false "matchEqPairs" ((PVar "pairs")) (EBlock (DoLet false false (PVar "subst") (EApp (EVar "Ref") (EListLit))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "cohOverlapGo") (EVar "subst")) (EVar "pairs")) (EApp (EApp (EVar "allList") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p"))))) (EVar "pairs"))))))
 (DTypeSig false "positionBindings" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))))
 (DFunDef false "positionBindings" ((PList) (PList) (PVar "acc")) (EApp (EVar "Some") (EVar "acc")))
 (DFunDef false "positionBindings" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PVar "acc")) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "p")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "positionBindings") (EVar "ps")) (EVar "cs")) (EBinOp "++" (EVar "acc") (EVar "s"))))))
@@ -57790,9 +57868,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "preferConcrete" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "preferConcrete" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "a")) (arm (PCon "Some" PWild) () (EVar "a")) (arm (PCon "None") () (EVar "b"))))
 (DTypeSig false "matchTyMono" (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "matchTyMono" ((PVar "headTy") (PVar "resultMono")) (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EVar "cohEqMono")) (EListLit (ETuple (EVar "headTy") (EVar "resultMono")))) (EListLit)))
+(DFunDef false "matchTyMono" ((PVar "headTy") (PVar "resultMono")) (EBlock (DoLet false false (PVar "subst") (EApp (EVar "Ref") (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EApp (EVar "matchEqMono") (EVar "subst"))) (EListLit (ETuple (EVar "headTy") (EVar "resultMono")))) (EListLit)))))
 (DTypeSig false "matchTyMonos" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "matchTyMonos" ((PVar "pats") (PVar "goals")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "goals"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EVar "cohEqMono")) (EApp (EApp (EVar "zipL") (EVar "pats")) (EVar "goals"))) (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "matchTyMonos" ((PVar "pats") (PVar "goals")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "goals"))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "subst") (EApp (EVar "Ref") (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EApp (EVar "matchEqMono") (EVar "subst"))) (EApp (EApp (EVar "zipL") (EVar "pats")) (EVar "goals"))) (EListLit)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "entryHeadMatches" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "entryHeadMatches" ((PVar "hty") (PVar "itys") (PVar "goals")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "itys")) (EApp (EVar "listLen") (EVar "goals"))) (EApp (EVar "isSome") (EApp (EApp (EVar "matchTyMonos") (EVar "itys")) (EVar "goals"))) (EIf (EVar "otherwise") (EMatch (EVar "goals") (arm (PCons (PVar "g") PWild) () (EApp (EVar "isSome") (EApp (EApp (EVar "matchTyMono") (EVar "hty")) (EVar "g")))) (arm (PList) () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "matchStep" (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyApp (TyApp (TyApp (TyCon "MStep") (TyCon "String")) (TyCon "Ty")) (TyCon "Mono")))))
@@ -58358,7 +58436,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "methodPredicateTemplateCandidateCount" (PWild (PList) (PVar "count")) (EVar "count"))
 (DFunDef false "methodPredicateTemplateCandidateCount" ((PVar "template") (PCons (PVar "row") (PVar "rest")) (PVar "count")) (EApp (EApp (EApp (EVar "methodPredicateTemplateCandidateCount") (EVar "template")) (EVar "rest")) (EIf (EApp (EApp (EVar "methodPredicateTemplateMatchesRow") (EVar "template")) (EVar "row")) (EBinOp "+" (EVar "count") (ELit (LInt 1))) (EVar "count"))))
 (DTypeSig false "methodPredicateTemplateMatchesRow" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ImplRow") (TyCon "Bool"))))
-(DFunDef false "methodPredicateTemplateMatchesRow" ((PVar "template") (PCon "ImplRow" PWild PWild (PVar "iface") (PVar "tys") PWild PWild)) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EVar "iface")) (EMatch (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EFieldAccess (EVar "template") "mptArguments")) (EVar "tys")) (arm (PCon "Some" (PVar "pairs")) () (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EVar "cohEqMono")) (EVar "pairs")) (EListLit)))) (arm (PCon "None") () (EVar "False")))))
+(DFunDef false "methodPredicateTemplateMatchesRow" ((PVar "template") (PCon "ImplRow" PWild PWild (PVar "iface") (PVar "tys") PWild PWild)) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EVar "iface")) (EMatch (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EFieldAccess (EVar "template") "mptArguments")) (EVar "tys")) (arm (PCon "Some" (PVar "pairs")) () (EBlock (DoLet false false (PVar "subst") (EApp (EVar "Ref") (EListLit))) (DoExpr (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EApp (EVar "matchEqMono") (EVar "subst"))) (EVar "pairs")) (EListLit)))))) (arm (PCon "None") () (EVar "False")))))
 (DTypeSig false "methodPredicateTemplateHeadPairs" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "Ty") (TyCon "Mono")))))))
 (DFunDef false "methodPredicateTemplateHeadPairs" ((PList) (PList)) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "methodPredicateTemplateHeadPairs" ((PCons (PCon "Some" (PVar "argument")) (PVar "rest")) (PCons (PVar "head") (PVar "heads"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "head") (EVar "argument")) (EVar "_s")))) (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EVar "rest")) (EVar "heads"))))
@@ -65686,6 +65764,26 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohEqR" ((PCon "TQual" (PVar "a") PWild) (PVar "b")) (EApp (EApp (EVar "cohEqR") (EApp (EVar "normalize") (EVar "a"))) (EVar "b")))
 (DFunDef false "cohEqR" ((PVar "a") (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EVar "cohEqR") (EVar "a")) (EApp (EVar "normalize") (EVar "b"))))
 (DFunDef false "cohEqR" (PWild PWild) (EVar "False"))
+(DTypeSig false "matchEqMono" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool")))))
+(DFunDef false "matchEqMono" ((PVar "subst") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "matchEqR") (EVar "subst")) (EApp (EApp (EVar "cohResolve") (EVar "subst")) (EVar "a"))) (EApp (EApp (EVar "cohResolve") (EVar "subst")) (EVar "b"))))
+(DTypeSig false "matchEqR" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool")))))
+(DFunDef false "matchEqR" (PWild (PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))))
+(DFunDef false "matchEqR" (PWild (PCon "TCon" (PVar "a") (PVar "oa")) (PCon "TCon" (PVar "b") (PVar "ob"))) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")))
+(DFunDef false "matchEqR" (PWild (PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "matchEqR" (PWild (PCon "TCon" (PVar "a") PWild) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "matchEqR" (PWild (PCon "TRigid" (PVar "a")) (PCon "TCon" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "matchEqR" ((PVar "subst") (PCon "TApp" (PVar "f1") (PVar "a1")) (PCon "TApp" (PVar "f2") (PVar "a2"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "f1")) (EVar "f2")) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "a1")) (EVar "a2"))))
+(DFunDef false "matchEqR" ((PVar "subst") (PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "matchEqRow") (EVar "r1")) (EVar "r2"))) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "b1")) (EVar "b2"))))
+(DFunDef false "matchEqR" (PWild (PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) (EApp (EApp (EVar "matchEqRow") (EVar "r1")) (EVar "r2")))
+(DFunDef false "matchEqR" (PWild (PCon "TAuth" (PVar "q1")) (PCon "TAuth" (PVar "q2"))) (EApp (EApp (EVar "matchEqAuth") (EVar "q1")) (EVar "q2")))
+(DFunDef false "matchEqR" ((PVar "subst") (PCon "TQual" (PVar "a") (PVar "q1")) (PCon "TQual" (PVar "b") (PVar "q2"))) (EBinOp "&&" (EApp (EApp (EVar "matchEqAuth") (EVar "q1")) (EVar "q2")) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "a")) (EVar "b"))))
+(DFunDef false "matchEqR" ((PVar "subst") (PCon "TQual" (PVar "a") (PVar "q")) (PVar "b")) (EBinOp "&&" (EApp (EVar "authIsTop") (EVar "q")) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "a")) (EVar "b"))))
+(DFunDef false "matchEqR" ((PVar "subst") (PVar "a") (PCon "TQual" (PVar "b") (PVar "q"))) (EBinOp "&&" (EApp (EVar "authIsTop") (EVar "q")) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EVar "a")) (EVar "b"))))
+(DFunDef false "matchEqR" (PWild PWild PWild) (EVar "False"))
+(DTypeSig false "matchEqAuth" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
+(DFunDef false "matchEqAuth" ((PVar "a") (PVar "b")) (EBinOp "&&" (EApp (EApp (EVar "authSub") (EVar "a")) (EVar "b")) (EApp (EApp (EVar "authSub") (EVar "b")) (EVar "a"))))
+(DTypeSig false "matchEqRow" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Bool"))))
+(DFunDef false "matchEqRow" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "atomsA") (PVar "tailsA")) (EApp (EVar "rowFlat") (EVar "a"))) (DoLet false false (PTuple (PVar "atomsB") (PVar "tailsB")) (EApp (EVar "rowFlat") (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "atomsA")) (EApp (EVar "listLen") (EVar "atomsB"))) (EBinOp "==" (EApp (EVar "listLen") (EVar "tailsA")) (EApp (EVar "listLen") (EVar "tailsB")))) (EApp (EApp (EVar "allList") (ELam ((PVar "x")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "atomsB")) (arm (PCon "Some" (PVar "y")) () (EApp (EApp (EVar "matchEqAuth") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (arm (PCon "None") () (EVar "False"))))) (EVar "atomsA"))) (EApp (EApp (EVar "allList") (ELam ((PVar "x")) (EApp (EApp (EVar "anyList") (ELam ((PVar "y")) (EBinOp "==" (EApp (EVar "effvarId") (EVar "x")) (EApp (EVar "effvarId") (EVar "y"))))) (EVar "tailsB")))) (EVar "tailsA"))))))
 (DTypeSig false "cohStrictlyMoreSpecific" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "cohStrictlyMoreSpecific" ((PVar "a") (PVar "b")) (EBinOp "&&" (EApp (EApp (EVar "cohSubsumes") (EVar "b")) (EVar "a")) (EApp (EVar "not") (EApp (EApp (EVar "cohSubsumes") (EVar "a")) (EVar "b")))))
 (DTypeSig false "cohPpPair" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyTuple (TyCon "String") (TyCon "String")))))
@@ -66235,7 +66333,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "augmentWithParams" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "augmentWithParams" ((PVar "headSub") (PVar "implTys") (PVar "paramMonos")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "implTys")) (EApp (EVar "listLen") (EVar "paramMonos"))) (EBinOp ">" (EApp (EVar "listLen") (EVar "paramMonos")) (ELit (LInt 1)))) (EMatch (EApp (EApp (EVar "implHeadSubst") (EVar "implTys")) (EVar "paramMonos")) (arm (PCon "Some" (PVar "full")) () (EApp (EApp (EVar "mergeSubstPreferConcrete") (EVar "headSub")) (EVar "full"))) (arm (PCon "None") () (EVar "headSub"))) (EIf (EVar "otherwise") (EVar "headSub") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implHeadSubst" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "implHeadSubst" ((PVar "pats") (PVar "concretes")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "concretes"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "positionBindings") (EVar "pats")) (EVar "concretes")) (EListLit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "binds")) () (EIf (EApp (EApp (EVar "cohOverlapGo") (EApp (EVar "Ref") (EListLit))) (EApp (EApp (EVar "repeatedBindings") (EVar "binds")) (EListLit))) (EApp (EVar "Some") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EApp (EVar "fst") (EVar "b"))) (EApp (EVar "snd") (EVar "b"))))) (EListLit)) (EVar "binds"))) (EVar "None")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implHeadSubst" ((PVar "pats") (PVar "concretes")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "concretes"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "positionBindings") (EVar "pats")) (EVar "concretes")) (EListLit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "binds")) () (EIf (EApp (EVar "matchEqPairs") (EApp (EApp (EVar "repeatedBindings") (EVar "binds")) (EListLit))) (EApp (EVar "Some") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EApp (EVar "fst") (EVar "b"))) (EApp (EVar "snd") (EVar "b"))))) (EListLit)) (EVar "binds"))) (EVar "None")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "matchEqPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Mono"))) (TyCon "Bool")))
+(DFunDef false "matchEqPairs" ((PVar "pairs")) (EBlock (DoLet false false (PVar "subst") (EApp (EVar "Ref") (EListLit))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "cohOverlapGo") (EVar "subst")) (EVar "pairs")) (EApp (EApp (EVar "allList") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "matchEqMono") (EVar "subst")) (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p"))))) (EVar "pairs"))))))
 (DTypeSig false "positionBindings" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))))
 (DFunDef false "positionBindings" ((PList) (PList) (PVar "acc")) (EApp (EVar "Some") (EVar "acc")))
 (DFunDef false "positionBindings" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PVar "acc")) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "p")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "positionBindings") (EVar "ps")) (EVar "cs")) (EBinOp "++" (EVar "acc") (EVar "s"))))))
@@ -66252,9 +66352,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "preferConcrete" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "preferConcrete" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "a")) (arm (PCon "Some" PWild) () (EVar "a")) (arm (PCon "None") () (EVar "b"))))
 (DTypeSig false "matchTyMono" (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "matchTyMono" ((PVar "headTy") (PVar "resultMono")) (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EVar "cohEqMono")) (EListLit (ETuple (EVar "headTy") (EVar "resultMono")))) (EListLit)))
+(DFunDef false "matchTyMono" ((PVar "headTy") (PVar "resultMono")) (EBlock (DoLet false false (PVar "subst") (EApp (EVar "Ref") (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EApp (EVar "matchEqMono") (EVar "subst"))) (EListLit (ETuple (EVar "headTy") (EVar "resultMono")))) (EListLit)))))
 (DTypeSig false "matchTyMonos" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
-(DFunDef false "matchTyMonos" ((PVar "pats") (PVar "goals")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "goals"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EVar "cohEqMono")) (EApp (EApp (EVar "zipL") (EVar "pats")) (EVar "goals"))) (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "matchTyMonos" ((PVar "pats") (PVar "goals")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "goals"))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "subst") (EApp (EVar "Ref") (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EApp (EVar "matchEqMono") (EVar "subst"))) (EApp (EApp (EVar "zipL") (EVar "pats")) (EVar "goals"))) (EListLit)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "entryHeadMatches" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "entryHeadMatches" ((PVar "hty") (PVar "itys") (PVar "goals")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "itys")) (EApp (EVar "listLen") (EVar "goals"))) (EApp (EVar "isSome") (EApp (EApp (EVar "matchTyMonos") (EVar "itys")) (EVar "goals"))) (EIf (EVar "otherwise") (EMatch (EVar "goals") (arm (PCons (PVar "g") PWild) () (EApp (EVar "isSome") (EApp (EApp (EVar "matchTyMono") (EVar "hty")) (EVar "g")))) (arm (PList) () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "matchStep" (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyApp (TyApp (TyApp (TyCon "MStep") (TyCon "String")) (TyCon "Ty")) (TyCon "Mono")))))
@@ -66820,7 +66920,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "methodPredicateTemplateCandidateCount" (PWild (PList) (PVar "count")) (EDictApp "count"))
 (DFunDef false "methodPredicateTemplateCandidateCount" ((PVar "template") (PCons (PVar "row") (PVar "rest")) (PVar "count")) (EApp (EApp (EApp (EVar "methodPredicateTemplateCandidateCount") (EVar "template")) (EVar "rest")) (EIf (EApp (EApp (EVar "methodPredicateTemplateMatchesRow") (EVar "template")) (EVar "row")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1))) (EDictApp "count"))))
 (DTypeSig false "methodPredicateTemplateMatchesRow" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ImplRow") (TyCon "Bool"))))
-(DFunDef false "methodPredicateTemplateMatchesRow" ((PVar "template") (PCon "ImplRow" PWild PWild (PVar "iface") (PVar "tys") PWild PWild)) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EVar "iface")) (EMatch (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EFieldAccess (EVar "template") "mptArguments")) (EVar "tys")) (arm (PCon "Some" (PVar "pairs")) () (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EVar "cohEqMono")) (EVar "pairs")) (EListLit)))) (arm (PCon "None") () (EVar "False")))))
+(DFunDef false "methodPredicateTemplateMatchesRow" ((PVar "template") (PCon "ImplRow" PWild PWild (PVar "iface") (PVar "tys") PWild PWild)) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EVar "iface")) (EMatch (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EFieldAccess (EVar "template") "mptArguments")) (EVar "tys")) (arm (PCon "Some" (PVar "pairs")) () (EBlock (DoLet false false (PVar "subst") (EApp (EVar "Ref") (EListLit))) (DoExpr (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EApp (EVar "matchEqMono") (EVar "subst"))) (EVar "pairs")) (EListLit)))))) (arm (PCon "None") () (EVar "False")))))
 (DTypeSig false "methodPredicateTemplateHeadPairs" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "Ty") (TyCon "Mono")))))))
 (DFunDef false "methodPredicateTemplateHeadPairs" ((PList) (PList)) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "methodPredicateTemplateHeadPairs" ((PCons (PCon "Some" (PVar "argument")) (PVar "rest")) (PCons (PVar "head") (PVar "heads"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "head") (EVar "argument")) (EVar "_s")))) (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EVar "rest")) (EVar "heads"))))
