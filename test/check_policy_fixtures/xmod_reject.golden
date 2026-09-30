@@ -1,0 +1,2 @@
+rejected. transform requires <Stdout>. Not permitted by policy {Cache}
+   reached via: transform → step

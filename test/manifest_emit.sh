@@ -84,19 +84,60 @@ Stdout = true'
 fi
 
 # ── case 3: round-trip accept ────────────────────────────────────────────────
-# The manifest-derived --allow token for net_param_plugin is "Net=idp.example.com/api".
-# check-policy with that exact allow must ACCEPT (rc 0).
-# This proves the manifest is the exact verified authority (self ⊑ self).
-if [ -f "$NET_FIX" ]; then
-  rt_out="$(perl -e 'alarm 90; exec @ARGV' \
-      "$NATIVE" check-policy "$NET_FIX" --allow "FFI,Net=idp.example.com/api" --fn transform 2>&1)"
-  rt_rc=$?
-  if [ "$rt_rc" = "0" ] && printf '%s' "$rt_out" | grep -qF "accepted"; then
-    ok_case "round-trip-accept (manifest → check-policy rc=0)"
-  else
-    fail_case "round-trip-accept" "rc=$rt_rc output: $rt_out"
+# The manifest's OWN output, respelled as --allow tokens, fed back into
+# check-policy for the same target and entry must ACCEPT (rc 0).  This proves
+# the manifest is the exact verified authority (self ⊑ self).  Run over a
+# single-file target and over multi-file ones (#3331): check-policy loads the
+# target through the same loader and analysis manifest does.
+
+# manifest_to_allow TOML — print the --allow spelling of a manifest whose lines
+# are all `Label = true` or `Label = "value"`; fail on any other form, so a
+# manifest shape this helper cannot spell reds the case instead of passing it.
+manifest_to_allow() {
+  printf '%s\n' "$1" | awk '
+    NR == 1 { if ($0 != "[package.capabilities]") bad = 1; next }
+    /^[A-Za-z_][A-Za-z0-9_]* = true$/ {
+      out = out sep substr($0, 1, index($0, " = ") - 1); sep = ","; next
+    }
+    /^[A-Za-z_][A-Za-z0-9_]* = "[^"]*"$/ {
+      i = index($0, " = "); v = substr($0, i + 4); v = substr(v, 1, length(v) - 1)
+      out = out sep substr($0, 1, i - 1) "=" v; sep = ","; next
+    }
+    { bad = 1 }
+    END { if (bad) exit 1; print out }'
+}
+
+# round_trip NAME TARGET FN EXPECTED_ALLOW
+round_trip() {
+  rname="$1"; rtarget="$2"; rfn="$3"; rwant="$4"
+  [ -f "$rtarget" ] || { fail_case "$rname" "missing $rtarget"; return; }
+  rman="$(perl -e 'alarm 90; exec @ARGV' "$NATIVE" manifest "$rtarget" --fn "$rfn" 2>&1)"
+  rman_rc=$?
+  if [ "$rman_rc" != "0" ]; then
+    fail_case "$rname" "manifest rc=$rman_rc: $rman"; return
   fi
-fi
+  if ! rallow="$(manifest_to_allow "$rman")"; then
+    fail_case "$rname" "cannot spell the manifest as --allow: $rman"; return
+  fi
+  # Pin the derived policy, so an emptied manifest cannot pass as self ⊆ self.
+  if [ "$rallow" != "$rwant" ]; then
+    fail_case "$rname" "manifest spelled --allow '$rallow', want '$rwant'"; return
+  fi
+  rout="$(perl -e 'alarm 90; exec @ARGV' \
+      "$NATIVE" check-policy "$rtarget" --allow "$rallow" --fn "$rfn" 2>&1)"
+  rrc=$?
+  if [ "$rrc" = "0" ] && printf '%s' "$rout" | grep -qF "accepted. $rfn"; then
+    ok_case "$rname (manifest --allow '$rallow' → check-policy rc=0)"
+  else
+    fail_case "$rname" "--allow '$rallow' rc=$rrc output: $rout"
+  fi
+}
+
+round_trip "round-trip-accept" "$NET_FIX" transform "FFI,Net=idp.example.com/api"
+round_trip "round-trip-xmod-helper-effect" \
+  "$ROOT/test/check_policy_fixtures/manifest_xmod_main.mdk" entry "Clock"
+round_trip "round-trip-xmod-sample-run" \
+  "$ROOT/test/check_policy_fixtures/policy_xmod_main.mdk" transform "Stdout"
 
 # ── case 3b: an exact bare filename round-trips (#3557) ──────────────────────
 # The manifest line `FileRead = "notes.txt"` is a legal --allow entry: an exact
@@ -168,6 +209,18 @@ assert_refuse "manifest-unresolvable" \
 # case 3: --fn names no binding at all
 assert_refuse "manifest-fn-nosuch" \
   "$ROOT/test/check_policy_fixtures/missing_entry_plugin.mdk" "nosuch"
+
+# case 4: an ill-typed IMPORT is refused with the error located in the
+# import's own file, not the entry's (#3331).
+assert_refuse "manifest-import-illtyped" \
+  "$ROOT/test/check_policy_fixtures/policy_xmod_bad_main.mdk" "transform"
+bad_err="$("$NATIVE" manifest --fn transform \
+  "$ROOT/test/check_policy_fixtures/policy_xmod_bad_main.mdk" 2>&1 >/dev/null)"
+if printf '%s' "$bad_err" | grep -qF "policy_xmod_bad_helper.mdk:4:10: No impl of Num for String"; then
+  ok_case "manifest-import-illtyped-located (error names the import's file and line)"
+else
+  fail_case "manifest-import-illtyped-located" "stderr: $bad_err"
+fi
 
 # case 5: sibling-module import now resolves and the imported effect reaches
 # the manifest.
