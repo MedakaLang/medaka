@@ -1467,6 +1467,7 @@ importerShadowOnEmitPath : String -> Ref Route -> Bool
 improveByUniqueImpl : Map String Unit -> List UObligation -> Unit
 improveGoal : Map String Unit -> IfaceRef -> List Mono -> Unit
 improvementPool : List Mono -> List ImplRow
+indexAtomsCovered : List Atom -> List Atom -> List Atom
 indexEagerMsg : String -> String -> String
 indexOfId : Int -> List Int -> Option Int
 indexOfIdGo : Int -> Int -> List Int -> Option Int
@@ -1475,7 +1476,9 @@ indexOfIntGo : Int -> List Int -> Int -> Int
 indexOfPred : Int -> PredicateRequest -> List PredicateSlot -> Option Int
 indexOfPredGo : Int -> Int -> PredicateRequest -> List PredicateSlot -> Option Int
 indexOnlyEffVars : List (String, List Kind) -> Ty -> List String
+indexOpenClosed : List Atom -> Ref Effvar -> List Atom -> Unit
 indexRowEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
+indexRowEquate : List Atom -> List Atom -> Unit
 indexRowMismatchMsg : List Atom -> List Atom -> String
 infer : TcEnv -> Expr -> Mono
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
@@ -2920,7 +2923,7 @@ unifyAll : Mono -> List Mono -> Unit
 unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> String -> Expr -> Unit
 unifyFieldAssignsIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> List FieldAssign -> Unit
 unifyIndex : Authority -> Authority -> Unit
-unifyIndexAtomAuthorities : EffRow -> EffRow -> Unit
+unifyIndexAtomAuthorities : List Atom -> List Atom -> Unit
 unifyIndexRow : EffRow -> EffRow -> Unit
 unifyIndexRowN : EffRow -> EffRow -> Unit
 unifyIndexRowPlain : EffRow -> EffRow -> Unit
