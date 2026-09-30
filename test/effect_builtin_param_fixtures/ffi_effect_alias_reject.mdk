@@ -1,0 +1,11 @@
+-- #3618: the rejecting twin of ffi_effect_alias_accept.mdk.  `Call <>`
+-- expands to `Int -> <> Int`, whose row does not name `FFI`.
+type Call (e : Effect) = Int -> <e> Int
+
+extern cCall : Call <>
+
+wrapCall : Int -> Int
+wrapCall x = cCall x
+
+main : <IO> Unit
+main = println "unreached"

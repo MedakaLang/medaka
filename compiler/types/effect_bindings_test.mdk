@@ -1370,3 +1370,54 @@ test "a join the result's own use shapes keeps each alternative's row" = expectA
           "pickApply c f g = (if c then f else g) ()\nuse = pickApply True loud quiet\n")
         "use"),
   ]
+
+-- #3618: a clause-defined function whose whole signature names a function-type
+-- alias declares the alias's row, whether the alias is local, imported, nested
+-- in the result, or takes the row as an `Effect` argument.
+functionAliasSource : String
+functionAliasSource =
+  "effect Other\neffect Sign Set\nextern emitOther : Unit -> <Other> Unit\nextern signAny : Int -> <Sign> Int\ntype Tick = Unit -> <Audit> Unit\ntype Signed = Int -> <Sign> Int\ntype Commit = Int -> <Sign \"commit\"> Int\ntype Twice = Int -> Tick\ntype Wide (e : Effect) = Unit -> <Audit | e> Unit\nsign : (purpose : String) -> Int -> <Sign purpose> Int\nsign _ x = x\n"
+
+test "a function-type alias signature declares the alias's row" = expectAll [
+  expectEqual
+    []
+    (messagesFor
+      (functionAliasSource
+        ++ "d : Tick\nd u = emitAudit u\ne : Signed\ne x = signAny x\nf : Commit\nf x = sign \"commit\" x\nt : Twice\nt _ u = emitAudit u\np : Tick\np _ = ()\nw : Wide <Other>\nw u =\n  let _ = emitOther u\n  emitAudit u\nopen : Wide r\nopen u = emitAudit u\n")),
+  expectEqual
+    ["Effectful value used where <Audit> is allowed, but it performs <Other>"]
+    (messagesFor (functionAliasSource ++ "bad : Tick\nbad u = emitOther u\n")),
+  expectEqual
+    ["Effectful value used where <Audit> is allowed, but it performs <Other>"]
+    (messagesFor
+      (functionAliasSource ++ "bad : Twice\nbad _ u = emitOther u\n")),
+  expectEqual
+    ["Effectful value used where <Audit> is allowed, but it performs <Other>"]
+    (messagesFor
+      (functionAliasSource ++ "bad : Wide <>\nbad u = emitOther u\n")),
+]
+
+test "an imported function-type alias signature declares the alias's row" =
+  let provider =
+    "export effect Other\nexport extern emitOther : Unit -> <Other> Unit\nexport type Tick = Unit -> <Audit> Unit\n"
+  expectAll [
+    expectEqual
+      []
+      (moduleErrorsChain [
+        ("provider", provider),
+        (
+          "entry",
+          "import provider.{Tick}\nimport provider as P\nd : Tick\nd u = emitAudit u\nq : P.Tick\nq u = emitAudit u\n",
+        ),
+      ]),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (moduleErrorsChain [
+          ("provider", provider),
+          (
+            "entry",
+            "import provider.{Tick, emitOther}\nbad : Tick\nbad u = emitOther u\n",
+          ),
+        ])),
+  ]

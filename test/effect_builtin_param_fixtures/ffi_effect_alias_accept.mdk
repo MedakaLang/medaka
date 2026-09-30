@@ -1,0 +1,14 @@
+-- #3618: an extern whose signature is an alias taking its row as an `Effect`
+-- argument names `FFI` when the argument does.  The alias's `<e>` is the
+-- argument's row after expansion, not a row variable of its own, so
+-- `Call <FFI>` declares `Int -> <FFI> Int`.  Its rejecting twin is
+-- ffi_effect_alias_reject.mdk, identical but for the argument row.
+type Call (e : Effect) = Int -> <e> Int
+
+extern cCall : Call <FFI>
+
+wrapCall : Int -> <FFI> Int
+wrapCall x = cCall x
+
+main : <IO> Unit
+main = println "ffi effect alias accept"

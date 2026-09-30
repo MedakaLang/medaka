@@ -292,6 +292,13 @@ test "a constrained alias does not hide a nullary extern" = expectCheckReject
   (fixture "ffi_nullary_alias_constrained_reject.mdk")
   ["Foreign declaration 'k' has no arrow in its signature"]
 
+test "an alias's Effect argument is the row an extern declares" = expectAll [
+  expectCheckAccept (fixture "ffi_effect_alias_accept.mdk"),
+  expectCheckReject (fixture "ffi_effect_alias_reject.mdk") [
+    "Foreign declaration 'cCall' does not name the 'FFI' effect in its result row",
+  ],
+]
+
 -- #3463/#3468: the invocation summary.  An entry is charged for what the host
 -- can reach through it, read by variance; each charged entry has a control
 -- that differs in one position.

@@ -983,6 +983,7 @@ exitLevel : Unit -> Unit
 expandAliasHeadTy : Ty -> Ty
 expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
 expandIoInBound : List Atom -> List Atom
+expandReturnSpine : Ty -> Ty
 expectedParamTypes : Mono -> Int -> List Mono
 exportedRootCells : Map String Unit -> List (String, Scheme) -> Map Int Unit
 exportsCtorIdentFor : String -> Ident -> List (String, String, Ident) -> Bool
@@ -2762,6 +2763,7 @@ spellCtxOf : List Decl -> SpellCtx
 spineHead : Mono -> Mono
 spineHeadEv : Expr -> Option EvId
 spineHeadMono : Mono -> Mono
+spliceRowTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
 splitOnComma : String -> List String
 splitOnCommaGo : String -> Int -> Int -> List String -> List String
 stampCtxOf : String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
@@ -2793,6 +2795,7 @@ stripEff : Ty -> Ty
 stripLeadingMethodConstraints : Ty -> Ty
 stripTyConstraints : Ty -> Ty
 stripTyWrap : Ty -> Ty
+substAliasArgs : List (String, Ty) -> Ty -> Ty
 substArgVec : List (Int, Mono) -> Mono -> List Mono -> List Mono
 substAtom : List (Int, Authority) -> Atom -> Atom
 substAtoms : List (Int, Authority) -> List Atom -> List Atom
@@ -2806,6 +2809,7 @@ substOblArgs : List Mono -> List (Int, Mono) -> Option (List Mono)
 substParams : List String -> List (String, Ty) -> List Ty
 substRecordField : RecordSubst -> Mono -> Mono
 substRow : List (Int, Ref Effvar) -> List (Int, Authority) -> EffRow -> EffRow
+substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
 substTyVars : List (String, Ty) -> Ty -> Ty
 substVecOblArgs : VecObl -> List (Int, Mono) -> Option (List Mono)
 substituteIndex : Ref Authvar -> Authority -> Unit
