@@ -230,7 +230,10 @@ memory (#2572), about 5.5 KiB of live heap per write measured on 2026-09-30.
 So the writer's pace sets how much RSS grows by design. Each writer pauses
 `LOAD_WRITE_INTERVAL_MS` after an acknowledged write (0, the default, writes as
 fast as the rate limit allows, about 0.8 writes/s). Choose an interval that keeps
-the expected growth well under the RSS limit. The disk limit grades the highest sampled disk usage
+the expected growth well under the RSS limit. A paced writer opens a fresh
+connection for each write, because the server closes an idle kept-alive
+connection after its header timeout. Any writer logs in again when a write is
+refused because its access token expired, since the token lasts two hours. The disk limit grades the highest sampled disk usage
 against the initial sample in KiB. A transient sampled breach is not forgiven by a later
 drop. Set `LOAD_RESOURCE_SAMPLE_SECONDS` to
 an operator-chosen sampling cadence for the observation. No numerical limit,
