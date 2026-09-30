@@ -344,6 +344,7 @@ resolveProgram : List Decl -> List Decl -> List Decl -> List ResError
 resolveProgramG2 : List String -> List Decl -> List Decl -> List Decl -> List ResError
 resolveToLines : List Decl -> List Decl -> List Decl -> String
 rewriteNonRec : List String -> ResError -> ResError
+runtimeExternTyOriginScope : List Decl -> Map String TyConOrigin
 sameCase : Bool -> Bool -> Bool
 scanDecls : (Decl -> List a) -> List Decl -> List a
 scopeAdd : String -> Scope -> Scope

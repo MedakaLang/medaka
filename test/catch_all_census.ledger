@@ -39,8 +39,10 @@ doChainIsDeferred	Expr	3/42
 eagerRefs	Expr	36/42
 exprLoc	Expr	2/42
 extensionBase	Expr	1/42
+fileBodyLoc	Expr	1/42
+fileValueShape	Expr	3/42
 grantDecl	Decl	5/14
-grantExpr	Expr	5/42
+grantExprInner	Expr	6/42
 grantSpine	Expr	2/42
 ifaceMethodRowOf	Decl	2/14
 implBodyLoc	Expr	4/42

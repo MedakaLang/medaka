@@ -213,8 +213,17 @@ main = match quiet ()
   Wrapper n => println n' \
   ""
 
+check_grant "user_file_label_built" \
+'effect FileRead Prefix
+
+readData : Unit -> <FileRead "user/*", IO> Result String String
+readData _ = readFile "data.txt"
+
+main = println (readData ())' \
+  ""
+
 if [ "$fail" -eq 0 ]; then
-  echo "14 ok, 0 failing"
+  echo "15 ok, 0 failing"
   exit 0
 else
   echo "diff_wasm_ffi_wall: FAILURES ABOVE"

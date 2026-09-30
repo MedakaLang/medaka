@@ -1,0 +1,20 @@
+joined : (first : String) ->
+  (second : String) ->
+  <FileWrite first, FileWrite second> Result String Unit
+joined first second = match writeFile first "first"
+  Err e => Err e
+  Ok () => writeFile second "second"
+
+mixed : (path : String) ->
+  <FileWrite path, FileWrite "cfg/*"> Result String Unit
+mixed path = match writeFile path "mixed"
+  Err e => Err e
+  Ok () => writeFile "cfg/mixed.txt" "mixed"
+
+whole : String -> <FileWrite> Result String Unit
+whole path = joined path "cfg/whole.txt"
+
+main =
+  println (joined "cfg/first.txt" "cfg/second.txt")
+  println (mixed "cfg/third.txt")
+  println (whole "outdir/allowed.txt")

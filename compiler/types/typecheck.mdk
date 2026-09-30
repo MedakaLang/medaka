@@ -363,6 +363,7 @@ import frontend.resolve.{
   -- #1280: the extern-signature half of the identity supply — see `externSchemes`.
   stampTyOrigins,
   externTyOriginScope,
+  runtimeExternTyOriginScope,
   noteOriginTrace,
 }
 -- The type-aware non-exhaustive-`match` check (`check_match` in compiler/frontend/exhaust.mdk)
@@ -33941,10 +33942,11 @@ grantBody body =
       fold (result (row, chain) => fileBoundExpr chain row result) inner bounds
 
 narrowFileAtom : Atom -> Bool
-narrowFileAtom atom =
-  let label = atomLabel atom
-  (label == "FileRead" || label == "FileWrite")
-    && not (authIsTop (atomAuth atom))
+narrowFileAtom atom = match atomLabelOf atom
+  EffLabel label OriginBuiltin =>
+    (label == "FileRead" || label == "FileWrite")
+      && not (authIsTop (atomAuth atom))
+  _ => False
 
 recordClauseFileBound : Expr -> Int -> Mono -> Unit
 recordClauseFileBound body arity ty
@@ -33967,8 +33969,7 @@ fileBoundExpr chain row body =
     fold
       (result atom =>
         let label = atomLabel atom
-        if (label == "FileRead" || label == "FileWrite")
-          && not (authIsTop (atomAuth atom)) then
+        if narrowFileAtom atom then
           applyExprs (EVar ("$with" ++ label ++ "Bound")) [
             grantTerm chain (atomAuth atom),
             ELam [PWild] result,
@@ -34012,7 +34013,12 @@ grantTerm chain a = match authGrantShape a
         p :: rest =>
           fold
             (acc param => topAbsorbs param acc)
-            (fold (acc q => EBinOp "++" acc q (Ref RNone)) p rest)
+            -- Generated after inference: the list identity supplies the operand
+            -- representation that a hidden grant parameter alone cannot carry.
+            (fold
+              (acc q => EBinOp "++" acc q (Ref RNone))
+              (EListLit [])
+              (p :: rest))
             (dedup params)
 
 -- The parameters a join's variables are, or None when one of them has no caller
@@ -50102,7 +50108,7 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- (`netSend : Socket h -> … <Net h> …`), and a name in an index slot is an
   -- authority binder only by the head's declared kind.
   let runtimeSeed = withDeclParamKinds coreDecls (u =>
-    externSchemes (externTyOriginScope coreDecls) runtimeDecls)
+    externSchemes (runtimeExternTyOriginScope coreDecls) runtimeDecls)
   let _ = seedAbstractRecordTypes coreDecls modules
   -- TREES only: the interfaces in scope for the superclass census before the first
   -- sweep.  The diags arm leaves `superDeclsRef` to `checkBodyImpl`'s own
@@ -51481,8 +51487,8 @@ checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
 -- two halves back SEPARATE, so the split needs no new projection.
 --
 -- The empty `coreDecls` is what makes the seed identical to the `Flat` wrapper's
--- hand-built `externSchemes (externTyOriginScope []) runtimeDecls`: `graphPreamble`
--- computes `externSchemes (externTyOriginScope coreDecls) runtimeDecls`, which
+-- hand-built `externSchemes (runtimeExternTyOriginScope []) runtimeDecls`: `graphPreamble`
+-- computes `externSchemes (runtimeExternTyOriginScope coreDecls) runtimeDecls`, which
 -- collapses to the same expression at `coreDecls = []`.  `"__user__"` mirrors
 -- `checkOneToLinesWithRuntime`'s rootId convention just above.
 export

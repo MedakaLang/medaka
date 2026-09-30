@@ -1,5 +1,5 @@
 # META
-source_lines=6527
+source_lines=6537
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -6466,9 +6466,10 @@ flatTyOriginScope coreDecls =
 -- interface) ' stdlib/runtime.mdk` is empty), so it has nothing to attribute to a
 -- module of its own and needs neither the graph arm's import layer
 -- (`tyOriginScope`'s `usePathsOf prog` term — `runtime.mdk` has no `import`) nor
--- an own-declarations layer.  What is left is exactly builtins ⊎ the prelude's own
--- names, i.e. `flatTyOriginScope` — which the GRAPH arm agrees with on this
--- population: `tyOriginScope`'s builtin and prelude layers are the same two lists.
+-- an own-declarations layer. Its type names use `flatTyOriginScope`; its effect
+-- labels are language builtins, supplied by `runtimeExternTyOriginScope`.
+-- The GRAPH arm agrees with both populations in `tyOriginScope`'s builtin and
+-- prelude layers.
 -- So this is deliberately NOT `stampFlatTyOrigins`' "flat drivers claim less"
 -- asymmetry; on this population there is nothing more for the graph arm to claim.
 --
@@ -6479,6 +6480,15 @@ flatTyOriginScope coreDecls =
 export
 externTyOriginScope : List Decl -> OrdMap TyConOrigin
 externTyOriginScope coreDecls = flatTyOriginScope coreDecls
+
+-- Only the runtime catalog can claim builtin effect identity without a loader.
+-- A user extern can name a local effect with the same spelling, so its scope
+-- remains type-only. Missing catalog identities would lose producer evidence
+-- when a recursive result is shaped by a later file-bound annotation.
+export
+runtimeExternTyOriginScope : List Decl -> OrdMap TyConOrigin
+runtimeExternTyOriginScope coreDecls =
+  omFromPairs builtinEffOrigins (externTyOriginScope coreDecls)
 
 -- ── the AGREEMENT TAP (#1110) ────────────────────────────────────────────────
 -- ⚠️ NOTHING in the compiler reads this, and nothing may.  It exists so a GATE can
@@ -8097,6 +8107,8 @@ takeOriginTrace _ =
 (DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))) (EApp (EApp (EVar "map") (EApp (EVar "ifaceDeclaredIn") (ELit (LString "core")))) (EApp (EVar "interfaceNamesOf") (EVar "coreDecls")))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
 (DTypeSig true "externTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
 (DFunDef false "externTyOriginScope" ((PVar "coreDecls")) (EApp (EVar "flatTyOriginScope") (EVar "coreDecls")))
+(DTypeSig true "runtimeExternTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
+(DFunDef false "runtimeExternTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EVar "builtinEffOrigins")) (EApp (EVar "externTyOriginScope") (EVar "coreDecls"))))
 (DTypeSig false "originTraceEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "originTraceEnabled" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "originTraceLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
@@ -9675,6 +9687,8 @@ takeOriginTrace _ =
 (DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDeclaredIn") (ELit (LString "core")))) (EApp (EVar "interfaceNamesOf") (EVar "coreDecls")))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
 (DTypeSig true "externTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
 (DFunDef false "externTyOriginScope" ((PVar "coreDecls")) (EApp (EVar "flatTyOriginScope") (EVar "coreDecls")))
+(DTypeSig true "runtimeExternTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
+(DFunDef false "runtimeExternTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EVar "builtinEffOrigins")) (EApp (EVar "externTyOriginScope") (EVar "coreDecls"))))
 (DTypeSig false "originTraceEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "originTraceEnabled" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "originTraceLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))

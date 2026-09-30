@@ -291,6 +291,11 @@ union: Ok
 explicit link: Ok
 restored: Ok"
 confine_case bounded_recursion . "True" native
+confine_case user_file_labels . "Ok granted
+Ok ()"
+confine_case grant_bound_joins . "Ok ()
+Ok ()
+Ok ()"
 # A container cannot acquire a new physical file bound by covariance. The
 # diagnostic must reach all three production verbs before any file is opened.
 for fixture in nested_value nested_widen aggregate_widen compose recursive_aggregate nested_scope polymorphic_container; do
