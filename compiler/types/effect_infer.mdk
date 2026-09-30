@@ -6,7 +6,7 @@ import types.effect_domain.{
 }
 import types.effect_authority.{
   Authority(..), authJoin, authTop, authExtend, authAppend, authWidenValue,
-  authDomainTop
+  authDomainTop, authRetag
 }
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
@@ -83,7 +83,7 @@ typeAuthority top ty = match normalize ty
   _ => authTop top
 
 qualifierIn : Param -> Authority -> Authority
-qualifierIn top q = if inDomain top q then q else authTop top
+qualifierIn top q = if inDomain top q then authRetag top q else authTop top
 
 inDomain : Param -> Authority -> Bool
 inDomain PUnit _ = True
@@ -229,6 +229,7 @@ letBindName (LetBind n _) = [n]
 -- product's primary axis; an atomic label abstracts every value to its top.
 literalAuthority : Param -> String -> Authority
 literalAuthority (PPrefix _) s = AConst (canonParam (PPrefix (Some s)))
+literalAuthority (PPath _) s = AConst (canonParam (PPath (Some s)))
 literalAuthority (PSet _) s = AConst (PSet (Some [s]))
 literalAuthority (PProduct schema) s = AConst (productPrimaryLift schema s)
 literalAuthority top _ = authTop top
@@ -245,6 +246,8 @@ concatAuthority : Param ->
   Expr ->
   Option Authority
 concatAuthority (top@(PPrefix _)) env lets a b =
+  mapOption (suffixed env lets b) (alphaSyntax top env lets a)
+concatAuthority (top@(PPath _)) env lets a b =
   mapOption (suffixed env lets b) (alphaSyntax top env lets a)
 concatAuthority (top@(PProduct _)) env lets a b =
   mapOption (suffixed env lets b) (alphaSyntax top env lets a)

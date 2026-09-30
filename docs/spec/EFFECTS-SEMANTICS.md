@@ -148,7 +148,7 @@ realize a prefix of it — see the audit):
 | Domain | Elements | `⊑` | `⊔` | `⊓` |
 |---|---|---|---|---|
 | **`Unit`** | `()` only | trivial | `()` | `()` |
-| **`Prefix`** | a string pattern (an exact element, or one ending in `*`), or `⊤` | structural prefix-containment (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
+| **`Prefix`** | a string pattern (an exact element, or one ending in `*`), or `⊤` | structural prefix-containment, of lexically normalized paths for `FileRead`/`FileWrite` (§2.3) | longest common prefix, saturating to `⊤` (inexact: a row keeps both patterns, §2.2) | the more specific, or `⊥` if neither contains the other |
 | **`Set`** | a finite set of strings, or `⊤` | `⊆` | `∪` (saturating to `⊤` past a cardinality cap) | `∩` |
 | **`Product`** | a tuple of sub-domains, e.g. `Net = Host(Prefix) × Method(Set)` | pointwise | pointwise | pointwise (⊥ if any component ⊥) |
 
@@ -272,6 +272,55 @@ for a real one. The whole domain confines nothing. `Net` has the same problem
 and not yet the answer: a host part such as `a.com/../x`, a percent-encoded
 byte, or a `.` segment is not normalized, and the socket externs, which take a
 host and a port, receive no grant. That is open.
+
+**For the path labels, the order compares normalized paths.** `FileRead` and
+`FileWrite` are the labels whose externs receive a grant and canonicalize, so
+the checker reads their elements as the runtime does, as far as it can without
+the file system. Their normal form is lexical: empty and `.` components are
+dropped, a `..` at the root of an absolute path stays at the root, and a
+relative path whose `..` climbs above the working directory keeps it as a
+leading component, which the runtime resolves the same way. A pattern `d/s*` is
+`d`'s normal form followed by the stem `s` as written, and `*` alone admits
+every path.
+
+A `..` that follows a named component is not resolved. Whether `x/..` is the
+directory holding `x` depends on the file system: when `x` is a symlink it is
+the parent of the link's target, which can be anything. So an element whose
+normal form holds a `..` after a named component (`"a/../data/x"`,
+`"data/sub/../x"`, `"data/../*"`) *pops*, and a popping element lies within
+exactly two things: itself (another spelling with the same normal form) and the
+whole domain. It is never within a narrower bound, and nothing narrower is
+within it but its own spelling. Then, for elements that do not pop:
+
+```
+p₁ ⊑ p₂   iff   p₂ = ⊤,  or  p₂ is `*`,
+             or  both are exact and their normal forms are equal,
+             or  p₂ = d/s* and p₁'s normal form is d itself (when s is empty),
+                 or lies under d with a next component that begins with s and is not `..`
+                 (for a pattern p₁ = d₁/s₁*: d₁ = d and s₁ begins with s, or d₁ lies so under d)
+```
+
+So `"data/./x"`, `"./data//x"` and `"data"` against `"data/"` are equal or
+within as expected, while `"data/../" ++ leaf`, `"a/../data/" ++ leaf` and
+`"data/sub/../x"` are not within `"data/*"`. A path whose normal form climbs
+above the working directory (`".."`, `"../x"`) is within no bound inside it, and
+a relative path is never compared with an absolute one. A `..` in a part of the
+value the abstraction cannot see (`"data/" ++ name`) is refused by the runtime,
+as before. An element keeps the spelling it was written or derived with, since a
+later suffix extends that spelling; it is rendered with every component before
+its last `/` normalized and a popping `..` kept as written (`"a/../data/*"` for
+`"./a//../data/" ++ leaf`), which a host that resolves it physically reads
+correctly, and a manifest grants an element that climbs above the working
+directory as the bare label. Every other `Prefix` label keeps the textual order
+above, the built-in ones without path confinement (`Net`, `Exec`, `FFI`) and
+every user label (`effect Store Prefix`): there `..` is two characters.
+
+The runtime confines each call against that call's own grant, the element the
+checker derived at the call site, not against the declared bound. It therefore
+confines only the parts of a path that arrive at run time: a symlink under a
+component the program spells (`"data/link/" ++ name`, with `data/link` pointing
+elsewhere) is followed, and the bound is not re-checked
+([#3645](https://github.com/MedakaLang/medaka/issues/3645)).
 
 **Patterns.** Extending a value by an unknown suffix is the closure
 `π = extend` on the domain: `π(⊤) = ⊤`, `π(s*) = s*`, and `π(e) = e*` for an
@@ -1405,6 +1454,13 @@ runtime contract. The two parts are:
 - **The grant.** The authority the type checker grants a parameterized file extern
   at a call reaches the runtime as a hidden argument, for confinement only (§2.3).
   It can refuse the call, and cannot otherwise change a value a program computes.
+  The runtime confines the call's path against that grant, which is the element
+  the checker derived at the call (its α), and never re-checks the declared
+  bound. The checker orders the path labels' elements lexically (§2.3), and a
+  `..` that pops a named component is never within a narrower bound, because a
+  symlink can make it mean anything. A symlink under a component the program
+  spells is still followed at run time, wherever it leads
+  ([#3645](https://github.com/MedakaLang/medaka/issues/3645)).
 
 A corollary worth stating because it is easy to violate: a primitive's effect must
 be a faithful upper bound of what it *actually does* at runtime. Static checking

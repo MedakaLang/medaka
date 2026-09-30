@@ -45,6 +45,12 @@ RECORDS=${LOAD_RECORDS:-5000}
 BLOBS=${LOAD_BLOBS:-200}
 CLIENTS=${LOAD_CLIENTS:-8}
 WRITE_CLIENTS=${LOAD_WRITE_CLIENTS:-1}
+# The pause each writer takes after an acknowledged write, never below the
+# gap the write rate limit needs. The server keeps every committed block in
+# memory, so over a long soak the writer's pace sets how much RSS grows by
+# design; a soak graded for leaks spaces its writes to keep that growth well
+# under its bound. 0 writes as fast as the rate limit allows.
+WRITE_INTERVAL_MS=${LOAD_WRITE_INTERVAL_MS:-0}
 SUBSCRIBER=${LOAD_SUBSCRIBER:-1}
 # The generators run well past the sampler on purpose; the overlap check
 # below is what enforces that they actually did, and names this knob when
@@ -136,6 +142,9 @@ esac
 [ "$RESOURCE_SAMPLE_SECONDS" -gt 0 ] || fail 'LOAD_RESOURCE_SAMPLE_SECONDS must be a positive integer'
 case "$RSS_BASELINE_AFTER_S" in
   ''|*[!0-9]*) fail 'LOAD_RSS_BASELINE_AFTER_S must be a non-negative integer' ;;
+esac
+case "$WRITE_INTERVAL_MS" in
+  ''|*[!0-9]*) fail 'LOAD_WRITE_INTERVAL_MS must be a non-negative integer' ;;
 esac
 [ "$SUBSCRIBER" = 1 ] || fail 'LOAD_SUBSCRIBER must be 1; a soak requires one live consumer'
 [ "$WRITE_CLIENTS" -gt 0 ] || fail 'LOAD_WRITE_CLIENTS must be positive'
@@ -599,7 +608,8 @@ i=1
 while [ "$i" -le "$WRITE_CLIENTS" ]; do
   writer_id=$((128 + i))
   "$WORK/client" write "$LOADED_PORT" "$COLLECTION" "$writer_id" \
-    "$DURATION_MS" "$DID" "$WORK/password" > "$WORK/write$i.out" 2>&1 &
+    "$DURATION_MS" "$DID" "$WORK/password" "$WRITE_INTERVAL_MS" \
+    > "$WORK/write$i.out" 2>&1 &
   LOAD_PIDS="$LOAD_PIDS $!"
   i=$((i + 1))
 done

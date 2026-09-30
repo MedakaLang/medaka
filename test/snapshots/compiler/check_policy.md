@@ -1,8 +1,10 @@
 # META
-source_lines=915
+source_lines=923
 stages=DESUGAR,MARK
 # SOURCE
-import types.effect_domain.{canonParam, drender, isSubTop, Param(..)}
+import types.effect_domain.{
+  canonParam, drender, isSubTop, Param(..), pathClimbs, pathSpelling
+}
 import types.effect_authority.{
   Authority(..), authSub, authVars, authHasVars, authvarDefaultName,
   authJoinAll, authConsts
@@ -82,7 +84,7 @@ import types.typecheck.{
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{
   sortUniqS, joinWith, reverseL, escStr, lookupAssoc, contains, filterList,
-  listLen, escOneHex2
+  listLen, escOneHex2, anyList
 }
 import string.{toLower}
 import list.{replicate}
@@ -764,11 +766,14 @@ listIsEmpty _ = False
 -- element is itself an array of members.
 -- An authority left symbolic at the host boundary is reported conservatively
 -- as the bare grant (`Label = true`), never omitted, with a TOML comment
--- naming the variables that left it unresolved.
+-- naming the variables that left it unresolved. So is a path whose canonical
+-- form lies above the working directory, which no working-directory-relative
+-- grant admits.
 atomToToml : (Atom -> String) -> Atom -> String
 atomToToml keyOf a =
   let label = keyOf a
   match authConsts (atomAuth a)
+    Some ps if anyList pathClimbs ps => label ++ " = true"
     Some [p] => "\{label} = \{paramToml p}"
     Some (ps@(_ :: _ :: _)) =>
       "\{label} = [\{joinWith ", " (map paramToml ps)}]"
@@ -781,6 +786,7 @@ atomToToml keyOf a =
 paramToml : Param -> String
 paramToml p = match canonParam p
   PPrefix (Some s) => tomlQuote s
+  PPath (Some s) => tomlQuote (pathSpelling s)
   PSet (Some xs) => "[\{joinWith ", " (map tomlQuote xs)}]"
   PProduct ax if not (isSubTop (PProduct ax)) => "{ \{productTomlInline ax} }"  -- WS-4 inline table
   _ => "true"
@@ -892,12 +898,14 @@ atomToAllowToks : Atom -> List String
 atomToAllowToks a =
   let label = atomLabel a
   match authConsts (atomAuth a)
+    Some ps if anyList pathClimbs ps => [label]
     Some (ps@(_ :: _)) => map (paramAllowTok label) ps
     _ => [label]
 
 paramAllowTok : String -> Param -> String
 paramAllowTok label p = match canonParam p
   PPrefix (Some s) => "\{label}=\{s}"
+  PPath (Some s) => "\{label}=\{pathSpelling s}"
   PSet (Some xs) => "\{label}={\{joinWith "," xs}}"
   PProduct ax if not (isSubTop (PProduct ax)) =>
     "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form
@@ -918,7 +926,7 @@ axisToAllow _ = []
 joinSemiTok : List String -> String
 joinSemiTok xs = joinWith ";" xs
 # DESUGAR
-(DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "Param" true))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "Param" true) (mem "pathClimbs" false) (mem "pathSpelling" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false) (mem "authJoinAll" false) (mem "authConsts" false))))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "invocationSummary" false) (mem "InvocationOps" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false))))
@@ -929,7 +937,7 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "ElabResult" false) (mem "elaborateModulesWithSchemes" false) (mem "lastInvocationOps" false) (mem "decodeSetParam" false) (mem "decodeWrittenParam" false) (mem "atomOfLabel" false) (mem "ioAliasLabels" false) (mem "bindingGrantArity" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false))))
+(DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false) (mem "anyList" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DData Public "PolicyArgs" () ((variant "PolicyArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
@@ -1119,9 +1127,9 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "listIsEmpty" ((PList)) (EVar "True"))
 (DFunDef false "listIsEmpty" (PWild) (EVar "False"))
 (DTypeSig false "atomToToml" (TyFun (TyFun (TyCon "Atom") (TyCon "String")) (TyFun (TyCon "Atom") (TyCon "String"))))
-(DFunDef false "atomToToml" ((PVar "keyOf") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "keyOf") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "authConsts") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "Some" (PList (PVar "p"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "paramToml") (EVar "p")))) (ELit (LString "")))) (arm (PCon "Some" (PAs "ps" (PCons PWild (PCons PWild PWild)))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "paramToml")) (EVar "ps"))))) (ELit (LString "]")))) (arm PWild () (EIf (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = true  # unresolved: "))) (EApp (EVar "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ""))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))))))))
+(DFunDef false "atomToToml" ((PVar "keyOf") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "keyOf") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "authConsts") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "Some" (PVar "ps")) ((GBool (EApp (EApp (EVar "anyList") (EVar "pathClimbs")) (EVar "ps")))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))) (arm (PCon "Some" (PList (PVar "p"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "paramToml") (EVar "p")))) (ELit (LString "")))) (arm (PCon "Some" (PAs "ps" (PCons PWild (PCons PWild PWild)))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "paramToml")) (EVar "ps"))))) (ELit (LString "]")))) (arm PWild () (EIf (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = true  # unresolved: "))) (EApp (EVar "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ""))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))))))))
 (DTypeSig false "paramToml" (TyFun (TyCon "Param") (TyCon "String")))
-(DFunDef false "paramToml" ((PVar "p")) (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EApp (EVar "tomlQuote") (EVar "s"))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "tomlQuote")) (EVar "xs"))))) (ELit (LString "]")))) (arm (PCon "PProduct" (PVar "ax")) ((GBool (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "PProduct") (EVar "ax")))))) (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EVar "display") (EApp (EVar "productTomlInline") (EVar "ax")))) (ELit (LString " }")))) (arm PWild () (ELit (LString "true")))))
+(DFunDef false "paramToml" ((PVar "p")) (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EApp (EVar "tomlQuote") (EVar "s"))) (arm (PCon "PPath" (PCon "Some" (PVar "s"))) () (EApp (EVar "tomlQuote") (EApp (EVar "pathSpelling") (EVar "s")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "tomlQuote")) (EVar "xs"))))) (ELit (LString "]")))) (arm (PCon "PProduct" (PVar "ax")) ((GBool (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "PProduct") (EVar "ax")))))) (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EVar "display") (EApp (EVar "productTomlInline") (EVar "ax")))) (ELit (LString " }")))) (arm PWild () (ELit (LString "true")))))
 (DTypeSig false "productTomlInline" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
 (DFunDef false "productTomlInline" ((PVar "ax")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "axisToToml")) (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "snd") (EVar "a")))))) (EVar "ax")))))
 (DTypeSig false "axisToToml" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyCon "String")))
@@ -1156,9 +1164,9 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig true "manifestToAllowStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "manifestToAllowStr" ((PVar "atoms")) (EBlock (DoLet false false (PVar "toks") (EApp (EApp (EVar "flatMap") (EVar "atomToAllowToks")) (EVar "atoms"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "toks")))))
 (DTypeSig false "atomToAllowToks" (TyFun (TyCon "Atom") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "atomToAllowToks" ((PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "atomLabel") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "authConsts") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "Some" (PAs "ps" (PCons PWild PWild))) () (EApp (EApp (EVar "map") (EApp (EVar "paramAllowTok") (EVar "label"))) (EVar "ps"))) (arm PWild () (EListLit (EVar "label")))))))
+(DFunDef false "atomToAllowToks" ((PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "atomLabel") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "authConsts") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "Some" (PVar "ps")) ((GBool (EApp (EApp (EVar "anyList") (EVar "pathClimbs")) (EVar "ps")))) (EListLit (EVar "label"))) (arm (PCon "Some" (PAs "ps" (PCons PWild PWild))) () (EApp (EApp (EVar "map") (EApp (EVar "paramAllowTok") (EVar "label"))) (EVar "ps"))) (arm PWild () (EListLit (EVar "label")))))))
 (DTypeSig false "paramAllowTok" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyCon "String"))))
-(DFunDef false "paramAllowTok" ((PVar "label") (PVar "p")) (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "="))) (EApp (EVar "display") (EVar "s"))) (ELit (LString "")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "={"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))) (ELit (LString "}")))) (arm (PCon "PProduct" (PVar "ax")) ((GBool (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "PProduct") (EVar "ax")))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "productAllowRhs") (EVar "ax")))) (ELit (LString "")))) (arm PWild () (EVar "label"))))
+(DFunDef false "paramAllowTok" ((PVar "label") (PVar "p")) (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "="))) (EApp (EVar "display") (EVar "s"))) (ELit (LString "")))) (arm (PCon "PPath" (PCon "Some" (PVar "s"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "pathSpelling") (EVar "s")))) (ELit (LString "")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "={"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))) (ELit (LString "}")))) (arm (PCon "PProduct" (PVar "ax")) ((GBool (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "PProduct") (EVar "ax")))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "productAllowRhs") (EVar "ax")))) (ELit (LString "")))) (arm PWild () (EVar "label"))))
 (DTypeSig false "productAllowRhs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
 (DFunDef false "productAllowRhs" ((PVar "ax")) (EApp (EVar "joinSemiTok") (EApp (EApp (EVar "flatMap") (EVar "axisToAllow")) (EVar "ax"))))
 (DTypeSig false "axisToAllow" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -1168,7 +1176,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "joinSemiTok" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSemiTok" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "xs")))
 # MARK
-(DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "Param" true))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "Param" true) (mem "pathClimbs" false) (mem "pathSpelling" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false) (mem "authJoinAll" false) (mem "authConsts" false))))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "invocationSummary" false) (mem "InvocationOps" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false))))
@@ -1179,7 +1187,7 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "ElabResult" false) (mem "elaborateModulesWithSchemes" false) (mem "lastInvocationOps" false) (mem "decodeSetParam" false) (mem "decodeWrittenParam" false) (mem "atomOfLabel" false) (mem "ioAliasLabels" false) (mem "bindingGrantArity" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false))))
+(DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false) (mem "anyList" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DData Public "PolicyArgs" () ((variant "PolicyArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
@@ -1369,9 +1377,9 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "listIsEmpty" ((PList)) (EVar "True"))
 (DFunDef false "listIsEmpty" (PWild) (EVar "False"))
 (DTypeSig false "atomToToml" (TyFun (TyFun (TyCon "Atom") (TyCon "String")) (TyFun (TyCon "Atom") (TyCon "String"))))
-(DFunDef false "atomToToml" ((PVar "keyOf") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "keyOf") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "authConsts") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "Some" (PList (PVar "p"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "paramToml") (EVar "p")))) (ELit (LString "")))) (arm (PCon "Some" (PAs "ps" (PCons PWild (PCons PWild PWild)))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "paramToml")) (EVar "ps"))))) (ELit (LString "]")))) (arm PWild () (EIf (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = true  # unresolved: "))) (EApp (EMethodRef "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ""))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))))))))
+(DFunDef false "atomToToml" ((PVar "keyOf") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "keyOf") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "authConsts") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "Some" (PVar "ps")) ((GBool (EApp (EApp (EVar "anyList") (EVar "pathClimbs")) (EVar "ps")))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))) (arm (PCon "Some" (PList (PVar "p"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "paramToml") (EVar "p")))) (ELit (LString "")))) (arm (PCon "Some" (PAs "ps" (PCons PWild (PCons PWild PWild)))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "paramToml")) (EVar "ps"))))) (ELit (LString "]")))) (arm PWild () (EIf (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = true  # unresolved: "))) (EApp (EMethodRef "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ""))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))))))))
 (DTypeSig false "paramToml" (TyFun (TyCon "Param") (TyCon "String")))
-(DFunDef false "paramToml" ((PVar "p")) (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EApp (EVar "tomlQuote") (EVar "s"))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "tomlQuote")) (EVar "xs"))))) (ELit (LString "]")))) (arm (PCon "PProduct" (PVar "ax")) ((GBool (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "PProduct") (EVar "ax")))))) (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EMethodRef "display") (EApp (EVar "productTomlInline") (EVar "ax")))) (ELit (LString " }")))) (arm PWild () (ELit (LString "true")))))
+(DFunDef false "paramToml" ((PVar "p")) (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EApp (EVar "tomlQuote") (EVar "s"))) (arm (PCon "PPath" (PCon "Some" (PVar "s"))) () (EApp (EVar "tomlQuote") (EApp (EVar "pathSpelling") (EVar "s")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "tomlQuote")) (EVar "xs"))))) (ELit (LString "]")))) (arm (PCon "PProduct" (PVar "ax")) ((GBool (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "PProduct") (EVar "ax")))))) (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EMethodRef "display") (EApp (EVar "productTomlInline") (EVar "ax")))) (ELit (LString " }")))) (arm PWild () (ELit (LString "true")))))
 (DTypeSig false "productTomlInline" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
 (DFunDef false "productTomlInline" ((PVar "ax")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "axisToToml")) (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "snd") (EVar "a")))))) (EVar "ax")))))
 (DTypeSig false "axisToToml" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyCon "String")))
@@ -1406,9 +1414,9 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig true "manifestToAllowStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "manifestToAllowStr" ((PVar "atoms")) (EBlock (DoLet false false (PVar "toks") (EApp (EApp (EDictApp "flatMap") (EVar "atomToAllowToks")) (EVar "atoms"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "toks")))))
 (DTypeSig false "atomToAllowToks" (TyFun (TyCon "Atom") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "atomToAllowToks" ((PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "atomLabel") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "authConsts") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "Some" (PAs "ps" (PCons PWild PWild))) () (EApp (EApp (EMethodRef "map") (EApp (EVar "paramAllowTok") (EVar "label"))) (EVar "ps"))) (arm PWild () (EListLit (EVar "label")))))))
+(DFunDef false "atomToAllowToks" ((PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "atomLabel") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "authConsts") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "Some" (PVar "ps")) ((GBool (EApp (EApp (EVar "anyList") (EVar "pathClimbs")) (EVar "ps")))) (EListLit (EVar "label"))) (arm (PCon "Some" (PAs "ps" (PCons PWild PWild))) () (EApp (EApp (EMethodRef "map") (EApp (EVar "paramAllowTok") (EVar "label"))) (EVar "ps"))) (arm PWild () (EListLit (EVar "label")))))))
 (DTypeSig false "paramAllowTok" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyCon "String"))))
-(DFunDef false "paramAllowTok" ((PVar "label") (PVar "p")) (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "={"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))) (ELit (LString "}")))) (arm (PCon "PProduct" (PVar "ax")) ((GBool (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "PProduct") (EVar "ax")))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "productAllowRhs") (EVar "ax")))) (ELit (LString "")))) (arm PWild () (EVar "label"))))
+(DFunDef false "paramAllowTok" ((PVar "label") (PVar "p")) (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "")))) (arm (PCon "PPath" (PCon "Some" (PVar "s"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "pathSpelling") (EVar "s")))) (ELit (LString "")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "={"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))) (ELit (LString "}")))) (arm (PCon "PProduct" (PVar "ax")) ((GBool (EApp (EVar "not") (EApp (EVar "isSubTop") (EApp (EVar "PProduct") (EVar "ax")))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "productAllowRhs") (EVar "ax")))) (ELit (LString "")))) (arm PWild () (EVar "label"))))
 (DTypeSig false "productAllowRhs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
 (DFunDef false "productAllowRhs" ((PVar "ax")) (EApp (EVar "joinSemiTok") (EApp (EApp (EDictApp "flatMap") (EVar "axisToAllow")) (EVar "ax"))))
 (DTypeSig false "axisToAllow" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "String"))))

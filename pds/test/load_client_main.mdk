@@ -373,6 +373,14 @@ recordWriteBody did collection rkey =
 writeGap : Duration
 writeGap = millis (rateLimitWindowSeconds * 1000 * 6 / (maxWritesPerWindow * 5))
 
+{- | The pause a writer asked for `intervalMs` takes, never below `writeGap`.
+
+   The server keeps every block it has ever committed in memory, so a long
+   soak's writer pace decides how much its RSS grows by design. A soak graded
+   for leaks paces its writer to keep that growth well under its bound. -}
+writePause : Int -> Duration
+writePause intervalMs = max writeGap (millis intervalMs)
+
 responseRoundTrip : Connection * ->
   Bytes ->
   Bytes ->
@@ -381,53 +389,132 @@ responseRoundTrip conn pending request = match sendAll conn request
   Err message => Err message
   Ok () => readOneResponse conn pending
 
-writeLoop : Connection * ->
+-- | One writer's settings, fixed for its whole run.
+data WriteRun = WriteRun {
+  port : Int,
+  did : String,
+  password : String,
+  collection : String,
+  clientId : Int,
+  t0 : Float,
+  budget : Float,
+  pause : Duration,
+  paced : Bool,
+}
+
+-- | What a writer did. `requests` counts write requests only; `logins` counts
+-- every createSession, the first included.
+data WriteTally = WriteTally {
+  requests : Int,
+  writes : Int,
+  non200 : Int,
+  errors : Int,
+  logins : Int,
+}
+
+-- | Log in as the synthetic account on `conn`: the access token, and the
+-- bytes buffered past the response.
+login : WriteRun -> Connection * -> Bytes -> <Net> (String, Bytes)
+login run conn pending =
+  let request =
+    postJsonRequest
+      (identityFor identityBlockSize run.clientId 0)
+      ""
+      "com.atproto.server.createSession"
+      (loginBody run.did run.password)
+  let (status, body, rest) =
+    resultOrPanic
+      "load_client: createSession transport failed"
+      (responseRoundTrip conn pending request)
+  if status /= 200 then
+    panic "load_client: createSession answered \{intToString status}"
+  let token = accessTokenFrom body
+  (token, rest)
+
+createRecord : WriteRun ->
+  Connection * ->
   Bytes ->
   String ->
   String ->
+  Int ->
+  <Net> Result String (Int, Bytes, Bytes)
+createRecord run conn pending token rkey i =
+  responseRoundTrip
+    conn
+    pending
+    (postJsonRequest
+      (identityFor identityBlockSize run.clientId i)
+      "Authorization: Bearer \{token}\r\n"
+      "com.atproto.repo.createRecord"
+      (recordWriteBody run.did run.collection rkey))
+
+{- | Writes until the run's budget is spent.
+
+   A paced writer opens a fresh connection for each write. The server closes a
+   kept-alive connection that sends nothing within its header timeout, a few
+   seconds, so a longer pause would find its connection gone.
+
+   An access token expires sooner than a long soak ends, so a write answered
+   401 logs in again and retries that record once, as a real client would.
+   Any other refusal, and any transport error, ends the writer: a writer that
+   quietly retried would hide what the harness grades it on. -}
+writeLoop : WriteRun ->
+  Connection * ->
+  Bytes ->
   String ->
   Int ->
-  Float ->
-  Float ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  <Clock, IO, Net> (Bytes, Int, Int, Int, Int, Int)
-writeLoop conn pending did collection token clientId t0 budget i requests writes non200 errors =
-  if elapsedSince t0 >= budget then
-    (pending, requests, writes, non200, errors, i)
+  WriteTally ->
+  <Clock, IO, Net> WriteTally
+writeLoop run conn pending token i tally =
+  if elapsedSince run.t0 >= run.budget then
+    let () = ignoreResult (close conn)
+    tally
   else
-    let rkey = "soak-\{intToString clientId}-\{intToString i}"
-    let body = recordWriteBody did collection rkey
-    let xff = identityFor identityBlockSize clientId i
-    let request =
-      postJsonRequest
-        xff
-        "Authorization: Bearer \{token}\r\n"
-        "com.atproto.repo.createRecord"
-        body
-    match responseRoundTrip conn pending request
-      Err _ => (pending, requests + 1, writes, non200, errors + 1, i)
-      Ok (200, _, rest) =>
-        let () = println "write-path \{collection}/\{rkey}"
-        let () = sleep writeGap
-        writeLoop
-          conn
-          rest
-          did
-          collection
-          token
-          clientId
-          t0
-          budget
-          (i + 1)
-          (requests + 1)
-          (writes + 1)
-          non200
-          errors
-      Ok (_, _, rest) => (rest, requests + 1, writes, non200 + 1, errors, i)
+    let rkey = "soak-\{intToString run.clientId}-\{intToString i}"
+    match createRecord run conn pending token rkey i
+      Ok (401, _, rest) =>
+        let (fresh, afterLogin) = login run conn rest
+        let relogged = { tally |
+          requests = tally.requests + 2,
+          logins = tally.logins + 1,
+        }
+        match createRecord run conn afterLogin fresh rkey i
+          Ok (200, _, retried) =>
+            nextWrite run conn retried fresh rkey i relogged
+          answer => stopWriting conn answer relogged
+      Ok (200, _, rest) => nextWrite run conn rest token rkey i { tally |
+        requests = tally.requests + 1,
+      }
+      answer =>
+        stopWriting conn answer { tally | requests = tally.requests + 1 }
+
+nextWrite : WriteRun ->
+  Connection * ->
+  Bytes ->
+  String ->
+  String ->
+  Int ->
+  WriteTally ->
+  <Clock, IO, Net> WriteTally
+nextWrite run conn rest token rkey i tally =
+  let () = println "write-path \{run.collection}/\{rkey}"
+  let () = sleep run.pause
+  let written = { tally | writes = tally.writes + 1 }
+  if run.paced then
+    let () = ignoreResult (close conn)
+    writeLoop run (mustConnect run.port) empty token (i + 1) written
+  else
+    writeLoop run conn rest token (i + 1) written
+
+stopWriting : Connection * ->
+  Result String (Int, Bytes, Bytes) ->
+  WriteTally ->
+  <Net> WriteTally
+stopWriting conn answer tally =
+  let () = ignoreResult (close conn)
+  match answer
+    Err _ => { tally | errors = tally.errors + 1 }
+    Ok _ => { tally | non200 = tally.non200 + 1 }
 
 runWrite : Int ->
   String ->
@@ -435,35 +522,37 @@ runWrite : Int ->
   Int ->
   String ->
   String ->
+  Int ->
   <Clock, Env, IO, Net, FileRead> Unit
-runWrite port collection clientId durationMs did passwordPath =
+runWrite port collection clientId durationMs did passwordPath intervalMs =
   let password = match readFile passwordPath
     Err message =>
       panic "load_client: cannot read synthetic password file: \{message}"
     Ok text => trim text
   let conn = mustConnect port
-  let loginXff = identityFor identityBlockSize clientId 0
-  let loginRequest =
-    postJsonRequest
-      loginXff
-      ""
-      "com.atproto.server.createSession"
-      (loginBody did password)
-  let (loginStatus, loginBodyBytes, pending) =
-    resultOrPanic
-      "load_client: createSession transport failed"
-      (responseRoundTrip conn empty loginRequest)
-  if loginStatus /= 200 then
-    panic "load_client: createSession answered \{intToString loginStatus}"
-  let token = accessTokenFrom loginBodyBytes
-  let t0 = monotonic ()
-  let budget = intToFloat durationMs / 1000.0
-  let (_, requests, writes, non200, errors, _) =
-    writeLoop conn pending did collection token clientId t0 budget 0 0 0 0 0
-  let elapsed = elapsedSince t0
-  let () = ignoreResult (close conn)
+  let unstarted = WriteRun {
+    port = port,
+    did = did,
+    password = password,
+    collection = collection,
+    clientId = clientId,
+    t0 = 0.0,
+    budget = intToFloat durationMs / 1000.0,
+    pause = writePause intervalMs,
+    paced = intervalMs > 0,
+  }
+  let (token, pending) = login unstarted conn empty
+  let run = { unstarted | t0 = monotonic () }
+  let tally = writeLoop run conn pending token 0 WriteTally {
+    requests = 0,
+    writes = 0,
+    non200 = 0,
+    errors = 0,
+    logins = 1,
+  }
+  let elapsed = elapsedSince run.t0
   println
-    "write client=\{intToString clientId} requests=\{intToString requests} writes=\{intToString writes} non200=\{intToString non200} errors=\{intToString errors} seconds=\{floatToString elapsed}"
+    "write client=\{intToString clientId} requests=\{intToString tally.requests} writes=\{intToString tally.writes} non200=\{intToString tally.non200} errors=\{intToString tally.errors} logins=\{intToString tally.logins} seconds=\{floatToString elapsed}"
 
 -- # Percentiles
 
@@ -792,7 +881,7 @@ mustInt text =
 
 usage : String
 usage =
-  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <blobCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <blobCount> <requests> <intervalMs>\n       load_client_main write <port> <collection> <clientId> <durationMs> <did> <passwordFile>"
+  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <blobCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <blobCount> <requests> <intervalMs>\n       load_client_main write <port> <collection> <clientId> <durationMs> <did> <passwordFile> <writeIntervalMs>"
 
 main : <Clock, Env, IO, Net, FileRead> Unit
 main = match args ()
@@ -809,7 +898,7 @@ main = match args ()
       (Plan scenario collection (mustInt recordCount) (mustInt blobCount))
       (mustInt requests)
       (mustInt intervalMs)
-  ["write", port, collection, clientId, durationMs, did, passwordPath] =>
+  ["write", port, collection, clientId, durationMs, did, passwordPath, intervalMs] =>
     runWrite
       (mustInt port)
       collection
@@ -817,4 +906,5 @@ main = match args ()
       (mustInt durationMs)
       did
       passwordPath
+      (mustInt intervalMs)
   _ => panic usage

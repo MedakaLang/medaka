@@ -99,6 +99,49 @@ test "manifest grants an interpolated pattern-ranging directory's instantiation"
     "serve"
     "[package.capabilities]\nFileWrite = \"data/*\""
 
+test "a `..` after a written directory is outside a FileWrite bound on it" = expectCheckReject
+  (fixture "filewrite_dotdot_bound_reject.mdk")
+  [
+    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"data/../*\">",
+  ]
+
+test "a `..` that pops a named component is outside a narrower FileWrite bound" = expectCheckReject
+  (fixture "filewrite_popped_bound_reject.mdk")
+  [
+    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"a/../data/*\">",
+    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"data/sub/../*\">",
+  ]
+
+test "`.` and empty components keep a FileWrite path under its directory" =
+  expectCheckAccept (fixture "filewrite_dot_bound_accept.mdk")
+
+test "a user Prefix label compares text, so its `..` is two characters" =
+  expectCheckAccept (fixture "store_dotdot_textual_accept.mdk")
+
+test "manifest keeps a write under `data/../` apart from one under `data/`" =
+  expectManifest
+    "filewrite_dotdot_manifest_accept.mdk"
+    "both"
+    "[package.capabilities]\nFileWrite = [\"data/*\", \"data/../*\"]"
+
+test "manifest spells a popping path raw, less `.` and empty components" =
+  expectManifest
+    "filewrite_dotdot_manifest_accept.mdk"
+    "popped"
+    "[package.capabilities]\nFileWrite = \"a/../data/*\""
+
+test "manifest names a path less its `.` and empty components" =
+  expectManifest
+    "filewrite_dotdot_manifest_accept.mdk"
+    "normalized"
+    "[package.capabilities]\nFileWrite = \"data/x.txt\""
+
+test "manifest grants the bare label for a path above the working directory" =
+  expectManifest
+    "filewrite_dotdot_manifest_accept.mdk"
+    "climb"
+    "[package.capabilities]\nFileWrite = true"
+
 test "FileWrite builtin fills a concrete path inside its Prefix bound" =
   expectCheckAccept (fixture "filewrite_hole_accept.mdk")
 

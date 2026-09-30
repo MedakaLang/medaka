@@ -1,0 +1,28 @@
+-- #3636: a manifest names a path in its normalized spelling. A `..` that pops
+-- a named component keeps its raw spelling, since only the file system knows
+-- where it leads; a path that climbs above the working directory is the bare
+-- label.
+leafFromArgs : Unit -> String
+leafFromArgs _ = match args ()
+  a :: _ => a
+  [] => "leaf.txt"
+
+both _ =
+  let _ = writeFile ("data/" ++ leafFromArgs ()) "x"
+  let _ = writeFile ("data/../" ++ leafFromArgs ()) "x"
+  ()
+
+popped _ =
+  let _ = writeFile ("./a//../data/" ++ leafFromArgs ()) "x"
+  ()
+
+normalized _ =
+  let _ = writeFile "./data//x.txt" "x"
+  ()
+
+climb _ =
+  let _ = writeFile "./../x.txt" "x"
+  ()
+
+main : <IO> Unit
+main = println "filewrite dotdot manifest accept"

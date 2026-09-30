@@ -561,17 +561,20 @@ tconUnresolved n = TCon n OriginUnresolved
 -- ── effect-label DOMAIN registry ───────────────────────────────────────────
 -- Maps a label's identity key (`labelKey`) to the ⊤-param of its declared
 -- domain.  A `PPrefix None` entry means "Prefix-domain (carries a pattern)";
--- absence ⇒ atomic (Unit).  Seeded with the builtin labels and extended per
--- program from `effect Net Prefix` decls, each under its declaration's own
--- identity, so two modules' same-spelled labels own separate schemas.  An
--- assoc-list Ref (the label set is tiny).
+-- a `PPath None` entry is a Prefix domain whose runtime confines by canonical
+-- path, so its order compares canonical paths (`FileRead`, `FileWrite`: the
+-- labels of the file externs that take a grant); absence ⇒ atomic (Unit).
+-- Seeded with the builtin labels and extended per program from `effect Net
+-- Prefix` decls, each under its declaration's own identity, so two modules'
+-- same-spelled labels own separate schemas.  An assoc-list Ref (the label set
+-- is tiny).
 
 seedEffectDomains : Unit -> Unit
 seedEffectDomains _ =
   let builtins = [
     ("Net", PPrefix None),
-    ("FileRead", PPrefix None),
-    ("FileWrite", PPrefix None),
+    ("FileRead", PPath None),
+    ("FileWrite", PPath None),
     ("Env", PSet None),
     ("Exec", PPrefix None),
     ("FFI", PPrefix None),
@@ -694,6 +697,7 @@ dtopFor : EffLabel -> Param
 dtopFor label =
   match lookupDomain (labelKey label) driverState.value.effectDomains.value
     PPrefix None => PPrefix None
+    PPath None => PPath None
     PSet None => PSet None
     p@(PProduct _) => p
     _ => PUnit
@@ -802,6 +806,7 @@ writtenAxisTerm sv written (name, top) = match lookupAssoc name written
 writtenParam : Param -> EffParamTy -> Param
 writtenParam top EPTop = top
 writtenParam (PPrefix None) (EPLit s) = canonParam (PPrefix (Some s))
+writtenParam (PPath None) (EPLit s) = canonParam (PPath (Some s))
 writtenParam (PSet None) (EPLit s) = PSet (Some [s])
 writtenParam (PSet None) (EPSet xs) = PSet (Some (sortUniqS xs))
 writtenParam (PProduct schema) (EPLit s) = productPrimaryLift schema s
@@ -2066,6 +2071,7 @@ checkAuthorityKindLabel _ = ()
 -- In a Set domain every element is exact, so the only pattern is the top.
 domainHasPatterns : Param -> Bool
 domainHasPatterns (PPrefix _) = True
+domainHasPatterns (PPath _) = True
 domainHasPatterns (PProduct ((_, axis) :: _)) = domainHasPatterns axis
 domainHasPatterns _ = False
 
@@ -3196,6 +3202,7 @@ effectParamProblems l PUnit (EPName _) = [atomicLabelParamText l]
 effectParamProblems _ _ (EPName _) = []
 effectParamProblems _ _ EPTop = []
 effectParamProblems l (PPrefix None) (EPLit pat) = prefixLiteralProblems l pat
+effectParamProblems l (PPath None) (EPLit pat) = prefixLiteralProblems l pat
 effectParamProblems _ (PSet None) (EPLit _) = []
 -- A bare literal on a Product label lifts into the first axis as the
 -- domain does (`productPrimaryLift`): a prefix pattern for a Prefix axis, a
@@ -3208,6 +3215,8 @@ effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]
 -- other elements its label writes.
 effectParamProblems _ (PSet None) (EPSet _) = []
 effectParamProblems l (PPrefix None) (EPSet _) =
+  ["label '\{l}' takes a prefix pattern, not a set"]
+effectParamProblems l (PPath None) (EPSet _) =
   ["label '\{l}' takes a prefix pattern, not a set"]
 effectParamProblems l (PProduct _) (EPSet _) =
   ["label '\{l}' takes named axes (`Host=… Method=…`), not a bare set"]
@@ -40515,6 +40524,7 @@ atomParamIsTop a = match atomConst a
 
 paramIsTopDomain : Param -> Bool
 paramIsTopDomain (PPrefix None) = True
+paramIsTopDomain (PPath None) = True
 paramIsTopDomain (PSet None) = True
 paramIsTopDomain (p@(PProduct _)) = isSubTop p
 paramIsTopDomain _ = False

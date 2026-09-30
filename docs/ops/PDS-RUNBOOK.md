@@ -214,6 +214,7 @@ LOAD_RSS_BASELINE_AFTER_S=<operator-approved-warm-up-seconds> \
 LOAD_MAX_DISK_GROWTH_KIB=<operator-approved-KiB> \
 LOAD_RECORDS=<operator-approved-record-count> LOAD_BLOBS=<operator-approved-blob-count> \
 LOAD_CLIENTS=<operator-approved-reader-count> LOAD_WRITE_CLIENTS=<operator-approved-writer-count> \
+LOAD_WRITE_INTERVAL_MS=<operator-approved-write-interval-ms> \
 LOAD_SUBSCRIBER=1 LOAD_TICKS=<operator-approved-sample-count> \
 LOAD_INTERVAL_MS=<operator-approved-interval-ms> \
 MEDAKA_ROOT=<isolated-checkout> MEDAKA=<isolated-checkout>/medaka \
@@ -224,7 +225,15 @@ The RSS limit grades the highest sampled RSS against a baseline sample as a
 percentage. The baseline is the first sample taken at least
 `LOAD_RSS_BASELINE_AFTER_S` seconds into the load phase (0, the default, means
 the initial sample), so the heap's growth to its working size early in a run
-is not graded as drift. The disk limit grades the highest sampled disk usage
+is not graded as drift. The server holds every block it has committed in
+memory (#2572), about 5.5 KiB of live heap per write measured on 2026-09-30.
+So the writer's pace sets how much RSS grows by design. Each writer pauses
+`LOAD_WRITE_INTERVAL_MS` after an acknowledged write (0, the default, writes as
+fast as the rate limit allows, about 0.8 writes/s). Choose an interval that keeps
+the expected growth well under the RSS limit. A paced writer opens a fresh
+connection for each write, because the server closes an idle kept-alive
+connection after its header timeout. Any writer logs in again when a write is
+refused because its access token expired, since the token lasts two hours. The disk limit grades the highest sampled disk usage
 against the initial sample in KiB. A transient sampled breach is not forgiven by a later
 drop. Set `LOAD_RESOURCE_SAMPLE_SECONDS` to
 an operator-chosen sampling cadence for the observation. No numerical limit,

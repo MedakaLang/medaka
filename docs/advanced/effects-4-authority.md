@@ -285,6 +285,48 @@ same message. The grant is also what the manifest records, so a host that trusts
 `cfg/*` from the manifest reads it as the program does. A bare `<FileRead>`
 grants every path, and confines nothing.
 
+The compiler reads the part of a path it can see, as far as it can without
+the file system. For `FileRead` and `FileWrite`, whose file functions resolve
+the path, `.` and empty components are dropped before a bound is checked, so
+`"cfg/./" ++ name` is within `"cfg/*"`. A `..` after a named directory is left
+as written, because only the file system knows where it leads: when `cfg` is a
+symlink, `cfg/..` is the parent of whatever it points to. So `"cfg/../" ++ name`
+is within no bound but its own spelling and the bare label:
+
+```medaka
+readIn : String -> <FileRead "cfg/*"> Result String String
+readIn name = readFile ("cfg/./" ++ name)
+
+readBeside : String -> <FileRead "cfg/../*"> Result String String
+readBeside name = readFile ("cfg/../" ++ name)
+
+main = println "checked"
+```
+
+```medaka-expect
+checked
+```
+
+Bounding `readBeside` to `"cfg/*"`, or even to `"./*"`, is refused before
+anything runs:
+
+```
+error: authority.mdk:5:27: Effectful value used where <FileRead "cfg/*"> is allowed, but it performs <FileRead "cfg/../*">
+  |
+5 | readBeside name = readFile ("cfg/../" ++ name)
+  |                            ^
+```
+
+A path that climbs above the working directory, such as `"../x"`, is within
+no bound inside it, and a manifest grants it as the bare label. The runtime
+checks a call only against the grant made at that call, which comes from the
+path the program spells, never against the declared bound. So it confines the
+part of the path that arrives at run time, `name` here, and a symlink under a
+directory the program spells, such as a `cfg/link` pointing elsewhere in
+`"cfg/link/" ++ name`, is followed wherever it leads. Every other label compares
+text, `Net` and your own `effect Store Prefix` included, and there `..` is two
+characters.
+
 The check has limits, each listed under "Open edges" in the
 [reference](effects-7-reference.md):
 

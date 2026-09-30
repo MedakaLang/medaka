@@ -1,5 +1,5 @@
 # META
-source_lines=53042
+source_lines=53052
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -565,17 +565,20 @@ tconUnresolved n = TCon n OriginUnresolved
 -- ── effect-label DOMAIN registry ───────────────────────────────────────────
 -- Maps a label's identity key (`labelKey`) to the ⊤-param of its declared
 -- domain.  A `PPrefix None` entry means "Prefix-domain (carries a pattern)";
--- absence ⇒ atomic (Unit).  Seeded with the builtin labels and extended per
--- program from `effect Net Prefix` decls, each under its declaration's own
--- identity, so two modules' same-spelled labels own separate schemas.  An
--- assoc-list Ref (the label set is tiny).
+-- a `PPath None` entry is a Prefix domain whose runtime confines by canonical
+-- path, so its order compares canonical paths (`FileRead`, `FileWrite`: the
+-- labels of the file externs that take a grant); absence ⇒ atomic (Unit).
+-- Seeded with the builtin labels and extended per program from `effect Net
+-- Prefix` decls, each under its declaration's own identity, so two modules'
+-- same-spelled labels own separate schemas.  An assoc-list Ref (the label set
+-- is tiny).
 
 seedEffectDomains : Unit -> Unit
 seedEffectDomains _ =
   let builtins = [
     ("Net", PPrefix None),
-    ("FileRead", PPrefix None),
-    ("FileWrite", PPrefix None),
+    ("FileRead", PPath None),
+    ("FileWrite", PPath None),
     ("Env", PSet None),
     ("Exec", PPrefix None),
     ("FFI", PPrefix None),
@@ -698,6 +701,7 @@ dtopFor : EffLabel -> Param
 dtopFor label =
   match lookupDomain (labelKey label) driverState.value.effectDomains.value
     PPrefix None => PPrefix None
+    PPath None => PPath None
     PSet None => PSet None
     p@(PProduct _) => p
     _ => PUnit
@@ -806,6 +810,7 @@ writtenAxisTerm sv written (name, top) = match lookupAssoc name written
 writtenParam : Param -> EffParamTy -> Param
 writtenParam top EPTop = top
 writtenParam (PPrefix None) (EPLit s) = canonParam (PPrefix (Some s))
+writtenParam (PPath None) (EPLit s) = canonParam (PPath (Some s))
 writtenParam (PSet None) (EPLit s) = PSet (Some [s])
 writtenParam (PSet None) (EPSet xs) = PSet (Some (sortUniqS xs))
 writtenParam (PProduct schema) (EPLit s) = productPrimaryLift schema s
@@ -2070,6 +2075,7 @@ checkAuthorityKindLabel _ = ()
 -- In a Set domain every element is exact, so the only pattern is the top.
 domainHasPatterns : Param -> Bool
 domainHasPatterns (PPrefix _) = True
+domainHasPatterns (PPath _) = True
 domainHasPatterns (PProduct ((_, axis) :: _)) = domainHasPatterns axis
 domainHasPatterns _ = False
 
@@ -3200,6 +3206,7 @@ effectParamProblems l PUnit (EPName _) = [atomicLabelParamText l]
 effectParamProblems _ _ (EPName _) = []
 effectParamProblems _ _ EPTop = []
 effectParamProblems l (PPrefix None) (EPLit pat) = prefixLiteralProblems l pat
+effectParamProblems l (PPath None) (EPLit pat) = prefixLiteralProblems l pat
 effectParamProblems _ (PSet None) (EPLit _) = []
 -- A bare literal on a Product label lifts into the first axis as the
 -- domain does (`productPrimaryLift`): a prefix pattern for a Prefix axis, a
@@ -3212,6 +3219,8 @@ effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]
 -- other elements its label writes.
 effectParamProblems _ (PSet None) (EPSet _) = []
 effectParamProblems l (PPrefix None) (EPSet _) =
+  ["label '\{l}' takes a prefix pattern, not a set"]
+effectParamProblems l (PPath None) (EPSet _) =
   ["label '\{l}' takes a prefix pattern, not a set"]
 effectParamProblems l (PProduct _) (EPSet _) =
   ["label '\{l}' takes named axes (`Host=… Method=…`), not a bare set"]
@@ -40519,6 +40528,7 @@ atomParamIsTop a = match atomConst a
 
 paramIsTopDomain : Param -> Bool
 paramIsTopDomain (PPrefix None) = True
+paramIsTopDomain (PPath None) = True
 paramIsTopDomain (PSet None) = True
 paramIsTopDomain (p@(PProduct _)) = isSubTop p
 paramIsTopDomain _ = False
@@ -53086,7 +53096,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "tconUnresolved" (TyFun (TyCon "String") (TyCon "Mono")))
 (DFunDef false "tconUnresolved" ((PVar "n")) (EApp (EApp (EVar "TCon") (EVar "n")) (EVar "OriginUnresolved")))
 (DTypeSig false "seedEffectDomains" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "seedEffectDomains" (PWild) (EBlock (DoLet false false (PVar "builtins") (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FFI")) (EApp (EVar "PPrefix") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EVar "builtins")))))
+(DFunDef false "seedEffectDomains" (PWild) (EBlock (DoLet false false (PVar "builtins") (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPath") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPath") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FFI")) (EApp (EVar "PPrefix") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EVar "builtins")))))
 (DTypeSig false "registerEffectDomain" (TyFun (TyCon "EffLabel") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit")))))
 (DFunDef false "registerEffectDomain" ((PVar "label") (PVar "domain") (PVar "axes")) (EBlock (DoLet false false (PVar "entry") (ETuple (EApp (EVar "labelKey") (EVar "label")) (EApp (EApp (EVar "domainParamWith") (EVar "domain")) (EVar "axes")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EBinOp "::" (EVar "entry") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains") "value"))))))
 (DTypeSig false "checkDomainAxes" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))))
@@ -53115,7 +53125,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "lookupDomain" (PWild (PList)) (EVar "PUnit"))
 (DFunDef false "lookupDomain" ((PVar "l") (PCons (PTuple (PVar "k") (PVar "p")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "l") (EVar "k")) (EVar "p") (EApp (EApp (EVar "lookupDomain") (EVar "l")) (EVar "rest"))))
 (DTypeSig false "dtopFor" (TyFun (TyCon "EffLabel") (TyCon "Param")))
-(DFunDef false "dtopFor" ((PVar "label")) (EMatch (EApp (EApp (EVar "lookupDomain") (EApp (EVar "labelKey") (EVar "label"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains") "value")) (arm (PCon "PPrefix" (PCon "None")) () (EApp (EVar "PPrefix") (EVar "None"))) (arm (PCon "PSet" (PCon "None")) () (EApp (EVar "PSet") (EVar "None"))) (arm (PAs "p" (PCon "PProduct" PWild)) () (EVar "p")) (arm PWild () (EVar "PUnit"))))
+(DFunDef false "dtopFor" ((PVar "label")) (EMatch (EApp (EApp (EVar "lookupDomain") (EApp (EVar "labelKey") (EVar "label"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains") "value")) (arm (PCon "PPrefix" (PCon "None")) () (EApp (EVar "PPrefix") (EVar "None"))) (arm (PCon "PPath" (PCon "None")) () (EApp (EVar "PPath") (EVar "None"))) (arm (PCon "PSet" (PCon "None")) () (EApp (EVar "PSet") (EVar "None"))) (arm (PAs "p" (PCon "PProduct" PWild)) () (EVar "p")) (arm PWild () (EVar "PUnit"))))
 (DTypeSig true "atomOfLabel" (TyFun (TyCon "String") (TyCon "Atom")))
 (DFunDef false "atomOfLabel" ((PVar "l")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EVar "dtopFor") (EApp (EVar "builtinLabel") (EVar "l")))))
 (DTypeSig false "ioLabel" (TyCon "EffLabel"))
@@ -53135,6 +53145,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "writtenParam" (TyFun (TyCon "Param") (TyFun (TyCon "EffParamTy") (TyCon "Param"))))
 (DFunDef false "writtenParam" ((PVar "top") (PCon "EPTop")) (EVar "top"))
 (DFunDef false "writtenParam" ((PCon "PPrefix" (PCon "None")) (PCon "EPLit" (PVar "s"))) (EApp (EVar "canonParam") (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
+(DFunDef false "writtenParam" ((PCon "PPath" (PCon "None")) (PCon "EPLit" (PVar "s"))) (EApp (EVar "canonParam") (EApp (EVar "PPath") (EApp (EVar "Some") (EVar "s")))))
 (DFunDef false "writtenParam" ((PCon "PSet" (PCon "None")) (PCon "EPLit" (PVar "s"))) (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "s")))))
 (DFunDef false "writtenParam" ((PCon "PSet" (PCon "None")) (PCon "EPSet" (PVar "xs"))) (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EVar "xs")))))
 (DFunDef false "writtenParam" ((PCon "PProduct" (PVar "schema")) (PCon "EPLit" (PVar "s"))) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "s")))
@@ -53407,6 +53418,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkAuthorityKindLabel" (PWild) (ELit LUnit))
 (DTypeSig false "domainHasPatterns" (TyFun (TyCon "Param") (TyCon "Bool")))
 (DFunDef false "domainHasPatterns" ((PCon "PPrefix" PWild)) (EVar "True"))
+(DFunDef false "domainHasPatterns" ((PCon "PPath" PWild)) (EVar "True"))
 (DFunDef false "domainHasPatterns" ((PCon "PProduct" (PCons (PTuple PWild (PVar "axis")) PWild))) (EApp (EVar "domainHasPatterns") (EVar "axis")))
 (DFunDef false "domainHasPatterns" (PWild) (EVar "False"))
 (DTypeSig false "rangedOver" (TyFun (TyCon "EffLabel") (TyFun (TyCon "Bool") (TyCon "Bool"))))
@@ -53630,11 +53642,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effectParamProblems" (PWild PWild (PCon "EPName" PWild)) (EListLit))
 (DFunDef false "effectParamProblems" (PWild PWild (PCon "EPTop")) (EListLit))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPLit" (PVar "pat"))) (EApp (EApp (EVar "prefixLiteralProblems") (EVar "l")) (EVar "pat")))
+(DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPath" (PCon "None")) (PCon "EPLit" (PVar "pat"))) (EApp (EApp (EVar "prefixLiteralProblems") (EVar "l")) (EVar "pat")))
 (DFunDef false "effectParamProblems" (PWild (PCon "PSet" (PCon "None")) (PCon "EPLit" PWild)) (EListLit))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PProduct" (PVar "schema")) (PCon "EPLit" (PVar "pat"))) (EBinOp "++" (EApp (EApp (EVar "primaryLiteralProblems") (EVar "schema")) (EVar "pat")) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "pat")))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPLit" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
 (DFunDef false "effectParamProblems" (PWild (PCon "PSet" (PCon "None")) (PCon "EPSet" PWild)) (EListLit))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' takes a prefix pattern, not a set")))))
+(DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPath" (PCon "None")) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' takes a prefix pattern, not a set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PProduct" PWild) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' takes named axes (`Host=… Method=…`), not a bare set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPSet" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
 (DFunDef false "effectParamProblems" (PWild (PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "repeatedAxisText")) (EApp (EApp (EVar "repeatedNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "axes"))) (EListLit))) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EVar "PProduct") (EApp (EApp (EVar "map") (EApp (EVar "checkedAxis") (EVar "schema"))) (EVar "axes"))))))
@@ -59887,6 +59901,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "atomParamIsTop" ((PVar "a")) (EMatch (EApp (EVar "atomConst") (EVar "a")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "paramIsTopDomain") (EApp (EVar "canonParam") (EVar "p")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "paramIsTopDomain" (TyFun (TyCon "Param") (TyCon "Bool")))
 (DFunDef false "paramIsTopDomain" ((PCon "PPrefix" (PCon "None"))) (EVar "True"))
+(DFunDef false "paramIsTopDomain" ((PCon "PPath" (PCon "None"))) (EVar "True"))
 (DFunDef false "paramIsTopDomain" ((PCon "PSet" (PCon "None"))) (EVar "True"))
 (DFunDef false "paramIsTopDomain" ((PAs "p" (PCon "PProduct" PWild))) (EApp (EVar "isSubTop") (EVar "p")))
 (DFunDef false "paramIsTopDomain" (PWild) (EVar "False"))
@@ -61694,7 +61709,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "tconUnresolved" (TyFun (TyCon "String") (TyCon "Mono")))
 (DFunDef false "tconUnresolved" ((PVar "n")) (EApp (EApp (EVar "TCon") (EVar "n")) (EVar "OriginUnresolved")))
 (DTypeSig false "seedEffectDomains" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "seedEffectDomains" (PWild) (EBlock (DoLet false false (PVar "builtins") (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FFI")) (EApp (EVar "PPrefix") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EVar "builtins")))))
+(DFunDef false "seedEffectDomains" (PWild) (EBlock (DoLet false false (PVar "builtins") (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPath") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPath") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FFI")) (EApp (EVar "PPrefix") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EVar "builtins")))))
 (DTypeSig false "registerEffectDomain" (TyFun (TyCon "EffLabel") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit")))))
 (DFunDef false "registerEffectDomain" ((PVar "label") (PVar "domain") (PVar "axes")) (EBlock (DoLet false false (PVar "entry") (ETuple (EApp (EVar "labelKey") (EVar "label")) (EApp (EApp (EVar "domainParamWith") (EVar "domain")) (EVar "axes")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EBinOp "::" (EVar "entry") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains") "value"))))))
 (DTypeSig false "checkDomainAxes" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))))
@@ -61723,7 +61738,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "lookupDomain" (PWild (PList)) (EVar "PUnit"))
 (DFunDef false "lookupDomain" ((PVar "l") (PCons (PTuple (PVar "k") (PVar "p")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "l") (EVar "k")) (EVar "p") (EApp (EApp (EVar "lookupDomain") (EVar "l")) (EVar "rest"))))
 (DTypeSig false "dtopFor" (TyFun (TyCon "EffLabel") (TyCon "Param")))
-(DFunDef false "dtopFor" ((PVar "label")) (EMatch (EApp (EApp (EVar "lookupDomain") (EApp (EVar "labelKey") (EVar "label"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains") "value")) (arm (PCon "PPrefix" (PCon "None")) () (EApp (EVar "PPrefix") (EVar "None"))) (arm (PCon "PSet" (PCon "None")) () (EApp (EVar "PSet") (EVar "None"))) (arm (PAs "p" (PCon "PProduct" PWild)) () (EVar "p")) (arm PWild () (EVar "PUnit"))))
+(DFunDef false "dtopFor" ((PVar "label")) (EMatch (EApp (EApp (EVar "lookupDomain") (EApp (EVar "labelKey") (EVar "label"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains") "value")) (arm (PCon "PPrefix" (PCon "None")) () (EApp (EVar "PPrefix") (EVar "None"))) (arm (PCon "PPath" (PCon "None")) () (EApp (EVar "PPath") (EVar "None"))) (arm (PCon "PSet" (PCon "None")) () (EApp (EVar "PSet") (EVar "None"))) (arm (PAs "p" (PCon "PProduct" PWild)) () (EVar "p")) (arm PWild () (EVar "PUnit"))))
 (DTypeSig true "atomOfLabel" (TyFun (TyCon "String") (TyCon "Atom")))
 (DFunDef false "atomOfLabel" ((PVar "l")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EVar "dtopFor") (EApp (EVar "builtinLabel") (EVar "l")))))
 (DTypeSig false "ioLabel" (TyCon "EffLabel"))
@@ -61743,6 +61758,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "writtenParam" (TyFun (TyCon "Param") (TyFun (TyCon "EffParamTy") (TyCon "Param"))))
 (DFunDef false "writtenParam" ((PVar "top") (PCon "EPTop")) (EVar "top"))
 (DFunDef false "writtenParam" ((PCon "PPrefix" (PCon "None")) (PCon "EPLit" (PVar "s"))) (EApp (EVar "canonParam") (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
+(DFunDef false "writtenParam" ((PCon "PPath" (PCon "None")) (PCon "EPLit" (PVar "s"))) (EApp (EVar "canonParam") (EApp (EVar "PPath") (EApp (EVar "Some") (EVar "s")))))
 (DFunDef false "writtenParam" ((PCon "PSet" (PCon "None")) (PCon "EPLit" (PVar "s"))) (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "s")))))
 (DFunDef false "writtenParam" ((PCon "PSet" (PCon "None")) (PCon "EPSet" (PVar "xs"))) (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EVar "xs")))))
 (DFunDef false "writtenParam" ((PCon "PProduct" (PVar "schema")) (PCon "EPLit" (PVar "s"))) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "s")))
@@ -62015,6 +62031,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkAuthorityKindLabel" (PWild) (ELit LUnit))
 (DTypeSig false "domainHasPatterns" (TyFun (TyCon "Param") (TyCon "Bool")))
 (DFunDef false "domainHasPatterns" ((PCon "PPrefix" PWild)) (EVar "True"))
+(DFunDef false "domainHasPatterns" ((PCon "PPath" PWild)) (EVar "True"))
 (DFunDef false "domainHasPatterns" ((PCon "PProduct" (PCons (PTuple PWild (PVar "axis")) PWild))) (EApp (EVar "domainHasPatterns") (EVar "axis")))
 (DFunDef false "domainHasPatterns" (PWild) (EVar "False"))
 (DTypeSig false "rangedOver" (TyFun (TyCon "EffLabel") (TyFun (TyCon "Bool") (TyCon "Bool"))))
@@ -62238,11 +62255,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effectParamProblems" (PWild PWild (PCon "EPName" PWild)) (EListLit))
 (DFunDef false "effectParamProblems" (PWild PWild (PCon "EPTop")) (EListLit))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPLit" (PVar "pat"))) (EApp (EApp (EVar "prefixLiteralProblems") (EVar "l")) (EVar "pat")))
+(DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPath" (PCon "None")) (PCon "EPLit" (PVar "pat"))) (EApp (EApp (EVar "prefixLiteralProblems") (EVar "l")) (EVar "pat")))
 (DFunDef false "effectParamProblems" (PWild (PCon "PSet" (PCon "None")) (PCon "EPLit" PWild)) (EListLit))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PProduct" (PVar "schema")) (PCon "EPLit" (PVar "pat"))) (EBinOp "++" (EApp (EApp (EVar "primaryLiteralProblems") (EVar "schema")) (EVar "pat")) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EApp (EVar "productPrimaryLift") (EVar "schema")) (EVar "pat")))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPLit" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
 (DFunDef false "effectParamProblems" (PWild (PCon "PSet" (PCon "None")) (PCon "EPSet" PWild)) (EListLit))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPrefix" (PCon "None")) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' takes a prefix pattern, not a set")))))
+(DFunDef false "effectParamProblems" ((PVar "l") (PCon "PPath" (PCon "None")) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' takes a prefix pattern, not a set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") (PCon "PProduct" PWild) (PCon "EPSet" PWild)) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' takes named axes (`Host=… Method=…`), not a bare set")))))
 (DFunDef false "effectParamProblems" ((PVar "l") PWild (PCon "EPSet" PWild)) (EListLit (EApp (EVar "atomicLabelParamText") (EVar "l"))))
 (DFunDef false "effectParamProblems" (PWild (PCon "PProduct" (PVar "schema")) (PCon "EPProduct" (PVar "axes"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "repeatedAxisText")) (EApp (EApp (EVar "repeatedNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "axes"))) (EListLit))) (EApp (EApp (EVar "productAxesProblems") (EVar "schema")) (EApp (EVar "PProduct") (EApp (EApp (EMethodRef "map") (EApp (EVar "checkedAxis") (EVar "schema"))) (EVar "axes"))))))
@@ -68495,6 +68514,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "atomParamIsTop" ((PVar "a")) (EMatch (EApp (EVar "atomConst") (EVar "a")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "paramIsTopDomain") (EApp (EVar "canonParam") (EVar "p")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "paramIsTopDomain" (TyFun (TyCon "Param") (TyCon "Bool")))
 (DFunDef false "paramIsTopDomain" ((PCon "PPrefix" (PCon "None"))) (EVar "True"))
+(DFunDef false "paramIsTopDomain" ((PCon "PPath" (PCon "None"))) (EVar "True"))
 (DFunDef false "paramIsTopDomain" ((PCon "PSet" (PCon "None"))) (EVar "True"))
 (DFunDef false "paramIsTopDomain" ((PAs "p" (PCon "PProduct" PWild))) (EApp (EVar "isSubTop") (EVar "p")))
 (DFunDef false "paramIsTopDomain" (PWild) (EVar "False"))

@@ -1,0 +1,12 @@
+-- A `..` in the constant part of a path pops the directory written before it,
+-- and a symlink can make that any directory, so a write under `data/../` lies
+-- within no bound but its own spelling and the whole domain; a `data/*` bound
+-- does not cover it, so this program does not check.
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+store : String -> <FileWrite "data/*"> Result String Unit
+store leaf = writeFile ("data/../" ++ leaf) "x"
+
+main = println (said (store "pwned.txt"))
