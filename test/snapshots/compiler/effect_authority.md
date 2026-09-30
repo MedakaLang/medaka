@@ -1,5 +1,5 @@
 # META
-source_lines=469
+source_lines=523
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -35,25 +35,26 @@ public export data Authority =
   | AJoin (List Authority)
   | AProduct (List (String, Authority))
 
--- id, inference level, the domain's top, and the source binder's name when
--- the variable came from a written signature. Identity belongs to the cell
--- and survives linking, as an effect variable's does, and so does the domain:
--- a linked variable still has its label's declared schema, never the axes of
--- the constant it was linked to.
+-- id, inference level, the domain's top, whether the variable ranges over
+-- the domain's patterns only (a binder written `@L*` or `Authority L*`), and
+-- the source binder's name when the variable came from a written signature.
+-- Identity belongs to the cell and survives linking, as an effect variable's
+-- does, and so does the domain: a linked variable still has its label's
+-- declared schema, never the axes of the constant it was linked to.
 public export data Authvar =
-  | AUnbound Int Int Param (Option String)
+  | AUnbound Int Int Param Bool (Option String)
   | ALink Int Param Authority
 
 export
 authvarId : Ref Authvar -> Int
 authvarId cell = match !cell
-  AUnbound id _ _ _ => id
+  AUnbound id _ _ _ _ => id
   ALink id _ _ => id
 
 export
 authvarLevel : Ref Authvar -> Int
 authvarLevel cell = match !cell
-  AUnbound _ level _ _ => level
+  AUnbound _ level _ _ _ => level
   ALink _ _ a => authLevelOf a
 
 authLevelOf : Authority -> Int
@@ -66,18 +67,67 @@ authLevelOf _ = 0
 export
 authvarDomain : Ref Authvar -> Param
 authvarDomain cell = match !cell
-  AUnbound _ _ top _ => top
+  AUnbound _ _ top _ _ => top
   ALink _ top _ => top
 
 export
 authvarName : Ref Authvar -> Option String
 authvarName cell = match !cell
-  AUnbound _ _ _ name => name
+  AUnbound _ _ _ _ name => name
   ALink _ _ _ => None
 
+-- Whether an unbound variable ranges over its domain's patterns only. A
+-- linked cell is no longer a variable; its target answers for it.
+export
+authvarIsPattern : Ref Authvar -> Bool
+authvarIsPattern cell = match !cell
+  AUnbound _ _ _ pat _ => pat
+  ALink _ _ _ => False
+
+-- Narrow a flexible variable to its domain's patterns: it now stands for
+-- what a pattern-ranging variable it was equated with stands for. Only a
+-- flexible variable may be narrowed, since a rigid one is a caller's choice.
+export
+markAuthvarPattern : Ref Authvar -> Unit
+markAuthvarPattern cell = match !cell
+  AUnbound id level top _ name => cell := AUnbound id level top True name
+  ALink _ _ _ => ()
+
+-- Every solution goes through here, so a pattern-ranging variable never
+-- links outside its range: the term is closed to the least pattern above it
+-- (`authPatternClose`), which leaves a term already in the range unchanged.
+-- A caller that must refuse a term outside the range (an index equality with
+-- an exact element) decides that before linking.
 export
 linkAuthvar : Ref Authvar -> Authority -> Unit
-linkAuthvar cell a = cell := ALink (authvarId cell) (authvarDomain cell) a
+linkAuthvar cell a =
+  let target = if authvarIsPattern cell then authPatternClose a else a
+  cell := ALink (authvarId cell) (authvarDomain cell) target
+
+-- The least term of the pattern range above [a] (the closure π of
+-- EFFECTS-SEMANTICS §4.1): each constant extended to the pattern it begins,
+-- a Product on its primary axis, a pattern-ranging variable kept, and any
+-- other variable the domain's top, since what it stands for may be an exact
+-- element.
+export
+authPatternClose : Authority -> Authority
+authPatternClose a = mapConstants extendParam a
+
+-- Whether [a] lies in the pattern range: every constant a pattern (a fixed
+-- point of `extendParam`, on a Product's primary axis) and every variable
+-- pattern-ranging.
+export
+authIsPattern : Authority -> Bool
+authIsPattern a = match authNorm a
+  AConst p => isPatternParam p
+  AVar cell => authvarIsPattern cell
+  AJoin ms => allList authIsPattern ms
+  AProduct ((_, t) :: _) => authIsPattern t
+  AProduct [] => True
+
+export
+isPatternParam : Param -> Bool
+isPatternParam p = dsub (extendParam p) p
 
 export
 authTop : Param -> Authority
@@ -87,7 +137,10 @@ authTop top = AConst (subTopOf top)
 -- through its domain, by the suffix when it is known (`authAppend`) and to
 -- the pattern it begins when it is not (`authExtend`). A variable extends to
 -- its domain's top: what it stands for is not known here, and an exact
--- element has no extension inside itself, so no narrower bound is sound.
+-- element has no extension inside itself, so no narrower bound is sound. A
+-- pattern-ranging variable is the exception: whatever it stands for is a
+-- pattern, which admits every extension of a value within it, so it extends
+-- to itself.
 export
 authExtend : Authority -> Authority
 authExtend a = mapConstants extendParam a
@@ -104,7 +157,8 @@ mapConstants f a = match authNorm a
   AJoin ms => authJoinAll (map (mapConstants f) ms)
   AProduct ((name, t) :: rest) =>
     authNorm (AProduct ((name, mapConstants f t) :: rest))
-  AVar cell => authTop (authvarDomain cell)
+  AVar cell =>
+    if authvarIsPattern cell then AVar cell else authTop (authvarDomain cell)
   v => v
 
 -- The domain's top for a term: from a constant's shape, or a variable's
@@ -152,7 +206,7 @@ collect ((AConst p) :: rest) (Parts consts tuples vars) =
   collect rest (Parts (p :: consts) tuples vars)
 collect ((AVar cell) :: rest) (Parts consts tuples vars) = match !cell
   ALink _ _ target => collect (target :: rest) (Parts consts tuples vars)
-  AUnbound id _ _ _ => collect rest (Parts consts tuples (M.set id cell vars))
+  AUnbound id _ _ _ _ => collect rest (Parts consts tuples (M.set id cell vars))
 collect ((AJoin ms) :: rest) parts = collect (ms ++ rest) parts
 collect ((AProduct axes) :: rest) (Parts consts tuples vars) =
   match productTerm axes
@@ -478,22 +532,32 @@ paramElements p = [trimLeft (drender p)]
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DData Public "Authority" () ((variant "AConst" (ConPos (TyCon "Param"))) (variant "AVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Authvar")))) (variant "AJoin" (ConPos (TyApp (TyCon "List") (TyCon "Authority")))) (variant "AProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Authority")))))) ())
-(DData Public "Authvar" () ((variant "AUnbound" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Param") (TyApp (TyCon "Option") (TyCon "String")))) (variant "ALink" (ConPos (TyCon "Int") (TyCon "Param") (TyCon "Authority")))) ())
+(DData Public "Authvar" () ((variant "AUnbound" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Param") (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "String")))) (variant "ALink" (ConPos (TyCon "Int") (TyCon "Param") (TyCon "Authority")))) ())
 (DTypeSig true "authvarId" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Int")))
-(DFunDef false "authvarId" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EVar "id")) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EVar "id"))))
+(DFunDef false "authvarId" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild PWild) () (EVar "id")) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EVar "id"))))
 (DTypeSig true "authvarLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Int")))
-(DFunDef false "authvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild (PVar "level") PWild PWild) () (EVar "level")) (arm (PCon "ALink" PWild PWild (PVar "a")) () (EApp (EVar "authLevelOf") (EVar "a")))))
+(DFunDef false "authvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild (PVar "level") PWild PWild PWild) () (EVar "level")) (arm (PCon "ALink" PWild PWild (PVar "a")) () (EApp (EVar "authLevelOf") (EVar "a")))))
 (DTypeSig false "authLevelOf" (TyFun (TyCon "Authority") (TyCon "Int")))
 (DFunDef false "authLevelOf" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarLevel") (EVar "cell")))
 (DFunDef false "authLevelOf" ((PCon "AJoin" (PVar "ms"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "m")) (EApp (EApp (EVar "max") (EVar "acc")) (EApp (EVar "authLevelOf") (EVar "m"))))) (ELit (LInt 0))) (EVar "ms")))
 (DFunDef false "authLevelOf" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "max") (EVar "acc")) (EApp (EVar "authLevelOf") (EApp (EVar "snd") (EVar "a")))))) (ELit (LInt 0))) (EVar "axes")))
 (DFunDef false "authLevelOf" (PWild) (ELit (LInt 0)))
 (DTypeSig true "authvarDomain" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Param")))
-(DFunDef false "authvarDomain" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild (PVar "top") PWild) () (EVar "top")) (arm (PCon "ALink" PWild (PVar "top") PWild) () (EVar "top"))))
+(DFunDef false "authvarDomain" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild (PVar "top") PWild PWild) () (EVar "top")) (arm (PCon "ALink" PWild (PVar "top") PWild) () (EVar "top"))))
 (DTypeSig true "authvarName" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "authvarName" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "name")) () (EVar "name")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "None"))))
+(DFunDef false "authvarName" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild PWild (PVar "name")) () (EVar "name")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "None"))))
+(DTypeSig true "authvarIsPattern" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")))
+(DFunDef false "authvarIsPattern" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "pat") PWild) () (EVar "pat")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "False"))))
+(DTypeSig true "markAuthvarPattern" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Unit")))
+(DFunDef false "markAuthvarPattern" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "level") (PVar "top") PWild (PVar "name")) () (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EApp (EApp (EVar "AUnbound") (EVar "id")) (EVar "level")) (EVar "top")) (EVar "True")) (EVar "name")))) (arm (PCon "ALink" PWild PWild PWild) () (ELit LUnit))))
 (DTypeSig true "linkAuthvar" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyCon "Unit"))))
-(DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell"))) (EVar "a"))))
+(DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EBlock (DoLet false false (PVar "target") (EIf (EApp (EVar "authvarIsPattern") (EVar "cell")) (EApp (EVar "authPatternClose") (EVar "a")) (EVar "a"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell"))) (EVar "target"))))))
+(DTypeSig true "authPatternClose" (TyFun (TyCon "Authority") (TyCon "Authority")))
+(DFunDef false "authPatternClose" ((PVar "a")) (EApp (EApp (EVar "mapConstants") (EVar "extendParam")) (EVar "a")))
+(DTypeSig true "authIsPattern" (TyFun (TyCon "Authority") (TyCon "Bool")))
+(DFunDef false "authIsPattern" ((PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "isPatternParam") (EVar "p"))) (arm (PCon "AVar" (PVar "cell")) () (EApp (EVar "authvarIsPattern") (EVar "cell"))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EVar "allList") (EVar "authIsPattern")) (EVar "ms"))) (arm (PCon "AProduct" (PCons (PTuple PWild (PVar "t")) PWild)) () (EApp (EVar "authIsPattern") (EVar "t"))) (arm (PCon "AProduct" (PList)) () (EVar "True"))))
+(DTypeSig true "isPatternParam" (TyFun (TyCon "Param") (TyCon "Bool")))
+(DFunDef false "isPatternParam" ((PVar "p")) (EApp (EApp (EVar "dsub") (EApp (EVar "extendParam") (EVar "p"))) (EVar "p")))
 (DTypeSig true "authTop" (TyFun (TyCon "Param") (TyCon "Authority")))
 (DFunDef false "authTop" ((PVar "top")) (EApp (EVar "AConst") (EApp (EVar "subTopOf") (EVar "top"))))
 (DTypeSig true "authExtend" (TyFun (TyCon "Authority") (TyCon "Authority")))
@@ -501,7 +565,7 @@ paramElements p = [trimLeft (drender p)]
 (DTypeSig true "authAppend" (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority"))))
 (DFunDef false "authAppend" ((PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "appendParam") (EVar "suffix"))) (EVar "a")))
 (DTypeSig false "mapConstants" (TyFun (TyFun (TyCon "Param") (TyCon "Param")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
-(DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PCon "AProduct" (PCons (PTuple (PVar "name") (PVar "t")) (PVar "rest"))) () (EApp (EVar "authNorm") (EApp (EVar "AProduct") (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "mapConstants") (EVar "f")) (EVar "t"))) (EVar "rest"))))) (arm (PCon "AVar" (PVar "cell")) () (EApp (EVar "authTop") (EApp (EVar "authvarDomain") (EVar "cell")))) (arm (PVar "v") () (EVar "v"))))
+(DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PCon "AProduct" (PCons (PTuple (PVar "name") (PVar "t")) (PVar "rest"))) () (EApp (EVar "authNorm") (EApp (EVar "AProduct") (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "mapConstants") (EVar "f")) (EVar "t"))) (EVar "rest"))))) (arm (PCon "AVar" (PVar "cell")) () (EIf (EApp (EVar "authvarIsPattern") (EVar "cell")) (EApp (EVar "AVar") (EVar "cell")) (EApp (EVar "authTop") (EApp (EVar "authvarDomain") (EVar "cell"))))) (arm (PVar "v") () (EVar "v"))))
 (DTypeSig true "authDomainTop" (TyFun (TyCon "Authority") (TyCon "Param")))
 (DFunDef false "authDomainTop" ((PCon "AConst" (PVar "p"))) (EApp (EVar "subTopOf") (EVar "p")))
 (DFunDef false "authDomainTop" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell")))
@@ -517,7 +581,7 @@ paramElements p = [trimLeft (drender p)]
 (DTypeSig false "collect" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyCon "Parts") (TyTuple (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar")))))))
 (DFunDef false "collect" ((PList) (PCon "Parts" (PVar "consts") (PVar "tuples") (PVar "vars"))) (ETuple (EVar "consts") (EApp (EVar "reverseL") (EVar "tuples")) (EVar "vars")))
 (DFunDef false "collect" ((PCons (PCon "AConst" (PVar "p")) (PVar "rest")) (PCon "Parts" (PVar "consts") (PVar "tuples") (PVar "vars"))) (EApp (EApp (EVar "collect") (EVar "rest")) (EApp (EApp (EApp (EVar "Parts") (EBinOp "::" (EVar "p") (EVar "consts"))) (EVar "tuples")) (EVar "vars"))))
-(DFunDef false "collect" ((PCons (PCon "AVar" (PVar "cell")) (PVar "rest")) (PCon "Parts" (PVar "consts") (PVar "tuples") (PVar "vars"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EApp (EVar "collect") (EBinOp "::" (EVar "target") (EVar "rest"))) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EVar "tuples")) (EVar "vars")))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EApp (EApp (EVar "collect") (EVar "rest")) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EVar "tuples")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "vars")))))))
+(DFunDef false "collect" ((PCons (PCon "AVar" (PVar "cell")) (PVar "rest")) (PCon "Parts" (PVar "consts") (PVar "tuples") (PVar "vars"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EApp (EVar "collect") (EBinOp "::" (EVar "target") (EVar "rest"))) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EVar "tuples")) (EVar "vars")))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild PWild) () (EApp (EApp (EVar "collect") (EVar "rest")) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EVar "tuples")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "vars")))))))
 (DFunDef false "collect" ((PCons (PCon "AJoin" (PVar "ms")) (PVar "rest")) (PVar "parts")) (EApp (EApp (EVar "collect") (EBinOp "++" (EVar "ms") (EVar "rest"))) (EVar "parts")))
 (DFunDef false "collect" ((PCons (PCon "AProduct" (PVar "axes")) (PVar "rest")) (PCon "Parts" (PVar "consts") (PVar "tuples") (PVar "vars"))) (EMatch (EApp (EVar "productTerm") (EVar "axes")) (arm (PCon "AProduct" (PVar "normed")) () (EApp (EApp (EVar "collect") (EVar "rest")) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EBinOp "::" (EApp (EVar "AProduct") (EVar "normed")) (EVar "tuples"))) (EVar "vars")))) (arm (PVar "other") () (EApp (EApp (EVar "collect") (EBinOp "::" (EVar "other") (EVar "rest"))) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EVar "tuples")) (EVar "vars"))))))
 (DTypeSig false "productTerm" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Authority"))) (TyCon "Authority")))
@@ -629,22 +693,32 @@ paramElements p = [trimLeft (drender p)]
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DData Public "Authority" () ((variant "AConst" (ConPos (TyCon "Param"))) (variant "AVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Authvar")))) (variant "AJoin" (ConPos (TyApp (TyCon "List") (TyCon "Authority")))) (variant "AProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Authority")))))) ())
-(DData Public "Authvar" () ((variant "AUnbound" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Param") (TyApp (TyCon "Option") (TyCon "String")))) (variant "ALink" (ConPos (TyCon "Int") (TyCon "Param") (TyCon "Authority")))) ())
+(DData Public "Authvar" () ((variant "AUnbound" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Param") (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "String")))) (variant "ALink" (ConPos (TyCon "Int") (TyCon "Param") (TyCon "Authority")))) ())
 (DTypeSig true "authvarId" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Int")))
-(DFunDef false "authvarId" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EVar "id")) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EVar "id"))))
+(DFunDef false "authvarId" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild PWild) () (EVar "id")) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EVar "id"))))
 (DTypeSig true "authvarLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Int")))
-(DFunDef false "authvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild (PVar "level") PWild PWild) () (EVar "level")) (arm (PCon "ALink" PWild PWild (PVar "a")) () (EApp (EVar "authLevelOf") (EVar "a")))))
+(DFunDef false "authvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild (PVar "level") PWild PWild PWild) () (EVar "level")) (arm (PCon "ALink" PWild PWild (PVar "a")) () (EApp (EVar "authLevelOf") (EVar "a")))))
 (DTypeSig false "authLevelOf" (TyFun (TyCon "Authority") (TyCon "Int")))
 (DFunDef false "authLevelOf" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarLevel") (EVar "cell")))
 (DFunDef false "authLevelOf" ((PCon "AJoin" (PVar "ms"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "m")) (EApp (EApp (EMethodRef "max") (EVar "acc")) (EApp (EVar "authLevelOf") (EVar "m"))))) (ELit (LInt 0))) (EVar "ms")))
 (DFunDef false "authLevelOf" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EMethodRef "max") (EVar "acc")) (EApp (EVar "authLevelOf") (EApp (EVar "snd") (EVar "a")))))) (ELit (LInt 0))) (EVar "axes")))
 (DFunDef false "authLevelOf" (PWild) (ELit (LInt 0)))
 (DTypeSig true "authvarDomain" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Param")))
-(DFunDef false "authvarDomain" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild (PVar "top") PWild) () (EVar "top")) (arm (PCon "ALink" PWild (PVar "top") PWild) () (EVar "top"))))
+(DFunDef false "authvarDomain" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild (PVar "top") PWild PWild) () (EVar "top")) (arm (PCon "ALink" PWild (PVar "top") PWild) () (EVar "top"))))
 (DTypeSig true "authvarName" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "authvarName" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "name")) () (EVar "name")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "None"))))
+(DFunDef false "authvarName" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild PWild (PVar "name")) () (EVar "name")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "None"))))
+(DTypeSig true "authvarIsPattern" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")))
+(DFunDef false "authvarIsPattern" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild PWild (PVar "pat") PWild) () (EVar "pat")) (arm (PCon "ALink" PWild PWild PWild) () (EVar "False"))))
+(DTypeSig true "markAuthvarPattern" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Unit")))
+(DFunDef false "markAuthvarPattern" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "level") (PVar "top") PWild (PVar "name")) () (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EApp (EApp (EVar "AUnbound") (EVar "id")) (EVar "level")) (EVar "top")) (EVar "True")) (EVar "name")))) (arm (PCon "ALink" PWild PWild PWild) () (ELit LUnit))))
 (DTypeSig true "linkAuthvar" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyCon "Unit"))))
-(DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell"))) (EVar "a"))))
+(DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EBlock (DoLet false false (PVar "target") (EIf (EApp (EVar "authvarIsPattern") (EVar "cell")) (EApp (EVar "authPatternClose") (EVar "a")) (EVar "a"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell"))) (EVar "target"))))))
+(DTypeSig true "authPatternClose" (TyFun (TyCon "Authority") (TyCon "Authority")))
+(DFunDef false "authPatternClose" ((PVar "a")) (EApp (EApp (EVar "mapConstants") (EVar "extendParam")) (EVar "a")))
+(DTypeSig true "authIsPattern" (TyFun (TyCon "Authority") (TyCon "Bool")))
+(DFunDef false "authIsPattern" ((PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "isPatternParam") (EVar "p"))) (arm (PCon "AVar" (PVar "cell")) () (EApp (EVar "authvarIsPattern") (EVar "cell"))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EVar "allList") (EVar "authIsPattern")) (EVar "ms"))) (arm (PCon "AProduct" (PCons (PTuple PWild (PVar "t")) PWild)) () (EApp (EVar "authIsPattern") (EVar "t"))) (arm (PCon "AProduct" (PList)) () (EVar "True"))))
+(DTypeSig true "isPatternParam" (TyFun (TyCon "Param") (TyCon "Bool")))
+(DFunDef false "isPatternParam" ((PVar "p")) (EApp (EApp (EVar "dsub") (EApp (EVar "extendParam") (EVar "p"))) (EVar "p")))
 (DTypeSig true "authTop" (TyFun (TyCon "Param") (TyCon "Authority")))
 (DFunDef false "authTop" ((PVar "top")) (EApp (EVar "AConst") (EApp (EVar "subTopOf") (EVar "top"))))
 (DTypeSig true "authExtend" (TyFun (TyCon "Authority") (TyCon "Authority")))
@@ -652,7 +726,7 @@ paramElements p = [trimLeft (drender p)]
 (DTypeSig true "authAppend" (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority"))))
 (DFunDef false "authAppend" ((PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "appendParam") (EVar "suffix"))) (EVar "a")))
 (DTypeSig false "mapConstants" (TyFun (TyFun (TyCon "Param") (TyCon "Param")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
-(DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PCon "AProduct" (PCons (PTuple (PVar "name") (PVar "t")) (PVar "rest"))) () (EApp (EVar "authNorm") (EApp (EVar "AProduct") (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "mapConstants") (EVar "f")) (EVar "t"))) (EVar "rest"))))) (arm (PCon "AVar" (PVar "cell")) () (EApp (EVar "authTop") (EApp (EVar "authvarDomain") (EVar "cell")))) (arm (PVar "v") () (EVar "v"))))
+(DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PCon "AProduct" (PCons (PTuple (PVar "name") (PVar "t")) (PVar "rest"))) () (EApp (EVar "authNorm") (EApp (EVar "AProduct") (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "mapConstants") (EVar "f")) (EVar "t"))) (EVar "rest"))))) (arm (PCon "AVar" (PVar "cell")) () (EIf (EApp (EVar "authvarIsPattern") (EVar "cell")) (EApp (EVar "AVar") (EVar "cell")) (EApp (EVar "authTop") (EApp (EVar "authvarDomain") (EVar "cell"))))) (arm (PVar "v") () (EVar "v"))))
 (DTypeSig true "authDomainTop" (TyFun (TyCon "Authority") (TyCon "Param")))
 (DFunDef false "authDomainTop" ((PCon "AConst" (PVar "p"))) (EApp (EVar "subTopOf") (EVar "p")))
 (DFunDef false "authDomainTop" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell")))
@@ -668,7 +742,7 @@ paramElements p = [trimLeft (drender p)]
 (DTypeSig false "collect" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyFun (TyCon "Parts") (TyTuple (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Authvar")))))))
 (DFunDef false "collect" ((PList) (PCon "Parts" (PVar "consts") (PVar "tuples") (PVar "vars"))) (ETuple (EVar "consts") (EApp (EVar "reverseL") (EVar "tuples")) (EVar "vars")))
 (DFunDef false "collect" ((PCons (PCon "AConst" (PVar "p")) (PVar "rest")) (PCon "Parts" (PVar "consts") (PVar "tuples") (PVar "vars"))) (EApp (EApp (EVar "collect") (EVar "rest")) (EApp (EApp (EApp (EVar "Parts") (EBinOp "::" (EVar "p") (EVar "consts"))) (EVar "tuples")) (EVar "vars"))))
-(DFunDef false "collect" ((PCons (PCon "AVar" (PVar "cell")) (PVar "rest")) (PCon "Parts" (PVar "consts") (PVar "tuples") (PVar "vars"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EApp (EVar "collect") (EBinOp "::" (EVar "target") (EVar "rest"))) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EVar "tuples")) (EVar "vars")))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EApp (EApp (EVar "collect") (EVar "rest")) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EVar "tuples")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "vars")))))))
+(DFunDef false "collect" ((PCons (PCon "AVar" (PVar "cell")) (PVar "rest")) (PCon "Parts" (PVar "consts") (PVar "tuples") (PVar "vars"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" PWild PWild (PVar "target")) () (EApp (EApp (EVar "collect") (EBinOp "::" (EVar "target") (EVar "rest"))) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EVar "tuples")) (EVar "vars")))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild PWild) () (EApp (EApp (EVar "collect") (EVar "rest")) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EVar "tuples")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "vars")))))))
 (DFunDef false "collect" ((PCons (PCon "AJoin" (PVar "ms")) (PVar "rest")) (PVar "parts")) (EApp (EApp (EVar "collect") (EBinOp "++" (EVar "ms") (EVar "rest"))) (EVar "parts")))
 (DFunDef false "collect" ((PCons (PCon "AProduct" (PVar "axes")) (PVar "rest")) (PCon "Parts" (PVar "consts") (PVar "tuples") (PVar "vars"))) (EMatch (EApp (EVar "productTerm") (EVar "axes")) (arm (PCon "AProduct" (PVar "normed")) () (EApp (EApp (EVar "collect") (EVar "rest")) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EBinOp "::" (EApp (EVar "AProduct") (EVar "normed")) (EVar "tuples"))) (EVar "vars")))) (arm (PVar "other") () (EApp (EApp (EVar "collect") (EBinOp "::" (EVar "other") (EVar "rest"))) (EApp (EApp (EApp (EVar "Parts") (EVar "consts")) (EVar "tuples")) (EVar "vars"))))))
 (DTypeSig false "productTerm" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Authority"))) (TyCon "Authority")))

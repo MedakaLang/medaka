@@ -1,5 +1,5 @@
 # META
-source_lines=2536
+source_lines=2553
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -758,6 +758,10 @@ public export data EffAtomTy = EffAtomTy {
   -- atom rather than at the enclosing expression; `None` for an atom a tool
   -- synthesises
   eatLoc : Option Loc,
+  -- a binder's written domain spelled `@L*`: the binder ranges over the
+  -- domain's patterns only (EFFECTS-SEMANTICS §4.1). Always `False` on an
+  -- atom a row writes.
+  eatPattern : Bool,
 }
 
 -- The written parameter of an effect atom.  A bare label is the domain's top;
@@ -779,6 +783,7 @@ effAtomBare l = EffAtomTy {
   eatOrigin = OriginUnresolved,
   eatParam = EPTop,
   eatLoc = None,
+  eatPattern = False,
 }
 
 -- The names a pattern binds, in source order.
@@ -816,6 +821,7 @@ effAtomWith l p = EffAtomTy {
   eatOrigin = OriginUnresolved,
   eatParam = p,
   eatLoc = None,
+  eatPattern = False,
 }
 
 -- An atom as the parser reads it, with its span.
@@ -826,6 +832,7 @@ effAtomAt l p loc = EffAtomTy {
   eatOrigin = OriginUnresolved,
   eatParam = p,
   eatLoc = Some loc,
+  eatPattern = False,
 }
 
 -- The written spelling of an atom, given the string-literal escaper the caller
@@ -836,10 +843,11 @@ effAtomSurface : (String -> String) -> EffAtomTy -> String
 effAtomSurface esc a = a.eatLabel ++ effParamSurface esc a.eatParam
 
 -- A named argument's written domain as it follows the argument's type,
--- ` @Store`, or nothing when the binder writes none.
+-- ` @Store` (or ` @Store*` for a pattern-ranging binder), or nothing when the
+-- binder writes none.
 export
 binderDomainSurface : Option EffAtomTy -> String
-binderDomainSurface (Some a) = " @" ++ a.eatLabel
+binderDomainSurface (Some a) = " @\{a.eatLabel}\{patternMark a.eatPattern}"
 binderDomainSurface None = ""
 
 -- An authority term as an INDEX argument spells it (`Handle *`, `Handle
@@ -979,14 +987,23 @@ public export data KindAnn =
   -- `EffAtomTy`'s is; the parser leaves it unresolved.
   -- The span is the label's, so a diagnostic about it (an unknown label, a
   -- label with no domain to draw authorities from) points at it.
-  | KindAuthority String TyConOrigin (Option Loc)
+  -- The flag is the `*` of `Authority L*`: the parameter ranges over the
+  -- domain's patterns only, so an extension of a value within it stays
+  -- within it.
+  | KindAuthority String TyConOrigin Bool (Option Loc)
   | KindArrow KindAnn KindAnn
 
 -- The kind as the parser produces it: the label's origin is resolve's to
 -- stamp, so before resolve it carries none.
 export
-kindAuthorityUnstamped : String -> Option Loc -> KindAnn
-kindAuthorityUnstamped l loc = KindAuthority l OriginUnresolved loc
+kindAuthorityUnstamped : String -> Bool -> Option Loc -> KindAnn
+kindAuthorityUnstamped l pat loc = KindAuthority l OriginUnresolved pat loc
+
+-- The `*` a pattern-ranging binder writes after its label.
+export
+patternMark : Bool -> String
+patternMark True = "*"
+patternMark False = ""
 
 -- The SOURCE spelling of a kind, and of a whole declaration head's parameter
 -- list.  It lives HERE, beside the node, for the reason `firstTyLoc` below
@@ -998,7 +1015,7 @@ export
 kindAnnSource : KindAnn -> String
 kindAnnSource KindType = "Type"
 kindAnnSource KindEffect = "Effect"
-kindAnnSource (KindAuthority l _ _) = "Authority \{l}"
+kindAnnSource (KindAuthority l _ pat _) = "Authority \{l}\{patternMark pat}"
 kindAnnSource (KindArrow a b) = "\{kindAnnArg a} -> \{kindAnnSource b}"
 
 -- The source spelling of a qualifier's terms, `@p` or the joined `@(a | "b/*")`,
@@ -2599,10 +2616,10 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig false "tyConIdsConflict" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))
 (DFunDef false "tyConIdsConflict" ((PVar "o1") (PVar "o2")) (EMatch (ETuple (EApp (EVar "identOriginOf") (EVar "o1")) (EApp (EVar "identOriginOf") (EVar "o2"))) (arm (PTuple (PCon "Some" (PVar "i1")) (PCon "Some" (PVar "i2"))) () (EBinOp "/=" (EVar "i1") (EVar "i2"))) (arm PWild () (EVar "False"))))
 (DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyNamed" (ConPos (TyCon "String") (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "EffAtomTy")))) (variant "TyQual" (ConPos (TyCon "Ty") (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyAuth" (ConPos (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
-(DData Public "EffAtomTy" () ((variant "EffAtomTy" (ConNamed (field "eatLabel" (TyCon "String")) (field "eatOrigin" (TyCon "TyConOrigin")) (field "eatParam" (TyCon "EffParamTy")) (field "eatLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DData Public "EffAtomTy" () ((variant "EffAtomTy" (ConNamed (field "eatLabel" (TyCon "String")) (field "eatOrigin" (TyCon "TyConOrigin")) (field "eatParam" (TyCon "EffParamTy")) (field "eatLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "eatPattern" (TyCon "Bool"))))) ())
 (DData Public "EffParamTy" () ((variant "EPTop" (ConPos)) (variant "EPLit" (ConPos (TyCon "String"))) (variant "EPName" (ConPos (TyCon "String"))) (variant "EPSet" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "EPProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))) ())
 (DTypeSig true "effAtomBare" (TyFun (TyCon "String") (TyCon "EffAtomTy")))
-(DFunDef false "effAtomBare" ((PVar "l")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "EPTop")) (fa "eatLoc" (EVar "None")))))
+(DFunDef false "effAtomBare" ((PVar "l")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "EPTop")) (fa "eatLoc" (EVar "None")) (fa "eatPattern" (EVar "False")))))
 (DTypeSig true "patBoundNames" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patBoundNames" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBoundNames" ((PCon "PCon" PWild (PVar "args"))) (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EVar "args")))
@@ -2618,13 +2635,13 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "effectDeclUnstamped" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Decl")))))))
 (DFunDef false "effectDeclUnstamped" ((PVar "pub") (PVar "name") (PVar "dom") (PVar "axes") (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "name")) (EVar "dom")) (EVar "axes")) (EVar "OriginUnresolved")) (EVar "loc")))
 (DTypeSig true "effAtomWith" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyCon "EffAtomTy"))))
-(DFunDef false "effAtomWith" ((PVar "l") (PVar "p")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "p")) (fa "eatLoc" (EVar "None")))))
+(DFunDef false "effAtomWith" ((PVar "l") (PVar "p")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "p")) (fa "eatLoc" (EVar "None")) (fa "eatPattern" (EVar "False")))))
 (DTypeSig true "effAtomAt" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyFun (TyCon "Loc") (TyCon "EffAtomTy")))))
-(DFunDef false "effAtomAt" ((PVar "l") (PVar "p") (PVar "loc")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "p")) (fa "eatLoc" (EApp (EVar "Some") (EVar "loc"))))))
+(DFunDef false "effAtomAt" ((PVar "l") (PVar "p") (PVar "loc")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "p")) (fa "eatLoc" (EApp (EVar "Some") (EVar "loc"))) (fa "eatPattern" (EVar "False")))))
 (DTypeSig true "effAtomSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "EffAtomTy") (TyCon "String"))))
 (DFunDef false "effAtomSurface" ((PVar "esc") (PVar "a")) (EBinOp "++" (EFieldAccess (EVar "a") "eatLabel") (EApp (EApp (EVar "effParamSurface") (EVar "esc")) (EFieldAccess (EVar "a") "eatParam"))))
 (DTypeSig true "binderDomainSurface" (TyFun (TyApp (TyCon "Option") (TyCon "EffAtomTy")) (TyCon "String")))
-(DFunDef false "binderDomainSurface" ((PCon "Some" (PVar "a"))) (EBinOp "++" (ELit (LString " @")) (EFieldAccess (EVar "a") "eatLabel")))
+(DFunDef false "binderDomainSurface" ((PCon "Some" (PVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " @")) (EApp (EVar "display") (EFieldAccess (EVar "a") "eatLabel"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "patternMark") (EFieldAccess (EVar "a") "eatPattern")))) (ELit (LString ""))))
 (DFunDef false "binderDomainSurface" ((PCon "None")) (ELit (LString "")))
 (DTypeSig true "authTermSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "EffParamTy") (TyCon "String"))))
 (DFunDef false "authTermSurface" (PWild (PCon "EPTop")) (ELit (LString "*")))
@@ -2657,13 +2674,16 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "Constraint" () ((variant "Constraint" (ConNamed (field "constraintHead" (TyCon "String")) (field "constraintArgs" (TyApp (TyCon "List") (TyCon "Ty"))) (field "constraintOrigin" (TyCon "TyConOrigin"))))) ())
 (DTypeSig true "constraintUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Constraint"))))
 (DFunDef false "constraintUnresolved" ((PVar "iface") (PVar "args")) (ERecordCreate "Constraint" ((fa "constraintHead" (EVar "iface")) (fa "constraintArgs" (EVar "args")) (fa "constraintOrigin" (EVar "OriginUnresolved")))))
-(DData Public "KindAnn" () ((variant "KindType" (ConPos)) (variant "KindEffect" (ConPos)) (variant "KindAuthority" (ConPos (TyCon "String") (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "KindArrow" (ConPos (TyCon "KindAnn") (TyCon "KindAnn")))) ())
-(DTypeSig true "kindAuthorityUnstamped" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "KindAnn"))))
-(DFunDef false "kindAuthorityUnstamped" ((PVar "l") (PVar "loc")) (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "OriginUnresolved")) (EVar "loc")))
+(DData Public "KindAnn" () ((variant "KindType" (ConPos)) (variant "KindEffect" (ConPos)) (variant "KindAuthority" (ConPos (TyCon "String") (TyCon "TyConOrigin") (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "KindArrow" (ConPos (TyCon "KindAnn") (TyCon "KindAnn")))) ())
+(DTypeSig true "kindAuthorityUnstamped" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "KindAnn")))))
+(DFunDef false "kindAuthorityUnstamped" ((PVar "l") (PVar "pat") (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "OriginUnresolved")) (EVar "pat")) (EVar "loc")))
+(DTypeSig true "patternMark" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "patternMark" ((PCon "True")) (ELit (LString "*")))
+(DFunDef false "patternMark" ((PCon "False")) (ELit (LString "")))
 (DTypeSig true "kindAnnSource" (TyFun (TyCon "KindAnn") (TyCon "String")))
 (DFunDef false "kindAnnSource" ((PCon "KindType")) (ELit (LString "Type")))
 (DFunDef false "kindAnnSource" ((PCon "KindEffect")) (ELit (LString "Effect")))
-(DFunDef false "kindAnnSource" ((PCon "KindAuthority" (PVar "l") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EApp (EVar "display") (EVar "l"))) (ELit (LString ""))))
+(DFunDef false "kindAnnSource" ((PCon "KindAuthority" (PVar "l") PWild (PVar "pat") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EApp (EVar "display") (EVar "l"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "patternMark") (EVar "pat")))) (ELit (LString ""))))
 (DFunDef false "kindAnnSource" ((PCon "KindArrow" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "kindAnnArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EVar "kindAnnSource") (EVar "b")))) (ELit (LString ""))))
 (DTypeSig true "qualifierSource" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
 (DFunDef false "qualifierSource" ((PVar "esc") (PList (PCon "EPSet" (PVar "xs")))) (EBinOp "++" (EBinOp "++" (ELit (LString "@(")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EListLit (EApp (EVar "EPSet") (EVar "xs"))))) (ELit (LString ")"))))
@@ -3007,10 +3027,10 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig false "tyConIdsConflict" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))
 (DFunDef false "tyConIdsConflict" ((PVar "o1") (PVar "o2")) (EMatch (ETuple (EApp (EVar "identOriginOf") (EVar "o1")) (EApp (EVar "identOriginOf") (EVar "o2"))) (arm (PTuple (PCon "Some" (PVar "i1")) (PCon "Some" (PVar "i2"))) () (EBinOp "/=" (EVar "i1") (EVar "i2"))) (arm PWild () (EVar "False"))))
 (DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyNamed" (ConPos (TyCon "String") (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "EffAtomTy")))) (variant "TyQual" (ConPos (TyCon "Ty") (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyAuth" (ConPos (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
-(DData Public "EffAtomTy" () ((variant "EffAtomTy" (ConNamed (field "eatLabel" (TyCon "String")) (field "eatOrigin" (TyCon "TyConOrigin")) (field "eatParam" (TyCon "EffParamTy")) (field "eatLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DData Public "EffAtomTy" () ((variant "EffAtomTy" (ConNamed (field "eatLabel" (TyCon "String")) (field "eatOrigin" (TyCon "TyConOrigin")) (field "eatParam" (TyCon "EffParamTy")) (field "eatLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "eatPattern" (TyCon "Bool"))))) ())
 (DData Public "EffParamTy" () ((variant "EPTop" (ConPos)) (variant "EPLit" (ConPos (TyCon "String"))) (variant "EPName" (ConPos (TyCon "String"))) (variant "EPSet" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "EPProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))) ())
 (DTypeSig true "effAtomBare" (TyFun (TyCon "String") (TyCon "EffAtomTy")))
-(DFunDef false "effAtomBare" ((PVar "l")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "EPTop")) (fa "eatLoc" (EVar "None")))))
+(DFunDef false "effAtomBare" ((PVar "l")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "EPTop")) (fa "eatLoc" (EVar "None")) (fa "eatPattern" (EVar "False")))))
 (DTypeSig true "patBoundNames" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patBoundNames" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBoundNames" ((PCon "PCon" PWild (PVar "args"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EVar "args")))
@@ -3026,13 +3046,13 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "effectDeclUnstamped" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Decl")))))))
 (DFunDef false "effectDeclUnstamped" ((PVar "pub") (PVar "name") (PVar "dom") (PVar "axes") (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "name")) (EVar "dom")) (EVar "axes")) (EVar "OriginUnresolved")) (EVar "loc")))
 (DTypeSig true "effAtomWith" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyCon "EffAtomTy"))))
-(DFunDef false "effAtomWith" ((PVar "l") (PVar "p")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "p")) (fa "eatLoc" (EVar "None")))))
+(DFunDef false "effAtomWith" ((PVar "l") (PVar "p")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "p")) (fa "eatLoc" (EVar "None")) (fa "eatPattern" (EVar "False")))))
 (DTypeSig true "effAtomAt" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyFun (TyCon "Loc") (TyCon "EffAtomTy")))))
-(DFunDef false "effAtomAt" ((PVar "l") (PVar "p") (PVar "loc")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "p")) (fa "eatLoc" (EApp (EVar "Some") (EVar "loc"))))))
+(DFunDef false "effAtomAt" ((PVar "l") (PVar "p") (PVar "loc")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "p")) (fa "eatLoc" (EApp (EVar "Some") (EVar "loc"))) (fa "eatPattern" (EVar "False")))))
 (DTypeSig true "effAtomSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "EffAtomTy") (TyCon "String"))))
 (DFunDef false "effAtomSurface" ((PVar "esc") (PVar "a")) (EBinOp "++" (EFieldAccess (EVar "a") "eatLabel") (EApp (EApp (EVar "effParamSurface") (EVar "esc")) (EFieldAccess (EVar "a") "eatParam"))))
 (DTypeSig true "binderDomainSurface" (TyFun (TyApp (TyCon "Option") (TyCon "EffAtomTy")) (TyCon "String")))
-(DFunDef false "binderDomainSurface" ((PCon "Some" (PVar "a"))) (EBinOp "++" (ELit (LString " @")) (EFieldAccess (EVar "a") "eatLabel")))
+(DFunDef false "binderDomainSurface" ((PCon "Some" (PVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " @")) (EApp (EMethodRef "display") (EFieldAccess (EVar "a") "eatLabel"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "patternMark") (EFieldAccess (EVar "a") "eatPattern")))) (ELit (LString ""))))
 (DFunDef false "binderDomainSurface" ((PCon "None")) (ELit (LString "")))
 (DTypeSig true "authTermSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "EffParamTy") (TyCon "String"))))
 (DFunDef false "authTermSurface" (PWild (PCon "EPTop")) (ELit (LString "*")))
@@ -3065,13 +3085,16 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "Constraint" () ((variant "Constraint" (ConNamed (field "constraintHead" (TyCon "String")) (field "constraintArgs" (TyApp (TyCon "List") (TyCon "Ty"))) (field "constraintOrigin" (TyCon "TyConOrigin"))))) ())
 (DTypeSig true "constraintUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Constraint"))))
 (DFunDef false "constraintUnresolved" ((PVar "iface") (PVar "args")) (ERecordCreate "Constraint" ((fa "constraintHead" (EVar "iface")) (fa "constraintArgs" (EVar "args")) (fa "constraintOrigin" (EVar "OriginUnresolved")))))
-(DData Public "KindAnn" () ((variant "KindType" (ConPos)) (variant "KindEffect" (ConPos)) (variant "KindAuthority" (ConPos (TyCon "String") (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "KindArrow" (ConPos (TyCon "KindAnn") (TyCon "KindAnn")))) ())
-(DTypeSig true "kindAuthorityUnstamped" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "KindAnn"))))
-(DFunDef false "kindAuthorityUnstamped" ((PVar "l") (PVar "loc")) (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "OriginUnresolved")) (EVar "loc")))
+(DData Public "KindAnn" () ((variant "KindType" (ConPos)) (variant "KindEffect" (ConPos)) (variant "KindAuthority" (ConPos (TyCon "String") (TyCon "TyConOrigin") (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "KindArrow" (ConPos (TyCon "KindAnn") (TyCon "KindAnn")))) ())
+(DTypeSig true "kindAuthorityUnstamped" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "KindAnn")))))
+(DFunDef false "kindAuthorityUnstamped" ((PVar "l") (PVar "pat") (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "OriginUnresolved")) (EVar "pat")) (EVar "loc")))
+(DTypeSig true "patternMark" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "patternMark" ((PCon "True")) (ELit (LString "*")))
+(DFunDef false "patternMark" ((PCon "False")) (ELit (LString "")))
 (DTypeSig true "kindAnnSource" (TyFun (TyCon "KindAnn") (TyCon "String")))
 (DFunDef false "kindAnnSource" ((PCon "KindType")) (ELit (LString "Type")))
 (DFunDef false "kindAnnSource" ((PCon "KindEffect")) (ELit (LString "Effect")))
-(DFunDef false "kindAnnSource" ((PCon "KindAuthority" (PVar "l") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString ""))))
+(DFunDef false "kindAnnSource" ((PCon "KindAuthority" (PVar "l") PWild (PVar "pat") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "patternMark") (EVar "pat")))) (ELit (LString ""))))
 (DFunDef false "kindAnnSource" ((PCon "KindArrow" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "kindAnnArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EVar "kindAnnSource") (EVar "b")))) (ELit (LString ""))))
 (DTypeSig true "qualifierSource" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "String"))))
 (DFunDef false "qualifierSource" ((PVar "esc") (PList (PCon "EPSet" (PVar "xs")))) (EBinOp "++" (EBinOp "++" (ELit (LString "@(")) (EApp (EApp (EVar "authTermsSurface") (EVar "esc")) (EListLit (EApp (EVar "EPSet") (EVar "xs"))))) (ELit (LString ")"))))

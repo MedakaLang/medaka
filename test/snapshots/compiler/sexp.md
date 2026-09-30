@@ -1,5 +1,5 @@
 # META
-source_lines=399
+source_lines=403
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -11,6 +11,7 @@ import frontend.ast.{
   EffParamTy(..),
   DeriveRef(..),
   deriveRefName,
+  patternMark,
   Lit(..),
   Ty(..),
   Constraint(..),
@@ -104,8 +105,11 @@ tySexp (TyAuth ps _) = node "TyAuth" (map effParamSexp ps)
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 tySexp (TyNamed n t None) = node "TyNamed" [escStr n, tySexp t]
-tySexp (TyNamed n t (Some d)) =
-  node "TyNamed" [escStr n, tySexp t, escStr d.eatLabel]
+tySexp (TyNamed n t (Some d)) = node "TyNamed" [
+  escStr n,
+  tySexp t,
+  escStr (d.eatLabel ++ patternMark d.eatPattern),
+]
 tySexp (TyQual t ps _) = node "TyQual" (tySexp t :: map qualTermSexp ps)
 
 constraintSexp : Constraint -> String
@@ -402,7 +406,7 @@ deferNodeName False = "EDo"
 axisSexp : (String, String) -> String
 axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "patternMark" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false))))
 (DTypeSig true "boolStr" (TyFun (TyCon "Bool") (TyCon "String")))
 (DFunDef false "boolStr" ((PCon "True")) (ELit (LString "true")))
@@ -447,7 +451,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "tySexp" ((PCon "TyAuth" (PVar "ps") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyAuth"))) (EApp (EApp (EVar "map") (EVar "effParamSexp")) (EVar "ps"))))
 (DFunDef false "tySexp" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyConstrained"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "constraintSexp")) (EVar "cs"))) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t") (PCon "None"))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
-(DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t") (PCon "Some" (PVar "d")))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")) (EApp (EVar "escStr") (EFieldAccess (EVar "d") "eatLabel")))))
+(DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t") (PCon "Some" (PVar "d")))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")) (EApp (EVar "escStr") (EBinOp "++" (EFieldAccess (EVar "d") "eatLabel") (EApp (EVar "patternMark") (EFieldAccess (EVar "d") "eatPattern")))))))
 (DFunDef false "tySexp" ((PCon "TyQual" (PVar "t") (PVar "ps") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyQual"))) (EBinOp "::" (EApp (EVar "tySexp") (EVar "t")) (EApp (EApp (EVar "map") (EVar "qualTermSexp")) (EVar "ps")))))
 (DTypeSig false "constraintSexp" (TyFun (TyCon "Constraint") (TyCon "String")))
 (DFunDef false "constraintSexp" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "node") (ELit (LString "cstr"))) (EBinOp "::" (EApp (EVar "escStr") (EVar "iface")) (EApp (EApp (EVar "map") (EVar "tySexp")) (EVar "args")))))
@@ -600,7 +604,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DTypeSig false "axisSexp" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
 (DFunDef false "axisSexp" ((PTuple (PVar "name") (PVar "dom"))) (EApp (EApp (EVar "node") (ELit (LString "axis"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "escStr") (EVar "dom")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "patternMark" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false))))
 (DTypeSig true "boolStr" (TyFun (TyCon "Bool") (TyCon "String")))
 (DFunDef false "boolStr" ((PCon "True")) (ELit (LString "true")))
@@ -645,7 +649,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "tySexp" ((PCon "TyAuth" (PVar "ps") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyAuth"))) (EApp (EApp (EMethodRef "map") (EVar "effParamSexp")) (EVar "ps"))))
 (DFunDef false "tySexp" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyConstrained"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "constraintSexp")) (EVar "cs"))) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t") (PCon "None"))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
-(DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t") (PCon "Some" (PVar "d")))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")) (EApp (EVar "escStr") (EFieldAccess (EVar "d") "eatLabel")))))
+(DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t") (PCon "Some" (PVar "d")))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")) (EApp (EVar "escStr") (EBinOp "++" (EFieldAccess (EVar "d") "eatLabel") (EApp (EVar "patternMark") (EFieldAccess (EVar "d") "eatPattern")))))))
 (DFunDef false "tySexp" ((PCon "TyQual" (PVar "t") (PVar "ps") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyQual"))) (EBinOp "::" (EApp (EVar "tySexp") (EVar "t")) (EApp (EApp (EMethodRef "map") (EVar "qualTermSexp")) (EVar "ps")))))
 (DTypeSig false "constraintSexp" (TyFun (TyCon "Constraint") (TyCon "String")))
 (DFunDef false "constraintSexp" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "node") (ELit (LString "cstr"))) (EBinOp "::" (EApp (EVar "escStr") (EVar "iface")) (EApp (EApp (EMethodRef "map") (EVar "tySexp")) (EVar "args")))))

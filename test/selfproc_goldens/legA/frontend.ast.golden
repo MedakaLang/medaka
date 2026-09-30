@@ -43,7 +43,7 @@ isU64Head : String -> Bool
 isUnsignedHead : String -> Bool
 kindAnnArg : KindAnn -> String
 kindAnnSource : KindAnn -> String
-kindAuthorityUnstamped : String -> Option Loc -> KindAnn
+kindAuthorityUnstamped : String -> Bool -> Option Loc -> KindAnn
 lookupTab : TabKey -> List (TabKey, a) -> Option a
 mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
 mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)
@@ -74,6 +74,7 @@ mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 negateLiteral : Int -> Int
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 patBoundNames : Pat -> List String
+patternMark : Bool -> String
 qualifiedLocal : String -> String -> String
 qualifierSource : (String -> String) -> List EffParamTy -> String
 recPatFieldNames : RecPatField -> List String

@@ -207,7 +207,7 @@ attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List 
 attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
 augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
 authArgBindersIn : Ty -> List (String, Param)
-authArgOf : SigVars -> List (String, Mono) -> EffLabel -> Ty -> Authority
+authArgOf : SigVars -> List (String, Mono) -> EffLabel -> Bool -> Ty -> Authority
 authCellsIn : Mono -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authIdsIn : Mono -> Map Int Unit -> Map Int Unit
 authOrderIn : Mono -> List Int -> List Int
@@ -216,9 +216,10 @@ authOrderTerm : Authority -> List Int -> List Int
 authRoots : Mono -> Map Int Unit -> Map Int Unit
 authRowCells : EffRow -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authRowRoots : EffRow -> Map Int Unit -> Map Int Unit
+authSlotNamesIn : (List Kind -> List Ty -> List a) -> Ty -> List a
 authTermCells : Authority -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authTermIds : Authority -> Map Int Unit -> Map Int Unit
-authTermOf : SigVars -> List (String, Mono) -> EffLabel -> EffParamTy -> Authority
+authTermOf : SigVars -> List (String, Mono) -> EffLabel -> Bool -> EffParamTy -> Authority
 authorityAsTypeMsg : String -> String
 authorityAtomicLabelMsg : String -> String
 authorityBinderBound : List (String, Ty) -> List String -> String -> Bool
@@ -257,6 +258,7 @@ bindVar : Ref Tyvar -> Mono -> Unit
 binderDomainMsg : String -> String
 binderDomainTypeMsg : String -> String -> String
 binderDomainsIn : Ty -> List (String, Param)
+binderIsPattern : List (String, Option EffAtomTy) -> List String -> String -> Bool
 binderNoDomainMsg : String -> String
 binderTypeMsg : String -> String -> String
 bindingDeclared : TcEnv -> String -> Option CDeclared
@@ -864,6 +866,7 @@ doRequiresMonadMsg : String
 doStmtDictSites : DoStmt -> List (List Route)
 doStmtEVars : DoStmt -> List String
 doStmtSites : DoStmt -> List (Ref Route)
+domainHasPatterns : Param -> Bool
 domainIsTupleOfArity : Mono -> Int -> Bool
 domainParam : Option String -> Param
 domainParamWith : Option String -> List (String, String) -> Param
@@ -969,6 +972,7 @@ evValueOf : EvDest -> EvVal
 evidenceObservationEnabled : Ref Bool
 evidenceObservationEntries : Ref (List EvidenceObservationEntry)
 evidenceObservationEntriesGo : Obligation -> List Route -> List (Option Mono) -> Int -> Int -> List EvidenceObservationEntry
+exactInPatternSlotMsg : String -> String -> String -> String
 exactReturnBlockers : List Mono -> List SolverBlocker
 exactReturnDefers : Wanted -> List Mono -> Bool
 exactReturnGoalCount : List Obligation -> Int
@@ -1140,11 +1144,12 @@ freeAuthorityNames : List String -> List EffAtomTy -> List String
 freeAuthvars : Mono -> List Int
 freeEffvars : Mono -> List Int
 freeGenVars : Int -> Mono -> List Int
-freshAuthBinder : (String, Param) -> (String, Ref Authvar)
+freshAuthBinderRanged : Bool -> (String, Param) -> (String, Ref Authvar)
 freshAuthSubstFor : List Int -> Mono -> EffRow -> List (Int, Authority)
 freshAuthSubstOpening : List Int -> Mono -> (List (Int, Authority), List (Ref Authvar))
 freshAuthSubstOpeningIn : List Int -> Map Int (Ref Authvar) -> (List (Int, Authority), List (Ref Authvar))
 freshAuthvar : Param -> Option String -> Ref Authvar
+freshAuthvarRanged : Param -> Bool -> Option String -> Ref Authvar
 freshCrossRun : TcEnv -> CrossRun
 freshDriverState : Unit -> DriverState
 freshEffMap : List String -> List (String, Ref Effvar)
@@ -1156,7 +1161,7 @@ freshEvId : Unit -> EvId
 freshGrantName : Unit -> String
 freshGrantState : Unit -> GrantState
 freshGraphRun : Unit -> GraphRun
-freshInferenceAuthvar : Option (Ref Authvar) -> Ref Authvar
+freshInferenceAuthvar : Int -> Option (Ref Authvar) -> Ref Authvar
 freshInferenceEffvar : Unit -> Ref Effvar
 freshLocalAbsName : String -> String
 freshLocalAbsState : Unit -> LocalAbsState
@@ -1474,6 +1479,7 @@ indexOfIntGo : Int -> List Int -> Int -> Int
 indexOfPred : Int -> PredicateRequest -> List PredicateSlot -> Option Int
 indexOfPredGo : Int -> Int -> PredicateRequest -> List PredicateSlot -> Option Int
 indexOnlyEffVars : List (String, List Kind) -> Ty -> List String
+indexOutsidePatterns : Authority -> List Authority
 indexRowEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
 indexRowMismatchMsg : List Atom -> List Atom -> String
 infer : TcEnv -> Expr -> Mono
@@ -2036,6 +2042,7 @@ nameNotAuthorityMsg : String -> String
 nameableIfaceMethodSet : List Decl -> Map String Unit
 nameableIfaceRows : List Decl -> List (String, List String)
 nameableIfaceShadows : List Decl -> List String -> List String
+namedArgDomains : Ty -> List (String, Option EffAtomTy)
 namedArgOrder : Ty -> List (String, Int)
 namedArgPositions : Ty -> Int -> List (String, Int)
 namedArgTypes : Ty -> List (String, Ty)
@@ -2135,6 +2142,7 @@ ordinalIsSentinel : Int -> Bool
 ordinalSentinelGuard : Int -> Unit
 ordinalSentinelMsg : String
 ordinaryEnvBinding : Scheme -> EnvBinding
+ordinaryInPatternSlotMsg : String -> String -> String
 ordinaryValueScheme : Scheme -> ValueScheme
 originMethodName : String -> String
 originPhrase : TyConOrigin -> String
@@ -2178,6 +2186,10 @@ patIsVar : Pat -> Bool
 patOpensExistentials : TcEnv -> Pat -> Bool
 patVarsListTc : List Pat -> List String
 patVarsTc : Pat -> List String
+patternArgVarNames : List Kind -> List Ty -> List String
+patternDomainMsg : String -> String -> String
+patternIndexMsg : Authority -> String
+patternSlotNamesIn : Ty -> List String
 payloadAstTypes : ConPayload -> List Ty
 payloadTypesE : SigVars -> List (String, Mono) -> ConPayload -> List Mono
 peelArrows : Int -> Mono -> List Mono
@@ -2500,8 +2512,6 @@ renderDeclaredRow : List Atom -> List String -> String
 renderEffTailVars : List String -> String
 renderEvidenceBinder : EvidenceBinderId -> String
 renderFlatRow : (List Atom, List (Ref Effvar)) -> String
-renderKindAnn : KindAnn -> String
-renderKindAnnAtomic : KindAnn -> String
 renderKindArrow : List Kind -> String
 renderRouteIdentity : Route -> String
 repeatedAxisText : String -> String
@@ -2809,6 +2819,7 @@ substRow : List (Int, Ref Effvar) -> List (Int, Authority) -> EffRow -> EffRow
 substTyVars : List (String, Ty) -> Ty -> Ty
 substVecOblArgs : VecObl -> List (Int, Mono) -> Option (List Mono)
 substituteIndex : Ref Authvar -> Authority -> Unit
+substituteIndexLinked : Ref Authvar -> Authority -> Unit
 suggestField : String -> List String -> Option String
 summaryEscape : Bool -> List Atom -> List Atom -> List Atom
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
