@@ -1,0 +1,3 @@
+-- One of two unrelated modules declaring an interface spelled `Same`.
+export interface Same f where
+  pmth : f a -> Int

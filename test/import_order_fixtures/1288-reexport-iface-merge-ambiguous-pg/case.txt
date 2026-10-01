@@ -1,0 +1,6 @@
+entry: main.mdk
+what: #1288 (re-export merges two distinct same-named interfaces) naming the merged interface at the importer is ambiguous, whichever order `mid` re-exports the two in
+
+`p` and `g` each declare their OWN interface `Same`; `mid` re-exports both under wildcard (`pg` order); `main` imports `Same` through `mid` and writes `impl Same P`. Which `Same` that names is undecidable, exactly as it is for `import p.{Same}` plus `import g.{Same}` directly, so `check` owes `R-AMBIGUOUS-INTERFACE` at the use, naming `p` and `g`, at exit 1.
+
+Spec answer, hand-derived: rejected at exit 1 with `R-AMBIGUOUS-INTERFACE`; no program output. This gate grades only invariance across import orderings; the code was measured by hand. Typecheck cascade codes beside it are owed to a later slice.

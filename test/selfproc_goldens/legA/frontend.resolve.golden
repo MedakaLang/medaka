@@ -2,6 +2,8 @@ abstractlyExportedTypes : ModuleExports -> List String
 addEffectProvenance : Map String (List String) -> List (String, String) -> Map String (List String)
 addIfaceMethods : String -> List String -> Map String String -> Map String String
 addImportProvenance : Map String (List String) -> String -> List String -> Map String (List String)
+addImportProvenance2 : Map String (List String) -> String -> List String -> Map String (List String)
+addMergedOrigins : Map String (List String) -> ModuleExports -> List (String, String) -> Map String (List String)
 addProvenance : Map String (List String) -> String -> String -> Map String (List String)
 addStrippedCtorProv : Map String (List String) -> UsePath -> List String -> Map String (List String)
 aliasAbstractCtorErrs : Env -> String -> Option Loc -> List ResError
@@ -178,6 +180,7 @@ firstStmtLoc : List DoStmt -> Option Loc
 flatTyOriginScope : List Decl -> Map String TyConOrigin
 foldCtorProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldEffectProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
+foldIfaceMergeProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldImports : Map String ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldNamespaceProvenance : (Map String ModuleExports -> UsePath -> List String) -> Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
@@ -192,6 +195,7 @@ ifaceAmbigMods : Env -> String -> List String
 ifaceAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 ifaceDeclaredIn : String -> String -> (String, String)
 ifaceKey : String -> String
+ifaceMergedOrigins : ModuleExports -> String -> List String
 ifaceMethodCollisions : List Decl -> List ResError
 ifaceMethodCollisionsGo : Map String String -> List (String, List String) -> List ResError
 ifaceMethodErrs : String -> Map String String -> List String -> List ResError
@@ -201,6 +205,7 @@ ifaceMethodsOf : String -> List (String, List String) -> List String
 ifaceValsOf : ModuleExports -> String -> List String
 implMethodNm : ImplMethod -> String
 importNamesIn : ExpNs String -> Map String ModuleExports -> UsePath -> List String
+importUnmergedIfaceNames : Map String ModuleExports -> UsePath -> List String
 importValueNames : Map String ModuleExports -> UsePath -> List String
 importedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
 importedEffects : Map String ModuleExports -> List Decl -> List String
@@ -269,6 +274,7 @@ nsEffectOrigins : ExpNs (String, String)
 nsEffects : ExpNs String
 nsFieldOwners : ExpNs (String, String)
 nsIfaceMethods : ExpNs (String, List String)
+nsIfaceOrigins : ExpNs (String, String)
 nsInterfaces : ExpNs String
 nsNewtypeCtors : ExpNs (String, String)
 nsTypeCtors : ExpNs (String, List String)

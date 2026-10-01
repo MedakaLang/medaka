@@ -1,0 +1,3 @@
+-- Re-exports both `Same` interfaces under one bare name.
+export import p.*
+export import g.*
