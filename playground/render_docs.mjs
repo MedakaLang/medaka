@@ -57,6 +57,7 @@
 //   --og-image-alt <text>  alt text for that image.
 //   --no-pager         omit the previous/next links at the foot of each page
 //                      (a doc set whose pages are not read in order, like a blog).
+//   --no-toc           omit the "On this page" box above each page's article.
 //
 // A page's og:description is the `<!-- description: … -->` comment in its source
 // when there is one, else its first prose paragraph; `<!-- og-image: <file> -->`
@@ -309,6 +310,8 @@ function parseArgs(argv) {
     ogImageAlt: '',
     // false = no previous/next links at the foot of a page (--no-pager).
     pager: true,
+    // false = no "On this page" box (--no-toc).
+    toc: true,
     // Sibling doc sets, {name, href, exclude}: see --sibling above. Empty = every
     // out-of-set link goes to the repository, exactly as before.
     siblings: [],
@@ -367,6 +370,7 @@ function parseArgs(argv) {
       case '--og-image': opts.ogImage = next(); break;
       case '--og-image-alt': opts.ogImageAlt = next(); break;
       case '--no-pager': opts.pager = false; break;
+      case '--no-toc': opts.toc = false; break;
       default: throw new Error(`unknown argument: ${a}`);
     }
   }
@@ -389,7 +393,7 @@ function parseArgs(argv) {
 // ── the renderer ────────────────────────────────────────────────────────────
 export function renderDocSet(opts) {
   const { src, out, exclude, repoUrl, repoRoot, playgroundUrl = '../index.html',
-          cssName = 'guide.css', navLinks = [], siblings = [], distDir = null, runLinks = true, siteUrl = null, ogImage = null, ogImageAlt = '', pager = true } = opts;
+          cssName = 'guide.css', navLinks = [], siblings = [], distDir = null, runLinks = true, siteUrl = null, ogImage = null, ogImageAlt = '', pager = true, toc: showToc = true } = opts;
   const og = siteUrl ? { siteUrl, ogImage, ogImageAlt } : null;
   if (!existsSync(src)) throw new Error(`--src does not exist: ${src}`);
 
@@ -421,7 +425,7 @@ export function renderDocSet(opts) {
   const titles = new Map(pages.map((file) => [file, pageTitleOf(readFileSync(join(src, file), 'utf8'), file)]));
 
   const rendered = pages.map((file) =>
-    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs, runLinks, og, pager }));
+    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs, runLinks, og, pager, showToc }));
 
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -455,7 +459,7 @@ function pageTitleOf(markdown, file) {
   return (markdown.match(/^#\s+(.+)$/m)?.[1] ?? basename(file, '.md')).replace(/`/g, '').trim();
 }
 
-function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs = [], runLinks = true, og = null, pager = true }) {
+function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs = [], runLinks = true, og = null, pager = true, showToc = true }) {
   const markdown = readFileSync(join(src, file), 'utf8');
   const slug = slugger();
   const toc = [];
@@ -528,7 +532,7 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titl
     outFile,
     title: pageTitle,
     toc,
-    html: pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, playgroundUrl, navLinks, cssName,
+    html: pageShell({ pageTitle, docTitle, body, toc: showToc ? toc : [], outFile, pages, titles, playgroundUrl, navLinks, cssName,
                       og: pageOg(og, markdown), description: pageDescription(markdown), pager }),
   };
 }

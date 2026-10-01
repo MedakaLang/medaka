@@ -499,7 +499,7 @@ try {
   const opt = join(scratch, 'opt');
   mkdirSync(opt, { recursive: true });
   writeFileSync(join(opt, '01-a.md'),
-    '# Alpha\n\nFirst *prose* paragraph, with a [link](https://example.com).\n\n```medaka\nmain = println 1\n```\n');
+    '# Alpha\n\nFirst *prose* paragraph, with a [link](https://example.com).\n\n```medaka\nmain = println 1\n```\n\n## Part\n\nMore.\n');
   writeFileSync(join(opt, '02-b.md'),
     '# Beta\n\n<!-- description: Beta, described. -->\n<!-- og-image: beta.png -->\n'
     + '<!-- og-image-alt: Beta card. -->\n\nBody.\n');
@@ -530,7 +530,11 @@ try {
   check(!/property="og:/.test(aOff), 'og: no --site-url, no link-preview tags');
   check(/class="pg-run"/.test(aOff), 'run links: on by default');
   check(!/class="pager"/.test(aOff), '--no-pager: no previous/next links');
-  note('link-preview tags, --no-run-links and the pager behave as documented');
+  check(/class="toc"/.test(aOff), 'toc: the "On this page" box is on by default');
+  const optNoToc = join(scratch, 'optnotoc');
+  renderDocSet({ src: opt, out: optNoToc, exclude: [], title: 'Opt', repoUrl: '', repoRoot: REPO_ROOT, toc: false });
+  check(!/class="toc"/.test(readFileSync(join(optNoToc, '01-a.html'), 'utf8')), '--no-toc: no "On this page" box');
+  note('link-preview tags, --no-run-links, the pager and --no-toc behave as documented');
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

@@ -281,8 +281,13 @@ runtime. Once declared, they behave exactly like the built-in effects do.
 Here's how the signing key gets used:
 
 ```medaka-nocheck: an excerpt, not a whole program
-signCommitDigest : SecretKey -> Bytes -> <Sign "commit"> Result String Signature
-signServiceAuthDigest : SecretKey -> Bytes -> <Sign "service-auth"> Result String Signature
+signCommitDigest : SecretKey ->
+  Bytes ->
+  <Sign "commit"> Result String Signature
+
+signServiceAuthDigest : SecretKey ->
+  Bytes ->
+  <Sign "service-auth"> Result String Signature
 ```
 
 `SecretKey` is an opaque type, so only the signing module can look inside it. That's the same property the
@@ -293,7 +298,10 @@ other module imports the raw signing code directly, so there's no back door arou
 Put all of that together and you get the type of the server this PDS actually runs:
 
 ```medaka-nocheck: an excerpt, not a whole program
-pdsServer : Account -> ServerLinks -> String -> Result String (Server <Mint {"access", "refresh"}, Sign "commit">)
+pdsServer : Account ->
+  ServerLinks ->
+  String ->
+  Result String (Server <Mint {"access", "refresh"}, Sign "commit">)
 ```
 
 In plain English: answering a request can issue access and refresh tokens and sign commits, and that's it.
