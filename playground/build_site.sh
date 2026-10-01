@@ -144,7 +144,8 @@ bash "$SCRIPT_DIR/build_stdlib_docs.sh" "$ROOT/docs/stdlib" "$SITE/stdlib" "$SIT
 # The same renderer, called directly rather than through a build_*.sh wrapper:
 # a new .sh under playground/ is a gate candidate to test/preflight.sh. Posts are
 # prose whose code is illustration, so --no-run-links drops the ▶ footers, and
-# they are not read in sequence, so --no-pager drops the previous/next links;
+# they are not read in sequence, so --no-pager drops the previous/next links and
+# --no-toc the "On this page" box;
 # docs/blog/index.md is the authored post list. A post's link-card image lives in
 # playground/blog-cards/ (named by the post's `<!-- og-image: … -->` comment) and
 # is copied verbatim beside the rendered post.
@@ -156,6 +157,7 @@ node "$SCRIPT_DIR/render_docs.mjs" \
   --repo-root "$ROOT" \
   --no-run-links \
   --no-pager \
+  --no-toc \
   --nav-link "Guide=../guide/index.html" \
   --nav-link "Advanced=../advanced/index.html" \
   --nav-link "Stdlib=../stdlib/index.html" \
