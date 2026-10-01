@@ -820,7 +820,7 @@ definerShadowArgHeadCell : String -> EvCell -> Option (String, Ref (Option Int),
 definerShadowSpineArgAt : Expr -> Option (String, Ref (Option Int), Ref Route, Ref (List Route), Expr, List Expr)
 definerShadowSpineVarAt : Expr -> Option (String, Expr, List Expr)
 definerShadowVarHead : Expr -> Option String
-definerShadowsFromSet : Map String Unit -> List Decl -> List String
+definerShadowsFromSet : (String -> Bool) -> List Decl -> List String
 definersIn : Map String (List (String, (String, String))) -> String -> List (String, (String, String))
 depExportsCtorIdent : String -> String -> Ident -> Bool
 depExportsMethodIdent : String -> String -> Ident -> Bool
@@ -1920,6 +1920,7 @@ methodLevelPredicateSlot : List String -> List (String, Mono) -> Constraint -> L
 methodLevelPredicateSlots : List String -> Ty -> List (String, Mono) -> List PredicateSlot
 methodMarkCtx : MarkSets -> String -> List Decl -> MarkCtx
 methodMembersOf : List String -> Loc -> List UseMember
+methodNameDeclaredAt : Int -> MethodEnv -> String -> Bool
 methodOwnScope : List Decl -> String -> List MethodRow -> MethodRow -> MethodScope
 methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
 methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
@@ -2832,7 +2833,7 @@ standaloneOcc : Option GrantOcc -> Option (Int, GrantOcc)
 standaloneOccurrence : TcEnv -> String -> String -> Option Loc -> Option SelectedValueOccurrence
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
 standaloneShadowDomainAt : String -> Int -> Option Mono
-standaloneShadowsFromSet : Map String Unit -> Map String Unit -> List Decl -> List String
+standaloneShadowsFromSet : (String -> Bool) -> Map String Unit -> List Decl -> List String
 standaloneSigOf : String -> List Decl -> Option Ty
 standaloneValueBinding : TcEnv -> String -> Option ValueScheme
 standaloneValueBindingEmit : TcEnv -> String -> Ref Route -> Option ValueScheme

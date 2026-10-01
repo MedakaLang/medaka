@@ -141,7 +141,7 @@ autoPrintPinName = "0autoprintln"
 -- `EVar`s synthesized INTO THE ENTRY MODULE, and every bare name synthesized
 -- there is resolved against the ENTRY MODULE's scope — where a user's own
 -- `interface Ifc c where display : c -> String` outranks the prelude's `Display`
--- (`ownMethodIdent`, `overrideScopedMethods` in `compiler/types/typecheck.mdk`:
+-- (`ownMethodIdent`, `methodOwnScope` in `compiler/types/typecheck.mdk`:
 -- an OWN declaration wins outright).  So the identical S0 simply moved from
 -- `println` to `display`, a name users declare constantly, plus an S1 false
 -- reject (`No impl of Ifc for Int`) on a program that declares such an
