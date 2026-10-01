@@ -102,6 +102,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`LANGUAGE-SURFACE-AUDIT.md`](design/LANGUAGE-SURFACE-AUDIT.md) | LANGUAGE-SURFACE-AUDIT.md | OPEN |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
 | [`REGEX-DESIGN.md`](design/REGEX-DESIGN.md) | Regular expressions in the stdlib | — |
+| [`TARGETS-DESIGN.md`](design/TARGETS-DESIGN.md) | Targets and host profiles | OPEN |
 
 ### ops — release, testing, distribution
 
