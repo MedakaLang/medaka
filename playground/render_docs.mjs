@@ -47,6 +47,21 @@
 //                      there is classified not-runnable (conjunct 4 below);
 //                      omitted, that one conjunct is skipped and everything else
 //                      is unchanged.
+//   --no-run-links     emit no "open in playground" footer under Medaka blocks
+//                      (a doc set of prose whose code is illustration, not lessons).
+//   --site-url <url>   the ABSOLUTE url this doc set is served at (e.g.
+//                      https://medaka-lang.dev/guide). Given, every page gets
+//                      link-preview tags (og:*, twitter:card) so a shared link
+//                      renders a card; scrapers do not resolve relative urls.
+//   --og-image <url>   absolute url of the 1200x630 card image; needs --site-url.
+//   --og-image-alt <text>  alt text for that image.
+//   --no-pager         omit the previous/next links at the foot of each page
+//                      (a doc set whose pages are not read in order, like a blog).
+//
+// A page's og:description is the `<!-- description: … -->` comment in its source
+// when there is one, else its first prose paragraph; `<!-- og-image: <file> -->`
+// gives that page its own card image, relative to --site-url, and
+// `<!-- og-image-alt: … -->` its alt text.
 //
 // Besides one page per source `.md`, the renderer emits a doc-set INDEX page at
 // `index.html`: a static host serves nothing at a bare directory URL without
@@ -286,6 +301,14 @@ function parseArgs(argv) {
     // --playground-url. The renderer knows nothing about sibling doc sets, so
     // the caller that lays them out beside each other supplies the links.
     navLinks: [],
+    // false = no "open in playground" footer under any Medaka block (--no-run-links).
+    runLinks: true,
+    // Absolute base url + card image for link-preview tags; null = no tags.
+    siteUrl: null,
+    ogImage: null,
+    ogImageAlt: '',
+    // false = no previous/next links at the foot of a page (--no-pager).
+    pager: true,
     // Sibling doc sets, {name, href, exclude}: see --sibling above. Empty = every
     // out-of-set link goes to the repository, exactly as before.
     siblings: [],
@@ -339,6 +362,11 @@ function parseArgs(argv) {
         break;
       }
       case '--dist': opts.distDir = resolve(next()); break;
+      case '--no-run-links': opts.runLinks = false; break;
+      case '--site-url': opts.siteUrl = next().replace(/\/+$/, ''); break;
+      case '--og-image': opts.ogImage = next(); break;
+      case '--og-image-alt': opts.ogImageAlt = next(); break;
+      case '--no-pager': opts.pager = false; break;
       default: throw new Error(`unknown argument: ${a}`);
     }
   }
@@ -348,6 +376,10 @@ function parseArgs(argv) {
   }
   // A --dist that is not there is a hard error, never a silent skip: the caller
   // asked for the check, so failing to perform it must be loud.
+  for (const [flag, v] of [['--site-url', opts.siteUrl], ['--og-image', opts.ogImage]]) {
+    if (v !== null && !/^https?:\/\//.test(v)) throw new Error(`${flag} must be an absolute url, got: ${v}`);
+  }
+  if (opts.ogImage && !opts.siteUrl) throw new Error('--og-image needs --site-url');
   if (opts.distDir && !existsSync(opts.distDir)) {
     throw new Error(`--dist does not exist: ${opts.distDir}`);
   }
@@ -357,7 +389,8 @@ function parseArgs(argv) {
 // ── the renderer ────────────────────────────────────────────────────────────
 export function renderDocSet(opts) {
   const { src, out, exclude, repoUrl, repoRoot, playgroundUrl = '../index.html',
-          cssName = 'guide.css', navLinks = [], siblings = [], distDir = null } = opts;
+          cssName = 'guide.css', navLinks = [], siblings = [], distDir = null, runLinks = true, siteUrl = null, ogImage = null, ogImageAlt = '', pager = true } = opts;
+  const og = siteUrl ? { siteUrl, ogImage, ogImageAlt } : null;
   if (!existsSync(src)) throw new Error(`--src does not exist: ${src}`);
 
   // A sibling doc set's SOURCE directory sits beside this one (docs/guide next
@@ -388,7 +421,7 @@ export function renderDocSet(opts) {
   const titles = new Map(pages.map((file) => [file, pageTitleOf(readFileSync(join(src, file), 'utf8'), file)]));
 
   const rendered = pages.map((file) =>
-    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs }));
+    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs, runLinks, og, pager }));
 
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -408,7 +441,7 @@ export function renderDocSet(opts) {
   // basenames, and the renderer must not clobber generated content.
   if (!inSet.has('index.md')) {
     writeFileSync(join(out, 'index.html'),
-      indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks, cssName }));
+      indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks, cssName, og }));
   }
   writeFileSync(join(out, cssName), STYLESHEET);
 
@@ -422,7 +455,7 @@ function pageTitleOf(markdown, file) {
   return (markdown.match(/^#\s+(.+)$/m)?.[1] ?? basename(file, '.md')).replace(/`/g, '').trim();
 }
 
-function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs = [] }) {
+function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs = [], runLinks = true, og = null, pager = true }) {
   const markdown = readFileSync(join(src, file), 'utf8');
   const slug = slugger();
   const toc = [];
@@ -457,7 +490,7 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titl
             `silently render as unhighlighted prose.`);
         }
         const kind = KNOWN_FENCES[label] ?? 'unknown';
-        const footer = kind === 'medaka' && !isDoctest
+        const footer = kind === 'medaka' && !isDoctest && runLinks
           ? runnableFooter(classifyRunnable(label, text, shipped), text, playgroundUrl)
           : '';
         return `<div class="codeblock kind-${kind}"`
@@ -495,8 +528,36 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titl
     outFile,
     title: pageTitle,
     toc,
-    html: pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, playgroundUrl, navLinks, cssName }),
+    html: pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, playgroundUrl, navLinks, cssName,
+                      og: pageOg(og, markdown), description: pageDescription(markdown), pager }),
   };
+}
+
+// A page's own card image, `<!-- og-image: <file> -->`, resolved against the doc
+// set's --site-url, replaces the doc set's --og-image for that page alone.
+function pageOg(og, markdown) {
+  const own = markdown.match(/<!--\s*og-image:\s*(\S+)\s*-->/);
+  if (!og || !own) return og;
+  const url = /^https?:\/\//.test(own[1]) ? own[1] : `${og.siteUrl}/${own[1]}`;
+  const alt = markdown.match(/<!--\s*og-image-alt:\s*([\s\S]*?)-->/);
+  return { ...og, ogImage: url, ogImageAlt: alt ? alt[1].trim() : og.ogImageAlt };
+}
+
+// A page's link-preview description: its `<!-- description: … -->` comment, else
+// the first prose paragraph with the Markdown syntax stripped, cut at a word
+// boundary near 200 characters.
+export function pageDescription(markdown) {
+  const explicit = markdown.match(/<!--\s*description:\s*([\s\S]*?)-->/);
+  const paragraph = explicit ? explicit[1]
+    : (markdown.split(/\n\s*\n/).map((b) => b.trim())
+        .find((b) => b !== '' && !/^(#|```|<|>|-|\*|\||\d+\.)/.test(b)) ?? '');
+  const plain = paragraph
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[`*_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (plain.length <= 200) return plain;
+  return plain.slice(0, 200).replace(/\s+\S*$/, '') + '…';
 }
 
 // Rewrite one href.
@@ -558,7 +619,35 @@ function rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors, siblin
 }
 
 // ── page shell ──────────────────────────────────────────────────────────────
-function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, playgroundUrl, navLinks = [], cssName = 'guide.css' }) {
+function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, playgroundUrl, navLinks = [], cssName = 'guide.css',
+                    og = null, description = '', pager = false }) {
+  // Previous/next follow the sidebar's chapter order; an authored index.md is
+  // the doc set's landing page, not a chapter, so it is not in the sequence.
+  const sequence = pages.filter((p) => p !== 'index.md');
+  const at = sequence.findIndex((p) => p.replace(/\.md$/, '.html') === outFile);
+  const step = (p, cls, label) => !p ? '' :
+    `<a class="${cls}" href="${escapeHtml(p.replace(/\.md$/, '.html'))}">`
+    + `<span class="pager-label">${label}</span>${escapeHtml(titles.get(p))}</a>`;
+  const pagerHtml = !pager || at < 0 || sequence.length < 2 ? '' :
+    `<nav class="pager" aria-label="Chapter">\n`
+    + step(sequence[at - 1], 'pager-prev', '&larr; Previous')
+    + step(sequence[at + 1], 'pager-next', 'Next &rarr;')
+    + `\n</nav>\n`;
+  const fullTitle = pageTitle === docTitle ? pageTitle : `${pageTitle} — ${docTitle}`;
+  const ogHtml = !og ? '' : [
+    `<meta name="description" content="${escapeHtml(description)}">`,
+    `<meta property="og:type" content="article">`,
+    `<meta property="og:url" content="${escapeHtml(`${og.siteUrl}/${outFile}`)}">`,
+    `<meta property="og:title" content="${escapeHtml(pageTitle)}">`,
+    `<meta property="og:description" content="${escapeHtml(description)}">`,
+    ...(og.ogImage ? [
+      `<meta property="og:image" content="${escapeHtml(og.ogImage)}">`,
+      `<meta property="og:image:width" content="1200">`,
+      `<meta property="og:image:height" content="630">`,
+      `<meta property="og:image:alt" content="${escapeHtml(og.ogImageAlt)}">`,
+      `<meta name="twitter:card" content="summary_large_image">`,
+    ] : []),
+  ].join('\n') + '\n';
   const navHtml = navLinks.length === 0 ? '' :
     `<nav class="site-nav-links" aria-label="Site">\n`
     + navLinks.map(({ label, href }) => {
@@ -582,8 +671,8 @@ function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, pla
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(pageTitle === docTitle ? pageTitle : `${pageTitle} — ${docTitle}`)}</title>
-<link rel="stylesheet" href="${escapeHtml(cssName)}">
+<title>${escapeHtml(fullTitle)}</title>
+${ogHtml}<link rel="stylesheet" href="${escapeHtml(cssName)}">
 </head>
 <body>
 <header class="site-nav">
@@ -600,7 +689,7 @@ ${chapters}
 <main>
 ${tocHtml}<article>
 ${body}</article>
-</main>
+${pagerHtml}</main>
 </div>
 </body>
 </html>
@@ -613,7 +702,7 @@ ${body}</article>
 // that derives from `docs/guide/*.md` honest. It is written ONLY for a doc set
 // with no `index.md` of its own (see the guard in `renderDocSet`): where a set
 // authors one, that page is the index and this function is never called.
-function indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks, cssName }) {
+function indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks, cssName, og = null }) {
   const items = rendered.map((p) =>
     `<li><a href="${escapeHtml(p.outFile)}">${escapeHtml(p.title)}</a></li>`).join('\n');
   const body = `<h1>${escapeHtml(docTitle)}</h1>\n`
@@ -621,7 +710,8 @@ function indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks,
     + `<ol class="chapter-index">\n${items}\n</ol>\n`;
   return pageShell({
     pageTitle: docTitle, docTitle, body, toc: [],
-    outFile: 'index.html', pages, titles, playgroundUrl, navLinks, cssName,
+    outFile: 'index.html', pages, titles, playgroundUrl, navLinks, cssName, og,
+    description: `${docTitle}: ${rendered.length} pages.`,
   });
 }
 
@@ -668,7 +758,7 @@ const STYLESHEET = `/* Generated by playground/render_docs.mjs — do not edit b
   --tok-punctuation: #8b949e;
 }
 *, *::before, *::after { box-sizing: border-box; }
-html { background: #0c1019; }
+html { background: #0c1019; scroll-padding-top: 4.5rem; } /* clear the sticky .site-nav on #anchor jumps */
 body { margin:0; color:var(--ink); background:var(--bg); font:16px/1.65 var(--ui); }
 a { color:var(--accent); text-decoration:none; }
 a:hover { color:var(--accent-bright); text-decoration:underline; }
@@ -684,6 +774,12 @@ a:hover { color:var(--accent-bright); text-decoration:underline; }
 .site-nav-title:hover { color:var(--ink); text-decoration:none; }
 .site-nav-title { color:var(--faint); font-size:.8rem; text-transform:uppercase;
        letter-spacing:.06em; }
+.pager { display:flex; gap:1rem; margin-top:3rem; padding-top:1.25rem; border-top:1px solid var(--line); }
+.pager a { flex:1; display:flex; flex-direction:column; gap:.2rem; padding:.75rem 1rem;
+       border:1px solid var(--line); border-radius:8px; color:var(--ink); }
+.pager a:hover { border-color:var(--accent); text-decoration:none; }
+.pager-next { text-align:right; margin-left:auto; }
+.pager-label { font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
 
 .layout { display:flex; gap:2.5rem; max-width:1180px; margin:0 auto; padding:2rem 1.25rem; }
 .chapters { flex:0 0 15rem; font-size:.88rem; }

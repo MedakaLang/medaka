@@ -139,6 +139,32 @@ bash "$SCRIPT_DIR/build_advanced_docs.sh" "$ROOT/docs/advanced" "$SITE/advanced"
 echo "[build_site] rendering docs/stdlib -> $SITE/stdlib ..."
 bash "$SCRIPT_DIR/build_stdlib_docs.sh" "$ROOT/docs/stdlib" "$SITE/stdlib" "$SITE/dist"
 
+# ── The blog (docs/blog/*.md -> site/blog/*.html) ────────────────────────────
+#
+# The same renderer, called directly rather than through a build_*.sh wrapper:
+# a new .sh under playground/ is a gate candidate to test/preflight.sh. Posts are
+# prose whose code is illustration, so --no-run-links drops the ▶ footers, and
+# they are not read in sequence, so --no-pager drops the previous/next links;
+# docs/blog/index.md is the authored post list. A post's link-card image lives in
+# playground/blog-cards/ (named by the post's `<!-- og-image: … -->` comment) and
+# is copied verbatim beside the rendered post.
+echo "[build_site] rendering docs/blog -> $SITE/blog ..."
+node "$SCRIPT_DIR/render_docs.mjs" \
+  --src "$ROOT/docs/blog" \
+  --out "$SITE/blog" \
+  --title "The Medaka Blog" \
+  --repo-root "$ROOT" \
+  --no-run-links \
+  --no-pager \
+  --nav-link "Guide=../guide/index.html" \
+  --nav-link "Advanced=../advanced/index.html" \
+  --nav-link "Stdlib=../stdlib/index.html" \
+  --nav-link "GitHub=https://github.com/MedakaLang/medaka" \
+  --site-url "https://medaka-lang.dev/blog" \
+  --og-image "https://medaka-lang.dev/og-card.png" \
+  --og-image-alt "Medaka, a practical functional language."
+cp "$SCRIPT_DIR"/blog-cards/*.png "$SITE/blog/"
+
 # ── Verify the site can actually serve what the page asks for ───────────────
 # Derived from main.js, so this check cannot drift from the page's real needs.
 missing=""
@@ -206,6 +232,23 @@ done
 [ -f "$SITE/stdlib/guide.css" ] || missing_stdlib="$missing_stdlib guide.css"
 if [ -n "$missing_stdlib" ]; then
   echo "FAIL: docs/stdlib names these but they are not in site/stdlib:$missing_stdlib" >&2
+  exit 1
+fi
+
+# Fifth instance, for the blog: every docs/blog/*.md rendered (index.md is the
+# authored index, so it renders to index.html like any other page), plus the
+# stylesheet and every playground/blog-cards/ image.
+missing_blog=""
+for m in "$ROOT"/docs/blog/*.md "$SCRIPT_DIR"/blog-cards/*.png; do
+  b="$(basename "$m")"
+  case "$b" in
+    *.md) [ -f "$SITE/blog/${b%.md}.html" ] || missing_blog="$missing_blog ${b%.md}.html" ;;
+    *) [ -f "$SITE/blog/$b" ] || missing_blog="$missing_blog $b" ;;
+  esac
+done
+[ -f "$SITE/blog/guide.css" ] || missing_blog="$missing_blog guide.css"
+if [ -n "$missing_blog" ]; then
+  echo "FAIL: docs/blog and playground/blog-cards name these but they are not in site/blog:$missing_blog" >&2
   exit 1
 fi
 

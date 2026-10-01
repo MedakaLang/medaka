@@ -492,6 +492,45 @@ try {
   check((probeBlocks[2] ?? 'x') === '',
     'probe: a `> `-prompt doctest transcript gets NO footer — in a doc set that is neither the guide nor the stdlib');
   note('doctest footer suppression is keyed on the fence, not on --src');
+
+  // Link-preview tags, run-link suppression, and the pager. Two chapters, the
+  // second with its own description and card image; one rendering with every
+  // option on, one with none, so each assertion has its control.
+  const opt = join(scratch, 'opt');
+  mkdirSync(opt, { recursive: true });
+  writeFileSync(join(opt, '01-a.md'),
+    '# Alpha\n\nFirst *prose* paragraph, with a [link](https://example.com).\n\n```medaka\nmain = println 1\n```\n');
+  writeFileSync(join(opt, '02-b.md'),
+    '# Beta\n\n<!-- description: Beta, described. -->\n<!-- og-image: beta.png -->\n'
+    + '<!-- og-image-alt: Beta card. -->\n\nBody.\n');
+  const optOn = join(scratch, 'opton');
+  renderDocSet({ src: opt, out: optOn, exclude: [], title: 'Opt', repoUrl: '', repoRoot: REPO_ROOT,
+    siteUrl: 'https://example.com/opt', ogImage: 'https://example.com/card.png', ogImageAlt: 'Set card.',
+    runLinks: false, pager: true });
+  const a = readFileSync(join(optOn, '01-a.html'), 'utf8');
+  const b = readFileSync(join(optOn, '02-b.html'), 'utf8');
+  check(a.includes('<meta property="og:url" content="https://example.com/opt/01-a.html">'),
+    'og: og:url is --site-url joined with the page');
+  check(a.includes('<meta property="og:description" content="First prose paragraph, with a link.">'),
+    'og: with no description comment, the first paragraph is the description, Markdown stripped');
+  check(a.includes('<meta property="og:image" content="https://example.com/card.png">'),
+    'og: a page with no og-image comment takes the doc set\'s --og-image');
+  check(b.includes('<meta property="og:description" content="Beta, described.">')
+      && b.includes('<meta property="og:image" content="https://example.com/opt/beta.png">')
+      && b.includes('<meta property="og:image:alt" content="Beta card.">'),
+    'og: a page\'s description / og-image / og-image-alt comments override the doc set\'s');
+  check(!/class="pg-(run|not-runnable)"/.test(a), '--no-run-links: no footer under a runnable block');
+  check(/class="pager-next" href="02-b.html"/.test(a) && !/pager-prev/.test(a),
+    'pager: the first chapter links forward only');
+  check(/class="pager-prev" href="01-a.html"/.test(b) && !/pager-next/.test(b),
+    'pager: the last chapter links back only');
+  const optOff = join(scratch, 'optoff');
+  renderDocSet({ src: opt, out: optOff, exclude: [], title: 'Opt', repoUrl: '', repoRoot: REPO_ROOT, pager: false });
+  const aOff = readFileSync(join(optOff, '01-a.html'), 'utf8');
+  check(!/property="og:/.test(aOff), 'og: no --site-url, no link-preview tags');
+  check(/class="pg-run"/.test(aOff), 'run links: on by default');
+  check(!/class="pager"/.test(aOff), '--no-pager: no previous/next links');
+  note('link-preview tags, --no-run-links and the pager behave as documented');
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
