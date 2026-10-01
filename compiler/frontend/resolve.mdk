@@ -1874,6 +1874,10 @@ checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body)) _) =
 -- `env.interfaces`' `iaIfaces` are filtered from the SAME `expInterfaces` over the
 -- SAME `importedNamesMM` names, so an ambiguous interface is necessarily in scope
 -- and the two verdicts are mutually exclusive by construction.
+--
+-- An ambiguous head names no single interface, so its methods are not checked
+-- for membership: `ifaceMethodsOf` would answer for whichever same-named
+-- interface was imported first, and report a member of the other as foreign.
 checkImplDecl : Env ->
   String ->
   List Ty ->
@@ -1881,11 +1885,15 @@ checkImplDecl : Env ->
   List ImplMethod ->
   List ResError
 checkImplDecl env iface tyargs reqs methods =
+  let ambiguous = ambiguousIfaceErrors env iface (firstTyLocList tyargs)
+  let membership = match ambiguous
+    [] => checkImplIface env iface methods
+    _ => []
   flatMap (checkType None env) tyargs
     ++ flatMap (checkRequire env) reqs
     ++ flatMap (checkImplMethod env) methods
-    ++ checkImplIface env iface methods
-    ++ ambiguousIfaceErrors env iface (firstTyLocList tyargs)
+    ++ membership
+    ++ ambiguous
 
 checkRequire : Env -> Require -> List ResError
 checkRequire env (Require { requireHead = iface, requireArgs = tys }) =
@@ -1915,8 +1923,11 @@ ifaceMethodsOf iface ((i, ms) :: rest)
   | otherwise = ifaceMethodsOf iface rest
 
 checkMethodMember : String -> List String -> ImplMethod -> List ResError
-checkMethodMember iface known (ImplMethod mname _ _) =
-  if contains mname known then [] else [MethodNotInInterface mname iface None]
+checkMethodMember iface known (ImplMethod mname _ body) =
+  if contains mname known then
+    []
+  else
+    [MethodNotInInterface mname iface (firstExprLoc body)]
 
 -- ── Primitives (hardcoded) ───────────────────────────────────────────────
 isTupleCtorTyName : String -> Bool

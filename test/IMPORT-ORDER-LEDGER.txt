@@ -109,9 +109,18 @@
 # `3337-ambiguous-ctor-reject-cascade-sibling-types` per the ledger's own
 # dir-must-match-issue-number rule; see its case.txt for the full history.
 
-733-ambiguous-ctor-reject-cascade-order-dependent | #733 | check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: | check=1;codes=R-AMBIGUOUS-CTOR,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
-
-3337-ambiguous-ctor-reject-cascade-sibling-types | #3337 | check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: | check=1;codes=R-AMBIGUOUS-CTOR,T-TYPE-MISMATCH,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+# ── DRAINED 2026-10-01 by S-method-namespace-identity M0 (#2563) ─────────────
+# Two rows are GONE: `733-ambiguous-ctor-reject-cascade-order-dependent` (#733)
+# and `3337-ambiguous-ctor-reject-cascade-sibling-types` (#3337). Each divergence
+# was a T-TYPE-MISMATCH cascade in ONE ordering beside the R-AMBIGUOUS-CTOR both
+# orderings raise. A module resolve rejected no longer reports typecheck
+# diagnostics, so both now read check=1;codes=R-AMBIGUOUS-CTOR;… in EVERY
+# ordering, and their fixtures are graded as invariant.
+#
+# ⚠️ This drains the CHECK-side observation only, not the typecheck-side order
+# dependence behind it: the emitter child, which has no resolve verdict to gate
+# on, still rejects in one ordering and emits IR in the other. Both issues stay
+# pinned by their rows in test/EMITTER-VERDICT-LEDGER.txt.
 
 # ── #1351 — order-DEPENDENCE row DRAINED 2026-08-21 (RUN-METHID-106) ──────────
 # This row licensed an EXPECTED divergence: import-line order alone decided
