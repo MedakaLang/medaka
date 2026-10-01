@@ -1,0 +1,9 @@
+-- A trailing binding yields Unit after evaluating its RHS. Eval and native
+-- print x then 1; Wasm currently panics while emitting the empty continuation
+-- (#3656). The engine-divergence ledger drains when Wasm starts compiling it.
+f : Int -> <IO> Unit
+f n =
+  println "x"
+  let _ = println n
+
+main = f 1

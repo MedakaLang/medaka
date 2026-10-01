@@ -1,0 +1,8 @@
+-- #3656 control: an explicit Unit result follows the binding.
+f : Int -> <IO> Unit
+f n =
+  println "x"
+  let _ = println n
+  ()
+
+main = f 1
