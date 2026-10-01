@@ -70,6 +70,7 @@ import support.util.{
   fallthroughName,
   noneHeadTag,
   isEmptyL,
+  isNonEmptyL,
   filterList,
   splitOnChar,
   initList,
@@ -2717,18 +2718,19 @@ prim1M f = VPrim f
 -- A file extern whose path is an authority takes, after its value arguments,
 -- the authority granted for each path (EFFECTS-SEMANTICS §8), and refuses a
 -- path that authority does not admit before it touches the file system.
-granted1 : Confine -> (Value <IO> -> <IO> Value <IO>) -> Value <IO>
-granted1 mode f = VPrim (a => VPrim (g => confined mode g a (_ => f a)))
+granted1 : Bool -> Confine -> (Value <IO> -> <IO> Value <IO>) -> Value <IO>
+granted1 write mode f =
+  VPrim (a => VPrim (g => confined write mode g a (_ => f a)))
 
 granted2 : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
 granted2 f =
-  VPrim (a => VPrim (b => VPrim (g => confined Follow g a (_ => f a b))))
+  VPrim (a => VPrim (b => VPrim (g => confined True Follow g a (_ => f a b))))
 
 granted3 : (Value <IO> -> Value <IO> -> Value <IO> -> <IO> Value <IO>) ->
   Value <IO>
 granted3 f = VPrim
-  (a =>
-    VPrim (b => VPrim (c => VPrim (g => confined Follow g a (_ => f a b c)))))
+  (a => VPrim (b => VPrim (c => VPrim (g => confined True Follow g a (_ =>
+    f a b c)))))
 
 -- `rename` names two paths, so it takes two grants, and each path is refused
 -- against its own.
@@ -2736,29 +2738,71 @@ grantedPair : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
 grantedPair f = VPrim
   (a => VPrim
     (b => VPrim
-      (ga => VPrim (gb => confined Entry ga a (_ => confined Entry gb b (_ =>
-        f a b))))))
+      (ga => VPrim
+        (gb => confined True Entry ga a (_ => confined True Entry gb b (_ =>
+          f a b))))))
 
 -- How a file extern resolves its path and reports a refusal: through the last
 -- component or at the entry itself, as an `Err` or as a panic.
 data Confine = Follow | Entry | FollowPanic
 
-confined : Confine ->
+fileBounds : Ref (List (Bool, List String))
+fileBounds = Ref []
+
+scopedFileBound : Bool -> Value e
+scopedFileBound write = VPrim (g => VPrim (thunk =>
+  let saved = fileBounds.value
+  let grant = match g
+    VList elems => map unString elems
+    _ => panic "file bound: the authority is not a List"
+  fileBounds := (write, grant) :: saved
+  let result = apply thunk VUnit
+  fileBounds := saved
+  result))
+
+confined : Bool ->
+  Confine ->
   Value <IO> ->
   Value <IO> ->
   (Unit -> <IO> Value <IO>) ->
   <IO> Value <IO>
-confined _ (VList []) _ k = k ()
-confined mode (VList elems) path k =
+confined write mode (VList elems) path k =
   let entry = match mode
     Entry => True
     _ => False
-  match confinePath entry (map unString elems) (unString path)
+  match confineFileBounds write entry (map unString elems) (unString path)
     None => k ()
     Some msg => match mode
       FollowPanic => runtimePanic "E-PANIC" msg
       _ => VCon "Err" [VString msg]
-confined _ _ _ _ = panic "file extern: the granted authority is not a List"
+confined _ _ _ _ _ = panic "file extern: the granted authority is not a List"
+
+confineFileBounds : Bool ->
+  Bool ->
+  List String ->
+  String ->
+  <FileRead | e> Option String
+confineFileBounds write entry grant path =
+  let own = if isEmptyL grant then None else confinePath entry grant path
+  match own
+    Some msg => Some msg
+    None => confineEnclosing write entry path fileBounds.value
+
+confineEnclosing : Bool ->
+  Bool ->
+  String ->
+  List (Bool, List String) ->
+  <FileRead | e> Option String
+confineEnclosing _ _ _ [] = None
+confineEnclosing write entry path ((mode, grant) :: rest) =
+  let refused =
+    if mode == write && isNonEmptyL grant then
+      confinePath entry grant path
+    else
+      None
+  match refused
+    Some msg => Some msg
+    None => confineEnclosing write entry path rest
 
 -- ── Confinement ───────────────────────────────────────────────────────────
 -- `mdk_confine` in runtime/medaka_rt.c states the rules and the reason for
@@ -3254,6 +3298,8 @@ pFlushStdout _ = panic "flushStdout: expected Unit"
 export
 externBindings : Unit -> List (String, Value e)
 externBindings _ = [
+  ("$withFileReadBound", scopedFileBound False),
+  ("$withFileWriteBound", scopedFileBound True),
   ("randomInt", prim2M pRandomInt),
   ("randomBool", prim1M pRandomBool),
   ("randomFloat", prim1M pRandomFloat),
@@ -4952,22 +4998,22 @@ ioExternBindings _ = [
   ("ePutStr", prim1M pEPutStr),
   ("ePutStrLn", prim1M pEPutStrLn),
   -- File
-  ("readFile", granted1 Follow pReadFile),
-  ("readFileBytes", granted1 Follow pReadFileBytes),
-  ("fileExists", granted1 FollowPanic pFileExists),
-  ("fileMode", granted1 Follow pFileMode),
-  ("canonicalizePath", granted1 FollowPanic pCanonicalizePath),
-  ("listDir", granted1 Follow pListDir),
-  ("statFile", granted1 Follow pStatFile),
+  ("readFile", granted1 False Follow pReadFile),
+  ("readFileBytes", granted1 False Follow pReadFileBytes),
+  ("fileExists", granted1 False FollowPanic pFileExists),
+  ("fileMode", granted1 False Follow pFileMode),
+  ("canonicalizePath", granted1 False FollowPanic pCanonicalizePath),
+  ("listDir", granted1 False Follow pListDir),
+  ("statFile", granted1 False Follow pStatFile),
   ("writeFile", granted2 pWriteFile),
   ("writeFileBytes", granted2 pWriteFileBytes),
   ("writeFileMode", granted3 pWriteFileMode),
   ("appendFile", granted2 pAppendFile),
-  ("makeDir", granted1 Entry pMakeDir),
-  ("removeFile", granted1 Entry pRemoveFile),
-  ("removeDir", granted1 Entry pRemoveDir),
+  ("makeDir", granted1 True Entry pMakeDir),
+  ("removeFile", granted1 True Entry pRemoveFile),
+  ("removeDir", granted1 True Entry pRemoveDir),
   ("rename", grantedPair pRename),
-  ("fsync", granted1 Follow pFsync),
+  ("fsync", granted1 True Follow pFsync),
   -- Env
   ("args", prim1M pArgs),
   ("getEnv", prim1 pGetEnv),

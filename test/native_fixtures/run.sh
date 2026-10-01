@@ -222,7 +222,7 @@ Ok ()"
 CONFINE="$FIX/confinement"
 confine_tree() {
   rm -rf "$1"
-  mkdir -p "$1/cfg/sub" "$1/outdir" "$1/other/cfg" "$1/data"
+  mkdir -p "$1/cfg/sub" "$1/outdir/sub" "$1/other/cfg" "$1/data"
   printf 'top secret' > "$1/secret.txt"
   printf 'granted' > "$1/cfg/a.txt"
   printf 'other granted' > "$1/other/cfg/a.txt"
@@ -230,9 +230,11 @@ confine_tree() {
   ln -s cfg/a.txt "$1/inlink"
   ln -s ../newsecret.txt "$1/cfg/dangling"
   ln -s cfg "$1/link"
+  ln -s ../outdir/sub "$1/cfg/link"
+  printf 'outside' > "$1/outdir/sub/a.txt"
 }
 confine_untouched() {
-  for f in newsecret.txt new.txt pwned.txt x.txt outdir/stolen.txt cfg/stolen.txt; do
+  for f in newsecret.txt new.txt pwned.txt x.txt outdir/stolen.txt outdir/sub/stolen.txt cfg/stolen.txt; do
     [ -e "$1/$f" ] && { echo "$f was created"; return; }
   done
   [ -f "$1/secret.txt" ] && [ -L "$1/inlink" ] || echo "an entry outside cfg/ was removed"
@@ -247,7 +249,9 @@ confine_case() {
   refusal='runtime error [E-PANIC]: cfg/../secret.txt is outside the granted authority ["cfg/*"]'
   (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$CONFINE/$1.mdk" -o "$bin" >/dev/null 2>&1)
   detail=""
-  for engine in run build; do
+  engines='run build'
+  [ "${4:-}" = native ] && engines=build
+  for engine in $engines; do
     confine_tree "$tree"
     if [ "$engine" = run ]; then
       out="$(cd "$tree/$2" && perl -e 'alarm 60; exec @ARGV' -- "$M" run "$CONFINE/$1.mdk" 2>"$tree.err")"
@@ -273,6 +277,45 @@ confine_case() {
   if [ -z "$detail" ]; then ok "confine_$1"; else bad "confine_$1" "$detail"; fi
 }
 outside='is outside the granted authority'
+confine_case declared_bound . "direct: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+dotdot: Err cfg/link/../stolen.txt $outside [\"cfg/link/*\"]
+helper: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+alias: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+read: Err cfg/link/a.txt $outside [\"cfg/*\"]
+inside: Ok
+delay: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+delay alias: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+packed: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+method: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+union: Ok
+explicit link: Ok
+restored: Ok"
+confine_case bounded_recursion . "True" native
+confine_case user_file_labels . "Ok granted
+Ok ()"
+confine_case grant_bound_joins . "Ok ()
+Ok ()
+Ok ()"
+# A container cannot acquire a new physical file bound by covariance. The
+# diagnostic must reach all three production verbs before any file is opened.
+for fixture in nested_value nested_widen aggregate_widen compose recursive_aggregate nested_scope polymorphic_container; do
+  detail=""
+  for verb in check run build; do
+    tree="${TMPDIR:-/tmp}/medaka_confine_reject_$$"
+    confine_tree "$tree"
+    src="$CONFINE/reject_$fixture.mdk"
+    out="$(cd "$tree" && "$M" "$verb" --json "$src" 2>&1)"
+    status=$?
+    [ "$status" -ne 0 ] || detail="$detail $verb accepted;"
+    case "$out" in
+      *'"code":"T-FILE-BOUND-VALUE"'*) ;;
+      *) detail="$detail $verb missing container-bound diagnostic [$out];" ;;
+    esac
+    [ -z "$(find "$tree/outdir" -type f ! -name a.txt -print)" ] || detail="$detail $verb wrote outside cfg/;"
+    rm -rf "$tree"
+  done
+  if [ -z "$detail" ]; then ok "confine_reject_$fixture"; else bad "confine_reject_$fixture" "$detail"; fi
+done
 confine_case paths . "dotdot first: Ok
 dotdot middle in: Ok
 dotdot middle out: Err cfg/sub/../../secret.txt $outside [\"cfg/*\"]

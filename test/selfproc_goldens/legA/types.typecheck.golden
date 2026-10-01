@@ -391,6 +391,8 @@ censusSuperStep : List String -> Int -> Super -> Option Int
 censusVecSuperStep : List String -> (List Int, List Mono) -> Super -> Option (List Int, List Mono)
 chainFullKey : Int -> Int -> String -> String
 chainGo : List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> List (Option String) -> List (String, List Decl) -> (List (String, (List (String, Scheme), List TcDiag, List TcDiag)), List ChainStep)
+changesFileRow : EffRow -> EffRow -> Bool
+changesPackedFileBound : Bool -> Mono -> Mono -> Bool
 checkAdmittedOccObl : ImplEnv -> (String, Mono, Option Loc) -> Unit
 checkAdmittedOccObls : Unit -> Unit
 checkAliasPatternSlots : List (String, Option KindAnn) -> Ty -> Unit
@@ -422,6 +424,7 @@ checkEffectParams : List Decl -> Unit
 checkEffectParamsDecl : Decl -> Unit
 checkEffectParamsTy : Ty -> Unit
 checkEffectParamsTys : List Ty -> Unit
+checkFileValueFlow : (Option Loc, Mono, Mono) -> Unit
 checkFixedWidthLiterals : List (Mono, Int, Option Loc) -> Unit
 checkGradedImplHead : String -> Ty -> List Kind -> Unit
 checkGradedImplHeadCon : String -> TyConOrigin -> String -> Option Loc -> Int -> List Kind -> Unit
@@ -1095,7 +1098,14 @@ fieldOwnerReachable : String -> Bool
 fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
 fieldTyOf : Field -> Ty
 fieldTypeE : SigVars -> List (String, Mono) -> Field -> Mono
+fileBodyLoc : Expr -> Option Loc
+fileBoundExpr : List GrantBinder -> EffRow -> Expr -> Expr
+fileBoundKey : Loc -> String
+fileBoundSite : String -> Loc -> String
+fileBoundValue : List GrantBinder -> Mono -> Expr -> Expr
 fileGrantExterns : Map String (Int, Int)
+fileValueKey : String -> Expr -> Option String
+fileValueShape : Expr -> String
 filterImplTysFor : List Decl -> String -> String -> List (List Ty)
 filterNonSelf : String -> List String -> List String
 finalizeNumBoundary : NumBoundary -> Unit
@@ -1113,6 +1123,7 @@ finishEffectContract : (Map Int Unit, Map Int Unit) -> Unit
 finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Unit
 finishEffectSummaryScopeKeeping : ScopeRoles -> Map Int Unit -> Map Int (Ref Effvar) -> List (Int, AuthResidual)
 finishEvidenceObservation : Unit -> List EvidenceObservationEntry
+finishFileValueScope : Unit -> Unit
 finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
 finishModuleMarking : ModuleMarking -> TcEnv -> Map String (List (List Pat, Expr)) -> List Decl -> List Decl
 finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry
@@ -1228,10 +1239,12 @@ goalsMark : Unit -> Int
 goalsOfKindIn : GoalKind -> List Obligation -> List Obligation
 goalsSince : Int -> List Obligation
 grantArrows : Int -> Ty -> Ty
+grantBody : Expr -> Expr
 grantCalleeOf : String -> GrantCallee
 grantChainAt : ScopeId -> List GrantBinder
 grantDecl : String -> Decl -> Decl
 grantExpr : Expr -> Expr
+grantExprInner : Expr -> Expr
 grantIdTerm : List GrantBinder -> Int -> Expr
 grantIfaceMethod : String -> IfaceMethod -> IfaceMethod
 grantImplMethod : String -> ImplMethod -> ImplMethod
@@ -1292,6 +1305,7 @@ guardSites : Guard -> List (Ref Route)
 hadMatchWarnings : Unit -> Bool
 hadTypeErrors : Unit -> Bool
 hasDupI : List Int -> Bool
+hasFileBoundValue : Mono -> Bool
 hasImportDefiner : String -> Bool
 hasMethodLevelConstraint : List String -> Ty -> Bool
 hasPredicateSlots : String -> List (String, List PredicateSlot) -> Bool
@@ -2072,6 +2086,7 @@ namedArgTypes : Ty -> List (String, Ty)
 namedAtomBinder : EffAtomTy -> List (String, Param)
 namedAtomBinders : Ty -> List (String, Param)
 namesToSet : List String -> Map String Unit -> Map String Unit
+narrowFileAtom : Atom -> Bool
 narrowPerformedIo : List Atom -> List Atom -> List Atom
 narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
 narrowedPick : Option HeadKey -> String -> List String -> List (String, RecordInfo) -> Option (String, RecordInfo)
@@ -2404,6 +2419,7 @@ recordCandImported : List Decl -> String -> (Ident, String, RecordInfo) -> Bool
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
 recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
 recordCandIsType : Ident -> Ident -> String -> Bool
+recordClauseFileBound : Expr -> Int -> Mono -> Unit
 recordCtors : TyConOrigin -> String -> DataVis -> List String -> List Variant -> Unit
 recordDeclKinds : Decl -> Unit
 recordDeclParamKinds : Decl -> Unit
@@ -2417,6 +2433,8 @@ recordExactMethodObligation : MethodReturnRequest -> Mono
 recordExistentials : List (String, Ref Authvar) -> Unit
 recordFieldMap : RecordInfo -> Map String Mono
 recordFieldNames : RecordInfo -> List String
+recordFileBound : Expr -> EffRow -> Unit
+recordFileValueFlow : Option Loc -> Mono -> Mono -> Unit
 recordForReceiverIdent : Mono -> String -> Option RecordInfo
 recordGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Unit
 recordHasExistentials : Option RecordInfo -> Bool
@@ -2463,6 +2481,7 @@ recordStandaloneGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> 
 recordTopGrants : String -> List (String, Scheme) -> Map String (List (List Pat, Expr)) -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
+recordValueFileBound : Expr -> Mono -> Unit
 recoveredShadowSym : String -> Ref Route -> String
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
 reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
@@ -2698,6 +2717,7 @@ schemeOblEntriesFor : String -> UsePath -> List ((String, String), List VecObl) 
 schemeObligationsOf : List Int -> List UObligation -> List VecObl
 schemeOblsForMember : List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List VecObl
 schemesAgree : Option Ty -> Ty -> Bool
+scopeFileBoundModule : Unit -> String
 scopeFrameStats : Unit -> (Int, Int)
 scopeGivenProbe : Unit -> List Bool
 scopeImplMethods : ScopeId -> List ImplMethod -> List ScopedImplMethod
@@ -2968,6 +2988,7 @@ unifyIndexRowPlain : EffRow -> EffRow -> Unit
 unifyInto : Bool -> Mono -> Mono -> Unit
 unifyIntoN : Bool -> Bool -> Mono -> Mono -> Unit
 unifyIntoOrd : Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoStep : Bool -> Bool -> Mono -> Mono -> Unit
 unifyJoinRows : Bool -> EffRow -> EffRow -> Unit
 unifyN : Mono -> Mono -> Unit
 unifyOrdered : Bool -> Mono -> Mono -> Unit
@@ -2977,6 +2998,7 @@ unifyRowN : EffRow -> EffRow -> Unit
 unifyRowPlain : EffRow -> EffRow -> Unit
 unifySourceDomains : Int -> Mono -> Mono -> Unit
 unifySpineProbe : Mono -> List Mono -> Unit
+unifySpineProbeGo : Mono -> List Mono -> Unit
 unifySpineResult : TcEnv -> Expr -> Mono -> List (Expr, Mono) -> Mono
 unifyStandaloneDomain : Mono -> Mono -> Option Loc -> Unit
 unifyStruct : Mono -> Mono -> Unit
@@ -3005,6 +3027,9 @@ unreachableArmWarning : String
 unrigidSig : List (String, Mono) -> Mono -> Mono
 unroutedGroundReqs : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 unroutedResidual : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+unsettledFileRow : EffRow -> EffRow -> Bool
+unsettledFileValueFlow : (Option Loc, Mono, Mono) -> Bool
+unsettledPackedFileBound : Bool -> Mono -> Mono -> Bool
 updateAuthority : String -> List (String, Mono) -> List String -> Int -> Option (Ref Authvar) -> Authority
 useAdmittedRows : Bool -> List Decl -> List (String, (String, String))
 useDefinerRows : Bool -> UsePath -> List (String, (String, String))

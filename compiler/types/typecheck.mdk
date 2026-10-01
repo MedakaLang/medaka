@@ -363,6 +363,7 @@ import frontend.resolve.{
   -- #1280: the extern-signature half of the identity supply — see `externSchemes`.
   stampTyOrigins,
   externTyOriginScope,
+  runtimeExternTyOriginScope,
   noteOriginTrace,
 }
 -- The type-aware non-exhaustive-`match` check (`check_match` in compiler/frontend/exhaust.mdk)
@@ -1001,6 +1002,8 @@ effectSiteOf fn (Some label) bound =
 
 beginEffectSummaryScope : Unit -> Unit
 beginEffectSummaryScope _ =
+  perRun.value.fileValueScopes :=
+    wSnapshot perRun.value.fileValueFlows :: perRun.value.fileValueScopes.value
   EffectSolver.openSummaryScope
     perRun.value.effectSummaries
     (newEffvarId ())
@@ -1069,6 +1072,7 @@ finishEffectSummaryScopeKeeping roles retained borrowed =
       freshEffvarAt
       widenOpenedFor
   let _ = reportEffectSummaryFailures outcome.esoFailures
+  let _ = finishFileValueScope ()
   map
     ((member, w) => (
       member,
@@ -11329,6 +11333,8 @@ data PerRun = PerRun {
   -- joins of alternatives that had no shape yet, newest first, decided when
   -- the binding scope they were recorded in closes (`resolvePendingJoins`)
   pendingJoinsRef : Ref (List PendingJoin),
+  fileValueFlows : Windowed (Option Loc, Mono, Mono),
+  fileValueScopes : Ref (List (List (Option Loc, Mono, Mono), Int)),
   rigidEffvarsRef : Ref (Map Int Unit),
   rigidAuthvarsRef : Ref (Map Int Unit),
   -- Effect provenance: for each (binding, label key), the first site in that
@@ -11460,6 +11466,8 @@ freshPerRun _ = PerRun {
   curEffect = Ref [],
   effectSummaries = EffectSolver.newSolver (),
   pendingJoinsRef = Ref [],
+  fileValueFlows = wNew (),
+  fileValueScopes = Ref [],
   rigidEffvarsRef = Ref Tip,
   rigidAuthvarsRef = Ref Tip,
   effectSitesRef = Ref omEmpty,
@@ -16301,6 +16309,9 @@ data GrantState = GrantState {
   -- takes grants
   gsTakers : Ref (OrdMap Unit),
   gsFresh : Ref Int,
+  gsBounds : Ref (OrdMap (List (EffRow, List GrantBinder))),
+  gsValueBounds : Ref (OrdMap (List (Mono, List GrantBinder))),
+  gsPassingModule : Ref String,
 }
 
 freshGrantState : Unit -> GrantState
@@ -16317,6 +16328,9 @@ freshGrantState _ = GrantState {
   gsSourceless = Ref Tip,
   gsTakers = Ref omEmpty,
   gsFresh = Ref 0,
+  gsBounds = Ref omEmpty,
+  gsValueBounds = Ref omEmpty,
+  gsPassingModule = Ref "",
 }
 
 copyGrantState : GrantState -> GrantState
@@ -16333,6 +16347,9 @@ copyGrantState st = GrantState {
   gsSourceless = Ref st.gsSourceless.value,
   gsTakers = Ref st.gsTakers.value,
   gsFresh = Ref st.gsFresh.value,
+  gsBounds = Ref st.gsBounds.value,
+  gsValueBounds = Ref st.gsValueBounds.value,
+  gsPassingModule = Ref st.gsPassingModule.value,
 }
 
 -- The catalog externs whose authority parameter names a file path
@@ -20519,11 +20536,17 @@ unifySpineResult env f ft ((node, at) :: rest) =
 -- as `unifySpineResult`, but a PROBE: it performs no effect and discards the result.
 -- The dict-slot and obligation recoveries below unify only to populate a substitution.
 unifySpineProbe : Mono -> List Mono -> Unit
-unifySpineProbe _ [] = ()
-unifySpineProbe ft (a :: rest) =
+unifySpineProbe ft args =
+  let saved = wSnapshot perRun.value.fileValueFlows
+  let _ = unifySpineProbeGo ft args
+  wRestore perRun.value.fileValueFlows saved
+
+unifySpineProbeGo : Mono -> List Mono -> Unit
+unifySpineProbeGo _ [] = ()
+unifySpineProbeGo ft (a :: rest) =
   let r = freshVar ()
   let _ = applicationRowTyped ft a r
-  unifySpineProbe r rest
+  unifySpineProbeGo r rest
 
 -- ── #2109: RESULT-FIRST inference against a known expected type ───────────
 -- `paramVarianceGuard` (the D-2 variance gate) fires only when BOTH rows at a
@@ -20660,6 +20683,18 @@ unifyInto pos e a = unifyIntoOrd False pos e a
 -- [valueFirst] is only the operand order of the fallback `unify`.
 unifyIntoOrd : Bool -> Bool -> Mono -> Mono -> Unit
 unifyIntoOrd valueFirst pos e a =
+  let _ =
+    if monoHasArrowInSlot e || monoHasArrowInSlot a then
+      if pos then
+        recordFileValueFlow !currentLoc e a
+      else
+        recordFileValueFlow !currentLoc a e
+  unifyIntoStep valueFirst pos e a
+
+-- Capture a directed judgment once; recursive descent does not rescan every
+-- remaining type subtree for packed arrows.
+unifyIntoStep : Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoStep valueFirst pos e a =
   unifyIntoN valueFirst pos (normalize e) (normalize a)
 
 unifyIntoN : Bool -> Bool -> Mono -> Mono -> Unit
@@ -20681,23 +20716,23 @@ unifyIntoN _ _ (t@(TQual _ _)) (TVar cell) = bindVar cell t
 -- bounds the plain value (the application site refines this with α).
 unifyIntoN vf pos (TQual e qe) (TQual a qa) =
   let _ = if pos then wantAuthority qa qe else wantAuthority qe qa
-  unifyIntoOrd vf pos e a
+  unifyIntoStep vf pos e a
 unifyIntoN vf pos (TQual e qe) a =
   let _ = if pos then wantAuthority (authTop (authDomainTop qe)) qe
-  unifyIntoOrd vf pos e a
+  unifyIntoStep vf pos e a
 unifyIntoN vf pos e (TQual a qa) =
   let _ = if pos then () else wantAuthority (authTop (authDomainTop qa)) qa
-  unifyIntoOrd vf pos e a
+  unifyIntoStep vf pos e a
 unifyIntoN _ _ (TAuth qe) (TAuth qa) = unifyIndex qa qe
 unifyIntoN vf pos (TFun e1 er e2) (TFun a1 ar a2) =
-  let _ = unifyIntoOrd vf (not pos) e1 a1
+  let _ = unifyIntoStep vf (not pos) e1 a1
   let _ = rowInto pos (effrowNorm er) (effrowNorm ar)
-  unifyIntoOrd vf pos e2 a2
+  unifyIntoStep vf pos e2 a2
 unifyIntoN vf pos (e@(TApp e1 e2)) (a@(TApp a1 a2))
   | tupleUnifyClash e a || monoSlotNonCovariant e1 = unifyOrdered vf e a
   | otherwise =
-    let _ = unifyIntoOrd vf pos e1 a1
-    unifyIntoOrd vf pos e2 a2
+    let _ = unifyIntoStep vf pos e1 a1
+    unifyIntoStep vf pos e2 a2
 unifyIntoN vf _ e a = unifyOrdered vf e a
 
 -- A flexible receiving slot acquires the value's shape, not its first closed
@@ -20715,6 +20750,7 @@ bindValueUpper cell lower =
         (joinProducedEnvelope (valueJoinOps "argument" collectValueAllowance) [
           (!currentLoc, lower),
         ])
+    let _ = recordFileValueFlow !currentLoc upper lower
     bindVar cell upper
 
 collectValueAllowance : List EffRow -> EffRow
@@ -22313,6 +22349,9 @@ inferBindingChecked env expected pats body =
     None => ()
   let scope = openExistentialScope (takeOpenedExistentials ())
   let _ = settlePatLits lits
+  let _ = match expected
+    Some want => recordClauseFileBound body arity want
+    None => ()
   let (bodyTy, bodyEff) = captureEffects perRun.value.curEffect joinCellOf (_ =>
     let bodyEnv = extendLocalVars env (snd pr)
     let actual = infer bodyEnv body
@@ -22694,12 +22733,15 @@ argumentInto env arg dom xt = argumentIntoOrd False env arg dom xt
 -- sides in: a call argument names the slot first, a supplied record field the
 -- value first, as their `unify`s did.
 argumentIntoOrd : Bool -> TcEnv -> Option Expr -> Mono -> Mono -> Unit
-argumentIntoOrd valueFirst env arg dom xt = match normalize dom
-  TQual d q =>
-    let _ = unifyIntoOrd valueFirst True d xt
-    wantAuthority (argumentAuthority env (authDomainTop q) arg xt) q
-  _ => unifyIntoOrd valueFirst True dom xt
-
+argumentIntoOrd valueFirst env arg dom xt =
+  let _ = match arg
+    Some e => recordValueFileBound e dom
+    None => ()
+  match normalize dom
+    TQual d q =>
+      let _ = unifyIntoOrd valueFirst True d xt
+      wantAuthority (argumentAuthority env (authDomainTop q) arg xt) q
+    _ => unifyIntoOrd valueFirst True dom xt
 -- The same judgment for an expression that flows into a declared type rather
 -- than a parameter: a signed body into its result, a lambda or method body into
 -- the arrow it is checked against. A qualified declared type bounds the
@@ -22707,13 +22749,14 @@ argumentIntoOrd valueFirst env arg dom xt = match normalize dom
 -- every use reads the declared qualifier. Any other declared type is left to
 -- the caller's own directed check, and [actual] is returned unchanged.
 checkedInto : TcEnv -> Expr -> Mono -> Mono -> Mono
-checkedInto env e expected actual = match normalize expected
-  TQual _ _ =>
-    let _ = setLocIfSome (exprLoc e)
-    let _ = argumentInto env (Some e) expected actual
-    expected
-  _ => actual
-
+checkedInto env e expected actual =
+  let _ = recordValueFileBound e expected
+  match normalize expected
+    TQual _ _ =>
+      let _ = setLocIfSome (exprLoc e)
+      let _ = argumentInto env (Some e) expected actual
+      expected
+    _ => actual
 -- The same judgment where only the argument's type is at hand (a pipe, a
 -- composition, a dispatch spine): the type's own qualifier or the top.
 applicationRowTyped : Mono -> Mono -> Mono -> EffRow
@@ -23084,8 +23127,11 @@ inferIf env c t e =
 -- the structural join. Unknown constructor slots remain exact.
 joinValueTypes : String -> List (Option Loc, Mono) -> Mono
 joinValueTypes context values =
-  optionOrFresh
-    (joinProduced (valueJoinOps context (collectRows joinCellOf)) values)
+  let upper =
+    optionOrFresh
+      (joinProduced (valueJoinOps context (collectRows joinCellOf)) values)
+  let _ = map ((loc, lower) => recordFileValueFlow loc upper lower) values
+  upper
 
 valueJoinOps : String -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
 valueJoinOps context collector =
@@ -23256,6 +23302,7 @@ publishProducedResults owned values =
       (joinProducedEnvelope
         (valueJoinOps "clause" collectProducedSummary)
         results)
+  let _ = map ((loc, lower) => recordFileValueFlow loc produced lower) results
   match resultAfterArrows owned.bsArity owned.bsValue
     Some expected => bindFrom expected produced
     None => panic "binding source arity differs from its allocated shape"
@@ -33350,11 +33397,17 @@ dictPass mid names prog =
 -- parameters land after the dictionary parameters those rewrites prepend, and
 -- each recorded use is applied to its grants while it still carries its id.
 grantPass : String -> List Decl -> List Decl
-grantPass mid prog = map (grantDecl mid) prog
+grantPass mid prog =
+  let st = graphRun.value.grants
+  let saved = st.gsPassingModule.value
+  st.gsPassingModule := mid
+  let result = map (grantDecl mid) prog
+  st.gsPassingModule := saved
+  result
 
 grantDecl : String -> Decl -> Decl
 grantDecl mid (DFunDef pub n pats body) =
-  DFunDef pub n (grantParamPats (topGrantIds mid n) n ++ pats) (grantExpr body)
+  DFunDef pub n (grantParamPats (topGrantIds mid n) n ++ pats) (grantBody body)
 grantDecl mid (DLetGroup pub binds) =
   DLetGroup
     pub
@@ -33388,7 +33441,7 @@ grantIfaceMethod word (IfaceMethod n ty def mloc) = match methodGrantOf word n
       ty
       (map
         (d => match d
-          MethodDefault ps e => MethodDefault ps (grantExpr e))
+          MethodDefault ps e => MethodDefault ps (grantBody e))
         def)
       mloc
   Some mg =>
@@ -33398,16 +33451,16 @@ grantIfaceMethod word (IfaceMethod n ty def mloc) = match methodGrantOf word n
       (map
         (d => match d
           MethodDefault ps e =>
-            let (ps2, e2) = grantMethodParams mg n ps (grantExpr e)
+            let (ps2, e2) = grantMethodParams mg n ps (grantBody e)
             MethodDefault ps2 e2)
         def)
       mloc
 
 grantImplMethod : String -> ImplMethod -> ImplMethod
 grantImplMethod word (ImplMethod n ps e) = match methodGrantOf word n
-  None => ImplMethod n ps (grantExpr e)
+  None => ImplMethod n ps (grantBody e)
   Some mg =>
-    let (ps2, e2) = grantMethodParams mg n ps (grantExpr e)
+    let (ps2, e2) = grantMethodParams mg n ps (grantBody e)
     ImplMethod n ps2 e2
 
 -- A method clause's grant parameters, after its value parameters; a clause
@@ -33455,7 +33508,7 @@ grantLetBind params (LetBind n clauses) =
     n
     (map
       (c => match c
-        FunClause ps body => FunClause (params ++ ps) (grantExpr body))
+        FunClause ps body => FunClause (params ++ ps) (grantBody body))
       clauses)
 
 topGrantIds : String -> String -> List Int
@@ -33481,7 +33534,20 @@ grantParamPats ids n =
 -- argument it takes, so it sees its whole application spine before its
 -- arguments do.
 grantExpr : Expr -> Expr
-grantExpr (e@(EApp _ _)) = match grantSpine e []
+grantExpr e =
+  let inner = grantExprInner e
+  let st = graphRun.value.grants
+  match st.gsValueBounds.value
+    Tip => inner
+    _ => match fileValueKey st.gsPassingModule.value e
+      Some key =>
+        let bounds = optionOr [] (omLookup key st.gsValueBounds.value)
+        fold (result (ty, chain) => fileBoundValue chain ty result) inner bounds
+      None => inner
+
+grantExprInner : Expr -> Expr
+grantExprInner (ELam pats body) = ELam pats (grantBody body)
+grantExprInner (e@(EApp _ _)) = match grantSpine e []
   (EDictAt n ev, args) => match grantOccOf ev
     Some occ => match occ.goTrailing
       Some arity =>
@@ -33495,15 +33561,15 @@ grantExpr (e@(EApp _ _)) = match grantSpine e []
       applyExprs (applyExprs (EMethodAt n seed ev) grants) (map grantExpr args)
     NoGrants => mapChildren grantExpr e
   _ => mapChildren grantExpr e
-grantExpr (EDictAt n ev) = grantUse n ev
-grantExpr (EMethodAt n seed ev) = match methodGrantUse n ev
+grantExprInner (EDictAt n ev) = grantUse n ev
+grantExprInner (EMethodAt n seed ev) = match methodGrantUse n ev
   MethodGrants arity grants =>
     saturateGrants (EMethodAt n seed ev) arity grants []
   LeadingGrants _ grants => applyExprs (EMethodAt n seed ev) grants
   NoGrants => EMethodAt n seed ev
-grantExpr (ELet m r (PVar x xloc) e1 e2) =
+grantExprInner (ELet m r (PVar x xloc) e1 e2) =
   ELet m r (PVar x xloc) (grantLocalRhs x (grantExpr e1)) (grantExpr e2)
-grantExpr (ELetGroup binds body) =
+grantExprInner (ELetGroup binds body) =
   ELetGroup
     (map
       (b => match b
@@ -33511,9 +33577,9 @@ grantExpr (ELetGroup binds body) =
           grantLetBind (grantParamPats (localGrantIds x) x) (LetBind x clauses))
       binds)
     (grantExpr body)
-grantExpr (EBlock stmts) = EBlock (map grantStmt stmts)
+grantExprInner (EBlock stmts) = EBlock (map grantStmt stmts)
 -- every other node: its children, through the one traversal every pass shares
-grantExpr e = mapChildren grantExpr e
+grantExprInner e = mapChildren grantExpr e
 
 grantStmt : DoStmt -> DoStmt
 grantStmt (DoLet m r (PVar x xloc) e) =
@@ -33652,6 +33718,267 @@ freshGrantName _ =
   st.gsFresh := k + 1
   "$grant_arg_\{intToString k}"
 
+-- A declared file row bounds every operation performed while its body runs,
+-- including operations in helpers and callbacks. The bound is checked in
+-- addition to each extern's own grant; a statically named symlink can change
+-- the physical order between the two authorities.
+fileBoundKey : Loc -> String
+fileBoundKey (Loc file line col endLine endCol) =
+  "\{file}:\{intToString line}:\{intToString col}:\{intToString endLine}:\{intToString endCol}"
+
+-- Some application and block roots carry locations only on their children.
+-- Key the body by its first source node, and guard the whole body at its
+-- binding/lambda seam, rather than guarding that child alone.
+fileBodyLoc : Expr -> Option Loc
+fileBodyLoc (ELoc l _) = Some l
+fileBodyLoc e =
+  let found = Ref None
+  let _ =
+    mapChildren
+      (child =>
+        let _ = match found.value
+          None => found := fileBodyLoc child
+          Some _ => ()
+        child)
+      e
+  found.value
+
+fileBoundSite : String -> Loc -> String
+-- Parsed locations may have an empty file field; the module keeps equal
+-- source spans in different modules from sharing a bound.
+fileBoundSite mid loc =
+  "\{intToString (stringLength mid)}:\{mid}:\{fileBoundKey loc}"
+
+scopeFileBoundModule : Unit -> String
+scopeFileBoundModule _ =
+  (Scopes.scopeFrame (currentScopeStore ()) (captureScope ())).sfModuleId
+
+fileValueKey : String -> Expr -> Option String
+fileValueKey mid e =
+  map (loc => "\{fileBoundSite mid loc}:\{fileValueShape e}") (fileBodyLoc e)
+
+fileValueShape : Expr -> String
+fileValueShape (ELoc _ _) = "loc"
+fileValueShape (EApp f _) = "app" ++ intToString (appSpineArgCount f + 1)
+fileValueShape (ELam _ _) = "lambda"
+fileValueShape _ = "value"
+
+-- Container covariance cannot install a confinement wrapper on a function
+-- already packed inside the value. Retain the directed flows until the row
+-- solver closes, including the lower rows of produced-value joins.
+recordFileValueFlow : Option Loc -> Mono -> Mono -> Unit
+recordFileValueFlow loc upper lower =
+  wPush perRun.value.fileValueFlows (loc, upper, lower)
+
+finishFileValueScope : Unit -> Unit
+finishFileValueScope _ = match perRun.value.fileValueScopes.value
+  saved :: rest =>
+    perRun.value.fileValueScopes := rest
+    let flows = wWindow perRun.value.fileValueFlows (snd saved)
+    let _ = wRestore perRun.value.fileValueFlows saved
+    let _ =
+      map
+        (flow =>
+          if isEmptyL rest || not (unsettledFileValueFlow flow) then
+            checkFileValueFlow flow)
+        flows
+    -- A local result can be shaped by a later use in its enclosing scope.
+    -- Keep its producer evidence until that receiving type is determined.
+    let _ = match rest
+      [] => ()
+      _ =>
+        wPushAll
+          perRun.value.fileValueFlows
+          (reverseL (filterList unsettledFileValueFlow flows))
+    ()
+  [] => ()
+
+unsettledFileValueFlow : (Option Loc, Mono, Mono) -> Bool
+unsettledFileValueFlow (_, upper, lower) =
+  unsettledPackedFileBound False upper lower
+
+unsettledPackedFileBound : Bool -> Mono -> Mono -> Bool
+unsettledPackedFileBound packed upper lower = match (
+  normalize upper,
+  normalize lower,
+)
+  (TVar _, _) => True
+  (_, TVar _) => True
+  (TQual u _, l) => unsettledPackedFileBound packed u l
+  (u, TQual l _) => unsettledPackedFileBound packed u l
+  (TApp uf ux, TApp lf lx) =>
+    unsettledPackedFileBound True uf lf || unsettledPackedFileBound True ux lx
+  (TFun ud ur ux, TFun ld lr lx) =>
+    packed && unsettledFileRow ur lr
+      || unsettledPackedFileBound packed ld ud
+      || unsettledPackedFileBound packed ux lx
+  _ => False
+
+unsettledFileRow : EffRow -> EffRow -> Bool
+unsettledFileRow upper lower =
+  let (ua, ut) = rowFlat upper
+  let (la, lt) = rowFlat lower
+  isNonEmptyL ut
+    || isNonEmptyL lt
+    || anyList (a => narrowFileAtom a && authHasVars (atomAuth a)) (ua ++ la)
+
+checkFileValueFlow : (Option Loc, Mono, Mono) -> Unit
+checkFileValueFlow (loc, upper, lower) =
+  if changesPackedFileBound False upper lower then
+    pushTypeErrorOnceAt
+      "T-FILE-BOUND-VALUE"
+      loc
+      ("Cannot change a function's file bound inside a container. The value and required types are: "
+        ++ ppMonosShared [lower, upper]
+        ++ ". Annotate the function with the required FileRead or FileWrite bound before packing it into the container.")
+
+changesPackedFileBound : Bool -> Mono -> Mono -> Bool
+changesPackedFileBound packed upper lower = match (
+  normalize upper,
+  normalize lower,
+)
+  (TQual u _, l) => changesPackedFileBound packed u l
+  (u, TQual l _) => changesPackedFileBound packed u l
+  (TApp uf ux, TApp lf lx) =>
+    changesPackedFileBound True uf lf || changesPackedFileBound True ux lx
+  (TFun ud ur ux, TFun ld lr lx) =>
+    packed && changesFileRow ur lr
+      || changesPackedFileBound packed ld ud
+      || changesPackedFileBound packed ux lx
+  _ => False
+
+changesFileRow : EffRow -> EffRow -> Bool
+changesFileRow upper lower =
+  let (ua, ut) = rowFlat upper
+  let (la, lt) = rowFlat lower
+  isEmptyL ut
+    && anyList
+      (u =>
+        narrowFileAtom u
+          && (isNonEmptyL lt
+            || anyList
+              (l =>
+                atomKey l == atomKey u
+                  && not
+                    (authSub (atomAuth l) (atomAuth u)
+                      && authSub (atomAuth u) (atomAuth l)))
+              la))
+      ua
+
+hasFileBoundValue : Mono -> Bool
+hasFileBoundValue t = match normalize t
+  TFun _ row result =>
+    let (atoms, tails) = rowFlat row
+    isEmptyL tails && anyList narrowFileAtom atoms || hasFileBoundValue result
+  TQual inner _ => hasFileBoundValue inner
+  _ => False
+
+recordValueFileBound : Expr -> Mono -> Unit
+recordValueFileBound e ty =
+  if hasFileBoundValue ty then match fileValueKey (scopeFileBoundModule ()) e
+    Some key =>
+      let st = graphRun.value.grants
+      st.gsValueBounds :=
+        omInsert
+          key
+          ((ty, grantChainAt (captureScope ()))
+            :: optionOr [] (omLookup key st.gsValueBounds.value))
+          st.gsValueBounds.value
+    None => ()
+
+-- Evaluate a function-valued expression once. Its bound becomes active on
+-- application, and the returned function (if any) retains its own arrow rows.
+fileBoundValue : List GrantBinder -> Mono -> Expr -> Expr
+fileBoundValue chain ty e =
+  if hasFileBoundValue ty then match normalize ty
+    TFun _ row result =>
+      let fn = freshGrantName ()
+      let arg = freshGrantName ()
+      ELet
+        False
+        False
+        (PVar fn (Loc "" 0 0 0 0))
+        e
+        (ELam
+          [PVar arg (Loc "" 0 0 0 0)]
+          (fileBoundExpr
+            chain
+            row
+            (fileBoundValue chain result (EApp (EVar fn) (EVar arg)))))
+    TQual inner _ => fileBoundValue chain inner e
+    _ => e
+  else
+    e
+
+recordFileBound : Expr -> EffRow -> Unit
+recordFileBound body row =
+  let (atoms, tails) = rowFlat row
+  if isEmptyL tails && anyList narrowFileAtom atoms then match fileBodyLoc body
+    None => ()
+    Some loc =>
+      let st = graphRun.value.grants
+      let key = fileBoundSite (scopeFileBoundModule ()) loc
+      st.gsBounds :=
+        omInsert
+          key
+          ((row, grantChainAt (captureScope ()))
+            :: optionOr [] (omLookup key st.gsBounds.value))
+          st.gsBounds.value
+
+grantBody : Expr -> Expr
+grantBody body =
+  let inner = grantExpr body
+  match graphRun.value.grants.gsBounds.value
+    Tip => inner
+    boundsBySite =>
+      let bounds = match fileBodyLoc body
+        Some loc =>
+          optionOr
+            []
+            (omLookup
+              (fileBoundSite graphRun.value.grants.gsPassingModule.value loc)
+              boundsBySite)
+        None => []
+      fold (result (row, chain) => fileBoundExpr chain row result) inner bounds
+
+narrowFileAtom : Atom -> Bool
+narrowFileAtom atom = match atomLabelOf atom
+  EffLabel label OriginBuiltin =>
+    (label == "FileRead" || label == "FileWrite")
+      && not (authIsTop (atomAuth atom))
+  _ => False
+
+recordClauseFileBound : Expr -> Int -> Mono -> Unit
+recordClauseFileBound body arity ty
+  | arity <= 0 = ()
+  | otherwise = match normalize ty
+    TFun _ row result =>
+      if arity == 1 then
+        recordFileBound body row
+      else
+        recordClauseFileBound body (arity - 1) result
+    TQual inner _ => recordClauseFileBound body arity inner
+    _ => ()
+
+fileBoundExpr : List GrantBinder -> EffRow -> Expr -> Expr
+fileBoundExpr chain row body =
+  let (atoms, tails) = rowFlat row
+  if isNonEmptyL tails then
+    body
+  else
+    fold
+      (result atom =>
+        let label = atomLabel atom
+        if narrowFileAtom atom then
+          applyExprs (EVar ("$with" ++ label ++ "Bound")) [
+            grantTerm chain (atomAuth atom),
+            ELam [PWild] result,
+          ]
+        else
+          result)
+      body
+      atoms
+
 -- The grant terms of one use, one per authority the callee quantifies.
 grantTerms : GrantOcc -> List Expr
 grantTerms occ = match occ.goRecIds
@@ -33686,7 +34013,12 @@ grantTerm chain a = match authGrantShape a
         p :: rest =>
           fold
             (acc param => topAbsorbs param acc)
-            (fold (acc q => EBinOp "++" acc q (Ref RNone)) p rest)
+            -- Generated after inference: the list identity supplies the operand
+            -- representation that a hidden grant parameter alone cannot carry.
+            (fold
+              (acc q => EBinOp "++" acc q (Ref RNone))
+              (EListLit [])
+              (p :: rest))
             (dedup params)
 
 -- The parameters a join's variables are, or None when one of them has no caller
@@ -37794,6 +38126,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
       (methodBodyHeadMonos kind)
       inst
       bodyScope
+  let _ = recordClauseFileBound body (listLen pats) inst.mbiExpected
   let loc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
   let subject = methodBodySubject kind iface.irName mname
   -- #821: the method's effect variables are RIGID for the body — two of them
@@ -42458,6 +42791,8 @@ inferMembers env sigs grouped (member :: rest) =
       unifyInto True member.smMono member.smOwned.bsValue
   let _ = match member.smForceBound.value
     Some bound =>
+      let _ =
+        fold (_ cl => recordFileBound (snd cl) bound) () (clausesOf m grouped)
       rowInto
         True
         (effrowNorm bound)
@@ -42548,6 +42883,9 @@ inferClauseEff env peel (pats, body) =
   let _ = peelOntoParams peel (fst pr) pats
   let scope = openExistentialScope (takeOpenedExistentials ())
   let _ = settlePatLits lits
+  let _ = match peel
+    Some src => recordClauseFileBound body (listLen pats) src
+    None => ()
   -- #2109: a signed clause's body is inferred AGAINST the signature's result
   -- type (result-first), so a fresh construction at a non-covariant slot meets
   -- the declaration while its own slot is still a metavariable.  See
@@ -49770,7 +50108,7 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- (`netSend : Socket h -> … <Net h> …`), and a name in an index slot is an
   -- authority binder only by the head's declared kind.
   let runtimeSeed = withDeclParamKinds coreDecls (u =>
-    externSchemes (externTyOriginScope coreDecls) runtimeDecls)
+    externSchemes (runtimeExternTyOriginScope coreDecls) runtimeDecls)
   let _ = seedAbstractRecordTypes coreDecls modules
   -- TREES only: the interfaces in scope for the superclass census before the first
   -- sweep.  The diags arm leaves `superDeclsRef` to `checkBodyImpl`'s own
@@ -51149,8 +51487,8 @@ checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
 -- two halves back SEPARATE, so the split needs no new projection.
 --
 -- The empty `coreDecls` is what makes the seed identical to the `Flat` wrapper's
--- hand-built `externSchemes (externTyOriginScope []) runtimeDecls`: `graphPreamble`
--- computes `externSchemes (externTyOriginScope coreDecls) runtimeDecls`, which
+-- hand-built `externSchemes (runtimeExternTyOriginScope []) runtimeDecls`: `graphPreamble`
+-- computes `externSchemes (runtimeExternTyOriginScope coreDecls) runtimeDecls`, which
 -- collapses to the same expression at `coreDecls = []`.  `"__user__"` mirrors
 -- `checkOneToLinesWithRuntime`'s rootId convention just above.
 export

@@ -114,7 +114,8 @@ check_grant() {
       echo "$out" | sed 's/^/  /'
       fail=1
     fi
-  elif [ "$st" -ne 0 ] && printf '%s' "$out" | grep -qF "$want"; then
+  elif [ "$st" -ne 0 ] && printf '%s' "$out" | grep -qF "$want" &&
+       printf '%s' "$out" | grep -qE "$name\\.mdk:[0-9]+:[0-9]+:"; then
     echo "ok   $name"
   else
     echo "FAIL $name: expected exit != 0 and a message containing:"
@@ -170,8 +171,307 @@ readAny p = readFile p
 main = println (readAny "data.txt")' \
   ""
 
+# An exact call grant cannot discharge a declared directory bound: its path
+# can name a symlink whose physical target is outside that directory.
+check_grant "file_declared_bound_exact_call_refused" \
+'readCfg : Unit -> <FileRead "cfg/*"> Result String String
+readCfg _ = readFile "cfg/link/a.txt"
+
+main = println (readCfg ())' \
+  '`declared FileRead bound` is given the file grant ["cfg/*"]'
+
+check_grant "file_declared_bound_alias_refused" \
+'helper _ = readFile "cfg/link/a.txt"
+
+readCfg : Unit -> <FileRead "cfg/*"> Result String String
+readCfg = helper
+
+main = println (readCfg ())' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_declared_bound_pure_built" \
+'quiet : Unit -> <FileRead "cfg/*"> Option Int
+quiet _ = Some 7
+
+main = println (quiet ())' \
+  ""
+
+check_grant "file_declared_read_bound_write_only_built" \
+'writeOnly : Unit -> <FileRead "cfg/*", FileWrite> Result String Unit
+writeOnly _ = writeFileBytes "data.txt" (arrayFromList [120])
+
+main = println (writeOnly ())' \
+  ""
+
+check_grant "file_declared_bound_newtype_built" \
+'newtype Wrapper = Wrapper Int
+
+quiet : Unit -> <FileRead "cfg/*"> Wrapper
+quiet _ = Wrapper 7
+
+main = match quiet ()
+  Wrapper n => println n' \
+  ""
+
+check_grant "user_file_label_built" \
+'effect FileRead Prefix
+
+readData : Unit -> <FileRead "user/*", IO> Result String String
+readData _ = readFile "data.txt"
+
+main = println (readData ())' \
+  ""
+
+# A callback can share a spelling with a live pure global. Only the callback's
+# lexical binding determines whether the declared bound needs host confinement.
+check_grant "file_bound_callback_shadow_refused" \
+'cb : Unit -> <IO> Result String String
+cb _ = Ok "pure"
+
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg cb = cb ()
+
+main =
+  let _ = cb ()
+  println (readCfg (_ => readFile "data.txt"))' \
+  '`declared FileRead bound` is given the file grant ["cfg/*"]'
+
+check_grant "file_bound_callback_helper_refused" \
+'cb : Unit -> <IO> Result String String
+cb _ = Ok "pure"
+
+invoke cb = cb ()
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = invoke given
+
+main =
+  let _ = cb ()
+  println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_callback_let_refused" \
+'cb : Unit -> <IO> Result String String
+cb _ = Ok "pure"
+
+invoke given =
+  let cb = given
+  cb ()
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = invoke given
+
+main =
+  let _ = cb ()
+  println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_callback_lambda_refused" \
+'cb : Unit -> <IO> Result String String
+cb _ = Ok "pure"
+
+invoke given = (cb => cb ()) given
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = invoke given
+
+main =
+  let _ = cb ()
+  println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_callback_match_refused" \
+'cb : Unit -> <IO> Result String String
+cb _ = Ok "pure"
+
+invoke given = match Some given
+  Some cb => cb ()
+  None => Ok "none"
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = invoke given
+
+main =
+  let _ = cb ()
+  println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_callback_returned_refused" \
+'cb : Unit -> <IO> Result String String
+cb _ = Ok "pure"
+
+identity cb = cb
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = (identity given) ()
+
+main =
+  let _ = cb ()
+  println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_callback_returned_helper_refused" \
+'cb : Unit -> <IO> Result String String
+cb _ = Ok "pure"
+
+identity cb = cb
+invoke given = (identity given) ()
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = invoke given
+
+main =
+  let _ = cb ()
+  println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_callback_do_refused" \
+'cb : Unit -> <IO> Result String String
+cb _ = Ok "pure"
+
+invoke given = do
+  cb <- Ok given
+  let call = cb
+  call ()
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = invoke given
+
+main =
+  let _ = cb ()
+  println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+# A nested binder does not shadow an extern outside that binder's scope.
+check_grant "file_bound_out_of_scope_extern_built" \
+'readCfg : Unit -> <FileRead "cfg/*"> String
+readCfg _ =
+  let keep = (intToString => intToString)
+  intToString 1
+
+main = println (readCfg ())' \
+  ""
+
+check_grant "file_bound_constrained_returned_refused" \
+'interface Tag a where
+  tag : a -> Bool
+impl Tag String where
+  tag _ = True
+
+returnCb : Tag a => a -> b -> b
+returnCb x cb =
+  let _ = tag x
+  cb
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = (returnCb "tag" given) ()
+
+main = println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_signed_returned_refused" \
+'returnCb : (Unit -> <IO> Result String String) -> Unit -> <IO> Result String String
+returnCb cb = cb
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = (returnCb given) ()
+
+main = println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_relay_returned_refused" \
+'returnCb cb = cb
+relay cb = returnCb cb
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = (relay given) ()
+
+main = println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_pointfree_method_built" \
+'readCfg : Unit -> <FileRead "cfg/*"> Int
+readCfg _ = length [1, 2]
+
+main = println (readCfg ())' \
+  ""
+
+check_grant "file_bound_signed_lambda_alias_built" \
+'keep : Int -> Int -> Int
+keep x = y => x
+keepAlias = keep
+readCfg : Unit -> <FileRead "cfg/*"> Int
+readCfg _ =
+  let _ = keep 1 2
+  keepAlias 3 4
+
+main = println (readCfg ())' \
+  ""
+
+check_grant "file_bound_alias_callback_refused" \
+'type Runner = (Unit -> <IO> Result String String) -> <IO> Result String String
+runCallback : Runner
+runCallback cb = cb ()
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = runCallback given
+
+main = println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_read_bound_write_callback_built" \
+'callWrite : (Unit -> <FileWrite "out"> Result String Unit) -> <FileWrite "out"> Result String Unit
+callWrite cb = cb ()
+readCfg : Unit -> <FileRead "cfg/*", FileWrite "out"> Result String Unit
+readCfg _ = callWrite (_ => writeFileBytes "out" (arrayFromList [120]))
+
+main = println (readCfg ())' \
+  ""
+
+check_grant "file_read_bound_eager_callback_construction" \
+'callWrite : (Unit -> <FileWrite "out"> Result String Unit) -> <FileWrite "out"> Result String Unit
+callWrite cb = cb ()
+readCfg : Unit -> <FileRead "cfg/*", FileWrite "out"> Result String Unit
+readCfg _ = callWrite (let _ = readFile "cfg/link" in _ => writeFileBytes "out" (arrayFromList [120]))
+main = println (readCfg ())' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_pure_local_function_built" \
+'readCfg : Unit -> <FileRead "cfg/*"> Int
+readCfg _ =
+  let count xs = length xs
+  count [1, 2]
+main = println (readCfg ())' \
+  ""
+
+check_grant "file_bound_local_capture_refused" \
+'readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given =
+  let call _ = given ()
+  let given = _ => Ok "pure"
+  call ()
+main = println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_local_returned_callback_refused" \
+'readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given =
+  let identity cb = cb
+  identity given ()
+main = println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_method_returned_callback_refused" \
+'interface Return s where
+  returnCb : s -> (Unit -> <IO> Result String String) -> Unit -> <IO> Result String String
+data Box = Box
+impl Return Box where
+  returnCb _ cb = cb
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = returnCb Box given ()
+main = println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
+check_grant "file_bound_standalone_shadow_returned_callback_refused" \
+'data Box = Box
+sub : Box -> (Unit -> <IO> Result String String) -> Unit -> <IO> Result String String
+sub _ cb = cb
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg given = sub Box given ()
+main = println (readCfg (_ => readFile "data.txt"))' \
+  'but a wasm build cannot confine a file operation to a pattern'
+
 if [ "$fail" -eq 0 ]; then
-  echo "9 ok, 0 failing"
+  echo "37 ok, 0 failing"
   exit 0
 else
   echo "diff_wasm_ffi_wall: FAILURES ABOVE"

@@ -2202,9 +2202,49 @@ static long long mdk_confine(long long path, long long grant, int entry) {
   return mdk_string_append(msg, mdk_str_cstr("]"));
 }
 
-#define MDK_CONFINE(path, grant, entry)                       \
+struct mdk_file_bound {
+  int write;
+  long long grant;
+  struct mdk_file_bound *parent;
+};
+static _Thread_local struct mdk_file_bound *mdk_file_bounds;
+static const long long mdk_file_bound_unit = 1;
+
+static int mdk_same_file_grant(long long a, long long b) {
+  while (a != b) {
+    if (a == mdk_nil() || b == mdk_nil()) return 0;
+    if (mdk_string_eq(((const long long *)a)[1], ((const long long *)b)[1]) != 3)
+      return 0;
+    a = ((const long long *)a)[2];
+    b = ((const long long *)b)[2];
+  }
+  return 1;
+}
+
+long long mdk_with_file_bound(long long write, long long grant, long long thunk) {
+  /* Re-entering an existing bound adds no restriction. This return stays a
+   * tail call, so a recursive bounded function does not accumulate frames. */
+  if (grant == mdk_nil()) return __mdk_apply(thunk, 1, &mdk_file_bound_unit);
+  for (struct mdk_file_bound *b = mdk_file_bounds; b; b = b->parent)
+    if (b->write == write && mdk_same_file_grant(b->grant, grant))
+      return __mdk_apply(thunk, 1, &mdk_file_bound_unit);
+  struct mdk_file_bound frame = {(int)write, grant, mdk_file_bounds};
+  mdk_file_bounds = &frame;
+  long long result = __mdk_apply(thunk, 1, &mdk_file_bound_unit);
+  mdk_file_bounds = frame.parent;
+  return result;
+}
+
+static long long mdk_confine_bounds(long long path, long long grant, int entry, int write) {
+  long long refused = mdk_confine(path, grant, entry);
+  for (struct mdk_file_bound *b = mdk_file_bounds; !refused && b; b = b->parent)
+    if (b->write == write) refused = mdk_confine(path, b->grant, entry);
+  return refused;
+}
+
+#define MDK_CONFINE(path, grant, entry, write)                       \
   do {                                                        \
-    long long refused_ = mdk_confine((path), (grant), (entry)); \
+    long long refused_ = mdk_confine_bounds((path), (grant), (entry), (write)); \
     if (refused_) return mdk_err(refused_);                   \
   } while (0)
 
@@ -2222,7 +2262,7 @@ static long long mdk_confine(long long path, long long grant, int entry) {
  * here would lose data the caller never saw; readFileBytes is the raw route.
  * The bytes are read straight into the String cell and validated there. */
 long long mdk_read_file(long long path, long long grant) {
-  MDK_CONFINE(path, grant, 0);
+  MDK_CONFINE(path, grant, 0, 0);
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) == 0 && S_ISDIR(st.st_mode))
@@ -2252,7 +2292,7 @@ long long mdk_read_file(long long path, long long grant) {
  * 0..255 (mirrors mdk_array_from_list element tagging).
  * Same directory guard as mdk_read_file — see comment there. */
 long long mdk_read_file_bytes(long long path, long long grant) {
-  MDK_CONFINE(path, grant, 0);
+  MDK_CONFINE(path, grant, 0, 0);
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) == 0 && S_ISDIR(st.st_mode))
@@ -2310,12 +2350,12 @@ static long long mdk_write_impl(long long path, long long content, const char *m
 
 /* writeFile : String -> String -> Result String Unit — truncating write. */
 long long mdk_write_file(long long path, long long content, long long grant) {
-  MDK_CONFINE(path, grant, 0);
+  MDK_CONFINE(path, grant, 0, 1);
   return mdk_write_impl(path, content, "wb");
 }
 /* appendFile : String -> String -> Result String Unit — append (create if absent). */
 long long mdk_append_file(long long path, long long content, long long grant) {
-  MDK_CONFINE(path, grant, 0);
+  MDK_CONFINE(path, grant, 0, 1);
   return mdk_write_impl(path, content, "ab");
 }
 
@@ -2324,7 +2364,7 @@ long long mdk_append_file(long long path, long long content, long long grant) {
  * Untag each element: (elem >> 1) & 0xFF.  Byte-clean write counterpart of
  * mdk_read_file_bytes. */
 long long mdk_write_file_bytes(long long path, long long arr, long long grant) {
-  MDK_CONFINE(path, grant, 0);
+  MDK_CONFINE(path, grant, 0, 1);
   const char *p = (const char *)path + 24;
   const long long *a = (const long long *)arr;
   long long n = a[0];
@@ -2346,7 +2386,7 @@ long long mdk_write_file_bytes(long long path, long long arr, long long grant) {
  * first byte is written, so the contents never exist at a wider mode. */
 long long mdk_write_file_mode(long long path, long long mode_tagged, long long content,
                                long long grant) {
-  MDK_CONFINE(path, grant, 0);
+  MDK_CONFINE(path, grant, 0, 1);
   const char *p = (const char *)path + 24;
   const char *c = (const char *)content + 24;
   long long cl = ((const long long *)content)[1];
@@ -2373,7 +2413,7 @@ long long mdk_write_file_mode(long long path, long long mode_tagged, long long c
 /* fileMode : String -> Result String Int — st_mode's permission bits (& 07777),
  * as a tagged Int inside Ok.  stat(2), so a symlink reports its target. */
 long long mdk_file_mode(long long path, long long grant) {
-  MDK_CONFINE(path, grant, 0);
+  MDK_CONFINE(path, grant, 0, 0);
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2382,7 +2422,7 @@ long long mdk_file_mode(long long path, long long grant) {
 
 /* fileExists : String -> Bool — raw 0/1, emitter tags via tagInt. */
 long long mdk_file_exists(long long path, long long grant) {
-  long long refused = mdk_confine(path, grant, 0);
+  long long refused = mdk_confine_bounds(path, grant, 0, 0);
   if (refused) mdk_panic(refused);
   return access((const char *)path + 24, F_OK) == 0 ? 1 : 0;
 }
@@ -2390,7 +2430,7 @@ long long mdk_file_exists(long long path, long long grant) {
 /* canonicalizePath : String -> String — realpath(3); input unchanged on failure
  * (matches the OCaml oracle's `try Unix.realpath p with _ -> p`). */
 long long mdk_canonicalize_path(long long path, long long grant) {
-  long long refused = mdk_confine(path, grant, 0);
+  long long refused = mdk_confine_bounds(path, grant, 0, 0);
   if (refused) mdk_panic(refused);
   const char *p = (const char *)path + 24;
   char buf[PATH_MAX];
@@ -2401,7 +2441,7 @@ long long mdk_canonicalize_path(long long path, long long grant) {
 /* listDir : String -> Result String (List String).
  * OCaml Sys.readdir excludes "." and ".." — skip them for correctness. */
 long long mdk_list_dir(long long path, long long grant) {
-  MDK_CONFINE(path, grant, 0);
+  MDK_CONFINE(path, grant, 0, 0);
   const char *p = (const char *)path + 24;
   DIR *d = opendir(p);
   if (!d) return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2416,7 +2456,7 @@ long long mdk_list_dir(long long path, long long grant) {
 
 /* makeDir : String -> Result String Unit — mkdir 0755. */
 long long mdk_make_dir(long long path, long long grant) {
-  MDK_CONFINE(path, grant, 1);
+  MDK_CONFINE(path, grant, 1, 1);
   const char *p = (const char *)path + 24;
   if (mkdir(p, 0755) == 0) return mdk_ok(1);  /* Ok () */
   return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2424,7 +2464,7 @@ long long mdk_make_dir(long long path, long long grant) {
 
 /* removeFile : String -> Result String Unit — unlink(2). */
 long long mdk_remove_file(long long path, long long grant) {
-  MDK_CONFINE(path, grant, 1);
+  MDK_CONFINE(path, grant, 1, 1);
   const char *p = (const char *)path + 24;
   if (unlink(p) == 0) return mdk_ok(1);  /* Ok () */
   return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2433,8 +2473,8 @@ long long mdk_remove_file(long long path, long long grant) {
 /* rename : String -> String -> Result String Unit — rename(2) old new. */
 long long mdk_rename(long long oldp, long long newp, long long grant_src,
                      long long grant_dst) {
-  MDK_CONFINE(oldp, grant_src, 1);
-  MDK_CONFINE(newp, grant_dst, 1);
+  MDK_CONFINE(oldp, grant_src, 1, 1);
+  MDK_CONFINE(newp, grant_dst, 1, 1);
   const char *o = (const char *)oldp + 24;
   const char *n = (const char *)newp + 24;
   if (rename(o, n) == 0) return mdk_ok(1);  /* Ok () */
@@ -2443,7 +2483,7 @@ long long mdk_rename(long long oldp, long long newp, long long grant_src,
 
 /* removeDir : String -> Result String Unit — rmdir(2); empty dir only. */
 long long mdk_remove_dir(long long path, long long grant) {
-  MDK_CONFINE(path, grant, 1);
+  MDK_CONFINE(path, grant, 1, 1);
   const char *p = (const char *)path + 24;
   if (rmdir(p) == 0) return mdk_ok(1);  /* Ok () */
   return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2453,7 +2493,7 @@ long long mdk_remove_dir(long long path, long long grant) {
  * O_RDONLY opens both a regular file and a directory, since the durability
  * of a rename is a property of the containing directory, not either file. */
 long long mdk_fsync(long long path, long long grant) {
-  MDK_CONFINE(path, grant, 0);
+  MDK_CONFINE(path, grant, 0, 1);
   const char *p = (const char *)path + 24;
   int fd = open(p, O_RDONLY);
   if (fd < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
@@ -2638,7 +2678,7 @@ long long mdk_build_date(long long unit_ignored) {
  * 4-tuple cell layout mirrors mdk_run_command's 3-tuple: [TUPLE_TAG, e0..e3].
  * Bool uses the native tagged encoding (True=3, False=1); Float is boxed. */
 long long mdk_stat_file(long long path, long long grant) {
-  MDK_CONFINE(path, grant, 0);
+  MDK_CONFINE(path, grant, 0, 0);
   const char *p = (const char *)path + 24;
   struct stat st;
   if (stat(p, &st) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));

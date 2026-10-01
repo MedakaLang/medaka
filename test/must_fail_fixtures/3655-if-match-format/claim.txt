@@ -1,0 +1,6 @@
+issue: 3655
+what: fmt --write reports success while removing required parentheses from an if-match condition
+cmd: fmt-write main.mdk
+exit: 0
+control: check control.mdk
+file-after: choose x =\n  if match x\n    Some n => n > 0\n    None => False then\n    1\n  else\n    0\n\nmain = println (choose (Some 1))

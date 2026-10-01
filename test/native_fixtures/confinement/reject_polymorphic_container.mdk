@@ -1,0 +1,9 @@
+helper _ = writeFile "cfg/link/stolen.txt" "x"
+
+main =
+  let pack f = Some f
+  let boxed =
+    pack helper : Option (Unit -> <FileWrite "cfg/*"> Result String Unit)
+  match boxed
+    Some f => println (f ())
+    None => ()

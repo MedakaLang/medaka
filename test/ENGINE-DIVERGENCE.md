@@ -669,3 +669,9 @@ neighbours.
 3. **§3.2, the wasm i31 tag leak and the unsignatured-float trap** — two real codegen
    bugs with sharp, verified repros.
 4. Everything else is a gap, not a soundness hole, and can wait.
+
+The trailing-binding Wasm gap (#3656) is pinned by
+`engine/wasm_trailing_let`: eval and native agree, while Wasm cannot emit the
+empty continuation after the final binding. The explicit-Unit sibling runs on
+all three engines. Remove the divergence row when the Wasm block walkers yield
+Unit after a final binding.

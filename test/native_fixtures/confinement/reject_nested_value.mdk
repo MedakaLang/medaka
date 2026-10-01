@@ -1,0 +1,14 @@
+helper _ = writeFile "cfg/link/stolen.txt" "x"
+
+boxed : Unit -> Option (Unit -> <FileWrite "cfg/*"> Result String Unit)
+boxed _ = Some helper
+
+paired : Unit -> (Unit -> <FileWrite "cfg/*"> Result String Unit, Int)
+paired _ = (helper, 1)
+
+main =
+  match boxed ()
+    Some f => println (f ())
+    None => ()
+  let (g, _) = paired ()
+  println (g ())
