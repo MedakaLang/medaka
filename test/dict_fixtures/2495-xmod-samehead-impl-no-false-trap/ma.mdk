@@ -1,0 +1,7 @@
+import md.{Sole(..)}
+
+export interface Wrap f where
+  wsize : f a -> Int
+
+export impl Wrap Sole where
+  wsize _ = 1

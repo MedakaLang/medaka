@@ -1500,6 +1500,61 @@ table = [
     codes = [],
   },
   Row {
+    entry = "756-samename-verb-selective-agreement/main.mdk",
+    label =
+      "#756 (same-name verb), SELECTIVE spelling `import q.{f}` beside `import p`: `p.f : Display a => a -> String` vs `q.f : a -> String`, called at a type with no `Display`. The selected `q.f` needs no dict, so the program is well-typed and prints `q` on every verb. Regression row for a closed issue; value hand-derived from the declared signatures, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "q\n",
+    codes = [],
+  },
+  Row {
+    entry = "756-samename-verb-alias-agreement/main.mdk",
+    label =
+      "#756 (same-name verb), ALIAS spelling `import q as Q` (`Q.f Z`) beside `import p`; same pair as the selective row. Prints `q` on every verb. Regression row for a closed issue; value hand-derived from the declared signatures, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "q\n",
+    codes = [],
+  },
+  Row {
+    entry = "756b-samename-verb-selective-agreement/main.mdk",
+    label =
+      "#756 (same-name verb), the #1426 pair `ps.h : Display a => a -> String` / `qs.h : a -> a` with `qs` imported SELECTIVELY (`qs.{h}`); the wildcard spelling is the `1426-wildcard-samename-verb-agreement` row. `tag (h NoDisp)` needs no `Display`, `ph 5` does and has it: `ok / 5` on every verb. Regression row for a closed issue; value hand-derived from the declared signatures, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok / 5\n",
+    codes = [],
+  },
+  Row {
+    entry = "756b-samename-verb-alias-agreement/main.mdk",
+    label =
+      "#756 (same-name verb), the #1426 pair with `qs` imported by ALIAS (`import qs as Q`, `Q.h NoDisp`). `ok / 5` on every verb. Regression row for a closed issue; value hand-derived from the declared signatures, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok / 5\n",
+    codes = [],
+  },
+  Row {
+    entry = "2495-xmod-samehead-impl-no-false-trap/main.mdk",
+    label =
+      "#2495 (arg-tag false trap): two modules each declare an interface `Wrap` (method `wsize`) with an impl at the same head `Sole`; the entry imports only `ma.{wsize}` and bare `mb`. `go` is generic over `Wrap`, so the call resolves by identity to `ma`'s impl and prints `1` (not `9`) with no dispatch trap on `run` or the built binary. Regression row for a closed issue; value hand-derived from the declared signatures, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
     entry = "s8-i1-samename-reexport-selective-through-wildcard/main.mdk",
     label =
       "§8 I1 ACROSS A SELECTIVE RE-EXPORT REACHED BY A WILDCARD IMPORT (RUN-XMOD-062, #1425 F1 third relocation). The two `-wildcard-` rows above grade a name a wildcard-imported module DECLARES; `rmod` here declares NOTHING and only `export import umod.{pick}`. The RUN-XMOD-054 repair`s supply walk enumerated declared exports, so this name got no row in `currentImportDefinersRef`, `declaredConstraintFor` fell to the source-blind bare-name table, and `cmod.pick``s CONSTRAINED row answered for the unconstrained `umod.pick`. Hand-derived from the two declared signatures, not captured: `C.pick (1 : Int)` = `sz 1 + 100` = 101, `pick 1 + 200` = 201; a re-export changes neither binding`s identity. MEASURED KNOWN-BAD at b313d767 in BOTH import orders: `run` 101 then `E-NOT-A-FUNCTION: applied non-function: <dict:>`, `check` exit 0, built binary CORRECT -- three verbs, two answers. ⚠️ Order-INVARIANT, so `import_order` reports it \"invariant\" and PASSES on the broken compiler",
@@ -2733,7 +2788,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 236
+tableRows = 241
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

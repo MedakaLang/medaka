@@ -1,0 +1,6 @@
+entry: main.mdk
+what: #1708 (ctor alias form) a match on `A.Red` is checked against `aacol.Col`, whichever alias clause comes first
+
+`aacol` and `zzcol` both declare a type `Col` (`Red | Blue` and `Green`); `main` imports them as `A` and `Z` and matches `A.Red` only. The scrutinee is `aacol.Col`, so `check` owes the warning `Missing case: 'Blue'` regardless of import order. What this guards is the alias form resolving the type by whichever `Col` comes first or last.
+
+Spec answer, hand-derived: `check` warns `Missing case: 'Blue'` at exit 0; `run` and the built binary print `1` (`f A.Red` = 1; the `aval`/`zval` calls add 0). This gate grades only invariance across the two import orderings; the warning text and the value were measured by hand.

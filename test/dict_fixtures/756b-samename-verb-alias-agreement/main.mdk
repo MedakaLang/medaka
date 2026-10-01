@@ -1,0 +1,9 @@
+import ps.{h as ph}
+import qs as Q
+
+data NoDisp = NoDisp
+
+tag : NoDisp -> String
+tag _ = "ok"
+
+main = println "\{tag (Q.h NoDisp)} / \{ph 5}"
