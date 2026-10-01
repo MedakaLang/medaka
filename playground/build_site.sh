@@ -163,7 +163,7 @@ node "$SCRIPT_DIR/render_docs.mjs" \
   --site-url "https://medaka-lang.dev/blog" \
   --og-image "https://medaka-lang.dev/og-card.png" \
   --og-image-alt "Medaka, a practical functional language."
-cp "$SCRIPT_DIR"/blog-cards/*.png "$SITE/blog/"
+cp "$SCRIPT_DIR"/blog-cards/* "$SITE/blog/"
 
 # ── Verify the site can actually serve what the page asks for ───────────────
 # Derived from main.js, so this check cannot drift from the page's real needs.
@@ -239,7 +239,7 @@ fi
 # authored index, so it renders to index.html like any other page), plus the
 # stylesheet and every playground/blog-cards/ image.
 missing_blog=""
-for m in "$ROOT"/docs/blog/*.md "$SCRIPT_DIR"/blog-cards/*.png; do
+for m in "$ROOT"/docs/blog/*.md "$SCRIPT_DIR"/blog-cards/*; do
   b="$(basename "$m")"
   case "$b" in
     *.md) [ -f "$SITE/blog/${b%.md}.html" ] || missing_blog="$missing_blog ${b%.md}.html" ;;

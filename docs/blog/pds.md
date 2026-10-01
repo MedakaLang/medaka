@@ -3,7 +3,7 @@
 _Valerie Grasley · October 1, 2026_
 
 <!-- description: A Bluesky PDS written entirely in Medaka, a functional language that didn't exist four months ago: hand-rolled crypto, new integer types, and effects that prove what the server can touch. -->
-<!-- og-image: pds-card.png -->
+<!-- og-image: pds-card.jpg -->
 <!-- og-image-alt: The Medaka fish and the Bluesky butterfly side by side. -->
 
 Two weeks ago I made an unassuming post from a Bluesky account for my programming language Medaka:

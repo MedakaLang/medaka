@@ -44,7 +44,12 @@ DIST="$ROOT/playground/dist"
 # gained the u8/u16/u32 pages, pushing the real total to 7,631,285 bytes (CI run
 # 36154492441). Same ~16% headroom over the new total: 7,631,285 * 1.16 ≈
 # 8,852,000, rounded down.
-SITE_BYTES_CEIL=8850000
+# RETUNED again (PR #3657): /blog joined the assembled site, a new asset class
+# (rendered posts plus each post's link-card image, kept as an 18 KB JPEG), and
+# every doc page gained link-preview tags. main alone measured 8,827,017 bytes
+# here, already within 0.3% of the old ceiling; the new total is 8,898,933.
+# Same ~16% headroom: 8,898,933 * 1.16 ≈ 10,322,800, rounded down.
+SITE_BYTES_CEIL=10320000
 
 NODE=node
 major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
