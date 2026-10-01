@@ -1014,7 +1014,7 @@ residualJsonTriples entryFile pathMap ((mid, d) :: rest) =
 --
 -- The buckets start empty rather than from `resolvePass`: both callers run
 -- `resolveModulesErrorsByFile` first and abort on any resolve error, so
--- `isRedundantUnbound` has nothing to filter against.
+-- `resolveRejected` has nothing to gate on.
 elaboratedProjectDiags : List Decl ->
   List Decl ->
   List (String, String, List Decl) ->

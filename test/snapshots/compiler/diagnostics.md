@@ -1635,7 +1635,7 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
   let shadowPool = preludeStandaloneSet (runtimeP ++ coreP)
   -- #2738's operand: every module whose decls this compile has, keyed the way a
   -- `DUse`'s `usePathModuleId` spells it, with the prelude under the same `"core"`
-  -- key `graphIfaceMethodsRef` uses.  The detector reads a DEPENDENCY's decls (the
+  -- key `meIfaceExports` (`DeclEnvs.deMethods`) uses.  The detector reads a DEPENDENCY's decls (the
   -- displaced function's own signature lives there, not here), which is exactly the
   -- operand the flat path cannot have.
   let shadowGraph = ("core", runtimeP ++ coreP) :: modPairs
