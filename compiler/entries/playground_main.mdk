@@ -124,10 +124,10 @@ import json.{
 import support.path.{dirOf}
 import support.char.{isIdentChar, isDigit}
 import entries.entry_support.{rootsOrDefault, desugarPair}
-import support.util.{startsWith}
+import support.util.{startsWith, lookupAssoc}
 import types.repr.{Scheme}
 import types.typecheck.{
-  elaborateModules, constrainedSigNames, preludeReturnPosDictNames,
+  TcDiag, elaborateModules, constrainedSigNames, preludeReturnPosDictNames,
   preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
   checkedFfiExternTypeNamesModules, ppSchemeNamedFull, checkOneSchemeFullK
 }
@@ -143,6 +143,7 @@ import ir.core_ir_lower.{
 import backend.private_mangle.{mangleUnitsEv}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
+import backend.wasm_file_grants.{prepareWasmFileGrants}
 import backend.wasm_reach.{wasmReachFilter}
 
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
@@ -229,7 +230,7 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
               let mods = map dropPath triples
               match mods
                 [_] =>
-                  analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods
+                  analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP triples
                 _ =>
                   analyzeMulti
                     emit
@@ -240,7 +241,7 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
                     runtimeP
                     coreP
                     roots
-                    mods
+                    triples
 
 dropPath : (String, String, List Decl) -> (String, List Decl)
 dropPath (mid, _, decls) = (mid, decls)
@@ -265,13 +266,15 @@ analyzeSingle : Bool ->
   String ->
   String ->
   String ->
-  List (String, List Decl) ->
+  List (String, String, List Decl) ->
   <IO> Unit
-analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods =
+analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP loaded =
+  let mods = map dropPath loaded
+  let paths = map ((mid, path, _) => (mid, path)) loaded
   let diags = analyzeLocated rsrc csrc tsrc
   match any isDiagError diags
     True => emitDiagnostics (cjAllToJson [(entry, tsrc, diags)])
-    False => guardedEmit emit rsrc csrc tsrc entry mods [
+    False => guardedEmit emit rsrc csrc tsrc entry paths mods [
       (entry, tsrc, filterWarnings diags),
     ]
 
@@ -287,9 +290,11 @@ analyzeMulti : Bool ->
   String ->
   String ->
   List String ->
-  List (String, List Decl) ->
+  List (String, String, List Decl) ->
   <IO> Unit
-analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods =
+analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots loaded =
+  let mods = map dropPath loaded
+  let paths = map ((mid, path, _) => (mid, path)) loaded
   let cacheRef = Ref []
   let results =
     analyzeProject
@@ -305,7 +310,8 @@ analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods =
   let triples = map readDiagSrc results
   match any cjHasErr results
     True => emitDiagnostics (cjAllToJson triples)
-    False => guardedEmit emit rsrc csrc tsrc entry mods (map warnTriple triples)
+    False =>
+      guardedEmit emit rsrc csrc tsrc entry paths mods (map warnTriple triples)
 
 -- Keep only non-error (i.e. warning) diagnostics for a single file's list.
 filterWarnings : List Diag -> List Diag
@@ -338,14 +344,16 @@ guardedEmit : Bool ->
   String ->
   String ->
   String ->
+  List (String, String) ->
   List (String, List Decl) ->
   List (String, String, List Diag) ->
   <IO> Unit
-guardedEmit emit rsrc csrc tsrc entry mods warnTriples = match parseResult tsrc
-  Err pe => emitParseError entry pe
-  Ok decls => match mainShapeError decls
-    Some d => emitDiagnostics (cjAllToJson [(entry, tsrc, [d])])
-    None => doEmit emit rsrc csrc tsrc entry mods warnTriples
+guardedEmit emit rsrc csrc tsrc entry paths mods warnTriples =
+  match parseResult tsrc
+    Err pe => emitParseError entry pe
+    Ok decls => match mainShapeError decls
+      Some d => emitDiagnostics (cjAllToJson [(entry, tsrc, [d])])
+      None => doEmit emit rsrc csrc tsrc entry paths mods warnTriples
 
 -- Find a top-level `main` DFunDef among a module's raw decls (skipping @attr
 -- wrappers).  Returns its param list + body so callers can inspect arity and
@@ -437,10 +445,11 @@ doEmit : Bool ->
   String ->
   String ->
   String ->
+  List (String, String) ->
   List (String, List Decl) ->
   List (String, String, List Diag) ->
   <IO> Unit
-doEmit emit rsrc csrc tsrc entry mods warnTriples =
+doEmit emit rsrc csrc tsrc entry paths mods warnTriples =
   let rt = desugaredPrelude rsrc
   let core = desugaredPrelude csrc
   let modules = map desugarPair mods
@@ -449,7 +458,7 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
     let coreW = autoPrintPinCore core
     let modulesW = autoPrintWrapModules modules
     match underivedMainDiags rt coreW modulesW
-      [] => finishClean emit warnTriples rt coreW modulesW
+      [] => finishClean emit paths warnTriples rt coreW modulesW
       errs =>
         emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
   else match asyncMainShapeError modules
@@ -470,12 +479,12 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
         -- Re-check the rewritten program, as the auto-print branch does.
         let modulesW = asyncWrapModules "runAsyncMain" modules
         match underivedMainDiags rt core modulesW
-          [] => finishClean emit warnTriples rt core modulesW
+          [] => finishClean emit paths warnTriples rt core modulesW
           errs =>
             emitDiagnostics
               (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
       else
-        finishClean emit warnTriples rt core modules
+        finishClean emit paths warnTriples rt core modules
 
 -- ACCEPTED TRADEOFF (Val, 2026-09-01, #2442 review round F1): because `analyze`
 -- deliberately never reaches `runEmit` below, it CANNOT detect a codegen-only
@@ -494,22 +503,22 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
 -- bug to fix here.
 --
 -- The ONE divergence point between `compile` and `analyze`.  Every diagnostic
--- either mode can produce has already been produced by the time control reaches
--- here, so `compile` prints the WAT marker and the WAT while `analyze` prints its
+-- from the frontend has already been produced here. Compile additionally checks
+-- the target file-capability prerequisites before printing WAT; analyze prints its
 -- own marker and the same warnings JSON — no lowerProgramEmit, no wasmReachFilter,
 -- no emitProgram, and no `elaborateModules` at all (`runEmit`'s is now the only one
 -- on either path — see doEmit's obituary for the discarded one that preceded
 -- it, which is why `analyze` reaches here having elaborated the user's program once).
 finishClean : Bool ->
+  List (String, String) ->
   List (String, String, List Diag) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-finishClean emit warnTriples runtimeDecls coreDecls modules =
+finishClean emit paths warnTriples runtimeDecls coreDecls modules =
   if emit then
-    let _ = emitWatMarker warnTriples
-    runEmit runtimeDecls coreDecls modules
+    runEmit paths warnTriples runtimeDecls coreDecls modules
   else
     emitAnalyzeMarker warnTriples
 
@@ -542,33 +551,50 @@ nonEmptyDiags : List Diag -> Bool
 nonEmptyDiags [] = False
 nonEmptyDiags _ = True
 
-runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
-runEmit runtimeDecls coreDecls modules =
+runEmit : List (String, String) ->
+  List (String, String, List Diag) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+runEmit paths warnTriples runtimeDecls coreDecls modules =
   -- #2809: elaborate the program as written, then mangle its elaborated trees.
   let (coreE, modulesE, _, _, _, _) =
     elaborateModules runtimeDecls coreDecls modules
   let (coreD, modules2) = mangleUnitsEv coreE modulesE
   let allDecls0 = coreD ++ flatMap snd modules2
-  let allDecls = dceFilter allDecls0
-  let _ =
-    preludeReturnPosDictNames coreD allDecls
-      ++ preludeArgPosDictNames coreD allDecls
-      ++ constrainedSigNames allDecls
-  let input =
-    makeWasmEmitInputFull
-      (methodIfaceTable allDecls)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-      (ctorFieldTypeNames allDecls)
-      (mainTypeIsFloat ())
-      (declaredRecordFieldOrders allDecls)
-      (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-  -- #2359 (F1): mirror wasm_emit_modules_main.emitTail — bind the lowered
-  -- program, then drop the impl bodies (and the plain bindings only they
-  -- reached) that no dispatchable method name in this program can reach.  Without
-  -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
-  let lowered = lowerProgramEmit TargetWasm allDecls
-  let filtered = wasmReachFilter lowered
-  putStr (emitProgram input filtered)
+  match prepareWasmFileGrants runtimeDecls (dceFilter allDecls0) modules2
+    Err diags =>
+      emitDiagnostics (cjAllToJson (map (wasmGrantDiagTriple paths) diags))
+    Ok allDecls =>
+      let _ =
+        preludeReturnPosDictNames coreD allDecls
+          ++ preludeArgPosDictNames coreD allDecls
+          ++ constrainedSigNames allDecls
+      let input =
+        makeWasmEmitInputFull
+          (methodIfaceTable allDecls)
+          (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+          (ctorFieldTypeNames allDecls)
+          (mainTypeIsFloat ())
+          (declaredRecordFieldOrders allDecls)
+          (validateFfiExternTypeNames
+            (checkedFfiExternTypeNamesModules modules2))
+      -- #2359 (F1): mirror wasm_emit_modules_main.emitTail — bind the lowered
+      -- program, then drop the impl bodies (and the plain bindings only they
+      -- reached) that no dispatchable method name in this program can reach.  Without
+      -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
+      let lowered = lowerProgramEmit TargetWasm allDecls
+      let filtered = wasmReachFilter lowered
+      let _ = emitWatMarker warnTriples
+      putStr (emitProgram input filtered)
+
+wasmGrantDiagTriple : List (String, String) ->
+  (String, TcDiag) ->
+  <IO> (String, String, List Diag)
+wasmGrantDiagTriple paths (mid, diag) =
+  let file = optionOr mid (lookupAssoc mid paths)
+  readDiagSrc (file, [diagOfTypeError diag])
 
 -- ── diagnostics emit helpers ──────────────────────────────────────────────────
 -- Print the marker then the one-line JSON, then exit 0 (NO trap).

@@ -121,5 +121,35 @@ if [ -f "$PLAYGROUND" ]; then
   node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-ffi.out" 2>"$WORK/playground-ffi.err" && bad "playground compiler accepted an FFI extern"
   check_ffi_wall playground-ffi "$WORK/playground-ffi.out" "$WORK/playground-ffi.err"
 else bad "playground compiler missing for the FFI-wall case"; fi
+# Declared bounds must be checked before either product emits WAT. The formal
+# callback shadows a live pure global, so name-only reachability is insufficient.
+cat > "$WORK/input.mdk" <<'EOF2'
+cb _ = "pure"
+readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
+readCfg cb = cb ()
+main =
+  println (cb ())
+  println (readCfg (_ => readFile "data.txt"))
+EOF2
+check_file_wall() {
+  label="$1"; outf="$2"; errf="$3"; checks=$((checks + 1))
+  grep -qF 'declared FileRead bound' "$outf" "$errf" || bad "$label lost the named file-grant refusal"
+  grep -qF 'cfg/*' "$outf" "$errf" || bad "$label lost the declared bound"
+  if grep -qF '(module' "$outf"; then bad "$label emitted partial WAT"; fi
+}
+"$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-file.out" 2>"$WORK/modules-file.err" && bad "modules accepted a narrow callback bound"
+check_file_wall modules-file "$WORK/modules-file.out" "$WORK/modules-file.err"
+node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-file.out" 2>"$WORK/playground-file.err" && bad "playground accepted a narrow callback bound"
+check_file_wall playground-file "$WORK/playground-file.out" "$WORK/playground-file.err"
+node -e 'const fs=require("node:fs"); const d=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const hit=d.files.flatMap(f=>f.diagnostics).find(x=>x.code==="T-WASM-FILE-GRANT"); if(!hit || !hit.range || hit.range.start.line!==2) process.exit(1)' "$WORK/playground-file.out" || bad "playground file refusal lost its code or source range"
+# A pure function using a point-free prelude helper needs no host confinement.
+cat > "$WORK/input.mdk" <<'EOF2'
+readCfg : Unit -> <FileRead "cfg/*"> Int
+readCfg _ = length [1, 2]
+main = println (readCfg ())
+EOF2
+printf '%s\n' 2 > "$WORK/expected"
+if "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-pure-bound.wat" 2>"$WORK/modules-pure-bound.err"; then check_wat modules-pure-bound "$WORK/modules-pure-bound.wat"; else bad "modules refused a pure bound"; fi
+if node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-pure-bound.wat" 2>"$WORK/playground-pure-bound.err"; then check_wat playground-pure-bound "$WORK/playground-pure-bound.wat"; else bad "playground refused a pure bound"; fi
 printf '%d checks, %d failing\n' "$checks" "$fail"
 [ "$checks" -gt 0 ] && [ "$fail" -eq 0 ]
