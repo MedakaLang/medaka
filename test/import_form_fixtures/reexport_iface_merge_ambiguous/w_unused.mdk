@@ -1,0 +1,4 @@
+-- Importing a method of the merge but never the contested name is no use of it.
+import mid.{pmth}
+
+main = println 1
