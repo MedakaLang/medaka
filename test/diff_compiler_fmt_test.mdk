@@ -1025,9 +1025,8 @@ oracleBucket entry = match map asString (get "file" entry)
   _ => Err "a \"files\" entry has no string \"file\""
 
 {- | One diagnostic object of the oracle. A `range` that is PRESENT with the
-   value `null` means the same as an absent one: `MethodNotInInterface`
-   (`compiler/frontend/resolve.mdk`) always builds with a literal `None`
-   location, so its JSON `range` is `null` rather than missing (#1269). -}
+   value `null` means the same as an absent one: an unlocated diagnostic
+   serializes its JSON `range` as `null` rather than leaving it out. -}
 oracleDiag : Json -> Result String ProjectDiag
 oracleDiag d = match (
   map asInt (get "severity" d),

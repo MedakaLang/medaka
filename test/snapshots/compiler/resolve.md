@@ -1,5 +1,5 @@
 # META
-source_lines=6613
+source_lines=6624
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -1878,6 +1878,10 @@ checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body)) _) =
 -- `env.interfaces`' `iaIfaces` are filtered from the SAME `expInterfaces` over the
 -- SAME `importedNamesMM` names, so an ambiguous interface is necessarily in scope
 -- and the two verdicts are mutually exclusive by construction.
+--
+-- An ambiguous head names no single interface, so its methods are not checked
+-- for membership: `ifaceMethodsOf` would answer for whichever same-named
+-- interface was imported first, and report a member of the other as foreign.
 checkImplDecl : Env ->
   String ->
   List Ty ->
@@ -1885,11 +1889,15 @@ checkImplDecl : Env ->
   List ImplMethod ->
   List ResError
 checkImplDecl env iface tyargs reqs methods =
+  let ambiguous = ambiguousIfaceErrors env iface (firstTyLocList tyargs)
+  let membership = match ambiguous
+    [] => checkImplIface env iface methods
+    _ => []
   flatMap (checkType None env) tyargs
     ++ flatMap (checkRequire env) reqs
     ++ flatMap (checkImplMethod env) methods
-    ++ checkImplIface env iface methods
-    ++ ambiguousIfaceErrors env iface (firstTyLocList tyargs)
+    ++ membership
+    ++ ambiguous
 
 checkRequire : Env -> Require -> List ResError
 checkRequire env (Require { requireHead = iface, requireArgs = tys }) =
@@ -1919,8 +1927,11 @@ ifaceMethodsOf iface ((i, ms) :: rest)
   | otherwise = ifaceMethodsOf iface rest
 
 checkMethodMember : String -> List String -> ImplMethod -> List ResError
-checkMethodMember iface known (ImplMethod mname _ _) =
-  if contains mname known then [] else [MethodNotInInterface mname iface None]
+checkMethodMember iface known (ImplMethod mname _ body) =
+  if contains mname known then
+    []
+  else
+    [MethodNotInInterface mname iface (firstExprLoc body)]
 
 -- ── Primitives (hardcoded) ───────────────────────────────────────────────
 isTupleCtorTyName : String -> Bool
@@ -7055,7 +7066,7 @@ addImportProvenance2 prov n (m :: rest) =
 (DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "None") PWild)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DTypeSig false "checkImplDecl" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))))
-(DFunDef false "checkImplDecl" ((PVar "env") (PVar "iface") (PVar "tyargs") (PVar "reqs") (PVar "methods")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tyargs")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkRequire") (EVar "env"))) (EVar "reqs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkImplMethod") (EVar "env"))) (EVar "methods"))) (EApp (EApp (EApp (EVar "checkImplIface") (EVar "env")) (EVar "iface")) (EVar "methods"))) (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EApp (EVar "firstTyLocList") (EVar "tyargs")))))
+(DFunDef false "checkImplDecl" ((PVar "env") (PVar "iface") (PVar "tyargs") (PVar "reqs") (PVar "methods")) (EBlock (DoLet false false (PVar "ambiguous") (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EApp (EVar "firstTyLocList") (EVar "tyargs")))) (DoLet false false (PVar "membership") (EMatch (EVar "ambiguous") (arm (PList) () (EApp (EApp (EApp (EVar "checkImplIface") (EVar "env")) (EVar "iface")) (EVar "methods"))) (arm PWild () (EListLit)))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tyargs")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkRequire") (EVar "env"))) (EVar "reqs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkImplMethod") (EVar "env"))) (EVar "methods"))) (EVar "membership")) (EVar "ambiguous")))))
 (DTypeSig false "checkRequire" (TyFun (TyCon "Env") (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkRequire" ((PVar "env") (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "tys"))) false)) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EApp (EVar "firstTyLocList") (EVar "tys"))) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tys"))))
 (DTypeSig false "checkImplMethod" (TyFun (TyCon "Env") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -7066,7 +7077,7 @@ addImportProvenance2 prov n (m :: rest) =
 (DFunDef false "ifaceMethodsOf" (PWild (PList)) (EListLit))
 (DFunDef false "ifaceMethodsOf" ((PVar "iface") (PCons (PTuple (PVar "i") (PVar "ms")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EVar "ms") (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceMethodsOf") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "checkMethodMember" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "ResError"))))))
-(DFunDef false "checkMethodMember" ((PVar "iface") (PVar "known") (PCon "ImplMethod" (PVar "mname") PWild PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "known")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "MethodNotInInterface") (EVar "mname")) (EVar "iface")) (EVar "None")))))
+(DFunDef false "checkMethodMember" ((PVar "iface") (PVar "known") (PCon "ImplMethod" (PVar "mname") PWild (PVar "body"))) (EIf (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "known")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "MethodNotInInterface") (EVar "mname")) (EVar "iface")) (EApp (EVar "firstExprLoc") (EVar "body"))))))
 (DTypeSig false "isTupleCtorTyName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleCtorTyName" ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "tupleCtorTyNames")))
 (DTypeSig false "tupleCtorTyNames" (TyApp (TyCon "List") (TyCon "String")))
@@ -8650,7 +8661,7 @@ addImportProvenance2 prov n (m :: rest) =
 (DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "None") PWild)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DTypeSig false "checkImplDecl" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))))
-(DFunDef false "checkImplDecl" ((PVar "env") (PVar "iface") (PVar "tyargs") (PVar "reqs") (PVar "methods")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tyargs")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkRequire") (EVar "env"))) (EVar "reqs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkImplMethod") (EVar "env"))) (EVar "methods"))) (EApp (EApp (EApp (EVar "checkImplIface") (EVar "env")) (EVar "iface")) (EVar "methods"))) (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EApp (EVar "firstTyLocList") (EVar "tyargs")))))
+(DFunDef false "checkImplDecl" ((PVar "env") (PVar "iface") (PVar "tyargs") (PVar "reqs") (PVar "methods")) (EBlock (DoLet false false (PVar "ambiguous") (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EApp (EVar "firstTyLocList") (EVar "tyargs")))) (DoLet false false (PVar "membership") (EMatch (EVar "ambiguous") (arm (PList) () (EApp (EApp (EApp (EVar "checkImplIface") (EVar "env")) (EVar "iface")) (EVar "methods"))) (arm PWild () (EListLit)))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tyargs")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkRequire") (EVar "env"))) (EVar "reqs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkImplMethod") (EVar "env"))) (EVar "methods"))) (EVar "membership")) (EVar "ambiguous")))))
 (DTypeSig false "checkRequire" (TyFun (TyCon "Env") (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkRequire" ((PVar "env") (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "tys"))) false)) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EApp (EVar "firstTyLocList") (EVar "tys"))) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tys"))))
 (DTypeSig false "checkImplMethod" (TyFun (TyCon "Env") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -8661,7 +8672,7 @@ addImportProvenance2 prov n (m :: rest) =
 (DFunDef false "ifaceMethodsOf" (PWild (PList)) (EListLit))
 (DFunDef false "ifaceMethodsOf" ((PVar "iface") (PCons (PTuple (PVar "i") (PVar "ms")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EVar "ms") (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceMethodsOf") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "checkMethodMember" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "ResError"))))))
-(DFunDef false "checkMethodMember" ((PVar "iface") (PVar "known") (PCon "ImplMethod" (PVar "mname") PWild PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "known")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "MethodNotInInterface") (EVar "mname")) (EVar "iface")) (EVar "None")))))
+(DFunDef false "checkMethodMember" ((PVar "iface") (PVar "known") (PCon "ImplMethod" (PVar "mname") PWild (PVar "body"))) (EIf (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "known")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "MethodNotInInterface") (EVar "mname")) (EVar "iface")) (EApp (EVar "firstExprLoc") (EVar "body"))))))
 (DTypeSig false "isTupleCtorTyName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleCtorTyName" ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "tupleCtorTyNames")))
 (DTypeSig false "tupleCtorTyNames" (TyApp (TyCon "List") (TyCon "String")))

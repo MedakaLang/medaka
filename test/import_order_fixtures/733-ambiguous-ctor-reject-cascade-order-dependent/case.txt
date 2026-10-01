@@ -52,4 +52,7 @@ existed to pin — confirmed byte-for-byte against the ledger row below. The bar
 ctor member is gone from the source, but the underlying resolve mechanism the row
 describes is unchanged, so the row stays.
 
-Ledgered in test/IMPORT-ORDER-LEDGER.txt against #733.
+Was ledgered in test/IMPORT-ORDER-LEDGER.txt against #733. The check-side divergence
+drained once a module resolve rejected stopped reporting typecheck diagnostics (that
+file's 2026-10-01 drain note); the case is now graded invariant. The emitter-verdict
+divergence is unchanged and stays pinned in test/EMITTER-VERDICT-LEDGER.txt.
