@@ -87,7 +87,6 @@ reexportedMethodIdentsOf	Decl	2/14
 reexportedMethodsOf	Decl	2/14
 reexportedOriginsOf	Decl	2/14
 registerData	Decl	1/14
-registerMethodIfaceParamsDecl	Decl	2/14
 renderCallArg	Expr	10/42
 returnPosOfDecl	Decl	1/14
 rewriteArgScoped	Expr	34/42

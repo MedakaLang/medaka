@@ -4085,7 +4085,8 @@ recoveredShadowSym name tagRef =
 -- byte-identical to rebuilding over the full universe. They survive
 -- per-module `resetState`, are cleared per RUN by `resetCrossModuleState`,
 -- and are seeded by the core pass.
---   * interface-method name SET (buildDefinerShadows / buildStandaloneShadows)
+--   * interface-method names (buildDefinerShadows / buildStandaloneShadows): not an
+--     accumulator; `methodNameDeclaredAt` reads `deMethods` at the reader's ordinal.
 --   * top-level funDef name SET (buildStandaloneShadows' importedFns)
 --     (Do not add an impl KEY-BUCKET accumulator beside this list: all three
 --     boolean existence reads read the graph-global `bodyImplEnvRef` instead
@@ -7480,14 +7481,13 @@ ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
 -- "WHY NOT JUST CALL registerAllData/…" block above `DataEnv` for the full
 -- derivation, which applies here unchanged.
 --
--- EXCLUDES `universeMethodDispatchIdxByIdRef` and `universeIfaceMethodsRef` —
+-- EXCLUDES `universeMethodDispatchIdxByIdRef` —
 -- lifted bare and unchanged, NEVER keyed here (#1112's decomposition row,
 -- re-grounded in #1519's own bookkeeping comment 2026-08-11 after #1353
--- closed): `universeIfaceMethodsRef` belongs to #1354's method-namespace unit
--- (OPEN) — its own inventory table names this table *"never touched by any
--- unit"*, and the S1-NS ruling (#1353, ADOPTED 2026-08-08) is implemented as a
--- FILTER AT THE READ (`nameableIfaceShadows` narrowing the graph-global set
--- per module), not a re-keying of the table, so keying it here would build a
+-- closed).  The method-name membership S1's shadow builders take is not built
+-- here either: it is `methodNameDeclaredAt`, a read of `deMethods` at the
+-- reader's ordinal, and the S1-NS ruling (#1353, ADOPTED 2026-08-08) is a
+-- filter at the read (`nameableIfaceShadows`), so a copy here would be a
 -- second, differently-shaped answer to a question that already has one live
 -- decision point.  `universeMethodDispatchIdxByIdRef` is #1351's (OPEN S0; its
 -- bare-name predecessor `universeMethodDispatchIdxRef` was retired at L5), and
@@ -8228,6 +8228,13 @@ methodCandsAt n cur env =
   filterList
     (r => declEnvVisibleAt cur r.mrOrd)
     (optionOr [] (omLookup n env.meByName))
+
+-- Is [n] the spelling of an interface method some module at or before ordinal [cur]
+-- declares, whatever its export or `pub`?  The membership test S1's shadow builders
+-- take (`definerShadowsFromSet`, `standaloneShadowsFromSet`): a point query on the
+-- whole-graph table, so no per-module set is ever built.
+methodNameDeclaredAt : Int -> MethodEnv -> String -> Bool
+methodNameDeclaredAt cur env n = isNonEmptyL (methodCandsAt n cur env)
 
 methodRowById : Ident -> List MethodRow -> Option MethodRow
 methodRowById _ [] = None
@@ -9474,7 +9481,6 @@ data PendingMethodDict = PendingMethodDict {
 -- (appendUniverseAccums / appendDataUniverse / growImplUniverse) and the Module-arm copies
 -- mutate the field-Refs in place, so no whole-record copy is allocated per grow/push.
 data CrossRun = CrossRun {
-  universeIfaceMethodsRef : Ref (OrdMap Unit),
   universeFunNamesRef : Ref (OrdMap Unit),
   universeMethodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),  -- #1351: the interface dispatch-index universe, keyed ((IfaceRef, method name), Int).  Its bare-name-keyed predecessor `universeMethodDispatchIdxRef` was RETIRED by L5 (CONTRACT) once `dispatchIdxScoped` stopped falling back to it — read via `methodDispatchIdxByIdRef`.
   universeRecordByName : Ref (OrdMap RecordInfo),
@@ -9576,7 +9582,6 @@ data CrossRun = CrossRun {
 -- closure that follows calls) is #553 and MUST cover both backends.
 freshCrossRun : TcEnv -> CrossRun
 freshCrossRun env = CrossRun {
-  universeIfaceMethodsRef = Ref omEmpty,
   universeFunNamesRef = Ref omEmpty,
   universeMethodDispatchIdxByIdRef = Ref [],
   universeRecordByName = Ref omEmpty,
@@ -34703,20 +34708,23 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- (#4) shadows.  definerShadows uses the SHARED form — buildDefinerShadows over the
   -- full visible universe, scoped to THIS module's decls (prog0).  On Flat, prog0 =
   -- userProg and fullUniverse = prog, so this is exactly the old flat `buildDefinerShadows
-  -- prog userProg`.  #154 PR1: the Module path reads the accumulated interface-method
-  -- SET instead (byte-identical membership).  importerShadows exist only across a module
-  -- boundary; the `Module _ _ []` arm (cmCheckWorker / core pass, implDecls = []) keeps
-  -- the old empty result — `funDefs [] = []` gave no imported fns there.
-  -- #1354 unit A (#1353): both accumulators are graph-global, so the intersection alone
-  -- implements only S1's LEFT operand.  `nameableIfaceShadows` supplies the RIGHT one —
-  -- the interface must be nameable in THIS module.  Applied to the RESULT, never inside
-  -- either filter (the result is single-digit; `fnSet` is every fn name in the graph), and
-  -- fail-open when the graph index is absent.  See `nameableIfaceShadows`.  The Flat arms
-  -- are untouched: a single file is one module and its own interfaces are nameable in it.
+  -- prog userProg`.  The method-name test, `isMethod`, reads `deMethods` at this module's
+  -- ordinal: every interface method a module at or before it declares, whatever its
+  -- export.  importerShadows exist only across a module boundary; the `Module _ _ []` arm
+  -- (cmCheckWorker / core pass, implDecls = []) keeps the old empty result — `funDefs []
+  -- = []` gave no imported fns there.
+  -- #1354 unit A (#1353): that test is not scoped to what this module can name, so the
+  -- intersection alone implements only S1's LEFT operand.  `nameableIfaceShadows` supplies
+  -- the RIGHT one — the interface must be nameable in THIS module.  Applied to the RESULT,
+  -- never inside either filter (the result is single-digit; `fnSet` is every fn name in
+  -- the graph), and fail-open when the graph index is absent.  See `nameableIfaceShadows`.
+  -- The Flat arms are untouched: a single file is one module and its own interfaces are
+  -- nameable in it.
+  let isMethod =
+    let envs = driverState.value.declEnvsRef.value
+    methodNameDeclaredAt (declEnvsOrdOf mid envs) envs.deMethods
   let definerShadows =
-    nameableIfaceShadows
-      prog0
-      (definerShadowsFromSet crossRun.value.universeIfaceMethodsRef.value prog0)
+    nameableIfaceShadows prog0 (definerShadowsFromSet isMethod prog0)
   let importerShadows =
     if isEmptyL implDecls then
       []
@@ -34724,7 +34732,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
       nameableIfaceShadows
         prog0
         (standaloneShadowsFromSet
-          crossRun.value.universeIfaceMethodsRef.value
+          isMethod
           (omMapValues (_ => ()) moduleSeed.msImportedValues)
           prog0)
   let sigs = sigsOf prog
@@ -45853,16 +45861,14 @@ isPreludeMid mid = mid == "core" || mid == ""
 -- has moved onto the ordinal predicate.
 appendUniverseAccums : String -> List Decl -> Unit
 appendUniverseAccums mid prog =
-  crossRun.value.universeIfaceMethodsRef :=
-    namesToSet
-      (allIfaceMethodNames prog)
-      crossRun.value.universeIfaceMethodsRef.value
   -- 🚨 SHADOW-SEMANTICS S1-PRELUDE (a), RULED 2026-08-10 (#1375 item 2, #1499 clause (b)):
-  -- THE PRELUDE IS NOT S1's LEFT (standalone) OPERAND.  The asymmetry with the line above
-  -- is DELIBERATE and is the ruling's own (`SHADOW-SEMANTICS.md:225`): S1's INTERFACE
-  -- operand is the wider "nameable in M", which INCLUDES the prelude, while its STANDALONE
-  -- operand is pinned by the definer/importer kind partition — and a standalone reaching M
-  -- only as an implicit prelude export is NEITHER kind, so it creates no shadow in M.
+  -- The prelude is not S1's left (standalone) operand.  The asymmetry with the shadow
+  -- builders' interface-method test, `methodNameDeclaredAt`, which counts the prelude's
+  -- interfaces at ordinal 0, is deliberate and is the ruling's own
+  -- (`SHADOW-SEMANTICS.md:225`): S1's INTERFACE operand is the wider "nameable in M",
+  -- which INCLUDES the prelude, while its STANDALONE operand is pinned by the
+  -- definer/importer kind partition — and a standalone reaching M only as an implicit
+  -- prelude export is NEITHER kind, so it creates no shadow in M.
   -- This ref's ONE reader is the `importerShadows` binding in `checkBodyImpl`
   -- (`standaloneShadowsFromSet`'s `fnSet`), i.e. exactly that left operand; folding the
   -- prelude's own funDefs in admitted every prelude standalone as an IMPORTER shadow —
@@ -46049,14 +46055,14 @@ appendDataUniverse mid prog0 =
   crossRun.value.universeRecordCollidedRef := snd recAcc
 
 -- #154 PR1: buildDefinerShadows with the `allIfaceMethodNames fullUniverse` scan
--- replaced by the persistent interface-method membership SET.  `direct` still filters
--- THIS module's localNames in declaration order, so `omHasKey n ifaceSet` is a
--- point-for-point substitute for `contains n methodNames` — same set, same order,
--- byte-identical output.
-definerShadowsFromSet : OrdMap Unit -> List Decl -> List String
-definerShadowsFromSet ifaceSet prog =
+-- replaced by a membership test, `isMethod` (`methodNameDeclaredAt` at the module's
+-- ordinal).  `direct` still filters THIS module's localNames in declaration order, so
+-- `isMethod n` is a point-for-point substitute for `contains n methodNames` — same
+-- set, same order, byte-identical output.
+definerShadowsFromSet : (String -> Bool) -> List Decl -> List String
+definerShadowsFromSet isMethod prog =
   let localNames = dedup (map fst (funDefs prog))
-  let direct = filter (n => omHasKey n ifaceSet) localNames
+  let direct = filter isMethod localNames
   let sm = driverState.value.mangledShadowMapRef.value
   let bares =
     flatMap
@@ -46076,19 +46082,17 @@ definerShadowsFromSet ifaceSet prog =
 -- path (the map is empty there) → `direct` alone → byte-identical. See
 -- docs/spec/SHADOW-SEMANTICS.md § "2. Decision matrix (re-observed 2026-07-14,
 -- post-`eb92cdff`; now GATED)" rows 21a/21b for the fixed bug and its fixtures.
-standaloneShadowsFromSet : OrdMap Unit ->
+standaloneShadowsFromSet : (String -> Bool) ->
   OrdMap Unit ->
   List Decl ->
   List String
-standaloneShadowsFromSet ifaceSet fnSet prog =
+standaloneShadowsFromSet isMethod fnSet prog =
   -- Both probes below run once per GRAPH-WIDE fn name, so both of their tables are
   -- sets: a `contains` over the module's own names and a `lookupAssoc` over the
   -- definer-shadow map were each O(names x table) here.
   let localNames = namesToSet (map fst (funDefs prog)) omEmpty
   let direct =
-    filter
-      (n => omHasKey n ifaceSet && not (omHasKey n localNames))
-      (omKeys fnSet)
+    filter (n => isMethod n && not (omHasKey n localNames)) (omKeys fnSet)
   let sm = driverState.value.mangledShadowMapRef.value
   let mangled =
     flatMap
@@ -46101,14 +46105,14 @@ standaloneShadowsFromSet ifaceSet fnSet prog =
 -- ── #1354 unit A (#1353): SHADOW-SEMANTICS S1's `nameable in M` interface operand ──
 -- `docs/spec/SHADOW-SEMANTICS.md` S1 (SCOPE RULED 2026-08-06, #1375) intersects
 -- funDef-names(standalones defined in or imported into `M`) with
--- iface-method-names(interfaces **nameable in `M`**).  `universeIfaceMethodsRef` is the
--- accumulated method-name set of EVERY module the loader processed, so the two builders
+-- iface-method-names(interfaces **nameable in `M`**).  `methodNameDeclaredAt` answers
+-- for the method names of EVERY module at or before `M`'s ordinal, so the two builders
 -- above implement the LEFT operand's scope (the `fnSet`/`localNames` guards) and give the
 -- RIGHT one none: an interface reachable only transitively, through a module that
 -- re-exports nothing, captured a standalone the occurrence's module had explicitly
 -- imported (#1353, S0 — `7` instead of `99`, at exit 0, no diagnostic).
 --
--- The remedy is a SUPPLY, not a re-key: the set is a correct MEMBERSHIP set and re-keying
+-- The remedy is a SUPPLY, not a re-scope: the membership test is correct and narrowing
 -- it would answer a question nobody asks of it.  This is the missing predicate, applied to
 -- the ALREADY-COMPUTED intersection rather than inside either operand's filter — the
 -- intersection is single-digit in practice (over `compiler/**` + `stdlib/*` it is 3:
@@ -49320,7 +49324,6 @@ coreCheckMemoHit (Some key) = match !coreCheckMemoRef
 -- this complete — a new CrossRun field cannot be left out of the copy.
 copyCrossRun : CrossRun -> CrossRun
 copyCrossRun c = CrossRun {
-  universeIfaceMethodsRef = Ref c.universeIfaceMethodsRef.value,
   universeFunNamesRef = Ref c.universeFunNamesRef.value,
   universeMethodDispatchIdxByIdRef =
     Ref c.universeMethodDispatchIdxByIdRef.value,
@@ -49857,7 +49860,7 @@ checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
 -- driver can thread accV/accData exactly as foldModules does.
 --
 -- Precondition (#154 PR1/PR2): this is per-module, and the Module path consults the
--- persistent universe accumulators (`universeIfaceMethodsRef` / …), which survive the
+-- persistent universe accumulators (`universeFunNamesRef` / …), which survive the
 -- per-module resetState.  They are grown by `appendUniverseAccums prog0` per module but
 -- must be cleared once per run by `resetCrossModuleState` (and seeded by the core pass)
 -- before the first module.  Every existing caller goes through a driver that does exactly
