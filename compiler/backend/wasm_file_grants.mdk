@@ -21,12 +21,14 @@ import frontend.ast.{
   PropParam(..),
   Ty(..),
   TyConOrigin(..),
+  Route(..),
   EffAtomTy(..),
   patBoundNames,
   Variant(..),
 }
 import frontend.desugar.{mapChildren}
 import types.typecheck.{TcDiag(..)}
+import types.route_key.{evMethodRoutes}
 import support.ordmap.{
   OrdMap,
   omEmpty,
@@ -115,7 +117,7 @@ moduleGrantDiags reach live (mid, decls) =
 scanGrantSites : Reach ->
   Ref (List (Option Loc, String, List String)) ->
   Option Loc ->
-  OrdMap Unit ->
+  Scope ->
   Expr ->
   Expr
 scanGrantSites reach sites _ bound (ELoc l e) =
@@ -148,7 +150,7 @@ scanGrantSites reach sites around bound (e@(EApp _ _)) =
 -- A partial use is saturated under `let`s binding the arguments it was given, so
 -- the call inside reads as fresh names: locate it at the first bound argument.
 scanGrantSites reach sites around bound (ELet mutable recursive pat rhs body) =
-  let after = addPatScope [pat] bound
+  let after = letScope mutable recursive pat rhs bound
   let rhs2 =
     scanGrantSites reach sites around (if recursive then after else bound) rhs
   let body2 =
@@ -160,14 +162,14 @@ scanGrantSites reach sites around bound e =
 scanOrdinaryGrantSites : Reach ->
   Ref (List (Option Loc, String, List String)) ->
   Option Loc ->
-  OrdMap Unit ->
+  Scope ->
   Expr ->
   Expr ->
   List Expr ->
   Expr
 scanOrdinaryGrantSites reach sites around bound _ head args =
   let _ =
-    if mayReachFile reach bound head then
+    if mayReachFile reach bound head (listLen args) then
       let path = leafPath head args
       let values = filterList (a => isNone (grantElems a)) args
       let at = orElse (findMap leftLoc values) around
@@ -192,17 +194,51 @@ scanOrdinaryGrantSites reach sites around bound _ head args =
 -- folding a callback into a same-spelled pure global would erase its file bound.
 data Reach = Reach (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (OrdMap Int)
 
-mayReachFile : Reach -> OrdMap Unit -> Expr -> Bool
-mayReachFile reach bound head =
-  isBoundHead bound head
-    || (match (reach, headName head)
-      (Reach defined reads writes _, Some n) =>
-        omHasKey n reads || omHasKey n writes || not (omHasKey n defined)
-      _ => True)
+mayReachFile : Reach -> Scope -> Expr -> Int -> Bool
+mayReachFile reach bound head argc =
+  callMayReachFile reach False bound head argc
+    || callMayReachFile reach True bound head argc
+
+callMayReachFile : Reach -> Bool -> Scope -> Expr -> Int -> Bool
+callMayReachFile reach write bound head argc = match localHead bound head
+  Some (LocalFunction ps body captured reads writes) =>
+    argc > valueParamCount ps
+      || localMayReachFile reach write ps body captured (if write then
+        writes
+      else
+        reads)
+  Some UnknownBinding => True
+  None =>
+    let (Reach defined reads writes returns) = reach
+    unknownCall returns bound head argc
+      || (match headName head
+        Some n =>
+          if n == "$withFileReadBound" || n == "$withFileWriteBound" then
+            False
+          else
+            omHasKey n (if write then writes else reads)
+              || not (omHasKey n defined)
+        None => True)
+
+-- Cache each immutable definition's proof once per label. A chain of local
+-- helpers that calls each predecessor twice must not expand exponentially.
+localMayReachFile : Reach ->
+  Bool ->
+  List Pat ->
+  Expr ->
+  Scope ->
+  Ref (Option Bool) ->
+  Bool
+localMayReachFile reach write ps body captured cache = match cache.value
+  Some found => found
+  None =>
+    let found = bodyMayReachFile reach write (addPatScope ps captured) body
+    cache := Some found
+    found
 
 -- A declared bound constrains only operations of its own label. A pure
 -- body, or a body using only the other label, needs no host confinement.
-bodyMayReachFile : Reach -> Bool -> OrdMap Unit -> Expr -> Bool
+bodyMayReachFile : Reach -> Bool -> Scope -> Expr -> Bool
 bodyMayReachFile reach write bound (e@(EApp _ _)) =
   let (head, args) = appSpine e []
   if knownNonFileCall reach write bound head (listLen args) then
@@ -215,16 +251,11 @@ bodyMayReachFile reach write bound e =
 -- A callback body is deferred when the callee cannot invoke that label. Its
 -- construction still runs: a let RHS or immediately applied lambda can read.
 -- Returned-value invocation must be ruled out before trusting the callee's row.
-knownNonFileCall : Reach -> Bool -> OrdMap Unit -> Expr -> Int -> Bool
+knownNonFileCall : Reach -> Bool -> Scope -> Expr -> Int -> Bool
 knownNonFileCall reach write bound head argc =
-  let (Reach defined reads writes returns) = reach
-  not (unknownCall returns bound head argc)
-    && (match headName head
-      Some n =>
-        omHasKey n defined && not (omHasKey n (if write then writes else reads))
-      None => False)
+  not (callMayReachFile reach write bound head argc)
 
-evalOnlyMayReachFile : Reach -> Bool -> OrdMap Unit -> Expr -> Bool
+evalOnlyMayReachFile : Reach -> Bool -> Scope -> Expr -> Bool
 evalOnlyMayReachFile _ _ _ (ELam _ _) = False
 evalOnlyMayReachFile reach write bound (e@(EApp _ _)) =
   bodyMayReachFile reach write bound e
@@ -240,7 +271,7 @@ evalOnlyMayReachFile reach write bound e =
       e
   found.value
 
-bodyMayReachFileChildren : Reach -> Bool -> OrdMap Unit -> Expr -> Bool
+bodyMayReachFileChildren : Reach -> Bool -> Scope -> Expr -> Bool
 bodyMayReachFileChildren reach write bound e =
   let found = Ref False
   let _ =
@@ -254,22 +285,13 @@ bodyMayReachFileChildren reach write bound e =
     || (match e
       EApp _ _ =>
         let (head, args) = appSpine e []
-        let (Reach _ _ _ returns) = reach
-        unknownCall returns bound head (listLen args)
-          || (match (reach, headName head)
-            (Reach defined reads writes _, Some n) =>
-              if n == "$withFileReadBound" || n == "$withFileWriteBound" then
-                False
-              else
-                omHasKey n (if write then writes else reads)
-                  || not (omHasKey n defined)
-            _ => True)
+        callMayReachFile reach write bound head (listLen args)
       _ => False)
 
-isBoundHead : OrdMap Unit -> Expr -> Bool
-isBoundHead bound head = match headRawName head
-  Some n => omHasKey n bound
-  None => False
+localHead : Scope -> Expr -> Option LocalBinding
+localHead bound head = match headRawName head
+  Some n => omLookup n bound
+  None => None
 
 headName : Expr -> Option String
 headName e = map unmangled (headRawName e)
@@ -277,17 +299,74 @@ headName e = map unmangled (headRawName e)
 headRawName : Expr -> Option String
 headRawName (EVar n) = Some n
 headRawName (EDictAt n _) = Some n
-headRawName (EMethodAt n _ _) = Some n
+headRawName (EMethodAt n _ ev) =
+  let (_, _, route, _, _) = evMethodRoutes ev
+  Some (match route
+    RLocal sym _ => if sym == "" then n else sym
+    _ => n)
 headRawName (EVarAt n _) = Some n
 headRawName (EVarId n _) = Some n
 headRawName _ = None
 
 -- Scope is threaded at each occurrence, not collected for a whole declaration:
 -- a nested binder must not shadow a later, out-of-scope runtime extern call.
-addPatScope : List Pat -> OrdMap Unit -> OrdMap Unit
-addPatScope ps bound = omFromNames (flatMap patBoundNames ps) bound
+-- Immutable local functions retain their definition-time scope. Parameters,
+-- mutable values and recursive references remain unknown; a same-spelled global
+-- therefore never supplies a local callback's proof.
+data LocalBinding =
+  | UnknownBinding
+  | LocalFunction (List Pat) Expr (OrdMap LocalBinding) (Ref (Option Bool)) (Ref (Option Bool))
+type Scope = OrdMap LocalBinding
 
-mapScopedDeclBodies : (OrdMap Unit -> Expr -> Expr) -> Decl -> Decl
+localBinding : List Pat -> Expr -> Scope -> LocalBinding
+localBinding ps body captured =
+  LocalFunction ps body captured (Ref None) (Ref None)
+
+addNamesScope : List String -> Scope -> Scope
+addNamesScope names bound =
+  fold (m n => omInsert n UnknownBinding m) bound names
+
+addPatScope : List Pat -> Scope -> Scope
+addPatScope ps bound = addNamesScope (flatMap patBoundNames ps) bound
+
+letScope : Bool -> Bool -> Pat -> Expr -> Scope -> Scope
+letScope False recursive (PVar n _) rhs bound =
+  let captured = if recursive then addNamesScope [n] bound else bound
+  match localFunction captured rhs
+    Some binding => omInsert n binding bound
+    None => addNamesScope [n] bound
+letScope _ _ pat _ bound = addPatScope [pat] bound
+
+localFunction : Scope -> Expr -> Option LocalBinding
+localFunction bound (ELoc _ e) = localFunction bound e
+localFunction bound (EAnnot e _) = localFunction bound e
+localFunction bound (EHeadAnnot e _) = localFunction bound e
+localFunction bound (ELet False False pat rhs body) =
+  -- Grant saturation evaluates supplied arguments before constructing its eta
+  -- closure. Keep those binders in the closure's scope; the caller also scans
+  -- the construction RHS, including any eager file operations.
+  localFunction (letScope False False pat rhs bound) body
+localFunction bound (ELam ps body) = Some (localBinding ps body bound)
+localFunction _ _ = None
+
+localGroupScope : List LetBind -> Scope -> Scope
+localGroupScope binds bound =
+  let captured =
+    addNamesScope
+      (map
+        (b => match b
+          LetBind n _ => n)
+        binds)
+      bound
+  fold
+    (m b => match b
+      LetBind n [FunClause ps body] =>
+        omInsert n (localBinding ps body captured) m
+      LetBind _ _ => m)
+    captured
+    binds
+
+mapScopedDeclBodies : (Scope -> Expr -> Expr) -> Decl -> Decl
 mapScopedDeclBodies f (DFunDef pub n ps body) =
   DFunDef pub n ps (f (addPatScope ps omEmpty) body)
 mapScopedDeclBodies f (DLetGroup pub binds) =
@@ -318,7 +397,7 @@ mapScopedDeclBodies f (d@(DInterface { methods, ... })) = DInterface { d |
 }
 mapScopedDeclBodies f (DProp pub n params body) =
   let bound =
-    omFromNames
+    addNamesScope
       (map
         (p => match p
           PropParam name _ _ => name)
@@ -330,10 +409,7 @@ mapScopedDeclBodies f (DAttrib attrs d) =
   DAttrib attrs (mapScopedDeclBodies f d)
 mapScopedDeclBodies _ d = d
 
-mapScopedLetBind : (OrdMap Unit -> Expr -> Expr) ->
-  OrdMap Unit ->
-  LetBind ->
-  LetBind
+mapScopedLetBind : (Scope -> Expr -> Expr) -> Scope -> LetBind -> LetBind
 mapScopedLetBind f bound (LetBind n clauses) =
   LetBind
     n
@@ -342,11 +418,11 @@ mapScopedLetBind f bound (LetBind n clauses) =
         FunClause ps body => FunClause ps (f (addPatScope ps bound) body))
       clauses)
 
-mapScopedChildren : OrdMap Unit -> (OrdMap Unit -> Expr -> Expr) -> Expr -> Expr
+mapScopedChildren : Scope -> (Scope -> Expr -> Expr) -> Expr -> Expr
 mapScopedChildren bound f (ELam ps body) =
   ELam ps (f (addPatScope ps bound) body)
 mapScopedChildren bound f (ELet mutable recursive pat rhs body) =
-  let after = addPatScope [pat] bound
+  let after = letScope mutable recursive pat rhs bound
   ELet
     mutable
     recursive
@@ -354,13 +430,7 @@ mapScopedChildren bound f (ELet mutable recursive pat rhs body) =
     (f (if recursive then after else bound) rhs)
     (f after body)
 mapScopedChildren bound f (ELetGroup binds body) =
-  let after =
-    omFromNames
-      (map
-        (b => match b
-          LetBind n _ => n)
-        binds)
-      bound
+  let after = localGroupScope binds bound
   ELetGroup (map (mapScopedLetBind f after) binds) (f after body)
 mapScopedChildren bound f (EMatch e arms) =
   EMatch
@@ -385,10 +455,10 @@ mapScopedChildren bound f (EDo label stmts) =
   EDo label (mapScopedStmts f bound stmts)
 mapScopedChildren bound f e = mapChildren (f bound) e
 
-mapScopedGuards : (OrdMap Unit -> Expr -> Expr) ->
-  OrdMap Unit ->
+mapScopedGuards : (Scope -> Expr -> Expr) ->
+  Scope ->
   List Guard ->
-  (List Guard, OrdMap Unit)
+  (List Guard, Scope)
 mapScopedGuards _ bound [] = ([], bound)
 mapScopedGuards f bound ((GBool e) :: rest) =
   let e2 = f bound e
@@ -399,17 +469,14 @@ mapScopedGuards f bound ((GBind pat e) :: rest) =
   let (rest2, after) = mapScopedGuards f (addPatScope [pat] bound) rest
   (GBind pat e2 :: rest2, after)
 
-mapScopedStmts : (OrdMap Unit -> Expr -> Expr) ->
-  OrdMap Unit ->
-  List DoStmt ->
-  List DoStmt
+mapScopedStmts : (Scope -> Expr -> Expr) -> Scope -> List DoStmt -> List DoStmt
 mapScopedStmts _ _ [] = []
 mapScopedStmts f bound ((DoExpr e) :: rest) =
   DoExpr (f bound e) :: mapScopedStmts f bound rest
 mapScopedStmts f bound ((DoBind pat e) :: rest) =
   DoBind pat (f bound e) :: mapScopedStmts f (addPatScope [pat] bound) rest
 mapScopedStmts f bound ((DoLet mutable recursive pat e) :: rest) =
-  let after = addPatScope [pat] bound
+  let after = letScope mutable recursive pat e bound
   DoLet mutable recursive pat (f (if recursive then after else bound) e)
     :: mapScopedStmts f after rest
 mapScopedStmts f bound ((DoAssign n e) :: rest) =
@@ -420,10 +487,19 @@ mapScopedStmts f bound ((DoFieldAssign n fields e) :: rest) =
 fileReach : List Decl -> Reach
 fileReach decls =
   let bindings = flatMap declBindingBodies decls
-  let returns = returnedBoundaries bindings
   let aliases = omFromNames (flatMap aliasNames decls) omEmpty
   let noRead = declaredNoFile aliases False decls bindings
   let noWrite = declaredNoFile aliases True decls bindings
+  -- A closed contract covers every result arrow, including a returned function.
+  -- Scalar returns through authority parameters must not seed callback reach.
+  let returns =
+    returnedBoundaries
+      (filterList
+        ((n, _, _) =>
+          not
+            (optionOr False (omLookup (unmangled n) noRead)
+              && optionOr False (omLookup (unmangled n) noWrite)))
+        bindings)
   let users = Ref omEmpty
   let defined = Ref omEmpty
   let _ = map (d => declDefines defined d) decls
@@ -440,14 +516,15 @@ fileReach decls =
 -- A boundary counts arguments consumed BEFORE a returned lexical value is
 -- invoked, rather than counting every arrow in its declared type. Dictionary
 -- evidence travels in the head; grant parameters remain ordinary EApp args.
-unknownCall : OrdMap Int -> OrdMap Unit -> Expr -> Int -> Bool
-unknownCall returns bound head argc =
-  isBoundHead bound head
-    || (match headName head
-      Some n => match omLookup n returns
-        Some boundary => argc > boundary
-        None => False
-      None => True)
+unknownCall : OrdMap Int -> Scope -> Expr -> Int -> Bool
+unknownCall returns bound head argc = match localHead bound head
+  Some (LocalFunction ps _ _ _ _) => argc > valueParamCount ps
+  Some UnknownBinding => True
+  None => match headRawName head
+    Some n => match omLookup n returns
+      Some boundary => argc > boundary
+      None => False
+    None => True
 
 valueParamCount : List Pat -> Int
 valueParamCount ((PVar n _) :: rest)
@@ -481,6 +558,8 @@ letBindBodies (LetBind n clauses) =
 -- Each tail reference gives a reverse dependency (owner, consumed args, supplied
 -- args). Relax only decreased boundaries, including recursive aliases; a name
 -- collision takes the minimum, so it cannot conceal a callback invocation.
+-- Keep resolved global symbols intact: a standalone authority-polymorphic `sub`
+-- has a different argument boundary from the unrelated prelude `sub` method.
 returnedBoundaries : List (String, List Pat, Expr) -> OrdMap Int
 returnedBoundaries bindings =
   let seeds = Ref []
@@ -491,7 +570,7 @@ returnedBoundaries bindings =
         tailReturns
           seeds
           deps
-          (unmangled n)
+          n
           (valueParamCount ps)
           (addPatScope ps omEmpty)
           body)
@@ -520,7 +599,7 @@ tailReturns : Ref (List (String, Int)) ->
   Ref (OrdMap (List (String, Int, Int))) ->
   String ->
   Int ->
-  OrdMap Unit ->
+  Scope ->
   Expr ->
   Unit
 tailReturns seeds deps owner base bound (ELoc _ e) =
@@ -543,7 +622,7 @@ tailReturns seeds deps owner base bound (ELet _ _ pat _ body) =
   tailReturns seeds deps owner base (addPatScope [pat] bound) body
 tailReturns seeds deps owner base bound (ELetGroup binds body) =
   let after =
-    omFromNames
+    addNamesScope
       (map
         (b => match b
           LetBind n _ => n)
@@ -590,12 +669,11 @@ tailReturns seeds deps owner base bound e =
         if omHasKey raw bound then
           seeds := (owner, base) :: seeds.value
         else
-          let n = unmangled raw
           deps :=
             omInsert
-              n
+              raw
               ((owner, base, listLen args)
-                :: optionOr [] (omLookup n deps.value))
+                :: optionOr [] (omLookup raw deps.value))
               deps.value
       None => match e
         ELit _ => ()
@@ -605,7 +683,7 @@ tailReturns seeds deps owner base bound e =
         ERecordCreate _ _ => ()
         _ => seeds := (owner, base) :: seeds.value
 
-guardScope : List Guard -> OrdMap Unit -> OrdMap Unit
+guardScope : List Guard -> Scope -> Scope
 guardScope [] bound = bound
 guardScope ((GBind pat _) :: rest) bound =
   guardScope rest (addPatScope [pat] bound)
@@ -615,7 +693,7 @@ tailStmtReturns : Ref (List (String, Int)) ->
   Ref (OrdMap (List (String, Int, Int))) ->
   String ->
   Int ->
-  OrdMap Unit ->
+  Scope ->
   List DoStmt ->
   Unit
 tailStmtReturns seeds deps owner base bound [DoExpr e] =
@@ -794,13 +872,19 @@ bindingRefs users defined returns b ps body =
       users.value
       refs.value
 
-collectRefs : OrdMap Int -> Ref (List String) -> OrdMap Unit -> Expr -> Expr
+collectRefs : OrdMap Int -> Ref (List String) -> Scope -> Expr -> Expr
 collectRefs returns refs bound (e@(EApp _ _)) =
   let (head, args) = appSpine e []
   let _ =
     if unknownCall returns bound head (listLen args) then
       refs := "readFile" :: "writeFileBytes" :: refs.value
-  let _ = collectRefs returns refs bound head
+  let _ = match localHead bound head
+    -- Every local definition's body is already visited by the lexical walk.
+    -- Re-expanding it here would duplicate its edges at every local call.
+    Some (LocalFunction _ _ _ _ _) => ()
+    _ =>
+      let _ = collectRefs returns refs bound head
+      ()
   let _ = map (collectRefs returns refs bound) args
   e
 collectRefs returns refs bound e = match headRawName e
