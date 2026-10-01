@@ -742,8 +742,8 @@ tyNoFile _ _ _ = False
 atomNoFile : Bool -> EffAtomTy -> Bool
 atomNoFile write (EffAtomTy { eatLabel = label, eatOrigin = OriginBuiltin }) =
   label /= "IO" && label /= (if write then "FileWrite" else "FileRead")
-atomNoFile _ (EffAtomTy { eatOrigin = OriginUnresolved }) = False
-atomNoFile _ _ = True
+atomNoFile _ (EffAtomTy { eatOrigin = (OriginModule _) }) = True
+atomNoFile _ _ = False
 
 -- Breadth-first over "is referenced by", stopping at a closed contract that
 -- proves this operation's label absent. Callback-return boundaries are checked
@@ -1050,8 +1050,8 @@ leftLoc e =
 (DFunDef false "tyNoFile" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "atomNoFile" (TyFun (TyCon "Bool") (TyFun (TyCon "EffAtomTy") (TyCon "Bool"))))
 (DFunDef false "atomNoFile" ((PVar "write") (PRec "EffAtomTy" ((rf "eatLabel" (PVar "label")) (rf "eatOrigin" (PCon "OriginBuiltin"))) false)) (EBinOp "&&" (EBinOp "/=" (EVar "label") (ELit (LString "IO"))) (EBinOp "/=" (EVar "label") (EIf (EVar "write") (ELit (LString "FileWrite")) (ELit (LString "FileRead"))))))
-(DFunDef false "atomNoFile" (PWild (PRec "EffAtomTy" ((rf "eatOrigin" (PCon "OriginUnresolved"))) false)) (EVar "False"))
-(DFunDef false "atomNoFile" (PWild PWild) (EVar "True"))
+(DFunDef false "atomNoFile" (PWild (PRec "EffAtomTy" ((rf "eatOrigin" (PCon "OriginModule" PWild))) false)) (EVar "True"))
+(DFunDef false "atomNoFile" (PWild PWild) (EVar "False"))
 (DTypeSig false "spread" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "spread" (PWild PWild (PList) (PVar "seen")) (EVar "seen"))
 (DFunDef false "spread" ((PVar "users") (PVar "noFile") (PCons (PVar "n") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "u")) (EVar "seen"))) (EApp (EVar "not") (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "u")) (EVar "noFile"))))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "users"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "spread") (EVar "users")) (EVar "noFile")) (EBinOp "++" (EVar "fresh") (EVar "rest"))) (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EVar "seen"))))))
@@ -1267,8 +1267,8 @@ leftLoc e =
 (DFunDef false "tyNoFile" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "atomNoFile" (TyFun (TyCon "Bool") (TyFun (TyCon "EffAtomTy") (TyCon "Bool"))))
 (DFunDef false "atomNoFile" ((PVar "write") (PRec "EffAtomTy" ((rf "eatLabel" (PVar "label")) (rf "eatOrigin" (PCon "OriginBuiltin"))) false)) (EBinOp "&&" (EBinOp "/=" (EVar "label") (ELit (LString "IO"))) (EBinOp "/=" (EVar "label") (EIf (EVar "write") (ELit (LString "FileWrite")) (ELit (LString "FileRead"))))))
-(DFunDef false "atomNoFile" (PWild (PRec "EffAtomTy" ((rf "eatOrigin" (PCon "OriginUnresolved"))) false)) (EVar "False"))
-(DFunDef false "atomNoFile" (PWild PWild) (EVar "True"))
+(DFunDef false "atomNoFile" (PWild (PRec "EffAtomTy" ((rf "eatOrigin" (PCon "OriginModule" PWild))) false)) (EVar "True"))
+(DFunDef false "atomNoFile" (PWild PWild) (EVar "False"))
 (DTypeSig false "spread" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "spread" (PWild PWild (PList) (PVar "seen")) (EVar "seen"))
 (DFunDef false "spread" ((PVar "users") (PVar "noFile") (PCons (PVar "n") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "u")) (EVar "seen"))) (EApp (EVar "not") (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "u")) (EVar "noFile"))))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "users"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "spread") (EVar "users")) (EVar "noFile")) (EBinOp "++" (EVar "fresh") (EVar "rest"))) (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EVar "seen"))))))

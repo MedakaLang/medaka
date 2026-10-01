@@ -738,8 +738,8 @@ tyNoFile _ _ _ = False
 atomNoFile : Bool -> EffAtomTy -> Bool
 atomNoFile write (EffAtomTy { eatLabel = label, eatOrigin = OriginBuiltin }) =
   label /= "IO" && label /= (if write then "FileWrite" else "FileRead")
-atomNoFile _ (EffAtomTy { eatOrigin = OriginUnresolved }) = False
-atomNoFile _ _ = True
+atomNoFile _ (EffAtomTy { eatOrigin = (OriginModule _) }) = True
+atomNoFile _ _ = False
 
 -- Breadth-first over "is referenced by", stopping at a closed contract that
 -- proves this operation's label absent. Callback-return boundaries are checked
