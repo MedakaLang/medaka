@@ -130,14 +130,13 @@ scanGrantSites reach sites around bound (e@(EApp _ _)) =
             reach
             (name == "$withFileWriteBound")
             bound
-            body then
-            let _ = match grantElems grant
-              Some es =>
-                if not (wasmGrantConfined None es) then
-                  sites :=
-                    (orElse (leftLoc body) around, calleeName head, es)
-                      :: sites.value
-              None => ()
+            body then match grantElems grant
+            Some es =>
+              if not (wasmGrantConfined None es) then
+                sites :=
+                  (orElse (leftLoc body) around, calleeName head, es)
+                    :: sites.value
+            None => ()
         -- The first pass rejects unsupported bounds before returning any tree.
         -- Accepted Wasm bounds have no runtime instruction; erase the thunk so
         -- locals and match scratch stay in their ordinary enclosing function.
