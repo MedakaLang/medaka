@@ -31560,11 +31560,13 @@ ieRowHeadMatches [] _ = False
 --
 -- 🚨 B-4b-ii SUPPLIED REAL IDENTITY, SO THE `(Some, Some)` ARM IS NOW REACHABLE AND
 -- THE PARAGRAPH ABOVE IS HISTORY, NOT A CURRENT DESCRIPTION.  Exactly ONE of the
--- family's three entry points supplies it — `findMatchingImplReqsU` → `iface`, read
--- off `Require.requireOrigin` / `Predicate.iface`; see the derivation there, and the
--- per-site reasons the other two are still bare (`entailInst`'s `EKNestedTop` arm and
--- `argImplRequiresRoutes`, both fed by the deliberately SPELLING-keyed route-word
--- channel `shadowStandaloneDictSlots` / `pushDictApp` project into).
+-- family's three entry points supplies it at every call — `findMatchingImplReqsU` →
+-- `iface`, read off `Require.requireOrigin` / `Predicate.iface`; see the derivation
+-- there.  The other two (`entailInst`'s `EKNestedTop` arm and `argImplRequiresRoutes`)
+-- forward the interface their caller supplies: identity-bearing on the `requires` leg
+-- (`argImplReqRoutes` reads `requireOrigin`, #3534), and possibly the bare route word
+-- `pushDictApp` projects into on the top-level constrained-call leg
+-- (`ifaceForInferredId`'s third fallback).
 --
 -- ⚠️ WHAT THAT MAKES REACHABLE, stated because B-4b-i's neutrality argument DEPENDED
 -- on it being unreachable: a row whose interface carries `OriginBuiltin` would now
@@ -32915,14 +32917,7 @@ routeUndeterminedTop prog scope ifaceRef
     [tag] =>
       RKey
         tag
-        (argImplRequiresRoutes
-          (ifaceRefBare ifaceRef.irName)
-          ""
-          scope
-          (tconUnresolved tag)
-          []
-          0
-          0)
+        (argImplRequiresRoutes ifaceRef "" scope (tconUnresolved tag) [] 0 0)
         -- the goal is undetermined, so each super is too: answered by the same count
         (map
           ((superIface, _) => routeUndeterminedTop prog scope superIface)
@@ -33213,11 +33208,15 @@ argImplReqRoutes : String ->
   Int ->
   List Route
 argImplReqRoutes _ _ _ [] _ _ = []
-argImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
-  argReqRoute rIface encl useScope subst rargs prevSize spent
+argImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs, requireOrigin = ro }) :: rest) prevSize spent =
+  let iface = IfaceRef { irName = rIface, irOrigin = ro }
+  argReqRoute iface encl useScope subst rargs prevSize spent
     :: argImplReqRoutes encl useScope subst rest prevSize spent
 
-argReqRoute : String ->
+-- [iface] is the requirement's resolved interface, origin included: two interfaces
+-- spelled alike (`requires A.Sh a, B.Sh a`) select their impls by declaration, and a
+-- bare spelling here selects whichever same-named row matches first (#3534).
+argReqRoute : IfaceRef ->
   String ->
   ScopeId ->
   List (String, Mono) ->
@@ -33232,7 +33231,7 @@ argReqRoute _ _ _ _ [] _ _ = RNone
 -- EKNestedTop leg.  Single-param requires bind `more == []` ⇒ unchanged.
 argReqRoute iface encl useScope subst (arg :: more) prevSize spent =
   routeOfD
-    (ifaceRefBare iface)
+    iface
     encl
     useScope
     KeepNone

@@ -1,0 +1,8 @@
+import ma as A
+import mb as B
+import mb.{Box(..)}
+
+main =
+  let one = A.shl (1 : Int)
+  let five = B.shl (Box (5 : Int))
+  println (one ++ "|" ++ five)
