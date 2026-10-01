@@ -1195,16 +1195,16 @@ Given an occurrence of bare name `N` in module `M`:
   > graph minus one `impl` and must stay `99` on all three verbs.
   >
   > **What the implementation had to grow, stated because "widen the read" is the wrong
-  > mental model and cost a refused slice.** `admittedIfaceFor` (`types/typecheck.mdk`)
-  > is a **cardinality-1 projection** of `methodIfaceParamsRef`, which holds ONE payload
-  > per bare name — its single-winner-ness is a property of the TABLE, not of the read —
+  > mental model and cost a refused slice.** `methodIfaceHere` (`types/typecheck.mdk`)
+  > is a **cardinality-1 projection** of the module's method scope, which yields ONE payload
+  > per bare name — its single-winner-ness is a property of the PROJECTION, not of the read —
   > and its "declined" fallback is a last-write-wins **floor**, i.e. exactly the
   > outside-the-program tie-break (d) bullet 3 forbids. MEASURED at `7e5ec5e7`: this
   > clause's own corpus printed **99** with `import amodI…` first and **55** with
   > `import zmodI…` first, on `run` and on the shipped binary — a live (e) violation the
   > 2026-08-09 conformance note above does not record. The fix therefore adds a genuine
-  > per-module **admitted-SET** table, built at `overrideScopedMethods` by that
-  > function's own ladder and holding an entry ONLY for names with ≥2 admitted
+  > per-module **admitted SET** (`MethodScope`'s `MsMany`), built by `methodScopeAt`'s
+  > own ladder and present ONLY for names with ≥2 admitted
   > declarations, so every name with 0 or 1 keeps the single-winner projection
   > byte-identically. **Because two distinct interfaces can never yield the same impl,
   > "they agree" reduces at cardinality ≥2 to "they all fall to the standalone"** — the
@@ -1218,7 +1218,7 @@ Given an occurrence of bare name `N` in module `M`:
   > importer-shadow application arms, so it is scoped to an **applied** occurrence of a
   > name that is a shadow under S1 — an under-applied occurrence (`mth n` where the
   > outermost admitted receiver is argument 1) still takes the old path. The
-  > single-winner `admittedIfaceFor` remains what the other readers consume; that is
+  > single-winner `methodIfaceHere` remains what the other readers consume; that is
   > sound for the cells this arm decides (a rejected program has no denotation to route,
   > and an all-miss agreeing set makes every winner miss too) but it is not a general
   > widening, and a future cell that needs per-declaration *routing* rather than a
@@ -1249,8 +1249,8 @@ Given an occurrence of bare name `N` in module `M`:
   > right operand. S1-NS (a)(i) — the TYPE arm — admits a method name `n` when the
   > declaring interface's **own name** is admitted into `M`, whether or not `n` is. Two
   > nameable interfaces give a union of **two**, not zero. What declines in that shape is
-  > an *implementation* predicate (`scopedMethodEntry`'s witness ladder, whose
-  > `importedMethodEntry` arm requires an import binding the **name**), which is strictly
+  > an *implementation* predicate (`methodScopeAt`'s witness ladder, whose
+  > rung 1 requires an import binding the **name**), which is strictly
   > narrower than S1-NS (a). **A predicate that requires the method name where S1-NS (a)
   > admits on the interface name is NON-CONFORMANT with S2-DECL (c)**, which admits
   > declarations by S1-NS (a) and by nothing else. This is the whole content of the

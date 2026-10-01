@@ -770,8 +770,8 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    never raised and `run` executed a dot-access on an abstractly exported record that
    `check`/`build` reject — live on main for the import-bearing arm since (13c).  Seeded
    at both driver entries now; three `run_check_agreement` fixtures pin it.  The lesson
-   for the next driver consolidation: the check preamble's writer set (`graphMethodExports`,
-   `graphIfaceMethods`, `graphCtorExports`, `mangledFunDefsPresent`, `declEnvs`,
+   for the next driver consolidation: the check preamble's writer set (`graphCtorExports`,
+   `mangledFunDefsPresent`, `declEnvs` — which carries the method-export indices since #2563 —
    `effectDomains`, `abstractRecordTypes`) is the contract every Module-mode entry must
    carry, and `registry_keying_ratchet`'s check 6 (#2796) is that place.
 15. **`check` typechecks once, and the analyze path stops re-resolving its unchanged prefix,
