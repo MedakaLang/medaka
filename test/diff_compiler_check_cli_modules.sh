@@ -2039,6 +2039,63 @@ else
   fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-az-build-run (native build failed)\n'
 fi
 
+# The "za" cell (#1852): same modules, entry imports reversed. Spec answer is the
+# same as az (`viaA 5` = 105, `viaZ 5 3` = 10): each wrapper reaches the interface
+# it was declared against, whatever order the entry imports them in.
+cat > "$TMP/x1852za_main.mdk" <<'EOF'
+import x1852_zmod.{viaZ}
+import x1852_amod.{viaA}
+
+main =
+  let _ = println (viaA 5)
+  println (viaZ 5 3)
+EOF
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1852za_main.mdk" -o "$TMP/x1852za.bin" >/dev/null 2>&1 && [ -x "$TMP/x1852za.bin" ]; then
+  x1852_bld_za="$("$TMP/x1852za.bin" 2>/dev/null | tr '\n' ',')"
+  if [ "$x1852_bld_za" = "105,10," ]; then pass=$((pass+1)); printf 'ok   1852-xmod-samehead-arity-za-build-run (right interface by identity: 105,10)\n'
+  else fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-za-build-run (got [%s], want [105,10,])\n' "$x1852_bld_za"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-za-build-run (native build failed)\n'
+fi
+
+# #1852 variant: arities 3 vs 1 and a partially applied wrapper. `viaZ 5` = 6 and
+# `viaA 1 2 3` = 1 + 2 + 3 + 1000 = 1006, with zmod imported first.
+cat > "$TMP/x1852b_amod.mdk" <<'EOF'
+export interface IA a where
+  f3 : a -> Int -> Int -> Int
+
+impl IA Int where
+  f3 n x y = n + x + y + 1000
+
+export viaA : IA a => a -> Int -> Int -> Int
+viaA x = f3 x
+EOF
+cat > "$TMP/x1852b_zmod.mdk" <<'EOF'
+export interface IZ b where
+  f3 : b -> Int
+
+impl IZ Int where
+  f3 s = s + 1
+
+export viaZ : IZ b => b -> Int
+viaZ x = f3 x
+EOF
+cat > "$TMP/x1852b_main.mdk" <<'EOF'
+import x1852b_zmod.{viaZ}
+import x1852b_amod.{viaA}
+
+main =
+  let g = viaA 1
+  println (viaZ 5, g 2 3)
+EOF
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1852b_main.mdk" -o "$TMP/x1852b.bin" >/dev/null 2>&1 && [ -x "$TMP/x1852b.bin" ]; then
+  x1852_bld_b="$("$TMP/x1852b.bin" 2>/dev/null | tr '\n' ',')"
+  if [ "$x1852_bld_b" = "(6, 1006)," ]; then pass=$((pass+1)); printf 'ok   1852-xmod-samehead-arity-3v1-partial-build-run (right interface by identity: (6, 1006))\n'
+  else fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-3v1-partial-build-run (got [%s], want [(6, 1006),])\n' "$x1852_bld_b"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-3v1-partial-build-run (native build failed)\n'
+fi
+
 # ── #1280: EXTERN SIGNATURES CARRY IDENTITY (the SUPPLY half of Stage A-2) ────
 #
 # `externSchemes` (compiler/types/typecheck.mdk) used to turn each `DExtern`'s

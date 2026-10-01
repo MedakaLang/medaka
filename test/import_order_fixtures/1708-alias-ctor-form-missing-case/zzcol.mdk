@@ -1,0 +1,4 @@
+public export data Col = Green
+
+export zval : Int -> Int
+zval n = n
