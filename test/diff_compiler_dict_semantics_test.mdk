@@ -1555,6 +1555,28 @@ table = [
     codes = [],
   },
   Row {
+    entry = "3534-require-head-same-name-iface/main.mdk",
+    label =
+      "#3534 (requires resolved by spelling): `ma` and `mb` each declare an interface `Sh` with an `Int` impl; `mb`'s `impl Sh (Box a) requires Sh a` names `mb.Sh`, so `B.shl (Box 5)` is `B[` ++ `box` ++ mb's `sh 5` ++ `]` and the line is `A<a1>|B[boxb5]` on every verb. Before the fix the built binary resolved the requirement by the bare name `Sh` and trapped E-DISPATCH-NO-IMPL at exit 1 while `run` printed the value. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a1>|B[boxb5]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3534-require-list-two-same-name-ifaces/main.mdk",
+    label =
+      "#3534, two same-spelled interfaces in ONE requires list: `mc`'s `impl Both (W a) requires A.Sh a, B.Sh a` (`A`/`B` alias `ma`/`mb`, each declaring `Sh` with a default `shl`) has body `A.shl v ++ \"+\" ++ B.shl v`. Each slot is answered by its own interface's `Sh Int` impl, so `both (W 7)` prints `A<a7>+B[b7]`; a slot answered by the other interface shows its bracket style (`B[b7]` in the first half or `A<a7>` in the second). Before the fix the built binary trapped E-DISPATCH-NO-IMPL at exit 1. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
     entry = "s8-i1-samename-reexport-selective-through-wildcard/main.mdk",
     label =
       "§8 I1 ACROSS A SELECTIVE RE-EXPORT REACHED BY A WILDCARD IMPORT (RUN-XMOD-062, #1425 F1 third relocation). The two `-wildcard-` rows above grade a name a wildcard-imported module DECLARES; `rmod` here declares NOTHING and only `export import umod.{pick}`. The RUN-XMOD-054 repair`s supply walk enumerated declared exports, so this name got no row in `currentImportDefinersRef`, `declaredConstraintFor` fell to the source-blind bare-name table, and `cmod.pick``s CONSTRAINED row answered for the unconstrained `umod.pick`. Hand-derived from the two declared signatures, not captured: `C.pick (1 : Int)` = `sz 1 + 100` = 101, `pick 1 + 200` = 201; a re-export changes neither binding`s identity. MEASURED KNOWN-BAD at b313d767 in BOTH import orders: `run` 101 then `E-NOT-A-FUNCTION: applied non-function: <dict:>`, `check` exit 0, built binary CORRECT -- three verbs, two answers. ⚠️ Order-INVARIANT, so `import_order` reports it \"invariant\" and PASSES on the broken compiler",
@@ -2788,7 +2810,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 241
+tableRows = 243
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
