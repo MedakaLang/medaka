@@ -38,6 +38,32 @@ function check(name, cond, detail) {
   }
 }
 
+// Phone-width header: the page must not scroll sideways, the link row must be
+// replaced by a hamburger, and opening it must reveal the links. `menu` is the
+// <details> selector for that header (.b-menu on the apex, .site-nav-menu on a
+// rendered doc page); `row` is the wide-viewport link row it replaces.
+async function checkPhoneHeader(browser, url, label, { menu, row }) {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const p = await ctx.newPage();
+  try {
+    await p.goto(url, { waitUntil: 'domcontentloaded' });
+    await p.waitForSelector(menu + ' summary', { timeout: 15000 });
+    const scrollW = await p.evaluate(() => document.documentElement.scrollWidth);
+    check(`${label}: no horizontal overflow at 390px (scrollWidth ${scrollW})`, scrollW <= 390);
+    const rowHidden = await p.$eval(row, (el) => getComputedStyle(el).display === 'none');
+    check(`${label}: wide link row hidden at 390px`, rowHidden);
+    const summaryShown = await p.$eval(menu + ' summary', (el) => el.getBoundingClientRect().width > 0);
+    check(`${label}: hamburger visible at 390px`, summaryShown);
+    await p.click(menu + ' summary');
+    const linkCount = await p.$$eval(menu + ' nav a', (as) => as.filter((a) => a.getBoundingClientRect().height > 0).length);
+    check(`${label}: opening the menu reveals the links (got ${linkCount})`, linkCount >= 4);
+    const scrollWOpen = await p.evaluate(() => document.documentElement.scrollWidth);
+    check(`${label}: open menu does not overflow either (scrollWidth ${scrollWOpen})`, scrollWOpen <= 390);
+  } finally {
+    await ctx.close();
+  }
+}
+
 function setSource(page, src) {
   return page.evaluate((s) => {
     const v = window.__mdkView;
@@ -74,6 +100,10 @@ async function main() {
     await page.waitForSelector('.cm-editor .cm-content', { timeout: 15000 });
     const funnelStillHidden = await page.$eval('#funnel-strip', (el) => getComputedStyle(el).display === 'none');
     check('funnel strip stays hidden across reload (localStorage)', funnelStillHidden);
+
+    // ── Test 1c: phone-width header (apex) ──────────────────────────────────
+    console.log('Test: phone-width header on the apex');
+    await checkPhoneHeader(browser, BASE_URL, 'apex', { menu: '.b-menu', row: '.b-head .links' });
 
     // ── Test 2: syntax highlighting active ─────────────────────────────────
     console.log('Test: syntax highlighting');
@@ -300,6 +330,12 @@ async function main() {
       const backStatus = await page.evaluate(async (h) => (await fetch(h)).status, backHref);
       check(`guide "← Playground" back link resolves (${backHref} -> ${backStatus})`, backStatus === 200);
       await page.screenshot({ path: `${SCREENSHOT_DIR}/09_guide_chapter.png` });
+
+      // The rendered doc pages carry the other header (render_docs.mjs .site-nav);
+      // same phone-width contract as the apex.
+      console.log('Test: phone-width header on a guide page');
+      await checkPhoneHeader(browser, base + '/guide/03-functions.html', 'guide page',
+        { menu: '.site-nav-menu', row: '.site-nav-links' });
 
       // "Open in Playground" must land the EXACT block source in the editor.
       console.log('Test: guide "Open in Playground" round-trip');

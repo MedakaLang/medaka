@@ -194,7 +194,7 @@ try {
   // Group 5 is the `<code>` BODY, which since F-guide-syntax-highlight is no
   // longer plain-escaped text but token `<span>`s (playground/highlight_medaka.mjs).
   // Check 10 grades it against group 4 (`data-source`); the footer is now group 6.
-  const BLOCK_RE = /<div class="codeblock kind-([a-z]+)" data-lang="([^"]*)" data-fence="([^"]*)" data-source="([\s\S]*?)"><pre><code[^>]*>([\s\S]*?)<\/code><\/pre>([\s\S]*?)<\/div>\n/g;
+  const BLOCK_RE = /<div class="codeblock kind-([a-z]+)" data-lang="([^"]*)" data-fence="([^"]*)" data-source="([\s\S]*?)"><pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>([\s\S]*?)<\/div>\n/g;
 
   for (const page of pages) {
     const html = readFileSync(join(out, page.outFile), 'utf8');
@@ -228,6 +228,7 @@ try {
     check(ids.length > 0, `${where}: has at least one anchored heading`);
     check(page.toc.length > 0, `${where}: has a non-empty TOC`);
     const idSet = new Set(ids);
+    idSet.add('main');   // <main id="main">, the skip link's target on every page
     idsByPage.set(where, idSet);
     for (const entry of page.toc) {
       check(idSet.has(entry.id), `${where}: TOC entry #${entry.id} resolves to a heading`);
@@ -509,8 +510,8 @@ try {
     runLinks: false, pager: true });
   const a = readFileSync(join(optOn, '01-a.html'), 'utf8');
   const b = readFileSync(join(optOn, '02-b.html'), 'utf8');
-  check(a.includes('<meta property="og:url" content="https://example.com/opt/01-a.html">'),
-    'og: og:url is --site-url joined with the page');
+  check(a.includes('<meta property="og:url" content="https://example.com/opt/01-a">'),
+    'og: og:url is --site-url joined with the page, without the .html (the site serves clean URLs)');
   check(a.includes('<meta property="og:description" content="First prose paragraph, with a link.">'),
     'og: with no description comment, the first paragraph is the description, Markdown stripped');
   check(a.includes('<meta property="og:image" content="https://example.com/card.png">'),
