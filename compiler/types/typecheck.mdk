@@ -8265,7 +8265,8 @@ data MethodScope = MsAbsent | MsOne MethodRow | MsMany (List IfaceRef)
 --   own    this module's own interface declares [n];
 --   rung 1 a use-path that binds the METHOD name and witnesses the declaration;
 --   rung 2 only if rung 1 admits nothing: a use-path that names the declaration's
---          INTERFACE and witnesses it (F23, #1351);
+--          INTERFACE and witnesses it (F23, #1351).  Skipped in favour of the
+--          prelude's row for a METHOD-BOUND spelling (below);
 --   prelude the implicit prelude's declaration, reached only when no rung admitted
 --          anything;
 --   alias  only without a prelude row: a module alias whose module carries the
@@ -8284,28 +8285,54 @@ data MethodScope = MsAbsent | MsOne MethodRow | MsMany (List IfaceRef)
 -- carries no discriminator yet reaches rung 1 (`usePathBindsName` is True for every
 -- name under `UseWild`), so `import msb.*` can make rung 1 admit two and answer
 -- `MsMany`; that gap is RUN-METHID-116's and unfixed.
-methodScopeAt : List Decl -> String -> Int -> DeclEnvs -> MethodScope
-methodScopeAt prog n cur envs = match methodCandsAt n cur envs.deMethods
-  [] => MsAbsent
-  [only] => MsOne only
-  cs => methodOwnScope prog n cs
+--
+-- [standalone] says whether a standalone function binds [n] in this module (an
+-- importer or definer shadow, `standaloneValuesRef`).  When none does, the spelling is
+-- METHOD-BOUND: resolve bound a bare occurrence of it through this module's own
+-- interface, a use-path naming the method (rung 1), or the prelude, and through
+-- nothing else, since `import m.{I}` and `import m as A` bind no bare method name.
+-- That declaration answers the occurrence (docs/spec/SHADOW-SEMANTICS.md S2-DECL,
+-- "a method-bound occurrence"), so a prelude row outranks rung 2 there.  Rung 2 still
+-- answers a method-bound spelling with no prelude row: resolve rejects every bare
+-- occurrence of it, so only readers that answer no occurrence (an `impl` this module
+-- writes, say) see that answer.  A standalone-bound spelling keeps the whole ladder,
+-- which is S2-DECL (c)'s admitted set.
+methodScopeAt : Bool -> List Decl -> String -> Int -> DeclEnvs -> MethodScope
+methodScopeAt standalone prog n cur envs =
+  match methodCandsAt n cur envs.deMethods
+    [] => MsAbsent
+    [only] => MsOne only
+    cs => methodOwnScope standalone prog n cs
 
-methodOwnScope : List Decl -> String -> List MethodRow -> MethodScope
-methodOwnScope prog n cs = match ownMethodIdent prog n
+methodOwnScope : Bool -> List Decl -> String -> List MethodRow -> MethodScope
+methodOwnScope standalone prog n cs = match ownMethodIdent prog n
   Some ident => match methodRowById ident cs
     Some r => MsOne r
-    None => methodImportedScope prog n cs
-  None => methodImportedScope prog n cs
+    None => methodImportedScope standalone prog n cs
+  None => methodImportedScope standalone prog n cs
 
-methodImportedScope : List Decl -> String -> List MethodRow -> MethodScope
-methodImportedScope prog0 n cs =
+methodImportedScope : Bool ->
+  List Decl ->
+  String ->
+  List MethodRow ->
+  MethodScope
+methodImportedScope standalone prog0 n cs =
   let prog = writtenImportsOf prog0
   match filterList (r => methodCandImported prog n (methodRowCand r)) cs
     [only] => MsOne only
-    [] => match filterList (r => methodCandAdmitted prog n (methodRowCand r)) cs
-      [only] => MsOne only
-      rung2 => methodUndecided prog n cs rung2
+    [] => match if standalone then None else methodPreludeRow n cs
+      Some r => MsOne r
+      None =>
+        match filterList (r => methodCandAdmitted prog n (methodRowCand r)) cs
+          [only] => MsOne only
+          rung2 => methodUndecided prog n cs rung2
     rung1 => methodUndecided prog n cs rung1
+
+-- The implicit prelude's declaration of [n], when it is one of [cs].
+methodPreludeRow : String -> List MethodRow -> Option MethodRow
+methodPreludeRow n cs = do
+  ident <- mkIdent NsMethod (OriginModule "core") n
+  methodRowById ident cs
 
 -- [prog] without the method imports `deAliasMethodImports` appends beside each
 -- `import m as A`.  That import exists so the elaborated tree has the origin name the
@@ -8340,11 +8367,9 @@ methodUndecided : List Decl ->
   List MethodRow ->
   List MethodRow ->
   MethodScope
-methodUndecided prog n cs [] = match mkIdent NsMethod (OriginModule "core") n
+methodUndecided prog n cs [] = match methodPreludeRow n cs
+  Some r => MsOne r
   None => methodAliasedScope prog n cs
-  Some ident => match methodRowById ident cs
-    Some r => MsOne r
-    None => methodAliasedScope prog n cs
 methodUndecided _ _ _ admitted =
   MsMany (sortIfaceRefs (map methodRowIface admitted))
 
@@ -8378,7 +8403,13 @@ methodScopeHere n = match perRun.value.methodScopeCtxRef.value
   Some (prog, cur) => match omLookup n perRun.value.methodScopeMemoRef.value
     Some s => s
     None =>
-      let s = methodScopeAt prog n cur driverState.value.declEnvsRef.value
+      let s =
+        methodScopeAt
+          (omHasKey n driverState.value.standaloneValuesRef.value)
+          prog
+          n
+          cur
+          driverState.value.declEnvsRef.value
       perRun.value.methodScopeMemoRef :=
         omInsert n s perRun.value.methodScopeMemoRef.value
       s
@@ -15751,6 +15782,7 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef =
     None => standaloneValueBindingEmit env name tagRef
   match selected
     Some value =>
+      let _ = rejectAdmittedValueOccurrence name
       let sym = routeLocalSym !tagRef
       let occurrence =
         instantiateStandaloneOccurrence env name sym !currentLoc value
@@ -22159,6 +22191,7 @@ maybeStandaloneValueMono : TcEnv -> String -> Option Mono
 maybeStandaloneValueMono env name =
   map
     (value =>
+      let _ = rejectAdmittedValueOccurrence name
       (instantiateStandaloneOccurrence
         env
         name
@@ -22166,6 +22199,19 @@ maybeStandaloneValueMono env name =
         !currentLoc
         value).svoInstance.mtiBody)
     (standaloneValueBinding env name)
+
+-- S2-DECL (d) for a VALUE occurrence of an importer shadow (`ap2 mth`, `g = mth`,
+-- `flip mth`): no argument is applied, so no admitted declaration's own receiver can be
+-- evaluated, and with two or more admitted the declarations have not been shown to
+-- agree.  That is the located reject, in every import order.  The standalone still
+-- types the occurrence, as at the applied arms' reject.  A definer shadow denotes its
+-- own module's standalone and is never ambiguous.
+rejectAdmittedValueOccurrence : String -> Unit
+rejectAdmittedValueOccurrence name
+  | isDefinerShadow name = ()
+  | otherwise =
+    let ifs = methodAdmittedHere name
+    if listLen ifs >= 2 then pushAmbiguousShadowDecl name ifs !currentLoc
 
 -- A selected standalone value contributes its own forcing row and constraints.
 -- Preparing a method candidate must not charge this alternate binding.
@@ -46402,27 +46448,41 @@ importMemberShadow graph rows nameable universe depDecls (UseMember origin _ mlo
     []
   else match reachableStandaloneSig graph (listLen graph) depDecls origin
     None => []
-    Some sty => match ifaceMethodSigFor local rows universe
+    Some sty => match ifaceMethodSigFor local sty rows universe
       None => []
-      Some (iface, mty) =>
-        if schemesAgree sty mty then [] else [(local, iface, sty, mty, mloc)]
+      Some (iface, mty) => [(local, iface, sty, mty, mloc)]
 
 schemesAgree : Option Ty -> Ty -> Bool
 schemesAgree None _ = False
 schemesAgree (Some sty) mty = tyAlphaEq sty mty
 
--- the first NAMEABLE interface declaring [name], with that method's declared signature.
--- Rows whose declaration is not in [universe] are skipped rather than guessed at.
+-- A NAMEABLE interface declaring [name] whose signature differs from the standalone's
+-- [sty], with that signature.  When two or more differ, the least by interface name and
+-- then by rendered signature, so the warning reads the same in every import order
+-- (S2-DECL (e)).  Rows whose declaration is not in [universe] are skipped rather than
+-- guessed at.
 ifaceMethodSigFor : String ->
+  Option Ty ->
   List (String, List String) ->
   List Decl ->
   Option (String, Ty)
-ifaceMethodSigFor _ [] _ = None
-ifaceMethodSigFor name ((iface, ms) :: rest) universe
-  | not (contains name ms) = ifaceMethodSigFor name rest universe
-  | otherwise = match ifaceMethodTyIn iface name universe
-    Some ty => Some (iface, ty)
-    None => ifaceMethodSigFor name rest universe
+ifaceMethodSigFor _ _ [] _ = None
+ifaceMethodSigFor name sty ((iface, ms) :: rest) universe =
+  let later = ifaceMethodSigFor name sty rest universe
+  if not (contains name ms) then
+    later
+  else match ifaceMethodTyIn iface name universe
+    Some ty =>
+      if schemesAgree sty ty then later else leastIfaceSig (iface, ty) later
+    None => later
+
+leastIfaceSig : (String, Ty) -> Option (String, Ty) -> Option (String, Ty)
+leastIfaceSig a None = Some a
+leastIfaceSig (a@(ia, ta)) (Some (b@(ib, tb)))
+  | ia < ib = Some a
+  | ib < ia = Some b
+  | ppTy ta <= ppTy tb = Some a
+  | otherwise = Some b
 
 ifaceMethodTyIn : String -> String -> List Decl -> Option Ty
 ifaceMethodTyIn _ _ [] = None

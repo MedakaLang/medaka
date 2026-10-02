@@ -1112,6 +1112,22 @@ Given an occurrence of bare name `N` in module `M`:
   > what `N` denotes either. **Note the asymmetry this preserves:** the *names* that
   > may decide are narrowed; the *instances* that answer the query are not (I5).
   >
+  > **A method-bound occurrence. RULED 2026-10-02 (Val, #3677).** (c) and (d) choose
+  > among admitted declarations only for an occurrence resolve bound to a
+  > **standalone**, the shadow case. When resolve binds a bare occurrence to a
+  > **method** declaration (this module's own interface, a use-path that names the
+  > method, or the prelude), that declaration answers it. Admission through S1-NS
+  > (a)(i)/(ii) widens shadow-hood; it never re-routes a method occurrence resolve
+  > already bound. So `import m.{Disp}` or `import m as M` beside the prelude's
+  > `display` leaves a bare `display (6 : Int)` the prelude's method, printing `6`:
+  > naming an interface, or aliasing its module, binds no bare method name. Declined:
+  > strict (d), which rejects both shapes, and ladder precedence, which makes the
+  > imported `Disp`'s method the answer. Still unruled: strict (d) cardinality for a
+  > standalone-bound occurrence that admits an alias declaration beside a written or
+  > prelude one, which stays on the ladder (`methodScopeAt`). Pinned by
+  > `test/run_check_agreement_fixtures/accept_3677_iface_import_keeps_prelude_method.mdk`
+  > and `test/run_check_agreement_fixtures/accept_3677_alias_import_keeps_prelude_method.mdk`.
+  >
   > **(d) The choice, by cardinality of the admitted set.**
   >
   > - **Exactly one** → it decides, per (a)+(b).
@@ -1125,11 +1141,11 @@ Given an occurrence of bare name `N` in module `M`:
   >   occurrence is the **located reject** of the next bullet, in every import order.
   >   **RULED 2026-10-01 (Val)**: this replaces the earlier hand-derived `99` for the
   >   under-applied shape. A fully applied occurrence is unaffected. A **value**
-  >   occurrence (`ap2 mth "abc" 5`, `g = mth`, `flip mth`) is the limit case of
-  >   under-application, so this bullet and the next govern it as written, but the
-  >   implementation does **not yet reject** one: it binds the imported standalone,
-  >   which is a wrong answer whenever the admitted declarations disagree (known
-  >   gap, #3678).
+  >   occurrence (`ap2 mth "abc" 5`, `g = mth`, `let h = mth`, `flip mth`) is the
+  >   limit case of under-application: no argument is applied, so no admitted
+  >   declaration's receiver can be evaluated, and with two or more admitted it is
+  >   the located reject as well (#3678,
+  >   `test/shadow_fixtures/i37_importer_two_admitted_value_occurrence/`).
   > - **Two or more that DISAGREE** → a **located reject** at the occurrence. Not a
   >   silent pick: by S1-SCOPE's own criterion this clause set is a
   >   *name-resolution* rule, which must be **choosing between candidates the author
