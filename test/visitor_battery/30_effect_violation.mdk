@@ -1,0 +1,6 @@
+double : Int -> Int
+double n =
+  println "doubling"
+  n * 2
+
+main = println (double 2)

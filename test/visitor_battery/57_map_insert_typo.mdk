@@ -1,0 +1,3 @@
+import map.{Map, insert}
+
+main = println (insert "a" 1 Map {})

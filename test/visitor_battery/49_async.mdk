@@ -1,0 +1,12 @@
+import async.{runAsyncMain, spawn, await, sleep, liftIO}
+
+main = runAsyncMain (do
+  a <- spawn (do
+    sleep 10
+    pure 1)
+  b <- spawn (do
+    sleep 5
+    pure 2)
+  x <- await a
+  y <- await b
+  liftIO (u => println (x + y)))

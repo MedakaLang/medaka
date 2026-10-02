@@ -1,0 +1,4 @@
+sign : Int -> String
+sign n = if n > 0 then "pos"
+
+main = println (sign 1)
