@@ -1,0 +1,20 @@
+-- #3676 NEGATIVE CONTROL for OD3's zero arm. The goal is the same undetermined
+-- `Sz ?a` as reject_3676_zero_impl_undetermined_no_impl_anywhere.mdk, but `Sz`
+-- has one impl, arrow-headed. The impl census drops arrow heads, so a census
+-- count of 0 here does not mean "no impl": this is a sole impl and the goal
+-- commits to it. If this rejects, the zero arm is reading the census.
+--
+-- Expected value from the source: `szNew 14` is `(+ 14)`, and `szTag`
+-- applies it to 0, giving 14.
+interface Sz a where
+  szNew : Int -> a
+  szTag : a -> Int
+
+impl Sz (Int -> Int) where
+  szNew n = (+ n)
+  szTag f = f 0
+
+roundtrip : Sz a => Int -> Int
+roundtrip n = szTag (szNew n)
+
+main = println (roundtrip 14)

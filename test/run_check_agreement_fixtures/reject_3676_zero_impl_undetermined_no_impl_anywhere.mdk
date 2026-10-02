@@ -1,0 +1,8 @@
+-- #3676 (undetermined goal with zero impls of its declaration accepted).
+-- The same undetermined `Sz ?a` goal in `roundtrip`'s body as
+-- reject_3676_zero_impl_undetermined_same_spelling.mdk, in a program that
+-- declares no `Sz` impl of any spelling. Every verb owes `T-NO-IMPL` naming
+-- `lib.zi3676_mb.Sz` (DICT-SEMANTICS OD3, zero arm), never a runtime panic.
+import lib.zi3676_mb.{roundtrip}
+
+main = println (roundtrip 14)

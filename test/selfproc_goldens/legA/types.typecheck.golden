@@ -2381,6 +2381,7 @@ qualDeclOf : String -> String -> List PredicateSlot -> CDeclared
 qualSchemeOblsFor : String -> Option (List VecObl)
 qualifiedArgumentKinds : Option Loc -> List (String, List Kind) -> List (List Kind) -> List Ty -> List (String, List Kind)
 qualifiedConstraintKinds : Option Loc -> List (String, List Kind) -> List Constraint -> List (String, List Kind)
+qualifiedIfaceLabel : IfaceRef -> String
 qualifiedKindScope : List (String, List Kind) -> Ty -> List (String, List Kind)
 qualifierAuthIds : Mono -> Map Int Unit -> Map Int Unit
 qualifierBinderTypeMsg : String -> String -> String
@@ -3012,6 +3013,7 @@ unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
 unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
 univAddIfaceTag : Bool -> RegKey -> TabKey -> Registry SetRegistry -> Registry SetRegistry
 univConcreteBucket : ImplUniverse -> IfaceRef -> Option HeadKey -> List (List Ty, List Require)
+univHasAnyImpl : ImplUniverse -> IfaceRef -> Bool
 univHeadCountsInCensus : List Ty -> Bool
 univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)
 univReceiverTag : List Ty -> Option HeadKey
