@@ -1129,7 +1129,7 @@ Given an occurrence of bare name `N` in module `M`:
   >   under-application, so this bullet and the next govern it as written, but the
   >   implementation does **not yet reject** one: it binds the imported standalone,
   >   which is a wrong answer whenever the admitted declarations disagree (known
-  >   gap, #TBD-F4).
+  >   gap, #3678).
   > - **Two or more that DISAGREE** → a **located reject** at the occurrence. Not a
   >   silent pick: by S1-SCOPE's own criterion this clause set is a
   >   *name-resolution* rule, which must be **choosing between candidates the author
