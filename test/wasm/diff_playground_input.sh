@@ -244,7 +244,7 @@ main =
   println (toInt " 42 ")
   println (toFloat "3.5")
 EOF2
-printf '%s\n' 'Some 42' 'Some -17' 'None' 'None' 'Some 3.5' > "$WORK/expected"
+printf '%s\n' 'Some 42' 'Some (-17)' 'None' 'None' 'Some 3.5' > "$WORK/expected"
 check_imports_program string-to-int
 printf '%d checks, %d failing\n' "$checks" "$fail"
 [ "$checks" -gt 0 ] && [ "$fail" -eq 0 ]

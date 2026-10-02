@@ -59,9 +59,9 @@ ignored.
 
 ```medaka
 > parse "[package]\nname = \"hello\"\nversion = \"0.1.0\""
-Ok Toml [("package.name", TString "hello"), ("package.version", TString "0.1.0")]
+Ok (Toml [("package.name", TString "hello"), ("package.version", TString "0.1.0")])
 > parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
-Ok Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]
+Ok (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")])
 ```
 
 ## Accessors

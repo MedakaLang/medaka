@@ -50,7 +50,7 @@ The inverse of `toList`.
 
 ```medaka
 > fromList [1, 2, 3]
-Some NonEmpty [1, 2, 3]
+Some (NonEmpty [1, 2, 3])
 > fromList ([] : List Int)
 None
 ```

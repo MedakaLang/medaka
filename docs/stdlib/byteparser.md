@@ -266,7 +266,7 @@ optional p
 
 ```medaka
 > runByteParser (optional (byte 5)) (fromU8Array [|5|])
-Ok Some 5
+Ok (Some 5)
 > runByteParser (optional (byte 5)) (fromU8Array [|9|])
 Ok None
 ```
@@ -315,7 +315,7 @@ any real input could hold — the bound check never overflows.
 
 ```medaka
 > runByteParser (takeBytes 3) (fromU8Array [|10, 20, 30, 40|])
-Ok Bytes "0a141e"
+Ok (Bytes "0a141e")
 > runByteParser (deferThen anyByte (_ => takeBytes 4611686018427387903)) (fromU8Array [|10, 20, 30, 40|])
 Err "unexpected end of input at byte 4"
 ```
@@ -357,15 +357,15 @@ first.
 
 ```medaka
 > runByteParser (beSint 1) (fromU8Array [|255|])
-Ok -1
+Ok (-1)
 > runByteParser (beSint 1) (fromU8Array [|127|])
 Ok 127
 > runByteParser (beSint 2) (fromU8Array [|255, 255|])
-Ok -1
+Ok (-1)
 > runByteParser (beSint 2) (fromU8Array [|0, 1|])
 Ok 1
 > runByteParser (beSint 9) (fromU8Array [|255, 255, 255, 255, 255, 255, 255, 255, 254|])
-Ok -2
+Ok (-2)
 ```
 
 ### `beFloat64`
@@ -380,7 +380,7 @@ A 64-bit IEEE 754 float from eight bytes, most significant byte first.
 > runByteParser beFloat64 (fromU8Array [|63, 248, 0, 0, 0, 0, 0, 0|])
 Ok 1.5
 > runByteParser beFloat64 (fromU8Array [|192, 0, 0, 0, 0, 0, 0, 0|])
-Ok -2.0
+Ok (-2.0)
 ```
 
 ### `leUint`
@@ -416,11 +416,11 @@ first.
 
 ```medaka
 > runByteParser (leSint 1) (fromU8Array [|255|])
-Ok -1
+Ok (-1)
 > runByteParser (leSint 1) (fromU8Array [|127|])
 Ok 127
 > runByteParser (leSint 2) (fromU8Array [|255, 255|])
-Ok -1
+Ok (-1)
 > runByteParser (leSint 2) (fromU8Array [|1, 0|])
 Ok 1
 ```
@@ -437,7 +437,7 @@ A 64-bit IEEE 754 float from eight bytes, least significant byte first.
 > runByteParser leFloat64 (fromU8Array [|0, 0, 0, 0, 0, 0, 248, 63|])
 Ok 1.5
 > runByteParser leFloat64 (fromU8Array [|0, 0, 0, 0, 0, 0, 0, 192|])
-Ok -2.0
+Ok (-2.0)
 ```
 
 ## Fixed-width unsigned readers
