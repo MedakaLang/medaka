@@ -1,0 +1,6 @@
+-- The same two imports, written in the other order.
+import a.{g as f}
+import a.*
+
+answer : Int
+answer = f 1

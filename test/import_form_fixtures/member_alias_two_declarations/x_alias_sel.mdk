@@ -1,0 +1,6 @@
+-- The alias binds `f` to `g`, the plain member binds it to `f`.
+import a.{g as f}
+import a.{f}
+
+answer : Int
+answer = f 1

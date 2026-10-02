@@ -1,0 +1,5 @@
+-- One member list binds `f` to `g` and to `f`.
+import a.{g as f, f}
+
+answer : Int
+answer = f 1

@@ -1491,11 +1491,10 @@ gen_starimports() {
 # check`): `export import m.*` re-exports, and the entry's `import m.*` binds.
 #
 # m0 also declares `data D0 = D0`, a type and a constructor sharing one spelling, which
-# every hop re-exports by wildcard (#3683). A hop that re-exports that name once per
-# export list it appears in doubles its copies at every hop, which makes resolve
-# exponential in N on this chain (measured: N=20 takes 10s, N=100 does not finish), and it
-# makes the type namespaces non-empty, so a per-name list scan over a type, constructor
-# or interface export list lifts the op assertion off 0.
+# every hop re-exports by wildcard. A hop that re-exports that name once per export list
+# it appears in doubles its copies at every hop, so resolve goes exponential in N on this
+# chain, and the non-empty type namespaces mean a per-name list scan over a type,
+# constructor or interface export list lifts the op assertion off 0.
 gen_reexports() {
   n=$1; dir=$2
   rm -rf "$dir"; mkdir -p "$dir"
@@ -2604,8 +2603,7 @@ KNOWN_SLOW_OPS="
 # ── alloc self-draining ledger (the alloc analogue of KNOWN_OCEIL/OFIXED) ──
 # ACEIL 4.0: the resolve-STAGE alloc ratio at the FIXED band N=100->200->400 is a
 # deterministic r2=3.26 (intrinsic-quadratic, converging to 4.0 from below as N grows; at
-# this fixed finite band it is 3.26, ~18% under 4.0; it read 3.10 before resolve began
-# carrying each exported value's declaring module, #3684). A cubic-ALLOC regression reads r2=4.41
+# this fixed finite band it is 3.26, ~18% under 4.0). A cubic-ALLOC regression reads r2=4.41
 # at this same band (MEASURED by reverting the provenance-map fix), 10% over — caught. AFIXED
 # 2.30: if the export representation is ever made sub-quadratic (e.g. shared/lazy exports) the
 # ratio drops under 2.30 and this row PROMOTES (retire the quadratic allowance). Deterministic

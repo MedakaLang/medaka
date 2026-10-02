@@ -1,0 +1,10 @@
+-- #3681, the import order reversed from
+-- accept_3681_iface_direct_plus_reexport.mdk; the answer is the same 2.
+import lib.od3681_p.{Same, pmth}
+import lib.od3681_mid.{Same}
+data P a = MkP a
+
+impl Same P where
+  pmth p = 2
+
+main = println (pmth (MkP 1))

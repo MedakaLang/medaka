@@ -1,0 +1,6 @@
+-- reject_one_name_two_decls_wildcard_then_alias.mdk with the import order
+-- reversed; the same located R-AMBIGUOUS-OCCURRENCE.
+import lib.od2decl_a.{g as f}
+import lib.od2decl_a.*
+
+main = println (f 1)

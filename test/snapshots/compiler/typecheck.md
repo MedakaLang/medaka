@@ -1,5 +1,5 @@
 # META
-source_lines=53196
+source_lines=53200
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -17745,11 +17745,10 @@ firstOrZero (x :: _) = x
 -- occurrence then reads the slot of the interface its own name resolved to (#3680,
 -- #3679).  The same interface written twice, `(Sh a, Sh a)`, still keys identically and
 -- shares one slot.  An interface whose origin is unrecoverable (`OriginUnresolved`) keys
--- on its bare name, exactly as before.
--- Not a dedup key on its own any more: the only `dedupBy` over slots is
--- `dedupSlotVecs`, over `cslotVecKey`.  The vector-free `dedupSlots` that used to live
--- here was deleted with #1866: keeping it would have let a reader dedup slots without
--- their vectors, which is exactly the collapse that slice removed.
+-- on its bare name.
+-- It is never a dedup key on its own: the only `dedupBy` over slots is
+-- `dedupSlotVecs`, over `cslotVecKey`.  A slot dedup without the vectors would merge
+-- two slots that differ only in their vectors.
 cslotKey : CSlot -> String
 cslotKey s =
   lenKey (regKeyRender (regKeyOfTab (oblIfaceKey s.csIface)))
@@ -35888,8 +35887,8 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- `IfaceRef` `methodEntryHere` already held, instead of stripping it via
 -- `ifaceRefBare iface.irName` — so by the census rule stated then, every REMAINING
 -- `ifaceRefBare` call site IS the definition or a reader that holds only a spelling.
--- `ifaceForInferredId`'s `pendingDictApps` fallback no longer mints one: it returns the
--- callee slot's `pdaIfaces` entry, declaration included (#3679).
+-- `ifaceForInferredId`'s `pendingDictApps` fallback mints none: it returns the
+-- callee slot's `pdaIfaces` entry, declaration included.
 --
 -- ⚠️ 🚨 **AND THE LEG STILL MAY NOT BE DELETED — MEASURED, NOT INFERRED FROM THE
 -- CENSUS ABOVE.**  Zero remaining `ifaceRefBare` *goal-producer* call sites does not by
@@ -47202,10 +47201,12 @@ publicModuleExports prog bindings =
 
 -- The first row for a name wins, unless a second import supplies a different
 -- declaration of the same name: then the occurrence is the ambiguity the
--- resolver reports (`ambiguousSet` keys on the declaration exactly like this,
--- and a local definition, which it exempts, shadows the seed here anyway). Choosing either
--- supplier would type the use against a definition the program never named,
--- and the cascade would change with the order the imports were written.
+-- resolver reports as R-AMBIGUOUS-OCCURRENCE (`ambiguousSet`, keyed by
+-- declaration through `importValueDecls`, whichever module each import names;
+-- a local definition, which it exempts, shadows the seed here anyway).
+-- Choosing either supplier would type the use against a definition the program
+-- never named, and the cascade would change with the order the imports were
+-- written.
 importedBindingWinners : List (String, (Option String, ExportBinding)) ->
   OrdMap Unit ->
   OrdMap Unit ->
@@ -48498,6 +48499,9 @@ andList (x :: rest) = "\{x}, \{andList rest}"
 -- accept one declaration reached through two imports. A row the form admits
 -- without binding its name (a bare method row admitted for dispatch, a mangled
 -- twin) carries no supplier, and core is exempt there as it is in the resolver.
+-- The key is looked up by local name, so one member list binding a local twice
+-- (`import m.{a as b, b}`) gives both rows one key and the first row wins here;
+-- the resolver rejects that occurrence by declaration all the same.
 importSeed : List (String, a) ->
   List (String, String) ->
   List Decl ->

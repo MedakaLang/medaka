@@ -205,11 +205,10 @@ ifaceMethodNm : IfaceMethod -> String
 ifaceMethodPairs : ModuleExports -> List String -> List (String, List String)
 ifaceMethodsOf : String -> List (String, List String) -> List String
 implMethodNm : ImplMethod -> String
-importBaseNames : UsePath -> ModuleExports -> Map String String
 importNamesIn : ExpNs String -> Map String ModuleExports -> UsePath -> List String
 importUnmergedIfaceDecls : Map String ModuleExports -> UsePath -> List (String, String)
+importValueBindings : UsePath -> ModuleExports -> List (String, String)
 importValueDecls : Map String ModuleExports -> UsePath -> List (String, String)
-importValueNames : Map String ModuleExports -> UsePath -> List String
 importedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
 importedEffects : Map String ModuleExports -> List Decl -> List String
 importedIfaceMethods : Map String ModuleExports -> List Decl -> List (String, List String)

@@ -1,0 +1,5 @@
+-- The same member list, members reversed.
+import a.{f, g as f}
+
+answer : Int
+answer = f 1

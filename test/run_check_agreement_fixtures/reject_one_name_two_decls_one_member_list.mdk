@@ -1,0 +1,5 @@
+-- One member list binds `f` twice, to `g` and to `f`: a located
+-- R-AMBIGUOUS-OCCURRENCE, never whichever member was written first.
+import lib.od2decl_a.{g as f, f}
+
+main = println (f 1)
