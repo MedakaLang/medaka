@@ -54,9 +54,14 @@ is_dict_resolution_failure() {
   grep -qE "no impl of method '|dispatch arm for '|dict param '.*' not in scope|forwarded dict '.*' not in scope|RNone route as a dict witness|CDict (value )?over unknown function" "$1"
 }
 
+# A tolerated GAP is a `gap`-helper panic that is not a resolution failure.
+is_tolerated_gap() {
+  grep -q 'wasm_emit gap — ' "$1" && ! is_dict_resolution_failure "$1"
+}
+
 # Classifier probe: `--classify <emit.err>` prints GAP or FAIL for a seeded emit error.
 if [ "${1:-}" = "--classify" ]; then
-  if grep -q 'wasm_emit gap — ' "$2" && ! is_dict_resolution_failure "$2"; then echo GAP; else echo FAIL; fi
+  if is_tolerated_gap "$2"; then echo GAP; else echo FAIL; fi
   exit 0
 fi
 
@@ -80,8 +85,7 @@ if [ "${1:-}" = "--one" ]; then
     # Any other emit-time panic (e.g. a hard closure-check panic, S4) is a real
     # FAIL too — classifying it as GAP would silently hide the exact regression
     # class this gate exists to catch loudly.
-    if grep -q 'wasm_emit gap — ' "$WORKDIR/$name.emit.err" \
-       && ! is_dict_resolution_failure "$WORKDIR/$name.emit.err"; then
+    if is_tolerated_gap "$WORKDIR/$name.emit.err"; then
       msg="$(printf 'GAP  %s (emit) %s' "$name" "$(head -1 "$WORKDIR/$name.emit.err" | sed 's/.*gap — //')")"; st=2
     else
       msg="$(printf 'FAIL %s (emit)\n%s' "$name" "$(cat "$WORKDIR/$name.emit.err")")"; st=1
