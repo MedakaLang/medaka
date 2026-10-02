@@ -873,6 +873,86 @@ table = [
     pinned = "20\n",
   },
   Row {
+    entry = "i37_importer_two_admitted_value_occurrence/main.mdk",
+    label =
+      "I37 (#3678) S2-DECL (d), the VALUE-OCCURRENCE limit of under-application: `ap2 mth \"abc\" 5`, the occurrence an argument to a higher-order function, where `mth` is an imported standalone and BOTH `IA` and `IZ` are admitted (each named in its own import clause; amodI before zmodI). A value occurrence applies no argument, so neither declaration`s receiver can be evaluated and the two have not been shown to agree -- the located T-AMBIGUOUS-SHADOW-DECL at the occurrence, on all three verbs, RULED 2026-10-01 (SHADOW-SEMANTICS.md S2-DECL (d) bullet 2). `impl IA String` (55) and `impl IZ String` (7) make the declarations disagree, so the pre-fix answer, the standalone`s 99 at exit 0, was a wrong value with no diagnostic. VERDICT DERIVED FROM THE CLAUSE, not captured",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/value_za.mdk",
+    label =
+      "I37 (#3678) `ap2 mth \"abc\" 5`, the occurrence an argument to a higher-order function; zmodI before amodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/pointfree_az.mdk",
+    label =
+      "I37 (#3678) `g = mth`, a point-free top-level binding; amodI before zmodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/pointfree_za.mdk",
+    label =
+      "I37 (#3678) `g = mth`, a point-free top-level binding; zmodI before amodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/let_az.mdk",
+    label =
+      "I37 (#3678) `let h = mth`, a point-free local binding; amodI before zmodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/let_za.mdk",
+    label =
+      "I37 (#3678) `let h = mth`, a point-free local binding; zmodI before amodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/flip_az.mdk",
+    label =
+      "I37 (#3678) `flip mth 5 \"abc\"`, the occurrence an argument to `flip`; amodI before zmodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/flip_za.mdk",
+    label =
+      "I37 (#3678) `flip mth 5 \"abc\"`, the occurrence an argument to `flip`; zmodI before amodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
     entry = "x9_prelude_numlit_iface_method_own_impl.mdk",
     label =
       "X9 (#2157, S0) THE NUMERIC-LITERAL CELL of the prelude-method collision, and the corpus had none: x1-x8 all collide with a prelude name written as an IDENTIFIER, so every one of them grades what a bare occurrence denotes -- and a numeric literal mentions no identifier at all, which is precisely why no row could see this. `fromInt` is the PRELUDE `Num`s own method; declaring a user interface method of that name put a second row under the bare key `\"fromInt\"` in `methodIfaceParamsRef`, and `recordImplObligation`s `omLookup` (bare NAME, no interface identity, last-write-wins) then recorded EVERY numeric literals impl obligation against the USERs interface. #259 had already fixed the literals TYPE by identity (`seedNumLitFromIntScheme`); the OBLIGATION half still went through the spelling. MEASURED ON THE BASE BINARY (d5d71833, cold-built in this worktree, MEDAKA_STRICT=1): `medaka check` exit 1, `No impl of Buildable for Int` pointed at the literal `1000` -- three lines under an `impl Buildable Tag` that plainly exists. Both denotations are pinned by value so a fix that over-corrects is visible too: the ANNOTATED `fromInt 5` must still take `Buildable` (1005 = Tag (5 + 1000) unwrapped) while the bare literals take `Num` (3 = 1 + 2). Values hand-derived from the sources, not captured",
@@ -1097,6 +1177,16 @@ data WarnCheck = WarnCheck { entry : String, mustFire : Bool, needle : String }
 
 warnChecks : List WarnCheck
 warnChecks = [
+  WarnCheck {
+    entry = "i28_importer_two_admitted_agree/main.mdk",
+    mustFire = True,
+    needle = "by interface method 'IA.mth : a -> Int -> Int'",
+  },
+  WarnCheck {
+    entry = "i28_importer_two_admitted_agree/order-swapped.mdk",
+    mustFire = True,
+    needle = "by interface method 'IA.mth : a -> Int -> Int'",
+  },
   WarnCheck {
     entry = "i29_importer_selective_import_displaced/main.mdk",
     mustFire = True,

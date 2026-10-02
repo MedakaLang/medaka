@@ -1,0 +1,12 @@
+-- #3677, the filed shape: `import lib.disp3677 as M` binds `M.display` and nothing
+-- bare, so resolve binds the bare `display` and `debug` below to the PRELUDE's methods
+-- and those declarations answer them (docs/spec/SHADOW-SEMANTICS.md S2-DECL, RULED
+-- 2026-10-02): `6` and `5`.  Only the alias-qualified spelling reaches `Disp Int`'s
+-- impl: `mm-display`.  The pair with `accept_3677_iface_import_keeps_prelude_method.mdk`
+-- covers both import forms that admit `Disp` without binding its method names.
+import lib.disp3677 as M
+
+main =
+  println (display (6 : Int))
+  println (debug (5 : Int))
+  println (M.display (7 : Int))
