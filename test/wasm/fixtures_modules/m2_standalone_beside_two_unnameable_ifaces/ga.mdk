@@ -1,0 +1,4 @@
+import ma.*
+
+export fa : Int
+fa = mth 10

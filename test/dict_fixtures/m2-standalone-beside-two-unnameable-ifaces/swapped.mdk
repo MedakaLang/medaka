@@ -1,0 +1,9 @@
+-- Byte-identical to `main.mdk` apart from this header and the two import clauses,
+-- which are swapped.  S2-DECL (e): the answer may not move, so this row reads 3131.
+import gb.{fb}
+import ga.{fa}
+
+mth : Int -> Int
+mth n = n + 100
+
+main = println (mth 1 + fa + fb)

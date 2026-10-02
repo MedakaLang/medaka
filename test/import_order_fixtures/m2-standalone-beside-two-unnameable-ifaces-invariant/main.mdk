@@ -1,0 +1,17 @@
+-- Two interfaces declare a method spelled `mth`: `ma.IA` and `mb.IB`.  This
+-- module imports NEITHER interface nor either `mth`; it reaches `ma`/`mb` only
+-- through `ga.fa`/`gb.fb`, so both declarations are visible in the graph but
+-- neither is nameable here.  Its own top-level `mth` is therefore not a shadow of
+-- anything (SHADOW-SEMANTICS.md S1-NS): `mth 1` is the standalone, 101.
+-- `fa = mth 10` in `ga` is `IA Int`'s body, 1010; `fb = mth 20` in `gb` is
+-- `IB Int`'s body, 2020.  Hand-derived total: 101 + 1010 + 2020 = 3131.
+--
+-- No declaration of `mth` is chosen for this module at all, so nothing here may
+-- depend on which of `ma`/`mb` the graph processed last (S2-DECL (e)).
+import ga.{fa}
+import gb.{fb}
+
+mth : Int -> Int
+mth n = n + 100
+
+main = println (mth 1 + fa + fb)

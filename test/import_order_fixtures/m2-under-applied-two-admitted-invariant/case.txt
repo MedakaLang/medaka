@@ -1,0 +1,15 @@
+entry: main.mdk
+what: an under-applied occurrence of a spelling with two admitted interface
+      declarations is one located reject in every ordering
+
+`amodI.IA.mth : a -> Int -> Int` and `zmodI.IZ.mth : Int -> b -> Int` are both
+admitted in the entry, and `fmodI.mth` is the imported standalone they shadow.
+`g = mth "abc"` supplies IA's receiver (argument 0) but not IZ's (argument 1), so
+IZ's impl query cannot be asked at the occurrence and no rule decides between
+the two declarations.
+
+Spec answer (SHADOW-SEMANTICS.md S2-DECL (d) bullet 2, ruled 2026-10-01):
+`T-AMBIGUOUS-SHADOW-DECL`, exit 1, on check, run and build, in every ordering.
+When the method scope still answered with the last-registered declaration, the
+answer depended on the ordering: one ordering rejected with `T-TYPE-MISMATCH` and
+another printed 99.

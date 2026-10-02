@@ -1,0 +1,5 @@
+-- `main.mdk` with the two import clauses swapped; the same reject.
+import mb.*
+import ma.*
+
+main = println (mth 1)

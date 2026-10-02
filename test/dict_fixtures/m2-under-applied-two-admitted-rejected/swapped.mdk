@@ -1,0 +1,10 @@
+-- `main.mdk` with the two interface import clauses swapped; the same reject
+-- (S2-DECL (e)).
+import fmodI.{mth}
+import zmodI.{IZ, zf}
+import amodI.{IA, af}
+
+g : Int -> Int
+g = mth "abc"
+
+main = println (g 5 + af 0 + zf 0)

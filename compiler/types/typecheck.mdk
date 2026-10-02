@@ -8254,10 +8254,10 @@ methodRowIface r = match r.mrEntry
 -- What one spelling means in one module:
 --   * `MsAbsent` — no visible declaration;
 --   * `MsOne r`  — the scope decides `r` (or only `r` is visible);
---   * `MsMany ifs r` — two or more declarations are admitted (`ifs`, sorted, the set
---     S2-DECL (d) decides by cardinality), and `r` is the PARITY FLOOR the
---     single-winner readers still take.
-data MethodScope = MsAbsent | MsOne MethodRow | MsMany (List IfaceRef) MethodRow
+--   * `MsMany ifs` — two or more declarations are admitted (`ifs`, sorted, the set
+--     S2-DECL (d) decides by cardinality) and none is the answer, so every
+--     single-winner reader sees no declaration.
+data MethodScope = MsAbsent | MsOne MethodRow | MsMany (List IfaceRef)
 
 -- The nearest-scope-wins ladder `tyOriginScope` (`frontend/resolve.mdk`) argues for
 -- the TYPE namespace, run once per (module, spelling) and only when two or more
@@ -8266,65 +8266,51 @@ data MethodScope = MsAbsent | MsOne MethodRow | MsMany (List IfaceRef) MethodRow
 --   rung 1 a use-path that binds the METHOD name and witnesses the declaration;
 --   rung 2 only if rung 1 admits nothing: a use-path that names the declaration's
 --          INTERFACE and witnesses it (F23, #1351);
---   prelude the implicit prelude's declaration, reached only when no rung decided.
--- A rung that admits exactly one declaration decides.  When none decides, the answer
--- is the prelude's row if it has one, else the FLOOR: the highest-ordinal visible
--- row (the last declaration registered).  The floor is a parity artefact — S2-DECL (e)
--- forbids reading it as an answer, which is why `MsMany` carries the admitted set
--- beside it.
+--   prelude the implicit prelude's declaration, reached only when no rung admitted
+--          anything.
+-- A rung that admits exactly one declaration decides.  A rung that admits two or more
+-- is `MsMany`.  When no rung admits anything, the answer is the prelude's row if it
+-- has one, else `MsAbsent`: no visible declaration is nameable here, and a
+-- declaration is never chosen by its ordinal, which would make the answer a function
+-- of module-processing order (S2-DECL (e)).
 --
 -- Rung 1's precedence over rung 2 is grounded in RUN-METHID-116, not S2-DECL (c): a
 -- pick is legitimate when the source carries a discriminator, and `import msa.{MA,
 -- mth}` beside `import msb.{MB}` names the method on one path only.  A WILDCARD import
 -- carries no discriminator yet reaches rung 1 (`usePathBindsName` is True for every
--- name under `UseWild`), so `import msb.*` can make rung 1 admit two and fall to the
--- floor; that gap is RUN-METHID-116's and unfixed.
+-- name under `UseWild`), so `import msb.*` can make rung 1 admit two and answer
+-- `MsMany`; that gap is RUN-METHID-116's and unfixed.
 methodScopeAt : List Decl -> String -> Int -> DeclEnvs -> MethodScope
 methodScopeAt prog n cur envs = match methodCandsAt n cur envs.deMethods
   [] => MsAbsent
   [only] => MsOne only
-  cs@(c :: more) => methodOwnScope prog n cs (methodFloor c more)
+  cs => methodOwnScope prog n cs
 
-methodFloor : MethodRow -> List MethodRow -> MethodRow
-methodFloor r [] = r
-methodFloor _ (r :: rest) = methodFloor r rest
-
-methodOwnScope : List Decl ->
-  String ->
-  List MethodRow ->
-  MethodRow ->
-  MethodScope
-methodOwnScope prog n cs floor = match ownMethodIdent prog n
+methodOwnScope : List Decl -> String -> List MethodRow -> MethodScope
+methodOwnScope prog n cs = match ownMethodIdent prog n
   Some ident => match methodRowById ident cs
     Some r => MsOne r
-    None => methodImportedScope prog n cs floor
-  None => methodImportedScope prog n cs floor
+    None => methodImportedScope prog n cs
+  None => methodImportedScope prog n cs
 
-methodImportedScope : List Decl ->
-  String ->
-  List MethodRow ->
-  MethodRow ->
-  MethodScope
-methodImportedScope prog n cs floor =
+methodImportedScope : List Decl -> String -> List MethodRow -> MethodScope
+methodImportedScope prog n cs =
   match filterList (r => methodCandImported prog n (methodRowCand r)) cs
     [only] => MsOne only
     [] => match filterList (r => methodCandAdmitted prog n (methodRowCand r)) cs
       [only] => MsOne only
-      rung2 => methodUndecided n cs floor rung2
-    rung1 => methodUndecided n cs floor rung1
+      rung2 => methodUndecided n cs rung2
+    rung1 => methodUndecided n cs rung1
 
 -- No rung decided.  [admitted] is the deciding rung's survivors (zero or two-plus).
-methodUndecided : String ->
-  List MethodRow ->
-  MethodRow ->
-  List MethodRow ->
-  MethodScope
-methodUndecided n cs floor admitted =
-  let row = match mkIdent NsMethod (OriginModule "core") n
-    None => floor
-    Some ident => optionOr floor (methodRowById ident cs)
-  let ifs = sortIfaceRefs (map methodRowIface admitted)
-  if listLen ifs >= 2 then MsMany ifs row else MsOne row
+methodUndecided : String -> List MethodRow -> List MethodRow -> MethodScope
+methodUndecided n cs [] = match mkIdent NsMethod (OriginModule "core") n
+  None => MsAbsent
+  Some ident => match methodRowById ident cs
+    Some r => MsOne r
+    None => MsAbsent
+methodUndecided _ _ admitted =
+  MsMany (sortIfaceRefs (map methodRowIface admitted))
 
 -- THIS module's answer for [n]: the reading module's declarations and ordinal are
 -- installed by `checkBodyImpl` (`methodScopeCtxRef`); before that point, and in a
@@ -8340,17 +8326,18 @@ methodScopeHere n = match perRun.value.methodScopeCtxRef.value
         omInsert n s perRun.value.methodScopeMemoRef.value
       s
 
--- The declaration this module's scope admits for [n], as the payload every
--- single-winner reader consumes.  Alias-qualified spellings (`A.mth`) are a separate
--- supply (`aliasQualifiedMethodEntries`); a bare method name never contains a dot, so
--- the two key sets are disjoint.
+-- The declaration this module's scope decides for [n], as the payload every
+-- single-winner reader consumes: `None` when no declaration is visible, none is
+-- nameable, or two or more are admitted (`methodAdmittedHere` holds that set).
+-- Alias-qualified spellings (`A.mth`) are a separate supply
+-- (`aliasQualifiedMethodEntries`); a bare method name never contains a dot, so the two
+-- key sets are disjoint.
 methodEntryHere : String -> Option MethodEntry
 methodEntryHere n = match omLookup n perRun.value.methodAliasEntriesRef.value
   Some e => Some e
   None => match methodScopeHere n
-    MsAbsent => None
     MsOne r => Some r.mrEntry
-    MsMany _ r => Some r.mrEntry
+    _ => None
 
 -- The interface of `methodEntryHere`'s declaration.
 methodIfaceHere : String -> Option IfaceRef
@@ -8361,11 +8348,24 @@ methodIfaceHere n = map ((iface, _, _, _) => iface) (methodEntryHere n)
 -- "nothing is admitted".
 methodAdmittedHere : String -> List IfaceRef
 methodAdmittedHere n = match methodScopeHere n
-  MsMany ifs _ => ifs
+  MsMany ifs => ifs
   _ => []
 
+-- The interfaces an impl query about [n] may be answered by: the one declaration the
+-- scope decides, or NONE when two or more are admitted.  An impl query is asked about
+-- one goal, built from one declaration's receiver position, so no row of the admitted
+-- set is answerable for it by the set alone: the union would admit an impl of the
+-- other declaration's interface (S2-DECL (b)).  The per-declaration queries S2-DECL (d)
+-- asks pass their declaration explicitly (`admittedDeclHits`).  `None` only when this
+-- module's scope admits nothing for [n], which `ieRowAdmittedBy` reads as the
+-- bare-name answer.
+methodAdmissionHere : String -> Option (List IfaceRef)
+methodAdmissionHere n = match methodIfaceHere n
+  Some iface => Some [iface]
+  None => if isEmptyL (methodAdmittedHere n) then None else Some []
+
 -- The visible declarations of [n] at the reading module's ordinal, for the
--- alias-qualified supply (`aliasMethodKeyEntry`).
+-- alias-qualified supply (`aliasMethodKeyEntry`) and the admitted-set readers.
 methodVisibleHere : String -> List MethodRow
 methodVisibleHere n = match perRun.value.methodScopeCtxRef.value
   None => []
@@ -15910,12 +15910,13 @@ argDispatchOf name =
 -- Retiring it needed the precondition L3 wrote down here verbatim ("after `argNames`'
 -- consumer joins the site set") to be TRUE, and L5 MEASURED it rather than assuming it:
 --
---   * `methodEntryHere` answers from `methodScopeAt`, which picks among every visible
---     declaration of a name and never drops one: a name with any visible declaration
---     has an entry.  Scoping re-decides which declaration a colliding name maps to;
---     it does not narrow the key set.  So this reader's domain is a superset of the
---     retired bare tables' domain, not a subset of it — the direction that makes the
---     fall-back dead rather than load-bearing.
+--   * `methodEntryHere` answers from `methodScopeAt`: an entry when the scope decides
+--     one declaration, `None` when none is visible or nameable, and `None` when two or
+--     more are admitted.  The last case has no single declaration whose index could
+--     be the answer, and a bare-name table would only pick one by decl-walk order;
+--     an importer-shadow occurrence of such a name reads each admitted declaration's
+--     own index instead (`importerDispatchIdxOuter`, `admittedDeclHits`).  So a `None`
+--     here never stands in for an index the scope could have supplied.
 --   * `argNames`' consumer was ALREADY scoped: `moduleMarkCtx` keeps only
 --     `filterList keep argNames` (keep = `nameableIfaceMethodSet` of the module's own
 --     decls) for the group marker, so a name this module cannot name is never marked
@@ -20370,10 +20371,10 @@ recordImplObligation x mono
   | omHasKey x perRun.value.definerShadowNamesRef.value
     || omHasKey x driverState.value.standaloneValuesRef.value = mono
   -- A bare spelling with TWO OR MORE admitted declarations in this module's scope
-  -- (S2-DECL (d), `methodAdmittedHere`) names no single interface: the row
-  -- `methodEntryHere` answers for it is the parity floor S2-DECL (e)
-  -- forbids reading as an answer, so an obligation built from it would be a coin
-  -- flip — and the impl channel checks it on every driver (#2705).  MEASURED:
+  -- (S2-DECL (d), `methodAdmittedHere`) names no single interface, and
+  -- `methodEntryHere` answers no declaration for it: an obligation against any one
+  -- of them would be a choice the scope did not make — and the impl channel checks
+  -- it on every driver (#2705).  MEASURED:
   -- `A.ff (A.mkA 0)` beside `import x1277_b as B`, both interfaces declaring `ff`,
   -- rejected `No impl of Fb for H` on `run`/`build` once the alias renamer fanned
   -- both aliases into bare `ff`.  The obligation is recorded against the whole
@@ -20415,7 +20416,8 @@ recordImplObligation x mono
       -- do NOT cite "resolve already rejects the ambiguous case" as cover either: MEASURED,
       -- resolve catches a DIRECT double import of a colliding method name but does NOT
       -- diagnose a RE-EXPORT MERGE of the same collision, which reaches this line as
-      -- `methodScopeAt`'s arbitrary floor answer with no diagnostic either way.
+      -- `methodScopeAt` as two admitted declarations (the guard above), with no
+      -- diagnostic either way.
       --
       -- ⚠️ THIS IS NOT THE ONLY DECL-LAYER GOAL SITE.  Four more
       -- (`recordIfaceObligation`, `inferNumLitBare`, `numCallObls`, `numDictObls`) build
@@ -20521,7 +20523,7 @@ admittedMonoHits env name ir mono = do
   k <- lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
   at <- nthArgMono k mono
   hk <- headTyconMono at
-  Some (ieImplExistsForHeadOf env name hk (Some ir))
+  Some (ieImplExistsForHeadOf env name hk (Some [ir]))
 
 -- The receiver named in the reject: the first admitted declaration's own receiver
 -- argument (they all grounded, or the verdict would have deferred).
@@ -21232,7 +21234,10 @@ isShadowStandalone env name =
 
 -- True iff [name]'s interface (in methodEntryHere) takes exactly ONE type
 -- parameter -- the receiver-directed case the per-receiver IMPORTER rule (Fork 1) is
--- scoped to.
+-- scoped to.  When two or more declarations are admitted it answers over the whole
+-- set (every admitted interface takes one), never by the absence of a single winner:
+-- `False` would skip the importer route and with it S2-DECL (d)'s cardinality
+-- decision (`importerAdmittedVerdict`).
 --
 -- ⚠️ RENAMED from `singleParamIfaceMethod` (#54).  The old name said "single-PARAM
 -- method" while the body counts interface TYPE PARAMS; it stated the opposite of what it
@@ -21242,7 +21247,17 @@ isShadowStandalone env name =
 singleTyparamIfaceMethod : String -> Bool
 singleTyparamIfaceMethod name = match methodEntryHere name
   Some (_, typarams, _, _) => listLen typarams == 1
-  None => False
+  None => match methodAdmittedHere name
+    [] => False
+    ifs =>
+      allList
+        (r => match r.mrEntry
+          (_, typarams, _, _) => listLen typarams == 1)
+        (filterList
+          (r =>
+            let key = ifaceSortKey (methodRowIface r)
+            anyList (ir => ifaceSortKey ir == key) ifs)
+          (methodVisibleHere name))
 
 -- True iff [name] is a method of SOME visible interface, whatever its typaram arity --
 -- the DEFINER-side gate (#54, closing S-3 / SHADOW-SEMANTICS.md row 26).
@@ -21254,8 +21269,11 @@ singleTyparamIfaceMethod name = match methodEntryHere name
 -- bug: d11 typed+emitted per-receiver (the OLD, pre-inversion semantics) while eval, which
 -- has no route stamp to follow, resolved the bare name lexically to the standalone and
 -- E-PANICked `unknown op '*'` on a `Box` -- an S7 path-agreement violation.
+-- Two or more admitted declarations are each a method of a visible interface, so the
+-- admitted set answers True as well.
 ifaceMethodName : String -> Bool
-ifaceMethodName name = isSome (methodEntryHere name)
+ifaceMethodName name =
+  isSome (methodEntryHere name) || isNonEmptyL (methodAdmittedHere name)
 
 -- Bug C: type `toList m` for a no-impl receiver against the imported STANDALONE
 -- scheme (giving the concrete result element type, e.g. `List (String, Int)`) and
@@ -21316,7 +21334,8 @@ inferShadowApp env mname arityRefs tagRefs f x =
   let _ = groundAdmittedReceivers env mname [tx] dloc
   match importerAdmittedVerdict perRun.value.bodyImplEnvRef.value mname [tx]
     AdReject ifs =>
-      let _ = pushAmbiguousShadowDecl mname ifs dloc
+      let _ =
+        pushAmbiguousShadowDecl mname ifs (orElseLoc (appSpineHeadLoc f) dloc)
       -- T-ERRORS-ACCUM: the diagnostic is the verdict; inference still has to produce a
       -- type for the occurrence, and the standalone is the only denotation this call has
       -- that no admitted declaration disputes the SHAPE of.
@@ -21426,7 +21445,8 @@ inferShadowAppAt env mname arityRefs tagRefs hd nodes f x =
   let _ = groundAdmittedReceivers env mname ats dloc
   match importerAdmittedVerdict perRun.value.bodyImplEnvRef.value mname ats
     AdReject ifs =>
-      let _ = pushAmbiguousShadowDecl mname ifs dloc
+      let _ =
+        pushAmbiguousShadowDecl mname ifs (orElseLoc (appSpineHeadLoc f) dloc)
       inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx
     AdStandalone =>
       inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx
@@ -26974,7 +26994,7 @@ ieImplExistsForHead env name hk =
   -- same reason ([T-PERF-HUNT]: Medaka is strict, so an in-loop projection is rebuilt
   -- once per row).  The scan itself stays the same single linear walk of `ieHeadRows`
   -- with one more conjunct per row — no rescan, no new bucket.
-  ieImplExistsForHeadOf env name hk (methodIfaceHere name)
+  ieImplExistsForHeadOf env name hk (methodAdmissionHere name)
 
 -- #2188: the SAME query with the admitted declaration supplied by the CALLER rather than
 -- projected from the single-winner table.  The one caller that supplies it is S2-DECL
@@ -26983,7 +27003,11 @@ ieImplExistsForHead env name hk =
 -- cardinality-1 projection by construction.  The body is `ieImplExistsForHead`'s former
 -- body verbatim; the three existence READS above are unchanged and still route through
 -- the single-argument spelling, so no read has been split off from the set.
-ieImplExistsForHeadOf : ImplEnv -> String -> HeadKey -> Option IfaceRef -> Bool
+ieImplExistsForHeadOf : ImplEnv ->
+  String ->
+  HeadKey ->
+  Option (List IfaceRef) ->
+  Bool
 -- #1386: a row's method set is keyed by the method's own DECLARED name, so an
 -- alias-qualified occurrence is resolved to its origin here — once per query, beside
 -- the admitted declaration, never inside the row scan.
@@ -27006,23 +27030,21 @@ admittedIfaceWord name = match methodIfaceHere name
 -- ══ S2-DECL (d): THE CHOICE, BY CARDINALITY OF THE ADMITTED SET (#2188) ═══════
 --
 -- `methodIfaceHere` above is a cardinality-1 projection: one `Option` per bare
--- name, from `methodEntryHere`.  When two declarations are admitted it cannot
--- report that fact, so the "declined" case fell through to a last-write-wins floor —
--- and the floor moves with import-clause order, which S2-DECL (e) forbids outright
--- ("A resolution rule whose answer moves when two `import` clauses are swapped is
--- non-conformant WHATEVER value it produces").  MEASURED at base `7e5ec5e7`: #2188's
--- graph prints 99 with `import amodI…` first and 55 with `import zmodI…` first, on
--- `run` and on the built binary.
+-- name, from `methodEntryHere`, and `None` when two or more declarations are
+-- admitted.  The admitted set is `methodAdmittedHere`, and no reader may pick one
+-- member of it by any order: S2-DECL (e), "A resolution rule whose answer moves when
+-- two `import` clauses are swapped is non-conformant whatever value it produces".
 --
--- This is the decision the projection could not express, and it is asked ONCE, at the
+-- This is the decision the projection cannot express, and it is asked ONCE, at the
 -- importer-shadow application arms, over the whole admitted set:
 --
---   * fewer than two admitted → `AdDefer`.  Every existing program lands here and the
---     old code runs byte-identically; (d)'s "exactly one" and "none" arms are already
+--   * fewer than two admitted → `AdDefer`.  (d)'s "exactly one" and "none" arms are
 --     what `methodIfaceHere` + `ieImplExistsForHead` implement between them.
 --   * two or more, and NONE of their own impl queries hits → `AdStandalone`.  (d)'s
 --     bullet 2: they agree, and what they agree on is the standalone.
 --   * two or more, and at least one hits → `AdReject`.  (d)'s bullet 3.
+--   * two or more, and some declaration's query cannot be asked → `AdReject` as well;
+--     see the second note below.
 --
 -- ⚠️ WHY "AT LEAST ONE HIT" IS THE WHOLE OF THE DISAGREEMENT TEST, not a shortcut.
 -- (d) bullet 2 admits "two or more that yield the SAME denotation (all the standalone,
@@ -27033,11 +27055,16 @@ admittedIfaceWord name = match methodIfaceHere name
 -- reduces to "they all fall to the standalone", i.e. zero hits.  One hit alongside a
 -- miss is bullet 3; two hits is two different impls, also bullet 3.
 --
--- ⚠️ AN UNANSWERABLE RECEIVER DEFERS, IT NEVER REJECTS.  If any admitted declaration's
--- own receiver argument is missing from the applied prefix (under-application), has no
--- recorded dispatch index, or is still ungrounded after `groundAdmittedReceivers`, the
--- verdict is `AdDefer`: this clause narrows acceptance, and narrowing it on a receiver
--- whose head is not yet known would reject programs (d) says nothing about.
+-- An unanswerable receiver is an ambiguity, not a deferral.  If any admitted
+-- declaration's own receiver argument is missing from the applied prefix
+-- (under-application, `g = mth "abc"` for a declaration that dispatches at argument 1),
+-- has no recorded dispatch index, or is still ungrounded after
+-- `groundAdmittedReceivers`, no rule decides between the declarations at this
+-- occurrence, and nothing later does either: the scope holds no single declaration to
+-- fall back to, so any type or row chosen here would be one declaration picked by the
+-- compiler, and which one would track module order (S2-DECL (e)).  The occurrence is
+-- the located reject bullet 3 already produces, in every import order
+-- (`docs/spec/SHADOW-SEMANTICS.md` S2-DECL (d) bullet 2).
 data AdmittedVerdict = AdDefer | AdStandalone | AdReject (List IfaceRef)
 
 importerAdmittedVerdict : ImplEnv -> String -> List Mono -> AdmittedVerdict
@@ -27047,12 +27074,12 @@ importerAdmittedVerdict env name ats = match methodAdmittedHere name
     if listLen ifs < 2 then
       AdDefer
     else match admittedDeclHitters env name ifs ats
-      None => AdDefer
+      None => AdReject ifs
       Some hits => if isEmptyL hits then AdStandalone else AdReject ifs
 
 -- The admitted declarations whose OWN (receiver argument, impl query) pair — S2-DECL
 -- (b), both halves from the same declaration — HITS.  `None` if any declaration's pair
--- cannot be evaluated at all; see the ⚠️ on `AdmittedVerdict`.
+-- cannot be evaluated at all, which `importerAdmittedVerdict` reads as an ambiguity.
 admittedDeclHitters : ImplEnv ->
   String ->
   List IfaceRef ->
@@ -27076,7 +27103,7 @@ admittedDeclHits env name ir ats = do
   k <- lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
   at <- nthMono k ats
   hk <- headTyconMono at
-  Some (ieImplExistsForHeadOf env name hk (Some ir))
+  Some (ieImplExistsForHeadOf env name hk (Some [ir]))
 
 nthMono : Int -> List Mono -> Option Mono
 nthMono _ [] = None
@@ -27138,7 +27165,9 @@ groundAdmittedGo env mname (ir :: rest) ats dloc =
   groundAdmittedGo env mname rest ats dloc
 
 -- ERROR-QUALITY: name the two things that collide, say what the collision costs, then
--- name the fixes.  Phrased after `aliasAmbiguityMsg`, the nearest neighbour in this file.
+-- name the fixes.  Callers locate it at the occurrence's head (`appSpineHeadLoc`): an
+-- application carries no location of its own, and the location current when the
+-- occurrence is reached can belong to whichever module was checked last.  Phrased after `aliasAmbiguityMsg`, the nearest neighbour in this file.
 -- The interface list is the SORTED admitted set, so the prose does not encode import
 -- order any more than the verdict does (S2-DECL (e)).
 pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
@@ -27173,7 +27202,7 @@ shadowIfaceLabel ir = match ir.irOrigin
 ieImplExistsForHeadGo : List ImplRow ->
   String ->
   TabKey ->
-  Option IfaceRef ->
+  Option (List IfaceRef) ->
   Bool
 ieImplExistsForHeadGo [] _ _ _ = False
 ieImplExistsForHeadGo ((ImplRow _ _ ir tys _ ms) :: rest) name goal admitted
@@ -27188,13 +27217,14 @@ ieImplExistsForHeadGo ((ImplRow _ _ ir tys _ ms) :: rest) name goal admitted
 -- SETTLED reading, not a hedge.  S2-DECL (c) narrows the query to declarations `M` can
 -- name; (d)'s `None` arm ("S1 already says `N` is not a shadow in `M`; the standalone
 -- denotes.  Unchanged by this clause") hands the EMPTY-admitted-set case to S1, upstream
--- of this query, so S2-DECL gives this site no instruction for a table miss.  A miss here
--- is `methodEntryHere` holding no entry for [name] — "this module's scope does not
--- decide it" — and the file's own two precedents for exactly that miss both fall back:
--- `pickSchemesByDecl`'s ⚠️ block ("a miss must not DROP the binding") and
--- `admittedSchemeFor`'s ("never a guess").  Answering `False` unconditionally instead
--- would turn a dispatched occurrence into an `RLocal` one on every shape this slice does
--- not decide — a routing change, not a conservative one.
+-- of this query, so S2-DECL gives this site no instruction for a table miss.  `None`
+-- is a module scope that admits no declaration of [name] at all, and the file's own
+-- two precedents for exactly that miss both fall back: `pickSchemesByDecl`'s block ("a
+-- miss must not drop the binding") and `admittedSchemeFor`'s ("never a guess").
+-- Answering `False` unconditionally instead would turn a dispatched occurrence into an
+-- `RLocal` one on every shape this query does not decide.  Two or more admitted
+-- declarations are not a miss: they arrive as `Some []` (`methodAdmissionHere`) and
+-- admit no row.
 --
 -- ⚠️ `ieRowIfaceMatches` (`sameTyConHead` over `irName`/`irOrigin`), NOT a bare `irName`
 -- compare and NOT `ieCountHeadByIfaceGo`'s deliberately spelling-only test: this is a
@@ -27202,9 +27232,9 @@ ieImplExistsForHeadGo ((ImplRow _ _ ir tys _ ms) :: rest) name goal admitted
 -- answering `True` — the #1664 defect) and a false MISS costs only the fall-through to
 -- the standalone.  It is the one standing comparator for IfaceRef-vs-IfaceRef identity in
 -- this family (`ieEntriesForIface`, `cohSameIface`, `lookupSchemeById`).
-ieRowAdmittedBy : IfaceRef -> Option IfaceRef -> Bool
+ieRowAdmittedBy : IfaceRef -> Option (List IfaceRef) -> Bool
 ieRowAdmittedBy _ None = True
-ieRowAdmittedBy ir (Some iface) = ieRowIfaceMatches ir iface
+ieRowAdmittedBy ir (Some ifaces) = anyList (ieRowIfaceMatches ir) ifaces
 
 -- C5: stamp RLocal on each recorded standalone-shadow arg-position site whose
 -- receiver mono now grounds to a concrete head tycon with NO impl of the method.
@@ -29449,7 +29479,7 @@ anyUsePathBinds (_ :: rest) wide n c = anyUsePathBinds rest wide n c
 -- the export graph:
 --   #1275 — an unrelated BYSTANDER module declaring a same-named interface with the same
 --           method name was witnessed by an import that names neither it nor anything of
---           it, so the guard saw two matches and the override declined to the floor;
+--           it, so the guard saw two matches and the scope decided neither;
 --   #1272 — a WILDCARD import of a re-exporter (`import mid.*`) named no member, so the
 --           old witness could not fire at all.  It could not simply be relaxed either:
 --           letting a wildcard satisfy a NAME test makes it "name" every interface and
@@ -29491,7 +29521,7 @@ anyUsePathBinds (_ :: rest) wide n c = anyUsePathBinds rest wide n c
 -- False, i.e. the index is an UNDER-approximation and the overlay declines more often
 -- than it should.  When #1280 makes supply total, rows appear that are missing now, so
 -- the overlay STRENGTHENS — strictly more candidates witnessed, never fewer.  A shape
--- that silently keeps the floor today can therefore start being decided correctly then;
+-- that the scope leaves undecided today can therefore start being decided correctly then;
 -- the change is monotone in the right direction, but it IS a behaviour change and this
 -- unit's fixtures do not cover it.
 usePathWitnesses : UsePath ->
@@ -29535,7 +29565,7 @@ usePathBindsName path n = match importedBindings path
 --
 -- A per-`dep` miss is the honest answer to "this dependency's row does not carry that
 -- declaration".  A miss does not always decline: the ladder decides on exactly one
--- witnessed declaration, so dropping one of two witnesses turns "2 → floor" into
+-- witnessed declaration, so dropping one of two witnesses turns "2 → undecided" into
 -- "1 → that one".  A wholesale miss — the index absent — is a programming error;
 -- `meExports` lives on `DeclEnvs`, which the one Module-mode driver entry
 -- (`graphPreamble`) overwrites whole and nothing resets in between.
@@ -31027,7 +31057,8 @@ pickMostSpecificEntry goals (e :: rest) =
 --     drained: both impl-block orderings now answer `1` on `run` AND on the built
 --     binary.  What is NOT true is the tempting corollary "every candidate set now
 --     shares one interface by construction".  DERIVED, not assumed:
---       * on the `Some iface` arm the corollary HOLDS.  `ieRowAdmittedBy` →
+--       * on the `Some [iface]` arm the corollary holds (`Some []`, two or more
+--         admitted declarations, admits no row at all).  `ieRowAdmittedBy` →
 --         `ieRowIfaceMatches` → `sameTyConHead n1 o1 n2 o2 = n1 == n2 && …`, so every
 --         admitted row carries `ir.irName == iface.irName`; `keyEntryOfRow` writes
 --         exactly that `ir.irName` into the `KeyEntry` field `keyEntryIface` reads.
@@ -31435,7 +31466,7 @@ ieEntriesForIface ((r@(ImplRow _ _ ir tys _ _)) :: rest) iface goals
 -- a set drawn across two classes is a candidate-set DEFORMATION, not a program.
 --
 -- The admitted declaration is the SAME one `ieImplExistsForHeadGo` already tests
--- for the EXISTENCE read (`ieRowAdmittedBy`, `methodIfaceHere`), through the same
+-- for the EXISTENCE read (`ieRowAdmittedBy`, `methodAdmissionHere`), through the same
 -- comparator — `ieRowIfaceMatches` (`sameTyConHead` over `irName`/`irOrigin`), NOT a
 -- bare `irName` compare and NOT `ieCountHeadByIfaceGo`'s deliberately spelling-only
 -- test.  Selection is this shape's SECOND consumer; the existence read was its first.
@@ -31443,7 +31474,9 @@ ieEntriesForIface ((r@(ImplRow _ _ ir tys _ _)) :: rest) iface goals
 -- ⚠️ `None` (this module's scope decides nothing for [name]) FALLS BACK TO THE
 -- BARE-NAME ANSWER — every row passes, i.e. today's behaviour exactly.  The
 -- derivation is `ieRowAdmittedBy`'s own doc-comment and is not restated here; the
--- consequence that IS specific to this site is recorded on `candsOneIface`.
+-- consequence that IS specific to this site is recorded on `candsOneIface`.  Two or
+-- more admitted declarations are `Some []`, not `None`, and admit no row
+-- (`methodAdmissionHere`).
 --
 -- ⚠️ BEHAVIOUR-NARROWING BY DESIGN ([W-QUIETER] in the opposite direction): supplying
 -- identity REMOVES candidates, so a program that used to dispatch by accident can now
@@ -31455,7 +31488,7 @@ ieEntriesForIface ((r@(ImplRow _ _ ir tys _ _)) :: rest) iface goals
 -- the graph-global bucket, unfiltered.
 ieEntriesForMethod : List ImplRow ->
   String ->
-  Option IfaceRef ->
+  Option (List IfaceRef) ->
   List Mono ->
   List KeyEntry
 ieEntriesForMethod [] _ _ _ = []
@@ -31475,7 +31508,11 @@ ieEntriesForMethod ((r@(ImplRow _ _ ir tys _ ms)) :: rest) name admitted goals
 -- read only when the occurrence's interface is known ([admitted]): without it the
 -- scan cannot tell a default of the occurrence's interface from a same-spelled
 -- method of another one.
-ieRowAnswersMethod : ImplRow -> List String -> String -> Option IfaceRef -> Bool
+ieRowAnswersMethod : ImplRow ->
+  List String ->
+  String ->
+  Option (List IfaceRef) ->
+  Bool
 ieRowAnswersMethod _ ms name None = contains name ms
 ieRowAnswersMethod r ms name (Some _) =
   contains name ms || ieRowInheritsDefault r name
@@ -31527,7 +31564,7 @@ ieCandidatesForIface env hk iface goals =
 ieCandidatesForMethod : ImplEnv ->
   HeadKey ->
   String ->
-  Option IfaceRef ->
+  Option (List IfaceRef) ->
   List Mono ->
   List KeyEntry
 ieCandidatesForMethod env hk name admitted goals =
@@ -31585,7 +31622,7 @@ ieSelectRowByMethod env name goals = match goalHeadCon goals
           env
           hk
           (originMethodName name)
-          (methodIfaceHere name)
+          (methodAdmissionHere name)
           goals))
   None => None
 
@@ -35059,7 +35096,11 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- (`methodScopeAt`), not to `lookupAssoc`'s decl-walk first match.
     -- Falls back to the bare-name answer on a miss — see `pickSchemesByDecl`.
     let sm =
-      pickSchemesByDecl importerShadows ifaceSchemes visibleMethodRowIndex
+      pickSchemesByDecl
+        importerShadows
+        ifaceSchemes
+        visibleMethodRowIndex
+        moduleSeed.msImportedValues
     perRun.value.methodPredicateSlotsRef :=
       perRun.value.methodPredicateSlotsRef.value
         ++ crossRun.value.crossModuleMethodPredicateSlotsRef.value
@@ -46795,18 +46836,38 @@ pickSchemes (n :: ns) table = match lookupAssoc n table
 -- would remove a name from the shadow layer, i.e. turn a checked occurrence into an
 -- unchecked one, `exit 1 → exit 0`, a severity INCREASE.  Falling back keeps exactly
 -- today's answer for every shape this leaf does not decide.
+--
+-- Two or more admitted declarations are not a miss.  The scope decides none of them,
+-- so the first match would be one declaration's scheme picked by decl-walk order; the
+-- name is bound to the imported standalone's scheme ([sources]) instead.  An applied
+-- occurrence is then decided by S2-DECL (d)'s verdict (`importerAdmittedVerdict`),
+-- which types it as the standalone or rejects it, and a value occurrence is the
+-- standalone already.
 pickSchemesByDecl : List String ->
   List (String, Scheme) ->
   Registry MethodSchemeRow ->
+  OrdMap Scheme ->
   List (String, EnvBinding)
-pickSchemesByDecl [] _ _ = []
-pickSchemesByDecl (n :: ns) table byId = match admittedRowFor n byId
-  Some row => (n, methodEnvBinding row) :: pickSchemesByDecl ns table byId
-  None => match admittedSchemeFor n byId
-    Some s => (n, ordinaryEnvBinding s) :: pickSchemesByDecl ns table byId
-    None => match lookupAssoc n table
-      Some s => (n, ordinaryEnvBinding s) :: pickSchemesByDecl ns table byId
-      None => pickSchemesByDecl ns table byId
+pickSchemesByDecl [] _ _ _ = []
+pickSchemesByDecl (n :: ns) table byId sources =
+  let rest = pickSchemesByDecl ns table byId sources
+  match admittedRowFor n byId
+    Some row => (n, methodEnvBinding row) :: rest
+    None => match admittedSchemeFor n byId
+      Some s => (n, ordinaryEnvBinding s) :: rest
+      None => match undecidedSchemeFor n table sources
+        Some s => (n, ordinaryEnvBinding s) :: rest
+        None => rest
+
+undecidedSchemeFor : String ->
+  List (String, Scheme) ->
+  OrdMap Scheme ->
+  Option Scheme
+undecidedSchemeFor n table sources =
+  if isEmptyL (methodAdmittedHere n) then
+    lookupAssoc n table
+  else
+    omLookup n sources
 
 ordinaryEnvBinding : Scheme -> EnvBinding
 ordinaryEnvBinding scheme = EnvBinding {
@@ -46875,8 +46936,10 @@ admittedRowFor n byId =
 
 -- The declaration `methodScopeAt` resolved for [n] in this module, then
 -- that declaration's own scheme row.  `None` at either step means "this module's
--- scope does not decide it", and the caller keeps the bare-name answer — never a
--- guess, the same discipline `methodScopeAt` states for the table itself.
+-- scope does not decide it", and the caller answers without a declaration (the
+-- bare-name scheme when nothing is admitted, the standalone when two or more are;
+-- `pickSchemesByDecl`) — never a guess, the same discipline `methodScopeAt` states
+-- for the table itself.
 admittedSchemeFor : String -> Registry MethodSchemeRow -> Option Scheme
 -- #1386: the row half is keyed by the method's OWN declared name, the same asymmetry
 -- `dispatchIdxScoped` carries — an alias-qualified occurrence resolves its interface
