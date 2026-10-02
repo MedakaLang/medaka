@@ -240,7 +240,6 @@ _Speedups are ratios of CPU instruction counts; the two timings above are the be
 
 For calibration, 5.3 ms per signature is still roughly a hundred times slower than libsecp256k1. That's a
 pure-Medaka implementation with no hand-written assembly, signing one commit per post, so I'm fine with it.
-The point of the table is the trend, not the absolute number.
 
 ## Effects
 
