@@ -2,7 +2,8 @@
 
 The fastest way to follow along is [the playground](https://medaka-lang.dev), which
 runs every example in this guide in your browser. To work locally instead, put a
-program in a file ending in `.mdk` and run it with:
+program in a file ending in `.mdk` and run it with the `medaka` binary (build it
+from source by following the [Install section of the README](../../README.md#install)):
 
 ```
 medaka run hello.mdk
