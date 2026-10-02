@@ -827,7 +827,7 @@ partialReject _ w = failWith "unsupported SQL after CREATE INDEX: '\{w}'"
 --   `optional` and re-surfacing far away as "expected end of input".
 --
 -- > runParser (afterKeyword "WHERE" intDigits) "WHERE 42"
--- Ok Some "42"
+-- Ok (Some "42")
 -- > runParser (afterKeyword "WHERE" intDigits) ""
 -- Ok None
 -- > runParser (afterKeyword "WHERE" intDigits) "WHERE x"

@@ -454,11 +454,11 @@ arrItems arr i n =
 
 export impl Debug (Option a) requires Debug a where
   debug None = "None"
-  debug (Some x) = "Some " ++ debug x
+  debug (Some x) = "Some " ++ derivedShowWrap (debug x)
 
 export impl Debug (Result e a) requires Debug e, Debug a where
-  debug (Ok x) = "Ok " ++ debug x
-  debug (Err e) = "Err " ++ debug e
+  debug (Ok x) = "Ok " ++ derivedShowWrap (debug x)
+  debug (Err e) = "Err " ++ derivedShowWrap (debug e)
 
 -- Tuple rendering (arities 2–5): `(a, b)`, matching the interpreter's
 -- value printer.
@@ -538,11 +538,11 @@ export impl Display (Array a) requires Display a where
 
 export impl Display (Option a) requires Display a where
   display None = "None"
-  display (Some x) = "Some " ++ display x
+  display (Some x) = "Some " ++ derivedShowWrap (display x)
 
 export impl Display (Result e a) requires Display e, Display a where
-  display (Ok x) = "Ok " ++ display x
-  display (Err e) = "Err " ++ display e
+  display (Ok x) = "Ok " ++ derivedShowWrap (display x)
+  display (Err e) = "Err " ++ derivedShowWrap (display e)
 
 export impl Display (a, b) requires Display a, Display b where
   display (a, b) = "(\{a}, \{b})"
@@ -893,7 +893,7 @@ checkedAdd a b =
    See `checkedAdd`.
 
    > checkedSub 2 3
-   Some -1
+   Some (-1)
    > checkedSub intMinBound 1
    None
    > checkedSub 0 intMinBound
@@ -916,7 +916,7 @@ checkedSub a b =
    > checkedMul intMinBound (-1)
    None
    > checkedMul (-1) intMaxBound
-   Some -4611686018427387903 -}
+   Some (-4611686018427387903) -}
 export
 checkedMul : Int -> Int -> Option Int
 checkedMul a b = if mulOverflows a b then None else Some (a * b)
@@ -1374,7 +1374,7 @@ export impl IndexMut (Array a) Int a where
    `Option`-returning form. Lists are immutable, so there is no `IndexMut`
    instance. -}
 export impl Index (List a) Int a where
-  index xs i = indexGo xs i i
+  index xs i = if i < 0 then indexErrorAt i else indexGo xs i i
 
 -- Threads the caller's ORIGINAL index alongside the one being decremented down
 -- to the base case, so the out-of-bounds message can name the index the caller
@@ -1527,11 +1527,11 @@ export interface Traversable t requires Mappable t, Foldable t where
 -- > traverse (x => if x > 0 then Some x else None) [1, -2, 3]
 -- None
 -- > traverse (x => if x > 0 then Some (x + 1) else None) (Some 5)
--- Some Some 6
+-- Some (Some 6)
 -- > traverse (x => if x > 0 then Ok x else Err x) [1, 2, 3]
 -- Ok [1, 2, 3]
 -- > traverse (x => if x > 0 then Ok x else Err x) [1, -2, 3]
--- Err -2
+-- Err (-2)
 -- > sequence [Some 1, Some 2, Some 3]
 -- Some [1, 2, 3]
 -- > sequence [Some 1, None, Some 3]

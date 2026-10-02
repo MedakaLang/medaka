@@ -453,11 +453,11 @@ arrItems arr i n =
 
 export impl Debug (Option a) requires Debug a where
   debug None = "None"
-  debug (Some x) = "Some " ++ debug x
+  debug (Some x) = "Some " ++ derivedShowWrap (debug x)
 
 export impl Debug (Result e a) requires Debug e, Debug a where
-  debug (Ok x) = "Ok " ++ debug x
-  debug (Err e) = "Err " ++ debug e
+  debug (Ok x) = "Ok " ++ derivedShowWrap (debug x)
+  debug (Err e) = "Err " ++ derivedShowWrap (debug e)
 
 -- Tuple rendering (arities 2–5): `(a, b)`, matching the interpreter's
 -- value printer.
@@ -537,11 +537,11 @@ export impl Display (Array a) requires Display a where
 
 export impl Display (Option a) requires Display a where
   display None = "None"
-  display (Some x) = "Some " ++ display x
+  display (Some x) = "Some " ++ derivedShowWrap (display x)
 
 export impl Display (Result e a) requires Display e, Display a where
-  display (Ok x) = "Ok " ++ display x
-  display (Err e) = "Err " ++ display e
+  display (Ok x) = "Ok " ++ derivedShowWrap (display x)
+  display (Err e) = "Err " ++ derivedShowWrap (display e)
 
 export impl Display (a, b) requires Display a, Display b where
   display (a, b) = "(\{a}, \{b})"
@@ -892,7 +892,7 @@ checkedAdd a b =
    See `checkedAdd`.
 
    > checkedSub 2 3
-   Some -1
+   Some (-1)
    > checkedSub intMinBound 1
    None
    > checkedSub 0 intMinBound
@@ -915,7 +915,7 @@ checkedSub a b =
    > checkedMul intMinBound (-1)
    None
    > checkedMul (-1) intMaxBound
-   Some -4611686018427387903 -}
+   Some (-4611686018427387903) -}
 export
 checkedMul : Int -> Int -> Option Int
 checkedMul a b = if mulOverflows a b then None else Some (a * b)
@@ -1373,7 +1373,7 @@ export impl IndexMut (Array a) Int a where
    `Option`-returning form. Lists are immutable, so there is no `IndexMut`
    instance. -}
 export impl Index (List a) Int a where
-  index xs i = indexGo xs i i
+  index xs i = if i < 0 then indexErrorAt i else indexGo xs i i
 
 -- Threads the caller's ORIGINAL index alongside the one being decremented down
 -- to the base case, so the out-of-bounds message can name the index the caller
@@ -1526,11 +1526,11 @@ export interface Traversable t requires Mappable t, Foldable t where
 -- > traverse (x => if x > 0 then Some x else None) [1, -2, 3]
 -- None
 -- > traverse (x => if x > 0 then Some (x + 1) else None) (Some 5)
--- Some Some 6
+-- Some (Some 6)
 -- > traverse (x => if x > 0 then Ok x else Err x) [1, 2, 3]
 -- Ok [1, 2, 3]
 -- > traverse (x => if x > 0 then Ok x else Err x) [1, -2, 3]
--- Err -2
+-- Err (-2)
 -- > sequence [Some 1, Some 2, Some 3]
 -- Some [1, 2, 3]
 -- > sequence [Some 1, None, Some 3]
@@ -2321,8 +2321,8 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DImpl true "Ord" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EApp (EApp (EVar "arrItems") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a")))) (EApp (EApp (EApp (EVar "arrItems") (EVar "b")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "b")))))))
 (DTypeSig false "arrItems" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "arrItems" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EApp (EApp (EApp (EVar "arrItems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
-(DImpl true "Debug" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "None")) (ELit (LString "None"))) (im "debug" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "debug") (EVar "x"))))))
-(DImpl true "Debug" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Debug" ((TyVar "e"))) (req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EVar "debug") (EVar "x")))) (im "debug" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "debug") (EVar "e"))))))
+(DImpl true "Debug" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "None")) (ELit (LString "None"))) (im "debug" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "x")))))))
+(DImpl true "Debug" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Debug" ((TyVar "e"))) (req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "x"))))) (im "debug" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "e")))))))
 (DImpl true "Debug" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Debug" ((TyVar "a"))) (req "Debug" ((TyVar "b")))) ((im "debug" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "a")))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "b")))) (ELit (LString ")"))))))
 (DImpl true "Debug" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Debug" ((TyVar "a"))) (req "Debug" ((TyVar "b"))) (req "Debug" ((TyVar "c")))) ((im "debug" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "a")))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "b")))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "c")))) (ELit (LString ")"))))))
 (DImpl true "Debug" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Debug" ((TyVar "a"))) (req "Debug" ((TyVar "b"))) (req "Debug" ((TyVar "c"))) (req "Debug" ((TyVar "d")))) ((im "debug" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "a")))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "b")))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "c")))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "d")))) (ELit (LString ")"))))))
@@ -2343,8 +2343,8 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DTypeSig false "displayArrayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "displayArrayItems" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EVar "i") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "display") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "display") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "displayArrayItems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DImpl true "Display" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "arr")) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "displayArrayItems") (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))) (ELit (LString "|]"))))))
-(DImpl true "Display" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PCon "None")) (ELit (LString "None"))) (im "display" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "display") (EVar "x"))))))
-(DImpl true "Display" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Display" ((TyVar "e"))) (req "Display" ((TyVar "a")))) ((im "display" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EVar "display") (EVar "x")))) (im "display" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "display") (EVar "e"))))))
+(DImpl true "Display" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PCon "None")) (ELit (LString "None"))) (im "display" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "x")))))))
+(DImpl true "Display" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Display" ((TyVar "e"))) (req "Display" ((TyVar "a")))) ((im "display" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "x"))))) (im "display" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "e")))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b")))) ((im "display" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ")"))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "c"))) (ELit (LString ")"))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c"))) (req "Display" ((TyVar "d")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "c"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "d"))) (ELit (LString ")"))))))
@@ -2472,7 +2472,7 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DInterface true false "IndexMut" ("c" "k" "v") ((super "Index" ("c" "k" "v"))) ((imethod "setIndex" (TyFun (TyVar "c") (TyFun (TyVar "k") (TyFun (TyVar "v") (TyVar "c")))) None)))
 (DImpl true "Index" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PVar "arr") (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
 (DImpl true "IndexMut" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "setIndex" ((PVar "arr") (PVar "i") (PVar "v")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "v")) (EVar "arr"))) (DoExpr (EVar "arr")))))))
-(DImpl true "Index" ((TyApp (TyCon "List") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PVar "xs") (PVar "i")) (EApp (EApp (EApp (EVar "indexGo") (EVar "xs")) (EVar "i")) (EVar "i")))))
+(DImpl true "Index" ((TyApp (TyCon "List") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PVar "xs") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EApp (EVar "indexGo") (EVar "xs")) (EVar "i")) (EVar "i"))))))
 (DTypeSig false "indexGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a")))))
 (DFunDef false "indexGo" ((PList) (PVar "i0") PWild) (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "index ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i0")))) (ELit (LString " out of bounds")))))
 (DFunDef false "indexGo" ((PCons (PVar "h") (PVar "t")) (PVar "i0") (PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "h") (EApp (EApp (EApp (EVar "indexGo") (EVar "t")) (EVar "i0")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
@@ -2731,8 +2731,8 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DImpl true "Ord" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EApp (EApp (EVar "arrItems") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a")))) (EApp (EApp (EApp (EVar "arrItems") (EVar "b")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "b")))))))
 (DTypeSig false "arrItems" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "arrItems" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EApp (EApp (EApp (EVar "arrItems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
-(DImpl true "Debug" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "None")) (ELit (LString "None"))) (im "debug" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EMethodRef "debug") (EVar "x"))))))
-(DImpl true "Debug" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Debug" ((TyVar "e"))) (req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EMethodRef "debug") (EVar "x")))) (im "debug" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EMethodRef "debug") (EVar "e"))))))
+(DImpl true "Debug" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "None")) (ELit (LString "None"))) (im "debug" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "x")))))))
+(DImpl true "Debug" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Debug" ((TyVar "e"))) (req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "x"))))) (im "debug" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "e")))))))
 (DImpl true "Debug" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Debug" ((TyVar "a"))) (req "Debug" ((TyVar "b")))) ((im "debug" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "a")))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "b")))) (ELit (LString ")"))))))
 (DImpl true "Debug" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Debug" ((TyVar "a"))) (req "Debug" ((TyVar "b"))) (req "Debug" ((TyVar "c")))) ((im "debug" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "a")))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "b")))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "c")))) (ELit (LString ")"))))))
 (DImpl true "Debug" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Debug" ((TyVar "a"))) (req "Debug" ((TyVar "b"))) (req "Debug" ((TyVar "c"))) (req "Debug" ((TyVar "d")))) ((im "debug" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "a")))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "b")))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "c")))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "d")))) (ELit (LString ")"))))))
@@ -2753,8 +2753,8 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DTypeSig false "displayArrayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "displayArrayItems" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EVar "i") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EMethodRef "display") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EMethodRef "display") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EDictApp "displayArrayItems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DImpl true "Display" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "arr")) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EDictApp "displayArrayItems") (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))) (ELit (LString "|]"))))))
-(DImpl true "Display" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PCon "None")) (ELit (LString "None"))) (im "display" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EMethodRef "display") (EVar "x"))))))
-(DImpl true "Display" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Display" ((TyVar "e"))) (req "Display" ((TyVar "a")))) ((im "display" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EMethodRef "display") (EVar "x")))) (im "display" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EMethodRef "display") (EVar "e"))))))
+(DImpl true "Display" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PCon "None")) (ELit (LString "None"))) (im "display" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "x")))))))
+(DImpl true "Display" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Display" ((TyVar "e"))) (req "Display" ((TyVar "a")))) ((im "display" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "x"))))) (im "display" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "e")))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b")))) ((im "display" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ")"))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString ")"))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c"))) (req "Display" ((TyVar "d")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "d"))) (ELit (LString ")"))))))
@@ -2882,7 +2882,7 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DInterface true false "IndexMut" ("c" "k" "v") ((super "Index" ("c" "k" "v"))) ((imethod "setIndex" (TyFun (TyVar "c") (TyFun (TyVar "k") (TyFun (TyVar "v") (TyVar "c")))) None)))
 (DImpl true "Index" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PVar "arr") (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
 (DImpl true "IndexMut" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "setIndex" ((PVar "arr") (PVar "i") (PVar "v")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "v")) (EVar "arr"))) (DoExpr (EVar "arr")))))))
-(DImpl true "Index" ((TyApp (TyCon "List") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PVar "xs") (PVar "i")) (EApp (EApp (EApp (EVar "indexGo") (EVar "xs")) (EVar "i")) (EVar "i")))))
+(DImpl true "Index" ((TyApp (TyCon "List") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PVar "xs") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EApp (EVar "indexGo") (EVar "xs")) (EVar "i")) (EVar "i"))))))
 (DTypeSig false "indexGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a")))))
 (DFunDef false "indexGo" ((PList) (PVar "i0") PWild) (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "index ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i0")))) (ELit (LString " out of bounds")))))
 (DFunDef false "indexGo" ((PCons (PVar "h") (PVar "t")) (PVar "i0") (PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "h") (EApp (EApp (EApp (EVar "indexGo") (EVar "t")) (EVar "i0")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))

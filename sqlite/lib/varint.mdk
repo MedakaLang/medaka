@@ -51,7 +51,7 @@ groupMask = 127
 -- > runByteParser sqVarint (fromU8Array [|0x81, 0x80, 0x01|])
 -- Ok 16385
 -- > runByteParser sqVarint (fromU8Array [|0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF|])
--- Ok -1
+-- Ok (-1)
 -- > runByteParser sqVarint (fromU8Array [|0xA0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00|])
 -- Err "varint: value does not fit Int at byte 8"
 export
@@ -160,9 +160,9 @@ roundTrip v =
 -- > roundTrip 4611686018427387903
 -- Ok 4611686018427387903
 -- > roundTrip (-1)
--- Ok -1
+-- Ok (-1)
 -- > roundTrip (-4611686018427387904)
--- Ok -4611686018427387904
+-- Ok (-4611686018427387904)
 
 -- 1-byte (0..127)
 -- > roundTrip 0

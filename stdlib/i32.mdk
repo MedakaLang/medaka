@@ -43,7 +43,7 @@ import u32
    `2147483647`.
 
    > tryFromInt (-200) |> map toInt
-   Some -200
+   Some (-200)
    > tryFromInt 2147483648 |> map toInt
    None -}
 export
@@ -54,7 +54,7 @@ tryFromInt n =
 -- > tryFromInt (-2147483649) |> map toInt
 -- None
 -- > tryFromInt (-2147483648) |> map toInt
--- Some -2147483648
+-- Some (-2147483648)
 
 {- | The low 32 bits of the value, read in two's complement, as an `I32`.
 

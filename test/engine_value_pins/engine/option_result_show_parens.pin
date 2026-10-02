@@ -1,0 +1,6 @@
+Some (-3)
+Ok (-3)
+[Some (-1), None]
+Some (Some 1)
+Some "a b"
+Ok (Err x)

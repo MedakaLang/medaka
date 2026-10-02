@@ -259,7 +259,7 @@ sepBy p sep = orElse (sepBy1 p sep) (deferPure [])
 {- | `Some` the result of `p`, or `None` when `p` fails, consuming nothing.
 
    > runByteParser (optional (byte 5)) (fromU8Array [|5|])
-   Ok Some 5
+   Ok (Some 5)
    > runByteParser (optional (byte 5)) (fromU8Array [|9|])
    Ok None -}
 export
@@ -312,7 +312,7 @@ chainl1Rest p op acc =
    any real input could hold — the bound check never overflows.
 
    > runByteParser (takeBytes 3) (fromU8Array [|10, 20, 30, 40|])
-   Ok Bytes "0a141e"
+   Ok (Bytes "0a141e")
    > runByteParser (deferThen anyByte (_ => takeBytes 4611686018427387903)) (fromU8Array [|10, 20, 30, 40|])
    Err "unexpected end of input at byte 4" -}
 export
@@ -365,15 +365,15 @@ intRangeMessage = "integer does not fit Int (read a U64 with beU64 or leU64)"
    first.
 
    > runByteParser (beSint 1) (fromU8Array [|255|])
-   Ok -1
+   Ok (-1)
    > runByteParser (beSint 1) (fromU8Array [|127|])
    Ok 127
    > runByteParser (beSint 2) (fromU8Array [|255, 255|])
-   Ok -1
+   Ok (-1)
    > runByteParser (beSint 2) (fromU8Array [|0, 1|])
    Ok 1
    > runByteParser (beSint 9) (fromU8Array [|255, 255, 255, 255, 255, 255, 255, 255, 254|])
-   Ok -2 -}
+   Ok (-2) -}
 export
 beSint : Int -> ByteParser Int
 beSint n
@@ -411,7 +411,7 @@ pow2 n = shiftLeft 1 n
    > runByteParser beFloat64 (fromU8Array [|63, 248, 0, 0, 0, 0, 0, 0|])
    Ok 1.5
    > runByteParser beFloat64 (fromU8Array [|192, 0, 0, 0, 0, 0, 0, 0|])
-   Ok -2.0 -}
+   Ok (-2.0) -}
 export
 beFloat64 : ByteParser Float
 beFloat64 = defer
@@ -452,11 +452,11 @@ leUintGo n shift acc input pos end
    first.
 
    > runByteParser (leSint 1) (fromU8Array [|255|])
-   Ok -1
+   Ok (-1)
    > runByteParser (leSint 1) (fromU8Array [|127|])
    Ok 127
    > runByteParser (leSint 2) (fromU8Array [|255, 255|])
-   Ok -1
+   Ok (-1)
    > runByteParser (leSint 2) (fromU8Array [|1, 0|])
    Ok 1 -}
 export
@@ -477,7 +477,7 @@ leSint n
    > runByteParser leFloat64 (fromU8Array [|0, 0, 0, 0, 0, 0, 248, 63|])
    Ok 1.5
    > runByteParser leFloat64 (fromU8Array [|0, 0, 0, 0, 0, 0, 0, 192|])
-   Ok -2.0 -}
+   Ok (-2.0) -}
 export
 leFloat64 : ByteParser Float
 leFloat64 = defer

@@ -48,7 +48,7 @@ singleton x = NonEmpty x []
    The inverse of `toList`.
 
    > fromList [1, 2, 3]
-   Some NonEmpty [1, 2, 3]
+   Some (NonEmpty [1, 2, 3])
    > fromList ([] : List Int)
    None -}
 export
