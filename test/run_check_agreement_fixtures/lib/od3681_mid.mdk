@@ -1,0 +1,2 @@
+-- Re-exports `od3681_p`'s `Same` unchanged: the same declaration, a second path.
+export import lib.od3681_p.*

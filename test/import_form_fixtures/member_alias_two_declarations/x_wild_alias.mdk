@@ -1,0 +1,6 @@
+-- The wildcard binds `f` to `f`, the alias binds it to `g`.
+import a.*
+import a.{g as f}
+
+answer : Int
+answer = f 1

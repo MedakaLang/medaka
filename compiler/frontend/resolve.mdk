@@ -2859,8 +2859,13 @@ ppResError (DuplicateSignature n _ None) =
   "'\{n}' is already defined earlier in this file. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"
 ppResError (DuplicateBinder k n _) =
   "Duplicate binder: '\{n}' is bound more than once in this \{k}. Each binder must be distinct — rename one occurrence"
-ppResError (AmbiguousOccurrence n mods _) =
-  "Ambiguous occurrence: '\{n}' is exported by \{ambigModPhrase mods}. Qualify, or import it under a new name from one module: `import <mod>.{\{n} as <alias>}` — a plain `import <mod>.{\{n}}` still collides with the other module's wildcard import"
+-- `mods` holds one importing module per distinct declaration, so a module
+-- whose imports bind the name to two of its declarations appears twice.
+ppResError (AmbiguousOccurrence n mods _) = match dedup mods
+  [m] =>
+    "Ambiguous occurrence: '\{n}' is bound to \{intToString (listLen mods)} different declarations imported from `\{m}`. Keep '\{n}' for one of them and import the other under a different name: `import \{m}.{<name> as <alias>}`"
+  distinct =>
+    "Ambiguous occurrence: '\{n}' is exported by \{ambigModPhrase distinct}. Qualify, or import it under a new name from one module: `import <mod>.{\{n} as <alias>}` — a plain `import <mod>.{\{n}}` still collides with the other module's wildcard import"
 -- An alias-qualified constructor spelling parses since #1287, but it does not
 -- SEPARATE two modules' constructors the way it separates their types: resolve
 -- strips the alias prefix before typecheck, whose constructor table is keyed by the
@@ -3346,29 +3351,21 @@ collectImports : OrdMap ModuleExports -> List Decl -> ImportAdds
 collectImports known prog = foldImports known (usePathLocsOf prog)
 
 -- ── use-time ambiguity (MAP-SET-AMBIGUITY-DESIGN.md) ───────────────────────
--- The VALUE names a single non-core import contributes, attributed to its
--- directly-imported module id.  Whether two such attributions are two
--- candidates or one is decided by `importValueDecls`, by declaration.
+-- The value bindings one import makes, each as (origin, local): the name the
+-- imported module exports and the name this file binds it under.  They differ
+-- only under a member alias (`import m.{a as b}`), so a binding is tested
+-- against the value exports by its ORIGIN, never its local, and two members
+-- binding one local (`{a as b, b}`) stay two bindings.
 --
--- Deliberately NOT `importNamesIn nsValues`: this narrows with `filterInSet`,
--- where every other namespace narrows with `filterNsInSetFor`, which unaliases
--- each name before testing it.  On an alias-qualified path the two answer
--- differently, so the value peer is its own function until that difference is
+-- An alias-qualified path (`import m as A`) contributes nothing here, unlike
+-- `importNamesIn`, which unaliases each dotted name.  That difference is to be
 -- settled on purpose rather than merged by tidying.
-importValueNames : OrdMap ModuleExports -> UsePath -> List String
-importValueNames known path =
-  if useModId path == "core" then
-    []
-  else match findExports (useModId path) known
-    None => []
-    Some exp =>
-      let (names, _) = importedNamesMM path exp
-      -- #925: the value export list GROWS with re-export depth, so the old
-      -- list scan (O(len) per name) is O(depth^2) per module → cubic over the
-      -- re-export chain.  An OrdMap membership set makes it O(len log len) and — the
-      -- point for the op-count arm — routes the per-name test through `omHasKey`
-      -- instead of the counted `contains`, byte-identically (same kept names, order).
-      filterInSet (omFromNames (exportsIn nsValues exp) omEmpty) names
+importValueBindings : UsePath -> ModuleExports -> List (String, String)
+importValueBindings path exp =
+  -- The value export list grows with re-export depth, so membership is a set
+  -- built once per path, not a list scan per name.
+  let values = omFromNames (exportsIn nsValues exp) omEmpty
+  filterList (b => omHasKey (fst b) values) (reexportBindings path exp)
 
 -- Register one (name, mid) into a name→[mid] MAP, deduping mids (mids kept in
 -- append order).  #925/#926: this was a `List (String, List String)` assoc rescanned
@@ -3404,10 +3401,12 @@ valueProvenance known paths =
 -- declaration key) pairs, and an import is recorded against a name only when it
 -- brings a declaration of that name no earlier import brought.  One declaration
 -- reached through two import paths (a direct import and a re-export, or two
--- re-exports) is therefore one provenance; two distinct declarations stay two.
--- The recorded id is still the importing module, which is what the diagnostic
--- tells the author to qualify with.  The second map is the set of (name,
--- declaration) keys already recorded.
+-- re-exports) is therefore one provenance; two distinct declarations stay two,
+-- even when one importing module supplies both (`import m.{a as b, b}`, or
+-- `import m.*` beside `import m.{a as b}`).  The recorded id is the importing
+-- module, which is what the diagnostic tells the author to qualify with, so it
+-- repeats in that case.  The second map is the set of (name, declaration) keys
+-- already recorded.
 foldDeclProvenance : (OrdMap ModuleExports -> UsePath -> List (String, String)) ->
   OrdMap ModuleExports ->
   (OrdMap (List String), OrdMap Unit) ->
@@ -3430,7 +3429,10 @@ addDeclProvenance (prov, seen) mid ((n, decl) :: rest) =
   if omHasKey k seen then
     addDeclProvenance (prov, seen) mid rest
   else
-    addDeclProvenance (addProvenance prov n mid, omInsert k () seen) mid rest
+    let mids = match omLookup n prov
+      Some ms => ms ++ [mid]
+      None => [mid]
+    addDeclProvenance (omInsert n mids prov, omInsert k () seen) mid rest
 
 -- The value names one import binds, each with the key of the declaration it
 -- denotes in the imported module (`expValueOrigins`).  A member alias
@@ -3440,27 +3442,9 @@ importValueDecls known path = match findExports (useModId path) known
   None => []
   Some exp =>
     let decls = valueDeclsOf exp
-    let bases = importBaseNames path exp
     map
-      (n => (
-        n,
-        declKey
-          (valueDeclOf exp decls (match omLookup n bases
-            Some b => b
-            None => n)),
-      ))
-      (importValueNames known path)
-
--- local → name in the imported module, for the member aliases a selective
--- import writes.  Every other form binds a value under its own name.
-importBaseNames : UsePath -> ModuleExports -> OrdMap String
-importBaseNames (UseGroup _ members) exp =
-  omFromPairs
-    (map
-      ((o, l, _) => (l, o))
-      (reverseL (flatMap (expandMemberNames exp) members)))
-    omEmpty
-importBaseNames _ _ = omEmpty
+      ((o, l) => (l, declKey (valueDeclOf exp decls o)))
+      (importValueBindings path exp)
 
 declKey : (String, String) -> String
 declKey (m, n) = "\{lenKey m}\{n}"
@@ -3901,12 +3885,9 @@ realImport exp path loc =
   let (names, errs) = importedNamesMM path exp
   ImportAdds {
     iaImported = names,
-    -- #925: a wildcard `export import m.*` re-export makes both `names` and
-    -- the value export list grow with depth, so this filter is O(depth^2) per
-    -- module → cubic over the chain.  Index each (growing) export set once;
-    -- `filterInSet`'s `omHasKey` is uncounted and byte-identical to a
-    -- `contains` filter.  The type, ctor and interface sets grow the same way
-    -- once the chain carries a type.
+    -- Over a wildcard `export import m.*` chain, `names` and every export set
+    -- grow with depth, so each set is indexed once and tested by `omHasKey`,
+    -- never scanned per name.
     iaValues =
       filterNsInSetFor
         path
