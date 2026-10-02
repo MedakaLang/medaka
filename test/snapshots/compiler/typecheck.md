@@ -1,5 +1,5 @@
 # META
-source_lines=53117
+source_lines=53103
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -17705,18 +17705,22 @@ firstOrZero : List Int -> Int
 firstOrZero [] = 0
 firstOrZero (x :: _) = x
 
--- U1b (#1482): the `CSlot` analogue's key.  ⚠️ Keyed on the interface SPELLING,
--- deliberately — this key feeds the dedup that decides how many dict slots a constrained
--- fn has, so keying it on identity would give two same-spelled interfaces two slots where
--- today they share one, moving emitted dict ARITY.  That is a separate judgment with a
--- different blast radius (#1425's ground), and neither U1b nor S-slot-key-vector makes it:
--- the latter widens on the predicate's ARGUMENT VECTOR (`cslotVecKey`), never on identity.
--- ⚠️ NOT a dedup key on its own any more — the only `dedupBy` over slots is
+-- U1b (#1482): the `CSlot` analogue's key.  Keyed on the interface's DECLARATION
+-- (`oblIfaceKey`: origin module plus name), not its spelling.  This key feeds the dedup
+-- that decides how many dict slots a constrained fn has, so two declarations that share a
+-- spelling, `(A.Sh a, B.Sh a) => …`, are two predicates and get two slots; each method
+-- occurrence then reads the slot of the interface its own name resolved to (#3680,
+-- #3679).  The same interface written twice, `(Sh a, Sh a)`, still keys identically and
+-- shares one slot.  An interface whose origin is unrecoverable (`OriginUnresolved`) keys
+-- on its bare name, exactly as before.
+-- Not a dedup key on its own any more: the only `dedupBy` over slots is
 -- `dedupSlotVecs`, over `cslotVecKey`.  The vector-free `dedupSlots` that used to live
 -- here was deleted with #1866: keeping it would have let a reader dedup slots without
 -- their vectors, which is exactly the collapse that slice removed.
 cslotKey : CSlot -> String
-cslotKey s = lenKey s.csIface.irName ++ intToString s.csId
+cslotKey s =
+  lenKey (regKeyRender (regKeyOfTab (oblIfaceKey s.csIface)))
+    ++ intToString s.csId
 
 -- S-slot-key-vector (#1866): THE dict-slot identity — `cslotKey` plus the predicate's
 -- argument vector.  Exactly the widening `vecOblKey` already carries on the obligation
@@ -35834,26 +35838,9 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- third producer** — `recordImplObligation` now records `iface`, the identity-carrying
 -- `IfaceRef` `methodEntryHere` already held, instead of stripping it via
 -- `ifaceRefBare iface.irName` — so by the census rule stated then, every REMAINING
--- `ifaceRefBare` call site IS the definition (`:3850-3851`) or the deliberately-bare
--- `pendingDictApps` route-word fallback in `ifaceForInferredId` (§10.3).
---
--- ⚠️ THAT FALLBACK IS NOT SAFELY DISMISSED AS "A ROUTE WORD, NOT A GOAL PRODUCER" —
--- an earlier revision of this paragraph said so and it was not established, only
--- assumed from the fallback's OWN call site (`pushDictApp`'s routing arg). TRACED,
--- not instrumented: `ifaceForInferredId`'s result is written by `registerInferredFor`
--- directly into `funConstraintIfacesRef` (`map (ifaceForInferredId m) ids`); that
--- table is read by `declaredConstraintFor`'s `None` arm (when `qualConstraintFor`
--- misses); `declaredConstraintFor` feeds `inferDictAtFound`, which calls
--- `recordCallObligations`, which calls `recordObl (Predicate { iface = s.csIface, … })
--- 0 PCallSlot …` — an `ImplUniverse` goal, unconditionally, for any slot whose
--- `csIface.irName /= ""`. So the SAME value this fallback mints reaches BOTH a
--- routing site AND a goal-producing one, through two different readers of
--- `funConstraintIfacesRef`. Bare BY CONSTRUCTION (this channel stores route words,
--- §10.3's still-true half) — but that is a FOURTH reason the leg stays, not evidence
--- the fallback is goal-producer-free. Not independently re-derived whether a program
--- can actually DRIVE this path to a bare, non-"" `csIface` at a live call site
--- (`ifaceForConstraintId`/`lookupSchemeIface` are tried first and may already cover
--- every reachable case) — flag this as unresolved rather than assume either answer.
+-- `ifaceRefBare` call site IS the definition or a reader that holds only a spelling.
+-- `ifaceForInferredId`'s `pendingDictApps` fallback no longer mints one: it returns the
+-- callee slot's `pdaIfaces` entry, declaration included (#3679).
 --
 -- ⚠️ 🚨 **AND THE LEG STILL MAY NOT BE DELETED — MEASURED, NOT INFERRED FROM THE
 -- CENSUS ABOVE.**  Zero remaining `ifaceRefBare` *goal-producer* call sites does not by
@@ -45621,13 +45608,13 @@ inferredPredicateSlotIdTag aid bid cid id
 -- Both run AFTER the callee's own constraints are registered (topological SCC order),
 -- so the forwarded callee's ifaces are populated.
 -- U1b (#1482): returns an `IfaceRef`, since `funConstraintIfacesRef` now stores one.
--- Fallbacks (1) and (2) carry a real occurrence identity — `implObls` and
--- `schemeObligationsRef` both hold one.  Fallback (3) CANNOT and does not pretend to:
--- a `GKDictApp` goal stores a route WORD (see `resolveDictApps` / `dispHeadTab`), so
--- its recovery is bare by construction.  The scan is over the CURRENT module's goals
--- only: an earlier module's application of the same scheme var id would be a stale
--- read under the graph-wide counter.  `ifaceRefNone` is the "no interface here" sentinel,
--- which is a different fact from "identity unrecoverable".
+-- Every source carries the interface's declaration: `implObls` and
+-- `schemeObligationsRef` hold the occurrence's, and a forwarded constraint takes the
+-- callee slot's `pdaIfaces` entry.  Two same-spelled interfaces therefore stay two
+-- slots here (#3679), which a name-only recovery would merge.  The scan is over the
+-- CURRENT module's goals only: an earlier module's application of the same scheme var
+-- id would be a stale read under the graph-wide counter.  `ifaceRefNone` is the "no
+-- interface here" sentinel, which is a different fact from "identity unrecoverable".
 ifaceForInferredId : String -> Int -> IfaceRef
 ifaceForInferredId m id =
   let direct = ifaceForConstraintId id
@@ -45635,10 +45622,7 @@ ifaceForInferredId m id =
     direct
   else match lookupSchemeIface m id perRun.value.schemeObligationsRef.value
     Some ir => ir
-    None =>
-      match ifaceFromDictApps id (dictAppsSince (currentModuleMarks ()).mGoals)
-        "" => ifaceRefNone
-        n => ifaceRefBare n
+    None => ifaceFromDictApps id (dictAppsSince (currentModuleMarks ()).mGoals)
 
 -- #837: keyed by member NAME only (the id here is a SCHEME-VAR id, not a binding
 -- id) — match the name component of the (name, binding-id) key, first match wins.
@@ -45664,22 +45648,24 @@ lookupIfaceById id (o :: rest)
   | containsI id o.voIds = Some o.voIface
   | otherwise = lookupIfaceById id rest
 
--- Scan pendingDictApps for [id] at a slot (bare-TVar mono) whose iface is non-empty.
--- B-4b-iii: SPELLING consumer of the widened route carrier — it RETURNS a bare name,
--- so `.irName` is projected at the one read and `ifaceAtMonoId` keeps its `List String`.
-ifaceFromDictApps : Int -> List PendingDictApp -> String
-ifaceFromDictApps _ [] = ""
+-- Scan pendingDictApps for [id] at a slot (bare-TVar mono) whose iface is non-empty,
+-- returning that slot's interface with its declaration; `ifaceRefNone` when none does.
+ifaceFromDictApps : Int -> List PendingDictApp -> IfaceRef
+ifaceFromDictApps _ [] = ifaceRefNone
 ifaceFromDictApps id (app :: rest) =
-  match ifaceAtMonoId id app.pdaMonos (map (i => i.irName) app.pdaIfaces)
-    Some s => s
+  match ifaceAtMonoId id app.pdaMonos app.pdaIfaces
+    Some ir => ir
     None => ifaceFromDictApps id rest
 
-ifaceAtMonoId : Int -> List Mono -> List String -> Option String
+ifaceAtMonoId : Int -> List Mono -> List IfaceRef -> Option IfaceRef
 ifaceAtMonoId _ [] _ = None
 ifaceAtMonoId _ _ [] = None
 ifaceAtMonoId id (m :: ms) (i :: is) = match normalize m
   TVar cell =>
-    if tyvarId cell == id && i /= "" then Some i else ifaceAtMonoId id ms is
+    if tyvarId cell == id && i.irName /= "" then
+      Some i
+    else
+      ifaceAtMonoId id ms is
   _ => ifaceAtMonoId id ms is
 
 -- recover the interface name of an INFERRED constraint var (unsignatured fn like
@@ -56215,7 +56201,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "firstOrZero" ((PList)) (ELit (LInt 0)))
 (DFunDef false "firstOrZero" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig false "cslotKey" (TyFun (TyCon "CSlot") (TyCon "String")))
-(DFunDef false "cslotKey" ((PVar "s")) (EBinOp "++" (EApp (EVar "lenKey") (EFieldAccess (EFieldAccess (EVar "s") "csIface") "irName")) (EApp (EVar "intToString") (EFieldAccess (EVar "s") "csId"))))
+(DFunDef false "cslotKey" ((PVar "s")) (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "regKeyRender") (EApp (EVar "regKeyOfTab") (EApp (EVar "oblIfaceKey") (EFieldAccess (EVar "s") "csIface"))))) (EApp (EVar "intToString") (EFieldAccess (EVar "s") "csId"))))
 (DTypeSig false "cslotVecKey" (TyFun (TyTuple (TyCon "CSlot") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "String")))
 (DFunDef false "cslotVecKey" ((PTuple (PVar "s") (PVar "vec"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "cslotKey") (EVar "s")))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "oblArgKey")) (EVar "vec"))))) (ELit (LString ""))))
 (DTypeSig false "stripArrows" (TyFun (TyCon "Mono") (TyCon "Mono")))
@@ -60821,20 +60807,20 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferredPredicateSlotIdTag" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "inferredPredicateSlotIdTag" ((PVar "aid") (PVar "bid") (PVar "cid") (PVar "id")) (EIf (EBinOp "==" (EVar "id") (EVar "aid")) (ELit (LString "a")) (EIf (EBinOp "==" (EVar "id") (EVar "bid")) (ELit (LString "b")) (EIf (EBinOp "==" (EVar "id") (EVar "cid")) (ELit (LString "c")) (EIf (EVar "otherwise") (ELit (LString "_")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "ifaceForInferredId" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "IfaceRef"))))
-(DFunDef false "ifaceForInferredId" ((PVar "m") (PVar "id")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "ifaceForConstraintId") (EVar "id"))) (DoExpr (EIf (EBinOp "/=" (EFieldAccess (EVar "direct") "irName") (ELit (LString ""))) (EVar "direct") (EMatch (EApp (EApp (EApp (EVar "lookupSchemeIface") (EVar "m")) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PVar "ir")) () (EVar "ir")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "ifaceFromDictApps") (EVar "id")) (EApp (EVar "dictAppsSince") (EFieldAccess (EApp (EVar "currentModuleMarks") (ELit LUnit)) "mGoals"))) (arm (PLit (LString "")) () (EVar "ifaceRefNone")) (arm (PVar "n") () (EApp (EVar "ifaceRefBare") (EVar "n"))))))))))
+(DFunDef false "ifaceForInferredId" ((PVar "m") (PVar "id")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "ifaceForConstraintId") (EVar "id"))) (DoExpr (EIf (EBinOp "/=" (EFieldAccess (EVar "direct") "irName") (ELit (LString ""))) (EVar "direct") (EMatch (EApp (EApp (EApp (EVar "lookupSchemeIface") (EVar "m")) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PVar "ir")) () (EVar "ir")) (arm (PCon "None") () (EApp (EApp (EVar "ifaceFromDictApps") (EVar "id")) (EApp (EVar "dictAppsSince") (EFieldAccess (EApp (EVar "currentModuleMarks") (ELit LUnit)) "mGoals")))))))))
 (DTypeSig false "lookupSchemeIface" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "VecObl")))) (TyApp (TyCon "Option") (TyCon "IfaceRef"))))))
 (DFunDef false "lookupSchemeIface" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "lookupSchemeIface" ((PVar "m") (PVar "id") (PCons (PTuple (PTuple (PVar "m2") PWild) (PVar "obs")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "m2")) (EMatch (EApp (EApp (EVar "lookupIfaceById") (EVar "id")) (EVar "obs")) (arm (PCon "Some" (PVar "iface")) () (EApp (EVar "Some") (EVar "iface"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "lookupSchemeIface") (EVar "m")) (EVar "id")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupSchemeIface") (EVar "m")) (EVar "id")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lookupIfaceById" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyApp (TyCon "Option") (TyCon "IfaceRef")))))
 (DFunDef false "lookupIfaceById" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupIfaceById" ((PVar "id") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "containsI") (EVar "id")) (EFieldAccess (EVar "o") "voIds")) (EApp (EVar "Some") (EFieldAccess (EVar "o") "voIface")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupIfaceById") (EVar "id")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "ifaceFromDictApps" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "PendingDictApp")) (TyCon "String"))))
-(DFunDef false "ifaceFromDictApps" (PWild (PList)) (ELit (LString "")))
-(DFunDef false "ifaceFromDictApps" ((PVar "id") (PCons (PVar "app") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EFieldAccess (EVar "app") "pdaMonos")) (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EFieldAccess (EVar "i") "irName"))) (EFieldAccess (EVar "app") "pdaIfaces"))) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EApp (EApp (EVar "ifaceFromDictApps") (EVar "id")) (EVar "rest")))))
-(DTypeSig false "ifaceAtMonoId" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DTypeSig false "ifaceFromDictApps" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "PendingDictApp")) (TyCon "IfaceRef"))))
+(DFunDef false "ifaceFromDictApps" (PWild (PList)) (EVar "ifaceRefNone"))
+(DFunDef false "ifaceFromDictApps" ((PVar "id") (PCons (PVar "app") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EFieldAccess (EVar "app") "pdaMonos")) (EFieldAccess (EVar "app") "pdaIfaces")) (arm (PCon "Some" (PVar "ir")) () (EVar "ir")) (arm (PCon "None") () (EApp (EApp (EVar "ifaceFromDictApps") (EVar "id")) (EVar "rest")))))
+(DTypeSig false "ifaceAtMonoId" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "Option") (TyCon "IfaceRef"))))))
 (DFunDef false "ifaceAtMonoId" (PWild (PList) PWild) (EVar "None"))
 (DFunDef false "ifaceAtMonoId" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "ifaceAtMonoId" ((PVar "id") (PCons (PVar "m") (PVar "ms")) (PCons (PVar "i") (PVar "is"))) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EBinOp "/=" (EVar "i") (ELit (LString "")))) (EApp (EVar "Some") (EVar "i")) (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EVar "ms")) (EVar "is")))) (arm PWild () (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EVar "ms")) (EVar "is")))))
+(DFunDef false "ifaceAtMonoId" ((PVar "id") (PCons (PVar "m") (PVar "ms")) (PCons (PVar "i") (PVar "is"))) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EBinOp "/=" (EFieldAccess (EVar "i") "irName") (ELit (LString "")))) (EApp (EVar "Some") (EVar "i")) (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EVar "ms")) (EVar "is")))) (arm PWild () (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EVar "ms")) (EVar "is")))))
 (DTypeSig false "ifaceForConstraintId" (TyFun (TyCon "Int") (TyCon "IfaceRef")))
 (DFunDef false "ifaceForConstraintId" ((PVar "id")) (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value")))
 (DTypeSig false "ifaceForConstraintIdGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "IfaceRef"))))
@@ -64888,7 +64874,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "firstOrZero" ((PList)) (ELit (LInt 0)))
 (DFunDef false "firstOrZero" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig false "cslotKey" (TyFun (TyCon "CSlot") (TyCon "String")))
-(DFunDef false "cslotKey" ((PVar "s")) (EBinOp "++" (EApp (EVar "lenKey") (EFieldAccess (EFieldAccess (EVar "s") "csIface") "irName")) (EApp (EVar "intToString") (EFieldAccess (EVar "s") "csId"))))
+(DFunDef false "cslotKey" ((PVar "s")) (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "regKeyRender") (EApp (EVar "regKeyOfTab") (EApp (EVar "oblIfaceKey") (EFieldAccess (EVar "s") "csIface"))))) (EApp (EVar "intToString") (EFieldAccess (EVar "s") "csId"))))
 (DTypeSig false "cslotVecKey" (TyFun (TyTuple (TyCon "CSlot") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "String")))
 (DFunDef false "cslotVecKey" ((PTuple (PVar "s") (PVar "vec"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "cslotKey") (EVar "s")))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "oblArgKey")) (EVar "vec"))))) (ELit (LString ""))))
 (DTypeSig false "stripArrows" (TyFun (TyCon "Mono") (TyCon "Mono")))
@@ -69494,20 +69480,20 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferredPredicateSlotIdTag" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "inferredPredicateSlotIdTag" ((PVar "aid") (PVar "bid") (PVar "cid") (PVar "id")) (EIf (EBinOp "==" (EVar "id") (EVar "aid")) (ELit (LString "a")) (EIf (EBinOp "==" (EVar "id") (EVar "bid")) (ELit (LString "b")) (EIf (EBinOp "==" (EVar "id") (EVar "cid")) (ELit (LString "c")) (EIf (EVar "otherwise") (ELit (LString "_")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "ifaceForInferredId" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "IfaceRef"))))
-(DFunDef false "ifaceForInferredId" ((PVar "m") (PVar "id")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "ifaceForConstraintId") (EVar "id"))) (DoExpr (EIf (EBinOp "/=" (EFieldAccess (EVar "direct") "irName") (ELit (LString ""))) (EVar "direct") (EMatch (EApp (EApp (EApp (EVar "lookupSchemeIface") (EVar "m")) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PVar "ir")) () (EVar "ir")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "ifaceFromDictApps") (EVar "id")) (EApp (EVar "dictAppsSince") (EFieldAccess (EApp (EVar "currentModuleMarks") (ELit LUnit)) "mGoals"))) (arm (PLit (LString "")) () (EVar "ifaceRefNone")) (arm (PVar "n") () (EApp (EVar "ifaceRefBare") (EVar "n"))))))))))
+(DFunDef false "ifaceForInferredId" ((PVar "m") (PVar "id")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "ifaceForConstraintId") (EVar "id"))) (DoExpr (EIf (EBinOp "/=" (EFieldAccess (EVar "direct") "irName") (ELit (LString ""))) (EVar "direct") (EMatch (EApp (EApp (EApp (EVar "lookupSchemeIface") (EVar "m")) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PVar "ir")) () (EVar "ir")) (arm (PCon "None") () (EApp (EApp (EVar "ifaceFromDictApps") (EVar "id")) (EApp (EVar "dictAppsSince") (EFieldAccess (EApp (EVar "currentModuleMarks") (ELit LUnit)) "mGoals")))))))))
 (DTypeSig false "lookupSchemeIface" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "VecObl")))) (TyApp (TyCon "Option") (TyCon "IfaceRef"))))))
 (DFunDef false "lookupSchemeIface" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "lookupSchemeIface" ((PVar "m") (PVar "id") (PCons (PTuple (PTuple (PVar "m2") PWild) (PVar "obs")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "m2")) (EMatch (EApp (EApp (EVar "lookupIfaceById") (EVar "id")) (EVar "obs")) (arm (PCon "Some" (PVar "iface")) () (EApp (EVar "Some") (EVar "iface"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "lookupSchemeIface") (EVar "m")) (EVar "id")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupSchemeIface") (EVar "m")) (EVar "id")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lookupIfaceById" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyApp (TyCon "Option") (TyCon "IfaceRef")))))
 (DFunDef false "lookupIfaceById" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupIfaceById" ((PVar "id") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "containsI") (EVar "id")) (EFieldAccess (EVar "o") "voIds")) (EApp (EVar "Some") (EFieldAccess (EVar "o") "voIface")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupIfaceById") (EVar "id")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "ifaceFromDictApps" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "PendingDictApp")) (TyCon "String"))))
-(DFunDef false "ifaceFromDictApps" (PWild (PList)) (ELit (LString "")))
-(DFunDef false "ifaceFromDictApps" ((PVar "id") (PCons (PVar "app") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EFieldAccess (EVar "app") "pdaMonos")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EFieldAccess (EVar "i") "irName"))) (EFieldAccess (EVar "app") "pdaIfaces"))) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EApp (EApp (EVar "ifaceFromDictApps") (EVar "id")) (EVar "rest")))))
-(DTypeSig false "ifaceAtMonoId" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DTypeSig false "ifaceFromDictApps" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "PendingDictApp")) (TyCon "IfaceRef"))))
+(DFunDef false "ifaceFromDictApps" (PWild (PList)) (EVar "ifaceRefNone"))
+(DFunDef false "ifaceFromDictApps" ((PVar "id") (PCons (PVar "app") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EFieldAccess (EVar "app") "pdaMonos")) (EFieldAccess (EVar "app") "pdaIfaces")) (arm (PCon "Some" (PVar "ir")) () (EVar "ir")) (arm (PCon "None") () (EApp (EApp (EVar "ifaceFromDictApps") (EVar "id")) (EVar "rest")))))
+(DTypeSig false "ifaceAtMonoId" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "Option") (TyCon "IfaceRef"))))))
 (DFunDef false "ifaceAtMonoId" (PWild (PList) PWild) (EVar "None"))
 (DFunDef false "ifaceAtMonoId" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "ifaceAtMonoId" ((PVar "id") (PCons (PVar "m") (PVar "ms")) (PCons (PVar "i") (PVar "is"))) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EBinOp "/=" (EVar "i") (ELit (LString "")))) (EApp (EVar "Some") (EVar "i")) (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EVar "ms")) (EVar "is")))) (arm PWild () (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EVar "ms")) (EVar "is")))))
+(DFunDef false "ifaceAtMonoId" ((PVar "id") (PCons (PVar "m") (PVar "ms")) (PCons (PVar "i") (PVar "is"))) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EBinOp "/=" (EFieldAccess (EVar "i") "irName") (ELit (LString "")))) (EApp (EVar "Some") (EVar "i")) (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EVar "ms")) (EVar "is")))) (arm PWild () (EApp (EApp (EApp (EVar "ifaceAtMonoId") (EVar "id")) (EVar "ms")) (EVar "is")))))
 (DTypeSig false "ifaceForConstraintId" (TyFun (TyCon "Int") (TyCon "IfaceRef")))
 (DFunDef false "ifaceForConstraintId" ((PVar "id")) (EApp (EApp (EVar "ifaceForConstraintIdGo") (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value")))
 (DTypeSig false "ifaceForConstraintIdGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "IfaceRef"))))

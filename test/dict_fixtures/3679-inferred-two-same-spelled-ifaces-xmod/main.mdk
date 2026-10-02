@@ -1,0 +1,3 @@
+import mc.{f2}
+
+main = println (f2 (7 : Int))
