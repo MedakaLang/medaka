@@ -1,0 +1,20 @@
+-- `IA.mth : a -> Int -> Int` (dispatch at argument 0) and `IZ.mth : Int -> b -> Int`
+-- (dispatch at argument 1) are both admitted here, each through its own interface
+-- import, and `fmodI.mth` is the imported standalone they shadow.  This is the graph of
+-- `test/shadow_fixtures/i28_importer_two_admitted_agree`, with the occurrence
+-- under-applied: `mth "abc"` supplies IA's receiver but not IZ's.  IZ's own impl
+-- query cannot be asked at this occurrence, so the two declarations are not shown to
+-- agree, and nothing else decides between them.  Spec answer (SHADOW-SEMANTICS.md
+-- S2-DECL (d) bullet 2, ruled 2026-10-01): the located reject
+-- `T-AMBIGUOUS-SHADOW-DECL` at `mth`, exit 1, in every import order.  Not 99 (the
+-- fully applied i28 value), not 7 (`IZ String`'s body, which neither declaration's
+-- own receiver reaches), and not `Type mismatch` (one declaration's scheme typing the
+-- occurrence).
+import fmodI.{mth}
+import amodI.{IA, af}
+import zmodI.{IZ, zf}
+
+g : Int -> Int
+g = mth "abc"
+
+main = println (g 5 + af 0 + zf 0)

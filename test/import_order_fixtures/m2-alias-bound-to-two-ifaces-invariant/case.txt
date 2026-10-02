@@ -1,0 +1,7 @@
+entry: main.mdk
+what: one alias bound to two modules that both export a method spelled `mth` is
+      rejected with the same code in every ordering
+
+`import ma as A` + `import mb as A`; `A.mth` names `IA.mth` and `IB.mth`. Spec
+answer: `T-AMBIGUOUS-ALIAS-METHOD`, exit 1, identical under every ordering
+(S2-DECL (e)).

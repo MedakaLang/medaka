@@ -1322,11 +1322,11 @@ ieBuildSnaps : List ImplRow -> List (Int, ImplUniverse)
 ieBuildSnapsGo : List ImplRow -> (List (Int, ImplUniverse), ImplUniverse) -> (List (Int, ImplUniverse), ImplUniverse)
 ieCandidacyVisibleAt : Int -> Int -> Bool
 ieCandidatesForIface : ImplEnv -> HeadKey -> IfaceRef -> List Mono -> List KeyEntry
-ieCandidatesForMethod : ImplEnv -> HeadKey -> String -> Option IfaceRef -> List Mono -> List KeyEntry
+ieCandidatesForMethod : ImplEnv -> HeadKey -> String -> Option (List IfaceRef) -> List Mono -> List KeyEntry
 ieDefinesReqMethodAt : ImplEnv -> String -> Option HeadKey -> Bool
 ieDefinesReqMethodAtGo : List ImplRow -> String -> Option TabKey -> Bool
 ieEntriesForIface : List ImplRow -> IfaceRef -> List Mono -> List KeyEntry
-ieEntriesForMethod : List ImplRow -> String -> Option IfaceRef -> List Mono -> List KeyEntry
+ieEntriesForMethod : List ImplRow -> String -> Option (List IfaceRef) -> List Mono -> List KeyEntry
 ieFileRow : ImplRow -> ImplEnv -> ImplEnv
 ieFileRowByHead : ImplRow -> ImplEnv -> ImplEnv
 ieGenImplIn : String -> Decl
@@ -1337,8 +1337,8 @@ ieHeadProbeEnv : ImplEnv
 ieHeadProbeZmod : List Decl
 ieHeadRows : Option HeadKey -> ImplEnv -> List ImplRow
 ieImplExistsForHead : ImplEnv -> String -> HeadKey -> Bool
-ieImplExistsForHeadGo : List ImplRow -> String -> TabKey -> Option IfaceRef -> Bool
-ieImplExistsForHeadOf : ImplEnv -> String -> HeadKey -> Option IfaceRef -> Bool
+ieImplExistsForHeadGo : List ImplRow -> String -> TabKey -> Option (List IfaceRef) -> Bool
+ieImplExistsForHeadOf : ImplEnv -> String -> HeadKey -> Option (List IfaceRef) -> Bool
 ieIndexRows : List ImplRow -> ImplEnv -> ImplEnv
 ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowAt : TabKey -> ImplRow -> ImplEnv -> ImplEnv
@@ -1349,8 +1349,8 @@ ieProbeBareKey : RegKey
 ieProbeBlobHead : HeadKey
 ieProbeEnv : ImplEnv
 ieProbeKey : String -> RegKey
-ieRowAdmittedBy : IfaceRef -> Option IfaceRef -> Bool
-ieRowAnswersMethod : ImplRow -> List String -> String -> Option IfaceRef -> Bool
+ieRowAdmittedBy : IfaceRef -> Option (List IfaceRef) -> Bool
+ieRowAnswersMethod : ImplRow -> List String -> String -> Option (List IfaceRef) -> Bool
 ieRowHeadMatches : List Ty -> List Mono -> Bool
 ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
 ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
@@ -1875,6 +1875,7 @@ mentionsOpened : Authority -> Bool
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
 mergeOne : List (String, Mono) -> String -> Mono -> List (String, Mono)
 mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (String, Mono)
+methodAdmissionHere : String -> Option (List IfaceRef)
 methodAdmittedHere : String -> List IfaceRef
 methodArgs : Ty -> List Ty
 methodBodyHeadMonos : MethodBodyKind -> List Mono
@@ -1905,13 +1906,12 @@ methodEntryHere : String -> Option (IfaceRef, List String, Ty, List (String, Lis
 methodEnvBinding : MethodSchemeRow -> EnvBinding
 methodEnvGo : List DeclEnvModule -> MethodEnv -> MethodEnv
 methodExportsIndex : Unit -> Map String (List (String, Ident))
-methodFloor : MethodRow -> List MethodRow -> MethodRow
 methodGrantKey : String -> String -> String
 methodGrantOf : String -> String -> Option MethodGrant
 methodGrantOfRow : MethodSchemeRow -> Option MethodGrant
 methodGrantUse : String -> EvId -> MethodGrantUse
 methodIfaceHere : String -> Option IfaceRef
-methodImportedScope : List Decl -> String -> List MethodRow -> MethodRow -> MethodScope
+methodImportedScope : List Decl -> String -> List MethodRow -> MethodScope
 methodInterfacePredicateTemplate : List String -> List (String, Mono) -> List (Option Mono)
 methodLevelConstraintMonos : List String -> Ty -> List (String, Mono) -> List Mono
 methodLevelConstraintSlots : List String -> Ty -> List (String, IfaceRef)
@@ -1921,7 +1921,7 @@ methodLevelPredicateSlots : List String -> Ty -> List (String, Mono) -> List Pre
 methodMarkCtx : MarkSets -> String -> List Decl -> MarkCtx
 methodMembersOf : List String -> Loc -> List UseMember
 methodNameDeclaredAt : Int -> MethodEnv -> String -> Bool
-methodOwnScope : List Decl -> String -> List MethodRow -> MethodRow -> MethodScope
+methodOwnScope : List Decl -> String -> List MethodRow -> MethodScope
 methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
 methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
 methodPredicateSlotsOfType : List String -> Ty -> List (String, Mono) -> List Int -> List MethodPredicateSlot
@@ -2019,7 +2019,7 @@ methodSlotPositions : List MethodPredicateSlot -> List (List Int)
 methodSlotSubst : List Int -> List Int -> List (Int, Mono) -> Option (List (Int, Mono))
 methodTemplateGivenScan : MethodPredicateTemplate -> List Int -> List GivenEntry -> MethodTemplateGivenResult -> MethodTemplateGivenResult
 methodTerms : String -> MethodGrant -> GrantOcc -> List Expr
-methodUndecided : String -> List MethodRow -> MethodRow -> List MethodRow -> MethodScope
+methodUndecided : String -> List MethodRow -> List MethodRow -> MethodScope
 methodVisibleHere : String -> List MethodRow
 methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List (String, List String)
 minLevelOf : List (Ref Effvar) -> Int
@@ -2245,7 +2245,7 @@ phantomMethodMsgs : CeRow -> List String
 pickMostSpecificEntry : List Mono -> List KeyEntry -> Option KeyEntry
 pickNumLitRow : IfaceRef -> String -> List MethodSchemeRow -> Option MethodSchemeRow
 pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
-pickSchemesByDecl : List String -> List (String, Scheme) -> Registry MethodSchemeRow -> List (String, EnvBinding)
+pickSchemesByDecl : List String -> List (String, Scheme) -> Registry MethodSchemeRow -> Map String Scheme -> List (String, EnvBinding)
 pinsTyvarMsg : String -> Ty -> List String -> String
 pipeOp : TcEnv -> Expr -> Expr -> Mono -> Mono -> Mono
 placeholderMonoOf : String -> List (String, Mono) -> Mono
@@ -2967,6 +2967,7 @@ unannotatedRowParamMsg : String -> String -> String
 unboundSpineHead : Mono -> Bool
 unboundVarFresh : String -> Mono
 unboundVarMsg : String -> String
+undecidedSchemeFor : String -> List (String, Scheme) -> Map String Scheme -> Option Scheme
 undeclaredConstraintMsg : String -> Ty -> String -> String -> String
 undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
