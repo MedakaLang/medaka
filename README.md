@@ -55,8 +55,7 @@ Pipeline stages, in order:
 - **AST** — `compiler/frontend/ast.mdk`
 - **Desugar** — `compiler/frontend/desugar.mdk` (`deriving` → impls, record punning, do-blocks, default-method specialization)
 - **Resolver** — `compiler/frontend/resolve.mdk` (every reference bound; multi-module aware)
-- **Method marker** — `compiler/frontend/marker.mdk` (EVar → EMethodRef rewrite for dispatch)
-- **Type checker** — `compiler/types/typecheck.mdk` (Hindley-Milner + interfaces + effects + exhaustiveness)
+- **Type checker** — `compiler/types/typecheck.mdk` (Hindley-Milner + interfaces + effects + exhaustiveness; marks method dispatch per binding group)
 - **Exhaustiveness** — `compiler/frontend/exhaust.mdk` (Maranget pattern-matrix; called from typecheck)
 - **Evaluator** — `compiler/eval/eval.mdk` (tree-walking interpreter with dict-passing typeclass dispatch)
 - **Core IR / LLVM emit** — `compiler/ir/core_ir_lower.mdk` → `compiler/backend/llvm_emit.mdk` → `clang`

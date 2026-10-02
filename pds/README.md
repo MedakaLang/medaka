@@ -32,7 +32,8 @@ locally" section under Contributor notes has the native and all-engines forms.
 ## What has and has not been checked
 
 Nobody should rely on this code for anything that matters yet. These are the
-blog post's two honest-caveat lists, carried over as written.
+blog post's two honest-caveat lists, carried over with one sentence scoped to
+its section.
 
 ### Crypto: the current blind spots
 
@@ -41,7 +42,7 @@ libsecp256k1, Bluesky's own code) and a Valgrind Memcheck constant-time probe.
 If anyone wants to use these in something that actually matters, they have been
 warned. _Caveat emptor_.
 
-- **No cryptographer has reviewed this.** Everything claimed on this page is just testing. Nobody with real crypto expertise has read
+- **No cryptographer has reviewed this.** Everything in this section is just testing. Nobody with real crypto expertise has read
   through the code, and that's a major shortcoming of the current state of the project.
 - **Memcheck only sees branches and memory lookups.** It can't see instructions whose running time depends on
   their inputs, like division or some multiplications on certain CPUs. Hardware-level attacks like speculative

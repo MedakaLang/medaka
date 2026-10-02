@@ -1,5 +1,5 @@
 # META
-source_lines=2244
+source_lines=2231
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -585,52 +585,39 @@ export impl Display (a, b, c, d, e) requires Display a, Display b, Display c, Di
    convention of parenthesizing negative numeric literals in argument
    position. -}
 derivedShowWrap : String -> String
--- Called only from generated `deriving` code (desugar.mdk's `showFieldPart`),
--- never from source text in this tree, so the dead-code rule can't see the
--- (real) call site.
--- lint-disable-next-line rule-dead-code
-derivedShowWrap s
-  | derivedArgNeedsParens s = "(\{s})"
-  | otherwise = s
+-- Callers: the `Debug`/`Display` impls for `Option` and `Result` above, and the
+-- generated `deriving` code (desugar.mdk's `showFieldPart`). Every wasm program
+-- that keeps those impls ships this cluster, so it is written with `if` rather
+-- than guards (a guard chain emits a non-exhaustive-match trap body per
+-- function) and scans one `stringToChars` array.
+derivedShowWrap s = if derivedArgNeedsParens s then "(" ++ s ++ ")" else s
 
 derivedArgNeedsParens : String -> Bool
--- Reached only from `derivedShowWrap`'s own generated-code call above, same
--- invisible-to-the-rule reason.
--- lint-disable-next-line rule-dead-code
-derivedArgNeedsParens s
-  | stringLength s == 0 = False
-  | derivedIsQuoteChar (arrayGetUnsafe 0 (stringToChars s)) = False
-  | arrayGetUnsafe 0 (stringToChars s) == '-' = True
-  | otherwise = derivedHasTopLevelSpace (stringToChars s) 0 (stringLength s) 0
-
-derivedIsQuoteChar : Char -> Bool
--- Reached only from `derivedArgNeedsParens` in this same generated-code-only
--- cluster.
--- lint-disable-next-line rule-dead-code
-derivedIsQuoteChar c = c == '"' || c == '\''
+derivedArgNeedsParens s =
+  if stringLength s == 0 then
+    False
+  else
+    let chars = stringToChars s
+    let c = arrayGetUnsafe 0 chars
+    if c == '"' || c == '\'' then
+      False
+    else
+      c == '-' || derivedHasTopLevelSpace chars 0 (stringLength s) 0
 
 derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
--- Reached only from `derivedArgNeedsParens` in this same generated-code-only
--- cluster.
--- lint-disable-next-line rule-dead-code
-derivedHasTopLevelSpace chars i n depth
-  | i >= n = False
-  | arrayGetUnsafe i chars == ' ' && depth == 0 = True
-  | otherwise =
-    derivedHasTopLevelSpace
-      chars
-      (i + 1)
-      n
-      (derivedNextDepth (arrayGetUnsafe i chars) depth)
-
-derivedNextDepth : Char -> Int -> Int
--- Reached only from `derivedHasTopLevelSpace` in this same generated-code-only
--- cluster.
--- lint-disable-next-line rule-dead-code
-derivedNextDepth c depth
-  | c == '(' || c == '[' || c == '{' = depth + 1
-  | c == ')' || c == ']' || c == '}' = depth - 1
-  | otherwise = depth
+derivedHasTopLevelSpace chars i n depth =
+  if i >= n then
+    False
+  else
+    let c = arrayGetUnsafe i chars
+    if c == ' ' && depth == 0 then
+      True
+    else if c == '(' || c == '[' || c == '{' then
+      derivedHasTopLevelSpace chars (i + 1) n (depth + 1)
+    else if c == ')' || c == ']' || c == '}' then
+      derivedHasTopLevelSpace chars (i + 1) n (depth - 1)
+    else
+      derivedHasTopLevelSpace chars (i + 1) n depth
 
 -- # Hashing
 
@@ -2350,15 +2337,11 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c"))) (req "Display" ((TyVar "d")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "c"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "d"))) (ELit (LString ")"))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c"))) (req "Display" ((TyVar "d"))) (req "Display" ((TyVar "e")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "c"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "d"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ")"))))))
 (DTypeSig false "derivedShowWrap" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "derivedShowWrap" ((PVar "s")) (EIf (EApp (EVar "derivedArgNeedsParens") (EVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "s"))) (ELit (LString ")"))) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "derivedShowWrap" ((PVar "s")) (EIf (EApp (EVar "derivedArgNeedsParens") (EVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))
 (DTypeSig false "derivedArgNeedsParens" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "derivedArgNeedsParens" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EIf (EApp (EVar "derivedIsQuoteChar") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s")))) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LChar "-"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig false "derivedIsQuoteChar" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "derivedIsQuoteChar" ((PVar "c")) (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EBinOp "==" (EVar "c") (ELit (LChar "'")))))
+(DFunDef false "derivedArgNeedsParens" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "chars"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EBinOp "==" (EVar "c") (ELit (LChar "'")))) (EVar "False") (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0)))))))))
 (DTypeSig false "derivedHasTopLevelSpace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "derivedHasTopLevelSpace" ((PVar "chars") (PVar "i") (PVar "n") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar " "))) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EApp (EVar "derivedNextDepth") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (EVar "depth"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "derivedNextDepth" (TyFun (TyCon "Char") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "derivedNextDepth" ((PVar "c") (PVar "depth")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EBinOp "==" (EVar "c") (ELit (LChar "[")))) (EBinOp "==" (EVar "c") (ELit (LChar "{")))) (EBinOp "+" (EVar "depth") (ELit (LInt 1))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar ")"))) (EBinOp "==" (EVar "c") (ELit (LChar "]")))) (EBinOp "==" (EVar "c") (ELit (LChar "}")))) (EBinOp "-" (EVar "depth") (ELit (LInt 1))) (EIf (EVar "otherwise") (EVar "depth") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "derivedHasTopLevelSpace" ((PVar "chars") (PVar "i") (PVar "n") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar " "))) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "True") (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EBinOp "==" (EVar "c") (ELit (LChar "[")))) (EBinOp "==" (EVar "c") (ELit (LChar "{")))) (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar ")"))) (EBinOp "==" (EVar "c") (ELit (LChar "]")))) (EBinOp "==" (EVar "c") (ELit (LChar "}")))) (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "depth")))))))))
 (DInterface true false "Hashable" ("a") () ((imethod "hash" (TyFun (TyVar "a") (TyCon "Int")) None)))
 (DImpl true "Hashable" ((TyCon "Int")) () ((im "hash" ((PVar "n")) (EApp (EVar "hashInt") (EVar "n")))))
 (DImpl true "Hashable" ((TyCon "Float")) () ((im "hash" ((PVar "x")) (EApp (EVar "hashFloat") (EVar "x")))))
@@ -2760,15 +2743,11 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c"))) (req "Display" ((TyVar "d")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "d"))) (ELit (LString ")"))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c"))) (req "Display" ((TyVar "d"))) (req "Display" ((TyVar "e")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "d"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ")"))))))
 (DTypeSig false "derivedShowWrap" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "derivedShowWrap" ((PVar "s")) (EIf (EApp (EVar "derivedArgNeedsParens") (EVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString ")"))) (EIf (EVar "otherwise") (EVar "s") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "derivedShowWrap" ((PVar "s")) (EIf (EApp (EVar "derivedArgNeedsParens") (EVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))
 (DTypeSig false "derivedArgNeedsParens" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "derivedArgNeedsParens" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EIf (EApp (EVar "derivedIsQuoteChar") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s")))) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LChar "-"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig false "derivedIsQuoteChar" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "derivedIsQuoteChar" ((PVar "c")) (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EBinOp "==" (EVar "c") (ELit (LChar "'")))))
+(DFunDef false "derivedArgNeedsParens" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "chars"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EBinOp "==" (EVar "c") (ELit (LChar "'")))) (EVar "False") (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0)))))))))
 (DTypeSig false "derivedHasTopLevelSpace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "derivedHasTopLevelSpace" ((PVar "chars") (PVar "i") (PVar "n") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar " "))) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EApp (EVar "derivedNextDepth") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (EVar "depth"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "derivedNextDepth" (TyFun (TyCon "Char") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "derivedNextDepth" ((PVar "c") (PVar "depth")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EBinOp "==" (EVar "c") (ELit (LChar "[")))) (EBinOp "==" (EVar "c") (ELit (LChar "{")))) (EBinOp "+" (EVar "depth") (ELit (LInt 1))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar ")"))) (EBinOp "==" (EVar "c") (ELit (LChar "]")))) (EBinOp "==" (EVar "c") (ELit (LChar "}")))) (EBinOp "-" (EVar "depth") (ELit (LInt 1))) (EIf (EVar "otherwise") (EVar "depth") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "derivedHasTopLevelSpace" ((PVar "chars") (PVar "i") (PVar "n") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "False") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar " "))) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "True") (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EBinOp "==" (EVar "c") (ELit (LChar "[")))) (EBinOp "==" (EVar "c") (ELit (LChar "{")))) (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar ")"))) (EBinOp "==" (EVar "c") (ELit (LChar "]")))) (EBinOp "==" (EVar "c") (ELit (LChar "}")))) (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "depth")))))))))
 (DInterface true false "Hashable" ("a") () ((imethod "hash" (TyFun (TyVar "a") (TyCon "Int")) None)))
 (DImpl true "Hashable" ((TyCon "Int")) () ((im "hash" ((PVar "n")) (EApp (EVar "hashInt") (EVar "n")))))
 (DImpl true "Hashable" ((TyCon "Float")) () ((im "hash" ((PVar "x")) (EApp (EVar "hashFloat") (EVar "x")))))

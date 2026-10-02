@@ -200,7 +200,7 @@ main =
   println (parseAndHalve "forty")
   println (optionOr 0 (safeDiv 1 0))
 EOF2
-printf '%s\n' 'Some 5' 'None' 'Ok 21' 'Err not a number: forty' '0' > "$WORK/expected"
+printf '%s\n' 'Some 5' 'None' 'Ok 21' 'Err (not a number: forty)' '0' > "$WORK/expected"
 check_imports_program option-result
 cat > "$WORK/input.mdk" <<'EOF2'
 import json.{parse, stringify, get, asInt, asString}
