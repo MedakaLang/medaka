@@ -1577,6 +1577,72 @@ table = [
     codes = [],
   },
   Row {
+    entry = "3680-sig-two-same-spelled-constraints/main.mdk",
+    label =
+      "#3680, a signature naming two same-spelled interfaces: `ma` and `mb` each declare `Sh` with a default `shl` (`A<..>` vs `B[..]`) and an `Sh Int` impl. `f : (A.Sh a, B.Sh a) => a -> String` owes two dictionary slots, one per declaration, and `f v = A.shl v ++ \"+\" ++ B.shl v` reads each from its own, so `f 7` is `A<a7>+B[b7]`. Before the fix both constraints collapsed to one slot keyed by the spelling `Sh`: `run` died on `unbound identifier: $dict_f_1` and `build`'s emitter panicked. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3680-sig-same-spelled-constraint-bare-beside-alias/main.mdk",
+    label =
+      "#3680 with one constraint bare: `import mb.{Sh, shl}` beside `import ma as A`, so `f : (Sh a, A.Sh a) => a -> String` names `mb.Sh` and `ma.Sh`. `A.shl v` is `ma`'s default over `ma`'s `Sh Int` (`A<a7>`) and bare `shl v` is `mb`'s (`B[b7]`), so `f 7` is `A<a7>+B[b7]`. Before the fix the two constraints shared one slot: `run` died on an unbound dictionary and `build`'s emitter panicked. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3679-inferred-two-same-spelled-ifaces/main.mdk",
+    label =
+      "#3679, an inferred constraint over two same-spelled interfaces: unannotated `f v = A.shl v ++ \"+\" ++ B.shl v` generalizes over `ma.Sh` and `mb.Sh`, two slots, so `f 7` is `A<a7>+B[b7]`. Before the fix `run` printed the value (its dispatch recovered by name) while the built binary crashed at exit 139: the two inferred constraints shared one slot. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3679-inferred-two-same-spelled-ifaces-xmod/main.mdk",
+    label =
+      "#3679 across a module boundary and in the other order: `mc` exports unannotated `f2 v = B.shl v ++ \"+\" ++ A.shl v`, so `main`'s `f2 7` passes `mb.Sh Int` and `ma.Sh Int` into their own slots and prints `B[b7]+A<a7>`. Before the fix the built binary crashed at exit 139 while `run` printed the value. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "B[b7]+A<a7>\n",
+    codes = [],
+  },
+  Row {
+    entry = "3679-inferred-two-same-spelled-ifaces-local-lambda/main.mdk",
+    label =
+      "#3679 on a let-bound lambda: `let f = v => A.shl v ++ \"+\" ++ B.shl v` generalizes over both `Sh` declarations, so `f 7` is `A<a7>+B[b7]`. Before the fix the built binary crashed at exit 139 while `run` printed the value. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3679-inferred-same-spelled-iface-through-requires/main.mdk",
+    label =
+      "#3679 through a conditional impl: `mb` adds `impl Sh (Box a) requires Sh a` (`sh (Box v) = \"box\" ++ sh v`), and unannotated `g v = B.shl (Box v) ++ A.shl v` reduces `mb.Sh (Box a)` to `mb.Sh a` beside `ma.Sh a`. `g 7` is `B[` ++ `box` ++ `b7` ++ `]` then `A<a7>`: `B[boxb7]A<a7>`. Before the fix the built binary trapped E-DISPATCH-NO-IMPL while `run` printed the value. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "B[boxb7]A<a7>\n",
+    codes = [],
+  },
+  Row {
     entry = "s8-i1-samename-reexport-selective-through-wildcard/main.mdk",
     label =
       "§8 I1 ACROSS A SELECTIVE RE-EXPORT REACHED BY A WILDCARD IMPORT (RUN-XMOD-062, #1425 F1 third relocation). The two `-wildcard-` rows above grade a name a wildcard-imported module DECLARES; `rmod` here declares NOTHING and only `export import umod.{pick}`. The RUN-XMOD-054 repair`s supply walk enumerated declared exports, so this name got no row in `currentImportDefinersRef`, `declaredConstraintFor` fell to the source-blind bare-name table, and `cmod.pick``s CONSTRAINED row answered for the unconstrained `umod.pick`. Hand-derived from the two declared signatures, not captured: `C.pick (1 : Int)` = `sz 1 + 100` = 101, `pick 1 + 200` = 201; a re-export changes neither binding`s identity. MEASURED KNOWN-BAD at b313d767 in BOTH import orders: `run` 101 then `E-NOT-A-FUNCTION: applied non-function: <dict:>`, `check` exit 0, built binary CORRECT -- three verbs, two answers. ⚠️ Order-INVARIANT, so `import_order` reports it \"invariant\" and PASSES on the broken compiler",
@@ -3170,7 +3236,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 275
+tableRows = 281
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

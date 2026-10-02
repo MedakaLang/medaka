@@ -1379,7 +1379,7 @@ ieSnapZero : (List (Int, ImplUniverse), ImplUniverse)
 ieTyBlob : Ty
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUniverseAt : Int -> ImplEnv -> ImplUniverse
-ifaceAtMonoId : Int -> List Mono -> List String -> Option String
+ifaceAtMonoId : Int -> List Mono -> List IfaceRef -> Option IfaceRef
 ifaceDfsCycle : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> CeRow -> List String
 ifaceDfsCycleOneSuper : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> TyConOrigin -> String -> List String
 ifaceDfsCycleSupers : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> List Super -> List String
@@ -1389,7 +1389,7 @@ ifaceExportsIndex : Unit -> Map String (List (String, List String))
 ifaceForConstraintId : Int -> IfaceRef
 ifaceForConstraintIdGo : Int -> List UObligation -> IfaceRef
 ifaceForInferredId : String -> Int -> IfaceRef
-ifaceFromDictApps : Int -> List PendingDictApp -> String
+ifaceFromDictApps : Int -> List PendingDictApp -> IfaceRef
 ifaceMethodEVars : IfaceMethod -> List String
 ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
 ifaceMethodName : String -> Bool

@@ -1,0 +1,12 @@
+export interface Sh a where
+  sh : a -> String
+  shl : a -> String
+  shl x = "B[" ++ sh x ++ "]"
+
+impl Sh Int where
+  sh n = "b" ++ intToString n
+
+public export data Box a = Box a
+
+impl Sh (Box a) requires Sh a where
+  sh (Box v) = "box" ++ sh v
