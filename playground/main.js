@@ -225,7 +225,7 @@ function setStatus(msg, cls) {
 function killRunner(reason) {
   if (activeRunner) { activeRunner.terminate(); activeRunner = null; }
   if (killTimer)    { clearTimeout(killTimer); killTimer = null; }
-  if (reason) appendConsole('con-stderr', '\n[' + reason + ']\n');
+  if (reason) appendConsole('con-stderr', '\n' + reason + '\n');
   runBtn.disabled = false;
   setStatus('killed', 'error');
 }
@@ -452,14 +452,14 @@ async function runProgram() {
   const runner = new Worker('worker.js');
   activeRunner = runner;
 
-  killTimer = setTimeout(() => killRunner('killed: time limit'), RUN_TIMEOUT_MS);
+  killTimer = setTimeout(() => killRunner(`stopped after ${RUN_TIMEOUT_MS / 1000} s (the playground's time limit)`), RUN_TIMEOUT_MS);
 
   runner.onmessage = (e) => {
-    const { type, text, message } = e.data;
+    const { type, text, message, shown } = e.data;
     if (type === 'stdout') appendConsole('con-stdout', text);
     else if (type === 'stderr') appendConsole('con-stderr', text);
     else if (type === 'error') {
-      appendConsole('con-stderr', '\n[' + message + ']\n');
+      if (!shown) appendConsole('con-stderr', '\n' + message + '\n');
       clearTimeout(killTimer); killTimer = null;
       activeRunner = null;
       runBtn.disabled = false;

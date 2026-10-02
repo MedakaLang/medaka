@@ -17,6 +17,7 @@
 // replaces the old three-pane stdout/stderr/problems layout — stdout renders
 // plain, stderr/problems render inline in that same pane (see main.js).
 import { chromium } from 'playwright';
+import fs from 'node:fs';
 
 const [, , BASE_URL, SCREENSHOT_DIR] = process.argv;
 if (!BASE_URL || !SCREENSHOT_DIR) {
@@ -69,6 +70,23 @@ function setSource(page, src) {
     const v = window.__mdkView;
     v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: s } });
   }, src);
+}
+
+// Battery program sources are read from test/visitor_battery/, never copied.
+const batterySource = (name) =>
+  fs.readFileSync(new URL(`../../../test/visitor_battery/${name}.mdk`, import.meta.url), 'utf8');
+
+// Runs `name` through the page and returns the console text once Run re-enables.
+async function runBattery(page, name, timeout = 30000) {
+  await setSource(page, batterySource(name));
+  await page.waitForSelector('#run-btn:not([disabled])', { timeout: 15000 });
+  await page.click('#run-btn');
+  await page.waitForFunction(
+    () => !document.querySelector('#run-btn').disabled
+      && /runtime error|stack overflow|not available|native-only|stopped after|error\]|\n/.test(document.querySelector('#console').textContent),
+    null, { timeout });
+  await page.waitForTimeout(300);
+  return (await page.$eval('#console', (el) => el.textContent)).trim();
 }
 
 async function main() {
@@ -489,6 +507,32 @@ async function main() {
         check(`stdlib "← Playground" back link resolves (${backHref} -> ${backStatus})`, backStatus === 200);
         await page.screenshot({ path: `${SCREENSHOT_DIR}/13_stdlib_module.png` });
       }
+    }
+
+    // Console truthfulness (#3691): each message appears once, names the real cause.
+    {
+      console.log('Test: console tells the truth');
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('.cm-editor .cm-content', { timeout: 15000 });
+      const div = await runBattery(page, '13_int_div_zero');
+      check('13 div-by-zero: runtime error shown exactly once, unbracketed',
+        div.split('division by zero').length === 2 && !div.includes('[runtime error'), JSON.stringify(div));
+      const rec = await runBattery(page, '14_deep_recursion');
+      check('14 deep recursion: names the browser stack limit',
+        rec.includes('stack overflow: recursion too deep for the browser; the native compiler has a larger stack')
+          && !rec.includes('instantiate failed'), JSON.stringify(rec));
+      const stdin = await runBattery(page, '34_stdin');
+      check('34 readLine: names the extern as unavailable in the browser',
+        stdin.includes('readLine is not available in the browser playground')
+          && !stdin.includes('compiler trap'), JSON.stringify(stdin));
+      const asy = await runBattery(page, '49_async');
+      check('49 import async: says the module is native-only',
+        asy.includes('native-only and not available in the browser playground')
+          && !asy.includes('unknown module'), JSON.stringify(asy));
+      const inf = await runBattery(page, '51_infinite_loop', 40000);
+      check('51 infinite loop: states the time limit',
+        inf.includes("stopped after 10 s (the playground's time limit)")
+          && !inf.includes('killed: time limit'), JSON.stringify(inf));
     }
 
     if (pageErrors.length) {
