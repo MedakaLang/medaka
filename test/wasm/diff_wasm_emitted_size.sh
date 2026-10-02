@@ -79,8 +79,15 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    Int operators and shifts every module that does Int arithmetic now carries
 #    (`intRuntimeLines`, about +1.2% bytes on the modules corpus); and seventeen
 #    new overflow/shift fixtures.
-MODULES_BYTES_CEIL=3450000
-MODULES_FUNCS_CEIL=5000
+#    Re-baselined for #3298 to the measured 3495311 B / 5445 funcs (F1-floor
+#    ratio 3586), with no headroom.  The `Debug`/`Display` impls for `Option`
+#    and `Result` now parenthesize a nested payload through `derivedShowWrap`,
+#    and DCE keeps those impls whole, so nearly every modules program carries
+#    that wrap: three core functions plus the nine-function UTF-8 codec that
+#    `stringToChars` pulls in.  Over the measured 3315557 B / 4816 funcs
+#    without the wrap, that is about +3 KB and +11 funcs per program.
+MODULES_BYTES_CEIL=3495311
+MODULES_FUNCS_CEIL=5445
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
@@ -109,7 +116,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=3300   # emitted-funcs/F1-floor * 1000, headroom over measured
+MODULES_F1_RATIO_CEIL_X1000=3586   # emitted-funcs/F1-floor * 1000; measured for #3298, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node

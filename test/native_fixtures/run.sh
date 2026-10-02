@@ -205,7 +205,7 @@ Ok granted"
 grant_case method "Ok granted
 Ok grantedgranted
 Ok granted
-Ok echo cfg/a.txt
+Ok (echo cfg/a.txt)
 Ok granted
 [Ok granted]"
 grant_case partial_write "Ok ()
@@ -354,11 +354,11 @@ method: Err cfg/../secret.txt $outside [\"cfg/*\"]
 poly: Err cfg/../secret.txt $outside [\"cfg/*\"]
 partial method: Err cfg/../secret.txt $outside [\"cfg/*\"]
 partial write: Err cfg/../pwned.txt $outside [\"cfg/*\"]"
-confine_case cwd other "Ok other granted
-Err cfg/../../cfg/a.txt $outside [\"cfg/*\"]"
-confine_case join . "Ok top secret
+confine_case cwd other "Ok (other granted)
+Err (cfg/../../cfg/a.txt $outside [\"cfg/*\"])"
+confine_case join . "Ok (top secret)
 Ok granted
-Err outdir/../secret.txt $outside [\"cfg/a.txt\", \"outdir/*\"]"
+Err (outdir/../secret.txt $outside [\"cfg/a.txt\", \"outdir/*\"])"
 confine_case exists_panic . "True" panic
 confine_case canonicalize_panic . "True" panic
 # A binding's grants follow its identity, never its spelling: a helper named like
@@ -436,8 +436,8 @@ deep_case() {
     bad "confine_deep_cwd" "expected [$1], run printed [$out_run], build printed [$out_build]"
   fi
 }
-deep_case "Err cfg/a.txt $outside [\"cfg/*\"]
-Err cfg/../secret.txt $outside [\"cfg/*\"]"
+deep_case "Err (cfg/a.txt $outside [\"cfg/*\"])
+Err (cfg/../secret.txt $outside [\"cfg/*\"])"
 
 echo
 

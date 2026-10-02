@@ -1,5 +1,5 @@
 # META
-source_lines=2244
+source_lines=2231
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -586,52 +586,39 @@ export impl Display (a, b, c, d, e) requires Display a, Display b, Display c, Di
    convention of parenthesizing negative numeric literals in argument
    position. -}
 derivedShowWrap : String -> String
--- Called only from generated `deriving` code (desugar.mdk's `showFieldPart`),
--- never from source text in this tree, so the dead-code rule can't see the
--- (real) call site.
--- lint-disable-next-line rule-dead-code
-derivedShowWrap s
-  | derivedArgNeedsParens s = "(\{s})"
-  | otherwise = s
+-- Callers: the `Debug`/`Display` impls for `Option` and `Result` above, and the
+-- generated `deriving` code (desugar.mdk's `showFieldPart`). Every wasm program
+-- that keeps those impls ships this cluster, so it is written with `if` rather
+-- than guards (a guard chain emits a non-exhaustive-match trap body per
+-- function) and scans one `stringToChars` array.
+derivedShowWrap s = if derivedArgNeedsParens s then "(" ++ s ++ ")" else s
 
 derivedArgNeedsParens : String -> Bool
--- Reached only from `derivedShowWrap`'s own generated-code call above, same
--- invisible-to-the-rule reason.
--- lint-disable-next-line rule-dead-code
-derivedArgNeedsParens s
-  | stringLength s == 0 = False
-  | derivedIsQuoteChar (arrayGetUnsafe 0 (stringToChars s)) = False
-  | arrayGetUnsafe 0 (stringToChars s) == '-' = True
-  | otherwise = derivedHasTopLevelSpace (stringToChars s) 0 (stringLength s) 0
-
-derivedIsQuoteChar : Char -> Bool
--- Reached only from `derivedArgNeedsParens` in this same generated-code-only
--- cluster.
--- lint-disable-next-line rule-dead-code
-derivedIsQuoteChar c = c == '"' || c == '\''
+derivedArgNeedsParens s =
+  if stringLength s == 0 then
+    False
+  else
+    let chars = stringToChars s
+    let c = arrayGetUnsafe 0 chars
+    if c == '"' || c == '\'' then
+      False
+    else
+      c == '-' || derivedHasTopLevelSpace chars 0 (stringLength s) 0
 
 derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
--- Reached only from `derivedArgNeedsParens` in this same generated-code-only
--- cluster.
--- lint-disable-next-line rule-dead-code
-derivedHasTopLevelSpace chars i n depth
-  | i >= n = False
-  | arrayGetUnsafe i chars == ' ' && depth == 0 = True
-  | otherwise =
-    derivedHasTopLevelSpace
-      chars
-      (i + 1)
-      n
-      (derivedNextDepth (arrayGetUnsafe i chars) depth)
-
-derivedNextDepth : Char -> Int -> Int
--- Reached only from `derivedHasTopLevelSpace` in this same generated-code-only
--- cluster.
--- lint-disable-next-line rule-dead-code
-derivedNextDepth c depth
-  | c == '(' || c == '[' || c == '{' = depth + 1
-  | c == ')' || c == ']' || c == '}' = depth - 1
-  | otherwise = depth
+derivedHasTopLevelSpace chars i n depth =
+  if i >= n then
+    False
+  else
+    let c = arrayGetUnsafe i chars
+    if c == ' ' && depth == 0 then
+      True
+    else if c == '(' || c == '[' || c == '{' then
+      derivedHasTopLevelSpace chars (i + 1) n (depth + 1)
+    else if c == ')' || c == ']' || c == '}' then
+      derivedHasTopLevelSpace chars (i + 1) n (depth - 1)
+    else
+      derivedHasTopLevelSpace chars (i + 1) n depth
 
 -- # Hashing
 
@@ -2317,8 +2304,6 @@ eqGo : Eq a => Array a -> Array a -> Int -> Int -> Bool
 arrItems : Array a -> Int -> Int -> List a
 displayListItems : Display a => List a -> String
 displayArrayItems : Display a => Array a -> Int -> Int -> String
-derivedIsQuoteChar : Char -> Bool
-derivedNextDepth : Char -> Int -> Int
 derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
 derivedArgNeedsParens : String -> Bool
 derivedShowWrap : String -> String

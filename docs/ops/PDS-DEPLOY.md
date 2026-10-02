@@ -1,15 +1,16 @@
 # PDS-DEPLOY.md — deploying `pds serve` behind Caddy under systemd
 
-**Status:** IMPLEMENTED, not yet DEPLOYED. The bind, the refusal, and the
+**Status:** IMPLEMENTED and DEPLOYED. The bind, the refusal, and the
 artifacts below are landed (`#2606`, `#2757`, sprint `pds-leaves-loopback`),
 and sprint `pds-it-runs-on-the-box` (#2960, #2965, #2964, #2958, #2959, #2970)
 landed build provenance (`--stamp-build`, `--version`), a health probe
 (`GET /xrpc/_health`), one access-log line per request, and a hardened
 `pds.service`/`Caddyfile` linted by their own gate — see "Versioned releases
 and rollback" and "Observability: version, health, and the access log" below.
-But no live deploy has happened — pointing a real domain at a real key is a
-manual, deliberate act for whoever runs this procedure, and this document
-describes how, not a completed deployment.
+A live instance serves `pds.medaka-lang.dev`, hosting the language's own
+Bluesky account (`pds/README.md`). Pointing a real domain at a real key is
+still a manual, deliberate act for whoever runs this procedure: this document
+describes how, and is not a record of that deployment.
 
 ---
 

@@ -274,7 +274,7 @@ main = println (readConfig "../secret.txt")
 ```
 
 ```medaka-expect
-Err cfg/../secret.txt is outside the granted authority ["cfg/*"]
+Err (cfg/../secret.txt is outside the granted authority ["cfg/*"])
 ```
 
 The same holds for a symlink inside `cfg/` that points out of it, and for a file

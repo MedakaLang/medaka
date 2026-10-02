@@ -128,18 +128,17 @@ const enc = (s) => new TextEncoder().encode(s);
 const dec = (a) => new TextDecoder('utf8').decode(new Uint8Array(a));
 
 // Compile the wasm bytes to a WebAssembly.Module ONCE and reuse it across every
-// guest run.  This is load-bearing for the deep-recursion paths (a full
-// typecheck of core.mdk recurses thousands of frames in the lexer's layout pass):
-// passing raw BYTES to instantiate recompiles with V8's baseline (Liftoff) tier
-// on every call, whose stack frames are large enough to overflow a Web Worker's
-// small stack.  Reusing one Module lets V8 tier it up to TurboFan (much smaller
-// frames), which fits.  Keyed on the caller's stable wasm object reference (the
+// guest run.  Passing raw BYTES to instantiate recompiles with V8's baseline
+// (Liftoff) tier on every call.  Reusing one Module lets V8 tier it up to
+// TurboFan, whose smaller frames let a deep recursion go about 2.6x deeper
+// before a Web Worker's small stack overflows (measured for #3688).  Keyed on
+// the caller's stable wasm object reference (the
 // language worker holds one Uint8Array for its lifetime).
 // A single global slot: the playground only ever runs ONE wasm (playground.wasm),
 // so cache the first compiled Module and reuse it for every call — even when the
 // caller hands us a fresh Uint8Array/ArrayBuffer each time (the run compiler
 // worker clones the bytes per message).  Reusing one Module is what lets V8 keep
-// tiering it up (Liftoff→TurboFan) across calls so the deep-recursion paths fit.
+// tiering it up (Liftoff→TurboFan) across calls.
 let _compiledModule = null;
 let _compiledLen = 0;
 function compiledModuleFor(wasmModuleOrBytes) {
@@ -322,8 +321,7 @@ const NATIVE_ONLY_EXTERNS = new Set([
   'netSend', 'netSendFrom', 'netRecv', 'netShutdown', 'netClose', 'netCloseListener',
   'netSetTimeout', 'netSetNonblock', 'netTryAccept', 'netTryRecv', 'netTrySend',
 ]);
-// `async` is listed because it imports `time`.
-const NATIVE_ONLY_MODULES = new Set(['time', 'fs', 'net', 'io', 'math', 'async']);
+const NATIVE_ONLY_MODULES = new Set(['time', 'fs', 'net', 'io', 'math']);
 
 function nativeOnlyMessage(text) {
   const ext = /unbound variable '([A-Za-z0-9_]+)'/.exec(text);
@@ -359,11 +357,11 @@ function trapDiagnostic(e) {
   return synthErr(err ? msg + '\n' + err : msg);
 }
 
-// True for a stack-overflow thrown out of the guest.  The compiler's front end
-// recurses deeply (the lexer's layout pass is ~one frame per token, thousands
-// deep on core.mdk).  On the FIRST run V8 executes the module with its baseline
-// (Liftoff) tier, whose large frames can overflow; a retry re-runs against the
-// now-tiered-up (TurboFan, small-frame) module and fits.  See runGuestRetry.
+// True for a stack-overflow thrown out of the guest.  On the FIRST run V8
+// executes the module with its baseline (Liftoff) tier, whose larger frames
+// overflow sooner; a retry re-runs against the tiered-up (TurboFan) module,
+// which reaches about 2.6x deeper.  A retry cannot rescue unbounded recursion,
+// which overflows the same way on every attempt.  See runGuestRetry.
 function isStackOverflow(e) {
   const m = (e && (e.message || String(e))) || '';
   return /call stack|Maximum call stack|stack (?:size|overflow)/i.test(m);
