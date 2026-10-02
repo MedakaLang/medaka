@@ -1,0 +1,11 @@
+-- `import ma as A` binds no bare method name, so bare `sh` (direct and through a
+-- `Sh a =>` constraint) is `mb.sh` alone and `A.sh` is `ma.sh`.  Prints 3014, 2007.
+import ma as A
+import mb.{Sh, sh}
+
+viaGiven : Sh a => a -> Int
+viaGiven v = sh v
+
+main =
+  println (sh (7 : Int) + A.sh (7 : Int))
+  println (viaGiven (7 : Int))

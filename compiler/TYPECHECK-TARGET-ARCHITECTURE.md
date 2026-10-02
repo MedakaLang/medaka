@@ -3967,6 +3967,13 @@ whether the leg is dead weight.
 
 Landed by the PR that implements **#1507**, sequenced after U1b (§10).
 
+> **Historical names.** This section records the code as U1c found it. The method-scope
+> functions it names (`scopedMethodEntry`, `importedMethodEntry`, `overrideScopedMethods`
+> and its floor entry) are gone; `methodScopeAt` (`compiler/types/typecheck.mdk`) replaced
+> them, and its ladder has no floor: two or more admitted declarations answer `MsMany`, and
+> every single-winner reader then sees no declaration. Read the paragraphs below as the
+> state at U1c, not as the current code.
+
 **Step 0 — the decl-layer / occurrence-layer ruling.** Ratified by the repo owner on
 #1507: [issuecomment-5248859630](https://github.com/MedakaLang/medaka/issues/1507#issuecomment-5248859630)
 — *the class a method-occurrence goal names is the

@@ -2020,7 +2020,7 @@ table = [
   Row {
     entry = "1182-alias-dispatch-half-known-bad/main.mdk",
     label =
-      "The DISPATCH half of an alias-qualified method occurrence -- which impl body actually RUNS, as opposed to whether an obligation exists for it at all (the CHECKED half, the #1276/#1386 rows above). `Blob` implements BOTH `IA` and `IB`; `A.mth Blob` and `B.mth Blob` name TWO DIFFERENT interfaces. Hand-derived answer 1 then 2, each call dispatching to the impl its own alias names -- and that is now what check, run and build all produce. This was a KNOWN-BAD row (pinned 1,1, re-pinned 2,2 at `cdca5045`) while `renameAliasedMethods` erased `A.mth` to a bare `mth` before dispatch was decided: both occurrences then asked `admittedIfaceFor` under the SAME bare name, one last-write-wins row, and collapsed onto ONE impl. #1386 supply fix keeps the spelling through inference, so `admittedIfaceFor` answers per spelling and the row method-set membership is resolved under the ORIGIN name (`ieSelectRowByMethod`). NOT a closure of #1182/#1265, whose subject is a BARE occurrence with two admitted declarations and no spelling to tell them apart. A value change here is a regression in the alias-spelling channel, and a silent one -- the program is accepted on every verb whichever impl runs",
+      "The DISPATCH half of an alias-qualified method occurrence -- which impl body actually RUNS, as opposed to whether an obligation exists for it at all (the CHECKED half, the #1276/#1386 rows above). `Blob` implements BOTH `IA` and `IB`; `A.mth Blob` and `B.mth Blob` name TWO DIFFERENT interfaces. Hand-derived answer 1 then 2, each call dispatching to the impl its own alias names -- and that is now what check, run and build all produce. This was a KNOWN-BAD row (pinned 1,1, re-pinned 2,2 at `cdca5045`) while `renameAliasedMethods` erased `A.mth` to a bare `mth` before dispatch was decided: both occurrences then asked the method scope under the SAME bare name, one last-write-wins row, and collapsed onto ONE impl. #1386 supply fix keeps the spelling through inference, so `methodEntryHere` answers per spelling (an `A.mth` key from `aliasQualifiedMethodEntries`) and the row method-set membership is resolved under the ORIGIN name (`ieSelectRowByMethod`). NOT a closure of #1182/#1265, whose subject is a BARE occurrence with two admitted declarations and no spelling to tell them apart. A value change here is a regression in the alias-spelling channel, and a silent one -- the program is accepted on every verb whichever impl runs",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -2895,6 +2895,270 @@ table = [
     pinned = "",
     codes = [Present "T-AMBIGUOUS-SHADOW-DECL", Absent "T-TYPE-MISMATCH"],
   },
+  Row {
+    entry = "alias-beside-bare-method/main.mdk",
+    label =
+      "SYNTAX.md \"Import aliasing\": `import ma as A` binds `ma`'s methods as `A.sh` only, so beside `import mb.{Sh, sh}` the bare `sh` is `mb.sh` alone (`mb`'s `Sh Int` adds 2000). 2007, hand-derived from the declarations; never `ma`'s 1007 by import order and never an emitter panic",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/wildcard.mdk",
+    label =
+      "the wildcard spelling of the row above: `import ma as A` beside `import mb.*`. The alias still binds no bare name, so `sh` is `mb.sh`: 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/wildcard-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/method-only.mdk",
+    label =
+      "the method-only spelling: `import mb.{sh}` without the interface, beside `import ma as A`. `sh` is `mb.sh`: 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/method-only-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/given.mdk",
+    label =
+      "the given-constraint reader: `f : Sh a => a -> Int; f v = sh v` beside `import ma as A`. `Sh` and `sh` are both `mb`'s, so `f 7` is `mb`'s `Sh Int`: 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/given-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/mono.mdk",
+    label =
+      "the monomorphic reader: `f : Int -> Int; f v = sh v` beside `import ma as A`. `sh` is `mb.sh`: 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/mono-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/both.mdk",
+    label =
+      "both spellings in one module: bare `sh` is `mb.sh` (2007 at 7) and `A.sh` is `ma.sh` (1007 at 7), so 3014. Never 2014 or 4014, one declaration read through both spellings",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3014\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/both-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 3014",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3014\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/reverse.mdk",
+    label =
+      "the mirror of the row above: `import mb as B` beside `import ma.{Sh, sh}`. Bare `sh` is `ma.sh` (1007) and `B.sh` is `mb.sh` (2007): 3014",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3014\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/reverse-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 3014",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3014\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/local-impl.mdk",
+    label =
+      "a local `impl Sh Bool` beside `import ma as A` + `import mb.{Sh, sh}`: the bare `Sh` is `mb`'s, so `sh True` is the local body (5), and `A.sh 1` is `ma`'s `Sh Int` (1001): 1006 on every engine, never an emitter panic",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1006\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/local-impl-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 1006",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1006\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-return-method/main.mdk",
+    label =
+      "a RETURN-position method (`mk : Int -> a`) beside an alias of the other declaring module: `v : Int; v = mk 7` is `mb`'s `Mk Int` (2007), since `import ma as A` binds no bare `mk`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-return-method/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/main.mdk",
+    label =
+      "#3534's `requires` head beside an alias: `mc` writes `import ma as A` and `import mb.{Sh, shl}`, then `impl Both (W a) requires Sh a` whose body calls bare `shl`. Both bare names are `mb`'s, so `both (W 7)` is `mb`'s default `shl` over `mb`'s `Sh Int`: B[b7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: `mc`'s two import clauses swapped (`mcs`), the same B[b7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/both-heads.mdk",
+    label =
+      "two `requires` heads, bare and alias-qualified: `requires Sh a, A.Sh a` beside `import ma as A` + `import mb.{Sh, shl}`, body `A.shl v ++ \"+\" ++ shl v`. `A.shl` is `ma`'s (A<a7>) and bare `shl` is `mb`'s (B[b7])",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/both-heads-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: `mr`'s two import clauses swapped (`mrs`), the same A<a7>+B[b7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/reverse-heads.mdk",
+    label =
+      "the mirror: `import ma.{Sh, shl}` + `import mb as B`, `requires Sh a, B.Sh a`, body `shl v ++ \"+\" ++ B.shl v`. Bare `shl` is `ma`'s and `B.shl` is `mb`'s: A<a7>+B[b7], never B[b7]+B[b7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/reverse-heads-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: `mq`'s two import clauses swapped (`mqs`), the same A<a7>+B[b7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -2906,7 +3170,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 251
+tableRows = 275
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
