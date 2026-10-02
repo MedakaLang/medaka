@@ -473,6 +473,7 @@ import types.registry.{
   SetRegistry,
   sregEmpty,
   sregAddK,
+  sregMemberK,
   sregSize,
 }
 -- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
@@ -7287,7 +7288,7 @@ ieProbeEnv = buildImplEnv [
 -- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
 -- 1
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
-ieUnivConcreteOf (ImplUniverse conc _ _) = conc
+ieUnivConcreteOf (ImplUniverse conc _ _ _) = conc
 
 -- ── ARCH B-2.1-a3: the HEAD-keyed index's corpus, built to DISCRIMINATE ────────
 -- `ieProbeEnv` above cannot grade `ieByHead`: one impl per module means "exactly
@@ -35781,11 +35782,13 @@ methodLevelPredicateSlot typarams tvMap c
 -- order — which is the invariant the ratchet asks a cross-module table to
 -- declare.  They use `mregAppendK`, not `mregAddK`, because within one bucket
 -- the FORWARD declaration order is semantic (`findMatchingImplReqsU`).
+-- The fourth field is not a bucket: it is the set of interface keys that have at
+-- least one impl of ANY head shape, read only by `univHasAnyImpl`.
 data ImplUniverse =
-  | ImplUniverse (MultiRegistry (List Ty, List Require)) (MultiRegistry (List Ty, List Require)) (Registry SetRegistry)
+  | ImplUniverse (MultiRegistry (List Ty, List Require)) (MultiRegistry (List Ty, List Require)) (Registry SetRegistry) SetRegistry
 
 emptyImplUniverse : ImplUniverse
-emptyImplUniverse = ImplUniverse mregEmpty mregEmpty regEmpty
+emptyImplUniverse = ImplUniverse mregEmpty mregEmpty regEmpty sregEmpty
 
 buildImplUniverse : List Decl -> ImplUniverse
 buildImplUniverse prog =
@@ -35920,14 +35923,15 @@ insertUnivImplAt : TabKey ->
   List Require ->
   ImplUniverse ->
   ImplUniverse
-insertUnivImplAt ifk tys reqs (ImplUniverse conc hl tags) =
+insertUnivImplAt ifk tys reqs (ImplUniverse conc hl tags anyImpl) =
+  -- Each key is bound ONCE — Medaka is strict and `regKeyRender` BUILDS a
+  -- string, so a re-minted key is a re-rendered key.  `regInsertCheckedK`
+  -- (`types/registry.mdk`) carries the same warning for the same reason, and
+  -- `check` is GC-bound.
+  let ifkey = regKeyOfTab ifk
+  let anyImpl2 = sregAddK ifkey anyImpl
   match univReceiverTag tys
     Some hk =>
-      -- Each key is bound ONCE — Medaka is strict and `regKeyRender` BUILDS a
-      -- string, so a re-minted key is a re-rendered key.  `regInsertCheckedK`
-      -- (`types/registry.mdk`) carries the same warning for the same reason, and
-      -- `check` is GC-bound.
-      let ifkey = regKeyOfTab ifk
       let hd = dispHeadTab hk
       -- ⚠️ the third bucket is the ACCEPTANCE census, not a dispatch table — see
       -- `univHeadCountsInCensus`.  It is the ONE of these three that an arrow- or
@@ -35936,8 +35940,8 @@ insertUnivImplAt ifk tys reqs (ImplUniverse conc hl tags) =
         (mregAppendK (regKeyNTab [ifk, hd]) (tys, reqs) conc)
         hl
         (univAddIfaceTag (univHeadCountsInCensus tys) ifkey hd tags)
-    None =>
-      ImplUniverse conc (mregAppendK (regKeyOfTab ifk) (tys, reqs) hl) tags
+        anyImpl2
+    None => ImplUniverse conc (mregAppendK ifkey (tys, reqs) hl) tags anyImpl2
 
 -- ✅ #1446 (T2): THE OBLIGATION CHANNEL'S INTERFACE KEY IS AN IDENTITY.  `Predicate`
 -- carries an `IfaceRef` (P1), so `checkOneCallObligation`'s goal side supplies the
@@ -36212,7 +36216,7 @@ firstReqMatch ((tys, reqs) :: rest) args = match implHeadSubst tys args
 -- the number of DISTINCT concrete-head impls of [iface] (headless impls contribute no
 -- tag, exactly as the old implHeadTagsFromHeads skipped them).
 implCountForIfaceU : ImplUniverse -> IfaceRef -> Int
-implCountForIfaceU (ImplUniverse _ _ tags) iface =
+implCountForIfaceU (ImplUniverse _ _ tags _) iface =
   optionOr 0 (map sregSize (regLookupK (regKeyOfTab (oblIfaceKey iface)) tags))
 
 -- the concrete "iface|tag" bucket (empty when the tag is None / no such impl).
@@ -36229,13 +36233,22 @@ univConcreteBucket : ImplUniverse ->
   IfaceRef ->
   Option HeadKey ->
   List (List Ty, List Require)
-univConcreteBucket (ImplUniverse conc _ _) iface (Some hk) =
+univConcreteBucket (ImplUniverse conc _ _ _) iface (Some hk) =
   mregLookupK (regKeyNTab [oblIfaceKey iface, dispHeadTab hk]) conc
 univConcreteBucket _ _ None = []
 
 univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)
-univHeadless (ImplUniverse _ hl _) iface =
+univHeadless (ImplUniverse _ hl _ _) iface =
   mregLookupK (regKeyOfTab (oblIfaceKey iface)) hl
+
+-- Whether [iface]'s declaration has at least one impl anywhere in the universe, of
+-- any head shape: concrete, headless, arrow-, tuple-, effect- or constraint-headed.
+-- `implCountForIfaceU` cannot answer this — its census deliberately drops headless,
+-- arrow-, effect- and constraint-headed impls, so a census count of 0 does not mean
+-- no impl exists.
+univHasAnyImpl : ImplUniverse -> IfaceRef -> Bool
+univHasAnyImpl (ImplUniverse _ _ _ anyImpl) iface =
+  sregMemberK (regKeyOfTab (oblIfaceKey iface)) anyImpl
 
 -- ── Error-path B4: missing-impl dispatch-obligation check ──────────────────
 -- The `No impl of … for …` reject.  For each recorded interface-method occurrence, recover the types the
@@ -36898,9 +36911,10 @@ checkUndeterminedArgs univ iface (a :: rest) loc scope =
 -- error); TWO or more → genuinely ambiguous → AmbiguousImpl (the deliberate
 -- divergence from the oracle's silent first-wins).  RULE 3b (#1180) is the second
 -- spelling of "two or more": one census-counted impl beside a HEADLESS one.  Skip
--- "Num" (its literal defaulting handles ambiguity) and ifaces with no user impls
--- (zero → existing no-impl path).  This runs on BOTH the check path
--- (checkModuleFullImpl) and the emit/eval path, so `check` rejects too.
+-- "Num" (its literal defaulting handles ambiguity).  ZERO impls of the interface
+-- declaration, of any head shape, is `T-NO-IMPL` (OD3's zero arm, #3676).  This
+-- runs on BOTH the check path (checkModuleFullImpl) and the emit/eval path, so
+-- `check` rejects too.
 --
 -- ⚠️ This block used to say the sole-impl case is one "routeUndeterminedTop stamps
 -- concretely".  MEASURED FALSE (sprint `dispatch-must-not-guess`, 1st attempt at
@@ -36972,7 +36986,26 @@ checkUndeterminedObligation univ iface occ loc scope
       "T-AMBIGUOUS-INSTANCE"
       loc
       (ambiguousImplMsg iface.irName)
+  -- OD3's zero arm (#3676): no impl of this interface DECLARATION exists anywhere in
+  -- the program, so the goal has no candidate at all and nothing can discharge it.
+  -- The verdict depends on the goal alone, not on whether the callee's body reads
+  -- the dict.  `univHasAnyImpl` and not `implCountForIfaceU == 0`: the census drops
+  -- headless, arrow-, effect- and constraint-headed impls, and each of those is a
+  -- real candidate that must keep the sole-impl default below.
+  | not (univHasAnyImpl univ iface) =
+    pushNoImplError (qualifiedIfaceLabel iface) loc [occ]
   | otherwise = ()
+
+-- An interface's name qualified by its declaring module (`mb.Sz`), for a diagnostic
+-- that must say WHICH declaration lacks an impl when two modules declare the same
+-- spelling.  An interface with no module origin renders bare, and so does one
+-- declared by the flat single-file entry: `"__user__"` is a synthetic id, not a
+-- name the user wrote (`originPhrase` treats it the same way).
+qualifiedIfaceLabel : IfaceRef -> String
+qualifiedIfaceLabel ir = match ir.irOrigin
+  OriginModule "__user__" => ir.irName
+  OriginModule m => "\{m}.\{ir.irName}"
+  _ => ir.irName
 
 -- PLAN.md #11: after HM + defaulting every source integer literal's type var is
 -- ground (or a genuine `Num a` survivor).  Decide each literal's runtime rep

@@ -1,0 +1,8 @@
+-- No module in any program that loads this one declares an impl of THIS `Sz`.
+export interface Sz a where
+  szNew : Int -> a
+  szTag : a -> Int
+
+export
+roundtrip : Sz a => Int -> Int
+roundtrip n = szTag (szNew n)
