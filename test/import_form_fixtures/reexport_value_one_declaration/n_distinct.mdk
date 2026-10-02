@@ -1,0 +1,7 @@
+-- The control: `ia`'s and `ja`'s declarations are distinct, so each name stays
+-- ambiguous at its use.
+import ma.*
+import mj.*
+
+both : Int
+both = mth 21 + val

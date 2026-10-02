@@ -1318,6 +1318,7 @@ headTyconTy : Ty -> Option HeadKey
 headlessBucketKey : RegKey
 i64RangeText : String
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
+identKeysByName : Map String (List String) -> List (String, Ident) -> Map String (List String)
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
 ieAnyRowForIface : List ImplRow -> IfaceRef -> Bool
 ieBuildSnaps : List ImplRow -> List (Int, ImplUniverse)
@@ -1464,6 +1465,7 @@ importMemberShadow : List (String, List Decl) -> List (String, List String) -> M
 importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : List (String, a) -> List (String, String) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
 importShadowsOfDecl : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> Decl -> List (String, String, Option Ty, Ty, Loc)
+importSupplierKey : String -> Map String (String, String) -> Map String (List String) -> String -> String
 importTableMid : UsePath -> String
 importedBindingWinners : List (String, (Option String, ExportBinding)) -> Map String Unit -> Map String Unit -> List (String, ExportBinding)
 importedBindings : UsePath -> Option (List (String, String))

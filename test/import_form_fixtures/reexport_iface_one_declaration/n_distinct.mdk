@@ -1,0 +1,9 @@
+-- The control: `g`'s `Same` directly and `p`'s through `mid` are two distinct
+-- declarations, so the name stays ambiguous at its use.
+import g.{Same}
+import mid.{Same}
+
+data P a = MkP a
+
+impl Same P where
+  pmth _ = 2
