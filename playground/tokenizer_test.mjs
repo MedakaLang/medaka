@@ -174,5 +174,34 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
         'got ' + t.filter((x) => x.text === 'M').map((x) => x.type));
 }
 
+// P. rows read the same everywhere (#3705 part 1)
+{
+  const t = tokenize('signCommitDigest : SecretKey ->\n  Bytes ->\n  <Sign "commit"> Result String Signature');
+  for (const n of ['SecretKey', 'Bytes', 'Sign', 'Result', 'String', 'Signature']) {
+    check('wrapped signature: ' + n + ' is typeName', typeOf(t, n) === 'typeName', 'got ' + typeOf(t, n));
+  }
+}
+{
+  const t = tokenize('export effect Sign Set   -- spends the key\neffect Audit');
+  check('effect decl: label is typeName', typeOf(t, 'Sign') === 'typeName', 'got ' + typeOf(t, 'Sign'));
+  check('effect decl: domain kind is typeName', typeOf(t, 'Set') === 'typeName', 'got ' + typeOf(t, 'Set'));
+  check('effect decl: bare label is typeName', typeOf(t, 'Audit') === 'typeName', 'got ' + typeOf(t, 'Audit'));
+}
+{
+  const t = tokenize('f : Int ->\n  Result String (Server <Mint {"access", "refresh"}, Sign "commit">)');
+  for (const n of ['Result', 'String', 'Server', 'Mint', 'Sign']) {
+    check('wrapped effect row: ' + n + ' is typeName', typeOf(t, n) === 'typeName', 'got ' + typeOf(t, n));
+  }
+  const u = tokenize('g : Int ->\n  Server <Mint {"a",\n    "b"},\n   Sign "c"> Int');
+  check('row split after `,` keeps Sign typeName', typeOf(u, 'Sign') === 'typeName', 'got ' + typeOf(u, 'Sign'));
+}
+{
+  const src = 'xs = [\n  Some 1,\n  None,\n  Some 2]\nshapes = foo (\n  Circle 1.0,\n  Rect 2.0 3.0\n  )\nr = { a = Some 1,\n  b = Circle 2.0 }\nh = bar {\n  Some 3 }';
+  const t = tokenize(src);
+  const all = t.filter((x) => /^(Some|None|Circle|Rect)$/.test(x.text));
+  check('expression continuation lines keep constructors',
+        all.length === 8 && all.every((x) => x.type === 'constructor'), JSON.stringify(all));
+}
+
 console.log('\n=== ' + pass + ' pass / ' + fail + ' fail ===\n');
 process.exit(fail > 0 ? 1 : 0);
