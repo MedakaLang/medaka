@@ -1,0 +1,7 @@
+import ma as A
+import mb.{Sh, shl}
+
+f : (Sh a, A.Sh a) => a -> String
+f v = A.shl v ++ "+" ++ shl v
+
+main = println (f (7 : Int))

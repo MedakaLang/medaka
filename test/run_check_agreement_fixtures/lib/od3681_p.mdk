@@ -1,0 +1,8 @@
+-- Declares the `Same` the entry modules mean; `Q` carries an impl of it.
+export interface Same f where
+  pmth : f a -> Int
+
+public export data Q a = MkQ a
+
+impl Same Q where
+  pmth _ = 1

@@ -1,0 +1,7 @@
+-- `f` is bound to `g` by the alias and to `f` by the plain member: two
+-- declarations of one module under one name. Every verb owes the located
+-- R-AMBIGUOUS-OCCURRENCE at the use, in either import order.
+import lib.od2decl_a.{g as f}
+import lib.od2decl_a.{f}
+
+main = println (f 1)

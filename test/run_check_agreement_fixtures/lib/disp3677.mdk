@@ -1,0 +1,7 @@
+export interface Disp a where
+  display : a -> String
+  debug : a -> String
+
+impl Disp Int where
+  display n = "mm-display"
+  debug n = "mm-debug"

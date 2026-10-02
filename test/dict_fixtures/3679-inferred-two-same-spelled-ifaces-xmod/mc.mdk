@@ -1,0 +1,4 @@
+import mb as B
+import ma as A
+
+export f2 v = B.shl v ++ "+" ++ A.shl v

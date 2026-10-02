@@ -3821,9 +3821,11 @@ comparing `irName`, and each would change behaviour if re-keyed:
 
 - every **display** surface (`ppSchemeCon` / `renderConstraintCtx`) — otherwise every
   rendered `Num a =>` moves;
-- the **dedup/coverage** currency (`vecOblKey`, `containsVecObl`, `pairsOfVecObls`,
-  `cslotKey`, `censusSuperSlotsOf`) — `cslotKey` decides how many dict slots a constrained
-  fn has, so an identity key would move emitted dict **arity**;
+- the **dedup/coverage** currency (`vecOblKey`, `containsVecObl`, `pairsOfVecObls`).
+  `cslotKey`, which decides how many dict slots a constrained fn has, left this list with
+  #3680: it keys on the declaration (`oblIfaceKey`), so `(A.Sh a, B.Sh a) =>` owns two
+  slots, and the dict arity of every signature without two same-spelled interfaces is
+  unchanged;
 - the **routing** goal (`pushDictApp`'s iface component, `resolveDictApps`) — a route word
   against the spelling-keyed `KeyBuckets`, kept that way by #1317 T1 / the closed S0 #1277;
 - `groupConstraintMonosRef`, whose only reader compares interface names.

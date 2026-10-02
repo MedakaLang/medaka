@@ -1,0 +1,6 @@
+-- The wildcard binds `f` to `f`, the alias binds it to `g`: two declarations
+-- of one module under one name, a located R-AMBIGUOUS-OCCURRENCE.
+import lib.od2decl_a.*
+import lib.od2decl_a.{g as f}
+
+main = println (f 1)

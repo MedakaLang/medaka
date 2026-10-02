@@ -1,0 +1,11 @@
+-- #3677: `import lib.disp3677.{Disp}` names an interface whose methods `display` and
+-- `debug` share their spellings with the prelude's.  Naming an interface binds none of
+-- its method names, so resolve binds both bare occurrences below to the PRELUDE's
+-- methods, and a method-bound occurrence is answered by the declaration resolve bound
+-- (docs/spec/SHADOW-SEMANTICS.md S2-DECL, RULED 2026-10-02).  So this prints the
+-- prelude's `6` and `5`, never `Disp Int`'s `mm-display`/`mm-debug`, on every verb.
+import lib.disp3677.{Disp}
+
+main =
+  println (display (6 : Int))
+  println (debug (5 : Int))

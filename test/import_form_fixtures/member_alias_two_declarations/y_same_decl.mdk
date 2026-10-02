@@ -1,0 +1,8 @@
+-- The controls: every import here binds `f` to `g`, or `h` to `f`, so each
+-- name denotes one declaration however many imports bind it.
+import a.{g as f}
+import a.{g as f, f as h}
+import a.{f as h}
+
+answer : Int
+answer = f 1 + h 1

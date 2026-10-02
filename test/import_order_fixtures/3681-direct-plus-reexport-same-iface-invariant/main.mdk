@@ -1,0 +1,9 @@
+import mid.{Same}
+import p.{Same, pmth}
+
+data P a = MkP a
+
+impl Same P where
+  pmth p = 2
+
+main = println (pmth (MkP 1))

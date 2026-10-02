@@ -1,0 +1,10 @@
+-- One interface method `mth` and one plain value `val`, each declared once.
+export interface IA a where
+  mth : a -> Int
+
+export impl IA Int where
+  mth n = n * 2
+
+export
+val : Int
+val = 42

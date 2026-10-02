@@ -1,0 +1,9 @@
+entry: main.mdk
+what: #3684 control: two distinct declarations of `val` reached through two
+      wildcard re-exports stay ambiguous, and no ordering picks a winner
+
+`iv` declares `val : Int`, `jv` declares `val : String`; `ma` re-exports `iv`,
+`mb` re-exports `jv`. Spec answer, hand-derived: rejected at exit 1 with
+`R-AMBIGUOUS-OCCURRENCE` and no other code in every ordering. Typecheck must not
+choose either declaration either: had it typed `val` as `jv`'s `String` in one
+ordering, that ordering's `codes=` cell would gain `T-NO-IMPL` and diverge.

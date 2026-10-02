@@ -1,0 +1,6 @@
+-- A control: the wildcard and the plain member both bind `f` to `f`.
+import a.*
+import a.{f}
+
+answer : Int
+answer = f 1 + g 1

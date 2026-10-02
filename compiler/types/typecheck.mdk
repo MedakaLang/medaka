@@ -342,6 +342,7 @@ import types.solver_contract.{
 import types.registry.{
   RegKey,
   Registry,
+  identKey,
   regKeyOfTab,
   regKeyRender,
   regEmpty,
@@ -472,6 +473,7 @@ import types.registry.{
   SetRegistry,
   sregEmpty,
   sregAddK,
+  sregMemberK,
   sregSize,
 }
 -- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
@@ -7286,7 +7288,7 @@ ieProbeEnv = buildImplEnv [
 -- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
 -- 1
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
-ieUnivConcreteOf (ImplUniverse conc _ _) = conc
+ieUnivConcreteOf (ImplUniverse conc _ _ _) = conc
 
 -- ── ARCH B-2.1-a3: the HEAD-keyed index's corpus, built to DISCRIMINATE ────────
 -- `ieProbeEnv` above cannot grade `ieByHead`: one impl per module means "exactly
@@ -8263,7 +8265,8 @@ data MethodScope = MsAbsent | MsOne MethodRow | MsMany (List IfaceRef)
 --   own    this module's own interface declares [n];
 --   rung 1 a use-path that binds the METHOD name and witnesses the declaration;
 --   rung 2 only if rung 1 admits nothing: a use-path that names the declaration's
---          INTERFACE and witnesses it (F23, #1351);
+--          INTERFACE and witnesses it (F23, #1351).  Skipped in favour of the
+--          prelude's row for a METHOD-BOUND spelling (below);
 --   prelude the implicit prelude's declaration, reached only when no rung admitted
 --          anything;
 --   alias  only without a prelude row: a module alias whose module carries the
@@ -8282,28 +8285,54 @@ data MethodScope = MsAbsent | MsOne MethodRow | MsMany (List IfaceRef)
 -- carries no discriminator yet reaches rung 1 (`usePathBindsName` is True for every
 -- name under `UseWild`), so `import msb.*` can make rung 1 admit two and answer
 -- `MsMany`; that gap is RUN-METHID-116's and unfixed.
-methodScopeAt : List Decl -> String -> Int -> DeclEnvs -> MethodScope
-methodScopeAt prog n cur envs = match methodCandsAt n cur envs.deMethods
-  [] => MsAbsent
-  [only] => MsOne only
-  cs => methodOwnScope prog n cs
+--
+-- [standalone] says whether a standalone function binds [n] in this module (an
+-- importer or definer shadow, `standaloneValuesRef`).  When none does, the spelling is
+-- METHOD-BOUND: resolve bound a bare occurrence of it through this module's own
+-- interface, a use-path naming the method (rung 1), or the prelude, and through
+-- nothing else, since `import m.{I}` and `import m as A` bind no bare method name.
+-- That declaration answers the occurrence (docs/spec/SHADOW-SEMANTICS.md S2-DECL,
+-- "a method-bound occurrence"), so a prelude row outranks rung 2 there.  Rung 2 still
+-- answers a method-bound spelling with no prelude row: resolve rejects every bare
+-- occurrence of it, so only readers that answer no occurrence (an `impl` this module
+-- writes, say) see that answer.  A standalone-bound spelling keeps the whole ladder,
+-- which is S2-DECL (c)'s admitted set.
+methodScopeAt : Bool -> List Decl -> String -> Int -> DeclEnvs -> MethodScope
+methodScopeAt standalone prog n cur envs =
+  match methodCandsAt n cur envs.deMethods
+    [] => MsAbsent
+    [only] => MsOne only
+    cs => methodOwnScope standalone prog n cs
 
-methodOwnScope : List Decl -> String -> List MethodRow -> MethodScope
-methodOwnScope prog n cs = match ownMethodIdent prog n
+methodOwnScope : Bool -> List Decl -> String -> List MethodRow -> MethodScope
+methodOwnScope standalone prog n cs = match ownMethodIdent prog n
   Some ident => match methodRowById ident cs
     Some r => MsOne r
-    None => methodImportedScope prog n cs
-  None => methodImportedScope prog n cs
+    None => methodImportedScope standalone prog n cs
+  None => methodImportedScope standalone prog n cs
 
-methodImportedScope : List Decl -> String -> List MethodRow -> MethodScope
-methodImportedScope prog0 n cs =
+methodImportedScope : Bool ->
+  List Decl ->
+  String ->
+  List MethodRow ->
+  MethodScope
+methodImportedScope standalone prog0 n cs =
   let prog = writtenImportsOf prog0
   match filterList (r => methodCandImported prog n (methodRowCand r)) cs
     [only] => MsOne only
-    [] => match filterList (r => methodCandAdmitted prog n (methodRowCand r)) cs
-      [only] => MsOne only
-      rung2 => methodUndecided prog n cs rung2
+    [] => match if standalone then None else methodPreludeRow n cs
+      Some r => MsOne r
+      None =>
+        match filterList (r => methodCandAdmitted prog n (methodRowCand r)) cs
+          [only] => MsOne only
+          rung2 => methodUndecided prog n cs rung2
     rung1 => methodUndecided prog n cs rung1
+
+-- The implicit prelude's declaration of [n], when it is one of [cs].
+methodPreludeRow : String -> List MethodRow -> Option MethodRow
+methodPreludeRow n cs = do
+  ident <- mkIdent NsMethod (OriginModule "core") n
+  methodRowById ident cs
 
 -- [prog] without the method imports `deAliasMethodImports` appends beside each
 -- `import m as A`.  That import exists so the elaborated tree has the origin name the
@@ -8338,11 +8367,9 @@ methodUndecided : List Decl ->
   List MethodRow ->
   List MethodRow ->
   MethodScope
-methodUndecided prog n cs [] = match mkIdent NsMethod (OriginModule "core") n
+methodUndecided prog n cs [] = match methodPreludeRow n cs
+  Some r => MsOne r
   None => methodAliasedScope prog n cs
-  Some ident => match methodRowById ident cs
-    Some r => MsOne r
-    None => methodAliasedScope prog n cs
 methodUndecided _ _ _ admitted =
   MsMany (sortIfaceRefs (map methodRowIface admitted))
 
@@ -8376,7 +8403,13 @@ methodScopeHere n = match perRun.value.methodScopeCtxRef.value
   Some (prog, cur) => match omLookup n perRun.value.methodScopeMemoRef.value
     Some s => s
     None =>
-      let s = methodScopeAt prog n cur driverState.value.declEnvsRef.value
+      let s =
+        methodScopeAt
+          (omHasKey n driverState.value.standaloneValuesRef.value)
+          prog
+          n
+          cur
+          driverState.value.declEnvsRef.value
       perRun.value.methodScopeMemoRef :=
         omInsert n s perRun.value.methodScopeMemoRef.value
       s
@@ -15749,6 +15782,7 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef =
     None => standaloneValueBindingEmit env name tagRef
   match selected
     Some value =>
+      let _ = rejectAdmittedValueOccurrence name
       let sym = routeLocalSym !tagRef
       let occurrence =
         instantiateStandaloneOccurrence env name sym !currentLoc value
@@ -17700,18 +17734,21 @@ firstOrZero : List Int -> Int
 firstOrZero [] = 0
 firstOrZero (x :: _) = x
 
--- U1b (#1482): the `CSlot` analogue's key.  ⚠️ Keyed on the interface SPELLING,
--- deliberately — this key feeds the dedup that decides how many dict slots a constrained
--- fn has, so keying it on identity would give two same-spelled interfaces two slots where
--- today they share one, moving emitted dict ARITY.  That is a separate judgment with a
--- different blast radius (#1425's ground), and neither U1b nor S-slot-key-vector makes it:
--- the latter widens on the predicate's ARGUMENT VECTOR (`cslotVecKey`), never on identity.
--- ⚠️ NOT a dedup key on its own any more — the only `dedupBy` over slots is
--- `dedupSlotVecs`, over `cslotVecKey`.  The vector-free `dedupSlots` that used to live
--- here was deleted with #1866: keeping it would have let a reader dedup slots without
--- their vectors, which is exactly the collapse that slice removed.
+-- U1b (#1482): the `CSlot` analogue's key.  Keyed on the interface's DECLARATION
+-- (`oblIfaceKey`: origin module plus name), not its spelling.  This key feeds the dedup
+-- that decides how many dict slots a constrained fn has, so two declarations that share a
+-- spelling, `(A.Sh a, B.Sh a) => …`, are two predicates and get two slots; each method
+-- occurrence then reads the slot of the interface its own name resolved to (#3680,
+-- #3679).  The same interface written twice, `(Sh a, Sh a)`, still keys identically and
+-- shares one slot.  An interface whose origin is unrecoverable (`OriginUnresolved`) keys
+-- on its bare name.
+-- It is never a dedup key on its own: the only `dedupBy` over slots is
+-- `dedupSlotVecs`, over `cslotVecKey`.  A slot dedup without the vectors would merge
+-- two slots that differ only in their vectors.
 cslotKey : CSlot -> String
-cslotKey s = lenKey s.csIface.irName ++ intToString s.csId
+cslotKey s =
+  lenKey (regKeyRender (regKeyOfTab (oblIfaceKey s.csIface)))
+    ++ intToString s.csId
 
 -- S-slot-key-vector (#1866): THE dict-slot identity — `cslotKey` plus the predicate's
 -- argument vector.  Exactly the widening `vecOblKey` already carries on the obligation
@@ -22153,6 +22190,7 @@ maybeStandaloneValueMono : TcEnv -> String -> Option Mono
 maybeStandaloneValueMono env name =
   map
     (value =>
+      let _ = rejectAdmittedValueOccurrence name
       (instantiateStandaloneOccurrence
         env
         name
@@ -22160,6 +22198,19 @@ maybeStandaloneValueMono env name =
         !currentLoc
         value).svoInstance.mtiBody)
     (standaloneValueBinding env name)
+
+-- S2-DECL (d) for a VALUE occurrence of an importer shadow (`ap2 mth`, `g = mth`,
+-- `flip mth`): no argument is applied, so no admitted declaration's own receiver can be
+-- evaluated, and with two or more admitted the declarations have not been shown to
+-- agree.  That is the located reject, in every import order.  The standalone still
+-- types the occurrence, as at the applied arms' reject.  A definer shadow denotes its
+-- own module's standalone and is never ambiguous.
+rejectAdmittedValueOccurrence : String -> Unit
+rejectAdmittedValueOccurrence name
+  | isDefinerShadow name = ()
+  | otherwise =
+    let ifs = methodAdmittedHere name
+    if listLen ifs >= 2 then pushAmbiguousShadowDecl name ifs !currentLoc
 
 -- A selected standalone value contributes its own forcing row and constraints.
 -- Preparing a method candidate must not charge this alternate binding.
@@ -35776,11 +35827,13 @@ methodLevelPredicateSlot typarams tvMap c
 -- order — which is the invariant the ratchet asks a cross-module table to
 -- declare.  They use `mregAppendK`, not `mregAddK`, because within one bucket
 -- the FORWARD declaration order is semantic (`findMatchingImplReqsU`).
+-- The fourth field is not a bucket: it is the set of interface keys that have at
+-- least one impl of ANY head shape, read only by `univHasAnyImpl`.
 data ImplUniverse =
-  | ImplUniverse (MultiRegistry (List Ty, List Require)) (MultiRegistry (List Ty, List Require)) (Registry SetRegistry)
+  | ImplUniverse (MultiRegistry (List Ty, List Require)) (MultiRegistry (List Ty, List Require)) (Registry SetRegistry) SetRegistry
 
 emptyImplUniverse : ImplUniverse
-emptyImplUniverse = ImplUniverse mregEmpty mregEmpty regEmpty
+emptyImplUniverse = ImplUniverse mregEmpty mregEmpty regEmpty sregEmpty
 
 buildImplUniverse : List Decl -> ImplUniverse
 buildImplUniverse prog =
@@ -35829,26 +35882,9 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- third producer** — `recordImplObligation` now records `iface`, the identity-carrying
 -- `IfaceRef` `methodEntryHere` already held, instead of stripping it via
 -- `ifaceRefBare iface.irName` — so by the census rule stated then, every REMAINING
--- `ifaceRefBare` call site IS the definition (`:3850-3851`) or the deliberately-bare
--- `pendingDictApps` route-word fallback in `ifaceForInferredId` (§10.3).
---
--- ⚠️ THAT FALLBACK IS NOT SAFELY DISMISSED AS "A ROUTE WORD, NOT A GOAL PRODUCER" —
--- an earlier revision of this paragraph said so and it was not established, only
--- assumed from the fallback's OWN call site (`pushDictApp`'s routing arg). TRACED,
--- not instrumented: `ifaceForInferredId`'s result is written by `registerInferredFor`
--- directly into `funConstraintIfacesRef` (`map (ifaceForInferredId m) ids`); that
--- table is read by `declaredConstraintFor`'s `None` arm (when `qualConstraintFor`
--- misses); `declaredConstraintFor` feeds `inferDictAtFound`, which calls
--- `recordCallObligations`, which calls `recordObl (Predicate { iface = s.csIface, … })
--- 0 PCallSlot …` — an `ImplUniverse` goal, unconditionally, for any slot whose
--- `csIface.irName /= ""`. So the SAME value this fallback mints reaches BOTH a
--- routing site AND a goal-producing one, through two different readers of
--- `funConstraintIfacesRef`. Bare BY CONSTRUCTION (this channel stores route words,
--- §10.3's still-true half) — but that is a FOURTH reason the leg stays, not evidence
--- the fallback is goal-producer-free. Not independently re-derived whether a program
--- can actually DRIVE this path to a bare, non-"" `csIface` at a live call site
--- (`ifaceForConstraintId`/`lookupSchemeIface` are tried first and may already cover
--- every reachable case) — flag this as unresolved rather than assume either answer.
+-- `ifaceRefBare` call site IS the definition or a reader that holds only a spelling.
+-- `ifaceForInferredId`'s `pendingDictApps` fallback mints none: it returns the
+-- callee slot's `pdaIfaces` entry, declaration included.
 --
 -- ⚠️ 🚨 **AND THE LEG STILL MAY NOT BE DELETED — MEASURED, NOT INFERRED FROM THE
 -- CENSUS ABOVE.**  Zero remaining `ifaceRefBare` *goal-producer* call sites does not by
@@ -35932,14 +35968,15 @@ insertUnivImplAt : TabKey ->
   List Require ->
   ImplUniverse ->
   ImplUniverse
-insertUnivImplAt ifk tys reqs (ImplUniverse conc hl tags) =
+insertUnivImplAt ifk tys reqs (ImplUniverse conc hl tags anyImpl) =
+  -- Each key is bound ONCE — Medaka is strict and `regKeyRender` BUILDS a
+  -- string, so a re-minted key is a re-rendered key.  `regInsertCheckedK`
+  -- (`types/registry.mdk`) carries the same warning for the same reason, and
+  -- `check` is GC-bound.
+  let ifkey = regKeyOfTab ifk
+  let anyImpl2 = sregAddK ifkey anyImpl
   match univReceiverTag tys
     Some hk =>
-      -- Each key is bound ONCE — Medaka is strict and `regKeyRender` BUILDS a
-      -- string, so a re-minted key is a re-rendered key.  `regInsertCheckedK`
-      -- (`types/registry.mdk`) carries the same warning for the same reason, and
-      -- `check` is GC-bound.
-      let ifkey = regKeyOfTab ifk
       let hd = dispHeadTab hk
       -- ⚠️ the third bucket is the ACCEPTANCE census, not a dispatch table — see
       -- `univHeadCountsInCensus`.  It is the ONE of these three that an arrow- or
@@ -35948,8 +35985,8 @@ insertUnivImplAt ifk tys reqs (ImplUniverse conc hl tags) =
         (mregAppendK (regKeyNTab [ifk, hd]) (tys, reqs) conc)
         hl
         (univAddIfaceTag (univHeadCountsInCensus tys) ifkey hd tags)
-    None =>
-      ImplUniverse conc (mregAppendK (regKeyOfTab ifk) (tys, reqs) hl) tags
+        anyImpl2
+    None => ImplUniverse conc (mregAppendK ifkey (tys, reqs) hl) tags anyImpl2
 
 -- ✅ #1446 (T2): THE OBLIGATION CHANNEL'S INTERFACE KEY IS AN IDENTITY.  `Predicate`
 -- carries an `IfaceRef` (P1), so `checkOneCallObligation`'s goal side supplies the
@@ -36224,7 +36261,7 @@ firstReqMatch ((tys, reqs) :: rest) args = match implHeadSubst tys args
 -- the number of DISTINCT concrete-head impls of [iface] (headless impls contribute no
 -- tag, exactly as the old implHeadTagsFromHeads skipped them).
 implCountForIfaceU : ImplUniverse -> IfaceRef -> Int
-implCountForIfaceU (ImplUniverse _ _ tags) iface =
+implCountForIfaceU (ImplUniverse _ _ tags _) iface =
   optionOr 0 (map sregSize (regLookupK (regKeyOfTab (oblIfaceKey iface)) tags))
 
 -- the concrete "iface|tag" bucket (empty when the tag is None / no such impl).
@@ -36241,13 +36278,22 @@ univConcreteBucket : ImplUniverse ->
   IfaceRef ->
   Option HeadKey ->
   List (List Ty, List Require)
-univConcreteBucket (ImplUniverse conc _ _) iface (Some hk) =
+univConcreteBucket (ImplUniverse conc _ _ _) iface (Some hk) =
   mregLookupK (regKeyNTab [oblIfaceKey iface, dispHeadTab hk]) conc
 univConcreteBucket _ _ None = []
 
 univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)
-univHeadless (ImplUniverse _ hl _) iface =
+univHeadless (ImplUniverse _ hl _ _) iface =
   mregLookupK (regKeyOfTab (oblIfaceKey iface)) hl
+
+-- Whether [iface]'s declaration has at least one impl anywhere in the universe, of
+-- any head shape: concrete, headless, arrow-, tuple-, effect- or constraint-headed.
+-- `implCountForIfaceU` cannot answer this — its census deliberately drops headless,
+-- arrow-, effect- and constraint-headed impls, so a census count of 0 does not mean
+-- no impl exists.
+univHasAnyImpl : ImplUniverse -> IfaceRef -> Bool
+univHasAnyImpl (ImplUniverse _ _ _ anyImpl) iface =
+  sregMemberK (regKeyOfTab (oblIfaceKey iface)) anyImpl
 
 -- ── Error-path B4: missing-impl dispatch-obligation check ──────────────────
 -- The `No impl of … for …` reject.  For each recorded interface-method occurrence, recover the types the
@@ -36910,9 +36956,10 @@ checkUndeterminedArgs univ iface (a :: rest) loc scope =
 -- error); TWO or more → genuinely ambiguous → AmbiguousImpl (the deliberate
 -- divergence from the oracle's silent first-wins).  RULE 3b (#1180) is the second
 -- spelling of "two or more": one census-counted impl beside a HEADLESS one.  Skip
--- "Num" (its literal defaulting handles ambiguity) and ifaces with no user impls
--- (zero → existing no-impl path).  This runs on BOTH the check path
--- (checkModuleFullImpl) and the emit/eval path, so `check` rejects too.
+-- "Num" (its literal defaulting handles ambiguity).  ZERO impls of the interface
+-- declaration, of any head shape, is `T-NO-IMPL` (OD3's zero arm, #3676).  This
+-- runs on BOTH the check path (checkModuleFullImpl) and the emit/eval path, so
+-- `check` rejects too.
 --
 -- ⚠️ This block used to say the sole-impl case is one "routeUndeterminedTop stamps
 -- concretely".  MEASURED FALSE (sprint `dispatch-must-not-guess`, 1st attempt at
@@ -36984,7 +37031,26 @@ checkUndeterminedObligation univ iface occ loc scope
       "T-AMBIGUOUS-INSTANCE"
       loc
       (ambiguousImplMsg iface.irName)
+  -- OD3's zero arm (#3676): no impl of this interface DECLARATION exists anywhere in
+  -- the program, so the goal has no candidate at all and nothing can discharge it.
+  -- The verdict depends on the goal alone, not on whether the callee's body reads
+  -- the dict.  `univHasAnyImpl` and not `implCountForIfaceU == 0`: the census drops
+  -- headless, arrow-, effect- and constraint-headed impls, and each of those is a
+  -- real candidate that must keep the sole-impl default below.
+  | not (univHasAnyImpl univ iface) =
+    pushNoImplError (qualifiedIfaceLabel iface) loc [occ]
   | otherwise = ()
+
+-- An interface's name qualified by its declaring module (`mb.Sz`), for a diagnostic
+-- that must say WHICH declaration lacks an impl when two modules declare the same
+-- spelling.  An interface with no module origin renders bare, and so does one
+-- declared by the flat single-file entry: `"__user__"` is a synthetic id, not a
+-- name the user wrote (`originPhrase` treats it the same way).
+qualifiedIfaceLabel : IfaceRef -> String
+qualifiedIfaceLabel ir = match ir.irOrigin
+  OriginModule "__user__" => ir.irName
+  OriginModule m => "\{m}.\{ir.irName}"
+  _ => ir.irName
 
 -- PLAN.md #11: after HM + defaulting every source integer literal's type var is
 -- ground (or a genuine `Num a` survivor).  Decide each literal's runtime rep
@@ -45616,13 +45682,13 @@ inferredPredicateSlotIdTag aid bid cid id
 -- Both run AFTER the callee's own constraints are registered (topological SCC order),
 -- so the forwarded callee's ifaces are populated.
 -- U1b (#1482): returns an `IfaceRef`, since `funConstraintIfacesRef` now stores one.
--- Fallbacks (1) and (2) carry a real occurrence identity — `implObls` and
--- `schemeObligationsRef` both hold one.  Fallback (3) CANNOT and does not pretend to:
--- a `GKDictApp` goal stores a route WORD (see `resolveDictApps` / `dispHeadTab`), so
--- its recovery is bare by construction.  The scan is over the CURRENT module's goals
--- only: an earlier module's application of the same scheme var id would be a stale
--- read under the graph-wide counter.  `ifaceRefNone` is the "no interface here" sentinel,
--- which is a different fact from "identity unrecoverable".
+-- Every source carries the interface's declaration: `implObls` and
+-- `schemeObligationsRef` hold the occurrence's, and a forwarded constraint takes the
+-- callee slot's `pdaIfaces` entry.  Two same-spelled interfaces therefore stay two
+-- slots here (#3679), which a name-only recovery would merge.  The scan is over the
+-- CURRENT module's goals only: an earlier module's application of the same scheme var
+-- id would be a stale read under the graph-wide counter.  `ifaceRefNone` is the "no
+-- interface here" sentinel, which is a different fact from "identity unrecoverable".
 ifaceForInferredId : String -> Int -> IfaceRef
 ifaceForInferredId m id =
   let direct = ifaceForConstraintId id
@@ -45630,10 +45696,7 @@ ifaceForInferredId m id =
     direct
   else match lookupSchemeIface m id perRun.value.schemeObligationsRef.value
     Some ir => ir
-    None =>
-      match ifaceFromDictApps id (dictAppsSince (currentModuleMarks ()).mGoals)
-        "" => ifaceRefNone
-        n => ifaceRefBare n
+    None => ifaceFromDictApps id (dictAppsSince (currentModuleMarks ()).mGoals)
 
 -- #837: keyed by member NAME only (the id here is a SCHEME-VAR id, not a binding
 -- id) — match the name component of the (name, binding-id) key, first match wins.
@@ -45659,22 +45722,24 @@ lookupIfaceById id (o :: rest)
   | containsI id o.voIds = Some o.voIface
   | otherwise = lookupIfaceById id rest
 
--- Scan pendingDictApps for [id] at a slot (bare-TVar mono) whose iface is non-empty.
--- B-4b-iii: SPELLING consumer of the widened route carrier — it RETURNS a bare name,
--- so `.irName` is projected at the one read and `ifaceAtMonoId` keeps its `List String`.
-ifaceFromDictApps : Int -> List PendingDictApp -> String
-ifaceFromDictApps _ [] = ""
+-- Scan pendingDictApps for [id] at a slot (bare-TVar mono) whose iface is non-empty,
+-- returning that slot's interface with its declaration; `ifaceRefNone` when none does.
+ifaceFromDictApps : Int -> List PendingDictApp -> IfaceRef
+ifaceFromDictApps _ [] = ifaceRefNone
 ifaceFromDictApps id (app :: rest) =
-  match ifaceAtMonoId id app.pdaMonos (map (i => i.irName) app.pdaIfaces)
-    Some s => s
+  match ifaceAtMonoId id app.pdaMonos app.pdaIfaces
+    Some ir => ir
     None => ifaceFromDictApps id rest
 
-ifaceAtMonoId : Int -> List Mono -> List String -> Option String
+ifaceAtMonoId : Int -> List Mono -> List IfaceRef -> Option IfaceRef
 ifaceAtMonoId _ [] _ = None
 ifaceAtMonoId _ _ [] = None
 ifaceAtMonoId id (m :: ms) (i :: is) = match normalize m
   TVar cell =>
-    if tyvarId cell == id && i /= "" then Some i else ifaceAtMonoId id ms is
+    if tyvarId cell == id && i.irName /= "" then
+      Some i
+    else
+      ifaceAtMonoId id ms is
   _ => ifaceAtMonoId id ms is
 
 -- recover the interface name of an INFERRED constraint var (unsignatured fn like
@@ -46382,27 +46447,41 @@ importMemberShadow graph rows nameable universe depDecls (UseMember origin _ mlo
     []
   else match reachableStandaloneSig graph (listLen graph) depDecls origin
     None => []
-    Some sty => match ifaceMethodSigFor local rows universe
+    Some sty => match ifaceMethodSigFor local sty rows universe
       None => []
-      Some (iface, mty) =>
-        if schemesAgree sty mty then [] else [(local, iface, sty, mty, mloc)]
+      Some (iface, mty) => [(local, iface, sty, mty, mloc)]
 
 schemesAgree : Option Ty -> Ty -> Bool
 schemesAgree None _ = False
 schemesAgree (Some sty) mty = tyAlphaEq sty mty
 
--- the first NAMEABLE interface declaring [name], with that method's declared signature.
--- Rows whose declaration is not in [universe] are skipped rather than guessed at.
+-- A NAMEABLE interface declaring [name] whose signature differs from the standalone's
+-- [sty], with that signature.  When two or more differ, the least by interface name and
+-- then by rendered signature, so the warning reads the same in every import order
+-- (S2-DECL (e)).  Rows whose declaration is not in [universe] are skipped rather than
+-- guessed at.
 ifaceMethodSigFor : String ->
+  Option Ty ->
   List (String, List String) ->
   List Decl ->
   Option (String, Ty)
-ifaceMethodSigFor _ [] _ = None
-ifaceMethodSigFor name ((iface, ms) :: rest) universe
-  | not (contains name ms) = ifaceMethodSigFor name rest universe
-  | otherwise = match ifaceMethodTyIn iface name universe
-    Some ty => Some (iface, ty)
-    None => ifaceMethodSigFor name rest universe
+ifaceMethodSigFor _ _ [] _ = None
+ifaceMethodSigFor name sty ((iface, ms) :: rest) universe =
+  let later = ifaceMethodSigFor name sty rest universe
+  if not (contains name ms) then
+    later
+  else match ifaceMethodTyIn iface name universe
+    Some ty =>
+      if schemesAgree sty ty then later else leastIfaceSig (iface, ty) later
+    None => later
+
+leastIfaceSig : (String, Ty) -> Option (String, Ty) -> Option (String, Ty)
+leastIfaceSig a None = Some a
+leastIfaceSig (a@(ia, ta)) (Some (b@(ib, tb)))
+  | ia < ib = Some a
+  | ib < ia = Some b
+  | ppTy ta <= ppTy tb = Some a
+  | otherwise = Some b
 
 ifaceMethodTyIn : String -> String -> List Decl -> Option Ty
 ifaceMethodTyIn _ _ [] = None
@@ -47116,12 +47195,14 @@ publicModuleExports prog bindings =
       standalones
       (pickSchemes (publicValNames prog) bindings.mbSchemes))
 
--- The first row for a name wins, unless a second import supplies the same name:
--- then the occurrence is the ambiguity the resolver reports (`ambiguousSet`
--- keys on the supplying import's module id exactly like this, and a local
--- definition, which it exempts, shadows the seed here anyway). Choosing either
--- supplier would type the use against a definition the program never named,
--- and the cascade would change with the order the imports were written.
+-- The first row for a name wins, unless a second import supplies a different
+-- declaration of the same name: then the occurrence is the ambiguity the
+-- resolver reports as R-AMBIGUOUS-OCCURRENCE (`ambiguousSet`, keyed by
+-- declaration through `importValueDecls`, whichever module each import names;
+-- a local definition, which it exempts, shadows the seed here anyway).
+-- Choosing either supplier would type the use against a definition the program
+-- never named, and the cascade would change with the order the imports were
+-- written.
 importedBindingWinners : List (String, (Option String, ExportBinding)) ->
   OrdMap Unit ->
   OrdMap Unit ->
@@ -48407,12 +48488,16 @@ andList (x :: rest) = "\{x}, \{andList rest}"
 -- spelling.  `resolve.mdk`'s `coreAliasNames` binds exactly the same two forms, and the
 -- two must agree: a key bound in scope with no scheme here is a `T-UNBOUND` at the use
 -- site, which is what #95 measured for six years.
--- Each row carries the id of the import that BINDS its name: the resolver's
--- ambiguity key (`ambiguousSet` over `importNamesIn`), so `moduleImportSeed` can
--- refuse to pick a winner by import order for a name the resolver has already
--- rejected. A row the form admits without binding its name (a bare method row
--- admitted for dispatch, a mangled twin) carries no supplier, and core is exempt
--- there as it is in the resolver.
+-- Each row a use-path BINDS carries the declaration it denotes
+-- (`importSupplierKey`), the same identity the resolver's value ambiguity check
+-- keys on (`importValueDecls`), so `moduleImportSeed` can refuse to pick a winner
+-- by import order for a name the resolver has already rejected, and still
+-- accept one declaration reached through two imports. A row the form admits
+-- without binding its name (a bare method row admitted for dispatch, a mangled
+-- twin) carries no supplier, and core is exempt there as it is in the resolver.
+-- The key is looked up by local name, so one member list binding a local twice
+-- (`import m.{a as b, b}`) gives both rows one key and the first row wins here;
+-- the resolver rejects that occurrence by declaration all the same.
 importSeed : List (String, a) ->
   List (String, String) ->
   List Decl ->
@@ -48430,12 +48515,22 @@ importSeed coreV admitted ((DUse _ path _) :: rest) depEnv =
     None => importSeed coreV admitted rest depEnv
     Some depSchemes =>
       let bound = boundNames path
+      let decls =
+        omFromPairs
+          (reverseL (importFormRows path (graphPubDefiners depId)))
+          omEmpty
+      let methods =
+        identKeysByName
+          omEmpty
+          (importFormRows path (match omLookup depId (methodExportsIndex ())
+            Some rows => rows
+            None => []))
       map
           (row =>
             suppliedBy
               (if bindsName bound (fst row)
                 && not (containsPair (depId, fst row) admitted) then
-                Some depId
+                Some (importSupplierKey depId decls methods (fst row))
               else
                 None)
               row)
@@ -48443,6 +48538,34 @@ importSeed coreV admitted ((DUse _ path _) :: rest) depEnv =
         ++ importSeed coreV admitted rest depEnv
 importSeed coreV admitted (_ :: rest) depEnv =
   importSeed coreV admitted rest depEnv
+
+-- The identity one import's binding of `name` is compared by: the declaration
+-- it denotes.  A standalone value is `(defining module, name there)` from
+-- `graphPubDefiners`, first row winning as it does there; an interface method
+-- is the set of method declarations the import carries under that name
+-- (`meExports`).  A driver without an import graph knows neither, so the
+-- binding falls back to the importing module's id.  The three key shapes are
+-- two, a multiple of four, and one netstring long, so no two can coincide.
+importSupplierKey : String ->
+  OrdMap (String, String) ->
+  OrdMap (List String) ->
+  String ->
+  String
+importSupplierKey depId decls methods name = match omLookup name decls
+  Some (defMid, origin) => "\{lenKey defMid}\{lenKey origin}"
+  None => match omLookup name methods
+    Some keys => joinWith "" (sortUniqS keys)
+    None => lenKey depId
+
+identKeysByName : OrdMap (List String) ->
+  List (String, Ident) ->
+  OrdMap (List String)
+identKeysByName acc [] = acc
+identKeysByName acc ((n, ident) :: rest) =
+  let seen = match omLookup n acc
+    Some keys => keys
+    None => []
+  identKeysByName (omInsert n (identKey ident :: seen) acc) rest
 
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 suppliedBy mid (name, row) = (name, (mid, row))

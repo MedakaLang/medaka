@@ -1,0 +1,7 @@
+-- `ia`'s method and value reached through two wildcard re-exports: one
+-- declaration of each, so neither occurrence is ambiguous.
+import ma.*
+import mb.*
+
+both : Int
+both = mth 21 + val

@@ -1,0 +1,5 @@
+-- #3684, the import order reversed; the answer is the same 42.
+import lib.od3684_mb.*
+import lib.od3684_ma.*
+
+main = println (mth 21)

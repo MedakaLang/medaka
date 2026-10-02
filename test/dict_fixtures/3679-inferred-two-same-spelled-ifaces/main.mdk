@@ -1,0 +1,6 @@
+import ma as A
+import mb as B
+
+f v = A.shl v ++ "+" ++ B.shl v
+
+main = println (f (7 : Int))

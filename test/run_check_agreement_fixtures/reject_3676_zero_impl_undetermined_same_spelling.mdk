@@ -1,0 +1,12 @@
+-- #3676 (undetermined goal with zero impls of its declaration accepted).
+-- `roundtrip`'s body leaves the goal `Sz ?a` pinned by neither argument nor
+-- result. Its interface is `zi3676_mb.Sz`, and no impl of that declaration
+-- exists anywhere in the program: the one `impl Sz Widget` belongs to
+-- `zi3676_ma`'s same-spelled `Sz`, a different interface. With no candidate,
+-- nothing can discharge the goal, so every verb owes `T-NO-IMPL` naming
+-- `lib.zi3676_mb.Sz` (DICT-SEMANTICS OD3, zero arm). Accepting it lets the
+-- same-spelled impl answer for the wrong interface.
+import lib.zi3676_ma.{Widget(..)}
+import lib.zi3676_mb.{roundtrip}
+
+main = println (roundtrip 14)

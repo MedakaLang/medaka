@@ -1,0 +1,6 @@
+import ma as A
+import mb as B
+
+main =
+  let f = v => A.shl v ++ "+" ++ B.shl v
+  println (f (7 : Int))

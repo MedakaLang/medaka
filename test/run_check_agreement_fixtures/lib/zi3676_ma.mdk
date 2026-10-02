@@ -1,0 +1,11 @@
+-- Declares its own `Sz`, spelled the same as `zi3676_mb`'s but a different
+-- declaration, and the only `Sz` impl in the program.
+export interface Sz a where
+  szNew : Int -> a
+  szTag : a -> Int
+
+public export data Widget = Widget Int
+
+impl Sz Widget where
+  szNew n = Widget (n * 3)
+  szTag (Widget n) = n

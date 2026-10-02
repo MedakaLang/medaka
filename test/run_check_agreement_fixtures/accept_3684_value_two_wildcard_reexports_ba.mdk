@@ -1,0 +1,5 @@
+-- #3684, the value peer with the import order reversed; the same 42.
+import lib.od3684_vb.*
+import lib.od3684_va.*
+
+main = println val

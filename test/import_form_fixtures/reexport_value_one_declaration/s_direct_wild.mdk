@@ -1,0 +1,6 @@
+-- A selective import of the declarer beside a wildcard re-export of it.
+import ia.{val, mth}
+import ma.*
+
+both : Int
+both = mth 21 + val

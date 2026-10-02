@@ -1,0 +1,15 @@
+-- #1812, the receiver variant: `accept_1812_alias_import_order.mdk`'s three imports
+-- unchanged, with the call written at `IZ.mth`'s shape instead of the standalone's.
+-- `mth` is a shadow here: the standalone from `lib.order1812_fmod` binds the name, and
+-- the module alias admits `IZ` (S1-NS (a)(ii)).  `IZ` is the one admitted declaration,
+-- its receiver is argument 1 (`"x"`, a `String`), and `impl IZ String` exists, so the
+-- occurrence dispatches to that impl and prints 7 on every verb (S2-DECL (a), (b), (d)).
+--
+-- The pair with `accept_1812_alias_import_order.mdk` is the point: the same imports
+-- answer 99 at the standalone's shape and 7 at the method's, so a change that pinned
+-- `mth` to either binding regardless of the receiver reddens one of the two.
+import lib.order1812_amod.{af}
+import lib.order1812_fmod.{mth}
+import lib.order1812_zmod as Z
+
+main = println (mth 1 "x" + af 0 + Z.zf 0)
