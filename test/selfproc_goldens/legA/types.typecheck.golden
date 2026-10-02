@@ -73,6 +73,7 @@ aliasSchemes : List (String, List (String, a)) -> String -> List (String, a) -> 
 aliasScopeE : SigVars -> List (String, Mono) -> Ty -> Option (SigVars, List (String, Mono), Ty)
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasVisibleTo : Int -> AliasDecl -> Bool
+aliasWitnessesMethod : List (List String, Loc) -> String -> Ident -> Bool
 aliasesHeadRowMsg : String -> Ty -> String
 alignScopedSchemes : List ScopedMember -> List (String, Scheme) -> List ScopedScheme
 allArrowEffs : Mono -> List EffRow
@@ -1879,6 +1880,7 @@ mergeOne : List (String, Mono) -> String -> Mono -> List (String, Mono)
 mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (String, Mono)
 methodAdmissionHere : String -> Option (List IfaceRef)
 methodAdmittedHere : String -> List IfaceRef
+methodAliasedScope : List Decl -> String -> List MethodRow -> MethodScope
 methodArgs : Ty -> List Ty
 methodBodyHeadMonos : MethodBodyKind -> List Mono
 methodBodyLaunderMsg : MethodBodyKind -> String -> String -> List Atom -> String
@@ -2021,7 +2023,7 @@ methodSlotPositions : List MethodPredicateSlot -> List (List Int)
 methodSlotSubst : List Int -> List Int -> List (Int, Mono) -> Option (List (Int, Mono))
 methodTemplateGivenScan : MethodPredicateTemplate -> List Int -> List GivenEntry -> MethodTemplateGivenResult -> MethodTemplateGivenResult
 methodTerms : String -> MethodGrant -> GrantOcc -> List Expr
-methodUndecided : String -> List MethodRow -> List MethodRow -> MethodScope
+methodUndecided : List Decl -> String -> List MethodRow -> List MethodRow -> MethodScope
 methodVisibleHere : String -> List MethodRow
 methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List (String, List String)
 minLevelOf : List (Ref Effvar) -> Int

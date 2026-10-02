@@ -1,5 +1,5 @@
 # META
-source_lines=53048
+source_lines=53077
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -8269,14 +8269,16 @@ data MethodScope = MsAbsent | MsOne MethodRow | MsMany (List IfaceRef)
 --   rung 2 only if rung 1 admits nothing: a use-path that names the declaration's
 --          INTERFACE and witnesses it (F23, #1351);
 --   prelude the implicit prelude's declaration, reached only when no rung admitted
---          anything.
+--          anything;
+--   alias  only without a prelude row: a module alias whose module carries the
+--          declaration (`methodAliasedScope`).
 -- A rung that admits exactly one declaration decides.  A rung that admits two or more
 -- is `MsMany`.  When no rung admits anything, the answer is the prelude's row if it
--- has one, else `MsAbsent`: no visible declaration is nameable here.  The ladder
--- never chooses a declaration by its ordinal, which would make the answer a function
--- of module-processing order (S2-DECL (e)); a reader handed `MsMany` must reject the
--- occurrence, not pick a member.  The rungs read only the imports the source wrote
--- (`writtenImportsOf`): `import m as A` binds no bare method name.
+-- has one, else the alias rung's, else `MsAbsent`: no visible declaration is nameable
+-- here.  The ladder never chooses a declaration by its ordinal, which would make the
+-- answer a function of module-processing order (S2-DECL (e)); a reader handed `MsMany`
+-- must reject the occurrence, not pick a member.  Rungs 1 and 2 read only the imports
+-- the source wrote (`writtenImportsOf`): `import m as A` binds no bare method name.
 --
 -- Rung 1's precedence over rung 2 is grounded in RUN-METHID-116, not S2-DECL (c): a
 -- pick is legitimate when the source carries a discriminator, and `import msa.{MA,
@@ -8304,14 +8306,14 @@ methodImportedScope prog0 n cs =
     [only] => MsOne only
     [] => match filterList (r => methodCandAdmitted prog n (methodRowCand r)) cs
       [only] => MsOne only
-      rung2 => methodUndecided n cs rung2
-    rung1 => methodUndecided n cs rung1
+      rung2 => methodUndecided prog n cs rung2
+    rung1 => methodUndecided prog n cs rung1
 
 -- [prog] without the method imports `deAliasMethodImports` appends beside each
 -- `import m as A`.  That import exists so the elaborated tree has the origin name the
 -- alias-qualified spelling resolves to after inference; the source never wrote it, and
 -- an alias binds no bare method name (docs/spec/SYNTAX.md § "Import aliasing"), so it
--- must not witness a declaration on either rung.  It is recognised by carrying the
+-- must not witness a declaration on rung 1 or 2.  It is recognised by carrying the
 -- alias import's own module path and location.
 writtenImportsOf : List Decl -> List Decl
 writtenImportsOf prog = match aliasImportSites prog
@@ -8326,6 +8328,8 @@ aliasImportSites ((DUse _ (UseAlias quals _) loc) :: rest) =
   (quals, loc) :: aliasImportSites rest
 aliasImportSites (_ :: rest) = aliasImportSites rest
 
+-- Only a `UseGroup` import is ever synthesized, so the final catch-all answering False
+-- for every other declaration is exhaustive by construction.
 isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
 isAliasMethodImport sites (DAttrib _ d) = isAliasMethodImport sites d
 isAliasMethodImport sites (DUse _ (UseGroup quals _) loc) =
@@ -8333,14 +8337,39 @@ isAliasMethodImport sites (DUse _ (UseGroup quals _) loc) =
 isAliasMethodImport _ _ = False
 
 -- No rung decided.  [admitted] is the deciding rung's survivors (zero or two-plus).
-methodUndecided : String -> List MethodRow -> List MethodRow -> MethodScope
-methodUndecided n cs [] = match mkIdent NsMethod (OriginModule "core") n
-  None => MsAbsent
+methodUndecided : List Decl ->
+  String ->
+  List MethodRow ->
+  List MethodRow ->
+  MethodScope
+methodUndecided prog n cs [] = match mkIdent NsMethod (OriginModule "core") n
+  None => methodAliasedScope prog n cs
   Some ident => match methodRowById ident cs
     Some r => MsOne r
-    None => MsAbsent
-methodUndecided _ _ admitted =
+    None => methodAliasedScope prog n cs
+methodUndecided _ _ _ admitted =
   MsMany (sortIfaceRefs (map methodRowIface admitted))
+
+-- The last rung: a declaration reached only through a module alias.  The alias binds
+-- no bare name, so it never outranks a written import or the prelude, but S1-NS (a)(ii)
+-- still admits its method into S1's operand.  A bare spelling something else binds (an
+-- imported or own standalone) therefore reads the aliased declaration here, and S2-DECL
+-- takes the receiver argument and the impl query from it.
+methodAliasedScope : List Decl -> String -> List MethodRow -> MethodScope
+methodAliasedScope prog n cs =
+  let sites = aliasImportSites prog
+  match filterList (r => aliasWitnessesMethod sites n r.mrIdent) cs
+    [] => MsAbsent
+    [only] => MsOne only
+    aliased => MsMany (sortIfaceRefs (map methodRowIface aliased))
+
+aliasWitnessesMethod : List (List String, Loc) -> String -> Ident -> Bool
+aliasWitnessesMethod sites n ident =
+  anyList
+    (s =>
+      let dep = joinDot (fst s)
+      dep /= "core" && depExportsMethodIdent dep n ident)
+    sites
 
 -- THIS module's answer for [n]: the reading module's declarations and ordinal are
 -- installed by `checkBodyImpl` (`methodScopeCtxRef`); before that point, and in a
@@ -54348,7 +54377,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "methodOwnScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope")))))
 (DFunDef false "methodOwnScope" ((PVar "prog") (PVar "n") (PVar "cs")) (EMatch (EApp (EApp (EVar "ownMethodIdent") (EVar "prog")) (EVar "n")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "methodRowById") (EVar "ident")) (EVar "cs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "MsOne") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "methodImportedScope") (EVar "prog")) (EVar "n")) (EVar "cs"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "methodImportedScope") (EVar "prog")) (EVar "n")) (EVar "cs")))))
 (DTypeSig false "methodImportedScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope")))))
-(DFunDef false "methodImportedScope" ((PVar "prog0") (PVar "n") (PVar "cs")) (EBlock (DoLet false false (PVar "prog") (EApp (EVar "writtenImportsOf") (EVar "prog0"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "methodCandImported") (EVar "prog")) (EVar "n")) (EApp (EVar "methodRowCand") (EVar "r"))))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PList) () (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "methodCandAdmitted") (EVar "prog")) (EVar "n")) (EApp (EVar "methodRowCand") (EVar "r"))))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PVar "rung2") () (EApp (EApp (EApp (EVar "methodUndecided") (EVar "n")) (EVar "cs")) (EVar "rung2"))))) (arm (PVar "rung1") () (EApp (EApp (EApp (EVar "methodUndecided") (EVar "n")) (EVar "cs")) (EVar "rung1")))))))
+(DFunDef false "methodImportedScope" ((PVar "prog0") (PVar "n") (PVar "cs")) (EBlock (DoLet false false (PVar "prog") (EApp (EVar "writtenImportsOf") (EVar "prog0"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "methodCandImported") (EVar "prog")) (EVar "n")) (EApp (EVar "methodRowCand") (EVar "r"))))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PList) () (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "methodCandAdmitted") (EVar "prog")) (EVar "n")) (EApp (EVar "methodRowCand") (EVar "r"))))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PVar "rung2") () (EApp (EApp (EApp (EApp (EVar "methodUndecided") (EVar "prog")) (EVar "n")) (EVar "cs")) (EVar "rung2"))))) (arm (PVar "rung1") () (EApp (EApp (EApp (EApp (EVar "methodUndecided") (EVar "prog")) (EVar "n")) (EVar "cs")) (EVar "rung1")))))))
 (DTypeSig false "writtenImportsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "writtenImportsOf" ((PVar "prog")) (EMatch (EApp (EVar "aliasImportSites") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "sites") () (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d"))))) (EVar "prog")))))
 (DTypeSig false "aliasImportSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc")))))
@@ -54360,9 +54389,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d")))
 (DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DUse" PWild (PCon "UseGroup" (PVar "quals") PWild) (PVar "loc"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "s")) (EVar "quals")) (EApp (EApp (EVar "locEq") (EApp (EVar "snd") (EVar "s"))) (EVar "loc"))))) (EVar "sites")))
 (DFunDef false "isAliasMethodImport" (PWild PWild) (EVar "False"))
-(DTypeSig false "methodUndecided" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope")))))
-(DFunDef false "methodUndecided" ((PVar "n") (PVar "cs") (PList)) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EApp (EVar "OriginModule") (ELit (LString "core")))) (EVar "n")) (arm (PCon "None") () (EVar "MsAbsent")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "methodRowById") (EVar "ident")) (EVar "cs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "MsOne") (EVar "r"))) (arm (PCon "None") () (EVar "MsAbsent"))))))
-(DFunDef false "methodUndecided" (PWild PWild (PVar "admitted")) (EApp (EVar "MsMany") (EApp (EVar "sortIfaceRefs") (EApp (EApp (EVar "map") (EVar "methodRowIface")) (EVar "admitted")))))
+(DTypeSig false "methodUndecided" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope"))))))
+(DFunDef false "methodUndecided" ((PVar "prog") (PVar "n") (PVar "cs") (PList)) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EApp (EVar "OriginModule") (ELit (LString "core")))) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "methodAliasedScope") (EVar "prog")) (EVar "n")) (EVar "cs"))) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "methodRowById") (EVar "ident")) (EVar "cs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "MsOne") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "methodAliasedScope") (EVar "prog")) (EVar "n")) (EVar "cs")))))))
+(DFunDef false "methodUndecided" (PWild PWild PWild (PVar "admitted")) (EApp (EVar "MsMany") (EApp (EVar "sortIfaceRefs") (EApp (EApp (EVar "map") (EVar "methodRowIface")) (EVar "admitted")))))
+(DTypeSig false "methodAliasedScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope")))))
+(DFunDef false "methodAliasedScope" ((PVar "prog") (PVar "n") (PVar "cs")) (EBlock (DoLet false false (PVar "sites") (EApp (EVar "aliasImportSites") (EVar "prog"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "aliasWitnessesMethod") (EVar "sites")) (EVar "n")) (EFieldAccess (EVar "r") "mrIdent")))) (EVar "cs")) (arm (PList) () (EVar "MsAbsent")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PVar "aliased") () (EApp (EVar "MsMany") (EApp (EVar "sortIfaceRefs") (EApp (EApp (EVar "map") (EVar "methodRowIface")) (EVar "aliased")))))))))
+(DTypeSig false "aliasWitnessesMethod" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc"))) (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyCon "Bool")))))
+(DFunDef false "aliasWitnessesMethod" ((PVar "sites") (PVar "n") (PVar "ident")) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "joinDot") (EApp (EVar "fst") (EVar "s")))) (DoExpr (EBinOp "&&" (EBinOp "/=" (EVar "dep") (ELit (LString "core"))) (EApp (EApp (EApp (EVar "depExportsMethodIdent") (EVar "dep")) (EVar "n")) (EVar "ident"))))))) (EVar "sites")))
 (DTypeSig false "methodScopeHere" (TyFun (TyCon "String") (TyCon "MethodScope")))
 (DFunDef false "methodScopeHere" ((PVar "n")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeCtxRef") "value") (arm (PCon "None") () (EVar "MsAbsent")) (arm (PCon "Some" (PTuple (PVar "prog") (PVar "cur"))) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeMemoRef") "value")) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EVar "methodScopeAt") (EVar "prog")) (EVar "n")) (EVar "cur")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeMemoRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "s")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeMemoRef") "value")))) (DoExpr (EVar "s"))))))))
 (DTypeSig false "methodEntryHere" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodEntry"))))
@@ -63012,7 +63045,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "methodOwnScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope")))))
 (DFunDef false "methodOwnScope" ((PVar "prog") (PVar "n") (PVar "cs")) (EMatch (EApp (EApp (EVar "ownMethodIdent") (EVar "prog")) (EVar "n")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "methodRowById") (EVar "ident")) (EVar "cs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "MsOne") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "methodImportedScope") (EVar "prog")) (EVar "n")) (EVar "cs"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "methodImportedScope") (EVar "prog")) (EVar "n")) (EVar "cs")))))
 (DTypeSig false "methodImportedScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope")))))
-(DFunDef false "methodImportedScope" ((PVar "prog0") (PVar "n") (PVar "cs")) (EBlock (DoLet false false (PVar "prog") (EApp (EVar "writtenImportsOf") (EVar "prog0"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "methodCandImported") (EVar "prog")) (EVar "n")) (EApp (EVar "methodRowCand") (EVar "r"))))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PList) () (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "methodCandAdmitted") (EVar "prog")) (EVar "n")) (EApp (EVar "methodRowCand") (EVar "r"))))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PVar "rung2") () (EApp (EApp (EApp (EVar "methodUndecided") (EVar "n")) (EVar "cs")) (EVar "rung2"))))) (arm (PVar "rung1") () (EApp (EApp (EApp (EVar "methodUndecided") (EVar "n")) (EVar "cs")) (EVar "rung1")))))))
+(DFunDef false "methodImportedScope" ((PVar "prog0") (PVar "n") (PVar "cs")) (EBlock (DoLet false false (PVar "prog") (EApp (EVar "writtenImportsOf") (EVar "prog0"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "methodCandImported") (EVar "prog")) (EVar "n")) (EApp (EVar "methodRowCand") (EVar "r"))))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PList) () (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "methodCandAdmitted") (EVar "prog")) (EVar "n")) (EApp (EVar "methodRowCand") (EVar "r"))))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PVar "rung2") () (EApp (EApp (EApp (EApp (EVar "methodUndecided") (EVar "prog")) (EVar "n")) (EVar "cs")) (EVar "rung2"))))) (arm (PVar "rung1") () (EApp (EApp (EApp (EApp (EVar "methodUndecided") (EVar "prog")) (EVar "n")) (EVar "cs")) (EVar "rung1")))))))
 (DTypeSig false "writtenImportsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "writtenImportsOf" ((PVar "prog")) (EMatch (EApp (EVar "aliasImportSites") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "sites") () (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d"))))) (EVar "prog")))))
 (DTypeSig false "aliasImportSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc")))))
@@ -63024,9 +63057,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d")))
 (DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DUse" PWild (PCon "UseGroup" (PVar "quals") PWild) (PVar "loc"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "s")) (EVar "quals")) (EApp (EApp (EVar "locEq") (EApp (EVar "snd") (EVar "s"))) (EVar "loc"))))) (EVar "sites")))
 (DFunDef false "isAliasMethodImport" (PWild PWild) (EVar "False"))
-(DTypeSig false "methodUndecided" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope")))))
-(DFunDef false "methodUndecided" ((PVar "n") (PVar "cs") (PList)) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EApp (EVar "OriginModule") (ELit (LString "core")))) (EVar "n")) (arm (PCon "None") () (EVar "MsAbsent")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "methodRowById") (EVar "ident")) (EVar "cs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "MsOne") (EVar "r"))) (arm (PCon "None") () (EVar "MsAbsent"))))))
-(DFunDef false "methodUndecided" (PWild PWild (PVar "admitted")) (EApp (EVar "MsMany") (EApp (EVar "sortIfaceRefs") (EApp (EApp (EMethodRef "map") (EVar "methodRowIface")) (EVar "admitted")))))
+(DTypeSig false "methodUndecided" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope"))))))
+(DFunDef false "methodUndecided" ((PVar "prog") (PVar "n") (PVar "cs") (PList)) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EApp (EVar "OriginModule") (ELit (LString "core")))) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "methodAliasedScope") (EVar "prog")) (EVar "n")) (EVar "cs"))) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "methodRowById") (EVar "ident")) (EVar "cs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "MsOne") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "methodAliasedScope") (EVar "prog")) (EVar "n")) (EVar "cs")))))))
+(DFunDef false "methodUndecided" (PWild PWild PWild (PVar "admitted")) (EApp (EVar "MsMany") (EApp (EVar "sortIfaceRefs") (EApp (EApp (EMethodRef "map") (EVar "methodRowIface")) (EVar "admitted")))))
+(DTypeSig false "methodAliasedScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope")))))
+(DFunDef false "methodAliasedScope" ((PVar "prog") (PVar "n") (PVar "cs")) (EBlock (DoLet false false (PVar "sites") (EApp (EVar "aliasImportSites") (EVar "prog"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "aliasWitnessesMethod") (EVar "sites")) (EVar "n")) (EFieldAccess (EVar "r") "mrIdent")))) (EVar "cs")) (arm (PList) () (EVar "MsAbsent")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PVar "aliased") () (EApp (EVar "MsMany") (EApp (EVar "sortIfaceRefs") (EApp (EApp (EMethodRef "map") (EVar "methodRowIface")) (EVar "aliased")))))))))
+(DTypeSig false "aliasWitnessesMethod" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc"))) (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyCon "Bool")))))
+(DFunDef false "aliasWitnessesMethod" ((PVar "sites") (PVar "n") (PVar "ident")) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "joinDot") (EApp (EVar "fst") (EVar "s")))) (DoExpr (EBinOp "&&" (EBinOp "/=" (EVar "dep") (ELit (LString "core"))) (EApp (EApp (EApp (EVar "depExportsMethodIdent") (EVar "dep")) (EVar "n")) (EVar "ident"))))))) (EVar "sites")))
 (DTypeSig false "methodScopeHere" (TyFun (TyCon "String") (TyCon "MethodScope")))
 (DFunDef false "methodScopeHere" ((PVar "n")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeCtxRef") "value") (arm (PCon "None") () (EVar "MsAbsent")) (arm (PCon "Some" (PTuple (PVar "prog") (PVar "cur"))) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeMemoRef") "value")) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EVar "methodScopeAt") (EVar "prog")) (EVar "n")) (EVar "cur")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeMemoRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "s")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeMemoRef") "value")))) (DoExpr (EVar "s"))))))))
 (DTypeSig false "methodEntryHere" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodEntry"))))
