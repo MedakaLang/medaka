@@ -1,0 +1,27 @@
+data S = SE E | SL Int E
+
+data E = Blk (List S) | Lf Int
+
+mapStmts : (E -> E) -> List S -> List S
+mapStmts _ [] = []
+mapStmts f ((SE e) :: rest) = SE (f e) :: mapStmts f rest
+mapStmts f ((SL n e) :: rest) =
+  let k = n + 1
+  SL k (f e) :: mapStmts f rest
+
+walk : E -> E
+walk (Blk ss) = Blk (mapStmts walk ss)
+walk e = e
+
+render : E -> String
+render (Lf n) = intToString n
+render (Blk ss) = "{" ++ fold (acc s => acc ++ " " ++ renderS s) "" ss ++ " }"
+
+renderS : S -> String
+renderS (SE e) = render e
+renderS (SL n e) = "let" ++ intToString n ++ "=" ++ render e
+
+main =
+  println
+    (render
+      (walk (Blk [SL 1 (Lf 1), SE (Blk [SL 2 (Lf 2), SE (Lf 3)]), SE (Lf 4)])))
