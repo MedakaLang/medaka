@@ -1,0 +1,11 @@
+safe : Int -> List Int -> Bool
+safe q qs = go 1 qs
+  where
+    go _ [] = True
+    go d (x :: rest) = x /= q && x /= q + d && x /= q - d && go (d + 1) rest
+
+queens : Int -> Int -> List (List Int)
+queens n 0 = [[]]
+queens n k = [q :: qs | qs <- queens n (k - 1), q <- [1..=n], safe q qs]
+
+main = println (length (queens 8 8))

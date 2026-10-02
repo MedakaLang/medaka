@@ -1,0 +1,9 @@
+abs2 : Int -> Int
+abs2 n = if n < 0 then -n else n
+
+main =
+  println (-5)
+  println (3 - -2)
+  let x = -1
+  println (abs2 x)
+  println (abs2 -7)

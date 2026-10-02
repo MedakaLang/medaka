@@ -1,0 +1,17 @@
+import string.{toInt}
+
+safeDiv : Int -> Int -> Option Int
+safeDiv _ 0 = None
+safeDiv a b = Some (a / b)
+
+parseAndHalve : String -> Result String Int
+parseAndHalve s = match toInt s
+  Some n => Ok (n / 2)
+  None => Err "not a number: \{s}"
+
+main =
+  println (safeDiv 10 2)
+  println (safeDiv 10 0)
+  println (parseAndHalve "42")
+  println (parseAndHalve "forty")
+  println (optionOr 0 (safeDiv 1 0))

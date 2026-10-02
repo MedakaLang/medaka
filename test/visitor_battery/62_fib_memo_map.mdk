@@ -1,0 +1,13 @@
+import map.{Map, get, set}
+
+fibs : Int -> Map Int Int -> (Int, Map Int Int)
+fibs n memo
+  | n < 2 = (n, memo)
+  | otherwise = match get n memo
+    Some v => (v, memo)
+    None =>
+      let (a, m1) = fibs (n - 1) memo
+      let (b, m2) = fibs (n - 2) m1
+      (a + b, set n (a + b) m2)
+
+main = println (fst (fibs 90 Map {}))

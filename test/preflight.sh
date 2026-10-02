@@ -1093,6 +1093,14 @@ while IFS= read -r f; do
     # correctly invisible as a gate would otherwise be UNMAPPED as a SOURCE.
     test/snapshot_bless.sh)        add 'diff_compiler_snapshot*' ;;
 
+    # ── the first-visitor program corpus (#3699) ─────────────────────────────
+    # Not read by any differential gate yet; its driver is a TOOL (ledgered in
+    # test/CI-COVERAGE-TOOLS.txt). Two tree-wide scans do read every tracked
+    # .mdk, these included, so they are what a change here can red. Without this
+    # arm every edit to the corpus is UNMAPPED and widens the PR run to the full
+    # suite ([W-THIRD-CONSUMER]).
+    test/visitor_battery/*)        add 'check_removed_constructs' 'diff_compiler_source_bytes' ;;
+
     # ── the LSP suite's two shell halves ─────────────────────────────────────
     # Neither is a gate — `test/lsp_bless.sh` only writes goldens (ledgered in
     # test/CI-COVERAGE-TOOLS.txt) and `test/lsp_warm_session.sh` is the live

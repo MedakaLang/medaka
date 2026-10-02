@@ -1,0 +1,4 @@
+main =
+  println intMaxBound
+  println (checkedAdd intMaxBound 1)
+  println (intMaxBound + 1)

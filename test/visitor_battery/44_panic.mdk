@@ -1,0 +1,4 @@
+main =
+  println "before"
+  panic "something went wrong"
+  println "after"

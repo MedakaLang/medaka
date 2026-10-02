@@ -1,0 +1,12 @@
+collatzLen : Int -> Int -> Int
+collatzLen 1 acc = acc
+collatzLen n acc = if isEven n then collatzLen (n / 2) (acc + 1) else collatzLen (3 * n + 1) (acc + 1)
+
+best : Int -> Int -> Int -> Int -> (Int, Int)
+best i limit bestN bestLen
+  | i > limit = (bestN, bestLen)
+  | otherwise =
+    let l = collatzLen i 1
+    if l > bestLen then best (i + 1) limit i l else best (i + 1) limit bestN bestLen
+
+main = println (best 1 100000 1 1)

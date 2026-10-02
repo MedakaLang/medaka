@@ -1,0 +1,9 @@
+import async.{Async, liftIO, spawnTask, await}
+
+main : Async <Stdout> Unit
+main = defer
+  t <- spawnTask (deferPure 1)
+  u <- spawnTask (deferPure 2)
+  x <- await t
+  y <- await u
+  liftIO (_ => println (x + y))

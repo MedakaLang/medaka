@@ -1,0 +1,12 @@
+import list.{zip, take, reverse}
+
+main =
+  let nums = [1..=10]
+  println (nums |> filter isEven |> map (* 3) |> sum)
+  println (nums |> map (x => x * x) |> filter (> 50))
+  let addThenDouble = (+ 1) >> (* 2)
+  println (addThenDouble 5)
+  println (fold (acc x => acc ++ "\{x}") "" nums)
+  println (zip [1, 2, 3] ["a", "b", "c"])
+  println (maximum nums)
+  println (take 3 (reverse nums))

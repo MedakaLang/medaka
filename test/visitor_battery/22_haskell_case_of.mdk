@@ -1,0 +1,6 @@
+describe : Int -> String
+describe n = case n of
+  0 -> "zero"
+  _ -> "other"
+
+main = println (describe 0)
