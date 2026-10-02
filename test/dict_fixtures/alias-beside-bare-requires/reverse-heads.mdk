@@ -1,0 +1,5 @@
+-- `mq` writes an alias import beside a bare import of `Sh`; the bare
+-- `Sh` and the bare method name are the bare-imported module's alone.
+import mq.{both, W(..)}
+
+main = println (both (W (7 : Int)))

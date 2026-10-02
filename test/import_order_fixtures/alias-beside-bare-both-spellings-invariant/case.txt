@@ -1,0 +1,8 @@
+entry: main.mdk
+what: bare `sh` and alias-qualified `A.sh` in one module name two different
+      declarations in every import order
+
+`import ma as A` + `import mb.{Sh, sh}`: bare `sh` is `mb.sh` (2007 at 7) and `A.sh`
+is `ma.sh` (1007 at 7). Spec answer: `check` clean; `run` and the built binary print
+`3014` in every ordering. The value is graded by the matching row of
+`test/diff_compiler_dict_semantics_test.mdk`; this case grades its invariance.

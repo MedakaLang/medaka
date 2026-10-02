@@ -1124,8 +1124,12 @@ Given an occurrence of bare name `N` in module `M`:
   >   still ungrounded), the declarations have not been shown to agree, and the
   >   occurrence is the **located reject** of the next bullet, in every import order.
   >   **RULED 2026-10-01 (Val)**: this replaces the earlier hand-derived `99` for the
-  >   under-applied shape. A fully applied occurrence, and a value occurrence
-  >   (`ap2 mth "abc" 5`), are unaffected.
+  >   under-applied shape. A fully applied occurrence is unaffected. A **value**
+  >   occurrence (`ap2 mth "abc" 5`, `g = mth`, `flip mth`) is the limit case of
+  >   under-application, so this bullet and the next govern it as written, but the
+  >   implementation does **not yet reject** one: it binds the imported standalone,
+  >   which is a wrong answer whenever the admitted declarations disagree (known
+  >   gap, #TBD-F4).
   > - **Two or more that DISAGREE** → a **located reject** at the occurrence. Not a
   >   silent pick: by S1-SCOPE's own criterion this clause set is a
   >   *name-resolution* rule, which must be **choosing between candidates the author
@@ -1852,12 +1856,12 @@ recorded as a dated observation, not as a number this page maintains.
 >   imported under a member list that binds another name. [#1353](https://github.com/MedakaLang/medaka/issues/1353)
 >   is **CLOSED**; its must-fail pin was drained and deleted, and row 33 is what
 >   replaced it. The mechanism it was filed on, recorded because §3's own
->   S1-detect row is marked stale about it: the Module-path shadow test reads
->   `crossRun.value.universeIfaceMethodsRef`, grown per module by
->   `appendUniverseAccums`'s call to `allIfaceMethodNames` — which carries **no
->   `pub` filter** — accumulated **cumulatively in the loader's dependency-first
->   topological order**, the same shape `DICT-SEMANTICS.md` §8 I5 records for the
->   impl universe. The **feeder** is still unfiltered; what changed is that the
+>   S1-detect row is marked stale about it: the Module-path shadow test asks
+>   `methodNameDeclaredAt` over `deMethods`, the whole-graph method table
+>   restricted to the declarations visible at the reading module's ordinal —
+>   which carries **no `pub` filter** — so its answer grows **cumulatively in the
+>   loader's dependency-first topological order**, the same shape
+>   `DICT-SEMANTICS.md` §8 I5 records for the impl universe. The **feeder** is still unfiltered; what changed is that the
 >   **result** is now intersected with the nameable set (§3).
 > - ✅ **The namespace axis (S1-NS).** Rows 36–38 and 40–42 — sibling method,
 >   return position, re-export by method name, module alias, member alias.

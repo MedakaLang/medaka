@@ -1,0 +1,5 @@
+export interface Mk a where
+  mk : Int -> a
+
+impl Mk Int where
+  mk n = n + 2000

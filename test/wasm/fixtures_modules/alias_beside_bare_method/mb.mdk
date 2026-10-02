@@ -1,0 +1,5 @@
+export interface Sh a where
+  sh : a -> Int
+
+impl Sh Int where
+  sh n = n + 2000
