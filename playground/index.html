@@ -105,9 +105,25 @@
     .b-head .links { margin-left: auto; display: flex; gap: 16px; font-size: 0.78rem; }
     .b-head .links a { color: var(--muted); text-decoration: none; }
     .b-head .links a:hover { color: var(--accent); }
+    .b-menu { display: none; margin-left: auto; position: relative; align-self: center; }
+    .b-menu summary {
+      list-style: none; cursor: pointer; color: var(--muted); font-size: 1.15rem; line-height: 1;
+      padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+    }
+    .b-menu summary::-webkit-details-marker { display: none; }
+    .b-menu[open] summary { color: var(--ink); }
+    .b-menu-links {
+      position: absolute; right: 0; top: calc(100% + 8px); display: flex; flex-direction: column;
+      gap: 11px; min-width: 11rem; padding: 13px 16px; font-size: 0.95rem;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .35); z-index: 20;
+    }
+    .b-menu-links a { color: var(--muted); text-decoration: none; }
+    .b-menu-links a:hover { color: var(--accent); }
     @media (max-width: 700px) {
       .b-head .tag { display: none; }
-      .b-head .links { gap: 12px; }
+      .b-head .links { display: none; }
+      .b-menu { display: block; }
     }
 
     /* ---------- funnel strip ---------- */
@@ -310,6 +326,9 @@
            is one of the three notes build_stdlib_docs.sh deliberately does NOT
            publish. -->
       <div class="links"><a href="./guide/00-introduction.html">Guide</a><a href="./guide/01-quick-start.html">Quickstart</a><a href="./advanced/index.html">Advanced</a><a href="./stdlib/index.html">Stdlib</a><a href="./blog/index.html">Blog</a><a href="https://github.com/MedakaLang/medaka" target="_blank" rel="noopener">GitHub</a></div>
+      <!-- The same links again for phones, behind a hamburger (CSS shows one of
+           the two per width; see .b-menu). Keep both lists identical. -->
+      <details class="b-menu"><summary aria-label="Site menu">&#9776;</summary><nav class="b-menu-links" aria-label="Site"><a href="./guide/00-introduction.html">Guide</a><a href="./guide/01-quick-start.html">Quickstart</a><a href="./advanced/index.html">Advanced</a><a href="./stdlib/index.html">Stdlib</a><a href="./blog/index.html">Blog</a><a href="https://github.com/MedakaLang/medaka" target="_blank" rel="noopener">GitHub</a></nav></details>
     </div>
 
     <div id="funnel-strip">

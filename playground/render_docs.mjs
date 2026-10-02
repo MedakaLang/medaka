@@ -652,13 +652,18 @@ function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, pla
       `<meta name="twitter:card" content="summary_large_image">`,
     ] : []),
   ].join('\n') + '\n';
+  // The link list is emitted twice: a row for wide viewports and, for phones, the
+  // same links inside a <details> menu behind a hamburger. CSS shows exactly one
+  // of the two at any width; a closed <details> cannot be forced open from CSS,
+  // which is why the row is not simply restyled.
+  const linksHtml = navLinks.map(({ label, href }) => {
+    const ext = /^https?:\/\//.test(href) ? ' target="_blank" rel="noopener"' : '';
+    return `<a href="${escapeHtml(href)}"${ext}>${escapeHtml(label)}</a>`;
+  }).join('\n');
   const navHtml = navLinks.length === 0 ? '' :
-    `<nav class="site-nav-links" aria-label="Site">\n`
-    + navLinks.map(({ label, href }) => {
-      const ext = /^https?:\/\//.test(href) ? ' target="_blank" rel="noopener"' : '';
-      return `<a href="${escapeHtml(href)}"${ext}>${escapeHtml(label)}</a>`;
-    }).join('\n')
-    + `\n</nav>\n`;
+    `<nav class="site-nav-links" aria-label="Site">\n${linksHtml}\n</nav>\n`
+    + `<details class="site-nav-menu">\n<summary aria-label="Site menu">\u2630</summary>\n`
+    + `<nav class="site-nav-menu-links" aria-label="Site">\n${linksHtml}\n</nav>\n</details>\n`;
   const tocHtml = toc.length === 0 ? '' :
     `<nav class="toc" aria-label="On this page">\n<h2>On this page</h2>\n<ul>\n`
     + toc.map((h) => `<li class="toc-h${h.depth}"><a href="#${h.id}">${h.text}</a></li>`).join('\n')
@@ -778,6 +783,25 @@ a:hover { color:var(--accent-bright); text-decoration:underline; }
 .site-nav-title:hover { color:var(--ink); text-decoration:none; }
 .site-nav-title { color:var(--faint); font-size:.8rem; text-transform:uppercase;
        letter-spacing:.06em; }
+.site-nav-menu { display:none; margin-left:auto; position:relative; }
+.site-nav-menu summary { list-style:none; cursor:pointer; color:var(--muted); font-size:1.15rem;
+       line-height:1; padding:.3rem .5rem; border:1px solid var(--line); border-radius:6px; }
+.site-nav-menu summary::-webkit-details-marker { display:none; }
+.site-nav-menu[open] summary { color:var(--ink); }
+.site-nav-menu-links { position:absolute; right:0; top:calc(100% + .5rem); display:flex;
+       flex-direction:column; gap:.7rem; min-width:11rem; padding:.8rem 1rem; font-size:.95rem;
+       background:var(--panel); border:1px solid var(--line); border-radius:8px;
+       box-shadow:0 8px 24px rgba(0,0,0,.35); z-index:20; }
+.site-nav-menu-links a { color:var(--muted); }
+.site-nav-menu-links a:hover { color:var(--accent); text-decoration:none; }
+@media (max-width:700px) {
+  /* One row, always: back link, the set title truncated, a hamburger. The full
+     link row would overflow the viewport and make the whole page scroll sideways. */
+  .site-nav { gap:.75rem; padding:.7rem 1rem; }
+  .site-nav-links { display:none; }
+  .site-nav-menu { display:block; }
+  .site-nav-title { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+}
 .pager { display:flex; gap:1rem; margin-top:3rem; padding-top:1.25rem; border-top:1px solid var(--line); }
 .pager a { flex:1; display:flex; flex-direction:column; gap:.2rem; padding:.75rem 1rem;
        border:1px solid var(--line); border-radius:8px; color:var(--ink); }
