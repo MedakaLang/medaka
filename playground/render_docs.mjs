@@ -641,7 +641,7 @@ function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, pla
   const ogHtml = !og ? '' : [
     `<meta name="description" content="${escapeHtml(description)}">`,
     `<meta property="og:type" content="article">`,
-    `<meta property="og:url" content="${escapeHtml(`${og.siteUrl}/${outFile}`)}">`,
+    `<meta property="og:url" content="${escapeHtml(`${og.siteUrl}/${outFile.replace(/(?:^|\/)index\.html$|\.html$/, "")}`)}">`,
     `<meta property="og:title" content="${escapeHtml(pageTitle)}">`,
     `<meta property="og:description" content="${escapeHtml(description)}">`,
     ...(og.ogImage ? [

@@ -509,8 +509,8 @@ try {
     runLinks: false, pager: true });
   const a = readFileSync(join(optOn, '01-a.html'), 'utf8');
   const b = readFileSync(join(optOn, '02-b.html'), 'utf8');
-  check(a.includes('<meta property="og:url" content="https://example.com/opt/01-a.html">'),
-    'og: og:url is --site-url joined with the page');
+  check(a.includes('<meta property="og:url" content="https://example.com/opt/01-a">'),
+    'og: og:url is --site-url joined with the page, without the .html (the site serves clean URLs)');
   check(a.includes('<meta property="og:description" content="First prose paragraph, with a link.">'),
     'og: with no description comment, the first paragraph is the description, Markdown stripped');
   check(a.includes('<meta property="og:image" content="https://example.com/card.png">'),
