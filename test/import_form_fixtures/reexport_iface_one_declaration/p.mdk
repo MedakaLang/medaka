@@ -1,0 +1,9 @@
+-- The one declaration of `Same` that `mid` re-exports.  `Q` carries an impl, so a
+-- consumer can call `pmth` without writing `impl Same` itself.
+export interface Same f where
+  pmth : f a -> Int
+
+public export data Q a = MkQ a
+
+impl Same Q where
+  pmth _ = 1

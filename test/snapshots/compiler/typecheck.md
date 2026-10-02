@@ -1,5 +1,5 @@
 # META
-source_lines=53077
+source_lines=53117
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -346,6 +346,7 @@ import types.solver_contract.{
 import types.registry.{
   RegKey,
   Registry,
+  identKey,
   regKeyOfTab,
   regKeyRender,
   regEmpty,
@@ -47120,10 +47121,10 @@ publicModuleExports prog bindings =
       standalones
       (pickSchemes (publicValNames prog) bindings.mbSchemes))
 
--- The first row for a name wins, unless a second import supplies the same name:
--- then the occurrence is the ambiguity the resolver reports (`ambiguousSet`
--- keys on the supplying import's module id exactly like this, and a local
--- definition, which it exempts, shadows the seed here anyway). Choosing either
+-- The first row for a name wins, unless a second import supplies a different
+-- declaration of the same name: then the occurrence is the ambiguity the
+-- resolver reports (`ambiguousSet` keys on the declaration exactly like this,
+-- and a local definition, which it exempts, shadows the seed here anyway). Choosing either
 -- supplier would type the use against a definition the program never named,
 -- and the cascade would change with the order the imports were written.
 importedBindingWinners : List (String, (Option String, ExportBinding)) ->
@@ -48411,12 +48412,13 @@ andList (x :: rest) = "\{x}, \{andList rest}"
 -- spelling.  `resolve.mdk`'s `coreAliasNames` binds exactly the same two forms, and the
 -- two must agree: a key bound in scope with no scheme here is a `T-UNBOUND` at the use
 -- site, which is what #95 measured for six years.
--- Each row carries the id of the import that BINDS its name: the resolver's
--- ambiguity key (`ambiguousSet` over `importNamesIn`), so `moduleImportSeed` can
--- refuse to pick a winner by import order for a name the resolver has already
--- rejected. A row the form admits without binding its name (a bare method row
--- admitted for dispatch, a mangled twin) carries no supplier, and core is exempt
--- there as it is in the resolver.
+-- Each row a use-path BINDS carries the declaration it denotes
+-- (`importSupplierKey`), the same identity the resolver's value ambiguity check
+-- keys on (`importValueDecls`), so `moduleImportSeed` can refuse to pick a winner
+-- by import order for a name the resolver has already rejected, and still
+-- accept one declaration reached through two imports. A row the form admits
+-- without binding its name (a bare method row admitted for dispatch, a mangled
+-- twin) carries no supplier, and core is exempt there as it is in the resolver.
 importSeed : List (String, a) ->
   List (String, String) ->
   List Decl ->
@@ -48434,12 +48436,22 @@ importSeed coreV admitted ((DUse _ path _) :: rest) depEnv =
     None => importSeed coreV admitted rest depEnv
     Some depSchemes =>
       let bound = boundNames path
+      let decls =
+        omFromPairs
+          (reverseL (importFormRows path (graphPubDefiners depId)))
+          omEmpty
+      let methods =
+        identKeysByName
+          omEmpty
+          (importFormRows path (match omLookup depId (methodExportsIndex ())
+            Some rows => rows
+            None => []))
       map
           (row =>
             suppliedBy
               (if bindsName bound (fst row)
                 && not (containsPair (depId, fst row) admitted) then
-                Some depId
+                Some (importSupplierKey depId decls methods (fst row))
               else
                 None)
               row)
@@ -48447,6 +48459,34 @@ importSeed coreV admitted ((DUse _ path _) :: rest) depEnv =
         ++ importSeed coreV admitted rest depEnv
 importSeed coreV admitted (_ :: rest) depEnv =
   importSeed coreV admitted rest depEnv
+
+-- The identity one import's binding of `name` is compared by: the declaration
+-- it denotes.  A standalone value is `(defining module, name there)` from
+-- `graphPubDefiners`, first row winning as it does there; an interface method
+-- is the set of method declarations the import carries under that name
+-- (`meExports`).  A driver without an import graph knows neither, so the
+-- binding falls back to the importing module's id.  The three key shapes are
+-- two, a multiple of four, and one netstring long, so no two can coincide.
+importSupplierKey : String ->
+  OrdMap (String, String) ->
+  OrdMap (List String) ->
+  String ->
+  String
+importSupplierKey depId decls methods name = match omLookup name decls
+  Some (defMid, origin) => "\{lenKey defMid}\{lenKey origin}"
+  None => match omLookup name methods
+    Some keys => joinWith "" (sortUniqS keys)
+    None => lenKey depId
+
+identKeysByName : OrdMap (List String) ->
+  List (String, Ident) ->
+  OrdMap (List String)
+identKeysByName acc [] = acc
+identKeysByName acc ((n, ident) :: rest) =
+  let seen = match omLookup n acc
+    Some keys => keys
+    None => []
+  identKeysByName (omInsert n (identKey ident :: seen) acc) rest
 
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 suppliedBy mid (name, row) = (name, (mid, row))
@@ -53098,7 +53138,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeFrame" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "ClassPredicate" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "SolverBlocker" true) (mem "SolverFailure" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
-(DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "identKey" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "mapChildren" false) (mem "mapExpr" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false) (mem "programIsCore" false) (mem "stampBindingIds" false) (mem "stampTopScope" false) (mem "stampDeclWith" false) (mem "stampClauseWith" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "runtimeExternTyOriginScope" false) (mem "noteOriginTrace" false))))
@@ -61243,8 +61283,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "importSeed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyVar "a")))))))))
 (DFunDef false "importSeed" (PWild PWild (PList) PWild) (EListLit))
 (DFunDef false "importSeed" ((PVar "coreV") (PVar "admitted") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "depEnv")))
-(DFunDef false "importSeed" ((PVar "coreV") (PVar "admitted") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "suppliedBy") (EVar "None"))) (EApp (EApp (EVar "coreAliasSchemes") (EVar "path")) (EVar "coreV"))) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBlock (DoLet false false (PVar "bound") (EApp (EVar "boundNames") (EVar "path"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EApp (EApp (EVar "suppliedBy") (EIf (EBinOp "&&" (EApp (EApp (EVar "bindsName") (EVar "bound")) (EApp (EVar "fst") (EVar "row"))) (EApp (EVar "not") (EApp (EApp (EVar "containsPair") (ETuple (EVar "depId") (EApp (EVar "fst") (EVar "row")))) (EVar "admitted")))) (EApp (EVar "Some") (EVar "depId")) (EVar "None"))) (EVar "row")))) (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes"))) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv")))))))))))
+(DFunDef false "importSeed" ((PVar "coreV") (PVar "admitted") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "suppliedBy") (EVar "None"))) (EApp (EApp (EVar "coreAliasSchemes") (EVar "path")) (EVar "coreV"))) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBlock (DoLet false false (PVar "bound") (EApp (EVar "boundNames") (EVar "path"))) (DoLet false false (PVar "decls") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EVar "graphPubDefiners") (EVar "depId"))))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "identKeysByName") (EVar "omEmpty")) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "depId")) (EApp (EVar "methodExportsIndex") (ELit LUnit))) (arm (PCon "Some" (PVar "rows")) () (EVar "rows")) (arm (PCon "None") () (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EApp (EApp (EVar "suppliedBy") (EIf (EBinOp "&&" (EApp (EApp (EVar "bindsName") (EVar "bound")) (EApp (EVar "fst") (EVar "row"))) (EApp (EVar "not") (EApp (EApp (EVar "containsPair") (ETuple (EVar "depId") (EApp (EVar "fst") (EVar "row")))) (EVar "admitted")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "importSupplierKey") (EVar "depId")) (EVar "decls")) (EVar "methods")) (EApp (EVar "fst") (EVar "row")))) (EVar "None"))) (EVar "row")))) (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes"))) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv")))))))))))
 (DFunDef false "importSeed" ((PVar "coreV") (PVar "admitted") (PCons PWild (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv")))
+(DTypeSig false "importSupplierKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))))
+(DFunDef false "importSupplierKey" ((PVar "depId") (PVar "decls") (PVar "methods") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "decls")) (arm (PCon "Some" (PTuple (PVar "defMid") (PVar "origin"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "defMid")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "origin")))) (ELit (LString "")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "methods")) (arm (PCon "Some" (PVar "keys")) () (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EVar "sortUniqS") (EVar "keys")))) (arm (PCon "None") () (EApp (EVar "lenKey") (EVar "depId")))))))
+(DTypeSig false "identKeysByName" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "identKeysByName" ((PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "identKeysByName" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "ident")) (PVar "rest"))) (EBlock (DoLet false false (PVar "seen") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "acc")) (arm (PCon "Some" (PVar "keys")) () (EVar "keys")) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "identKeysByName") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EBinOp "::" (EApp (EVar "identKey") (EVar "ident")) (EVar "seen"))) (EVar "acc"))) (EVar "rest")))))
 (DTypeSig false "suppliedBy" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyVar "a")) (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyVar "a"))))))
 (DFunDef false "suppliedBy" ((PVar "mid") (PTuple (PVar "name") (PVar "row"))) (ETuple (EVar "name") (ETuple (EVar "mid") (EVar "row"))))
 (DTypeSig false "containsPair" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
@@ -61766,7 +61811,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeFrame" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "ClassPredicate" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "SolverBlocker" true) (mem "SolverFailure" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
-(DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "identKey" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "mapChildren" false) (mem "mapExpr" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false) (mem "programIsCore" false) (mem "stampBindingIds" false) (mem "stampTopScope" false) (mem "stampDeclWith" false) (mem "stampClauseWith" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "runtimeExternTyOriginScope" false) (mem "noteOriginTrace" false))))
@@ -69911,8 +69956,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "importSeed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyVar "a")))))))))
 (DFunDef false "importSeed" (PWild PWild (PList) PWild) (EListLit))
 (DFunDef false "importSeed" ((PVar "coreV") (PVar "admitted") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "depEnv")))
-(DFunDef false "importSeed" ((PVar "coreV") (PVar "admitted") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "suppliedBy") (EVar "None"))) (EApp (EApp (EVar "coreAliasSchemes") (EVar "path")) (EVar "coreV"))) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBlock (DoLet false false (PVar "bound") (EApp (EVar "boundNames") (EVar "path"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EApp (EApp (EVar "suppliedBy") (EIf (EBinOp "&&" (EApp (EApp (EVar "bindsName") (EVar "bound")) (EApp (EVar "fst") (EVar "row"))) (EApp (EVar "not") (EApp (EApp (EVar "containsPair") (ETuple (EVar "depId") (EApp (EVar "fst") (EVar "row")))) (EVar "admitted")))) (EApp (EVar "Some") (EVar "depId")) (EVar "None"))) (EVar "row")))) (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes"))) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv")))))))))))
+(DFunDef false "importSeed" ((PVar "coreV") (PVar "admitted") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "suppliedBy") (EVar "None"))) (EApp (EApp (EVar "coreAliasSchemes") (EVar "path")) (EVar "coreV"))) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBlock (DoLet false false (PVar "bound") (EApp (EVar "boundNames") (EVar "path"))) (DoLet false false (PVar "decls") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EVar "graphPubDefiners") (EVar "depId"))))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "identKeysByName") (EVar "omEmpty")) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "depId")) (EApp (EVar "methodExportsIndex") (ELit LUnit))) (arm (PCon "Some" (PVar "rows")) () (EVar "rows")) (arm (PCon "None") () (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EApp (EApp (EVar "suppliedBy") (EIf (EBinOp "&&" (EApp (EApp (EVar "bindsName") (EVar "bound")) (EApp (EVar "fst") (EVar "row"))) (EApp (EVar "not") (EApp (EApp (EVar "containsPair") (ETuple (EVar "depId") (EApp (EVar "fst") (EVar "row")))) (EVar "admitted")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "importSupplierKey") (EVar "depId")) (EVar "decls")) (EVar "methods")) (EApp (EVar "fst") (EVar "row")))) (EVar "None"))) (EVar "row")))) (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes"))) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv")))))))))))
 (DFunDef false "importSeed" ((PVar "coreV") (PVar "admitted") (PCons PWild (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv")))
+(DTypeSig false "importSupplierKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))))
+(DFunDef false "importSupplierKey" ((PVar "depId") (PVar "decls") (PVar "methods") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "decls")) (arm (PCon "Some" (PTuple (PVar "defMid") (PVar "origin"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "defMid")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "origin")))) (ELit (LString "")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "methods")) (arm (PCon "Some" (PVar "keys")) () (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EVar "sortUniqS") (EVar "keys")))) (arm (PCon "None") () (EApp (EVar "lenKey") (EVar "depId")))))))
+(DTypeSig false "identKeysByName" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "identKeysByName" ((PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "identKeysByName" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "ident")) (PVar "rest"))) (EBlock (DoLet false false (PVar "seen") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "acc")) (arm (PCon "Some" (PVar "keys")) () (EVar "keys")) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "identKeysByName") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EBinOp "::" (EApp (EVar "identKey") (EVar "ident")) (EVar "seen"))) (EVar "acc"))) (EVar "rest")))))
 (DTypeSig false "suppliedBy" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyVar "a")) (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyVar "a"))))))
 (DFunDef false "suppliedBy" ((PVar "mid") (PTuple (PVar "name") (PVar "row"))) (ETuple (EVar "name") (ETuple (EVar "mid") (EVar "row"))))
 (DTypeSig false "containsPair" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))

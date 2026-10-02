@@ -342,6 +342,7 @@ import types.solver_contract.{
 import types.registry.{
   RegKey,
   Registry,
+  identKey,
   regKeyOfTab,
   regKeyRender,
   regEmpty,
@@ -47116,10 +47117,10 @@ publicModuleExports prog bindings =
       standalones
       (pickSchemes (publicValNames prog) bindings.mbSchemes))
 
--- The first row for a name wins, unless a second import supplies the same name:
--- then the occurrence is the ambiguity the resolver reports (`ambiguousSet`
--- keys on the supplying import's module id exactly like this, and a local
--- definition, which it exempts, shadows the seed here anyway). Choosing either
+-- The first row for a name wins, unless a second import supplies a different
+-- declaration of the same name: then the occurrence is the ambiguity the
+-- resolver reports (`ambiguousSet` keys on the declaration exactly like this,
+-- and a local definition, which it exempts, shadows the seed here anyway). Choosing either
 -- supplier would type the use against a definition the program never named,
 -- and the cascade would change with the order the imports were written.
 importedBindingWinners : List (String, (Option String, ExportBinding)) ->
@@ -48407,12 +48408,13 @@ andList (x :: rest) = "\{x}, \{andList rest}"
 -- spelling.  `resolve.mdk`'s `coreAliasNames` binds exactly the same two forms, and the
 -- two must agree: a key bound in scope with no scheme here is a `T-UNBOUND` at the use
 -- site, which is what #95 measured for six years.
--- Each row carries the id of the import that BINDS its name: the resolver's
--- ambiguity key (`ambiguousSet` over `importNamesIn`), so `moduleImportSeed` can
--- refuse to pick a winner by import order for a name the resolver has already
--- rejected. A row the form admits without binding its name (a bare method row
--- admitted for dispatch, a mangled twin) carries no supplier, and core is exempt
--- there as it is in the resolver.
+-- Each row a use-path BINDS carries the declaration it denotes
+-- (`importSupplierKey`), the same identity the resolver's value ambiguity check
+-- keys on (`importValueDecls`), so `moduleImportSeed` can refuse to pick a winner
+-- by import order for a name the resolver has already rejected, and still
+-- accept one declaration reached through two imports. A row the form admits
+-- without binding its name (a bare method row admitted for dispatch, a mangled
+-- twin) carries no supplier, and core is exempt there as it is in the resolver.
 importSeed : List (String, a) ->
   List (String, String) ->
   List Decl ->
@@ -48430,12 +48432,22 @@ importSeed coreV admitted ((DUse _ path _) :: rest) depEnv =
     None => importSeed coreV admitted rest depEnv
     Some depSchemes =>
       let bound = boundNames path
+      let decls =
+        omFromPairs
+          (reverseL (importFormRows path (graphPubDefiners depId)))
+          omEmpty
+      let methods =
+        identKeysByName
+          omEmpty
+          (importFormRows path (match omLookup depId (methodExportsIndex ())
+            Some rows => rows
+            None => []))
       map
           (row =>
             suppliedBy
               (if bindsName bound (fst row)
                 && not (containsPair (depId, fst row) admitted) then
-                Some depId
+                Some (importSupplierKey depId decls methods (fst row))
               else
                 None)
               row)
@@ -48443,6 +48455,34 @@ importSeed coreV admitted ((DUse _ path _) :: rest) depEnv =
         ++ importSeed coreV admitted rest depEnv
 importSeed coreV admitted (_ :: rest) depEnv =
   importSeed coreV admitted rest depEnv
+
+-- The identity one import's binding of `name` is compared by: the declaration
+-- it denotes.  A standalone value is `(defining module, name there)` from
+-- `graphPubDefiners`, first row winning as it does there; an interface method
+-- is the set of method declarations the import carries under that name
+-- (`meExports`).  A driver without an import graph knows neither, so the
+-- binding falls back to the importing module's id.  The three key shapes are
+-- two, a multiple of four, and one netstring long, so no two can coincide.
+importSupplierKey : String ->
+  OrdMap (String, String) ->
+  OrdMap (List String) ->
+  String ->
+  String
+importSupplierKey depId decls methods name = match omLookup name decls
+  Some (defMid, origin) => "\{lenKey defMid}\{lenKey origin}"
+  None => match omLookup name methods
+    Some keys => joinWith "" (sortUniqS keys)
+    None => lenKey depId
+
+identKeysByName : OrdMap (List String) ->
+  List (String, Ident) ->
+  OrdMap (List String)
+identKeysByName acc [] = acc
+identKeysByName acc ((n, ident) :: rest) =
+  let seen = match omLookup n acc
+    Some keys => keys
+    None => []
+  identKeysByName (omInsert n (identKey ident :: seen) acc) rest
 
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 suppliedBy mid (name, row) = (name, (mid, row))

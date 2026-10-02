@@ -1,0 +1,4 @@
+import ma.*
+import mb.*
+
+main = println (val + 1)

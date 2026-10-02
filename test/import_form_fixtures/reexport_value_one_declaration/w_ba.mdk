@@ -1,0 +1,6 @@
+-- The same two re-exports, written in the other order.
+import mb.*
+import ma.*
+
+both : Int
+both = mth 21 + val
