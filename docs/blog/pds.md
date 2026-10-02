@@ -44,8 +44,9 @@ main = println (render Post { author = "medaka", text = "Hello world!" })
 It's still experimental, but I think this project shows that
 it's at minimum capable of implementing some real-world programs. There are still a lot of features that I want
 to implement (and a long list of open bugs that I'm working through), but the basic elements of the language are
-all in place. If you only read one section, make it the one on effects near the end. It's the part of Medaka
-I find most interesting: the server's type says exactly what it's allowed to touch, and the compiler checks it.
+all in place. If you only read one section, I recommend the one on effects near the end. The effects system is
+one of my favorite parts of Medaka and for this project it lets us specify exactly what the server's allowed to
+touch directly in its types.
 
 ## Why a PDS?
 
