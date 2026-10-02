@@ -3383,7 +3383,7 @@ impl Szz Int where
 main = println (sz (dd 1))
 EOF
 # A bare method name whose interface is imported WITHOUT the method is
-# R-UNBOUND alone: typecheck never runs on a resolve-rejected graph.
+# R-UNBOUND alone: typecheck never runs on a resolve-rejected module.
 cat > "$TMP/m0/ma.mdk" <<'EOF'
 export interface IA a where
   mth : a -> Int
@@ -3409,13 +3409,22 @@ printf 'import ma.{IA}\nimport mb.{IB}\n\nmain = println (mth 1)\n' > "$TMP/m0/i
 printf 'import mb.{IB}\nimport ma.{IA}\n\nmain = println (mth 1)\n' > "$TMP/m0/ifaceonly_ba.mdk"
 printf 'import ma.{IA}\n\nmain = println (mth 1)\n' > "$TMP/m0/ifaceonly_single.mdk"
 printf 'import zz.{Zork}\n\nmain = println (zork 1)\n' > "$TMP/m0/ifaceonly_zork.mdk"
+# A rejection withholds typecheck from the rejected module and its importers only:
+# an independent module's type error is still reported beside it (rejdep_indep),
+# while one importing the rejected module is not typechecked (rejdep_importer).
+printf 'export h : Int -> Int\nh x = zz x\n' > "$TMP/m0/rjx.mdk"
+printf 'export y : Int\ny = "str"\n' > "$TMP/m0/tbx.mdk"
+printf 'import rjx.{h}\n\nexport w : Int\nw = h "str"\n' > "$TMP/m0/tcx.mdk"
+printf 'import rjx.{h}\nimport tbx.{y}\n\nmain = println (h y)\n' > "$TMP/m0/rejdep_indep.mdk"
+printf 'import tcx.{w}\n\nmain = println w\n' > "$TMP/m0/rejdep_importer.mdk"
 m0_codes() { printf '%s\n' "$1" | grep -o '"code":"[^"]*"' | sed 's/"code":"//; s/"$//' | tr '\n' ' '; }
 for m0_case in direct_pg:R-AMBIGUOUS-INTERFACE direct_gp:R-AMBIGUOUS-INTERFACE \
     reexport_pg:R-AMBIGUOUS-INTERFACE reexport_gp:R-AMBIGUOUS-INTERFACE \
     unknown_iface:R-UNKNOWN-INTERFACE ifaceonly_ab:R-UNBOUND ifaceonly_ba:R-UNBOUND \
-    ifaceonly_single:R-UNBOUND ifaceonly_zork:R-UNBOUND; do
+    ifaceonly_single:R-UNBOUND ifaceonly_zork:R-UNBOUND \
+    rejdep_indep:R-UNBOUND+T-TYPE-MISMATCH rejdep_importer:R-UNBOUND; do
   m0_name="${m0_case%%:*}"
-  m0_want="${m0_case#*:} "
+  m0_want="$(printf '%s' "${m0_case#*:}" | tr '+' ' ') "
   m0_json="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/m0/$m0_name.mdk" 2>/dev/null)"
   m0_code=$?
   m0_got="$(m0_codes "$m0_json")"
