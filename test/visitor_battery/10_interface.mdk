@@ -1,0 +1,21 @@
+interface Shape a where
+  area : a -> Float
+  name : a -> String
+
+data Circle = Circle Float
+data Square = Square Float
+
+impl Shape Circle where
+  area (Circle r) = 3.14159 * r * r
+  name _ = "circle"
+
+impl Shape Square where
+  area (Square s) = s * s
+  name _ = "square"
+
+describe : Shape a => a -> String
+describe s = "\{name s} with area \{area s}"
+
+main =
+  println (describe (Circle 1.0))
+  println (describe (Square 2.0))

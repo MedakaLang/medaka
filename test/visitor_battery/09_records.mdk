@@ -1,0 +1,11 @@
+data Point = { x : Int, y : Int } deriving (Eq, Debug)
+
+data Person = { name : String, age : Int, home : Point } deriving (Eq, Debug)
+
+main =
+  let p = Person { name = "Ada", age = 36, home = Point { x = 1, y = 2 } }
+  let q = { p | age = 37 }
+  println p.name
+  println (debug q)
+  println (p == q)
+  println (p.home == q.home)

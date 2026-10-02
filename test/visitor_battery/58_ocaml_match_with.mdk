@@ -1,0 +1,6 @@
+describe : Int -> String
+describe n = match n with
+  | 0 -> "zero"
+  | _ -> "other"
+
+main = println (describe 0)

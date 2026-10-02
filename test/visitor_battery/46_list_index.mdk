@@ -1,0 +1,6 @@
+main =
+  let xs = [10, 20, 30]
+  println xs[0]
+  println xs[2]
+  println xs[-1]
+  println xs[5]

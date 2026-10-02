@@ -1,0 +1,13 @@
+import string.{words, toLower}
+import map.{Map, insertWith, entries}
+
+printAll : List String -> <IO> Unit
+printAll [] = ()
+printAll (x :: xs) =
+  println x
+  printAll xs
+
+main =
+  let text = "the quick brown fox jumps over the lazy dog the fox"
+  let freq = fold (m w => insertWith (+) w 1 m) Map {} (words (toLower text))
+  printAll (map (p => "\{fst p}: \{snd p}") (entries freq))

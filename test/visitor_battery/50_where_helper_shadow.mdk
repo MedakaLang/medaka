@@ -1,0 +1,14 @@
+total : List Int -> Int
+total xs = go xs 0
+  where
+    go [] acc = acc
+    go (y :: ys) acc = go ys (acc + y)
+
+average : List Int -> Float
+average xs = fromInt (total xs) / fromInt (length xs)
+  where
+    length ys = fold (acc _ => acc + 1) 0 ys
+
+main =
+  println (total [1, 2, 3, 4])
+  println (average [1, 2, 3, 4])

@@ -26,10 +26,27 @@ All of this was enabled by coding agents, and it's hard to imagine these sorts o
 
 This blog post isn't going to go super in-depth into Medaka itself. We've got a whole [guide](https://medaka-lang.dev/guide/) for that, which
 I'd encourage you to check out if you're interested. High level, Medaka is a functional programming language
-inspired by languages like Haskell and OCaml. It's still experimental, but I think this project shows that
+inspired by languages like Haskell and OCaml. Here's what it looks like:
+
+```medaka
+data Post = Post { author : String, text : String }
+
+render : Post -> String
+render (Post { author, text }) = "@\{author}: \{text}"
+
+main = println (render Post { author = "medaka", text = "Hello world!" })
+```
+
+```medaka-expect
+@medaka: Hello world!
+```
+
+It's still experimental, but I think this project shows that
 it's at minimum capable of implementing some real-world programs. There are still a lot of features that I want
 to implement (and a long list of open bugs that I'm working through), but the basic elements of the language are
-all in place.
+all in place. If you only read one section, I recommend the one on effects near the end. The effects system is
+one of my favorite parts of Medaka and for this project it lets us specify exactly what the server's allowed to
+touch directly in its types.
 
 ## Why a PDS?
 
@@ -205,19 +222,24 @@ The end result was some massive improvements. The code was much cleaner and type
 big performance gains from no longer abusing the `Int` type and using proper representations and instructions. And the integer types
 took about 3 days from design to done, which is truly insane for a language feature of this scope.
 
-Here's how things compare from just before the integer work started to today:
+Here's how things compare from just before the integer work started to today. Signing a commit went from
+about 23.5 ms to about 5.3 ms, and hashing one 64-byte SHA-256 block from 2.6 µs to 0.95 µs. The rest of
+the speedups, as ratios:
 
-| What | Before | After | Faster |
-|---|---|---|---|
-| Signing a commit (one ECDSA signature) | ~23.5 ms | ~5.3 ms | **5.7×** |
-| SHA-256, per 64-byte block | 2.6 µs | 0.95 µs | **2.7×** |
-| Password hash (PBKDF2) | — | — | **2.6×** |
-| Field multiplication (the core curve operation) | — | — | **6.9×** |
-| Modular inversion (one step of signing) | — | — | **30×** |
-| Exporting or reloading a 2,000-record repo | — | — | **1.7×** |
-| Inserting 2,000 records into the MST | — | — | **1.2×** |
+| What | Faster |
+|---|---|
+| Signing a commit (one ECDSA signature) | **5.7×** |
+| SHA-256, per 64-byte block | **2.7×** |
+| Password hash (PBKDF2) | **2.6×** |
+| Field multiplication (the core curve operation) | **6.9×** |
+| Modular inversion (one step of signing) | **30×** |
+| Exporting or reloading a 2,000-record repo | **1.7×** |
+| Inserting 2,000 records into the MST | **1.2×** |
 
-_Speedups are measured in CPU instructions. Times are the best of five runs._
+_Speedups are ratios of CPU instruction counts; the two timings above are the best of five runs._
+
+For calibration, 5.3 ms per signature is still roughly a hundred times slower than libsecp256k1. That's a
+pure-Medaka implementation with no hand-written assembly, signing one commit per post, so I'm fine with it.
 
 ## Effects
 
