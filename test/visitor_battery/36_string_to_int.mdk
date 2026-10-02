@@ -1,0 +1,8 @@
+import string.{toInt, toFloat}
+
+main =
+  println (toInt "42")
+  println (toInt "-17")
+  println (toInt "abc")
+  println (toInt " 42 ")
+  println (toFloat "3.5")

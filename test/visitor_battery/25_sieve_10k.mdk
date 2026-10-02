@@ -1,0 +1,5 @@
+sieve : List Int -> List Int
+sieve [] = []
+sieve (p :: xs) = p :: sieve (filter (x => x % p /= 0) xs)
+
+main = println (length (sieve [2..=10000]))

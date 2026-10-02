@@ -1,0 +1,14 @@
+fizzbuzz : Int -> String
+fizzbuzz n
+  | n % 15 == 0 = "FizzBuzz"
+  | n % 3 == 0 = "Fizz"
+  | n % 5 == 0 = "Buzz"
+  | otherwise = "\{n}"
+
+printAll : List String -> <IO> Unit
+printAll [] = ()
+printAll (x :: xs) =
+  println x
+  printAll xs
+
+main = printAll (map fizzbuzz [1..=20])

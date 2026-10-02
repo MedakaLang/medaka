@@ -570,3 +570,9 @@ test/compiler_module_roster_test.mdk  a small fixed roster over four modules not
                                Its behavior IS asserted: the Makefile `test:` target names it
                                explicitly, so `make test` runs it, and CI's `inlang` job runs
                                `make test`.
+test/visitor_battery/tools/run_battery.sh  the first-visitor program battery driver (#3699): runs every
+                               test/visitor_battery/*.mdk through run / build / the playground
+                               compiler and RECORDS exit codes and output; it asserts nothing, so
+                               a green run proves nothing about the compiler. The proposal to
+                               turn the corpus into a native gate-test plus a nightly browser arm
+                               is #3699; until then this is a tool.

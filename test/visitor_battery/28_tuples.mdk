@@ -1,0 +1,10 @@
+swap : (a, b) -> (b, a)
+swap (a, b) = (b, a)
+
+main =
+  let (x, y) = (1, "one")
+  println (swap (x, y))
+  println (fst (3, 4) + snd (3, 4))
+  let pairs = [(1, "a"), (2, "b")]
+  println (map (p => fst p) pairs)
+  println (map ((n, s) => "\{n}\{s}") pairs)

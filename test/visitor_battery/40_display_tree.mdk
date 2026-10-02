@@ -1,0 +1,14 @@
+data Tree = Leaf | Node Tree Int Tree
+
+impl Display Tree where
+  display Leaf = "."
+  display (Node l v r) = "(\{l} \{v} \{r})"
+
+insert : Int -> Tree -> Tree
+insert v Leaf = Node Leaf v Leaf
+insert v (Node l x r)
+  | v < x = Node (insert v l) x r
+  | v > x = Node l x (insert v r)
+  | otherwise = Node l x r
+
+main = println (fold (t v => insert v t) Leaf [5, 3, 8, 1, 4])

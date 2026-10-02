@@ -1,0 +1,4 @@
+spin : Int -> Int
+spin n = spin (n + 1)
+
+main = println (spin 0)
