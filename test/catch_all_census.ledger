@@ -59,6 +59,7 @@ infer	Expr	30/42
 inferExpected	Expr	2/42
 inferOneIfaceDefaults	Decl	2/14
 inferOneImpl	Decl	2/14
+isAliasMethodImport	Decl	2/14
 isCtorAppSpine	Expr	5/42
 isDirectInterfaceDecl	Decl	1/14
 isDisplayHead	Expr	6/42
