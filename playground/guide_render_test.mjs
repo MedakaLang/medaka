@@ -194,7 +194,7 @@ try {
   // Group 5 is the `<code>` BODY, which since F-guide-syntax-highlight is no
   // longer plain-escaped text but token `<span>`s (playground/highlight_medaka.mjs).
   // Check 10 grades it against group 4 (`data-source`); the footer is now group 6.
-  const BLOCK_RE = /<div class="codeblock kind-([a-z]+)" data-lang="([^"]*)" data-fence="([^"]*)" data-source="([\s\S]*?)"><pre><code[^>]*>([\s\S]*?)<\/code><\/pre>([\s\S]*?)<\/div>\n/g;
+  const BLOCK_RE = /<div class="codeblock kind-([a-z]+)" data-lang="([^"]*)" data-fence="([^"]*)" data-source="([\s\S]*?)"><pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>([\s\S]*?)<\/div>\n/g;
 
   for (const page of pages) {
     const html = readFileSync(join(out, page.outFile), 'utf8');
@@ -228,6 +228,7 @@ try {
     check(ids.length > 0, `${where}: has at least one anchored heading`);
     check(page.toc.length > 0, `${where}: has a non-empty TOC`);
     const idSet = new Set(ids);
+    idSet.add('main');   // <main id="main">, the skip link's target on every page
     idsByPage.set(where, idSet);
     for (const entry of page.toc) {
       check(idSet.has(entry.id), `${where}: TOC entry #${entry.id} resolves to a heading`);

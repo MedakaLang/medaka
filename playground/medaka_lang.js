@@ -43,7 +43,7 @@ const medakaStream = StreamLanguage.define({
 // Dark highlight style — cohesive with the two named UI accents.
 export const medakaHighlightStyle = HighlightStyle.define([
   { tag: tags.keyword, color: '#5fd38f' },
-  { tag: tags.comment, color: '#6e7781', fontStyle: 'italic' },
+  { tag: tags.comment, color: '#8a94a6', fontStyle: 'italic' },
   { tag: tags.string, color: '#f0c674' },
   { tag: tags.character, color: '#f0c674' },
   { tag: tags.special(tags.string), color: '#ffb86c' },
