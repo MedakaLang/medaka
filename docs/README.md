@@ -128,6 +128,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`TESTING-ARCHITECTURE.md`](ops/TESTING-ARCHITECTURE.md) | TESTING-ARCHITECTURE.md — the target testing architecture, and the migration to it | PROPOSED 2026-09-03, from a two-round survey at `5397afc9c` |
 | [`TESTING-DESIGN.md`](ops/TESTING-DESIGN.md) | TESTING-DESIGN.md — a coherent testing architecture for Medaka | SUPERSEDED as a plan, 2026-09-03 |
 | [`TESTING-INVENTORY.md`](ops/TESTING-INVENTORY.md) | TESTING-INVENTORY.md — which gates can be native today, and what blocks the rest | — |
+| [`TOOLING-REFERENCE.md`](ops/TOOLING-REFERENCE.md) | TOOLING-REFERENCE.md — build cache, lint cache, editors, and the source layout | REFERENCE |
 
 ### stdlib — library plan
 
