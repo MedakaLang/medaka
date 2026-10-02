@@ -241,7 +241,7 @@ buildHuffmanWith allowSingle lengths =
    use `buildHuffmanStrict` instead.
 
    > buildHuffman [|2, 1, 3, 3|]
-   Ok Huffman { counts = [|0, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|], symbols = [|1, 0, 2, 3|] }
+   Ok (Huffman { counts = [|0, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|], symbols = [|1, 0, 2, 3|] })
 -}
 export
 buildHuffman : Array Int -> Result String Huffman

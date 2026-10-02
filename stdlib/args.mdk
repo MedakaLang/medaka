@@ -359,7 +359,7 @@ usageExitCode = 1
    `usageExitCode`.
 
    > map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["-o", "x"])
-   Ok Some "x"
+   Ok (Some "x")
    > map (a => a.positionals) (parseArgs (spec "fmt" [switch ["--write"] "w"]) ["a.mdk", "--write", "b.mdk"])
    Ok ["a.mdk", "b.mdk"]
    > map (_ => "ok") (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--zzz"])
@@ -379,11 +379,11 @@ parseArgs sp argv =
 --
 -- C1: both value spellings reach the same canonical key:
 -- > map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["--out", "x"])
--- Ok Some "x"
+-- Ok (Some "x")
 -- > map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["--out=x"])
--- Ok Some "x"
+-- Ok (Some "x")
 -- > map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["-o=x"])
--- Ok Some "x"
+-- Ok (Some "x")
 --
 -- C2: a value flag with nothing after it:
 -- > map (_ => "ok") (parseArgs (spec "fmt" [value ["--out"] "PATH" "o"]) ["--out"])
@@ -396,11 +396,11 @@ parseArgs sp argv =
 --
 -- `OneOf` and `IntValue` check the value they took, in either spelling:
 -- > map (a => flagValue "--engine" a) (parseArgs (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) ["--engine", "native"])
--- Ok Some "native"
+-- Ok (Some "native")
 -- > map (_ => "ok") (parseArgs (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) ["--engine=zzz"])
 -- Err "medaka test: --engine: unrecognized value 'zzz' (known: eval, native)"
 -- > map (a => flagValue "--jobs" a) (parseArgs (spec "gate" [intValue ["--jobs"] "N" "j"]) ["--jobs", "-3"])
--- Ok Some "-3"
+-- Ok (Some "-3")
 -- > map (_ => "ok") (parseArgs (spec "gate" [intValue ["--jobs"] "N" "j"]) ["--jobs", "x"])
 -- Err "medaka gate: --jobs: expected an integer, got 'x'"
 --
@@ -421,7 +421,7 @@ parseArgs sp argv =
 --
 -- `CollectUnknown` records a token no `FlagSpec` claims:
 -- > map (a => flagValue "--anything" a) (parseArgs (withUnknown CollectUnknown (spec "codemod" [])) ["--anything", "v"])
--- Ok Some "v"
+-- Ok (Some "v")
 
 -- The scanner's carrier: the three `Args` fields, still being built, or the
 -- finished rejection sentence.
@@ -566,7 +566,7 @@ hasKey nm ((k, _) :: rest) = k == nm || hasKey nm rest
 {- | The value of the flag's first occurrence, or `None`.
 
    > map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
-   Ok Some "a" -}
+   Ok (Some "a") -}
 export
 flagValue : String -> Args -> Option String
 flagValue nm a = firstValue nm a.given
@@ -580,7 +580,7 @@ firstValue nm ((k, v) :: rest)
 {- | The value of the flag's last occurrence, or `None`.
 
    > map (a => lastValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
-   Ok Some "b" -}
+   Ok (Some "b") -}
 export
 lastValue : String -> Args -> Option String
 lastValue nm a = lastValueGo nm a.given None
