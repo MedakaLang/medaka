@@ -1,0 +1,11 @@
+main =
+  println (0.1 + 0.2)
+  println (1.0 / 3.0)
+  println (pow 2.0 0.5)
+  println (sqrt 2.0)
+  println (1.0e100)
+  println (1.0 / 0.0)
+  println (0.0 / 0.0)
+  println (floatToInt 3.99)
+  println (fromInt 7 / 2.0)
+  println (round 2.5)

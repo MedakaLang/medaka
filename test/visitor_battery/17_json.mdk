@@ -1,0 +1,9 @@
+import json.{parse, stringify, get, asInt, asString}
+
+main =
+  match parse "{\"name\": \"medaka\", \"stars\": 3, \"tags\": [\"fp\", \"effects\"]}"
+    Err e => println "parse error: \{e}"
+    Ok j =>
+      println (stringify j)
+      println (get "name" j |> flatMap asString)
+      println (get "stars" j |> flatMap asInt)

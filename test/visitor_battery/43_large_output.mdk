@@ -1,0 +1,7 @@
+printAll : List String -> <IO> Unit
+printAll [] = ()
+printAll (x :: xs) =
+  println x
+  printAll xs
+
+main = printAll (map (n => "\{n}") [1..=5000])
