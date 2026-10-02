@@ -1,0 +1,6 @@
+entry: main.mdk
+what: #1288 CONTROL for the ambiguity rows, `mid` re-exports only `p` so `Same` can mean one interface
+
+Identical to the ambiguous rows except `mid` has no `g.*` line.
+
+Spec answer, hand-derived: `check` is clean; `run` and the built binary print `1`.

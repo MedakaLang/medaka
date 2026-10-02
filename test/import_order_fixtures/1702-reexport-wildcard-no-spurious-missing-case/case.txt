@@ -1,0 +1,6 @@
+entry: main.mdk
+what: #1702 (spurious `Missing case` via re-export) a ctor type reached through a wildcard re-export chain is not confused with a same-named type elsewhere
+
+`umod` declares `Col = Red Int | Green`; `mid` only does `export import umod.*`; `amod` declares an unrelated `Col = Red Int | Green | Blue` and `main` takes just `aval` from it. `main`'s `score` matches the `Col` that `mk` returns (from `umod`) with `Red` and `Green`, which is exhaustive, so `check` owes NO warning.
+
+Spec answer, hand-derived: `check` prints no `Missing case` warning; `run` and the built binary print `105` (`score mk` = 5, plus `aval` = 100). This gate grades only invariance across import-clause orderings; the value and the absent warning were measured by hand.

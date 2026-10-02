@@ -1,0 +1,8 @@
+-- `import ma as A` and `import mb as A` bind one alias to two modules, and
+-- both export a method spelled `mth` (`IA.mth`, `IB.mth`).  `A.mth` therefore
+-- names two declarations: T-AMBIGUOUS-ALIAS-METHOD, exit 1, the same code in
+-- either import order (S2-DECL (e)).
+import ma as A
+import mb as A
+
+main = println (A.mth 1)

@@ -1,0 +1,10 @@
+import ma as A
+import mb as B
+
+export interface Both a where
+  both : a -> String
+
+public export data W a = W a
+
+impl Both (W a) requires A.Sh a, B.Sh a where
+  both (W v) = A.shl v ++ "+" ++ B.shl v

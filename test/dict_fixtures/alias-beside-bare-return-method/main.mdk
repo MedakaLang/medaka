@@ -1,0 +1,8 @@
+-- `import ma as A` binds no bare method name, so bare `mk` is `mb.mk` alone.
+import ma as A
+import mb.{Mk, mk}
+
+v : Int
+v = mk 7
+
+main = println v

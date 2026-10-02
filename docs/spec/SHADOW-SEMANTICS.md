@@ -1117,7 +1117,19 @@ Given an occurrence of bare name `N` in module `M`:
   > - **Exactly one** → it decides, per (a)+(b).
   > - **Two or more that yield the SAME denotation** (all the standalone, or all the
   >   same impl) → that denotation. Shadow-hood is per **name** (S1); an occurrence
-  >   is not ambiguous merely because two declarations agree about it.
+  >   is not ambiguous merely because two declarations agree about it. Agreement is
+  >   decided at the occurrence: if some admitted declaration's own receiver cannot
+  >   be evaluated there (under-application, as in `g = mth "abc"` where one
+  >   declaration dispatches at argument 1; no recorded dispatch index; a receiver
+  >   still ungrounded), the declarations have not been shown to agree, and the
+  >   occurrence is the **located reject** of the next bullet, in every import order.
+  >   **RULED 2026-10-01 (Val)**: this replaces the earlier hand-derived `99` for the
+  >   under-applied shape. A fully applied occurrence is unaffected. A **value**
+  >   occurrence (`ap2 mth "abc" 5`, `g = mth`, `flip mth`) is the limit case of
+  >   under-application, so this bullet and the next govern it as written, but the
+  >   implementation does **not yet reject** one: it binds the imported standalone,
+  >   which is a wrong answer whenever the admitted declarations disagree (known
+  >   gap, #3678).
   > - **Two or more that DISAGREE** → a **located reject** at the occurrence. Not a
   >   silent pick: by S1-SCOPE's own criterion this clause set is a
   >   *name-resolution* rule, which must be **choosing between candidates the author
@@ -1187,38 +1199,41 @@ Given an occurrence of bare name `N` in module `M`:
   > ([#2188](https://github.com/MedakaLang/medaka/issues/2188), sprint
   > `bare-name-is-not-a-key`, slice `S-admitted-iface-all-candidates`). Two or more
   > admitted declarations that disagree are now a **located reject at the occurrence**,
-  > diagnostic code **`T-AMBIGUOUS-SHADOW-DECL`**, span = the **application node** whose
-  > argument is the outermost admitted declaration's receiver (i.e. the call site, not
-  > the argument) — pinned as `test/shadow_fixtures/i27_importer_two_admitted_disagree/`
+  > diagnostic code **`T-AMBIGUOUS-SHADOW-DECL`**, span = the **head** of the
+  > application whose argument is the outermost admitted declaration's receiver (i.e.
+  > the call site, not the argument; an application node carries no span of its own)
+  > — pinned as `test/shadow_fixtures/i27_importer_two_admitted_disagree/`
   > on `check`, `run` and `build`, with its `order-swapped.mdk` companion pinning (e).
   > Its agreeing twin, `i28_importer_two_admitted_agree/`, pins (d) bullet 2 at the same
   > graph minus one `impl` and must stay `99` on all three verbs.
   >
   > **What the implementation had to grow, stated because "widen the read" is the wrong
-  > mental model and cost a refused slice.** `admittedIfaceFor` (`types/typecheck.mdk`)
-  > is a **cardinality-1 projection** of `methodIfaceParamsRef`, which holds ONE payload
-  > per bare name — its single-winner-ness is a property of the TABLE, not of the read —
-  > and its "declined" fallback is a last-write-wins **floor**, i.e. exactly the
+  > mental model and cost a refused slice.** `methodIfaceHere` (`types/typecheck.mdk`)
+  > is a **cardinality-1 projection** of the module's method scope, which yields ONE payload
+  > per bare name — its single-winner-ness is a property of the PROJECTION, not of the read —
+  > and its "declined" fallback was a last-write-wins **floor**, i.e. exactly the
   > outside-the-program tie-break (d) bullet 3 forbids. MEASURED at `7e5ec5e7`: this
   > clause's own corpus printed **99** with `import amodI…` first and **55** with
   > `import zmodI…` first, on `run` and on the shipped binary — a live (e) violation the
   > 2026-08-09 conformance note above does not record. The fix therefore adds a genuine
-  > per-module **admitted-SET** table, built at `overrideScopedMethods` by that
-  > function's own ladder and holding an entry ONLY for names with ≥2 admitted
+  > per-module **admitted SET** (`MethodScope`'s `MsMany`), built by `methodScopeAt`'s
+  > own ladder and present ONLY for names with ≥2 admitted
   > declarations, so every name with 0 or 1 keeps the single-winner projection
   > byte-identically. **Because two distinct interfaces can never yield the same impl,
   > "they agree" reduces at cardinality ≥2 to "they all fall to the standalone"** — the
   > verdict is `reject` iff at least one admitted declaration's own impl query hits.
   > The joint evaluation (b) requires happens at the **outermost** admitted dispatch
   > index, the only spine node at which every declaration's receiver argument has been
-  > inferred; an unanswerable receiver (under-application, no recorded index, still
-  > ungrounded) **defers to the pre-existing behaviour and never rejects**.
+  > inferred. An unanswerable receiver (under-application, no recorded index, still
+  > ungrounded) at first deferred to the pre-existing behaviour, which was the floor's
+  > pick and moved with import order; since 2026-10-01 it is the same located reject
+  > (bullet 2's ruling above), and the floor is gone: `MsMany` carries the admitted set
+  > alone, and every single-winner reader sees no declaration for it.
   >
   > **Not reached by that fix, and deliberately so.** The reject fires from the
   > importer-shadow application arms, so it is scoped to an **applied** occurrence of a
-  > name that is a shadow under S1 — an under-applied occurrence (`mth n` where the
-  > outermost admitted receiver is argument 1) still takes the old path. The
-  > single-winner `admittedIfaceFor` remains what the other readers consume; that is
+  > name that is a shadow under S1 (an under-applied one included, since 2026-10-01).
+  > The single-winner `methodIfaceHere` remains what the other readers consume; that is
   > sound for the cells this arm decides (a rejected program has no denotation to route,
   > and an all-miss agreeing set makes every winner miss too) but it is not a general
   > widening, and a future cell that needs per-declaration *routing* rather than a
@@ -1249,8 +1264,8 @@ Given an occurrence of bare name `N` in module `M`:
   > right operand. S1-NS (a)(i) — the TYPE arm — admits a method name `n` when the
   > declaring interface's **own name** is admitted into `M`, whether or not `n` is. Two
   > nameable interfaces give a union of **two**, not zero. What declines in that shape is
-  > an *implementation* predicate (`scopedMethodEntry`'s witness ladder, whose
-  > `importedMethodEntry` arm requires an import binding the **name**), which is strictly
+  > an *implementation* predicate (`methodScopeAt`'s witness ladder, whose
+  > rung 1 requires an import binding the **name**), which is strictly
   > narrower than S1-NS (a). **A predicate that requires the method name where S1-NS (a)
   > admits on the interface name is NON-CONFORMANT with S2-DECL (c)**, which admits
   > declarations by S1-NS (a) and by nothing else. This is the whole content of the
@@ -1841,12 +1856,12 @@ recorded as a dated observation, not as a number this page maintains.
 >   imported under a member list that binds another name. [#1353](https://github.com/MedakaLang/medaka/issues/1353)
 >   is **CLOSED**; its must-fail pin was drained and deleted, and row 33 is what
 >   replaced it. The mechanism it was filed on, recorded because §3's own
->   S1-detect row is marked stale about it: the Module-path shadow test reads
->   `crossRun.value.universeIfaceMethodsRef`, grown per module by
->   `appendUniverseAccums`'s call to `allIfaceMethodNames` — which carries **no
->   `pub` filter** — accumulated **cumulatively in the loader's dependency-first
->   topological order**, the same shape `DICT-SEMANTICS.md` §8 I5 records for the
->   impl universe. The **feeder** is still unfiltered; what changed is that the
+>   S1-detect row is marked stale about it: the Module-path shadow test asks
+>   `methodNameDeclaredAt` over `deMethods`, the whole-graph method table
+>   restricted to the declarations visible at the reading module's ordinal —
+>   which carries **no `pub` filter** — so its answer grows **cumulatively in the
+>   loader's dependency-first topological order**, the same shape
+>   `DICT-SEMANTICS.md` §8 I5 records for the impl universe. The **feeder** is still unfiltered; what changed is that the
 >   **result** is now intersected with the nameable set (§3).
 > - ✅ **The namespace axis (S1-NS).** Rows 36–38 and 40–42 — sibling method,
 >   return position, re-export by method name, module alias, member alias.
@@ -1996,7 +2011,7 @@ Line numbers at `cfc4fa5a`.
 
 | Clause | Stage / site | What it enforces | **Keying assumption** |
 |---|---|---|---|
-| S1 detect (run/check, definer) | 🔴 **STALE — re-verified 2026-08-07, wrong on the Module path.** `buildDefinerShadows` is the FLAT-path function; on the MODULE (multi-module) path the reader is `definerShadowsFromSet`, keyed on `crossRun.value.universeIfaceMethodsRef` (grown by `appendUniverseAccums` → `allIfaceMethodNames`) — not the symbols or line numbers this cell names. Line numbers are additionally untrusted per this table's own preamble | this module's funDefs that name a method | **bare-name intersection, but NOT via `accData`/`publicDataDecls` — those are DEAD on the Module path** (`fullUniverse` binds `[]` there; an in-source comment calls the old accData concat "a dead per-module O(N) concat"). The real feeder, `allIfaceMethodNames`, has **no `pub` filter** (sees a private interface's methods too — the opposite of what "public decls" implies) and is accumulated **cumulatively in the loader's dependency-first topological order**, not filtered by import reachability — the same shape as `DICT-SEMANTICS.md` §8 I5's "PARTIAL — cumulative, not global" row for the impl universe. This is the mechanism behind #1375's reachability axis; see row-14 BUG. ⚠️ **The FEEDER is still unfiltered; the RESULT no longer is (S1-NS / #1353, 2026-08-08).** `checkBodyImpl` now wraps *both* `definerShadowsFromSet` and `standaloneShadowsFromSet` in `nameableIfaceShadows`, which intersects the answer with `nameableIfaceMethodSet` — the methods of the interfaces that module can NAME. So this cell describes the operand, not the answer |
+| S1 detect (run/check, definer) | 🔴 **STALE — re-verified 2026-08-07, wrong on the Module path.** `buildDefinerShadows` is the FLAT-path function; on the MODULE (multi-module) path the reader is `definerShadowsFromSet`, whose method-name test is `methodNameDeclaredAt` over `DeclEnvs.deMethods` at the reading module's ordinal (every interface method a module at or before it declares, with no `pub` filter) — not the symbols or line numbers this cell names. Line numbers are additionally untrusted per this table's own preamble | this module's funDefs that name a method | **bare-name intersection, but NOT via `accData`/`publicDataDecls` — those are DEAD on the Module path** (`fullUniverse` binds `[]` there; an in-source comment calls the old accData concat "a dead per-module O(N) concat"). The real feeder, `deMethods` read at the module's ordinal (`methodNameDeclaredAt`), has **no `pub` filter** (sees a private interface's methods too — the opposite of what "public decls" implies) and covers **every module at or before the reader's ordinal in the loader's dependency-first topological order**, not filtered by import reachability — the same shape as `DICT-SEMANTICS.md` §8 I5's "PARTIAL — cumulative, not global" row for the impl universe. This is the mechanism behind #1375's reachability axis; see row-14 BUG. ⚠️ **The FEEDER is still unfiltered; the RESULT no longer is (S1-NS / #1353, 2026-08-08).** `checkBodyImpl` now wraps *both* `definerShadowsFromSet` and `standaloneShadowsFromSet` in `nameableIfaceShadows`, which intersects the answer with `nameableIfaceMethodSet` — the methods of the interfaces that module can NAME. So this cell describes the operand, not the answer |
 | S1 detect (run/check, importer) | `typecheck.mdk:17020` `buildStandaloneShadowsGraph` | imported standalones shadowing a method | imported funDef names minus local names, methods scanned across `implDecls ++ prog` (the `cfc4fa5a` fix: LOCAL interfaces included) |
 | S1 detect (build path) | `typecheck.mdk:11475` `computeMangledShadowMap` + `unitMangledShadows:11480`, set once at `elaborateModules:11932` (`mangledShadowMapRef`); consumed by `buildDefinerShadows:11460` and `buildStandaloneShadowsGraph:11487-11497` | recover shadows AFTER mangling renamed the standalone | **forward-constructs `mangledName mid m`** per (module, method) and checks it against actual funDefs — exact, not prefix-stripping; empty map on the un-mangled path (inert) |
 | S1 mark | `markSetsOf` (its unsplit set ∪ `buildStandaloneShadowsGraph`) → `prePassDictArg`/`prePassModulePairArg` rewrite occurrences to `EMethodAt`; since #2705 every Module-arm driver marks, not only `elaborateModules` | occurrences get an evidence id (`EMethodAt String String EvId`) | graph-wide name set over USER modules (core excluded). ⚠️ **NO LONGER graph-wide on the Module path (S1-NS / #1353, 2026-08-08).** The unsplit set is still what `core` is marked with, but each USER module goes through `prePassModulePairArg`, which filters four of its five inputs — `rpNames`, the graph shadow set (through `shadowBareName`), `argNames` and `shadowMap` — to `nameableIfaceMethodSet` for *that* module. `dictNames` is the one input left unfiltered, and is not an input to dispatch (it yields `EDictAt`) |

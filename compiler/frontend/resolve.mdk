@@ -1874,6 +1874,10 @@ checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body)) _) =
 -- `env.interfaces`' `iaIfaces` are filtered from the SAME `expInterfaces` over the
 -- SAME `importedNamesMM` names, so an ambiguous interface is necessarily in scope
 -- and the two verdicts are mutually exclusive by construction.
+--
+-- An ambiguous head names no single interface, so its methods are not checked
+-- for membership: `ifaceMethodsOf` would answer for whichever same-named
+-- interface was imported first, and report a member of the other as foreign.
 checkImplDecl : Env ->
   String ->
   List Ty ->
@@ -1881,11 +1885,15 @@ checkImplDecl : Env ->
   List ImplMethod ->
   List ResError
 checkImplDecl env iface tyargs reqs methods =
+  let ambiguous = ambiguousIfaceErrors env iface (firstTyLocList tyargs)
+  let membership = match ambiguous
+    [] => checkImplIface env iface methods
+    _ => []
   flatMap (checkType None env) tyargs
     ++ flatMap (checkRequire env) reqs
     ++ flatMap (checkImplMethod env) methods
-    ++ checkImplIface env iface methods
-    ++ ambiguousIfaceErrors env iface (firstTyLocList tyargs)
+    ++ membership
+    ++ ambiguous
 
 checkRequire : Env -> Require -> List ResError
 checkRequire env (Require { requireHead = iface, requireArgs = tys }) =
@@ -1915,8 +1923,11 @@ ifaceMethodsOf iface ((i, ms) :: rest)
   | otherwise = ifaceMethodsOf iface rest
 
 checkMethodMember : String -> List String -> ImplMethod -> List ResError
-checkMethodMember iface known (ImplMethod mname _ _) =
-  if contains mname known then [] else [MethodNotInInterface mname iface None]
+checkMethodMember iface known (ImplMethod mname _ body) =
+  if contains mname known then
+    []
+  else
+    [MethodNotInInterface mname iface (firstExprLoc body)]
 
 -- ── Primitives (hardcoded) ───────────────────────────────────────────────
 isTupleCtorTyName : String -> Bool
@@ -3003,6 +3014,10 @@ public export data ModuleExports = ModuleExports {
   expFieldOwners : List (String, String),
   expInterfaces : List String,
   expIfaceMethods : List (String, List String),
+  -- (interface name, DECLARING module) for every exported interface.  A name
+  -- with two distinct declaring modules is two interfaces merged by a
+  -- re-export; the importer's ambiguity check reads that here.
+  expIfaceOrigins : List (String, String),
   expEffects : List String,  -- exported effect labels (Phase 146)
   -- (label, DECLARING module) for every exported label, the identity an
   -- importer's rows are stamped with and the provenance its ambiguity check
@@ -3681,11 +3696,58 @@ ifaceAmbiguousSet : OrdMap ModuleExports ->
 ifaceAmbiguousSet known prog =
   let prov =
     foldNamespaceProvenance
-      (importNamesIn nsInterfaces)
+      importUnmergedIfaceNames
       known
       omEmpty
       (usePathsOf prog)
-  keepAmbiguous (interfaceNamesOf prog) (provToPairs prov)
+  let prov2 = foldIfaceMergeProvenance known prov (usePathsOf prog)
+  keepAmbiguous (interfaceNamesOf prog) (provToPairs prov2)
+
+-- A path's interface names, split by whether its module's re-exports merged
+-- the name from two distinct declarations (`export import p.*` + `export
+-- import g.*`, each with its own `Same`).  A merged name is attributed to its
+-- declaring modules, not to the one module the path names, so the importer is
+-- told which two interfaces collided.  One declaration reached by two
+-- re-export paths has one origin and is not merged.
+ifaceMergedOrigins : ModuleExports -> String -> List String
+ifaceMergedOrigins exp base =
+  let origins =
+    dedup (map snd (filterList (o => fst o == base) exp.expIfaceOrigins))
+  if listLen origins >= 2 then origins else []
+
+importUnmergedIfaceNames : OrdMap ModuleExports -> UsePath -> List String
+importUnmergedIfaceNames known path = match findExports (useModId path) known
+  Some exp =>
+    filterList
+      (n => isEmptyL (ifaceMergedOrigins exp (useBaseName path n)))
+      (importNamesIn nsInterfaces known path)
+  None => []
+
+foldIfaceMergeProvenance : OrdMap ModuleExports ->
+  OrdMap (List String) ->
+  List UsePath ->
+  OrdMap (List String)
+foldIfaceMergeProvenance _ prov [] = prov
+foldIfaceMergeProvenance known prov (p :: rest) =
+  let prov2 = match findExports (useModId p) known
+    Some exp =>
+      addMergedOrigins
+        prov
+        exp
+        (map (n => (n, useBaseName p n)) (importNamesIn nsInterfaces known p))
+    None => prov
+  foldIfaceMergeProvenance known prov2 rest
+
+addMergedOrigins : OrdMap (List String) ->
+  ModuleExports ->
+  List (String, String) ->
+  OrdMap (List String)
+addMergedOrigins prov _ [] = prov
+addMergedOrigins prov exp ((local, base) :: rest) =
+  addMergedOrigins
+    (addImportProvenance2 prov local (ifaceMergedOrigins exp base))
+    exp
+    rest
 
 -- The effect peer.  Every import of a module installs all of that module's
 -- labels (`importedEffects`), so provenance is keyed by the DECLARING module
@@ -4125,6 +4187,7 @@ coreExports preludeDecls = ModuleExports {
   expFieldOwners = fieldOwnersOf preludeDecls,
   expInterfaces = map fst (interfaceList preludeDecls),
   expIfaceMethods = interfaceList preludeDecls,
+  expIfaceOrigins = map (i => (fst i, "core")) (interfaceList preludeDecls),
   expEffects = effectNames preludeDecls,
   expEffectOrigins = map (n => (n, "core")) (effectNames preludeDecls),
   expNewtypeCtors = [],  -- the prelude declares no `newtype` today; nothing to refuse
@@ -4293,6 +4356,18 @@ nsIfaceMethods = ExpNs {
         (filterContains src.expInterfaces (reexportOrigins path src)),
 }
 
+-- The identity-carrying twin of `nsInterfaces`: each carried interface name
+-- keeps its declaring module.  No direct rule (`buildExports` has the id).
+nsIfaceOrigins : ExpNs (String, String)
+nsIfaceOrigins = ExpNs {
+  nsGet = exp => exp.expIfaceOrigins,
+  nsDirectOf = _ => [],
+  nsCarry =
+    path src =>
+      let carried = omFromNames (reexportOrigins path src) omEmpty
+      filterList (o => omHasKey (fst o) carried) src.expIfaceOrigins,
+}
+
 -- exported effect labels (Phase 146).  A hop carries a label by the same
 -- binding rule as every other namespace: a wildcard carries every exported
 -- label, a member list or a single name carries the labels it names, and an
@@ -4406,6 +4481,9 @@ buildExports coreExp known modId prog env = ModuleExports {
     directIn nsInterfaces prog ++ carriedIn nsInterfaces coreExp known prog,
   expIfaceMethods =
     directIn nsIfaceMethods prog ++ carriedIn nsIfaceMethods coreExp known prog,
+  expIfaceOrigins =
+    map (n => (n, modId)) (directIn nsInterfaces prog)
+      ++ carriedIn nsIfaceOrigins coreExp known prog,
   expEffects =
     directIn nsEffects prog ++ carriedIn nsEffects coreExp known prog,
   expEffectOrigins =
@@ -6535,3 +6613,12 @@ takeOriginTrace _ =
   let rows = !originTraceLog
   originTraceLog := []
   rows
+
+-- Attribute one name to each of several modules.
+addImportProvenance2 : OrdMap (List String) ->
+  String ->
+  List String ->
+  OrdMap (List String)
+addImportProvenance2 prov _ [] = prov
+addImportProvenance2 prov n (m :: rest) =
+  addImportProvenance2 (addProvenance prov n m) n rest

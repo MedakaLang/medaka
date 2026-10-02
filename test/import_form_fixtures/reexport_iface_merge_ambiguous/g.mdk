@@ -1,0 +1,3 @@
+-- The other `Same`: a different interface with a different method.
+export interface Same f where
+  gandThen : f a -> Int

@@ -1,0 +1,5 @@
+-- `import ma as A` binds no bare method name, so bare `sh` is `mb.sh` alone.
+import mb.{sh}
+import ma as A
+
+main = println (sh (7 : Int))

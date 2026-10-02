@@ -1,5 +1,5 @@
 # META
-source_lines=2826
+source_lines=2802
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -1635,7 +1635,7 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
   let shadowPool = preludeStandaloneSet (runtimeP ++ coreP)
   -- #2738's operand: every module whose decls this compile has, keyed the way a
   -- `DUse`'s `usePathModuleId` spells it, with the prelude under the same `"core"`
-  -- key `graphIfaceMethodsRef` uses.  The detector reads a DEPENDENCY's decls (the
+  -- key `meIfaceExports` (`DeclEnvs.deMethods`) uses.  The detector reads a DEPENDENCY's decls (the
   -- displaced function's own signature lives there, not here), which is exactly the
   -- operand the flat path cannot have.
   let shadowGraph = ("core", runtimeP ++ coreP) :: modPairs
@@ -1842,40 +1842,19 @@ moduleDesugarCacheLimit = 24
 moduleDesugarCacheRef : Ref (List (String, List Decl))
 moduleDesugarCacheRef = Ref []
 
--- Whenever `import` is present the multi-module path runs BOTH resolve and
--- typecheck over the same file, and an unbound name is a resolve-phase fact —
--- resolve already reported it (with the did-you-mean / import hint) before
--- typecheck ever ran. Typecheck's own `T-UNBOUND` for that identical
--- occurrence is therefore pure duplication; only the resolve diagnostic
--- carries the actionable hint, so it's the one that should survive. Matched by
--- (code pair, identical Loc) — never by message text, and never by code alone
--- (two DIFFERENT unbound names must each keep their own diagnostic).
-diagLoc : Diag -> Option Loc
-diagLoc (Diag _ _ _ loc _ _) = loc
-
 diagCode : Diag -> String
 diagCode (Diag _ code _ _ _ _) = code
 
-locEq : Loc -> Loc -> Bool
-locEq (Loc f1 sl1 sc1 el1 ec1) (Loc f2 sl2 sc2 el2 ec2) =
-  f1 == f2 && sl1 == sl2 && sc1 == sc2 && el1 == el2 && ec1 == ec2
-
--- True when `d` is a T-UNBOUND diagnostic whose Loc exactly matches an
--- R-UNBOUND diagnostic already sitting in this file's bucket (i.e. resolve
--- already reported this exact occurrence).
-isRedundantUnbound : List Diag -> Diag -> Bool
-isRedundantUnbound existing d
-  | diagCode d /= "T-UNBOUND" = False
-  | otherwise = match diagLoc d
-    None => False
-    Some dl =>
-      anyList
-        (e =>
-          diagCode e == "R-UNBOUND"
-            && (match diagLoc e
-              Some el => locEq dl el
-              None => False))
-        existing
+-- The multi-module twin of `SurfaceAnalysis.resolveClean`: a module whose own
+-- bucket holds a resolve error gets no typecheck diagnostics.  Whatever
+-- typecheck reports about such a module follows from a name resolve could not
+-- bind (`T-UNBOUND` beside `R-UNBOUND`, `T-NO-IMPL` beside
+-- `R-UNKNOWN-INTERFACE`), and only the resolve diagnostic names the fault.
+-- Typecheck itself still runs, so schemes projected from the same pass are
+-- unaffected; only the report is gated.
+resolveRejected : List Diag -> Bool
+resolveRejected =
+  anyList (d => diagIsError d && codeKind (diagCode d) == "resolve")
 
 -- For each (mid, path, rawProg): look up its harvested (errs, warns) by mid, wrap
 -- them as Diags (preserving each type error's Option Loc), fold in this module's
@@ -1901,14 +1880,11 @@ foldModuleTc : OrdMap Unit ->
 foldModuleTc _ _ _ _ [] _ _ buckets = buckets
 foldModuleTc shadowPool shadowGraph oracleDecls modPairs ((mid, path, prog) :: rest) tcByMid autoPrintDiags buckets =
   let (tcErrs, tcWarns) = lookupTcDiags mid tcByMid
-  let existing = match lookupBucket path buckets
-    Some ds => ds
-    None => []
-  let errDiags =
-    filterList
-      (d => not (isRedundantUnbound existing d))
-      (map diagOfTypeError tcErrs)
-  let warnDiags = map diagOfTypeWarning tcWarns
+  let tcReported = match lookupBucket path buckets
+    Some existing => not (resolveRejected existing)
+    None => True
+  let errDiags = if tcReported then map diagOfTypeError tcErrs else []
+  let warnDiags = if tcReported then map diagOfTypeWarning tcWarns else []
   let guardWarns = checkGuardExhaustivenessWith oracleDecls prog
   let guardDiags = map guardWarnToDiag guardWarns
   let deriveDiags = map deriveErrToDiag (checkDerives prog)
@@ -1938,7 +1914,7 @@ foldModuleTc shadowPool shadowGraph oracleDecls modPairs ((mid, path, prog) :: r
   -- does for the flat path.
   let ownTcDiags = errDiags ++ warnDiags
   let autoPrintHere = match rest
-    [] => filterNewDiags ownTcDiags autoPrintDiags
+    [] => if tcReported then filterNewDiags ownTcDiags autoPrintDiags else []
     _ => []
   let buckets2 =
     pushDiags
@@ -3056,20 +3032,16 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "moduleDesugarCacheLimit" () (ELit (LInt 24)))
 (DTypeSig false "moduleDesugarCacheRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "moduleDesugarCacheRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig false "diagLoc" (TyFun (TyCon "Diag") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "diagLoc" ((PCon "Diag" PWild PWild PWild (PVar "loc") PWild PWild)) (EVar "loc"))
 (DTypeSig false "diagCode" (TyFun (TyCon "Diag") (TyCon "String")))
 (DFunDef false "diagCode" ((PCon "Diag" PWild (PVar "code") PWild PWild PWild PWild)) (EVar "code"))
-(DTypeSig false "locEq" (TyFun (TyCon "Loc") (TyFun (TyCon "Loc") (TyCon "Bool"))))
-(DFunDef false "locEq" ((PCon "Loc" (PVar "f1") (PVar "sl1") (PVar "sc1") (PVar "el1") (PVar "ec1")) (PCon "Loc" (PVar "f2") (PVar "sl2") (PVar "sc2") (PVar "el2") (PVar "ec2"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "f1") (EVar "f2")) (EBinOp "==" (EVar "sl1") (EVar "sl2"))) (EBinOp "==" (EVar "sc1") (EVar "sc2"))) (EBinOp "==" (EVar "el1") (EVar "el2"))) (EBinOp "==" (EVar "ec1") (EVar "ec2"))))
-(DTypeSig false "isRedundantUnbound" (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyCon "Diag") (TyCon "Bool"))))
-(DFunDef false "isRedundantUnbound" ((PVar "existing") (PVar "d")) (EIf (EBinOp "/=" (EApp (EVar "diagCode") (EVar "d")) (ELit (LString "T-UNBOUND"))) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EVar "diagLoc") (EVar "d")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "dl")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "diagCode") (EVar "e")) (ELit (LString "R-UNBOUND"))) (EMatch (EApp (EVar "diagLoc") (EVar "e")) (arm (PCon "Some" (PVar "el")) () (EApp (EApp (EVar "locEq") (EVar "dl")) (EVar "el"))) (arm (PCon "None") () (EVar "False")))))) (EVar "existing")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "resolveRejected" (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Bool")))
+(DFunDef false "resolveRejected" () (EApp (EVar "anyList") (ELam ((PVar "d")) (EBinOp "&&" (EApp (EVar "diagIsError") (EVar "d")) (EBinOp "==" (EApp (EVar "codeKind") (EApp (EVar "diagCode") (EVar "d"))) (ELit (LString "resolve")))))))
 (DTypeSig false "lookupDesugaredMod" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "lookupDesugaredMod" (PWild (PList)) (EListLit))
 (DFunDef false "lookupDesugaredMod" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "mid")) (EVar "d") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "foldModuleTc" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))
 (DFunDef false "foldModuleTc" (PWild PWild PWild PWild (PList) PWild PWild (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "foldModuleTc" ((PVar "shadowPool") (PVar "shadowGraph") (PVar "oracleDecls") (PVar "modPairs") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "autoPrintDiags") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "existing") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "ds")) () (EVar "ds")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "errDiags") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isRedundantUnbound") (EVar "existing")) (EVar "d"))))) (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")))) (DoLet false false (PVar "warnDiags") (EApp (EApp (EVar "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns"))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "prog"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog")))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "shadowPool")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "importShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "importedStandaloneShadows") (EVar "shadowGraph")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "ownTcDiags") (EBinOp "++" (EVar "errDiags") (EVar "warnDiags"))) (DoLet false false (PVar "autoPrintHere") (EMatch (EVar "rest") (arm (PList) () (EApp (EApp (EVar "filterNewDiags") (EVar "ownTcDiags")) (EVar "autoPrintDiags"))) (arm PWild () (EListLit)))) (DoLet false false (PVar "buckets2") (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "errDiags")) (EVar "warnDiags")) (EVar "autoPrintHere"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "shadowPool")) (EVar "shadowGraph")) (EVar "oracleDecls")) (EVar "modPairs")) (EVar "rest")) (EVar "tcByMid")) (EVar "autoPrintDiags")) (EVar "buckets2")))))
+(DFunDef false "foldModuleTc" ((PVar "shadowPool") (PVar "shadowGraph") (PVar "oracleDecls") (PVar "modPairs") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "autoPrintDiags") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "tcReported") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "existing")) () (EApp (EVar "not") (EApp (EVar "resolveRejected") (EVar "existing")))) (arm (PCon "None") () (EVar "True")))) (DoLet false false (PVar "errDiags") (EIf (EVar "tcReported") (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EListLit))) (DoLet false false (PVar "warnDiags") (EIf (EVar "tcReported") (EApp (EApp (EVar "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")) (EListLit))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "prog"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog")))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "shadowPool")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "importShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "importedStandaloneShadows") (EVar "shadowGraph")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "ownTcDiags") (EBinOp "++" (EVar "errDiags") (EVar "warnDiags"))) (DoLet false false (PVar "autoPrintHere") (EMatch (EVar "rest") (arm (PList) () (EIf (EVar "tcReported") (EApp (EApp (EVar "filterNewDiags") (EVar "ownTcDiags")) (EVar "autoPrintDiags")) (EListLit))) (arm PWild () (EListLit)))) (DoLet false false (PVar "buckets2") (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "errDiags")) (EVar "warnDiags")) (EVar "autoPrintHere"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "shadowPool")) (EVar "shadowGraph")) (EVar "oracleDecls")) (EVar "modPairs")) (EVar "rest")) (EVar "tcByMid")) (EVar "autoPrintDiags")) (EVar "buckets2")))))
 (DTypeSig false "lookupTcDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "lookupTcDiags" (PWild (PList)) (ETuple (EListLit) (EListLit)))
 (DFunDef false "lookupTcDiags" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "mid")) (EVar "d") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -3425,20 +3397,16 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "moduleDesugarCacheLimit" () (ELit (LInt 24)))
 (DTypeSig false "moduleDesugarCacheRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "moduleDesugarCacheRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig false "diagLoc" (TyFun (TyCon "Diag") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "diagLoc" ((PCon "Diag" PWild PWild PWild (PVar "loc") PWild PWild)) (EVar "loc"))
 (DTypeSig false "diagCode" (TyFun (TyCon "Diag") (TyCon "String")))
 (DFunDef false "diagCode" ((PCon "Diag" PWild (PVar "code") PWild PWild PWild PWild)) (EVar "code"))
-(DTypeSig false "locEq" (TyFun (TyCon "Loc") (TyFun (TyCon "Loc") (TyCon "Bool"))))
-(DFunDef false "locEq" ((PCon "Loc" (PVar "f1") (PVar "sl1") (PVar "sc1") (PVar "el1") (PVar "ec1")) (PCon "Loc" (PVar "f2") (PVar "sl2") (PVar "sc2") (PVar "el2") (PVar "ec2"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "f1") (EVar "f2")) (EBinOp "==" (EVar "sl1") (EVar "sl2"))) (EBinOp "==" (EVar "sc1") (EVar "sc2"))) (EBinOp "==" (EVar "el1") (EVar "el2"))) (EBinOp "==" (EVar "ec1") (EVar "ec2"))))
-(DTypeSig false "isRedundantUnbound" (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyCon "Diag") (TyCon "Bool"))))
-(DFunDef false "isRedundantUnbound" ((PVar "existing") (PVar "d")) (EIf (EBinOp "/=" (EApp (EVar "diagCode") (EVar "d")) (ELit (LString "T-UNBOUND"))) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EVar "diagLoc") (EVar "d")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "dl")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "diagCode") (EVar "e")) (ELit (LString "R-UNBOUND"))) (EMatch (EApp (EVar "diagLoc") (EVar "e")) (arm (PCon "Some" (PVar "el")) () (EApp (EApp (EVar "locEq") (EVar "dl")) (EVar "el"))) (arm (PCon "None") () (EVar "False")))))) (EVar "existing")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "resolveRejected" (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Bool")))
+(DFunDef false "resolveRejected" () (EApp (EVar "anyList") (ELam ((PVar "d")) (EBinOp "&&" (EApp (EVar "diagIsError") (EVar "d")) (EBinOp "==" (EApp (EVar "codeKind") (EApp (EVar "diagCode") (EVar "d"))) (ELit (LString "resolve")))))))
 (DTypeSig false "lookupDesugaredMod" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "lookupDesugaredMod" (PWild (PList)) (EListLit))
 (DFunDef false "lookupDesugaredMod" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "mid")) (EVar "d") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "foldModuleTc" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))
 (DFunDef false "foldModuleTc" (PWild PWild PWild PWild (PList) PWild PWild (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "foldModuleTc" ((PVar "shadowPool") (PVar "shadowGraph") (PVar "oracleDecls") (PVar "modPairs") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "autoPrintDiags") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "existing") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "ds")) () (EVar "ds")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "errDiags") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isRedundantUnbound") (EVar "existing")) (EVar "d"))))) (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")))) (DoLet false false (PVar "warnDiags") (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns"))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "prog"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog")))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "shadowPool")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "importShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "importedStandaloneShadows") (EVar "shadowGraph")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "ownTcDiags") (EBinOp "++" (EVar "errDiags") (EVar "warnDiags"))) (DoLet false false (PVar "autoPrintHere") (EMatch (EVar "rest") (arm (PList) () (EApp (EApp (EVar "filterNewDiags") (EVar "ownTcDiags")) (EVar "autoPrintDiags"))) (arm PWild () (EListLit)))) (DoLet false false (PVar "buckets2") (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "errDiags")) (EVar "warnDiags")) (EVar "autoPrintHere"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "shadowPool")) (EVar "shadowGraph")) (EVar "oracleDecls")) (EVar "modPairs")) (EVar "rest")) (EVar "tcByMid")) (EVar "autoPrintDiags")) (EVar "buckets2")))))
+(DFunDef false "foldModuleTc" ((PVar "shadowPool") (PVar "shadowGraph") (PVar "oracleDecls") (PVar "modPairs") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "autoPrintDiags") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "tcReported") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "existing")) () (EApp (EVar "not") (EApp (EVar "resolveRejected") (EVar "existing")))) (arm (PCon "None") () (EVar "True")))) (DoLet false false (PVar "errDiags") (EIf (EVar "tcReported") (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EListLit))) (DoLet false false (PVar "warnDiags") (EIf (EVar "tcReported") (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")) (EListLit))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "prog"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog")))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "shadowPool")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "importShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "importedStandaloneShadows") (EVar "shadowGraph")) (EApp (EApp (EVar "lookupDesugaredMod") (EVar "mid")) (EVar "modPairs"))))) (DoLet false false (PVar "ownTcDiags") (EBinOp "++" (EVar "errDiags") (EVar "warnDiags"))) (DoLet false false (PVar "autoPrintHere") (EMatch (EVar "rest") (arm (PList) () (EIf (EVar "tcReported") (EApp (EApp (EVar "filterNewDiags") (EVar "ownTcDiags")) (EVar "autoPrintDiags")) (EListLit))) (arm PWild () (EListLit)))) (DoLet false false (PVar "buckets2") (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "errDiags")) (EVar "warnDiags")) (EVar "autoPrintHere"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "shadowPool")) (EVar "shadowGraph")) (EVar "oracleDecls")) (EVar "modPairs")) (EVar "rest")) (EVar "tcByMid")) (EVar "autoPrintDiags")) (EVar "buckets2")))))
 (DTypeSig false "lookupTcDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "lookupTcDiags" (PWild (PList)) (ETuple (EListLit) (EListLit)))
 (DFunDef false "lookupTcDiags" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "mid")) (EVar "d") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

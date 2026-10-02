@@ -1753,8 +1753,8 @@ public export data Decl =
   -- A-2: `DData.dataOrigin` reaches `registerVariants o` (`types/typecheck.mdk`),
   -- so the dispatch GOAL side now DOES acquire identity from the declaration;
   -- `DInterface.ifaceOrigin` is the write side of A-2.4's interface-namespace key
-  -- (`ifaceTabKey o name`, reached from `registerData` / `insertIfaceRequired` /
-  -- `insertMethodIdents` / `ownMethodIdent`) and of `lowerDeclImpl`'s
+  -- (`ifaceTabKey o name`, reached from `registerData` / `classEnvRowsOf` /
+  -- `methodRowsInto` / `ownMethodIdent`) and of `lowerDeclImpl`'s
   -- default-method identity (`ir/core_ir_lower.mdk`).  Derive the readers rather
   -- than reading a list here:
   --

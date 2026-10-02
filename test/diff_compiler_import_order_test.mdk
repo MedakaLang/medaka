@@ -31,8 +31,7 @@
      Sorted because diagnostics are emitted in source order and permutation
      moves source lines. A multiset because one `T-TYPE-MISMATCH` and two
      are genuinely different observations: an exit-code-only criterion is
-     blind to the cascading second code one ordering of
-     `733-ambiguous-ctor-reject-cascade-order-dependent` emits, and a
+     blind to a cascading second code that only one ordering emits, and a
      set-not-multiset one is blind to a pair.
    - `schemes=` is plain `check`'s scheme dump for the user's own top-level
      bindings, selected by FORMAT (`<name> : <type>` anchored at column 0)

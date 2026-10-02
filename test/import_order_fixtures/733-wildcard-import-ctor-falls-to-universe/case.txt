@@ -26,8 +26,9 @@ the export index whether that dependency really carries THIS declaration of the 
 than by a separate one. The ledger row went RED naming #733; it was deleted.
 
 ⚠️ #733 IS NOT CLOSED BY THIS. Item 1c was one symptom; the sibling case
-`733-ambiguous-ctor-reject-cascade-order-dependent` in this same corpus is STILL
-ledgered and still diverging. Do not close the issue on this row's drain alone.
+`733-ambiguous-ctor-reject-cascade-order-dependent` in this same corpus still
+diverges at the emitter verdict (test/EMITTER-VERDICT-LEDGER.txt). Do not close the
+issue on this row's drain alone.
 
 THIS CASE IS NOW THE REGRESSION GUARD, unledgered so the gate demands invariance.
 Current behaviour, every ordering: exit 0, prints `1`.

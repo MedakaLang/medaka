@@ -1,0 +1,10 @@
+entry: main.mdk
+what: an alias import beside a bare import of a same-named interface does not make a
+      `requires` head or the method it guards depend on import order
+
+`ma` and `mb` each declare `interface Sh` with `sh` and a default `shl`. The entry
+imports `ma` as an alias and `mb.{Sh, shl}` bare, then writes `impl Both (W a)
+requires Sh a` whose body calls bare `shl`. Both bare names are `mb`'s. Spec answer:
+`check` clean; `run` and the built binary print `B[b7]` in every ordering. The value
+is graded by `alias-beside-bare-requires/main.mdk` in
+`test/diff_compiler_dict_semantics_test.mdk`; this case grades its invariance.

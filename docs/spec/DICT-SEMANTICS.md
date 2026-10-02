@@ -2415,7 +2415,7 @@ module-qualified identity.
   is a distinct defect from the one I7 rules out, and closing I7 does not close it.
 
 - **I8 — Widening a SPELLING filter is not the same move as deciding a declaration BY
-  spelling.** `applyMethodScopeOverrides`' member filter (`compiler/types/
+  spelling.** `methodScopeAt`'s member filter (`compiler/types/
   typecheck.mdk`) was widened to admit an INTERFACE-name import (`import zmodI.{IZ,
   zf}` witnesses `IZ`, not just a method name) because SHADOW-SEMANTICS S2-DECL clause
   (c) admits a declaration `I` in module `M` iff `I` is nameable in `M` — an

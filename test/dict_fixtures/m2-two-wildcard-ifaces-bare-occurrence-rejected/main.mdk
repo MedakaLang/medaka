@@ -1,0 +1,10 @@
+-- `ma.IA.mth` and `mb.IB.mth` both reach this module through a wildcard
+-- import, so the bare occurrence `mth 1` names two declarations and no source
+-- discriminator picks one.  Resolve rejects the occurrence as ambiguous
+-- (#1675): R-AMBIGUOUS-OCCURRENCE, exit 1, and no typecheck diagnostic beside
+-- it, since a module resolve rejected is not typechecked.  Neither import
+-- order may pick a declaration (S2-DECL (e)).
+import ma.*
+import mb.*
+
+main = println (mth 1)

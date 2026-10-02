@@ -1,0 +1,8 @@
+import aacol as A
+import zzcol as Z
+
+f x = match x
+  A.Red => 1
+
+main : <IO> Unit
+main = println (f A.Red + A.aval 0 + Z.zval 0)

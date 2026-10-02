@@ -80,7 +80,7 @@ does not have as units. The amended set is eight:
 |---|---|---|
 | **K** — declaration analysis | whole-graph CE/IE/DataEnv **and the per-module seed layer it has not absorbed** | R folded in; the "assembled once" clause corrected (SA-2) |
 | **I** — inference | the `infer` recursion, kept structurally intact | unchanged |
-| **Sh** — shadow resolution | definer/importer shadow dispatch, value-position pinning, standalone dict computation | **NEW.** 1,043 code lines, larger than ENTAIL (556) and COHERENCE (265) combined, today split four ways: I (the six-arm `inferAppExpr` ladder), K (shadow sets from `universeIfaceMethodsRef`), E (per-module `prePassModulePairArg` filtering), S (`resolveRLocalSites`). L1 already names "the shadow resolution function" as a spec judgment and SHADOW-SEMANTICS §3 already has its table; §2 gave it no home |
+| **Sh** — shadow resolution | definer/importer shadow dispatch, value-position pinning, standalone dict computation | **NEW.** 1,043 code lines, larger than ENTAIL (556) and COHERENCE (265) combined, today split four ways: I (the six-arm `inferAppExpr` ladder), K (shadow sets from `deMethods`, read through `methodNameDeclaredAt`), E (per-module `prePassModulePairArg` filtering), S (`resolveRLocalSites`). L1 already names "the shadow resolution function" as a spec judgment and SHADOW-SEMANTICS §3 already has its table; §2 gave it no home |
 | **S** — solving | ONE entailment engine **and the stamper schedule as one owned contract** | the schedule is inside S's contract, not adjacent to it: `moduleStampOrder` is the sole graph-level sequence, including `resolveRLocalSites`, so L15's override rule has one enforceable order |
 | **E** — elaboration / driver | one driver, one mode, marking on the schedule | unchanged in intent; re-sequenced (SA-4) |
 | **G** — global checks | coherence, escape/launder, kinds, exhaustiveness bridge | unchanged |
@@ -770,8 +770,8 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    never raised and `run` executed a dot-access on an abstractly exported record that
    `check`/`build` reject — live on main for the import-bearing arm since (13c).  Seeded
    at both driver entries now; three `run_check_agreement` fixtures pin it.  The lesson
-   for the next driver consolidation: the check preamble's writer set (`graphMethodExports`,
-   `graphIfaceMethods`, `graphCtorExports`, `mangledFunDefsPresent`, `declEnvs`,
+   for the next driver consolidation: the check preamble's writer set (`graphCtorExports`,
+   `mangledFunDefsPresent`, `declEnvs` — which carries the method-export indices since #2563 —
    `effectDomains`, `abstractRecordTypes`) is the contract every Module-mode entry must
    carry, and `registry_keying_ratchet`'s check 6 (#2796) is that place.
 15. **`check` typechecks once, and the analyze path stops re-resolving its unchanged prefix,
@@ -3966,6 +3966,13 @@ whether the leg is dead weight.
 ### 10.7 U1c — the method-occurrence goal, Step 0's ruling, and the drain condition's real state
 
 Landed by the PR that implements **#1507**, sequenced after U1b (§10).
+
+> **Historical names.** This section records the code as U1c found it. The method-scope
+> functions it names (`scopedMethodEntry`, `importedMethodEntry`, `overrideScopedMethods`
+> and its floor entry) are gone; `methodScopeAt` (`compiler/types/typecheck.mdk`) replaced
+> them, and its ladder has no floor: two or more admitted declarations answer `MsMany`, and
+> every single-winner reader then sees no declaration. Read the paragraphs below as the
+> state at U1c, not as the current code.
 
 **Step 0 — the decl-layer / occurrence-layer ruling.** Ratified by the repo owner on
 #1507: [issuecomment-5248859630](https://github.com/MedakaLang/medaka/issues/1507#issuecomment-5248859630)

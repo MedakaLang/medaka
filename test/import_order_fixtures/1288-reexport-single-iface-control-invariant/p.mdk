@@ -1,0 +1,9 @@
+-- The interface the entry module means.  `Q` carries its impl, so a program can
+-- call `pmth` without ever writing `impl Same` itself.
+export interface Same f where
+  pmth : f a -> Int
+
+public export data Q a = MkQ a
+
+impl Same Q where
+  pmth _ = 1

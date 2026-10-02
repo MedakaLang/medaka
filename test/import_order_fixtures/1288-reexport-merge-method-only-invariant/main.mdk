@@ -1,0 +1,4 @@
+import mid.{pmth}
+import mid.{Q(..)}
+
+main = println (pmth (MkQ 1))

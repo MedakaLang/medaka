@@ -43,5 +43,7 @@ mechanism as #733's own row: test/EMITTER-VERDICT-LEDGER.txt.
 Directory renamed from `1284-...` to `3337-...` per test/IMPORT-ORDER-LEDGER.txt's
 own rule that a ledgered row's directory must be named `<issue-number>-...`.
 
-Ledgered in test/IMPORT-ORDER-LEDGER.txt and test/EMITTER-VERDICT-LEDGER.txt
-against #3337.
+Ledgered in test/EMITTER-VERDICT-LEDGER.txt against #3337. The
+test/IMPORT-ORDER-LEDGER.txt row drained once a module resolve rejected stopped
+reporting typecheck diagnostics (that file's 2026-10-01 drain note); the check-side
+answer is now graded invariant.
