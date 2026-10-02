@@ -1340,14 +1340,8 @@ projectDiagsLoadedFull : Bool ->
   (List ModDiags, List (String, List Diag))
 projectDiagsLoadedFull allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
   let modPairs = desugaredModPairs mods
-  typecheckPassFull
-    runtimeP
-    coreP
-    preludeKey
-    chainKey
-    mods
-    modPairs
-    (resolvedBuckets
+  let buckets =
+    resolvedBuckets
       allowInternal
       trustedMods
       preludeKey
@@ -1355,7 +1349,18 @@ projectDiagsLoadedFull allowInternal trustedMods runtimeP coreP preludeKey chain
       runtimeP
       coreP
       mods
-      modPairs)
+      modPairs
+  -- The graph analogue of `analyzeFrom`'s `resolveClean` gate: a program
+  -- resolve rejected is never typechecked (a bare method name resolve left
+  -- unbound would panic in `inferMethodAt`), so the resolve diagnostics are
+  -- the whole typecheck-independent report.
+  match anyList (b => resolveRejected (snd b)) buckets
+    True => (
+      [],
+      typecheckDiagsFold runtimeP coreP mods modPairs [] buckets,
+    )
+    False =>
+      typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
@@ -1640,7 +1645,11 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
   -- the same auto-print Display-obligation re-check the flat path already runs,
   -- computed once here (not per module — `shouldAutoPrintMain`/`underivedMainDiags`
   -- read the WHOLE graph) and folded in only at the entry module below.
-  let autoPrintDiags = multiModuleAutoPrintDiags runtimeP coreP modPairs
+  -- A resolve-rejected graph is never typechecked, and this re-check typechecks a
+  -- synthetic wrapped program, so it is skipped there as `analyzeFinish` does.
+  let autoPrintDiags = match anyList (b => resolveRejected (snd b)) buckets
+    True => []
+    False => multiModuleAutoPrintDiags runtimeP coreP modPairs
   foldModuleTc
     shadowPool
     shadowGraph

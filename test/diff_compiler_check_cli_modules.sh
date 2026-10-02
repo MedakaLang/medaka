@@ -3382,10 +3382,38 @@ impl Szz Int where
 
 main = println (sz (dd 1))
 EOF
+# A bare method name whose interface is imported WITHOUT the method is
+# R-UNBOUND alone: typecheck never runs on a resolve-rejected graph.
+cat > "$TMP/m0/ma.mdk" <<'EOF'
+export interface IA a where
+  mth : a -> Int
+
+export impl IA Int where
+  mth n = n + 1000
+EOF
+cat > "$TMP/m0/mb.mdk" <<'EOF'
+export interface IB a where
+  mth : a -> Int
+
+export impl IB Int where
+  mth n = n + 2000
+EOF
+cat > "$TMP/m0/zz.mdk" <<'EOF'
+export interface Zork a where
+  zork : a -> Int
+
+export impl Zork Int where
+  zork n = n
+EOF
+printf 'import ma.{IA}\nimport mb.{IB}\n\nmain = println (mth 1)\n' > "$TMP/m0/ifaceonly_ab.mdk"
+printf 'import mb.{IB}\nimport ma.{IA}\n\nmain = println (mth 1)\n' > "$TMP/m0/ifaceonly_ba.mdk"
+printf 'import ma.{IA}\n\nmain = println (mth 1)\n' > "$TMP/m0/ifaceonly_single.mdk"
+printf 'import zz.{Zork}\n\nmain = println (zork 1)\n' > "$TMP/m0/ifaceonly_zork.mdk"
 m0_codes() { printf '%s\n' "$1" | grep -o '"code":"[^"]*"' | sed 's/"code":"//; s/"$//' | tr '\n' ' '; }
 for m0_case in direct_pg:R-AMBIGUOUS-INTERFACE direct_gp:R-AMBIGUOUS-INTERFACE \
     reexport_pg:R-AMBIGUOUS-INTERFACE reexport_gp:R-AMBIGUOUS-INTERFACE \
-    unknown_iface:R-UNKNOWN-INTERFACE; do
+    unknown_iface:R-UNKNOWN-INTERFACE ifaceonly_ab:R-UNBOUND ifaceonly_ba:R-UNBOUND \
+    ifaceonly_single:R-UNBOUND ifaceonly_zork:R-UNBOUND; do
   m0_name="${m0_case%%:*}"
   m0_want="${m0_case#*:} "
   m0_json="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/m0/$m0_name.mdk" 2>/dev/null)"
