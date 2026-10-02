@@ -18,8 +18,6 @@
 // Inside a `data` body (which spans its indented continuation lines) the
 // first uppercase name after each `=` / `|` is the constructor and the rest
 // of that alternative is types. A top-level (column-0) line resets both.
-// Known miss: a multi-line signature's continuation line lexes as
-// expression position.
 //
 // The stateful pieces are handled through the parser state object:
 //   blockComment : nesting depth of `{- {- -} -}` block comments (0 = outside)
@@ -33,6 +31,10 @@
 //   decl         : 'data' | 'alias' | null — the top-level declaration the
 //                  current line belongs to, for the `=` / `|` rules above
 //   ctorNext     : true when the next uppercase name is a constructor
+//   last         : text of the last operator/punctuation token on the line, or
+//                  null if the last significant token was anything else
+//   depth        : open `( [ {` count while in type position (carry-over test)
+//   angle        : open type-position `<` count (effect rows)
 
 // The keyword set, mirroring lexer.mdk's `keywordOrIdent` table.  True/False are
 // NOT here — they lex as TUpper (uppercase), handled as `bool` below.  Derive the
@@ -57,7 +59,7 @@ const OP1_SET = '+-*/%<>=:.|!?@~^&$';   // single-char operator chars
 const PUNCT_SET = '()[],;';             // delimiters (not braces — see below)
 
 export function startState() {
-  return { blockComment: 0, strKind: null, interpStack: [], typePos: false, decl: null, ctorNext: false };
+  return { blockComment: 0, strKind: null, interpStack: [], typePos: false, decl: null, ctorNext: false, last: null, depth: 0, angle: 0 };
 }
 
 export function copyState(s) {
@@ -66,13 +68,19 @@ export function copyState(s) {
     strKind: s.strKind,
     interpStack: s.interpStack.map((f) => ({ brace: f.brace, kind: f.kind })),
     typePos: s.typePos, decl: s.decl, ctorNext: s.ctorNext,
+    last: s.last, depth: s.depth, angle: s.angle,
   };
 }
 
 export function token(stream, state) {
   if (state.blockComment > 0) return tokenBlockComment(stream, state);
   if (state.strKind) return tokenString(stream, state);
-  return tokenCode(stream, state);
+  const type = tokenCode(stream, state);
+  if (type !== null && type !== 'comment') {
+    state.last = (type === 'operator' || type === 'punctuation')
+      ? stream.string.slice(stream.start, stream.pos) : null;
+  }
+  return type;
 }
 
 // Inside a `{- … -}` block comment (possibly spanning lines / nested).
@@ -136,7 +144,7 @@ function tokenString(stream, state) {
 }
 
 // Keywords that put the rest of the line in type position.
-const TYPE_HEAD = new Set(['interface', 'impl', 'requires', 'deriving', 'import']);
+const TYPE_HEAD = new Set(['interface', 'impl', 'requires', 'deriving', 'import', 'effect']);
 
 function tokenCode(stream, state) {
   if (stream.pos === 0) {
@@ -145,7 +153,12 @@ function tokenCode(stream, state) {
     // data body — an impl/interface body is expressions again).
     const indented = stream.peek() === ' ' || stream.peek() === '\t';
     if (!indented) { state.decl = null; state.ctorNext = false; }
-    state.typePos = state.decl === 'data' || state.decl === 'alias';
+    const open = state.depth > 0 && (state.last === ',' || state.last === '(' ||
+                                     state.last === '<' || state.last === '{');
+    const carry = indented && state.typePos && (state.last === '->' || open);
+    if (!carry) { state.depth = 0; state.angle = 0; }
+    state.last = null;
+    state.typePos = carry || state.decl === 'data' || state.decl === 'alias';
   }
   if (stream.eatSpace()) return null;
 
@@ -186,6 +199,7 @@ function tokenCode(stream, state) {
   if (c >= 'A' && c <= 'Z') {
     const w = stream.match(/^[A-Za-z0-9_]+/)[0];
     if (w === 'True' || w === 'False') return 'bool';
+    if (state.angle > 0) return 'typeName';
     if (state.ctorNext) { state.ctorNext = false; state.typePos = true; return 'constructor'; }
     if (state.typePos) return 'typeName';
     // `M.get`: a module alias, neither a type nor a constructor — keep it neutral.
@@ -210,12 +224,20 @@ function tokenCode(stream, state) {
   for (const op of OP2) if (stream.match(op)) return 'operator';
 
   // plain delimiters
-  if (PUNCT_SET.indexOf(c) >= 0) { stream.next(); return 'punctuation'; }
+  if (PUNCT_SET.indexOf(c) >= 0) {
+    stream.next();
+    if (state.typePos) {
+      if (c === '(' || c === '[') state.depth++;
+      else if (c === ')' || c === ']') state.depth = Math.max(0, state.depth - 1);
+    }
+    return 'punctuation';
+  }
 
   // braces: interpolation-brace tracking when inside a `\{ … }`, else record punct
   if (c === '{' || c === '}') {
     stream.next();
     const top = state.interpStack[state.interpStack.length - 1];
+    if (!top && state.typePos) state.depth = Math.max(0, state.depth + (c === '{' ? 1 : -1));
     if (top) {
       if (c === '{') { top.brace++; return 'punctuation'; }
       top.brace--;
@@ -229,6 +251,8 @@ function tokenCode(stream, state) {
   if (OP1_SET.indexOf(c) >= 0) {
     stream.next();
     if (c === ':') state.typePos = true;
+    else if (c === '<' && state.typePos) { state.angle++; state.depth++; }
+    else if (c === '>' && state.angle > 0) { state.angle--; state.depth = Math.max(0, state.depth - 1); }
     else if (c === '=') {
       if (state.decl === 'data') state.ctorNext = true;
       else if (state.decl !== 'alias') state.typePos = false;
