@@ -72,6 +72,25 @@ derive_repo() {
   [ -n "$REPO" ] || die "cannot derive OWNER/REPO"
 }
 
+# GitHub closes an issue on merge for a closing keyword followed by an issue
+# reference ANYWHERE in a PR body, prose included — "this does not fix #508"
+# closes #508 (#583). Advisory only: warn on every such reference whose line
+# does not START with the keyword (after an optional list bullet), and write
+# the body unchanged. A line that starts with one may not carry a second.
+warn_prose_closing_keywords() {
+  hits="$(awk '
+    BEGIN { kw = "(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+([[:alnum:]_.-]+/[[:alnum:]_.-]+)?#[0-9]+" }
+    {
+      rest = tolower($0)
+      sub("^[[:space:]]*([-*+][[:space:]]+)?" kw, "", rest)
+      if (rest ~ ("(^|[^[:alnum:]_])" kw)) print "  line " NR ": " $0
+    }' "$1")"
+  [ -n "$hits" ] || return 0
+  echo "pr.sh: warning: closing keyword inside prose — GitHub will close these issues on merge:" >&2
+  printf '%s\n' "$hits" >&2
+  echo "pr.sh: put each intended close on its own line (\"Fixes #N\"), or reword the rest." >&2
+}
+
 # ---------------------------------------------------------------------------
 # body — safe body write with verified readback
 # ---------------------------------------------------------------------------
@@ -94,6 +113,7 @@ cmd_body() {
   derive_repo
 
   resource="pulls"; [ "$kind" = issue ] && resource="issues"
+  [ "$kind" = pr ] && warn_prose_closing_keywords "$file"
 
   # PATCH with -F (not -f): -F expands the leading @ as a file read; -f writes
   # the literal four characters "@file" (#1212 item 2). We deliberately do NOT
