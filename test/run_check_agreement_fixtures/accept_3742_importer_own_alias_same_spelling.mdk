@@ -1,0 +1,10 @@
+import lib.alias3742_decl.{R(..), mk}
+
+type Px = String
+
+label : Px
+label = "n="
+
+main =
+  println (label ++ intToString ((mk 41).v + 1))
+  println (label ++ intToString (R { v = 40 }.v + 2))

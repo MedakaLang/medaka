@@ -1,0 +1,3 @@
+import lib.alias3742_pub.{R, mk}
+
+main = println ((mk 41).v + 1)

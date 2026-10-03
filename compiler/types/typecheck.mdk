@@ -46476,7 +46476,7 @@ appendDataUniverse mid prog0 =
   let pubDecls = publicDataDecls prog0
   -- The alias half of the reload is a stage-K projection, so it takes THIS module's
   -- ordinal, strictly BELOW-this-module (`aliasUniverseAt`'s `<`): the registration
-  -- below is what puts this module's own public aliases in front.
+  -- below is what puts this module's own aliases, public and private, in front.
   let _ =
     loadDataUniverse (declEnvsOrdOf mid driverState.value.declEnvsRef.value)
   -- #2112: the polarity fixpoint sees the WHOLE module (`prog0`), the universe
@@ -46484,7 +46484,7 @@ appendDataUniverse mid prog0 =
   let env2 =
     registerAllDataScoped
       (withCtors (spFloor crossRun.value.universeCtorPop.value))
-      pubDecls
+      (publicDataScopeDecls prog0)
       prog0
   -- Both walkers read the payloads this registration just made back out of `env2` and
   -- `recordByNameRef`, so each population row holds the very object its floor holds.
@@ -46492,6 +46492,17 @@ appendDataUniverse mid prog0 =
     insertCtorPop env2 pubDecls crossRun.value.universeCtorPop.value
   crossRun.value.universeRecordPop :=
     insertRecordPop pubDecls crossRun.value.universeRecordPop.value
+
+-- What `appendDataUniverse` registers to elaborate a module's public data: the
+-- public declarations plus every alias the module declares, private ones
+-- included.  A public field may name a private alias, and the scheme it
+-- elaborates to here is the one every importer reads back, so it expands under
+-- the declaring module's aliases.  The private aliases reach only the working
+-- alias table, which the next module's arm reloads; the populations take
+-- `pubDecls` alone.
+publicDataScopeDecls : List Decl -> List Decl
+publicDataScopeDecls prog0 =
+  filterList (d => publicDataDecl d || isAliasDecl d) prog0
 
 -- #154 PR1: buildDefinerShadows with the `allIfaceMethodNames fullUniverse` scan
 -- replaced by a membership test, `isMethod` (`methodNameDeclaredAt` at the module's
