@@ -1,0 +1,4 @@
+type Px = String
+
+export shout : Px -> Px
+shout s = s ++ "!"

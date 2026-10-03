@@ -41744,7 +41744,21 @@ registerAllDataScoped env ds allDs =
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
 registerAllDataGo env ds =
   let _ = fold (_ d => recordDeclKinds d) () ds
-  fold registerData env ds
+  registerDeclsAliasesFirst env ds
+
+-- Aliases enter the alias table ahead of every other declaration, so a field
+-- naming an alias declared later in the list expands the same as one naming an
+-- alias declared above it.  An alias adds no env entry, so the split fold only
+-- changes the table's contents by the time fields elaborate.
+registerDeclsAliasesFirst : TcEnv -> List Decl -> TcEnv
+registerDeclsAliasesFirst env ds =
+  let env1 = fold (e d => if isAliasDecl d then registerData e d else e) env ds
+  fold (e d => if isAliasDecl d then e else registerData e d) env1 ds
+
+isAliasDecl : Decl -> Bool
+isAliasDecl (DAttrib _ d) = isAliasDecl d
+isAliasDecl (DTypeAlias { ... }) = True
+isAliasDecl _ = False
 
 -- The Module arm's import overlay, registered over [env] without elaborating a
 -- second time what the populations already hold.  A public data declaration is
@@ -41772,11 +41786,16 @@ registerImportOverlay env overlay =
         Some _ => ())
       ()
       served
+  let env1 =
+    fold
+      (e p => if isAliasDecl (fst p) then registerData e (fst p) else e)
+      env
+      served
   fold
     (e p => match snd p
-      None => registerData e (fst p)
+      None => if isAliasDecl (fst p) then e else registerData e (fst p)
       Some rows => registerCachedRows e rows)
-    env
+    env1
     served
 
 -- The cached constructor schemes and record infos of [d], in variant order, when
