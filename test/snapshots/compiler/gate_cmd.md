@@ -1,5 +1,5 @@
 # META
-source_lines=3627
+source_lines=3625
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -1184,7 +1184,7 @@ candidatesFor root pattern = match gitLsFilesSh root ["ls-files"] pattern
 --
 -- That narrowing bounds the census rather than describing every native gate.
 -- A project's floor gate is a native `run` under its OWN `test/` directory
--- (`mq/test/check_test.mdk`, #2592), which this corpus does not reach and so
+-- (`parsec/test/check_test.mdk`, #2592), which this corpus does not reach and so
 -- gets no orphan protection. Widening to `*/test/*_test.mdk` would reach it
 -- and would also sweep in ~29 `pds/test/*_test.mdk` and `sqlite/test/*_test.mdk`
 -- modules that are in-language test suites some project gate RUNS, not gates
@@ -2842,10 +2842,8 @@ explainCmdBody argv = match parseExplainArgs argv
 --      (`driver/loader.mdk`: `resolveDepFile` consults declared dep names and
 --      nothing else; its `findInRoots` fallback ranges only over the entry's own
 --      dir, its project root, and the stdlib root).  NEVER from import names:
---      `stdlib/byteparser.mdk` and the project `byteparser/` share a module
---      name, so a `grep '^import byteparser'` graph invents
---      `gzip -> byteparser`, `pds -> byteparser`, `sqlite -> byteparser` and
---      `byteparser -> byteparser` edges no manifest declares.  Dep VALUES are
+--      an import name can coincide with a stdlib module's name, so an
+--      import-grep graph invents edges no manifest declares.  Dep VALUES are
 --      compared realpath-canonicalized rather than matched by the manifest KEY,
 --      so `parsec = "../parsec"` and `pc = "../parsec"` are ONE edge —
 --      `loader.revLookupRoot` draws exactly the same line for the same reason.

@@ -44,8 +44,8 @@ ever applied to a receiver whose head tycon has an impl of the shadowed interfac
 ### 0.1 The shadow universe is exactly the prelude
 
 The **only** interfaces in production source are the **22 in `stdlib/core.mdk`**. No
-module in `compiler/`, no non-core module in `stdlib/`, and no module in `sqlite/`,
-`mq/`, `byteparser/`, or `parsec/` declares an interface. So shadow-hood reduces to:
+module in `compiler/`, no non-core module in `stdlib/`, and no module in `sqlite/`
+or `parsec/` declares an interface. So shadow-hood reduces to:
 
 > `standalone-names ∩ { the 49 prelude method names }`
 

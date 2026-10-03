@@ -83,7 +83,7 @@ area        = "frontend"       # semantic identity: frontend|types|eval|backend|
 shard       = "frontend"       # ci.yml `gates` matrix ROW: engines|sqlite|pds|frontend|
                                #   types|eval|backend|tools, or `other-job` for a gate
                                #   some OTHER workflow job schedules (#2177)
-project     = "compiler"       # compiler | sqlite | gzip | pds | mq | parsec | byteparser
+project     = "compiler"       # compiler | sqlite | gzip | pds | parsec
 tiers       = ["merge"]        # the SET OF RUNS this gate has (#2181). Each element is
                                #   a RUN TOKEN `<tier>` or `<tier>/<mode>`, where <tier>
                                #   is merge|nightly|ondemand and <mode> is the INVOCATION
