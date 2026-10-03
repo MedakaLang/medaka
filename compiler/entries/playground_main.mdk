@@ -107,6 +107,7 @@ import driver.diagnostics.{
   parseErrCode,
   codeKind,
   diagOfTypeError,
+  missingMainDiag,
 }
 import driver.main_autoprint.{
   shouldAutoPrintMain,
@@ -384,9 +385,9 @@ warnTriple (p, s, ds) = (p, s, filterWarnings ds)
 -- has no valid nullary main to force and hits a bare wasm `unreachable` trap
 -- with zero diagnostic. Re-parse the user's RAW entry decls here and block on
 -- either shape with a located ERROR before ever reaching the emitter, as `run`
--- and `build` do. (Mirrors driver/diagnostics.mdk's `mainEntryError` and its
--- messages; duplicated per this entry's F5 self-contained convention rather
--- than importing the driver.)
+-- and `build` do. (Mirrors driver/diagnostics.mdk's `mainEntryError`; the
+-- function-shape half is duplicated per this entry's F5 self-contained
+-- convention, the missing-`main` half is the driver's `missingMainDiag`.)
 -- `warnTriples` carries the (already error-filtered) warning diags per source
 -- file, so a clean-but-warning program can still surface them once we reach
 -- `doEmit` below.  The main-shape guard runs FIRST and unconditionally blocks
@@ -436,10 +437,6 @@ mainArityMsg : String
 mainArityMsg =
   "'main' must be a value, not a function. Write 'main = …', not 'main () = …' or 'main x = …': a program starts by evaluating 'main', and nothing ever calls it"
 
-mainMissingMsg : String
-mainMissingMsg =
-  "no 'main' found. Add a top-level 'main = …' (e.g. 'main = println \"hi\"')"
-
 -- Some d ⇒ block emit with a located ERROR; None ⇒ a valid nullary main (or
 -- any other shape typecheck already accepts), safe to fall through to emit.
 mainShapeError : List Decl -> Option Diag
@@ -448,7 +445,7 @@ mainShapeError decls = match findMainFunDef decls
     Some
       (Diag SevError "W-MAIN-SHAPE" mainArityMsg (mainHeadLoc body) None None)
   Some ([], _) => None
-  None => Some (Diag SevError "W-MAIN-MISSING" mainMissingMsg None None None)
+  None => Some (missingMainDiag decls)
 
 -- ── emit (clean path) ───────────────────────────────────────────────────────
 -- Identical to wasm_emit_modules_main.runEmit, prefixed by the WAT marker.  A clean
