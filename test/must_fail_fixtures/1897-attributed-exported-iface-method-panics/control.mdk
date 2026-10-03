@@ -1,0 +1,5 @@
+import plain.{Speak(..), speak}
+data Dog = Dog
+impl Speak Dog where
+  speak _ = "woof"
+main = println (speak Dog)

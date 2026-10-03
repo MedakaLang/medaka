@@ -1,0 +1,23 @@
+issue: 2004
+what: an attribute above a `public export data` hides the type from importers. a.mdk is
+what: `@deprecated "x"` over `public export data R = R { s : Int }`; main.mdk does
+what: `import a.{R(..)}`, reads `r.s` and constructs `R 3`. `check` rejects the legal
+what: program at exit 1: the field has no owner (T-UNKNOWN-FIELD) and the constructor is
+what: unbound (T-UNBOUND), with an ambiguous-Display cascade from the unbound `R`. The
+what: same files without the attribute check clean (`f : R -> Int`).
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-UNKNOWN-FIELD 2:6-2:7
+diag-code: T-UNBOUND 4:19-4:20
+diag-code: T-AMBIGUOUS-INSTANCE 4:7-4:14
+control: check control.mdk
+why-diag-code: code + range, not message: T-UNKNOWN-FIELD's message renders the owner as
+why-diag-code: `<unknown>`, which a partial fix could change without fixing the import.
+why-diag-code: All three rows are pinned because this harness compares the whole list;
+why-diag-code: the third is a cascade of the second. Ranges are 0-based and LINE-SENSITIVE:
+why-diag-code: keep main.mdk's line count unchanged or re-derive with `medaka check --json`.
+why-control: control.mdk is main.mdk importing from b.mdk, which is a.mdk without the
+why-control: attribute line. It must check at exit 0. A red control means cross-module
+why-control: record import broke, never that #2004 drained.
+why-note: the issue also claimed a single-file variant; that did not reproduce on
+why-note: 2026-10-03, so only the cross-module shape is pinned.
