@@ -1,0 +1,7 @@
+public export data T = Zed { x : Int, q : Int } | Oth { x : Int, r : Int }
+
+export mkZ : T
+mkZ = Zed { x = 1, q = 2 }
+
+export mkO : T
+mkO = Oth { x = 3, r = 4 }

@@ -1,0 +1,16 @@
+-- #3741: the spelling control for `accept_3741_annotated_receiver_bystander_aaa`.
+-- Identical but for `U`'s constructor, spelled `Zzz` so that it sorts after both
+-- of `T`'s constructors instead of before them.  The verdict and the output must
+-- be the same as that fixture's.
+data T = Zed { x : Int, q : Int } | Oth { x : Int, r : Int }
+
+data U = Zzz { x : Int }
+
+viaAnnot v = (v : T).x
+
+main : <IO> Unit
+main = println (
+  viaAnnot Zed { x = 1, q = 2 },
+  viaAnnot Oth { x = 3, r = 4 },
+  Zzz { x = 3 }.x,
+)

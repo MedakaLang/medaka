@@ -1,0 +1,18 @@
+-- #3741: an ANNOTATED receiver whose field `x` is declared by both constructors of
+-- `T` at the same position with the same type, beside an unrelated record `U`
+-- that also declares `x`.  The two constructors are one candidate for `T`, so the
+-- read is accepted.  Paired with `accept_3741_annotated_receiver_bystander_zzz`,
+-- identical but for the spelling of `U`'s constructor: the verdict and the output
+-- must not depend on it.
+data T = Zed { x : Int, q : Int } | Oth { x : Int, r : Int }
+
+data U = Aaa { x : Int }
+
+viaAnnot v = (v : T).x
+
+main : <IO> Unit
+main = println (
+  viaAnnot Zed { x = 1, q = 2 },
+  viaAnnot Oth { x = 3, r = 4 },
+  Aaa { x = 3 }.x,
+)

@@ -1,0 +1,5 @@
+-- A self-referential alias declared BELOW a data field that names it must be
+-- rejected, not expanded forever while the field elaborates.
+data R = R A
+
+type A = List A

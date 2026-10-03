@@ -1,0 +1,6 @@
+public export data Zed = { x : Int }
+
+public export data Oth = { x : Int }
+
+export mkPZ : Zed
+mkPZ = Zed { x = 7 }

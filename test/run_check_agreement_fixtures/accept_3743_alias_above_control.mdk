@@ -1,0 +1,4 @@
+type Px = Int
+data R = { v : Px }
+
+main = println ((R { v = 41 }).v + 1)

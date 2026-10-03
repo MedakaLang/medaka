@@ -1,0 +1,15 @@
+entry: main.mdk
+what: an alias-qualified named-field constructor builds its OWN module's record in every import-clause order
+
+`ra` declares `data RA = Cfg { alpha }` and `rb` declares `data RB = Cfg { beta, alpha }`: two
+named-field constructors spelled `Cfg`, in two modules. `main` builds `A.Cfg { alpha = 40 }`
+through the alias of `ra`, matches it with `A.Cfg { alpha }`, and adds `rbv`, which `rb`
+computes from its own `Cfg { beta = 1, alpha = 2 }`. Correct answer: `43` (40 + 1 + 2).
+
+The construction must be checked against `ra`'s `Cfg`, which declares no `beta`. The
+spelling-keyed record table holds one row per spelling, and the record-scope override pass
+re-points that row to the record the module's own source means; with that pass removed, one
+import order rejects the program with `Missing field 'beta' in construction of record 'Cfg'`.
+This case grades that rung: the answer must be `43` in both orders.
+`rec1rev-alias-ctor-record-construction-invariant/` is the same program with the entry's
+import clauses written in the other order.
