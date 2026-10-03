@@ -3470,7 +3470,8 @@ name = "dist_install_smoke"
 area = "infra"
 shard = "gates_7"
 project = "compiler"
-tiers = ["merge"]
+# `nightly`: nightly.yml's macos-smoke job also runs it, on macOS (#2533).
+tiers = ["merge", "nightly"]
 cost = "medium"
 kind = "exec"
 migration = "native-wrap"

@@ -1,0 +1,115 @@
+name: 'macOS smoke'
+description: >-
+  Cold-bootstrap the compiler from the checked-in seed on a macOS runner and
+  run a small smoke over it (#2533): `medaka check`, `medaka run` and
+  `medaka build` on a few inline programs, the interpreter and the native
+  binary compared against fixed expected output, then the relocatable-dist
+  smoke (test/dist_install_smoke.sh). A smoke, not the gate suite: it
+  answers "does the toolchain build and produce working programs on macOS",
+  which the all-Linux merge tier cannot.
+
+  Shared by two callers so they cannot drift apart: nightly.yml's
+  `macos-smoke` job (every night; a red run files a known-red issue) and
+  macos.yml (pull requests touching runtime/, the build driver, the
+  bootstrap scripts or the release scripts). The caller must already have
+  checked out the repo, as with setup-medaka.
+
+  setup-medaka is not reused: its toolchain step is apt-only. On macOS the
+  Xcode Command Line Tools on the hosted image provide clang, and libgc
+  comes from Homebrew, matching the Darwin arms of
+  test/build_native_medaka.sh (`brew --prefix bdw-gc`).
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install libgc (the image's Xcode CLT provides clang)
+      shell: bash
+      run: |
+        set -eu
+        brew install bdw-gc
+        clang --version
+        uname -a
+
+    - name: Build medaka (cold bootstrap from seed)
+      shell: bash
+      run: make medaka
+
+    # MEDAKA_STRICT=1 turns the baked source-fingerprint check into a hard
+    # exit, so a binary that does not match this checkout fails here rather
+    # than answering from stale source (AGENTS.md [B-STALENESS]).
+    - name: check / run / build smoke programs
+      shell: bash
+      run: |
+        set -eu
+        export MEDAKA_STRICT=1
+        d="$RUNNER_TEMP/macos-smoke"
+        mkdir -p "$d"
+
+        printf 'main = println "hello, macOS"\n' > "$d/hello.mdk"
+        printf 'hello, macOS\n' > "$d/hello.expected"
+
+        cat > "$d/shapes.mdk" <<'EOF'
+        import map as M
+        import string.{toUpper}
+
+        data Shape = Circle Int | Rect Int Int
+
+        area : Shape -> Int
+        area s = match s
+          Circle r => 3 * r * r
+          Rect w h => w * h
+
+        main =
+          let shapes = [Circle 2, Rect 3 4, Circle 1]
+          let total = sum (map area shapes)
+          let big = [1..=10000]
+          let counts = M.fromList [("a", 1), ("b", 2)]
+          println "areas=\{total}"
+          println "sum=\{sum big} len=\{length big}"
+          println "map=\{M.get "a" counts} \{M.get "z" counts} size=\{M.size counts}"
+          println (toUpper "done")
+        EOF
+        cat > "$d/shapes.expected" <<'EOF'
+        areas=27
+        sum=50005000 len=10000
+        map=Some 1 None size=2
+        DONE
+        EOF
+
+        # Native only: three million cons cells is past the interpreter's
+        # recursion ceiling, and the point is the Boehm GC under load.
+        cat > "$d/alloc.mdk" <<'EOF'
+        main =
+          let xs = [1..=3000000]
+          let ys = map (x => x * 2) xs
+          println "alloc sum=\{sum ys} len=\{length ys}"
+        EOF
+        printf 'alloc sum=9000003000000 len=3000000\n' > "$d/alloc.expected"
+
+        for p in hello shapes alloc; do
+          echo "== medaka check $p.mdk"
+          ./medaka check "$d/$p.mdk"
+        done
+
+        # `medaka build`'s exit code does not survive a pipe (AGENTS.md
+        # [D-BUILD-PIPE]): redirect to a file, then test the status.
+        native() {
+          ./medaka build "$d/$1.mdk" -o "$d/$1" > "$d/$1.build.log" 2>&1 || { cat "$d/$1.build.log"; return 1; }
+          "$d/$1" > "$d/$1.native"
+          diff -u "$d/$1.expected" "$d/$1.native"
+        }
+
+        for p in hello shapes; do
+          echo "== medaka run $p.mdk"
+          ./medaka run "$d/$p.mdk" > "$d/$p.run"
+          diff -u "$d/$p.expected" "$d/$p.run"
+          echo "== medaka build $p.mdk"
+          native "$p"
+        done
+        echo "== medaka build alloc.mdk"
+        native alloc
+        echo "macOS smoke: OK"
+
+    - name: Relocatable dist smoke
+      shell: bash
+      run: sh test/dist_install_smoke.sh

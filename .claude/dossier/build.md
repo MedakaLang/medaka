@@ -56,5 +56,8 @@ caught and re-derived.
 
 ## [B-CI-UBUNTU-ONLY] / [B-DUAL-PLATFORM] mitigation note
 
-Until a macOS CI job exists, the only mitigation for a macOS-only break shipping through 100%-green
-required checks is a manual macOS smoke test before tagging a release (tracked as #549).
+Since #2533, a macOS smoke (`.github/actions/macos-smoke`) runs nightly and on PRs touching
+`runtime/`, the build driver, the bootstrap scripts or the release scripts — neither run is a
+required check, and neither runs the gate suite. A macOS-only break outside those paths still
+merges green and is caught the next night at the earliest; a manual macOS smoke test before
+tagging a release remains the backstop (tracked as #549).

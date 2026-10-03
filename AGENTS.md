@@ -438,15 +438,17 @@ for an old macOS laptop problem that doesn't apply here.
 alive when touching a script: `stat -c %Y` *or* `stat -f %m`, `pkg-config`/`-lgc` *or* `brew
 --prefix bdw-gc`, no Mach-O-only link flags.
 
-⚠️ **[B-CI-UBUNTU-ONLY] Upheld by convention only — CI is 100% `ubuntu-latest`** — don't trust a
-count in this file, derive it: every `runs-on:` hit across the workflows should read
-`ubuntu-latest` and zero should mention macOS:
+⚠️ **[B-CI-UBUNTU-ONLY] Every REQUIRED check runs on `ubuntu-latest`; macOS gets a smoke, never
+the gate suite** (#2533). The smoke (`.github/actions/macos-smoke`: cold seed bootstrap,
+`check`/`run`/`build` on inline programs, dist smoke) runs NIGHTLY (`nightly.yml` `macos-smoke`,
+red files a `known-red` issue) and on a PR only when it touches `runtime/`, the build driver,
+the bootstrap scripts or the release scripts (`.github/workflows/macos.yml`'s `paths:`), not
+required either way. ⇒ **A macOS-only break anywhere else ships green and surfaces the next
+night.** Derive the non-Linux jobs, don't trust this list:
 ```sh
-grep -rn "runs-on" .github/workflows/*.yml | grep -vc ubuntu-latest   # 0 = clean
-grep -rin macos .github/workflows/*.yml | wc -l                       # 0 = clean
+grep -rn "runs-on" .github/workflows/*.yml | grep -v ubuntu-latest   # the macOS jobs, nothing else
 ```
-A macOS-only break ships with every check green; mitigate with a manual macOS smoke test before
-tagging a release (#549).
+Still smoke-test by hand on macOS before tagging a release (#549).
 
 Two platform facts: emitted LLVM IR carries **no target triple** (seed cold-bootstraps on x86 or
 arm from the same bytes); the compiler's stack comes from a **256 MB GC-aware worker pthread**
