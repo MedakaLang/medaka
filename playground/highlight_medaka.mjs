@@ -48,6 +48,7 @@ const escapeHtml = (s) =>
 const TOKEN_CLASSES = new Set([
   'keyword', 'comment', 'string', 'character', 'number', 'typeName', 'constructor',
   'variableName', 'operator', 'punctuation', 'bool', 'escape', 'interpolation',
+  'typeVar', 'effectLabel', 'effectVar',
 ]);
 
 // ── the StringStream adapter ────────────────────────────────────────────────
