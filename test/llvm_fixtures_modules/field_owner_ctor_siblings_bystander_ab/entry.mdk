@@ -1,0 +1,15 @@
+-- ACCEPT cell for a concrete receiver whose type's constructors both declare the
+-- field at the same position, beside another module's records spelled like those
+-- constructors.  Import order `tlib` then `plib`; `field_owner_ctor_siblings_bystander_ba/`
+-- is the same program with the imports swapped.
+--
+-- `x` is field 1 of both `Zed` and `Oth` in `tlib`'s `T`, so `mkZ.x` and `mkO.x`
+-- are legal reads of a `T`.  `plib` declares single-constructor records spelled
+-- `Zed` and `Oth`, which `main` never reads; the verdict must not depend on them.
+--
+-- Expected output, derived by hand: `mkZ.x` is 1 and `mkO.x` is 3, so `(1, 3)`.
+import tlib.{T, mkZ, mkO}
+import plib.{Zed, Oth, mkPZ}
+
+main : <IO> Unit
+main = putStrLn ("(" ++ intToString mkZ.x ++ ", " ++ intToString mkO.x ++ ")")

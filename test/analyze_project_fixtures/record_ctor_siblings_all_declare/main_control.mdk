@@ -2,11 +2,11 @@
 -- first; neither cell tests the property alone.
 --
 -- Every named-field constructor of `T` declares `x`, so the candidate filter keeps
--- TWO survivors and the narrowing already returned the pre-narrowing answer before
--- the repair.  MEASURED byte-identical on base `d2b7cb8b`, on the unrepaired slice
--- `ada2bd57`, and after the repair: two `Type mismatch: T vs U` diagnostics.  If a
--- future change to the narrowing moves THIS cell, it changed a case the receiver's
--- type genuinely cannot decide.
+-- both of them, and they collapse to ONE candidate because they declare one type.
+-- No sibling withholds `x`, so the narrowing selects `T`, and the constructor
+-- agreement test rejects the access: `x` is field 1 of `Zed` but field 2 of `Oth`.
+-- The verdict must not depend on how `m2`'s unrelated constructor is spelled:
+-- left as two survivors, they would fall through to a `T vs U` mismatch.
 import m1.{T(..), mkZ, mkO}
 import m2.{U(..), mkU}
 

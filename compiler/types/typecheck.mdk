@@ -4297,9 +4297,10 @@ toggles = Ref (freshToggles ())
 --
 -- ORDINALS.  The prelude is 0; then each module of the loader's dependency-first
 -- list, in that order.  The prelude is indexed under BOTH `"core"` — the spelling
--- its `graph*Exports` peers key it under — and `""`, which is the `mid` both
--- drivers actually pass for the core pass (`checkModuleFull` → `checkModuleFullImpl
--- ""`; `elabModuleStamp ""`), so `declEnvsOrdOf` cannot miss on either spelling.
+-- the export indexes (`meExports`, `deCtorExports`) key it under — and `""`, which
+-- is the `mid` both drivers actually pass for the core pass (`checkModuleFull` →
+-- `checkModuleFullImpl ""`; `elabModuleStamp ""`), so `declEnvsOrdOf` cannot miss on
+-- either spelling.
 --
 -- 🚨 A-3.2+ WILL ADD FIELDS TO `DeclEnvs`, SO READ THIS BEFORE YOU DO.  The one
 -- interior comment on each record below is LOAD-BEARING against #829 (REOPENED),
@@ -5908,6 +5909,7 @@ data DataEnv = DataEnv {
   deRecordIdents : OrdMap (List (Ident, String, List Field)),
   deFieldOwnerIdents : OrdMap (List (Ident, String)),
   deAliases : List (TabKey, AliasDecl),  -- A-3.2b residual (#1512): LIVE — the sole cross-module alias source, read by `aliasUniverseAt`
+  deCtorExports : OrdMap (List (String, String, Ident)),  -- module id → the constructor rows that module's row CARRIES; the constructor peer of `meExports`, see `ctorExportsInto`
 }
 
 emptyDataEnv : DataEnv
@@ -5917,6 +5919,7 @@ emptyDataEnv = DataEnv {
   deRecordIdents = omEmpty,
   deFieldOwnerIdents = omEmpty,
   deAliases = [],
+  deCtorExports = omEmpty,
 }
 
 -- Build the whole-graph `DataEnv` from the per-module rows — the SAME rows
@@ -5942,7 +5945,10 @@ dataEnvFinish env = DataEnv { env |
 dataEnvFromRowsGo : List DeclEnvModule -> DataEnv -> DataEnv
 dataEnvFromRowsGo [] acc = acc
 dataEnvFromRowsGo (m :: rest) acc =
-  dataEnvFromRowsGo rest (dataEnvFromDeclsGo m.demOrd m.demDecls acc)
+  let env = dataEnvFromDeclsGo m.demOrd m.demDecls acc
+  dataEnvFromRowsGo rest DataEnv { env |
+    deCtorExports = ctorExportsInto m env.deCtorExports,
+  }
 
 dataEnvFromDeclsGo : Int -> List Decl -> DataEnv -> DataEnv
 dataEnvFromDeclsGo _ [] acc = acc
@@ -8503,7 +8509,6 @@ data DriverState = DriverState {
   -- admitted for dispatch without the program binding that bare name, so the
   -- import seed can tell an admission from a written binding.
   graphAdmittedMethodsRef : Ref (OrdMap (List (String, String))),
-  graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),
   declEnvsRef : Ref DeclEnvs,
   abstractRecordTypesRef : Ref (OrdMap Unit),
   argDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
@@ -8546,7 +8551,6 @@ freshDriverState : Unit -> DriverState
 freshDriverState _ = DriverState {
   effectDomains = Ref [],
   graphAdmittedMethodsRef = Ref omEmpty,
-  graphCtorExportsRef = Ref omEmpty,
   declEnvsRef = Ref emptyDeclEnvs,
   abstractRecordTypesRef = Ref omEmpty,
   argDispatchIdxByIdRef = Ref [],
@@ -13694,10 +13698,13 @@ emitCyclicAliasErrors (name :: rest) =
         ++ "`. Type aliases cannot be recursive or cyclic")
   emitCyclicAliasErrors rest
 
--- Cycle-detection pre-pass over aliasTableRef.  MUST run immediately after
--- registerAllData has fully populated the table and BEFORE any fromAstType*
--- call (which would infinite-loop on a cyclic alias via the recursive expansion
--- added in stages 2–3).  For each alias found on a cycle:
+-- Cycle-detection pre-pass over aliasTableRef.  MUST run after the aliases are
+-- in the table and BEFORE any fromAstType* call (which would infinite-loop on a
+-- cyclic alias via the recursive expansion added in stages 2–3); a declaration's
+-- fields elaborate during registration, so `registerDeclsAliasesFirst` and
+-- `registerImportOverlay` run it between their alias and non-alias folds.
+-- A rerun finds nothing new and the diagnostic is message-deduped.
+-- For each alias found on a cycle:
 --   (1) emits a deduped type_error naming the offending alias;
 --   (2) removes it from aliasTableRef so the expansion seam falls through to an
 --       opaque TCon and cannot recurse → no stack overflow.
@@ -18918,11 +18925,16 @@ fieldDeclDescr (k, ri) = match recordOwnerModule ri
 -- so the stamp `stampedRecordHead k ri` names the selected declaration's own
 -- module: the emitters apply that declaration's layout.
 --
+-- The matches are collapsed by declaring type (`fieldDeclTypeKey`): every match
+-- is a constructor of the receiver's one type, so two owner keys naming two of its
+-- constructors are one answer, and `fieldSelectionWellTyped` decides afterwards
+-- whether they agree about the field's slot.
+--
 -- Declines (answers `None`, so the ladder runs unchanged) when the receiver
--- carries no identity, when no owner key or more than one owner key holds the
--- receiver's declaration, or when a sibling constructor of the receiver's type
--- withholds the field.  The sibling case is the multi-`ConNamed`-variant shape
--- `narrowedPick` refuses: the receiver's type does not say which layout applies.
+-- carries no identity, when no owner key holds the receiver's declaration, or when
+-- a sibling constructor of the receiver's type withholds the field.  The sibling
+-- case is the multi-`ConNamed`-variant shape `narrowedPick` refuses: the
+-- receiver's type does not say which layout applies.
 ownerDeclOfReceiver : Mono ->
   String ->
   List String ->
@@ -18930,7 +18942,7 @@ ownerDeclOfReceiver : Mono ->
 ownerDeclOfReceiver _ _ [] = None
 ownerDeclOfReceiver te fname owners = match receiverTypeIdent te
   None => None
-  Some ident => match ownerDeclMatches ident owners
+  Some ident => match dedupBy fieldDeclTypeKey (ownerDeclMatches ident owners)
     [(k, ri)] =>
       if narrowingBlockedByCtorSibling (headTyconMono te) fname k then
         None
@@ -19011,6 +19023,13 @@ resolveFieldAmbiguous te fname owners =
 --     old expression, so no program that resolved to `None` here can now resolve to
 --     `Some`.
 --
+-- The survivors are collapsed by declaring type (`fieldDeclTypeKey`, as in the
+-- unannotated-receiver path): the named-field constructors of the receiver's type
+-- are one candidate, and `fieldSelectionWellTyped` decides afterwards whether they
+-- agree about the field's slot and type.  Left uncollapsed, two constructors of
+-- one type are two survivors, and the answer becomes the sorted `headL owners`,
+-- which depends on how an unrelated type's constructor is spelled.
+--
 -- One mint of the receiver's key for the whole filter, not one per candidate, for the
 -- reason `types/registry.mdk` gives against re-minting a `TabKey` per lookup
 -- (`tabKeyOf` → `mkIdent` → `identOriginOf` allocates on the way).
@@ -19024,7 +19043,9 @@ resolveFieldOwnersNarrowed te fname owners =
     rk
     fname
     owners
-    (filterList (recordCandIsReceiverDecl rk) (ownerCandidates owners))
+    (dedupBy
+      fieldDeclTypeKey
+      (filterList (recordCandIsReceiverDecl rk) (ownerCandidates owners)))
 
 -- The singleton gate, plus the guard the comparator's granularity requires.  A
 -- lone survivor is trusted ONLY when the receiver's type does not also have a
@@ -19834,9 +19855,10 @@ builtinClassSet _ _ _ acc = acc
 --     declaration to replace an earlier one.
 seedBuiltinClasses : String -> List Decl -> Unit
 -- ⚠️ BOTH SPELLINGS of the prelude's module id are tested, for the same reason
--- `declEnvsOrdOf` indexes it twice: the `graph*Exports` peers key the prelude under
--- `"core"`, but the `mid` `graphPreamble` actually PASSES for the core pass is `""` on
--- both output selections (`GOutDiags`: `checkModuleFull` → `checkModuleFullImpl ""`;
+-- `declEnvsOrdOf` indexes it twice: the export indexes (`meExports`,
+-- `deCtorExports`) key the prelude under `"core"`, but the `mid` `graphPreamble`
+-- actually PASSES for the core pass is `""` on both output selections
+-- (`GOutDiags`: `checkModuleFull` → `checkModuleFullImpl ""`;
 -- `GOutTrees`: `elabModuleStamp ""`).  Testing
 -- only `"core"` would silently never fire on either selection — and the miss is silent
 -- because an unseeded table yields `OriginUnresolved`, i.e. a `TkBare` goal key against
@@ -30002,7 +30024,7 @@ exportsIdentFor n ident ((en, ei) :: rest)
 
 -- ── #1111 Stage A-2 unit A-2.11 (#1319 unit 1): the CONSTRUCTOR-namespace peer ──
 --
--- Everything from here to `graphCtorExports` is the constructor twin of the METHOD
+-- Everything from here to `ctorExportsInto` is the constructor twin of the METHOD
 -- method machinery (`MethodEnv` … `exportsIdentFor`).  It is a
 -- deliberate near-copy and it is NAMED SCAFFOLDING, not an oversight:
 --
@@ -30209,7 +30231,7 @@ anyUsePathBindsCtor (_ :: rest) n owner ident =
 -- `usePathWitnesses` states for methods:
 --   * the path lets the CONSTRUCTOR through — `usePathBindsCtor`;
 --   * the dependency's row CARRIES *that declaration* of it — asked of
---     `graphCtorExportsRef`, so a re-export chain resolves transitively and BY IDENTITY.
+--     `deCtorExports`, so a re-export chain resolves transitively and BY IDENTITY.
 --     That second conjunct is what drains #1283: the re-exporter's row carries the
 --     DECLARING module's `Ident`, so naming the re-exporter and naming the definer are
 --     the same question with the same answer.
@@ -30275,12 +30297,11 @@ memberBindsCtorName n owner (UseMember mn ctors _ _) =
 -- declaration"; a WHOLESALE miss — the index absent — is a programming error, and the
 -- property that forbids it is the same two-part conjunction stated on
 -- `meExports` (overwritten at every Module-mode driver entry AND no reset point
--- in between).  `graphCtorExports` carries the constructor half of that property.
+-- in between); `deCtorExports` rides the same `DeclEnvs` write.
 depExportsCtorIdent : String -> String -> Ident -> Bool
-depExportsCtorIdent dep n ident =
-  match omLookup dep driverState.value.graphCtorExportsRef.value
-    None => False
-    Some es => exportsCtorIdentFor n ident es
+depExportsCtorIdent dep n ident = match omLookup dep (ctorExportsIndex ())
+  None => False
+  Some es => exportsCtorIdentFor n ident es
 
 exportsCtorIdentFor : String -> Ident -> List (String, String, Ident) -> Bool
 exportsCtorIdentFor _ _ [] = False
@@ -41744,7 +41765,25 @@ registerAllDataScoped env ds allDs =
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
 registerAllDataGo env ds =
   let _ = fold (_ d => recordDeclKinds d) () ds
-  fold registerData env ds
+  registerDeclsAliasesFirst env ds
+
+-- Aliases enter the alias table ahead of every other declaration, so a field
+-- naming an alias declared later in the list expands the same as one naming an
+-- alias declared above it.  An alias adds no env entry, so the split fold only
+-- changes the table's contents by the time fields elaborate.  The table then
+-- holds every alias the fields can name, cyclic ones included, so cycles are
+-- rejected between the two folds: a field naming a cyclic alias would
+-- otherwise expand it forever.
+registerDeclsAliasesFirst : TcEnv -> List Decl -> TcEnv
+registerDeclsAliasesFirst env ds =
+  let env1 = fold (e d => if isAliasDecl d then registerData e d else e) env ds
+  let _ = rejectCyclicAliases ()
+  fold (e d => if isAliasDecl d then e else registerData e d) env1 ds
+
+isAliasDecl : Decl -> Bool
+isAliasDecl (DAttrib _ d) = isAliasDecl d
+isAliasDecl (DTypeAlias { ... }) = True
+isAliasDecl _ = False
 
 -- The Module arm's import overlay, registered over [env] without elaborating a
 -- second time what the populations already hold.  A public data declaration is
@@ -41772,11 +41811,18 @@ registerImportOverlay env overlay =
         Some _ => ())
       ()
       served
+  let env1 =
+    fold
+      (e p => if isAliasDecl (fst p) then registerData e (fst p) else e)
+      env
+      served
+  -- Cycles out before any field elaborates, as in `registerDeclsAliasesFirst`.
+  let _ = rejectCyclicAliases ()
   fold
     (e p => match snd p
-      None => registerData e (fst p)
+      None => if isAliasDecl (fst p) then e else registerData e (fst p)
       Some rows => registerCachedRows e rows)
-    env
+    env1
     served
 
 -- The cached constructor schemes and record infos of [d], in variant order, when
@@ -46335,8 +46381,9 @@ allIfaceMethodNames (_ :: rest) = allIfaceMethodNames rest
 -- impl EXISTENCE and impl SELECTION both read the graph-global `bodyImplEnvRef` now, and a
 -- prefix-keyed second population is the shape B-2.1-c/-f/-g each measured an S0 out of.
 -- BOTH SPELLINGS of the prelude's module id under `Module` mode, in one place.  The
--- `graph*Exports` peers key the prelude under `"core"`, but the `mid` `graphPreamble`
--- actually PASSES for the core pass is `""` on both output selections (`GOutDiags`:
+-- export indexes (`meExports`, `deCtorExports`) key the prelude under `"core"`, but
+-- the `mid` `graphPreamble` actually PASSES for the core pass is `""` on both output
+-- selections (`GOutDiags`:
 -- `checkCoreMemoized` → `checkModuleFull` → `checkModuleFullImpl ""`; `GOutTrees`:
 -- `elabModuleStamp ""`).  A test of one spelling alone silently never fires on either
 -- selection.  Two callers — `seedBuiltinClasses` and
@@ -46457,7 +46504,7 @@ appendDataUniverse mid prog0 =
   let pubDecls = publicDataDecls prog0
   -- The alias half of the reload is a stage-K projection, so it takes THIS module's
   -- ordinal, strictly BELOW-this-module (`aliasUniverseAt`'s `<`): the registration
-  -- below is what puts this module's own public aliases in front.
+  -- below is what puts this module's own aliases, public and private, in front.
   let _ =
     loadDataUniverse (declEnvsOrdOf mid driverState.value.declEnvsRef.value)
   -- #2112: the polarity fixpoint sees the WHOLE module (`prog0`), the universe
@@ -46465,7 +46512,7 @@ appendDataUniverse mid prog0 =
   let env2 =
     registerAllDataScoped
       (withCtors (spFloor crossRun.value.universeCtorPop.value))
-      pubDecls
+      (publicDataScopeDecls prog0)
       prog0
   -- Both walkers read the payloads this registration just made back out of `env2` and
   -- `recordByNameRef`, so each population row holds the very object its floor holds.
@@ -46473,6 +46520,17 @@ appendDataUniverse mid prog0 =
     insertCtorPop env2 pubDecls crossRun.value.universeCtorPop.value
   crossRun.value.universeRecordPop :=
     insertRecordPop pubDecls crossRun.value.universeRecordPop.value
+
+-- What `appendDataUniverse` registers to elaborate a module's public data: the
+-- public declarations plus every alias the module declares, private ones
+-- included.  A public field may name a private alias, and the scheme it
+-- elaborates to here is the one every importer reads back, so it expands under
+-- the declaring module's aliases.  The private aliases reach only the working
+-- alias table, which the next module's arm reloads; the populations take
+-- `pubDecls` alone.
+publicDataScopeDecls : List Decl -> List Decl
+publicDataScopeDecls prog0 =
+  filterList (d => publicDataDecl d || isAliasDecl d) prog0
 
 -- #154 PR1: buildDefinerShadows with the `allIfaceMethodNames fullUniverse` scan
 -- replaced by a membership test, `isMethod` (`methodNameDeclaredAt` at the module's
@@ -48204,21 +48262,20 @@ narrowRowToNamed named r
     ms => [(fst r, ms)]
 
 -- ── #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of meExports ──
--- (module id → [(ctor name, owning type name, declaring `Ident`)]), folded dependency-first
--- so a `export import` chain resolves transitively and BY IDENTITY.  Read only by
--- `depExportsCtorIdent`.  Its SAFETY PROPERTY is the conjunction stated in full on
--- `meExports` and it is the SAME conjunction, not a similar one:
---   (a) unconditional whole-value overwrite at EVERY Module-mode driver entry — there
---       is ONE, `graphPreamble`, carrying the line
---       `setRef driverState.value.graphCtorExportsRef (graphCtorExports … modules)`;
---   (b) no reset point in between — `DriverState` has none, which is why this ref lives
---       there and not on `CrossRun` (`resetCrossModuleState` would clear it between the
---       write and the read: that was F1).
--- Both halves, or neither.  An empty index makes every candidate miss, the override
--- declines everywhere, and the unit silently does nothing.
+-- `DataEnv.deCtorExports`: (module id → [(ctor name, owning type name, declaring
+-- `Ident`)]), folded dependency-first by `dataEnvFromRowsGo` so a `export import` chain
+-- resolves transitively and BY IDENTITY.  Read through `ctorExportsIndex` by
+-- `depExportsCtorIdent` (the ctor and record scope ladders' import witness) and
+-- `reexportedCtorDecls` (the exhaustiveness oracle's re-export rows).  It rides
+-- `declEnvsRef` for the same reason `meExports` does and under the same two-part
+-- property: the one Module-mode driver entry (`graphPreamble`) overwrites the envelope
+-- whole and nothing resets it in between.  The emitter child builds it the same way,
+-- because it runs that same entry; resolve's `ModuleExports` is not available there.
+-- An empty index makes every candidate miss, the override declines everywhere, and the
+-- ladder silently does nothing.
 --
--- ⚠️ Must run on the STAMPED graph — identity comes from `DData.dataOrigin` /
--- `DNewtype.newtypeOrigin`, which `stampGraphTyOrigins` writes.  The call site sits
+-- Must run on the STAMPED graph: identity comes from `DData.dataOrigin` /
+-- `DNewtype.newtypeOrigin`, which `stampGraphTyOrigins` writes, and `buildDeclEnvs` runs
 -- after the driver's stamp.
 --
 -- ⚠️ THE OWNING TYPE NAME IS IN THE ROW ON PURPOSE.  It is what lets a `(..)` member be
@@ -48232,22 +48289,21 @@ narrowRowToNamed named r
 -- promise: the CANDIDATES this index is matched against come from `publicDataDecls`
 -- (`appendDataUniverse`), so a private declaration's row entry can never equal a
 -- candidate's `Ident` and can never witness anything.
--- `meExports`'s constructor peer, same shape, same reason; unkeyed, the
--- prelude half is `declCtorIdents coreDecls`.
-graphCtorExports : List (String, String, Ident) ->
-  List (String, List Decl) ->
+-- One row's step, the shape of `methodEnvGo`'s `meExports` arm: [m]'s own declarations
+-- plus what it re-exports from the rows already folded.  The prelude row is keyed
+-- `"core"` (its `demId`) and is folded first, so its re-export half is empty.
+ctorExportsInto : DeclEnvModule ->
+  OrdMap (List (String, String, Ident)) ->
   OrdMap (List (String, String, Ident))
-graphCtorExports coreIdents modules =
-  graphCtorExportsGo (omInsert "core" coreIdents omEmpty) modules
+ctorExportsInto m acc =
+  omInsert
+    m.demId
+    (declCtorIdents m.demDecls ++ reexportedCtorIdents acc m.demDecls)
+    acc
 
-graphCtorExportsGo : OrdMap (List (String, String, Ident)) ->
-  List (String, List Decl) ->
-  OrdMap (List (String, String, Ident))
-graphCtorExportsGo acc [] = acc
-graphCtorExportsGo acc ((mid, decls) :: rest) =
-  graphCtorExportsGo
-    (omInsert mid (declCtorIdents decls ++ reexportedCtorIdents acc decls) acc)
-    rest
+-- The graph's constructor export index; `omEmpty` before a driver built `DeclEnvs`.
+ctorExportsIndex : Unit -> OrdMap (List (String, String, Ident))
+ctorExportsIndex _ = driverState.value.declEnvsRef.value.deData.deCtorExports
 
 -- the (ctor name, owning type name, declaring identity) rows [decls] DECLARES.
 declCtorIdents : List Decl -> List (String, String, Ident)
@@ -49043,13 +49099,12 @@ oracleImportDeclsOf _ _ _ = []
 -- declaring identity across any chain of `export import`.  One decl per (declaring
 -- module, type), however many of its constructors are re-exported.
 reexportedCtorDecls : Int -> List DeclEnvModule -> String -> List Decl
-reexportedCtorDecls cur rows dep =
-  match omLookup dep driverState.value.graphCtorExportsRef.value
-    None => []
-    Some es =>
-      flatMap
-        (k => reexportedTypeDecl cur rows (fst k) (snd k))
-        (dedupBy (k => "\{fst k}.\{snd k}") (flatMap (reexportedOwner dep) es))
+reexportedCtorDecls cur rows dep = match omLookup dep (ctorExportsIndex ())
+  None => []
+  Some es =>
+    flatMap
+      (k => reexportedTypeDecl cur rows (fst k) (snd k))
+      (dedupBy (k => "\{fst k}.\{snd k}") (flatMap (reexportedOwner dep) es))
 
 -- (declaring module, owning type) of an export row declared outside `dep`.
 reexportedOwner : String -> (String, String, Ident) -> List (String, String)
@@ -49851,7 +49906,6 @@ copyDriverState : DriverState -> DriverState
 copyDriverState d = DriverState {
   effectDomains = Ref d.effectDomains.value,
   graphAdmittedMethodsRef = Ref d.graphAdmittedMethodsRef.value,
-  graphCtorExportsRef = Ref d.graphCtorExportsRef.value,
   declEnvsRef = Ref d.declEnvsRef.value,
   abstractRecordTypesRef = Ref d.abstractRecordTypesRef.value,
   argDispatchIdxByIdRef = Ref d.argDispatchIdxByIdRef.value,
@@ -49978,7 +50032,6 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
 -- per analyze.
 data PreludePreamble = PreludePreamble {
   ppEnvAcc : DeclEnvAcc,
-  ppCtorIdents : List (String, String, Ident),
   ppMangledFunDefs : Bool,
   ppMarkFacts : PreludeMarkFacts,
 }
@@ -49989,7 +50042,6 @@ preludePreambleMemoRef = Ref None
 preludePreambleOf : List Decl -> DeclEnvModule -> PreludePreamble
 preludePreambleOf coreDecls coreRow = PreludePreamble {
   ppEnvAcc = declEnvAccOf [coreRow] emptyDeclEnvAcc,
-  ppCtorIdents = declCtorIdents coreDecls,
   ppMangledFunDefs = unitCarriesMangledFunDefs "core" (funDefs coreDecls),
   ppMarkFacts = preludeMarkFactsOf coreDecls,
 }
@@ -50155,23 +50207,20 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   let coreRow = declEnvModule 0 "core" coreDecls
   let modRows = declEnvModulesFrom 1 modules
   let prelude = preludePreambleFor preludeKey coreDecls coreRow
-  -- #1111 A-2.11 (#1319 unit 1): the constructor peer of the method index, under the
-  -- two-part property stated on `meExports`.
-  driverState.value.graphCtorExportsRef :=
-    graphCtorExports prelude.ppCtorIdents modules
   -- L3 (xmod-identity #1351 spine): the graph-level mangled-funDefs fact, under the
-  -- same two-part safety property as the line above (F3: unconditional
+  -- two-part safety property stated on `meExports` (F3: unconditional
   -- whole-value overwrite at the Module-mode driver entry + no reset point after it
-  -- is what keeps compile N's flag from leaking into compile N+1 — see
-  -- `meExports`).  The two terms are the `("core", coreDecls) :: modules`
-  -- unit list split on its head, which `graphCarriesMangledFunDefs` folds with `||`.
+  -- is what keeps compile N's flag from leaking into compile N+1).  The two terms
+  -- are the `("core", coreDecls) :: modules` unit list split on its head, which
+  -- `graphCarriesMangledFunDefs` folds with `||`.
   driverState.value.mangledFunDefsPresentRef :=
     prelude.ppMangledFunDefs || graphCarriesMangledFunDefs modules
   -- #1112 A-3.1: the whole-graph declaration envelope, under the same two-part
-  -- property as the two lines above (`driverState` has no reset point, and the
+  -- property as the line above (`driverState` has no reset point, and the
   -- Module-mode driver entry writes it unconditionally).  See `buildDeclEnvs`.  It
-  -- carries the method namespace (`deMethods`), so it is written before any module
-  -- — the core pass included — reads a method's scope.
+  -- carries the method namespace (`deMethods`) and the constructor export index
+  -- (`deData.deCtorExports`), so it is written before any module — the core pass
+  -- included — reads a method's scope or a constructor's import witness.
   let declEnvs = buildDeclEnvs prelude.ppEnvAcc coreRow modRows
   driverState.value.declEnvsRef := declEnvs
   -- #1280: `coreDecls` arrives here ALREADY STAMPED (the caller's
@@ -51398,8 +51447,8 @@ checkModulesEntryHasErrors runtimeDecls coreDecls modules =
 -- is the entry-report projection of the one whole-graph driver (see the file header
 -- and `driveGraphK`) — it therefore performs BOTH halves of the
 -- two-part safety property a standalone `Module`-arm caller must uphold
--- (`resetCrossModuleState` and the unconditional `graphCtorExportsRef`/
--- `mangledFunDefsPresentRef`/`declEnvsRef` overwrites, the last carrying the method
+-- (`resetCrossModuleState` and the unconditional `mangledFunDefsPresentRef`/
+-- `declEnvsRef` overwrites, the last carrying the method and constructor export
 -- indices — see `checkModuleFullDiags`'s header comment just above its `export`).
 -- Delegating to it (rather than hand-assembling a bare `checkModuleFullDiags` call
 -- with an invented module id / degenerate accData/implDecls) gets that property for

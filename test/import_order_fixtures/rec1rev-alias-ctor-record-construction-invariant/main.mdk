@@ -1,0 +1,9 @@
+import rb.{rbv}
+import ra as A
+
+main : <IO> Unit
+main =
+  let c = A.Cfg { alpha = 40 }
+  let v = match c
+    A.Cfg { alpha } => alpha
+  putStrLn (intToString (v + rbv))

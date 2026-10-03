@@ -650,6 +650,8 @@ cslotKey : CSlot -> String
 cslotVecKey : (CSlot, List Mono) -> String
 ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
+ctorExportsIndex : Unit -> Map String (List (String, String, Ident))
+ctorExportsInto : DeclEnvModule -> Map String (List (String, String, Ident)) -> Map String (List (String, String, Ident))
 ctorFieldConflict : HeadKey -> String -> String -> Option CtorFieldConflict
 ctorFieldConflictHere : Mono -> String -> RecordInfo -> String -> Option CtorFieldConflict
 ctorFieldSlot : HeadKey -> String -> String -> Option (String, Int, RecordInfo)
@@ -1282,8 +1284,6 @@ graphAliasEntry : String -> List ((String, String), a) -> (String, (String, Stri
 graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCollect : GraphOut -> Bool -> String -> (List Decl, List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List (String, Scheme), List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List (String, Scheme), List TcDiag, List TcDiag)))
-graphCtorExports : List (String, String, Ident) -> List (String, List Decl) -> Map String (List (String, String, Ident))
-graphCtorExportsGo : Map String (List (String, String, Ident)) -> List (String, List Decl) -> Map String (List (String, String, Ident))
 graphDrainFinish : DrainDiags -> Unit
 graphMarksNow : Unit -> GraphMarks
 graphModuleWorker : GraphOut -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, Scheme), List TcDiag, List TcDiag))
@@ -1690,6 +1690,7 @@ intersectDeclAtoms : List (List Atom) -> List Atom
 invocationHeadKey : Mono -> String
 ioAliasLabels : List String
 ioLabel : EffLabel
+isAliasDecl : Decl -> Bool
 isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
 isBareTyvarMono : Mono -> Bool
 isCompareMethod : String -> Bool
@@ -2364,6 +2365,7 @@ propagatePoison : Ref Tyvar -> Mono -> Unit
 pubTopFnNames : List Decl -> List String
 publicDataDecl : Decl -> Bool
 publicDataDecls : List Decl -> List Decl
+publicDataScopeDecls : List Decl -> List Decl
 publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding)
 publicStandaloneNames : List Decl -> List String
 publicValNames : List Decl -> List String
@@ -2551,6 +2553,7 @@ registerCachedRecord : String -> RecordInfo -> Unit
 registerCachedRows : TcEnv -> (List (String, Scheme), List (String, RecordInfo)) -> TcEnv
 registerConstraintRegs : List ConstraintReg -> Unit
 registerData : TcEnv -> Decl -> TcEnv
+registerDeclsAliasesFirst : TcEnv -> List Decl -> TcEnv
 registerDispatchMonos : IfaceRef -> List Mono -> Option Loc -> ScopeId -> Int -> List Int -> List Int -> Unit
 registerEachActive : List Int -> EvidenceBinderId -> Unit
 registerEachActiveId : List Int -> EvidenceBinderId -> Unit

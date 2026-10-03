@@ -1,0 +1,6 @@
+-- The newtype form of `cyclic_alias_after_data_self`: a newtype's field
+-- elaborates at registration too, so a cyclic alias it names below it must be
+-- rejected first.
+newtype N = N A
+
+type A = List A

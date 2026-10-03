@@ -1,0 +1,8 @@
+import lib.alias3743_other.{shout}
+
+data R = { v : Px }
+type Px = Int
+
+main =
+  println ((R { v = 41 }).v + 1)
+  println (shout "hi")

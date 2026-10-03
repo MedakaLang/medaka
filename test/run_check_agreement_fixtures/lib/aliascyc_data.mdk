@@ -1,0 +1,6 @@
+-- A public record whose field names a private alias cycle declared below it.
+export data R = R { v : A }
+
+type A = B
+
+type B = A
