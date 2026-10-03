@@ -1,0 +1,7 @@
+-- #1185, drained from its must_fail pin: an exhaustive list function in a
+-- non-entry module, in a graph where another module declares a constructor
+-- spelled `Nil`. Expected: no diagnostic in any file.
+import doc.{Doc(..)}
+import util.{total}
+
+main = println (total [1, 2, 3])

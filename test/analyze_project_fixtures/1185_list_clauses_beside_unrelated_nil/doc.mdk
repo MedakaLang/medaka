@@ -1,0 +1,3 @@
+-- A sum type whose constructors share no type with anything `util.mdk`
+-- matches on; one of them is spelled `Nil`.
+public export data Doc = Nil | Text String | Cat Doc Doc

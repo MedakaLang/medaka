@@ -1,4 +1,5 @@
 abstractlyExportedTypes : ModuleExports -> List String
+addCtorDeclarers : String -> List String -> Map String (Map String Unit) -> Map String (Map String Unit)
 addDeclProvenance : (Map String (List String), Map String Unit) -> String -> List (String, String) -> (Map String (List String), Map String Unit)
 addEffectProvenance : Map String (List String) -> List (String, String) -> Map String (List String)
 addIfaceMethods : String -> List String -> Map String String -> Map String String
@@ -39,6 +40,7 @@ buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
 buildEnvMM : PreludeScope -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
 buildErrors : List Decl -> List Decl -> List ResError
 buildExports : ModuleExports -> Map String ModuleExports -> String -> List Decl -> Env -> ModuleExports
+buildExportsWith : ModuleExports -> Map String ModuleExports -> String -> List Decl -> List String -> ModuleExports
 buildFieldOwnerIndex : List (String, String) -> Map String (List String)
 builtInEffects : List String
 builtinEffOrigins : List (String, TyConOrigin)
@@ -115,8 +117,10 @@ coreUsePaths : List Decl -> List UsePath
 ctorAmbigMods : Env -> String -> List String
 ctorAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 ctorDeclaredIn : String -> String -> (String, String)
+ctorDeclsBoundBy : Map String (List Decl) -> Map String ModuleExports -> List UsePath -> List Decl
 ctorKey : String -> String
 ctorNames : List Decl -> List String
+ctorNamesByDeclarer : List (String, String, List String) -> Map String (Map String Unit) -> Map String (Map String Unit)
 ctorOccurrenceContested : Env -> String -> Bool
 ctorOwnedBy : (String, List String) -> List (String, String)
 ctorOwnerKey : String -> String
@@ -124,10 +128,12 @@ ctorTypeLookup : String -> List (String, List String) -> Option String
 dataRecordNames : List Decl -> List String
 dbName : ResError -> String
 declBindNames : Decl -> List String
+declDeclaresCtorIn : Map String Unit -> Decl -> Bool
 declKey : (String, String) -> String
 declLoc : Decl -> Option Loc
 declProvenanceBy : (UsePath -> String -> String) -> ExpNs String -> ExpNs (String, String) -> Map String ModuleExports -> List UsePath -> Map String (List String)
 declProvenanceIn : ExpNs String -> ExpNs (String, String) -> Map String ModuleExports -> List UsePath -> Map String (List String)
+declsDeclaringCtorIn : Map String (Map String Unit) -> Map String (List Decl) -> String -> List Decl
 dedupResErrors : List ResError -> List ResError
 deleteAllStr : List String -> Map String Unit -> Map String Unit
 directIn : ExpNs a -> List Decl -> List a
@@ -206,6 +212,8 @@ importNameOrigins : ExpNs String -> ExpNs (String, String) -> Map String ModuleE
 importNamesIn : ExpNs String -> Map String ModuleExports -> UsePath -> List String
 importValueBindings : UsePath -> ModuleExports -> List (String, String)
 importValueDecls : Map String ModuleExports -> UsePath -> List (String, String)
+importedCtorDecls : List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
+importedCtorDeclsGo : ModuleExports -> Map String (List Decl) -> Map String ModuleExports -> List (String, List Decl) -> List (String, List Decl)
 importedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
 importedEffects : Map String ModuleExports -> List Decl -> List String
 importedIfaceMethods : Map String ModuleExports -> List Decl -> List (String, List String)
@@ -222,6 +230,7 @@ interfaceList : List Decl -> List (String, List String)
 interfaceNamesOf : List Decl -> List String
 internalExterns : List String
 internalGuardFor : Bool -> List String
+isAliasPath : UsePath -> Bool
 isAmbiguous : Env -> String -> Bool
 isCtorAmbiguous : Env -> String -> Bool
 isCtorOwnerKey : String -> Bool

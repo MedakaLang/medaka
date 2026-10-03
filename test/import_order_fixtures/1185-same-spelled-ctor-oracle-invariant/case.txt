@@ -1,0 +1,12 @@
+entry: main.mdk
+what: #1185 the exhaustiveness oracle answers a constructor by the declaration the entry can name
+
+`a`, `b` and `one` each declare a constructor spelled `Bin`, of three unrelated
+types; the entry names only `a`'s constructors. `fe` and `ge` are exhaustive and
+`fq` misses `Leaf`, so every ordering owes exactly one W-NONEXHAUSTIVE-CLAUSES
+(naming `Leaf`; the name is pinned by
+test/check_json_fixtures/projects/exhaust_same_spelled_ctor_missing) and prints `8`.
+
+Before #1185's fix the oracle's bare-name tables were first-wins over every loaded
+module, so the ordering decided which `Bin` answered: with `b` first, `fe` drew a
+false `Missing case: 'Tip'`.

@@ -3554,6 +3554,97 @@ strippedCtorKey p collisions n =
     Some mods => [(n, mods)]
     None => []
 
+-- ── the constructor declarations a module can name (#1185) ─────────────────
+-- For each module of a dependency-first graph, the `data` and `newtype` decls
+-- declaring a constructor that module's imports bind, keyed by declaration
+-- through `expCtorOrigins` exactly as `ctorAmbiguousSet` keys them, so a
+-- re-exported constructor is found in the module that declares it.  `pool`
+-- holds the decls each module id contributes.  The exhaustiveness oracle reads
+-- constructors by bare name, so it is built from these beside the module's own
+-- decls: over every module in the graph, an unrelated module's same-spelled
+-- constructor answers whenever its module comes first.
+--
+-- An alias import's decls come after every other import's.  The oracle sees an
+-- alias-qualified constructor by its bare name, and a bare occurrence means the
+-- unaliased import's constructor (`strippedCtorAmbiguity`).
+export
+importedCtorDecls : List Decl ->
+  List (String, List Decl) ->
+  List (String, List Decl) ->
+  List (String, List Decl)
+importedCtorDecls preludeDecls mods pool =
+  importedCtorDeclsGo
+    (coreExports preludeDecls)
+    (omFromPairs pool omEmpty)
+    omEmpty
+    mods
+
+importedCtorDeclsGo : ModuleExports ->
+  OrdMap (List Decl) ->
+  OrdMap ModuleExports ->
+  List (String, List Decl) ->
+  List (String, List Decl)
+importedCtorDeclsGo _ _ _ [] = []
+importedCtorDeclsGo coreExp pool known ((mid, prog) :: rest) =
+  let paths = usePathsOf prog
+  let decls =
+    ctorDeclsBoundBy pool known (filterList (p => not (isAliasPath p)) paths)
+      ++ ctorDeclsBoundBy pool known (filterList isAliasPath paths)
+  -- values are left without interface methods: they are read through `env`,
+  -- and nothing a constructor answer reads depends on them
+  let exp = buildExportsWith coreExp known mid prog []
+  (mid, decls)
+    :: importedCtorDeclsGo coreExp pool (omInsert exp.modId exp known) rest
+
+isAliasPath : UsePath -> Bool
+isAliasPath (UseAlias _ _) = True
+isAliasPath _ = False
+
+ctorDeclsBoundBy : OrdMap (List Decl) ->
+  OrdMap ModuleExports ->
+  List UsePath ->
+  List Decl
+ctorDeclsBoundBy pool known paths =
+  let byDeclarer =
+    ctorNamesByDeclarer
+      (flatMap (importNameOrigins nsCtors nsCtorOrigins known) paths)
+      omEmpty
+  flatMap (declsDeclaringCtorIn byDeclarer pool) (omKeys byDeclarer)
+
+-- declaring module → the names it declares them under, for the constructors
+-- bound here
+ctorNamesByDeclarer : List (String, String, List String) ->
+  OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit)
+ctorNamesByDeclarer [] acc = acc
+ctorNamesByDeclarer ((_, base, mids) :: rest) acc =
+  ctorNamesByDeclarer rest (addCtorDeclarers base mids acc)
+
+addCtorDeclarers : String ->
+  List String ->
+  OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit)
+addCtorDeclarers _ [] acc = acc
+addCtorDeclarers n (m :: ms) acc =
+  let names = match omLookup m acc
+    Some ns => ns
+    None => omEmpty
+  addCtorDeclarers n ms (omInsert m (omInsert n () names) acc)
+
+declsDeclaringCtorIn : OrdMap (OrdMap Unit) ->
+  OrdMap (List Decl) ->
+  String ->
+  List Decl
+declsDeclaringCtorIn byDeclarer pool m = match (
+  omLookup m byDeclarer,
+  omLookup m pool,
+)
+  (Some names, Some decls) => filterList (declDeclaresCtorIn names) decls
+  _ => []
+
+declDeclaresCtorIn : OrdMap Unit -> Decl -> Bool
+declDeclaresCtorIn names d = anyList (n => omHasKey n names) (ctorNames [d])
+
 -- The STRIP-ONTO-A-LOCAL-CONSTRUCTOR collision, the half `strippedCtorAmbiguity`
 -- above structurally cannot see.  Its provenance map counts IMPORTS, and
 -- `keepAmbiguous` then drops any name this module declares, because for a BARE
@@ -4574,11 +4665,22 @@ buildExports : ModuleExports ->
   List Decl ->
   Env ->
   ModuleExports
-buildExports coreExp known modId prog env = ModuleExports {
+buildExports coreExp known modId prog env =
+  buildExportsWith coreExp known modId prog (publicIfaceMethodVals prog env)
+
+-- `buildExports` given the public interface methods bound as values, the one
+-- part of a module's exports that reads its resolved `Env`.
+buildExportsWith : ModuleExports ->
+  OrdMap ModuleExports ->
+  String ->
+  List Decl ->
+  List String ->
+  ModuleExports
+buildExportsWith coreExp known modId prog ifaceVals = ModuleExports {
   modId = modId,
   expValues =
     directIn nsValues prog
-      ++ publicIfaceMethodVals prog env
+      ++ ifaceVals
       ++ carriedIn nsValues coreExp known prog,
   expTypes = directIn nsTypes prog ++ carriedIn nsTypes coreExp known prog,
   expAbstractData =
@@ -4602,9 +4704,7 @@ buildExports coreExp known modId prog env = ModuleExports {
     map (n => (n, modId)) (directIn nsCtors prog)
       ++ carriedIn nsCtorOrigins coreExp known prog,
   expValueOrigins =
-    map
-        (n => (n, (modId, n)))
-        (directIn nsValues prog ++ publicIfaceMethodVals prog env)
+    map (n => (n, (modId, n))) (directIn nsValues prog ++ ifaceVals)
       ++ carriedIn nsValueOrigins coreExp known prog,
   expEffects =
     directIn nsEffects prog ++ carriedIn nsEffects coreExp known prog,

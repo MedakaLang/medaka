@@ -1,5 +1,5 @@
 # META
-source_lines=180
+source_lines=183
 stages=DESUGAR,MARK
 # SOURCE
 -- Composed self-hosted front-end LOGIC — wires the stage ports into one
@@ -35,6 +35,7 @@ import frontend.resolve.{
   resolveToLines,
   singleFileImportErrors,
   ppResError,
+  importedCtorDecls,
 }
 import frontend.exhaust.{exhaustToLinesWith}
 import types.typecheck.{
@@ -166,29 +167,31 @@ runCheckModulesFromDiags rtD coreD mods perMod =
 -- analog of runCheck's `exhaustToLines raw`.  exhaustToLines runs on the desugared
 -- decls here (the loaded mods are already desugared); guard-coverage lowering does
 -- not erase the `match` shape exhaust inspects, so this surfaces the same warnings.
--- Oracle superset = runtime + core + EVERY loaded module's decls (so a
--- multi-clause function in the entry module over an IMPORTED ADT is not
--- false-flagged); only the entry module (last) is CHECKED.  `rtD`/`coreD`/`mods`
--- are the DESUGARED decls, which still carry the DData the oracle reads.
+-- The oracle is the entry's own decls, the decls declaring a constructor its
+-- imports bind, and runtime + core — the same scope `typecheckDiagsFold`
+-- (`driver/diagnostics.mdk`) gives every module.  `rtD`/`coreD`/`mods` are the
+-- DESUGARED decls, which still carry the DData the oracle reads.
 entryExhaust : List Decl -> List Decl -> List (String, List Decl) -> String
 entryExhaust rtD coreD mods =
-  let oracleDecls = rtD ++ coreD ++ flatMap declsOfMod mods
-  entryExhaustGo oracleDecls mods
+  entryExhaustGo (rtD ++ coreD) (importedCtorDecls coreD mods mods) mods
 
-declsOfMod : (String, List Decl) -> List Decl
-declsOfMod (_, prog) = prog
-
-entryExhaustGo : List Decl -> List (String, List Decl) -> String
-entryExhaustGo _ [] = ""
-entryExhaustGo oracleDecls [(_, prog)] = exhaustToLinesWith oracleDecls prog
-entryExhaustGo oracleDecls (_ :: rest) = entryExhaustGo oracleDecls rest
+entryExhaustGo : List Decl ->
+  List (String, List Decl) ->
+  List (String, List Decl) ->
+  String
+entryExhaustGo _ _ [] = ""
+entryExhaustGo preludeDecls [(_, imported)] [(_, prog)] =
+  exhaustToLinesWith (imported ++ preludeDecls) prog
+entryExhaustGo preludeDecls (_ :: scopes) (_ :: rest) =
+  entryExhaustGo preludeDecls scopes rest
+entryExhaustGo _ [] (_ :: _) = ""
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "parsePrelude" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveToLines" false) (mem "singleFileImportErrors" false) (mem "ppResError" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveToLines" false) (mem "singleFileImportErrors" false) (mem "ppResError" false) (mem "importedCtorDecls" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "exhaustToLinesWith" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "checkOneErrorsWithRuntime" false) (mem "entryReportFromDiags" false) (mem "ModDiags" false))))
 (DTypeSig true "runCheck" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
@@ -212,20 +215,19 @@ entryExhaustGo oracleDecls (_ :: rest) = entryExhaustGo oracleDecls rest
 (DTypeSig true "runCheckModulesFromDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyCon "String"))))))
 (DFunDef false "runCheckModulesFromDiags" ((PVar "rtD") (PVar "coreD") (PVar "mods") (PVar "perMod")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EApp (EVar "entryExhaust") (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EApp (EVar "entryReportFromDiags") (EVar "perMod"))))))
 (DTypeSig false "entryExhaust" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
-(DFunDef false "entryExhaust" ((PVar "rtD") (PVar "coreD") (PVar "mods")) (EBlock (DoLet false false (PVar "oracleDecls") (EBinOp "++" (EBinOp "++" (EVar "rtD") (EVar "coreD")) (EApp (EApp (EVar "flatMap") (EVar "declsOfMod")) (EVar "mods")))) (DoExpr (EApp (EApp (EVar "entryExhaustGo") (EVar "oracleDecls")) (EVar "mods")))))
-(DTypeSig false "declsOfMod" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "declsOfMod" ((PTuple PWild (PVar "prog"))) (EVar "prog"))
-(DTypeSig false "entryExhaustGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
-(DFunDef false "entryExhaustGo" (PWild (PList)) (ELit (LString "")))
-(DFunDef false "entryExhaustGo" ((PVar "oracleDecls") (PList (PTuple PWild (PVar "prog")))) (EApp (EApp (EVar "exhaustToLinesWith") (EVar "oracleDecls")) (EVar "prog")))
-(DFunDef false "entryExhaustGo" ((PVar "oracleDecls") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "entryExhaustGo") (EVar "oracleDecls")) (EVar "rest")))
+(DFunDef false "entryExhaust" ((PVar "rtD") (PVar "coreD") (PVar "mods")) (EApp (EApp (EApp (EVar "entryExhaustGo") (EBinOp "++" (EVar "rtD") (EVar "coreD"))) (EApp (EApp (EApp (EVar "importedCtorDecls") (EVar "coreD")) (EVar "mods")) (EVar "mods"))) (EVar "mods")))
+(DTypeSig false "entryExhaustGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
+(DFunDef false "entryExhaustGo" (PWild PWild (PList)) (ELit (LString "")))
+(DFunDef false "entryExhaustGo" ((PVar "preludeDecls") (PList (PTuple PWild (PVar "imported"))) (PList (PTuple PWild (PVar "prog")))) (EApp (EApp (EVar "exhaustToLinesWith") (EBinOp "++" (EVar "imported") (EVar "preludeDecls"))) (EVar "prog")))
+(DFunDef false "entryExhaustGo" ((PVar "preludeDecls") (PCons PWild (PVar "scopes")) (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "entryExhaustGo") (EVar "preludeDecls")) (EVar "scopes")) (EVar "rest")))
+(DFunDef false "entryExhaustGo" (PWild (PList) (PCons PWild PWild)) (ELit (LString "")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "parsePrelude" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveToLines" false) (mem "singleFileImportErrors" false) (mem "ppResError" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveToLines" false) (mem "singleFileImportErrors" false) (mem "ppResError" false) (mem "importedCtorDecls" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "exhaustToLinesWith" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "checkOneErrorsWithRuntime" false) (mem "entryReportFromDiags" false) (mem "ModDiags" false))))
 (DTypeSig true "runCheck" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
@@ -249,10 +251,9 @@ entryExhaustGo oracleDecls (_ :: rest) = entryExhaustGo oracleDecls rest
 (DTypeSig true "runCheckModulesFromDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyCon "String"))))))
 (DFunDef false "runCheckModulesFromDiags" ((PVar "rtD") (PVar "coreD") (PVar "mods") (PVar "perMod")) (EBlock (DoLet false false (PVar "exWarns") (EApp (EApp (EApp (EVar "entryExhaust") (EVar "rtD")) (EVar "coreD")) (EVar "mods"))) (DoExpr (EApp (EApp (EVar "joinNonEmpty") (EVar "exWarns")) (EApp (EVar "entryReportFromDiags") (EVar "perMod"))))))
 (DTypeSig false "entryExhaust" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
-(DFunDef false "entryExhaust" ((PVar "rtD") (PVar "coreD") (PVar "mods")) (EBlock (DoLet false false (PVar "oracleDecls") (EBinOp "++" (EBinOp "++" (EVar "rtD") (EVar "coreD")) (EApp (EApp (EDictApp "flatMap") (EVar "declsOfMod")) (EVar "mods")))) (DoExpr (EApp (EApp (EVar "entryExhaustGo") (EVar "oracleDecls")) (EVar "mods")))))
-(DTypeSig false "declsOfMod" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "declsOfMod" ((PTuple PWild (PVar "prog"))) (EVar "prog"))
-(DTypeSig false "entryExhaustGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
-(DFunDef false "entryExhaustGo" (PWild (PList)) (ELit (LString "")))
-(DFunDef false "entryExhaustGo" ((PVar "oracleDecls") (PList (PTuple PWild (PVar "prog")))) (EApp (EApp (EVar "exhaustToLinesWith") (EVar "oracleDecls")) (EVar "prog")))
-(DFunDef false "entryExhaustGo" ((PVar "oracleDecls") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "entryExhaustGo") (EVar "oracleDecls")) (EVar "rest")))
+(DFunDef false "entryExhaust" ((PVar "rtD") (PVar "coreD") (PVar "mods")) (EApp (EApp (EApp (EVar "entryExhaustGo") (EBinOp "++" (EVar "rtD") (EVar "coreD"))) (EApp (EApp (EApp (EVar "importedCtorDecls") (EVar "coreD")) (EVar "mods")) (EVar "mods"))) (EVar "mods")))
+(DTypeSig false "entryExhaustGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
+(DFunDef false "entryExhaustGo" (PWild PWild (PList)) (ELit (LString "")))
+(DFunDef false "entryExhaustGo" ((PVar "preludeDecls") (PList (PTuple PWild (PVar "imported"))) (PList (PTuple PWild (PVar "prog")))) (EApp (EApp (EVar "exhaustToLinesWith") (EBinOp "++" (EVar "imported") (EVar "preludeDecls"))) (EVar "prog")))
+(DFunDef false "entryExhaustGo" ((PVar "preludeDecls") (PCons PWild (PVar "scopes")) (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "entryExhaustGo") (EVar "preludeDecls")) (EVar "scopes")) (EVar "rest")))
+(DFunDef false "entryExhaustGo" (PWild (PList) (PCons PWild PWild)) (ELit (LString "")))

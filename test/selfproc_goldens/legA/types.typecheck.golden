@@ -751,6 +751,7 @@ declEnvsOrdOf : String -> DeclEnvs -> Int
 declGradedScope : List String -> List (Option KindAnn) -> List IfaceMethod -> List (String, List Kind)
 declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
 declHasPolarityEntry : List (TabKey, List Polarity) -> Decl -> Bool
+declIsOwnedType : String -> String -> Decl -> Bool
 declKindEntry : Decl -> Option (TyConOrigin, String, List Kind)
 declMethodIdents : List Decl -> List (String, Ident)
 declMethodIdentsOf : Decl -> List (String, Ident)
@@ -2186,6 +2187,8 @@ openRowHint : List Atom -> String
 openScope : ScopeId -> Unit
 optLocEq : Option Loc -> Option Loc -> Bool
 optionOrFresh : Option Mono -> Mono
+oracleImportDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
+oracleImportDeclsOf : Int -> List DeclEnvModule -> Decl -> List Decl
 ordCompareOp : Mono -> Mono -> Mono
 ordinalIsSentinel : Int -> Bool
 ordinalSentinelGuard : Int -> Unit
@@ -2498,6 +2501,7 @@ reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> 
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
 reexportSeed : List (String, a) -> List Decl -> List (String, List (String, a)) -> List (String, a)
+reexportedCtorDecls : Int -> List DeclEnvModule -> String -> List Decl
 reexportedCtorIdents : Map String (List (String, String, Ident)) -> List Decl -> List (String, String, Ident)
 reexportedCtorIdentsOf : Map String (List (String, String, Ident)) -> Decl -> List (String, String, Ident)
 reexportedIfaceMethods : Map String (List (String, List String)) -> List Decl -> List (String, List String)
@@ -2508,6 +2512,8 @@ reexportedMethodNames : List (String, List String) -> List Decl -> List String
 reexportedMethodsOf : List (String, List String) -> Decl -> List String
 reexportedOrigins : List Decl -> String -> List (String, String)
 reexportedOriginsOf : Decl -> String -> List (String, String)
+reexportedOwner : String -> (String, String, Ident) -> List (String, String)
+reexportedTypeDecl : Int -> List DeclEnvModule -> String -> String -> List Decl
 refStored : Mono -> Mono
 refuseBoxedLitPat : String -> String -> Option Loc -> Unit
 refuseOpenedExistentials : Unit -> Unit
