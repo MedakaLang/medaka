@@ -41780,6 +41780,7 @@ registerDeclsAliasesFirst env ds =
   let _ = rejectCyclicAliases ()
   fold (e d => if isAliasDecl d then e else registerData e d) env1 ds
 
+-- Only `type` declares an alias, so the wildcard is right for every other Decl.
 isAliasDecl : Decl -> Bool
 isAliasDecl (DAttrib _ d) = isAliasDecl d
 isAliasDecl (DTypeAlias { ... }) = True
