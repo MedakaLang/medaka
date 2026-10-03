@@ -406,11 +406,14 @@ handle (Scroll n)                = println "scroll \{debug n}"
 
 Field punning works in patterns (`{ x, y }` is shorthand for `{ x = x, y = y }`). Positional variants and named-field variants can coexist in the same `data` declaration. Field names are namespaced to the variant.
 
-### Product Types (`record`)
+### Product Types (`data X = { … }`)
+
+> Historical: this section was written for a standalone `record` keyword, which
+> has been removed (a parse error naming the replacement). The live spelling is
+> the braced `data` form below; see SYNTAX.md "Removed — do not use".
+
 ```
-record Person
-  name : String
-  age  : Int
+data Person = { name : String, age : Int }
 ```
 
 - **Dot access** for fields: `person.name`
@@ -432,12 +435,13 @@ Because fields are namespaced to their type, two record types may declare the
 same field name:
 
 ```
-record Person
-  name : String
+data Person = { name : String }
 
-record Company
-  name : String
+data Company = { name : String }
 ```
+
+(Historical note: the original text spelled these `record Person` and
+`record Company`; `record` has been removed, the braced `data` form is live.)
 
 Field access resolves by the **record type inferred for the receiver**: in
 `p.name` the compiler already knows `p : Person`, so `name` resolves to
@@ -480,9 +484,7 @@ This is a conscious narrowing, not an oversight:
 
 ### Combining Them
 ```
-record Point2D
-  x : Float
-  y : Float
+data Point2D = { x : Float, y : Float }
 
 data Shape
   = Circle Float
@@ -490,7 +492,7 @@ data Shape
   | Positioned Point2D Float
 ```
 
-`data` and `record` are kept clearly separate. Pattern matching on `data` is always positional. Named field access is always through `record` via dot notation.
+Historical wording: the original text kept `data` and `record` separate. `record` has been removed; a braced `data X = { … }` declaration is the product type, and named field access is through it via dot notation.
 
 ---
 

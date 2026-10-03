@@ -5845,15 +5845,76 @@ backtickInfixMsg =
   "backtick infix application (`f`) is not supported — use prefix application `f x y`"
 
 -- `let rec … with …` mutual-recursion grouping has been removed: each
--- recursive binding is its own `let rec`. `with` (TWith) is now used nowhere
--- else in the grammar, so its presence is always the removed construct.  A
--- pre-grammar token scan surfaces a located hint (pointing at `with`).
--- Index of the first `TWith` in the stream, or -1 if absent.
-firstWithIdx : Array Token -> Int -> Int
-firstWithIdx toks i
+-- recursive binding is its own `let rec`.  `with` (TWith) has no live use in
+-- the grammar, but OCaml's `match e with` also spells it, so a `with` is
+-- classified by whether a `match` opened earlier on the same logical line.
+-- `inMatch` is set at `TMatch` and cleared by any layout token; `wantMatch`
+-- picks which kind of `with` the scan reports.  Returns the index of the first
+-- `with` of the wanted kind, or -1.
+firstWithIdx : Array Token -> Int -> Bool -> Bool -> Int
+firstWithIdx toks i inMatch wantMatch
   | i >= arrayLength toks = 0 - 1
-  | peekTok toks i == TWith = i
-  | otherwise = firstWithIdx toks (i + 1)
+  | peekTok toks i == TWith =
+    if inMatch == wantMatch then
+      i
+    else
+      firstWithIdx toks (i + 1) False wantMatch
+  | peekTok toks i == TMatch = firstWithIdx toks (i + 1) True wantMatch
+  | peekTok toks i == TNewline
+    || peekTok toks i == TIndent
+    || peekTok toks i == TDedent = firstWithIdx toks (i + 1) False wantMatch
+  | otherwise = firstWithIdx toks (i + 1) inMatch wantMatch
+
+matchWithMsg : String
+matchWithMsg =
+  "Medaka's `match` has no `with`. Write `match e` and put the `pattern => body` arms on indented lines below"
+
+-- `**` is two adjacent `TStar` tokens (the lexer has no power operator).
+-- Adjacency is checked on source offsets, so `* *` and `(*)` are untouched.
+firstStarStarIdx : Array Token -> Array Int -> Int -> Int
+firstStarStarIdx toks offs i
+  | i + 1 >= arrayLength toks = 0 - 1
+  | peekTok toks i == TStar
+    && peekTok toks (i + 1) == TStar
+    && arrayGetUnsafe (i + 1) offs == arrayGetUnsafe i offs + 1 = i
+  | otherwise = firstStarStarIdx toks offs (i + 1)
+
+starStarMsg : String
+starStarMsg =
+  "Medaka has no `**` operator. Use `pow x y` for Float exponentiation"
+
+-- `for` is a plain identifier, so a `for <pattern> in …` loop is recognised only
+-- when `for` starts a line and the same line continues with pattern tokens
+-- (idents, `_`, tuple punctuation) and then `in`, with no `=` before it.
+forLoopHeadTail : Array Token -> Int -> Bool -> Bool
+forLoopHeadTail toks i sawPat
+  | i >= arrayLength toks = False
+  | peekTok toks i == TIn = sawPat
+  | isForPatTok (peekTok toks i) = forLoopHeadTail toks (i + 1) True
+  | otherwise = False
+
+isForPatTok : Token -> Bool
+isForPatTok (TIdent _) = True
+isForPatTok TUnderscore = True
+isForPatTok TComma = True
+isForPatTok TLParen = True
+isForPatTok TRParen = True
+isForPatTok _ = False
+
+firstForLoopIdx : Array Token -> Int -> Bool -> Int
+firstForLoopIdx toks i lineStart
+  | i >= arrayLength toks = 0 - 1
+  | lineStart
+    && peekTok toks i == TIdent "for"
+    && forLoopHeadTail toks (i + 1) False = i
+  | peekTok toks i == TNewline
+    || peekTok toks i == TIndent
+    || peekTok toks i == TDedent = firstForLoopIdx toks (i + 1) True
+  | otherwise = firstForLoopIdx toks (i + 1) False
+
+forLoopMsg : String
+forLoopMsg =
+  "Medaka has no 'for' loop. Use `map`/`fold` over a list, or recursion"
 
 letRecWithRemovedMsg : String
 letRecWithRemovedMsg =
@@ -6087,7 +6148,10 @@ parseResultWith src tokList offList =
   let ilIdx = firstInlineLetMissingIn toks 0
   let coIdx = firstHsCaseOfIdx toks 0
   let btIdx = firstBacktickIdx toks 0
-  let wiIdx = firstWithIdx toks 0
+  let wiIdx = firstWithIdx toks 0 False False
+  let mwIdx = firstWithIdx toks 0 False True
+  let ssIdx = firstStarStarIdx toks offs 0
+  let forIdx = firstForLoopIdx toks 0 True
   let sigIdx = firstHsSigIdx toks 0 0 True
   let bcIdx = firstBlockCommentIdx toks 0
   let bbIdx = firstBraceBlockIdx toks 0
@@ -6128,8 +6192,12 @@ parseResultWith src tokList offList =
         Err (mkLocated src toks offs srcLen hsCaseOfMsg coIdx)
       else if btIdx >= 0 then
         Err (mkLocated src toks offs srcLen backtickInfixMsg btIdx)
+      else if mwIdx >= 0 then
+        Err (mkLocated src toks offs srcLen matchWithMsg mwIdx)
       else if wiIdx >= 0 then
         Err (mkLocated src toks offs srcLen letRecWithRemovedMsg wiIdx)
+      else if ssIdx >= 0 then
+        Err (mkLocated src toks offs srcLen starStarMsg ssIdx)
       else if sigIdx >= 0 then
         Err (mkLocated src toks offs srcLen hsSigMsg sigIdx)
       else if bcIdx >= 0 then
@@ -6145,5 +6213,7 @@ parseResultWith src tokList offList =
             srcLen
             (foreignKwMsg (peekTok toks fkwIdx))
             fkwIdx)
+      else if forIdx >= 0 then
+        Err (mkLocated src toks offs srcLen forLoopMsg forIdx)
       else
         resultDeclsResult src toks offs srcLen (runP parseProgram toks 0)

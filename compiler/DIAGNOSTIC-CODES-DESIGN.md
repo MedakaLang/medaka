@@ -265,6 +265,8 @@ kebab-case; never renumber (append only).
 | `P-UNEXPECTED-EOF` | unexpected end of input |
 | `P-BAD-NEQ` | `!=` used for not-equal (suggest `/=`) |
 | `P-HS-CASE` | Haskell `case … of` (suggest `match e` with `pattern => body` arms) |
+| `P-OCAML-MATCH-WITH` | OCaml `match e with` (caret on the `with`; suggest `match e` with indented `pattern => body` arms). A `with` after `let rec` keeps its own removal message |
+| `P-NO-POW-OPERATOR` | `**` exponentiation (caret on the first `*`; suggest `pow`). Two adjacent `*` tokens only; `* *` and `(*)` are untouched |
 | `P-HS-SIG` | Haskell `f :: T` type-signature syntax (`::` is cons; suggest `f : T`) |
 | `P-BRACE-BLOCK` | C-style `{ … }` brace block on `if` (suggest `then`/`else` + indentation) |
 | `P-FOR-WHILE` | foreign `for`/`while` loop (suggest recursion or list functions) |

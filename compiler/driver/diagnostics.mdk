@@ -372,6 +372,8 @@ parseErrCode msg
   | startsWith "unexpected end of input" msg = "P-UNEXPECTED-EOF"
   | startsWith "unexpected '!='" msg = "P-BAD-NEQ"
   | startsWith "Medaka has no 'case" msg = "P-HS-CASE"
+  | startsWith "Medaka's `match` has no `with`" msg = "P-OCAML-MATCH-WITH"
+  | startsWith "Medaka has no `**`" msg = "P-NO-POW-OPERATOR"
   | startsWith "Use '::' for List cons" msg = "P-HS-SIG"
   | startsWith "Medaka has no '/* " msg = "L-BLOCKCOMMENT"
   | startsWith "unexpected '{'. Medaka has no brace" msg = "P-BRACE-BLOCK"

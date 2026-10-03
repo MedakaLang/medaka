@@ -1,0 +1,6 @@
+f n =
+  match n with
+    0 => 1
+    _ => 2
+
+main = println (f 1)
