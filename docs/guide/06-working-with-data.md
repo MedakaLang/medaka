@@ -212,7 +212,9 @@ a `Display` implementation can be interpolated.
 
 > ⚠️ **`length` does not work on a `String`.** `length` is a `Foldable` method, and a
 > string is not a container of characters as far as the interfaces are concerned.
-> Convert with `string.toChars` first. The compiler says so:
+> For a string's length in characters, use `stringLength`, which is always in scope
+> and does not walk the string: `stringLength "héllo"` is `5`. To work over the
+> characters themselves, convert with `string.toChars` first. The compiler says so:
 >
 > ```
 > error: probe.mdk:2:18: 'length' expects a container (like List or Array) here, but
