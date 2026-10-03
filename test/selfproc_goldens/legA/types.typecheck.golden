@@ -1824,7 +1824,6 @@ lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
 lookupMethodRowById : IfaceRef -> String -> Registry MethodSchemeRow -> Option MethodSchemeRow
 lookupPredicateSlots : String -> List (String, List PredicateSlot) -> Option (List PredicateSlot)
 lookupQualPayload : String -> String -> List ((String, String), a) -> Option a
-lookupRecordByMangledHead : Mono -> String -> String -> Option (String, RecordInfo)
 lookupRecordByName : String -> Option RecordInfo
 lookupRecordForReceiver : Mono -> String -> Option RecordInfo
 lookupSchemeById : IfaceRef -> String -> Registry MethodSchemeRow -> Option Scheme
@@ -1847,8 +1846,6 @@ mainTypeIsAsync : Unit -> Bool
 mainTypeIsFloat : Unit -> Bool
 mainTypeIsUnit : Unit -> Bool
 mangledCtorShaped : Array Char -> Int -> Int -> Bool
-mangledHeadCandidates : String -> String -> List (String, RecordInfo)
-mangledHeadCandidatesGo : String -> List String -> List (String, RecordInfo)
 mapDeclBodies : (Expr -> Expr) -> Decl -> Decl
 mapGroupClauses : ((List Pat, Expr) -> (List Pat, Expr)) -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 mapLocalSchemes : List (String, Option Loc, Mono) -> List (String, Option Loc, Scheme)
