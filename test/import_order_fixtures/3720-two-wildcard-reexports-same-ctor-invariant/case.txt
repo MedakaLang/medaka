@@ -1,0 +1,8 @@
+entry: main.mdk
+what: #3720 one constructor reached through two wildcard re-exports is one
+      constructor, in an expression and in a pattern, in either import order
+
+`p` declares `data T = Mk Int`; `ma` and `mb` are each `export import p.*`.
+`Mk` is used once as an expression and once as a pattern. Spec answer,
+hand-derived: `check` clean, with no `R-AMBIGUOUS-CTOR` at either use; `run` and
+the built binary print `7` in every ordering.

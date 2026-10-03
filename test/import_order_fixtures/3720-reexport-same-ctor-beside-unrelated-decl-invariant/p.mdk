@@ -1,0 +1,6 @@
+public export data T = Mk Int
+
+export unT : T -> Int
+unT (Mk n) = n
+
+public export data R = { rx : Int }

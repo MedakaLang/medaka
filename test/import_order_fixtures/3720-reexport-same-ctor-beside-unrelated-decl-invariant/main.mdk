@@ -1,0 +1,9 @@
+import p.{T(..), R(..), unT}
+import mid.*
+import other.{useQ}
+
+f : T -> Int
+f t = match t
+  Mk n => unT (Mk n)
+
+main = println "\{f (Mk 7)} \{(R { rx = 9 }).rx} \{useQ 0}"

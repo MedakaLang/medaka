@@ -1,0 +1,4 @@
+-- An unrelated module declaring its OWN `T`, `Mk` and `R`.
+public export data T = Mk String
+
+public export data R = { rx : String }

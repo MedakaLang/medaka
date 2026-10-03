@@ -1,0 +1,7 @@
+-- `p`'s one `Mk` through two wildcard re-exports, in both positions.
+import mid.*
+import mid2.*
+
+c : Int
+c = match Mk 7
+  Mk n => n

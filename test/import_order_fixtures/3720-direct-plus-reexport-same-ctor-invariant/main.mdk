@@ -1,0 +1,4 @@
+import p.{T(..), unT}
+import mid.*
+
+main = println (unT (Mk 7))

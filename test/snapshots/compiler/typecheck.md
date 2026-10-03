@@ -29750,8 +29750,8 @@ exportsIdentFor n ident ((en, ei) :: rest)
 -- the NAME, which is why a ride-along sibling cannot win here.
 --
 -- 🚨 IT MUST NOT RE-DECIDE AMBIGUITY.  Constructor-name ambiguity is provenance-based
--- (`ctorAmbiguousSet` → `keepAmbiguous` in `frontend/resolve.mdk`: ≥2 distinct DIRECTLY
--- IMPORTED modules), and that rule is deliberately ONE rule across the value / type /
+-- (`ctorAmbiguousSet` → `keepAmbiguous` in `frontend/resolve.mdk`: ≥2 distinct
+-- declarations in scope), and that rule is deliberately ONE rule across the value / type /
 -- interface / ctor namespaces — resolve's own note says a change there must change all
 -- four at once.  This is a different question on the same data: "which declaration does
 -- this module mean" is asked only where resolve has already ACCEPTED the program.  Two
