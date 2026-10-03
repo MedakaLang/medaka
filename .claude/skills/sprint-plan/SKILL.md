@@ -69,8 +69,10 @@ deeper than this measured ~75% rework.
    (`[T-SNAPSHOT-SELF]`) and usually a LEG A golden re-capture
    (`[T-LEGA-GOLDEN]`) on top of the move.** `make arch-census` gives the
    current largest-files table if the slice might grow one of them.
-4. **Acceptance shape** — how we'll know it worked ("gate family X", "a new
-   fixture class Y", "IR byte-identical"), not exact commands.
+4. **Acceptance shape** — how we'll know it worked ("a `test` case in
+   `<module>_test.mdk`", "a `kind = "native"` gate-test row", "IR
+   byte-identical"), not exact commands. Pick the vehicle with the
+   `write-tests` skill; a shell gate needs its `shell-because:` reason.
 5. **Model** — name the selected harness role, model/reasoning and a one-line
    tier justification. **Claude:** `sonnet` by default, `opus` for genuinely
    tricky slices (cross-cutting semantics, coupled sites, wrong-but-plausible

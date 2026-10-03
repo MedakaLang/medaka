@@ -69,7 +69,9 @@ failure mode is silent.
 For the vehicle dispatch itself (doctest vs. property vs. `test "…"` sibling
 vs. differential gate) source the **`write-tests`** skill
 (`.claude/skills/write-tests/SKILL.md`) — its dispatch table and negative
-space, not an improvised one here.
+space, not an improvised one here. The one question asked here is the nearest
+gate, answered with pasted `medaka gate explain <path>` output; on a migration
+PR, also ask for the parity-plus-red transcript.
 
 ### 4. Placement — does this code live where it belongs?
 
