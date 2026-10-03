@@ -1,0 +1,5 @@
+import a.{R(..)}
+
+f r = r.s
+
+main = println (f (R 3))

@@ -1,0 +1,2 @@
+export interface Speak a where
+  speak : a -> String

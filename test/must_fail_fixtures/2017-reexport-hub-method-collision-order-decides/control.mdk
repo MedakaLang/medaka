@@ -1,0 +1,3 @@
+import lib.hubone.{IA, mth}
+
+main = println (mth 1)

@@ -1,0 +1,2 @@
+@deprecated "x"
+public export data R = R { s : Int }
