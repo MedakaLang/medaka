@@ -1,0 +1,27 @@
+issue: 2435
+what: the loader keys modules by a root-less module id, so a user file named list.mdk
+what: beside the entry is deduped onto the stdlib's `list` module. Here the sibling
+what: list.mdk exports `lookup`, `reverse` and `sortOn` with the stdlib's exact types,
+what: but its `sortOn` sorts DESCENDING, plus an extra `mine`. main.mdk imports
+what: `list.{mine}` and then `hash_map.{fromList}`. The stdlib's hash_map.mdk does
+what: `import list as L` and renders `Display` through `L.sortOn fst`, so it silently
+what: picks up the user's sortOn: `display` of a three-entry table prints
+what: `HashMap { 3 => 30, 2 => 20, 1 => 10 }` instead of the ascending
+what: `HashMap { 1 => 10, 2 => 20, 3 => 30 }`, at exit 0 with no diagnostic. With the two
+what: imports in the other order the stdlib list wins and `import list.{mine}` fails
+what: loudly ("no exported name 'mine'"); that loud shape is the issue's original repro.
+cmd: run main.mdk
+exit: 0
+stdout: 7
+stdout: HashMap { 3 => 30, 2 => 20, 1 => 10 }
+control: run control.mdk
+why-verb: `run`, because the defect is a silent wrong value at exit 0. Root-qualified
+why-verb: module identity makes the user `list` and the stdlib `list` distinct modules,
+why-verb: so hash_map keeps the stdlib sortOn and prints ascending, which drains this row.
+why-stdout: the descending order can only come from the sibling's sortOn; `7` proves the
+why-stdout: user module was loaded. Both lines are pinned so a change that stops loading
+why-stdout: the user module altogether also reads as a change, not as this fix.
+why-control: control.mdk sits in the same directory, beside the same list.mdk, but does
+why-control: not import `list`; it must print the ascending rendering at exit 0. That
+why-control: shows hash_map's Display works and that the sibling file alone does not
+why-control: hijack anything: the trigger is importing the user `list` first.
