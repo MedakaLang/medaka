@@ -24,7 +24,7 @@
 #   hello    test/native_cli_fixtures/run/hello.mdk  (1 file, existing fixture
 #            — reused rather than adding a new one, see AGENTS.md T-SHARED-CORPUS)
 #   project  gzip/main.mdk  (9 files, 3,650 lines — 0.1.0-scale small project;
-#            see compiler/PERF-BASELINE.md for why gzip over parsec/sqlite/mq)
+#            see compiler/PERF-BASELINE.md for why gzip over parsec/sqlite)
 #
 # Verbs measured: new, check, build, run, test.
 #
@@ -228,7 +228,7 @@ echo "- **hello**: \`$HELLO_FILE\` (1 file, existing fixture, reused rather than
 echo "  a new one to the shared corpus)."
 echo "- **project**: \`$PROJECT_FILE\` (9 files, 3,650 lines — a 0.1.0-scale small real"
 echo "  project; \`parsec/\` was the other plausible candidate at 4 files/761 lines,"
-echo "  \`sqlite/\`/\`pds/\` are too large and \`mq/\`/\`byteparser/\` too small — see the"
+echo "  \`sqlite/\`/\`pds/\` are too large — see the"
 echo "  sprint contract's project-inventory finding)."
 echo
 echo "This is a DIFFERENT harness from test/bench.sh, which times compiled FIXTURE"

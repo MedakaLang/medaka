@@ -278,9 +278,31 @@ main_refuse_case() {
       "$mr_verb" "$mr_name" "$mr_want" "$mr_status" "$(cat "$mr_err" 2>/dev/null)"
   fi
 }
+# An entry whose only `main` is imported (`import lib2.{main}`) is refused with
+# the message that says the entry file must define it: one `error:` line, exit 1.
+imported_main_case() {
+  im_verb="$1"
+  im_f="$FIX/imported_main/m2.mdk"; im_err="$TMP/nat_imported_main_${im_verb}.err"
+  if [ "$im_verb" = run ]; then
+    MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$im_f" >/dev/null 2>"$im_err"
+  else
+    ( export MEDAKA_ROOT="$ROOT"; export MEDAKA_EMITTER="$EMITTER"; bound "$MEDAKA" build "$im_f" -o "$TMP/nat_imported_main_bin" ) >/dev/null 2>"$im_err"
+  fi
+  im_status=$?
+  im_errs="$(grep -c '^error:' "$im_err")"
+  if [ "$im_status" -eq 1 ] && [ "$im_errs" -eq 1 ] &&
+     grep -qF "'main' must be defined in the entry file; 'import lib2.{main}' does not count" "$im_err" &&
+     ! grep -qE 'E-PANIC|emitter failed' "$im_err"; then
+    pass=$((pass+1)); printf 'ok   %s/imported_main (exit 1, one located error naming the import)\n' "$im_verb"
+  else
+    fail=$((fail+1)); printf 'FAIL %s/imported_main (want exit 1 + one error containing the imported-main wording, got exit %s stderr [%s])\n' \
+      "$im_verb" "$im_status" "$(cat "$im_err" 2>/dev/null)"
+  fi
+}
 if [ "$RUN_WIRED" = 1 ]; then
   main_refuse_case run main_fn ":1:10: 'main' must be a value, not a function"
   main_refuse_case run no_main ": no 'main' found"
+  imported_main_case run
 fi
 
 # ── run: sequence bounds guards, interpreter arm (#3267, #3192, #3256) ───────
@@ -566,6 +588,7 @@ else
   fi
   main_refuse_case build main_fn ":1:10: 'main' must be a value, not a function"
   main_refuse_case build no_main ": no 'main' found"
+  imported_main_case build
 
   # `build --json` reports the SAME single refusal as one diagnostic on stdout,
   # never R-BUILD-FAILED wrapping the emitter's panic.  `$2` is the code expected.
