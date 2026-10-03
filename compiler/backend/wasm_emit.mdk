@@ -3595,7 +3595,8 @@ emitBlockI32 emit fnNames valNames env ((CSAssign x ex) :: rest) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env ex
   let (i2, ty) = emitBlockI32 emit fnNames valNames env rest
   (i1 ++ ["local.set $" ++ gname x] ++ i2, ty)
-emitBlockI32 emit _ _ _ [] = gapLTy emit "scalar-mode: empty block"
+-- A block whose last statement is a `let` yields Unit, as in eval and LLVM.
+emitBlockI32 _ _ _ _ [] = (["i64.const 0"], WUnit)
 emitBlockI32 emit _ _ _ _ =
   gapLTy emit "scalar-mode: unsupported block statement"
 
@@ -7543,7 +7544,7 @@ emitBlockRef prog env d ((CSAssign x ex) :: rest) =
   emitRefExpr prog env d ex
     ++ ["local.set $" ++ gname x]
     ++ emitBlockRef prog env d rest
-emitBlockRef prog _ _ [] = gapLP prog "ref-mode: empty block"
+emitBlockRef prog env d [] = emitRefExpr prog env d (CLit LUnit)
 emitBlockRef prog _ _ _ = gapLP prog "ref-mode: unsupported block statement"
 
 -- application: a saturated top-level-fn call, or a saturated CONSTRUCTOR application
@@ -9899,7 +9900,7 @@ emitBlockTail prog env arity ((CSAssign x ex) :: rest) =
   emitRefExpr prog env 0 ex
     ++ ["local.set $" ++ gname x]
     ++ emitBlockTail prog env arity rest
-emitBlockTail prog _ _ [] = gapLP prog "ref-mode: empty block in tail position"
+emitBlockTail prog env arity [] = emitRefTail prog env arity (CLit LUnit)
 emitBlockTail prog _ _ _ =
   gapLP prog "ref-mode: unsupported block statement in tail position"
 

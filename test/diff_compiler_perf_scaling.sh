@@ -2211,7 +2211,13 @@ KNOWN_TCEIL_xref_emit="5.6";          KNOWN_TFIXED_xref_emit="2.60"
 # manydefs:lint carries against the same floor - so a quiet runner cannot false-PROMOTE.
 # Promotes out when the lint per-file cost on a wide cross-reference shape is linear;
 # that is the same underlying cost manydefs:lint (#956) ledgers on a different shape.
-KNOWN_TCEIL_xref_lint="5.6";          KNOWN_TFIXED_xref_lint="2.60"
+# ⚠️ TFIXED IS 2.20, NOT 2.60 (band re-measured on CI, QUICK xref @ 2000->4000->8000,
+# min-of-5, heap pinned): three consecutive runs of the same tree read r2 2.45-2.48, under
+# the 2.60 line, so the row PROMOTED on every run while nothing in `lint` had changed. The
+# 3.37-3.92 band above no longer describes the CI runner. Like `modules:typecheck`, TFIXED
+# is set against the observed floor with ~10% margin, so this arm still catches WORSENING
+# (the ceiling) and only drains on a genuinely linear stage (AT OR UNDER ~2.0).
+KNOWN_TCEIL_xref_lint="5.6";          KNOWN_TFIXED_xref_lint="2.20"
 # modules:typecheck (TIME) — see the block above KNOWN_SLOW_TIME for the sample band.
 # Ceiling 4.2 clears its top (3.21) by ~31%.
 #

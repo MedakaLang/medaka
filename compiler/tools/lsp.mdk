@@ -41,6 +41,7 @@ import driver.diagnostics.{
   analyzeLocated,
   analyzeProject,
   projectEntrySchemes,
+  stdlibExportsReader,
 }
 import driver.loader.{findProjectRootOrSelf}
 import frontend.parser.{
@@ -184,14 +185,21 @@ diagToJson src (Diag sev _ msg loc _ _) =
 -- circuits to a single located diagnostic (parseResult); otherwise run the
 -- full resolve+typecheck `analyzeLocated` pipeline (real ELoc spans, so type
 -- errors carry expr-level ranges).
-diagnosticsFor : String -> String -> String -> List Json
+diagnosticsFor : String -> String -> String -> <IO> List Json
 diagnosticsFor runtimeSrc coreSrc src = match parseResult src
   Err e =>
     let ln = maxI 0 (parseErrorLine e - 1)
     let col = maxI 0 (parseErrorCol e)
     let r = jRange ln col ln (col + 1)
     [jDiagnostic 1 r (parseErrorMessage e)]
-  Ok _ => map (diagToJson src) (analyzeLocated runtimeSrc coreSrc src)
+  Ok _ =>
+    map
+      (diagToJson src)
+      (analyzeLocated
+        (stdlibExportsReader (lspMedakaRoot "." ++ "/stdlib"))
+        runtimeSrc
+        coreSrc
+        src)
 -- parseResult line is 1-based, col 0-based (matches the OCaml loader); LSP
 -- wants 0-based lines, so subtract 1 from the line.
 
@@ -1722,6 +1730,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri docs =
   -- so a live-edit session never flags what a build-time `check` wouldn't.
   let results =
     analyzeProject
+      (stdlibExportsReader stdlibDir)
       True
       []
       projectCache

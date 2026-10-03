@@ -125,8 +125,8 @@ const escapeHtml = (s) =>
 //      loads fine — it throws a `CapabilityError` at run time instead of
 //      producing the documented output, which is worse than no link.
 //   3. it defines a top-level `main`. A block without one is not a program:
-//      natively `medaka build` panics ("no 'main' binding found"), and the
-//      browser answers W-MAIN-MISSING. The ▶ button would open a guaranteed
+//      natively `medaka run`/`build` refuse it with one located error
+//      (W-MAIN-MISSING), and the browser answers the same code. The ▶ button would open a guaranteed
 //      failure, so there must not be one.
 //   4. every module it imports is one the page SHIPS. A `import test` resolves
 //      natively and 404s in the browser, which fetches each import from

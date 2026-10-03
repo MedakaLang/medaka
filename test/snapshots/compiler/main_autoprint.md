@@ -1,5 +1,5 @@
 # META
-source_lines=360
+source_lines=361
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -61,8 +61,8 @@ entryPair (_ :: rest) = entryPair rest
 
 -- Find the top-level `main`'s param list among a module's decls (skipping @attr
 -- wrappers), so the caller can require an EMPTY param list (a value main — a
--- function-shaped `main () =`/`main x =` keeps its own W-MAIN-SHAPE handling and
--- is NEVER auto-printed).
+-- function-shaped `main () =`/`main x =` is diagnosed instead, see
+-- `mainEntryError` in driver/diagnostics.mdk, and is NEVER auto-printed).
 findMainParams : List Decl -> Option (List Pat)
 findMainParams [] = None
 findMainParams ((DAttrib _ d) :: rest) = findMainParams (d :: rest)
@@ -81,8 +81,9 @@ definesPrintln ((DAttrib _ d) :: rest) = definesPrintln (d :: rest)
 definesPrintln ((DFunDef _ "println" _ _) :: _) = True
 definesPrintln (_ :: rest) = definesPrintln rest
 
--- Auto-print fires iff main's inferred type is neither Unit nor `Async _`, the
--- entry `main` is a zero-arg VALUE (empty param list), AND `println` is in scope.
+-- Auto-print fires iff main's inferred type is neither Unit-shaped (`Unit`, or
+-- a bare type variable: see `mainTypeIsUnit`) nor `Async _`, the entry `main`
+-- is a zero-arg VALUE (empty param list), AND `println` is in scope.
 -- Requires the caller to have run an elaborate first (populates mainSchemeRef).
 export
 shouldAutoPrintMain : List Decl -> List (String, List Decl) -> Bool

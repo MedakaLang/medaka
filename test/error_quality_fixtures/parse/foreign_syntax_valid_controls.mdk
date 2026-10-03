@@ -1,0 +1,15 @@
+for x = x + 1
+
+form = 2
+
+sq x = x * x
+
+mul = (*)
+
+f n =
+  match n
+    0 => 1
+    _ => 2
+
+main =
+  let for = 3 in println (for + form + 2 * sq 3 + mul 2 3 + f 1)

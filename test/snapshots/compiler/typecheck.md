@@ -1,5 +1,5 @@
 # META
-source_lines=53288
+source_lines=53303
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -10387,16 +10387,31 @@ mainAsyncPayloadIsUnit _ = match driverState.value.mainSchemeRef.value
     _ => False
   None => False
 
--- Stage 3 query: did the last-elaborated `main` infer to a bare Unit return type
--- (with effects stripped at each arrow, mono resolves to TCon "Unit")?  Used by
--- the LLVM emitter to suppress the auto-print of Unit-returning mains even when no
--- explicit `main : <IO> Unit` annotation is present — e.g. `main = applyEff f 42`
--- where `applyEff : (a -> <IO> b) -> a -> <IO> b` and `f : Int -> <IO> Unit`.
+-- Stage 3 query: is the last-elaborated `main` Unit-shaped, i.e. is there no
+-- value for a driver to print?  True when its type (effects stripped at each
+-- arrow) resolves to `Unit`, or is a type variable no interface constrains: a
+-- `main` of type `a` for every `a` (`main = panic "boom"`) never produces a
+-- value, and printing one would need a `Display` impl that no type selects.  A
+-- CONSTRAINED variable (`main = empty`, `Monoid a => a`) is not Unit-shaped:
+-- its ambiguity is a real error, reported when the auto-print wrap is checked.
+-- A `Scheme` carries no context, so the variable case reads the obligation
+-- side-channel `ppSchemeNamed` renders the `=>` from, keyed the same way; it
+-- answers for the module last checked, the entry module on the paths that ask
+-- about `main`'s shape.
+-- Used by the emitters to suppress the auto-print of Unit-returning mains even
+-- when no explicit `main : <IO> Unit` annotation is present — e.g.
+-- `main = applyEff f 42` where `applyEff : (a -> <IO> b) -> a -> <IO> b` and
+-- `f : Int -> <IO> Unit` — and by the auto-print wrap (driver/main_autoprint.mdk).
 export
 mainTypeIsUnit : Unit -> Bool
 mainTypeIsUnit _ = match driverState.value.mainSchemeRef.value
   Some (Forall _ _ _ _ _ t) => match normalize t
     TCon "Unit" _ => True
+    TVar _ =>
+      let id = optionOr 0 (omLookup "main" perRun.value.schemeDefIdsRef.value)
+      match lookupSchemeObls "main" id perRun.value.schemeObligationsRef.value
+        Some (_ :: _) => False
+        _ => True
     _ => False
   None => False
 
@@ -54863,7 +54878,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "mainAsyncPayloadIsUnit" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "mainAsyncPayloadIsUnit" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" PWild (PVar "payload")) () (EMatch (EApp (EVar "normalize") (EVar "payload")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "mainTypeIsUnit" (TyFun (TyCon "Unit") (TyCon "Bool")))
-(DFunDef false "mainTypeIsUnit" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "mainTypeIsUnit" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (EVar "True")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false (PVar "id") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (ELit (LString "main"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "lookupSchemeObls") (ELit (LString "main"))) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PCons PWild PWild)) () (EVar "False")) (arm PWild () (EVar "True")))))) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "mainTypeIsFloat" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "mainTypeIsFloat" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Float")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "hadMatchWarnings" (TyFun (TyCon "Unit") (TyCon "Bool")))
@@ -63578,7 +63593,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "mainAsyncPayloadIsUnit" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "mainAsyncPayloadIsUnit" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" PWild (PVar "payload")) () (EMatch (EApp (EVar "normalize") (EVar "payload")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "mainTypeIsUnit" (TyFun (TyCon "Unit") (TyCon "Bool")))
-(DFunDef false "mainTypeIsUnit" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "mainTypeIsUnit" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (EVar "True")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false (PVar "id") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (ELit (LString "main"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "lookupSchemeObls") (ELit (LString "main"))) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PCons PWild PWild)) () (EVar "False")) (arm PWild () (EVar "True")))))) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "mainTypeIsFloat" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "mainTypeIsFloat" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Float")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "hadMatchWarnings" (TyFun (TyCon "Unit") (TyCon "Bool")))

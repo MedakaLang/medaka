@@ -37,6 +37,7 @@ import json.{
 }
 import string.{stripCR}
 import driver.diagnostics.{
+  stdlibExportsReader,
   checkJsonSingle,
   checkJsonFile,
   cjAllToJson,
@@ -478,7 +479,14 @@ runCheckTool runtimeSrc coreSrc stdlibDir args = match (
       toolTextResult json hasErr
   (None, Some src) =>
     let (json, hasErr) =
-      checkJsonSingle "" False runtimeSrc coreSrc syntheticSourceName src
+      checkJsonSingle
+        (stdlibExportsReader stdlibDir)
+        ""
+        False
+        runtimeSrc
+        coreSrc
+        syntheticSourceName
+        src
     toolTextResult json hasErr
 
 -- ── symbol-name addressing (#849) ───────────────────────────────────────────

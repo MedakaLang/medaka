@@ -1,0 +1,8 @@
+-- #2425: a lambda applied to more arguments than its own parameter list, and a
+-- lambda passed to a higher-order function.
+ho : (Int -> Int) -> Int -> Int
+ho f x = f x
+
+main =
+  println ((a b => a + b) 3 4)
+  println (ho (x => x + 1) 41)
