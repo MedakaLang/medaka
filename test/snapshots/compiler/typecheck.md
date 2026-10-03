@@ -1,5 +1,5 @@
 # META
-source_lines=53502
+source_lines=53513
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -13702,10 +13702,13 @@ emitCyclicAliasErrors (name :: rest) =
         ++ "`. Type aliases cannot be recursive or cyclic")
   emitCyclicAliasErrors rest
 
--- Cycle-detection pre-pass over aliasTableRef.  MUST run immediately after
--- registerAllData has fully populated the table and BEFORE any fromAstType*
--- call (which would infinite-loop on a cyclic alias via the recursive expansion
--- added in stages 2–3).  For each alias found on a cycle:
+-- Cycle-detection pre-pass over aliasTableRef.  MUST run after the aliases are
+-- in the table and BEFORE any fromAstType* call (which would infinite-loop on a
+-- cyclic alias via the recursive expansion added in stages 2–3); a declaration's
+-- fields elaborate during registration, so `registerDeclsAliasesFirst` and
+-- `registerImportOverlay` run it between their alias and non-alias folds.
+-- A rerun finds nothing new and the diagnostic is message-deduped.
+-- For each alias found on a cycle:
 --   (1) emits a deduped type_error naming the offending alias;
 --   (2) removes it from aliasTableRef so the expansion seam falls through to an
 --       opaque TCon and cannot recurse → no stack overflow.
@@ -18933,8 +18936,9 @@ fieldDeclDescr (k, ri) = match recordOwnerModule ri
 --
 -- Declines (answers `None`, so the ladder runs unchanged) when the receiver
 -- carries no identity, when no owner key holds the receiver's declaration, or when
--- a sibling constructor of the receiver's type withholds the field.  The sibling case is the multi-`ConNamed`-variant shape
--- `narrowedPick` refuses: the receiver's type does not say which layout applies.
+-- a sibling constructor of the receiver's type withholds the field.  The sibling
+-- case is the multi-`ConNamed`-variant shape `narrowedPick` refuses: the
+-- receiver's type does not say which layout applies.
 ownerDeclOfReceiver : Mono ->
   String ->
   List String ->
@@ -19028,7 +19032,7 @@ resolveFieldAmbiguous te fname owners =
 -- are one candidate, and `fieldSelectionWellTyped` decides afterwards whether they
 -- agree about the field's slot and type.  Left uncollapsed, two constructors of
 -- one type are two survivors, and the answer becomes the sorted `headL owners`,
--- which depends on how an unrelated type's constructor is spelled (#3741).
+-- which depends on how an unrelated type's constructor is spelled.
 --
 -- One mint of the receiver's key for the whole filter, not one per candidate, for the
 -- reason `types/registry.mdk` gives against re-minting a `TabKey` per lookup
@@ -41770,12 +41774,17 @@ registerAllDataGo env ds =
 -- Aliases enter the alias table ahead of every other declaration, so a field
 -- naming an alias declared later in the list expands the same as one naming an
 -- alias declared above it.  An alias adds no env entry, so the split fold only
--- changes the table's contents by the time fields elaborate.
+-- changes the table's contents by the time fields elaborate.  The table then
+-- holds every alias the fields can name, cyclic ones included, so cycles are
+-- rejected between the two folds: a field naming a cyclic alias would
+-- otherwise expand it forever.
 registerDeclsAliasesFirst : TcEnv -> List Decl -> TcEnv
 registerDeclsAliasesFirst env ds =
   let env1 = fold (e d => if isAliasDecl d then registerData e d else e) env ds
+  let _ = rejectCyclicAliases ()
   fold (e d => if isAliasDecl d then e else registerData e d) env1 ds
 
+-- Only `type` declares an alias, so the wildcard is right for every other Decl.
 isAliasDecl : Decl -> Bool
 isAliasDecl (DAttrib _ d) = isAliasDecl d
 isAliasDecl (DTypeAlias { ... }) = True
@@ -41812,6 +41821,8 @@ registerImportOverlay env overlay =
       (e p => if isAliasDecl (fst p) then registerData e (fst p) else e)
       env
       served
+  -- Cycles out before any field elaborates, as in `registerDeclsAliasesFirst`.
+  let _ = rejectCyclicAliases ()
   fold
     (e p => match snd p
       None => if isAliasDecl (fst p) then e else registerData e (fst p)
@@ -60702,13 +60713,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "registerAllDataGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
 (DFunDef false "registerAllDataGo" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "d")) (EApp (EVar "recordDeclKinds") (EVar "d")))) (ELit LUnit)) (EVar "ds"))) (DoExpr (EApp (EApp (EVar "registerDeclsAliasesFirst") (EVar "env")) (EVar "ds")))))
 (DTypeSig false "registerDeclsAliasesFirst" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
-(DFunDef false "registerDeclsAliasesFirst" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false (PVar "env1") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d")) (EVar "e")))) (EVar "env")) (EVar "ds"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EVar "e") (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d"))))) (EVar "env1")) (EVar "ds")))))
+(DFunDef false "registerDeclsAliasesFirst" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false (PVar "env1") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d")) (EVar "e")))) (EVar "env")) (EVar "ds"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EVar "e") (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d"))))) (EVar "env1")) (EVar "ds")))))
 (DTypeSig false "isAliasDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "isAliasDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "isAliasDecl") (EVar "d")))
 (DFunDef false "isAliasDecl" ((PRec "DTypeAlias" () true)) (EVar "True"))
 (DFunDef false "isAliasDecl" (PWild) (EVar "False"))
 (DTypeSig false "registerImportOverlay" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
-(DFunDef false "registerImportOverlay" ((PVar "env") (PVar "overlay")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedParamPolarityFixpointScoped") (EVar "overlay")) (EVar "overlay"))) (DoLet false false (PVar "ctorPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")) (DoLet false false (PVar "recordPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")) (DoLet false false (PVar "served") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EVar "d") (EApp (EApp (EApp (EVar "overlayCachedRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "d"))))) (EVar "overlay"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EApp (EVar "recordDeclKinds") (EApp (EVar "fst") (EVar "p")))) (arm (PCon "Some" PWild) () (ELit LUnit))))) (ELit LUnit)) (EVar "served"))) (DoLet false false (PVar "env1") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "p")) (EIf (EApp (EVar "isAliasDecl") (EApp (EVar "fst") (EVar "p"))) (EApp (EApp (EVar "registerData") (EVar "e")) (EApp (EVar "fst") (EVar "p"))) (EVar "e")))) (EVar "env")) (EVar "served"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EIf (EApp (EVar "isAliasDecl") (EApp (EVar "fst") (EVar "p"))) (EVar "e") (EApp (EApp (EVar "registerData") (EVar "e")) (EApp (EVar "fst") (EVar "p"))))) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EVar "registerCachedRows") (EVar "e")) (EVar "rows")))))) (EVar "env1")) (EVar "served")))))
+(DFunDef false "registerImportOverlay" ((PVar "env") (PVar "overlay")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedParamPolarityFixpointScoped") (EVar "overlay")) (EVar "overlay"))) (DoLet false false (PVar "ctorPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")) (DoLet false false (PVar "recordPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")) (DoLet false false (PVar "served") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EVar "d") (EApp (EApp (EApp (EVar "overlayCachedRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "d"))))) (EVar "overlay"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EApp (EVar "recordDeclKinds") (EApp (EVar "fst") (EVar "p")))) (arm (PCon "Some" PWild) () (ELit LUnit))))) (ELit LUnit)) (EVar "served"))) (DoLet false false (PVar "env1") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "p")) (EIf (EApp (EVar "isAliasDecl") (EApp (EVar "fst") (EVar "p"))) (EApp (EApp (EVar "registerData") (EVar "e")) (EApp (EVar "fst") (EVar "p"))) (EVar "e")))) (EVar "env")) (EVar "served"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EIf (EApp (EVar "isAliasDecl") (EApp (EVar "fst") (EVar "p"))) (EVar "e") (EApp (EApp (EVar "registerData") (EVar "e")) (EApp (EVar "fst") (EVar "p"))))) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EVar "registerCachedRows") (EVar "e")) (EVar "rows")))))) (EVar "env1")) (EVar "served")))))
 (DTypeSig false "overlayCachedRows" (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))))
 (DFunDef false "overlayCachedRows" ((PVar "ctorPop") (PVar "recordPop") (PRec "DData" ((rf "dataCtors" None) (rf "dataOrigin" None)) true)) (EApp (EApp (EApp (EApp (EVar "cachedVariantRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "dataOrigin")) (EVar "dataCtors")))
 (DFunDef false "overlayCachedRows" (PWild PWild PWild) (EVar "None"))
@@ -69499,13 +69510,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "registerAllDataGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
 (DFunDef false "registerAllDataGo" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "d")) (EApp (EVar "recordDeclKinds") (EVar "d")))) (ELit LUnit)) (EVar "ds"))) (DoExpr (EApp (EApp (EVar "registerDeclsAliasesFirst") (EVar "env")) (EVar "ds")))))
 (DTypeSig false "registerDeclsAliasesFirst" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
-(DFunDef false "registerDeclsAliasesFirst" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false (PVar "env1") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d")) (EVar "e")))) (EVar "env")) (EVar "ds"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EVar "e") (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d"))))) (EVar "env1")) (EVar "ds")))))
+(DFunDef false "registerDeclsAliasesFirst" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false (PVar "env1") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d")) (EVar "e")))) (EVar "env")) (EVar "ds"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "d")) (EIf (EApp (EVar "isAliasDecl") (EVar "d")) (EVar "e") (EApp (EApp (EVar "registerData") (EVar "e")) (EVar "d"))))) (EVar "env1")) (EVar "ds")))))
 (DTypeSig false "isAliasDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "isAliasDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "isAliasDecl") (EVar "d")))
 (DFunDef false "isAliasDecl" ((PRec "DTypeAlias" () true)) (EVar "True"))
 (DFunDef false "isAliasDecl" (PWild) (EVar "False"))
 (DTypeSig false "registerImportOverlay" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
-(DFunDef false "registerImportOverlay" ((PVar "env") (PVar "overlay")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedParamPolarityFixpointScoped") (EVar "overlay")) (EVar "overlay"))) (DoLet false false (PVar "ctorPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")) (DoLet false false (PVar "recordPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")) (DoLet false false (PVar "served") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EVar "d") (EApp (EApp (EApp (EVar "overlayCachedRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "d"))))) (EVar "overlay"))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EApp (EVar "recordDeclKinds") (EApp (EVar "fst") (EVar "p")))) (arm (PCon "Some" PWild) () (ELit LUnit))))) (ELit LUnit)) (EVar "served"))) (DoLet false false (PVar "env1") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "p")) (EIf (EApp (EVar "isAliasDecl") (EApp (EVar "fst") (EVar "p"))) (EApp (EApp (EVar "registerData") (EVar "e")) (EApp (EVar "fst") (EVar "p"))) (EVar "e")))) (EVar "env")) (EVar "served"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EIf (EApp (EVar "isAliasDecl") (EApp (EVar "fst") (EVar "p"))) (EVar "e") (EApp (EApp (EVar "registerData") (EVar "e")) (EApp (EVar "fst") (EVar "p"))))) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EVar "registerCachedRows") (EVar "e")) (EVar "rows")))))) (EVar "env1")) (EVar "served")))))
+(DFunDef false "registerImportOverlay" ((PVar "env") (PVar "overlay")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedParamPolarityFixpointScoped") (EVar "overlay")) (EVar "overlay"))) (DoLet false false (PVar "ctorPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")) (DoLet false false (PVar "recordPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")) (DoLet false false (PVar "served") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EVar "d") (EApp (EApp (EApp (EVar "overlayCachedRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "d"))))) (EVar "overlay"))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EApp (EVar "recordDeclKinds") (EApp (EVar "fst") (EVar "p")))) (arm (PCon "Some" PWild) () (ELit LUnit))))) (ELit LUnit)) (EVar "served"))) (DoLet false false (PVar "env1") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "p")) (EIf (EApp (EVar "isAliasDecl") (EApp (EVar "fst") (EVar "p"))) (EApp (EApp (EVar "registerData") (EVar "e")) (EApp (EVar "fst") (EVar "p"))) (EVar "e")))) (EVar "env")) (EVar "served"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EIf (EApp (EVar "isAliasDecl") (EApp (EVar "fst") (EVar "p"))) (EVar "e") (EApp (EApp (EVar "registerData") (EVar "e")) (EApp (EVar "fst") (EVar "p"))))) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EVar "registerCachedRows") (EVar "e")) (EVar "rows")))))) (EVar "env1")) (EVar "served")))))
 (DTypeSig false "overlayCachedRows" (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))))
 (DFunDef false "overlayCachedRows" ((PVar "ctorPop") (PVar "recordPop") (PRec "DData" ((rf "dataCtors" None) (rf "dataOrigin" None)) true)) (EApp (EApp (EApp (EApp (EVar "cachedVariantRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "dataOrigin")) (EVar "dataCtors")))
 (DFunDef false "overlayCachedRows" (PWild PWild PWild) (EVar "None"))
