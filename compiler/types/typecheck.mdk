@@ -29406,7 +29406,17 @@ aliasQualifiedMethodEntries prog tab =
 -- A member alias (`import m.{mth as loc}`) contributes a row the same way, keyed `loc`.
 aliasMethodKeyCands : List Decl -> List (String, String, String, Ident, Loc)
 aliasMethodKeyCands prog =
-  useKeyCands moduleAliasKeys prog ++ useKeyCands memberAliasKeys prog
+  useKeyCands moduleAliasKeys prog ++ memberAliasCands prog
+
+-- The member-alias rows of [prog], less any whose local name [prog] itself declares
+-- at top level: an own top-level value shadows an import of the same local name, so
+-- that occurrence is the module's declaration and the import supplies no spelling.
+memberAliasCands : List Decl -> List (String, String, String, Ident, Loc)
+memberAliasCands prog =
+  let own = namesToSet (declTopFnNames prog) omEmpty
+  filterList
+    (r => not (omHasKey (aliasRowKey r) own))
+    (useKeyCands memberAliasKeys prog)
 
 useKeyCands : (UsePath -> Loc -> List (String, String, String, Ident, Loc)) ->
   List Decl ->
@@ -48147,9 +48157,10 @@ methodMembersOf : List String -> Loc -> List UseMember
 methodMembersOf methods loc = map (n => UseMember n False loc None) methods
 
 -- [qualified] holds the `A.mth` spellings: nothing but the method can be spelled that
--- way, so every occurrence moves.  [members] holds the member-alias locals, which a
--- local binder can also spell; only a MARKED occurrence is the import's, since the
--- marker leaves a locally-bound name unmarked (`rewriteArgScoped`).
+-- way, so every occurrence moves.  [members] holds the member-alias locals no own
+-- top-level value takes (`memberAliasCands`), which a local binder can still spell;
+-- only a MARKED occurrence is the import's, since the marker leaves a locally-bound
+-- name unmarked (`rewriteArgScoped`).
 renameMethodVar : List (String, String) -> List (String, String) -> Expr -> Expr
 renameMethodVar qualified _ (e@(EVar x)) = match lookupAssoc x qualified
   Some origin => EVar origin
@@ -48186,7 +48197,7 @@ renameMethodVar _ _ e = e
 resolveAliasMethodSpellings : (String, List Decl) -> (String, List Decl)
 resolveAliasMethodSpellings (mid, prog) =
   let qualified = map aliasRowSpelling (useKeyCands moduleAliasKeys prog)
-  let members = map aliasRowSpelling (useKeyCands memberAliasKeys prog)
+  let members = map aliasRowSpelling (memberAliasCands prog)
   match (qualified, members)
     ([], []) => (mid, prog)
     _ => (
@@ -48197,7 +48208,8 @@ resolveAliasMethodSpellings (mid, prog) =
     )
 
 -- `import m.{mth as loc}` → `import m.{mth}`, once every `loc` occurrence carries `mth`:
--- downstream of elaboration a method is bound by its origin name only.
+-- downstream of elaboration a method is bound by its origin name only.  Only a
+-- `DUse` names import members, so every other decl passes through unchanged.
 deAliasMethodMembers : List (String, String) -> Decl -> Decl
 deAliasMethodMembers rows (DAttrib attrs d) =
   DAttrib attrs (deAliasMethodMembers rows d)
@@ -48831,7 +48843,9 @@ importOverlayDecls _ _ _ _ = []
 -- loaded earlier answers for them (#1185).  They follow both halves of
 -- `importedCtorTypeDeclsFirstWins` because a bare occurrence means an unaliased
 -- import's constructor.  Kept out of `importOverlayDecls`, whose other reader is the
--- `dataEnv` overlay.
+-- `dataEnv` overlay.  A selective `import m.{…}` is already one of those rows, and no
+-- decl other than a `DUse` imports anything, so `oracleImportDeclsOf` adds nothing for
+-- either.
 oracleImportDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
 oracleImportDecls unitDecls cur rows =
   flatMap (oracleImportDeclsOf cur rows) unitDecls
@@ -48871,6 +48885,8 @@ reexportedTypeDecl cur (m :: rest) declarer tyName =
   else
     reexportedTypeDecl cur rest declarer tyName
 
+-- Only a `data` or `newtype` declaration declares constructors, so no other decl owns
+-- a type whose constructors a re-export reaches.
 declIsOwnedType : String -> String -> Decl -> Bool
 declIsOwnedType mid tyName (DAttrib _ d) = declIsOwnedType mid tyName d
 declIsOwnedType mid tyName (DData { dataName = tn, dataOrigin = o }) =
