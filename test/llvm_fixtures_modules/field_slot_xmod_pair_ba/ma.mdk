@@ -1,0 +1,9 @@
+-- The BYSTANDER half of the pair: a type spelled `T` with a constructor spelled `Cfg`,
+-- exactly as `mb.mdk`'s, but whose constructors place `x` at different positions.
+-- `entry.mdk` never reads a field of this type, so the field-position guard must not
+-- fire here, and must not mistake this module's `Cfg` for `mb`'s.
+public export data T = Cfg { x : Int, y : Int } | Dfg { y : Int, x : Int }
+
+export
+mk : T
+mk = Dfg { y = 1, x = 2 }
