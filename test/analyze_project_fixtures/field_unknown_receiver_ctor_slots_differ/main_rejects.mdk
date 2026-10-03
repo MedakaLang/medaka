@@ -1,0 +1,11 @@
+-- #3728 with #3726: an UNANNOTATED receiver whose only candidate type is `V`.  The
+-- two owner keys `R` and `W` are constructors of that one type, so they are one
+-- candidate, and the selection then meets the same field-position check an
+-- annotated `V` receiver does: `x` sits at a different slot in each constructor, a
+-- `V` value carries no constructor tag, and the access is rejected where it is
+-- written.
+import m.{V, mkW}
+
+g v = v.x
+
+main = putStrLn (intToString (g mkW))

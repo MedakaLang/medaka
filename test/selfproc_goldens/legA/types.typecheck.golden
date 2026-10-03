@@ -87,6 +87,7 @@ ambigReexportMsg : String -> String -> List String -> String
 ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
 ambiguousAdmitted : Map String Unit -> UsePath -> List (String, List String) -> List (String, List String)
 ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
+ambiguousFieldDeclsMsg : String -> List String -> List (String, RecordInfo) -> String
 ambiguousFieldMsg : String -> List String -> String
 ambiguousImplMsg : String -> String
 ambiguousImportBinding : Unit -> ExportBinding
@@ -1084,6 +1085,11 @@ fieldAssignDictSites : FieldAssign -> List (List Route)
 fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
+fieldDeclDescr : (String, RecordInfo) -> String
+fieldDeclReachFilter : List (String, RecordInfo) -> List (String, RecordInfo)
+fieldDeclReachable : (String, RecordInfo) -> Bool
+fieldDeclTypeKey : (String, RecordInfo) -> String
+fieldDeclTypeName : (String, RecordInfo) -> String
 fieldFixFrom : Option Loc -> String -> String -> Option (Loc, String)
 fieldNameOf : Field -> String
 fieldNotInAllCtorsMsg : String -> String -> String -> String
@@ -1740,6 +1746,7 @@ keepGroupNames : Map String Unit -> List String -> List String
 keyEntryIdx : KeyEntry -> Int
 keyEntryIface : KeyEntry -> String
 keyEntryOfRow : ImplRow -> List KeyEntry
+keyFieldDecls : String -> String -> List (String, RecordInfo)
 keyForSite : String -> List Mono -> (Option String, Option ImplRow)
 kindAnnAtom : KindAnn -> Kind
 kindAnnHasEffect : KindAnn -> Bool
@@ -2646,6 +2653,7 @@ resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordI
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldOwnersNarrowed : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
+resolveFieldUnknownReceiver : String -> List String -> Option (String, RecordInfo)
 resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 resolveMethodDicts : List PendingMethodDict -> Unit
 resolveNumLitSite : List String -> String -> Ref Route -> Mono -> Mono -> ClassPredicate -> String -> Option Loc -> ScopeId -> Unit
@@ -3088,6 +3096,7 @@ vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
 vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
 visibleDictsFor : Int -> ScopeId -> List (Int, EvidenceBinderId) -> List EvidenceBinderId
+visibleFieldDecls : String -> List String -> List (String, RecordInfo)
 wAll : Windowed a -> List a
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
