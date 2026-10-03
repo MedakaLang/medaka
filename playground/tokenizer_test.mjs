@@ -52,7 +52,7 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
 
 // 1. keywords vs TUpper ctor vs TIdent
 {
-  const t = tokenize('let match data impl foo Bar baz');
+  const t = tokenize('let match foo baz data impl Bar');
   check('keyword: let', has(t, 'let', 'keyword'));
   check('keyword: match', has(t, 'match', 'keyword'));
   check('keyword: data', has(t, 'data', 'keyword'));
@@ -178,22 +178,22 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
 {
   const t = tokenize('signCommitDigest : SecretKey ->\n  Bytes ->\n  <Sign "commit"> Result String Signature');
   for (const n of ['SecretKey', 'Bytes', 'Sign', 'Result', 'String', 'Signature']) {
-    check('wrapped signature: ' + n + ' is typeName', typeOf(t, n) === 'typeName', 'got ' + typeOf(t, n));
+    check('wrapped signature: ' + n + ' is typeName', typeOf(t, n) === (n === 'Sign' ? 'effectLabel' : 'typeName'), 'got ' + typeOf(t, n));
   }
 }
 {
   const t = tokenize('export effect Sign Set   -- spends the key\neffect Audit');
-  check('effect decl: label is typeName', typeOf(t, 'Sign') === 'typeName', 'got ' + typeOf(t, 'Sign'));
+  check('effect decl: label is effectLabel', typeOf(t, 'Sign') === 'effectLabel', 'got ' + typeOf(t, 'Sign'));
   check('effect decl: domain kind is typeName', typeOf(t, 'Set') === 'typeName', 'got ' + typeOf(t, 'Set'));
-  check('effect decl: bare label is typeName', typeOf(t, 'Audit') === 'typeName', 'got ' + typeOf(t, 'Audit'));
+  check('effect decl: bare label is effectLabel', typeOf(t, 'Audit') === 'effectLabel', 'got ' + typeOf(t, 'Audit'));
 }
 {
   const t = tokenize('f : Int ->\n  Result String (Server <Mint {"access", "refresh"}, Sign "commit">)');
   for (const n of ['Result', 'String', 'Server', 'Mint', 'Sign']) {
-    check('wrapped effect row: ' + n + ' is typeName', typeOf(t, n) === 'typeName', 'got ' + typeOf(t, n));
+    check('wrapped effect row: ' + n + ' class', typeOf(t, n) === (n === 'Mint' || n === 'Sign' ? 'effectLabel' : 'typeName'), 'got ' + typeOf(t, n));
   }
   const u = tokenize('g : Int ->\n  Server <Mint {"a",\n    "b"},\n   Sign "c"> Int');
-  check('row split after `,` keeps Sign typeName', typeOf(u, 'Sign') === 'typeName', 'got ' + typeOf(u, 'Sign'));
+  check('row split after `,` keeps Sign effectLabel', typeOf(u, 'Sign') === 'effectLabel', 'got ' + typeOf(u, 'Sign'));
 }
 {
   const src = 'xs = [\n  Some 1,\n  None,\n  Some 2]\nshapes = foo (\n  Circle 1.0,\n  Rect 2.0 3.0\n  )\nr = { a = Some 1,\n  b = Circle 2.0 }\nh = bar {\n  Some 3 }';
@@ -201,6 +201,39 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
   const all = t.filter((x) => /^(Some|None|Circle|Rect)$/.test(x.text));
   check('expression continuation lines keep constructors',
         all.length === 8 && all.every((x) => x.type === 'constructor'), JSON.stringify(all));
+}
+
+// Q. effect labels, type variables, effect variables (#3705 part 2)
+{
+  const t = tokenize('signCommitDigest : SecretKey ->\n  Bytes ->\n  <Sign "commit"> Result String Signature\nopen : <FileRead path> Int');
+  check('row label is effectLabel', typeOf(t, 'Sign') === 'effectLabel', 'got ' + typeOf(t, 'Sign'));
+  check('row with domain: label is effectLabel', typeOf(t, 'FileRead') === 'effectLabel', 'got ' + typeOf(t, 'FileRead'));
+  check('row domain variable is effectVar', typeOf(t, 'path') === 'effectVar', 'got ' + typeOf(t, 'path'));
+  check('wrapped signature types stay typeName', typeOf(t, 'Bytes') === 'typeName' && typeOf(t, 'Result') === 'typeName');
+}
+{
+  const t = tokenize('effect Audit\nexport effect Sign Set');
+  check('effect decl: name is effectLabel', t.filter((x) => x.text === 'Audit' || x.text === 'Sign').every((x) => x.type === 'effectLabel'));
+  check('effect decl: domain kind stays typeName', typeOf(t, 'Set') === 'typeName', 'got ' + typeOf(t, 'Set'));
+}
+{
+  const t = tokenize('handle : Server e -> Request -> <e> Response\nf : Int -> <Clock | e> Int');
+  const es = t.filter((x) => x.text === 'e').map((x) => x.type);
+  check('type variable vs effect variable', es.join() === 'typeVar,effectVar,effectVar', 'got ' + es);
+}
+{
+  const t = tokenize('data Box a = Box a\nimport map.{Map, get}');
+  check('data type parameter is typeVar', t.filter((x) => x.text === 'a').every((x) => x.type === 'typeVar'),
+        'got ' + t.filter((x) => x.text === 'a').map((x) => x.type));
+  check('import names are not typeVar', typeOf(t, 'get') === 'variableName' && typeOf(t, 'map') === 'variableName',
+        'got ' + typeOf(t, 'get') + ',' + typeOf(t, 'map'));
+}
+{
+  const t = tokenize('g = if a < b then xs -> y else foo > bar\nh = Some a');
+  const lower = t.filter((x) => /^[a-z]/.test(x.text) && !['if', 'then', 'else', 'g', 'h'].includes(x.text));
+  check('expression line: lowercase identifiers stay variableName', lower.every((x) => x.type === 'variableName'), JSON.stringify(lower));
+  check('expression line: < > -> stay operators', t.filter((x) => ['<', '>', '->'].includes(x.text)).every((x) => x.type === 'operator'));
+  check('expression line: constructor unchanged', typeOf(t, 'Some') === 'constructor');
 }
 
 console.log('\n=== ' + pass + ' pass / ' + fail + ' fail ===\n');

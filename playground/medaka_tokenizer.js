@@ -8,7 +8,12 @@
 // token() returns one of these class names per token (mapped to highlight tags
 // by medaka_lang.js's tokenTable):
 //   keyword comment string character number typeName constructor variableName
-//   operator punctuation bool escape interpolation
+//   operator punctuation bool escape interpolation typeVar effectLabel effectVar
+//
+// typeVar is a lowercase identifier in type position; effectLabel an uppercase
+// name inside a `< … >` row or the name after `effect`; effectVar a lowercase
+// name inside a row (`e` in `<e>`, `<Clock | e>`).  Like typeName, all three
+// are positional guesses.
 //
 // typeName vs constructor is a POSITIONAL guess, not a parse: an uppercase
 // identifier is a type in type position and a constructor everywhere else.
@@ -35,6 +40,8 @@
 //                  null if the last significant token was anything else
 //   depth        : open `( [ {` count while in type position (carry-over test)
 //   angle        : open type-position `<` count (effect rows)
+//   effHead      : true after the `effect` keyword until its name is read
+//   imp          : true on an `import` line, whose lowercase names are not type variables
 
 // The keyword set, mirroring lexer.mdk's `keywordOrIdent` table.  True/False are
 // NOT here — they lex as TUpper (uppercase), handled as `bool` below.  Derive the
@@ -59,7 +66,7 @@ const OP1_SET = '+-*/%<>=:.|!?@~^&$';   // single-char operator chars
 const PUNCT_SET = '()[],;';             // delimiters (not braces — see below)
 
 export function startState() {
-  return { blockComment: 0, strKind: null, interpStack: [], typePos: false, decl: null, ctorNext: false, last: null, depth: 0, angle: 0 };
+  return { blockComment: 0, strKind: null, interpStack: [], typePos: false, decl: null, ctorNext: false, last: null, depth: 0, angle: 0, effHead: false, imp: false };
 }
 
 export function copyState(s) {
@@ -69,6 +76,7 @@ export function copyState(s) {
     interpStack: s.interpStack.map((f) => ({ brace: f.brace, kind: f.kind })),
     typePos: s.typePos, decl: s.decl, ctorNext: s.ctorNext,
     last: s.last, depth: s.depth, angle: s.angle,
+    effHead: s.effHead, imp: s.imp,
   };
 }
 
@@ -158,6 +166,7 @@ function tokenCode(stream, state) {
     const carry = indented && state.typePos && (state.last === '->' || open);
     if (!carry) { state.depth = 0; state.angle = 0; }
     state.last = null;
+    state.effHead = false; state.imp = false;
     state.typePos = carry || state.decl === 'data' || state.decl === 'alias';
   }
   if (stream.eatSpace()) return null;
@@ -199,7 +208,8 @@ function tokenCode(stream, state) {
   if (c >= 'A' && c <= 'Z') {
     const w = stream.match(/^[A-Za-z0-9_]+/)[0];
     if (w === 'True' || w === 'False') return 'bool';
-    if (state.angle > 0) return 'typeName';
+    if (state.effHead) { state.effHead = false; return 'effectLabel'; }
+    if (state.angle > 0) return 'effectLabel';
     if (state.ctorNext) { state.ctorNext = false; state.typePos = true; return 'constructor'; }
     if (state.typePos) return 'typeName';
     // `M.get`: a module alias, neither a type nor a constructor — keep it neutral.
@@ -214,8 +224,12 @@ function tokenCode(stream, state) {
       if (w === 'data' || w === 'newtype') { state.decl = 'data'; state.typePos = true; }
       else if (w === 'type') { state.decl = 'alias'; state.typePos = true; }
       else if (TYPE_HEAD.has(w)) state.typePos = true;
+      if (w === 'effect') state.effHead = true;
+      if (w === 'import') state.imp = true;
       return 'keyword';
     }
+    if (state.angle > 0) return 'effectVar';
+    if (state.typePos && !state.imp) return 'typeVar';
     return 'variableName';
   }
 
