@@ -1,0 +1,3 @@
+(AmbiguousConstructor "Mk" "g" "mid")
+(AmbiguousType "R" "g" "mid")
+(AmbiguousType "T" "g" "mid")

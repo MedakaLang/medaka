@@ -1,0 +1,2 @@
+-- `Bin` here has arity 2 and siblings `Tip` and `Nd`.
+public export data B = Bin Int Int | Tip | Nd

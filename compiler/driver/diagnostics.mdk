@@ -41,13 +41,21 @@ import frontend.resolve.{
   resErrorDidYouMean,
   resErrorIsPrivateName,
   resolveModuleG,
+  importedCtorDecls,
   ModuleExports,
   withStdlibExports,
   hintableUnboundNames,
   exportedValueNames,
 }
 import list.{drop}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey}
+import support.ordmap.{
+  OrdMap,
+  omEmpty,
+  omInsert,
+  omHasKey,
+  omLookup,
+  omFromPairs,
+}
 import frontend.exhaust.{checkGuardExhaustivenessWith}
 import frontend.marker.{
   preludeStandaloneShadows,
@@ -1760,12 +1768,16 @@ typecheckDiagsFold : List Decl ->
   List (String, List Diag) ->
   List (String, List Diag)
 typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
-  -- Oracle superset = prelude + EVERY loaded module's decls, so a multi-clause
-  -- function over an imported ADT isn't false-flagged as non-exhaustive.
-  let oracleDecls = runtimeP ++ coreP ++ flatMap rawDeclsOfMod mods
-  -- #1499: the prelude-standalone operand is the PRELUDE ALONE — NOT
-  -- `oracleDecls`, which folds in every loaded module's own top-level fns and
-  -- would turn this into a different (cross-module standalone) rule.  Built
+  -- Each module's clause-exhaustiveness oracle is its own decls, the decls
+  -- declaring a constructor its imports bind, and the prelude: never every
+  -- loaded module, where an unrelated module's same-spelled constructor
+  -- answers for a pattern that names another (#1185).
+  let ctorScope =
+    omFromPairs (importedCtorDecls coreP modPairs (map rawPairOf mods)) omEmpty
+  let preludeDecls = runtimeP ++ coreP
+  -- #1499: the prelude-standalone operand is the PRELUDE ALONE — NOT the
+  -- oracle's decls, which fold in other modules' declarations and would turn
+  -- this into a different (cross-module standalone) rule.  Built
   -- ONCE here rather than per module: the fold below is over many modules
   -- against one prelude.
   let shadowPool = preludeStandaloneSet (runtimeP ++ coreP)
@@ -1788,7 +1800,7 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
   foldModuleTc
     shadowPool
     shadowGraph
-    oracleDecls
+    (ctorScope, preludeDecls)
     modPairs
     mods
     tcByMid
@@ -1936,8 +1948,8 @@ export
 desugaredModPairs : List (String, String, List Decl) -> List (String, List Decl)
 desugaredModPairs mods = map midToDesugaredPair mods
 
-rawDeclsOfMod : (String, String, List Decl) -> List Decl
-rawDeclsOfMod (_, _, prog) = prog
+rawPairOf : (String, String, List Decl) -> (String, List Decl)
+rawPairOf (mid, _, prog) = (mid, prog)
 
 -- (mid, path, rawDecls) → (mid, desugared decls) for checkModulesDiags.
 export
@@ -2042,7 +2054,7 @@ lookupDesugaredMod mid ((m, d) :: rest)
 
 foldModuleTc : OrdMap Unit ->
   List (String, List Decl) ->
-  List Decl ->
+  (OrdMap (List Decl), List Decl) ->
   List (String, List Decl) ->
   List (String, String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
@@ -2050,14 +2062,18 @@ foldModuleTc : OrdMap Unit ->
   List (String, List Diag) ->
   List (String, List Diag)
 foldModuleTc _ _ _ _ [] _ _ buckets = buckets
-foldModuleTc shadowPool shadowGraph oracleDecls modPairs ((mid, path, prog) :: rest) tcByMid autoPrintDiags buckets =
+foldModuleTc shadowPool shadowGraph oracle modPairs ((mid, path, prog) :: rest) tcByMid autoPrintDiags buckets =
   let (tcErrs, tcWarns) = lookupTcDiags mid tcByMid
   let tcReported = match lookupBucket path buckets
     Some existing => not (resolveRejected existing)
     None => True
   let errDiags = if tcReported then map diagOfTypeError tcErrs else []
   let warnDiags = if tcReported then map diagOfTypeWarning tcWarns else []
-  let guardWarns = checkGuardExhaustivenessWith oracleDecls prog
+  let (ctorScope, preludeDecls) = oracle
+  let imported = match omLookup mid ctorScope
+    Some ds => ds
+    None => []
+  let guardWarns = checkGuardExhaustivenessWith (imported ++ preludeDecls) prog
   let guardDiags = map guardWarnToDiag guardWarns
   let deriveDiags = map deriveErrToDiag (checkDerives prog)
   -- #1375 clause (b) / #1499, per module: this module's own interface methods
@@ -2102,7 +2118,7 @@ foldModuleTc shadowPool shadowGraph oracleDecls modPairs ((mid, path, prog) :: r
   foldModuleTc
     shadowPool
     shadowGraph
-    oracleDecls
+    oracle
     modPairs
     rest
     tcByMid
@@ -2425,14 +2441,12 @@ diagIsWarn d = not (diagIsError d)
 --      F-3d is the coherence reject F-3d demoted.  Every other warning on the
 --      `matchWarnings` channel was ALREADY invisible on those verbs and stays exactly
 --      as it was — not a regression, and not this change's to fix.
---  (2) SPEW, ~96% FALSE.  The channel is populated over the WHOLE MODULE GRAPH, and
---      `checkGuardExhaustivenessWith` draws its constructor oracle from the graph
---      rather than from the scrutinee's own type — so a fully exhaustive
---      `List`-matching function is reported "Missing case: `Text _`", `Text` being a
---      constructor of an unrelated type in another module (issue 1185, PRE-EXISTING).
---      Measured: `medaka build compiler/driver/medaka_cli.mdk` went 0 → 4896 stderr
---      lines, 1249 of them demanding that phantom `Text _`; a 25-line three-module
---      toy went 0 → 20, all false.  That makes `build` ~200× noisier than `check`.
+--  (2) SPEW.  The channel is populated over the whole module graph.  The
+--      exhaustiveness oracle reads the constructors each module can name (#1185), and
+--      on the compiler's own graph (`check --json compiler/driver/medaka_cli.mdk`) the
+--      channel carries 8 `W-NONEXHAUSTIVE-CLAUSES` and 2 `W-NONEXHAUSTIVE`, each
+--      hand-graded genuine.  Surfacing them on every `build` is a decision about those
+--      findings, not a cleanup, and this allowlist stays as it is until one is made.
 --  (3) PERF.  Surfacing the channel means RENDERING it, and rendering a located
 --      diagnostic materialises the containing file's lines (`ppDiagCliSrc` →
 --      `srcLinesArr`) — a cost paid per file whose channel is non-empty.

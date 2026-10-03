@@ -10,25 +10,25 @@
 -- `{size as sz}` admits `size` -- the name in the DEPENDENCY -- rather than `sz`, the name
 -- this module can call.
 --
--- 🚨 THE FIX SHAPE IS NOT KNOWN, AND THE OBVIOUS ONE IS INERT. This header used to end
--- "the fix is one token: key the VALUE arm on `snd` while the TYPE arm keeps `fst`". That
--- change cannot move this file's answer, and it is DERIVABLE without building anything:
+-- THE FIX SHAPE IS NOT KNOWN. Since #3708 a member alias is no longer de-aliased before
+-- inference: `renameAliasedMethodsIn` rewrites only a MODULE alias (`import m as A`), so
+-- `import ifc.{size as sz}` reaches `selectIfaceRows` as written on every driver, and
+-- `fst b` and `snd b` differ for the aliased member there. Keying the VALUE arm on `snd`
+-- (the local spelling) while the TYPE arm keeps `fst` is therefore no longer inert by
+-- construction, as it was while the import was rewritten to `import ifc.{size}` upstream.
 --
---     grep -n 'renameAliasedMethods \|graphIfaceMethodsRef :=' compiler/types/typecheck.mdk
+-- What that re-keying would decide is what a standalone-bound spelling means: here the
+-- bare `size` is bound by `fmod`'s standalone and the interface is reachable only as `sz`.
+-- No ruling covers that yet (SHADOW-SEMANTICS S2-DECL (d), unruled), so the cell stays
+-- pinned at its current value rather than re-keyed here.
 --
--- `renameAliasedMethods` has exactly one call site: `driveGraphK`'s `GOutTrees` arm, and it
--- runs BEFORE the `graphIfaceMethodsRef` write and before the mark pass. It applies
--- `deAliasMethodImports`, which rewrites `import ifc.{size as sz}` into `import ifc.{size}`
--- -- so by the time `selectIfaceRows` runs on the run/build path, `snd b == fst b` for every
--- member and the two keyings are the same expression. A reviewer implemented the one-token
--- change, rebuilt, and measured this file still at 7, which is what the derivation predicts.
--- (The `check` path does not de-alias, so re-keying would move that arm alone -- a
--- `check`/`run` split, not a fix.) A real fix spans at least those two functions and is a
--- design question: not de-aliasing breaks aliased method CALLS outright, which is why
--- `deAliasMethodImports` exists at all. A DOCUMENTED FIX SHAPE THAT IS INERT IS WORSE THAN
--- NONE -- the next person implements it, sees nothing move, and looks for the defect
--- somewhere else. The PINNED VALUES below are correct and this cell is verified
--- fail-capable: under a genuine fix main.mdk moves 7 -> 99 while bare.mdk stays 99.
+-- After inference, `resolveAliasMethodSpellings` (compiler/types/typecheck.mdk) restores
+-- each marked `sz` occurrence to `size` and drops the alias from the import, so every
+-- stage downstream of elaboration still keys the method by its origin name.
+--
+-- The PINNED VALUES below are correct and this cell is verified fail-capable: under a
+-- genuine fix main.mdk moves 7 -> 99 while bare.mdk stays 99, and a re-keying that moves
+-- it is graded here rather than discovered afterwards.
 --
 -- ⚠️ NOT A REGRESSION, AND THAT IS WHY IT IS PINNED RATHER THAN FIXED HERE. The base
 -- compiler prints 7 too -- the member-alias arm is exactly where this unit changes nothing.

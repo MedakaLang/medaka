@@ -1,5 +1,5 @@
 # META
-source_lines=1158
+source_lines=1179
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -223,12 +223,33 @@ oracleMap pairs = omFromPairs (reverseL pairs) omEmpty
 builtinTypeCtors : List (TabKey, List String)
 builtinTypeCtors = [
   (tabKeyOf NsType OriginBuiltin "Bool", ["True", "False"]),
-  (tabKeyOf NsType OriginBuiltin "List", ["Cons", "Nil"]),
-  (tabKeyOf NsType OriginBuiltin "Unit", ["Unit"]),
+  (tabKeyOf NsType OriginBuiltin "List", [listConsCtor, listNilCtor]),
+  (tabKeyOf NsType OriginBuiltin "Unit", [unitCtor]),
 ]
 
+-- The matrix spellings of the builtin list and unit constructors.  They are
+-- not identifiers, so no program constructor can share them: every oracle
+-- table is keyed by bare constructor name, and a `[]` minted as `Nil` would be
+-- answered by a program's own `data D = Nil | ...` row, which comes first.
+-- `True`/`False` need no such spelling, because resolve already refuses a
+-- program constructor of either name.
+listNilCtor : String
+listNilCtor = "[]"
+
+listConsCtor : String
+listConsCtor = "::"
+
+unitCtor : String
+unitCtor = "()"
+
 builtinArity : List (String, Int)
-builtinArity = [("True", 0), ("False", 0), ("Cons", 2), ("Nil", 0), ("Unit", 0)]
+builtinArity = [
+  ("True", 0),
+  ("False", 0),
+  (listConsCtor, 2),
+  (listNilCtor, 0),
+  (unitCtor, 0),
+]
 
 -- ⚠️ `OriginBuiltin` for the same reason `builtinTypeCtors` uses it: these
 -- values ARE the keys `oGetCtors` is about to look up, and the builtin rows of
@@ -239,9 +260,9 @@ builtinCtorType : List (String, TabKey)
 builtinCtorType = [
   ("True", tabKeyOf NsType OriginBuiltin "Bool"),
   ("False", tabKeyOf NsType OriginBuiltin "Bool"),
-  ("Cons", tabKeyOf NsType OriginBuiltin "List"),
-  ("Nil", tabKeyOf NsType OriginBuiltin "List"),
-  ("Unit", tabKeyOf NsType OriginBuiltin "Unit"),
+  (listConsCtor, tabKeyOf NsType OriginBuiltin "List"),
+  (listNilCtor, tabKeyOf NsType OriginBuiltin "List"),
+  (unitCtor, tabKeyOf NsType OriginBuiltin "Unit"),
 ]
 
 dataTypeCtors : Decl -> List (TabKey, List String)
@@ -346,17 +367,17 @@ desugarPat _ PWild = PWild
 desugarPat _ (PVar _ _) = PWild
 desugarPat _ (PLit (LBool True)) = PCon "True" []
 desugarPat _ (PLit (LBool False)) = PCon "False" []
-desugarPat _ (PLit LUnit) = PCon "Unit" []
+desugarPat _ (PLit LUnit) = PCon unitCtor []
 desugarPat _ (PLit l) = PLit l
 desugarPat oracle (PTuple ps) =
   PCon (tupleCtorName (listLen ps)) (map (desugarPat oracle) ps)
 desugarPat oracle (PCon c args) =
   PCon (oracleCtorName oracle c) (map (desugarPat oracle) args)
 desugarPat oracle (PCons h t) =
-  PCon "Cons" [desugarPat oracle h, desugarPat oracle t]
-desugarPat _ (PList []) = PCon "Nil" []
+  PCon listConsCtor [desugarPat oracle h, desugarPat oracle t]
+desugarPat _ (PList []) = PCon listNilCtor []
 desugarPat oracle (PList (h :: rest)) =
-  PCon "Cons" [desugarPat oracle h, desugarPat oracle (PList rest)]
+  PCon listConsCtor [desugarPat oracle h, desugarPat oracle (PList rest)]
 desugarPat oracle (PAs _ _ p) = desugarPat oracle p
 desugarPat oracle (PRec name fields _) =
   desugarRecPat oracle (oracleCtorName oracle name) fields
@@ -759,9 +780,9 @@ renderWit _ _ = "_"
 
 renderConWit : Bool -> String -> List Pat -> String
 renderConWit paren c args
-  | c == "Nil" = "[]"
-  | c == "Cons" = renderCons paren args
-  | c == "Unit" = "()"
+  | c == listNilCtor = "[]"
+  | c == listConsCtor = renderCons paren args
+  | c == unitCtor = "()"
   | (Some _) <- tupleArityOfName c =
     "(\{joinWith ", " (map (renderWit False) args)})"
   | isEmptyArgs args = c
@@ -1189,11 +1210,17 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "oracleMap" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyVar "a"))))
 (DFunDef false "oracleMap" ((PVar "pairs")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "pairs"))) (EVar "omEmpty")))
 (DTypeSig false "builtinTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "builtinTypeCtors" () (EListLit (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool"))) (EListLit (ELit (LString "True")) (ELit (LString "False")))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil")))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))) (EListLit (ELit (LString "Unit"))))))
+(DFunDef false "builtinTypeCtors" () (EListLit (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool"))) (EListLit (ELit (LString "True")) (ELit (LString "False")))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List"))) (EListLit (EVar "listConsCtor") (EVar "listNilCtor"))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))) (EListLit (EVar "unitCtor")))))
+(DTypeSig false "listNilCtor" (TyCon "String"))
+(DFunDef false "listNilCtor" () (ELit (LString "[]")))
+(DTypeSig false "listConsCtor" (TyCon "String"))
+(DFunDef false "listConsCtor" () (ELit (LString "::")))
+(DTypeSig false "unitCtor" (TyCon "String"))
+(DFunDef false "unitCtor" () (ELit (LString "()")))
 (DTypeSig false "builtinArity" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
-(DFunDef false "builtinArity" () (EListLit (ETuple (ELit (LString "True")) (ELit (LInt 0))) (ETuple (ELit (LString "False")) (ELit (LInt 0))) (ETuple (ELit (LString "Cons")) (ELit (LInt 2))) (ETuple (ELit (LString "Nil")) (ELit (LInt 0))) (ETuple (ELit (LString "Unit")) (ELit (LInt 0)))))
+(DFunDef false "builtinArity" () (EListLit (ETuple (ELit (LString "True")) (ELit (LInt 0))) (ETuple (ELit (LString "False")) (ELit (LInt 0))) (ETuple (EVar "listConsCtor") (ELit (LInt 2))) (ETuple (EVar "listNilCtor") (ELit (LInt 0))) (ETuple (EVar "unitCtor") (ELit (LInt 0)))))
 (DTypeSig false "builtinCtorType" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TabKey"))))
-(DFunDef false "builtinCtorType" () (EListLit (ETuple (ELit (LString "True")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (ELit (LString "False")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (ELit (LString "Cons")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (ELit (LString "Nil")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (ELit (LString "Unit")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))))))
+(DFunDef false "builtinCtorType" () (EListLit (ETuple (ELit (LString "True")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (ELit (LString "False")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (EVar "listConsCtor") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (EVar "listNilCtor") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (EVar "unitCtor") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))))))
 (DTypeSig false "dataTypeCtors" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "dataTypeCtors" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataOrigin" (PVar "origin")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "origin")) (EVar "tyname")) (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "variants")))))
 (DFunDef false "dataTypeCtors" (PWild) (EListLit))
@@ -1248,13 +1275,13 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" (PWild (PCon "PVar" PWild PWild)) (EVar "PWild"))
 (DFunDef false "desugarPat" (PWild (PCon "PLit" (PCon "LBool" (PCon "True")))) (EApp (EApp (EVar "PCon") (ELit (LString "True"))) (EListLit)))
 (DFunDef false "desugarPat" (PWild (PCon "PLit" (PCon "LBool" (PCon "False")))) (EApp (EApp (EVar "PCon") (ELit (LString "False"))) (EListLit)))
-(DFunDef false "desugarPat" (PWild (PCon "PLit" (PCon "LUnit"))) (EApp (EApp (EVar "PCon") (ELit (LString "Unit"))) (EListLit)))
+(DFunDef false "desugarPat" (PWild (PCon "PLit" (PCon "LUnit"))) (EApp (EApp (EVar "PCon") (EVar "unitCtor")) (EListLit)))
 (DFunDef false "desugarPat" (PWild (PCon "PLit" (PVar "l"))) (EApp (EVar "PLit") (EVar "l")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "PCon") (EApp (EVar "tupleCtorName") (EApp (EVar "listLen") (EVar "ps")))) (EApp (EApp (EVar "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "ps"))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCon" (PVar "c") (PVar "args"))) (EApp (EApp (EVar "PCon") (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "c"))) (EApp (EApp (EVar "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "args"))))
-(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCon") (ELit (LString "Cons"))) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "t")))))
-(DFunDef false "desugarPat" (PWild (PCon "PList" (PList))) (EApp (EApp (EVar "PCon") (ELit (LString "Nil"))) (EListLit)))
-(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (ELit (LString "Cons"))) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
+(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCon") (EVar "listConsCtor")) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "t")))))
+(DFunDef false "desugarPat" (PWild (PCon "PList" (PList))) (EApp (EApp (EVar "PCon") (EVar "listNilCtor")) (EListLit)))
+(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (EVar "listConsCtor")) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "desugarRecPat") (EVar "oracle")) (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "name"))) (EVar "fields")))
 (DFunDef false "desugarPat" (PWild (PCon "PRng" PWild PWild PWild)) (EVar "PWild"))
@@ -1388,7 +1415,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "renderWit" ((PVar "paren") (PCon "PCon" (PVar "c") (PVar "args"))) (EApp (EApp (EApp (EVar "renderConWit") (EVar "paren")) (EVar "c")) (EVar "args")))
 (DFunDef false "renderWit" (PWild PWild) (ELit (LString "_")))
 (DTypeSig false "renderConWit" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "String")))))
-(DFunDef false "renderConWit" ((PVar "paren") (PVar "c") (PVar "args")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "Nil"))) (ELit (LString "[]")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "Cons"))) (EApp (EApp (EVar "renderCons") (EVar "paren")) (EVar "args")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "Unit"))) (ELit (LString "()")) (EMatch (EApp (EVar "tupleArityOfName") (EVar "c")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EApp (EVar "renderWit") (EVar "False"))) (EVar "args"))))) (ELit (LString ")")))) (arm PWild () (EIf (EApp (EVar "isEmptyArgs") (EVar "args")) (EVar "c") (EIf (EVar "otherwise") (EApp (EApp (EVar "parenWrapWit") (EVar "paren")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "c"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EVar "renderWit") (EVar "True"))) (EVar "args"))))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
+(DFunDef false "renderConWit" ((PVar "paren") (PVar "c") (PVar "args")) (EIf (EBinOp "==" (EVar "c") (EVar "listNilCtor")) (ELit (LString "[]")) (EIf (EBinOp "==" (EVar "c") (EVar "listConsCtor")) (EApp (EApp (EVar "renderCons") (EVar "paren")) (EVar "args")) (EIf (EBinOp "==" (EVar "c") (EVar "unitCtor")) (ELit (LString "()")) (EMatch (EApp (EVar "tupleArityOfName") (EVar "c")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EApp (EVar "renderWit") (EVar "False"))) (EVar "args"))))) (ELit (LString ")")))) (arm PWild () (EIf (EApp (EVar "isEmptyArgs") (EVar "args")) (EVar "c") (EIf (EVar "otherwise") (EApp (EApp (EVar "parenWrapWit") (EVar "paren")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "c"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EVar "renderWit") (EVar "True"))) (EVar "args"))))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "renderCons" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "String"))))
 (DFunDef false "renderCons" ((PVar "paren") (PCons (PVar "h") (PCons (PVar "t") PWild))) (EApp (EApp (EVar "parenWrapWit") (EVar "paren")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "renderWit") (EVar "True")) (EVar "h")))) (ELit (LString " :: "))) (EApp (EVar "display") (EApp (EApp (EVar "renderWit") (EVar "False")) (EVar "t")))) (ELit (LString "")))))
 (DFunDef false "renderCons" (PWild PWild) (ELit (LString "_ :: _")))
@@ -1594,11 +1621,17 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "oracleMap" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyVar "a"))))
 (DFunDef false "oracleMap" ((PVar "pairs")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "pairs"))) (EVar "omEmpty")))
 (DTypeSig false "builtinTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "builtinTypeCtors" () (EListLit (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool"))) (EListLit (ELit (LString "True")) (ELit (LString "False")))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil")))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))) (EListLit (ELit (LString "Unit"))))))
+(DFunDef false "builtinTypeCtors" () (EListLit (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool"))) (EListLit (ELit (LString "True")) (ELit (LString "False")))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List"))) (EListLit (EVar "listConsCtor") (EVar "listNilCtor"))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))) (EListLit (EVar "unitCtor")))))
+(DTypeSig false "listNilCtor" (TyCon "String"))
+(DFunDef false "listNilCtor" () (ELit (LString "[]")))
+(DTypeSig false "listConsCtor" (TyCon "String"))
+(DFunDef false "listConsCtor" () (ELit (LString "::")))
+(DTypeSig false "unitCtor" (TyCon "String"))
+(DFunDef false "unitCtor" () (ELit (LString "()")))
 (DTypeSig false "builtinArity" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
-(DFunDef false "builtinArity" () (EListLit (ETuple (ELit (LString "True")) (ELit (LInt 0))) (ETuple (ELit (LString "False")) (ELit (LInt 0))) (ETuple (ELit (LString "Cons")) (ELit (LInt 2))) (ETuple (ELit (LString "Nil")) (ELit (LInt 0))) (ETuple (ELit (LString "Unit")) (ELit (LInt 0)))))
+(DFunDef false "builtinArity" () (EListLit (ETuple (ELit (LString "True")) (ELit (LInt 0))) (ETuple (ELit (LString "False")) (ELit (LInt 0))) (ETuple (EVar "listConsCtor") (ELit (LInt 2))) (ETuple (EVar "listNilCtor") (ELit (LInt 0))) (ETuple (EVar "unitCtor") (ELit (LInt 0)))))
 (DTypeSig false "builtinCtorType" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TabKey"))))
-(DFunDef false "builtinCtorType" () (EListLit (ETuple (ELit (LString "True")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (ELit (LString "False")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (ELit (LString "Cons")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (ELit (LString "Nil")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (ELit (LString "Unit")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))))))
+(DFunDef false "builtinCtorType" () (EListLit (ETuple (ELit (LString "True")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (ELit (LString "False")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (EVar "listConsCtor") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (EVar "listNilCtor") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (EVar "unitCtor") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))))))
 (DTypeSig false "dataTypeCtors" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "dataTypeCtors" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataOrigin" (PVar "origin")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "origin")) (EVar "tyname")) (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "variants")))))
 (DFunDef false "dataTypeCtors" (PWild) (EListLit))
@@ -1653,13 +1686,13 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" (PWild (PCon "PVar" PWild PWild)) (EVar "PWild"))
 (DFunDef false "desugarPat" (PWild (PCon "PLit" (PCon "LBool" (PCon "True")))) (EApp (EApp (EVar "PCon") (ELit (LString "True"))) (EListLit)))
 (DFunDef false "desugarPat" (PWild (PCon "PLit" (PCon "LBool" (PCon "False")))) (EApp (EApp (EVar "PCon") (ELit (LString "False"))) (EListLit)))
-(DFunDef false "desugarPat" (PWild (PCon "PLit" (PCon "LUnit"))) (EApp (EApp (EVar "PCon") (ELit (LString "Unit"))) (EListLit)))
+(DFunDef false "desugarPat" (PWild (PCon "PLit" (PCon "LUnit"))) (EApp (EApp (EVar "PCon") (EVar "unitCtor")) (EListLit)))
 (DFunDef false "desugarPat" (PWild (PCon "PLit" (PVar "l"))) (EApp (EVar "PLit") (EVar "l")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "PCon") (EApp (EVar "tupleCtorName") (EApp (EVar "listLen") (EVar "ps")))) (EApp (EApp (EMethodRef "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "ps"))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCon" (PVar "c") (PVar "args"))) (EApp (EApp (EVar "PCon") (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "c"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "args"))))
-(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCon") (ELit (LString "Cons"))) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "t")))))
-(DFunDef false "desugarPat" (PWild (PCon "PList" (PList))) (EApp (EApp (EVar "PCon") (ELit (LString "Nil"))) (EListLit)))
-(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (ELit (LString "Cons"))) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
+(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCon") (EVar "listConsCtor")) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "t")))))
+(DFunDef false "desugarPat" (PWild (PCon "PList" (PList))) (EApp (EApp (EVar "PCon") (EVar "listNilCtor")) (EListLit)))
+(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (EVar "listConsCtor")) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "desugarRecPat") (EVar "oracle")) (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "name"))) (EVar "fields")))
 (DFunDef false "desugarPat" (PWild (PCon "PRng" PWild PWild PWild)) (EVar "PWild"))
@@ -1793,7 +1826,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "renderWit" ((PVar "paren") (PCon "PCon" (PVar "c") (PVar "args"))) (EApp (EApp (EApp (EVar "renderConWit") (EVar "paren")) (EVar "c")) (EVar "args")))
 (DFunDef false "renderWit" (PWild PWild) (ELit (LString "_")))
 (DTypeSig false "renderConWit" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "String")))))
-(DFunDef false "renderConWit" ((PVar "paren") (PVar "c") (PVar "args")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "Nil"))) (ELit (LString "[]")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "Cons"))) (EApp (EApp (EVar "renderCons") (EVar "paren")) (EVar "args")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "Unit"))) (ELit (LString "()")) (EMatch (EApp (EVar "tupleArityOfName") (EVar "c")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderWit") (EVar "False"))) (EVar "args"))))) (ELit (LString ")")))) (arm PWild () (EIf (EApp (EVar "isEmptyArgs") (EVar "args")) (EVar "c") (EIf (EVar "otherwise") (EApp (EApp (EVar "parenWrapWit") (EVar "paren")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderWit") (EVar "True"))) (EVar "args"))))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
+(DFunDef false "renderConWit" ((PVar "paren") (PVar "c") (PVar "args")) (EIf (EBinOp "==" (EVar "c") (EVar "listNilCtor")) (ELit (LString "[]")) (EIf (EBinOp "==" (EVar "c") (EVar "listConsCtor")) (EApp (EApp (EVar "renderCons") (EVar "paren")) (EVar "args")) (EIf (EBinOp "==" (EVar "c") (EVar "unitCtor")) (ELit (LString "()")) (EMatch (EApp (EVar "tupleArityOfName") (EVar "c")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderWit") (EVar "False"))) (EVar "args"))))) (ELit (LString ")")))) (arm PWild () (EIf (EApp (EVar "isEmptyArgs") (EVar "args")) (EVar "c") (EIf (EVar "otherwise") (EApp (EApp (EVar "parenWrapWit") (EVar "paren")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderWit") (EVar "True"))) (EVar "args"))))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "renderCons" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "String"))))
 (DFunDef false "renderCons" ((PVar "paren") (PCons (PVar "h") (PCons (PVar "t") PWild))) (EApp (EApp (EVar "parenWrapWit") (EVar "paren")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "renderWit") (EVar "True")) (EVar "h")))) (ELit (LString " :: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "renderWit") (EVar "False")) (EVar "t")))) (ELit (LString "")))))
 (DFunDef false "renderCons" (PWild PWild) (ELit (LString "_ :: _")))

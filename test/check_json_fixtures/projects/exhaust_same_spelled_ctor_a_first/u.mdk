@@ -1,0 +1,6 @@
+-- Exhaustive over `A`, in a non-entry module.
+import a.{A(..)}
+
+export f : A -> Int
+f (Bin n) = n
+f Leaf = 0

@@ -1,5 +1,4 @@
 aliasDictNamesOfDecl	Decl	2/14
-aliasMethodRenamesOf	Decl	2/14
 allEVars	Expr	37/42
 appArgExpr	Expr	2/42
 appArgLoc	Expr	2/42
@@ -24,8 +23,10 @@ constrainedSigName	Decl	1/14
 constrainedSigPredicateSlots	Decl	1/14
 dataEnvAddDecl	Decl	3/14
 deAliasMethodImports	Decl	1/14
+deAliasMethodMembers	Decl	2/14
 declBodyVarsOf	Decl	1/14
 declCtorIdentsOf	Decl	3/14
+declIsOwnedType	Decl	1/14
 declKindEntry	Decl	1/14
 declMethodIdentsOf	Decl	2/14
 declMethodNamesOf	Decl	3/14
@@ -76,6 +77,7 @@ mapDeclBodies	Decl	5/14
 markTailDecl	Decl	1/14
 methodConstraintNamesOfDecl	Decl	2/14
 negatedI32Lit	Expr	3/42
+oracleImportDeclsOf	Decl	2/14
 overlayScanOne	Decl	1/14
 plainAppHead	Expr	2/42
 prePassDeclScoped	Decl	5/14

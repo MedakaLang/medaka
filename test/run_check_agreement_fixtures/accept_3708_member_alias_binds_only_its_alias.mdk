@@ -1,0 +1,9 @@
+-- #3708: one program spelling both names.  The member alias `dsp` is `Disp`'s
+-- `display` and reaches `Disp Int`'s impl (`mm-display`); the bare `display` is the
+-- prelude's, which resolve bound it to (`6`).  The alias is a second spelling of the
+-- imported method, not a binding of its origin name.
+import lib.disp3677.{display as dsp}
+
+main =
+  println (display (6 : Int))
+  println (dsp (6 : Int))

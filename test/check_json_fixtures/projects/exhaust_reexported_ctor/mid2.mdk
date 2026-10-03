@@ -1,0 +1,2 @@
+-- Re-exports `T` with its constructors.
+export import p.{T(..)}

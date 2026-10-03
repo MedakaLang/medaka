@@ -1,5 +1,5 @@
 # META
-source_lines=53215
+source_lines=53303
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -8421,9 +8421,9 @@ methodScopeHere n = match perRun.value.methodScopeCtxRef.value
 -- The declaration this module's scope decides for [n], as the payload every
 -- single-winner reader consumes: `None` when no declaration is visible, none is
 -- nameable, or two or more are admitted (`methodAdmittedHere` holds that set).
--- Alias-qualified spellings (`A.mth`) are a separate supply
--- (`aliasQualifiedMethodEntries`); a bare method name never contains a dot, so the two
--- key sets are disjoint.
+-- Alias spellings (`A.mth`, and a member alias's local name) are a separate supply
+-- (`aliasQualifiedMethodEntries`), read first: an alias key is a name one of this
+-- module's imports binds to that declaration, which is the binding resolve chose.
 methodEntryHere : String -> Option MethodEntry
 methodEntryHere n = match omLookup n perRun.value.methodAliasEntriesRef.value
   Some e => Some e
@@ -11744,10 +11744,10 @@ data PerRun = PerRun {
   definerShadowNamesRef : Ref (OrdMap Unit),
   definerShadowSigsRef : Ref (OrdMap Ty),
   bodyImplEnvRef : Ref ImplEnv,
-  methodAliasEntriesRef : Ref (OrdMap MethodEntry),  -- #1386: the alias-qualified method spellings (`A.mth`) this module's imports supply, each to its declaration's entry — see `aliasQualifiedMethodEntries`
+  methodAliasEntriesRef : Ref (OrdMap MethodEntry),  -- #1386: the alias method spellings (`A.mth`, a member alias's local) this module's imports supply, each to its declaration's entry — see `aliasQualifiedMethodEntries`
   methodScopeCtxRef : Ref (Option (List Decl, Int)),  -- #2563: this module's decls and ordinal, the inputs `methodScopeHere` reads at
   methodScopeMemoRef : Ref (OrdMap MethodScope),  -- #2563: `methodScopeAt`'s answers for the spellings this module has read
-  aliasMethodOriginsRef : Ref (OrdMap String),  -- #1386: the alias-qualified method spellings this module's imports bring into scope (`import m as A` ⇒ `A.mth`), each mapped to the ORIGIN method name.  A projection of the same candidate rows that supply `methodAliasEntriesRef`, UNFILTERED (the supply drops ambiguous and unresolvable keys; see `aliasMethodSpellings`), so this table is a superset of the supply's key set; read through `originMethodName`.
+  aliasMethodOriginsRef : Ref (OrdMap String),  -- #1386: the alias-qualified method spellings this module's imports bring into scope (`import m as A` ⇒ `A.mth`, `import m.{mth as loc}` ⇒ `loc`), each mapped to the ORIGIN method name.  A projection of the same candidate rows that supply `methodAliasEntriesRef`, UNFILTERED (the supply drops ambiguous and unresolvable keys; see `aliasMethodSpellings`), so this table is a superset of the supply's key set; read through `originMethodName`.
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
@@ -16072,9 +16072,10 @@ dispatchIdxScoped name byId = match methodIfaceHere name
 -- #1386: `import m as A` puts `A.mth` in scope as a second SPELLING of the method
 -- `mth`, and an occurrence written that way keeps it — `renameAliasedMethods` no
 -- longer rewrites it, because rewriting erased the distinction that makes the
--- occurrence decidable (see `aliasQualifiedMethodEntries`).  The rows above are
--- keyed by the method's OWN declared name, so the spelling has to be resolved back
--- to it before the row can match.  A bare occurrence is its own origin.
+-- occurrence decidable (see `aliasQualifiedMethodEntries`); `import m.{mth as loc}`
+-- puts `loc` in scope the same way.  The rows above are keyed by the method's OWN
+-- declared name, so the spelling has to be resolved back to it before the row can
+-- match.  Any other occurrence is its own origin.
 originMethodName : String -> String
 originMethodName name =
   optionOr name (omLookup name perRun.value.aliasMethodOriginsRef.value)
@@ -18705,12 +18706,59 @@ mangledHeadCandidatesGo head (key :: rest)
   | otherwise = mangledHeadCandidatesGo head rest
 
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
-resolveFieldByOwners te fname = match fieldOwnerNames fname
-  [] =>
-    let _ = pushUnknownField fname "<unknown>"
-    None
-  [r] => pairRecordByName r
-  r :: rest => resolveFieldAmbiguous te fname (r :: rest)
+resolveFieldByOwners te fname =
+  let owners = fieldOwnerNames fname
+  match ownerDeclOfReceiver te fname owners
+    Some pair => Some pair
+    None => match owners
+      [] =>
+        let _ = pushUnknownField fname "<unknown>"
+        None
+      [r] => pairRecordByName r
+      r :: rest => resolveFieldAmbiguous te fname (r :: rest)
+
+-- #1383: a concrete receiver's field is answered by the receiver's own
+-- declaration.  The floor `recordByNameRef` keeps one row per bare key, so when a
+-- named-field variant (`data Holder = | Plain { hx }`) shares its key with
+-- another module's record (`data Plain = { px }`), the floor can hold the other
+-- declaration and the ladder below would pick it by registration order.  The
+-- identity companion keeps every module's row under that key; the receiver's
+-- `(declaring module, type name)` picks among them.
+--
+-- The answer is `(k, ri)` with `ri` read from the companion row filed under `k`,
+-- so the stamp `stampedRecordHead k ri` names the selected declaration's own
+-- module: the emitters apply that declaration's layout.
+--
+-- Declines (answers `None`, so the ladder runs unchanged) when the receiver
+-- carries no identity, when no owner key or more than one owner key holds the
+-- receiver's declaration, or when a sibling constructor of the receiver's type
+-- withholds the field.  The sibling case is the multi-`ConNamed`-variant shape
+-- `narrowedPick` refuses: the receiver's type does not say which layout applies.
+ownerDeclOfReceiver : Mono ->
+  String ->
+  List String ->
+  Option (String, RecordInfo)
+ownerDeclOfReceiver _ _ [] = None
+ownerDeclOfReceiver te fname owners = match receiverTypeIdent te
+  None => None
+  Some ident => match ownerDeclMatches ident owners
+    [(k, ri)] =>
+      if narrowingBlockedByCtorSibling (headTyconMono te) fname k then
+        None
+      else
+        Some (k, ri)
+    _ => None
+
+-- Every owner key whose companion rows hold the declaration `ident` names, with
+-- that row's `RecordInfo`.
+ownerDeclMatches : Ident -> List String -> List (String, RecordInfo)
+ownerDeclMatches _ [] = []
+ownerDeclMatches ident (k :: rest) =
+  match omLookup k crossRun.value.universeRecordIdentsRef.value
+    None => ownerDeclMatches ident rest
+    Some cs => match recordCandForType ident cs
+      None => ownerDeclMatches ident rest
+      Some ri => (k, ri) :: ownerDeclMatches ident rest
 
 -- multiple owners: receiver still an unbound var ⇒ genuinely ambiguous; a
 -- concrete (non-record) receiver ⇒ narrow by the receiver's own declaration
@@ -29374,15 +29422,55 @@ aliasQualifiedMethodEntries prog tab =
 -- (the local `A.<method>` key, the bare method name, the aliased module id, that
 -- method's own declaration identity, the `import … as A` span the row came from).
 -- Gathering before inserting is what makes the answer independent of import order.
+-- A member alias (`import m.{mth as loc}`) contributes a row the same way, keyed `loc`.
 aliasMethodKeyCands : List Decl -> List (String, String, String, Ident, Loc)
-aliasMethodKeyCands [] = []
-aliasMethodKeyCands ((DAttrib _ d) :: rest) =
-  aliasMethodKeyCands [d] ++ aliasMethodKeyCands rest
-aliasMethodKeyCands ((DUse _ path loc) :: rest) = match path
-  UseAlias _ a =>
-    aliasMethodKeysFor a (usePathModuleId path) loc ++ aliasMethodKeyCands rest
-  _ => aliasMethodKeyCands rest
-aliasMethodKeyCands (_ :: rest) = aliasMethodKeyCands rest
+aliasMethodKeyCands prog =
+  useKeyCands moduleAliasKeys prog ++ memberAliasCands prog
+
+-- The member-alias rows of [prog], less any whose local name [prog] itself declares
+-- at top level: an own top-level value shadows an import of the same local name, so
+-- that occurrence is the module's declaration and the import supplies no spelling.
+memberAliasCands : List Decl -> List (String, String, String, Ident, Loc)
+memberAliasCands prog =
+  let own = namesToSet (declTopFnNames prog) omEmpty
+  filterList
+    (r => not (omHasKey (aliasRowKey r) own))
+    (useKeyCands memberAliasKeys prog)
+
+useKeyCands : (UsePath -> Loc -> List (String, String, String, Ident, Loc)) ->
+  List Decl ->
+  List (String, String, String, Ident, Loc)
+useKeyCands _ [] = []
+useKeyCands f ((DAttrib _ d) :: rest) = useKeyCands f [d] ++ useKeyCands f rest
+useKeyCands f ((DUse _ path loc) :: rest) = f path loc ++ useKeyCands f rest
+useKeyCands f (_ :: rest) = useKeyCands f rest
+
+moduleAliasKeys : UsePath -> Loc -> List (String, String, String, Ident, Loc)
+moduleAliasKeys (path@(UseAlias _ a)) loc =
+  aliasMethodKeysFor a (usePathModuleId path) loc
+moduleAliasKeys _ _ = []
+
+memberAliasKeys : UsePath -> Loc -> List (String, String, String, Ident, Loc)
+memberAliasKeys (path@(UseGroup _ ms)) loc =
+  flatMap (memberAliasMethodKeys (usePathModuleId path) loc) ms
+memberAliasKeys _ _ = []
+
+-- `import m.{mth as loc}`: the local `loc` is a spelling of `m`'s method `mth`, keyed
+-- under the local name.  It binds `loc` and nothing else, so a bare `mth` in the same
+-- module is answered by whatever else binds it (the prelude, another import).
+memberAliasMethodKeys : String ->
+  Loc ->
+  UseMember ->
+  List (String, String, String, Ident, Loc)
+memberAliasMethodKeys mid loc m = match useMemberAlias m
+  None => []
+  Some local => match omLookup mid (methodExportsIndex ())
+    None => []
+    Some rows =>
+      let origin = useMemberOrigin m
+      map
+        (r => (local, origin, mid, snd r, loc))
+        (filterList (r => fst r == origin) rows)
 
 -- every method the aliased module EXPORTS, under the local `A.<method>` spelling and
 -- carrying that method's own declaration identity, never a bare-name last-write-wins pick.
@@ -29734,8 +29822,8 @@ exportsIdentFor n ident ((en, ei) :: rest)
 -- the NAME, which is why a ride-along sibling cannot win here.
 --
 -- 🚨 IT MUST NOT RE-DECIDE AMBIGUITY.  Constructor-name ambiguity is provenance-based
--- (`ctorAmbiguousSet` → `keepAmbiguous` in `frontend/resolve.mdk`: ≥2 distinct DIRECTLY
--- IMPORTED modules), and that rule is deliberately ONE rule across the value / type /
+-- (`ctorAmbiguousSet` → `keepAmbiguous` in `frontend/resolve.mdk`: ≥2 distinct
+-- declarations in scope), and that rule is deliberately ONE rule across the value / type /
 -- interface / ctor namespaces — resolve's own note says a change there must change all
 -- four at once.  This is a different question on the same data: "which declaration does
 -- this module mean" is asked only where resolve has already ACCEPTED the program.  Two
@@ -47655,15 +47743,12 @@ aliasEntriesFor _ _ _ = []
 -- NOT a per-module binding (eval.mdk's globalCells / coalesceImpls).  So an alias of a
 -- method is not a new binding at all: it is a second SPELLING of the same method.
 --
--- MEMBER aliases (`import m.{area as computeArea}`) are resolved back to the origin
--- name here, once, before any marking / route-stamping / dict-arity machinery runs.
--- A member alias is an undotted local name, indistinguishable in every reader from a
--- standalone's, so the rewrite is what binds it at all.
---
--- MODULE aliases (`import m as A` … `A.area`) are NOT resolved here.  The dotted
--- spelling is what makes the occurrence decidable — erasing it makes `A.area` the same
--- name as an unrelated imported standalone `area`, and the standalone shadow wins
--- (#1386 Repro B).  Inference gets the spelling supplied to it
+-- No alias spelling is resolved here, module or member.  The alias spelling is what
+-- makes the occurrence decidable.  Erasing `A.area` makes it the same name as an
+-- unrelated imported standalone `area`, and the standalone shadow wins (#1386 Repro B);
+-- erasing a member alias `import m.{area as computeArea}` makes `computeArea` and a bare
+-- `area` one name, so the import's method captures an `area` that resolve bound to
+-- another declaration (#3708).  Inference gets the spelling supplied to it
 -- (`aliasQualifiedMethodEntries`, `moduleMarkCtx`, `originMethodName`) and
 -- `resolveAliasMethodSpellings` puts the occurrence back under its origin name once
 -- inference is done, so every stage after elaboration still sees an ordinary method
@@ -47675,17 +47760,10 @@ aliasEntriesFor _ _ _ = []
 -- The standalone `=>`-constrained functions are the opposite case — they ARE per-module
 -- bindings that keep their local name, which is why they needed the re-keying.
 --
--- Caveat, shared with the marker's own shadowRename: the rewrite is scope-blind, so a
--- LOCAL binder whose name equals a member-alias local would also be rewritten.  An alias
--- local is chosen by the importing file, so this is a self-inflicted collision.
--- The rewrite has TWO halves, and they must agree: rewriting only the references would
--- leave them bound to nothing.
---   (a) every reference to a member-aliased method → the origin method name
---   (b) the module's own `DUse` decls               → import that method under its ORIGIN name
--- (b) also runs for a module alias, where it is the whole of the work: the alias `DUse`
--- keeps its own non-method values and an `import m.{…m's methods…}` is appended beside
--- it, so the origin name is in scope for the occurrence `resolveAliasMethodSpellings`
--- resolves it to.
+-- What this pass does rewrite is a module alias's `DUse`: it keeps its own non-method
+-- values and an `import m.{…m's methods…}` is appended beside it, so the origin name is
+-- in scope for the occurrence `resolveAliasMethodSpellings` resolves it to.  A member
+-- alias's `DUse` is rewritten to its origin name by that same restore, after inference.
 renameAliasedMethods : List Decl ->
   List (String, List Decl) ->
   List (String, List Decl)
@@ -47704,10 +47782,9 @@ admittedIn : String -> List (String, String)
 admittedIn mid =
   optionOr [] (omLookup mid driverState.value.graphAdmittedMethodsRef.value)
 
--- The method names half (b) below admits WITHOUT a binding the resolver counted:
--- every method of an alias-imported module, and every member-aliased method
--- whose alias is dropped. `importSeed` reads this so such a row never makes a
--- bare name look supplied twice.
+-- The method names `deAliasMethodImports` admits WITHOUT a binding the resolver
+-- counted: every method of an alias-imported module.  `importSeed` reads this so
+-- such a row never makes a bare name look supplied twice.
 synthesizedAdmissions : List (String, List String) ->
   List Decl ->
   List (String, String)
@@ -47720,13 +47797,6 @@ synthesizedAdmissions mm ((DUse _ path _) :: rest) =
     None => []
     Some methods => match path
       UseAlias _ _ => map (n => (mid, n)) methods
-      UseGroup _ ms =>
-        flatMap
-          (m => match m
-            UseMember n _ _ (Some _) =>
-              if contains n methods then [(mid, n)] else []
-            _ => [])
-          ms
       _ => []
   here ++ synthesizedAdmissions mm rest
 synthesizedAdmissions mm (_ :: rest) = synthesizedAdmissions mm rest
@@ -47959,28 +48029,11 @@ selectIfaceRows path src = match importedBindings path
 -- axis that no ruling has been written for.  Pinned instead, so it self-drains:
 -- `test/shadow_fixtures/i22_importer_member_alias_not_nameable/`.
 --
--- 🚨 THE FIX SHAPE IS NOT KNOWN, AND THE OBVIOUS ONE IS INERT.  This note used to end *"the
--- fix shape when it is taken: key the VALUE arm on `snd` (the LOCAL spelling) while the TYPE
--- arm keeps `fst`"*.  It cannot move the run/build answer, and that is DERIVABLE from this
--- file without building anything — grep the two call sites and read the order:
---
---     grep -n 'renameAliasedMethods \|declEnvsRef :=' compiler/types/typecheck.mdk
---
--- `renameAliasedMethods` has exactly ONE call site: `driveGraphK`'s `GOutTrees` arm, which
--- selects it before calling `graphPreamble`, so it runs before the `declEnvsRef` write
--- that carries `meIfaceExports` and before the mark pass, and only on the tree selection.  It applies
--- `deAliasMethodImports`, whose whole job (b) is rewriting `import ifc.{size as sz}` into
--- `import ifc.{size}` — the alias is dropped because a method is global-by-name.  So by the
--- time `selectIfaceRows` runs on that path, `snd b == fst b` for every member and the two
--- keyings are literally the SAME EXPRESSION.  A reviewer implemented the one-token change,
--- rebuilt, and measured `i22/main.mdk` still at **7** — which is what the derivation
--- predicts.  (The `check` path does NOT de-alias, having no `renameAliasedMethods` call, so
--- re-keying WOULD move that arm alone.  That is a `check`≠`run` split, not a fix.)  A real
--- fix therefore spans at least those two functions and is a design question, because simply
--- not de-aliasing breaks aliased method CALLS outright, which is the whole reason
--- `deAliasMethodImports` exists.
--- A DOCUMENTED FIX SHAPE THAT IS INERT IS WORSE THAN NONE: the next person implements it,
--- sees nothing move, and concludes the defect is somewhere else.
+-- A member alias reaches this selector as written on every driver
+-- (`renameAliasedMethodsIn` rewrites only module aliases), so `fst b` and `snd b` differ
+-- for an aliased member here, and keying the value arm on `snd` is not a no-op by
+-- construction.  It would change what a standalone-bound spelling means, which no ruling
+-- covers yet.
 narrowRowToNamed : List String ->
   (String, List String) ->
   List (String, List String)
@@ -48090,36 +48143,22 @@ reexportCtorMember m src = filterList (r => rowBoundByMember m r) src
 rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
 rowBoundByMember m (cn, owner, _) = memberBindsCtorName cn owner m
 
+-- Only a MODULE alias is rewritten before inference (`deAliasMethodImports`).  A
+-- member alias reaches inference as written, so `import m.{mth as loc}` binds `loc`
+-- and not `mth`; `resolveAliasMethodSpellings` restores the origin name afterwards.
+-- The pass is a no-op on a module whose imports name no method.
 renameAliasedMethodsIn : List (String, List String) ->
   (String, List Decl) ->
   (String, List Decl)
--- Half (b) runs UNCONDITIONALLY.  It used to be gated on half (a) finding a rename,
--- which was sound only while a MODULE alias produced one: with the module-alias arm
--- of (a) gone, gating (b) on (a) would stop `import m as A` bringing `m`'s methods
--- into scope under their origin name at all — every verb would go SILENT on the
--- #1812 shape they all reject today, and an alias-qualified call would lose its
--- dispatch.  Pinned by
--- `test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk`.
--- The pass is a no-op on a module whose imports name no method, so running it always
--- costs a walk and changes nothing else.
 renameAliasedMethodsIn methodsPerMid (mid, prog) =
-  let prog2 = flatMap (deAliasMethodImports methodsPerMid) prog
-  match aliasMethodRenames methodsPerMid prog
-    [] => (mid, prog2)
-    renames => (mid, mapProg (renameMethodVar renames) prog2)
+  (mid, flatMap (deAliasMethodImports methodsPerMid) prog)
 
--- (b): make each import bind the METHODS it names under their ORIGIN name.
---   `import m.{area as computeArea}` → `import m.{area}`  (the alias is dropped: a method
---                                      is global-by-name, so the rename already points
---                                      every reference at `area`)
---   `import m as A`                  → keep it (its non-method values are still `A.f`)
---                                      and ADD `import m.{…m's methods…}`, the origin
---                                      name `resolveAliasMethodSpellings` resolves
---                                      `A.area` to once inference is done.
---   Both rewrites are recorded in `graphAdmittedMethodsRef` (`synthesizedAdmissions`),
---   because the resolver never saw them: it counted `sz`, or nothing, as bound.
---   The added import keeps the alias import's path and location, which is how the
---   method scope ladder tells it from a written one (`writtenImportsOf`).
+-- `import m as A` is kept (its non-method values are still `A.f`) and gains a sibling
+-- `import m.{…m's methods…}`, the origin name `resolveAliasMethodSpellings` resolves
+-- `A.area` to once inference is done.  The rewrite is recorded in
+-- `graphAdmittedMethodsRef` (`synthesizedAdmissions`), because the resolver never saw
+-- it.  The added import keeps the alias import's path and location, which is how the
+-- method scope ladder tells it from a written one (`writtenImportsOf`).
 deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodImports mm (DAttrib attrs d) =
   map (DAttrib attrs) (deAliasMethodImports mm d)
@@ -48127,44 +48166,46 @@ deAliasMethodImports mm (d@(DUse pub path loc)) =
   match lookupAssoc (usePathModuleId path) mm
     None => [d]
     Some methods => match path
-      UseGroup quals ms =>
-        [DUse pub (UseGroup quals (map (deAliasMethodMember methods) ms)) loc]
       UseAlias quals _ => match methodMembersOf methods loc
         [] => [d]
         mems => [d, DUse pub (UseGroup quals mems) loc]
       _ => [d]
 deAliasMethodImports _ d = [d]
 
-deAliasMethodMember : List String -> UseMember -> UseMember
-deAliasMethodMember methods (m@(UseMember n allCtors loc _))
-  | contains n methods = UseMember n allCtors loc None
-  | otherwise = m
-
 methodMembersOf : List String -> Loc -> List UseMember
 methodMembersOf methods loc = map (n => UseMember n False loc None) methods
 
-renameMethodVar : List (String, String) -> Expr -> Expr
-renameMethodVar renames (e@(EVar x)) = match lookupAssoc x renames
+-- [qualified] holds the `A.mth` spellings: nothing but the method can be spelled that
+-- way, so every occurrence moves.  [members] holds the member-alias locals no own
+-- top-level value takes (`memberAliasCands`), which a local binder can still spell;
+-- only a MARKED occurrence is the import's, since the marker leaves a locally-bound
+-- name unmarked (`rewriteArgScoped`).
+renameMethodVar : List (String, String) -> List (String, String) -> Expr -> Expr
+renameMethodVar qualified _ (e@(EVar x)) = match lookupAssoc x qualified
   Some origin => EVar origin
   None => e
-renameMethodVar renames (e@(EVarId x _)) = match lookupAssoc x renames
+renameMethodVar qualified _ (e@(EVarId x _)) = match lookupAssoc x qualified
   Some origin => EVar origin
   None => e
 -- A marked occurrence: `resolveAliasMethodSpellings` runs after inference, on a tree
 -- the schedule has already marked.  Only the NAME moves — the route cell carries the
--- dispatch decision inference reached under the alias-qualified spelling.
-renameMethodVar renames (e@(EMethodAt x sym ev)) = match lookupAssoc x renames
-  Some origin => EMethodAt origin sym ev
-  None => e
-renameMethodVar _ e = e
+-- dispatch decision inference reached under the alias spelling.
+renameMethodVar qualified members (e@(EMethodAt x sym ev)) =
+  match lookupAssoc x qualified
+    Some origin => EMethodAt origin sym ev
+    None => match lookupAssoc x members
+      Some origin => EMethodAt origin sym ev
+      None => e
+renameMethodVar _ _ e = e
 
 -- ── #1386: the alias-qualified spelling, resolved AFTER inference ───────────────
--- `A.mth` reaches inference spelled as it was written, because that spelling is what
--- makes the occurrence decidable: rewriting it to a bare `mth` up front makes it the
--- same name as an unrelated imported standalone `mth`, and the standalone shadow wins
--- (`aliasQualifiedMethodEntries`' header, #1386 Repro B).  Every reader inference needs
--- is supplied under that spelling — the obligation table, the mark sets, the dispatch
--- index — so the distinction survives exactly as long as it decides something.
+-- `A.mth`, and a member alias `loc` from `import m.{mth as loc}`, reach inference
+-- spelled as written, because that spelling is what makes the occurrence decidable:
+-- rewriting either to a bare `mth` up front merges it with whatever else a bare `mth`
+-- names in this module (`renameAliasedMethods`' header, #1386 Repro B, #3708).  Every
+-- reader inference needs is supplied under that spelling — the obligation table, the
+-- mark sets, the dispatch index — so the distinction survives exactly as long as it
+-- decides something.
 --
 -- It must not survive further.  Everything DOWNSTREAM of elaboration keys a method by
 -- its origin name and only its origin name: eval's coalesced method cells and its
@@ -48173,49 +48214,33 @@ renameMethodVar _ e = e
 -- emitter's method tables.  Resolving the spelling here leaves all of them the tree
 -- they get today, so the fix is a VERDICT change and nothing else.
 resolveAliasMethodSpellings : (String, List Decl) -> (String, List Decl)
-resolveAliasMethodSpellings (mid, prog) = match aliasMethodSpellings prog
-  [] => (mid, prog)
-  rows => (mid, mapProg (renameMethodVar rows) prog)
+resolveAliasMethodSpellings (mid, prog) =
+  let qualified = map aliasRowSpelling (useKeyCands moduleAliasKeys prog)
+  let members = map aliasRowSpelling (memberAliasCands prog)
+  match (qualified, members)
+    ([], []) => (mid, prog)
+    _ => (
+      mid,
+      mapProg
+        (renameMethodVar qualified members)
+        (map (deAliasMethodMembers members) prog),
+    )
 
--- (localName, originMethodName) for every import in [prog] whose ORIGIN is a method of
--- the module it comes from.  Only an alias yields an entry — an un-aliased import already
--- carries the origin name, which is why this gap stayed invisible for so long.
-aliasMethodRenames : List (String, List String) ->
-  List Decl ->
-  List (String, String)
-aliasMethodRenames methodsPerMid prog =
-  flatMap (aliasMethodRenamesOf methodsPerMid) prog
+-- `import m.{mth as loc}` → `import m.{mth}`, once every `loc` occurrence carries `mth`:
+-- downstream of elaboration a method is bound by its origin name only.  Only a
+-- `DUse` names import members, so every other decl passes through unchanged.
+deAliasMethodMembers : List (String, String) -> Decl -> Decl
+deAliasMethodMembers rows (DAttrib attrs d) =
+  DAttrib attrs (deAliasMethodMembers rows d)
+deAliasMethodMembers rows (DUse pub (UseGroup quals ms) loc) =
+  DUse pub (UseGroup quals (map (deAliasMethodMember rows) ms)) loc
+deAliasMethodMembers _ d = d
 
-aliasMethodRenamesOf : List (String, List String) ->
-  Decl ->
-  List (String, String)
-aliasMethodRenamesOf mm (DAttrib _ d) = aliasMethodRenamesOf mm d
-aliasMethodRenamesOf mm (DUse _ path _) =
-  match lookupAssoc (usePathModuleId path) mm
-    None => []
-    Some methods => aliasMethodRenamesOfPath methods path
-aliasMethodRenamesOf _ _ = []
-
-aliasMethodRenamesOfPath : List String -> UsePath -> List (String, String)
--- `import m.{area as computeArea}` → `computeArea` is method `area`.  A member alias
--- is an UNDOTTED local name, so it is not a spelling any shadow rule can tell apart
--- from a standalone's — the rewrite is what binds it at all.
---
--- #1386: `import m as A` used to be here too, mapping `A.area` → `area`.  It is gone:
--- the dotted spelling is what makes the occurrence decidable, and erasing it up front
--- let an unrelated imported standalone `area` capture the occurrence.  The spelling is
--- now supplied to the readers that need it and resolved after inference instead — see
--- `resolveAliasMethodSpellings`.
-aliasMethodRenamesOfPath methods (UseGroup _ ms) =
-  flatMap (memberMethodRename methods) ms
-aliasMethodRenamesOfPath _ _ = []
-
-memberMethodRename : List String -> UseMember -> List (String, String)
-memberMethodRename methods m = match useMemberAlias m
-  Some local =>
-    let origin = useMemberOrigin m
-    if contains origin methods then [(local, origin)] else []
-  None => []
+deAliasMethodMember : List (String, String) -> UseMember -> UseMember
+deAliasMethodMember rows (m@(UseMember n allCtors loc (Some local)))
+  | containsPair (local, n) rows = UseMember n allCtors loc None
+  | otherwise = m
+deAliasMethodMember _ m = m
 
 -- every interface/impl method name a decl list declares (interface methods with or
 -- without a default, plus impl method names).
@@ -48828,6 +48853,66 @@ importOverlayDecls wildHalf cur rows (DUse _ (p@(UseGroup _ ms)) _) =
 importOverlayDecls wildHalf cur rows (DUse _ (p@(UseWild _)) _) =
   if wildHalf then wildOverlayDecls cur rows (usePathModuleId p) else []
 importOverlayDecls _ _ _ _ = []
+
+-- The exhaustiveness oracle's import rows beyond `importedCtorTypeDeclsFirstWins`:
+-- every decl a module ALIAS import's module publishes, and the declarations of the
+-- constructors a wildcard or alias import reaches through that module's own
+-- `export import`.  The oracle reads constructors by bare name (resolve strips `A.`
+-- before inference), so without these rows a same-spelled constructor of a module
+-- loaded earlier answers for them (#1185).  They follow both halves of
+-- `importedCtorTypeDeclsFirstWins` because a bare occurrence means an unaliased
+-- import's constructor.  Kept out of `importOverlayDecls`, whose other reader is the
+-- `dataEnv` overlay.  A selective `import m.{…}` is already one of those rows, and no
+-- decl other than a `DUse` imports anything, so `oracleImportDeclsOf` adds nothing for
+-- either.
+oracleImportDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
+oracleImportDecls unitDecls cur rows =
+  flatMap (oracleImportDeclsOf cur rows) unitDecls
+
+oracleImportDeclsOf : Int -> List DeclEnvModule -> Decl -> List Decl
+oracleImportDeclsOf cur rows (DAttrib _ d) = oracleImportDeclsOf cur rows d
+oracleImportDeclsOf cur rows (DUse _ (p@(UseAlias _ _)) _) =
+  let dep = usePathModuleId p
+  wildOverlayDecls cur rows dep ++ reexportedCtorDecls cur rows dep
+oracleImportDeclsOf cur rows (DUse _ (p@(UseWild _)) _) =
+  reexportedCtorDecls cur rows (usePathModuleId p)
+oracleImportDeclsOf _ _ _ = []
+
+-- The decls declaring the constructors `dep` re-exports from other modules, found
+-- through the graph's constructor export index, whose rows carry each constructor's
+-- declaring identity across any chain of `export import`.  One decl per (declaring
+-- module, type), however many of its constructors are re-exported.
+reexportedCtorDecls : Int -> List DeclEnvModule -> String -> List Decl
+reexportedCtorDecls cur rows dep =
+  match omLookup dep driverState.value.graphCtorExportsRef.value
+    None => []
+    Some es =>
+      flatMap
+        (k => reexportedTypeDecl cur rows (fst k) (snd k))
+        (dedupBy (k => "\{fst k}.\{snd k}") (flatMap (reexportedOwner dep) es))
+
+-- (declaring module, owning type) of an export row declared outside `dep`.
+reexportedOwner : String -> (String, String, Ident) -> List (String, String)
+reexportedOwner dep (_, owner, Ident _ io _) =
+  identOriginFold [] (m => if m == dep then [] else [(m, owner)]) io
+
+reexportedTypeDecl : Int -> List DeclEnvModule -> String -> String -> List Decl
+reexportedTypeDecl _ [] _ _ = []
+reexportedTypeDecl cur (m :: rest) declarer tyName =
+  if m.demId == declarer then
+    filterList (declIsOwnedType declarer tyName) (declEnvRowVisible cur m)
+  else
+    reexportedTypeDecl cur rest declarer tyName
+
+-- Only a `data` or `newtype` declaration declares constructors, so no other decl owns
+-- a type whose constructors a re-export reaches.
+declIsOwnedType : String -> String -> Decl -> Bool
+declIsOwnedType mid tyName (DAttrib _ d) = declIsOwnedType mid tyName d
+declIsOwnedType mid tyName (DData { dataName = tn, dataOrigin = o }) =
+  tn == tyName && declOwnedBy mid tn o
+declIsOwnedType mid tyName (DNewtype { newtypeName = tn, newtypeOrigin = o }) =
+  tn == tyName && declOwnedBy mid tn o
+declIsOwnedType _ _ _ = False
 
 -- A wildcard import's overlay: EVERY decl the named module publishes, as the reader at
 -- ordinal `cur` may see it.  A wildcard names no member, so there is nothing to look up
@@ -50191,6 +50276,10 @@ checkModuleFullDiags mid seedVars accData accAll prog =
           prog
           (declEnvsOrdOf mid declEnvsHere)
           declEnvsHere.deModules
+        ++ oracleImportDecls
+          prog
+          (declEnvsOrdOf mid declEnvsHere)
+          declEnvsHere.deModules
         ++ accData)
   -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
   -- implDecls (was checkModuleFull, i.e. implDecls=[]) so buildStandaloneShadows sees
@@ -50882,11 +50971,10 @@ driveGraphK : GraphOut ->
 driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
   let stickyBefore = typeErrorsStickyDiags.value
   -- IMPORT ALIASING of an interface/impl METHOD — a method is global-by-name, so an
-  -- alias of one is a second SPELLING, not a second binding.  A MEMBER alias is
-  -- resolved to the origin name here, before any marking / stamping / dict-arity
-  -- machinery runs; a MODULE alias keeps its dotted spelling through inference and
-  -- is resolved at the end of the tree arm (`resolveAliasMethodSpellings`).  See
-  -- `renameAliasedMethods`.  BOTH selections rename: half (b) of that rewrite makes
+  -- alias of one is a second SPELLING, not a second binding.  A member alias and a
+  -- module alias both keep their spelling through inference and are resolved at the
+  -- end of the tree arm (`resolveAliasMethodSpellings`).  See
+  -- `renameAliasedMethods`.  BOTH selections rename: that rewrite makes
   -- `import m as A` bind `m`'s methods under their ORIGIN name as well, which decides
   -- WHICH declaration a bare occurrence of that name resolves to — a binding change,
   -- not a spelling one, so a selection that skips it typechecks a different program.
@@ -56442,7 +56530,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mangledHeadCandidatesGo" (PWild (PList)) (EListLit))
 (DFunDef false "mangledHeadCandidatesGo" ((PVar "head") (PCons (PVar "key") (PVar "rest"))) (EIf (EApp (EApp (EVar "endsWith") (EBinOp "++" (ELit (LString "__")) (EVar "head"))) (EVar "key")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))
+(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EBlock (DoLet false false (PVar "owners") (EApp (EVar "fieldOwnerNames") (EVar "fname"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ownerDeclOfReceiver") (EVar "te")) (EVar "fname")) (EVar "owners")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "owners") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))))))
+(DTypeSig false "ownerDeclOfReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
+(DFunDef false "ownerDeclOfReceiver" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "ownerDeclOfReceiver" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "owners")) (arm (PList (PTuple (PVar "k") (PVar "ri"))) () (EIf (EApp (EApp (EApp (EVar "narrowingBlockedByCtorSibling") (EApp (EVar "headTyconMono") (EVar "te"))) (EVar "fname")) (EVar "k")) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri"))))) (arm PWild () (EVar "None"))))))
+(DTypeSig false "ownerDeclMatches" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "ownerDeclMatches" (PWild (PList)) (EListLit))
+(DFunDef false "ownerDeclMatches" ((PVar "ident") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "k") (EVar "ri")) (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))))))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "fname")) (EVar "owners")))))
 (DTypeSig false "resolveFieldOwnersNarrowed" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
@@ -58424,10 +58518,22 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "aliasQualifiedMethodEntries" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))
 (DFunDef false "aliasQualifiedMethodEntries" ((PVar "prog") (PVar "tab")) (EBlock (DoLet false false (PVar "grouped") (EApp (EApp (EVar "aliasMethodKeyGroup") (EApp (EVar "aliasMethodKeyCands") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EVar "aliasMethodKeyApply") (EVar "grouped")) (EApp (EVar "omKeys") (EVar "grouped"))) (EVar "tab")))))
 (DTypeSig false "aliasMethodKeyCands" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))
-(DFunDef false "aliasMethodKeyCands" ((PList)) (EListLit))
-(DFunDef false "aliasMethodKeyCands" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasMethodKeyCands") (EListLit (EVar "d"))) (EApp (EVar "aliasMethodKeyCands") (EVar "rest"))))
-(DFunDef false "aliasMethodKeyCands" ((PCons (PCon "DUse" PWild (PVar "path") (PVar "loc")) (PVar "rest"))) (EMatch (EVar "path") (arm (PCon "UseAlias" PWild (PVar "a")) () (EBinOp "++" (EApp (EApp (EApp (EVar "aliasMethodKeysFor") (EVar "a")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "loc")) (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))) (arm PWild () (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))))
-(DFunDef false "aliasMethodKeyCands" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))
+(DFunDef false "aliasMethodKeyCands" ((PVar "prog")) (EBinOp "++" (EApp (EApp (EVar "useKeyCands") (EVar "moduleAliasKeys")) (EVar "prog")) (EApp (EVar "memberAliasCands") (EVar "prog"))))
+(DTypeSig false "memberAliasCands" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))
+(DFunDef false "memberAliasCands" ((PVar "prog")) (EBlock (DoLet false false (PVar "own") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "aliasRowKey") (EVar "r"))) (EVar "own"))))) (EApp (EApp (EVar "useKeyCands") (EVar "memberAliasKeys")) (EVar "prog"))))))
+(DTypeSig false "useKeyCands" (TyFun (TyFun (TyCon "UsePath") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))))
+(DFunDef false "useKeyCands" (PWild (PList)) (EListLit))
+(DFunDef false "useKeyCands" ((PVar "f") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "useKeyCands") (EVar "f")) (EListLit (EVar "d"))) (EApp (EApp (EVar "useKeyCands") (EVar "f")) (EVar "rest"))))
+(DFunDef false "useKeyCands" ((PVar "f") (PCons (PCon "DUse" PWild (PVar "path") (PVar "loc")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "f") (EVar "path")) (EVar "loc")) (EApp (EApp (EVar "useKeyCands") (EVar "f")) (EVar "rest"))))
+(DFunDef false "useKeyCands" ((PVar "f") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "useKeyCands") (EVar "f")) (EVar "rest")))
+(DTypeSig false "moduleAliasKeys" (TyFun (TyCon "UsePath") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))))
+(DFunDef false "moduleAliasKeys" ((PAs "path" (PCon "UseAlias" PWild (PVar "a"))) (PVar "loc")) (EApp (EApp (EApp (EVar "aliasMethodKeysFor") (EVar "a")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "loc")))
+(DFunDef false "moduleAliasKeys" (PWild PWild) (EListLit))
+(DTypeSig false "memberAliasKeys" (TyFun (TyCon "UsePath") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))))
+(DFunDef false "memberAliasKeys" ((PAs "path" (PCon "UseGroup" PWild (PVar "ms"))) (PVar "loc")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "memberAliasMethodKeys") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "loc"))) (EVar "ms")))
+(DFunDef false "memberAliasKeys" (PWild PWild) (EListLit))
+(DTypeSig false "memberAliasMethodKeys" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))))
+(DFunDef false "memberAliasMethodKeys" ((PVar "mid") (PVar "loc") (PVar "m")) (EMatch (EApp (EVar "useMemberAlias") (EVar "m")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "local")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EApp (EVar "methodExportsIndex") (ELit LUnit))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "rows")) () (EBlock (DoLet false false (PVar "origin") (EApp (EVar "useMemberOrigin") (EVar "m"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EVar "local") (EVar "origin") (EVar "mid") (EApp (EVar "snd") (EVar "r")) (EVar "loc")))) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "fst") (EVar "r")) (EVar "origin")))) (EVar "rows"))))))))))
 (DTypeSig false "aliasMethodKeysFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))))
 (DFunDef false "aliasMethodKeysFor" ((PVar "a") (PVar "mid") (PVar "loc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EApp (EVar "methodExportsIndex") (ELit LUnit))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EApp (EApp (EVar "aliasMethodKeyRows") (EVar "a")) (EVar "mid")) (EVar "loc")) (EVar "rows")))))
 (DTypeSig false "aliasMethodKeyRows" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))))))
@@ -61222,7 +61328,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "synthesizedAdmissions" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "synthesizedAdmissions" (PWild (PList)) (EListLit))
 (DFunDef false "synthesizedAdmissions" ((PVar "mm") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "synthesizedAdmissions") (EVar "mm")) (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "synthesizedAdmissions" ((PVar "mm") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "mm")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "methods")) () (EMatch (EVar "path") (arm (PCon "UseAlias" PWild PWild) () (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "mid") (EVar "n")))) (EVar "methods"))) (arm (PCon "UseGroup" PWild (PVar "ms")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "UseMember" (PVar "n") PWild PWild (PCon "Some" PWild)) () (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "methods")) (EListLit (ETuple (EVar "mid") (EVar "n"))) (EListLit))) (arm PWild () (EListLit))))) (EVar "ms"))) (arm PWild () (EListLit)))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "synthesizedAdmissions") (EVar "mm")) (EVar "rest"))))))
+(DFunDef false "synthesizedAdmissions" ((PVar "mm") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "mm")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "methods")) () (EMatch (EVar "path") (arm (PCon "UseAlias" PWild PWild) () (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "mid") (EVar "n")))) (EVar "methods"))) (arm PWild () (EListLit)))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "synthesizedAdmissions") (EVar "mm")) (EVar "rest"))))))
 (DFunDef false "synthesizedAdmissions" ((PVar "mm") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "synthesizedAdmissions") (EVar "mm")) (EVar "rest")))
 (DTypeSig false "methodsPerMidGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "methodsPerMidGo" (PWild (PList)) (EListLit))
@@ -61293,33 +61399,27 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "rowBoundByMember" (TyFun (TyCon "UseMember") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")) (TyCon "Bool"))))
 (DFunDef false "rowBoundByMember" ((PVar "m") (PTuple (PVar "cn") (PVar "owner") PWild)) (EApp (EApp (EApp (EVar "memberBindsCtorName") (EVar "cn")) (EVar "owner")) (EVar "m")))
 (DTypeSig false "renameAliasedMethodsIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "renameAliasedMethodsIn" ((PVar "methodsPerMid") (PTuple (PVar "mid") (PVar "prog"))) (EBlock (DoLet false false (PVar "prog2") (EApp (EApp (EVar "flatMap") (EApp (EVar "deAliasMethodImports") (EVar "methodsPerMid"))) (EVar "prog"))) (DoExpr (EMatch (EApp (EApp (EVar "aliasMethodRenames") (EVar "methodsPerMid")) (EVar "prog")) (arm (PList) () (ETuple (EVar "mid") (EVar "prog2"))) (arm (PVar "renames") () (ETuple (EVar "mid") (EApp (EApp (EVar "mapProg") (EApp (EVar "renameMethodVar") (EVar "renames"))) (EVar "prog2"))))))))
+(DFunDef false "renameAliasedMethodsIn" ((PVar "methodsPerMid") (PTuple (PVar "mid") (PVar "prog"))) (ETuple (EVar "mid") (EApp (EApp (EVar "flatMap") (EApp (EVar "deAliasMethodImports") (EVar "methodsPerMid"))) (EVar "prog"))))
 (DTypeSig false "deAliasMethodImports" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "deAliasMethodImports" ((PVar "mm") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "map") (EApp (EVar "DAttrib") (EVar "attrs"))) (EApp (EApp (EVar "deAliasMethodImports") (EVar "mm")) (EVar "d"))))
-(DFunDef false "deAliasMethodImports" ((PVar "mm") (PAs "d" (PCon "DUse" (PVar "pub") (PVar "path") (PVar "loc")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "mm")) (arm (PCon "None") () (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "methods")) () (EMatch (EVar "path") (arm (PCon "UseGroup" (PVar "quals") (PVar "ms")) () (EListLit (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EApp (EApp (EVar "map") (EApp (EVar "deAliasMethodMember") (EVar "methods"))) (EVar "ms")))) (EVar "loc")))) (arm (PCon "UseAlias" (PVar "quals") PWild) () (EMatch (EApp (EApp (EVar "methodMembersOf") (EVar "methods")) (EVar "loc")) (arm (PList) () (EListLit (EVar "d"))) (arm (PVar "mems") () (EListLit (EVar "d") (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EVar "mems"))) (EVar "loc")))))) (arm PWild () (EListLit (EVar "d")))))))
+(DFunDef false "deAliasMethodImports" ((PVar "mm") (PAs "d" (PCon "DUse" (PVar "pub") (PVar "path") (PVar "loc")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "mm")) (arm (PCon "None") () (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "methods")) () (EMatch (EVar "path") (arm (PCon "UseAlias" (PVar "quals") PWild) () (EMatch (EApp (EApp (EVar "methodMembersOf") (EVar "methods")) (EVar "loc")) (arm (PList) () (EListLit (EVar "d"))) (arm (PVar "mems") () (EListLit (EVar "d") (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EVar "mems"))) (EVar "loc")))))) (arm PWild () (EListLit (EVar "d")))))))
 (DFunDef false "deAliasMethodImports" (PWild (PVar "d")) (EListLit (EVar "d")))
-(DTypeSig false "deAliasMethodMember" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UseMember") (TyCon "UseMember"))))
-(DFunDef false "deAliasMethodMember" ((PVar "methods") (PAs "m" (PCon "UseMember" (PVar "n") (PVar "allCtors") (PVar "loc") PWild))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "methods")) (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "n")) (EVar "allCtors")) (EVar "loc")) (EVar "None")) (EIf (EVar "otherwise") (EVar "m") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "methodMembersOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyCon "UseMember")))))
 (DFunDef false "methodMembersOf" ((PVar "methods") (PVar "loc")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "n")) (EVar "False")) (EVar "loc")) (EVar "None")))) (EVar "methods")))
-(DTypeSig false "renameMethodVar" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "renameMethodVar" ((PVar "renames") (PAs "e" (PCon "EVar" (PVar "x")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "renames")) (arm (PCon "Some" (PVar "origin")) () (EApp (EVar "EVar") (EVar "origin"))) (arm (PCon "None") () (EVar "e"))))
-(DFunDef false "renameMethodVar" ((PVar "renames") (PAs "e" (PCon "EVarId" (PVar "x") PWild))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "renames")) (arm (PCon "Some" (PVar "origin")) () (EApp (EVar "EVar") (EVar "origin"))) (arm (PCon "None") () (EVar "e"))))
-(DFunDef false "renameMethodVar" ((PVar "renames") (PAs "e" (PCon "EMethodAt" (PVar "x") (PVar "sym") (PVar "ev")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "renames")) (arm (PCon "Some" (PVar "origin")) () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "origin")) (EVar "sym")) (EVar "ev"))) (arm (PCon "None") () (EVar "e"))))
-(DFunDef false "renameMethodVar" (PWild (PVar "e")) (EVar "e"))
+(DTypeSig false "renameMethodVar" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "renameMethodVar" ((PVar "qualified") PWild (PAs "e" (PCon "EVar" (PVar "x")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "qualified")) (arm (PCon "Some" (PVar "origin")) () (EApp (EVar "EVar") (EVar "origin"))) (arm (PCon "None") () (EVar "e"))))
+(DFunDef false "renameMethodVar" ((PVar "qualified") PWild (PAs "e" (PCon "EVarId" (PVar "x") PWild))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "qualified")) (arm (PCon "Some" (PVar "origin")) () (EApp (EVar "EVar") (EVar "origin"))) (arm (PCon "None") () (EVar "e"))))
+(DFunDef false "renameMethodVar" ((PVar "qualified") (PVar "members") (PAs "e" (PCon "EMethodAt" (PVar "x") (PVar "sym") (PVar "ev")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "qualified")) (arm (PCon "Some" (PVar "origin")) () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "origin")) (EVar "sym")) (EVar "ev"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "members")) (arm (PCon "Some" (PVar "origin")) () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "origin")) (EVar "sym")) (EVar "ev"))) (arm (PCon "None") () (EVar "e"))))))
+(DFunDef false "renameMethodVar" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "resolveAliasMethodSpellings" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "resolveAliasMethodSpellings" ((PTuple (PVar "mid") (PVar "prog"))) (EMatch (EApp (EVar "aliasMethodSpellings") (EVar "prog")) (arm (PList) () (ETuple (EVar "mid") (EVar "prog"))) (arm (PVar "rows") () (ETuple (EVar "mid") (EApp (EApp (EVar "mapProg") (EApp (EVar "renameMethodVar") (EVar "rows"))) (EVar "prog"))))))
-(DTypeSig false "aliasMethodRenames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "aliasMethodRenames" ((PVar "methodsPerMid") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EVar "aliasMethodRenamesOf") (EVar "methodsPerMid"))) (EVar "prog")))
-(DTypeSig false "aliasMethodRenamesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "aliasMethodRenamesOf" ((PVar "mm") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "aliasMethodRenamesOf") (EVar "mm")) (EVar "d")))
-(DFunDef false "aliasMethodRenamesOf" ((PVar "mm") (PCon "DUse" PWild (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "mm")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "methods")) () (EApp (EApp (EVar "aliasMethodRenamesOfPath") (EVar "methods")) (EVar "path")))))
-(DFunDef false "aliasMethodRenamesOf" (PWild PWild) (EListLit))
-(DTypeSig false "aliasMethodRenamesOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "aliasMethodRenamesOfPath" ((PVar "methods") (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "memberMethodRename") (EVar "methods"))) (EVar "ms")))
-(DFunDef false "aliasMethodRenamesOfPath" (PWild PWild) (EListLit))
-(DTypeSig false "memberMethodRename" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "memberMethodRename" ((PVar "methods") (PVar "m")) (EMatch (EApp (EVar "useMemberAlias") (EVar "m")) (arm (PCon "Some" (PVar "local")) () (EBlock (DoLet false false (PVar "origin") (EApp (EVar "useMemberOrigin") (EVar "m"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EVar "origin")) (EVar "methods")) (EListLit (ETuple (EVar "local") (EVar "origin"))) (EListLit))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "resolveAliasMethodSpellings" ((PTuple (PVar "mid") (PVar "prog"))) (EBlock (DoLet false false (PVar "qualified") (EApp (EApp (EVar "map") (EVar "aliasRowSpelling")) (EApp (EApp (EVar "useKeyCands") (EVar "moduleAliasKeys")) (EVar "prog")))) (DoLet false false (PVar "members") (EApp (EApp (EVar "map") (EVar "aliasRowSpelling")) (EApp (EVar "memberAliasCands") (EVar "prog")))) (DoExpr (EMatch (ETuple (EVar "qualified") (EVar "members")) (arm (PTuple (PList) (PList)) () (ETuple (EVar "mid") (EVar "prog"))) (arm PWild () (ETuple (EVar "mid") (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "renameMethodVar") (EVar "qualified")) (EVar "members"))) (EApp (EApp (EVar "map") (EApp (EVar "deAliasMethodMembers") (EVar "members"))) (EVar "prog")))))))))
+(DTypeSig false "deAliasMethodMembers" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "deAliasMethodMembers" ((PVar "rows") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "deAliasMethodMembers") (EVar "rows")) (EVar "d"))))
+(DFunDef false "deAliasMethodMembers" ((PVar "rows") (PCon "DUse" (PVar "pub") (PCon "UseGroup" (PVar "quals") (PVar "ms")) (PVar "loc"))) (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EApp (EApp (EVar "map") (EApp (EVar "deAliasMethodMember") (EVar "rows"))) (EVar "ms")))) (EVar "loc")))
+(DFunDef false "deAliasMethodMembers" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "deAliasMethodMember" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "UseMember") (TyCon "UseMember"))))
+(DFunDef false "deAliasMethodMember" ((PVar "rows") (PAs "m" (PCon "UseMember" (PVar "n") (PVar "allCtors") (PVar "loc") (PCon "Some" (PVar "local"))))) (EIf (EApp (EApp (EVar "containsPair") (ETuple (EVar "local") (EVar "n"))) (EVar "rows")) (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "n")) (EVar "allCtors")) (EVar "loc")) (EVar "None")) (EIf (EVar "otherwise") (EVar "m") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "deAliasMethodMember" (PWild (PVar "m")) (EVar "m"))
 (DTypeSig false "declMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declMethodNames" ((PVar "decls")) (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (EVar "declMethodNamesOf")) (EVar "decls"))))
 (DTypeSig false "declMethodNamesOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
@@ -61431,6 +61531,25 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "importOverlayDecls" ((PVar "wildHalf") (PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseGroup" PWild (PVar "ms"))) PWild)) (EIf (EVar "wildHalf") (EListLit) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "memberOverlayDecl") (EVar "cur")) (EVar "rows")) (EApp (EVar "usePathModuleId") (EVar "p")))) (EVar "ms"))))
 (DFunDef false "importOverlayDecls" ((PVar "wildHalf") (PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseWild" PWild)) PWild)) (EIf (EVar "wildHalf") (EApp (EApp (EApp (EVar "wildOverlayDecls") (EVar "cur")) (EVar "rows")) (EApp (EVar "usePathModuleId") (EVar "p"))) (EListLit)))
 (DFunDef false "importOverlayDecls" (PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "oracleImportDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "oracleImportDecls" ((PVar "unitDecls") (PVar "cur") (PVar "rows")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "oracleImportDeclsOf") (EVar "cur")) (EVar "rows"))) (EVar "unitDecls")))
+(DTypeSig false "oracleImportDeclsOf" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "oracleImportDeclsOf" ((PVar "cur") (PVar "rows") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "oracleImportDeclsOf") (EVar "cur")) (EVar "rows")) (EVar "d")))
+(DFunDef false "oracleImportDeclsOf" ((PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseAlias" PWild PWild)) PWild)) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "usePathModuleId") (EVar "p"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "wildOverlayDecls") (EVar "cur")) (EVar "rows")) (EVar "dep")) (EApp (EApp (EApp (EVar "reexportedCtorDecls") (EVar "cur")) (EVar "rows")) (EVar "dep"))))))
+(DFunDef false "oracleImportDeclsOf" ((PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseWild" PWild)) PWild)) (EApp (EApp (EApp (EVar "reexportedCtorDecls") (EVar "cur")) (EVar "rows")) (EApp (EVar "usePathModuleId") (EVar "p"))))
+(DFunDef false "oracleImportDeclsOf" (PWild PWild PWild) (EListLit))
+(DTypeSig false "reexportedCtorDecls" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "reexportedCtorDecls" ((PVar "cur") (PVar "rows") (PVar "dep")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "dep")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphCtorExportsRef") "value")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "es")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "k")) (EApp (EApp (EApp (EApp (EVar "reexportedTypeDecl") (EVar "cur")) (EVar "rows")) (EApp (EVar "fst") (EVar "k"))) (EApp (EVar "snd") (EVar "k"))))) (EApp (EApp (EVar "dedupBy") (ELam ((PVar "k")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "k")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "snd") (EVar "k")))) (ELit (LString ""))))) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedOwner") (EVar "dep"))) (EVar "es")))))))
+(DTypeSig false "reexportedOwner" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "reexportedOwner" ((PVar "dep") (PTuple PWild (PVar "owner") (PCon "Ident" PWild (PVar "io") PWild))) (EApp (EApp (EApp (EVar "identOriginFold") (EListLit)) (ELam ((PVar "m")) (EIf (EBinOp "==" (EVar "m") (EVar "dep")) (EListLit) (EListLit (ETuple (EVar "m") (EVar "owner")))))) (EVar "io")))
+(DTypeSig false "reexportedTypeDecl" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "reexportedTypeDecl" (PWild (PList) PWild PWild) (EListLit))
+(DFunDef false "reexportedTypeDecl" ((PVar "cur") (PCons (PVar "m") (PVar "rest")) (PVar "declarer") (PVar "tyName")) (EIf (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "declarer")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "declIsOwnedType") (EVar "declarer")) (EVar "tyName"))) (EApp (EApp (EVar "declEnvRowVisible") (EVar "cur")) (EVar "m"))) (EApp (EApp (EApp (EApp (EVar "reexportedTypeDecl") (EVar "cur")) (EVar "rest")) (EVar "declarer")) (EVar "tyName"))))
+(DTypeSig false "declIsOwnedType" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool")))))
+(DFunDef false "declIsOwnedType" ((PVar "mid") (PVar "tyName") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "declIsOwnedType") (EVar "mid")) (EVar "tyName")) (EVar "d")))
+(DFunDef false "declIsOwnedType" ((PVar "mid") (PVar "tyName") (PRec "DData" ((rf "dataName" (PVar "tn")) (rf "dataOrigin" (PVar "o"))) false)) (EBinOp "&&" (EBinOp "==" (EVar "tn") (EVar "tyName")) (EApp (EApp (EApp (EVar "declOwnedBy") (EVar "mid")) (EVar "tn")) (EVar "o"))))
+(DFunDef false "declIsOwnedType" ((PVar "mid") (PVar "tyName") (PRec "DNewtype" ((rf "newtypeName" (PVar "tn")) (rf "newtypeOrigin" (PVar "o"))) false)) (EBinOp "&&" (EBinOp "==" (EVar "tn") (EVar "tyName")) (EApp (EApp (EApp (EVar "declOwnedBy") (EVar "mid")) (EVar "tn")) (EVar "o"))))
+(DFunDef false "declIsOwnedType" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "wildOverlayDecls" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "wildOverlayDecls" (PWild (PList) PWild) (EListLit))
 (DFunDef false "wildOverlayDecls" ((PVar "cur") (PCons (PVar "m") (PVar "rest")) (PVar "mid")) (EIf (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "mid")) (EApp (EApp (EVar "declEnvRowVisible") (EVar "cur")) (EVar "m")) (EApp (EApp (EApp (EVar "wildOverlayDecls") (EVar "cur")) (EVar "rest")) (EVar "mid"))))
@@ -61563,7 +61682,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "checkModulesK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "checkModulesK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EFieldAccess (EVar "coreSchemes") "mbSchemes"))) (EApp (EApp (EVar "tagModuleExports") (EFieldAccess (EVar "coreSchemes") "mbStandaloneSchemes")) (EFieldAccess (EVar "coreSchemes") "mbSchemes"))) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
 (DTypeSig false "checkModuleFullDiags" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
-(DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere")) (EVar "True"))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
+(DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EApp (EApp (EApp (EVar "oracleImportDecls") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere")) (EVar "True"))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeAlias true "ModDiags" () (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
 (DTypeSig false "graphModuleWorker" (TyFun (TyCon "GraphOut") (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))))
 (DFunDef false "graphModuleWorker" ((PVar "sel") (PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "implDecls") (EBinOp "++" (EVar "accAll") (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "implDecls"))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "implDecls")) (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EFieldAccess (EVar "schemes") "mbSchemes")) (arm (PCon "Some" (PVar "sc")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EApp (EVar "Some") (EVar "sc")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef")) (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value"))))) (DoExpr (ELit LUnit)))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "marked") (EFieldAccess (EVar "schemes") "mbSchemes") (EVar "errs") (EVar "warns"))))))
@@ -65126,7 +65245,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mangledHeadCandidatesGo" (PWild (PList)) (EListLit))
 (DFunDef false "mangledHeadCandidatesGo" ((PVar "head") (PCons (PVar "key") (PVar "rest"))) (EIf (EApp (EApp (EVar "endsWith") (EBinOp "++" (ELit (LString "__")) (EVar "head"))) (EVar "key")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))
+(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EBlock (DoLet false false (PVar "owners") (EApp (EVar "fieldOwnerNames") (EVar "fname"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ownerDeclOfReceiver") (EVar "te")) (EVar "fname")) (EVar "owners")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "owners") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))))))
+(DTypeSig false "ownerDeclOfReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
+(DFunDef false "ownerDeclOfReceiver" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "ownerDeclOfReceiver" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "owners")) (arm (PList (PTuple (PVar "k") (PVar "ri"))) () (EIf (EApp (EApp (EApp (EVar "narrowingBlockedByCtorSibling") (EApp (EVar "headTyconMono") (EVar "te"))) (EVar "fname")) (EVar "k")) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri"))))) (arm PWild () (EVar "None"))))))
+(DTypeSig false "ownerDeclMatches" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "ownerDeclMatches" (PWild (PList)) (EListLit))
+(DFunDef false "ownerDeclMatches" ((PVar "ident") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "k") (EVar "ri")) (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))))))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "fname")) (EVar "owners")))))
 (DTypeSig false "resolveFieldOwnersNarrowed" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
@@ -67108,10 +67233,22 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "aliasQualifiedMethodEntries" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))
 (DFunDef false "aliasQualifiedMethodEntries" ((PVar "prog") (PVar "tab")) (EBlock (DoLet false false (PVar "grouped") (EApp (EApp (EVar "aliasMethodKeyGroup") (EApp (EVar "aliasMethodKeyCands") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EVar "aliasMethodKeyApply") (EVar "grouped")) (EApp (EVar "omKeys") (EVar "grouped"))) (EVar "tab")))))
 (DTypeSig false "aliasMethodKeyCands" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))
-(DFunDef false "aliasMethodKeyCands" ((PList)) (EListLit))
-(DFunDef false "aliasMethodKeyCands" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasMethodKeyCands") (EListLit (EVar "d"))) (EApp (EVar "aliasMethodKeyCands") (EVar "rest"))))
-(DFunDef false "aliasMethodKeyCands" ((PCons (PCon "DUse" PWild (PVar "path") (PVar "loc")) (PVar "rest"))) (EMatch (EVar "path") (arm (PCon "UseAlias" PWild (PVar "a")) () (EBinOp "++" (EApp (EApp (EApp (EVar "aliasMethodKeysFor") (EVar "a")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "loc")) (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))) (arm PWild () (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))))
-(DFunDef false "aliasMethodKeyCands" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))
+(DFunDef false "aliasMethodKeyCands" ((PVar "prog")) (EBinOp "++" (EApp (EApp (EVar "useKeyCands") (EVar "moduleAliasKeys")) (EVar "prog")) (EApp (EVar "memberAliasCands") (EVar "prog"))))
+(DTypeSig false "memberAliasCands" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))
+(DFunDef false "memberAliasCands" ((PVar "prog")) (EBlock (DoLet false false (PVar "own") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "aliasRowKey") (EVar "r"))) (EVar "own"))))) (EApp (EApp (EVar "useKeyCands") (EVar "memberAliasKeys")) (EVar "prog"))))))
+(DTypeSig false "useKeyCands" (TyFun (TyFun (TyCon "UsePath") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))))
+(DFunDef false "useKeyCands" (PWild (PList)) (EListLit))
+(DFunDef false "useKeyCands" ((PVar "f") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "useKeyCands") (EVar "f")) (EListLit (EVar "d"))) (EApp (EApp (EVar "useKeyCands") (EVar "f")) (EVar "rest"))))
+(DFunDef false "useKeyCands" ((PVar "f") (PCons (PCon "DUse" PWild (PVar "path") (PVar "loc")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "f") (EVar "path")) (EVar "loc")) (EApp (EApp (EVar "useKeyCands") (EVar "f")) (EVar "rest"))))
+(DFunDef false "useKeyCands" ((PVar "f") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "useKeyCands") (EVar "f")) (EVar "rest")))
+(DTypeSig false "moduleAliasKeys" (TyFun (TyCon "UsePath") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))))
+(DFunDef false "moduleAliasKeys" ((PAs "path" (PCon "UseAlias" PWild (PVar "a"))) (PVar "loc")) (EApp (EApp (EApp (EVar "aliasMethodKeysFor") (EVar "a")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "loc")))
+(DFunDef false "moduleAliasKeys" (PWild PWild) (EListLit))
+(DTypeSig false "memberAliasKeys" (TyFun (TyCon "UsePath") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))))
+(DFunDef false "memberAliasKeys" ((PAs "path" (PCon "UseGroup" PWild (PVar "ms"))) (PVar "loc")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "memberAliasMethodKeys") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "loc"))) (EVar "ms")))
+(DFunDef false "memberAliasKeys" (PWild PWild) (EListLit))
+(DTypeSig false "memberAliasMethodKeys" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))))
+(DFunDef false "memberAliasMethodKeys" ((PVar "mid") (PVar "loc") (PVar "m")) (EMatch (EApp (EVar "useMemberAlias") (EVar "m")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "local")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EApp (EVar "methodExportsIndex") (ELit LUnit))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "rows")) () (EBlock (DoLet false false (PVar "origin") (EApp (EVar "useMemberOrigin") (EVar "m"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EVar "local") (EVar "origin") (EVar "mid") (EApp (EVar "snd") (EVar "r")) (EVar "loc")))) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "fst") (EVar "r")) (EVar "origin")))) (EVar "rows"))))))))))
 (DTypeSig false "aliasMethodKeysFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))))
 (DFunDef false "aliasMethodKeysFor" ((PVar "a") (PVar "mid") (PVar "loc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EApp (EVar "methodExportsIndex") (ELit LUnit))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EApp (EApp (EVar "aliasMethodKeyRows") (EVar "a")) (EVar "mid")) (EVar "loc")) (EVar "rows")))))
 (DTypeSig false "aliasMethodKeyRows" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))))))
@@ -69906,7 +70043,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "synthesizedAdmissions" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "synthesizedAdmissions" (PWild (PList)) (EListLit))
 (DFunDef false "synthesizedAdmissions" ((PVar "mm") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "synthesizedAdmissions") (EVar "mm")) (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "synthesizedAdmissions" ((PVar "mm") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "mm")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "methods")) () (EMatch (EVar "path") (arm (PCon "UseAlias" PWild PWild) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "mid") (EVar "n")))) (EVar "methods"))) (arm (PCon "UseGroup" PWild (PVar "ms")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "UseMember" (PVar "n") PWild PWild (PCon "Some" PWild)) () (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "methods")) (EListLit (ETuple (EVar "mid") (EVar "n"))) (EListLit))) (arm PWild () (EListLit))))) (EVar "ms"))) (arm PWild () (EListLit)))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "synthesizedAdmissions") (EVar "mm")) (EVar "rest"))))))
+(DFunDef false "synthesizedAdmissions" ((PVar "mm") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "mm")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "methods")) () (EMatch (EVar "path") (arm (PCon "UseAlias" PWild PWild) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "mid") (EVar "n")))) (EVar "methods"))) (arm PWild () (EListLit)))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "synthesizedAdmissions") (EVar "mm")) (EVar "rest"))))))
 (DFunDef false "synthesizedAdmissions" ((PVar "mm") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "synthesizedAdmissions") (EVar "mm")) (EVar "rest")))
 (DTypeSig false "methodsPerMidGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "methodsPerMidGo" (PWild (PList)) (EListLit))
@@ -69977,33 +70114,27 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "rowBoundByMember" (TyFun (TyCon "UseMember") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")) (TyCon "Bool"))))
 (DFunDef false "rowBoundByMember" ((PVar "m") (PTuple (PVar "cn") (PVar "owner") PWild)) (EApp (EApp (EApp (EVar "memberBindsCtorName") (EVar "cn")) (EVar "owner")) (EVar "m")))
 (DTypeSig false "renameAliasedMethodsIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "renameAliasedMethodsIn" ((PVar "methodsPerMid") (PTuple (PVar "mid") (PVar "prog"))) (EBlock (DoLet false false (PVar "prog2") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "deAliasMethodImports") (EVar "methodsPerMid"))) (EVar "prog"))) (DoExpr (EMatch (EApp (EApp (EVar "aliasMethodRenames") (EVar "methodsPerMid")) (EVar "prog")) (arm (PList) () (ETuple (EVar "mid") (EVar "prog2"))) (arm (PVar "renames") () (ETuple (EVar "mid") (EApp (EApp (EVar "mapProg") (EApp (EVar "renameMethodVar") (EVar "renames"))) (EVar "prog2"))))))))
+(DFunDef false "renameAliasedMethodsIn" ((PVar "methodsPerMid") (PTuple (PVar "mid") (PVar "prog"))) (ETuple (EVar "mid") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "deAliasMethodImports") (EVar "methodsPerMid"))) (EVar "prog"))))
 (DTypeSig false "deAliasMethodImports" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "deAliasMethodImports" ((PVar "mm") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "DAttrib") (EVar "attrs"))) (EApp (EApp (EVar "deAliasMethodImports") (EVar "mm")) (EVar "d"))))
-(DFunDef false "deAliasMethodImports" ((PVar "mm") (PAs "d" (PCon "DUse" (PVar "pub") (PVar "path") (PVar "loc")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "mm")) (arm (PCon "None") () (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "methods")) () (EMatch (EVar "path") (arm (PCon "UseGroup" (PVar "quals") (PVar "ms")) () (EListLit (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EApp (EApp (EMethodRef "map") (EApp (EVar "deAliasMethodMember") (EVar "methods"))) (EVar "ms")))) (EVar "loc")))) (arm (PCon "UseAlias" (PVar "quals") PWild) () (EMatch (EApp (EApp (EVar "methodMembersOf") (EVar "methods")) (EVar "loc")) (arm (PList) () (EListLit (EVar "d"))) (arm (PVar "mems") () (EListLit (EVar "d") (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EVar "mems"))) (EVar "loc")))))) (arm PWild () (EListLit (EVar "d")))))))
+(DFunDef false "deAliasMethodImports" ((PVar "mm") (PAs "d" (PCon "DUse" (PVar "pub") (PVar "path") (PVar "loc")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "mm")) (arm (PCon "None") () (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "methods")) () (EMatch (EVar "path") (arm (PCon "UseAlias" (PVar "quals") PWild) () (EMatch (EApp (EApp (EVar "methodMembersOf") (EVar "methods")) (EVar "loc")) (arm (PList) () (EListLit (EVar "d"))) (arm (PVar "mems") () (EListLit (EVar "d") (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EVar "mems"))) (EVar "loc")))))) (arm PWild () (EListLit (EVar "d")))))))
 (DFunDef false "deAliasMethodImports" (PWild (PVar "d")) (EListLit (EVar "d")))
-(DTypeSig false "deAliasMethodMember" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UseMember") (TyCon "UseMember"))))
-(DFunDef false "deAliasMethodMember" ((PVar "methods") (PAs "m" (PCon "UseMember" (PVar "n") (PVar "allCtors") (PVar "loc") PWild))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "methods")) (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "n")) (EVar "allCtors")) (EVar "loc")) (EVar "None")) (EIf (EVar "otherwise") (EVar "m") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "methodMembersOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyCon "UseMember")))))
 (DFunDef false "methodMembersOf" ((PVar "methods") (PVar "loc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "n")) (EVar "False")) (EVar "loc")) (EVar "None")))) (EVar "methods")))
-(DTypeSig false "renameMethodVar" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "renameMethodVar" ((PVar "renames") (PAs "e" (PCon "EVar" (PVar "x")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "renames")) (arm (PCon "Some" (PVar "origin")) () (EApp (EVar "EVar") (EVar "origin"))) (arm (PCon "None") () (EVar "e"))))
-(DFunDef false "renameMethodVar" ((PVar "renames") (PAs "e" (PCon "EVarId" (PVar "x") PWild))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "renames")) (arm (PCon "Some" (PVar "origin")) () (EApp (EVar "EVar") (EVar "origin"))) (arm (PCon "None") () (EVar "e"))))
-(DFunDef false "renameMethodVar" ((PVar "renames") (PAs "e" (PCon "EMethodAt" (PVar "x") (PVar "sym") (PVar "ev")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "renames")) (arm (PCon "Some" (PVar "origin")) () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "origin")) (EVar "sym")) (EVar "ev"))) (arm (PCon "None") () (EVar "e"))))
-(DFunDef false "renameMethodVar" (PWild (PVar "e")) (EVar "e"))
+(DTypeSig false "renameMethodVar" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "renameMethodVar" ((PVar "qualified") PWild (PAs "e" (PCon "EVar" (PVar "x")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "qualified")) (arm (PCon "Some" (PVar "origin")) () (EApp (EVar "EVar") (EVar "origin"))) (arm (PCon "None") () (EVar "e"))))
+(DFunDef false "renameMethodVar" ((PVar "qualified") PWild (PAs "e" (PCon "EVarId" (PVar "x") PWild))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "qualified")) (arm (PCon "Some" (PVar "origin")) () (EApp (EVar "EVar") (EVar "origin"))) (arm (PCon "None") () (EVar "e"))))
+(DFunDef false "renameMethodVar" ((PVar "qualified") (PVar "members") (PAs "e" (PCon "EMethodAt" (PVar "x") (PVar "sym") (PVar "ev")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "qualified")) (arm (PCon "Some" (PVar "origin")) () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "origin")) (EVar "sym")) (EVar "ev"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "members")) (arm (PCon "Some" (PVar "origin")) () (EApp (EApp (EApp (EVar "EMethodAt") (EVar "origin")) (EVar "sym")) (EVar "ev"))) (arm (PCon "None") () (EVar "e"))))))
+(DFunDef false "renameMethodVar" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "resolveAliasMethodSpellings" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "resolveAliasMethodSpellings" ((PTuple (PVar "mid") (PVar "prog"))) (EMatch (EApp (EVar "aliasMethodSpellings") (EVar "prog")) (arm (PList) () (ETuple (EVar "mid") (EVar "prog"))) (arm (PVar "rows") () (ETuple (EVar "mid") (EApp (EApp (EVar "mapProg") (EApp (EVar "renameMethodVar") (EVar "rows"))) (EVar "prog"))))))
-(DTypeSig false "aliasMethodRenames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "aliasMethodRenames" ((PVar "methodsPerMid") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "aliasMethodRenamesOf") (EVar "methodsPerMid"))) (EVar "prog")))
-(DTypeSig false "aliasMethodRenamesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "aliasMethodRenamesOf" ((PVar "mm") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "aliasMethodRenamesOf") (EVar "mm")) (EVar "d")))
-(DFunDef false "aliasMethodRenamesOf" ((PVar "mm") (PCon "DUse" PWild (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "mm")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "methods")) () (EApp (EApp (EVar "aliasMethodRenamesOfPath") (EVar "methods")) (EVar "path")))))
-(DFunDef false "aliasMethodRenamesOf" (PWild PWild) (EListLit))
-(DTypeSig false "aliasMethodRenamesOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "aliasMethodRenamesOfPath" ((PVar "methods") (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "memberMethodRename") (EVar "methods"))) (EVar "ms")))
-(DFunDef false "aliasMethodRenamesOfPath" (PWild PWild) (EListLit))
-(DTypeSig false "memberMethodRename" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "memberMethodRename" ((PVar "methods") (PVar "m")) (EMatch (EApp (EVar "useMemberAlias") (EVar "m")) (arm (PCon "Some" (PVar "local")) () (EBlock (DoLet false false (PVar "origin") (EApp (EVar "useMemberOrigin") (EVar "m"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EVar "origin")) (EVar "methods")) (EListLit (ETuple (EVar "local") (EVar "origin"))) (EListLit))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "resolveAliasMethodSpellings" ((PTuple (PVar "mid") (PVar "prog"))) (EBlock (DoLet false false (PVar "qualified") (EApp (EApp (EMethodRef "map") (EVar "aliasRowSpelling")) (EApp (EApp (EVar "useKeyCands") (EVar "moduleAliasKeys")) (EVar "prog")))) (DoLet false false (PVar "members") (EApp (EApp (EMethodRef "map") (EVar "aliasRowSpelling")) (EApp (EVar "memberAliasCands") (EVar "prog")))) (DoExpr (EMatch (ETuple (EVar "qualified") (EVar "members")) (arm (PTuple (PList) (PList)) () (ETuple (EVar "mid") (EVar "prog"))) (arm PWild () (ETuple (EVar "mid") (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "renameMethodVar") (EVar "qualified")) (EVar "members"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "deAliasMethodMembers") (EVar "members"))) (EVar "prog")))))))))
+(DTypeSig false "deAliasMethodMembers" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "deAliasMethodMembers" ((PVar "rows") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "deAliasMethodMembers") (EVar "rows")) (EVar "d"))))
+(DFunDef false "deAliasMethodMembers" ((PVar "rows") (PCon "DUse" (PVar "pub") (PCon "UseGroup" (PVar "quals") (PVar "ms")) (PVar "loc"))) (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EApp (EApp (EMethodRef "map") (EApp (EVar "deAliasMethodMember") (EVar "rows"))) (EVar "ms")))) (EVar "loc")))
+(DFunDef false "deAliasMethodMembers" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "deAliasMethodMember" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "UseMember") (TyCon "UseMember"))))
+(DFunDef false "deAliasMethodMember" ((PVar "rows") (PAs "m" (PCon "UseMember" (PVar "n") (PVar "allCtors") (PVar "loc") (PCon "Some" (PVar "local"))))) (EIf (EApp (EApp (EVar "containsPair") (ETuple (EVar "local") (EVar "n"))) (EVar "rows")) (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "n")) (EVar "allCtors")) (EVar "loc")) (EVar "None")) (EIf (EVar "otherwise") (EVar "m") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "deAliasMethodMember" (PWild (PVar "m")) (EVar "m"))
 (DTypeSig false "declMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declMethodNames" ((PVar "decls")) (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (EVar "declMethodNamesOf")) (EVar "decls"))))
 (DTypeSig false "declMethodNamesOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
@@ -70115,6 +70246,25 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "importOverlayDecls" ((PVar "wildHalf") (PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseGroup" PWild (PVar "ms"))) PWild)) (EIf (EVar "wildHalf") (EListLit) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "memberOverlayDecl") (EVar "cur")) (EVar "rows")) (EApp (EVar "usePathModuleId") (EVar "p")))) (EVar "ms"))))
 (DFunDef false "importOverlayDecls" ((PVar "wildHalf") (PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseWild" PWild)) PWild)) (EIf (EVar "wildHalf") (EApp (EApp (EApp (EVar "wildOverlayDecls") (EVar "cur")) (EVar "rows")) (EApp (EVar "usePathModuleId") (EVar "p"))) (EListLit)))
 (DFunDef false "importOverlayDecls" (PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "oracleImportDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "oracleImportDecls" ((PVar "unitDecls") (PVar "cur") (PVar "rows")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "oracleImportDeclsOf") (EVar "cur")) (EVar "rows"))) (EVar "unitDecls")))
+(DTypeSig false "oracleImportDeclsOf" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "oracleImportDeclsOf" ((PVar "cur") (PVar "rows") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "oracleImportDeclsOf") (EVar "cur")) (EVar "rows")) (EVar "d")))
+(DFunDef false "oracleImportDeclsOf" ((PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseAlias" PWild PWild)) PWild)) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "usePathModuleId") (EVar "p"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "wildOverlayDecls") (EVar "cur")) (EVar "rows")) (EVar "dep")) (EApp (EApp (EApp (EVar "reexportedCtorDecls") (EVar "cur")) (EVar "rows")) (EVar "dep"))))))
+(DFunDef false "oracleImportDeclsOf" ((PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseWild" PWild)) PWild)) (EApp (EApp (EApp (EVar "reexportedCtorDecls") (EVar "cur")) (EVar "rows")) (EApp (EVar "usePathModuleId") (EVar "p"))))
+(DFunDef false "oracleImportDeclsOf" (PWild PWild PWild) (EListLit))
+(DTypeSig false "reexportedCtorDecls" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "reexportedCtorDecls" ((PVar "cur") (PVar "rows") (PVar "dep")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "dep")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphCtorExportsRef") "value")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "es")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "k")) (EApp (EApp (EApp (EApp (EVar "reexportedTypeDecl") (EVar "cur")) (EVar "rows")) (EApp (EVar "fst") (EVar "k"))) (EApp (EVar "snd") (EVar "k"))))) (EApp (EApp (EVar "dedupBy") (ELam ((PVar "k")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "k")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "snd") (EVar "k")))) (ELit (LString ""))))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedOwner") (EVar "dep"))) (EVar "es")))))))
+(DTypeSig false "reexportedOwner" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "reexportedOwner" ((PVar "dep") (PTuple PWild (PVar "owner") (PCon "Ident" PWild (PVar "io") PWild))) (EApp (EApp (EApp (EVar "identOriginFold") (EListLit)) (ELam ((PVar "m")) (EIf (EBinOp "==" (EVar "m") (EVar "dep")) (EListLit) (EListLit (ETuple (EVar "m") (EVar "owner")))))) (EVar "io")))
+(DTypeSig false "reexportedTypeDecl" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "reexportedTypeDecl" (PWild (PList) PWild PWild) (EListLit))
+(DFunDef false "reexportedTypeDecl" ((PVar "cur") (PCons (PVar "m") (PVar "rest")) (PVar "declarer") (PVar "tyName")) (EIf (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "declarer")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "declIsOwnedType") (EVar "declarer")) (EVar "tyName"))) (EApp (EApp (EVar "declEnvRowVisible") (EVar "cur")) (EVar "m"))) (EApp (EApp (EApp (EApp (EVar "reexportedTypeDecl") (EVar "cur")) (EVar "rest")) (EVar "declarer")) (EVar "tyName"))))
+(DTypeSig false "declIsOwnedType" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool")))))
+(DFunDef false "declIsOwnedType" ((PVar "mid") (PVar "tyName") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "declIsOwnedType") (EVar "mid")) (EVar "tyName")) (EVar "d")))
+(DFunDef false "declIsOwnedType" ((PVar "mid") (PVar "tyName") (PRec "DData" ((rf "dataName" (PVar "tn")) (rf "dataOrigin" (PVar "o"))) false)) (EBinOp "&&" (EBinOp "==" (EVar "tn") (EVar "tyName")) (EApp (EApp (EApp (EVar "declOwnedBy") (EVar "mid")) (EVar "tn")) (EVar "o"))))
+(DFunDef false "declIsOwnedType" ((PVar "mid") (PVar "tyName") (PRec "DNewtype" ((rf "newtypeName" (PVar "tn")) (rf "newtypeOrigin" (PVar "o"))) false)) (EBinOp "&&" (EBinOp "==" (EVar "tn") (EVar "tyName")) (EApp (EApp (EApp (EVar "declOwnedBy") (EVar "mid")) (EVar "tn")) (EVar "o"))))
+(DFunDef false "declIsOwnedType" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "wildOverlayDecls" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "wildOverlayDecls" (PWild (PList) PWild) (EListLit))
 (DFunDef false "wildOverlayDecls" ((PVar "cur") (PCons (PVar "m") (PVar "rest")) (PVar "mid")) (EIf (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "mid")) (EApp (EApp (EVar "declEnvRowVisible") (EVar "cur")) (EVar "m")) (EApp (EApp (EApp (EVar "wildOverlayDecls") (EVar "cur")) (EVar "rest")) (EVar "mid"))))
@@ -70247,7 +70397,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "checkModulesK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "checkModulesK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EFieldAccess (EVar "coreSchemes") "mbSchemes"))) (EApp (EApp (EVar "tagModuleExports") (EFieldAccess (EVar "coreSchemes") "mbStandaloneSchemes")) (EFieldAccess (EVar "coreSchemes") "mbSchemes"))) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
 (DTypeSig false "checkModuleFullDiags" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
-(DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere")) (EVar "True"))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
+(DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EApp (EApp (EApp (EVar "oracleImportDecls") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere")) (EVar "True"))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeAlias true "ModDiags" () (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
 (DTypeSig false "graphModuleWorker" (TyFun (TyCon "GraphOut") (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))))
 (DFunDef false "graphModuleWorker" ((PVar "sel") (PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "implDecls") (EBinOp "++" (EVar "accAll") (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "implDecls"))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "implDecls")) (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EFieldAccess (EVar "schemes") "mbSchemes")) (arm (PCon "Some" (PVar "sc")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EApp (EVar "Some") (EVar "sc")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef")) (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value"))))) (DoExpr (ELit LUnit)))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "marked") (EFieldAccess (EVar "schemes") "mbSchemes") (EVar "errs") (EVar "warns"))))))

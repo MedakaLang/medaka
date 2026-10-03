@@ -1,5 +1,5 @@
 # META
-source_lines=4406
+source_lines=4404
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -1619,13 +1619,10 @@ emitHiddenDiagNote n =
 -- to `diagIsWarn` was tried and reverted.  Every one of its three measured
 -- objections is a property of the MODULE GRAPH, and none of them reaches this door:
 --
---  (2) SPEW.  The ~96%-false `Missing case: 'Text _'` phantom is #1185, whose
---      constructor oracle is drawn from the whole graph rather than the scrutinee's
---      own type — so it needs a graph to misfire.  Measured on this base: a
---      same-file `data Token = Text String | Num Int` beside an exhaustive
---      `List`-matching multi-clause function produced NO false warning, and neither
---      did a two-module toy; the compiler's own entry file produces 36 of them, all
---      phantom.  Single-file has no imported constructor universe to draw from.
+--  (2) SPEW.  The volume is graph-borne: on the compiler's own graph the channel
+--      carries 8 `W-NONEXHAUSTIVE-CLAUSES` and 2 `W-NONEXHAUSTIVE`, hand-graded
+--      genuine now that the exhaustiveness oracle reads the constructors a module can
+--      name (#1185).  A single file has no imported modules to add warnings from.
 --  (3) PERF.  The render cost is "per file whose channel is non-empty"; here there
 --      is exactly ONE file, already read into `src` for the error path.
 --  (1) CRITERION.  `check`'s single-file arm (`checkRoute`) and `run`'s
@@ -1643,10 +1640,11 @@ emitHiddenDiagNote n =
 --      warning `check` does not already show — it makes the three verbs agree on
 --      one input, which IS the criterion.
 --
--- ⚠️ THE SPLIT IS DELIBERATE.  The multi-module arms (`locatedProjectDiags`'s
+-- The split is deliberate.  The multi-module arms (`locatedProjectDiags`'s
 -- callers, `isHiddenNonEntryWarn`, `hiddenWarnsOfTriple`) stay on
--- `runBuildWarnCodes` and are BLOCKED ON #1185 — widening them ships the phantom.
--- Do not "unify" the two arms until #1185's oracle is scrutinee-typed.
+-- `runBuildWarnCodes`; widening them would surface the graph's genuine
+-- non-exhaustiveness warnings on every `run`/`build`, which is a decision about
+-- those findings that the allowlist (`runBuildWarnCodes`) has not yet taken.
 allWarnTriples : String ->
   String ->
   List Diag ->

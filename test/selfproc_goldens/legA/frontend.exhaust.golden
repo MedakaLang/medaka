@@ -69,6 +69,8 @@ isDigitC : Char -> Bool
 isEmptyArgs : List Pat -> Bool
 isIrrefutablePat : Pat -> Bool
 letGroupWarnings : Oracle -> Expr -> List (String, Option Loc)
+listConsCtor : String
+listNilCtor : String
 litEq : Lit -> Lit -> Bool
 lookupRecField : Oracle -> List RecPatField -> String -> Pat
 missingCtorPat : Oracle -> List String -> List String -> Pat
@@ -108,6 +110,7 @@ totalClauseRows : Oracle -> List (List Pat, Expr) -> List (List Pat)
 tupleArityCheck : Array Char -> Int -> Option Int
 tupleArityOfName : String -> Option Int
 tupleCtorName : Int -> String
+unitCtor : String
 useful : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 usefulBranch : Oracle -> List (List Pat) -> List Pat -> String -> Bool
 usefulBranchIn : Oracle -> Map String (List (List Pat)) -> List Pat -> String -> Bool

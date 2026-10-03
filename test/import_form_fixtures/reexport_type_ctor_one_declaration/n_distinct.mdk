@@ -1,0 +1,8 @@
+-- The control: `g`'s declarations directly and `p`'s through `mid` are
+-- distinct, so every name stays ambiguous at its use.
+import g.*
+import mid.*
+
+f : T -> Int
+f _ = match Mk 7
+  Mk n => (R { rx = n }).rx

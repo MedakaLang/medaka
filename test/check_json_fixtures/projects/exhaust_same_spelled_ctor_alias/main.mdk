@@ -1,0 +1,26 @@
+-- #1185: `A.Bin` names `a.mdk`'s constructor, whatever `b` and `one` declare.
+-- `fe` and `ge` are exhaustive. `fq` misses `A.Leaf`, reported as `Leaf`;
+-- `gq` misses `Some A.Leaf`, reported as `Some Leaf`.
+import b.{B}
+import one.{One}
+import a as A
+
+fe : A.A -> Int
+fe (A.Bin n) = n
+fe A.Leaf = 0
+
+ge : Option A.A -> Int
+ge o = match o
+  None => 0
+  Some (A.Bin n) => n
+  Some A.Leaf => 1
+
+fq : A.A -> Int
+fq (A.Bin n) = n
+
+gq : Option A.A -> Int
+gq o = match o
+  None => 0
+  Some (A.Bin n) => n
+
+main = println (fe (A.Bin 6) + ge (Some A.Leaf) + fq (A.Bin 1) + gq None)

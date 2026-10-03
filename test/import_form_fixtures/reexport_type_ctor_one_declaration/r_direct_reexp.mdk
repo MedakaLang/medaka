@@ -1,0 +1,6 @@
+-- `p`'s one record `R`, reached directly and through `mid`'s re-export.
+import p.{R(..)}
+import mid.*
+
+r : Int
+r = (R { rx = 9 }).rx

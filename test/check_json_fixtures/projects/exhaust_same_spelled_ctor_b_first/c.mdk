@@ -1,0 +1,7 @@
+-- Exhaustive over `B`, in a module that never sees `A`'s constructors.
+import b.{B(..)}
+
+export h : B -> Int
+h (Bin x y) = x + y
+h Tip = 0
+h Nd = 1

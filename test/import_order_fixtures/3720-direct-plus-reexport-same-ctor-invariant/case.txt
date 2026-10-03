@@ -1,0 +1,10 @@
+entry: main.mdk
+what: #3720 one constructor imported directly and through a re-export is one
+      constructor, in either import order
+
+`p` declares `data T = Mk Int`; `mid` is `export import p.*`; `main` imports
+`T(..)` from `p` and everything from `mid`. There is one declaration of `Mk`, so
+naming it is not ambiguous. Spec answer, hand-derived: `check` clean; `run` and
+the built binary print `7` in every ordering. The resolve verdict is graded by
+`test/import_form_fixtures/reexport_type_ctor_one_declaration/`; this case
+grades its invariance.

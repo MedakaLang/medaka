@@ -3114,6 +3114,13 @@ public export data ModuleExports = ModuleExports {
   -- with two distinct declaring modules is two interfaces merged by a
   -- re-export; the importer's ambiguity check reads that here.
   expIfaceOrigins : List (String, String),
+  -- (type name, DECLARING module) for every exported type, and the same for
+  -- every exported constructor: the identities the importer's type and
+  -- constructor ambiguity checks key on, as the interface check keys on
+  -- `expIfaceOrigins`.  A re-export cannot rename a type or a constructor, so
+  -- the exported name is the declared name.
+  expTypeOrigins : List (String, String),
+  expCtorOrigins : List (String, String),
   -- (value name, (DECLARING module, the name it is declared under there)) for
   -- every exported value, interface methods included.  The pair is the
   -- declaration's identity: an importer that reaches one declaration through
@@ -3478,15 +3485,6 @@ addProvenance prov n mid = match omLookup n prov
   Some mids =>
     if contains mid mids then prov else omInsert n (mids ++ [mid]) prov
 
--- Fold the value names of one import (all tagged with the same mid) into prov.
-addImportProvenance : OrdMap (List String) ->
-  String ->
-  List String ->
-  OrdMap (List String)
-addImportProvenance prov _ [] = prov
-addImportProvenance prov mid (n :: rest) =
-  addImportProvenance (addProvenance prov n mid) mid rest
-
 -- Provenance over every non-core import in the program, in decl order
 -- (left-to-right, so mod-id order matches declaration order).
 valueProvenance : OrdMap ModuleExports -> List UsePath -> OrdMap (List String)
@@ -3578,29 +3576,14 @@ keepAmbiguous sameMod ((n, mids) :: rest)
 -- The exact ctor peer of valueProvenance/ambiguousSet.  Each import contributes
 -- the CONSTRUCTOR names it actually binds (a bare `import m` binds NONE — impls
 -- only; a selective `import m.{T(..)}` binds T's exported ctors; `import m.*`
--- binds all of m's ctors), attributed to its DIRECTLY-imported module id.  A ctor
--- brought in by ≥2 distinct modules AND not defined locally is AMBIGUOUS: the same
--- name resolves to different modules' constructors, so load/import order (the two
+-- binds all of m's ctors), keyed by the DECLARATION it denotes
+-- (`expCtorOrigins`, through `declProvenanceIn`).  A ctor name reaching ≥2
+-- distinct declarations AND not defined locally is AMBIGUOUS: the same name
+-- resolves to different modules' constructors, so load/import order (the two
 -- check-side resolvers' opposite tie-breaks) can no longer decide it silently.
+-- One declaration reached through two import paths is one candidate.
 
-ctorProvenance : OrdMap ModuleExports -> List UsePath -> OrdMap (List String)
-ctorProvenance known paths = foldCtorProvenance known omEmpty paths
-
-foldCtorProvenance : OrdMap ModuleExports ->
-  OrdMap (List String) ->
-  List UsePath ->
-  OrdMap (List String)
-foldCtorProvenance _ prov [] = prov
-foldCtorProvenance known prov (p :: rest) =
-  let mid = useModId p
-  let prov2 =
-    if mid == "core" then
-      prov
-    else
-      addImportProvenance prov mid (importNamesIn nsCtors known p)
-  foldCtorProvenance known prov2 rest
-
--- Keep only ctor names bound by ≥2 distinct modules AND not defined by a
+-- Keep only ctor names bound to ≥2 distinct declarations AND not defined by a
 -- same-module top-level `data`/`newtype` (a real local ctor wins).
 ctorAmbiguousSet : OrdMap ModuleExports ->
   List Decl ->
@@ -3608,10 +3591,10 @@ ctorAmbiguousSet : OrdMap ModuleExports ->
 ctorAmbiguousSet known prog =
   let paths = usePathsOf prog
   let sameMod = ctorNames prog
-  keepAmbiguous sameMod (provToPairs (ctorProvenance known paths))
-    ++ strippedCtorAmbiguity
+  keepAmbiguous
       sameMod
-      (map (p => (p, importNamesIn nsCtors known p)) paths)
+      (provToPairs (declProvenanceIn nsCtors nsCtorOrigins known paths))
+    ++ strippedCtorAmbiguity sameMod known paths
 
 -- The POST-STRIP ctor collision (#1287).  A module alias qualifies constructors,
 -- but resolve strips the alias prefix before typecheck, whose constructor table is
@@ -3621,7 +3604,9 @@ ctorAmbiguousSet known prog =
 -- site spells them apart, and the winner is whichever import folded last.
 --
 -- So the collision is computed over the names typecheck will actually see (each
--- import's contribution mapped through `useBaseName`), and then the spellings that
+-- import's contribution mapped through `useBaseName`, keyed by declaration as
+-- the unstripped set is, since one declaration is one table entry however many
+-- paths reach it), and then the spellings that
 -- STRIP onto a colliding name are entered into the ambiguity set, so the use site
 -- is rejected by `ambiguousCtorErrors` instead of resolving to another module's
 -- constructor at exit 0.
@@ -3633,28 +3618,18 @@ ctorAmbiguousSet known prog =
 -- constructors, because nothing strips mb's into the table unless `B.Node` is
 -- written -- and if it is written, it is that occurrence that is rejected.
 strippedCtorAmbiguity : List String ->
-  List (UsePath, List String) ->
+  OrdMap ModuleExports ->
+  List UsePath ->
   List (String, List String)
-strippedCtorAmbiguity sameMod perPath =
+strippedCtorAmbiguity sameMod known paths =
   let collisions =
-    keepAmbiguous sameMod (provToPairs (strippedCtorProv omEmpty perPath))
-  flatMap (e => strippedCtorKeys (fst e) collisions (snd e)) perPath
-
-strippedCtorProv : OrdMap (List String) ->
-  List (UsePath, List String) ->
-  OrdMap (List String)
-strippedCtorProv prov [] = prov
-strippedCtorProv prov ((p, names) :: rest) =
-  strippedCtorProv (addStrippedCtorProv prov p names) rest
-
-addStrippedCtorProv : OrdMap (List String) ->
-  UsePath ->
-  List String ->
-  OrdMap (List String)
-addStrippedCtorProv prov p names
-  | useModId p == "core" = prov
-  | otherwise =
-    addImportProvenance prov (useModId p) (map (useBaseName p) names)
+    keepAmbiguous
+      sameMod
+      (provToPairs
+        (declProvenanceBy useBaseName nsCtors nsCtorOrigins known paths))
+  flatMap
+    (p => strippedCtorKeys p collisions (importNamesIn nsCtors known p))
+    paths
 
 strippedCtorKeys : UsePath ->
   List (String, List String) ->
@@ -3674,6 +3649,97 @@ strippedCtorKey p collisions n =
   else match lookupAssoc base collisions
     Some mods => [(n, mods)]
     None => []
+
+-- ── the constructor declarations a module can name (#1185) ─────────────────
+-- For each module of a dependency-first graph, the `data` and `newtype` decls
+-- declaring a constructor that module's imports bind, keyed by declaration
+-- through `expCtorOrigins` exactly as `ctorAmbiguousSet` keys them, so a
+-- re-exported constructor is found in the module that declares it.  `pool`
+-- holds the decls each module id contributes.  The exhaustiveness oracle reads
+-- constructors by bare name, so it is built from these beside the module's own
+-- decls: over every module in the graph, an unrelated module's same-spelled
+-- constructor answers whenever its module comes first.
+--
+-- An alias import's decls come after every other import's.  The oracle sees an
+-- alias-qualified constructor by its bare name, and a bare occurrence means the
+-- unaliased import's constructor (`strippedCtorAmbiguity`).
+export
+importedCtorDecls : List Decl ->
+  List (String, List Decl) ->
+  List (String, List Decl) ->
+  List (String, List Decl)
+importedCtorDecls preludeDecls mods pool =
+  importedCtorDeclsGo
+    (coreExports preludeDecls)
+    (omFromPairs pool omEmpty)
+    omEmpty
+    mods
+
+importedCtorDeclsGo : ModuleExports ->
+  OrdMap (List Decl) ->
+  OrdMap ModuleExports ->
+  List (String, List Decl) ->
+  List (String, List Decl)
+importedCtorDeclsGo _ _ _ [] = []
+importedCtorDeclsGo coreExp pool known ((mid, prog) :: rest) =
+  let paths = usePathsOf prog
+  let decls =
+    ctorDeclsBoundBy pool known (filterList (p => not (isAliasPath p)) paths)
+      ++ ctorDeclsBoundBy pool known (filterList isAliasPath paths)
+  -- values are left without interface methods: they are read through `env`,
+  -- and nothing a constructor answer reads depends on them
+  let exp = buildExportsWith coreExp known mid prog []
+  (mid, decls)
+    :: importedCtorDeclsGo coreExp pool (omInsert exp.modId exp known) rest
+
+isAliasPath : UsePath -> Bool
+isAliasPath (UseAlias _ _) = True
+isAliasPath _ = False
+
+ctorDeclsBoundBy : OrdMap (List Decl) ->
+  OrdMap ModuleExports ->
+  List UsePath ->
+  List Decl
+ctorDeclsBoundBy pool known paths =
+  let byDeclarer =
+    ctorNamesByDeclarer
+      (flatMap (importNameOrigins nsCtors nsCtorOrigins known) paths)
+      omEmpty
+  flatMap (declsDeclaringCtorIn byDeclarer pool) (omKeys byDeclarer)
+
+-- declaring module → the names it declares them under, for the constructors
+-- bound here
+ctorNamesByDeclarer : List (String, String, List String) ->
+  OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit)
+ctorNamesByDeclarer [] acc = acc
+ctorNamesByDeclarer ((_, base, mids) :: rest) acc =
+  ctorNamesByDeclarer rest (addCtorDeclarers base mids acc)
+
+addCtorDeclarers : String ->
+  List String ->
+  OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit)
+addCtorDeclarers _ [] acc = acc
+addCtorDeclarers n (m :: ms) acc =
+  let names = match omLookup m acc
+    Some ns => ns
+    None => omEmpty
+  addCtorDeclarers n ms (omInsert m (omInsert n () names) acc)
+
+declsDeclaringCtorIn : OrdMap (OrdMap Unit) ->
+  OrdMap (List Decl) ->
+  String ->
+  List Decl
+declsDeclaringCtorIn byDeclarer pool m = match (
+  omLookup m byDeclarer,
+  omLookup m pool,
+)
+  (Some names, Some decls) => filterList (declDeclaresCtorIn names) decls
+  _ => []
+
+declDeclaresCtorIn : OrdMap Unit -> Decl -> Bool
+declDeclaresCtorIn names d = anyList (n => omHasKey n names) (ctorNames [d])
 
 -- The STRIP-ONTO-A-LOCAL-CONSTRUCTOR collision, the half `strippedCtorAmbiguity`
 -- above structurally cannot see.  Its provenance map counts IMPORTS, and
@@ -3738,7 +3804,7 @@ abstractlyExportedTypes exp = exp.expAbstractData
 -- so all four ambiguity sets have ONE trigger and cannot drift into four rules.
 --
 -- 🚨 WHAT THIS TRIGGER IS, AND WHAT IT IS NOT.  It is a SCOPE collision: ≥2
--- distinct non-`core` import provenances for one name, visible in THIS module's
+-- distinct non-`core` imported declarations of one name, visible in THIS module's
 -- scope.  It is NOT a TABLE collision — two modules with no import relationship
 -- that each declare the same bare name never meet in one scope, so no use-site
 -- diagnostic, present or future, has anything to fire on for that shape.  #1047 /
@@ -3746,19 +3812,18 @@ abstractlyExportedTypes exp = exp.expAbstractData
 -- never imports the colliding interface at all); they are drained by Stage A-2's
 -- registry re-keying, NOT by anything in this file.  Do not claim otherwise.
 --
--- Which provenances count as distinct differs by namespace.  The value and
--- interface peers key on the DECLARATION (`foldDeclProvenance`), so one
--- declaration reached through two import paths is one candidate.  The type and
--- constructor peers still key on the directly-imported module, so the same
--- shape on a type or constructor name is reported as two.
+-- Every peer keys on the DECLARATION (`foldDeclProvenance`), so one
+-- declaration reached through two import paths is one candidate in every
+-- namespace.  The type, constructor and interface peers share one body for it
+-- (`declProvenanceIn`).
 --
 -- The one asymmetry with the ctor peer is which local declarations settle the name
 -- (`dataRecordNames` vs `interfaceNamesOf` vs `ctorNames`), because that is what
 -- "declared in this module" means per namespace.
 
--- The names one non-core import contributes to ONE export namespace,
--- attributed to its directly-imported module id (re-export safe, like
--- `importValueNames`).  Every namespace whose elements are plain names reads
+-- The names one non-core import contributes to ONE export namespace (re-export
+-- safe, like `importValueBindings`).  Every namespace whose elements are plain
+-- names reads
 -- this one body through its `ExpNs` descriptor's projection: constructors
 -- (the `#674` ctor peer), types, and interfaces.
 --
@@ -3781,22 +3846,107 @@ importNamesIn ns known path =
       let (names, _) = importedNamesMM path exp
       filterNsInSetFor path (omFromNames (exportsIn ns exp) omEmpty) names
 
-foldNamespaceProvenance : (OrdMap ModuleExports -> UsePath -> List String) ->
+-- Provenance keyed by DECLARATION for a namespace `ns` whose exports record
+-- their declaring module in `originNs`.  Each name an import binds is keyed by
+-- that module and the name it is declared under, which a re-export hop never
+-- renames, so the same declaration reached by two paths is one provenance.
+--
+-- A name the imported module's re-exports merged from two distinct
+-- declarations (`export import p.*` + `export import g.*`, each with its own
+-- `Same`) is attributed to its declaring modules, not to the one module the
+-- path names, so the importer is told which two declarations collided.  The
+-- merged names are folded in after every path's unmerged names, into the same
+-- declaration-keyed provenance, so a merged path naming a declaration another
+-- path already brought adds nothing for it.
+declProvenanceIn : ExpNs String ->
+  ExpNs (String, String) ->
   OrdMap ModuleExports ->
-  OrdMap (List String) ->
   List UsePath ->
   OrdMap (List String)
-foldNamespaceProvenance _ _ prov [] = prov
-foldNamespaceProvenance namesOf known prov (p :: rest) =
-  let mid = useModId p
-  let prov2 =
-    if mid == "core" then
-      prov
-    else
-      addImportProvenance prov mid (namesOf known p)
-  foldNamespaceProvenance namesOf known prov2 rest
+declProvenanceIn ns originNs known paths =
+  declProvenanceBy (_ n => n) ns originNs known paths
 
--- Keep only type names bound by ≥2 distinct modules AND not declared by a
+-- `declProvenanceIn` with each bound name first respelled by `localOf`, for a
+-- table that sees a name under another spelling than the import binds it as.
+declProvenanceBy : (UsePath -> String -> String) ->
+  ExpNs String ->
+  ExpNs (String, String) ->
+  OrdMap ModuleExports ->
+  List UsePath ->
+  OrdMap (List String)
+declProvenanceBy localOf ns originNs known paths =
+  let acc =
+    foldDeclProvenance
+      (k p =>
+        flatMap (unmergedDecl (localOf p)) (importNameOrigins ns originNs k p))
+      known
+      (omEmpty, omEmpty)
+      paths
+  fst (foldMergedProvenance localOf ns originNs known acc paths)
+
+-- (the name an import binds, the name its module declares it under, that
+-- name's distinct declaring modules among the imported module's exports).  A
+-- name with no recorded origin is declared by the module that exports it.
+importNameOrigins : ExpNs String ->
+  ExpNs (String, String) ->
+  OrdMap ModuleExports ->
+  UsePath ->
+  List (String, String, List String)
+importNameOrigins ns originNs known path =
+  match findExports (useModId path) known
+    None => []
+    Some exp =>
+      let origins = originsByName omEmpty (exportsIn originNs exp)
+      map
+        (n =>
+          let base = useBaseName path n
+          (n, base, optionOr [exp.modId] (omLookup base origins)))
+        (importNamesIn ns known path)
+
+-- name → its distinct declaring modules, in first-occurrence order.
+originsByName : OrdMap (List String) ->
+  List (String, String) ->
+  OrdMap (List String)
+originsByName acc [] = acc
+originsByName acc ((n, m) :: rest) = originsByName (addProvenance acc n m) rest
+
+unmergedDecl : (String -> String) ->
+  (String, String, List String) ->
+  List (String, String)
+unmergedDecl localOf (n, base, [m]) = [(localOf n, declKey (m, base))]
+unmergedDecl _ _ = []
+
+foldMergedProvenance : (UsePath -> String -> String) ->
+  ExpNs String ->
+  ExpNs (String, String) ->
+  OrdMap ModuleExports ->
+  (OrdMap (List String), OrdMap Unit) ->
+  List UsePath ->
+  (OrdMap (List String), OrdMap Unit)
+foldMergedProvenance _ _ _ _ acc [] = acc
+foldMergedProvenance localOf ns originNs known acc (p :: rest) =
+  foldMergedProvenance
+    localOf
+    ns
+    originNs
+    known
+    (addMergedOrigins (localOf p) acc (importNameOrigins ns originNs known p))
+    rest
+
+addMergedOrigins : (String -> String) ->
+  (OrdMap (List String), OrdMap Unit) ->
+  List (String, String, List String) ->
+  (OrdMap (List String), OrdMap Unit)
+addMergedOrigins _ acc [] = acc
+addMergedOrigins localOf acc ((n, base, ms) :: rest) =
+  let acc2 =
+    if listLen ms >= 2 then
+      addOriginsProvenance acc (localOf n) base ms
+    else
+      acc
+  addMergedOrigins localOf acc2 rest
+
+-- Keep only type names bound to ≥2 distinct declarations AND not declared by a
 -- same-module `data`/`newtype`/`type` (a real local declaration wins, exactly as it
 -- does for values and ctors — see `tyOriginScope`'s precedence argument, which
 -- states the same rule for identity).
@@ -3804,13 +3954,10 @@ typeAmbiguousSet : OrdMap ModuleExports ->
   List Decl ->
   List (String, List String)
 typeAmbiguousSet known prog =
-  let prov =
-    foldNamespaceProvenance
-      (importNamesIn nsTypes)
-      known
-      omEmpty
-      (usePathsOf prog)
-  keepAmbiguous (dataRecordNames prog) (provToPairs prov)
+  keepAmbiguous
+    (dataRecordNames prog)
+    (provToPairs
+      (declProvenanceIn nsTypes nsTypeOrigins known (usePathsOf prog)))
 
 -- The interface peer.  `interfaceNamesOf` (not `map fst (interfaceList prog)`) is
 -- the local-declaration set, because it has the `DAttrib` arm — an `@attr`-wrapped
@@ -3819,83 +3966,10 @@ ifaceAmbiguousSet : OrdMap ModuleExports ->
   List Decl ->
   List (String, List String)
 ifaceAmbiguousSet known prog =
-  let acc =
-    foldDeclProvenance
-      importUnmergedIfaceDecls
-      known
-      (omEmpty, omEmpty)
-      (usePathsOf prog)
-  let (prov2, _) = foldIfaceMergeProvenance known acc (usePathsOf prog)
-  keepAmbiguous (interfaceNamesOf prog) (provToPairs prov2)
-
--- A path's interface names, split by whether its module's re-exports merged
--- the name from two distinct declarations (`export import p.*` + `export
--- import g.*`, each with its own `Same`).  A merged name is attributed to its
--- declaring modules, not to the one module the path names, so the importer is
--- told which two interfaces collided.  One declaration reached by two
--- re-export paths has one origin and is not merged.
-ifaceMergedOrigins : ModuleExports -> String -> List String
-ifaceMergedOrigins exp base =
-  let origins =
-    dedup (map snd (filterList (o => fst o == base) exp.expIfaceOrigins))
-  if listLen origins >= 2 then origins else []
-
--- The unmerged interface names one import binds, each keyed by its declaration:
--- the declaring module (`expIfaceOrigins`) and the name it is exported under,
--- which a re-export hop never renames.  The same interface reached by two paths
--- is one provenance.
-importUnmergedIfaceDecls : OrdMap ModuleExports ->
-  UsePath ->
-  List (String, String)
-importUnmergedIfaceDecls known path = match findExports (useModId path) known
-  Some exp =>
-    let origins = omFromPairs (reverseL exp.expIfaceOrigins) omEmpty
-    map
-      (n =>
-        let base = useBaseName path n
-        (
-          n,
-          declKey (
-            match omLookup base origins
-              Some m => m
-              None => exp.modId,
-            base,
-          ),
-        ))
-      (filterList
-        (n => isEmptyL (ifaceMergedOrigins exp (useBaseName path n)))
-        (importNamesIn nsInterfaces known path))
-  None => []
-
--- A merged name contributes each of its declaring modules, recorded under that
--- module's own id, into the same declaration-keyed provenance as the unmerged
--- names, so a merged path naming a declaration another path already brought
--- adds nothing for it.
-foldIfaceMergeProvenance : OrdMap ModuleExports ->
-  (OrdMap (List String), OrdMap Unit) ->
-  List UsePath ->
-  (OrdMap (List String), OrdMap Unit)
-foldIfaceMergeProvenance _ acc [] = acc
-foldIfaceMergeProvenance known acc (p :: rest) =
-  let acc2 = match findExports (useModId p) known
-    Some exp =>
-      addMergedOrigins
-        acc
-        exp
-        (map (n => (n, useBaseName p n)) (importNamesIn nsInterfaces known p))
-    None => acc
-  foldIfaceMergeProvenance known acc2 rest
-
-addMergedOrigins : (OrdMap (List String), OrdMap Unit) ->
-  ModuleExports ->
-  List (String, String) ->
-  (OrdMap (List String), OrdMap Unit)
-addMergedOrigins acc _ [] = acc
-addMergedOrigins acc exp ((local, base) :: rest) =
-  addMergedOrigins
-    (addOriginsProvenance acc local base (ifaceMergedOrigins exp base))
-    exp
-    rest
+  keepAmbiguous
+    (interfaceNamesOf prog)
+    (provToPairs
+      (declProvenanceIn nsInterfaces nsIfaceOrigins known (usePathsOf prog)))
 
 -- The effect peer.  Every import of a module installs all of that module's
 -- labels (`importedEffects`), so provenance is keyed by the DECLARING module
@@ -4340,6 +4414,8 @@ coreExports preludeDecls = ModuleExports {
   expInterfaces = map fst (interfaceList preludeDecls),
   expIfaceMethods = interfaceList preludeDecls,
   expIfaceOrigins = map (i => (fst i, "core")) (interfaceList preludeDecls),
+  expTypeOrigins = map (n => (n, "core")) (dataRecordNames preludeDecls),
+  expCtorOrigins = map (n => (n, "core")) (ctorNames preludeDecls),
   expValueOrigins =
     map (n => (n, ("core", n))) (preludeValueNames preludeDecls),
   expEffects = effectNames preludeDecls,
@@ -4523,11 +4599,34 @@ nsIfaceOrigins : ExpNs (String, String)
 nsIfaceOrigins = ExpNs {
   nsGet = exp => exp.expIfaceOrigins,
   nsDirectOf = _ => [],
-  nsCarry =
-    path src =>
-      let carried = omFromNames (reexportOrigins path src) omEmpty
-      filterList (o => omHasKey (fst o) carried) src.expIfaceOrigins,
+  nsCarry = path src => carriedOriginsFrom path src src.expIfaceOrigins,
 }
+
+-- The identity-carrying twins of `nsTypes` and `nsCtors`, with the same shape
+-- as `nsIfaceOrigins`.
+nsTypeOrigins : ExpNs (String, String)
+nsTypeOrigins = ExpNs {
+  nsGet = exp => exp.expTypeOrigins,
+  nsDirectOf = _ => [],
+  nsCarry = path src => carriedOriginsFrom path src src.expTypeOrigins,
+}
+
+nsCtorOrigins : ExpNs (String, String)
+nsCtorOrigins = ExpNs {
+  nsGet = exp => exp.expCtorOrigins,
+  nsDirectOf = _ => [],
+  nsCarry = path src => carriedOriginsFrom path src src.expCtorOrigins,
+}
+
+-- The (name, declaring module) rows of `origins` whose name this hop
+-- re-exports.
+carriedOriginsFrom : UsePath ->
+  ModuleExports ->
+  List (String, String) ->
+  List (String, String)
+carriedOriginsFrom path src origins =
+  let carried = omFromNames (reexportOrigins path src) omEmpty
+  filterList (o => omHasKey (fst o) carried) origins
 
 -- The identity-carrying twin of `nsValues`: each carried value keeps the
 -- declaration it names in the source module, under the local name this hop
@@ -4662,11 +4761,22 @@ buildExports : ModuleExports ->
   List Decl ->
   Env ->
   ModuleExports
-buildExports coreExp known modId prog env = ModuleExports {
+buildExports coreExp known modId prog env =
+  buildExportsWith coreExp known modId prog (publicIfaceMethodVals prog env)
+
+-- `buildExports` given the public interface methods bound as values, the one
+-- part of a module's exports that reads its resolved `Env`.
+buildExportsWith : ModuleExports ->
+  OrdMap ModuleExports ->
+  String ->
+  List Decl ->
+  List String ->
+  ModuleExports
+buildExportsWith coreExp known modId prog ifaceVals = ModuleExports {
   modId = modId,
   expValues =
     directIn nsValues prog
-      ++ publicIfaceMethodVals prog env
+      ++ ifaceVals
       ++ carriedIn nsValues coreExp known prog,
   expTypes = directIn nsTypes prog ++ carriedIn nsTypes coreExp known prog,
   expAbstractData =
@@ -4683,10 +4793,14 @@ buildExports coreExp known modId prog env = ModuleExports {
   expIfaceOrigins =
     map (n => (n, modId)) (directIn nsInterfaces prog)
       ++ carriedIn nsIfaceOrigins coreExp known prog,
+  expTypeOrigins =
+    map (n => (n, modId)) (directIn nsTypes prog)
+      ++ carriedIn nsTypeOrigins coreExp known prog,
+  expCtorOrigins =
+    map (n => (n, modId)) (directIn nsCtors prog)
+      ++ carriedIn nsCtorOrigins coreExp known prog,
   expValueOrigins =
-    map
-        (n => (n, (modId, n)))
-        (directIn nsValues prog ++ publicIfaceMethodVals prog env)
+    map (n => (n, (modId, n))) (directIn nsValues prog ++ ifaceVals)
       ++ carriedIn nsValueOrigins coreExp known prog,
   expEffects =
     directIn nsEffects prog ++ carriedIn nsEffects coreExp known prog,

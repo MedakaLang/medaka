@@ -1055,7 +1055,7 @@ table = [
   Row {
     entry = "x19_prelude_module_alias_escapes_shadow.mdk",
     label =
-      "X19 (S1-PRELUDE (b), the recovery table) THE ESCAPE HATCH ITSELF, and the corpus had no cell for it: S1-PRELUDE (a) hands the colliding bare name to the module`s own declaration, and every x-cell above grades that displacement -- none grades whether the displaced prelude binding can still be NAMED. `import core as C` is the recovery spelling the table prescribes, and the pinned `(False, True)` is the whole of its content: the first component is the module`s own `eq`, the second is the prelude`s `Eq` method reached past it. `(False, False)` is the failure this cell exists to catch, and it is not hypothetical -- it is exactly what the RENAME spelling does at x20, so the two cells are numerically distinguishable in one component only. Mechanism: a module alias survives inference as a dotted occurrence (renameAliasedMethods de-aliases a member rename and deliberately leaves `A.name` alone; resolveAliasMethodSpellings restores the origin name only after inference). VALUES HAND-DERIVED FROM S1-PRELUDE (b), NOT CAPTURED -- at base the spelling did not resolve at all (`Unbound variable: C.eq` on all three verbs), so no arm could serve as an oracle",
+      "X19 (S1-PRELUDE (b), the recovery table) THE ESCAPE HATCH ITSELF, and the corpus had no cell for it: S1-PRELUDE (a) hands the colliding bare name to the module`s own declaration, and every x-cell above grades that displacement -- none grades whether the displaced prelude binding can still be NAMED. `import core as C` is the recovery spelling the table prescribes, and the pinned `(False, True)` is the whole of its content: the first component is the module`s own `eq`, the second is the prelude`s `Eq` method reached past it. `(False, False)` is the failure this cell exists to catch, and it is not hypothetical -- it is what the RENAME spelling did at x20 before #3708, when the two cells were distinguishable in one component only. Mechanism: a module alias survives inference as a dotted occurrence, and a member rename survives as its local spelling (resolveAliasMethodSpellings restores the origin name only after inference). VALUES HAND-DERIVED FROM S1-PRELUDE (b), NOT CAPTURED -- at base the spelling did not resolve at all (`Unbound variable: C.eq` on all three verbs), so no arm could serve as an oracle",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -1065,12 +1065,12 @@ table = [
   Row {
     entry = "x20_prelude_member_rename_lands_on_shadow.mdk",
     label =
-      "X20 (S1-PRELUDE (b)) x19`s member-RENAME twin, and the OPPOSITE value from the same topology: `(False, False)`, both components the module`s own `eq`. The two recovery spellings are not interchangeable and this pair is what says so -- a reader who transcribes x19`s value here destroys the distinction. WHY: a method is global-by-name, one dispatch cell per name, so an alias of a method is a second SPELLING and not a second binding; renameAliasedMethods rewrites `eqM` back to `eq` before resolution, and `eq` is then whatever this module`s scope holds, which is the standalone. GENERAL, not prelude-specific -- the same rewrite governs a rename of any module`s method, which is why `docs/spec/SYNTAX.md`s alias table states it as a consequence rather than this corpus pinning it as a prelude quirk. Not a defect to be drained: not de-aliasing leaves the renamed reference bound to nothing, which is why the rewrite has two halves that must agree. VALUES HAND-DERIVED, NOT CAPTURED -- at base the rename did not bind (`Unbound variable: eqM. Did you mean 'eq'`)",
+      "X20 (S1-PRELUDE (b)) x19`s member-RENAME twin, and since #3708 the SAME value as x19: `(False, True)`. An import member `x as y` binds `y` and nothing else (F6 ruling, Val 2026-10-02), so `eqM` is the prelude`s `Eq` method and bare `eq` stays the module`s own standalone. The member alias keeps a distinct spelling through inference and is restored to its origin name afterwards (resolveAliasMethodSpellings), as a module alias is. Pinned `(False, False)` before #3708, when the rename was rewritten back to the bare name before resolution. VALUES HAND-DERIVED FROM THE RULE, NOT CAPTURED",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
     mode = AllExact,
-    pinned = "(False, False)\n",
+    pinned = "(False, True)\n",
   },
   Row {
     entry = "x21_prelude_alias_private_helper_reject.mdk",

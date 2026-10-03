@@ -1,0 +1,28 @@
+-- #1185: list and unit patterns beside a program's own constructors spelled
+-- `Nil`, `Cons` and `Unit`. Expected, from the declarations alone: `total`,
+-- `consFirst` and `unitArg` are exhaustive; `onlyNil` misses `_ :: _`;
+-- `textOnly` misses the program's own `Nil`, named as `Nil`, not `[]`.
+data D = Nil | Text String
+
+data C = Cons Int | Z
+
+data U = Unit | Other
+
+total : List Int -> Int
+total [] = 0
+total (x :: xs) = x + total xs
+
+consFirst : List Int -> Int
+consFirst (_ :: _) = 1
+consFirst [] = 0
+
+unitArg : Unit -> Int
+unitArg () = 0
+
+onlyNil : List Int -> Int
+onlyNil [] = 0
+
+textOnly : D -> Int
+textOnly (Text _) = 0
+
+main = println (total [1, 2] + consFirst [1] + unitArg () + onlyNil [] + textOnly (Text "a"))
