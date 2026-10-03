@@ -47,7 +47,6 @@
 # and "not worth it" are not shapes. Name the thing the harness cannot express.
 
 
-407  needs the filed 3.4 MB binary input. Probed 2026-07-16: an 8-byte hostile file (invalid UTF-8 c0/c1 + an embedded NUL + 0xff) round-trips readFile->writeFile BYTE-IDENTICAL and stringLength reports 8, so there is NO small repro to pin today. Committing a multi-MB binary to test/ for one row is out of shape. If anyone narrows it to a small deterministic input this becomes an easy `run` + exact-stdout row — delete this line then.
 
 
 583  the defect lives in GitHub's PARSING OF A PR BODY (a closing keyword in prose silently closes an issue on merge). There is no .mdk to pin and no medaka exit code to grade. Out of shape for a harness that runs `medaka` against a fixture.
