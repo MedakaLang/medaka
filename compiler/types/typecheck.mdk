@@ -12843,8 +12843,9 @@ elselessIfHelp =
 -- One side is an unsolved variable applied to arguments (`m Unit`), the other a
 -- type with no application for that variable to take (`Unit`, an arrow).  Such
 -- a pair can only fail.  When the variable carries interface obligations, the
--- position wants a value of a type implementing them, and the other side is not
--- one.
+-- applied side is a value of a type implementing them and the other side is
+-- not.  `unify` has no expected/actual role, and the same pair arises with the
+-- applied side on either, so the text names neither side as the position.
 constrainedApplicationHelp : Mono -> Mono -> Option String
 constrainedApplicationHelp a b =
   map
@@ -12873,7 +12874,7 @@ constrainedApplicationText : Mono -> Mono -> List String -> String
 constrainedApplicationText app plain ifaces =
   let ctor = ppMono (spineHead app)
   let names = joinWith " and " ifaces
-  "`\{ppMono app}` here must be a \{names} value (`\{ctor}` stands for a type that implements \{names}), but this value is a plain \{ppMono plain}"
+  "`\{ppMono app}` is a value of a type that implements \{names} (`\{ctor}` stands for that type), and a plain \{ppMono plain} is not one"
 
 typeMismatchReportRest : Mono -> Mono -> Unit
 typeMismatchReportRest a b = match !currentDoOrigin
@@ -23852,7 +23853,10 @@ inferIf env c t e =
 
 -- The parser builds an omitted `else` as a bare unit literal (`elseBranch`,
 -- `compiler/frontend/parser.mdk`) and wraps every atom it reads in `ELoc`, a
--- written `()` included, so only an omitted branch arrives unwrapped.
+-- written `()` included, so only an omitted branch arrives unwrapped.  The
+-- final clause is a deliberate catch-all: the question is whether the branch is
+-- exactly that one parser-built shape, and every other constructor, including
+-- one added to `Expr` later, is a written branch.
 isOmittedElse : Expr -> Bool
 isOmittedElse (ELit LUnit) = True
 isOmittedElse _ = False

@@ -1,0 +1,4 @@
+twice : (Thenable m, Foldable m) => (Int -> m Int) -> Int
+twice g = 0
+
+main = println (twice (x => x))

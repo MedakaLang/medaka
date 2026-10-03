@@ -1,0 +1,7 @@
+interface Eff (f : Type -> Type) where
+  run1 : f a -> a
+
+use : Eff f => (Int -> f Int) -> Int
+use g = run1 (g 1)
+
+main = println (use (x => x))

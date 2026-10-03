@@ -76,6 +76,7 @@
 import frontend.ast.{Decl(..), Loc(..), Pat, Expr(..)}
 import frontend.parser.{
   parseResult,
+  parseLocatedResult,
   parseLocated,
   ParseError,
   parseErrorLine,
@@ -383,9 +384,10 @@ warnTriple (p, s, ds) = (p, s, filterWarnings ds)
 -- W-MAIN-SHAPE) or entirely unchecked (no `main` at all) — so both a function-
 -- shaped `main` and a program with no `main` fall through to `doEmit`, which
 -- has no valid nullary main to force and hits a bare wasm `unreachable` trap
--- with zero diagnostic. Re-parse the user's RAW entry decls here and block on
--- either shape with a located ERROR before ever reaching the emitter, as `run`
--- and `build` do. (Mirrors driver/diagnostics.mdk's `mainEntryError`; the
+-- with zero diagnostic. Re-parse the user's RAW entry decls here (located, so
+-- the parser's position state is this source's and an import-member loc points
+-- into this file) and block on either shape with a located ERROR before ever
+-- reaching the emitter, as `run` and `build` do. (Mirrors driver/diagnostics.mdk's `mainEntryError`; the
 -- function-shape half is duplicated per this entry's F5 self-contained
 -- convention, the missing-`main` half is the driver's `missingMainDiag`.)
 -- `warnTriples` carries the (already error-filtered) warning diags per source
@@ -404,7 +406,7 @@ guardedEmit : Bool ->
   List (String, String, List Diag) ->
   <IO> Unit
 guardedEmit emit rsrc csrc tsrc entry paths mods warnTriples =
-  match parseResult tsrc
+  match parseLocatedResult tsrc
     Err pe => emitParseError entry pe
     Ok decls => match mainShapeError decls
       Some d => emitDiagnostics (cjAllToJson [(entry, tsrc, [d])])

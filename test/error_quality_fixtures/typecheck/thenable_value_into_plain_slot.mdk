@@ -1,0 +1,4 @@
+f : (Int -> Unit) -> Int
+f g = 0
+
+main = println (f (x => forEach (y => println y) [x]))
