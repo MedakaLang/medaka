@@ -475,6 +475,15 @@ import types.registry.{
   sregAddK,
   sregMemberK,
   sregSize,
+  -- the cross-run constructor and record populations (`CrossRun`).
+  SpellingPop,
+  spEmpty,
+  spFromFloor,
+  spInsert,
+  spRows,
+  spFloor,
+  spCollided,
+  spLookupIdent,
 }
 -- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
 -- `ir/core_ir_lower.mdk`.  Before this bite each of those spelled its own copy
@@ -3529,8 +3538,8 @@ data RecordInfo =
 
 -- Keyed indices — so the hot per-field-access read paths never walk a linear registry
 -- (issue #149).  #415 item 3: `registerRecordInfoKeyed` is the sole REGISTRATION writer of
--- both; they are cleared together by resetState; and the cross-module universe copy goes
--- through the single loadDataUniverse/storeDataUniverse inverse pair.
+-- both; they are cleared together by resetState; and the cross-module record floor is
+-- loaded by `loadDataUniverse` from `universeRecordPop`.
 --
 -- 🚨 THE LOCKSTEP WAS "STRUCTURAL, NOT AN OBLIGATION" UNTIL #1111 A-2.12 (#1319 unit 2),
 -- AND IT IS NOW AN OBLIGATION.  `applyRecordScopeOverrides` re-points `recordByNameRef`
@@ -5807,7 +5816,7 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 -- This index is deliberately syntactic: an identity-keyed table over the raw
 -- `Variant`/`Field`/`Ty` declaration nodes, carrying no elaborated
 -- `Scheme`/`RecordInfo`/`Mono`. Elaborating (`registerAllData`,
--- `insertCtorIdents`, `insertRecordIdents`) writes `perRun`/`crossRun` refs as
+-- `insertCtorPop`, `insertRecordPop`) writes `perRun`/`crossRun` refs as
 -- a side effect (`recordParamKinds`, `registerRecordInfoKeyed`, alias
 -- resolution through `perRun.value.aliasTableRef`) and emits diagnostics
 -- deduped per module (`perRun.typeErrorMsgSetRef`, reset by `resetState`).
@@ -5827,7 +5836,7 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 -- test.
 --
 -- Latent divergence, noted rather than fixed: `addCtorIdentRaw` (below)
--- upserts unconditionally, unlike `addCtorIdentCand`'s upsert-by-identity.
+-- upserts unconditionally, unlike `spInsert`'s upsert-by-identity.
 -- `buildDataEnv` folds `deAllDecls` exactly once, so no producer re-presents
 -- the same identity today — a future caller folding a decl list twice would
 -- need the same guard.
@@ -6006,7 +6015,7 @@ addVariantIdentsRaw _ _ [] env = env
 addVariantIdentsRaw tyName o ((Variant cn payload) :: rest) env =
   addVariantIdentsRaw tyName o rest (addCtorIdentRaw tyName o cn payload env)
 
--- Honest absence, exactly as `addCtorIdentCand`: no module id ⇒ no identity ⇒
+-- Honest absence, exactly as `spInsert`'s callers: no module id ⇒ no identity ⇒
 -- no candidate — `mkIdent` refuses `OriginUnresolved`/`OriginModule ""`.
 addCtorIdentRaw : String ->
   TyConOrigin ->
@@ -9571,16 +9580,19 @@ data PendingMethodDict = PendingMethodDict {
 data CrossRun = CrossRun {
   universeFunNamesRef : Ref (OrdMap Unit),
   universeMethodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),  -- #1351: the interface dispatch-index universe, keyed ((IfaceRef, method name), Int).  Its bare-name-keyed predecessor `universeMethodDispatchIdxRef` was RETIRED by L5 (CONTRACT) once `dispatchIdxScoped` stopped falling back to it — read via `methodDispatchIdxByIdRef`.
-  universeRecordByName : Ref (OrdMap RecordInfo),
   -- Every registered head's parameters and constructors, from every module
   -- the universe has registered (the prelude's included), keyed by identity
   -- and read by `tyCarries`; a head absent here is abstract.
   universeDataCtors : Ref (List (TabKey, (DataVis, List String, List Variant))),
-  universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
-  universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
-  universeDataEnv : Ref TcEnv,
-  universeCtorIdentsRef : Ref (OrdMap (List (Ident, String, Scheme))),  -- #1111 A-2.11 (#1319 unit 1): the identity-keyed COMPANION of universeDataEnv's ctor map — see insertCtorIdents
-  universeCtorCollidedRef : Ref (List String),  -- #1111 A-2.11: the ctor NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
+  -- Every public constructor's elaborated scheme and every public record's
+  -- `RecordInfo`, one population per table, keyed by declaration identity and
+  -- indexed by spelling (`SpellingPop`).  Grown only by `appendDataUniverse`, at
+  -- the end of each module's arm in ordinal order, so module k reads exactly the
+  -- public rows of the modules before it.  The floor (`spFloor`) is the bare-keyed
+  -- last-write view: the ctor floor is the base of every Module-arm `dataEnv`
+  -- (`withCtors`), the record floor seeds `recordByNameRef` (`loadDataUniverse`).
+  universeCtorPop : Ref (SpellingPop Scheme),
+  universeRecordPop : Ref (SpellingPop RecordInfo),
   -- ⚠️ TOMBSTONES.  Ten cross-run field-Refs were RETIRED from this record — seven
   -- `universe*` cells plus the three `obUniv*` — and each is now answered by a stage-K
   -- structure, projected at the READING module's own ordinal.
@@ -9618,6 +9630,14 @@ data CrossRun = CrossRun {
   --   `obUnivConcreteRef`/`obUnivHeadlessRef`/`obUnivIfaceTagsRef` (A-3.4 PR2, #1112) --
   --      stage K's `IE` (`declEnvsRef.deImpls`, projected by `ieUniverseAt`) is the
   --      single answer to "what impls exist" on the Module path.  Not merely unread.
+  -- Six more cells were FOLDED rather than projected, because their payload is
+  -- elaborated and stage K is syntactic.  Each namespace had a bare-keyed floor
+  -- plus an identity companion plus a collided list; each is now one population.
+  --   `universeDataEnv`, `universeCtorIdentsRef`, `universeCtorCollidedRef` --
+  --      `universeCtorPop`'s `spFloor` (read through `withCtors`), `spRows`,
+  --      `spCollided`.
+  --   `universeRecordByName`, `universeRecordIdentsRef`, `universeRecordCollidedRef`
+  --      -- `universeRecordPop`'s same three projections.
   builtinClassesRef : Ref BuiltinClasses,  -- #1446 P1 + #1539 / DICT §8 I7: the four operator/literal classes' identities AND presence, read off the PRELUDE's own DInterface decls — see seedBuiltinClasses
   -- B-4 (#1318): one cross-run row per function, one carrier element per dictionary
   -- slot.  The bare table deliberately stores `PSArgsUnknown`; only the source-exact
@@ -9661,8 +9681,8 @@ data CrossRun = CrossRun {
 -- and `@mdk_g_types_typecheck__initialEnv = global i64 0` with a `load` of it inside
 -- `freshCrossRun`.  Native really did read a ZERO.
 -- It never BIT because the zero is overwritten before anything dereferences it: the only
--- readers of `universeDataEnv` sit on the `Module` arm (`registerAllData
--- crossRun.value.universeDataEnv.value`), and every multi-module entry calls
+-- readers of `universeCtorPop` sit on the `Module` arm (`withCtors (spFloor
+-- crossRun.value.universeCtorPop.value)`), and every multi-module entry calls
 -- `resetCrossModuleState ()` FIRST (`checkModulesPreambleK`, `elaborateModules`), which
 -- replaces the whole poisoned bundle once `initialEnv` is properly set.  That is luck, not
 -- design — native's failure mode is a SILENT zero where wasm traps loudly, which is the
@@ -9672,13 +9692,9 @@ freshCrossRun : TcEnv -> CrossRun
 freshCrossRun env = CrossRun {
   universeFunNamesRef = Ref omEmpty,
   universeMethodDispatchIdxByIdRef = Ref [],
-  universeRecordByName = Ref omEmpty,
   universeDataCtors = Ref [],
-  universeRecordIdentsRef = Ref omEmpty,
-  universeRecordCollidedRef = Ref [],
-  universeDataEnv = Ref env,
-  universeCtorIdentsRef = Ref omEmpty,
-  universeCtorCollidedRef = Ref [],
+  universeCtorPop = Ref (spFromFloor (envCtors env)),
+  universeRecordPop = Ref spEmpty,
   builtinClassesRef = Ref emptyBuiltinClasses,
   crossModuleFunPredicateSlotsRef = Ref [],
   crossModuleFunPredicateSlotsQualRef = Ref [],
@@ -12536,7 +12552,7 @@ recordInvocationView (TcEnv _ ctors _ _) =
           (c => match c
             (_, _, sch) => sch)
           cands)
-      (IdMap.values crossRun.value.universeCtorIdentsRef.value)
+      (IdMap.values (spRows crossRun.value.universeCtorPop.value))
   driverState.value.invocationViewRef :=
     InvocationView
       (IdMap.values ctors ++ universe)
@@ -15273,6 +15289,13 @@ lookupLocalFlag (TcEnv _ _ _ lc) n = omHasKey n lc
 
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtor (TcEnv vs cs al lc) n s = TcEnv vs (omInsert n s cs) al lc
+
+-- An environment holding the constructors [cs] and nothing else.
+withCtors : OrdMap Scheme -> TcEnv
+withCtors cs = TcEnv omEmpty cs [] omEmpty
+
+envCtors : TcEnv -> OrdMap Scheme
+envCtors (TcEnv _ cs _ _) = cs
 
 -- EFFECTS WS-2: seed α's known-prefix scope with a same-function-body let RHS.
 -- Prepended (most-recent-first) to mirror α's own `(x,e1)::lets` accumulation.
@@ -18438,7 +18461,7 @@ resolveFieldRecord te fname = match headTyconNameMono te
 -- `.claude/workstreams/TYPECHECK.md`'s standing gate asks about (its
 -- "does the fix change the KEY, or add a guard at ONE READ SITE?"
 -- discriminator).  Question (2) now has its OWN key — the receiver's `Ident`,
--- selected out of the identity-keyed companion `universeRecordIdentsRef` — and
+-- selected out of the identity-keyed rows of `universeRecordPop` — and
 -- question (1) keeps the spelling key it always had.  One read site moves
 -- because exactly one read site asks question (2); a second site asking it would
 -- call this same function.  What is NOT claimed: `recordByNameRef` is still
@@ -18482,7 +18505,7 @@ recordOfOtherType te (RecordInfo _ _ res _ _) = match (
   (Some (Ident _ wo wn), Some (Ident _ ro rn)) => not (wn == rn && wo == ro)
   _ => False
 
--- The identity half.  `universeRecordIdentsRef`'s outer key is the bare registry
+-- The identity half.  `universeRecordPop`'s rows are indexed by the bare registry
 -- key — an INDEX into a candidate list, not the selector; the selector is the
 -- identity comparison below, which is why a collided key keeps both rows here
 -- where `recordByNameRef` keeps one.
@@ -18495,7 +18518,7 @@ recordOfOtherType te (RecordInfo _ _ res _ _) = match (
 -- allocates nothing at all.  Do not "simplify" by projecting the head first.
 recordForReceiverIdent : Mono -> String -> Option RecordInfo
 recordForReceiverIdent te r =
-  match omLookup r crossRun.value.universeRecordIdentsRef.value
+  match omLookup r (spRows crossRun.value.universeRecordPop.value)
     None => None
     Some cs => match receiverTypeIdent te
       None => None
@@ -18531,7 +18554,7 @@ recordCandForType want ((ci, tyName, ri) :: rest)
 -- the TYPE it builds) the declaration the receiver identity `want` names?
 --
 -- A candidate carries `Ident NsCtor o cn` plus `tyName`, because that is what
--- `insertRecordIdents` has in hand; the receiver's head names the TYPE, so the
+-- `insertRecordRow` has in hand; the receiver's head names the TYPE, so the
 -- comparison is `(owning type name, declaring module)`.  `o` is the same
 -- `dataOrigin` `registerRecordInfoKeyed` put in the record's result type, which
 -- is what `headTyconMono` projects back out of a value of that record — so this
@@ -18617,7 +18640,7 @@ recordCandIsType (Ident _ wio wname) (Ident _ cio _) tyName =
 -- pass's premise was *"a real identity key subsumes that hack"* — true, and the
 -- adjudication then chose **B1**, which does NOT make `recordByNameRef` identity-keyed:
 -- it keeps the bare key as a floor and decides collisions with a per-module scope
--- overlay, exactly as unit 1 kept `universeDataEnv` bare.  So the premise the retirement
+-- overlay, exactly as unit 1 kept the ctor floor bare.  So the premise the retirement
 -- rests on is not in the tree, and retiring the hack under B1 would need one of:
 --
 --   * the MANGLER fixed so a record's TYPE name is renamed in lockstep with its
@@ -18815,7 +18838,7 @@ ownerDeclOfReceiver te fname owners = match receiverTypeIdent te
 ownerDeclMatches : Ident -> List String -> List (String, RecordInfo)
 ownerDeclMatches _ [] = []
 ownerDeclMatches ident (k :: rest) =
-  match omLookup k crossRun.value.universeRecordIdentsRef.value
+  match omLookup k (spRows crossRun.value.universeRecordPop.value)
     None => ownerDeclMatches ident rest
     Some cs => match recordCandForType ident cs
       None => ownerDeclMatches ident rest
@@ -19027,7 +19050,7 @@ ctorRecordOfType hk k = match ctorRecordFromCompanion hk k
 ctorRecordFromCompanion : HeadKey -> String -> Option RecordInfo
 ctorRecordFromCompanion hk k = match headKeyIdent hk
   None => None
-  Some ident => match omLookup k crossRun.value.universeRecordIdentsRef.value
+  Some ident => match omLookup k (spRows crossRun.value.universeRecordPop.value)
     None => None
     Some cs => recordCandForType ident cs
 
@@ -29896,7 +29919,7 @@ exportsIdentFor n ident ((en, ei) :: rest)
 -- other.  They are adjacent in this file on purpose.
 --
 -- ── WHAT THIS FIXES, AND WHAT IT DELIBERATELY DOES NOT ──────────────────────
--- `universeDataEnv`'s ctor map is keyed by the BARE constructor name and is
+-- The ctor floor (`universeCtorPop`'s `spFloor`) is keyed by the BARE constructor name and is
 -- last-write-wins, so when two unrelated modules each declare a `Dup` the whole loaded
 -- program has ONE entry for `Dup` and load order picks the winner.  #1111 A-2.6 attacked
 -- that with an import-scoped DECL overlay (`importedCtorTypeDecls`), and the boundary
@@ -29927,83 +29950,54 @@ exportsIdentFor n ident ((en, ei) :: rest)
 -- constructor is rejected outright (`Duplicate constructor: Lt`), so `core` can never be
 -- one of two candidates for one ctor name and there is no rung for it to be.
 
--- Grow the identity-keyed companion by THIS module's PUBLIC data decls.
+-- Grow the constructor population by THIS module's PUBLIC data decls.
 --
--- 🚨 THE SCHEME IS READ BACK OUT OF [env] RATHER THAN RE-DERIVED, and that is the whole
--- reason this lives in `appendDataUniverse` instead of anywhere else.  [env] is the
--- universe env immediately after `registerAllData … pubDecls`, so the companion holds
--- THE VERY SCHEME OBJECT the bare-name map holds — the two cannot come to hold different
--- types for one declaration, and no extra `registerVariants` call is made (which would
--- mint fresh tyvars, re-run `recordParamKinds`, and re-write `recordByNameRef`, i.e.
--- reach into unit 2's table from unit 1).
+-- The scheme is read back out of [env] rather than re-derived, and that is the whole
+-- reason this runs in `appendDataUniverse`: [env] is the universe env immediately after
+-- `registerAllDataScoped … pubDecls`, so a row holds the very scheme object the floor
+-- holds, and no extra `registerVariants` call is made (which would mint fresh tyvars,
+-- re-run `recordParamKinds`, and re-write `recordByNameRef`).
 --
 -- Within ONE module a constructor name is unique (a duplicate is rejected upstream), so
--- `lookupCtor env cn` after that registration is unambiguously THIS module's `cn`.
-insertCtorIdents : TcEnv ->
-  List Decl ->
-  (OrdMap (List (Ident, String, Scheme)), List String) ->
-  (OrdMap (List (Ident, String, Scheme)), List String)
-insertCtorIdents _ [] acc = acc
-insertCtorIdents env ((DAttrib _ d) :: rest) acc =
-  insertCtorIdents env rest (insertCtorIdents env [d] acc)
-insertCtorIdents env ((DData { dataName, dataCtors, dataOrigin, ... }) :: rest) acc =
-  insertCtorIdents
+-- `lookupCtor env cn` after that registration is unambiguously THIS module's `cn`.  A
+-- constructor with no scheme in [env] (an abstract decl whose ctors were never
+-- registered) is not inserted, so neither its floor nor its rows change.  An unstamped
+-- declaration mints no identity and reaches the floor alone (`spInsert`).
+insertCtorPop : TcEnv -> List Decl -> SpellingPop Scheme -> SpellingPop Scheme
+insertCtorPop _ [] pop = pop
+insertCtorPop env ((DAttrib _ d) :: rest) pop =
+  insertCtorPop env rest (insertCtorPop env [d] pop)
+insertCtorPop env ((DData { dataName, dataCtors, dataOrigin, ... }) :: rest) pop =
+  insertCtorPop
     env
     rest
-    (insertVariantIdents env dataName dataOrigin dataCtors acc)
-insertCtorIdents env ((DNewtype { newtypeName, newtypeCtor, newtypeOrigin, ... }) :: rest) acc =
-  insertCtorIdents
+    (insertCtorVariants env dataName dataOrigin dataCtors pop)
+insertCtorPop env ((DNewtype { newtypeName, newtypeCtor, newtypeOrigin, ... }) :: rest) pop =
+  insertCtorPop
     env
     rest
-    (addCtorIdentCand env newtypeName newtypeOrigin newtypeCtor acc)
-insertCtorIdents env (_ :: rest) acc = insertCtorIdents env rest acc
+    (insertCtorRow env newtypeName newtypeOrigin newtypeCtor pop)
+insertCtorPop env (_ :: rest) pop = insertCtorPop env rest pop
 
-insertVariantIdents : TcEnv ->
+insertCtorVariants : TcEnv ->
   String ->
   TyConOrigin ->
   List Variant ->
-  (OrdMap (List (Ident, String, Scheme)), List String) ->
-  (OrdMap (List (Ident, String, Scheme)), List String)
-insertVariantIdents _ _ _ [] acc = acc
-insertVariantIdents env tyName o ((Variant cn _) :: rest) acc =
-  insertVariantIdents env tyName o rest (addCtorIdentCand env tyName o cn acc)
+  SpellingPop Scheme ->
+  SpellingPop Scheme
+insertCtorVariants _ _ _ [] pop = pop
+insertCtorVariants env tyName o ((Variant cn _) :: rest) pop =
+  insertCtorVariants env tyName o rest (insertCtorRow env tyName o cn pop)
 
--- Upsert BY IDENTITY (a decl re-registered by a second pass replaces its own row rather
--- than appending a duplicate), so `listLen >= 2` means "two DISTINCT declarations of this
--- constructor name" and the collided list cannot fill with self-collisions.
---
--- Honest absence twice over (§8 I6.3): no module id ⇒ no identity ⇒ NO candidate, rather
--- than a constant every unstamped declaration would collide on; and no scheme in [env]
--- (an abstract/opaque decl whose ctors were never registered) ⇒ no candidate either,
--- because a candidate with no scheme could not be selected anyway.
-addCtorIdentCand : TcEnv ->
+insertCtorRow : TcEnv ->
   String ->
   TyConOrigin ->
   String ->
-  (OrdMap (List (Ident, String, Scheme)), List String) ->
-  (OrdMap (List (Ident, String, Scheme)), List String)
-addCtorIdentCand env tyName o cn (cands, collided) = match mkIdent NsCtor o cn
-  None => (cands, collided)
-  Some ident => match lookupCtor env cn
-    None => (cands, collided)
-    Some s =>
-      let prior = dropCtorIdentCand ident (optionOr [] (omLookup cn cands))
-      let next = prior ++ [(ident, tyName, s)]
-      (
-        omInsert cn next cands,
-        if listLen next >= 2 && not (contains cn collided) then
-          cn :: collided
-        else
-          collided,
-      )
-
-dropCtorIdentCand : Ident ->
-  List (Ident, String, Scheme) ->
-  List (Ident, String, Scheme)
-dropCtorIdentCand _ [] = []
-dropCtorIdentCand ident ((c@(i, _, _)) :: rest)
-  | i == ident = dropCtorIdentCand ident rest
-  | otherwise = c :: dropCtorIdentCand ident rest
+  SpellingPop Scheme ->
+  SpellingPop Scheme
+insertCtorRow env tyName o cn pop = match lookupCtor env cn
+  None => pop
+  Some s => spInsert (mkIdent NsCtor o cn) cn tyName s pop
 
 -- ── THIS module's scoped view of the bare-name constructor env ─────────────
 -- Overlay [env] (the fully-registered `dataEnv`: universe < import overlay < prog0) with
@@ -30018,11 +30012,8 @@ dropCtorIdentCand ident ((c@(i, _, _)) :: rest)
 -- in the universe, so it is registered in [env] by construction.
 applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
 applyCtorScopeOverrides prog env =
-  overrideScopedCtors
-    prog
-    crossRun.value.universeCtorIdentsRef.value
-    crossRun.value.universeCtorCollidedRef.value
-    env
+  let pop = crossRun.value.universeCtorPop.value
+  overrideScopedCtors prog (spRows pop) (spCollided pop) env
 
 overrideScopedCtors : List Decl ->
   OrdMap (List (Ident, String, Scheme)) ->
@@ -30080,7 +30071,7 @@ ctorCandScheme (_, _, s) = s
 -- unwrap one layer with `declCtorNamed n d`.  `DAttrib` CAN wrap another `DAttrib`
 -- (`parseAttrib` calls `parseDecl` recursively — `frontend/parser.mdk`'s own comment
 -- names the case), and `declCtorNamed`'s `_ => False` arm swallows a nested one
--- silently.  Both siblings on this path already recurse (`insertCtorIdents`,
+-- silently.  Both siblings on this path already recurse (`insertCtorPop`,
 -- `anyUsePathBindsCtor`); this one did not, and the divergence was caught in review
 -- rather than by any gate.
 --
@@ -30198,7 +30189,7 @@ exportsCtorIdentFor n ident ((cn, _, ci) :: rest)
 -- The two tables `registerRecordInfoKeyed` writes in lockstep — `recordByNameRef`
 -- (registry key → RecordInfo) and `fieldOwnersRef` (field name → owning registry keys) —
 -- are the constructor namespace's other half; a record literal / record pattern /
--- `.field` access never reads `universeDataEnv`'s constructor scheme env, so
+-- `.field` access never reads the constructor scheme env, so
 -- `applyCtorScopeOverrides` cannot reach them. Only `recordByNameRef` is fixed here: an
 -- identity-keyed COMPANION plus a per-module SCOPE DECISION for the collided keys.
 -- `fieldOwnersRef` stays a graph-global multimap, open on #1070 / #1319 — its value (the
@@ -30224,76 +30215,46 @@ exportsCtorIdentFor n ident ((cn, _, ci) :: rest)
 -- future change: a driver that hands `desugar` a concatenation of modules would reopen
 -- it.
 
--- Grow the identity-keyed companion by THIS module's PUBLIC record declarations.
+-- Grow the record population by THIS module's PUBLIC record declarations.
 --
 -- The `RecordInfo` is read back out of `recordByNameRef` rather than re-derived, for the
--- same reason `insertCtorIdents` reads its `Scheme` out of `env2`: this runs immediately
--- after `registerAllData … pubDecls` in `appendDataUniverse`, so `lookupRecordByName key`
--- is THIS module's just-registered entry and the companion holds the very object the bare
--- map holds. Re-deriving would call `registerRecordInfoKeyed` a second time, minting a
--- second set of `freshVars` for the same declaration — two RecordInfos for one record, the
--- failure this placement exists to make impossible.
+-- same reason `insertCtorPop` reads its `Scheme` out of `env2`: this runs immediately
+-- after `registerAllDataScoped … pubDecls` in `appendDataUniverse`, so
+-- `lookupRecordByName key` is THIS module's just-registered entry.  Re-deriving would
+-- call `registerRecordInfoKeyed` a second time, minting a second set of `freshVars` for
+-- the same declaration — two RecordInfos for one record.
 --
--- Only `ConNamed` variants are recorded, because only they are registered:
--- `registerNamedFieldVariants` skips a positional variant, so a positional constructor has
--- no `recordByNameRef` row to be a candidate for. The short-form record `data X = { … }`
--- IS a `ConNamed` variant (its key and its type name coincide); a `DNewtype` is `ConPos`
--- and contributes nothing here.
-insertRecordIdents : List Decl ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String) ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String)
-insertRecordIdents [] acc = acc
-insertRecordIdents ((DAttrib _ d) :: rest) acc =
-  insertRecordIdents rest (insertRecordIdents [d] acc)
-insertRecordIdents ((DData { dataName, dataCtors, dataOrigin, ... }) :: rest) acc =
-  insertRecordIdents
-    rest
-    (insertRecordVariantIdents dataName dataOrigin dataCtors acc)
-insertRecordIdents (_ :: rest) acc = insertRecordIdents rest acc
+-- Only `ConNamed` variants are inserted, because only they are registered:
+-- `registerNamedFieldVariants` skips a positional variant.  The short-form record
+-- `data X = { … }` IS a `ConNamed` variant (its key and its type name coincide); a
+-- `DNewtype` is `ConPos` and contributes nothing here.
+insertRecordPop : List Decl -> SpellingPop RecordInfo -> SpellingPop RecordInfo
+insertRecordPop [] pop = pop
+insertRecordPop ((DAttrib _ d) :: rest) pop =
+  insertRecordPop rest (insertRecordPop [d] pop)
+insertRecordPop ((DData { dataName, dataCtors, dataOrigin, ... }) :: rest) pop =
+  insertRecordPop rest (insertRecordVariants dataName dataOrigin dataCtors pop)
+insertRecordPop (_ :: rest) pop = insertRecordPop rest pop
 
-insertRecordVariantIdents : String ->
+insertRecordVariants : String ->
   TyConOrigin ->
   List Variant ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String) ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String)
-insertRecordVariantIdents _ _ [] acc = acc
-insertRecordVariantIdents tyName o ((Variant cn (ConNamed _ _)) :: rest) acc =
-  insertRecordVariantIdents tyName o rest (addRecordIdentCand tyName o cn acc)
-insertRecordVariantIdents tyName o (_ :: rest) acc =
-  insertRecordVariantIdents tyName o rest acc
+  SpellingPop RecordInfo ->
+  SpellingPop RecordInfo
+insertRecordVariants _ _ [] pop = pop
+insertRecordVariants tyName o ((Variant cn (ConNamed _ _)) :: rest) pop =
+  insertRecordVariants tyName o rest (insertRecordRow tyName o cn pop)
+insertRecordVariants tyName o (_ :: rest) pop =
+  insertRecordVariants tyName o rest pop
 
--- Upsert BY IDENTITY, so `listLen >= 2` means "two DISTINCT declarations of this registry
--- key" and the collided list cannot fill with self-collisions.  Honest absence twice over,
--- exactly as `addCtorIdentCand`: no module id ⇒ no identity ⇒ no candidate; no row in
--- `recordByNameRef` ⇒ no candidate, since a candidate with no RecordInfo could not be
--- selected anyway.
-addRecordIdentCand : String ->
+insertRecordRow : String ->
   TyConOrigin ->
   String ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String) ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String)
-addRecordIdentCand tyName o cn (cands, collided) = match mkIdent NsCtor o cn
-  None => (cands, collided)
-  Some ident => match lookupRecordByName cn
-    None => (cands, collided)
-    Some ri =>
-      let prior = dropRecordIdentCand ident (optionOr [] (omLookup cn cands))
-      let next = prior ++ [(ident, tyName, ri)]
-      (
-        omInsert cn next cands,
-        if listLen next >= 2 && not (contains cn collided) then
-          cn :: collided
-        else
-          collided,
-      )
-
-dropRecordIdentCand : Ident ->
-  List (Ident, String, RecordInfo) ->
-  List (Ident, String, RecordInfo)
-dropRecordIdentCand _ [] = []
-dropRecordIdentCand ident ((c@(i, _, _)) :: rest)
-  | i == ident = dropRecordIdentCand ident rest
-  | otherwise = c :: dropRecordIdentCand ident rest
+  SpellingPop RecordInfo ->
+  SpellingPop RecordInfo
+insertRecordRow tyName o cn pop = match lookupRecordByName cn
+  None => pop
+  Some ri => spInsert (mkIdent NsCtor o cn) cn tyName ri pop
 
 -- ── THIS module's scoped view of `recordByNameRef` ─────────────────────────
 -- Runs at the `dataEnv` binding, immediately after `registerAllData … prog0` has written
@@ -30368,10 +30329,8 @@ dropRecordIdentCand ident ((c@(i, _, _)) :: rest)
 -- of a fact `resolve.mdk` derives, and #1288 owns the consolidation.  Unit 4 owns retiring it.
 applyRecordScopeOverrides : List Decl -> Unit
 applyRecordScopeOverrides prog =
-  overrideScopedRecords
-    prog
-    crossRun.value.universeRecordIdentsRef.value
-    crossRun.value.universeRecordCollidedRef.value
+  let pop = crossRun.value.universeRecordPop.value
+  overrideScopedRecords prog (spRows pop) (spCollided pop)
 
 overrideScopedRecords : List Decl ->
   OrdMap (List (Ident, String, RecordInfo)) ->
@@ -34946,7 +34905,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- and discarded it unread — a dead per-module O(N) concat.  Bind `[]` on Module.
   -- registerAllData universe (#154 PR-A): the Module path no longer builds `accData ++ prog0`
   -- here — prior modules' public data lives in the persistent DATA-universe accumulators
-  -- (universeRecordByName/…/universeDataEnv), copied+overlaid at the `dataEnv` binding below.
+  -- (universeCtorPop/universeRecordPop), loaded+overlaid at the `dataEnv` binding below.
   -- groundMultiParamObligations universe: Flat grounds over prog; Module over implDecls.
   let groundUniverse = implDecls
   -- (#6, #1457) superDeclsRef: unified body OWNS it — Flat = coreProg ++ userProg, Module =
@@ -35292,8 +35251,8 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- opposite order for the opposite reason — see the partition note at
     -- `importedCtorTypeDeclsFirstWins`.  Swapping these two inverts the rule silently.
     let base =
-      registerAllData
-        crossRun.value.universeDataEnv.value
+      registerImportOverlay
+        (withCtors (spFloor crossRun.value.universeCtorPop.value))
         (importedCtorTypeDeclsLastWins prog0 cur envs.deModules)
     let env0 = registerAllData base prog0
     let _ = applyRecordScopeOverrides prog0
@@ -41685,6 +41644,88 @@ registerAllDataGo env ds =
   let _ = fold (_ d => recordDeclKinds d) () ds
   fold registerData env ds
 
+-- The Module arm's import overlay, registered over [env] without elaborating a
+-- second time what the populations already hold.  A public data declaration is
+-- elaborated once, by `appendDataUniverse` at the end of its own module's arm, and
+-- an importer reads that payload back by declaration identity.  The overlay's other
+-- decls (aliases, newtypes, attributed or private data, a declaration with no
+-- identity) are registered exactly as `registerAllData` registers them.
+--
+-- A served declaration skips `recordDeclKinds` and `registerVariants`' kind, atom
+-- and variance rows: it is public data of an earlier module, so stage K's seed
+-- (`declEnvSeedDataUniverse`) already holds those rows under the same identity keys.
+-- Its field-owner keys are still added, as `registerRecordInfoKeyed` adds them.
+-- The overlay is folded in list order, because its tables are last-write-wins and
+-- its named rows come last (`importedCtorTypeDeclsLastWins`).
+registerImportOverlay : TcEnv -> List Decl -> TcEnv
+registerImportOverlay env overlay =
+  let _ = seedParamPolarityFixpointScoped overlay overlay
+  let ctorPop = crossRun.value.universeCtorPop.value
+  let recordPop = crossRun.value.universeRecordPop.value
+  let served = map (d => (d, overlayCachedRows ctorPop recordPop d)) overlay
+  let _ =
+    fold
+      (_ p => match snd p
+        None => recordDeclKinds (fst p)
+        Some _ => ())
+      ()
+      served
+  fold
+    (e p => match snd p
+      None => registerData e (fst p)
+      Some rows => registerCachedRows e rows)
+    env
+    served
+
+-- The cached constructor schemes and record infos of [d], in variant order, when
+-- every one of its constructors has a population row under its own identity; any
+-- miss declines for the whole declaration.
+overlayCachedRows : SpellingPop Scheme ->
+  SpellingPop RecordInfo ->
+  Decl ->
+  Option (List (String, Scheme), List (String, RecordInfo))
+overlayCachedRows ctorPop recordPop (DData { dataCtors, dataOrigin, ... }) =
+  cachedVariantRows ctorPop recordPop dataOrigin dataCtors
+overlayCachedRows _ _ _ = None
+
+cachedVariantRows : SpellingPop Scheme ->
+  SpellingPop RecordInfo ->
+  TyConOrigin ->
+  List Variant ->
+  Option (List (String, Scheme), List (String, RecordInfo))
+cachedVariantRows _ _ _ [] = Some ([], [])
+cachedVariantRows ctorPop recordPop o ((Variant cn payload) :: rest) = do
+  ident <- mkIdent NsCtor o cn
+  s <- spLookupIdent ident cn ctorPop
+  recs <- cachedRecordRow recordPop ident cn payload
+  later <- cachedVariantRows ctorPop recordPop o rest
+  Some ((cn, s) :: fst later, recs ++ snd later)
+
+-- A named-field variant's cached `RecordInfo`, as a zero- or one-row list; a
+-- positional variant has none to look up.
+cachedRecordRow : SpellingPop RecordInfo ->
+  Ident ->
+  String ->
+  ConPayload ->
+  Option (List (String, RecordInfo))
+cachedRecordRow recordPop ident cn (ConNamed _ _) =
+  map (ri => [(cn, ri)]) (spLookupIdent ident cn recordPop)
+cachedRecordRow _ _ _ _ = Some []
+
+registerCachedRows : TcEnv ->
+  (List (String, Scheme), List (String, RecordInfo)) ->
+  TcEnv
+registerCachedRows env (ctors, recs) =
+  let _ = fold (_ r => registerCachedRecord (fst r) (snd r)) () recs
+  fold (e c => addCtor e (fst c) (snd c)) env ctors
+
+registerCachedRecord : String -> RecordInfo -> Unit
+registerCachedRecord key ri =
+  perRun.value.recordByNameRef :=
+    omInsert key ri perRun.value.recordByNameRef.value
+  perRun.value.fieldOwnersRef :=
+    addFieldOwners key (recordFieldNames ri) perRun.value.fieldOwnersRef.value
+
 recordDeclKinds : Decl -> Unit
 recordDeclKinds (DAttrib _ d) = recordDeclKinds d
 recordDeclKinds (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = anns, dataCtors = variants, dataOrigin = o }) =
@@ -46258,149 +46299,75 @@ appendUniverseAccums mid prog =
 -- #154 PR-A: grow the persistent DATA-universe by [pubDecls] (THIS module's public data).
 -- `registerData` / `registerVariants` hardcode the working table refs, so grow by
 -- pointing those refs at the persistent values, registering pubDecls over the accumulated
--- ctor env, and snapshotting the results back.  ⚠️ DERIVE HOW MANY from `loadDataUniverse`
--- below rather than trusting a count here — this sentence said "six"/"seven" while A-3.2b
--- was taking the pair to three.  Called at the END of checkBodyImpl's
--- Module arm, where the working table refs are DEAD (this module's inference is done and the
--- next module's resetState wipes them), so the clobber is invisible.  Registers each public
--- decl exactly ONCE across the whole run — the O(N) replacing the Module arm's old
--- per-module O(|accData|) re-registration.  Only publicDataDecls are folded in (private data
--- stays module-local), matching foldModules' `accData ++ publicDataDecls prog` threading.
--- ⚠️ #804/#1028's OPAQUE-type param kinds used to be published from here too, by a second
--- pass (`registerOpaqueParamKinds`) whose ONLY purpose was to reach the kind universe.
--- That universe is retired (see below) and the opaque arms live on `kindPublicDataDecl`,
--- so the pass is GONE rather than left writing a table nothing reads.
--- #415 item 3: the cross-module DATA universe ⇄ per-run working tables copy, which was
--- open-coded as an N-way lockstep mirror at THREE sites (the Module arm of the data-env
--- setup + appendDataUniverse's load and its store-back).  Adding a further universe table
--- meant remembering all three — the "silently absent from the other side" shape.  It now
--- has one body per direction.  ⚠️ N IS DELIBERATELY NOT A NUMBER HERE: it was 5, then 4
--- (#1557 A-3.5c), then 1 (#1512 slices 2+3), inside three successive PRs — derive it from
--- the two bodies below, which are what the invariant note there tells you to read.
--- ⚠️ universeDataEnv is deliberately NOT copied here: it is threaded through
--- `registerAllData` by the CALLER (it is that call's env argument and its result), so it
--- has no meaning as a blind copy.
+-- ctor floor, and reading the results back into the two populations.  Called at the END
+-- of checkBodyImpl's Module arm, where the working table refs are DEAD (this module's
+-- inference is done and the next module's resetState wipes them), so the clobber is
+-- invisible.  Registers each public decl exactly ONCE across the whole run — the O(N)
+-- replacing the Module arm's old per-module O(|accData|) re-registration.  Only
+-- publicDataDecls are folded in (private data stays module-local).
 --
--- 🚨 THE CROSS-RUN HALF IS NOW ONE CELL, AND THE OTHERS ARE NOT SILENTLY DROPPED.
--- Three units in a row have edited these two bodies, so read them as TWO SEPARABLE
--- HALVES rather than as a table count (a count here rots on contact — this comment
--- has said "five", "four" and "three" in three successive PRs; DERIVE it from the
--- bodies below):
---   * CROSS-RUN half — a copy IN and the exact inverse copy OUT, same set, same
---     order.  `universeRecordByName` is what is left of it: its payload is an
---     ELABORATED `RecordInfo`, which the Step-0 ruling keeps OUT of syntactic K, so
---     it stays a marshalled cell until a dedicated elaboration-cache unit.
---   * STAGE-K half — a PROJECTION at the reader's own ordinal, which has NO inverse
---     here by construction.  ⚠️ ONLY ONE OF THE THREE IS SEEDED IN THE BODY BELOW.
---     This bullet said "three tables are now on this side", which reads as three
---     lines of `loadDataUniverse`; two of them are seeded at a DIFFERENT call site —
---     the ONE call of `declEnvSeedDataUniverse mid envs`, in `checkBodyImpl`'s Module
---     arm, further down that arm than this function's own call.  Anchor on the seeder,
---     not on a line number or on this bullet's ordering:
---       `aliasTableRef`      ← `aliasUniverseAt cur … .deData.deAliases`  (#1512 residual 1)
---                              — HERE, in `loadDataUniverse`'s body
---       `dataParamKindsRef`  ← `declEnvSeedDataUniverse mid …`            (#1512 slice 2)
---       `fieldOwnersRef`     ← `declEnvSeedDataUniverse mid …`            (#1512 slice 3)
---                              — both at that function's ONE call site, not here
---     and `ifaceParamKindsRef` left the pair entirely with #1557 A-3.5c (its reader
---     sources `ceSlotKindsAt` from `deIfaces`).
--- Do NOT re-add a `setRef crossRun.… perRun.value.<any of those>.value` "for
--- symmetry".  That is design law L1's divergence: K and a cross-run copy become two
--- answers to one question, and the copy is always the one that drifts — it would
--- carry `rejectCyclicAliases`' per-module alias deletions, and it would carry the
--- DOUBLED owner keys `appendDataUniverse` now leaves behind (see its own note).
---
--- ⚠️ WHEN THIS INVARIANT BREAKS IT IS SILENT — no compile error, no gate, just a
--- table that stops crossing a module boundary.  After ANY rebase, read the two
--- bodies side by side and check the cross-run half agrees in SET and in ORDER, and
--- that each body still has exactly one tail expression and no dangling `let _ =`.
+-- The data universe has two halves, and only one of them is cross-run:
+--   * CROSS-RUN: `universeCtorPop` and `universeRecordPop`, one `SpellingPop` per table.
+--     Their payload is ELABORATED (`Scheme`, `RecordInfo`), which stage K, being
+--     syntactic, cannot hold.  Each population's floor is what a module starts from: the
+--     ctor floor is the base env of the Module arm's `dataEnv` (`withCtors`), the record
+--     floor is loaded into `recordByNameRef` below.  Nothing copies a per-run table back:
+--     `appendDataUniverse` inserts into the populations directly.
+--   * STAGE K: a PROJECTION at the reader's own ordinal, with nothing to write back.
+--     Only one of the three is seeded in the body below.  The other two are seeded at
+--     the one call of `declEnvSeedDataUniverse mid envs`, in `checkBodyImpl`'s Module
+--     arm.  Anchor on the seeder, not on a line number:
+--       `aliasTableRef`      ← `aliasUniverseAt cur … .deData.deAliases`  — HERE
+--       `dataParamKindsRef`  ← `declEnvSeedDataUniverse mid …`
+--       `fieldOwnersRef`     ← `declEnvSeedDataUniverse mid …`
+-- Do NOT add a `crossRun` copy of any stage-K table "for symmetry".  That is design law
+-- L1's divergence: K and a cross-run copy become two answers to one question, and the
+-- copy is always the one that drifts — it would carry `rejectCyclicAliases`' per-module
+-- alias deletions, and it would carry the DOUBLED owner keys `appendDataUniverse` leaves
+-- behind (see its own note).
 loadDataUniverse : Int -> Unit
 loadDataUniverse cur =
-  perRun.value.recordByNameRef := crossRun.value.universeRecordByName.value
+  perRun.value.recordByNameRef := spFloor crossRun.value.universeRecordPop.value
   perRun.value.aliasTableRef :=
     aliasUniverseAt cur driverState.value.declEnvsRef.value.deData.deAliases
 
--- The exact inverse of `loadDataUniverse`'s CROSS-RUN half — see the invariant above.
--- It is one line because that half is one cell; the other three seeds are stage-K
--- projections and have nothing to invert.
-storeDataUniverse : Unit -> Unit
-storeDataUniverse _ =
-  crossRun.value.universeRecordByName := perRun.value.recordByNameRef.value
-
--- ⚠️ STILL TAKES THIS MODULE'S WHOLE decl list, not a pre-filtered one, even though the
--- second half it owned has moved.  It used to own BOTH halves of what a module publishes
--- to the data universe — `publicDataDecls` (ctors + records + kinds, for a `public export`
--- type) and `registerOpaqueParamKinds` (kinds ONLY, for an opaque one, #804/#1028).
--- A-3.2b (#1512) slice 2 retired the kind universe, so the opaque half is now a projection
--- of the whole graph (`kindPublicDataDecl`) rather than a second pass here.  The parameter
--- stays unfiltered because filtering at the CALL SITE is what let the opaque half go
--- missing for as long as it did, and a future third half would land here again.
+-- Takes this module's whole decl list, not a pre-filtered one.  The polarity
+-- fixpoint runs over all of it (#2112), and filtering at the CALL SITE is what once let
+-- the opaque-kind half go missing.
 --
--- 🚨 WHAT `fieldOwnersRef` AND `dataParamKindsRef` CONTAIN WHEN THIS RUNS CHANGED WITH
--- A-3.2b, AND THE OLD "the working refs are DEAD here" NOTE DOES NOT COVER IT.  That
--- note is about WHEN (this module's inference is finished; the next module's
--- `resetState` wipes them) and it still holds.  What changed is WHAT they hold on
--- ENTRY.  `loadDataUniverse` used to RESET both refs from the cross-run universe as
--- its first act; it no longer touches either, so they arrive holding the K seed PLUS
--- everything this module registered during inference — and `registerAllData … pubDecls`
--- below then registers this module's PUBLIC decls a SECOND time.  `addFieldOwners`
--- conses without dedupe, so every own public record is DOUBLE-listed in
--- `fieldOwnersRef` from that line until the next `resetState`.
---
--- ⚠️ UNOBSERVABLE TODAY, AND ONLY BECAUSE NOTHING READS IT IN BETWEEN — verified, not
--- assumed: `insertRecordIdents`/`insertCtorIdents` below read `recordByNameRef` (an
--- `omInsert` map, idempotent under re-registration), never the owner multimap.  But a
--- doubled owner key is EXACTLY the shape `declEnvSeedChain`'s own-row 🚨 exists to
--- prevent: `mangledHeadCandidates` reads this multimap RAW (no `sortUniqS`), so a key
--- appearing twice turns its `[pair]` singleton gate into the give-up arm and `Some
--- pair` becomes `None`.  ⇒ DO NOT ADD A READ OF `fieldOwnersRef` AFTER THIS POINT
--- without either de-duplicating first or restoring a reset.  (`dataParamKindsRef` gets
--- the same doubling; it is inert there because `lookupTab` is first-match over
--- identity-bearing keys whose two copies are equal.)
+-- `fieldOwnersRef` arrives holding the K seed PLUS everything this module registered
+-- during inference, and `registerAllDataScoped … pubDecls` below registers this module's
+-- PUBLIC records a SECOND time.  `addFieldOwners` conses without dedupe, so every own
+-- public record is DOUBLE-listed in `fieldOwnersRef` from that line until the next
+-- `resetState`.  Unobservable today only because nothing reads the multimap in between
+-- (the two population walkers read `env2` and `recordByNameRef`).  A doubled owner key is
+-- the shape `declEnvSeedChain`'s own-row note exists to prevent: `mangledHeadCandidates`
+-- reads this multimap RAW, so a key appearing twice turns its `[pair]` singleton gate
+-- into the give-up arm.  So a read of `fieldOwnersRef` after this point must either
+-- de-duplicate first or restore a reset.  (`dataParamKindsRef` gets the same
+-- doubling; it is inert there because `lookupTab` is first-match over identity-bearing
+-- keys whose two copies are equal.)
 appendDataUniverse : String -> List Decl -> Unit
 appendDataUniverse mid prog0 =
   let pubDecls = publicDataDecls prog0
-  -- A-3.2b residual (#1512): the reload takes THIS module's ordinal, because the
-  -- alias half of it is now a stage-K projection rather than a cross-run copy.
-  -- Same ordinal the arm's own `dataEnv` reload used, and it must stay strictly
-  -- BELOW-this-module (`aliasUniverseAt`'s `<`): `registerAllData … pubDecls`
-  -- immediately below is what puts this module's own public aliases in front,
-  -- exactly as it always did.
+  -- The alias half of the reload is a stage-K projection, so it takes THIS module's
+  -- ordinal, strictly BELOW-this-module (`aliasUniverseAt`'s `<`): the registration
+  -- below is what puts this module's own public aliases in front.
   let _ =
     loadDataUniverse (declEnvsOrdOf mid driverState.value.declEnvsRef.value)
   -- #2112: the polarity fixpoint sees the WHOLE module (`prog0`), the universe
   -- receives only the public keys — see `registerAllDataScoped`.
   let env2 =
-    registerAllDataScoped crossRun.value.universeDataEnv.value pubDecls prog0
-  let _ = storeDataUniverse ()
-  crossRun.value.universeDataEnv := env2
-  -- #1111 A-2.11 (#1319 unit 1): the identity-keyed companion of `universeDataEnv`'s ctor
-  -- map, grown in the SAME place from the SAME `env2` so the two cannot come to hold
-  -- different schemes for one declaration.  See insertCtorIdents.
-  let ctorAcc = insertCtorIdents env2 pubDecls (
-    crossRun.value.universeCtorIdentsRef.value,
-    crossRun.value.universeCtorCollidedRef.value,
-  )
-  crossRun.value.universeCtorIdentsRef := fst ctorAcc
-  crossRun.value.universeCtorCollidedRef := snd ctorAcc
-  -- #1111 A-2.12 (#1319 unit 2): the RECORD-table peer of the three lines above, grown
-  -- HERE and not in `registerRecordInfoKeyed` for the same reason — `registerAllData …
-  -- pubDecls` has just written this module's rows into `recordByNameRef` / `fieldOwnersRef`
-  -- (`storeDataUniverse` copies, it does not clear), so both helpers read back the very
-  -- objects the bare tables hold instead of minting a second set.  See insertRecordIdents.
-  let recAcc = insertRecordIdents pubDecls (
-    crossRun.value.universeRecordIdentsRef.value,
-    crossRun.value.universeRecordCollidedRef.value,
-  )
-  crossRun.value.universeRecordIdentsRef := fst recAcc
-  -- ⚠️ A-3.2b (#1512): a `setRef crossRun.value.universeDataDecls (… ++ pubDecls)` used
-  -- to follow the line below — #674's overlay pool, kept here because
-  -- `universeDataEnv` is a lossy bare-name ctor env and could not recover a SPECIFIC
-  -- module's ctor.  It is RETIRED: stage K's `DeclEnvs` already holds every module's
-  -- decls tagged with the module id and ordinal that lossiness was the absence of, so
-  -- the overlay reads the envelope directly (`importedCtorTypeDecls`) instead of a
-  -- second, unkeyed copy of the same declarations grown one module at a time.
-  crossRun.value.universeRecordCollidedRef := snd recAcc
+    registerAllDataScoped
+      (withCtors (spFloor crossRun.value.universeCtorPop.value))
+      pubDecls
+      prog0
+  -- Both walkers read the payloads this registration just made back out of `env2` and
+  -- `recordByNameRef`, so each population row holds the very object its floor holds.
+  crossRun.value.universeCtorPop :=
+    insertCtorPop env2 pubDecls crossRun.value.universeCtorPop.value
+  crossRun.value.universeRecordPop :=
+    insertRecordPop pubDecls crossRun.value.universeRecordPop.value
 
 -- #154 PR1: buildDefinerShadows with the `allIfaceMethodNames fullUniverse` scan
 -- replaced by a membership test, `isMethod` (`methodNameDeclaredAt` at the module's
@@ -49754,13 +49721,9 @@ copyCrossRun c = CrossRun {
   universeFunNamesRef = Ref c.universeFunNamesRef.value,
   universeMethodDispatchIdxByIdRef =
     Ref c.universeMethodDispatchIdxByIdRef.value,
-  universeRecordByName = Ref c.universeRecordByName.value,
   universeDataCtors = Ref c.universeDataCtors.value,
-  universeRecordIdentsRef = Ref c.universeRecordIdentsRef.value,
-  universeRecordCollidedRef = Ref c.universeRecordCollidedRef.value,
-  universeDataEnv = Ref c.universeDataEnv.value,
-  universeCtorIdentsRef = Ref c.universeCtorIdentsRef.value,
-  universeCtorCollidedRef = Ref c.universeCtorCollidedRef.value,
+  universeCtorPop = Ref c.universeCtorPop.value,
+  universeRecordPop = Ref c.universeRecordPop.value,
   builtinClassesRef = Ref c.builtinClassesRef.value,
   crossModuleFunPredicateSlotsRef = Ref c.crossModuleFunPredicateSlotsRef.value,
   crossModuleFunPredicateSlotsQualRef =

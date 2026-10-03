@@ -167,7 +167,7 @@ import support.ordmap.{
   omDelete,
   omSize,
 }
-import support.util.{lenKey, listLen, joinWith, filterList}
+import support.util.{lenKey, listLen, joinWith, filterList, contains}
 import types.route_key.{typeTagOf}
 import map.{entries}
 
@@ -669,6 +669,86 @@ sregMerge older newer = sregMergeGo (sregKeys newer) older
 sregMergeGo : List RegKey -> SetRegistry -> SetRegistry
 sregMergeGo [] acc = acc
 sregMergeGo (k :: rest) acc = sregMergeGo rest (sregAddK k acc)
+
+-- ── SpellingPop: declarations indexed by the spelling a reader arrives with ─
+-- Three projections of one population, kept in step by the one writer
+-- `spInsert`:
+--   * `spRows`: every declaration registered under a spelling, as `(identity,
+--     owner name, payload)`.  Upsert by identity, so a declaration registered
+--     twice keeps one row, in the position of its latest registration.
+--   * `spFloor`: the payload registered last under each spelling, whatever
+--     its identity.  An unstamped declaration has no identity and reaches
+--     only this projection.
+--   * `spCollided`: the spellings holding two or more distinct identities,
+--     most recent first.  Normally empty, which is what lets a reader pay
+--     per collision rather than per spelling.
+-- The payload type is a parameter, so the elaborated payloads stay with the
+-- typechecker and this module reads none of its state.
+export data SpellingPop a =
+  | SpellingPop (OrdMap (List (Ident, String, a))) (OrdMap a) (List String)
+
+export
+spEmpty : SpellingPop a
+spEmpty = SpellingPop omEmpty omEmpty []
+
+-- A population whose floor is already [floor] and which has no rows.
+export
+spFromFloor : OrdMap a -> SpellingPop a
+spFromFloor floor = SpellingPop omEmpty floor []
+
+-- Registers [payload] under [spelling], owned by the declaration named
+-- [owner].  `None` for the identity updates the floor alone.
+export
+spInsert : Option Ident ->
+  String ->
+  String ->
+  a ->
+  SpellingPop a ->
+  SpellingPop a
+spInsert None spelling _ payload (SpellingPop rows floor collided) =
+  SpellingPop rows (omInsert spelling payload floor) collided
+spInsert (Some ident) spelling owner payload (SpellingPop rows floor collided) =
+  let prior = optionOr [] (omLookup spelling rows)
+  let next =
+    filterList (row => spRowIdent row /= ident) prior
+      ++ [(ident, owner, payload)]
+  let collided2 =
+    if listLen next >= 2 && not (contains spelling collided) then
+      spelling :: collided
+    else
+      collided
+  SpellingPop
+    (omInsert spelling next rows)
+    (omInsert spelling payload floor)
+    collided2
+
+spRowIdent : (Ident, String, a) -> Ident
+spRowIdent (ident, _, _) = ident
+
+export
+spRows : SpellingPop a -> OrdMap (List (Ident, String, a))
+spRows (SpellingPop rows _ _) = rows
+
+export
+spFloor : SpellingPop a -> OrdMap a
+spFloor (SpellingPop _ floor _) = floor
+
+export
+spCollided : SpellingPop a -> List String
+spCollided (SpellingPop _ _ collided) = collided
+
+export
+spCandsOf : String -> SpellingPop a -> List (Ident, String, a)
+spCandsOf spelling pop = optionOr [] (omLookup spelling (spRows pop))
+
+-- The payload the declaration [ident] registered under [spelling], if any.
+export
+spLookupIdent : Ident -> String -> SpellingPop a -> Option a
+spLookupIdent ident spelling pop =
+  map
+    (row => match row
+      (_, _, payload) => payload)
+    (find (row => spRowIdent row == ident) (spCandsOf spelling pop))
 
 -- ── The COMPOSITE assoc-list half (A-2.4) ─────────────────────────────────
 -- `lookupTab`'s peer for a table whose key carries ORDINALS as well as
