@@ -609,6 +609,14 @@ else
   }
   main_refuse_json_case main_fn W-MAIN-SHAPE
   main_refuse_json_case no_main W-MAIN-MISSING
+  # The imported-`main` refusal is located at the import member in the entry's own
+  # lines (0-based line 4, columns 13-28), on `build --json` too.
+  main_refuse_json_case imported_main_json W-MAIN-MISSING
+  if grep -qF '"range":{"end":{"character":28,"line":4},"start":{"character":13,"line":4}}' "$TMP/nat_imported_main_json_buildjson.out"; then
+    pass=$((pass+1)); printf 'ok   build --json/imported_main_json range (4:13-4:28)\n'
+  else
+    fail=$((fail+1)); printf 'FAIL build --json/imported_main_json range (want 4:13-4:28; got [%s])\n' "$(cat "$TMP/nat_imported_main_json_buildjson.out" 2>/dev/null)"
+  fi
 
   # ── build: MutBytes/Builder panic messages (stdlib/mut_bytes.mdk,
   # stdlib/bytebuilder.mdk) ──────────────────────────────────────────────────
