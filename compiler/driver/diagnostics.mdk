@@ -382,10 +382,16 @@ parseErrCode msg
   | startsWith "missing `where` on this " msg = "P-MISSING-WHERE"
   | startsWith "a `where` block must start on the next line" msg =
     "P-WHERE-BODY-SAME-LINE"
+  | startsWith "a `do` block must end" msg = "P-DO-ENDS-IN-BINDING"
+  | startsWith "a `defer` block must end" msg = "P-DO-ENDS-IN-BINDING"
   | startsWith "a match-arm guard uses" msg = "P-GUARD-BAR-IN-MATCH"
   | startsWith "an equation guard uses" msg = "P-GUARD-IF-IN-EQUATION"
   | isReservedKwMsg msg = "P-RESERVED-KEYWORD"
   | otherwise = "P-PARSE"
+
+doEndsInBindingHelp : String
+doEndsInBindingHelp =
+  "end the block with the expression whose value it should have, such as `pure x` or the call that produces the result; a binding (`let` or `x <- e`) only names a value for the statements after it"
 
 -- Build the (help, fix) pair for the two parse-error hints with a clean,
 -- mechanical single-token fix (the Haskell `::`-signature carveout and the
@@ -470,6 +476,8 @@ parseErrHelpFix msg (Loc f sl sc el ec)
       "`interface` and `impl` headers end with `where`, and their members are indented on the lines below — a header with no `where` swallows the next line as another type argument, which is why the error the parser used to report landed there",
     None,
   )
+  | startsWith "a `do` block must end" msg = (Some doEndsInBindingHelp, None)
+  | startsWith "a `defer` block must end" msg = (Some doEndsInBindingHelp, None)
   | startsWith "a `where` block must start on the next line" msg = (
     Some
       "`where` opens a block only when it is the LAST token on its line (docs/spec/LAYOUT-SEMANTICS.md §7.1); anything written after it on the same line is not in the block",

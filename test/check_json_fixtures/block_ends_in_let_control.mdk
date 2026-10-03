@@ -1,0 +1,13 @@
+-- Control: a plain (non-do) block ending in `let` stays valid and yields Unit,
+-- even next to a legal do block.
+ok : Option Int
+ok = do
+  x <- Some 1
+  pure (x + 1)
+
+f : Int -> <IO> Unit
+f n =
+  println "x"
+  let _ = println n
+
+main = println ok

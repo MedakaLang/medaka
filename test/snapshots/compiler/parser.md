@@ -1,5 +1,5 @@
 # META
-source_lines=6113
+source_lines=6149
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -91,6 +91,7 @@ import frontend.lexer.{
   describeToken,
 }
 import support.util.{reverseL, joinWith}
+import list.{last}
 import support.char.{isUpper}
 
 -- ── The Parser monad ────────────────────────────────────────────────────
@@ -4217,9 +4218,44 @@ parseDoBlock : Token -> Bool -> Parser Expr
 parseDoBlock herald deferred = defer
   expectTok herald
   expectTok TIndent
-  stmts <- parseStmts
+  p0 <- getPos
+  r <- doStmtsFrom p0
   expectTok TDedent
-  deferPure (EDo deferred stmts)
+  doBlockResult herald (fst r) (snd r)
+
+-- The statements of a `do`/`defer` block, paired with the token index where the
+-- LAST source statement starts (`p0` for an empty block).
+doStmtsFrom : Int -> Parser (Int, List DoStmt)
+doStmtsFrom p0 = defer
+  skipNewlines
+  doStmtsLoop p0
+
+doStmtsLoop : Int -> Parser (Int, List DoStmt)
+doStmtsLoop lastStart = orElse doStmtsCons (deferPure (lastStart, []))
+
+doStmtsCons : Parser (Int, List DoStmt)
+doStmtsCons = defer
+  p <- getPos
+  ss <- parseStmt
+  skipNewlines
+  r <- doStmtsLoop p
+  deferPure (fst r, ss ++ snd r)
+
+-- A do block's value is its last expression, so a trailing `let` or `x <- e`
+-- has nothing to yield; reported at that statement.
+doBlockResult : Token -> Int -> List DoStmt -> Parser Expr
+doBlockResult herald lastStart stmts = match last stmts
+  Some (DoLet _ _ _ _) => fatalAtP (doEndsInBindingMsg herald) lastStart
+  Some (DoBind _ _) => fatalAtP (doEndsInBindingMsg herald) lastStart
+  _ => deferPure (EDo (herald == TDefer) stmts)
+
+doEndsInBindingMsg : Token -> String
+doEndsInBindingMsg herald =
+  "a `\{blockWord herald}` block must end in an expression, but its last statement is a binding (`let` or `<-`) — a `\{blockWord herald}` block's value is its last expression"
+
+blockWord : Token -> String
+blockWord TDefer = "defer"
+blockWord _ = "do"
 
 -- statements, NEWLINE-separated, until the block's DEDENT
 -- A statement-let / where RHS, or a lambda body (`lamTailRaw`): a bare-INDENT
@@ -6119,6 +6155,7 @@ parseResultWith src tokList offList =
 (DUse false (UseGroup ("frontend" "ast") ((mem "intMinLiteralMsg" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithLines" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "describeToken" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "String") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DData Public "ParserE" ("e" "a") ((variant "ParserE" (ConPos (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))) ())
@@ -7398,7 +7435,20 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseDefer" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseDefer" () (EApp (EApp (EVar "parseDoBlock") (EVar "TDefer")) (EVar "True")))
 (DTypeSig false "parseDoBlock" (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr")))))
-(DFunDef false "parseDoBlock" ((PVar "herald") (PVar "deferred")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "herald"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseStmts")) (ELam ((PVar "stmts")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EVar "EDo") (EVar "deferred")) (EVar "stmts"))))))))))))
+(DFunDef false "parseDoBlock" ((PVar "herald") (PVar "deferred")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "herald"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "p0")) (EApp (EApp (EVar "deferThen") (EApp (EVar "doStmtsFrom") (EVar "p0"))) (ELam ((PVar "r")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EApp (EApp (EVar "doBlockResult") (EVar "herald")) (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "snd") (EVar "r"))))))))))))))
+(DTypeSig false "doStmtsFrom" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
+(DFunDef false "doStmtsFrom" ((PVar "p0")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EVar "doStmtsLoop") (EVar "p0")))))
+(DTypeSig false "doStmtsLoop" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
+(DFunDef false "doStmtsLoop" ((PVar "lastStart")) (EApp (EApp (EVar "orElse") (EVar "doStmtsCons")) (EApp (EVar "deferPure") (ETuple (EVar "lastStart") (EListLit)))))
+(DTypeSig false "doStmtsCons" (TyApp (TyCon "Parser") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "DoStmt")))))
+(DFunDef false "doStmtsCons" () (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "p")) (EApp (EApp (EVar "deferThen") (EVar "parseStmt")) (ELam ((PVar "ss")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "doStmtsLoop") (EVar "p"))) (ELam ((PVar "r")) (EApp (EVar "deferPure") (ETuple (EApp (EVar "fst") (EVar "r")) (EBinOp "++" (EVar "ss") (EApp (EVar "snd") (EVar "r"))))))))))))))
+(DTypeSig false "doBlockResult" (TyFun (TyCon "Token") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Parser") (TyCon "Expr"))))))
+(DFunDef false "doBlockResult" ((PVar "herald") (PVar "lastStart") (PVar "stmts")) (EMatch (EApp (EVar "last") (EVar "stmts")) (arm (PCon "Some" (PCon "DoLet" PWild PWild PWild PWild)) () (EApp (EApp (EVar "fatalAtP") (EApp (EVar "doEndsInBindingMsg") (EVar "herald"))) (EVar "lastStart"))) (arm (PCon "Some" (PCon "DoBind" PWild PWild)) () (EApp (EApp (EVar "fatalAtP") (EApp (EVar "doEndsInBindingMsg") (EVar "herald"))) (EVar "lastStart"))) (arm PWild () (EApp (EVar "deferPure") (EApp (EApp (EVar "EDo") (EBinOp "==" (EVar "herald") (EVar "TDefer"))) (EVar "stmts"))))))
+(DTypeSig false "doEndsInBindingMsg" (TyFun (TyCon "Token") (TyCon "String")))
+(DFunDef false "doEndsInBindingMsg" ((PVar "herald")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a `")) (EApp (EVar "display") (EApp (EVar "blockWord") (EVar "herald")))) (ELit (LString "` block must end in an expression, but its last statement is a binding (`let` or `<-`) — a `"))) (EApp (EVar "display") (EApp (EVar "blockWord") (EVar "herald")))) (ELit (LString "` block's value is its last expression"))))
+(DTypeSig false "blockWord" (TyFun (TyCon "Token") (TyCon "String")))
+(DFunDef false "blockWord" ((PCon "TDefer")) (ELit (LString "defer")))
+(DFunDef false "blockWord" (PWild) (ELit (LString "do")))
 (DTypeSig false "parseRhsExpr" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseRhsExpr" () (EApp (EApp (EVar "orElse") (EVar "parseBracketBlock")) (EVar "parseExpr")))
 (DTypeSig false "parseStmts" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "DoStmt"))))
@@ -7850,6 +7900,7 @@ parseResultWith src tokList offList =
 (DUse false (UseGroup ("frontend" "ast") ((mem "intMinLiteralMsg" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithLines" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "describeToken" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "String") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DData Public "ParserE" ("e" "a") ((variant "ParserE" (ConPos (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))) ())
@@ -9129,7 +9180,20 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseDefer" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseDefer" () (EApp (EApp (EVar "parseDoBlock") (EVar "TDefer")) (EVar "True")))
 (DTypeSig false "parseDoBlock" (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr")))))
-(DFunDef false "parseDoBlock" ((PVar "herald") (PVar "deferred")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "herald"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseStmts")) (ELam ((PVar "stmts")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "EDo") (EVar "deferred")) (EVar "stmts"))))))))))))
+(DFunDef false "parseDoBlock" ((PVar "herald") (PVar "deferred")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "herald"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "p0")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "doStmtsFrom") (EVar "p0"))) (ELam ((PVar "r")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EApp (EApp (EVar "doBlockResult") (EVar "herald")) (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "snd") (EVar "r"))))))))))))))
+(DTypeSig false "doStmtsFrom" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
+(DFunDef false "doStmtsFrom" ((PVar "p0")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EVar "doStmtsLoop") (EVar "p0")))))
+(DTypeSig false "doStmtsLoop" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
+(DFunDef false "doStmtsLoop" ((PVar "lastStart")) (EApp (EApp (EVar "orElse#shadow") (EVar "doStmtsCons")) (EApp (EMethodRef "deferPure") (ETuple (EVar "lastStart") (EListLit)))))
+(DTypeSig false "doStmtsCons" (TyApp (TyCon "Parser") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "DoStmt")))))
+(DFunDef false "doStmtsCons" () (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "p")) (EApp (EApp (EMethodRef "deferThen") (EVar "parseStmt")) (ELam ((PVar "ss")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "doStmtsLoop") (EVar "p"))) (ELam ((PVar "r")) (EApp (EMethodRef "deferPure") (ETuple (EApp (EVar "fst") (EVar "r")) (EBinOp "++" (EVar "ss") (EApp (EVar "snd") (EVar "r"))))))))))))))
+(DTypeSig false "doBlockResult" (TyFun (TyCon "Token") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Parser") (TyCon "Expr"))))))
+(DFunDef false "doBlockResult" ((PVar "herald") (PVar "lastStart") (PVar "stmts")) (EMatch (EApp (EVar "last") (EVar "stmts")) (arm (PCon "Some" (PCon "DoLet" PWild PWild PWild PWild)) () (EApp (EApp (EVar "fatalAtP") (EApp (EVar "doEndsInBindingMsg") (EVar "herald"))) (EVar "lastStart"))) (arm (PCon "Some" (PCon "DoBind" PWild PWild)) () (EApp (EApp (EVar "fatalAtP") (EApp (EVar "doEndsInBindingMsg") (EVar "herald"))) (EVar "lastStart"))) (arm PWild () (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "EDo") (EBinOp "==" (EVar "herald") (EVar "TDefer"))) (EVar "stmts"))))))
+(DTypeSig false "doEndsInBindingMsg" (TyFun (TyCon "Token") (TyCon "String")))
+(DFunDef false "doEndsInBindingMsg" ((PVar "herald")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a `")) (EApp (EMethodRef "display") (EApp (EVar "blockWord") (EVar "herald")))) (ELit (LString "` block must end in an expression, but its last statement is a binding (`let` or `<-`) — a `"))) (EApp (EMethodRef "display") (EApp (EVar "blockWord") (EVar "herald")))) (ELit (LString "` block's value is its last expression"))))
+(DTypeSig false "blockWord" (TyFun (TyCon "Token") (TyCon "String")))
+(DFunDef false "blockWord" ((PCon "TDefer")) (ELit (LString "defer")))
+(DFunDef false "blockWord" (PWild) (ELit (LString "do")))
 (DTypeSig false "parseRhsExpr" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseRhsExpr" () (EApp (EApp (EVar "orElse#shadow") (EVar "parseBracketBlock")) (EVar "parseExpr")))
 (DTypeSig false "parseStmts" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "DoStmt"))))

@@ -87,6 +87,7 @@ import frontend.lexer.{
   describeToken,
 }
 import support.util.{reverseL, joinWith}
+import list.{last}
 import support.char.{isUpper}
 
 -- ── The Parser monad ────────────────────────────────────────────────────
@@ -4213,9 +4214,44 @@ parseDoBlock : Token -> Bool -> Parser Expr
 parseDoBlock herald deferred = defer
   expectTok herald
   expectTok TIndent
-  stmts <- parseStmts
+  p0 <- getPos
+  r <- doStmtsFrom p0
   expectTok TDedent
-  deferPure (EDo deferred stmts)
+  doBlockResult herald (fst r) (snd r)
+
+-- The statements of a `do`/`defer` block, paired with the token index where the
+-- LAST source statement starts (`p0` for an empty block).
+doStmtsFrom : Int -> Parser (Int, List DoStmt)
+doStmtsFrom p0 = defer
+  skipNewlines
+  doStmtsLoop p0
+
+doStmtsLoop : Int -> Parser (Int, List DoStmt)
+doStmtsLoop lastStart = orElse doStmtsCons (deferPure (lastStart, []))
+
+doStmtsCons : Parser (Int, List DoStmt)
+doStmtsCons = defer
+  p <- getPos
+  ss <- parseStmt
+  skipNewlines
+  r <- doStmtsLoop p
+  deferPure (fst r, ss ++ snd r)
+
+-- A do block's value is its last expression, so a trailing `let` or `x <- e`
+-- has nothing to yield; reported at that statement.
+doBlockResult : Token -> Int -> List DoStmt -> Parser Expr
+doBlockResult herald lastStart stmts = match last stmts
+  Some (DoLet _ _ _ _) => fatalAtP (doEndsInBindingMsg herald) lastStart
+  Some (DoBind _ _) => fatalAtP (doEndsInBindingMsg herald) lastStart
+  _ => deferPure (EDo (herald == TDefer) stmts)
+
+doEndsInBindingMsg : Token -> String
+doEndsInBindingMsg herald =
+  "a `\{blockWord herald}` block must end in an expression, but its last statement is a binding (`let` or `<-`) — a `\{blockWord herald}` block's value is its last expression"
+
+blockWord : Token -> String
+blockWord TDefer = "defer"
+blockWord _ = "do"
 
 -- statements, NEWLINE-separated, until the block's DEDENT
 -- A statement-let / where RHS, or a lambda body (`lamTailRaw`): a bare-INDENT

@@ -671,8 +671,5 @@ neighbours.
    bugs with sharp, verified repros.
 4. Everything else is a gap, not a soundness hole, and can wait.
 
-The trailing-binding Wasm gap (#3656) is pinned by
-`engine/wasm_trailing_let`: eval and native agree, while Wasm cannot emit the
-empty continuation after the final binding. The explicit-Unit sibling runs on
-all three engines. Remove the divergence row when the Wasm block walkers yield
-Unit after a final binding.
+A block ending in a `let` yields Unit on all three engines (#3656, drained);
+`engine/wasm_trailing_let` and its explicit-Unit control are value-pinned.
