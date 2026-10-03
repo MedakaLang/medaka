@@ -1,0 +1,6 @@
+-- A public record whose spelling the importer also declares.
+public export data Cfg = { x : Int }
+
+export
+mk : Cfg
+mk = Cfg { x = 3 }

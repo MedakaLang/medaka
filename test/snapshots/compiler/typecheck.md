@@ -1,5 +1,5 @@
 # META
-source_lines=53324
+source_lines=53463
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -18226,13 +18226,16 @@ inferFieldOfRecord te rname ri fname =
 -- `medaka run` already refuses (`E-PANIC unknown field: x`) because the interpreter
 -- resolves fields BY NAME; this restores agreement by refusing EARLIER, at typecheck.
 --
--- The guard answers two layout questions about `f` across the receiver type's
--- constructors (`ctorFieldConflict`): does some constructor withhold `f`, and do
--- two constructors that declare it place it at different positions?  Both
--- emitters read `.f` at the selected constructor's declaration-order index with
--- no tag test, so either disagreement reads the wrong slot for some value of
--- the type (#1468, #1465, #3726).  A field every constructor declares at ONE
--- position has one slot for every value, so the access stays legal.
+-- The guard answers three questions about `f` across the receiver type's
+-- constructors (`ctorFieldConflict`): does some constructor withhold `f`, do
+-- two constructors that declare it place it at different positions, and do two
+-- declare it with different types?  Both emitters read `.f` at the selected
+-- constructor's declaration-order index with no tag test, and the access is
+-- typed by that constructor's declaration, so any disagreement reads the wrong
+-- slot, or reads the right slot at the wrong type, for some value of the type
+-- (#1468, #1465, #3726).  A field every constructor declares at ONE position
+-- with ONE type has one slot and one type for every value, so the access stays
+-- legal.
 --
 -- ⚠️ THE HEAD EQUALITY IS A CASCADE GUARD, NOT A CORRECTNESS ONE.  `te`'s head is
 -- compared against the SELECTED record's own result head, so the guard speaks only
@@ -18259,11 +18262,12 @@ fieldSelectionWellTyped te rname ri fname ft =
       v
 
 -- How the constructors of one type disagree about a field: a constructor that
--- does not declare it, or two that declare it at different (0-based,
--- declaration-order) positions.
+-- does not declare it, two that declare it at different (0-based,
+-- declaration-order) positions, or two that declare it with different types.
 data CtorFieldConflict =
   | CtorWithholds String
   | CtorSlotsDiffer String Int String Int
+  | CtorTypesDiffer String Mono String Mono
 
 -- The conflict, if any, among the constructors sharing the receiver's head.
 -- `ctorSiblingWithholdingName` is the SAME withheld test
@@ -18288,7 +18292,10 @@ ctorFieldConflict hk fname rname =
     Some sib => Some (CtorWithholds sib)
     None => match ctorsOfHead hk
       Some (ctors@(_ :: _ :: _)) =>
-        firstSlotDisagreement (ctorFieldSlots hk fname ctors)
+        let held = ctorFieldSlots hk fname ctors
+        orElseOpt
+          (firstSlotDisagreement held)
+          (firstTypeDisagreement fname held)
       _ => None
 
 ctorsOfHead : HeadKey -> Option (List String)
@@ -18297,27 +18304,125 @@ ctorsOfHead hk = match ctorOracleKeyOf (Some hk)
   Some tk => oGetCtors driverState.value.matchOracle.value tk
 
 -- Each constructor that declares `fname`, with the field's index in that
--- constructor's declaration-order field list — the index both emitters read.
-ctorFieldSlots : HeadKey -> String -> List String -> List (String, Int)
-ctorFieldSlots _ _ [] = []
-ctorFieldSlots hk fname (k :: rest) =
-  let more = ctorFieldSlots hk fname rest
-  match ctorRecordOfType hk k
-    None => more
-    Some ri => match elemIndex fname (recordFieldNames ri)
-      None => more
-      Some i => (k, i) :: more
+-- constructor's declaration-order field list — the index both emitters read —
+-- and the constructor's record.
+ctorFieldSlots : HeadKey ->
+  String ->
+  List String ->
+  List (String, Int, RecordInfo)
+ctorFieldSlots hk fname ctors = filterMap (ctorFieldSlot hk fname) ctors
 
-firstSlotDisagreement : List (String, Int) -> Option CtorFieldConflict
+ctorFieldSlot : HeadKey -> String -> String -> Option (String, Int, RecordInfo)
+ctorFieldSlot hk fname k = match ctorRecordOfType hk k
+  None => None
+  Some ri => map (i => (k, i, ri)) (elemIndex fname (recordFieldNames ri))
+
+firstSlotDisagreement : List (String, Int, RecordInfo) ->
+  Option CtorFieldConflict
 firstSlotDisagreement [] = None
-firstSlotDisagreement ((a, i) :: rest) =
+firstSlotDisagreement ((a, i, _) :: rest) =
   map ((b, j) => CtorSlotsDiffer a i b j) (slotOtherThan i rest)
 
-slotOtherThan : Int -> List (String, Int) -> Option (String, Int)
+slotOtherThan : Int -> List (String, Int, RecordInfo) -> Option (String, Int)
 slotOtherThan _ [] = None
-slotOtherThan i ((b, j) :: rest)
+slotOtherThan i ((b, j, _) :: rest)
   | j /= i = Some (b, j)
   | otherwise = slotOtherThan i rest
+
+-- The first constructor whose declared type for `fname` is not the first
+-- constructor's.  Each constructor's record is registered over its OWN
+-- parameter variables, so the other constructor's field type is restated over
+-- the first's parameters before the two are compared; `data T a = A { x : a } |
+-- B { x : a }` agrees.
+firstTypeDisagreement : String ->
+  List (String, Int, RecordInfo) ->
+  Option CtorFieldConflict
+firstTypeDisagreement _ [] = None
+firstTypeDisagreement fname ((a, _, ra) :: rest) =
+  match omLookup fname (recordFieldMap ra)
+    None => None
+    Some ta => typeOtherThan fname a ra ta rest
+
+typeOtherThan : String ->
+  String ->
+  RecordInfo ->
+  Mono ->
+  List (String, Int, RecordInfo) ->
+  Option CtorFieldConflict
+typeOtherThan _ _ _ _ [] = None
+typeOtherThan fname a ra ta ((b, _, rb) :: rest) =
+  match omLookup fname (recordFieldMap rb)
+    Some tb =>
+      let (tsub, esub, asub) =
+        paramRenaming (recordResultMono rb) (recordResultMono ra) ([], [], [])
+      let tbOverA = substMono tsub esub asub tb
+      if fieldTypeSame ta tbOverA then
+        typeOtherThan fname a ra ta rest
+      else
+        Some (CtorTypesDiffer a ta b tbOverA)
+    None => typeOtherThan fname a ra ta rest
+
+-- Pairs each parameter of `from`'s head application with the argument at the
+-- same position of `to`'s — a type, row or authority parameter, each into its
+-- own substitution — so substituting restates a type written over `from`'s
+-- parameters over `to`'s.
+paramRenaming : Mono ->
+  Mono ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
+paramRenaming from to acc = match normalize from
+  TApp f1 a1 => match normalize to
+    TApp f2 a2 => paramRenaming f1 f2 (renameParam (normalize a1) a2 acc)
+    _ => acc
+  _ => acc
+
+renameParam : Mono ->
+  Mono ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
+renameParam (TVar c) to (ts, es, qs) = ((tyvarId c, to) :: ts, es, qs)
+renameParam (TEff (EffRow [] (Some e1))) (TEff (EffRow [] (Some e2))) (ts, es, qs) =
+  (ts, (effvarId e1, e2) :: es, qs)
+renameParam (TAuth (AVar q1)) (TAuth q2) (ts, es, qs) =
+  (ts, es, (authvarId q1, q2) :: qs)
+renameParam _ _ acc = acc
+
+-- One declared type, read the way a field's value is used: the same shape,
+-- the same declarations and variables (`monoSameGiven` at the leaves), and the
+-- same effect rows and authorities, since a function field read at another
+-- constructor's row performs effects its type does not show.
+fieldTypeSame : Mono -> Mono -> Bool
+fieldTypeSame x y = match (normalize x, normalize y)
+  (TFun a1 r1 b1, TFun a2 r2 b2) =>
+    fieldTypeSame a1 a2 && rowSame r1 r2 && fieldTypeSame b1 b2
+  (TApp a1 b1, TApp a2 b2) => fieldTypeSame a1 a2 && fieldTypeSame b1 b2
+  (TEff r1, TEff r2) => rowSame r1 r2
+  (TQual t1 q1, TQual t2 q2) => fieldTypeSame t1 t2 && authSame q1 q2
+  (TAuth q1, TAuth q2) => authSame q1 q2
+  (TFun _ _ _, _) => False
+  (TApp _ _, _) => False
+  (TEff _, _) => False
+  (TAuth _, _) => False
+  (a, b) => monoSameGiven a b
+
+rowSame : EffRow -> EffRow -> Bool
+rowSame r1 r2 =
+  let (atoms1, tails1) = rowFlat r1
+  let (atoms2, tails2) = rowFlat r2
+  map effvarId tails1 == map effvarId tails2
+    && atomsSame (atomsNorm atoms1) (atomsNorm atoms2)
+
+atomsSame : List Atom -> List Atom -> Bool
+atomsSame [] [] = True
+atomsSame (x :: xs) (y :: ys) =
+  atomKey x == atomKey y
+    && authSame (atomAuth x) (atomAuth y)
+    && atomsSame xs ys
+atomsSame _ _ = False
+
+-- Equal as far as can be proven now: each within the other.
+authSame : Authority -> Authority -> Bool
+authSame p q = authSub p q && authSub q p
 
 pushCtorFieldConflict : String -> String -> CtorFieldConflict -> Unit
 pushCtorFieldConflict fname tname (CtorWithholds sib) =
@@ -18328,6 +18433,10 @@ pushCtorFieldConflict fname tname (CtorSlotsDiffer a i b j) =
   pushTypeError
     "T-FIELD-POSITION-DIFFERS"
     (fieldPositionDiffersMsg fname tname (a, i) (b, j))
+pushCtorFieldConflict fname tname (CtorTypesDiffer a ta b tb) =
+  pushTypeError
+    "T-FIELD-TYPE-DIFFERS"
+    (fieldTypeDiffersMsg fname tname a ta b tb)
 
 fieldNotInAllCtorsMsg : String -> String -> String -> String
 fieldNotInAllCtorsMsg fname tname sib =
@@ -18340,6 +18449,22 @@ fieldPositionDiffersMsg : String ->
   String
 fieldPositionDiffersMsg fname tname (a, i) (b, j) =
   "Field '\{fname}' is at different positions in the constructors of '\{tname}': it is field \{intToString (i + 1)} of '\{a}' but field \{intToString (j + 1)} of '\{b}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
+
+-- The two types render under one naming context, so a parameter shared by both
+-- prints as the same letter.
+fieldTypeDiffersMsg : String ->
+  String ->
+  String ->
+  Mono ->
+  String ->
+  Mono ->
+  String
+fieldTypeDiffersMsg fname tname a ta b tb =
+  let ctx = Ref []
+  let cnt = Ref 0
+  let sa = ppGo ctx cnt 0 ta
+  let sb = ppGo ctx cnt 0 tb
+  "Field '\{fname}' has different types in the constructors of '\{tname}': it is '\{sa}' in '\{a}' but '\{sb}' in '\{b}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be typed; match on the constructor instead"
 
 -- ── #3727/#3726: `{ v | f = e }` on a type with more than one constructor ──
 --
@@ -18362,12 +18487,23 @@ recordUpdateWellTyped bt rname ri fn = match headTyconMono bt
             fn
             (optionOr rname (headTyconNameMono bt))
             rname
+            (filterList (/= fn) (recordFieldNames ri))
             ctors)
       _ => ()
 
-updateMultiCtorMsg : String -> String -> String -> List String -> String
-updateMultiCtorMsg fn tname rname ctors =
-  "Record update of '\{fn}' is not supported on '\{tname}': it has more than one constructor (\{joinWith ", " ctors}), and the type does not say which one the value holds. Match on the constructor and update inside its arm, e.g. '\{rname} { v | \{fn} = ... }'"
+-- The hint rebuilds the value from the constructor's pattern rather than
+-- suggesting `Con { v | f = e }`, which does not check that `v` was built by
+-- `Con`.
+updateMultiCtorMsg : String ->
+  String ->
+  String ->
+  List String ->
+  List String ->
+  String
+updateMultiCtorMsg fn tname rname others ctors =
+  let pat = if isEmptyL others then "..." else joinWith ", " others
+  let rebuilt = joinWith ", " ("\{fn} = ..." :: others)
+  "Record update of '\{fn}' is not supported on '\{tname}': it has more than one constructor (\{joinWith ", " ctors}), and the type does not say which one the value holds. Match on the constructor and build the new value in its arm, e.g. '\{rname} { \{pat} } => \{rname} { \{rebuilt} }'"
 
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped.  For a plain record the key is its type name; for a
@@ -41649,7 +41785,10 @@ registerImportOverlay env overlay =
 
 -- The cached constructor schemes and record infos of [d], in variant order, when
 -- every one of its constructors has a population row under its own identity; any
--- miss declines for the whole declaration.
+-- miss declines for the whole declaration.  Only `DData` has rows to serve, and
+-- declining is never wrong: a declined decl is registered by `registerData`,
+-- which is where a new `Decl` constructor has to be decided, so the final
+-- clause covers every other constructor rather than naming each.
 overlayCachedRows : SpellingPop Scheme ->
   SpellingPop RecordInfo ->
   Decl ->
@@ -56510,33 +56649,60 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferFieldOfRecord" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "te")) (EApp (EVar "snd") (EVar "sr")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))) (arm (PCon "Some" (PVar "fm")) () (EApp (EApp (EVar "substRecordField") (EApp (EVar "fst") (EVar "sr"))) (EVar "fm"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "unknownFieldFresh") (EVar "fname")) (EVar "rname")) (EApp (EVar "recordFieldNames") (EVar "ri"))))))))
 (DTypeSig false "fieldSelectionWellTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono")))))))
 (DFunDef false "fieldSelectionWellTyped" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname") (PVar "ft")) (EMatch (EApp (EApp (EApp (EApp (EVar "ctorFieldConflictHere") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (arm (PCon "None") () (EVar "ft")) (arm (PCon "Some" (PVar "conflict")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushCtorFieldConflict") (EVar "fname")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "te")))) (EVar "conflict"))) (DoLet false false (PVar "v") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "v")) (EVar "v"))) (DoExpr (EVar "v"))))))
-(DData Private "CtorFieldConflict" () ((variant "CtorWithholds" (ConPos (TyCon "String"))) (variant "CtorSlotsDiffer" (ConPos (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "Int")))) ())
+(DData Private "CtorFieldConflict" () ((variant "CtorWithholds" (ConPos (TyCon "String"))) (variant "CtorSlotsDiffer" (ConPos (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "Int"))) (variant "CtorTypesDiffer" (ConPos (TyCon "String") (TyCon "Mono") (TyCon "String") (TyCon "Mono")))) ())
 (DTypeSig false "ctorFieldConflictHere" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CtorFieldConflict")))))))
 (DFunDef false "ctorFieldConflictHere" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "hk")) () (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EApp (EApp (EApp (EVar "ctorFieldConflict") (EVar "hk")) (EVar "fname")) (EVar "rname")) (EVar "None")))))
 (DTypeSig false "ctorFieldConflict" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))))
-(DFunDef false "ctorFieldConflict" ((PVar "hk") (PVar "fname") (PVar "rname")) (EMatch (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EApp (EVar "Some") (EVar "hk"))) (EVar "fname")) (EVar "rname")) (arm (PCon "Some" (PVar "sib")) () (EApp (EVar "Some") (EApp (EVar "CtorWithholds") (EVar "sib")))) (arm (PCon "None") () (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EApp (EVar "firstSlotDisagreement") (EApp (EApp (EApp (EVar "ctorFieldSlots") (EVar "hk")) (EVar "fname")) (EVar "ctors")))) (arm PWild () (EVar "None"))))))
+(DFunDef false "ctorFieldConflict" ((PVar "hk") (PVar "fname") (PVar "rname")) (EMatch (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EApp (EVar "Some") (EVar "hk"))) (EVar "fname")) (EVar "rname")) (arm (PCon "Some" (PVar "sib")) () (EApp (EVar "Some") (EApp (EVar "CtorWithholds") (EVar "sib")))) (arm (PCon "None") () (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EBlock (DoLet false false (PVar "held") (EApp (EApp (EApp (EVar "ctorFieldSlots") (EVar "hk")) (EVar "fname")) (EVar "ctors"))) (DoExpr (EApp (EApp (EVar "orElseOpt") (EApp (EVar "firstSlotDisagreement") (EVar "held"))) (EApp (EApp (EVar "firstTypeDisagreement") (EVar "fname")) (EVar "held")))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "ctorsOfHead" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ctorsOfHead" ((PVar "hk")) (EMatch (EApp (EVar "ctorOracleKeyOf") (EApp (EVar "Some") (EVar "hk"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")))))
-(DTypeSig false "ctorFieldSlots" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))))
-(DFunDef false "ctorFieldSlots" (PWild PWild (PList)) (EListLit))
-(DFunDef false "ctorFieldSlots" ((PVar "hk") (PVar "fname") (PCons (PVar "k") (PVar "rest"))) (EBlock (DoLet false false (PVar "more") (EApp (EApp (EApp (EVar "ctorFieldSlots") (EVar "hk")) (EVar "fname")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "ctorRecordOfType") (EVar "hk")) (EVar "k")) (arm (PCon "None") () (EVar "more")) (arm (PCon "Some" (PVar "ri")) () (EMatch (EApp (EApp (EVar "elemIndex") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri"))) (arm (PCon "None") () (EVar "more")) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (ETuple (EVar "k") (EVar "i")) (EVar "more")))))))))
-(DTypeSig false "firstSlotDisagreement" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))
+(DTypeSig false "ctorFieldSlots" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo")))))))
+(DFunDef false "ctorFieldSlots" ((PVar "hk") (PVar "fname") (PVar "ctors")) (EApp (EApp (EVar "filterMap") (EApp (EApp (EVar "ctorFieldSlot") (EVar "hk")) (EVar "fname"))) (EVar "ctors")))
+(DTypeSig false "ctorFieldSlot" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo")))))))
+(DFunDef false "ctorFieldSlot" ((PVar "hk") (PVar "fname") (PVar "k")) (EMatch (EApp (EApp (EVar "ctorRecordOfType") (EVar "hk")) (EVar "k")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EVar "map") (ELam ((PVar "i")) (ETuple (EVar "k") (EVar "i") (EVar "ri")))) (EApp (EApp (EVar "elemIndex") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri")))))))
+(DTypeSig false "firstSlotDisagreement" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))
 (DFunDef false "firstSlotDisagreement" ((PList)) (EVar "None"))
-(DFunDef false "firstSlotDisagreement" ((PCons (PTuple (PVar "a") (PVar "i")) (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "b") (PVar "j"))) (EApp (EApp (EApp (EApp (EVar "CtorSlotsDiffer") (EVar "a")) (EVar "i")) (EVar "b")) (EVar "j")))) (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest"))))
-(DTypeSig false "slotOtherThan" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DFunDef false "firstSlotDisagreement" ((PCons (PTuple (PVar "a") (PVar "i") PWild) (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "b") (PVar "j"))) (EApp (EApp (EApp (EApp (EVar "CtorSlotsDiffer") (EVar "a")) (EVar "i")) (EVar "b")) (EVar "j")))) (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest"))))
+(DTypeSig false "slotOtherThan" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "slotOtherThan" (PWild (PList)) (EVar "None"))
-(DFunDef false "slotOtherThan" ((PVar "i") (PCons (PTuple (PVar "b") (PVar "j")) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "j") (EVar "i")) (EApp (EVar "Some") (ETuple (EVar "b") (EVar "j"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "slotOtherThan" ((PVar "i") (PCons (PTuple (PVar "b") (PVar "j") PWild) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "j") (EVar "i")) (EApp (EVar "Some") (ETuple (EVar "b") (EVar "j"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "firstTypeDisagreement" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict")))))
+(DFunDef false "firstTypeDisagreement" (PWild (PList)) (EVar "None"))
+(DFunDef false "firstTypeDisagreement" ((PVar "fname") (PCons (PTuple (PVar "a") PWild (PVar "ra")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ra"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ta")) () (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
+(DTypeSig false "typeOtherThan" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))))))
+(DFunDef false "typeOtherThan" (PWild PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "typeOtherThan" ((PVar "fname") (PVar "a") (PVar "ra") (PVar "ta") (PCons (PTuple (PVar "b") PWild (PVar "rb")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "rb"))) (arm (PCon "Some" (PVar "tb")) () (EBlock (DoLet false false (PTuple (PVar "tsub") (PVar "esub") (PVar "asub")) (EApp (EApp (EApp (EVar "paramRenaming") (EApp (EVar "recordResultMono") (EVar "rb"))) (EApp (EVar "recordResultMono") (EVar "ra"))) (ETuple (EListLit) (EListLit) (EListLit)))) (DoLet false false (PVar "tbOverA") (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "tsub")) (EVar "esub")) (EVar "asub")) (EVar "tb"))) (DoExpr (EIf (EApp (EApp (EVar "fieldTypeSame") (EVar "ta")) (EVar "tbOverA")) (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "CtorTypesDiffer") (EVar "a")) (EVar "ta")) (EVar "b")) (EVar "tbOverA"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
+(DTypeSig false "paramRenaming" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
+(DFunDef false "paramRenaming" ((PVar "from") (PVar "to") (PVar "acc")) (EMatch (EApp (EVar "normalize") (EVar "from")) (arm (PCon "TApp" (PVar "f1") (PVar "a1")) () (EMatch (EApp (EVar "normalize") (EVar "to")) (arm (PCon "TApp" (PVar "f2") (PVar "a2")) () (EApp (EApp (EApp (EVar "paramRenaming") (EVar "f1")) (EVar "f2")) (EApp (EApp (EApp (EVar "renameParam") (EApp (EVar "normalize") (EVar "a1"))) (EVar "a2")) (EVar "acc")))) (arm PWild () (EVar "acc")))) (arm PWild () (EVar "acc"))))
+(DTypeSig false "renameParam" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
+(DFunDef false "renameParam" ((PCon "TVar" (PVar "c")) (PVar "to") (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EBinOp "::" (ETuple (EApp (EVar "tyvarId") (EVar "c")) (EVar "to")) (EVar "ts")) (EVar "es") (EVar "qs")))
+(DFunDef false "renameParam" ((PCon "TEff" (PCon "EffRow" (PList) (PCon "Some" (PVar "e1")))) (PCon "TEff" (PCon "EffRow" (PList) (PCon "Some" (PVar "e2")))) (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EVar "ts") (EBinOp "::" (ETuple (EApp (EVar "effvarId") (EVar "e1")) (EVar "e2")) (EVar "es")) (EVar "qs")))
+(DFunDef false "renameParam" ((PCon "TAuth" (PCon "AVar" (PVar "q1"))) (PCon "TAuth" (PVar "q2")) (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EVar "ts") (EVar "es") (EBinOp "::" (ETuple (EApp (EVar "authvarId") (EVar "q1")) (EVar "q2")) (EVar "qs"))))
+(DFunDef false "renameParam" (PWild PWild (PVar "acc")) (EVar "acc"))
+(DTypeSig false "fieldTypeSame" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "fieldTypeSame" ((PVar "x") (PVar "y")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "x")) (EApp (EVar "normalize") (EVar "y"))) (arm (PTuple (PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "rowSame") (EVar "r1")) (EVar "r2"))) (EApp (EApp (EVar "fieldTypeSame") (EVar "b1")) (EVar "b2")))) (arm (PTuple (PCon "TApp" (PVar "a1") (PVar "b1")) (PCon "TApp" (PVar "a2") (PVar "b2"))) () (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "fieldTypeSame") (EVar "b1")) (EVar "b2")))) (arm (PTuple (PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) () (EApp (EApp (EVar "rowSame") (EVar "r1")) (EVar "r2"))) (arm (PTuple (PCon "TQual" (PVar "t1") (PVar "q1")) (PCon "TQual" (PVar "t2") (PVar "q2"))) () (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "t1")) (EVar "t2")) (EApp (EApp (EVar "authSame") (EVar "q1")) (EVar "q2")))) (arm (PTuple (PCon "TAuth" (PVar "q1")) (PCon "TAuth" (PVar "q2"))) () (EApp (EApp (EVar "authSame") (EVar "q1")) (EVar "q2"))) (arm (PTuple (PCon "TFun" PWild PWild PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TApp" PWild PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TEff" PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TAuth" PWild) PWild) () (EVar "False")) (arm (PTuple (PVar "a") (PVar "b")) () (EApp (EApp (EVar "monoSameGiven") (EVar "a")) (EVar "b")))))
+(DTypeSig false "rowSame" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Bool"))))
+(DFunDef false "rowSame" ((PVar "r1") (PVar "r2")) (EBlock (DoLet false false (PTuple (PVar "atoms1") (PVar "tails1")) (EApp (EVar "rowFlat") (EVar "r1"))) (DoLet false false (PTuple (PVar "atoms2") (PVar "tails2")) (EApp (EVar "rowFlat") (EVar "r2"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "map") (EVar "effvarId")) (EVar "tails1")) (EApp (EApp (EVar "map") (EVar "effvarId")) (EVar "tails2"))) (EApp (EApp (EVar "atomsSame") (EApp (EVar "atomsNorm") (EVar "atoms1"))) (EApp (EVar "atomsNorm") (EVar "atoms2")))))))
+(DTypeSig false "atomsSame" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Bool"))))
+(DFunDef false "atomsSame" ((PList) (PList)) (EVar "True"))
+(DFunDef false "atomsSame" ((PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "atomKey") (EVar "y"))) (EApp (EApp (EVar "authSame") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EApp (EApp (EVar "atomsSame") (EVar "xs")) (EVar "ys"))))
+(DFunDef false "atomsSame" (PWild PWild) (EVar "False"))
+(DTypeSig false "authSame" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
+(DFunDef false "authSame" ((PVar "p") (PVar "q")) (EBinOp "&&" (EApp (EApp (EVar "authSub") (EVar "p")) (EVar "q")) (EApp (EApp (EVar "authSub") (EVar "q")) (EVar "p"))))
 (DTypeSig false "pushCtorFieldConflict" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CtorFieldConflict") (TyCon "Unit")))))
 (DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorWithholds" (PVar "sib"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-NOT-IN-ALL-CTORS"))) (EApp (EApp (EApp (EVar "fieldNotInAllCtorsMsg") (EVar "fname")) (EVar "tname")) (EVar "sib"))))
 (DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorSlotsDiffer" (PVar "a") (PVar "i") (PVar "b") (PVar "j"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-POSITION-DIFFERS"))) (EApp (EApp (EApp (EApp (EVar "fieldPositionDiffersMsg") (EVar "fname")) (EVar "tname")) (ETuple (EVar "a") (EVar "i"))) (ETuple (EVar "b") (EVar "j")))))
+(DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorTypesDiffer" (PVar "a") (PVar "ta") (PVar "b") (PVar "tb"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-TYPE-DIFFERS"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldTypeDiffersMsg") (EVar "fname")) (EVar "tname")) (EVar "a")) (EVar "ta")) (EVar "b")) (EVar "tb"))))
 (DTypeSig false "fieldNotInAllCtorsMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "fieldNotInAllCtorsMsg" ((PVar "fname") (PVar "tname") (PVar "sib")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is not declared by every constructor of '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "': constructor '"))) (EApp (EVar "display") (EVar "sib"))) (ELit (LString "' has no '"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "'. A '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' cannot be resolved; match on the constructor instead"))))
 (DTypeSig false "fieldPositionDiffersMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String"))))))
 (DFunDef false "fieldPositionDiffersMsg" ((PVar "fname") (PVar "tname") (PTuple (PVar "a") (PVar "i")) (PTuple (PVar "b") (PVar "j"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is at different positions in the constructors of '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "': it is field "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString " of '"))) (EApp (EVar "display") (EVar "a"))) (ELit (LString "' but field "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "j") (ELit (LInt 1)))))) (ELit (LString " of '"))) (EApp (EVar "display") (EVar "b"))) (ELit (LString "'. A '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' cannot be resolved; match on the constructor instead"))))
+(DTypeSig false "fieldTypeDiffersMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "String"))))))))
+(DFunDef false "fieldTypeDiffersMsg" ((PVar "fname") (PVar "tname") (PVar "a") (PVar "ta") (PVar "b") (PVar "tb")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "sa") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "ta"))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "tb"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' has different types in the constructors of '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "': it is '"))) (EApp (EVar "display") (EVar "sa"))) (ELit (LString "' in '"))) (EApp (EVar "display") (EVar "a"))) (ELit (LString "' but '"))) (EApp (EVar "display") (EVar "sb"))) (ELit (LString "' in '"))) (EApp (EVar "display") (EVar "b"))) (ELit (LString "'. A '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' cannot be typed; match on the constructor instead"))))))
 (DTypeSig false "recordUpdateWellTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Unit"))))))
-(DFunDef false "recordUpdateWellTyped" ((PVar "bt") (PVar "rname") (PVar "ri") (PVar "fn")) (EMatch (EApp (EVar "headTyconMono") (EVar "bt")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "hk")) () (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UPDATE-MULTI-CTOR"))) (EApp (EApp (EApp (EApp (EVar "updateMultiCtorMsg") (EVar "fn")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "bt")))) (EVar "rname")) (EVar "ctors")))) (arm PWild () (ELit LUnit))) (ELit LUnit)))))
-(DTypeSig false "updateMultiCtorMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "updateMultiCtorMsg" ((PVar "fn") (PVar "tname") (PVar "rname") (PVar "ctors")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Record update of '")) (EApp (EVar "display") (EVar "fn"))) (ELit (LString "' is not supported on '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "': it has more than one constructor ("))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ctors")))) (ELit (LString "), and the type does not say which one the value holds. Match on the constructor and update inside its arm, e.g. '"))) (EApp (EVar "display") (EVar "rname"))) (ELit (LString " { v | "))) (EApp (EVar "display") (EVar "fn"))) (ELit (LString " = ... }'"))))
+(DFunDef false "recordUpdateWellTyped" ((PVar "bt") (PVar "rname") (PVar "ri") (PVar "fn")) (EMatch (EApp (EVar "headTyconMono") (EVar "bt")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "hk")) () (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UPDATE-MULTI-CTOR"))) (EApp (EApp (EApp (EApp (EApp (EVar "updateMultiCtorMsg") (EVar "fn")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "bt")))) (EVar "rname")) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "fn")))) (EApp (EVar "recordFieldNames") (EVar "ri")))) (EVar "ctors")))) (arm PWild () (ELit LUnit))) (ELit LUnit)))))
+(DTypeSig false "updateMultiCtorMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "updateMultiCtorMsg" ((PVar "fn") (PVar "tname") (PVar "rname") (PVar "others") (PVar "ctors")) (EBlock (DoLet false false (PVar "pat") (EIf (EApp (EVar "isEmptyL") (EVar "others")) (ELit (LString "...")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fn"))) (ELit (LString " = ..."))) (EVar "others")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Record update of '")) (EApp (EVar "display") (EVar "fn"))) (ELit (LString "' is not supported on '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "': it has more than one constructor ("))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ctors")))) (ELit (LString "), and the type does not say which one the value holds. Match on the constructor and build the new value in its arm, e.g. '"))) (EApp (EVar "display") (EVar "rname"))) (ELit (LString " { "))) (EApp (EVar "display") (EVar "pat"))) (ELit (LString " } => "))) (EApp (EVar "display") (EVar "rname"))) (ELit (LString " { "))) (EApp (EVar "display") (EVar "rebuilt"))) (ELit (LString " }'"))))))
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "fieldOwnerReachFilter") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
 (DTypeSig false "fieldOwnerReachFilter" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -65273,33 +65439,60 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferFieldOfRecord" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "te")) (EApp (EVar "snd") (EVar "sr")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))) (arm (PCon "Some" (PVar "fm")) () (EApp (EApp (EVar "substRecordField") (EApp (EVar "fst") (EVar "sr"))) (EVar "fm"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "unknownFieldFresh") (EVar "fname")) (EVar "rname")) (EApp (EVar "recordFieldNames") (EVar "ri"))))))))
 (DTypeSig false "fieldSelectionWellTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono")))))))
 (DFunDef false "fieldSelectionWellTyped" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname") (PVar "ft")) (EMatch (EApp (EApp (EApp (EApp (EVar "ctorFieldConflictHere") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (arm (PCon "None") () (EVar "ft")) (arm (PCon "Some" (PVar "conflict")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushCtorFieldConflict") (EVar "fname")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "te")))) (EVar "conflict"))) (DoLet false false (PVar "v") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "v")) (EVar "v"))) (DoExpr (EVar "v"))))))
-(DData Private "CtorFieldConflict" () ((variant "CtorWithholds" (ConPos (TyCon "String"))) (variant "CtorSlotsDiffer" (ConPos (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "Int")))) ())
+(DData Private "CtorFieldConflict" () ((variant "CtorWithholds" (ConPos (TyCon "String"))) (variant "CtorSlotsDiffer" (ConPos (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "Int"))) (variant "CtorTypesDiffer" (ConPos (TyCon "String") (TyCon "Mono") (TyCon "String") (TyCon "Mono")))) ())
 (DTypeSig false "ctorFieldConflictHere" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CtorFieldConflict")))))))
 (DFunDef false "ctorFieldConflictHere" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "hk")) () (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EApp (EApp (EApp (EVar "ctorFieldConflict") (EVar "hk")) (EVar "fname")) (EVar "rname")) (EVar "None")))))
 (DTypeSig false "ctorFieldConflict" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))))
-(DFunDef false "ctorFieldConflict" ((PVar "hk") (PVar "fname") (PVar "rname")) (EMatch (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EApp (EVar "Some") (EVar "hk"))) (EVar "fname")) (EVar "rname")) (arm (PCon "Some" (PVar "sib")) () (EApp (EVar "Some") (EApp (EVar "CtorWithholds") (EVar "sib")))) (arm (PCon "None") () (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EApp (EVar "firstSlotDisagreement") (EApp (EApp (EApp (EVar "ctorFieldSlots") (EVar "hk")) (EVar "fname")) (EVar "ctors")))) (arm PWild () (EVar "None"))))))
+(DFunDef false "ctorFieldConflict" ((PVar "hk") (PVar "fname") (PVar "rname")) (EMatch (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EApp (EVar "Some") (EVar "hk"))) (EVar "fname")) (EVar "rname")) (arm (PCon "Some" (PVar "sib")) () (EApp (EVar "Some") (EApp (EVar "CtorWithholds") (EVar "sib")))) (arm (PCon "None") () (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EBlock (DoLet false false (PVar "held") (EApp (EApp (EApp (EVar "ctorFieldSlots") (EVar "hk")) (EVar "fname")) (EVar "ctors"))) (DoExpr (EApp (EApp (EVar "orElseOpt") (EApp (EVar "firstSlotDisagreement") (EVar "held"))) (EApp (EApp (EVar "firstTypeDisagreement") (EVar "fname")) (EVar "held")))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "ctorsOfHead" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ctorsOfHead" ((PVar "hk")) (EMatch (EApp (EVar "ctorOracleKeyOf") (EApp (EVar "Some") (EVar "hk"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")))))
-(DTypeSig false "ctorFieldSlots" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))))
-(DFunDef false "ctorFieldSlots" (PWild PWild (PList)) (EListLit))
-(DFunDef false "ctorFieldSlots" ((PVar "hk") (PVar "fname") (PCons (PVar "k") (PVar "rest"))) (EBlock (DoLet false false (PVar "more") (EApp (EApp (EApp (EVar "ctorFieldSlots") (EVar "hk")) (EVar "fname")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "ctorRecordOfType") (EVar "hk")) (EVar "k")) (arm (PCon "None") () (EVar "more")) (arm (PCon "Some" (PVar "ri")) () (EMatch (EApp (EApp (EVar "elemIndex") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri"))) (arm (PCon "None") () (EVar "more")) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (ETuple (EVar "k") (EVar "i")) (EVar "more")))))))))
-(DTypeSig false "firstSlotDisagreement" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))
+(DTypeSig false "ctorFieldSlots" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo")))))))
+(DFunDef false "ctorFieldSlots" ((PVar "hk") (PVar "fname") (PVar "ctors")) (EApp (EApp (EMethodRef "filterMap") (EApp (EApp (EVar "ctorFieldSlot") (EVar "hk")) (EVar "fname"))) (EVar "ctors")))
+(DTypeSig false "ctorFieldSlot" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo")))))))
+(DFunDef false "ctorFieldSlot" ((PVar "hk") (PVar "fname") (PVar "k")) (EMatch (EApp (EApp (EVar "ctorRecordOfType") (EVar "hk")) (EVar "k")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (ETuple (EVar "k") (EVar "i") (EVar "ri")))) (EApp (EApp (EVar "elemIndex") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri")))))))
+(DTypeSig false "firstSlotDisagreement" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))
 (DFunDef false "firstSlotDisagreement" ((PList)) (EVar "None"))
-(DFunDef false "firstSlotDisagreement" ((PCons (PTuple (PVar "a") (PVar "i")) (PVar "rest"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "b") (PVar "j"))) (EApp (EApp (EApp (EApp (EVar "CtorSlotsDiffer") (EVar "a")) (EVar "i")) (EVar "b")) (EVar "j")))) (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest"))))
-(DTypeSig false "slotOtherThan" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DFunDef false "firstSlotDisagreement" ((PCons (PTuple (PVar "a") (PVar "i") PWild) (PVar "rest"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "b") (PVar "j"))) (EApp (EApp (EApp (EApp (EVar "CtorSlotsDiffer") (EVar "a")) (EVar "i")) (EVar "b")) (EVar "j")))) (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest"))))
+(DTypeSig false "slotOtherThan" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "slotOtherThan" (PWild (PList)) (EVar "None"))
-(DFunDef false "slotOtherThan" ((PVar "i") (PCons (PTuple (PVar "b") (PVar "j")) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "j") (EVar "i")) (EApp (EVar "Some") (ETuple (EVar "b") (EVar "j"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "slotOtherThan" ((PVar "i") (PCons (PTuple (PVar "b") (PVar "j") PWild) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "j") (EVar "i")) (EApp (EVar "Some") (ETuple (EVar "b") (EVar "j"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "firstTypeDisagreement" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict")))))
+(DFunDef false "firstTypeDisagreement" (PWild (PList)) (EVar "None"))
+(DFunDef false "firstTypeDisagreement" ((PVar "fname") (PCons (PTuple (PVar "a") PWild (PVar "ra")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ra"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ta")) () (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
+(DTypeSig false "typeOtherThan" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))))))
+(DFunDef false "typeOtherThan" (PWild PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "typeOtherThan" ((PVar "fname") (PVar "a") (PVar "ra") (PVar "ta") (PCons (PTuple (PVar "b") PWild (PVar "rb")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "rb"))) (arm (PCon "Some" (PVar "tb")) () (EBlock (DoLet false false (PTuple (PVar "tsub") (PVar "esub") (PVar "asub")) (EApp (EApp (EApp (EVar "paramRenaming") (EApp (EVar "recordResultMono") (EVar "rb"))) (EApp (EVar "recordResultMono") (EVar "ra"))) (ETuple (EListLit) (EListLit) (EListLit)))) (DoLet false false (PVar "tbOverA") (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "tsub")) (EVar "esub")) (EVar "asub")) (EVar "tb"))) (DoExpr (EIf (EApp (EApp (EVar "fieldTypeSame") (EVar "ta")) (EVar "tbOverA")) (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "CtorTypesDiffer") (EVar "a")) (EVar "ta")) (EVar "b")) (EVar "tbOverA"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
+(DTypeSig false "paramRenaming" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
+(DFunDef false "paramRenaming" ((PVar "from") (PVar "to") (PVar "acc")) (EMatch (EApp (EVar "normalize") (EVar "from")) (arm (PCon "TApp" (PVar "f1") (PVar "a1")) () (EMatch (EApp (EVar "normalize") (EVar "to")) (arm (PCon "TApp" (PVar "f2") (PVar "a2")) () (EApp (EApp (EApp (EVar "paramRenaming") (EVar "f1")) (EVar "f2")) (EApp (EApp (EApp (EVar "renameParam") (EApp (EVar "normalize") (EVar "a1"))) (EVar "a2")) (EVar "acc")))) (arm PWild () (EVar "acc")))) (arm PWild () (EVar "acc"))))
+(DTypeSig false "renameParam" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
+(DFunDef false "renameParam" ((PCon "TVar" (PVar "c")) (PVar "to") (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EBinOp "::" (ETuple (EApp (EVar "tyvarId") (EVar "c")) (EVar "to")) (EVar "ts")) (EVar "es") (EVar "qs")))
+(DFunDef false "renameParam" ((PCon "TEff" (PCon "EffRow" (PList) (PCon "Some" (PVar "e1")))) (PCon "TEff" (PCon "EffRow" (PList) (PCon "Some" (PVar "e2")))) (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EVar "ts") (EBinOp "::" (ETuple (EApp (EVar "effvarId") (EVar "e1")) (EVar "e2")) (EVar "es")) (EVar "qs")))
+(DFunDef false "renameParam" ((PCon "TAuth" (PCon "AVar" (PVar "q1"))) (PCon "TAuth" (PVar "q2")) (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EVar "ts") (EVar "es") (EBinOp "::" (ETuple (EApp (EVar "authvarId") (EVar "q1")) (EVar "q2")) (EVar "qs"))))
+(DFunDef false "renameParam" (PWild PWild (PVar "acc")) (EVar "acc"))
+(DTypeSig false "fieldTypeSame" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "fieldTypeSame" ((PVar "x") (PVar "y")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "x")) (EApp (EVar "normalize") (EVar "y"))) (arm (PTuple (PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "rowSame") (EVar "r1")) (EVar "r2"))) (EApp (EApp (EVar "fieldTypeSame") (EVar "b1")) (EVar "b2")))) (arm (PTuple (PCon "TApp" (PVar "a1") (PVar "b1")) (PCon "TApp" (PVar "a2") (PVar "b2"))) () (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "fieldTypeSame") (EVar "b1")) (EVar "b2")))) (arm (PTuple (PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) () (EApp (EApp (EVar "rowSame") (EVar "r1")) (EVar "r2"))) (arm (PTuple (PCon "TQual" (PVar "t1") (PVar "q1")) (PCon "TQual" (PVar "t2") (PVar "q2"))) () (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "t1")) (EVar "t2")) (EApp (EApp (EVar "authSame") (EVar "q1")) (EVar "q2")))) (arm (PTuple (PCon "TAuth" (PVar "q1")) (PCon "TAuth" (PVar "q2"))) () (EApp (EApp (EVar "authSame") (EVar "q1")) (EVar "q2"))) (arm (PTuple (PCon "TFun" PWild PWild PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TApp" PWild PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TEff" PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TAuth" PWild) PWild) () (EVar "False")) (arm (PTuple (PVar "a") (PVar "b")) () (EApp (EApp (EVar "monoSameGiven") (EVar "a")) (EVar "b")))))
+(DTypeSig false "rowSame" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Bool"))))
+(DFunDef false "rowSame" ((PVar "r1") (PVar "r2")) (EBlock (DoLet false false (PTuple (PVar "atoms1") (PVar "tails1")) (EApp (EVar "rowFlat") (EVar "r1"))) (DoLet false false (PTuple (PVar "atoms2") (PVar "tails2")) (EApp (EVar "rowFlat") (EVar "r2"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EMethodRef "map") (EVar "effvarId")) (EVar "tails1")) (EApp (EApp (EMethodRef "map") (EVar "effvarId")) (EVar "tails2"))) (EApp (EApp (EVar "atomsSame") (EApp (EVar "atomsNorm") (EVar "atoms1"))) (EApp (EVar "atomsNorm") (EVar "atoms2")))))))
+(DTypeSig false "atomsSame" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Bool"))))
+(DFunDef false "atomsSame" ((PList) (PList)) (EVar "True"))
+(DFunDef false "atomsSame" ((PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "atomKey") (EVar "y"))) (EApp (EApp (EVar "authSame") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EApp (EApp (EVar "atomsSame") (EVar "xs")) (EVar "ys"))))
+(DFunDef false "atomsSame" (PWild PWild) (EVar "False"))
+(DTypeSig false "authSame" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
+(DFunDef false "authSame" ((PVar "p") (PVar "q")) (EBinOp "&&" (EApp (EApp (EVar "authSub") (EVar "p")) (EVar "q")) (EApp (EApp (EVar "authSub") (EVar "q")) (EVar "p"))))
 (DTypeSig false "pushCtorFieldConflict" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CtorFieldConflict") (TyCon "Unit")))))
 (DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorWithholds" (PVar "sib"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-NOT-IN-ALL-CTORS"))) (EApp (EApp (EApp (EVar "fieldNotInAllCtorsMsg") (EVar "fname")) (EVar "tname")) (EVar "sib"))))
 (DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorSlotsDiffer" (PVar "a") (PVar "i") (PVar "b") (PVar "j"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-POSITION-DIFFERS"))) (EApp (EApp (EApp (EApp (EVar "fieldPositionDiffersMsg") (EVar "fname")) (EVar "tname")) (ETuple (EVar "a") (EVar "i"))) (ETuple (EVar "b") (EVar "j")))))
+(DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorTypesDiffer" (PVar "a") (PVar "ta") (PVar "b") (PVar "tb"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-TYPE-DIFFERS"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldTypeDiffersMsg") (EVar "fname")) (EVar "tname")) (EVar "a")) (EVar "ta")) (EVar "b")) (EVar "tb"))))
 (DTypeSig false "fieldNotInAllCtorsMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "fieldNotInAllCtorsMsg" ((PVar "fname") (PVar "tname") (PVar "sib")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is not declared by every constructor of '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "': constructor '"))) (EApp (EMethodRef "display") (EVar "sib"))) (ELit (LString "' has no '"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "'. A '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' cannot be resolved; match on the constructor instead"))))
 (DTypeSig false "fieldPositionDiffersMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String"))))))
 (DFunDef false "fieldPositionDiffersMsg" ((PVar "fname") (PVar "tname") (PTuple (PVar "a") (PVar "i")) (PTuple (PVar "b") (PVar "j"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is at different positions in the constructors of '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "': it is field "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString " of '"))) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "' but field "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "j") (ELit (LInt 1)))))) (ELit (LString " of '"))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString "'. A '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' cannot be resolved; match on the constructor instead"))))
+(DTypeSig false "fieldTypeDiffersMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "String"))))))))
+(DFunDef false "fieldTypeDiffersMsg" ((PVar "fname") (PVar "tname") (PVar "a") (PVar "ta") (PVar "b") (PVar "tb")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "sa") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "ta"))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "tb"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' has different types in the constructors of '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "': it is '"))) (EApp (EMethodRef "display") (EVar "sa"))) (ELit (LString "' in '"))) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "' but '"))) (EApp (EMethodRef "display") (EVar "sb"))) (ELit (LString "' in '"))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString "'. A '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' cannot be typed; match on the constructor instead"))))))
 (DTypeSig false "recordUpdateWellTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Unit"))))))
-(DFunDef false "recordUpdateWellTyped" ((PVar "bt") (PVar "rname") (PVar "ri") (PVar "fn")) (EMatch (EApp (EVar "headTyconMono") (EVar "bt")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "hk")) () (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UPDATE-MULTI-CTOR"))) (EApp (EApp (EApp (EApp (EVar "updateMultiCtorMsg") (EVar "fn")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "bt")))) (EVar "rname")) (EVar "ctors")))) (arm PWild () (ELit LUnit))) (ELit LUnit)))))
-(DTypeSig false "updateMultiCtorMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "updateMultiCtorMsg" ((PVar "fn") (PVar "tname") (PVar "rname") (PVar "ctors")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Record update of '")) (EApp (EMethodRef "display") (EVar "fn"))) (ELit (LString "' is not supported on '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "': it has more than one constructor ("))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ctors")))) (ELit (LString "), and the type does not say which one the value holds. Match on the constructor and update inside its arm, e.g. '"))) (EApp (EMethodRef "display") (EVar "rname"))) (ELit (LString " { v | "))) (EApp (EMethodRef "display") (EVar "fn"))) (ELit (LString " = ... }'"))))
+(DFunDef false "recordUpdateWellTyped" ((PVar "bt") (PVar "rname") (PVar "ri") (PVar "fn")) (EMatch (EApp (EVar "headTyconMono") (EVar "bt")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "hk")) () (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UPDATE-MULTI-CTOR"))) (EApp (EApp (EApp (EApp (EApp (EVar "updateMultiCtorMsg") (EVar "fn")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "bt")))) (EVar "rname")) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "fn")))) (EApp (EVar "recordFieldNames") (EVar "ri")))) (EVar "ctors")))) (arm PWild () (ELit LUnit))) (ELit LUnit)))))
+(DTypeSig false "updateMultiCtorMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "updateMultiCtorMsg" ((PVar "fn") (PVar "tname") (PVar "rname") (PVar "others") (PVar "ctors")) (EBlock (DoLet false false (PVar "pat") (EIf (EApp (EVar "isEmptyL") (EVar "others")) (ELit (LString "...")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fn"))) (ELit (LString " = ..."))) (EVar "others")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Record update of '")) (EApp (EMethodRef "display") (EVar "fn"))) (ELit (LString "' is not supported on '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "': it has more than one constructor ("))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ctors")))) (ELit (LString "), and the type does not say which one the value holds. Match on the constructor and build the new value in its arm, e.g. '"))) (EApp (EMethodRef "display") (EVar "rname"))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EVar "pat"))) (ELit (LString " } => "))) (EApp (EMethodRef "display") (EVar "rname"))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EVar "rebuilt"))) (ELit (LString " }'"))))))
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "fieldOwnerReachFilter") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
 (DTypeSig false "fieldOwnerReachFilter" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))

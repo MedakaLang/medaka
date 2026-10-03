@@ -761,7 +761,7 @@ typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
    rules out an EMPTY scan — a corpus that lost fifty fixtures still reports
    nothing. -}
 typecheckErrorFixtureCount : Int
-typecheckErrorFixtureCount = 144
+typecheckErrorFixtureCount = 150
 
 {- | Fixtures whose documented error depends on the prelude (#11: an integer
    literal desugars to `fromInt`, so the no-prelude driver structurally
@@ -1562,7 +1562,7 @@ test "project-wide diagnostics bucket per file the way the oracle does" = report
   (match fixtureDirs (underRoot analyzeProjectFixturesDir)
     Err e => ["\{analyzeProjectFixturesDir}: \{e}"]
     Ok dirs =>
-      countFloor analyzeProjectFixturesDir 34 dirs
+      countFloor analyzeProjectFixturesDir 39 dirs
         ++ fold
           (acc d => acc ++ analyzeProjectFixtureFailures d)
           []

@@ -78,6 +78,7 @@ markTailDecl	Decl	1/14
 methodConstraintNamesOfDecl	Decl	2/14
 negatedI32Lit	Expr	3/42
 oracleImportDeclsOf	Decl	2/14
+overlayCachedRows	Decl	1/14
 overlayScanOne	Decl	1/14
 plainAppHead	Expr	2/42
 prePassDeclScoped	Decl	5/14

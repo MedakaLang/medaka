@@ -1,0 +1,11 @@
+-- #3728 with #3726: an UNANNOTATED receiver whose field `x` is declared by two
+-- constructors of one type, at the same position and with the same type.  The
+-- two owners are one candidate, the constructor-agreement test finds one slot
+-- and one type, so the read is accepted, and it must read the right value for a
+-- value built by either constructor.
+data T = A { x : Int, y : Int } | B { x : Int, z : String }
+
+g v = v.x + 1
+
+main : <IO> Unit
+main = println (g (A { x = 4, y = 7 }), g (B { x = 40, z = "s" }))
