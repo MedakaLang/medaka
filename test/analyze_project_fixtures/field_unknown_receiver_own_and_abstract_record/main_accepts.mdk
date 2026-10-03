@@ -1,0 +1,10 @@
+-- The control for `field_unknown_receiver_own_and_public_record`: the imported
+-- `Cfg` is exported abstractly, so its fields are not in scope here, and `.x`
+-- on an UNANNOTATED receiver has one owner, this module's own `Cfg`.
+import om.{mk, getx}
+
+data Cfg = { x : Int }
+
+g c = c.x
+
+main = putStrLn (intToString (g (Cfg { x = 7 }) + getx mk))

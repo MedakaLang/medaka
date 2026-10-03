@@ -1,0 +1,7 @@
+-- #3726 — the unannotated face of `field_ctor_type_differs.mdk`.  The receiver's
+-- type is unknown at the access, so the field selects through the owners that
+-- declare `x`; both are constructors of `T`, and the same constructor-agreement
+-- test then has to refuse them for disagreeing about the field's type.
+data T = A { x : Int } | B { x : String }
+
+getX v = v.x

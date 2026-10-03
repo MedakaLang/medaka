@@ -1564,7 +1564,7 @@ accumulators; #1512 and #1557 retired four more `universe*` rows). It will rot
 again; run the commands:
 `grep -rn '^\s*universe[A-Za-z0-9_]* *:' compiler/ stdlib/ | grep -v '\.md:'`
 plus `grep -rn '^\s*obUniv[A-Za-z0-9_]* *:' compiler/ --include=*.mdk`
-(`loadDataUniverse`/`storeDataUniverse`/
+(`loadDataUniverse`/`appendDataUniverse`/
 `appendUniverseAccums`) — and the approximation is exactly where #1072 lives:
 a site's module sees only its own slice of `IE`, concludes there is no
 collision at a head, and stamps a bare-head key that the emitter then ORs into

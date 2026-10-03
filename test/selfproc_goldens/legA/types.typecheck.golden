@@ -193,6 +193,7 @@ atomsAbsorbedInto : Int -> List AbsorptionEvent -> List Atom
 atomsEscape : List Atom -> List Atom -> List Atom
 atomsOfWritten : List EffAtomTy -> List Atom
 atomsOfWrittenIn : SigVars -> List EffAtomTy -> List Atom
+atomsSame : List Atom -> List Atom -> Bool
 attachCoherenceConflict : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag))
 attachEntryPayload : (a -> a) -> List (String, a) -> List (String, a)
 attachStandaloneSources : Map String Scheme -> List (String, EnvBinding) -> List (String, EnvBinding)
@@ -211,6 +212,7 @@ authOrderTerm : Authority -> List Int -> List Int
 authRoots : Mono -> Map Int Unit -> Map Int Unit
 authRowCells : EffRow -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authRowRoots : EffRow -> Map Int Unit -> Map Int Unit
+authSame : Authority -> Authority -> Bool
 authSlotNamesIn : (List Kind -> List Ty -> List a) -> Ty -> List a
 authTermCells : Authority -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authTermIds : Authority -> Map Int Unit -> Map Int Unit
@@ -650,7 +652,8 @@ ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
 ctorFieldConflict : HeadKey -> String -> String -> Option CtorFieldConflict
 ctorFieldConflictHere : Mono -> String -> RecordInfo -> String -> Option CtorFieldConflict
-ctorFieldSlots : HeadKey -> String -> List String -> List (String, Int)
+ctorFieldSlot : HeadKey -> String -> String -> Option (String, Int, RecordInfo)
+ctorFieldSlots : HeadKey -> String -> List String -> List (String, Int, RecordInfo)
 ctorHasExistentials : Option Scheme -> Bool
 ctorHeadShaped : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
@@ -1100,7 +1103,9 @@ fieldOwnerReachable : String -> Bool
 fieldPositionDiffersMsg : String -> String -> (String, Int) -> (String, Int) -> String
 fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
 fieldTyOf : Field -> Ty
+fieldTypeDiffersMsg : String -> String -> String -> Mono -> String -> Mono -> String
 fieldTypeE : SigVars -> List (String, Mono) -> Field -> Mono
+fieldTypeSame : Mono -> Mono -> Bool
 fileBodyLoc : Expr -> Option Loc
 fileBoundExpr : List GrantBinder -> EffRow -> Expr -> Expr
 fileBoundKey : Loc -> String
@@ -1150,9 +1155,10 @@ firstPredForEnclResidual : String -> List Mono -> ScopeId -> List GivenEntry -> 
 firstPredOnChain : PredicateRequest -> List Int -> List GivenEntry -> Option AssumAnswer
 firstReqMatch : List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
 firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
-firstSlotDisagreement : List (String, Int) -> Option CtorFieldConflict
+firstSlotDisagreement : List (String, Int, RecordInfo) -> Option CtorFieldConflict
 firstTupleCallHint : List Mono -> Option (String, Option (Loc, String))
 firstTvar : Mono -> Mono -> Int -> Option Mono
+firstTypeDisagreement : String -> List (String, Int, RecordInfo) -> Option CtorFieldConflict
 fixedSibling : Int -> List (Int, String) -> Option String
 fixedWidthLiteralFits : Route -> Int -> Bool
 flatGroupIsCore : List String -> Bool
@@ -2243,6 +2249,7 @@ paramOccPolarities : List (TabKey, List Polarity) -> String -> Polarity -> Ty ->
 paramOccPolaritiesArgs : List (TabKey, List Polarity) -> String -> Polarity -> Option (List Polarity) -> Int -> List Ty -> List Polarity
 paramPolaritiesIn : List (TabKey, List Polarity) -> TabKey -> Option (List Polarity)
 paramPolaritiesOf : TabKey -> Option (List Polarity)
+paramRenaming : Mono -> Mono -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
 paramRowAtomOccs : String -> Ty -> List (List Atom)
 paramRowAtomsFor : String -> List String -> List EffAtomTy -> List (List Atom)
 paramRowAtomsOf : TabKey -> Option (List (List Atom))
@@ -2584,6 +2591,7 @@ removeAllS : List String -> List String -> List String
 renameAliasedMethods : List Decl -> List (String, List Decl) -> List (String, List Decl)
 renameAliasedMethodsIn : List (String, List String) -> (String, List Decl) -> (String, List Decl)
 renameMethodVar : List (String, String) -> List (String, String) -> Expr -> Expr
+renameParam : Mono -> Mono -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
 renderAtomsOrEmpty : List Atom -> String
 renderCallArg : Expr -> Option String
 renderCallArgs : List Expr -> Option (List String)
@@ -2721,6 +2729,7 @@ rowInto : Bool -> EffRow -> EffRow -> Unit
 rowKindMismatchMsg : List EffAtomTy -> List String -> String
 rowOfMembers : List Atom -> List (Ref Effvar) -> EffRow
 rowRouteKey : ImplRow -> String
+rowSame : EffRow -> EffRow -> Bool
 rowSlotArgMono : SigVars -> List (String, Mono) -> Ty -> Mono
 rowTailId : EffRow -> List Int
 rowTailIsJoin : EffRow -> Bool
@@ -2839,7 +2848,7 @@ siteRDictName : Ref Route -> List String
 siteRDictNamesL : List Route -> List String
 sitesFor : String -> Map String (List a) -> List a
 slotLabelsNaming : String -> List Kind -> List Ty -> List String
-slotOtherThan : Int -> List (String, Int) -> Option (String, Int)
+slotOtherThan : Int -> List (String, Int, RecordInfo) -> Option (String, Int)
 slotVariance : Option Polarity -> Option Kind -> Variance
 slotVariances : Option (List Polarity) -> Option (List Kind) -> Option (List Variance)
 solveExactReturn : MethodReturnRequest -> MethodReturnResolution
@@ -2991,6 +3000,7 @@ typeMismatch : Mono -> Mono -> Unit
 typeMismatchInDo : Mono -> Mono -> Loc -> Unit
 typeMismatchReport : Mono -> Mono -> Unit
 typeMismatchReportRest : Mono -> Mono -> Unit
+typeOtherThan : String -> String -> RecordInfo -> Mono -> List (String, Int, RecordInfo) -> Option CtorFieldConflict
 typeParamAsRowMsg : String -> String -> String
 typeVarAsAuthorityMsg : String -> String -> String
 tyvarId : Ref Tyvar -> Int
@@ -3065,7 +3075,7 @@ unsettledFileRow : EffRow -> EffRow -> Bool
 unsettledFileValueFlow : (Option Loc, Mono, Mono) -> Bool
 unsettledPackedFileBound : Bool -> Mono -> Mono -> Bool
 updateAuthority : String -> List (String, Mono) -> List String -> Int -> Option (Ref Authvar) -> Authority
-updateMultiCtorMsg : String -> String -> String -> List String -> String
+updateMultiCtorMsg : String -> String -> String -> List String -> List String -> String
 useAdmittedRows : Bool -> List Decl -> List (String, (String, String))
 useDefinerRows : Bool -> UsePath -> List (String, (String, String))
 useKeyCands : (UsePath -> Loc -> List (String, String, String, Ident, Loc)) -> List Decl -> List (String, String, String, Ident, Loc)

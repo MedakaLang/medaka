@@ -18222,13 +18222,16 @@ inferFieldOfRecord te rname ri fname =
 -- `medaka run` already refuses (`E-PANIC unknown field: x`) because the interpreter
 -- resolves fields BY NAME; this restores agreement by refusing EARLIER, at typecheck.
 --
--- The guard answers two layout questions about `f` across the receiver type's
--- constructors (`ctorFieldConflict`): does some constructor withhold `f`, and do
--- two constructors that declare it place it at different positions?  Both
--- emitters read `.f` at the selected constructor's declaration-order index with
--- no tag test, so either disagreement reads the wrong slot for some value of
--- the type (#1468, #1465, #3726).  A field every constructor declares at ONE
--- position has one slot for every value, so the access stays legal.
+-- The guard answers three questions about `f` across the receiver type's
+-- constructors (`ctorFieldConflict`): does some constructor withhold `f`, do
+-- two constructors that declare it place it at different positions, and do two
+-- declare it with different types?  Both emitters read `.f` at the selected
+-- constructor's declaration-order index with no tag test, and the access is
+-- typed by that constructor's declaration, so any disagreement reads the wrong
+-- slot, or reads the right slot at the wrong type, for some value of the type
+-- (#1468, #1465, #3726).  A field every constructor declares at ONE position
+-- with ONE type has one slot and one type for every value, so the access stays
+-- legal.
 --
 -- ⚠️ THE HEAD EQUALITY IS A CASCADE GUARD, NOT A CORRECTNESS ONE.  `te`'s head is
 -- compared against the SELECTED record's own result head, so the guard speaks only
@@ -18255,11 +18258,12 @@ fieldSelectionWellTyped te rname ri fname ft =
       v
 
 -- How the constructors of one type disagree about a field: a constructor that
--- does not declare it, or two that declare it at different (0-based,
--- declaration-order) positions.
+-- does not declare it, two that declare it at different (0-based,
+-- declaration-order) positions, or two that declare it with different types.
 data CtorFieldConflict =
   | CtorWithholds String
   | CtorSlotsDiffer String Int String Int
+  | CtorTypesDiffer String Mono String Mono
 
 -- The conflict, if any, among the constructors sharing the receiver's head.
 -- `ctorSiblingWithholdingName` is the SAME withheld test
@@ -18284,7 +18288,10 @@ ctorFieldConflict hk fname rname =
     Some sib => Some (CtorWithholds sib)
     None => match ctorsOfHead hk
       Some (ctors@(_ :: _ :: _)) =>
-        firstSlotDisagreement (ctorFieldSlots hk fname ctors)
+        let held = ctorFieldSlots hk fname ctors
+        orElseOpt
+          (firstSlotDisagreement held)
+          (firstTypeDisagreement fname held)
       _ => None
 
 ctorsOfHead : HeadKey -> Option (List String)
@@ -18293,27 +18300,125 @@ ctorsOfHead hk = match ctorOracleKeyOf (Some hk)
   Some tk => oGetCtors driverState.value.matchOracle.value tk
 
 -- Each constructor that declares `fname`, with the field's index in that
--- constructor's declaration-order field list — the index both emitters read.
-ctorFieldSlots : HeadKey -> String -> List String -> List (String, Int)
-ctorFieldSlots _ _ [] = []
-ctorFieldSlots hk fname (k :: rest) =
-  let more = ctorFieldSlots hk fname rest
-  match ctorRecordOfType hk k
-    None => more
-    Some ri => match elemIndex fname (recordFieldNames ri)
-      None => more
-      Some i => (k, i) :: more
+-- constructor's declaration-order field list — the index both emitters read —
+-- and the constructor's record.
+ctorFieldSlots : HeadKey ->
+  String ->
+  List String ->
+  List (String, Int, RecordInfo)
+ctorFieldSlots hk fname ctors = filterMap (ctorFieldSlot hk fname) ctors
 
-firstSlotDisagreement : List (String, Int) -> Option CtorFieldConflict
+ctorFieldSlot : HeadKey -> String -> String -> Option (String, Int, RecordInfo)
+ctorFieldSlot hk fname k = match ctorRecordOfType hk k
+  None => None
+  Some ri => map (i => (k, i, ri)) (elemIndex fname (recordFieldNames ri))
+
+firstSlotDisagreement : List (String, Int, RecordInfo) ->
+  Option CtorFieldConflict
 firstSlotDisagreement [] = None
-firstSlotDisagreement ((a, i) :: rest) =
+firstSlotDisagreement ((a, i, _) :: rest) =
   map ((b, j) => CtorSlotsDiffer a i b j) (slotOtherThan i rest)
 
-slotOtherThan : Int -> List (String, Int) -> Option (String, Int)
+slotOtherThan : Int -> List (String, Int, RecordInfo) -> Option (String, Int)
 slotOtherThan _ [] = None
-slotOtherThan i ((b, j) :: rest)
+slotOtherThan i ((b, j, _) :: rest)
   | j /= i = Some (b, j)
   | otherwise = slotOtherThan i rest
+
+-- The first constructor whose declared type for `fname` is not the first
+-- constructor's.  Each constructor's record is registered over its OWN
+-- parameter variables, so the other constructor's field type is restated over
+-- the first's parameters before the two are compared; `data T a = A { x : a } |
+-- B { x : a }` agrees.
+firstTypeDisagreement : String ->
+  List (String, Int, RecordInfo) ->
+  Option CtorFieldConflict
+firstTypeDisagreement _ [] = None
+firstTypeDisagreement fname ((a, _, ra) :: rest) =
+  match omLookup fname (recordFieldMap ra)
+    None => None
+    Some ta => typeOtherThan fname a ra ta rest
+
+typeOtherThan : String ->
+  String ->
+  RecordInfo ->
+  Mono ->
+  List (String, Int, RecordInfo) ->
+  Option CtorFieldConflict
+typeOtherThan _ _ _ _ [] = None
+typeOtherThan fname a ra ta ((b, _, rb) :: rest) =
+  match omLookup fname (recordFieldMap rb)
+    Some tb =>
+      let (tsub, esub, asub) =
+        paramRenaming (recordResultMono rb) (recordResultMono ra) ([], [], [])
+      let tbOverA = substMono tsub esub asub tb
+      if fieldTypeSame ta tbOverA then
+        typeOtherThan fname a ra ta rest
+      else
+        Some (CtorTypesDiffer a ta b tbOverA)
+    None => typeOtherThan fname a ra ta rest
+
+-- Pairs each parameter of `from`'s head application with the argument at the
+-- same position of `to`'s — a type, row or authority parameter, each into its
+-- own substitution — so substituting restates a type written over `from`'s
+-- parameters over `to`'s.
+paramRenaming : Mono ->
+  Mono ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
+paramRenaming from to acc = match normalize from
+  TApp f1 a1 => match normalize to
+    TApp f2 a2 => paramRenaming f1 f2 (renameParam (normalize a1) a2 acc)
+    _ => acc
+  _ => acc
+
+renameParam : Mono ->
+  Mono ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
+renameParam (TVar c) to (ts, es, qs) = ((tyvarId c, to) :: ts, es, qs)
+renameParam (TEff (EffRow [] (Some e1))) (TEff (EffRow [] (Some e2))) (ts, es, qs) =
+  (ts, (effvarId e1, e2) :: es, qs)
+renameParam (TAuth (AVar q1)) (TAuth q2) (ts, es, qs) =
+  (ts, es, (authvarId q1, q2) :: qs)
+renameParam _ _ acc = acc
+
+-- One declared type, read the way a field's value is used: the same shape,
+-- the same declarations and variables (`monoSameGiven` at the leaves), and the
+-- same effect rows and authorities, since a function field read at another
+-- constructor's row performs effects its type does not show.
+fieldTypeSame : Mono -> Mono -> Bool
+fieldTypeSame x y = match (normalize x, normalize y)
+  (TFun a1 r1 b1, TFun a2 r2 b2) =>
+    fieldTypeSame a1 a2 && rowSame r1 r2 && fieldTypeSame b1 b2
+  (TApp a1 b1, TApp a2 b2) => fieldTypeSame a1 a2 && fieldTypeSame b1 b2
+  (TEff r1, TEff r2) => rowSame r1 r2
+  (TQual t1 q1, TQual t2 q2) => fieldTypeSame t1 t2 && authSame q1 q2
+  (TAuth q1, TAuth q2) => authSame q1 q2
+  (TFun _ _ _, _) => False
+  (TApp _ _, _) => False
+  (TEff _, _) => False
+  (TAuth _, _) => False
+  (a, b) => monoSameGiven a b
+
+rowSame : EffRow -> EffRow -> Bool
+rowSame r1 r2 =
+  let (atoms1, tails1) = rowFlat r1
+  let (atoms2, tails2) = rowFlat r2
+  map effvarId tails1 == map effvarId tails2
+    && atomsSame (atomsNorm atoms1) (atomsNorm atoms2)
+
+atomsSame : List Atom -> List Atom -> Bool
+atomsSame [] [] = True
+atomsSame (x :: xs) (y :: ys) =
+  atomKey x == atomKey y
+    && authSame (atomAuth x) (atomAuth y)
+    && atomsSame xs ys
+atomsSame _ _ = False
+
+-- Equal as far as can be proven now: each within the other.
+authSame : Authority -> Authority -> Bool
+authSame p q = authSub p q && authSub q p
 
 pushCtorFieldConflict : String -> String -> CtorFieldConflict -> Unit
 pushCtorFieldConflict fname tname (CtorWithholds sib) =
@@ -18324,6 +18429,10 @@ pushCtorFieldConflict fname tname (CtorSlotsDiffer a i b j) =
   pushTypeError
     "T-FIELD-POSITION-DIFFERS"
     (fieldPositionDiffersMsg fname tname (a, i) (b, j))
+pushCtorFieldConflict fname tname (CtorTypesDiffer a ta b tb) =
+  pushTypeError
+    "T-FIELD-TYPE-DIFFERS"
+    (fieldTypeDiffersMsg fname tname a ta b tb)
 
 fieldNotInAllCtorsMsg : String -> String -> String -> String
 fieldNotInAllCtorsMsg fname tname sib =
@@ -18336,6 +18445,22 @@ fieldPositionDiffersMsg : String ->
   String
 fieldPositionDiffersMsg fname tname (a, i) (b, j) =
   "Field '\{fname}' is at different positions in the constructors of '\{tname}': it is field \{intToString (i + 1)} of '\{a}' but field \{intToString (j + 1)} of '\{b}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
+
+-- The two types render under one naming context, so a parameter shared by both
+-- prints as the same letter.
+fieldTypeDiffersMsg : String ->
+  String ->
+  String ->
+  Mono ->
+  String ->
+  Mono ->
+  String
+fieldTypeDiffersMsg fname tname a ta b tb =
+  let ctx = Ref []
+  let cnt = Ref 0
+  let sa = ppGo ctx cnt 0 ta
+  let sb = ppGo ctx cnt 0 tb
+  "Field '\{fname}' has different types in the constructors of '\{tname}': it is '\{sa}' in '\{a}' but '\{sb}' in '\{b}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be typed; match on the constructor instead"
 
 -- ── #3727/#3726: `{ v | f = e }` on a type with more than one constructor ──
 --
@@ -18358,12 +18483,23 @@ recordUpdateWellTyped bt rname ri fn = match headTyconMono bt
             fn
             (optionOr rname (headTyconNameMono bt))
             rname
+            (filterList (/= fn) (recordFieldNames ri))
             ctors)
       _ => ()
 
-updateMultiCtorMsg : String -> String -> String -> List String -> String
-updateMultiCtorMsg fn tname rname ctors =
-  "Record update of '\{fn}' is not supported on '\{tname}': it has more than one constructor (\{joinWith ", " ctors}), and the type does not say which one the value holds. Match on the constructor and update inside its arm, e.g. '\{rname} { v | \{fn} = ... }'"
+-- The hint rebuilds the value from the constructor's pattern rather than
+-- suggesting `Con { v | f = e }`, which does not check that `v` was built by
+-- `Con`.
+updateMultiCtorMsg : String ->
+  String ->
+  String ->
+  List String ->
+  List String ->
+  String
+updateMultiCtorMsg fn tname rname others ctors =
+  let pat = if isEmptyL others then "..." else joinWith ", " others
+  let rebuilt = joinWith ", " ("\{fn} = ..." :: others)
+  "Record update of '\{fn}' is not supported on '\{tname}': it has more than one constructor (\{joinWith ", " ctors}), and the type does not say which one the value holds. Match on the constructor and build the new value in its arm, e.g. '\{rname} { \{pat} } => \{rname} { \{rebuilt} }'"
 
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped.  For a plain record the key is its type name; for a
@@ -41645,7 +41781,10 @@ registerImportOverlay env overlay =
 
 -- The cached constructor schemes and record infos of [d], in variant order, when
 -- every one of its constructors has a population row under its own identity; any
--- miss declines for the whole declaration.
+-- miss declines for the whole declaration.  Only `DData` has rows to serve, and
+-- declining is never wrong: a declined decl is registered by `registerData`,
+-- which is where a new `Decl` constructor has to be decided, so the final
+-- clause covers every other constructor rather than naming each.
 overlayCachedRows : SpellingPop Scheme ->
   SpellingPop RecordInfo ->
   Decl ->
