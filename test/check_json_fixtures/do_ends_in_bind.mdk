@@ -1,0 +1,11 @@
+-- A do block's value is its last expression: a trailing `x <- e` is rejected at
+-- that statement, here inside a lambda body nested in a legal do block.
+ok : Option Int
+ok = do
+  x <- Some 1
+  let f = n => do
+    a <- Some n
+    b <- Some (a + 1)
+  pure (x + 1)
+
+main = println ok

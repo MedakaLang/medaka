@@ -765,11 +765,11 @@ table = [
   Row {
     entry = "x7_composite_main_autoprint_no_shadow.mdk",
     label =
-      "X7 (#2155) the CONTROL for x6 and the half a one-directional fix breaks: no interface, no shadow, a bare non-Unit VALUE main -- the cell the auto-print wrap exists FOR (COMPOSITE-MAIN-AUTOPRINT-DESIGN section 10). x6 stops the wrap firing on a Unit main; narrowing that gate one step further -- disabling the wrap on the check path, or reading main`s type from a ref still empty -- turns this row`s `(1, abc)` into an EMPTY stdout at exit 0, which no ACCEPT/REJECT column can see. Hence the value pin. `run` REJECTs BY DESIGN, not by defect (#1681: `medaka run` exits 1 whenever the W-MAIN-SHAPE warning fires, because run never applies or prints a non-Unit main and exit 0 there was indistinguishable from a clean run), so the mode is BUILD_EXACT",
+      "X7 (#2155) the CONTROL for x6 and the half a one-directional fix breaks: no interface, no shadow, a bare non-Unit VALUE main -- the cell the auto-print wrap exists FOR (COMPOSITE-MAIN-AUTOPRINT-DESIGN section 10). x6 stops the wrap firing on a Unit main; narrowing that gate one step further -- disabling the wrap on the check path, or reading main`s type from a ref still empty -- turns this row`s `(1, abc)` into an EMPTY stdout at exit 0, which no ACCEPT/REJECT column can see. Hence the value pin. `run` prints a non-Unit value main through the same wrap (#2413), so the mode is ALL_EXACT",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "(1, abc)\n",
   },
   Row {
@@ -985,47 +985,47 @@ table = [
   Row {
     entry = "x12_autoprint_wrap_prelude_pin.mdk",
     label =
-      "X12 (#2185, S0) the COMPILER`S OWN synthesized `println` occurrence (the auto-print wrap), not a user-written one -- x6/x8 grade a user-written bare `println`, this grades the wrap`s synthetic one under the identical shadow (`impl Ifc Int where println n = n + 1000`, bare VALUE `main = 7`). MEASURED ON THE BASE BINARY (93a40382): check/build ACCEPT, built binary prints 1007 -- the wrap silently dispatched through the module`s own impl (S0: right-looking wrong number, no diagnostic). FIXED (this slice): the wrap no longer spells `println` at all, so it is not capturable -- built binary must print 7. `run` REJECTs BY DESIGN regardless (#1681, mirrors x7/x11: a non-Unit VALUE main), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`, not captured",
+      "X12 (#2185, S0) the COMPILER`S OWN synthesized `println` occurrence (the auto-print wrap), not a user-written one -- x6/x8 grade a user-written bare `println`, this grades the wrap`s synthetic one under the identical shadow (`impl Ifc Int where println n = n + 1000`, bare VALUE `main = 7`). MEASURED ON THE BASE BINARY (93a40382): check/build ACCEPT, built binary prints 1007 -- the wrap silently dispatched through the module`s own impl (S0: right-looking wrong number, no diagnostic). FIXED (this slice): the wrap no longer spells `println` at all, so it is not capturable -- built binary must print 7. `run` prints a non-Unit VALUE main through the same wrap (#2413, mirrors x7), graded ALL_EXACT. Value hand-derived from the literal `main = 7`, not captured",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "7\n",
   },
   Row {
     entry = "x13_autoprint_wrap_prelude_pin_noimpl.mdk",
     label =
-      "X13 (#2185, S0, packet §4b LICENSED FLIP) x12`s NO-IMPL sibling: `Ifc` declares a method literally named `println` but NO impl exists anywhere -- the unimplemented interface is otherwise wholly irrelevant (nothing calls it), the same \"declared and never called costs nothing\" shape x6 pins for a user occurrence. MEASURED ON THE BASE BINARY (93a40382): check/run/build ALL REJECT, `No impl of Ifc for Int`, order-invariant -- the wrap`s synthesized `println` was marked as a dispatch against this module`s `Ifc` and found no impl. FIXED (this slice, Val-licensed 2026-08-30 to flip reject -> accept): the wrap no longer spells `println`, so it cannot route through `Ifc` -- check/build must ACCEPT and the built binary must print 1. `run` REJECTs BY DESIGN regardless (#1681, mirrors x7/x11/x12: a non-Unit VALUE main) -- NOT a regression from the packet`s \"run exits 0\" expectation, which contradicts `run`s pre-existing, deliberate, unconditional non-Unit-main refusal (measured identically on the totally unrelated x7/x11 controls) -- graded BUILD_EXACT. Value hand-derived from the literal `main = 1`, not captured",
+      "X13 (#2185, S0, packet §4b LICENSED FLIP) x12`s NO-IMPL sibling: `Ifc` declares a method literally named `println` but NO impl exists anywhere -- the unimplemented interface is otherwise wholly irrelevant (nothing calls it), the same \"declared and never called costs nothing\" shape x6 pins for a user occurrence. MEASURED ON THE BASE BINARY (93a40382): check/run/build ALL REJECT, `No impl of Ifc for Int`, order-invariant -- the wrap`s synthesized `println` was marked as a dispatch against this module`s `Ifc` and found no impl. FIXED (this slice, Val-licensed 2026-08-30 to flip reject -> accept): the wrap no longer spells `println`, so it cannot route through `Ifc` -- check/build must ACCEPT and the built binary must print 1. `run` prints a non-Unit VALUE main through the same wrap (#2413, mirrors x7/x12), graded ALL_EXACT. Value hand-derived from the literal `main = 1`, not captured",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "1\n",
   },
   Row {
     entry = "x14_autoprint_wrap_display_pin.mdk",
     label =
-      "X14 (#2185`s defect class RE-OPENED as fix-round F1, S0) the `display` twin of x12: slice 1 paid for x12/x13 by RESPELLING the wrap `println` -> `putStrLn (display <e>)`, which merely MOVED the capture onto `display` -- a name users declare constantly for Pretty-style interfaces. MEASURED ON SPRINT HEAD a17281e6: check/build ACCEPT and the built binary prints `HIJACKED`, dispatching the wrap`s synthesized `display` through this module`s own `impl Ifc Int` (S0: wrong ANSWER, exit 0, no diagnostic, on source that never writes `display` at a call site). FIXED: the wrap resolves NO name in user scope -- it calls the prelude`s own `println` declaration re-bound under an unspellable name (autoPrintPinCore), so its `display` is prelude-scoped -- built binary must print 7. `run` REJECTs BY DESIGN (#1681, a non-Unit VALUE main), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`",
+      "X14 (#2185`s defect class RE-OPENED as fix-round F1, S0) the `display` twin of x12: slice 1 paid for x12/x13 by RESPELLING the wrap `println` -> `putStrLn (display <e>)`, which merely MOVED the capture onto `display` -- a name users declare constantly for Pretty-style interfaces. MEASURED ON SPRINT HEAD a17281e6: check/build ACCEPT and the built binary prints `HIJACKED`, dispatching the wrap`s synthesized `display` through this module`s own `impl Ifc Int` (S0: wrong ANSWER, exit 0, no diagnostic, on source that never writes `display` at a call site). FIXED: the wrap resolves NO name in user scope -- it calls the prelude`s own `println` declaration re-bound under an unspellable name (autoPrintPinCore), so its `display` is prelude-scoped -- built binary must print 7. `run` prints a non-Unit VALUE main through the same wrap (#2413), graded ALL_EXACT. Value hand-derived from the literal `main = 7`",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "7\n",
   },
   Row {
     entry = "x15_autoprint_wrap_display_pin_noimpl.mdk",
     label =
-      "X15 (fix-round F2, S1) x14`s NO-IMPL sibling and x13`s `display` twin: `Ifc` declares a method named `display`, no impl exists anywhere, nothing calls it. MEASURED ON SPRINT HEAD a17281e6: check/build REJECT `No impl of Ifc for Int` -- slice 1`s respelled wrap synthesized a `display` occurrence into this module, where the user declaration outranks the prelude`s Display, so the compiler demanded an impl of an interface the program never uses. A FALSE REJECT of a program that builds clean at b6d029cd. FIXED: `Ifc` is never consulted -- check/build ACCEPT, built binary prints 7. `run` REJECTs BY DESIGN (#1681), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`",
+      "X15 (fix-round F2, S1) x14`s NO-IMPL sibling and x13`s `display` twin: `Ifc` declares a method named `display`, no impl exists anywhere, nothing calls it. MEASURED ON SPRINT HEAD a17281e6: check/build REJECT `No impl of Ifc for Int` -- slice 1`s respelled wrap synthesized a `display` occurrence into this module, where the user declaration outranks the prelude`s Display, so the compiler demanded an impl of an interface the program never uses. A FALSE REJECT of a program that builds clean at b6d029cd. FIXED: `Ifc` is never consulted -- check/build ACCEPT, built binary prints 7. `run` prints a non-Unit VALUE main through the same wrap (#2413), graded ALL_EXACT. Value hand-derived from the literal `main = 7`",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "7\n",
   },
   Row {
     entry = "x16_autoprint_wrap_putstrln_pin.mdk",
     label =
-      "X16 (fix-round F1, packet §6.5) the `putStrLn` twin -- and the row recording WHY `putStrLn` is NOT fixed by pinning the wrap. The wrap half IS fixed (no `putStrLn` reference is synthesized in user scope any more). What remains is a DIFFERENT, PRE-EXISTING defect the wrap fix does not reach: `markVar`s `methods` set is PROGRAM-GLOBAL, so a user interface method named `putStrLn` also captures the PRELUDE`S OWN body `println x = putStrLn (display x)` -- and unlike `display`, the prelude declares no interface method of that name, so there is no prelude declaration for the method table to prefer. MEASURED with the wrap taken out entirely (UNIT main + a user-written `println 7`, so shouldAutoPrintMain is False): build exited 1, `E-PANIC: no impl of method putStrLn for type Unit`. DRAINED 2026-09-10 and RE-GRADED to BUILD_EXACT against 7, exactly as the row above it instructed: the prelude body stopped being capturable when `moduleMarkCtx`s CORE arm began applying S1`s nameable-in-M filter to its rp/arg sets. It could not before -- core`s own references were mangled `core__putStrLn` by the time the mark pass saw them, so no bare method name could match one, and that premise died when #2809 moved mangling after elaboration. Same rule, same commit, that returns four `prelude_shadow_census` ledger rows (identity, otherwise, arbitraryList, arbitraryString) from FAIL_BUILD to PASS. `run` still REJECTs: a non-Unit `main` is refused by `run` on its own account, which is a different rule and is not what drained",
+      "X16 (fix-round F1, packet §6.5) the `putStrLn` twin -- and the row recording WHY `putStrLn` is NOT fixed by pinning the wrap. The wrap half IS fixed (no `putStrLn` reference is synthesized in user scope any more). What remains is a DIFFERENT, PRE-EXISTING defect the wrap fix does not reach: `markVar`s `methods` set is PROGRAM-GLOBAL, so a user interface method named `putStrLn` also captures the PRELUDE`S OWN body `println x = putStrLn (display x)` -- and unlike `display`, the prelude declares no interface method of that name, so there is no prelude declaration for the method table to prefer. MEASURED with the wrap taken out entirely (UNIT main + a user-written `println 7`, so shouldAutoPrintMain is False): build exited 1, `E-PANIC: no impl of method putStrLn for type Unit`. DRAINED 2026-09-10 and RE-GRADED to BUILD_EXACT against 7, exactly as the row above it instructed: the prelude body stopped being capturable when `moduleMarkCtx`s CORE arm began applying S1`s nameable-in-M filter to its rp/arg sets. It could not before -- core`s own references were mangled `core__putStrLn` by the time the mark pass saw them, so no bare method name could match one, and that premise died when #2809 moved mangling after elaboration. Same rule, same commit, that returns four `prelude_shadow_census` ledger rows (identity, otherwise, arbitraryList, arbitraryString) from FAIL_BUILD to PASS. `run` REJECTs on the interpreter's own copy of the same capture: since #2413 `run` applies the wrap too, and the prelude's `println` body still routes `putStrLn` to the user method there, dying with an unlocated `E-PANIC: unknown op '+'`. A user-written `main = println 7` beside the same interface dies identically under `run` and prints 7 under `build`, so the wrap is not involved; graded BUILD_EXACT until the interpreter's prelude body stops being capturable",
     expCheck = "ACCEPT",
     expRun = "REJECT",
     expBuild = "ACCEPT",
@@ -1035,11 +1035,11 @@ table = [
   Row {
     entry = "x17_autoprint_wrap_display_pin_xmod/main.mdk",
     label =
-      "X17 (fix-round F1, CROSS-MODULE) x14 with the colliding `display` interface AND its impl moved into an IMPORTED module -- the entry declares nothing and sees the name only through `import ifcx.{Ifc, display}`. The axis a single-file row cannot see: own-declaration and imported are DIFFERENT rungs of the entry`s method table (ownMethodIdent vs methodCandImported), so a fix that only stops an OWN declaration capturing the wrap passes x14 and still ships the S0 here. MEASURED ON SPRINT HEAD a17281e6: build ACCEPTs, built binary prints `HIJACKED`. FIXED: built binary must print 7. `run` REJECTs BY DESIGN (#1681), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`",
+      "X17 (fix-round F1, CROSS-MODULE) x14 with the colliding `display` interface AND its impl moved into an IMPORTED module -- the entry declares nothing and sees the name only through `import ifcx.{Ifc, display}`. The axis a single-file row cannot see: own-declaration and imported are DIFFERENT rungs of the entry`s method table (ownMethodIdent vs methodCandImported), so a fix that only stops an OWN declaration capturing the wrap passes x14 and still ships the S0 here. MEASURED ON SPRINT HEAD a17281e6: build ACCEPTs, built binary prints `HIJACKED`. FIXED: built binary must print 7. `run` prints a non-Unit VALUE main through the same wrap (#2413), graded ALL_EXACT. Value hand-derived from the literal `main = 7`",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "7\n",
   },
   Row {

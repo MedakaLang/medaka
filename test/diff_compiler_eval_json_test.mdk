@@ -42,7 +42,7 @@ corpus : <IO> String
 corpus = "\{medakaRoot}/test/error_quality_fixtures/eval"
 
 declaredFixtureCount : Int
-declaredFixtureCount = 12
+declaredFixtureCount = 11
 
 {- | The fixed prefix of the source-staleness warning
    (`checkSourceStaleness`, `compiler/driver/medaka_cli.mdk`), read live from
@@ -106,7 +106,7 @@ gradeOne marker name =
             Some
               "  \{name}\{staleNote marker actual}\n    want: \{debug want}\n    got:  \{debug actual}"
 
-test "eval_json: exactly 12 fixtures on disk" = match fixtureStems corpus
+test "eval_json: exactly 11 fixtures on disk" = match fixtureStems corpus
   Err e => fail "\{corpus}: \{e}"
   Ok names => match expectUnitCount declaredFixtureCount names
     Err e => fail "\{corpus}: \{e}"

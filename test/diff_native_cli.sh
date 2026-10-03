@@ -238,25 +238,49 @@ else
   printf 'skip run/* (native run not yet wired)\n'
 fi
 
-# ── run: non-Unit main shape (#1681) ─────────────────────────────────────────
-# `run/main_shape_nonunit.mdk` is `main = 3 + 1` — main's inferred type is Int,
-# not Unit, so `run` never applies/prints it (unchanged, deliberate no-op) and
-# emits the rejection-shaped W-MAIN-SHAPE warning on stderr. Before #1681 the
-# process still exited 0 with 0 bytes of stdout — indistinguishable, by exit
-# code, from a correct silent program. Fixed: `run` now exits 1 for this shape
-# (compiler/driver/medaka_cli.mdk's finishRunEval), aligning the exit code with
-# what the message already implies. Pin both halves: exit code AND that stdout
-# stays genuinely empty (the underlying no-op behavior is intentional and
-# unchanged — see the 0.1.0 audit #3 note in medaka_cli.mdk).
+# ── run: main shapes (#1681, #2413) ──────────────────────────────────────────
+# `run/main_shape_nonunit.mdk` is `main = 3 + 1`: a zero-arg value main of a
+# non-Unit type, which `run` prints through its Display impl exactly as the
+# built binary does. Pin exit 0 AND the printed value: forcing main without
+# printing it also exits 0, with empty stdout.
 if [ "$RUN_WIRED" = 1 ]; then
   nu_f="$FIX/run/main_shape_nonunit.mdk"
   nu_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$nu_f" 2>/dev/null)"
   nu_status=$?
-  if [ "$nu_status" -eq 1 ] && [ -z "$nu_out" ]; then
-    pass=$((pass+1)); printf 'ok   run/main_shape_nonunit (exit 1, empty stdout)\n'
+  if [ "$nu_status" -eq 0 ] && [ "$nu_out" = "4" ]; then
+    pass=$((pass+1)); printf 'ok   run/main_shape_nonunit (exit 0, prints 4)\n'
   else
-    fail=$((fail+1)); printf 'FAIL run/main_shape_nonunit (want exit 1 + empty stdout, got exit %s stdout [%s])\n' "$nu_status" "$nu_out"
+    fail=$((fail+1)); printf 'FAIL run/main_shape_nonunit (want exit 0 + stdout 4, got exit %s stdout [%s])\n' "$nu_status" "$nu_out"
   fi
+fi
+
+# `run/main_fn.mdk` (`main () = ...`) and `run/no_main.mdk` cannot be started,
+# so `run` and `build` each refuse them with exactly one `error:` line naming
+# the file (located for the function), and neither reaches the interpreter's
+# or the emitter's own `main` lookup: no `E-PANIC`, no `emitter failed`.
+# `$3` is the text expected right after the file name.
+main_refuse_case() {
+  mr_verb="$1"; mr_name="$2"; mr_want="$3"
+  mr_f="$FIX/run/$mr_name.mdk"; mr_err="$TMP/nat_${mr_name}_${mr_verb}.err"
+  if [ "$mr_verb" = run ]; then
+    MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$mr_f" >/dev/null 2>"$mr_err"
+  else
+    ( export MEDAKA_ROOT="$ROOT"; export MEDAKA_EMITTER="$EMITTER"; bound "$MEDAKA" build "$mr_f" -o "$TMP/nat_${mr_name}_bin" ) >/dev/null 2>"$mr_err"
+  fi
+  mr_status=$?
+  mr_errs="$(grep -c '^error:' "$mr_err")"
+  if [ "$mr_status" -eq 1 ] && [ "$mr_errs" -eq 1 ] &&
+     grep -qF "error: $mr_f$mr_want" "$mr_err" &&
+     ! grep -qE 'E-PANIC|emitter failed' "$mr_err"; then
+    pass=$((pass+1)); printf 'ok   %s/%s (exit 1, one located error)\n' "$mr_verb" "$mr_name"
+  else
+    fail=$((fail+1)); printf 'FAIL %s/%s (want exit 1 + one [error: <file>%s] line, no E-PANIC/emitter failed; got exit %s stderr [%s])\n' \
+      "$mr_verb" "$mr_name" "$mr_want" "$mr_status" "$(cat "$mr_err" 2>/dev/null)"
+  fi
+}
+if [ "$RUN_WIRED" = 1 ]; then
+  main_refuse_case run main_fn ":1:10: 'main' must be a value, not a function"
+  main_refuse_case run no_main ": no 'main' found"
 fi
 
 # ── run: sequence bounds guards, interpreter arm (#3267, #3192, #3256) ───────
@@ -525,28 +549,43 @@ else
       printf '  want: [%s]\n  got:  [%s]\n' "$want" "$got"; fi
   done
 
-  # ── build: non-Unit main shape (#2246) ────────────────────────────────────
-  # The `build`-routed sibling of the run/main_shape_nonunit case above, on the
-  # SAME fixture (`main = 3 + 1`).  `medaka build` reaches the warning through
-  # typecheckGateRoute's single-module arm (compiler/driver/medaka_cli.mdk),
-  # whose `mainShapeWarnings` call #2246 changed: the first three arguments are
-  # ignored by that function unconditionally, so the two `desugar (parse …)`
-  # prelude re-parses that used to compute them were deleted and `[] [] []` is
-  # passed instead.  That edit is only inert if this warning still fires — and
-  # nothing else in this gate covered the build route's main-shape surface, so
-  # a regression to "silently no warning" (the [W-QUIETER] direction) would have
-  # been invisible.  Pin all three halves: exit 0, the warning on STDERR, and a
-  # binary actually produced (the warning must not become an error).
+  # ── build: main shapes (#2246, #2413) ─────────────────────────────────────
+  # The `build`-routed siblings of the run/main_* cases above, on the SAME
+  # fixtures. A value main builds with NOTHING on stderr (it is a supported
+  # shape, not one to warn about) and the binary prints it; the two shapes
+  # `build` cannot start are refused before the emitter runs.
   nub_f="$FIX/run/main_shape_nonunit.mdk"
   nub_err="$TMP/nat_main_shape_nonunit_build.err"
   ( export MEDAKA_ROOT="$ROOT"; export MEDAKA_EMITTER="$EMITTER"; bound "$MEDAKA" build "$nub_f" -o "$TMP/nat_build_nonunit" ) >/dev/null 2>"$nub_err"
   nub_status=$?
-  if [ "$nub_status" -eq 0 ] && [ -x "$TMP/nat_build_nonunit" ] &&
-     grep -q "must be a value of type Unit" "$nub_err"; then
-    pass=$((pass+1)); printf 'ok   build/main_shape_nonunit (exit 0, W-MAIN-SHAPE on stderr)\n'
+  nub_out="$("$TMP/nat_build_nonunit" 2>/dev/null)"
+  if [ "$nub_status" -eq 0 ] && [ ! -s "$nub_err" ] && [ "$nub_out" = "4" ]; then
+    pass=$((pass+1)); printf 'ok   build/main_shape_nonunit (exit 0, empty stderr, prints 4)\n'
   else
-    fail=$((fail+1)); printf 'FAIL build/main_shape_nonunit (want exit 0 + binary + W-MAIN-SHAPE on stderr, got exit %s stderr [%s])\n' "$nub_status" "$(cat "$nub_err" 2>/dev/null)"
+    fail=$((fail+1)); printf 'FAIL build/main_shape_nonunit (want exit 0 + empty stderr + binary printing 4, got exit %s stderr [%s] stdout [%s])\n' "$nub_status" "$(cat "$nub_err" 2>/dev/null)" "$nub_out"
   fi
+  main_refuse_case build main_fn ":1:10: 'main' must be a value, not a function"
+  main_refuse_case build no_main ": no 'main' found"
+
+  # `build --json` reports the SAME single refusal as one diagnostic on stdout,
+  # never R-BUILD-FAILED wrapping the emitter's panic.  `$2` is the code expected.
+  main_refuse_json_case() {
+    mj_name="$1"; mj_code="$2"
+    mj_f="$FIX/run/$mj_name.mdk"; mj_out="$TMP/nat_${mj_name}_buildjson.out"
+    ( export MEDAKA_ROOT="$ROOT"; export MEDAKA_EMITTER="$EMITTER"; bound "$MEDAKA" build --json "$mj_f" -o "$TMP/nat_${mj_name}_jbin" ) >"$mj_out" 2>/dev/null
+    mj_status=$?
+    mj_n="$(grep -o '"code":' "$mj_out" | wc -l | tr -d ' ')"
+    if [ "$mj_status" -eq 1 ] && [ "$mj_n" -eq 1 ] &&
+       grep -qF "\"code\":\"$mj_code\"" "$mj_out" &&
+       ! grep -qE 'E-PANIC|emitter failed|R-BUILD-FAILED' "$mj_out"; then
+      pass=$((pass+1)); printf 'ok   build --json/%s (exit 1, one %s diagnostic)\n' "$mj_name" "$mj_code"
+    else
+      fail=$((fail+1)); printf 'FAIL build --json/%s (want exit 1 + exactly one %s diagnostic, no E-PANIC/emitter failed; got exit %s stdout [%s])\n' \
+        "$mj_name" "$mj_code" "$mj_status" "$(cat "$mj_out" 2>/dev/null)"
+    fi
+  }
+  main_refuse_json_case main_fn W-MAIN-SHAPE
+  main_refuse_json_case no_main W-MAIN-MISSING
 
   # ── build: MutBytes/Builder panic messages (stdlib/mut_bytes.mdk,
   # stdlib/bytebuilder.mdk) ──────────────────────────────────────────────────

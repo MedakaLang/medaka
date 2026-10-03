@@ -77,13 +77,11 @@
 # ── The auto-print contract (why there is an `eval_autoprint_main` probe) ──────
 # Nearly every fixture in both corpora is a bare VALUE main (`main = 1 + 2`).
 # `medaka build` rewrites that to `main = println <e>` (driver/main_autoprint.mdk)
-# and the WasmGC emitter mirrors the same auto-print — but `medaka run` REFUSES a
-# value main by design ("'main' must be a value of type Unit").  That is a CLI/UX
-# decision, not a semantic difference, so using `medaka run` verbatim would report
-# every fixture as a spurious three-way disagreement.  The interpreter arm is
-# therefore compiler/entries/eval_autoprint_main.mdk = `medaka run`'s exact
-# load→elaborate→evalModules path PLUS the same auto-print wrap.  Nothing else about
-# the eval path differs from `medaka run`'s.
+# and the WasmGC emitter mirrors the same auto-print, as `medaka run` does since
+# #2413.  The interpreter arm is compiler/entries/eval_autoprint_main.mdk =
+# `medaka run`'s load→elaborate→evalModules path PLUS the same auto-print wrap,
+# without the CLI's check gate.  Nothing else about the eval path differs from
+# `medaka run`'s.
 #
 # ── Arms ──────────────────────────────────────────────────────────────────────
 #   eval    test/bin/eval_autoprint_main <runtime> <core> <f> <dir(f)> <stdlib>

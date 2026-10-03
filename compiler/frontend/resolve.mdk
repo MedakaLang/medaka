@@ -93,6 +93,7 @@ import support.util.{
   lenKey,
   splitOnChar,
   startsWith,
+  sortUniqS,
 }
 import test.{expectTrue}
 
@@ -107,12 +108,13 @@ public export data ResError =
   -- "did you mean"), None when no candidate is close enough (ERROR-QUALITY §4.1)
   | UnboundVariable String (Option Loc) (Option String)
   -- an unbound name that IS exported by a module the file already `import`s
-  -- (bare or selective-but-missing-this-name): name, exporting module id.
+  -- (bare or selective-but-missing-this-name), or by a stdlib module it does not
+  -- import (`withStdlibExports`): name, exporting module ids (never empty).
   -- Takes priority over the generic edit-distance UnboundVariable suggestion
   -- (audit finding #5) — the fix is "select this name from the import", not a
   -- typo correction, and a fuzzy edit-distance match against an unrelated name
   -- is actively misleading here.
-  | UnboundVariableExported String String (Option Loc)
+  | UnboundVariableExported String (List String) (Option Loc)
   -- an unbound name that is itself the id of a module this file `import`s
   -- bare (#514): `import string` then a reference to bare `string` — there is
   -- no qualified access for a bare import, so the generic edit-distance
@@ -143,8 +145,9 @@ public export data ResError =
   | MethodNotInInterface String String (Option Loc)
   | ExternWithBody String (Option Loc)
   -- multi-module path (resolve_module): import validation against real exports
-  | PrivateNameAccess String String (Option Loc)
-  -- name, owning module
+  | PrivateNameAccess String String (Option Loc) (Option String)
+  -- name, owning module; trailing `Option String` = the nearest name that module
+  -- does export (same did-you-mean policy as UnboundVariable)
   | NoExportedConstructors String String (Option Loc)
   -- type, owning module (exported abstractly)
   | NewtypeCtorNotExported String String (Option Loc)
@@ -264,15 +267,23 @@ public export data ResError =
   | DuplicateInterfaceMethod String String String (Option Loc)
 
 -- The did-you-mean pair (misspelled name, suggested name) for a resolve error,
--- or None.  Only an UnboundVariable that carries a suggestion qualifies today.
+-- or None.  Only an error that carries a suggestion qualifies.
 -- Consumed by diagnostics.mdk (Stage 2) to build the structured `help`/`fix`
 -- JSON fields — the fix span is the misspelled name's own loc-start + its length.
 export
 resErrorDidYouMean : ResError -> Option (String, String)
 resErrorDidYouMean (UnboundVariable n _ (Some sug)) = Some (n, sug)
+resErrorDidYouMean (PrivateNameAccess n _ _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownConstructor n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownType n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean _ = None
+
+-- True for a PrivateNameAccess, the one did-you-mean error whose location can
+-- be the whole import statement rather than the misspelled name.
+export
+resErrorIsPrivateName : ResError -> Bool
+resErrorIsPrivateName (PrivateNameAccess _ _ _ _) = True
+resErrorIsPrivateName _ = False
 
 -- The source span carried by a ResError (Stage B): consumed by diagnostics.mdk
 -- to position the Diag (was uniformly `None` pre-Stage-B).
@@ -291,7 +302,7 @@ resErrorLoc (DuplicateDefinition _ _ l) = l
 resErrorLoc (UnknownInterface _ l) = l
 resErrorLoc (MethodNotInInterface _ _ l) = l
 resErrorLoc (ExternWithBody _ l) = l
-resErrorLoc (PrivateNameAccess _ _ l) = l
+resErrorLoc (PrivateNameAccess _ _ l _) = l
 resErrorLoc (NoExportedConstructors _ _ l) = l
 resErrorLoc (NewtypeCtorNotExported _ _ l) = l
 resErrorLoc (BareCtorImport _ _ l) = l
@@ -992,12 +1003,50 @@ unboundVarErrors cur env scope n = match splitOnChar '.' n
     && not (localBinding env scope bare) =>
     [UnboundQualifiedElsewhere n alias bare cur]
   _ => match modulesExportingName env n
-    m :: _ => [UnboundVariableExported n m cur]
+    m :: _ => [UnboundVariableExported n [m] cur]
     [] =>
       if isImportedModuleName env n then
         [UnboundVariableIsModule n cur]
+      else if isSome (lookupAssoc n foreignKeywordNotes) then
+        [UnboundVariable n cur None]
       else
         [UnboundVariable n cur (suggestName env scope n)]
+
+-- The driver's post-pass over a module's resolve errors: an
+-- `UnboundVariable` whose name a module of `exports` exports becomes the
+-- import hint, naming every such module, ahead of any edit-distance guess.
+-- `exports` is (module id, exported value names) for modules this file does
+-- not import, so the import arm of `unboundVarErrors` cannot have fired.
+export
+withStdlibExports : List (String, List String) -> List ResError -> List ResError
+withStdlibExports [] errs = errs
+withStdlibExports exports errs = map (hintFromExports exports) errs
+
+hintFromExports : List (String, List String) -> ResError -> ResError
+hintFromExports exports (UnboundVariable n l s) =
+  match sortUniqS (flatMap (matchesExport n) exports)
+    [] => UnboundVariable n l s
+    mods => UnboundVariableExported n mods l
+hintFromExports _ e = e
+
+-- The names `withStdlibExports` could hint, deduplicated.  Empty means the
+-- driver has nothing to look up and reads no module.  An alias-qualified name
+-- (`A.x`) is never a module's export, so it is left out.
+export
+hintableUnboundNames : List ResError -> List String
+hintableUnboundNames errs = dedup (flatMap hintableName errs)
+
+hintableName : ResError -> List String
+hintableName (UnboundVariable n _ _) = match splitOnChar '.' n
+  [_] => [n]
+  _ => []
+hintableName _ = []
+
+-- The value names a module's own declarations export: the direct half of
+-- `buildExports`' `expValues`, read from the parsed decls alone, with no `Env`.
+export
+exportedValueNames : List Decl -> List String
+exportedValueNames prog = directIn nsValues prog
 
 -- module ids (of modules this file already imports) that export `n` as a
 -- value — deliberately NOT scope/local-shadow aware, since `unboundVarErrors`
@@ -1239,6 +1288,31 @@ suggestNameFuzzy env scope n
     match bestOfNames q (scopeNames scope)
       Some best => Some best
       None => bestOfPool q (sugValuePool env)
+
+-- Another language's keyword, met as an unbound name because Medaka parses it
+-- as an ordinary application (`while c` is `while` applied to `c`), mapped to
+-- the note naming what Medaka writes instead.  It replaces the edit-distance
+-- guess, which can only offer an unrelated name.
+foreignKeywordNotes : List (String, String)
+foreignKeywordNotes =
+  [("while", "Medaka has no `while`; write a recursive function")]
+
+-- "did you mean" for an import member a module does not export: the same
+-- policy as `suggestName` (a curated Haskell alias first, then the nearest name
+-- by edit distance), over the names that module exports.
+suggestExportName : ModuleExports -> String -> Option String
+suggestExportName exp n =
+  let names =
+    exp.expValues
+      ++ exp.expTypes
+      ++ exp.expCtors
+      ++ exp.expInterfaces
+      ++ exp.expEffects
+  match (lookupAssoc
+    n
+    (haskellValueAliases ++ haskellCtorAliases ++ haskellTypeAliases))
+    Some sug if contains sug names => Some sug
+    _ => if stringLength n < 3 then None else bestOfNames (sugQueryOf n) names
 
 -- "did you mean" for an unknown TYPE name: an exact curated Haskell-alias
 -- match takes priority; otherwise same policy as `suggestName` (nearest by
@@ -2668,8 +2742,8 @@ resErrorSexp : ResError -> String
 -- NOTE: the suggestion field is deliberately NOT serialized — the sexp feeds the
 -- resolve_modules gate and must stay stable (the suggestion is cosmetic).
 resErrorSexp (UnboundVariable n _ _) = "(UnboundVariable " ++ escStr n ++ ")"
-resErrorSexp (UnboundVariableExported n m _) =
-  "(UnboundVariableExported \{escStr n} \{escStr m})"
+resErrorSexp (UnboundVariableExported n ms _) =
+  "(UnboundVariableExported \{escStr n} \{joinWith " " (map escStr ms)})"
 resErrorSexp (UnboundVariableIsModule n _) =
   "(UnboundVariableIsModule \{escStr n})"
 resErrorSexp (UnboundQualifiedElsewhere n a b _) =
@@ -2691,7 +2765,7 @@ resErrorSexp (UnknownInterface n _) = "(UnknownInterface " ++ escStr n ++ ")"
 resErrorSexp (MethodNotInInterface m i _) =
   "(MethodNotInInterface \{escStr m} \{escStr i})"
 resErrorSexp (ExternWithBody n _) = "(ExternWithBody " ++ escStr n ++ ")"
-resErrorSexp (PrivateNameAccess n m _) =
+resErrorSexp (PrivateNameAccess n m _ _) =
   "(PrivateNameAccess \{escStr n} \{escStr m})"
 resErrorSexp (NoExportedConstructors n m _) =
   "(NoExportedConstructors \{escStr n} \{escStr m})"
@@ -2787,6 +2861,17 @@ resolveProgramG2 internalGuard runtimeDecls preludeDecls prog =
   let env = buildEnv runtimeDecls preludeDecls prog internalGuard
   dedupResErrors (buildErrors preludeDecls prog ++ flatMap (checkDecl env) prog)
 
+-- `'import m.{n}'` for each module exporting `n`, joined as alternatives:
+-- "'import a.{n}', 'import b.{n}' or 'import c.{n}'".
+importChoices : String -> List String -> String
+importChoices n ms =
+  let choices = map (m => "'import \{m}.{\{n}}'") ms
+  match reverseL choices
+    [] => ""
+    [only] => only
+    lastChoice :: earlier =>
+      "\{joinWith ", " (reverseL earlier)} or \{lastChoice}"
+
 -- Human-readable message for a ResError.
 -- Used by diagnostics.mdk to produce "error: <msg>" lines.  Loc-independent.
 export
@@ -2794,9 +2879,11 @@ ppResError : ResError -> String
 ppResError (UnboundVariable n _ s) = match s
   Some sug =>
     "Unbound variable: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
-  None => "Unbound variable: \{n}"
-ppResError (UnboundVariableExported n m _) =
-  "Unbound variable: \{n}. (Did you forget to 'import \{m}.{\{n}}'?)"
+  None => match lookupAssoc n foreignKeywordNotes
+    Some note => "Unbound variable: \{n}. \{note}"
+    None => "Unbound variable: \{n}"
+ppResError (UnboundVariableExported n ms _) =
+  "Unbound variable: \{n}. (Did you forget to \{importChoices n ms}?)"
 ppResError (UnboundVariableIsModule n _) =
   "Unbound variable: \{n}. '\{n}' is an imported module, not a value — a bare "
     ++ "'import \{n}' binds no names. Bind what you need: 'import \{n}.{name, "
@@ -2832,8 +2919,11 @@ ppResError (MethodNotInInterface m i _) =
   "Method '\{m}' is not part of interface '\{i}'"
 ppResError (ExternWithBody n _) =
   "Extern '" ++ n ++ "' must not have a definition body"
-ppResError (PrivateNameAccess n m _) =
-  "Module '\{m}' has no exported name '\{n}'"
+ppResError (PrivateNameAccess n m _ s) = match s
+  Some sug =>
+    "Module '\{m}' has no exported name '\{n}'. Did you mean '\{sug}'"
+      ++ haskellNote n sug
+  None => "Module '\{m}' has no exported name '\{n}'"
 ppResError (NoExportedConstructors n m _) =
   "'\{n}' exports no constructors from module '\{m}' (exported abstractly). Remove `(..)`, or export them: declare '\{n}' a `public export data` where it is defined, and name it `\{n}(..)` in any `export import` that re-exports it (`public` is a parse error on `import`)"
 ppResError (NewtypeCtorNotExported n m _) =
@@ -2938,7 +3028,7 @@ resErrorCode (DuplicateDefinition _ _ _) = "R-DUPLICATE-DEF"
 resErrorCode (UnknownInterface _ _) = "R-UNKNOWN-INTERFACE"
 resErrorCode (MethodNotInInterface _ _ _) = "R-METHOD-NOT-IN-INTERFACE"
 resErrorCode (ExternWithBody _ _) = "R-EXTERN-WITH-BODY"
-resErrorCode (PrivateNameAccess _ _ _) = "R-PRIVATE-NAME"
+resErrorCode (PrivateNameAccess _ _ _ _) = "R-PRIVATE-NAME"
 resErrorCode (NoExportedConstructors _ _ _) = "R-NO-EXPORTED-CTORS"
 resErrorCode (NewtypeCtorNotExported _ _ _) = "R-NEWTYPE-CTOR-PRIVATE"
 resErrorCode (BareCtorImport _ _ _) = "R-BARE-CTOR-IMPORT"
@@ -3238,14 +3328,20 @@ importedNamesMM (UseAlias _ a) exp = (
 
 pubErr : ModuleExports -> String -> List ResError
 pubErr exp n =
-  if isPubExp exp n then [] else [PrivateNameAccess n exp.modId None]
+  if isPubExp exp n then
+    []
+  else
+    [PrivateNameAccess n exp.modId None (suggestExportName exp n)]
 
 -- Like pubErr but carries the offending member's own source Loc (from a
 -- UseGroup member) so the diagnostic squiggles just that name, not the whole
 -- import statement (RESOLVER-DIAG-LOCATION-DESIGN.md F3 follow-up).
 pubErrLoc : ModuleExports -> (String, Loc) -> List ResError
 pubErrLoc exp (n, loc) =
-  if isPubExp exp n then [] else [PrivateNameAccess n exp.modId (Some loc)]
+  if isPubExp exp n then
+    []
+  else
+    [PrivateNameAccess n exp.modId (Some loc) (suggestExportName exp n)]
 
 -- expand_member: `T(..)` → the type plus its exported ctors; a plain member is
 -- itself.  `T(..)` on an abstractly-exported type is a NoExportedConstructors.
@@ -4001,10 +4097,10 @@ realImport exp path loc =
 -- rather than clobbering with the whole-statement loc, so the diagnostic
 -- squiggles just the offending name.
 withResErrorLoc : Loc -> ResError -> ResError
-withResErrorLoc loc (PrivateNameAccess n m None) =
-  PrivateNameAccess n m (Some loc)
-withResErrorLoc _ (PrivateNameAccess n m (Some l)) =
-  PrivateNameAccess n m (Some l)
+withResErrorLoc loc (PrivateNameAccess n m None s) =
+  PrivateNameAccess n m (Some loc) s
+withResErrorLoc _ (PrivateNameAccess n m (Some l) s) =
+  PrivateNameAccess n m (Some l) s
 withResErrorLoc loc (NoExportedConstructors n m None) =
   NoExportedConstructors n m (Some loc)
 withResErrorLoc _ (NoExportedConstructors n m (Some l)) =

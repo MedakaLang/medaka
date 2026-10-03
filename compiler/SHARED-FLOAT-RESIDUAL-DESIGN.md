@@ -9,11 +9,10 @@ this doc's own capture recorded as `2187642768` (garbage) on native — now buil
 auto-prints `6.0` correctly (`medaka build … && ./…` on the current binary). Whichever
 later change closed it, C4's specific proposed implementation (a dedicated `Ref String`
 main-type stamp) was never separately built; the outcome it targeted is simply no longer
-reproducible. Separately, `medaka run` on the same bare-Float-main source now REJECTS it
-with a clean diagnostic ("'main' must be a value of type Unit…") rather than printing
-anything — a deliberate `run`-vs-`build` CLI/UX asymmetry, not a regression; see
-`compiler/entries/eval_autoprint_main.mdk`'s header for where that asymmetry is pinned
-for the 3-engine differential gate.
+reproducible. Separately, `medaka run` on the same bare-Float-main source now prints `6.0`
+through its `Display` impl, as `build` does: every verb auto-prints a `main` of any
+Display type, and only a function `main` or a missing `main` is refused (one located
+error). See `compiler/driver/main_autoprint.mdk` for the shared rule.
 
 Original header (predates the fix): **Status:** DESIGN (read-mostly scoping). No emitter/lib source changed. This doc
 scopes the residual left after the two signature-driven fixes closed the anchored

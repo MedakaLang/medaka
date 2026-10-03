@@ -93,6 +93,8 @@ import driver.loader.{
 import driver.diagnostics.{
   analyzeProject,
   analyzeLocated,
+  exportsAmong,
+  sourcesMentioning,
   Diag(..),
   Severity(..),
   cjPosition,
@@ -124,7 +126,7 @@ import json.{
 import support.path.{dirOf}
 import support.char.{isIdentChar, isDigit}
 import entries.entry_support.{rootsOrDefault, desugarPair}
-import support.util.{startsWith, lookupAssoc}
+import support.util.{startsWith, lookupAssoc, splitOnChar, filterList}
 import types.repr.{Scheme}
 import types.typecheck.{
   TcDiag, elaborateModules, constrainedSigNames, preludeReturnPosDictNames,
@@ -149,6 +151,9 @@ import backend.wasm_reach.{wasmReachFilter}
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
 --   compile  <runtime> <core> <entry> [root ...]      → analyze→emit (today's behavior)
 --   analyze  <runtime> <core> <entry> [root ...]      → analyze ONLY, no wasm codegen
+-- compile/analyze also take `--stdlib-modules=<id>,<id>,…` among the roots: the
+-- stdlib modules the host placed in the vfs under the first root (the shipped
+-- set), the only ones an unbound name's import hint may name.
 --   hover    <runtime> <core> <entry> <line> <col>     → __MEDAKA_HOVER__ + Hover JSON
 --   complete <runtime> <core> <entry> <line> <col>     → __MEDAKA_COMPLETE__ + CompletionItem[]
 -- line/col are 0-based (LSP position convention).  hover/complete run a fresh
@@ -168,10 +173,10 @@ import backend.wasm_reach.{wasmReachFilter}
 -- what diagnostics they report.
 main : <IO> Unit
 main = match args ()
-  "compile" :: runtimeP :: coreP :: entry :: roots =>
-    run True runtimeP coreP entry (rootsOrDefault entry roots)
-  "analyze" :: runtimeP :: coreP :: entry :: roots =>
-    run False runtimeP coreP entry (rootsOrDefault entry roots)
+  "compile" :: runtimeP :: coreP :: entry :: rest =>
+    runWithShipped True runtimeP coreP entry rest
+  "analyze" :: runtimeP :: coreP :: entry :: rest =>
+    runWithShipped False runtimeP coreP entry rest
   "hover" :: runtimeP :: coreP :: entry :: rest =>
     runQuery True runtimeP coreP entry rest
   "complete" :: runtimeP :: coreP :: entry :: rest =>
@@ -181,6 +186,35 @@ main = match args ()
       "usage: playground_main <compile|analyze|hover|complete> <runtime.mdk> <core.mdk> <entry.mdk> [root ... | line col]"
 
 -- ── driver ────────────────────────────────────────────────────────────────
+
+-- Split the `--stdlib-modules=` argument off the roots and hand `run` the
+-- import hint's reader over those modules.
+runWithShipped : Bool -> String -> String -> String -> List String -> <IO> Unit
+runWithShipped emit runtimeP coreP entry rest =
+  let roots = rootsOrDefault entry (filterList (a => not (isShippedArg a)) rest)
+  let shipped = flatMap shippedIds rest
+  let hintRoot = match roots
+    r :: _ => r
+    [] => "."
+  run emit runtimeP coreP entry roots (names =>
+    exportsAmong names (sourcesMentioning hintRoot shipped names))
+
+shippedArgPrefix : String
+shippedArgPrefix = "--stdlib-modules="
+
+isShippedArg : String -> Bool
+isShippedArg a = startsWith shippedArgPrefix a
+
+shippedIds : String -> List String
+shippedIds a =
+  if isShippedArg a then
+    filterList
+      (/= "")
+      (splitOnChar
+        ','
+        (stringSlice (stringLength shippedArgPrefix) (stringLength a) a))
+  else
+    []
 -- Read runtime + core, then run the front end ONCE.  Parse the user entry with
 -- the non-panicking parseResult FIRST (so a parse-broken file becomes a clean
 -- JSON diagnostic instead of a loader panic / wasm trap — the key playground
@@ -192,8 +226,14 @@ main = match args ()
 -- If analysis is clean, fall through to emit.
 -- `emit` False (mode `analyze`) takes the SAME route through every diagnostic
 -- above and below; it only changes what happens after the last one has passed.
-run : Bool -> String -> String -> String -> List String -> <IO> Unit
-run emit runtimeP coreP entry roots = match readFile runtimeP
+run : Bool ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  (List String -> <IO> List (String, List String)) ->
+  <IO> Unit
+run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
   Err e => emitLoadFail entry e
   Ok rsrc => match readFile coreP
     Err e => emitLoadFail entry e
@@ -230,7 +270,16 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
               let mods = map dropPath triples
               match mods
                 [_] =>
-                  analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP triples
+                  analyzeSingle
+                    emit
+                    rsrc
+                    csrc
+                    tsrc
+                    entry
+                    runtimeP
+                    coreP
+                    triples
+                    exportsFor
                 _ =>
                   analyzeMulti
                     emit
@@ -242,6 +291,7 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
                     coreP
                     roots
                     triples
+                    exportsFor
 
 dropPath : (String, String, List Decl) -> (String, List Decl)
 dropPath (mid, _, decls) = (mid, decls)
@@ -267,11 +317,12 @@ analyzeSingle : Bool ->
   String ->
   String ->
   List (String, String, List Decl) ->
+  (List String -> <IO> List (String, List String)) ->
   <IO> Unit
-analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP loaded =
+analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP loaded exportsFor =
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
-  let diags = analyzeLocated rsrc csrc tsrc
+  let diags = analyzeLocated exportsFor rsrc csrc tsrc
   match any isDiagError diags
     True => emitDiagnostics (cjAllToJson [(entry, tsrc, diags)])
     False => guardedEmit emit rsrc csrc tsrc entry paths mods [
@@ -291,13 +342,15 @@ analyzeMulti : Bool ->
   String ->
   List String ->
   List (String, String, List Decl) ->
+  (List String -> <IO> List (String, List String)) ->
   <IO> Unit
-analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots loaded =
+analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots loaded exportsFor =
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
   let cacheRef = Ref []
   let results =
     analyzeProject
+      exportsFor
       True
       []
       cacheRef
@@ -330,9 +383,10 @@ warnTriple (p, s, ds) = (p, s, filterWarnings ds)
 -- shaped `main` and a program with no `main` fall through to `doEmit`, which
 -- has no valid nullary main to force and hits a bare wasm `unreachable` trap
 -- with zero diagnostic. Re-parse the user's RAW entry decls here and block on
--- either shape with a located ERROR before ever reaching the emitter. (Mirrors
--- medaka_cli.mdk's findMainFunDef/mainBodyLoc/mainArityMsg; duplicated per this
--- entry's F5 self-contained convention rather than importing the CLI entry.)
+-- either shape with a located ERROR before ever reaching the emitter, as `run`
+-- and `build` do. (Mirrors driver/diagnostics.mdk's `mainEntryError` and its
+-- messages; duplicated per this entry's F5 self-contained convention rather
+-- than importing the driver.)
 -- `warnTriples` carries the (already error-filtered) warning diags per source
 -- file, so a clean-but-warning program can still surface them once we reach
 -- `doEmit` below.  The main-shape guard runs FIRST and unconditionally blocks
@@ -380,7 +434,7 @@ mainHeadLoc body =
 
 mainArityMsg : String
 mainArityMsg =
-  "'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)"
+  "'main' must be a value, not a function. Write 'main = …', not 'main () = …' or 'main x = …': a program starts by evaluating 'main', and nothing ever calls it"
 
 mainMissingMsg : String
 mainMissingMsg =

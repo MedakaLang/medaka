@@ -1,0 +1,7 @@
+cmd: medaka check
+exit: 1
+---
+error: test/error_quality_fixtures/resolve/forgot_stdlib_import.mdk:3:16: Unbound variable: reverse. (Did you forget to 'import array.{reverse}', 'import list.{reverse}' or 'import string.{reverse}'?)
+  |
+3 | main = println (reverse nums)
+  |                 ^

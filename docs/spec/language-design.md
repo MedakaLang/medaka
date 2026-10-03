@@ -9,8 +9,8 @@ in forward tense with no completion marker.
 > ⚠️ **NON-NORMATIVE — `SYNTAX.md` is the ground-truth ledger of what the
 > current binary actually accepts, and wins whenever the two disagree.** This
 > document is intent and rationale, and deliberately includes aspirational
-> features never built. In particular: the "Product Types (`record`)" section
-> below teaches a standalone `record` keyword that **does not exist** — write
+> features never built. In particular: the "Product Types (`data X = { … }`)" section
+> below was written for a standalone `record` keyword that **does not exist** — write
 > `data X = { … }` (SYNTAX.md: "There is no separate `record` keyword"). The
 > "Mutability and Passing Values" section teaches `let mut` extensively as
 > current syntax; `let mut` **has been removed** (SYNTAX.md: "a parse error
@@ -406,11 +406,14 @@ handle (Scroll n)                = println "scroll \{debug n}"
 
 Field punning works in patterns (`{ x, y }` is shorthand for `{ x = x, y = y }`). Positional variants and named-field variants can coexist in the same `data` declaration. Field names are namespaced to the variant.
 
-### Product Types (`record`)
+### Product Types (`data X = { … }`)
+
+> Historical: this section was written for a standalone `record` keyword, which
+> has been removed (a parse error naming the replacement). The live spelling is
+> the braced `data` form below; see SYNTAX.md "Removed — do not use".
+
 ```
-record Person
-  name : String
-  age  : Int
+data Person = { name : String, age : Int }
 ```
 
 - **Dot access** for fields: `person.name`
@@ -432,12 +435,13 @@ Because fields are namespaced to their type, two record types may declare the
 same field name:
 
 ```
-record Person
-  name : String
+data Person = { name : String }
 
-record Company
-  name : String
+data Company = { name : String }
 ```
+
+(Historical note: the original text spelled these `record Person` and
+`record Company`; `record` has been removed, the braced `data` form is live.)
 
 Field access resolves by the **record type inferred for the receiver**: in
 `p.name` the compiler already knows `p : Person`, so `name` resolves to
@@ -480,9 +484,7 @@ This is a conscious narrowing, not an oversight:
 
 ### Combining Them
 ```
-record Point2D
-  x : Float
-  y : Float
+data Point2D = { x : Float, y : Float }
 
 data Shape
   = Circle Float
@@ -490,7 +492,7 @@ data Shape
   | Positioned Point2D Float
 ```
 
-`data` and `record` are kept clearly separate. Pattern matching on `data` is always positional. Named field access is always through `record` via dot notation.
+Historical wording: the original text kept `data` and `record` separate. `record` has been removed; a braced `data X = { … }` declaration is the product type, and named field access is through it via dot notation.
 
 ---
 
@@ -661,7 +663,7 @@ public export data Option a = Some a | None
 public export data Result e a = Ok a | Err e
 ```
 
-The same applies to `record` types: `export record Foo` exposes the type name; `public export record Foo` additionally exposes the fields (for construction, dot access, and update syntax). An abstractly-exported record can only be used via the operations the defining module chooses to expose.
+The same applies to braced product types: `export data Foo = { … }` exposes the type name; `public export data Foo = { … }` additionally exposes the fields (for construction, dot access, and update syntax). An abstractly-exported product type can only be used via the operations the defining module chooses to expose.
 
 **Why default-abstract:** library invariants (`Map` balance, `NonEmpty` non-emptiness, `Email` well-formedness) need compiler enforcement, not convention. Defaulting to abstract pushes authors toward designing a public API; defaulting to concrete bakes the representation into every call site. The cost is one extra word (`public`) when you want full transparency.
 
@@ -1139,7 +1141,7 @@ prop "reverse is its own inverse" (xs : List Int) =
 prop "sort preserves length" (xs : List Int) =
   length (sort xs) == length xs
 ```
-`Arbitrary` is derivable for any `data`/`record` whose fields are themselves `Arbitrary`. Shrinking is built in. This is the QuickCheck/Hypothesis lineage, made cheap by Medaka's HM types and `deriving` infrastructure.
+`Arbitrary` is derivable for any `data` type whose fields are themselves `Arbitrary`. Shrinking is built in. This is the QuickCheck/Hypothesis lineage, made cheap by Medaka's HM types and `deriving` infrastructure.
 
 **Doctests** — executable examples embedded in doc comments:
 ```

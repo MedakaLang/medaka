@@ -3,21 +3,13 @@
 --
 --   medaka run compiler/entries/eval_autoprint_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
 --
--- This is `medaka run` (loadProgram → elaborateModules → evalModulesOutput) PLUS
--- the composite-main auto-print wrap that `medaka build` applies
--- (driver/main_autoprint.mdk).  It exists because the three engines do NOT agree
--- on what to do with a bare VALUE `main` (`main = 1 + 2`) — the shape essentially
--- every fixture in test/llvm_fixtures/ and test/wasm/fixtures/ uses:
---
---   * `medaka build` rewrites `main = <e>` → `main = println <e>` and prints it;
---   * the WasmGC emitter mirrors that auto-print;
---   * `medaka run` REFUSES it ("'main' must be a value of type Unit") — a
---     deliberate CLI/UX decision, not a semantics difference.
---
--- Comparing the interpreter against the backends therefore needs an interpreter
--- driver under the SAME auto-print contract, or every value-main fixture would
--- register as a spurious three-way disagreement.  That is all this entry adds: the
--- eval path itself is byte-for-byte `medaka run`'s (eval_typed_modules_main.mdk).
+-- This is the interpreter path (loadProgram → elaborateModules →
+-- evalModulesOutput) PLUS the composite-main auto-print wrap
+-- (driver/main_autoprint.mdk) that every verb applies to a bare VALUE `main`
+-- (`main = 1 + 2`) — the shape essentially every fixture in test/llvm_fixtures/
+-- and test/wasm/fixtures/ uses.  `medaka run` applies the same wrap
+-- (`autoPrintElaborated`, driver/medaka_cli.mdk); this probe keeps the
+-- interpreter arm free of the CLI's check gate and argument handling.
 --
 -- Like every compiler/entries/*.mdk this is a probe driver — not compiled into the
 -- `medaka` binary and not in the emitter seed graph — so it owes no re-mint.

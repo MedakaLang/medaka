@@ -1,6 +1,6 @@
--- A trailing binding yields Unit after evaluating its RHS. Eval and native
--- print x then 1; Wasm currently panics while emitting the empty continuation
--- (#3656). The engine-divergence ledger drains when Wasm starts compiling it.
+-- A trailing binding yields Unit after evaluating its RHS. All three engines
+-- print x then 1 (#3656: Wasm used to panic emitting the empty continuation).
+-- Value-pinned in test/engine_value_pins/engine/wasm_trailing_let.pin.
 f : Int -> <IO> Unit
 f n =
   println "x"
