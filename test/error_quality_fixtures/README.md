@@ -33,7 +33,7 @@ intentionally broken; do not "fix" them.
 | `lex/`       | `check`    | 4     | unterminated string/char/comment, bad escape |
 | `parse/`     | `check`    | 7     | missing `then`, unclosed paren, trailing operator, missing `=>`, `else let` block, missing comma, keyword as binder |
 | `resolve/`   | `check`    | 8     | unbound var / typo'd name, unbound constructor / type, unknown module, importing a name that doesn't exist, forgotten import |
-| `typecheck/` | `check`    | 19    | int/string mismatch, arg-order swap, too few / too many args, float-where-int, if-branch mismatch, heterogeneous list, annotation mismatch, apply non-function, cons mismatch, return-type mismatch, missing record field / wrong field, missing instance / constraint, ambiguous, tuple-arity, wrong map arg, bool-where-int |
+| `typecheck/` | `check`    | 33    | int/string mismatch, arg-order swap, too few / too many args, float-where-int, if-branch mismatch, heterogeneous list, annotation mismatch, apply non-function, cons mismatch, return-type mismatch, missing record field / wrong field, missing instance / constraint, ambiguous, tuple-arity, wrong map arg, bool-where-int |
 | `exhaust/`   | `check`    | 5     | non-exhaustive match (Option / Bool / List / custom ADT), redundant arm |
 | `effect/`    | `check`    | 3     | IO not in annotation, effect missing from row, pure fn does IO |
 | `eval/`      | `run`      | 6     | division / modulo by zero, index OOB, explicit `panic`, let-else divergence, runtime non-exhaustive |

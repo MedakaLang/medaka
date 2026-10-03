@@ -259,8 +259,8 @@ files the queue can read without a compiler.
      `[dependencies]` sections, read through the loader's own `readDeps` and
      compared realpath-canonicalized, so `parsec = "../parsec"` and
      `pc = "../parsec"` are one edge. **Never** from import names:
-     `stdlib/byteparser.mdk` and the project `byteparser/` share a module name, so
-     an `import`-grep graph fabricates four edges no manifest declares.
+     an import name can coincide with a stdlib module's name, so an `import`-grep
+     graph fabricates edges no manifest declares.
   3. **Corpus** — a gate whose registry `corpus` names a project reads that
      project's tree as its fixtures (`wasm/diff_gzip` → `gzip`,
      `wasm/diff_sqlite` → `sqlite`, both owned by `compiler`), so a selected

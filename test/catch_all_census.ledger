@@ -68,6 +68,7 @@ isDoLoweredAndThenCallee	Expr	1/42
 isDoLoweredAndThenCalleeExpr	Expr	2/42
 isEmptyStringLit	Expr	2/42
 isNonexpansive	Expr	14/42
+isOmittedElse	Expr	1/42
 isSyntacticLambda	Expr	1/42
 lamUnderLoc	Expr	2/42
 leftmostPart	Expr	1/42

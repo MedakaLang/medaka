@@ -526,8 +526,8 @@ effTable` arm), which is indistinguishable from a verified-pure function, so the
 subsumption check passes and the plugin is **accepted**:
 
 ```
-$ ./medaka check-policy demo/plugin_malicious.mdk --allow Cache,Log --fn transform
-rejected. transform requires <Cache, Fetch>. Not permitted by policy {Cache, Log}
+$ ./medaka check-policy demo/plugin_malicious.mdk --allow Cache,Log,FFI --fn transform
+rejected. transform requires <Cache, FFI, Fetch>. Not permitted by policy {Cache, Log, FFI}
    reached via: transform → tagVisit → recordMetric → sendBeacon → fetch      # rc=1
 
 $ ./medaka check-policy demo/plugin_malicious.mdk --allow Cache,Log --fn zzzNoSuchFn

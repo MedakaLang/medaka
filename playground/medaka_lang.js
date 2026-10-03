@@ -26,6 +26,9 @@ const tokenTable = {
   bool: tags.bool,
   escape: tags.escape,
   interpolation: tags.special(tags.string),
+  typeVar: tags.local(tags.typeName),
+  effectLabel: tags.namespace,
+  effectVar: tags.atom,
 };
 
 const medakaStream = StreamLanguage.define({
@@ -55,6 +58,9 @@ export const medakaHighlightStyle = HighlightStyle.define([
   { tag: tags.variableName, color: '#d6dde8' },
   { tag: tags.operator, color: '#a9b1ba' },
   { tag: tags.punctuation, color: '#8b949e' },
+  { tag: tags.local(tags.typeName), color: '#6fc7d9' },
+  { tag: tags.namespace, color: '#f58fb0' },
+  { tag: tags.atom, color: '#b8c97a' },
 ]);
 
 export function medaka() {

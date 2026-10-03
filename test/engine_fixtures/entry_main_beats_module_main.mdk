@@ -1,0 +1,8 @@
+-- #3732: the entry file's own `main` is the program's `main` even when an
+-- imported module also defines one.  Expected `2`, derived from the source:
+-- `bump 1` is `1 + 1`, and `helpers.main` is never imported, so it must neither
+-- run nor replace this one.  Before the fix `run` printed `2` while both
+-- backends refused, because the two `main`s merged into one two-clause binding.
+import entry_main_beats_module_main.helpers.{bump}
+
+main = println (bump 1)

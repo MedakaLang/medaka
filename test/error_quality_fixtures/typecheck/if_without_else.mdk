@@ -1,0 +1,5 @@
+sign n = if n > 0 then "pos"
+
+count n = if n > 0 then 1
+
+main = println (sign 3)

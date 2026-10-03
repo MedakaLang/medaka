@@ -1,0 +1,9 @@
+h : Int -> Int
+h x = x
+
+k b = if b then 1 else ()
+
+j : Bool -> String
+j b = if b then "yes" else ()
+
+main = println (h ())

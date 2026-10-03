@@ -1,5 +1,5 @@
 # META
-source_lines=12886
+source_lines=12891
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -5680,8 +5680,13 @@ routeWitness prog env _ (RDictFwd dpar) =
     ["local.get $" ++ gname dpar]
   else
     gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
-routeWitness prog _ _ RNone =
-  gapLP prog "wasm W5: RNone route as a dict witness"
+-- RNone as a witness is the dictionary for an unconstrained type variable under a
+-- `requires` (the element of `None : Option a`, the error of `Ok 1 : Result e Int`).
+-- There is no value of that type for a method to take, so no value-position
+-- dispatch goes through it: the constructor-only and Display/Eq/Ord shapes never
+-- call it.  It is the no-op i31 (dict tag 0), mirroring llvm_emit's
+-- `dictWordOfRoute _ _ RNone = "0"`.
+routeWitness _ _ _ RNone = ["i32.const 0", "ref.i31"]
 -- S-1: RLocal's own dicts are the call's leading dict ARGS (pushed by emitMethodRef's
 -- RLocal arm via emitDictRef), not a dict WITNESS for this route — so as a witness it
 -- stays the no-op i31 (dict tag 0), mirroring llvm_emit's
@@ -13847,7 +13852,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "routeWitness" ((PVar "prog") (PVar "env") (PVar "d") (PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "r")) (EApp (EApp (EVar "flatMap") (EVar "superFieldW")) (EVar "path"))))
 (DFunDef false "routeWitness" ((PVar "prog") (PVar "env") PWild (PCon "RDict" (PVar "dpar"))) (EIf (EApp (EApp (EVar "contains") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope"))))))
 (DFunDef false "routeWitness" ((PVar "prog") (PVar "env") PWild (PCon "RDictFwd" (PVar "dpar"))) (EIf (EApp (EApp (EVar "contains") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope"))))))
-(DFunDef false "routeWitness" ((PVar "prog") PWild PWild (PCon "RNone")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W5: RNone route as a dict witness"))))
+(DFunDef false "routeWitness" (PWild PWild PWild (PCon "RNone")) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
 (DFunDef false "routeWitness" (PWild PWild PWild (PCon "RLocal" PWild PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
 (DFunDef false "routeWitness" (PWild PWild PWild (PCon "RScalar" PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
 (DTypeSig false "superFieldW" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
@@ -16206,7 +16211,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "routeWitness" ((PVar "prog") (PVar "env") (PVar "d") (PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "r")) (EApp (EApp (EDictApp "flatMap") (EVar "superFieldW")) (EVar "path"))))
 (DFunDef false "routeWitness" ((PVar "prog") (PVar "env") PWild (PCon "RDict" (PVar "dpar"))) (EIf (EApp (EApp (EVar "contains") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope"))))))
 (DFunDef false "routeWitness" ((PVar "prog") (PVar "env") PWild (PCon "RDictFwd" (PVar "dpar"))) (EIf (EApp (EApp (EVar "contains") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope"))))))
-(DFunDef false "routeWitness" ((PVar "prog") PWild PWild (PCon "RNone")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W5: RNone route as a dict witness"))))
+(DFunDef false "routeWitness" (PWild PWild PWild (PCon "RNone")) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
 (DFunDef false "routeWitness" (PWild PWild PWild (PCon "RLocal" PWild PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
 (DFunDef false "routeWitness" (PWild PWild PWild (PCon "RScalar" PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
 (DTypeSig false "superFieldW" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
