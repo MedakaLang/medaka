@@ -1,5 +1,5 @@
 # META
-source_lines=2918
+source_lines=2930
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -43,6 +43,7 @@ import frontend.resolve.{
   resErrorLoc,
   resErrorCode,
   resErrorDidYouMean,
+  resErrorIsPrivateName,
   resolveModuleG,
   ModuleExports,
   withStdlibExports,
@@ -141,6 +142,18 @@ export
 mkDiag : Severity -> String -> String -> Option Loc -> Diag
 mkDiag sev code msg loc = Diag sev code msg loc None None
 
+-- The edit for a did-you-mean at [loc].  A PrivateNameAccess carries the
+-- statement's span when the dotted import form (`import m.name`) has no member
+-- location, and an edit anchored there would overwrite the wrong text; it gets
+-- a fix only when its span is exactly the misspelled name.
+didYouMeanFix : ResError -> String -> String -> Loc -> Option Fix
+didYouMeanFix e bad sug (Loc f sl sc el ec) =
+  if resErrorIsPrivateName e
+    && not (el == sl && ec == sc + stringLength bad) then
+    None
+  else
+    Some (Fix (Loc f sl sc sl (sc + stringLength bad)) sug)
+
 -- Build the (help, fix) pair for a resolve error's structured suggestion.  Only
 -- did-you-mean yields both today: `help` is prose; `fix` replaces the misspelled
 -- identifier's OWN span (its loc start, end = start + name length) with the
@@ -150,10 +163,9 @@ resErrorHelpFix : ResError -> (Option String, Option Fix)
 resErrorHelpFix e = match resErrorDidYouMean e
   Some (bad, sug) =>
     let help = Some "did you mean '\{sug}'?"
-    let fix =
-      map
-        ((Loc f sl sc _ _) => Fix (Loc f sl sc sl (sc + stringLength bad)) sug)
-        (resErrorLoc e)
+    let fix = match resErrorLoc e
+      Some l => didYouMeanFix e bad sug l
+      None => None
     (help, fix)
   None => (None, None)
 
@@ -2926,7 +2938,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "takeFirstN" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resolveModuleG" false) (mem "ModuleExports" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "ModuleExports" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
@@ -2945,8 +2957,10 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DData Public "Diag" () ((variant "Diag" (ConPos (TyCon "Severity") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))) ())
 (DTypeSig true "mkDiag" (TyFun (TyCon "Severity") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Diag"))))))
 (DFunDef false "mkDiag" ((PVar "sev") (PVar "code") (PVar "msg") (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "sev")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "None")) (EVar "None")))
+(DTypeSig false "didYouMeanFix" (TyFun (TyCon "ResError") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Fix")))))))
+(DFunDef false "didYouMeanFix" ((PVar "e") (PVar "bad") (PVar "sug") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "&&" (EApp (EVar "resErrorIsPrivateName") (EVar "e")) (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "el") (EVar "sl")) (EBinOp "==" (EVar "ec") (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))) (EVar "sug")))))
 (DTypeSig true "resErrorHelpFix" (TyFun (TyCon "ResError") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix")))))
-(DFunDef false "resErrorHelpFix" ((PVar "e")) (EMatch (EApp (EVar "resErrorDidYouMean") (EVar "e")) (arm (PCon "Some" (PTuple (PVar "bad") (PVar "sug"))) () (EBlock (DoLet false false (PVar "help") (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "did you mean '")) (EApp (EVar "display") (EVar "sug"))) (ELit (LString "'?"))))) (DoLet false false (PVar "fix") (EApp (EApp (EVar "map") (ELam ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild)) (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))) (EVar "sug")))) (EApp (EVar "resErrorLoc") (EVar "e")))) (DoExpr (ETuple (EVar "help") (EVar "fix"))))) (arm (PCon "None") () (ETuple (EVar "None") (EVar "None")))))
+(DFunDef false "resErrorHelpFix" ((PVar "e")) (EMatch (EApp (EVar "resErrorDidYouMean") (EVar "e")) (arm (PCon "Some" (PTuple (PVar "bad") (PVar "sug"))) () (EBlock (DoLet false false (PVar "help") (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "did you mean '")) (EApp (EVar "display") (EVar "sug"))) (ELit (LString "'?"))))) (DoLet false false (PVar "fix") (EMatch (EApp (EVar "resErrorLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EApp (EApp (EVar "didYouMeanFix") (EVar "e")) (EVar "bad")) (EVar "sug")) (EVar "l"))) (arm (PCon "None") () (EVar "None")))) (DoExpr (ETuple (EVar "help") (EVar "fix"))))) (arm (PCon "None") () (ETuple (EVar "None") (EVar "None")))))
 (DTypeSig true "diagOfResError" (TyFun (TyCon "ResError") (TyCon "Diag")))
 (DFunDef false "diagOfResError" ((PVar "e")) (EBlock (DoLet false false (PTuple (PVar "help") (PVar "fix")) (EApp (EVar "resErrorHelpFix") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "resErrorCode") (EVar "e"))) (EApp (EVar "ppResError") (EVar "e"))) (EApp (EVar "resErrorLoc") (EVar "e"))) (EVar "help")) (EVar "fix")))))
 (DTypeSig true "hintResErrors" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyApp (TyCon "List") (TyCon "ResError")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -3320,7 +3334,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "takeFirstN" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resolveModuleG" false) (mem "ModuleExports" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "ModuleExports" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
@@ -3339,8 +3353,10 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DData Public "Diag" () ((variant "Diag" (ConPos (TyCon "Severity") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))) ())
 (DTypeSig true "mkDiag" (TyFun (TyCon "Severity") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Diag"))))))
 (DFunDef false "mkDiag" ((PVar "sev") (PVar "code") (PVar "msg") (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "sev")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "None")) (EVar "None")))
+(DTypeSig false "didYouMeanFix" (TyFun (TyCon "ResError") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Fix")))))))
+(DFunDef false "didYouMeanFix" ((PVar "e") (PVar "bad") (PVar "sug") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "&&" (EApp (EVar "resErrorIsPrivateName") (EVar "e")) (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "el") (EVar "sl")) (EBinOp "==" (EVar "ec") (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))) (EVar "sug")))))
 (DTypeSig true "resErrorHelpFix" (TyFun (TyCon "ResError") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix")))))
-(DFunDef false "resErrorHelpFix" ((PVar "e")) (EMatch (EApp (EVar "resErrorDidYouMean") (EVar "e")) (arm (PCon "Some" (PTuple (PVar "bad") (PVar "sug"))) () (EBlock (DoLet false false (PVar "help") (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "did you mean '")) (EApp (EMethodRef "display") (EVar "sug"))) (ELit (LString "'?"))))) (DoLet false false (PVar "fix") (EApp (EApp (EMethodRef "map") (ELam ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild)) (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))) (EVar "sug")))) (EApp (EVar "resErrorLoc") (EVar "e")))) (DoExpr (ETuple (EVar "help") (EVar "fix"))))) (arm (PCon "None") () (ETuple (EVar "None") (EVar "None")))))
+(DFunDef false "resErrorHelpFix" ((PVar "e")) (EMatch (EApp (EVar "resErrorDidYouMean") (EVar "e")) (arm (PCon "Some" (PTuple (PVar "bad") (PVar "sug"))) () (EBlock (DoLet false false (PVar "help") (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "did you mean '")) (EApp (EMethodRef "display") (EVar "sug"))) (ELit (LString "'?"))))) (DoLet false false (PVar "fix") (EMatch (EApp (EVar "resErrorLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EApp (EApp (EVar "didYouMeanFix") (EVar "e")) (EVar "bad")) (EVar "sug")) (EVar "l"))) (arm (PCon "None") () (EVar "None")))) (DoExpr (ETuple (EVar "help") (EVar "fix"))))) (arm (PCon "None") () (ETuple (EVar "None") (EVar "None")))))
 (DTypeSig true "diagOfResError" (TyFun (TyCon "ResError") (TyCon "Diag")))
 (DFunDef false "diagOfResError" ((PVar "e")) (EBlock (DoLet false false (PTuple (PVar "help") (PVar "fix")) (EApp (EVar "resErrorHelpFix") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EApp (EVar "resErrorCode") (EVar "e"))) (EApp (EVar "ppResError") (EVar "e"))) (EApp (EVar "resErrorLoc") (EVar "e"))) (EVar "help")) (EVar "fix")))))
 (DTypeSig true "hintResErrors" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyApp (TyCon "List") (TyCon "ResError")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "ResError"))))))

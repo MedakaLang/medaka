@@ -193,7 +193,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`ARCH-REVIEW.md`](../compiler/ARCH-REVIEW.md) | Medaka Architecture Review | PARTIAL |
 | [`ARGSTAMP-UNIFY-PLAN.md`](../compiler/ARGSTAMP-UNIFY-PLAN.md) | ARGSTAMP-UNIFY-PLAN.md — retire the `emitArgStampPasses` eval-vs-emit dispatch fork | IMPLEMENTED |
 | [`BOOTSTRAP.md`](../compiler/BOOTSTRAP.md) | BOOTSTRAP.md — Native self-compile slices | IMPLEMENTED |
-| [`COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`](../compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md) | Composite-`main` Auto-Print — Design (Option A: uniform auto-print) | PARTIAL |
+| [`COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`](../compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md) | Composite-`main` Auto-Print — Design (Option A: uniform auto-print) | IMPLEMENTED on every verb |
 | [`CONSTRUCT-COVERAGE.md`](../compiler/CONSTRUCT-COVERAGE.md) | CONSTRUCT-COVERAGE.md — `medaka build` native coverage matrix | PARTIAL |
 | [`DIAGNOSTIC-CODES-DESIGN.md`](../compiler/DIAGNOSTIC-CODES-DESIGN.md) | DIAGNOSTIC-CODES-DESIGN.md | IMPLEMENTED |
 | [`DIAGNOSTICS-SURFACING-PLAN.md`](../compiler/DIAGNOSTICS-SURFACING-PLAN.md) | DIAGNOSTICS-SURFACING-PLAN.md — native `check` error positions + messages (WS-4 / F6) | IMPLEMENTED |

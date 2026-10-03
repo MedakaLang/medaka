@@ -1,5 +1,5 @@
 # META
-source_lines=6843
+source_lines=6850
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -281,6 +281,13 @@ resErrorDidYouMean (PrivateNameAccess n _ _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownConstructor n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownType n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean _ = None
+
+-- True for a PrivateNameAccess, the one did-you-mean error whose location can
+-- be the whole import statement rather than the misspelled name.
+export
+resErrorIsPrivateName : ResError -> Bool
+resErrorIsPrivateName (PrivateNameAccess _ _ _ _) = True
+resErrorIsPrivateName _ = False
 
 -- The source span carried by a ResError (Stage B): consumed by diagnostics.mdk
 -- to position the Diag (was uniformly `None` pre-Stage-B).
@@ -6858,6 +6865,9 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "resErrorDidYouMean" ((PCon "UnknownConstructor" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" ((PCon "UnknownType" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" (PWild) (EVar "None"))
+(DTypeSig true "resErrorIsPrivateName" (TyFun (TyCon "ResError") (TyCon "Bool")))
+(DFunDef false "resErrorIsPrivateName" ((PCon "PrivateNameAccess" PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "resErrorIsPrivateName" (PWild) (EVar "False"))
 (DTypeSig true "resErrorLoc" (TyFun (TyCon "ResError") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "resErrorLoc" ((PCon "UnboundVariable" PWild (PVar "l") PWild)) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "UnboundVariableExported" PWild PWild (PVar "l"))) (EVar "l"))
@@ -8482,6 +8492,9 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "resErrorDidYouMean" ((PCon "UnknownConstructor" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" ((PCon "UnknownType" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" (PWild) (EVar "None"))
+(DTypeSig true "resErrorIsPrivateName" (TyFun (TyCon "ResError") (TyCon "Bool")))
+(DFunDef false "resErrorIsPrivateName" ((PCon "PrivateNameAccess" PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "resErrorIsPrivateName" (PWild) (EVar "False"))
 (DTypeSig true "resErrorLoc" (TyFun (TyCon "ResError") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "resErrorLoc" ((PCon "UnboundVariable" PWild (PVar "l") PWild)) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "UnboundVariableExported" PWild PWild (PVar "l"))) (EVar "l"))

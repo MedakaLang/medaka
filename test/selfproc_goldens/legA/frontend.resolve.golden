@@ -345,6 +345,7 @@ reexportedEffectOrigins : Map String (List (String, String)) -> UsePath -> List 
 resErrorCode : ResError -> String
 resErrorDedupKey : ResError -> String
 resErrorDidYouMean : ResError -> Option (String, String)
+resErrorIsPrivateName : ResError -> Bool
 resErrorLoc : ResError -> Option Loc
 resErrorSexp : ResError -> String
 reservedClashes : String -> List String -> List (String, Option Loc) -> List ResError

@@ -141,8 +141,7 @@ previously is long fixed (the user's own panic message now surfaces as
 | `runtime_nonexhaustive` | match with no arm | `:1:29: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match` | Located (caret on the scrutinee); no missing-arm value named; JSON no `fix` |
 | `explicit_panic` | `panic "user not found"` | `:2:37: runtime error [E-PANIC]: user not found` | Located (caret on the panic message literal); user's message correctly surfaces; JSON no `fix` |
 | `let_else_fail` | let-else with `panic` else | `:3:42: runtime error [E-PANIC]: empty list` | Located (caret on the panic message literal) via idiomatic let-else; JSON no `fix` |
-| `main_not_value` (added 2026-07-04) | `main () = println "hi"` (should be `main = …`) | `:1:10: 'main' must be a value of type Unit — write 'main = …', not 'main () = …' or 'main x = …' (…)` | `medaka run` (and `check`, `build`) emit a located, actionable warning naming the exact fix, where before it was a silent no-op (exit 0, no output). **Fixed 2026-08-23 (#1236):** now a proper `W-MAIN-SHAPE` `Diag` — carries a real `Loc` (was `<unknown location>`), appears in `check --json`'s `diagnostics` array (was absent), and `run --json` emits the SAME `Diag` JSON envelope (was raw caret-art text on a stream a machine consumer parses as JSON). See `test/check_json_fixtures/main_shape_arity.mdk`/`main_shape_nonunit.mdk` for the `check --json` regression coverage and `eval/main_not_unit_value.mdk` (below) for the zero-arg non-Unit VALUE sibling shape |
-| `main_not_unit_value` (added 2026-08-23, #1236) | `main = 1 + 2` (a zero-arg VALUE main, neither Unit nor Async) | `:1:7: 'main' must be a value of type Unit (e.g. an IO action) …` | Same `W-MAIN-SHAPE` code as `main_not_value` above, different shape: the body is a binop spine (`EBinOp`), not an `EApp` spine — the case that used to lose its `Loc` entirely (`mainBodyLoc` only walked `EApp`) even before the `--json` holes |
+| `main_not_value` (added 2026-07-04) | `main () = println "hi"` (should be `main = …`) | `:1:10: 'main' must be a value, not a function. Write 'main = …', not 'main () = …' or 'main x = …': a program starts by evaluating 'main', and nothing ever calls it` | `run` and `build` refuse a function `main` (and a program with no `main`) with this ONE located error, rc 1, `W-MAIN-SHAPE`; `check` warns. A zero-arg VALUE `main` of any `Display` type is printed, so `main = 1 + 2` prints `3` and is no longer a fixture here. See `test/check_json_fixtures/main_shape_arity.mdk` for the `check --json` coverage |
 
 ## build/ (`medaka build`)
 
@@ -150,7 +149,7 @@ previously is long fixed (the user's own panic message now surfaces as
 |---|---|---|---|
 | `internal_extern_use` | `arrayGetUnsafe` outside stdlib | `'arrayGetUnsafe' is an internal-only primitive … (pass --allow-internal to override)` | Clear + actionable; **location is `:1:0`** (line 0), not the use site |
 | `type_error_at_build` | `"x" + 1` | `error: emitter failed compiling … / No such file or directory` | ⚠️ **build does not surface the type error** `check` gives ("No impl of Num for String"); confusing emitter/file error instead |
-| `main_takes_unit` | `main () = …` | `error: emitter failed compiling … / No such file or directory` | ⚠️ Confusing "emitter failed / No such file" for a common `main` shape (silent no-op under `run`). **Since #1236:** the located `warning: … W-MAIN-SHAPE …` now prints BEFORE this — additive, still exits 1 the same way (the emitter's own hard guard is unchanged) — so the confusing message now at least has an actionable warning ahead of it naming the exact fix |
+| `main_takes_unit` | `main () = …` | `error: …:1:10: 'main' must be a value, not a function. …` | `build` now refuses this shape before the emitter runs, with one located error (rc 1), the same text `run` gives |
 
 ---
 
@@ -193,12 +192,10 @@ previously is long fixed (the user's own panic message now surfaces as
    names the exporting module and the exact `import list.{reverse}` fix,
    instead of a plain unbound-variable error.
 10. **New this session: `eval/main_not_value`** — `main () = …`/`main x = …`
-    under `medaka run` (and `check`) now emits a located, actionable warning
-    (`'main' must be a value of type Unit — write 'main = …', …`) instead of
-    silently running nothing. The **`build/main_takes_unit`** fixture below is
-    a *different, still-open* gap: `medaka build` on the identical shape still
-    prints the confusing `emitter failed compiling … / No such file or
-    directory` — the fix landed for the `run`/`check` path only.
+    under `medaka run` now emits one located, actionable error
+    (`'main' must be a value, not a function. …`) instead of silently running
+    nothing. `build/main_takes_unit` (the identical shape under `medaka build`)
+    now gives the same error rather than `emitter failed compiling …`.
 11. **Out-of-corpus beginner-facing wins this session** (not fully captured by
     a graded fixture — see `GRADING.md`'s "0.1.0 beginner-facing pass" section
     for the full writeup): native compiled div-by-zero/modulo-by-zero/

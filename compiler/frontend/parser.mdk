@@ -6196,12 +6196,14 @@ parseResultWith src tokList offList =
         Err (mkLocated src toks offs srcLen matchWithMsg mwIdx)
       else if wiIdx >= 0 then
         Err (mkLocated src toks offs srcLen letRecWithRemovedMsg wiIdx)
+      else if bcIdx >= 0 then
+        -- Before the `**` hint: a `/**` or `(**` comment opener lexes as a
+        -- `**` token, and the comment diagnosis is the true one.
+        Err (mkLocated src toks offs srcLen blockCommentMsg bcIdx)
       else if ssIdx >= 0 then
         Err (mkLocated src toks offs srcLen starStarMsg ssIdx)
       else if sigIdx >= 0 then
         Err (mkLocated src toks offs srcLen hsSigMsg sigIdx)
-      else if bcIdx >= 0 then
-        Err (mkLocated src toks offs srcLen blockCommentMsg bcIdx)
       else if bbIdx >= 0 then
         Err (mkLocated src toks offs srcLen braceBlockMsg bbIdx)
       else if fkwIdx >= 0 then

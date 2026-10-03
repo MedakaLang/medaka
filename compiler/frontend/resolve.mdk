@@ -278,6 +278,13 @@ resErrorDidYouMean (UnknownConstructor n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownType n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean _ = None
 
+-- True for a PrivateNameAccess, the one did-you-mean error whose location can
+-- be the whole import statement rather than the misspelled name.
+export
+resErrorIsPrivateName : ResError -> Bool
+resErrorIsPrivateName (PrivateNameAccess _ _ _ _) = True
+resErrorIsPrivateName _ = False
+
 -- The source span carried by a ResError (Stage B): consumed by diagnostics.mdk
 -- to position the Diag (was uniformly `None` pre-Stage-B).
 export

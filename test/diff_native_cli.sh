@@ -567,6 +567,26 @@ else
   main_refuse_case build main_fn ":1:10: 'main' must be a value, not a function"
   main_refuse_case build no_main ": no 'main' found"
 
+  # `build --json` reports the SAME single refusal as one diagnostic on stdout,
+  # never R-BUILD-FAILED wrapping the emitter's panic.  `$2` is the code expected.
+  main_refuse_json_case() {
+    mj_name="$1"; mj_code="$2"
+    mj_f="$FIX/run/$mj_name.mdk"; mj_out="$TMP/nat_${mj_name}_buildjson.out"
+    ( export MEDAKA_ROOT="$ROOT"; export MEDAKA_EMITTER="$EMITTER"; bound "$MEDAKA" build --json "$mj_f" -o "$TMP/nat_${mj_name}_jbin" ) >"$mj_out" 2>/dev/null
+    mj_status=$?
+    mj_n="$(grep -o '"code":' "$mj_out" | wc -l | tr -d ' ')"
+    if [ "$mj_status" -eq 1 ] && [ "$mj_n" -eq 1 ] &&
+       grep -qF "\"code\":\"$mj_code\"" "$mj_out" &&
+       ! grep -qE 'E-PANIC|emitter failed|R-BUILD-FAILED' "$mj_out"; then
+      pass=$((pass+1)); printf 'ok   build --json/%s (exit 1, one %s diagnostic)\n' "$mj_name" "$mj_code"
+    else
+      fail=$((fail+1)); printf 'FAIL build --json/%s (want exit 1 + exactly one %s diagnostic, no E-PANIC/emitter failed; got exit %s stdout [%s])\n' \
+        "$mj_name" "$mj_code" "$mj_status" "$(cat "$mj_out" 2>/dev/null)"
+    fi
+  }
+  main_refuse_json_case main_fn W-MAIN-SHAPE
+  main_refuse_json_case no_main W-MAIN-MISSING
+
   # ── build: MutBytes/Builder panic messages (stdlib/mut_bytes.mdk,
   # stdlib/bytebuilder.mdk) ──────────────────────────────────────────────────
   # Seven `panic` arms that no other vehicle reaches: MutBytes.setInPlace's

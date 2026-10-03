@@ -1381,6 +1381,16 @@ cjBuildFailedJson target msg = cjAllToJson [
   (target, "", [Diag SevError "R-BUILD-FAILED" msg None None None]),
 ]
 
+-- The `main` refusal of the entry file's own declarations, if any (the entry
+-- is the last module `typecheckGate` consults).  A file that does not parse
+-- never reaches here: the check gate has already rejected it.
+entryMainRefusal : String -> List Diag
+entryMainRefusal src = match parseResult src
+  Ok decls => match mainEntryError decls
+    Some d => [d]
+    None => []
+  Err _ => []
+
 -- `medaka build --json`: front-end gate via `checkJsonFile` (BYTE-IDENTICAL
 -- structured diagnostics to `check --json` on the same file — same code, same
 -- envelope), then, only if clean, the real emit+clang build. A build-stage
@@ -1402,7 +1412,7 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
     Err e =>
       let _ = println (cjSourceReadJson input e)
       exit 1
-    Ok _ =>
+    Ok entrySrc =>
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
       match readPreludeFile rtPath
@@ -1418,6 +1428,14 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
               checkJsonFileParts allowInternal rsrc csrc input stdlibDir
             if hasErr then
               let _ = println (ppCheckJson cj)
+              exit 1
+            else if not (isEmpty (entryMainRefusal entrySrc)) then
+              -- The same refusal `typecheckGate` gives the plain `build`: one
+              -- located diagnostic, never the emitter's panic wrapped in
+              -- R-BUILD-FAILED.
+              let _ =
+                println
+                  (cjAllToJson [(input, entrySrc, entryMainRefusal entrySrc)])
               exit 1
             else
               let medaka = envOr "MEDAKA" "medaka"

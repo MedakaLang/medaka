@@ -39,6 +39,7 @@ import frontend.resolve.{
   resErrorLoc,
   resErrorCode,
   resErrorDidYouMean,
+  resErrorIsPrivateName,
   resolveModuleG,
   ModuleExports,
   withStdlibExports,
@@ -137,6 +138,18 @@ export
 mkDiag : Severity -> String -> String -> Option Loc -> Diag
 mkDiag sev code msg loc = Diag sev code msg loc None None
 
+-- The edit for a did-you-mean at [loc].  A PrivateNameAccess carries the
+-- statement's span when the dotted import form (`import m.name`) has no member
+-- location, and an edit anchored there would overwrite the wrong text; it gets
+-- a fix only when its span is exactly the misspelled name.
+didYouMeanFix : ResError -> String -> String -> Loc -> Option Fix
+didYouMeanFix e bad sug (Loc f sl sc el ec) =
+  if resErrorIsPrivateName e
+    && not (el == sl && ec == sc + stringLength bad) then
+    None
+  else
+    Some (Fix (Loc f sl sc sl (sc + stringLength bad)) sug)
+
 -- Build the (help, fix) pair for a resolve error's structured suggestion.  Only
 -- did-you-mean yields both today: `help` is prose; `fix` replaces the misspelled
 -- identifier's OWN span (its loc start, end = start + name length) with the
@@ -146,10 +159,9 @@ resErrorHelpFix : ResError -> (Option String, Option Fix)
 resErrorHelpFix e = match resErrorDidYouMean e
   Some (bad, sug) =>
     let help = Some "did you mean '\{sug}'?"
-    let fix =
-      map
-        ((Loc f sl sc _ _) => Fix (Loc f sl sc sl (sc + stringLength bad)) sug)
-        (resErrorLoc e)
+    let fix = match resErrorLoc e
+      Some l => didYouMeanFix e bad sug l
+      None => None
     (help, fix)
   None => (None, None)
 

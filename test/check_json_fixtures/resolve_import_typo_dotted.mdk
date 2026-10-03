@@ -1,0 +1,3 @@
+import map.delet
+
+main = println 1
