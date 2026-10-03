@@ -1,2 +1,0 @@
-main : <IO> Unit
-main = println "Hello, Medaka!"
