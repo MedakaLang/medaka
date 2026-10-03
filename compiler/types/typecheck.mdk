@@ -10367,6 +10367,12 @@ currentDoDeferred = Ref False
 currentMethodMismatch : Ref (Option String)
 currentMethodMismatch = Ref None
 
+-- The context of the value join whose unify is running (`joinValueEqual`), so a
+-- mismatch that unify reports can say which construct demanded the two types
+-- agree.  `None` outside a join.
+currentJoinContext : Ref (Option String)
+currentJoinContext = Ref None
+
 -- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
 -- by `graphModuleWorker`'s `GOutTrees` arm so the native `run` driver can detect a
 -- `main : Async _` and route it through `runAsync` (perform its row) instead of
@@ -12800,7 +12806,74 @@ typeMismatchReport a b = match !currentMethodMismatch
     pushTypeError
       "T-METHOD-MISMATCH"
       "Method '\{mname}': expected type \{ppMono a} but got \{ppMono b}"
-  None => typeMismatchReportRest a b
+  None => typeMismatchReportJoin a b
+
+-- A mismatch inside the join of an `if` with no `else` branch is that `if`'s
+-- missing branch: the branch is `()`, so the `then` branch must be Unit too.
+-- Outside a do-lowered chain, a variable applied to arguments against a type
+-- with no application to fill it names the interface that variable stands for.
+typeMismatchReportJoin : Mono -> Mono -> Unit
+typeMismatchReportJoin a b = match !currentJoinContext
+  Some ctx if ctx == elselessIfContext =>
+    pushTypeErrorHelpFixAt
+      "T-TYPE-MISMATCH"
+      !currentLoc
+      "Type mismatch: \{ppMono a} vs \{ppMono b} — \{elselessIfHelp}"
+      elselessIfHelp
+      None
+  _ => match (!currentDoOrigin, constrainedApplicationHelp a b)
+    (None, Some help) =>
+      pushTypeErrorHelpFixAt
+        "T-TYPE-MISMATCH"
+        !currentLoc
+        "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}"
+        help
+        None
+    _ => typeMismatchReportRest a b
+
+-- The join context `inferIf` passes for an `if` whose `else` was omitted
+-- (`isOmittedElse`).
+elselessIfContext : String
+elselessIfContext = "if without else"
+
+elselessIfHelp : String
+elselessIfHelp =
+  "an `if` without `else` has type Unit, so its `then` branch must be Unit too; add an `else` branch"
+
+-- One side is an unsolved variable applied to arguments (`m Unit`), the other a
+-- type with no application for that variable to take (`Unit`, an arrow).  Such
+-- a pair can only fail.  When the variable carries interface obligations, the
+-- position wants a value of a type implementing them, and the other side is not
+-- one.
+constrainedApplicationHelp : Mono -> Mono -> Option String
+constrainedApplicationHelp a b =
+  map
+    ((app, plain, ifaces) => constrainedApplicationText app plain ifaces)
+    (orElseOpt (appliedVarIfaces a b) (appliedVarIfaces b a))
+
+appliedVarIfaces : Mono -> Mono -> Option (Mono, Mono, List String)
+appliedVarIfaces app plain = match (normalize app, normalize plain)
+  (TApp _ _, TApp _ _) => None
+  (TApp _ _, _) => match normalize (spineHead app)
+    TVar cell => match ifacesConstrainingVar (tyvarId cell)
+      [] => None
+      ifaces => Some (app, plain, ifaces)
+    _ => None
+  _ => None
+
+-- The interfaces a pending call or impl obligation places on the variable
+-- whose union-find root is [id], in first-recorded order, without repeats.
+ifacesConstrainingVar : Int -> List String
+ifacesConstrainingVar id =
+  let pending = wAll perRun.value.obls ++ wAll perRun.value.implObls
+  let onVar = filter (o => anyList (sameRootId id) o.pred.args) pending
+  dedup (map (o => o.pred.iface.irName) onVar)
+
+constrainedApplicationText : Mono -> Mono -> List String -> String
+constrainedApplicationText app plain ifaces =
+  let ctor = ppMono (spineHead app)
+  let names = joinWith " and " ifaces
+  "`\{ppMono app}` here must be a \{names} value (`\{ctor}` stands for a type that implements \{names}), but this value is a plain \{ppMono plain}"
 
 typeMismatchReportRest : Mono -> Mono -> Unit
 typeMismatchReportRest a b = match !currentDoOrigin
@@ -23774,7 +23847,15 @@ inferIf env c t e =
   let _ = unify (infer env c) (tconBuiltin "Bool")
   let tt = infer env t
   let ee = infer env e
-  joinValueTypes "if" [(exprLoc t, tt), (exprLoc e, ee)]
+  let context = if isOmittedElse e then elselessIfContext else "if"
+  joinValueTypes context [(exprLoc t, tt), (exprLoc e, ee)]
+
+-- The parser builds an omitted `else` as a bare unit literal (`elseBranch`,
+-- `compiler/frontend/parser.mdk`) and wraps every atom it reads in `ELoc`, a
+-- written `()` included, so only an omitted branch arrives unwrapped.
+isOmittedElse : Expr -> Bool
+isOmittedElse (ELit LUnit) = True
+isOmittedElse _ = False
 
 -- Inference owns source locations and variance metadata; effect_values owns
 -- the structural join. Unknown constructor slots remain exact.
@@ -23971,9 +24052,12 @@ checkRecursiveValue owned = unifyInto True owned.bsRecursiveValue owned.bsValue
 joinValueEqual : String -> Option Loc -> Mono -> Mono -> Unit
 joinValueEqual context loc left right =
   let saved = !currentLoc
+  let savedContext = !currentJoinContext
   let _ = setLocIfSome loc
   let _ = noteNumlitCtx left right context
+  currentJoinContext := Some context
   let _ = unify left right
+  currentJoinContext := savedContext
   currentLoc := saved
 
 producedSlotCovariants : Mono -> List Bool
@@ -37961,6 +38045,7 @@ numlitMismatchHint loc args = match numlitCtxKind loc
     ". All elements must have the same type; convert the \{ppMonosShared args} element, or make the list hold \{ppMonosShared args}."
   Some "cons" =>
     ". The head's type must match the list's elements; change the head to \{ppMonosShared args}, or use a list of Int."
+  Some ctx if ctx == elselessIfContext => " — \{elselessIfHelp}"
   _ => ""
 
 numlitCtxKind : Option Loc -> Option String

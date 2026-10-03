@@ -1,5 +1,5 @@
 # META
-source_lines=6221
+source_lines=6223
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -1498,7 +1498,9 @@ ifPlain = defer
   elseE <- elseBranch
   deferPure (EIf cond thenE elseE)
 
--- `else` is optional; an else-less `if` defaults the else branch to unit
+-- `else` is optional; an else-less `if` defaults the else branch to unit, left
+-- without an `ELoc` so the typechecker can tell it from a written `()`
+-- (`isOmittedElse`, `compiler/types/typecheck.mdk`)
 elseBranch : Parser Expr
 elseBranch = orElse elsePresent (deferPure (ELit LUnit))
 
