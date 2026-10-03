@@ -1048,6 +1048,8 @@ both print `(False, True)`. One case is not yet ruled: a member alias of an inte
 method whose interface the importer cannot name, beside an imported standalone of the
 origin name (`test/shadow_fixtures/i22_importer_member_alias_not_nameable/`), still
 resolves per SHADOW-SEMANTICS S2-DECL (d) and prints the impl's `7`, row 42's KNOWN-BAD cell.
+A module's own top-level binding named like the alias wins over the alias: with
+`import m.{size as sz}` and a top-level `sz`, `sz` is the module's own.
 
 Rules, each a real error rather than a silent no-op:
 
