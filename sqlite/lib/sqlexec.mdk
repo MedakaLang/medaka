@@ -153,10 +153,10 @@ foldRow (e :: rest) acc = do
 --   compiler does not handle is a clean `Err` that NAMES the expression.
 --
 -- > constCell (ELit (LInt 7))
--- Ok CInt 7
+-- Ok (CInt 7)
 --
 -- > constCell (EArith AMul (ELit (LInt 2)) (ELit (LInt 3)))
--- Ok CInt 6
+-- Ok (CInt 6)
 --
 -- > constCell (ECol "x")
 -- Err "VALUES: 'x' is not a constant expression — a column reference cannot appear in an INSERT's VALUES"

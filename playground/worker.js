@@ -119,6 +119,11 @@ const capabilityStub = (name) => () => {
   );
 };
 
+// A wasm stack overflow during the run (start function) is the guest's recursion depth,
+// worded like the interpreter's E-STACK-OVERFLOW.
+const STACK_OVERFLOW_MSG =
+  'stack overflow: recursion too deep for the browser; the native compiler has a larger stack';
+
 const stdoutBuf = [];
 const stderrBuf = [];
 // B5: a persistent copy of ALL stderr bytes (stderrBuf is drained on each flush). On a
@@ -220,11 +225,13 @@ self.onmessage = function(e) {
         .decode(new Uint8Array(stderrAll)).trim();
       const engineMsg = err.message || String(err);
       const isPanic = /unreachable|trap|RuntimeError/i.test(engineMsg);
-      self.postMessage({
-        type: 'error',
-        message: coded ? coded
-          : err instanceof CapabilityError ? engineMsg
-          : (isPanic ? 'program panicked' : 'instantiate failed: ' + engineMsg),
-      });
+      // A coded trap already reached the console through the stderr stream above, so
+      // the error message is withheld (shown: true) instead of printing it twice.
+      const overflow = /call stack|stack overflow/i.test(engineMsg);
+      const message = err instanceof CapabilityError ? engineMsg
+        : overflow ? STACK_OVERFLOW_MSG
+        : coded ? coded
+        : (isPanic ? 'program panicked' : 'instantiate failed: ' + engineMsg);
+      self.postMessage({ type: 'error', message, shown: !!coded && !overflow && !(err instanceof CapabilityError) });
     });
 };

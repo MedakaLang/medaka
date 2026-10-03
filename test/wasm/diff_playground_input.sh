@@ -151,5 +151,100 @@ EOF2
 printf '%s\n' 2 > "$WORK/expected"
 if "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-pure-bound.wat" 2>"$WORK/modules-pure-bound.err"; then check_wat modules-pure-bound "$WORK/modules-pure-bound.wat"; else bad "modules refused a pure bound"; fi
 if node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-pure-bound.wat" 2>"$WORK/playground-pure-bound.err"; then check_wat playground-pure-bound "$WORK/playground-pure-bound.wat"; else bad "playground refused a pure bound"; fi
+# Ordinary programs importing stdlib modules (#3688). The wasm-compiled compiler
+# must compile them the way the native one does: the same source compiled natively
+# is the oracle for every expected file below. The playground arm registers the
+# same extra modules the live page ships, read from EXTRA_MODULES in main.js.
+cat > "$WORK/pg_compile_extra.mjs" <<'EOF2'
+import fs from 'node:fs';
+import path from 'node:path';
+const [root, userPath] = process.argv.slice(2);
+const mainJs = fs.readFileSync(path.join(root, 'playground/main.js'), 'utf8');
+const m = mainJs.match(/const EXTRA_MODULES = \[([\s\S]*?)\];/);
+if (!m) { console.error('EXTRA_MODULES not found in playground/main.js'); process.exit(2); }
+const extra = {};
+for (const x of m[1].matchAll(/'([a-z0-9_]+)'/g)) extra[x[1]] = fs.readFileSync(path.join(root, 'stdlib', x[1] + '.mdk'), 'utf8');
+const { loadCompiler, compile } = await import(path.join(root, 'playground/compile.mjs'));
+const wasm = await loadCompiler(path.join(root, 'playground/dist/playground.wasm'));
+const stdlib = {
+  runtime: fs.readFileSync(path.join(root, 'stdlib/runtime.mdk'), 'utf8'),
+  core: fs.readFileSync(path.join(root, 'stdlib/core.mdk'), 'utf8'),
+  extra,
+};
+const r = await compile(fs.readFileSync(userPath, 'utf8'), { wasm, stdlib });
+if (r.ok) { process.stdout.write(r.wat); process.exit(0); }
+process.stdout.write(JSON.stringify(r.diagnostics, null, 2) + '\n');
+process.exit(1);
+EOF2
+check_imports_program() {
+  prog="$1"
+  if "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" "$ROOT/stdlib" >"$WORK/modules-$prog.wat" 2>"$WORK/modules-$prog.emit.err"; then check_wat "modules-$prog" "$WORK/modules-$prog.wat"; else bad "$prog modules emitter failed"; cat "$WORK/modules-$prog.emit.err"; fi
+  if node "$WORK/pg_compile_extra.mjs" "$ROOT" "$WORK/input.mdk" >"$WORK/playground-$prog.wat" 2>"$WORK/playground-$prog.emit.err"; then check_wat "playground-$prog" "$WORK/playground-$prog.wat"; else bad "$prog playground compiler failed"; head -c 600 "$WORK/playground-$prog.wat" "$WORK/playground-$prog.emit.err"; fi
+}
+cat > "$WORK/input.mdk" <<'EOF2'
+import string.{toInt}
+
+safeDiv : Int -> Int -> Option Int
+safeDiv _ 0 = None
+safeDiv a b = Some (a / b)
+
+parseAndHalve : String -> Result String Int
+parseAndHalve s = match toInt s
+  Some n => Ok (n / 2)
+  None => Err "not a number: \{s}"
+
+main =
+  println (safeDiv 10 2)
+  println (safeDiv 10 0)
+  println (parseAndHalve "42")
+  println (parseAndHalve "forty")
+  println (optionOr 0 (safeDiv 1 0))
+EOF2
+printf '%s\n' 'Some 5' 'None' 'Ok 21' 'Err (not a number: forty)' '0' > "$WORK/expected"
+check_imports_program option-result
+cat > "$WORK/input.mdk" <<'EOF2'
+import json.{parse, stringify, get, asInt, asString}
+
+main =
+  match parse "{\"name\": \"medaka\", \"stars\": 3, \"tags\": [\"fp\", \"effects\"]}"
+    Err e => println "parse error: \{e}"
+    Ok j =>
+      println (stringify j)
+      println (get "name" j |> flatMap asString)
+      println (get "stars" j |> flatMap asInt)
+EOF2
+printf '%s\n' '{"name":"medaka","stars":3,"tags":["fp","effects"]}' 'Some medaka' 'Some 3' > "$WORK/expected"
+check_imports_program json
+cat > "$WORK/input.mdk" <<'EOF2'
+import array as A
+import vector as V
+
+main =
+  let arr = A.fromList [3, 1, 2]
+  arr[0] := 99
+  println arr
+  println arr[1]
+  A.sortInPlace arr
+  println arr
+  let v = V.new ()
+  V.push "a" v
+  V.push "b" v
+  println (length v)
+  println (V.pop v)
+EOF2
+printf '%s\n' '[|99, 1, 2|]' '1' '[|1, 2, 99|]' '2' 'Some b' > "$WORK/expected"
+check_imports_program arrays-vectors
+cat > "$WORK/input.mdk" <<'EOF2'
+import string.{toInt, toFloat}
+
+main =
+  println (toInt "42")
+  println (toInt "-17")
+  println (toInt "abc")
+  println (toInt " 42 ")
+  println (toFloat "3.5")
+EOF2
+printf '%s\n' 'Some 42' 'Some (-17)' 'None' 'None' 'Some 3.5' > "$WORK/expected"
+check_imports_program string-to-int
 printf '%d checks, %d failing\n' "$checks" "$fail"
 [ "$checks" -gt 0 ] && [ "$fail" -eq 0 ]
