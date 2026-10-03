@@ -1,0 +1,5 @@
+-- A record TYPE `Cfg` whose fields are declared `b, a`: registry key `Cfg`.
+public export data Cfg = { b : Int, a : Int }
+
+export mkZ : Cfg
+mkZ = Cfg { b = 33, a = 44 }

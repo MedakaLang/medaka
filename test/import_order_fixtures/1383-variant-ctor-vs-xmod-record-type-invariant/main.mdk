@@ -1,0 +1,5 @@
+import ahold.{Holder, mkH}
+import plainlib.{Plain, mkP}
+
+main : <IO> Unit
+main = putStrLn (intToString mkH.hx ++ "," ++ intToString mkP.px)

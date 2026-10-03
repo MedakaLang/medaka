@@ -1,0 +1,13 @@
+import acfg.{mkZ}
+import zwrap.{mkW}
+
+main : <IO> Unit
+main =
+  putStrLn
+    (intToString mkW.a
+      ++ ","
+      ++ intToString mkW.b
+      ++ ","
+      ++ intToString mkZ.a
+      ++ ","
+      ++ intToString mkZ.b)

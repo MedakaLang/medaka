@@ -1,0 +1,4 @@
+public export data Plain = { px : Int }
+
+export mkP : Plain
+mkP = Plain { px = 1 }

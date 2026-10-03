@@ -18687,12 +18687,59 @@ mangledHeadCandidatesGo head (key :: rest)
   | otherwise = mangledHeadCandidatesGo head rest
 
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
-resolveFieldByOwners te fname = match fieldOwnerNames fname
-  [] =>
-    let _ = pushUnknownField fname "<unknown>"
-    None
-  [r] => pairRecordByName r
-  r :: rest => resolveFieldAmbiguous te fname (r :: rest)
+resolveFieldByOwners te fname =
+  let owners = fieldOwnerNames fname
+  match ownerDeclOfReceiver te fname owners
+    Some pair => Some pair
+    None => match owners
+      [] =>
+        let _ = pushUnknownField fname "<unknown>"
+        None
+      [r] => pairRecordByName r
+      r :: rest => resolveFieldAmbiguous te fname (r :: rest)
+
+-- #1383: a concrete receiver's field is answered by the receiver's own
+-- declaration.  The floor `recordByNameRef` keeps one row per bare key, so when a
+-- named-field variant (`data Holder = | Plain { hx }`) shares its key with
+-- another module's record (`data Plain = { px }`), the floor can hold the other
+-- declaration and the ladder below would pick it by registration order.  The
+-- identity companion keeps every module's row under that key; the receiver's
+-- `(declaring module, type name)` picks among them.
+--
+-- The answer is `(k, ri)` with `ri` read from the companion row filed under `k`,
+-- so the stamp `stampedRecordHead k ri` names the selected declaration's own
+-- module: the emitters apply that declaration's layout.
+--
+-- Declines (answers `None`, so the ladder runs unchanged) when the receiver
+-- carries no identity, when no owner key or more than one owner key holds the
+-- receiver's declaration, or when a sibling constructor of the receiver's type
+-- withholds the field.  The sibling case is the multi-`ConNamed`-variant shape
+-- `narrowedPick` refuses: the receiver's type does not say which layout applies.
+ownerDeclOfReceiver : Mono ->
+  String ->
+  List String ->
+  Option (String, RecordInfo)
+ownerDeclOfReceiver _ _ [] = None
+ownerDeclOfReceiver te fname owners = match receiverTypeIdent te
+  None => None
+  Some ident => match ownerDeclMatches ident owners
+    [(k, ri)] =>
+      if narrowingBlockedByCtorSibling (headTyconMono te) fname k then
+        None
+      else
+        Some (k, ri)
+    _ => None
+
+-- Every owner key whose companion rows hold the declaration `ident` names, with
+-- that row's `RecordInfo`.
+ownerDeclMatches : Ident -> List String -> List (String, RecordInfo)
+ownerDeclMatches _ [] = []
+ownerDeclMatches ident (k :: rest) =
+  match omLookup k crossRun.value.universeRecordIdentsRef.value
+    None => ownerDeclMatches ident rest
+    Some cs => match recordCandForType ident cs
+      None => ownerDeclMatches ident rest
+      Some ri => (k, ri) :: ownerDeclMatches ident rest
 
 -- multiple owners: receiver still an unbound var ⇒ genuinely ambiguous; a
 -- concrete (non-record) receiver ⇒ narrow by the receiver's own declaration

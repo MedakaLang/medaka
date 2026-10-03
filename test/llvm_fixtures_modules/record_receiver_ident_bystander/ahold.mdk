@@ -9,18 +9,12 @@
 -- IS FALSE, MEASURED: module-only tells them apart here correctly, and reds
 -- nothing anywhere in the tree.  See `recordCandIsType`.
 --
--- 🚨 `hxOf` PROJECTS `hx` HERE RATHER THAN IN `entry` BECAUSE THE `entry` ROUTE IS
--- BROKEN, NOT MERELY DIFFERENT.  From `entry` the receiver head is `Holder`, arm
--- (a) misses, and the field→owners fallback reaches `pairRecordByName "Plain"` — a
--- BARE-key read, which for this collided key returns `plainlib`'s record and
--- REFUSES the program at exit 1 (`Type mismatch: Holder vs Plain`, then `Field
--- 'hx' does not belong to record 'Plain'`) where `100` is correct.  Verified
--- PRE-EXISTING (it reproduces with unit 3's selection stubbed back out) and
--- deliberately unfixed by unit 3; it is filed as **#1383** and pinned at
--- `test/must_fail_fixtures/1383-variant-ctor-name-collides-xmod-record-type/`,
--- re-confirmed still reproducing on the rebase onto #1395.  So this cell AVOIDS a
--- broken path — it does not demonstrate a working one, and a reader standing here
--- must not infer that `mkH.hx` from `entry` would resolve.
+-- `hxOf` projects `hx` HERE, inside the declaring module, so this cell grades the
+-- own-module route.  The `entry` route (receiver head `Holder`, arm (a) misses,
+-- the field→owners path answers) was #1383: it was refused through the bare-key
+-- `pairRecordByName "Plain"`, and is now answered from the identity companion.
+-- That route is graded by
+-- `test/llvm_fixtures_modules/record_variant_ctor_vs_xmod_record_type/`.
 --
 -- 🚨 AND THE RESIDUAL IS NOT ONLY THE LOUD REJECT.  An earlier version of this
 -- header named only #1383 (S1, a false REJECT), which understates it: the SAME
