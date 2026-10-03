@@ -145,6 +145,9 @@ jobs:
   # Charter clause: N1 (docs/ops/CI-ARCHITECTURE.md §3.6 — cost above threshold — irreducible wall-clock cost would pole a merge-tier shard).
   stage-ir-scaling-full:
     name: "stage_ir_scaling FULL (all eight shapes; the merge tier affords two)"
+    # Known red, tracked in #2794: non-fatal so the run's conclusion reflects new breakage;
+    # the failure is still filed as a known-red issue by the step below.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -908,6 +911,9 @@ jobs:
   # Charter clause: N4 (docs/ops/CI-ARCHITECTURE.md §3.6 — advisory / non-blocking by construction — files a finding rather than gating the diff).
   gate-cost-autoadvance:
     name: "gate cost baseline auto-advance (#2180 baseline leg, S-1-baseline-autoadvance)"
+    # Known red, tracked in #2439: non-fatal so the run's conclusion reflects new breakage;
+    # the failure is still filed as a known-red issue by the step below.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

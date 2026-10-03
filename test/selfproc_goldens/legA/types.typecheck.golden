@@ -133,6 +133,7 @@ appendOp : Mono -> Mono -> Mono
 appendUniverseAccums : String -> List Decl -> Unit
 applicationRow : TcEnv -> Expr -> Mono -> Mono -> Mono -> EffRow
 applicationRowTyped : Mono -> Mono -> Mono -> EffRow
+appliedVarIfaces : Mono -> Mono -> Option (Mono, Mono, List String)
 applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
 applyExprs : Expr -> List Expr -> Expr
 applyParams : Mono -> List Mono -> Mono
@@ -599,6 +600,8 @@ concreteHeadVarIds : Mono -> List Int
 concreteReqMatchByIface : IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 consOp : Mono -> Mono -> Mono
 consSiteFn : String -> a -> Map String (List a) -> Map String (List a)
+constrainedApplicationHelp : Mono -> Mono -> Option String
+constrainedApplicationText : Mono -> Mono -> List String -> String
 constrainedSigName : Decl -> List String
 constrainedSigNames : List Decl -> List String
 constrainedSigPredicateSlots : Decl -> List (String, List PredicateSlot)
@@ -668,6 +671,7 @@ ctorsByHead : List Scheme -> Map String (List (List Mono, List Mono))
 ctorsOfHead : HeadKey -> Option (List String)
 currentDoDeferred : Ref Bool
 currentDoOrigin : Ref (Option Loc)
+currentJoinContext : Ref (Option String)
 currentLoc : Ref (Option Loc)
 currentLocalSchemes : Unit -> List (String, Scheme)
 currentLocalSchemesLoc : Unit -> List (String, Option Loc, Scheme)
@@ -936,6 +940,8 @@ elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> L
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable)
 elaborateModulesWithSchemes : List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), List (String, Scheme), List (String, Scheme))
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
+elselessIfContext : String
+elselessIfHelp : String
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
 emptyBuiltinClasses : BuiltinClasses
@@ -1435,6 +1441,7 @@ ifaceSortKey : IfaceRef -> String
 ifaceSuperCountOfRow : ImplRow -> (String, Int)
 ifaceSupersOf : List Decl -> String -> Option (List String, List Super)
 ifaceTabKey : TyConOrigin -> String -> TabKey
+ifacesConstrainingVar : Int -> List String
 implAccFinish : ImplAcc -> ImplEnv
 implBodyLoc : Expr -> Option Loc
 implCompletenessMsgsOfMap : ClassEnv -> Int -> Decl -> List (Option Loc, String)
@@ -1717,6 +1724,7 @@ isMangledExportOfAny : List (String, List (String, a)) -> String -> Bool
 isMangledFor : String -> String -> Bool
 isMonoScheme : Scheme -> Bool
 isNonexpansive : TcEnv -> Expr -> Bool
+isOmittedElse : Expr -> Bool
 isOrdinaryBinder : SigVars -> String -> Bool
 isOuterVariable : Int -> Mono -> Bool
 isPreludeDisplayIface : IfaceRef -> Bool
@@ -3002,6 +3010,7 @@ typeInRowSlotMsg : Ty -> String
 typeMismatch : Mono -> Mono -> Unit
 typeMismatchInDo : Mono -> Mono -> Loc -> Unit
 typeMismatchReport : Mono -> Mono -> Unit
+typeMismatchReportJoin : Mono -> Mono -> Unit
 typeMismatchReportRest : Mono -> Mono -> Unit
 typeOtherThan : String -> String -> RecordInfo -> Mono -> List (String, Int, RecordInfo) -> Option CtorFieldConflict
 typeParamAsRowMsg : String -> String -> String

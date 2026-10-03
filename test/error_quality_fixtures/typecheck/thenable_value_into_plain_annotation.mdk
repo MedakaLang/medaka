@@ -1,0 +1,4 @@
+n : Int
+n = forEach (x => println x) [1]
+
+main = println n

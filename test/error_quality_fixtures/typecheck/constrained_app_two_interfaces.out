@@ -1,0 +1,7 @@
+cmd: medaka check
+exit: 1
+---
+error: test/error_quality_fixtures/typecheck/constrained_app_two_interfaces.mdk:4:22: Type mismatch: a Int vs Int — `a Int` is a value of a type that implements Foldable and Thenable (`a` stands for that type), and a plain Int is not one
+  |
+4 | main = println (twice (x => x))
+  |                       ^

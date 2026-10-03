@@ -17,7 +17,7 @@ Absolute (not relative/regression) latency of the five user-facing CLI verbs —
   a new one to the shared corpus).
 - **project**: `gzip/main.mdk` (9 files, 3,650 lines — a 0.1.0-scale small real
   project; `parsec/` was the other plausible candidate at 4 files/761 lines,
-  `sqlite/`/`pds/` are too large and `mq/`/`byteparser/` too small — see the
+  `sqlite/`/`pds/` are too large — see the
   sprint contract's project-inventory finding).
 
 This is a DIFFERENT harness from test/bench.sh, which times compiled FIXTURE

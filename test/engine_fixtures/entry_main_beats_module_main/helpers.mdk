@@ -1,0 +1,7 @@
+-- A library module that also defines a top-level `main`.  It is never the
+-- program's entry, so this `main` is an ordinary private binding the entry
+-- neither imports nor reaches.
+export bump : Int -> Int
+bump x = x + 1
+
+main = println "HELPERS MAIN"

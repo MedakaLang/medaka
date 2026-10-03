@@ -47,7 +47,7 @@ name: CI
 #
 # ⚠️ WHAT NOW NARROWS ON `merge_group`: the LIBRARY-PROJECT gates only — a gate
 # whose registry `project` is one of the manifest-bearing projects outside
-# `compiler/` (byteparser, gzip, mq, parsec, pds, sqlite). Same shape as the
+# `compiler/` (gzip, parsec, pds, sqlite). Same shape as the
 # `pull_request` narrowing above and the same derivation (`test/preflight.sh`),
 # but keyed on PROJECT, not on gate: an entry runs a project's gates unless the
 # project graph proves the diff cannot reach that project. Narrowing fails SAFE in
@@ -824,7 +824,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'build_cmd' 'byteparser/test/check' 'mq/test/check' 'pds/test/did_key_all_engines' 'pds/test/encodings_vectors' 'pds/test/field_vectors' 'pds/test/mst_vectors' 'pds/test/repo_vectors' 'pds/test/rfc6979_vectors' 'pds/test/sha256_vectors' 'diff_compiler_capability_matrix' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_doc' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_iface_order' 'diff_compiler_internal_extern' 'diff_compiler_ir_scaling' 'diff_compiler_lint_cache' 'diff_compiler_lint_multi' 'diff_compiler_llvm' 'diff_compiler_llvm_typed_ir' 'diff_compiler_llvm_typed' 'diff_compiler_parse_error_loc' 'diff_compiler_preflight_base' 'diff_compiler_reach_fail_open' 'effect_product_domain' 'diff_compiler_tier_drift' 'diff_compiler_emitted_code_floor'"
+            pattern: "'build_cmd' 'pds/test/did_key_all_engines' 'pds/test/encodings_vectors' 'pds/test/field_vectors' 'pds/test/mst_vectors' 'pds/test/repo_vectors' 'pds/test/rfc6979_vectors' 'pds/test/sha256_vectors' 'diff_compiler_capability_matrix' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_doc' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_iface_order' 'diff_compiler_internal_extern' 'diff_compiler_ir_scaling' 'diff_compiler_lint_cache' 'diff_compiler_lint_multi' 'diff_compiler_llvm' 'diff_compiler_llvm_typed_ir' 'diff_compiler_llvm_typed' 'diff_compiler_parse_error_loc' 'diff_compiler_preflight_base' 'diff_compiler_reach_fail_open' 'effect_product_domain' 'diff_compiler_tier_drift' 'diff_compiler_emitted_code_floor'"
             wasm_arm: "1"
           - name: gates_4
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED

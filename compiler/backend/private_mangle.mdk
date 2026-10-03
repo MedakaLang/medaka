@@ -47,9 +47,12 @@
 -- (name → definer) and could not express "the export `b` is really `a`".
 --
 -- EXCLUDED (never mangled):
---   • the entry `main` — the emitter emits it as `@main`, the program entry point
---     (llvm_emit.mdk `isFnBind (CBind "main" _) = False`); renaming it would lose
---     the entry.  Excluded as both a definition and a reference target.
+--   • the ENTRY unit's `main` — the emitter emits it as `@main`, the program entry
+--     point (llvm_emit.mdk `isFnBind (CBind "main" _) = False`); renaming it would
+--     lose the entry.  Only the entry unit (the LAST unit: the loader hands modules
+--     dependency-first) keeps the key `main` unrenamed (`isEntryMainKey`).  Any other
+--     unit's `main` is an ordinary top-level name and mangles to `<mid>__main`, so it
+--     cannot merge with the entry's into one two-clause bind.
 --   • externs / runtime C symbols (`@mdk_<externName>` → runtime/medaka_rt.c) —
 --     they are declared in runtime.mdk (NOT in core/modules), so they never appear
 --     as a definition here; a reference to one is excluded by rule 4 (not in any
@@ -128,6 +131,7 @@ import frontend.ast.{
 }
 import types.route_key.{remapEvidence}
 import u64 as U64
+import list.{last}
 import support.util.{
   lookupAssoc,
   contains,
@@ -158,7 +162,7 @@ import support.ordmap.{
 
 -- ── entry point ───────────────────────────────────────────────────────────────
 -- Given the core unit and every (mid, decls) module, module-qualify EVERY
--- top-level function (except `main` / excluded), rewriting all references
+-- top-level function (except the entry unit's `main`), rewriting all references
 -- import-aware to their origin module's mangled name.  Returns the rewritten
 -- (coreDecls, modules) in the same shape `runEmit` already threads to
 -- elaborateModules.
@@ -168,16 +172,26 @@ mangleUnits : List Decl ->
   (List Decl, List (String, List Decl))
 mangleUnits coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
-  let _ = symbolInjectivityGuard allUnits
+  let entryMid = entryUnitMid allUnits
+  let _ = symbolInjectivityGuard entryMid allUnits
   let exportsPerUnit =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
       (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
   let coreOut =
-    mangleUnitU exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
-  let modsOut = map (mangleModule exportsPerUnit ctorExportsPerUnit) modules
+    mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
+  let modsOut =
+    map (mangleModule entryMid exportsPerUnit ctorExportsPerUnit) modules
   (coreOut, modsOut)
+
+-- The entry unit is the LAST one: the loader hands modules dependency-first (the
+-- invariant `driver/main_autoprint.entryPair` also reads), and a single-file
+-- program is the sole module after core.
+entryUnitMid : List (String, List Decl) -> String
+entryUnitMid units = match last units
+  Some (mid, _) => mid
+  None => ""
 
 -- ── the ELABORATED-graph entry point (#2809) ──────────────────────────────────
 -- What every EMIT driver calls.  The same rename as `mangleUnits`, extended to the one
@@ -194,7 +208,8 @@ mangleUnitsEv : List Decl ->
   (List Decl, List (String, List Decl))
 mangleUnitsEv coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
-  let _ = symbolInjectivityGuard allUnits
+  let entryMid = entryUnitMid allUnits
+  let _ = symbolInjectivityGuard entryMid allUnits
   let exportsPerUnit =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
@@ -204,7 +219,7 @@ mangleUnitsEv coreDecls modules =
   -- remap name the same symbols, and building the map twice was measured at +0.99%
   -- Ir on the emitter child over the compiler's own graph.
   let units =
-    map (unitRenameMapEntry exportsPerUnit ctorExportsPerUnit) allUnits
+    map (unitRenameMapEntry entryMid exportsPerUnit ctorExportsPerUnit) allUnits
   let renamed = map renameUnitEntry units
   let coreOut = match renamed
     [] => coreDecls
@@ -220,13 +235,14 @@ mangleUnitsEv coreDecls modules =
 -- one unit's rename map, keyed by its module id, beside the decls it applies to.  The
 -- SAME two builders and the same first-entry-wins fold `mangleUnitU` applies, so a
 -- route and the definition it names cannot be renamed differently.
-unitRenameMapEntry : List (String, List (String, String)) ->
+unitRenameMapEntry : String ->
+  List (String, List (String, String)) ->
   List (String, List (String, String, List String)) ->
   (String, List Decl) ->
   (String, (OrdMap String, Bool, List Decl))
-unitRenameMapEntry exportsPerUnit ctorExportsPerUnit (mid, decls) =
+unitRenameMapEntry entryMid exportsPerUnit ctorExportsPerUnit (mid, decls) =
   let rmList =
-    buildUnitRenameMap mid exportsPerUnit decls
+    buildUnitRenameMap entryMid mid exportsPerUnit decls
       ++ buildUnitCtorRenameMap mid ctorExportsPerUnit decls
   (mid, (omFromPairs (reverseL rmList) omEmpty, isEmptyL rmList, decls))
 
@@ -432,9 +448,10 @@ renameKeyCollides collided (n, _) = omHasKey n collided
 -- SCOPE — deliberately stated, because a partial check cited as a total one is how
 -- this bug class survives:
 --   * covers the MODULE-MANGLED domain only — the definition sites `mangleUnitU`
---     renames: top-level functions (`unitDefNames`, `main` excluded exactly as
---     `localRenameEntry` excludes it) and local constructors (`unitLocalCtorNames`,
---     reserved fixed-tag ctors already filtered out).  Ctors travel the identical
+--     renames: top-level functions (`unitDefNames`, the entry unit's `main`
+--     excluded exactly as `buildUnitRenameMap` excludes it) and local
+--     constructors (`unitLocalCtorNames`, reserved fixed-tag ctors already
+--     filtered out).  Ctors travel the identical
 --     `mangledName`/`sanitizeId` collapse, so leaving them out would leave half the
 --     map unchecked while claiming the map is injective for distinct module ids.
 --   * does NOT cover emitter-MINTED symbols (gensym'd lambdas/etas/impls, and
@@ -470,12 +487,12 @@ renameKeyCollides collided (n, _) = omHasKey n collided
 -- `wasm_emit_gaps_main` not at all), so a DCE-aware check would refuse different
 -- programs per driver.  A collision masked only because one side is currently dead
 -- is a latent silent mis-link waiting for the edit that makes it live.
-symbolInjectivityGuard : List (String, List Decl) -> Unit
-symbolInjectivityGuard allUnits =
+symbolInjectivityGuard : String -> List (String, List Decl) -> Unit
+symbolInjectivityGuard entryMid allUnits =
   let _ =
     checkSymbolsInjective
       "function"
-      (flatMap unitFnSymbolPairs allUnits)
+      (flatMap (unitFnSymbolPairs entryMid) allUnits)
       omEmpty
   let _ =
     checkSymbolsInjective
@@ -486,16 +503,15 @@ symbolInjectivityGuard allUnits =
 
 -- (emitted symbol, pre-image label) for the top-level FUNCTIONS this unit defines
 -- and `mangleUnitU` will rename.  Mirrors `buildUnitRenameMap`'s local half
--- (`dedup (unitDefNames …)` minus `isExcludedName`) so the domain is the same set
+-- (`dedup (unitDefNames …)` minus `isEntryMainKey`) so the domain is the same set
 -- of definition sites, not a re-derived approximation.
-unitFnSymbolPairs : (String, List Decl) -> List (String, String)
-unitFnSymbolPairs (mid, decls) =
+unitFnSymbolPairs : String -> (String, List Decl) -> List (String, String)
+unitFnSymbolPairs entryMid (mid, decls) =
   map
     (symbolPreImagePair mid)
-    (filterList notExcludedName (dedup (unitDefNames (mid, decls))))
-
-notExcludedName : String -> Bool
-notExcludedName n = not (isExcludedName n)
+    (filterList
+      (n => not (isEntryMainKey entryMid mid n))
+      (dedup (unitDefNames (mid, decls))))
 
 -- (emitted symbol, pre-image label) for the CONSTRUCTORS this unit declares.
 -- Mirrors `buildUnitCtorRenameMap`'s local half.
@@ -914,23 +930,25 @@ lookupCtorExports k ((m, es) :: rest) =
   if k == m then Some es else lookupCtorExports k rest
 
 -- a module keeps its mid in the output pair.
-mangleModule : List (String, List (String, String)) ->
+mangleModule : String ->
+  List (String, List (String, String)) ->
   List (String, List (String, String, List String)) ->
   (String, List Decl) ->
   (String, List Decl)
-mangleModule exportsPerUnit ctorExportsPerUnit (mid, decls) =
-  (mid, mangleUnitU exportsPerUnit ctorExportsPerUnit (mid, decls))
+mangleModule entryMid exportsPerUnit ctorExportsPerUnit (mid, decls) =
+  (mid, mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit (mid, decls))
 
 -- ── per-unit universal rename ────────────────────────────────────────────────
 -- For one unit: build the combined rename map (own top-level fns → `<mid>__<name>`,
 -- PLUS each imported bare name → its origin module's mangled symbol), then rewrite
 -- the unit's decls (definition names + all in-scope references).
-mangleUnitU : List (String, List (String, String)) ->
+mangleUnitU : String ->
+  List (String, List (String, String)) ->
   List (String, List (String, String, List String)) ->
   (String, List Decl) ->
   List Decl
-mangleUnitU exportsPerUnit ctorExportsPerUnit (mid, decls) =
-  let rmFn = buildUnitRenameMap mid exportsPerUnit decls
+mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit (mid, decls) =
+  let rmFn = buildUnitRenameMap entryMid mid exportsPerUnit decls
   let rmCtor = buildUnitCtorRenameMap mid ctorExportsPerUnit decls
   let rmList = rmFn ++ rmCtor
   -- omFromPairs over the REVERSED list so the FIRST list entry wins on a duplicate
@@ -944,15 +962,23 @@ mangleUnitU exportsPerUnit ctorExportsPerUnit (mid, decls) =
 
 -- The unit's rename map.  Order matters: LOCAL definitions are prepended LAST so a
 -- local def shadows an imported same-named binding (lookupAssoc is first-match).
+-- In the entry unit no entry is keyed `main` at all, whether it comes from the
+-- unit's own definition, an import, or a `{x as main}` rename: there the key is the
+-- program entry and must stay bare.
 buildUnitRenameMap : String ->
+  String ->
   List (String, List (String, String)) ->
   List Decl ->
   List (String, String)
-buildUnitRenameMap mid exportsPerUnit decls =
+buildUnitRenameMap entryMid mid exportsPerUnit decls =
   let localFns = dedup (unitDefNames (mid, decls))
-  let localEntries = flatMap (localRenameEntry mid) localFns
+  let localEntries = map (n => (n, mangledName mid n)) localFns
   let importEntries = importRenameEntries mid exportsPerUnit decls
-  localEntries ++ importEntries
+  let entries = localEntries ++ importEntries
+  if mid == entryMid then
+    filterList (e => not (isEntryMainKey entryMid mid (fst e))) entries
+  else
+    entries
 -- local first ⇒ shadows any imported entry with the same key under lookupAssoc.
 
 -- ── a locally declared interface method un-claims its IMPLICIT-PRELUDE entry ──
@@ -1002,15 +1028,12 @@ unitIfaceMethodNames (_ :: rest) = unitIfaceMethodNames rest
 ifaceMethodNameM : IfaceMethod -> String
 ifaceMethodNameM (IfaceMethod n _ _ _) = n
 
--- a local top-level fn → its module-qualified symbol, UNLESS excluded (`main`).
-localRenameEntry : String -> String -> List (String, String)
-localRenameEntry mid n
-  | isExcludedName n = []
-  | otherwise = [(n, mangledName mid n)]
-
--- `main` is the program entry (`@main`); never mangle it.
-isExcludedName : String -> Bool
-isExcludedName n = n == "main"
+-- `main` is the program entry (`@main`) only in the entry unit, so only there is
+-- the key left unmangled.  Keyed by the unit, never by the bare spelling: a library
+-- module's `main` is a plain function, and leaving it bare in every unit merged it
+-- with the entry's into one two-clause `main`.
+isEntryMainKey : String -> String -> String -> Bool
+isEntryMainKey entryMid mid n = mid == entryMid && n == "main"
 
 -- ── import-aware reference targets ───────────────────────────────────────────
 -- For each `DUse` of a non-core module `M`, the bare names it brings into this
@@ -1050,8 +1073,7 @@ withPreludeDefs names entries =
     (e => if fst e == "core" then ("core", map (n => (n, "core")) names) else e)
     entries
 
--- core's bindings as implicit-prelude entries (`name → core__name`), excluding
--- `main` (core has none, but be safe).
+-- core's bindings as implicit-prelude entries (`name → core__name`).
 coreImportEntries : List (String, List (String, String)) ->
   List (String, String)
 coreImportEntries exportsPerUnit = match lookupExports "core" exportsPerUnit
@@ -1059,9 +1081,7 @@ coreImportEntries exportsPerUnit = match lookupExports "core" exportsPerUnit
   None => []
 
 coreEntry : (String, String) -> List (String, String)
-coreEntry (n, definer)
-  | isExcludedName n = []
-  | otherwise = [(n, mangledName definer n)]
+coreEntry (n, definer) = [(n, mangledName definer n)]
 
 -- a single `DUse path` → the (bareName, originMangled) entries it introduces.
 declImportEntries : List (String, List (String, String)) ->
@@ -1142,11 +1162,9 @@ originEntryAs : List (String, String) ->
   String ->
   String ->
   List (String, String)
-originEntryAs exports origin local
-  | isExcludedName origin = []
-  | otherwise = match lookupDefiner origin exports
-    Some definer => [(local, mangledName definer origin)]
-    None => []
+originEntryAs exports origin local = match lookupDefiner origin exports
+  Some definer => [(local, mangledName definer origin)]
+  None => []
 
 -- a wildcard import iterates the (name, definer) pairs directly.
 originEntryPair : (String, String) -> List (String, String)
@@ -1154,9 +1172,7 @@ originEntryPair = coreEntry
 
 -- a module alias iterates the same pairs, keying each under `A.<name>`.
 aliasEntryPair : String -> (String, String) -> List (String, String)
-aliasEntryPair a (n, definer)
-  | isExcludedName n = []
-  | otherwise = [(qualifiedLocal a n, mangledName definer n)]
+aliasEntryPair a (n, definer) = [(qualifiedLocal a n, mangledName definer n)]
 
 useModIdU : UsePath -> String
 useModIdU (UseName ns) =
@@ -1472,7 +1488,7 @@ renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
 --   a different type) is the constructor total, and every one of them appears exactly
 --   once either above or here.
 --   * `DExtern` names a RUNTIME symbol, not a Medaka top-level binding — the mangle
---     domain is `unitDefNames` ∪ `unitLocalCtorNames`, and `localRenameEntry` never
+--     domain is `unitDefNames` ∪ `unitLocalCtorNames`, and `buildUnitRenameMap` never
 --     enters an extern.  Renaming one would emit a call to a `@mdk_<mid>__…` the C
 --     runtime does not define.
 --   * `DUse` is an import FORM; its module path and member names are resolved before
