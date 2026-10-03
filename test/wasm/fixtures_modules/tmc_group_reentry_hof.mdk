@@ -1,0 +1,10 @@
+mapL : (Int -> Int) -> List Int -> List Int
+mapL _ [] = []
+mapL f (x :: rest) =
+  let y = f x
+  y :: mapL f rest
+
+g : Int -> Int
+g x = length (mapL (n => n) [x, x]) + x
+
+main = println (mapL g [1, 2, 3])

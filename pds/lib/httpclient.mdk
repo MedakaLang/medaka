@@ -150,7 +150,7 @@ emitHeaders (header :: rest) out =
    itself.
 
    > map B.decodeUtf8 (serializeRequest "GET" "/xrpc/com.example.get" "127.0.0.1:8080" [] (encodeUtf8 ""))
-   Ok Some "GET /xrpc/com.example.get HTTP/1.1\r\nhost: 127.0.0.1:8080\r\ncontent-length: 0\r\n\r\n" -}
+   Ok (Some "GET /xrpc/com.example.get HTTP/1.1\r\nhost: 127.0.0.1:8080\r\ncontent-length: 0\r\n\r\n") -}
 export
 serializeRequest : String ->
   String ->

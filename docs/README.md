@@ -119,7 +119,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`PDS-B14-ATTACK-LIST.md`](ops/PDS-B14-ATTACK-LIST.md) | PDS B14 running-instance attack list | — |
 | [`PDS-CONFORMANCE-WALKTHROUGH.md`](ops/PDS-CONFORMANCE-WALKTHROUGH.md) | PDS-CONFORMANCE-WALKTHROUGH.md — criterion A8, run by hand from the official app | written ahead of the first G-QUIET deploy |
 | [`PDS-CRYPTO-CLAIMS.md`](ops/PDS-CRYPTO-CLAIMS.md) | PDS-CRYPTO-CLAIMS.md — what the PDS cryptography claims, and what it does not | written for G-ANNOUNCE |
-| [`PDS-DEPLOY.md`](ops/PDS-DEPLOY.md) | PDS-DEPLOY.md — deploying `pds serve` behind Caddy under systemd | IMPLEMENTED, not yet DEPLOYED |
+| [`PDS-DEPLOY.md`](ops/PDS-DEPLOY.md) | PDS-DEPLOY.md — deploying `pds serve` behind Caddy under systemd | IMPLEMENTED and DEPLOYED |
 | [`PDS-LAUNCH-PLAN.md`](ops/PDS-LAUNCH-PLAN.md) | PDS-LAUNCH-PLAN.md — the road to "this account runs on a PDS written in Medaka" | OPEN |
 | [`PDS-ORACLE.md`](ops/PDS-ORACLE.md) | PDS-ORACLE.md — running the official Bluesky PDS locally as the Phase 0/1 oracle | IMPLEMENTED |
 | [`PDS-RUNBOOK.md`](ops/PDS-RUNBOOK.md) | PDS-RUNBOOK.md — the release ritual for a PDS deploy | written ahead of the first G-QUIET deploy |
@@ -128,6 +128,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`TESTING-ARCHITECTURE.md`](ops/TESTING-ARCHITECTURE.md) | TESTING-ARCHITECTURE.md — the target testing architecture, and the migration to it | PROPOSED 2026-09-03, from a two-round survey at `5397afc9c` |
 | [`TESTING-DESIGN.md`](ops/TESTING-DESIGN.md) | TESTING-DESIGN.md — a coherent testing architecture for Medaka | SUPERSEDED as a plan, 2026-09-03 |
 | [`TESTING-INVENTORY.md`](ops/TESTING-INVENTORY.md) | TESTING-INVENTORY.md — which gates can be native today, and what blocks the rest | — |
+| [`TOOLING-REFERENCE.md`](ops/TOOLING-REFERENCE.md) | TOOLING-REFERENCE.md — build cache, lint cache, editors, and the source layout | REFERENCE |
 
 ### stdlib — library plan
 

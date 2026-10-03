@@ -1,5 +1,5 @@
 # META
-source_lines=12854
+source_lines=12885
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -9405,8 +9405,9 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
 --       saturated call to ANY group member (the overflow site), or
 --   (3) a saturated tail-call to another group member (a dispatcher OR a
 --       non-spine self-accumulator like the string-interp `acc++` loops).
--- We then emit `R` as a RESET wrapper that zeroes three module-level dest globals
--- ($g_tmc_head / $g_tmc_dest / $g_tmc_first) and `return_call`s an inner `R__loop`,
+-- We then emit `R` as a RESET wrapper that saves and zeroes three module-level dest
+-- globals ($g_tmc_head / $g_tmc_dest / $g_tmc_first), calls an inner `R__loop`, and
+-- restores them,
 -- and we emit every group member with its SPINE cons leaves rewritten to: build each
 -- `Cons` cell with a placeholder tail, link it into $g_tmc_dest (or seed $g_tmc_head
 -- on the first cell), advance the dest, then `return_call` the bottom callee (`$R__loop`
@@ -9417,9 +9418,11 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
 -- and they never touch the dest globals, which thread through transparently).
 --
 -- This needs NO param-slot recompute loop (unlike Stage-1): the engine's `return_call`
--- IS the loop.  Soundness rests on: the group is entered only as a top-level call (no
--- nesting of one scan inside another), so the shared globals carry exactly one in-flight
--- spine; the reset wrapper re-zeroes them per outer call.
+-- IS the loop.  Soundness rests on the root wrapper being the group's only external
+-- entry (dispValidate v4): every entry, including a re-entry from inside an in-flight
+-- spine, passes through the wrapper, which saves the dest globals, runs its own spine
+-- from zeroed ones, and restores them before returning, so the outer spine resumes
+-- linking where it left off.
 
 -- (`WDispCtx` and the per-emission `WasmEmit.wDispCtx` / `WasmEmit.wDispGroups`
 -- cells that carry this context live with the rest of the emission state, above.)
@@ -9428,8 +9431,10 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
 -- triple, so one group's spine build cannot clobber another's — a member's helper
 -- (mid-spine, non-tail) may freely call ANOTHER group's root (e.g. a lexer helper
 -- reaching `join` → `intersperse`): that root resets and threads ITS OWN globals
--- and returns a closed spine, leaving the in-flight group's dest untouched.  Only
--- SAME-group re-entry is unsafe, and wDispValidate v3 rejects exactly that.
+-- and returns a closed spine, leaving the in-flight group's dest untouched.
+-- SAME-group re-entry is not excluded by validation: v3 sees only named call heads,
+-- so a member calling back into its own root through a function-typed argument
+-- passes it.  The root wrapper's save/restore of the triple is what makes that safe.
 wDispHeadL : String -> String
 wDispHeadL root = "$g_tmc_head_" ++ gname root
 wDispDestL : String -> String
@@ -9520,8 +9525,8 @@ wTmcMarker sym mode =
   let name = if startsWith "mdk_" sym then dropPrefix sym "mdk_" else sym
   "  ;; tmc: \{name} \{mode}"
 
--- emit a group ROOT: the reset wrapper `$root` (zero the dest globals, return_call the
--- inner loop) + the inner `$root__disploop` (the real body, leaves redirected).
+-- emit a group ROOT: the reset wrapper `$root` (save and zero the dest globals, call the
+-- inner loop, restore them) + the inner `$root__disploop` (the real body, leaves redirected).
 emitWDispRoot : Prog -> DispGroup -> Int -> List CClause -> List String
 emitWDispRoot prog grp arity clauses =
   let name = dispRootOf grp
@@ -9532,14 +9537,31 @@ emitWDispRoot prog grp arity clauses =
   wTmcMarker name "group-root" :: resetWrapper ++ inner
 
 -- the reset wrapper: (func $root (param …) (result (ref eq))
+--   save $g_tmc_head / $g_tmc_dest / $g_tmc_first into locals
 --   i32.const 1  global.set $g_tmc_first
 --   ref.null eq  global.set $g_tmc_head
 --   ref.null eq  global.set $g_tmc_dest
---   local.get $a0 … return_call $root__disploop)
+--   local.get $a0 … call $root__disploop
+--   restore the saved triple, return the result)
+-- A plain `call`, not `return_call`: the restore must run after the spine closes.
 wDispResetWrapper : String -> String -> List String -> Int -> List String
 wDispResetWrapper name loopName params arity =
   let sig =
     "  (func $\{gname name}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
+  let locals = [
+    "(local $__disp_sh (ref null eq))",
+    "(local $__disp_sd (ref null eq))",
+    "(local $__disp_sf i32)",
+    "(local $__disp_r (ref eq))",
+  ]
+  let save = [
+    "global.get " ++ wDispHeadL name,
+    "local.set $__disp_sh",
+    "global.get " ++ wDispDestL name,
+    "local.set $__disp_sd",
+    "global.get " ++ wDispFirstL name,
+    "local.set $__disp_sf",
+  ]
   let reset = [
     "i32.const 1",
     "global.set " ++ wDispFirstL name,
@@ -9550,8 +9572,17 @@ wDispResetWrapper name loopName params arity =
   ]
   let forward =
     flatMap (p => ["local.get $" ++ gname p]) params
-      ++ ["return_call $" ++ gname loopName]
-  [sig] ++ indent (reset ++ forward) ++ ["  )"]
+      ++ ["call $" ++ gname loopName, "local.set $__disp_r"]
+  let restore = [
+    "local.get $__disp_sh",
+    "global.set " ++ wDispHeadL name,
+    "local.get $__disp_sd",
+    "global.set " ++ wDispDestL name,
+    "local.get $__disp_sf",
+    "global.set " ++ wDispFirstL name,
+    "local.get $__disp_r",
+  ]
+  [sig] ++ indent (locals ++ save ++ reset ++ forward ++ restore) ++ ["  )"]
 
 -- emit a non-root group MEMBER (or the root's inner loop): the ordinary clause machinery,
 -- but with the dispatch context LIVE so spine cons leaves + the root's base redirect.
@@ -14581,7 +14612,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitWDispRoot" (TyFun (TyCon "Prog") (TyFun (TyCon "DispGroup") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitWDispRoot" ((PVar "prog") (PVar "grp") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "dispRootOf") (EVar "grp"))) (DoLet false false (PVar "params") (EApp (EVar "synthParams") (EVar "arity"))) (DoLet false false (PVar "loopName") (EApp (EVar "wDispLoopName") (EVar "name"))) (DoLet false false (PVar "resetWrapper") (EApp (EApp (EApp (EApp (EVar "wDispResetWrapper") (EVar "name")) (EVar "loopName")) (EVar "params")) (EVar "arity"))) (DoLet false false (PVar "inner") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitWDispMemberFn") (EVar "prog")) (EVar "grp")) (EVar "loopName")) (EVar "name")) (EVar "arity")) (EVar "clauses"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "wTmcMarker") (EVar "name")) (ELit (LString "group-root"))) (EBinOp "++" (EVar "resetWrapper") (EVar "inner"))))))
 (DTypeSig false "wDispResetWrapper" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "wDispResetWrapper" ((PVar "name") (PVar "loopName") (PVar "params") (PVar "arity")) (EBlock (DoLet false false (PVar "sig") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (func $")) (EApp (EVar "display") (EApp (EVar "gname") (EVar "name")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "paramDeclRef")) (EVar "params"))))) (ELit (LString " (result (ref eq))")))) (DoLet false false (PVar "reset") (EListLit (ELit (LString "i32.const 1")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispFirstL") (EVar "name"))) (ELit (LString "ref.null eq")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispHeadL") (EVar "name"))) (ELit (LString "ref.null eq")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispDestL") (EVar "name"))))) (DoLet false false (PVar "forward") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "p")))))) (EVar "params")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EApp (EVar "gname") (EVar "loopName")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EListLit (EVar "sig")) (EApp (EVar "indent") (EBinOp "++" (EVar "reset") (EVar "forward")))) (EListLit (ELit (LString "  )")))))))
+(DFunDef false "wDispResetWrapper" ((PVar "name") (PVar "loopName") (PVar "params") (PVar "arity")) (EBlock (DoLet false false (PVar "sig") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (func $")) (EApp (EVar "display") (EApp (EVar "gname") (EVar "name")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "paramDeclRef")) (EVar "params"))))) (ELit (LString " (result (ref eq))")))) (DoLet false false (PVar "locals") (EListLit (ELit (LString "(local $__disp_sh (ref null eq))")) (ELit (LString "(local $__disp_sd (ref null eq))")) (ELit (LString "(local $__disp_sf i32)")) (ELit (LString "(local $__disp_r (ref eq))")))) (DoLet false false (PVar "save") (EListLit (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispHeadL") (EVar "name"))) (ELit (LString "local.set $__disp_sh")) (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispDestL") (EVar "name"))) (ELit (LString "local.set $__disp_sd")) (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispFirstL") (EVar "name"))) (ELit (LString "local.set $__disp_sf")))) (DoLet false false (PVar "reset") (EListLit (ELit (LString "i32.const 1")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispFirstL") (EVar "name"))) (ELit (LString "ref.null eq")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispHeadL") (EVar "name"))) (ELit (LString "ref.null eq")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispDestL") (EVar "name"))))) (DoLet false false (PVar "forward") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "p")))))) (EVar "params")) (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "loopName"))) (ELit (LString "local.set $__disp_r"))))) (DoLet false false (PVar "restore") (EListLit (ELit (LString "local.get $__disp_sh")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispHeadL") (EVar "name"))) (ELit (LString "local.get $__disp_sd")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispDestL") (EVar "name"))) (ELit (LString "local.get $__disp_sf")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispFirstL") (EVar "name"))) (ELit (LString "local.get $__disp_r")))) (DoExpr (EBinOp "++" (EBinOp "++" (EListLit (EVar "sig")) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "locals") (EVar "save")) (EVar "reset")) (EVar "forward")) (EVar "restore")))) (EListLit (ELit (LString "  )")))))))
 (DTypeSig false "emitWDispMemberFn" (TyFun (TyCon "Prog") (TyFun (TyCon "DispGroup") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitWDispMemberFn" ((PVar "prog") (PVar "grp") (PVar "emitName") (PVar "origName") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "dispRootOf") (EVar "grp"))) (DoLet false false (PVar "params") (EApp (EVar "synthParams") (EVar "arity"))) (DoLet false false (PVar "loopName") (EApp (EVar "wDispLoopName") (EVar "root"))) (DoLet false false (PVar "rootArity") (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "root"))) (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "wDispCtx") "value")) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "wDispCtx")) (EApp (EApp (EApp (EApp (EVar "WDispOn") (EVar "root")) (EVar "loopName")) (EVar "rootArity")) (EApp (EVar "dispMembersOf") (EVar "grp"))))) (DoLet false false (PVar "bodyLines") (EApp (EApp (EApp (EApp (EApp (EVar "emitClausesRef") (EVar "prog")) (EVar "origName")) (EVar "params")) (EVar "arity")) (EVar "clauses"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "wDispCtx")) (EVar "saved"))) (DoLet false false (PVar "allLocals") (EApp (EVar "clauseLocals") (EVar "clauses"))) (DoLet false false (PVar "extraLocals") (EApp (EApp (EVar "filterList") (EApp (EVar "notIn") (EVar "params"))) (EApp (EVar "dedupKeep") (EVar "allLocals")))) (DoLet false false (PVar "scratch") (EApp (EVar "scratchLocals") (EApp (EVar "clausesMaxDepth") (EVar "clauses")))) (DoLet false false (PVar "sig") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (func $")) (EApp (EVar "display") (EApp (EVar "gname") (EVar "emitName")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "paramDeclRef")) (EVar "params"))))) (ELit (LString " (result (ref eq))")))) (DoLet false false (PVar "marker") (EIf (EBinOp "==" (EVar "emitName") (EVar "origName")) (EListLit (EApp (EApp (EVar "wTmcMarker") (EVar "origName")) (EBinOp "++" (ELit (LString "group:")) (EVar "root")))) (EListLit))) (DoLet false false (PVar "tmcLocal") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "(local ")) (EApp (EVar "wTrmcTempL") (ELit (LInt 0)))) (ELit (LString " (ref null eq))"))))) (DoLet false false (PVar "localDecls") (EApp (EApp (EVar "map") (EVar "localDeclRef")) (EBinOp "++" (EVar "extraLocals") (EVar "scratch")))) (DoLet false false (PVar "w7Decls") (EApp (EApp (EVar "w7LocalDecls") (EApp (EVar "progEmit") (EVar "prog"))) (EApp (EVar "clausesMaxDepth") (EVar "clauses")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "marker") (EListLit (EVar "sig"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "  ")) (EVar "_s")))) (EBinOp "++" (EBinOp "++" (EVar "tmcLocal") (EVar "localDecls")) (EVar "w7Decls")))) (EApp (EVar "indent") (EVar "bodyLines"))) (EListLit (ELit (LString "  )")))))))
 (DTypeSig false "emitWDispSpineCons" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))))))
@@ -16940,7 +16971,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitWDispRoot" (TyFun (TyCon "Prog") (TyFun (TyCon "DispGroup") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitWDispRoot" ((PVar "prog") (PVar "grp") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "dispRootOf") (EVar "grp"))) (DoLet false false (PVar "params") (EApp (EVar "synthParams") (EVar "arity"))) (DoLet false false (PVar "loopName") (EApp (EVar "wDispLoopName") (EVar "name"))) (DoLet false false (PVar "resetWrapper") (EApp (EApp (EApp (EApp (EVar "wDispResetWrapper") (EVar "name")) (EVar "loopName")) (EVar "params")) (EVar "arity"))) (DoLet false false (PVar "inner") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitWDispMemberFn") (EVar "prog")) (EVar "grp")) (EVar "loopName")) (EVar "name")) (EVar "arity")) (EVar "clauses"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "wTmcMarker") (EVar "name")) (ELit (LString "group-root"))) (EBinOp "++" (EVar "resetWrapper") (EVar "inner"))))))
 (DTypeSig false "wDispResetWrapper" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "wDispResetWrapper" ((PVar "name") (PVar "loopName") (PVar "params") (PVar "arity")) (EBlock (DoLet false false (PVar "sig") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (func $")) (EApp (EMethodRef "display") (EApp (EVar "gname") (EVar "name")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "paramDeclRef")) (EVar "params"))))) (ELit (LString " (result (ref eq))")))) (DoLet false false (PVar "reset") (EListLit (ELit (LString "i32.const 1")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispFirstL") (EVar "name"))) (ELit (LString "ref.null eq")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispHeadL") (EVar "name"))) (ELit (LString "ref.null eq")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispDestL") (EVar "name"))))) (DoLet false false (PVar "forward") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "p")))))) (EVar "params")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EApp (EVar "gname") (EVar "loopName")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EListLit (EVar "sig")) (EApp (EVar "indent") (EBinOp "++" (EVar "reset") (EVar "forward")))) (EListLit (ELit (LString "  )")))))))
+(DFunDef false "wDispResetWrapper" ((PVar "name") (PVar "loopName") (PVar "params") (PVar "arity")) (EBlock (DoLet false false (PVar "sig") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (func $")) (EApp (EMethodRef "display") (EApp (EVar "gname") (EVar "name")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "paramDeclRef")) (EVar "params"))))) (ELit (LString " (result (ref eq))")))) (DoLet false false (PVar "locals") (EListLit (ELit (LString "(local $__disp_sh (ref null eq))")) (ELit (LString "(local $__disp_sd (ref null eq))")) (ELit (LString "(local $__disp_sf i32)")) (ELit (LString "(local $__disp_r (ref eq))")))) (DoLet false false (PVar "save") (EListLit (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispHeadL") (EVar "name"))) (ELit (LString "local.set $__disp_sh")) (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispDestL") (EVar "name"))) (ELit (LString "local.set $__disp_sd")) (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispFirstL") (EVar "name"))) (ELit (LString "local.set $__disp_sf")))) (DoLet false false (PVar "reset") (EListLit (ELit (LString "i32.const 1")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispFirstL") (EVar "name"))) (ELit (LString "ref.null eq")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispHeadL") (EVar "name"))) (ELit (LString "ref.null eq")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispDestL") (EVar "name"))))) (DoLet false false (PVar "forward") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "p")))))) (EVar "params")) (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "loopName"))) (ELit (LString "local.set $__disp_r"))))) (DoLet false false (PVar "restore") (EListLit (ELit (LString "local.get $__disp_sh")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispHeadL") (EVar "name"))) (ELit (LString "local.get $__disp_sd")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispDestL") (EVar "name"))) (ELit (LString "local.get $__disp_sf")) (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispFirstL") (EVar "name"))) (ELit (LString "local.get $__disp_r")))) (DoExpr (EBinOp "++" (EBinOp "++" (EListLit (EVar "sig")) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "locals") (EVar "save")) (EVar "reset")) (EVar "forward")) (EVar "restore")))) (EListLit (ELit (LString "  )")))))))
 (DTypeSig false "emitWDispMemberFn" (TyFun (TyCon "Prog") (TyFun (TyCon "DispGroup") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitWDispMemberFn" ((PVar "prog") (PVar "grp") (PVar "emitName") (PVar "origName") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "dispRootOf") (EVar "grp"))) (DoLet false false (PVar "params") (EApp (EVar "synthParams") (EVar "arity"))) (DoLet false false (PVar "loopName") (EApp (EVar "wDispLoopName") (EVar "root"))) (DoLet false false (PVar "rootArity") (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "root"))) (DoLet false false (PVar "saved") (EFieldAccess (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "wDispCtx") "value")) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "wDispCtx")) (EApp (EApp (EApp (EApp (EVar "WDispOn") (EVar "root")) (EVar "loopName")) (EVar "rootArity")) (EApp (EVar "dispMembersOf") (EVar "grp"))))) (DoLet false false (PVar "bodyLines") (EApp (EApp (EApp (EApp (EApp (EVar "emitClausesRef") (EVar "prog")) (EVar "origName")) (EVar "params")) (EVar "arity")) (EVar "clauses"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "wDispCtx")) (EVar "saved"))) (DoLet false false (PVar "allLocals") (EApp (EVar "clauseLocals") (EVar "clauses"))) (DoLet false false (PVar "extraLocals") (EApp (EApp (EVar "filterList") (EApp (EVar "notIn") (EVar "params"))) (EApp (EVar "dedupKeep") (EVar "allLocals")))) (DoLet false false (PVar "scratch") (EApp (EVar "scratchLocals") (EApp (EVar "clausesMaxDepth") (EVar "clauses")))) (DoLet false false (PVar "sig") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (func $")) (EApp (EMethodRef "display") (EApp (EVar "gname") (EVar "emitName")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "paramDeclRef")) (EVar "params"))))) (ELit (LString " (result (ref eq))")))) (DoLet false false (PVar "marker") (EIf (EBinOp "==" (EVar "emitName") (EVar "origName")) (EListLit (EApp (EApp (EVar "wTmcMarker") (EVar "origName")) (EBinOp "++" (ELit (LString "group:")) (EVar "root")))) (EListLit))) (DoLet false false (PVar "tmcLocal") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "(local ")) (EApp (EVar "wTrmcTempL") (ELit (LInt 0)))) (ELit (LString " (ref null eq))"))))) (DoLet false false (PVar "localDecls") (EApp (EApp (EMethodRef "map") (EVar "localDeclRef")) (EBinOp "++" (EVar "extraLocals") (EVar "scratch")))) (DoLet false false (PVar "w7Decls") (EApp (EApp (EVar "w7LocalDecls") (EApp (EVar "progEmit") (EVar "prog"))) (EApp (EVar "clausesMaxDepth") (EVar "clauses")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "marker") (EListLit (EVar "sig"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "  ")) (EVar "_s")))) (EBinOp "++" (EBinOp "++" (EVar "tmcLocal") (EVar "localDecls")) (EVar "w7Decls")))) (EApp (EVar "indent") (EVar "bodyLines"))) (EListLit (ELit (LString "  )")))))))
 (DTypeSig false "emitWDispSpineCons" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))))))

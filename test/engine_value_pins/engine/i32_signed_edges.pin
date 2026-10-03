@@ -73,7 +73,7 @@ toBits
 truncate
 [-2147483648, -1, 2147483647, -1]
 tryFromInt
-[None, Some -2147483648, None, Some 0]
+[None, Some (-2147483648), None, Some 0]
 fromBits
 [0, 1, 2147483647, -2147483648, -1]
 hash agrees with Int

@@ -1141,7 +1141,7 @@ matchOnce re s startAt anchorStart anchorEnd =
    > map source (compile "a+b")
    Ok "a+b"
    > compile "a("
-   Err RegexError { message = "pattern is missing a closing )", position = 2 } -}
+   Err (RegexError { message = "pattern is missing a closing )", position = 2 }) -}
 export
 compile : String -> Result RegexError Regex
 compile pattern =
@@ -1180,33 +1180,33 @@ finishCompile st node pattern multi = match !st.perr
         }
 
 -- > compile "["
--- Err RegexError { message = "character class is missing a closing ]", position = 1 }
+-- Err (RegexError { message = "character class is missing a closing ]", position = 1 })
 -- > compile "a{3,2}"
--- Err RegexError { message = "repetition bounds are out of order", position = 6 }
+-- Err (RegexError { message = "repetition bounds are out of order", position = 6 })
 -- > compile "a{1001}"
--- Err RegexError { message = "repetition bound is larger than the maximum of 1000", position = 7 }
+-- Err (RegexError { message = "repetition bound is larger than the maximum of 1000", position = 7 })
 -- > compile "*a"
--- Err RegexError { message = "repetition operator with nothing to repeat", position = 0 }
+-- Err (RegexError { message = "repetition operator with nothing to repeat", position = 0 })
 -- > compile "a)b"
--- Err RegexError { message = "unbalanced closing )", position = 1 }
+-- Err (RegexError { message = "unbalanced closing )", position = 1 })
 -- > compile "(a)\\1"
--- Err RegexError { message = "backreferences are not supported", position = 5 }
+-- Err (RegexError { message = "backreferences are not supported", position = 5 })
 -- > compile "(?=a)"
--- Err RegexError { message = "lookahead is not supported", position = 1 }
+-- Err (RegexError { message = "lookahead is not supported", position = 1 })
 -- > compile "(?<n>a)"
--- Err RegexError { message = "named groups and lookbehind are not supported", position = 1 }
+-- Err (RegexError { message = "named groups and lookbehind are not supported", position = 1 })
 -- > compile "[[:alpha:]]"
--- Err RegexError { message = "POSIX character classes are not supported", position = 1 }
+-- Err (RegexError { message = "POSIX character classes are not supported", position = 1 })
 -- > compile "\\p{L}"
--- Err RegexError { message = "Unicode character classes are not supported", position = 2 }
+-- Err (RegexError { message = "Unicode character classes are not supported", position = 2 })
 -- > compile "a(?i)b"
--- Err RegexError { message = "flags are only allowed at the start of the pattern", position = 2 }
+-- Err (RegexError { message = "flags are only allowed at the start of the pattern", position = 2 })
 -- > compile "[z-a]"
--- Err RegexError { message = "character class range is reversed", position = 4 }
+-- Err (RegexError { message = "character class range is reversed", position = 4 })
 -- > compile "a\\"
--- Err RegexError { message = "pattern ends in a backslash", position = 2 }
+-- Err (RegexError { message = "pattern ends in a backslash", position = 2 })
 -- > compile "\\q"
--- Err RegexError { message = "unknown escape sequence", position = 2 }
+-- Err (RegexError { message = "unknown escape sequence", position = 2 })
 
 -- An unmatched `{` is a literal, so these compile.
 -- > map source (compile "a{")
@@ -1314,7 +1314,7 @@ isFullMatch re s = match searchFrom re (codesOf s) 0 True True (Ref 0)
 {- | The leftmost match, or `None` when the pattern does not match.
 
    > find (mustCompile "\\d+") "ab123cd"
-   Some Match { start = 2, end = 5, text = "123", groups = [] }
+   Some (Match { start = 2, end = 5, text = "123", groups = [] })
    > find (mustCompile "z") "ab"
    None -}
 export
@@ -1498,7 +1498,7 @@ findBytes re bytes start end =
 -- Groups
 
 -- > map (m => m.groups) (find (mustCompile "(a)(b)") "ab")
--- Some [Some Group { start = 0, end = 1, text = "a" }, Some Group { start = 1, end = 2, text = "b" }]
+-- Some [Some (Group { start = 0, end = 1, text = "a" }), Some (Group { start = 1, end = 2, text = "b" })]
 
 -- A group that did not take part in the match is None.
 -- > map (m => m.groups) (find (mustCompile "(a)|b") "b")

@@ -227,7 +227,7 @@ main =
 ```medaka-expect
 parsed 42
 Ok 42
-Err not a number: x
+Err (not a number: x)
 ```
 
 The `let () =` is how a `Unit`-valued effect goes in a `do` block, where a bare
