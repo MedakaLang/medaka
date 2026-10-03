@@ -1680,7 +1680,7 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 | 9a | definer · value position · **method arity 2 / standalone arity 1** · annotated result | S4 | standalone → [2, 3, 4] | `d17_definer_value_pos_arity_differ.mdk` | [2,3,4] | [2,3,4] | accept | **OK** (**FIXED 2026-07-16 #410** — was `build` exit 0 printing PAP heap pointers as Ints, an S0 silent wrongness; see §6 S1-RESIDUAL-A (A)) |
 | 9b | definer · value position · arity-differing · **ZERO impls** of the iface | S2+S4 | standalone → [2, 3, 4] | `d19_definer_value_pos_arity_differ_zeroimpls.mdk` | [2,3,4] | [2,3,4] | accept | **OK** (**FIXED 2026-07-16 #410** — proves the impl universe is irrelevant: shadow-hood + arity mismatch + value position suffice) |
 | 9d | definer · value position · **method arity 1 / standalone arity 2** (opposite direction) · annotated | S4 | standalone → 3 | `d20_definer_value_pos_arity_differ_opposite.mdk` | 3 | 3 | accept | **OK** (**FIXED 2026-07-16 #410** — pins the other side of the route-derived arity) |
-| 9c | definer · value position · arity-differing · **UNANNOTATED** result | S4 | standalone → [2, 3, 4] | `d18_definer_value_pos_arity_differ_unannot.mdk` | [2,3,4] | accept, **binary SEGFAULTs** | accept | ❌ **KNOWN-BAD (#410 (B), open)** — `println`'s `Display` requirement gets a NULL element dict (RNone route). NOT the emitter: the route is stamped in `types/typecheck.mdk`. Pinned `BUILD_CRASH` (self-draining) |
+| 9c | definer · value position · arity-differing · **UNANNOTATED** result | S4 | standalone → [2, 3, 4] | `d18_definer_value_pos_arity_differ_unannot.mdk` | [2,3,4] | [2,3,4] | accept | **OK** (**FIXED 2026-07-19 #410 (B)** — was `BUILD_CRASH`: `println`'s `Display` requirement got a NULL element dict (RNone route), stamped in `types/typecheck.mdk`, not the emitter) |
 | 10 | definer · value position · LIVE-impl elements | S4 | located REJECT | `d4b_definer_value_pos_liveimpl.mdk` | reject `Int vs Box` | reject | reject | **OK** (fixed P0-19 batch 2 `ebb8ee90`; was a 3-way split) — ⚠️ also arity-EQUAL |
 | 11 | definer · ungrounded recv · wrapper used at standalone domain | S5 | 4; wrapper : Int -> Int | `d5_definer_poly_receiver.mdk` | 4 | 4 | accept (but `useIt : a -> Int` — over-general, the row-12 hole) | **OK** (value), caveat on scheme |
 | 12 | definer · ungrounded recv · wrapper CALLED at live-impl type | S5 | located REJECT | `d5b_definer_poly_liveimpl_call.mdk` | reject `Int vs Box` | reject | reject | **OK** (fixed P0-19 batch 1 `ef0874f3`; was a silent miscompile) |
@@ -1818,6 +1818,8 @@ recorded as a dated observation, not as a number this page maintains.
 >
 > ⚠️ **UPDATE 2026-08-28 — #1430 is FIXED and row 39 now reads OK, so the tally
 > above is stale in the OTHER direction; it is left as its dated observation.**
+> (Its row-9c `KNOWN-BAD` was already stale when it was taken: #410 (B) was fixed
+> on 2026-07-19, and row 9c has read OK since 2026-10-03.)
 > The lesson does not change: the cell had no row in `test/shadow_fixtures/` for as long
 > as it was broken, so the gate that enforces this table could not see it either
 > way. It now has one — **D25**
@@ -2093,15 +2095,16 @@ Two properties that keep it from rotting:
   twice.** `d10` (row 25) was added as a KNOWN-BAD row pinning the S-1 miscompile,
   S-1 landed, and the gate went red on the next run. `d11` (row 26) pinned S-3 the
   same way, and went red the moment #54 taught the definer entry points this shape
-  (2026-07-17). **Two KNOWN-BAD rows are open:** `d18` (row 9c, a #410 residual —
-  `build` ships a binary that SEGFAULTs while `run` is correct) and
+  (2026-07-17). **One KNOWN-BAD row is open:**
   `i22_importer_member_alias_not_nameable/main.mdk` (row 42, the member-alias
   cell, pinned to `7` where S1-NS (a)(ii) specifies `99`, with its own `bare.mdk`
-  sibling as the discriminator). ⚠️ **A KNOWN-BAD row is not the only way a cell
+  sibling as the discriminator). `d18` (row 9c, a #410 residual whose `build`
+  SEGFAULTed while `run` was correct) was the other until #410 (B) was fixed on
+  2026-07-19; it reads OK. ⚠️ **A KNOWN-BAD row is not the only way a cell
   can be non-conformant and still green here** — row 39 ([#1430](https://github.com/MedakaLang/medaka/issues/1430),
-  OPEN S0) is pinned in `test/must_fail_fixtures/`, **not** in
-  `test/shadow_fixtures/`, so this gate is green over it and the coverage
-  self-audit below cannot see it either: the audit checks that every fixture in
+  S0, since fixed) was pinned in `test/must_fail_fixtures/`, **not** in
+  `test/shadow_fixtures/`, so this gate was green over it while it was open, and the coverage
+  self-audit below cannot see such a cell either: the audit checks that every fixture in
   *this* directory has a row, never that every cell in §2 has a fixture *here*.
 
 CI: the `types` shard (`.github/workflows/ci.yml`); `diff_compiler_ci_shard_coverage`
