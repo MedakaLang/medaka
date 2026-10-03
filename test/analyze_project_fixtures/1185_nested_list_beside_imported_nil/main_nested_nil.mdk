@@ -1,0 +1,12 @@
+-- #1185: a `match` covering `None`, `Some []` and `Some (_ :: _)` is
+-- exhaustive over `Option (List Int)`. The nested `[]` is the list's
+-- constructor, not `Doc`'s `Nil`, so no `Some (Text _)` is owed.
+import doc.{Doc}
+
+g : Option (List Int) -> Int
+g o = match o
+  None => 0
+  Some [] => 1
+  Some (_ :: _) => 2
+
+main = println (g (Some [1]))
