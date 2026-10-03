@@ -1,0 +1,8 @@
+-- A mutual alias cycle declared BELOW a data field that names it must be
+-- rejected like one declared above it: the field elaborates after every alias
+-- is registered, so the cycle check has to run before it, not after.
+data R = R { v : A }
+
+type A = B
+
+type B = A

@@ -13698,10 +13698,13 @@ emitCyclicAliasErrors (name :: rest) =
         ++ "`. Type aliases cannot be recursive or cyclic")
   emitCyclicAliasErrors rest
 
--- Cycle-detection pre-pass over aliasTableRef.  MUST run immediately after
--- registerAllData has fully populated the table and BEFORE any fromAstType*
--- call (which would infinite-loop on a cyclic alias via the recursive expansion
--- added in stages 2–3).  For each alias found on a cycle:
+-- Cycle-detection pre-pass over aliasTableRef.  MUST run after the aliases are
+-- in the table and BEFORE any fromAstType* call (which would infinite-loop on a
+-- cyclic alias via the recursive expansion added in stages 2–3); a declaration's
+-- fields elaborate during registration, so `registerDeclsAliasesFirst` and
+-- `registerImportOverlay` run it between their alias and non-alias folds.
+-- A rerun finds nothing new and the diagnostic is message-deduped.
+-- For each alias found on a cycle:
 --   (1) emits a deduped type_error naming the offending alias;
 --   (2) removes it from aliasTableRef so the expansion seam falls through to an
 --       opaque TCon and cannot recurse → no stack overflow.
@@ -18929,8 +18932,9 @@ fieldDeclDescr (k, ri) = match recordOwnerModule ri
 --
 -- Declines (answers `None`, so the ladder runs unchanged) when the receiver
 -- carries no identity, when no owner key holds the receiver's declaration, or when
--- a sibling constructor of the receiver's type withholds the field.  The sibling case is the multi-`ConNamed`-variant shape
--- `narrowedPick` refuses: the receiver's type does not say which layout applies.
+-- a sibling constructor of the receiver's type withholds the field.  The sibling
+-- case is the multi-`ConNamed`-variant shape `narrowedPick` refuses: the
+-- receiver's type does not say which layout applies.
 ownerDeclOfReceiver : Mono ->
   String ->
   List String ->
@@ -19024,7 +19028,7 @@ resolveFieldAmbiguous te fname owners =
 -- are one candidate, and `fieldSelectionWellTyped` decides afterwards whether they
 -- agree about the field's slot and type.  Left uncollapsed, two constructors of
 -- one type are two survivors, and the answer becomes the sorted `headL owners`,
--- which depends on how an unrelated type's constructor is spelled (#3741).
+-- which depends on how an unrelated type's constructor is spelled.
 --
 -- One mint of the receiver's key for the whole filter, not one per candidate, for the
 -- reason `types/registry.mdk` gives against re-minting a `TabKey` per lookup
@@ -41766,10 +41770,14 @@ registerAllDataGo env ds =
 -- Aliases enter the alias table ahead of every other declaration, so a field
 -- naming an alias declared later in the list expands the same as one naming an
 -- alias declared above it.  An alias adds no env entry, so the split fold only
--- changes the table's contents by the time fields elaborate.
+-- changes the table's contents by the time fields elaborate.  The table then
+-- holds every alias the fields can name, cyclic ones included, so cycles are
+-- rejected between the two folds: a field naming a cyclic alias would
+-- otherwise expand it forever.
 registerDeclsAliasesFirst : TcEnv -> List Decl -> TcEnv
 registerDeclsAliasesFirst env ds =
   let env1 = fold (e d => if isAliasDecl d then registerData e d else e) env ds
+  let _ = rejectCyclicAliases ()
   fold (e d => if isAliasDecl d then e else registerData e d) env1 ds
 
 isAliasDecl : Decl -> Bool
@@ -41808,6 +41816,8 @@ registerImportOverlay env overlay =
       (e p => if isAliasDecl (fst p) then registerData e (fst p) else e)
       env
       served
+  -- Cycles out before any field elaborates, as in `registerDeclsAliasesFirst`.
+  let _ = rejectCyclicAliases ()
   fold
     (e p => match snd p
       None => if isAliasDecl (fst p) then e else registerData e (fst p)
