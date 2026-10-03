@@ -95,6 +95,7 @@ import frontend.parser.{
   parseWithPositions,
   parseWithPositionsLocated,
   parseResult,
+  parseLocatedResult,
   ParseError,
   parseErrorLine,
   parseErrorCol,
@@ -1383,9 +1384,11 @@ cjBuildFailedJson target msg = cjAllToJson [
 
 -- The `main` refusal of the entry file's own declarations, if any (the entry
 -- is the last module `typecheckGate` consults).  A file that does not parse
--- never reaches here: the check gate has already rejected it.
+-- never reaches here: the check gate has already rejected it.  The located
+-- parse primes the parser's position state with this source, so a refusal at an
+-- import member carries this file's line and column.
 entryMainRefusal : String -> List Diag
-entryMainRefusal src = match parseResult src
+entryMainRefusal src = match parseLocatedResult src
   Ok decls => match mainEntryError decls
     Some d => [d]
     None => []

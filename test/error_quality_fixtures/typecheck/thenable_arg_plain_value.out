@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/typecheck/thenable_arg_plain_value.mdk:1:15: Type mismatch: a Unit vs Unit — `a Unit` here must be a Thenable value (`a` stands for a type that implements Thenable), but this value is a plain Unit
+error: test/error_quality_fixtures/typecheck/thenable_arg_plain_value.mdk:1:15: Type mismatch: a Unit vs Unit — `a Unit` is a value of a type that implements Thenable (`a` stands for that type), and a plain Unit is not one
   |
 1 | main = forEach println [1, 2, 3]
   |                ^

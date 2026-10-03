@@ -5677,9 +5677,11 @@ routeWitness prog env _ (RDictFwd dpar) =
   else
     gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
 -- RNone as a witness is the dictionary for an unconstrained type variable under a
--- `requires` (the element of `None : Option a`, the error of `Ok 1 : Result e Int`):
--- no value of that type exists, so nothing dispatches through it.  It is the no-op
--- i31 (dict tag 0), mirroring llvm_emit's `dictWordOfRoute _ _ RNone = "0"`.
+-- `requires` (the element of `None : Option a`, the error of `Ok 1 : Result e Int`).
+-- There is no value of that type for a method to take, so no value-position
+-- dispatch goes through it: the constructor-only and Display/Eq/Ord shapes never
+-- call it.  It is the no-op i31 (dict tag 0), mirroring llvm_emit's
+-- `dictWordOfRoute _ _ RNone = "0"`.
 routeWitness _ _ _ RNone = ["i32.const 0", "ref.i31"]
 -- S-1: RLocal's own dicts are the call's leading dict ARGS (pushed by emitMethodRef's
 -- RLocal arm via emitDictRef), not a dict WITNESS for this route — so as a witness it
