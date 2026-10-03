@@ -701,7 +701,7 @@ while IFS= read -r f; do
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # #2551: the catch-all clause ratchet reads typecheck.mdk's clause heads directly.
       add 'diff_compiler_catch_all_census'
-      # #1319 unit 0: typecheck.mdk owns universeDataEnv, universeRecordByName and
+      # #1319 unit 0: typecheck.mdk owns universeCtorPop, universeRecordPop and
       # the A-2.6 import-scoped overlay — the tables whose keying decides which
       # declaration an import clause's constructor name lands on.
       add 'diff_compiler_import_order'
