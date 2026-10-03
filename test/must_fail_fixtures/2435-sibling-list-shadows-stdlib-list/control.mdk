@@ -1,0 +1,3 @@
+import hash_map.{fromList}
+
+main = println (display (fromList [(2, 20), (1, 10), (3, 30)]))
