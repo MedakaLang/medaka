@@ -1,0 +1,2 @@
+-- Two constructors; `Bin` is also spelled by `b.mdk` and `one.mdk`.
+public export data A = Bin Int | Leaf

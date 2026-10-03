@@ -1,0 +1,7 @@
+-- Exhaustive over `B`; the entry never imports `b` itself.
+import b.{B(..)}
+
+export h : B -> Int
+h (Bin x y) = x + y
+h Tip = 0
+h Nd = 1

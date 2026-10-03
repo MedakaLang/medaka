@@ -1,0 +1,7 @@
+-- #3708: `import lib.disp3677.{display as dsp}` binds the local `dsp` and not `display`,
+-- so resolve binds the bare `display` below to the PRELUDE's method, and a method-bound
+-- occurrence is answered by the declaration resolve bound (docs/spec/SHADOW-SEMANTICS.md
+-- S2-DECL).  So this prints the prelude's `6`, never `Disp Int`'s `mm-display`.
+import lib.disp3677.{display as dsp}
+
+main = println (display (6 : Int))

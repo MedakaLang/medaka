@@ -1,0 +1,7 @@
+-- A named-field VARIANT constructor `Cfg` of type `Wrap`, fields declared
+-- `a, b`: the same registry key `Cfg` as `acfg`'s record, opposite field order.
+public export data Wrap =
+  | Cfg { a : Int, b : Int }
+
+export mkW : Wrap
+mkW = Cfg { a = 11, b = 22 }

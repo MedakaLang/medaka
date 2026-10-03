@@ -677,6 +677,14 @@ case "$amb_out" in
                   else fail=$((fail+1)); printf 'FAIL 674a/ambiguous-ctor (flagged but exit %d)\n' "$amb_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL 674a/ambiguous-ctor (no R-AMBIGUOUS-CTOR: [%s])\n' "$amb_out" ;;
 esac
+# 12a'. NO CASCADE (#733 item 3): the ambiguity is the program's ONLY diagnostic,
+#      in every file — no type mismatch from `Node` resolving to one module's type,
+#      and no missing case from an oracle answering `Node` with the other's.
+amb_codes="$(printf '%s' "$amb_out" | grep -o '"code":"[A-Z-]*"' | tr '\n' ' ')"
+case "$amb_codes" in
+  '"code":"R-AMBIGUOUS-CTOR" ') pass=$((pass+1)); printf 'ok   674a/no-cascade (R-AMBIGUOUS-CTOR is the only diagnostic)\n' ;;
+  *) fail=$((fail+1)); printf 'FAIL 674a/no-cascade (codes beside the ambiguity: [%s])\n' "$amb_codes" ;;
+esac
 # 12b. build AGREEMENT: the ambiguous program must NOT build a (crashing) binary —
 #      check and build agree that it is rejected, so the S0 miscompile is gone.
 MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x674_amb.mdk" -o "$TMP/x674_amb.bin" >/dev/null 2>&1

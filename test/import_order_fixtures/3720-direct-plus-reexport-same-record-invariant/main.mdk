@@ -1,0 +1,4 @@
+import p.{R(..)}
+import mid.*
+
+main = println (R { rx = 9 }).rx

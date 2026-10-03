@@ -1,0 +1,22 @@
+-- #1383 face 1: a named-field VARIANT constructor (`ahold`'s `Plain { hx }`, one
+-- variant of type `Holder`) shares its registry key `Plain` with an unrelated
+-- module's record TYPE (`plainlib`'s `data Plain = { px }`).  `mkH.hx` is
+-- projected from the ENTRY, where the receiver head is `Holder`, so arm (a) of
+-- `resolveFieldRecord` misses and the field-owner path answers.  The owner set
+-- for `hx` is the singleton key `Plain`, whose bare floor row can hold
+-- `plainlib`'s declaration; the receiver's own declaration is selected from the
+-- identity companion instead.
+--
+-- Hand-derived correct answer: `100`.  `mkH : Holder`, `Holder`'s sole variant is
+-- `Plain { hx : Int }`, built with `hx = 100`.  `plainlib`'s `Plain` is a
+-- different declaration and plays no part in this projection.
+--
+-- Formerly the must-fail pin `1383-variant-ctor-name-collides-xmod-record-type`
+-- (refused with `Type mismatch: Holder vs Plain` + `Field 'hx' does not belong to
+-- record 'Plain'`).  The import-order twin of this cell is
+-- `test/import_order_fixtures/1383-variant-ctor-vs-xmod-record-type-invariant/`.
+import ahold.{Holder, mkH}
+import plainlib.{Plain, mkP}
+
+main : <IO> Unit
+main = putStrLn (intToString mkH.hx)

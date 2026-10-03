@@ -1035,17 +1035,21 @@ or not, is dispatch: importing a module in any form brings its `impl`s into scop
 same rule that makes a bare `import map` (binding no names at all) still change dispatch
 behavior (see stdlib import forms, above).
 
-**A member RENAME of a method does not out-scope a local binding of the origin name; a
-module ALIAS does.** `import m.{size as sz}` is
-rewritten to the origin name before resolution — it is a second spelling of one cell, not
-a second binding — so a module that also declares its own `size` gets *that* one when it
-writes `sz`. `import m as M` keeps the dotted spelling all the way through inference, so
-`M.size` reaches the method past the local declaration. This is not a prelude rule: the
-implicit prelude, aliasable as of #95, is just the case where it is easiest to hit,
-because its names are in scope everywhere without an import. Pinned at
-`test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk` (module alias, reaches
-the method) and `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk`
-(member rename, lands on the local binding).
+**A member RENAME of a method binds only its alias; so does a module ALIAS.**
+`import m.{size as sz}` binds the local name `sz` to `m`'s method and nothing else, so a
+module that also declares its own `size` keeps that one for the bare `size`, and `sz`
+reaches the method past it. `import m as M` does the same under the dotted spelling
+`M.size`. Both spellings survive inference and are restored to the origin name afterwards.
+This is not a prelude rule: the implicit prelude, aliasable as of #95, is just the case
+where it is easiest to hit, because its names are in scope everywhere without an import.
+Pinned at `test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk` (module alias)
+and `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk` (member rename);
+both print `(False, True)`. One case is not yet ruled: a member alias of an interface
+method whose interface the importer cannot name, beside an imported standalone of the
+origin name (`test/shadow_fixtures/i22_importer_member_alias_not_nameable/`), still
+resolves per SHADOW-SEMANTICS S2-DECL (d) and prints the impl's `7`, row 42's KNOWN-BAD cell.
+A module's own top-level binding named like the alias wins over the alias: with
+`import m.{size as sz}` and a top-level `sz`, `sz` is the module's own.
 
 Rules, each a real error rather than a silent no-op:
 

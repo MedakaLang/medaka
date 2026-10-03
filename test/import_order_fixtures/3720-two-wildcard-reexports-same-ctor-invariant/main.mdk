@@ -1,0 +1,5 @@
+import ma.*
+import mb.*
+
+main = println (match Mk 7
+  Mk n => n)

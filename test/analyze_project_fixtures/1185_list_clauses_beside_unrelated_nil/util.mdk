@@ -1,0 +1,7 @@
+-- `total` covers both list constructors, so it is exhaustive. `Doc` is in
+-- scope here, abstractly, and its `Text` must not be demanded.
+import doc.{Doc}
+
+export total : List Int -> Int
+total [] = 0
+total (x :: xs) = x + total xs

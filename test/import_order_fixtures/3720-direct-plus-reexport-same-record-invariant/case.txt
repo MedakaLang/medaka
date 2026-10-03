@@ -1,0 +1,7 @@
+entry: main.mdk
+what: #3720 one record imported directly and through a re-export is one record,
+      in either import order
+
+`p` declares `data R = { rx : Int }`; `mid` is `export import p.*`. Spec answer,
+hand-derived: `check` clean; `run` and the built binary print `9` in every
+ordering.

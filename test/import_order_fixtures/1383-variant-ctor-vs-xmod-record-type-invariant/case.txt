@@ -1,0 +1,12 @@
+entry: main.mdk
+what: a projection on a named-field variant's receiver answers the same in EVERY import-clause order when another module's record TYPE shares the variant's constructor spelling
+
+`ahold` declares `data Holder = | Plain { hx : Int }`; `plainlib` declares an unrelated
+record `data Plain = { px : Int }`. Both are filed under registry key `Plain`. `main` projects
+`mkH.hx` with `mkH : Holder`, and `mkP.px`. Correct answer: `100,1`, in both orderings.
+
+At base (#1383) both orderings were refused (`Type mismatch: Holder vs Plain` + `Field 'hx'
+does not belong to record 'Plain'`); with value-only imports the verdict was decided by which
+module last wrote the bare floor row. The value is pinned on the built binary by
+`test/llvm_fixtures_modules/record_variant_ctor_vs_xmod_record_type/`; this cell grades that
+no ordering is ever answered differently.
