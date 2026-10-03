@@ -1,0 +1,11 @@
+-- #3728 control: two visible declarations declare `hx`, both under the one
+-- constructor spelling `Plain`, and `g`'s receiver is unannotated, so its type
+-- says nothing about which one `.hx` reads.  The access is ambiguous and is
+-- reported AT the access, naming both types and their modules, in both import
+-- orders (`field_unknown_receiver_two_decls_ab/` is this program swapped).
+import other.{Other, mkO}
+import hold.{Holder, mkH}
+
+g h = h.hx + 1
+
+main = println (g mkH)

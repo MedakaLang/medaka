@@ -483,6 +483,7 @@ import types.registry.{
   spRows,
   spFloor,
   spCollided,
+  spCandsOf,
   spLookupIdent,
 }
 -- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
@@ -18798,8 +18799,103 @@ resolveFieldByOwners te fname =
       [] =>
         let _ = pushUnknownField fname "<unknown>"
         None
-      [r] => pairRecordByName r
-      r :: rest => resolveFieldAmbiguous te fname (r :: rest)
+      _ => match normalize te
+        TVar _ => resolveFieldUnknownReceiver fname owners
+        _ => resolveFieldAmbiguous te fname owners
+
+-- An unannotated receiver says nothing about its type, so the candidates are the
+-- record declarations visible here that declare `fname`.  An owner key names a
+-- SPELLING, and `recordByNameRef` holds one declaration per spelling: the one this
+-- module's own source means.  A value reaching `.fname` need not be of that
+-- declaration (a named-field variant may share its constructor's spelling with
+-- another module's record), so each key is expanded to every declaration filed
+-- under it, and a declaration that does not declare `fname` is dropped.
+--
+-- The constructors of one type count once: the selection is a TYPE question, and
+-- `fieldSelectionWellTyped` decides afterwards whether that type's constructors
+-- agree about the field's slot.  Two types left is an ambiguity, reported at the
+-- access.  No candidate at all keeps the owner-list answer.
+resolveFieldUnknownReceiver : String ->
+  List String ->
+  Option (String, RecordInfo)
+resolveFieldUnknownReceiver fname owners = match visibleFieldDecls fname owners
+  [pair] => Some pair
+  [] => match owners
+    [r] => pairRecordByName r
+    _ =>
+      let _ = pushTypeError "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
+      None
+  cands =>
+    let _ =
+      pushTypeError
+        "T-AMBIGUOUS-FIELD"
+        (ambiguousFieldDeclsMsg fname owners cands)
+    None
+
+-- The declarations under the owner keys that declare `fname`, reachable from this
+-- module, one per type.  The floor row comes first under each key so that, when it
+-- is one of the population's rows, the `RecordInfo` this module registered is the
+-- one kept.
+visibleFieldDecls : String -> List String -> List (String, RecordInfo)
+visibleFieldDecls fname owners =
+  dedupBy
+    fieldDeclTypeKey
+    (fieldDeclReachFilter (flatMap (keyFieldDecls fname) owners))
+
+keyFieldDecls : String -> String -> List (String, RecordInfo)
+keyFieldDecls fname k =
+  let rows =
+    map
+      (c => (k, recordCandInfo c))
+      (spCandsOf k crossRun.value.universeRecordPop.value)
+  let floor = match pairRecordByName k
+    Some pair => [pair]
+    None => []
+  filterList (c => omHasKey fname (recordFieldMap (snd c))) (floor ++ rows)
+
+-- Same fail-open shape as `fieldOwnerReachFilter`: a declaration whose module is
+-- unknown is kept, and a filter that would remove every candidate removes none.
+fieldDeclReachFilter : List (String, RecordInfo) -> List (String, RecordInfo)
+fieldDeclReachFilter cands = match filterList fieldDeclReachable cands
+  [] => cands
+  kept => kept
+
+fieldDeclReachable : (String, RecordInfo) -> Bool
+fieldDeclReachable (_, ri) = match recordOwnerModule ri
+  None => True
+  Some mid =>
+    let reach = perRun.value.fieldOwnerReachRef.value
+    omSize reach == 0 || omHasKey mid reach
+
+-- The declaring type's tag, so two named-field constructors of one type collapse.
+fieldDeclTypeKey : (String, RecordInfo) -> String
+fieldDeclTypeKey (k, ri) = match headTyconMono (recordResultMono ri)
+  Some hk => headKeyTag hk
+  None => k
+
+-- Distinct owner keys keep the owner-list message.  When one key holds two of the
+-- declarations, the key alone cannot tell them apart, so each is named by its type
+-- and declaring module, sorted so the text does not depend on import-clause order.
+ambiguousFieldDeclsMsg : String ->
+  List String ->
+  List (String, RecordInfo) ->
+  String
+ambiguousFieldDeclsMsg fname owners cands =
+  let keys = map fst cands
+  if listLen (dedup keys) == listLen keys then
+    ambiguousFieldMsg fname owners
+  else
+    let tys = sortUniqS (map fieldDeclTypeName cands)
+    let descrs = sortUniqS (map fieldDeclDescr cands)
+    "Ambiguous field access: '.\{fname}' is declared by \{joinWith " and by " descrs}; the record type is undetermined. Add a type annotation (e.g. '(r : \{headL tys}).\{fname}')"
+
+fieldDeclTypeName : (String, RecordInfo) -> String
+fieldDeclTypeName (k, ri) = optionOr k (headTyconNameMono (recordResultMono ri))
+
+fieldDeclDescr : (String, RecordInfo) -> String
+fieldDeclDescr (k, ri) = match recordOwnerModule ri
+  Some mid => "'\{fieldDeclTypeName (k, ri)}' from module '\{mid}'"
+  None => "'\{fieldDeclTypeName (k, ri)}'"
 
 -- #1383: a concrete receiver's field is answered by the receiver's own
 -- declaration.  The floor `recordByNameRef` keeps one row per bare key, so when a
@@ -18844,20 +18940,17 @@ ownerDeclMatches ident (k :: rest) =
       None => ownerDeclMatches ident rest
       Some ri => (k, ri) :: ownerDeclMatches ident rest
 
--- multiple owners: receiver still an unbound var ⇒ genuinely ambiguous; a
--- concrete (non-record) receiver ⇒ narrow by the receiver's own declaration
--- identity, and only if that does not land on exactly one owner fall back to
--- picking the first owner so the later unify surfaces the type mismatch
--- (mirrors the oracle's two `_` sub-branches).
+-- A concrete receiver that is not itself a known record: one owner is that owner;
+-- several are narrowed by the receiver's own declaration identity, and only if that
+-- does not land on exactly one owner fall back to picking the first owner so the
+-- later unify surfaces the type mismatch (mirrors the oracle's two `_` sub-branches).
 resolveFieldAmbiguous : Mono ->
   String ->
   List String ->
   Option (String, RecordInfo)
-resolveFieldAmbiguous te fname owners = match normalize te
-  TVar _ =>
-    let _ = pushTypeError "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
-    None
-  _ => resolveFieldOwnersNarrowed te fname owners
+resolveFieldAmbiguous _ _ [r] = pairRecordByName r
+resolveFieldAmbiguous te fname owners =
+  resolveFieldOwnersNarrowed te fname owners
 
 -- ── #1216 / #1382: the multi-owner arm stops answering by sort order ──────────
 -- `sortUniqS` makes `headL owners` a MODULE-NAME SORT, so before this the concrete

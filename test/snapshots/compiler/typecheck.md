@@ -1,5 +1,5 @@
 # META
-source_lines=53358
+source_lines=53451
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -487,6 +487,7 @@ import types.registry.{
   spRows,
   spFloor,
   spCollided,
+  spCandsOf,
   spLookupIdent,
 }
 -- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
@@ -18802,8 +18803,103 @@ resolveFieldByOwners te fname =
       [] =>
         let _ = pushUnknownField fname "<unknown>"
         None
-      [r] => pairRecordByName r
-      r :: rest => resolveFieldAmbiguous te fname (r :: rest)
+      _ => match normalize te
+        TVar _ => resolveFieldUnknownReceiver fname owners
+        _ => resolveFieldAmbiguous te fname owners
+
+-- An unannotated receiver says nothing about its type, so the candidates are the
+-- record declarations visible here that declare `fname`.  An owner key names a
+-- SPELLING, and `recordByNameRef` holds one declaration per spelling: the one this
+-- module's own source means.  A value reaching `.fname` need not be of that
+-- declaration (a named-field variant may share its constructor's spelling with
+-- another module's record), so each key is expanded to every declaration filed
+-- under it, and a declaration that does not declare `fname` is dropped.
+--
+-- The constructors of one type count once: the selection is a TYPE question, and
+-- `fieldSelectionWellTyped` decides afterwards whether that type's constructors
+-- agree about the field's slot.  Two types left is an ambiguity, reported at the
+-- access.  No candidate at all keeps the owner-list answer.
+resolveFieldUnknownReceiver : String ->
+  List String ->
+  Option (String, RecordInfo)
+resolveFieldUnknownReceiver fname owners = match visibleFieldDecls fname owners
+  [pair] => Some pair
+  [] => match owners
+    [r] => pairRecordByName r
+    _ =>
+      let _ = pushTypeError "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
+      None
+  cands =>
+    let _ =
+      pushTypeError
+        "T-AMBIGUOUS-FIELD"
+        (ambiguousFieldDeclsMsg fname owners cands)
+    None
+
+-- The declarations under the owner keys that declare `fname`, reachable from this
+-- module, one per type.  The floor row comes first under each key so that, when it
+-- is one of the population's rows, the `RecordInfo` this module registered is the
+-- one kept.
+visibleFieldDecls : String -> List String -> List (String, RecordInfo)
+visibleFieldDecls fname owners =
+  dedupBy
+    fieldDeclTypeKey
+    (fieldDeclReachFilter (flatMap (keyFieldDecls fname) owners))
+
+keyFieldDecls : String -> String -> List (String, RecordInfo)
+keyFieldDecls fname k =
+  let rows =
+    map
+      (c => (k, recordCandInfo c))
+      (spCandsOf k crossRun.value.universeRecordPop.value)
+  let floor = match pairRecordByName k
+    Some pair => [pair]
+    None => []
+  filterList (c => omHasKey fname (recordFieldMap (snd c))) (floor ++ rows)
+
+-- Same fail-open shape as `fieldOwnerReachFilter`: a declaration whose module is
+-- unknown is kept, and a filter that would remove every candidate removes none.
+fieldDeclReachFilter : List (String, RecordInfo) -> List (String, RecordInfo)
+fieldDeclReachFilter cands = match filterList fieldDeclReachable cands
+  [] => cands
+  kept => kept
+
+fieldDeclReachable : (String, RecordInfo) -> Bool
+fieldDeclReachable (_, ri) = match recordOwnerModule ri
+  None => True
+  Some mid =>
+    let reach = perRun.value.fieldOwnerReachRef.value
+    omSize reach == 0 || omHasKey mid reach
+
+-- The declaring type's tag, so two named-field constructors of one type collapse.
+fieldDeclTypeKey : (String, RecordInfo) -> String
+fieldDeclTypeKey (k, ri) = match headTyconMono (recordResultMono ri)
+  Some hk => headKeyTag hk
+  None => k
+
+-- Distinct owner keys keep the owner-list message.  When one key holds two of the
+-- declarations, the key alone cannot tell them apart, so each is named by its type
+-- and declaring module, sorted so the text does not depend on import-clause order.
+ambiguousFieldDeclsMsg : String ->
+  List String ->
+  List (String, RecordInfo) ->
+  String
+ambiguousFieldDeclsMsg fname owners cands =
+  let keys = map fst cands
+  if listLen (dedup keys) == listLen keys then
+    ambiguousFieldMsg fname owners
+  else
+    let tys = sortUniqS (map fieldDeclTypeName cands)
+    let descrs = sortUniqS (map fieldDeclDescr cands)
+    "Ambiguous field access: '.\{fname}' is declared by \{joinWith " and by " descrs}; the record type is undetermined. Add a type annotation (e.g. '(r : \{headL tys}).\{fname}')"
+
+fieldDeclTypeName : (String, RecordInfo) -> String
+fieldDeclTypeName (k, ri) = optionOr k (headTyconNameMono (recordResultMono ri))
+
+fieldDeclDescr : (String, RecordInfo) -> String
+fieldDeclDescr (k, ri) = match recordOwnerModule ri
+  Some mid => "'\{fieldDeclTypeName (k, ri)}' from module '\{mid}'"
+  None => "'\{fieldDeclTypeName (k, ri)}'"
 
 -- #1383: a concrete receiver's field is answered by the receiver's own
 -- declaration.  The floor `recordByNameRef` keeps one row per bare key, so when a
@@ -18848,20 +18944,17 @@ ownerDeclMatches ident (k :: rest) =
       None => ownerDeclMatches ident rest
       Some ri => (k, ri) :: ownerDeclMatches ident rest
 
--- multiple owners: receiver still an unbound var ⇒ genuinely ambiguous; a
--- concrete (non-record) receiver ⇒ narrow by the receiver's own declaration
--- identity, and only if that does not land on exactly one owner fall back to
--- picking the first owner so the later unify surfaces the type mismatch
--- (mirrors the oracle's two `_` sub-branches).
+-- A concrete receiver that is not itself a known record: one owner is that owner;
+-- several are narrowed by the receiver's own declaration identity, and only if that
+-- does not land on exactly one owner fall back to picking the first owner so the
+-- later unify surfaces the type mismatch (mirrors the oracle's two `_` sub-branches).
 resolveFieldAmbiguous : Mono ->
   String ->
   List String ->
   Option (String, RecordInfo)
-resolveFieldAmbiguous te fname owners = match normalize te
-  TVar _ =>
-    let _ = pushTypeError "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
-    None
-  _ => resolveFieldOwnersNarrowed te fname owners
+resolveFieldAmbiguous _ _ [r] = pairRecordByName r
+resolveFieldAmbiguous te fname owners =
+  resolveFieldOwnersNarrowed te fname owners
 
 -- ── #1216 / #1382: the multi-owner arm stops answering by sort order ──────────
 -- `sortUniqS` makes `headL owners` a MODULE-NAME SORT, so before this the concrete
@@ -53390,7 +53483,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omDelete" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false) (mem "elemIndex" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregMemberK" false) (mem "sregSize" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spLookupIdent" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregMemberK" false) (mem "sregSize" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "installedDispositionsOpt" false) (mem "restoreDispositions" false) (mem "validateDispositionTable" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
@@ -56609,7 +56702,25 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mangledHeadCandidatesGo" (PWild (PList)) (EListLit))
 (DFunDef false "mangledHeadCandidatesGo" ((PVar "head") (PCons (PVar "key") (PVar "rest"))) (EIf (EApp (EApp (EVar "endsWith") (EBinOp "++" (ELit (LString "__")) (EVar "head"))) (EVar "key")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EBlock (DoLet false false (PVar "owners") (EApp (EVar "fieldOwnerNames") (EVar "fname"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ownerDeclOfReceiver") (EVar "te")) (EVar "fname")) (EVar "owners")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "owners") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))))))
+(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EBlock (DoLet false false (PVar "owners") (EApp (EVar "fieldOwnerNames") (EVar "fname"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ownerDeclOfReceiver") (EVar "te")) (EVar "fname")) (EVar "owners")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "owners") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm PWild () (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EApp (EApp (EVar "resolveFieldUnknownReceiver") (EVar "fname")) (EVar "owners"))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EVar "owners")))))))))))
+(DTypeSig false "resolveFieldUnknownReceiver" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "resolveFieldUnknownReceiver" ((PVar "fname") (PVar "owners")) (EMatch (EApp (EApp (EVar "visibleFieldDecls") (EVar "fname")) (EVar "owners")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PList) () (EMatch (EVar "owners") (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))))) (arm (PVar "cands") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EApp (EVar "ambiguousFieldDeclsMsg") (EVar "fname")) (EVar "owners")) (EVar "cands")))) (DoExpr (EVar "None"))))))
+(DTypeSig false "visibleFieldDecls" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "visibleFieldDecls" ((PVar "fname") (PVar "owners")) (EApp (EApp (EVar "dedupBy") (EVar "fieldDeclTypeKey")) (EApp (EVar "fieldDeclReachFilter") (EApp (EApp (EVar "flatMap") (EApp (EVar "keyFieldDecls") (EVar "fname"))) (EVar "owners")))))
+(DTypeSig false "keyFieldDecls" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "keyFieldDecls" ((PVar "fname") (PVar "k")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "map") (ELam ((PVar "c")) (ETuple (EVar "k") (EApp (EVar "recordCandInfo") (EVar "c"))))) (EApp (EApp (EVar "spCandsOf") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")))) (DoLet false false (PVar "floor") (EMatch (EApp (EVar "pairRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "pair")) () (EListLit (EVar "pair"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EApp (EVar "recordFieldMap") (EApp (EVar "snd") (EVar "c")))))) (EBinOp "++" (EVar "floor") (EVar "rows"))))))
+(DTypeSig false "fieldDeclReachFilter" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
+(DFunDef false "fieldDeclReachFilter" ((PVar "cands")) (EMatch (EApp (EApp (EVar "filterList") (EVar "fieldDeclReachable")) (EVar "cands")) (arm (PList) () (EVar "cands")) (arm (PVar "kept") () (EVar "kept"))))
+(DTypeSig false "fieldDeclReachable" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "Bool")))
+(DFunDef false "fieldDeclReachable" ((PTuple PWild (PVar "ri"))) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "reach") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef") "value")) (DoExpr (EBinOp "||" (EBinOp "==" (EApp (EVar "omSize") (EVar "reach")) (ELit (LInt 0))) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "reach"))))))))
+(DTypeSig false "fieldDeclTypeKey" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclTypeKey" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri"))) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (EVar "k"))))
+(DTypeSig false "ambiguousFieldDeclsMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyCon "String")))))
+(DFunDef false "ambiguousFieldDeclsMsg" ((PVar "fname") (PVar "owners") (PVar "cands")) (EBlock (DoLet false false (PVar "keys") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "cands"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "dedup") (EVar "keys"))) (EApp (EVar "listLen") (EVar "keys"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")) (EBlock (DoLet false false (PVar "tys") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "fieldDeclTypeName")) (EVar "cands")))) (DoLet false false (PVar "descrs") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "fieldDeclDescr")) (EVar "cands")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous field access: '.")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is declared by "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " and by "))) (EVar "descrs")))) (ELit (LString "; the record type is undetermined. Add a type annotation (e.g. '(r : "))) (EApp (EVar "display") (EApp (EVar "headL") (EVar "tys")))) (ELit (LString ")."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "')")))))))))
+(DTypeSig false "fieldDeclTypeName" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclTypeName" ((PTuple (PVar "k") (PVar "ri"))) (EApp (EApp (EVar "optionOr") (EVar "k")) (EApp (EVar "headTyconNameMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
+(DTypeSig false "fieldDeclDescr" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclDescr" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "Some" (PVar "mid")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "' from module '"))) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "'")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "'"))))))
 (DTypeSig false "ownerDeclOfReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "ownerDeclOfReceiver" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "ownerDeclOfReceiver" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "owners")) (arm (PList (PTuple (PVar "k") (PVar "ri"))) () (EIf (EApp (EApp (EApp (EVar "narrowingBlockedByCtorSibling") (EApp (EVar "headTyconMono") (EVar "te"))) (EVar "fname")) (EVar "k")) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri"))))) (arm PWild () (EVar "None"))))))
@@ -56617,7 +56728,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ownerDeclMatches" (PWild (PList)) (EListLit))
 (DFunDef false "ownerDeclMatches" ((PVar "ident") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value"))) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "k") (EVar "ri")) (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))))))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
-(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "fname")) (EVar "owners")))))
+(DFunDef false "resolveFieldAmbiguous" (PWild PWild (PList (PVar "r"))) (EApp (EVar "pairRecordByName") (EVar "r")))
+(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EApp (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "fname")) (EVar "owners")))
 (DTypeSig false "resolveFieldOwnersNarrowed" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldOwnersNarrowed" ((PVar "te") (PVar "fname") (PVar "owners")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "narrowedPick") (EVar "rk")) (EVar "fname")) (EVar "owners")) (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EApp (EVar "ownerCandidates") (EVar "owners")))))))
 (DTypeSig false "narrowedPick" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))))
@@ -62141,7 +62253,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omDelete" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false) (mem "elemIndex" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregMemberK" false) (mem "sregSize" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spLookupIdent" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregMemberK" false) (mem "sregSize" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "installedDispositionsOpt" false) (mem "restoreDispositions" false) (mem "validateDispositionTable" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
@@ -65360,7 +65472,25 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mangledHeadCandidatesGo" (PWild (PList)) (EListLit))
 (DFunDef false "mangledHeadCandidatesGo" ((PVar "head") (PCons (PVar "key") (PVar "rest"))) (EIf (EApp (EApp (EVar "endsWith") (EBinOp "++" (ELit (LString "__")) (EVar "head"))) (EVar "key")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EBlock (DoLet false false (PVar "owners") (EApp (EVar "fieldOwnerNames") (EVar "fname"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ownerDeclOfReceiver") (EVar "te")) (EVar "fname")) (EVar "owners")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "owners") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))))))
+(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EBlock (DoLet false false (PVar "owners") (EApp (EVar "fieldOwnerNames") (EVar "fname"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ownerDeclOfReceiver") (EVar "te")) (EVar "fname")) (EVar "owners")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "owners") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm PWild () (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EApp (EApp (EVar "resolveFieldUnknownReceiver") (EVar "fname")) (EVar "owners"))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EVar "owners")))))))))))
+(DTypeSig false "resolveFieldUnknownReceiver" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "resolveFieldUnknownReceiver" ((PVar "fname") (PVar "owners")) (EMatch (EApp (EApp (EVar "visibleFieldDecls") (EVar "fname")) (EVar "owners")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PList) () (EMatch (EVar "owners") (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))))) (arm (PVar "cands") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EApp (EVar "ambiguousFieldDeclsMsg") (EVar "fname")) (EVar "owners")) (EVar "cands")))) (DoExpr (EVar "None"))))))
+(DTypeSig false "visibleFieldDecls" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "visibleFieldDecls" ((PVar "fname") (PVar "owners")) (EApp (EApp (EVar "dedupBy") (EVar "fieldDeclTypeKey")) (EApp (EVar "fieldDeclReachFilter") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "keyFieldDecls") (EVar "fname"))) (EVar "owners")))))
+(DTypeSig false "keyFieldDecls" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "keyFieldDecls" ((PVar "fname") (PVar "k")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (ETuple (EVar "k") (EApp (EVar "recordCandInfo") (EVar "c"))))) (EApp (EApp (EVar "spCandsOf") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")))) (DoLet false false (PVar "floor") (EMatch (EApp (EVar "pairRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "pair")) () (EListLit (EVar "pair"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EApp (EVar "recordFieldMap") (EApp (EVar "snd") (EVar "c")))))) (EBinOp "++" (EVar "floor") (EVar "rows"))))))
+(DTypeSig false "fieldDeclReachFilter" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
+(DFunDef false "fieldDeclReachFilter" ((PVar "cands")) (EMatch (EApp (EApp (EVar "filterList") (EVar "fieldDeclReachable")) (EVar "cands")) (arm (PList) () (EVar "cands")) (arm (PVar "kept") () (EVar "kept"))))
+(DTypeSig false "fieldDeclReachable" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "Bool")))
+(DFunDef false "fieldDeclReachable" ((PTuple PWild (PVar "ri"))) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "reach") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef") "value")) (DoExpr (EBinOp "||" (EBinOp "==" (EApp (EVar "omSize") (EVar "reach")) (ELit (LInt 0))) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "reach"))))))))
+(DTypeSig false "fieldDeclTypeKey" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclTypeKey" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri"))) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (EVar "k"))))
+(DTypeSig false "ambiguousFieldDeclsMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyCon "String")))))
+(DFunDef false "ambiguousFieldDeclsMsg" ((PVar "fname") (PVar "owners") (PVar "cands")) (EBlock (DoLet false false (PVar "keys") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "cands"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "dedup") (EVar "keys"))) (EApp (EVar "listLen") (EVar "keys"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")) (EBlock (DoLet false false (PVar "tys") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "fieldDeclTypeName")) (EVar "cands")))) (DoLet false false (PVar "descrs") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "fieldDeclDescr")) (EVar "cands")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous field access: '.")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is declared by "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " and by "))) (EVar "descrs")))) (ELit (LString "; the record type is undetermined. Add a type annotation (e.g. '(r : "))) (EApp (EMethodRef "display") (EApp (EVar "headL") (EVar "tys")))) (ELit (LString ")."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "')")))))))))
+(DTypeSig false "fieldDeclTypeName" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclTypeName" ((PTuple (PVar "k") (PVar "ri"))) (EApp (EApp (EVar "optionOr") (EVar "k")) (EApp (EVar "headTyconNameMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
+(DTypeSig false "fieldDeclDescr" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclDescr" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "Some" (PVar "mid")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "' from module '"))) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "'")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "'"))))))
 (DTypeSig false "ownerDeclOfReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "ownerDeclOfReceiver" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "ownerDeclOfReceiver" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "owners")) (arm (PList (PTuple (PVar "k") (PVar "ri"))) () (EIf (EApp (EApp (EApp (EVar "narrowingBlockedByCtorSibling") (EApp (EVar "headTyconMono") (EVar "te"))) (EVar "fname")) (EVar "k")) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri"))))) (arm PWild () (EVar "None"))))))
@@ -65368,7 +65498,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ownerDeclMatches" (PWild (PList)) (EListLit))
 (DFunDef false "ownerDeclMatches" ((PVar "ident") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value"))) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "k") (EVar "ri")) (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))))))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
-(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "fname")) (EVar "owners")))))
+(DFunDef false "resolveFieldAmbiguous" (PWild PWild (PList (PVar "r"))) (EApp (EVar "pairRecordByName") (EVar "r")))
+(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EApp (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "fname")) (EVar "owners")))
 (DTypeSig false "resolveFieldOwnersNarrowed" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldOwnersNarrowed" ((PVar "te") (PVar "fname") (PVar "owners")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "narrowedPick") (EVar "rk")) (EVar "fname")) (EVar "owners")) (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EApp (EVar "ownerCandidates") (EVar "owners")))))))
 (DTypeSig false "narrowedPick" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))))

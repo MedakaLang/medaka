@@ -626,7 +626,7 @@ tabHasName n ((k, _) :: rest) = tabKeyName k == n || tabHasName n rest
 -- member is a table that is keyed by a BARE NAME **and** stores a type head or a
 -- scheme containing one, which excludes the bare-name tables holding kinds or
 -- mere name-membership.  Two are known: #1256 (`recordByNameRef`, measured above)
--- and #1259 (`universeDataEnv`, constructor schemes — already a false reject
+-- and #1259 (`universeCtorPop`'s floor, constructor schemes — a false reject
 -- BEFORE this unit, which is why nothing about it moved here).  Whoever re-keys
 -- one drains a row in `test/must_fail_fixtures/` as well as fixing the table.
 export

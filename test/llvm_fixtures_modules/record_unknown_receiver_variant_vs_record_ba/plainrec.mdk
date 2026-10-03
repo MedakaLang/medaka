@@ -1,0 +1,7 @@
+-- A record spelled `Plain` that does NOT declare `hx`.  The entry names it in its
+-- import list, so it is the declaration the entry's own spelling `Plain` denotes.
+public export data Plain = { px : Int, n : Int }
+
+export
+mkP : Plain
+mkP = Plain { px = 2, n = 3 }

@@ -1,0 +1,8 @@
+-- The declaration `.hx` means: a named-field variant whose constructor is spelled
+-- `Plain`, the same spelling as `plainrec.mdk`'s record.  `hx` is the SECOND field,
+-- so a read through any other layout is observable rather than slot-0-invisible.
+public export data Holder = Plain { n : Int, hx : Int }
+
+export
+mkH : Holder
+mkH = Plain { n = 1, hx = 100 }
