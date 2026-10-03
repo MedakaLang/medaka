@@ -398,7 +398,7 @@ import support.ordmap.{
   omSize,
   omDelete,
 }
-import list.{replicate, drop, take}
+import list.{replicate, drop, take, elemIndex}
 import support.util.{
   splitOnChar,
   u64HalvesHex,
@@ -18183,11 +18183,13 @@ inferFieldOfRecord te rname ri fname =
 -- `medaka run` already refuses (`E-PANIC unknown field: x`) because the interpreter
 -- resolves fields BY NAME; this restores agreement by refusing EARLIER, at typecheck.
 --
--- ⚠️ SCOPE — this is #1468 (a field declared by EXACTLY ONE constructor of the
--- type), NOT #1465 (a field declared by MORE THAN ONE, which wants a dispatched
--- tag-based selector and a backend change).  A field every constructor declares is
--- untouched here: no sibling withholds it, so the guard is silent and the access
--- keeps whatever answer it had.
+-- The guard answers two layout questions about `f` across the receiver type's
+-- constructors (`ctorFieldConflict`): does some constructor withhold `f`, and do
+-- two constructors that declare it place it at different positions?  Both
+-- emitters read `.f` at the selected constructor's declaration-order index with
+-- no tag test, so either disagreement reads the wrong slot for some value of
+-- the type (#1468, #1465, #3726).  A field every constructor declares at ONE
+-- position has one slot for every value, so the access stays legal.
 --
 -- ⚠️ THE HEAD EQUALITY IS A CASCADE GUARD, NOT A CORRECTNESS ONE.  `te`'s head is
 -- compared against the SELECTED record's own result head, so the guard speaks only
@@ -18199,52 +18201,130 @@ inferFieldOfRecord te rname ri fname =
 -- `recordCandIsReceiverDecl` documents.
 fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
 fieldSelectionWellTyped te rname ri fname ft =
-  match ctorSiblingWithholdingHere te rname ri fname
+  match ctorFieldConflictHere te rname ri fname
     None => ft
-    Some sib =>
+    Some conflict =>
       let _ =
-        pushTypeError
-          "T-FIELD-NOT-IN-ALL-CTORS"
-          (fieldNotInAllCtorsMsg
-            fname
-            (optionOr rname (headTyconNameMono te))
-            sib)
+        pushCtorFieldConflict
+          fname
+          (optionOr rname (headTyconNameMono te))
+          conflict
       -- Same poisoned placeholder `unknownFieldFresh` returns: the access is already
       -- explained, so don't let its result var pile a second cascade on top.
       let v = freshVar ()
       let _ = poisonMismatchVars v v
       v
 
--- The named constructor, if any, that shares the receiver's head and withholds
--- `fname`.  `ctorSiblingWithholdingName` is the SAME predicate
--- `narrowingBlockedByCtorSibling` asks in the multi-owner arm — one implementation,
--- two callers, so the two paths cannot drift about what "a sibling withholds it"
--- means.
-ctorSiblingWithholdingHere : Mono ->
+-- How the constructors of one type disagree about a field: a constructor that
+-- does not declare it, or two that declare it at different (0-based,
+-- declaration-order) positions.
+data CtorFieldConflict =
+  | CtorWithholds String
+  | CtorSlotsDiffer String Int String Int
+
+-- The conflict, if any, among the constructors sharing the receiver's head.
+-- `ctorSiblingWithholdingName` is the SAME withheld test
+-- `narrowingBlockedByCtorSibling` asks in the multi-owner arm, so the two paths
+-- cannot drift about what "a sibling withholds it" means.
+ctorFieldConflictHere : Mono ->
   String ->
   RecordInfo ->
   String ->
-  Option String
-ctorSiblingWithholdingHere te rname ri fname =
-  ctorSiblingWithholdingForHead
-    (headTyconMono te)
-    (headTyconMono (recordResultMono ri))
-    rname
-    fname
+  Option CtorFieldConflict
+ctorFieldConflictHere te rname ri fname = match headTyconMono te
+  None => None
+  Some hk =>
+    if Some hk == headTyconMono (recordResultMono ri) then
+      ctorFieldConflict hk fname rname
+    else
+      None
 
-ctorSiblingWithholdingForHead : Option HeadKey ->
-  Option HeadKey ->
-  String ->
-  String ->
-  Option String
-ctorSiblingWithholdingForHead None _ _ _ = None
-ctorSiblingWithholdingForHead (Some hk) declHead rname fname
-  | Some hk == declHead = ctorSiblingWithholdingName (Some hk) fname rname
-  | otherwise = None
+ctorFieldConflict : HeadKey -> String -> String -> Option CtorFieldConflict
+ctorFieldConflict hk fname rname =
+  match ctorSiblingWithholdingName (Some hk) fname rname
+    Some sib => Some (CtorWithholds sib)
+    None => match ctorsOfHead hk
+      Some (ctors@(_ :: _ :: _)) =>
+        firstSlotDisagreement (ctorFieldSlots hk fname ctors)
+      _ => None
+
+ctorsOfHead : HeadKey -> Option (List String)
+ctorsOfHead hk = match ctorOracleKeyOf (Some hk)
+  None => None
+  Some tk => oGetCtors driverState.value.matchOracle.value tk
+
+-- Each constructor that declares `fname`, with the field's index in that
+-- constructor's declaration-order field list — the index both emitters read.
+ctorFieldSlots : HeadKey -> String -> List String -> List (String, Int)
+ctorFieldSlots _ _ [] = []
+ctorFieldSlots hk fname (k :: rest) =
+  let more = ctorFieldSlots hk fname rest
+  match ctorRecordOfType hk k
+    None => more
+    Some ri => match elemIndex fname (recordFieldNames ri)
+      None => more
+      Some i => (k, i) :: more
+
+firstSlotDisagreement : List (String, Int) -> Option CtorFieldConflict
+firstSlotDisagreement [] = None
+firstSlotDisagreement ((a, i) :: rest) =
+  map ((b, j) => CtorSlotsDiffer a i b j) (slotOtherThan i rest)
+
+slotOtherThan : Int -> List (String, Int) -> Option (String, Int)
+slotOtherThan _ [] = None
+slotOtherThan i ((b, j) :: rest)
+  | j /= i = Some (b, j)
+  | otherwise = slotOtherThan i rest
+
+pushCtorFieldConflict : String -> String -> CtorFieldConflict -> Unit
+pushCtorFieldConflict fname tname (CtorWithholds sib) =
+  pushTypeError
+    "T-FIELD-NOT-IN-ALL-CTORS"
+    (fieldNotInAllCtorsMsg fname tname sib)
+pushCtorFieldConflict fname tname (CtorSlotsDiffer a i b j) =
+  pushTypeError
+    "T-FIELD-POSITION-DIFFERS"
+    (fieldPositionDiffersMsg fname tname (a, i) (b, j))
 
 fieldNotInAllCtorsMsg : String -> String -> String -> String
 fieldNotInAllCtorsMsg fname tname sib =
   "Field '\{fname}' is not declared by every constructor of '\{tname}': constructor '\{sib}' has no '\{fname}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
+
+fieldPositionDiffersMsg : String ->
+  String ->
+  (String, Int) ->
+  (String, Int) ->
+  String
+fieldPositionDiffersMsg fname tname (a, i) (b, j) =
+  "Field '\{fname}' is at different positions in the constructors of '\{tname}': it is field \{intToString (i + 1)} of '\{a}' but field \{intToString (j + 1)} of '\{b}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
+
+-- ── #3727/#3726: `{ v | f = e }` on a type with more than one constructor ──
+--
+-- Both emitters rebuild an update as the constructor the typechecker selected,
+-- copying the other fields by that constructor's layout; the receiver's own tag
+-- is never read.  When the receiver's type has two or more constructors, a value
+-- built by any other one comes back as the selected constructor, whatever the
+-- field offsets.  `Con { v | f = e }` names the constructor and is not this path.
+-- Same cascade guard as `fieldSelectionWellTyped`: only a receiver that really is
+-- a value of the selected record's type is asked about.
+recordUpdateWellTyped : Mono -> String -> RecordInfo -> String -> Unit
+recordUpdateWellTyped bt rname ri fn = match headTyconMono bt
+  None => ()
+  Some hk =>
+    if Some hk == headTyconMono (recordResultMono ri) then match ctorsOfHead hk
+      Some (ctors@(_ :: _ :: _)) =>
+        pushTypeError
+          "T-UPDATE-MULTI-CTOR"
+          (updateMultiCtorMsg
+            fn
+            (optionOr rname (headTyconNameMono bt))
+            rname
+            ctors)
+      _ => ()
+
+updateMultiCtorMsg : String -> String -> String -> List String -> String
+updateMultiCtorMsg fn tname rname ctors =
+  "Record update of '\{fn}' is not supported on '\{tname}': it has more than one constructor (\{joinWith ", " ctors}), and the type does not say which one the value holds. Match on the constructor and update inside its arm, e.g. '\{rname} { v | \{fn} = ... }'"
 
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped.  For a plain record the key is its type name; for a
@@ -18866,11 +18946,10 @@ narrowingBlockedByCtorSibling rk fname survivorKey =
 -- `data` decl regardless of shape) via `oGetCtors`, keyed by `TabKey` — not by
 -- bare name — and reachable from `rk : Option HeadKey` through `ctorOracleKeyOf`.
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
-ctorSiblingWithholdingName rk fname survivorKey = match ctorOracleKeyOf rk
+ctorSiblingWithholdingName None _ _ = None
+ctorSiblingWithholdingName (Some hk) fname survivorKey = match ctorsOfHead hk
   None => None
-  Some tk => match oGetCtors driverState.value.matchOracle.value tk
-    None => None
-    Some ctors => firstCtorSiblingWithholding fname survivorKey ctors
+  Some ctors => firstCtorSiblingWithholding hk fname survivorKey ctors
 
 -- 🚨 THE READER'S KEY MINT FOR `matchOracle`'s `typeCtors`, AND IT IS **NOT**
 -- `headTabOf`.  `typeCtors` is the one oracle table keyed by DECLARATION
@@ -18911,22 +18990,46 @@ ctorOracleKeyOf : Option HeadKey -> Option TabKey
 ctorOracleKeyOf None = None
 ctorOracleKeyOf (Some hk) = headKeyDecl hk
 
-firstCtorSiblingWithholding : String -> String -> List String -> Option String
-firstCtorSiblingWithholding _ _ [] = None
-firstCtorSiblingWithholding fname skey (k :: rest)
-  | k == skey = firstCtorSiblingWithholding fname skey rest
-  | ctorSiblingWithholds fname k = Some k
-  | otherwise = firstCtorSiblingWithholding fname skey rest
+firstCtorSiblingWithholding : HeadKey ->
+  String ->
+  String ->
+  List String ->
+  Option String
+firstCtorSiblingWithholding _ _ _ [] = None
+firstCtorSiblingWithholding hk fname skey (k :: rest)
+  | k == skey = firstCtorSiblingWithholding hk fname skey rest
+  | ctorSiblingWithholds hk fname k = Some k
+  | otherwise = firstCtorSiblingWithholding hk fname skey rest
 
 -- `oGetCtors` already scopes the candidate list to the receiver's own type
 -- (via the `TabKey` lookup above), so this no longer needs to re-check the
 -- head itself — only whether THIS constructor declares `fname`.  A name with
--- no `RecordInfo` at all is a positional or nullary constructor: it declares
--- no named field, so it unconditionally withholds `fname`.
-ctorSiblingWithholds : String -> String -> Bool
-ctorSiblingWithholds fname k = match lookupRecordByName k
+-- no `RecordInfo` of this type is a positional or nullary constructor: it
+-- declares no named field, so it unconditionally withholds `fname`.
+ctorSiblingWithholds : HeadKey -> String -> String -> Bool
+ctorSiblingWithholds hk fname k = match ctorRecordOfType hk k
   Some ri => isNone (omLookup fname (recordFieldMap ri))
   None => True
+
+-- The `RecordInfo` constructor `k` of the type `hk` declares.  `k` is a
+-- spelling, and the bare-keyed floor `recordByNameRef` keeps one row per
+-- spelling, so a same-spelled constructor of another module's type can own it.
+-- The identity companion is asked first (as `ownerDeclMatches` does), and a
+-- floor row is accepted only when its result head IS `hk`.
+ctorRecordOfType : HeadKey -> String -> Option RecordInfo
+ctorRecordOfType hk k = match ctorRecordFromCompanion hk k
+  Some ri => Some ri
+  None => match lookupRecordByName k
+    Some ri =>
+      if recordCandIsReceiverDecl (Some hk) (k, ri) then Some ri else None
+    None => None
+
+ctorRecordFromCompanion : HeadKey -> String -> Option RecordInfo
+ctorRecordFromCompanion hk k = match headKeyIdent hk
+  None => None
+  Some ident => match omLookup k crossRun.value.universeRecordIdentsRef.value
+    None => None
+    Some cs => recordCandForType ident cs
 
 -- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
 -- rather than defaulted, so the filter above only ever sees real declarations.
@@ -19124,6 +19227,10 @@ inferRecordUpdatePicked : String ->
 inferRecordUpdatePicked rname bt env fields ri =
   let sr = instantiateRecordUpdate rname ri (assignedFieldNames fields)
   let _ = unify bt (snd sr)
+  -- Before the field values are inferred, so the error sits on the receiver.
+  let _ = match firstFieldName fields
+    Some fn => recordUpdateWellTyped bt rname ri fn
+    None => ()
   let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
   snd sr
 

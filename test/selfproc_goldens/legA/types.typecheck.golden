@@ -647,15 +647,19 @@ cslotKey : CSlot -> String
 cslotVecKey : (CSlot, List Mono) -> String
 ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
+ctorFieldConflict : HeadKey -> String -> String -> Option CtorFieldConflict
+ctorFieldConflictHere : Mono -> String -> RecordInfo -> String -> Option CtorFieldConflict
+ctorFieldSlots : HeadKey -> String -> List String -> List (String, Int)
 ctorHasExistentials : Option Scheme -> Bool
 ctorHeadShaped : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
 ctorOracleKeyOf : Option HeadKey -> Option TabKey
-ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> String -> Option String
-ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
+ctorRecordFromCompanion : HeadKey -> String -> Option RecordInfo
+ctorRecordOfType : HeadKey -> String -> Option RecordInfo
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
-ctorSiblingWithholds : String -> String -> Bool
+ctorSiblingWithholds : HeadKey -> String -> String -> Bool
 ctorsByHead : List Scheme -> Map String (List (List Mono, List Mono))
+ctorsOfHead : HeadKey -> Option (List String)
 currentDoDeferred : Ref Bool
 currentDoOrigin : Ref (Option Loc)
 currentLoc : Ref (Option Loc)
@@ -1088,6 +1092,7 @@ fieldOwnerAnyReachable : List String -> Bool
 fieldOwnerNames : String -> List String
 fieldOwnerReachFilter : List String -> List String
 fieldOwnerReachable : String -> Bool
+fieldPositionDiffersMsg : String -> String -> (String, Int) -> (String, Int) -> String
 fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
 fieldTyOf : Field -> Ty
 fieldTypeE : SigVars -> List (String, Mono) -> Field -> Mono
@@ -1122,7 +1127,7 @@ finishModuleMarking : ModuleMarking -> TcEnv -> Map String (List (List Pat, Expr
 finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry
 finishValueEffectsKeeping : List (Bool, Mono) -> List (Int, AuthResidual)
 first3 : (a, b, c) -> a
-firstCtorSiblingWithholding : String -> String -> List String -> Option String
+firstCtorSiblingWithholding : HeadKey -> String -> String -> List String -> Option String
 firstDictForEncl : Int -> ScopeId -> List (Int, EvidenceBinderId) -> Option EvidenceBinderId
 firstDispatchIdx : List String -> Int -> List Ty -> Option Int
 firstExactReturnRequest : List Obligation -> Option MethodReturnRequest
@@ -1140,6 +1145,7 @@ firstPredForEnclResidual : String -> List Mono -> ScopeId -> List GivenEntry -> 
 firstPredOnChain : PredicateRequest -> List Int -> List GivenEntry -> Option AssumAnswer
 firstReqMatch : List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
 firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
+firstSlotDisagreement : List (String, Int) -> Option CtorFieldConflict
 firstTupleCallHint : List Mono -> Option (String, Option (Loc, String))
 firstTvar : Mono -> Mono -> Int -> Option Mono
 fixedSibling : Int -> List (Int, String) -> Option String
@@ -2358,6 +2364,7 @@ pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
 pushArithGoal : Ref Route -> Mono -> EvId -> Unit
 pushCoherenceWarning : Option Loc -> String -> Unit
+pushCtorFieldConflict : String -> String -> CtorFieldConflict -> Unit
 pushDictApp : PendingDictApp -> Unit
 pushDiscardedValueDesc : String -> Expr -> Unit
 pushDiscardedValueError : Mono -> Expr -> Unit
@@ -2495,6 +2502,7 @@ recordStandaloneGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> 
 recordTopGrants : String -> List (String, Scheme) -> Map String (List (List Pat, Expr)) -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
+recordUpdateWellTyped : Mono -> String -> RecordInfo -> String -> Unit
 recordValueFileBound : Expr -> Mono -> Unit
 recoveredShadowSym : String -> Ref Route -> String
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
@@ -2821,6 +2829,7 @@ siteRDictName : Ref Route -> List String
 siteRDictNamesL : List Route -> List String
 sitesFor : String -> Map String (List a) -> List a
 slotLabelsNaming : String -> List Kind -> List Ty -> List String
+slotOtherThan : Int -> List (String, Int) -> Option (String, Int)
 slotVariance : Option Polarity -> Option Kind -> Variance
 slotVariances : Option (List Polarity) -> Option (List Kind) -> Option (List Variance)
 solveExactReturn : MethodReturnRequest -> MethodReturnResolution
@@ -3047,6 +3056,7 @@ unsettledFileRow : EffRow -> EffRow -> Bool
 unsettledFileValueFlow : (Option Loc, Mono, Mono) -> Bool
 unsettledPackedFileBound : Bool -> Mono -> Mono -> Bool
 updateAuthority : String -> List (String, Mono) -> List String -> Int -> Option (Ref Authvar) -> Authority
+updateMultiCtorMsg : String -> String -> String -> List String -> String
 useAdmittedRows : Bool -> List Decl -> List (String, (String, String))
 useDefinerRows : Bool -> UsePath -> List (String, (String, String))
 useKeyCands : (UsePath -> Loc -> List (String, String, String, Ident, Loc)) -> List Decl -> List (String, String, String, Ident, Loc)

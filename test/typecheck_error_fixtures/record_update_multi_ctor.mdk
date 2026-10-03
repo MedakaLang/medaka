@@ -1,0 +1,10 @@
+-- #3727 / #3726 — `{ t | x = n }` on a receiver of type `T`, which has two
+-- named-field constructors.  Both declare `x` at the SAME position, so the slot is
+-- not the problem: the emitted update rebuilds the value as the one constructor the
+-- typechecker selected, and a `B` came back as an `A` at exit 0.  The type does not
+-- say which constructor the value holds, so the update must reject whatever the
+-- offsets; `A { t | x = n }` inside a `match` arm is the supported spelling.
+data T = A { x : Int } | B { x : Int }
+
+setX : T -> Int -> T
+setX t n = { t | x = n }

@@ -1,0 +1,8 @@
+-- A single-constructor `T` whose one constructor shares its spelling, `Cfg`, with
+-- `ma.mdk`'s two-constructor `T`.  One constructor means one layout, so `.x` and
+-- `{ v | x = … }` on this type stay legal.
+public export data T = Cfg { y : Int, x : Int }
+
+export
+mk : T
+mk = Cfg { y = 30, x = 40 }
