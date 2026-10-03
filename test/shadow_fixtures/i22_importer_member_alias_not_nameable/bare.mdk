@@ -12,10 +12,10 @@
 -- joins this row; until then this row is also the proof that the correct value is reachable
 -- rather than hypothetical.
 --
--- ⚠️ This header used to name that fix as "re-keying the VALUE arm on the LOCAL spelling".
--- That was measured INERT -- see main.mdk's own header for why (the import is de-aliased
--- upstream of `selectIfaceRows` on the run/build path) -- so do not treat it as the
--- remaining step.
+-- This header used to name that fix as "re-keying the VALUE arm on the LOCAL spelling"
+-- and call it measured INERT. Since #3708 the alias reaches `selectIfaceRows` as written,
+-- so re-keying is no longer inert, but what it should decide is unruled (S2-DECL (d));
+-- see main.mdk's own header. Do not treat it as a known remaining step.
 import fmod.{size}
 import ifc
 

@@ -1044,7 +1044,10 @@ This is not a prelude rule: the implicit prelude, aliasable as of #95, is just t
 where it is easiest to hit, because its names are in scope everywhere without an import.
 Pinned at `test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk` (module alias)
 and `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk` (member rename);
-both print `(False, True)`.
+both print `(False, True)`. One case is not yet ruled: a member alias of an interface
+method whose interface the importer cannot name, beside an imported standalone of the
+origin name (`test/shadow_fixtures/i22_importer_member_alias_not_nameable/`), still
+resolves per SHADOW-SEMANTICS S2-DECL (d) and prints the impl's `7`, row 42's KNOWN-BAD cell.
 
 Rules, each a real error rather than a silent no-op:
 

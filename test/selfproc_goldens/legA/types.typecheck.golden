@@ -1861,6 +1861,7 @@ matchTyMono : Ty -> Mono -> Option (List (String, Mono))
 matchTyMonos : List Ty -> List Mono -> Option (List (String, Mono))
 maybeInferConstraint : List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> ScopeId -> Scheme -> Unit
 maybeStandaloneValueMono : TcEnv -> String -> Option Mono
+memberAliasCands : List Decl -> List (String, String, String, Ident, Loc)
 memberAliasEntry : String -> List ((String, String), a) -> UseMember -> List (String, a)
 memberAliasKeys : UsePath -> Loc -> List (String, String, String, Ident, Loc)
 memberAliasMethodKeys : String -> Loc -> UseMember -> List (String, String, String, Ident, Loc)
