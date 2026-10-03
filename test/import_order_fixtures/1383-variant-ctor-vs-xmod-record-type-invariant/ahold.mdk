@@ -1,0 +1,5 @@
+public export data Holder =
+  | Plain { hx : Int }
+
+export mkH : Holder
+mkH = Plain { hx = 100 }

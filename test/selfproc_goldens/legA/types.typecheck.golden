@@ -2209,6 +2209,8 @@ overrideScopedCtors : List Decl -> Map String (List (Ident, String, Scheme)) -> 
 overrideScopedRecords : List Decl -> Map String (List (Ident, String, RecordInfo)) -> List String -> Unit
 ownMethodIdent : List Decl -> String -> Option Ident
 ownerCandidates : List String -> List (String, RecordInfo)
+ownerDeclMatches : Ident -> List String -> List (String, RecordInfo)
+ownerDeclOfReceiver : Mono -> String -> List String -> Option (String, RecordInfo)
 ownerQualifiedHead : String -> String -> String
 padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
 padCtorBinders : List Variant -> List (List (String, KindAnn)) -> List (List (String, KindAnn))
