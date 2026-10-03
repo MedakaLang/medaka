@@ -6,7 +6,7 @@
 -- No sibling withholds `x`, so the narrowing selects `T`, and the constructor
 -- agreement test rejects the access: `x` is field 1 of `Zed` but field 2 of `Oth`.
 -- The verdict must not depend on how `m2`'s unrelated constructor is spelled:
--- before the collapse, the two survivors fell through to a `T vs U` mismatch.
+-- left as two survivors, they would fall through to a `T vs U` mismatch.
 import m1.{T(..), mkZ, mkO}
 import m2.{U(..), mkU}
 

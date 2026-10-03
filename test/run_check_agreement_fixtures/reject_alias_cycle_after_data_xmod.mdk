@@ -1,0 +1,6 @@
+-- An imported module declares a record above the alias cycle its field names.
+-- The cycle is rejected with `T-RECURSIVE-ALIAS` by all three verbs, rather
+-- than the field expanding the cycle forever while it elaborates.
+import lib.aliascyc_data.{R}
+
+main = println 1
