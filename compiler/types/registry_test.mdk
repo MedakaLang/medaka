@@ -73,6 +73,13 @@ import types.registry.{
   sregMember,
   sregMemberK,
   tabKeyRender,
+  SpellingPop,
+  spEmpty,
+  spInsert,
+  spFloor,
+  spCollided,
+  spCandsOf,
+  spLookupIdent,
 }
 import frontend.ast.{
   Ident(..),
@@ -85,7 +92,8 @@ import frontend.ast.{
   tabHasName,
   tabKeyOf,
 }
-import support.util.{startsWith}
+import support.util.{startsWith, listLen}
+import support.ordmap.{omLookup}
 import list.{sort}
 
 -- ── Fixtures — mirrors of `registry.mdk`'s own doctest fixtures ────────────
@@ -487,6 +495,57 @@ test "SetRegistry membership answers for its own key and no other" =
         (regKeyAt identIfaceFooM 4)
         (sregAddK (regKeyAt identIfaceFooM 3) sregEmpty),
     ]
+
+-- ── SpellingPop ─────────────────────────────────────────────────────────────
+identCtorCA : Ident
+identCtorCA = identIn NsCtor "a" "C"
+
+identCtorCB : Ident
+identCtorCB = identIn NsCtor "b" "C"
+
+popTwoDecls : SpellingPop Int
+popTwoDecls =
+  spInsert
+    (Some identCtorCB)
+    "C"
+    "TB"
+    2
+    (spInsert (Some identCtorCA) "C" "TA" 1 spEmpty)
+
+test "two declarations under one spelling are a collision" =
+  expectEqual
+    (["C"], 2)
+    (spCollided popTwoDecls, listLen (spCandsOf "C" popTwoDecls))
+
+test "re-inserting one declaration keeps one row and no collision" =
+  let pop =
+    spInsert
+      (Some identCtorCA)
+      "C"
+      "TA"
+      3
+      (spInsert (Some identCtorCA) "C" "TA" 1 spEmpty)
+  expectEqual
+    ([], 1, Some 3)
+    (
+      spCollided pop,
+      listLen (spCandsOf "C" pop),
+      spLookupIdent identCtorCA "C" pop,
+    )
+
+test "the floor holds the last payload registered under a spelling" =
+  expectEqual
+    (Some 2, Some 1)
+    (
+      omLookup "C" (spFloor popTwoDecls),
+      spLookupIdent identCtorCA "C" popTwoDecls,
+    )
+
+test "an unstamped declaration reaches the floor and no row" =
+  let pop = spInsert None "C" "TA" 7 spEmpty
+  expectEqual
+    (Some 7, 0)
+    (omLookup "C" (spFloor pop), listLen (spCandsOf "C" pop))
 
 -- ── F4: `TabKey` — the assoc-list half ─────────────────────────────────────
 -- The mint is total, and each origin case lands where it must. (Its

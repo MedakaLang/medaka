@@ -92,9 +92,10 @@ removing it:
   only while the mangler still ran first. "On the emit path the qualification is the identity
   function, so the emitted IR is byte-identical" — the emit path now elaborates an UNMANGLED
   tree, so the key is bare and this qualification is the whole of what distinguishes two
-  same-named records at the emitter. And "`lookupRecordByMangledHead` still selects the
-  `RecordInfo` on the emit path" — it no longer can, because no key reaching elaboration is
-  mangled there; the arm that fires is now the pre-elaboration ctor rename
+  same-named records at the emitter. And "the mangled-head record lookup still selects the
+  `RecordInfo` on the emit path" — it could not after #2809, because no key reaching
+  elaboration is mangled there, and that lookup was dead from then on and has since been
+  deleted; the arm that fires is now the pre-elaboration ctor rename
   (`mangleCtorCollisions`) on `eval` / `core_ir_eval` / `test`. The stamp is also now applied
   EXACTLY ONCE: the mangler's `renameScoped` no longer renames the cell, and the stamp's
   idempotence prefix-guard is gone with it — a record whose source name already carried its own

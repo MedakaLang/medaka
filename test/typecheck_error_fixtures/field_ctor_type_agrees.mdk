@@ -1,0 +1,24 @@
+-- #3726 controls for the field-type agreement test: each type below has two
+-- constructors declaring the field at one position with one type, so the read
+-- has one slot and one type for every value and stays legal.  `P` is compared
+-- over its own parameter (each constructor is registered with its own variable
+-- for `a`), and `E` over its own row parameter; the reads are both annotated
+-- and unannotated.
+data T = A { x : Int, y : Int } | B { x : Int, z : String }
+
+data P a = PA { p : a, q : Int } | PB { p : a }
+
+data E (e : Effect) = EA { f : Int -> <e> Int, n : Int } | EB { f : Int -> <e> Int }
+
+getX : T -> Int
+getX v = v.x
+
+getXU v = v.x
+
+getP : P String -> String
+getP v = v.p
+
+getPU v = v.p
+
+callE : E e -> Int -> <e> Int
+callE v k = v.f k

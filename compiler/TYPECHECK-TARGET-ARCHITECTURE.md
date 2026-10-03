@@ -1040,15 +1040,10 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    renames a constructor before elaboration, `mangleCtorCollisions`, cannot be observed
    through this cell — its drivers (`eval`, `core_ir_eval`, `test`) all discard the
    record-name field.
-   **What did NOT retire.** `lookupRecordByMangledHead` / `mangledHeadCandidates` answer a
-   different question — which `RecordInfo` a receiver SELECTS when the registry key is
-   mangled and the receiver's type reference is not — which this change does not touch.
-   Its reach moved, though, and the reorder is what moved it: the emit path no longer
-   elaborates mangled keys, so the arm that fires is now the pre-elaboration ctor rename
-   (`mangleCtorCollisions`, which renames a colliding record's constructor and leaves its
-   type name alone) on `eval` / `core_ir_eval` / `test`. Its own comment's stub measurement
-   — self-compile typechecks clean and then miscompiles itself into a segfault — was taken
-   on the old order and has not been re-run on the new one.
+   **Retired afterwards.** The mangled-head record lookup (a suffix-match over mangled registry keys) answered a
+   different question (which `RecordInfo` a receiver selects when the registry key is mangled and the
+   receiver's type reference is not) and were deleted after instrumentation measured zero candidates on
+   every emit and run path once the emit path elaborated unmangled.
 
 20. **The emitter child elaborates the program the user wrote, 2026-09-10** (#2809, branch
    `typecheck-rearch-4`). `entry_support.runEmitWith` / `emitModulesWith` — and the other
@@ -1135,7 +1130,7 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    (5) `standaloneShadowsFromSet`'s `mangled` arm (#411);
    (6) `maybeStandaloneValueMonoEmit` (#410/#669);
    (7) `mangledCtorShaped`;
-   (8) `lookupRecordByMangledHead` / `mangledHeadCandidates`;
+   (8) the mangled-head record lookup (deleted, dead since #2809);
    (9) `graphCarriesMangledFunDefs` / `mangledFunDefsPresentRef` / `importerShadowOnEmitPath`;
    (10) `isMangledFor` / `isMangledExportOfAny`;
    (11) `private_mangle`'s `unclaimPreludeForLocalMethods`;
@@ -1569,7 +1564,7 @@ accumulators; #1512 and #1557 retired four more `universe*` rows). It will rot
 again; run the commands:
 `grep -rn '^\s*universe[A-Za-z0-9_]* *:' compiler/ stdlib/ | grep -v '\.md:'`
 plus `grep -rn '^\s*obUniv[A-Za-z0-9_]* *:' compiler/ --include=*.mdk`
-(`loadDataUniverse`/`storeDataUniverse`/
+(`loadDataUniverse`/`appendDataUniverse`/
 `appendUniverseAccums`) — and the approximation is exactly where #1072 lives:
 a site's module sees only its own slice of `IE`, concludes there is no
 collision at a head, and stamps a bare-head key that the emitter then ORs into

@@ -1,0 +1,12 @@
+-- An UNANNOTATED receiver of `.x`, where `x` is declared by this module's own
+-- record `Cfg` and by the imported public record of the same spelling.  The
+-- import brings `om.Cfg`'s fields into scope, an own declaration does not shadow
+-- it for field selection, and nothing at the access says which `Cfg` `c` is, so
+-- the access is ambiguous where it is written.
+import om.{mk}
+
+data Cfg = { x : Int }
+
+g c = c.x
+
+main = putStrLn (intToString (g (Cfg { x = 7 })))

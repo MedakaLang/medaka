@@ -1,0 +1,6 @@
+-- The second declaration spelled `Plain` that declares `hx`, at a different slot.
+public export data Other = Plain { k : Int, hx : Int }
+
+export
+mkO : Other
+mkO = Plain { k = 1, hx = 200 }

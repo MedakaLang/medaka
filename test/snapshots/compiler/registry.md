@@ -1,5 +1,5 @@
 # META
-source_lines=1608
+source_lines=1688
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -171,7 +171,7 @@ import support.ordmap.{
   omDelete,
   omSize,
 }
-import support.util.{lenKey, listLen, joinWith, filterList}
+import support.util.{lenKey, listLen, joinWith, filterList, contains}
 import types.route_key.{typeTagOf}
 import map.{entries}
 
@@ -673,6 +673,86 @@ sregMerge older newer = sregMergeGo (sregKeys newer) older
 sregMergeGo : List RegKey -> SetRegistry -> SetRegistry
 sregMergeGo [] acc = acc
 sregMergeGo (k :: rest) acc = sregMergeGo rest (sregAddK k acc)
+
+-- ── SpellingPop: declarations indexed by the spelling a reader arrives with ─
+-- Three projections of one population, kept in step by the one writer
+-- `spInsert`:
+--   * `spRows`: every declaration registered under a spelling, as `(identity,
+--     owner name, payload)`.  Upsert by identity, so a declaration registered
+--     twice keeps one row, in the position of its latest registration.
+--   * `spFloor`: the payload registered last under each spelling, whatever
+--     its identity.  An unstamped declaration has no identity and reaches
+--     only this projection.
+--   * `spCollided`: the spellings holding two or more distinct identities,
+--     most recent first.  Normally empty, which is what lets a reader pay
+--     per collision rather than per spelling.
+-- The payload type is a parameter, so the elaborated payloads stay with the
+-- typechecker and this module reads none of its state.
+export data SpellingPop a =
+  | SpellingPop (OrdMap (List (Ident, String, a))) (OrdMap a) (List String)
+
+export
+spEmpty : SpellingPop a
+spEmpty = SpellingPop omEmpty omEmpty []
+
+-- A population whose floor is already [floor] and which has no rows.
+export
+spFromFloor : OrdMap a -> SpellingPop a
+spFromFloor floor = SpellingPop omEmpty floor []
+
+-- Registers [payload] under [spelling], owned by the declaration named
+-- [owner].  `None` for the identity updates the floor alone.
+export
+spInsert : Option Ident ->
+  String ->
+  String ->
+  a ->
+  SpellingPop a ->
+  SpellingPop a
+spInsert None spelling _ payload (SpellingPop rows floor collided) =
+  SpellingPop rows (omInsert spelling payload floor) collided
+spInsert (Some ident) spelling owner payload (SpellingPop rows floor collided) =
+  let prior = optionOr [] (omLookup spelling rows)
+  let next =
+    filterList (row => spRowIdent row /= ident) prior
+      ++ [(ident, owner, payload)]
+  let collided2 =
+    if listLen next >= 2 && not (contains spelling collided) then
+      spelling :: collided
+    else
+      collided
+  SpellingPop
+    (omInsert spelling next rows)
+    (omInsert spelling payload floor)
+    collided2
+
+spRowIdent : (Ident, String, a) -> Ident
+spRowIdent (ident, _, _) = ident
+
+export
+spRows : SpellingPop a -> OrdMap (List (Ident, String, a))
+spRows (SpellingPop rows _ _) = rows
+
+export
+spFloor : SpellingPop a -> OrdMap a
+spFloor (SpellingPop _ floor _) = floor
+
+export
+spCollided : SpellingPop a -> List String
+spCollided (SpellingPop _ _ collided) = collided
+
+export
+spCandsOf : String -> SpellingPop a -> List (Ident, String, a)
+spCandsOf spelling pop = optionOr [] (omLookup spelling (spRows pop))
+
+-- The payload the declaration [ident] registered under [spelling], if any.
+export
+spLookupIdent : Ident -> String -> SpellingPop a -> Option a
+spLookupIdent ident spelling pop =
+  map
+    (row => match row
+      (_, _, payload) => payload)
+    (find (row => spRowIdent row == ident) (spCandsOf spelling pop))
 
 -- ── The COMPOSITE assoc-list half (A-2.4) ─────────────────────────────────
 -- `lookupTab`'s peer for a table whose key carries ORDINALS as well as
@@ -1613,7 +1693,7 @@ headU = HkDecl (TkBare NsType "Box")
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false) (mem "tabHasName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
-(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false) (mem "contains" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false))))
 (DUse false (UseGroup ("map") ((mem "entries" false))))
 (DTypeSig false "nsTag" (TyFun (TyCon "Ns") (TyCon "String")))
@@ -1745,6 +1825,26 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "sregMergeGo" (TyFun (TyApp (TyCon "List") (TyCon "RegKey")) (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMergeGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "sregMergeGo" ((PCons (PVar "k") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "sregMergeGo") (EVar "rest")) (EApp (EApp (EVar "sregAddK") (EVar "k")) (EVar "acc"))))
+(DData Abstract "SpellingPop" ("a") ((variant "SpellingPop" (ConPos (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a")))) (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DTypeSig true "spEmpty" (TyApp (TyCon "SpellingPop") (TyVar "a")))
+(DFunDef false "spEmpty" () (EApp (EApp (EApp (EVar "SpellingPop") (EVar "omEmpty")) (EVar "omEmpty")) (EListLit)))
+(DTypeSig true "spFromFloor" (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "SpellingPop") (TyVar "a"))))
+(DFunDef false "spFromFloor" ((PVar "floor")) (EApp (EApp (EApp (EVar "SpellingPop") (EVar "omEmpty")) (EVar "floor")) (EListLit)))
+(DTypeSig true "spInsert" (TyFun (TyApp (TyCon "Option") (TyCon "Ident")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "SpellingPop") (TyVar "a"))))))))
+(DFunDef false "spInsert" ((PCon "None") (PVar "spelling") PWild (PVar "payload") (PCon "SpellingPop" (PVar "rows") (PVar "floor") (PVar "collided"))) (EApp (EApp (EApp (EVar "SpellingPop") (EVar "rows")) (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "payload")) (EVar "floor"))) (EVar "collided")))
+(DFunDef false "spInsert" ((PCon "Some" (PVar "ident")) (PVar "spelling") (PVar "owner") (PVar "payload") (PCon "SpellingPop" (PVar "rows") (PVar "floor") (PVar "collided"))) (EBlock (DoLet false false (PVar "prior") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "spelling")) (EVar "rows")))) (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "row")) (EBinOp "/=" (EApp (EVar "spRowIdent") (EVar "row")) (EVar "ident")))) (EVar "prior")) (EListLit (ETuple (EVar "ident") (EVar "owner") (EVar "payload"))))) (DoLet false false (PVar "collided2") (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "next")) (ELit (LInt 2))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "spelling")) (EVar "collided")))) (EBinOp "::" (EVar "spelling") (EVar "collided")) (EVar "collided"))) (DoExpr (EApp (EApp (EApp (EVar "SpellingPop") (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "next")) (EVar "rows"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "payload")) (EVar "floor"))) (EVar "collided2")))))
+(DTypeSig false "spRowIdent" (TyFun (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a")) (TyCon "Ident")))
+(DFunDef false "spRowIdent" ((PTuple (PVar "ident") PWild PWild)) (EVar "ident"))
+(DTypeSig true "spRows" (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a"))))))
+(DFunDef false "spRows" ((PCon "SpellingPop" (PVar "rows") PWild PWild)) (EVar "rows"))
+(DTypeSig true "spFloor" (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "OrdMap") (TyVar "a"))))
+(DFunDef false "spFloor" ((PCon "SpellingPop" PWild (PVar "floor") PWild)) (EVar "floor"))
+(DTypeSig true "spCollided" (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "spCollided" ((PCon "SpellingPop" PWild PWild (PVar "collided"))) (EVar "collided"))
+(DTypeSig true "spCandsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a"))))))
+(DFunDef false "spCandsOf" ((PVar "spelling") (PVar "pop")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "spelling")) (EApp (EVar "spRows") (EVar "pop")))))
+(DTypeSig true "spLookupIdent" (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))))
+(DFunDef false "spLookupIdent" ((PVar "ident") (PVar "spelling") (PVar "pop")) (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EMatch (EVar "row") (arm (PTuple PWild PWild (PVar "payload")) () (EVar "payload"))))) (EApp (EApp (EVar "find") (ELam ((PVar "row")) (EBinOp "==" (EApp (EVar "spRowIdent") (EVar "row")) (EVar "ident")))) (EApp (EApp (EVar "spCandsOf") (EVar "spelling")) (EVar "pop")))))
 (DTypeSig false "regKeyEq" (TyFun (TyCon "RegKey") (TyFun (TyCon "RegKey") (TyCon "Bool"))))
 (DFunDef false "regKeyEq" ((PCon "RegKey" (PVar "k1") (PVar "o1")) (PCon "RegKey" (PVar "k2") (PVar "o2"))) (EBinOp "&&" (EApp (EApp (EVar "intsEq") (EVar "o1")) (EVar "o2")) (EApp (EApp (EVar "tabKeysEq") (EVar "k1")) (EVar "k2"))))
 (DTypeSig false "intsEq" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
@@ -1874,7 +1974,7 @@ headU = HkDecl (TkBare NsType "Box")
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false) (mem "tabHasName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
-(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false) (mem "contains" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false))))
 (DUse false (UseGroup ("map") ((mem "entries" false))))
 (DTypeSig false "nsTag" (TyFun (TyCon "Ns") (TyCon "String")))
@@ -2006,6 +2106,26 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "sregMergeGo" (TyFun (TyApp (TyCon "List") (TyCon "RegKey")) (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMergeGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "sregMergeGo" ((PCons (PVar "k") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "sregMergeGo") (EVar "rest")) (EApp (EApp (EVar "sregAddK") (EVar "k")) (EVar "acc"))))
+(DData Abstract "SpellingPop" ("a") ((variant "SpellingPop" (ConPos (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a")))) (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DTypeSig true "spEmpty" (TyApp (TyCon "SpellingPop") (TyVar "a")))
+(DFunDef false "spEmpty" () (EApp (EApp (EApp (EVar "SpellingPop") (EVar "omEmpty")) (EVar "omEmpty")) (EListLit)))
+(DTypeSig true "spFromFloor" (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyApp (TyCon "SpellingPop") (TyVar "a"))))
+(DFunDef false "spFromFloor" ((PVar "floor")) (EApp (EApp (EApp (EVar "SpellingPop") (EVar "omEmpty")) (EVar "floor")) (EListLit)))
+(DTypeSig true "spInsert" (TyFun (TyApp (TyCon "Option") (TyCon "Ident")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "SpellingPop") (TyVar "a"))))))))
+(DFunDef false "spInsert" ((PCon "None") (PVar "spelling") PWild (PVar "payload") (PCon "SpellingPop" (PVar "rows") (PVar "floor") (PVar "collided"))) (EApp (EApp (EApp (EVar "SpellingPop") (EVar "rows")) (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "payload")) (EVar "floor"))) (EVar "collided")))
+(DFunDef false "spInsert" ((PCon "Some" (PVar "ident")) (PVar "spelling") (PVar "owner") (PVar "payload") (PCon "SpellingPop" (PVar "rows") (PVar "floor") (PVar "collided"))) (EBlock (DoLet false false (PVar "prior") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "spelling")) (EVar "rows")))) (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "row")) (EBinOp "/=" (EApp (EVar "spRowIdent") (EVar "row")) (EVar "ident")))) (EVar "prior")) (EListLit (ETuple (EVar "ident") (EVar "owner") (EVar "payload"))))) (DoLet false false (PVar "collided2") (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "next")) (ELit (LInt 2))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "spelling")) (EVar "collided")))) (EBinOp "::" (EVar "spelling") (EVar "collided")) (EVar "collided"))) (DoExpr (EApp (EApp (EApp (EVar "SpellingPop") (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "next")) (EVar "rows"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "spelling")) (EVar "payload")) (EVar "floor"))) (EVar "collided2")))))
+(DTypeSig false "spRowIdent" (TyFun (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a")) (TyCon "Ident")))
+(DFunDef false "spRowIdent" ((PTuple (PVar "ident") PWild PWild)) (EVar "ident"))
+(DTypeSig true "spRows" (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a"))))))
+(DFunDef false "spRows" ((PCon "SpellingPop" (PVar "rows") PWild PWild)) (EVar "rows"))
+(DTypeSig true "spFloor" (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "OrdMap") (TyVar "a"))))
+(DFunDef false "spFloor" ((PCon "SpellingPop" PWild (PVar "floor") PWild)) (EVar "floor"))
+(DTypeSig true "spCollided" (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "spCollided" ((PCon "SpellingPop" PWild PWild (PVar "collided"))) (EVar "collided"))
+(DTypeSig true "spCandsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyVar "a"))))))
+(DFunDef false "spCandsOf" ((PVar "spelling") (PVar "pop")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "spelling")) (EApp (EVar "spRows") (EVar "pop")))))
+(DTypeSig true "spLookupIdent" (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))))
+(DFunDef false "spLookupIdent" ((PVar "ident") (PVar "spelling") (PVar "pop")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EMatch (EVar "row") (arm (PTuple PWild PWild (PVar "payload")) () (EVar "payload"))))) (EApp (EApp (EDictApp "find") (ELam ((PVar "row")) (EBinOp "==" (EApp (EVar "spRowIdent") (EVar "row")) (EVar "ident")))) (EApp (EApp (EVar "spCandsOf") (EVar "spelling")) (EVar "pop")))))
 (DTypeSig false "regKeyEq" (TyFun (TyCon "RegKey") (TyFun (TyCon "RegKey") (TyCon "Bool"))))
 (DFunDef false "regKeyEq" ((PCon "RegKey" (PVar "k1") (PVar "o1")) (PCon "RegKey" (PVar "k2") (PVar "o2"))) (EBinOp "&&" (EApp (EApp (EVar "intsEq") (EVar "o1")) (EVar "o2")) (EApp (EApp (EVar "tabKeysEq") (EVar "k1")) (EVar "k2"))))
 (DTypeSig false "intsEq" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))

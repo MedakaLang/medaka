@@ -1,5 +1,5 @@
 # META
-source_lines=53303
+source_lines=53463
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -402,7 +402,7 @@ import support.ordmap.{
   omSize,
   omDelete,
 }
-import list.{replicate, drop, take}
+import list.{replicate, drop, take, elemIndex}
 import support.util.{
   splitOnChar,
   u64HalvesHex,
@@ -479,6 +479,16 @@ import types.registry.{
   sregAddK,
   sregMemberK,
   sregSize,
+  -- the cross-run constructor and record populations (`CrossRun`).
+  SpellingPop,
+  spEmpty,
+  spFromFloor,
+  spInsert,
+  spRows,
+  spFloor,
+  spCollided,
+  spCandsOf,
+  spLookupIdent,
 }
 -- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
 -- `ir/core_ir_lower.mdk`.  Before this bite each of those spelled its own copy
@@ -3533,8 +3543,8 @@ data RecordInfo =
 
 -- Keyed indices — so the hot per-field-access read paths never walk a linear registry
 -- (issue #149).  #415 item 3: `registerRecordInfoKeyed` is the sole REGISTRATION writer of
--- both; they are cleared together by resetState; and the cross-module universe copy goes
--- through the single loadDataUniverse/storeDataUniverse inverse pair.
+-- both; they are cleared together by resetState; and the cross-module record floor is
+-- loaded by `loadDataUniverse` from `universeRecordPop`.
 --
 -- 🚨 THE LOCKSTEP WAS "STRUCTURAL, NOT AN OBLIGATION" UNTIL #1111 A-2.12 (#1319 unit 2),
 -- AND IT IS NOW AN OBLIGATION.  `applyRecordScopeOverrides` re-points `recordByNameRef`
@@ -4750,9 +4760,10 @@ declEnvRowVisible cur m
 -- accumulator did (`appendDataUniverse` runs at the END of a module's arm, so the
 -- universe a module LOADS holds every EARLIER module and never itself).  Seeding
 -- the own row a second time would not merely duplicate work: `addFieldOwners`
--- does not dedupe, and `mangledHeadCandidates` reads that multimap RAW (no
--- `sortUniqS`), so a doubled owner key turns its `[pair]` singleton gate into the
--- give-up arm — `Some pair` becomes `None`.
+-- does not dedupe, so a doubled owner key would sit in the raw multimap; the one
+-- reader, `fieldOwnerNames`, `sortUniqS`es it, so the exclusion is a work-and-shape
+-- invariant of the seed that the `deSeedChainProbe` doctests assert, not a
+-- correctness one.
 --
 -- 🚨 IT IS A CHAIN, NOT A PER-READ FOLD, AND THAT IS A MEASURED REQUIREMENT.  The
 -- first cut of this unit folded the visible rows AT EVERY READ: O(universe) work
@@ -4782,8 +4793,8 @@ declEnvRowVisible cur m
 --      SAME ratchet row says so two sentences before instructing the edit that
 --      destroys it.  A module re-registers its own decls immediately after this
 --      seed via `registerAllData … prog0`, so seeding them here too doubles an
---      owner key that `mangledHeadCandidates` reads RAW, turning its singleton
---      gate into the give-up arm — live during inference.  That is now PINNED:
+--      owner key in the raw multimap (`fieldOwnerNames` dedupes it on read, so
+--      this is a shape invariant, not an answer change).  That is PINNED:
 --      see the four `deSeedChainProbe` doctests below `deKindRow1`, which were
 --      added by A-3.6 bite C-1 specifically as a tripwire on this edit and which
 --      were confirmed to be the only assertions in this file that fire on it.
@@ -5564,10 +5575,9 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 -- the exclusion is load-bearing in a way an ordinal statement is not: a module
 -- registers its OWN decls a second time, immediately after this seed, through
 -- `registerAllData … prog0`.  Seeding the own row here too would put the same
--- `cname` key in `fieldOwnersRef` twice, `addFieldOwners` does not dedupe, and
--- `mangledHeadCandidates` reads that multimap RAW — so a doubled owner key turns
--- `lookupRecordByMangledHead`'s `[pair]` singleton gate into its give-up arm,
--- LIVE during inference rather than inertly after it.
+-- `cname` key in `fieldOwnersRef` twice (`addFieldOwners` does not dedupe) —
+-- `fieldOwnerNames`, its only reader, dedupes on read, so the
+-- doubling would not move an answer; the assertions below pin the seed's shape.
 --
 -- 🚨 SO THESE FOUR LINES ARE A TRIPWIRE ON A SPECIFIC WRONG EDIT, and it is one
 -- an implementer can arrive here already instructed to make:
@@ -5811,7 +5821,7 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 -- This index is deliberately syntactic: an identity-keyed table over the raw
 -- `Variant`/`Field`/`Ty` declaration nodes, carrying no elaborated
 -- `Scheme`/`RecordInfo`/`Mono`. Elaborating (`registerAllData`,
--- `insertCtorIdents`, `insertRecordIdents`) writes `perRun`/`crossRun` refs as
+-- `insertCtorPop`, `insertRecordPop`) writes `perRun`/`crossRun` refs as
 -- a side effect (`recordParamKinds`, `registerRecordInfoKeyed`, alias
 -- resolution through `perRun.value.aliasTableRef`) and emits diagnostics
 -- deduped per module (`perRun.typeErrorMsgSetRef`, reset by `resetState`).
@@ -5831,7 +5841,7 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 -- test.
 --
 -- Latent divergence, noted rather than fixed: `addCtorIdentRaw` (below)
--- upserts unconditionally, unlike `addCtorIdentCand`'s upsert-by-identity.
+-- upserts unconditionally, unlike `spInsert`'s upsert-by-identity.
 -- `buildDataEnv` folds `deAllDecls` exactly once, so no producer re-presents
 -- the same identity today — a future caller folding a decl list twice would
 -- need the same guard.
@@ -6010,7 +6020,7 @@ addVariantIdentsRaw _ _ [] env = env
 addVariantIdentsRaw tyName o ((Variant cn payload) :: rest) env =
   addVariantIdentsRaw tyName o rest (addCtorIdentRaw tyName o cn payload env)
 
--- Honest absence, exactly as `addCtorIdentCand`: no module id ⇒ no identity ⇒
+-- Honest absence, exactly as `spInsert`'s callers: no module id ⇒ no identity ⇒
 -- no candidate — `mkIdent` refuses `OriginUnresolved`/`OriginModule ""`.
 addCtorIdentRaw : String ->
   TyConOrigin ->
@@ -9575,16 +9585,19 @@ data PendingMethodDict = PendingMethodDict {
 data CrossRun = CrossRun {
   universeFunNamesRef : Ref (OrdMap Unit),
   universeMethodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),  -- #1351: the interface dispatch-index universe, keyed ((IfaceRef, method name), Int).  Its bare-name-keyed predecessor `universeMethodDispatchIdxRef` was RETIRED by L5 (CONTRACT) once `dispatchIdxScoped` stopped falling back to it — read via `methodDispatchIdxByIdRef`.
-  universeRecordByName : Ref (OrdMap RecordInfo),
   -- Every registered head's parameters and constructors, from every module
   -- the universe has registered (the prelude's included), keyed by identity
   -- and read by `tyCarries`; a head absent here is abstract.
   universeDataCtors : Ref (List (TabKey, (DataVis, List String, List Variant))),
-  universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
-  universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
-  universeDataEnv : Ref TcEnv,
-  universeCtorIdentsRef : Ref (OrdMap (List (Ident, String, Scheme))),  -- #1111 A-2.11 (#1319 unit 1): the identity-keyed COMPANION of universeDataEnv's ctor map — see insertCtorIdents
-  universeCtorCollidedRef : Ref (List String),  -- #1111 A-2.11: the ctor NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
+  -- Every public constructor's elaborated scheme and every public record's
+  -- `RecordInfo`, one population per table, keyed by declaration identity and
+  -- indexed by spelling (`SpellingPop`).  Grown only by `appendDataUniverse`, at
+  -- the end of each module's arm in ordinal order, so module k reads exactly the
+  -- public rows of the modules before it.  The floor (`spFloor`) is the bare-keyed
+  -- last-write view: the ctor floor is the base of every Module-arm `dataEnv`
+  -- (`withCtors`), the record floor seeds `recordByNameRef` (`loadDataUniverse`).
+  universeCtorPop : Ref (SpellingPop Scheme),
+  universeRecordPop : Ref (SpellingPop RecordInfo),
   -- ⚠️ TOMBSTONES.  Ten cross-run field-Refs were RETIRED from this record — seven
   -- `universe*` cells plus the three `obUniv*` — and each is now answered by a stage-K
   -- structure, projected at the READING module's own ordinal.
@@ -9622,6 +9635,14 @@ data CrossRun = CrossRun {
   --   `obUnivConcreteRef`/`obUnivHeadlessRef`/`obUnivIfaceTagsRef` (A-3.4 PR2, #1112) --
   --      stage K's `IE` (`declEnvsRef.deImpls`, projected by `ieUniverseAt`) is the
   --      single answer to "what impls exist" on the Module path.  Not merely unread.
+  -- Six more cells were FOLDED rather than projected, because their payload is
+  -- elaborated and stage K is syntactic.  Each namespace had a bare-keyed floor
+  -- plus an identity companion plus a collided list; each is now one population.
+  --   `universeDataEnv`, `universeCtorIdentsRef`, `universeCtorCollidedRef` --
+  --      `universeCtorPop`'s `spFloor` (read through `withCtors`), `spRows`,
+  --      `spCollided`.
+  --   `universeRecordByName`, `universeRecordIdentsRef`, `universeRecordCollidedRef`
+  --      -- `universeRecordPop`'s same three projections.
   builtinClassesRef : Ref BuiltinClasses,  -- #1446 P1 + #1539 / DICT §8 I7: the four operator/literal classes' identities AND presence, read off the PRELUDE's own DInterface decls — see seedBuiltinClasses
   -- B-4 (#1318): one cross-run row per function, one carrier element per dictionary
   -- slot.  The bare table deliberately stores `PSArgsUnknown`; only the source-exact
@@ -9665,8 +9686,8 @@ data CrossRun = CrossRun {
 -- and `@mdk_g_types_typecheck__initialEnv = global i64 0` with a `load` of it inside
 -- `freshCrossRun`.  Native really did read a ZERO.
 -- It never BIT because the zero is overwritten before anything dereferences it: the only
--- readers of `universeDataEnv` sit on the `Module` arm (`registerAllData
--- crossRun.value.universeDataEnv.value`), and every multi-module entry calls
+-- readers of `universeCtorPop` sit on the `Module` arm (`withCtors (spFloor
+-- crossRun.value.universeCtorPop.value)`), and every multi-module entry calls
 -- `resetCrossModuleState ()` FIRST (`checkModulesPreambleK`, `elaborateModules`), which
 -- replaces the whole poisoned bundle once `initialEnv` is properly set.  That is luck, not
 -- design — native's failure mode is a SILENT zero where wasm traps loudly, which is the
@@ -9676,13 +9697,9 @@ freshCrossRun : TcEnv -> CrossRun
 freshCrossRun env = CrossRun {
   universeFunNamesRef = Ref omEmpty,
   universeMethodDispatchIdxByIdRef = Ref [],
-  universeRecordByName = Ref omEmpty,
   universeDataCtors = Ref [],
-  universeRecordIdentsRef = Ref omEmpty,
-  universeRecordCollidedRef = Ref [],
-  universeDataEnv = Ref env,
-  universeCtorIdentsRef = Ref omEmpty,
-  universeCtorCollidedRef = Ref [],
+  universeCtorPop = Ref (spFromFloor (envCtors env)),
+  universeRecordPop = Ref spEmpty,
   builtinClassesRef = Ref emptyBuiltinClasses,
   crossModuleFunPredicateSlotsRef = Ref [],
   crossModuleFunPredicateSlotsQualRef = Ref [],
@@ -12555,7 +12572,7 @@ recordInvocationView (TcEnv _ ctors _ _) =
           (c => match c
             (_, _, sch) => sch)
           cands)
-      (IdMap.values crossRun.value.universeCtorIdentsRef.value)
+      (IdMap.values (spRows crossRun.value.universeCtorPop.value))
   driverState.value.invocationViewRef :=
     InvocationView
       (IdMap.values ctors ++ universe)
@@ -15292,6 +15309,13 @@ lookupLocalFlag (TcEnv _ _ _ lc) n = omHasKey n lc
 
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtor (TcEnv vs cs al lc) n s = TcEnv vs (omInsert n s cs) al lc
+
+-- An environment holding the constructors [cs] and nothing else.
+withCtors : OrdMap Scheme -> TcEnv
+withCtors cs = TcEnv omEmpty cs [] omEmpty
+
+envCtors : TcEnv -> OrdMap Scheme
+envCtors (TcEnv _ cs _ _) = cs
 
 -- EFFECTS WS-2: seed α's known-prefix scope with a same-function-body let RHS.
 -- Prepended (most-recent-first) to mirror α's own `(x,e1)::lets` accumulation.
@@ -18202,11 +18226,16 @@ inferFieldOfRecord te rname ri fname =
 -- `medaka run` already refuses (`E-PANIC unknown field: x`) because the interpreter
 -- resolves fields BY NAME; this restores agreement by refusing EARLIER, at typecheck.
 --
--- ⚠️ SCOPE — this is #1468 (a field declared by EXACTLY ONE constructor of the
--- type), NOT #1465 (a field declared by MORE THAN ONE, which wants a dispatched
--- tag-based selector and a backend change).  A field every constructor declares is
--- untouched here: no sibling withholds it, so the guard is silent and the access
--- keeps whatever answer it had.
+-- The guard answers three questions about `f` across the receiver type's
+-- constructors (`ctorFieldConflict`): does some constructor withhold `f`, do
+-- two constructors that declare it place it at different positions, and do two
+-- declare it with different types?  Both emitters read `.f` at the selected
+-- constructor's declaration-order index with no tag test, and the access is
+-- typed by that constructor's declaration, so any disagreement reads the wrong
+-- slot, or reads the right slot at the wrong type, for some value of the type
+-- (#1468, #1465, #3726).  A field every constructor declares at ONE position
+-- with ONE type has one slot and one type for every value, so the access stays
+-- legal.
 --
 -- ⚠️ THE HEAD EQUALITY IS A CASCADE GUARD, NOT A CORRECTNESS ONE.  `te`'s head is
 -- compared against the SELECTED record's own result head, so the guard speaks only
@@ -18218,52 +18247,263 @@ inferFieldOfRecord te rname ri fname =
 -- `recordCandIsReceiverDecl` documents.
 fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
 fieldSelectionWellTyped te rname ri fname ft =
-  match ctorSiblingWithholdingHere te rname ri fname
+  match ctorFieldConflictHere te rname ri fname
     None => ft
-    Some sib =>
+    Some conflict =>
       let _ =
-        pushTypeError
-          "T-FIELD-NOT-IN-ALL-CTORS"
-          (fieldNotInAllCtorsMsg
-            fname
-            (optionOr rname (headTyconNameMono te))
-            sib)
+        pushCtorFieldConflict
+          fname
+          (optionOr rname (headTyconNameMono te))
+          conflict
       -- Same poisoned placeholder `unknownFieldFresh` returns: the access is already
       -- explained, so don't let its result var pile a second cascade on top.
       let v = freshVar ()
       let _ = poisonMismatchVars v v
       v
 
--- The named constructor, if any, that shares the receiver's head and withholds
--- `fname`.  `ctorSiblingWithholdingName` is the SAME predicate
--- `narrowingBlockedByCtorSibling` asks in the multi-owner arm — one implementation,
--- two callers, so the two paths cannot drift about what "a sibling withholds it"
--- means.
-ctorSiblingWithholdingHere : Mono ->
+-- How the constructors of one type disagree about a field: a constructor that
+-- does not declare it, two that declare it at different (0-based,
+-- declaration-order) positions, or two that declare it with different types.
+data CtorFieldConflict =
+  | CtorWithholds String
+  | CtorSlotsDiffer String Int String Int
+  | CtorTypesDiffer String Mono String Mono
+
+-- The conflict, if any, among the constructors sharing the receiver's head.
+-- `ctorSiblingWithholdingName` is the SAME withheld test
+-- `narrowingBlockedByCtorSibling` asks in the multi-owner arm, so the two paths
+-- cannot drift about what "a sibling withholds it" means.
+ctorFieldConflictHere : Mono ->
   String ->
   RecordInfo ->
   String ->
-  Option String
-ctorSiblingWithholdingHere te rname ri fname =
-  ctorSiblingWithholdingForHead
-    (headTyconMono te)
-    (headTyconMono (recordResultMono ri))
-    rname
-    fname
+  Option CtorFieldConflict
+ctorFieldConflictHere te rname ri fname = match headTyconMono te
+  None => None
+  Some hk =>
+    if Some hk == headTyconMono (recordResultMono ri) then
+      ctorFieldConflict hk fname rname
+    else
+      None
 
-ctorSiblingWithholdingForHead : Option HeadKey ->
-  Option HeadKey ->
+ctorFieldConflict : HeadKey -> String -> String -> Option CtorFieldConflict
+ctorFieldConflict hk fname rname =
+  match ctorSiblingWithholdingName (Some hk) fname rname
+    Some sib => Some (CtorWithholds sib)
+    None => match ctorsOfHead hk
+      Some (ctors@(_ :: _ :: _)) =>
+        let held = ctorFieldSlots hk fname ctors
+        orElseOpt
+          (firstSlotDisagreement held)
+          (firstTypeDisagreement fname held)
+      _ => None
+
+ctorsOfHead : HeadKey -> Option (List String)
+ctorsOfHead hk = match ctorOracleKeyOf (Some hk)
+  None => None
+  Some tk => oGetCtors driverState.value.matchOracle.value tk
+
+-- Each constructor that declares `fname`, with the field's index in that
+-- constructor's declaration-order field list — the index both emitters read —
+-- and the constructor's record.
+ctorFieldSlots : HeadKey ->
   String ->
+  List String ->
+  List (String, Int, RecordInfo)
+ctorFieldSlots hk fname ctors = filterMap (ctorFieldSlot hk fname) ctors
+
+ctorFieldSlot : HeadKey -> String -> String -> Option (String, Int, RecordInfo)
+ctorFieldSlot hk fname k = match ctorRecordOfType hk k
+  None => None
+  Some ri => map (i => (k, i, ri)) (elemIndex fname (recordFieldNames ri))
+
+firstSlotDisagreement : List (String, Int, RecordInfo) ->
+  Option CtorFieldConflict
+firstSlotDisagreement [] = None
+firstSlotDisagreement ((a, i, _) :: rest) =
+  map ((b, j) => CtorSlotsDiffer a i b j) (slotOtherThan i rest)
+
+slotOtherThan : Int -> List (String, Int, RecordInfo) -> Option (String, Int)
+slotOtherThan _ [] = None
+slotOtherThan i ((b, j, _) :: rest)
+  | j /= i = Some (b, j)
+  | otherwise = slotOtherThan i rest
+
+-- The first constructor whose declared type for `fname` is not the first
+-- constructor's.  Each constructor's record is registered over its OWN
+-- parameter variables, so the other constructor's field type is restated over
+-- the first's parameters before the two are compared; `data T a = A { x : a } |
+-- B { x : a }` agrees.
+firstTypeDisagreement : String ->
+  List (String, Int, RecordInfo) ->
+  Option CtorFieldConflict
+firstTypeDisagreement _ [] = None
+firstTypeDisagreement fname ((a, _, ra) :: rest) =
+  match omLookup fname (recordFieldMap ra)
+    None => None
+    Some ta => typeOtherThan fname a ra ta rest
+
+typeOtherThan : String ->
   String ->
-  Option String
-ctorSiblingWithholdingForHead None _ _ _ = None
-ctorSiblingWithholdingForHead (Some hk) declHead rname fname
-  | Some hk == declHead = ctorSiblingWithholdingName (Some hk) fname rname
-  | otherwise = None
+  RecordInfo ->
+  Mono ->
+  List (String, Int, RecordInfo) ->
+  Option CtorFieldConflict
+typeOtherThan _ _ _ _ [] = None
+typeOtherThan fname a ra ta ((b, _, rb) :: rest) =
+  match omLookup fname (recordFieldMap rb)
+    Some tb =>
+      let (tsub, esub, asub) =
+        paramRenaming (recordResultMono rb) (recordResultMono ra) ([], [], [])
+      let tbOverA = substMono tsub esub asub tb
+      if fieldTypeSame ta tbOverA then
+        typeOtherThan fname a ra ta rest
+      else
+        Some (CtorTypesDiffer a ta b tbOverA)
+    None => typeOtherThan fname a ra ta rest
+
+-- Pairs each parameter of `from`'s head application with the argument at the
+-- same position of `to`'s — a type, row or authority parameter, each into its
+-- own substitution — so substituting restates a type written over `from`'s
+-- parameters over `to`'s.
+paramRenaming : Mono ->
+  Mono ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
+paramRenaming from to acc = match normalize from
+  TApp f1 a1 => match normalize to
+    TApp f2 a2 => paramRenaming f1 f2 (renameParam (normalize a1) a2 acc)
+    _ => acc
+  _ => acc
+
+renameParam : Mono ->
+  Mono ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
+renameParam (TVar c) to (ts, es, qs) = ((tyvarId c, to) :: ts, es, qs)
+renameParam (TEff (EffRow [] (Some e1))) (TEff (EffRow [] (Some e2))) (ts, es, qs) =
+  (ts, (effvarId e1, e2) :: es, qs)
+renameParam (TAuth (AVar q1)) (TAuth q2) (ts, es, qs) =
+  (ts, es, (authvarId q1, q2) :: qs)
+renameParam _ _ acc = acc
+
+-- One declared type, read the way a field's value is used: the same shape,
+-- the same declarations and variables (`monoSameGiven` at the leaves), and the
+-- same effect rows and authorities, since a function field read at another
+-- constructor's row performs effects its type does not show.
+fieldTypeSame : Mono -> Mono -> Bool
+fieldTypeSame x y = match (normalize x, normalize y)
+  (TFun a1 r1 b1, TFun a2 r2 b2) =>
+    fieldTypeSame a1 a2 && rowSame r1 r2 && fieldTypeSame b1 b2
+  (TApp a1 b1, TApp a2 b2) => fieldTypeSame a1 a2 && fieldTypeSame b1 b2
+  (TEff r1, TEff r2) => rowSame r1 r2
+  (TQual t1 q1, TQual t2 q2) => fieldTypeSame t1 t2 && authSame q1 q2
+  (TAuth q1, TAuth q2) => authSame q1 q2
+  (TFun _ _ _, _) => False
+  (TApp _ _, _) => False
+  (TEff _, _) => False
+  (TAuth _, _) => False
+  (a, b) => monoSameGiven a b
+
+rowSame : EffRow -> EffRow -> Bool
+rowSame r1 r2 =
+  let (atoms1, tails1) = rowFlat r1
+  let (atoms2, tails2) = rowFlat r2
+  map effvarId tails1 == map effvarId tails2
+    && atomsSame (atomsNorm atoms1) (atomsNorm atoms2)
+
+atomsSame : List Atom -> List Atom -> Bool
+atomsSame [] [] = True
+atomsSame (x :: xs) (y :: ys) =
+  atomKey x == atomKey y
+    && authSame (atomAuth x) (atomAuth y)
+    && atomsSame xs ys
+atomsSame _ _ = False
+
+-- Equal as far as can be proven now: each within the other.
+authSame : Authority -> Authority -> Bool
+authSame p q = authSub p q && authSub q p
+
+pushCtorFieldConflict : String -> String -> CtorFieldConflict -> Unit
+pushCtorFieldConflict fname tname (CtorWithholds sib) =
+  pushTypeError
+    "T-FIELD-NOT-IN-ALL-CTORS"
+    (fieldNotInAllCtorsMsg fname tname sib)
+pushCtorFieldConflict fname tname (CtorSlotsDiffer a i b j) =
+  pushTypeError
+    "T-FIELD-POSITION-DIFFERS"
+    (fieldPositionDiffersMsg fname tname (a, i) (b, j))
+pushCtorFieldConflict fname tname (CtorTypesDiffer a ta b tb) =
+  pushTypeError
+    "T-FIELD-TYPE-DIFFERS"
+    (fieldTypeDiffersMsg fname tname a ta b tb)
 
 fieldNotInAllCtorsMsg : String -> String -> String -> String
 fieldNotInAllCtorsMsg fname tname sib =
   "Field '\{fname}' is not declared by every constructor of '\{tname}': constructor '\{sib}' has no '\{fname}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
+
+fieldPositionDiffersMsg : String ->
+  String ->
+  (String, Int) ->
+  (String, Int) ->
+  String
+fieldPositionDiffersMsg fname tname (a, i) (b, j) =
+  "Field '\{fname}' is at different positions in the constructors of '\{tname}': it is field \{intToString (i + 1)} of '\{a}' but field \{intToString (j + 1)} of '\{b}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
+
+-- The two types render under one naming context, so a parameter shared by both
+-- prints as the same letter.
+fieldTypeDiffersMsg : String ->
+  String ->
+  String ->
+  Mono ->
+  String ->
+  Mono ->
+  String
+fieldTypeDiffersMsg fname tname a ta b tb =
+  let ctx = Ref []
+  let cnt = Ref 0
+  let sa = ppGo ctx cnt 0 ta
+  let sb = ppGo ctx cnt 0 tb
+  "Field '\{fname}' has different types in the constructors of '\{tname}': it is '\{sa}' in '\{a}' but '\{sb}' in '\{b}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be typed; match on the constructor instead"
+
+-- ── #3727/#3726: `{ v | f = e }` on a type with more than one constructor ──
+--
+-- Both emitters rebuild an update as the constructor the typechecker selected,
+-- copying the other fields by that constructor's layout; the receiver's own tag
+-- is never read.  When the receiver's type has two or more constructors, a value
+-- built by any other one comes back as the selected constructor, whatever the
+-- field offsets.  `Con { v | f = e }` names the constructor and is not this path.
+-- Same cascade guard as `fieldSelectionWellTyped`: only a receiver that really is
+-- a value of the selected record's type is asked about.
+recordUpdateWellTyped : Mono -> String -> RecordInfo -> String -> Unit
+recordUpdateWellTyped bt rname ri fn = match headTyconMono bt
+  None => ()
+  Some hk =>
+    if Some hk == headTyconMono (recordResultMono ri) then match ctorsOfHead hk
+      Some (ctors@(_ :: _ :: _)) =>
+        pushTypeError
+          "T-UPDATE-MULTI-CTOR"
+          (updateMultiCtorMsg
+            fn
+            (optionOr rname (headTyconNameMono bt))
+            rname
+            (filterList (/= fn) (recordFieldNames ri))
+            ctors)
+      _ => ()
+
+-- The hint rebuilds the value from the constructor's pattern rather than
+-- suggesting `Con { v | f = e }`, which does not check that `v` was built by
+-- `Con`.
+updateMultiCtorMsg : String ->
+  String ->
+  String ->
+  List String ->
+  List String ->
+  String
+updateMultiCtorMsg fn tname rname others ctors =
+  let pat = if isEmptyL others then "..." else joinWith ", " others
+  let rebuilt = joinWith ", " ("\{fn} = ..." :: others)
+  "Record update of '\{fn}' is not supported on '\{tname}': it has more than one constructor (\{joinWith ", " ctors}), and the type does not say which one the value holds. Match on the constructor and build the new value in its arm, e.g. '\{rname} { \{pat} } => \{rname} { \{rebuilt} }'"
 
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped.  For a plain record the key is its type name; for a
@@ -18275,8 +18515,7 @@ fieldNotInAllCtorsMsg fname tname sib =
 --
 -- #1597: the owner list is then REACHABILITY-FILTERED — see `fieldOwnerReachFilter`.
 -- This is the one reader of the field→owners multimap that decides ACCEPTANCE, and it
--- is the only one this filter touches; `mangledHeadCandidates` reads the raw ref
--- because it asks a spelling question, not a candidacy one.
+-- is the only one this filter touches.
 fieldOwnerNames : String -> List String
 fieldOwnerNames fname =
   fieldOwnerReachFilter
@@ -18325,16 +18564,14 @@ resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
 resolveFieldRecord te fname = match headTyconNameMono te
   Some r => match lookupRecordForReceiver te r
     Some ri => Some (r, ri)
-    None => match lookupRecordByMangledHead te r fname
-      Some pair => Some pair
-      None =>
-        if omHasKey
-          (receiverTypeWord te r)
-          driverState.value.abstractRecordTypesRef.value then
-          let _ = pushTypeError "T-ABSTRACT-FIELD" (abstractFieldMsg r fname)
-          None
-        else
-          resolveFieldByOwners te fname
+    None =>
+      if omHasKey
+        (receiverTypeWord te r)
+        driverState.value.abstractRecordTypesRef.value then
+        let _ = pushTypeError "T-ABSTRACT-FIELD" (abstractFieldMsg r fname)
+        None
+      else
+        resolveFieldByOwners te fname
   None => resolveFieldByOwners te fname
 
 -- ── #1111 Stage A-2 unit A-2.13 (#1319 unit 3): ONE ENTRY, TWO QUESTIONS ────
@@ -18377,7 +18614,7 @@ resolveFieldRecord te fname = match headTyconNameMono te
 -- `.claude/workstreams/TYPECHECK.md`'s standing gate asks about (its
 -- "does the fix change the KEY, or add a guard at ONE READ SITE?"
 -- discriminator).  Question (2) now has its OWN key — the receiver's `Ident`,
--- selected out of the identity-keyed companion `universeRecordIdentsRef` — and
+-- selected out of the identity-keyed rows of `universeRecordPop` — and
 -- question (1) keeps the spelling key it always had.  One read site moves
 -- because exactly one read site asks question (2); a second site asking it would
 -- call this same function.  What is NOT claimed: `recordByNameRef` is still
@@ -18421,7 +18658,7 @@ recordOfOtherType te (RecordInfo _ _ res _ _) = match (
   (Some (Ident _ wo wn), Some (Ident _ ro rn)) => not (wn == rn && wo == ro)
   _ => False
 
--- The identity half.  `universeRecordIdentsRef`'s outer key is the bare registry
+-- The identity half.  `universeRecordPop`'s rows are indexed by the bare registry
 -- key — an INDEX into a candidate list, not the selector; the selector is the
 -- identity comparison below, which is why a collided key keeps both rows here
 -- where `recordByNameRef` keeps one.
@@ -18434,7 +18671,7 @@ recordOfOtherType te (RecordInfo _ _ res _ _) = match (
 -- allocates nothing at all.  Do not "simplify" by projecting the head first.
 recordForReceiverIdent : Mono -> String -> Option RecordInfo
 recordForReceiverIdent te r =
-  match omLookup r crossRun.value.universeRecordIdentsRef.value
+  match omLookup r (spRows crossRun.value.universeRecordPop.value)
     None => None
     Some cs => match receiverTypeIdent te
       None => None
@@ -18470,7 +18707,7 @@ recordCandForType want ((ci, tyName, ri) :: rest)
 -- the TYPE it builds) the declaration the receiver identity `want` names?
 --
 -- A candidate carries `Ident NsCtor o cn` plus `tyName`, because that is what
--- `insertRecordIdents` has in hand; the receiver's head names the TYPE, so the
+-- `insertRecordRow` has in hand; the receiver's head names the TYPE, so the
 -- comparison is `(owning type name, declaring module)`.  `o` is the same
 -- `dataOrigin` `registerRecordInfoKeyed` put in the record's result type, which
 -- is what `headTyconMono` projects back out of a value of that record — so this
@@ -18543,129 +18780,9 @@ recordCandIsType : Ident -> Ident -> String -> Bool
 recordCandIsType (Ident _ wio wname) (Ident _ cio _) tyName =
   tyName == wname && cio == wio
 
--- Mangle-aware record lookup for the emit path.  `backend/private_mangle.mdk`
--- renames a record's DECL name (a record's name IS its constructor) to
--- `<mid>__<name>`, so `recordByNameRef` is keyed by the mangled name — but a TYPE
--- reference like `r : Rule` is NOT mangled, so the receiver's head tycon stays
--- `Rule` and the exact `lookupRecordByName` above misses.  Recover by finding the
--- registry entry whose key suffix-matches `__<head>` AND owns `fname`; only when
--- it is UNIQUE (else ambiguous → None, so the caller's owners path keeps today's
--- behavior).  No-op off the emit path (unmangled key hits the exact lookup).
---
--- 🚨 #1319 UNIT 2 WAS SCOPED TO RETIRE THIS AND DELIBERATELY DID NOT.  The scoping
--- pass's premise was *"a real identity key subsumes that hack"* — true, and the
--- adjudication then chose **B1**, which does NOT make `recordByNameRef` identity-keyed:
--- it keeps the bare key as a floor and decides collisions with a per-module scope
--- overlay, exactly as unit 1 kept `universeDataEnv` bare.  So the premise the retirement
--- rests on is not in the tree, and retiring the hack under B1 would need one of:
---
---   * the MANGLER fixed so a record's TYPE name is renamed in lockstep with its
---     constructor name.  `renameDecl` (`backend/private_mangle.mdk`) rewrites
---     `dataCtors` and leaves `dataName` alone — its own comment says so — while
---     `registerRecordInfoKeyed` is called with key = the (mangled) ctor name and
---     typeName = the (unmangled) `dataName`.  That mismatch IS the hack's whole reason,
---     and it is `ws:emitter`'s (#1300 / #1305 family), not this unit's.
---     ⚠️ #1300 IS NOW CLOSED (PR #1393) AND DID NOT DO THIS — re-derived 2026-08-07
---     against the merged tree, not inferred from the issue state: `renameDecl` still
---     rewrites `dataCtors` and still leaves `dataName` alone.  So the route stays
---     open and #1305 is the live half; do not read the closed issue as the mangler
---     having been fixed;
---   * or a SECOND record index keyed by the declaration's TYPE identity.  Rejected:
---     it is unsound for a multi-`ConNamed`-variant type — `data T = | A { x } | B { y }`
---     would map `(o, T)` to one of the two, and `r.y` at `r : T` would resolve to `A`,
---     where today the exact lookup misses and the field→owners path answers correctly.
---     Restricting it to single-variant types makes it serve ONLY the emit path, i.e. a
---     THIRD keying scheme in a table that already has two — the opposite of reconciling.
---
--- 🚨 IT IS LOAD-BEARING, AND THAT IS MEASURED, NOT INFERRED.  The paragraph above was
--- written as a derivation from `renameDecl`'s source; the adversarial review of PR #1372
--- then ran the counterfactual, and this sentence exists so the next reader does not have to
--- repeat it: **stubbed to `None`** — body replaced by a constant, nothing else changed —
--- **the compiler TYPECHECKS CLEAN and then MISCOMPILES ITSELF INTO A SEGFAULT.**  So the
--- suffix match is not dead code kept for safety; the self-compile depends on it, and it
--- fails in the worst available way: no diagnostic, no type error, a crash in the produced
--- binary.  Anyone retiring it must land the mangler fix in the SAME change.
---
--- ⚠️ THE MEASUREMENT IS THE REVIEWER'S, NOT MINE.  Recorded here rather than only in a PR
--- body, because a PR body is not where someone standing at this function will be looking —
--- which is the exact report-versus-artifact split that produced this note.
---
--- Left in place, with the reason written down, rather than half-migrated.
---
--- ── #1382: WHAT THE NON-SINGLETON ARM DOES NOW, AND WHY IT IS NOT A RETIREMENT ──
--- The two routes above are about RETIRING this function.  This is not one of them:
--- the function stays, the singleton gate is untouched, and the only thing that
--- changed is what happens when the gate ALREADY gave up.
---
--- Before, `_ => None` handed the question to `resolveFieldByOwners`, whose
--- concrete-receiver arm answers `pairRecordByName (headL owners)` — the FIRST key
--- in `sortUniqS` order.  On the emit path every key is `<mid>__<ctor>`, so that
--- ladder decides which record a projection means BY MODULE-NAME SORT ORDER.  That
--- is #1382, and it is memory-unsafe rather than merely wrong: two modules each
--- declaring `Cfg` with their fields in the opposite order make one module's
--- projections read the OTHER module's slots, so `medaka check` exits 0, `medaka
--- run` is correct (the interpreter resolves fields by name at run time), and the
--- BUILT BINARY prints a wrong value — or, when the swapped slots hold an `Int` and
--- a `String`, segfaults.  Measured on a cold build of `c5fda728`: the typed Core IR
--- carried `CFieldAccess (CVar "zrmod__mkZ" AGlobal) "a" "armod__Cfg"` — zrmod's
--- value, armod's record — and the emitter faithfully applied armod's layout to it.
---
--- The narrowing below asks the ONE question the bare spelling cannot: which
--- DECLARATION does the receiver's own head name?  Both sides go through
--- `headTyconMono`, so the comparison is on the `HeadKey` (§8 I4's `(originModule,
--- name)`) rather than on the string — which is the whole point, since every
--- candidate here spells the same bare `head` by construction.  The receiver's
--- identity comes from `stampGraphTyOrigins`, which `elaborateModules` calls
--- precisely so the separate `medaka_emitter` process has it (see its note there);
--- the candidate's comes from `registerRecordInfoKeyed`'s `tconFrom o typeName`.
---
--- 🚨 IT CANNOT MOVE AN ANSWER THAT WAS ALREADY DECIDED.  It runs only in the arm
--- that returned `None`, so every reachable change is `None` → `Some pair`, i.e. a
--- coin flip in `resolveFieldByOwners` replaced by the receiver's own declaration.
--- A one-candidate lookup still short-circuits on the untouched first arm, and a
--- narrowing that does not land on exactly one candidate still returns `None` and
--- still falls through to today's ladder.  So this is deliberately NOT the target
--- rule quoted at `applyRecordScopeOverrides` (*"the receiver's own identity selects
--- its record"*): that rule wants `lookupRecordByName` itself to take an identity,
--- which moves the EXACT-hit arm above and is a change to the check path too.  This
--- unit only makes the give-up arm stop guessing.
---
--- ⚠️ ON THE CHECK PATH THIS IS REACHED BUT INERT — it is NOT unreachable there, and
--- an earlier draft of this note said it was.  A named-field variant's HEAD is not its
--- registry KEY: `registerNamedFieldVariants` passes key = the CONSTRUCTOR and
--- typeName = the TYPE (`registerRecordInfoKeyed o cname tyName params fields`), so
--- `data WA = | CA { … }` registers key `CA` while the receiver's head is `WA`, the
--- exact `lookupRecordByName "WA"` misses, and this function IS called with no
--- mangling anywhere.  What makes it harmless is the candidate filter, not
--- unreachability: no UNMANGLED key suffix-matches `__<head>`, so the list is empty,
--- the narrowing runs over nothing, and the answer is the `None` it always was.
--- That weaker claim is the one the safety argument actually needs — reachability was
--- never the property doing the work — so stating it correctly strengthens the case
--- rather than weakening it.  `test/llvm_fixtures_modules/field_owner_no_narrowing/`
--- is a live cell of exactly this shape (head `RA`, key `Dup`).
-lookupRecordByMangledHead : Mono ->
-  String ->
-  String ->
-  Option (String, RecordInfo)
-lookupRecordByMangledHead te head fname = match mangledHeadCandidates head fname
-  [pair] => Some pair
-  -- One mint of the receiver's key for the whole filter, not one per candidate:
-  -- `types/registry.mdk` names re-minting a `TabKey` per lookup as the thing the
-  -- #1111 A-2.3 follow-up hoisted, because `tabKeyOf` → `mkIdent` → `identOriginOf`
-  -- allocates on the way (an `Option`, the `map` closure, the `Ident`, the
-  -- `Some`/`None`, then the `TkIdent`/`TkBare` wrapper).  The cost here is small —
-  -- this arm only runs when the candidate list length ≠ 1, and at length 0 the
-  -- filter calls nothing — so this is about not borrowing an idiom from the file
-  -- that warns about it by name, not about a measured regression.
-  cands =>
-    let rk = headTyconMono te
-    match filterList (recordCandIsReceiverDecl rk) cands
-      [pair] => Some pair
-      _ => None
-
 -- Does this candidate's `RecordInfo` describe the declaration the RECEIVER's head
--- names?  `rk` is the receiver's key, already projected by the caller (see the mint
--- note there); `headTyconMono` produces both sides rather than a bespoke match, so
+-- names?  `rk` is the receiver's key, projected once by the caller rather than per
+-- candidate; `headTyconMono` produces both sides rather than a bespoke match, so
 -- no new origin-binding `Mono.TCon` pattern enters the set
 -- `test/typecheck_compiler_source.sh` pins.
 --
@@ -18686,25 +18803,6 @@ recordCandIsReceiverDecl rk (_, ri) = rk == headTyconMono (recordResultMono ri)
 recordResultMono : RecordInfo -> Mono
 recordResultMono (RecordInfo _ _ result _ _) = result
 
--- Candidates are the keys that already OWN `fname` (from the field→owners
--- multimap, which is the "declares this field" filter precomputed) whose key
--- suffix matches `__<head>`; each paired with its RecordInfo from
--- recordByNameRef.  The singleton gate in the caller is unchanged, so the order
--- here is irrelevant.
-mangledHeadCandidates : String -> String -> List (String, RecordInfo)
-mangledHeadCandidates head fname =
-  mangledHeadCandidatesGo
-    head
-    (optionOr [] (omLookup fname perRun.value.fieldOwnersRef.value))
-
-mangledHeadCandidatesGo : String -> List String -> List (String, RecordInfo)
-mangledHeadCandidatesGo _ [] = []
-mangledHeadCandidatesGo head (key :: rest)
-  | endsWith ("__" ++ head) key = match lookupRecordByName key
-    Some ri => (key, ri) :: mangledHeadCandidatesGo head rest
-    None => mangledHeadCandidatesGo head rest
-  | otherwise = mangledHeadCandidatesGo head rest
-
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldByOwners te fname =
   let owners = fieldOwnerNames fname
@@ -18714,8 +18812,103 @@ resolveFieldByOwners te fname =
       [] =>
         let _ = pushUnknownField fname "<unknown>"
         None
-      [r] => pairRecordByName r
-      r :: rest => resolveFieldAmbiguous te fname (r :: rest)
+      _ => match normalize te
+        TVar _ => resolveFieldUnknownReceiver fname owners
+        _ => resolveFieldAmbiguous te fname owners
+
+-- An unannotated receiver says nothing about its type, so the candidates are the
+-- record declarations visible here that declare `fname`.  An owner key names a
+-- SPELLING, and `recordByNameRef` holds one declaration per spelling: the one this
+-- module's own source means.  A value reaching `.fname` need not be of that
+-- declaration (a named-field variant may share its constructor's spelling with
+-- another module's record), so each key is expanded to every declaration filed
+-- under it, and a declaration that does not declare `fname` is dropped.
+--
+-- The constructors of one type count once: the selection is a TYPE question, and
+-- `fieldSelectionWellTyped` decides afterwards whether that type's constructors
+-- agree about the field's slot.  Two types left is an ambiguity, reported at the
+-- access.  No candidate at all keeps the owner-list answer.
+resolveFieldUnknownReceiver : String ->
+  List String ->
+  Option (String, RecordInfo)
+resolveFieldUnknownReceiver fname owners = match visibleFieldDecls fname owners
+  [pair] => Some pair
+  [] => match owners
+    [r] => pairRecordByName r
+    _ =>
+      let _ = pushTypeError "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
+      None
+  cands =>
+    let _ =
+      pushTypeError
+        "T-AMBIGUOUS-FIELD"
+        (ambiguousFieldDeclsMsg fname owners cands)
+    None
+
+-- The declarations under the owner keys that declare `fname`, reachable from this
+-- module, one per type.  The floor row comes first under each key so that, when it
+-- is one of the population's rows, the `RecordInfo` this module registered is the
+-- one kept.
+visibleFieldDecls : String -> List String -> List (String, RecordInfo)
+visibleFieldDecls fname owners =
+  dedupBy
+    fieldDeclTypeKey
+    (fieldDeclReachFilter (flatMap (keyFieldDecls fname) owners))
+
+keyFieldDecls : String -> String -> List (String, RecordInfo)
+keyFieldDecls fname k =
+  let rows =
+    map
+      (c => (k, recordCandInfo c))
+      (spCandsOf k crossRun.value.universeRecordPop.value)
+  let floor = match pairRecordByName k
+    Some pair => [pair]
+    None => []
+  filterList (c => omHasKey fname (recordFieldMap (snd c))) (floor ++ rows)
+
+-- Same fail-open shape as `fieldOwnerReachFilter`: a declaration whose module is
+-- unknown is kept, and a filter that would remove every candidate removes none.
+fieldDeclReachFilter : List (String, RecordInfo) -> List (String, RecordInfo)
+fieldDeclReachFilter cands = match filterList fieldDeclReachable cands
+  [] => cands
+  kept => kept
+
+fieldDeclReachable : (String, RecordInfo) -> Bool
+fieldDeclReachable (_, ri) = match recordOwnerModule ri
+  None => True
+  Some mid =>
+    let reach = perRun.value.fieldOwnerReachRef.value
+    omSize reach == 0 || omHasKey mid reach
+
+-- The declaring type's tag, so two named-field constructors of one type collapse.
+fieldDeclTypeKey : (String, RecordInfo) -> String
+fieldDeclTypeKey (k, ri) = match headTyconMono (recordResultMono ri)
+  Some hk => headKeyTag hk
+  None => k
+
+-- Distinct owner keys keep the owner-list message.  When one key holds two of the
+-- declarations, the key alone cannot tell them apart, so each is named by its type
+-- and declaring module, sorted so the text does not depend on import-clause order.
+ambiguousFieldDeclsMsg : String ->
+  List String ->
+  List (String, RecordInfo) ->
+  String
+ambiguousFieldDeclsMsg fname owners cands =
+  let keys = map fst cands
+  if listLen (dedup keys) == listLen keys then
+    ambiguousFieldMsg fname owners
+  else
+    let tys = sortUniqS (map fieldDeclTypeName cands)
+    let descrs = sortUniqS (map fieldDeclDescr cands)
+    "Ambiguous field access: '.\{fname}' is declared by \{joinWith " and by " descrs}; the record type is undetermined. Add a type annotation (e.g. '(r : \{headL tys}).\{fname}')"
+
+fieldDeclTypeName : (String, RecordInfo) -> String
+fieldDeclTypeName (k, ri) = optionOr k (headTyconNameMono (recordResultMono ri))
+
+fieldDeclDescr : (String, RecordInfo) -> String
+fieldDeclDescr (k, ri) = match recordOwnerModule ri
+  Some mid => "'\{fieldDeclTypeName (k, ri)}' from module '\{mid}'"
+  None => "'\{fieldDeclTypeName (k, ri)}'"
 
 -- #1383: a concrete receiver's field is answered by the receiver's own
 -- declaration.  The floor `recordByNameRef` keeps one row per bare key, so when a
@@ -18754,26 +18947,23 @@ ownerDeclOfReceiver te fname owners = match receiverTypeIdent te
 ownerDeclMatches : Ident -> List String -> List (String, RecordInfo)
 ownerDeclMatches _ [] = []
 ownerDeclMatches ident (k :: rest) =
-  match omLookup k crossRun.value.universeRecordIdentsRef.value
+  match omLookup k (spRows crossRun.value.universeRecordPop.value)
     None => ownerDeclMatches ident rest
     Some cs => match recordCandForType ident cs
       None => ownerDeclMatches ident rest
       Some ri => (k, ri) :: ownerDeclMatches ident rest
 
--- multiple owners: receiver still an unbound var ⇒ genuinely ambiguous; a
--- concrete (non-record) receiver ⇒ narrow by the receiver's own declaration
--- identity, and only if that does not land on exactly one owner fall back to
--- picking the first owner so the later unify surfaces the type mismatch
--- (mirrors the oracle's two `_` sub-branches).
+-- A concrete receiver that is not itself a known record: one owner is that owner;
+-- several are narrowed by the receiver's own declaration identity, and only if that
+-- does not land on exactly one owner fall back to picking the first owner so the
+-- later unify surfaces the type mismatch (mirrors the oracle's two `_` sub-branches).
 resolveFieldAmbiguous : Mono ->
   String ->
   List String ->
   Option (String, RecordInfo)
-resolveFieldAmbiguous te fname owners = match normalize te
-  TVar _ =>
-    let _ = pushTypeError "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
-    None
-  _ => resolveFieldOwnersNarrowed te fname owners
+resolveFieldAmbiguous _ _ [r] = pairRecordByName r
+resolveFieldAmbiguous te fname owners =
+  resolveFieldOwnersNarrowed te fname owners
 
 -- ── #1216 / #1382: the multi-owner arm stops answering by sort order ──────────
 -- `sortUniqS` makes `headL owners` a MODULE-NAME SORT, so before this the concrete
@@ -18784,7 +18974,7 @@ resolveFieldAmbiguous te fname owners = match normalize te
 --
 -- The narrowing asks the one question the bare key cannot: which DECLARATION does
 -- the receiver's own head name?  It ADOPTS `recordCandIsReceiverDecl` — the same
--- landed comparator `lookupRecordByMangledHead` filters with — so both sides go
+-- comparator the receiver-declaration lookups share — so both sides go
 -- through `headTyconMono` and the comparison is on `HeadKey`, not on the string
 -- every candidate here spells identically by construction.
 --
@@ -18825,8 +19015,8 @@ resolveFieldAmbiguous te fname owners = match normalize te
 --     old expression, so no program that resolved to `None` here can now resolve to
 --     `Some`.
 --
--- One mint of the receiver's key for the whole filter, not one per candidate — the
--- same hoist `lookupRecordByMangledHead` documents, for the same reason
+-- One mint of the receiver's key for the whole filter, not one per candidate, for the
+-- reason `types/registry.mdk` gives against re-minting a `TabKey` per lookup
 -- (`tabKeyOf` → `mkIdent` → `identOriginOf` allocates on the way).
 resolveFieldOwnersNarrowed : Mono ->
   String ->
@@ -18885,11 +19075,10 @@ narrowingBlockedByCtorSibling rk fname survivorKey =
 -- `data` decl regardless of shape) via `oGetCtors`, keyed by `TabKey` — not by
 -- bare name — and reachable from `rk : Option HeadKey` through `ctorOracleKeyOf`.
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
-ctorSiblingWithholdingName rk fname survivorKey = match ctorOracleKeyOf rk
+ctorSiblingWithholdingName None _ _ = None
+ctorSiblingWithholdingName (Some hk) fname survivorKey = match ctorsOfHead hk
   None => None
-  Some tk => match oGetCtors driverState.value.matchOracle.value tk
-    None => None
-    Some ctors => firstCtorSiblingWithholding fname survivorKey ctors
+  Some ctors => firstCtorSiblingWithholding hk fname survivorKey ctors
 
 -- 🚨 THE READER'S KEY MINT FOR `matchOracle`'s `typeCtors`, AND IT IS **NOT**
 -- `headTabOf`.  `typeCtors` is the one oracle table keyed by DECLARATION
@@ -18930,22 +19119,46 @@ ctorOracleKeyOf : Option HeadKey -> Option TabKey
 ctorOracleKeyOf None = None
 ctorOracleKeyOf (Some hk) = headKeyDecl hk
 
-firstCtorSiblingWithholding : String -> String -> List String -> Option String
-firstCtorSiblingWithholding _ _ [] = None
-firstCtorSiblingWithholding fname skey (k :: rest)
-  | k == skey = firstCtorSiblingWithholding fname skey rest
-  | ctorSiblingWithholds fname k = Some k
-  | otherwise = firstCtorSiblingWithholding fname skey rest
+firstCtorSiblingWithholding : HeadKey ->
+  String ->
+  String ->
+  List String ->
+  Option String
+firstCtorSiblingWithholding _ _ _ [] = None
+firstCtorSiblingWithholding hk fname skey (k :: rest)
+  | k == skey = firstCtorSiblingWithholding hk fname skey rest
+  | ctorSiblingWithholds hk fname k = Some k
+  | otherwise = firstCtorSiblingWithholding hk fname skey rest
 
 -- `oGetCtors` already scopes the candidate list to the receiver's own type
 -- (via the `TabKey` lookup above), so this no longer needs to re-check the
 -- head itself — only whether THIS constructor declares `fname`.  A name with
--- no `RecordInfo` at all is a positional or nullary constructor: it declares
--- no named field, so it unconditionally withholds `fname`.
-ctorSiblingWithholds : String -> String -> Bool
-ctorSiblingWithholds fname k = match lookupRecordByName k
+-- no `RecordInfo` of this type is a positional or nullary constructor: it
+-- declares no named field, so it unconditionally withholds `fname`.
+ctorSiblingWithholds : HeadKey -> String -> String -> Bool
+ctorSiblingWithholds hk fname k = match ctorRecordOfType hk k
   Some ri => isNone (omLookup fname (recordFieldMap ri))
   None => True
+
+-- The `RecordInfo` constructor `k` of the type `hk` declares.  `k` is a
+-- spelling, and the bare-keyed floor `recordByNameRef` keeps one row per
+-- spelling, so a same-spelled constructor of another module's type can own it.
+-- The identity companion is asked first (as `ownerDeclMatches` does), and a
+-- floor row is accepted only when its result head IS `hk`.
+ctorRecordOfType : HeadKey -> String -> Option RecordInfo
+ctorRecordOfType hk k = match ctorRecordFromCompanion hk k
+  Some ri => Some ri
+  None => match lookupRecordByName k
+    Some ri =>
+      if recordCandIsReceiverDecl (Some hk) (k, ri) then Some ri else None
+    None => None
+
+ctorRecordFromCompanion : HeadKey -> String -> Option RecordInfo
+ctorRecordFromCompanion hk k = match headKeyIdent hk
+  None => None
+  Some ident => match omLookup k (spRows crossRun.value.universeRecordPop.value)
+    None => None
+    Some cs => recordCandForType ident cs
 
 -- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
 -- rather than defaulted, so the filter above only ever sees real declarations.
@@ -19143,6 +19356,10 @@ inferRecordUpdatePicked : String ->
 inferRecordUpdatePicked rname bt env fields ri =
   let sr = instantiateRecordUpdate rname ri (assignedFieldNames fields)
   let _ = unify bt (snd sr)
+  -- Before the field values are inferred, so the error sits on the receiver.
+  let _ = match firstFieldName fields
+    Some fn => recordUpdateWellTyped bt rname ri fn
+    None => ()
   let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
   snd sr
 
@@ -29808,7 +30025,7 @@ exportsIdentFor n ident ((en, ei) :: rest)
 -- other.  They are adjacent in this file on purpose.
 --
 -- ── WHAT THIS FIXES, AND WHAT IT DELIBERATELY DOES NOT ──────────────────────
--- `universeDataEnv`'s ctor map is keyed by the BARE constructor name and is
+-- The ctor floor (`universeCtorPop`'s `spFloor`) is keyed by the BARE constructor name and is
 -- last-write-wins, so when two unrelated modules each declare a `Dup` the whole loaded
 -- program has ONE entry for `Dup` and load order picks the winner.  #1111 A-2.6 attacked
 -- that with an import-scoped DECL overlay (`importedCtorTypeDecls`), and the boundary
@@ -29839,83 +30056,54 @@ exportsIdentFor n ident ((en, ei) :: rest)
 -- constructor is rejected outright (`Duplicate constructor: Lt`), so `core` can never be
 -- one of two candidates for one ctor name and there is no rung for it to be.
 
--- Grow the identity-keyed companion by THIS module's PUBLIC data decls.
+-- Grow the constructor population by THIS module's PUBLIC data decls.
 --
--- 🚨 THE SCHEME IS READ BACK OUT OF [env] RATHER THAN RE-DERIVED, and that is the whole
--- reason this lives in `appendDataUniverse` instead of anywhere else.  [env] is the
--- universe env immediately after `registerAllData … pubDecls`, so the companion holds
--- THE VERY SCHEME OBJECT the bare-name map holds — the two cannot come to hold different
--- types for one declaration, and no extra `registerVariants` call is made (which would
--- mint fresh tyvars, re-run `recordParamKinds`, and re-write `recordByNameRef`, i.e.
--- reach into unit 2's table from unit 1).
+-- The scheme is read back out of [env] rather than re-derived, and that is the whole
+-- reason this runs in `appendDataUniverse`: [env] is the universe env immediately after
+-- `registerAllDataScoped … pubDecls`, so a row holds the very scheme object the floor
+-- holds, and no extra `registerVariants` call is made (which would mint fresh tyvars,
+-- re-run `recordParamKinds`, and re-write `recordByNameRef`).
 --
 -- Within ONE module a constructor name is unique (a duplicate is rejected upstream), so
--- `lookupCtor env cn` after that registration is unambiguously THIS module's `cn`.
-insertCtorIdents : TcEnv ->
-  List Decl ->
-  (OrdMap (List (Ident, String, Scheme)), List String) ->
-  (OrdMap (List (Ident, String, Scheme)), List String)
-insertCtorIdents _ [] acc = acc
-insertCtorIdents env ((DAttrib _ d) :: rest) acc =
-  insertCtorIdents env rest (insertCtorIdents env [d] acc)
-insertCtorIdents env ((DData { dataName, dataCtors, dataOrigin, ... }) :: rest) acc =
-  insertCtorIdents
+-- `lookupCtor env cn` after that registration is unambiguously THIS module's `cn`.  A
+-- constructor with no scheme in [env] (an abstract decl whose ctors were never
+-- registered) is not inserted, so neither its floor nor its rows change.  An unstamped
+-- declaration mints no identity and reaches the floor alone (`spInsert`).
+insertCtorPop : TcEnv -> List Decl -> SpellingPop Scheme -> SpellingPop Scheme
+insertCtorPop _ [] pop = pop
+insertCtorPop env ((DAttrib _ d) :: rest) pop =
+  insertCtorPop env rest (insertCtorPop env [d] pop)
+insertCtorPop env ((DData { dataName, dataCtors, dataOrigin, ... }) :: rest) pop =
+  insertCtorPop
     env
     rest
-    (insertVariantIdents env dataName dataOrigin dataCtors acc)
-insertCtorIdents env ((DNewtype { newtypeName, newtypeCtor, newtypeOrigin, ... }) :: rest) acc =
-  insertCtorIdents
+    (insertCtorVariants env dataName dataOrigin dataCtors pop)
+insertCtorPop env ((DNewtype { newtypeName, newtypeCtor, newtypeOrigin, ... }) :: rest) pop =
+  insertCtorPop
     env
     rest
-    (addCtorIdentCand env newtypeName newtypeOrigin newtypeCtor acc)
-insertCtorIdents env (_ :: rest) acc = insertCtorIdents env rest acc
+    (insertCtorRow env newtypeName newtypeOrigin newtypeCtor pop)
+insertCtorPop env (_ :: rest) pop = insertCtorPop env rest pop
 
-insertVariantIdents : TcEnv ->
+insertCtorVariants : TcEnv ->
   String ->
   TyConOrigin ->
   List Variant ->
-  (OrdMap (List (Ident, String, Scheme)), List String) ->
-  (OrdMap (List (Ident, String, Scheme)), List String)
-insertVariantIdents _ _ _ [] acc = acc
-insertVariantIdents env tyName o ((Variant cn _) :: rest) acc =
-  insertVariantIdents env tyName o rest (addCtorIdentCand env tyName o cn acc)
+  SpellingPop Scheme ->
+  SpellingPop Scheme
+insertCtorVariants _ _ _ [] pop = pop
+insertCtorVariants env tyName o ((Variant cn _) :: rest) pop =
+  insertCtorVariants env tyName o rest (insertCtorRow env tyName o cn pop)
 
--- Upsert BY IDENTITY (a decl re-registered by a second pass replaces its own row rather
--- than appending a duplicate), so `listLen >= 2` means "two DISTINCT declarations of this
--- constructor name" and the collided list cannot fill with self-collisions.
---
--- Honest absence twice over (§8 I6.3): no module id ⇒ no identity ⇒ NO candidate, rather
--- than a constant every unstamped declaration would collide on; and no scheme in [env]
--- (an abstract/opaque decl whose ctors were never registered) ⇒ no candidate either,
--- because a candidate with no scheme could not be selected anyway.
-addCtorIdentCand : TcEnv ->
+insertCtorRow : TcEnv ->
   String ->
   TyConOrigin ->
   String ->
-  (OrdMap (List (Ident, String, Scheme)), List String) ->
-  (OrdMap (List (Ident, String, Scheme)), List String)
-addCtorIdentCand env tyName o cn (cands, collided) = match mkIdent NsCtor o cn
-  None => (cands, collided)
-  Some ident => match lookupCtor env cn
-    None => (cands, collided)
-    Some s =>
-      let prior = dropCtorIdentCand ident (optionOr [] (omLookup cn cands))
-      let next = prior ++ [(ident, tyName, s)]
-      (
-        omInsert cn next cands,
-        if listLen next >= 2 && not (contains cn collided) then
-          cn :: collided
-        else
-          collided,
-      )
-
-dropCtorIdentCand : Ident ->
-  List (Ident, String, Scheme) ->
-  List (Ident, String, Scheme)
-dropCtorIdentCand _ [] = []
-dropCtorIdentCand ident ((c@(i, _, _)) :: rest)
-  | i == ident = dropCtorIdentCand ident rest
-  | otherwise = c :: dropCtorIdentCand ident rest
+  SpellingPop Scheme ->
+  SpellingPop Scheme
+insertCtorRow env tyName o cn pop = match lookupCtor env cn
+  None => pop
+  Some s => spInsert (mkIdent NsCtor o cn) cn tyName s pop
 
 -- ── THIS module's scoped view of the bare-name constructor env ─────────────
 -- Overlay [env] (the fully-registered `dataEnv`: universe < import overlay < prog0) with
@@ -29930,11 +30118,8 @@ dropCtorIdentCand ident ((c@(i, _, _)) :: rest)
 -- in the universe, so it is registered in [env] by construction.
 applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
 applyCtorScopeOverrides prog env =
-  overrideScopedCtors
-    prog
-    crossRun.value.universeCtorIdentsRef.value
-    crossRun.value.universeCtorCollidedRef.value
-    env
+  let pop = crossRun.value.universeCtorPop.value
+  overrideScopedCtors prog (spRows pop) (spCollided pop) env
 
 overrideScopedCtors : List Decl ->
   OrdMap (List (Ident, String, Scheme)) ->
@@ -29992,7 +30177,7 @@ ctorCandScheme (_, _, s) = s
 -- unwrap one layer with `declCtorNamed n d`.  `DAttrib` CAN wrap another `DAttrib`
 -- (`parseAttrib` calls `parseDecl` recursively — `frontend/parser.mdk`'s own comment
 -- names the case), and `declCtorNamed`'s `_ => False` arm swallows a nested one
--- silently.  Both siblings on this path already recurse (`insertCtorIdents`,
+-- silently.  Both siblings on this path already recurse (`insertCtorPop`,
 -- `anyUsePathBindsCtor`); this one did not, and the divergence was caught in review
 -- rather than by any gate.
 --
@@ -30110,7 +30295,7 @@ exportsCtorIdentFor n ident ((cn, _, ci) :: rest)
 -- The two tables `registerRecordInfoKeyed` writes in lockstep — `recordByNameRef`
 -- (registry key → RecordInfo) and `fieldOwnersRef` (field name → owning registry keys) —
 -- are the constructor namespace's other half; a record literal / record pattern /
--- `.field` access never reads `universeDataEnv`'s constructor scheme env, so
+-- `.field` access never reads the constructor scheme env, so
 -- `applyCtorScopeOverrides` cannot reach them. Only `recordByNameRef` is fixed here: an
 -- identity-keyed COMPANION plus a per-module SCOPE DECISION for the collided keys.
 -- `fieldOwnersRef` stays a graph-global multimap, open on #1070 / #1319 — its value (the
@@ -30136,76 +30321,46 @@ exportsCtorIdentFor n ident ((cn, _, ci) :: rest)
 -- future change: a driver that hands `desugar` a concatenation of modules would reopen
 -- it.
 
--- Grow the identity-keyed companion by THIS module's PUBLIC record declarations.
+-- Grow the record population by THIS module's PUBLIC record declarations.
 --
 -- The `RecordInfo` is read back out of `recordByNameRef` rather than re-derived, for the
--- same reason `insertCtorIdents` reads its `Scheme` out of `env2`: this runs immediately
--- after `registerAllData … pubDecls` in `appendDataUniverse`, so `lookupRecordByName key`
--- is THIS module's just-registered entry and the companion holds the very object the bare
--- map holds. Re-deriving would call `registerRecordInfoKeyed` a second time, minting a
--- second set of `freshVars` for the same declaration — two RecordInfos for one record, the
--- failure this placement exists to make impossible.
+-- same reason `insertCtorPop` reads its `Scheme` out of `env2`: this runs immediately
+-- after `registerAllDataScoped … pubDecls` in `appendDataUniverse`, so
+-- `lookupRecordByName key` is THIS module's just-registered entry.  Re-deriving would
+-- call `registerRecordInfoKeyed` a second time, minting a second set of `freshVars` for
+-- the same declaration — two RecordInfos for one record.
 --
--- Only `ConNamed` variants are recorded, because only they are registered:
--- `registerNamedFieldVariants` skips a positional variant, so a positional constructor has
--- no `recordByNameRef` row to be a candidate for. The short-form record `data X = { … }`
--- IS a `ConNamed` variant (its key and its type name coincide); a `DNewtype` is `ConPos`
--- and contributes nothing here.
-insertRecordIdents : List Decl ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String) ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String)
-insertRecordIdents [] acc = acc
-insertRecordIdents ((DAttrib _ d) :: rest) acc =
-  insertRecordIdents rest (insertRecordIdents [d] acc)
-insertRecordIdents ((DData { dataName, dataCtors, dataOrigin, ... }) :: rest) acc =
-  insertRecordIdents
-    rest
-    (insertRecordVariantIdents dataName dataOrigin dataCtors acc)
-insertRecordIdents (_ :: rest) acc = insertRecordIdents rest acc
+-- Only `ConNamed` variants are inserted, because only they are registered:
+-- `registerNamedFieldVariants` skips a positional variant.  The short-form record
+-- `data X = { … }` IS a `ConNamed` variant (its key and its type name coincide); a
+-- `DNewtype` is `ConPos` and contributes nothing here.
+insertRecordPop : List Decl -> SpellingPop RecordInfo -> SpellingPop RecordInfo
+insertRecordPop [] pop = pop
+insertRecordPop ((DAttrib _ d) :: rest) pop =
+  insertRecordPop rest (insertRecordPop [d] pop)
+insertRecordPop ((DData { dataName, dataCtors, dataOrigin, ... }) :: rest) pop =
+  insertRecordPop rest (insertRecordVariants dataName dataOrigin dataCtors pop)
+insertRecordPop (_ :: rest) pop = insertRecordPop rest pop
 
-insertRecordVariantIdents : String ->
+insertRecordVariants : String ->
   TyConOrigin ->
   List Variant ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String) ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String)
-insertRecordVariantIdents _ _ [] acc = acc
-insertRecordVariantIdents tyName o ((Variant cn (ConNamed _ _)) :: rest) acc =
-  insertRecordVariantIdents tyName o rest (addRecordIdentCand tyName o cn acc)
-insertRecordVariantIdents tyName o (_ :: rest) acc =
-  insertRecordVariantIdents tyName o rest acc
+  SpellingPop RecordInfo ->
+  SpellingPop RecordInfo
+insertRecordVariants _ _ [] pop = pop
+insertRecordVariants tyName o ((Variant cn (ConNamed _ _)) :: rest) pop =
+  insertRecordVariants tyName o rest (insertRecordRow tyName o cn pop)
+insertRecordVariants tyName o (_ :: rest) pop =
+  insertRecordVariants tyName o rest pop
 
--- Upsert BY IDENTITY, so `listLen >= 2` means "two DISTINCT declarations of this registry
--- key" and the collided list cannot fill with self-collisions.  Honest absence twice over,
--- exactly as `addCtorIdentCand`: no module id ⇒ no identity ⇒ no candidate; no row in
--- `recordByNameRef` ⇒ no candidate, since a candidate with no RecordInfo could not be
--- selected anyway.
-addRecordIdentCand : String ->
+insertRecordRow : String ->
   TyConOrigin ->
   String ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String) ->
-  (OrdMap (List (Ident, String, RecordInfo)), List String)
-addRecordIdentCand tyName o cn (cands, collided) = match mkIdent NsCtor o cn
-  None => (cands, collided)
-  Some ident => match lookupRecordByName cn
-    None => (cands, collided)
-    Some ri =>
-      let prior = dropRecordIdentCand ident (optionOr [] (omLookup cn cands))
-      let next = prior ++ [(ident, tyName, ri)]
-      (
-        omInsert cn next cands,
-        if listLen next >= 2 && not (contains cn collided) then
-          cn :: collided
-        else
-          collided,
-      )
-
-dropRecordIdentCand : Ident ->
-  List (Ident, String, RecordInfo) ->
-  List (Ident, String, RecordInfo)
-dropRecordIdentCand _ [] = []
-dropRecordIdentCand ident ((c@(i, _, _)) :: rest)
-  | i == ident = dropRecordIdentCand ident rest
-  | otherwise = c :: dropRecordIdentCand ident rest
+  SpellingPop RecordInfo ->
+  SpellingPop RecordInfo
+insertRecordRow tyName o cn pop = match lookupRecordByName cn
+  None => pop
+  Some ri => spInsert (mkIdent NsCtor o cn) cn tyName ri pop
 
 -- ── THIS module's scoped view of `recordByNameRef` ─────────────────────────
 -- Runs at the `dataEnv` binding, immediately after `registerAllData … prog0` has written
@@ -30280,10 +30435,8 @@ dropRecordIdentCand ident ((c@(i, _, _)) :: rest)
 -- of a fact `resolve.mdk` derives, and #1288 owns the consolidation.  Unit 4 owns retiring it.
 applyRecordScopeOverrides : List Decl -> Unit
 applyRecordScopeOverrides prog =
-  overrideScopedRecords
-    prog
-    crossRun.value.universeRecordIdentsRef.value
-    crossRun.value.universeRecordCollidedRef.value
+  let pop = crossRun.value.universeRecordPop.value
+  overrideScopedRecords prog (spRows pop) (spCollided pop)
 
 overrideScopedRecords : List Decl ->
   OrdMap (List (Ident, String, RecordInfo)) ->
@@ -34858,7 +35011,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- and discarded it unread — a dead per-module O(N) concat.  Bind `[]` on Module.
   -- registerAllData universe (#154 PR-A): the Module path no longer builds `accData ++ prog0`
   -- here — prior modules' public data lives in the persistent DATA-universe accumulators
-  -- (universeRecordByName/…/universeDataEnv), copied+overlaid at the `dataEnv` binding below.
+  -- (universeCtorPop/universeRecordPop), loaded+overlaid at the `dataEnv` binding below.
   -- groundMultiParamObligations universe: Flat grounds over prog; Module over implDecls.
   let groundUniverse = implDecls
   -- (#6, #1457) superDeclsRef: unified body OWNS it — Flat = coreProg ++ userProg, Module =
@@ -35204,8 +35357,8 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- opposite order for the opposite reason — see the partition note at
     -- `importedCtorTypeDeclsFirstWins`.  Swapping these two inverts the rule silently.
     let base =
-      registerAllData
-        crossRun.value.universeDataEnv.value
+      registerImportOverlay
+        (withCtors (spFloor crossRun.value.universeCtorPop.value))
         (importedCtorTypeDeclsLastWins prog0 cur envs.deModules)
     let env0 = registerAllData base prog0
     let _ = applyRecordScopeOverrides prog0
@@ -41597,6 +41750,91 @@ registerAllDataGo env ds =
   let _ = fold (_ d => recordDeclKinds d) () ds
   fold registerData env ds
 
+-- The Module arm's import overlay, registered over [env] without elaborating a
+-- second time what the populations already hold.  A public data declaration is
+-- elaborated once, by `appendDataUniverse` at the end of its own module's arm, and
+-- an importer reads that payload back by declaration identity.  The overlay's other
+-- decls (aliases, newtypes, attributed or private data, a declaration with no
+-- identity) are registered exactly as `registerAllData` registers them.
+--
+-- A served declaration skips `recordDeclKinds` and `registerVariants`' kind, atom
+-- and variance rows: it is public data of an earlier module, so stage K's seed
+-- (`declEnvSeedDataUniverse`) already holds those rows under the same identity keys.
+-- Its field-owner keys are still added, as `registerRecordInfoKeyed` adds them.
+-- The overlay is folded in list order, because its tables are last-write-wins and
+-- its named rows come last (`importedCtorTypeDeclsLastWins`).
+registerImportOverlay : TcEnv -> List Decl -> TcEnv
+registerImportOverlay env overlay =
+  let _ = seedParamPolarityFixpointScoped overlay overlay
+  let ctorPop = crossRun.value.universeCtorPop.value
+  let recordPop = crossRun.value.universeRecordPop.value
+  let served = map (d => (d, overlayCachedRows ctorPop recordPop d)) overlay
+  let _ =
+    fold
+      (_ p => match snd p
+        None => recordDeclKinds (fst p)
+        Some _ => ())
+      ()
+      served
+  fold
+    (e p => match snd p
+      None => registerData e (fst p)
+      Some rows => registerCachedRows e rows)
+    env
+    served
+
+-- The cached constructor schemes and record infos of [d], in variant order, when
+-- every one of its constructors has a population row under its own identity; any
+-- miss declines for the whole declaration.  Only `DData` has rows to serve, and
+-- declining is never wrong: a declined decl is registered by `registerData`,
+-- which is where a new `Decl` constructor has to be decided, so the final
+-- clause covers every other constructor rather than naming each.
+overlayCachedRows : SpellingPop Scheme ->
+  SpellingPop RecordInfo ->
+  Decl ->
+  Option (List (String, Scheme), List (String, RecordInfo))
+overlayCachedRows ctorPop recordPop (DData { dataCtors, dataOrigin, ... }) =
+  cachedVariantRows ctorPop recordPop dataOrigin dataCtors
+overlayCachedRows _ _ _ = None
+
+cachedVariantRows : SpellingPop Scheme ->
+  SpellingPop RecordInfo ->
+  TyConOrigin ->
+  List Variant ->
+  Option (List (String, Scheme), List (String, RecordInfo))
+cachedVariantRows _ _ _ [] = Some ([], [])
+cachedVariantRows ctorPop recordPop o ((Variant cn payload) :: rest) = do
+  ident <- mkIdent NsCtor o cn
+  s <- spLookupIdent ident cn ctorPop
+  recs <- cachedRecordRow recordPop ident cn payload
+  later <- cachedVariantRows ctorPop recordPop o rest
+  Some ((cn, s) :: fst later, recs ++ snd later)
+
+-- A named-field variant's cached `RecordInfo`, as a zero- or one-row list; a
+-- positional variant has none to look up.
+cachedRecordRow : SpellingPop RecordInfo ->
+  Ident ->
+  String ->
+  ConPayload ->
+  Option (List (String, RecordInfo))
+cachedRecordRow recordPop ident cn (ConNamed _ _) =
+  map (ri => [(cn, ri)]) (spLookupIdent ident cn recordPop)
+cachedRecordRow _ _ _ _ = Some []
+
+registerCachedRows : TcEnv ->
+  (List (String, Scheme), List (String, RecordInfo)) ->
+  TcEnv
+registerCachedRows env (ctors, recs) =
+  let _ = fold (_ r => registerCachedRecord (fst r) (snd r)) () recs
+  fold (e c => addCtor e (fst c) (snd c)) env ctors
+
+registerCachedRecord : String -> RecordInfo -> Unit
+registerCachedRecord key ri =
+  perRun.value.recordByNameRef :=
+    omInsert key ri perRun.value.recordByNameRef.value
+  perRun.value.fieldOwnersRef :=
+    addFieldOwners key (recordFieldNames ri) perRun.value.fieldOwnersRef.value
+
 recordDeclKinds : Decl -> Unit
 recordDeclKinds (DAttrib _ d) = recordDeclKinds d
 recordDeclKinds (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = anns, dataCtors = variants, dataOrigin = o }) =
@@ -46170,149 +46408,75 @@ appendUniverseAccums mid prog =
 -- #154 PR-A: grow the persistent DATA-universe by [pubDecls] (THIS module's public data).
 -- `registerData` / `registerVariants` hardcode the working table refs, so grow by
 -- pointing those refs at the persistent values, registering pubDecls over the accumulated
--- ctor env, and snapshotting the results back.  ⚠️ DERIVE HOW MANY from `loadDataUniverse`
--- below rather than trusting a count here — this sentence said "six"/"seven" while A-3.2b
--- was taking the pair to three.  Called at the END of checkBodyImpl's
--- Module arm, where the working table refs are DEAD (this module's inference is done and the
--- next module's resetState wipes them), so the clobber is invisible.  Registers each public
--- decl exactly ONCE across the whole run — the O(N) replacing the Module arm's old
--- per-module O(|accData|) re-registration.  Only publicDataDecls are folded in (private data
--- stays module-local), matching foldModules' `accData ++ publicDataDecls prog` threading.
--- ⚠️ #804/#1028's OPAQUE-type param kinds used to be published from here too, by a second
--- pass (`registerOpaqueParamKinds`) whose ONLY purpose was to reach the kind universe.
--- That universe is retired (see below) and the opaque arms live on `kindPublicDataDecl`,
--- so the pass is GONE rather than left writing a table nothing reads.
--- #415 item 3: the cross-module DATA universe ⇄ per-run working tables copy, which was
--- open-coded as an N-way lockstep mirror at THREE sites (the Module arm of the data-env
--- setup + appendDataUniverse's load and its store-back).  Adding a further universe table
--- meant remembering all three — the "silently absent from the other side" shape.  It now
--- has one body per direction.  ⚠️ N IS DELIBERATELY NOT A NUMBER HERE: it was 5, then 4
--- (#1557 A-3.5c), then 1 (#1512 slices 2+3), inside three successive PRs — derive it from
--- the two bodies below, which are what the invariant note there tells you to read.
--- ⚠️ universeDataEnv is deliberately NOT copied here: it is threaded through
--- `registerAllData` by the CALLER (it is that call's env argument and its result), so it
--- has no meaning as a blind copy.
+-- ctor floor, and reading the results back into the two populations.  Called at the END
+-- of checkBodyImpl's Module arm, where the working table refs are DEAD (this module's
+-- inference is done and the next module's resetState wipes them), so the clobber is
+-- invisible.  Registers each public decl exactly ONCE across the whole run — the O(N)
+-- replacing the Module arm's old per-module O(|accData|) re-registration.  Only
+-- publicDataDecls are folded in (private data stays module-local).
 --
--- 🚨 THE CROSS-RUN HALF IS NOW ONE CELL, AND THE OTHERS ARE NOT SILENTLY DROPPED.
--- Three units in a row have edited these two bodies, so read them as TWO SEPARABLE
--- HALVES rather than as a table count (a count here rots on contact — this comment
--- has said "five", "four" and "three" in three successive PRs; DERIVE it from the
--- bodies below):
---   * CROSS-RUN half — a copy IN and the exact inverse copy OUT, same set, same
---     order.  `universeRecordByName` is what is left of it: its payload is an
---     ELABORATED `RecordInfo`, which the Step-0 ruling keeps OUT of syntactic K, so
---     it stays a marshalled cell until a dedicated elaboration-cache unit.
---   * STAGE-K half — a PROJECTION at the reader's own ordinal, which has NO inverse
---     here by construction.  ⚠️ ONLY ONE OF THE THREE IS SEEDED IN THE BODY BELOW.
---     This bullet said "three tables are now on this side", which reads as three
---     lines of `loadDataUniverse`; two of them are seeded at a DIFFERENT call site —
---     the ONE call of `declEnvSeedDataUniverse mid envs`, in `checkBodyImpl`'s Module
---     arm, further down that arm than this function's own call.  Anchor on the seeder,
---     not on a line number or on this bullet's ordering:
---       `aliasTableRef`      ← `aliasUniverseAt cur … .deData.deAliases`  (#1512 residual 1)
---                              — HERE, in `loadDataUniverse`'s body
---       `dataParamKindsRef`  ← `declEnvSeedDataUniverse mid …`            (#1512 slice 2)
---       `fieldOwnersRef`     ← `declEnvSeedDataUniverse mid …`            (#1512 slice 3)
---                              — both at that function's ONE call site, not here
---     and `ifaceParamKindsRef` left the pair entirely with #1557 A-3.5c (its reader
---     sources `ceSlotKindsAt` from `deIfaces`).
--- Do NOT re-add a `setRef crossRun.… perRun.value.<any of those>.value` "for
--- symmetry".  That is design law L1's divergence: K and a cross-run copy become two
--- answers to one question, and the copy is always the one that drifts — it would
--- carry `rejectCyclicAliases`' per-module alias deletions, and it would carry the
--- DOUBLED owner keys `appendDataUniverse` now leaves behind (see its own note).
---
--- ⚠️ WHEN THIS INVARIANT BREAKS IT IS SILENT — no compile error, no gate, just a
--- table that stops crossing a module boundary.  After ANY rebase, read the two
--- bodies side by side and check the cross-run half agrees in SET and in ORDER, and
--- that each body still has exactly one tail expression and no dangling `let _ =`.
+-- The data universe has two halves, and only one of them is cross-run:
+--   * CROSS-RUN: `universeCtorPop` and `universeRecordPop`, one `SpellingPop` per table.
+--     Their payload is ELABORATED (`Scheme`, `RecordInfo`), which stage K, being
+--     syntactic, cannot hold.  Each population's floor is what a module starts from: the
+--     ctor floor is the base env of the Module arm's `dataEnv` (`withCtors`), the record
+--     floor is loaded into `recordByNameRef` below.  Nothing copies a per-run table back:
+--     `appendDataUniverse` inserts into the populations directly.
+--   * STAGE K: a PROJECTION at the reader's own ordinal, with nothing to write back.
+--     Only one of the three is seeded in the body below.  The other two are seeded at
+--     the one call of `declEnvSeedDataUniverse mid envs`, in `checkBodyImpl`'s Module
+--     arm.  Anchor on the seeder, not on a line number:
+--       `aliasTableRef`      ← `aliasUniverseAt cur … .deData.deAliases`  — HERE
+--       `dataParamKindsRef`  ← `declEnvSeedDataUniverse mid …`
+--       `fieldOwnersRef`     ← `declEnvSeedDataUniverse mid …`
+-- Do NOT add a `crossRun` copy of any stage-K table "for symmetry".  That is design law
+-- L1's divergence: K and a cross-run copy become two answers to one question, and the
+-- copy is always the one that drifts — it would carry `rejectCyclicAliases`' per-module
+-- alias deletions, and it would carry the DOUBLED owner keys `appendDataUniverse` leaves
+-- behind (see its own note).
 loadDataUniverse : Int -> Unit
 loadDataUniverse cur =
-  perRun.value.recordByNameRef := crossRun.value.universeRecordByName.value
+  perRun.value.recordByNameRef := spFloor crossRun.value.universeRecordPop.value
   perRun.value.aliasTableRef :=
     aliasUniverseAt cur driverState.value.declEnvsRef.value.deData.deAliases
 
--- The exact inverse of `loadDataUniverse`'s CROSS-RUN half — see the invariant above.
--- It is one line because that half is one cell; the other three seeds are stage-K
--- projections and have nothing to invert.
-storeDataUniverse : Unit -> Unit
-storeDataUniverse _ =
-  crossRun.value.universeRecordByName := perRun.value.recordByNameRef.value
-
--- ⚠️ STILL TAKES THIS MODULE'S WHOLE decl list, not a pre-filtered one, even though the
--- second half it owned has moved.  It used to own BOTH halves of what a module publishes
--- to the data universe — `publicDataDecls` (ctors + records + kinds, for a `public export`
--- type) and `registerOpaqueParamKinds` (kinds ONLY, for an opaque one, #804/#1028).
--- A-3.2b (#1512) slice 2 retired the kind universe, so the opaque half is now a projection
--- of the whole graph (`kindPublicDataDecl`) rather than a second pass here.  The parameter
--- stays unfiltered because filtering at the CALL SITE is what let the opaque half go
--- missing for as long as it did, and a future third half would land here again.
+-- Takes this module's whole decl list, not a pre-filtered one.  The polarity
+-- fixpoint runs over all of it (#2112), and filtering at the CALL SITE is what once let
+-- the opaque-kind half go missing.
 --
--- 🚨 WHAT `fieldOwnersRef` AND `dataParamKindsRef` CONTAIN WHEN THIS RUNS CHANGED WITH
--- A-3.2b, AND THE OLD "the working refs are DEAD here" NOTE DOES NOT COVER IT.  That
--- note is about WHEN (this module's inference is finished; the next module's
--- `resetState` wipes them) and it still holds.  What changed is WHAT they hold on
--- ENTRY.  `loadDataUniverse` used to RESET both refs from the cross-run universe as
--- its first act; it no longer touches either, so they arrive holding the K seed PLUS
--- everything this module registered during inference — and `registerAllData … pubDecls`
--- below then registers this module's PUBLIC decls a SECOND time.  `addFieldOwners`
--- conses without dedupe, so every own public record is DOUBLE-listed in
--- `fieldOwnersRef` from that line until the next `resetState`.
---
--- ⚠️ UNOBSERVABLE TODAY, AND ONLY BECAUSE NOTHING READS IT IN BETWEEN — verified, not
--- assumed: `insertRecordIdents`/`insertCtorIdents` below read `recordByNameRef` (an
--- `omInsert` map, idempotent under re-registration), never the owner multimap.  But a
--- doubled owner key is EXACTLY the shape `declEnvSeedChain`'s own-row 🚨 exists to
--- prevent: `mangledHeadCandidates` reads this multimap RAW (no `sortUniqS`), so a key
--- appearing twice turns its `[pair]` singleton gate into the give-up arm and `Some
--- pair` becomes `None`.  ⇒ DO NOT ADD A READ OF `fieldOwnersRef` AFTER THIS POINT
--- without either de-duplicating first or restoring a reset.  (`dataParamKindsRef` gets
--- the same doubling; it is inert there because `lookupTab` is first-match over
--- identity-bearing keys whose two copies are equal.)
+-- `fieldOwnersRef` arrives holding the K seed PLUS everything this module registered
+-- during inference, and `registerAllDataScoped … pubDecls` below registers this module's
+-- PUBLIC records a SECOND time.  `addFieldOwners` conses without dedupe, so every own
+-- public record is DOUBLE-listed in `fieldOwnersRef` from that line until the next
+-- `resetState`.  Unobservable today only because nothing reads the multimap in between
+-- (the two population walkers read `env2` and `recordByNameRef`).  A doubled owner key is
+-- the shape `declEnvSeedChain`'s own-row note exists to prevent.  `fieldOwnerNames`
+-- `sortUniqS`es on read, so the doubling does not move an answer; a new reader of
+-- `fieldOwnersRef` after this point must de-duplicate first or restore a reset.
+-- (`dataParamKindsRef` gets the same
+-- doubling; it is inert there because `lookupTab` is first-match over identity-bearing
+-- keys whose two copies are equal.)
 appendDataUniverse : String -> List Decl -> Unit
 appendDataUniverse mid prog0 =
   let pubDecls = publicDataDecls prog0
-  -- A-3.2b residual (#1512): the reload takes THIS module's ordinal, because the
-  -- alias half of it is now a stage-K projection rather than a cross-run copy.
-  -- Same ordinal the arm's own `dataEnv` reload used, and it must stay strictly
-  -- BELOW-this-module (`aliasUniverseAt`'s `<`): `registerAllData … pubDecls`
-  -- immediately below is what puts this module's own public aliases in front,
-  -- exactly as it always did.
+  -- The alias half of the reload is a stage-K projection, so it takes THIS module's
+  -- ordinal, strictly BELOW-this-module (`aliasUniverseAt`'s `<`): the registration
+  -- below is what puts this module's own public aliases in front.
   let _ =
     loadDataUniverse (declEnvsOrdOf mid driverState.value.declEnvsRef.value)
   -- #2112: the polarity fixpoint sees the WHOLE module (`prog0`), the universe
   -- receives only the public keys — see `registerAllDataScoped`.
   let env2 =
-    registerAllDataScoped crossRun.value.universeDataEnv.value pubDecls prog0
-  let _ = storeDataUniverse ()
-  crossRun.value.universeDataEnv := env2
-  -- #1111 A-2.11 (#1319 unit 1): the identity-keyed companion of `universeDataEnv`'s ctor
-  -- map, grown in the SAME place from the SAME `env2` so the two cannot come to hold
-  -- different schemes for one declaration.  See insertCtorIdents.
-  let ctorAcc = insertCtorIdents env2 pubDecls (
-    crossRun.value.universeCtorIdentsRef.value,
-    crossRun.value.universeCtorCollidedRef.value,
-  )
-  crossRun.value.universeCtorIdentsRef := fst ctorAcc
-  crossRun.value.universeCtorCollidedRef := snd ctorAcc
-  -- #1111 A-2.12 (#1319 unit 2): the RECORD-table peer of the three lines above, grown
-  -- HERE and not in `registerRecordInfoKeyed` for the same reason — `registerAllData …
-  -- pubDecls` has just written this module's rows into `recordByNameRef` / `fieldOwnersRef`
-  -- (`storeDataUniverse` copies, it does not clear), so both helpers read back the very
-  -- objects the bare tables hold instead of minting a second set.  See insertRecordIdents.
-  let recAcc = insertRecordIdents pubDecls (
-    crossRun.value.universeRecordIdentsRef.value,
-    crossRun.value.universeRecordCollidedRef.value,
-  )
-  crossRun.value.universeRecordIdentsRef := fst recAcc
-  -- ⚠️ A-3.2b (#1512): a `setRef crossRun.value.universeDataDecls (… ++ pubDecls)` used
-  -- to follow the line below — #674's overlay pool, kept here because
-  -- `universeDataEnv` is a lossy bare-name ctor env and could not recover a SPECIFIC
-  -- module's ctor.  It is RETIRED: stage K's `DeclEnvs` already holds every module's
-  -- decls tagged with the module id and ordinal that lossiness was the absence of, so
-  -- the overlay reads the envelope directly (`importedCtorTypeDecls`) instead of a
-  -- second, unkeyed copy of the same declarations grown one module at a time.
-  crossRun.value.universeRecordCollidedRef := snd recAcc
+    registerAllDataScoped
+      (withCtors (spFloor crossRun.value.universeCtorPop.value))
+      pubDecls
+      prog0
+  -- Both walkers read the payloads this registration just made back out of `env2` and
+  -- `recordByNameRef`, so each population row holds the very object its floor holds.
+  crossRun.value.universeCtorPop :=
+    insertCtorPop env2 pubDecls crossRun.value.universeCtorPop.value
+  crossRun.value.universeRecordPop :=
+    insertRecordPop pubDecls crossRun.value.universeRecordPop.value
 
 -- #154 PR1: buildDefinerShadows with the `allIfaceMethodNames fullUniverse` scan
 -- replaced by a membership test, `isMethod` (`methodNameDeclaredAt` at the module's
@@ -49666,13 +49830,9 @@ copyCrossRun c = CrossRun {
   universeFunNamesRef = Ref c.universeFunNamesRef.value,
   universeMethodDispatchIdxByIdRef =
     Ref c.universeMethodDispatchIdxByIdRef.value,
-  universeRecordByName = Ref c.universeRecordByName.value,
   universeDataCtors = Ref c.universeDataCtors.value,
-  universeRecordIdentsRef = Ref c.universeRecordIdentsRef.value,
-  universeRecordCollidedRef = Ref c.universeRecordCollidedRef.value,
-  universeDataEnv = Ref c.universeDataEnv.value,
-  universeCtorIdentsRef = Ref c.universeCtorIdentsRef.value,
-  universeCtorCollidedRef = Ref c.universeCtorCollidedRef.value,
+  universeCtorPop = Ref c.universeCtorPop.value,
+  universeRecordPop = Ref c.universeRecordPop.value,
   builtinClassesRef = Ref c.builtinClassesRef.value,
   crossModuleFunPredicateSlotsRef = Ref c.crossModuleFunPredicateSlotsRef.value,
   crossModuleFunPredicateSlotsQualRef =
@@ -53333,9 +53493,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omDelete" false))))
-(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false) (mem "elemIndex" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregMemberK" false) (mem "sregSize" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregMemberK" false) (mem "sregSize" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "installedDispositionsOpt" false) (mem "restoreDispositions" false) (mem "validateDispositionTable" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
@@ -54772,9 +54932,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "uOblIsDecidableNow" ((PVar "o")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EVar "uOblArgs") (EVar "o")))) (DoExpr (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "args")) (EBinOp "||" (EApp (EVar "allConcreteHeads") (EVar "args")) (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")))))))
 (DData Private "PendingDictApp" () ((variant "PendingDictApp" (ConNamed (field "pdaRoutesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route")))) (field "pdaEv" (TyCon "EvId")) (field "pdaMonos" (TyApp (TyCon "List") (TyCon "Mono"))) (field "pdaIfaces" (TyApp (TyCon "List") (TyCon "IfaceRef"))) (field "pdaArgVecs" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono")))) (field "pdaEncl" (TyCon "String")) (field "pdaLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "pdaScope" (TyCon "ScopeId"))))) ())
 (DData Private "PendingMethodDict" () ((variant "PendingMethodDict" (ConNamed (field "pmdRoutesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route")))) (field "pmdEv" (TyCon "EvId")) (field "pmdSlots" (TyApp (TyCon "List") (TyCon "PredicateSlot"))) (field "pmdEncl" (TyCon "String")) (field "pmdScope" (TyCon "ScopeId"))))) ())
-(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "universeRecordByName" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "universeDataCtors" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyCon "DataVis") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Variant"))))))) (field "universeRecordIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))))) (field "universeRecordCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeDataEnv" (TyApp (TyCon "Ref") (TyCon "TcEnv"))) (field "universeCtorIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))))) (field "universeCtorCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "builtinClassesRef" (TyApp (TyCon "Ref") (TyCon "BuiltinClasses"))) (field "crossModuleFunPredicateSlotsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot")))))) (field "crossModuleFunPredicateSlotsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PredicateSlot")))))) (field "crossModuleFunConstraintDeclaredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "CDeclaredPrefix"))))) (field "crossModuleFunConstraintDeclaredQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CDeclaredPrefix"))))) (field "crossModuleMethodPredicateSlotsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) (field "crossModuleMethodPredicateSlotsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))))) (field "crossModuleSchemeOblsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl"))))))))) ())
+(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "universeDataCtors" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyCon "DataVis") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Variant"))))))) (field "universeCtorPop" (TyApp (TyCon "Ref") (TyApp (TyCon "SpellingPop") (TyCon "Scheme")))) (field "universeRecordPop" (TyApp (TyCon "Ref") (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")))) (field "builtinClassesRef" (TyApp (TyCon "Ref") (TyCon "BuiltinClasses"))) (field "crossModuleFunPredicateSlotsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot")))))) (field "crossModuleFunPredicateSlotsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PredicateSlot")))))) (field "crossModuleFunConstraintDeclaredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "CDeclaredPrefix"))))) (field "crossModuleFunConstraintDeclaredQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CDeclaredPrefix"))))) (field "crossModuleMethodPredicateSlotsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) (field "crossModuleMethodPredicateSlotsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))))) (field "crossModuleSchemeOblsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl"))))))))) ())
 (DTypeSig false "freshCrossRun" (TyFun (TyCon "TcEnv") (TyCon "CrossRun")))
-(DFunDef false "freshCrossRun" ((PVar "env")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRecordByName" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeDataCtors" (EApp (EVar "Ref") (EListLit))) (fa "universeRecordIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeRecordCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "universeDataEnv" (EApp (EVar "Ref") (EVar "env"))) (fa "universeCtorIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeCtorCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EVar "emptyBuiltinClasses"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EListLit))))))
+(DFunDef false "freshCrossRun" ((PVar "env")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "universeDataCtors" (EApp (EVar "Ref") (EListLit))) (fa "universeCtorPop" (EApp (EVar "Ref") (EApp (EVar "spFromFloor") (EApp (EVar "envCtors") (EVar "env"))))) (fa "universeRecordPop" (EApp (EVar "Ref") (EVar "spEmpty"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EVar "emptyBuiltinClasses"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig false "crossRun" (TyApp (TyCon "Ref") (TyCon "CrossRun")))
 (DFunDef false "crossRun" () (EApp (EVar "Ref") (EApp (EVar "freshCrossRun") (EVar "initialEnv"))))
 (DTypeSig false "resetCrossModuleState" (TyFun (TyCon "Unit") (TyCon "Unit")))
@@ -55270,7 +55430,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "paramPolaritiesIn" ((PVar "tab") (PVar "key")) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Ref")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "tab")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DData Private "InvocationView" () ((variant "InvocationView" (ConPos (TyApp (TyCon "List") (TyCon "Scheme")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))) ())
 (DTypeSig false "recordInvocationView" (TyFun (TyCon "TcEnv") (TyCon "Unit")))
-(DFunDef false "recordInvocationView" ((PCon "TcEnv" PWild (PVar "ctors") PWild PWild)) (EBlock (DoLet false false (PVar "universe") (EApp (EApp (EVar "flatMap") (ELam ((PVar "cands")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PTuple PWild PWild (PVar "sch")) () (EVar "sch"))))) (EVar "cands")))) (EApp (EVar "IdMap.values") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorIdentsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EApp (EVar "InvocationView") (EBinOp "++" (EApp (EVar "IdMap.values") (EVar "ctors")) (EVar "universe"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))))))
+(DFunDef false "recordInvocationView" ((PCon "TcEnv" PWild (PVar "ctors") PWild PWild)) (EBlock (DoLet false false (PVar "universe") (EApp (EApp (EVar "flatMap") (ELam ((PVar "cands")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PTuple PWild PWild (PVar "sch")) () (EVar "sch"))))) (EVar "cands")))) (EApp (EVar "IdMap.values") (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EApp (EVar "InvocationView") (EBinOp "++" (EApp (EVar "IdMap.values") (EVar "ctors")) (EVar "universe"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))))))
 (DTypeSig true "lastInvocationOps" (TyFun (TyCon "Unit") (TyCon "InvocationOps")))
 (DFunDef false "lastInvocationOps" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef") "value") (arm (PCon "InvocationView" (PVar "ctors") (PVar "pols") (PVar "kinds")) () (EBlock (DoLet false false (PVar "byHead") (EApp (EVar "ctorsByHead") (EVar "ctors"))) (DoExpr (ERecordCreate "InvocationOps" ((fa "headVariances" (ELam ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EApp (EApp (EVar "slotVariances") (EApp (EApp (EVar "paramPolaritiesIn") (EVar "pols")) (EVar "key"))) (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "kinds")))) (arm PWild () (EVar "None"))))) (fa "appliedFields" (ELam ((PVar "applied")) (EBlock (DoLet false false (PTuple (PVar "h") (PVar "args")) (EApp (EVar "spineParts") (EVar "applied"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "instantiateFields") (EVar "args")) (EVar "c")))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "invocationHeadKey") (EVar "h"))) (EVar "byHead")))))))) (fa "headKey" (EVar "invocationHeadKey")))))))))
 (DTypeSig false "invocationHeadKey" (TyFun (TyCon "Mono") (TyCon "String")))
@@ -55933,6 +56093,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "lookupLocalFlag" ((PCon "TcEnv" PWild PWild PWild (PVar "lc")) (PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "lc")))
 (DTypeSig false "addCtor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "TcEnv")))))
 (DFunDef false "addCtor" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "s")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "vs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "s")) (EVar "cs"))) (EVar "al")) (EVar "lc")))
+(DTypeSig false "withCtors" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyCon "TcEnv")))
+(DFunDef false "withCtors" ((PVar "cs")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "omEmpty")) (EVar "cs")) (EListLit)) (EVar "omEmpty")))
+(DTypeSig false "envCtors" (TyFun (TyCon "TcEnv") (TyApp (TyCon "OrdMap") (TyCon "Scheme"))))
+(DFunDef false "envCtors" ((PCon "TcEnv" PWild (PVar "cs") PWild PWild)) (EVar "cs"))
 (DTypeSig false "seedAlphaLets" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "TcEnv")))))
 (DFunDef false "seedAlphaLets" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "rhs")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "vs")) (EVar "cs")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EVar "al"))) (EVar "lc")))
 (DTypeSig false "envAlphaLets" (TyFun (TyCon "TcEnv") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder")))))
@@ -56484,14 +56648,61 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferFieldOfRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Mono"))))))
 (DFunDef false "inferFieldOfRecord" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "te")) (EApp (EVar "snd") (EVar "sr")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))) (arm (PCon "Some" (PVar "fm")) () (EApp (EApp (EVar "substRecordField") (EApp (EVar "fst") (EVar "sr"))) (EVar "fm"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "unknownFieldFresh") (EVar "fname")) (EVar "rname")) (EApp (EVar "recordFieldNames") (EVar "ri"))))))))
 (DTypeSig false "fieldSelectionWellTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono")))))))
-(DFunDef false "fieldSelectionWellTyped" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname") (PVar "ft")) (EMatch (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholdingHere") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (arm (PCon "None") () (EVar "ft")) (arm (PCon "Some" (PVar "sib")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-NOT-IN-ALL-CTORS"))) (EApp (EApp (EApp (EVar "fieldNotInAllCtorsMsg") (EVar "fname")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "te")))) (EVar "sib")))) (DoLet false false (PVar "v") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "v")) (EVar "v"))) (DoExpr (EVar "v"))))))
-(DTypeSig false "ctorSiblingWithholdingHere" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "ctorSiblingWithholdingHere" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholdingForHead") (EApp (EVar "headTyconMono") (EVar "te"))) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EVar "rname")) (EVar "fname")))
-(DTypeSig false "ctorSiblingWithholdingForHead" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "ctorSiblingWithholdingForHead" ((PCon "None") PWild PWild PWild) (EVar "None"))
-(DFunDef false "ctorSiblingWithholdingForHead" ((PCon "Some" (PVar "hk")) (PVar "declHead") (PVar "rname") (PVar "fname")) (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EVar "declHead")) (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EApp (EVar "Some") (EVar "hk"))) (EVar "fname")) (EVar "rname")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fieldSelectionWellTyped" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname") (PVar "ft")) (EMatch (EApp (EApp (EApp (EApp (EVar "ctorFieldConflictHere") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (arm (PCon "None") () (EVar "ft")) (arm (PCon "Some" (PVar "conflict")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushCtorFieldConflict") (EVar "fname")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "te")))) (EVar "conflict"))) (DoLet false false (PVar "v") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "v")) (EVar "v"))) (DoExpr (EVar "v"))))))
+(DData Private "CtorFieldConflict" () ((variant "CtorWithholds" (ConPos (TyCon "String"))) (variant "CtorSlotsDiffer" (ConPos (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "Int"))) (variant "CtorTypesDiffer" (ConPos (TyCon "String") (TyCon "Mono") (TyCon "String") (TyCon "Mono")))) ())
+(DTypeSig false "ctorFieldConflictHere" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CtorFieldConflict")))))))
+(DFunDef false "ctorFieldConflictHere" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "hk")) () (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EApp (EApp (EApp (EVar "ctorFieldConflict") (EVar "hk")) (EVar "fname")) (EVar "rname")) (EVar "None")))))
+(DTypeSig false "ctorFieldConflict" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))))
+(DFunDef false "ctorFieldConflict" ((PVar "hk") (PVar "fname") (PVar "rname")) (EMatch (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EApp (EVar "Some") (EVar "hk"))) (EVar "fname")) (EVar "rname")) (arm (PCon "Some" (PVar "sib")) () (EApp (EVar "Some") (EApp (EVar "CtorWithholds") (EVar "sib")))) (arm (PCon "None") () (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EBlock (DoLet false false (PVar "held") (EApp (EApp (EApp (EVar "ctorFieldSlots") (EVar "hk")) (EVar "fname")) (EVar "ctors"))) (DoExpr (EApp (EApp (EVar "orElseOpt") (EApp (EVar "firstSlotDisagreement") (EVar "held"))) (EApp (EApp (EVar "firstTypeDisagreement") (EVar "fname")) (EVar "held")))))) (arm PWild () (EVar "None"))))))
+(DTypeSig false "ctorsOfHead" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ctorsOfHead" ((PVar "hk")) (EMatch (EApp (EVar "ctorOracleKeyOf") (EApp (EVar "Some") (EVar "hk"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")))))
+(DTypeSig false "ctorFieldSlots" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo")))))))
+(DFunDef false "ctorFieldSlots" ((PVar "hk") (PVar "fname") (PVar "ctors")) (EApp (EApp (EVar "filterMap") (EApp (EApp (EVar "ctorFieldSlot") (EVar "hk")) (EVar "fname"))) (EVar "ctors")))
+(DTypeSig false "ctorFieldSlot" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo")))))))
+(DFunDef false "ctorFieldSlot" ((PVar "hk") (PVar "fname") (PVar "k")) (EMatch (EApp (EApp (EVar "ctorRecordOfType") (EVar "hk")) (EVar "k")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EVar "map") (ELam ((PVar "i")) (ETuple (EVar "k") (EVar "i") (EVar "ri")))) (EApp (EApp (EVar "elemIndex") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri")))))))
+(DTypeSig false "firstSlotDisagreement" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))
+(DFunDef false "firstSlotDisagreement" ((PList)) (EVar "None"))
+(DFunDef false "firstSlotDisagreement" ((PCons (PTuple (PVar "a") (PVar "i") PWild) (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "b") (PVar "j"))) (EApp (EApp (EApp (EApp (EVar "CtorSlotsDiffer") (EVar "a")) (EVar "i")) (EVar "b")) (EVar "j")))) (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest"))))
+(DTypeSig false "slotOtherThan" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DFunDef false "slotOtherThan" (PWild (PList)) (EVar "None"))
+(DFunDef false "slotOtherThan" ((PVar "i") (PCons (PTuple (PVar "b") (PVar "j") PWild) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "j") (EVar "i")) (EApp (EVar "Some") (ETuple (EVar "b") (EVar "j"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "firstTypeDisagreement" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict")))))
+(DFunDef false "firstTypeDisagreement" (PWild (PList)) (EVar "None"))
+(DFunDef false "firstTypeDisagreement" ((PVar "fname") (PCons (PTuple (PVar "a") PWild (PVar "ra")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ra"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ta")) () (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
+(DTypeSig false "typeOtherThan" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))))))
+(DFunDef false "typeOtherThan" (PWild PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "typeOtherThan" ((PVar "fname") (PVar "a") (PVar "ra") (PVar "ta") (PCons (PTuple (PVar "b") PWild (PVar "rb")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "rb"))) (arm (PCon "Some" (PVar "tb")) () (EBlock (DoLet false false (PTuple (PVar "tsub") (PVar "esub") (PVar "asub")) (EApp (EApp (EApp (EVar "paramRenaming") (EApp (EVar "recordResultMono") (EVar "rb"))) (EApp (EVar "recordResultMono") (EVar "ra"))) (ETuple (EListLit) (EListLit) (EListLit)))) (DoLet false false (PVar "tbOverA") (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "tsub")) (EVar "esub")) (EVar "asub")) (EVar "tb"))) (DoExpr (EIf (EApp (EApp (EVar "fieldTypeSame") (EVar "ta")) (EVar "tbOverA")) (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "CtorTypesDiffer") (EVar "a")) (EVar "ta")) (EVar "b")) (EVar "tbOverA"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
+(DTypeSig false "paramRenaming" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
+(DFunDef false "paramRenaming" ((PVar "from") (PVar "to") (PVar "acc")) (EMatch (EApp (EVar "normalize") (EVar "from")) (arm (PCon "TApp" (PVar "f1") (PVar "a1")) () (EMatch (EApp (EVar "normalize") (EVar "to")) (arm (PCon "TApp" (PVar "f2") (PVar "a2")) () (EApp (EApp (EApp (EVar "paramRenaming") (EVar "f1")) (EVar "f2")) (EApp (EApp (EApp (EVar "renameParam") (EApp (EVar "normalize") (EVar "a1"))) (EVar "a2")) (EVar "acc")))) (arm PWild () (EVar "acc")))) (arm PWild () (EVar "acc"))))
+(DTypeSig false "renameParam" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
+(DFunDef false "renameParam" ((PCon "TVar" (PVar "c")) (PVar "to") (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EBinOp "::" (ETuple (EApp (EVar "tyvarId") (EVar "c")) (EVar "to")) (EVar "ts")) (EVar "es") (EVar "qs")))
+(DFunDef false "renameParam" ((PCon "TEff" (PCon "EffRow" (PList) (PCon "Some" (PVar "e1")))) (PCon "TEff" (PCon "EffRow" (PList) (PCon "Some" (PVar "e2")))) (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EVar "ts") (EBinOp "::" (ETuple (EApp (EVar "effvarId") (EVar "e1")) (EVar "e2")) (EVar "es")) (EVar "qs")))
+(DFunDef false "renameParam" ((PCon "TAuth" (PCon "AVar" (PVar "q1"))) (PCon "TAuth" (PVar "q2")) (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EVar "ts") (EVar "es") (EBinOp "::" (ETuple (EApp (EVar "authvarId") (EVar "q1")) (EVar "q2")) (EVar "qs"))))
+(DFunDef false "renameParam" (PWild PWild (PVar "acc")) (EVar "acc"))
+(DTypeSig false "fieldTypeSame" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "fieldTypeSame" ((PVar "x") (PVar "y")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "x")) (EApp (EVar "normalize") (EVar "y"))) (arm (PTuple (PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "rowSame") (EVar "r1")) (EVar "r2"))) (EApp (EApp (EVar "fieldTypeSame") (EVar "b1")) (EVar "b2")))) (arm (PTuple (PCon "TApp" (PVar "a1") (PVar "b1")) (PCon "TApp" (PVar "a2") (PVar "b2"))) () (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "fieldTypeSame") (EVar "b1")) (EVar "b2")))) (arm (PTuple (PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) () (EApp (EApp (EVar "rowSame") (EVar "r1")) (EVar "r2"))) (arm (PTuple (PCon "TQual" (PVar "t1") (PVar "q1")) (PCon "TQual" (PVar "t2") (PVar "q2"))) () (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "t1")) (EVar "t2")) (EApp (EApp (EVar "authSame") (EVar "q1")) (EVar "q2")))) (arm (PTuple (PCon "TAuth" (PVar "q1")) (PCon "TAuth" (PVar "q2"))) () (EApp (EApp (EVar "authSame") (EVar "q1")) (EVar "q2"))) (arm (PTuple (PCon "TFun" PWild PWild PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TApp" PWild PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TEff" PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TAuth" PWild) PWild) () (EVar "False")) (arm (PTuple (PVar "a") (PVar "b")) () (EApp (EApp (EVar "monoSameGiven") (EVar "a")) (EVar "b")))))
+(DTypeSig false "rowSame" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Bool"))))
+(DFunDef false "rowSame" ((PVar "r1") (PVar "r2")) (EBlock (DoLet false false (PTuple (PVar "atoms1") (PVar "tails1")) (EApp (EVar "rowFlat") (EVar "r1"))) (DoLet false false (PTuple (PVar "atoms2") (PVar "tails2")) (EApp (EVar "rowFlat") (EVar "r2"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "map") (EVar "effvarId")) (EVar "tails1")) (EApp (EApp (EVar "map") (EVar "effvarId")) (EVar "tails2"))) (EApp (EApp (EVar "atomsSame") (EApp (EVar "atomsNorm") (EVar "atoms1"))) (EApp (EVar "atomsNorm") (EVar "atoms2")))))))
+(DTypeSig false "atomsSame" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Bool"))))
+(DFunDef false "atomsSame" ((PList) (PList)) (EVar "True"))
+(DFunDef false "atomsSame" ((PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "atomKey") (EVar "y"))) (EApp (EApp (EVar "authSame") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EApp (EApp (EVar "atomsSame") (EVar "xs")) (EVar "ys"))))
+(DFunDef false "atomsSame" (PWild PWild) (EVar "False"))
+(DTypeSig false "authSame" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
+(DFunDef false "authSame" ((PVar "p") (PVar "q")) (EBinOp "&&" (EApp (EApp (EVar "authSub") (EVar "p")) (EVar "q")) (EApp (EApp (EVar "authSub") (EVar "q")) (EVar "p"))))
+(DTypeSig false "pushCtorFieldConflict" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CtorFieldConflict") (TyCon "Unit")))))
+(DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorWithholds" (PVar "sib"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-NOT-IN-ALL-CTORS"))) (EApp (EApp (EApp (EVar "fieldNotInAllCtorsMsg") (EVar "fname")) (EVar "tname")) (EVar "sib"))))
+(DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorSlotsDiffer" (PVar "a") (PVar "i") (PVar "b") (PVar "j"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-POSITION-DIFFERS"))) (EApp (EApp (EApp (EApp (EVar "fieldPositionDiffersMsg") (EVar "fname")) (EVar "tname")) (ETuple (EVar "a") (EVar "i"))) (ETuple (EVar "b") (EVar "j")))))
+(DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorTypesDiffer" (PVar "a") (PVar "ta") (PVar "b") (PVar "tb"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-TYPE-DIFFERS"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldTypeDiffersMsg") (EVar "fname")) (EVar "tname")) (EVar "a")) (EVar "ta")) (EVar "b")) (EVar "tb"))))
 (DTypeSig false "fieldNotInAllCtorsMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "fieldNotInAllCtorsMsg" ((PVar "fname") (PVar "tname") (PVar "sib")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is not declared by every constructor of '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "': constructor '"))) (EApp (EVar "display") (EVar "sib"))) (ELit (LString "' has no '"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "'. A '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' cannot be resolved; match on the constructor instead"))))
+(DTypeSig false "fieldPositionDiffersMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String"))))))
+(DFunDef false "fieldPositionDiffersMsg" ((PVar "fname") (PVar "tname") (PTuple (PVar "a") (PVar "i")) (PTuple (PVar "b") (PVar "j"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is at different positions in the constructors of '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "': it is field "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString " of '"))) (EApp (EVar "display") (EVar "a"))) (ELit (LString "' but field "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "j") (ELit (LInt 1)))))) (ELit (LString " of '"))) (EApp (EVar "display") (EVar "b"))) (ELit (LString "'. A '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' cannot be resolved; match on the constructor instead"))))
+(DTypeSig false "fieldTypeDiffersMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "String"))))))))
+(DFunDef false "fieldTypeDiffersMsg" ((PVar "fname") (PVar "tname") (PVar "a") (PVar "ta") (PVar "b") (PVar "tb")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "sa") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "ta"))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "tb"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' has different types in the constructors of '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "': it is '"))) (EApp (EVar "display") (EVar "sa"))) (ELit (LString "' in '"))) (EApp (EVar "display") (EVar "a"))) (ELit (LString "' but '"))) (EApp (EVar "display") (EVar "sb"))) (ELit (LString "' in '"))) (EApp (EVar "display") (EVar "b"))) (ELit (LString "'. A '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' cannot be typed; match on the constructor instead"))))))
+(DTypeSig false "recordUpdateWellTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Unit"))))))
+(DFunDef false "recordUpdateWellTyped" ((PVar "bt") (PVar "rname") (PVar "ri") (PVar "fn")) (EMatch (EApp (EVar "headTyconMono") (EVar "bt")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "hk")) () (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UPDATE-MULTI-CTOR"))) (EApp (EApp (EApp (EApp (EApp (EVar "updateMultiCtorMsg") (EVar "fn")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "bt")))) (EVar "rname")) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "fn")))) (EApp (EVar "recordFieldNames") (EVar "ri")))) (EVar "ctors")))) (arm PWild () (ELit LUnit))) (ELit LUnit)))))
+(DTypeSig false "updateMultiCtorMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "updateMultiCtorMsg" ((PVar "fn") (PVar "tname") (PVar "rname") (PVar "others") (PVar "ctors")) (EBlock (DoLet false false (PVar "pat") (EIf (EApp (EVar "isEmptyL") (EVar "others")) (ELit (LString "...")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fn"))) (ELit (LString " = ..."))) (EVar "others")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Record update of '")) (EApp (EVar "display") (EVar "fn"))) (ELit (LString "' is not supported on '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "': it has more than one constructor ("))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ctors")))) (ELit (LString "), and the type does not say which one the value holds. Match on the constructor and build the new value in its arm, e.g. '"))) (EApp (EVar "display") (EVar "rname"))) (ELit (LString " { "))) (EApp (EVar "display") (EVar "pat"))) (ELit (LString " } => "))) (EApp (EVar "display") (EVar "rname"))) (ELit (LString " { "))) (EApp (EVar "display") (EVar "rebuilt"))) (ELit (LString " }'"))))))
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "fieldOwnerReachFilter") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
 (DTypeSig false "fieldOwnerReachFilter" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -56502,13 +56713,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "fieldOwnerAnyReachable" ((PList)) (EVar "False"))
 (DFunDef false "fieldOwnerAnyReachable" ((PCons (PVar "m") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef") "value")) (EApp (EVar "fieldOwnerAnyReachable") (EVar "rest"))))
 (DTypeSig false "resolveFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "te")) (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "receiverTypeWord") (EVar "te")) (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "receiverTypeWord") (EVar "te")) (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
 (DTypeSig false "lookupRecordForReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
 (DFunDef false "lookupRecordForReceiver" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "recordForReceiverIdent") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EMatch (EApp (EVar "lookupRecordByName") (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EIf (EApp (EApp (EVar "recordOfOtherType") (EVar "te")) (EVar "ri")) (EVar "None") (EApp (EVar "Some") (EVar "ri")))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "recordOfOtherType" (TyFun (TyCon "Mono") (TyFun (TyCon "RecordInfo") (TyCon "Bool"))))
 (DFunDef false "recordOfOtherType" ((PVar "te") (PCon "RecordInfo" PWild PWild (PVar "res") PWild PWild)) (EMatch (ETuple (EApp (EVar "receiverTypeIdent") (EVar "te")) (EApp (EVar "receiverTypeIdent") (EVar "res"))) (arm (PTuple (PCon "Some" (PCon "Ident" PWild (PVar "wo") (PVar "wn"))) (PCon "Some" (PCon "Ident" PWild (PVar "ro") (PVar "rn")))) () (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "wn") (EVar "rn")) (EBinOp "==" (EVar "wo") (EVar "ro"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "recordForReceiverIdent" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
-(DFunDef false "recordForReceiverIdent" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
+(DFunDef false "recordForReceiverIdent" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "r")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
 (DTypeSig false "receiverTypeWord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "receiverTypeWord" ((PVar "te") (PVar "r")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (EVar "r"))))
 (DTypeSig false "receiverTypeIdent" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Ident"))))
@@ -56518,27 +56729,39 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "recordCandForType" ((PVar "want") (PCons (PTuple (PVar "ci") (PVar "tyName") (PVar "ri")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "recordCandIsType") (EVar "want")) (EVar "ci")) (EVar "tyName")) (EApp (EVar "Some") (EVar "ri")) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordCandForType") (EVar "want")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordCandIsType" (TyFun (TyCon "Ident") (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "recordCandIsType" ((PCon "Ident" PWild (PVar "wio") (PVar "wname")) (PCon "Ident" PWild (PVar "cio") PWild) (PVar "tyName")) (EBinOp "&&" (EBinOp "==" (EVar "tyName") (EVar "wname")) (EBinOp "==" (EVar "cio") (EVar "wio"))))
-(DTypeSig false "lookupRecordByMangledHead" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
-(DFunDef false "lookupRecordByMangledHead" ((PVar "te") (PVar "head") (PVar "fname")) (EMatch (EApp (EApp (EVar "mangledHeadCandidates") (EVar "head")) (EVar "fname")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PVar "cands") () (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EVar "cands")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm PWild () (EVar "None"))))))))
 (DTypeSig false "recordCandIsReceiverDecl" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "Bool"))))
 (DFunDef false "recordCandIsReceiverDecl" ((PVar "rk") (PTuple PWild (PVar "ri"))) (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
 (DTypeSig false "recordResultMono" (TyFun (TyCon "RecordInfo") (TyCon "Mono")))
 (DFunDef false "recordResultMono" ((PCon "RecordInfo" PWild PWild (PVar "result") PWild PWild)) (EVar "result"))
-(DTypeSig false "mangledHeadCandidates" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "mangledHeadCandidates" ((PVar "head") (PVar "fname")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value")))))
-(DTypeSig false "mangledHeadCandidatesGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "mangledHeadCandidatesGo" (PWild (PList)) (EListLit))
-(DFunDef false "mangledHeadCandidatesGo" ((PVar "head") (PCons (PVar "key") (PVar "rest"))) (EIf (EApp (EApp (EVar "endsWith") (EBinOp "++" (ELit (LString "__")) (EVar "head"))) (EVar "key")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EBlock (DoLet false false (PVar "owners") (EApp (EVar "fieldOwnerNames") (EVar "fname"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ownerDeclOfReceiver") (EVar "te")) (EVar "fname")) (EVar "owners")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "owners") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))))))
+(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EBlock (DoLet false false (PVar "owners") (EApp (EVar "fieldOwnerNames") (EVar "fname"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ownerDeclOfReceiver") (EVar "te")) (EVar "fname")) (EVar "owners")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "owners") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm PWild () (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EApp (EApp (EVar "resolveFieldUnknownReceiver") (EVar "fname")) (EVar "owners"))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EVar "owners")))))))))))
+(DTypeSig false "resolveFieldUnknownReceiver" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "resolveFieldUnknownReceiver" ((PVar "fname") (PVar "owners")) (EMatch (EApp (EApp (EVar "visibleFieldDecls") (EVar "fname")) (EVar "owners")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PList) () (EMatch (EVar "owners") (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))))) (arm (PVar "cands") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EApp (EVar "ambiguousFieldDeclsMsg") (EVar "fname")) (EVar "owners")) (EVar "cands")))) (DoExpr (EVar "None"))))))
+(DTypeSig false "visibleFieldDecls" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "visibleFieldDecls" ((PVar "fname") (PVar "owners")) (EApp (EApp (EVar "dedupBy") (EVar "fieldDeclTypeKey")) (EApp (EVar "fieldDeclReachFilter") (EApp (EApp (EVar "flatMap") (EApp (EVar "keyFieldDecls") (EVar "fname"))) (EVar "owners")))))
+(DTypeSig false "keyFieldDecls" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "keyFieldDecls" ((PVar "fname") (PVar "k")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "map") (ELam ((PVar "c")) (ETuple (EVar "k") (EApp (EVar "recordCandInfo") (EVar "c"))))) (EApp (EApp (EVar "spCandsOf") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")))) (DoLet false false (PVar "floor") (EMatch (EApp (EVar "pairRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "pair")) () (EListLit (EVar "pair"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EApp (EVar "recordFieldMap") (EApp (EVar "snd") (EVar "c")))))) (EBinOp "++" (EVar "floor") (EVar "rows"))))))
+(DTypeSig false "fieldDeclReachFilter" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
+(DFunDef false "fieldDeclReachFilter" ((PVar "cands")) (EMatch (EApp (EApp (EVar "filterList") (EVar "fieldDeclReachable")) (EVar "cands")) (arm (PList) () (EVar "cands")) (arm (PVar "kept") () (EVar "kept"))))
+(DTypeSig false "fieldDeclReachable" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "Bool")))
+(DFunDef false "fieldDeclReachable" ((PTuple PWild (PVar "ri"))) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "reach") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef") "value")) (DoExpr (EBinOp "||" (EBinOp "==" (EApp (EVar "omSize") (EVar "reach")) (ELit (LInt 0))) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "reach"))))))))
+(DTypeSig false "fieldDeclTypeKey" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclTypeKey" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri"))) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (EVar "k"))))
+(DTypeSig false "ambiguousFieldDeclsMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyCon "String")))))
+(DFunDef false "ambiguousFieldDeclsMsg" ((PVar "fname") (PVar "owners") (PVar "cands")) (EBlock (DoLet false false (PVar "keys") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "cands"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "dedup") (EVar "keys"))) (EApp (EVar "listLen") (EVar "keys"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")) (EBlock (DoLet false false (PVar "tys") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "fieldDeclTypeName")) (EVar "cands")))) (DoLet false false (PVar "descrs") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "fieldDeclDescr")) (EVar "cands")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous field access: '.")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is declared by "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " and by "))) (EVar "descrs")))) (ELit (LString "; the record type is undetermined. Add a type annotation (e.g. '(r : "))) (EApp (EVar "display") (EApp (EVar "headL") (EVar "tys")))) (ELit (LString ")."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "')")))))))))
+(DTypeSig false "fieldDeclTypeName" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclTypeName" ((PTuple (PVar "k") (PVar "ri"))) (EApp (EApp (EVar "optionOr") (EVar "k")) (EApp (EVar "headTyconNameMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
+(DTypeSig false "fieldDeclDescr" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclDescr" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "Some" (PVar "mid")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "' from module '"))) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "'")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "'"))))))
 (DTypeSig false "ownerDeclOfReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "ownerDeclOfReceiver" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "ownerDeclOfReceiver" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "owners")) (arm (PList (PTuple (PVar "k") (PVar "ri"))) () (EIf (EApp (EApp (EApp (EVar "narrowingBlockedByCtorSibling") (EApp (EVar "headTyconMono") (EVar "te"))) (EVar "fname")) (EVar "k")) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri"))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "ownerDeclMatches" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
 (DFunDef false "ownerDeclMatches" (PWild (PList)) (EListLit))
-(DFunDef false "ownerDeclMatches" ((PVar "ident") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "k") (EVar "ri")) (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))))))))
+(DFunDef false "ownerDeclMatches" ((PVar "ident") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value"))) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "k") (EVar "ri")) (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))))))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
-(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "fname")) (EVar "owners")))))
+(DFunDef false "resolveFieldAmbiguous" (PWild PWild (PList (PVar "r"))) (EApp (EVar "pairRecordByName") (EVar "r")))
+(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EApp (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "fname")) (EVar "owners")))
 (DTypeSig false "resolveFieldOwnersNarrowed" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldOwnersNarrowed" ((PVar "te") (PVar "fname") (PVar "owners")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "narrowedPick") (EVar "rk")) (EVar "fname")) (EVar "owners")) (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EApp (EVar "ownerCandidates") (EVar "owners")))))))
 (DTypeSig false "narrowedPick" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))))
@@ -56547,15 +56770,20 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "narrowingBlockedByCtorSibling" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "narrowingBlockedByCtorSibling" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EVar "rk")) (EVar "fname")) (EVar "survivorKey"))))
 (DTypeSig false "ctorSiblingWithholdingName" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EVar "ctorOracleKeyOf") (EVar "rk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))))
+(DFunDef false "ctorSiblingWithholdingName" ((PCon "None") PWild PWild) (EVar "None"))
+(DFunDef false "ctorSiblingWithholdingName" ((PCon "Some" (PVar "hk")) (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "hk")) (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))
 (DTypeSig false "ctorOracleKeyOf" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "Option") (TyCon "TabKey"))))
 (DFunDef false "ctorOracleKeyOf" ((PCon "None")) (EVar "None"))
 (DFunDef false "ctorOracleKeyOf" ((PCon "Some" (PVar "hk"))) (EApp (EVar "headKeyDecl") (EVar "hk")))
-(DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "firstCtorSiblingWithholding" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstCtorSiblingWithholding" ((PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "ctorSiblingWithholds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorSiblingWithholds" ((PVar "fname") (PVar "k")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))))) (arm (PCon "None") () (EVar "True"))))
+(DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "firstCtorSiblingWithholding" (PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstCtorSiblingWithholding" ((PVar "hk") (PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "hk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "hk")) (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "hk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "ctorSiblingWithholds" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "ctorSiblingWithholds" ((PVar "hk") (PVar "fname") (PVar "k")) (EMatch (EApp (EApp (EVar "ctorRecordOfType") (EVar "hk")) (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))))) (arm (PCon "None") () (EVar "True"))))
+(DTypeSig false "ctorRecordOfType" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "ctorRecordOfType" ((PVar "hk") (PVar "k")) (EMatch (EApp (EApp (EVar "ctorRecordFromCompanion") (EVar "hk")) (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EIf (EApp (EApp (EVar "recordCandIsReceiverDecl") (EApp (EVar "Some") (EVar "hk"))) (ETuple (EVar "k") (EVar "ri"))) (EApp (EVar "Some") (EVar "ri")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
+(DTypeSig false "ctorRecordFromCompanion" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "ctorRecordFromCompanion" ((PVar "hk") (PVar "k")) (EMatch (EApp (EVar "headKeyIdent") (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
 (DTypeSig false "ownerCandidates" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
 (DFunDef false "ownerCandidates" ((PList)) (EListLit))
 (DFunDef false "ownerCandidates" ((PCons (PVar "key") (PVar "rest"))) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EVar "ownerCandidates") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "ownerCandidates") (EVar "rest")))))
@@ -56609,7 +56837,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferRecordUpdateField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono")))))))
 (DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "r")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
 (DTypeSig false "inferRecordUpdatePicked" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
-(DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EApp (EVar "instantiateRecordUpdate") (EVar "rname")) (EVar "ri")) (EApp (EVar "assignedFieldNames") (EVar "fields")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
+(DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EApp (EVar "instantiateRecordUpdate") (EVar "rname")) (EVar "ri")) (EApp (EVar "assignedFieldNames") (EVar "fields")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EMatch (EApp (EVar "firstFieldName") (EVar "fields")) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EVar "recordUpdateWellTyped") (EVar "bt")) (EVar "rname")) (EVar "ri")) (EVar "fn"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferRecordUpdateWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
 (DFunDef false "inferRecordUpdateWith" ((PVar "env") (PVar "rname") (PVar "base") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EApp (EVar "instantiateRecordUpdate") (EVar "rname")) (EVar "ri")) (EApp (EVar "assignedFieldNames") (EVar "fields")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base"))) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferBinopE" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono")))))))
@@ -58603,22 +58831,19 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "exportsIdentFor" (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyCon "Bool")))))
 (DFunDef false "exportsIdentFor" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "exportsIdentFor" ((PVar "n") (PVar "ident") (PCons (PTuple (PVar "en") (PVar "ei")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "en") (EVar "n")) (EBinOp "==" (EVar "ei") (EVar "ident"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "exportsIdentFor") (EVar "n")) (EVar "ident")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "insertCtorIdents" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "insertCtorIdents" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "insertCtorIdents" ((PVar "env") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env")) (EListLit (EVar "d"))) (EVar "acc"))))
-(DFunDef false "insertCtorIdents" ((PVar "env") (PCons (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "insertVariantIdents") (EVar "env")) (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataCtors")) (EVar "acc"))))
-(DFunDef false "insertCtorIdents" ((PVar "env") (PCons (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeCtor" None) (rf "newtypeOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addCtorIdentCand") (EVar "env")) (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeCtor")) (EVar "acc"))))
-(DFunDef false "insertCtorIdents" ((PVar "env") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env")) (EVar "rest")) (EVar "acc")))
-(DTypeSig false "insertVariantIdents" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "insertVariantIdents" (PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "insertVariantIdents" ((PVar "env") (PVar "tyName") (PVar "o") (PCons (PCon "Variant" (PVar "cn") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "insertVariantIdents") (EVar "env")) (EVar "tyName")) (EVar "o")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addCtorIdentCand") (EVar "env")) (EVar "tyName")) (EVar "o")) (EVar "cn")) (EVar "acc"))))
-(DTypeSig false "addCtorIdentCand" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "addCtorIdentCand" ((PVar "env") (PVar "tyName") (PVar "o") (PVar "cn") (PTuple (PVar "cands") (PVar "collided"))) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (ETuple (EVar "cands") (EVar "collided"))) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "lookupCtor") (EVar "env")) (EVar "cn")) (arm (PCon "None") () (ETuple (EVar "cands") (EVar "collided"))) (arm (PCon "Some" (PVar "s")) () (EBlock (DoLet false false (PVar "prior") (EApp (EApp (EVar "dropCtorIdentCand") (EVar "ident")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EVar "cands"))))) (DoLet false false (PVar "next") (EBinOp "++" (EVar "prior") (EListLit (ETuple (EVar "ident") (EVar "tyName") (EVar "s"))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EVar "cands")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "next")) (ELit (LInt 2))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "cn")) (EVar "collided")))) (EBinOp "::" (EVar "cn") (EVar "collided")) (EVar "collided"))))))))))
-(DTypeSig false "dropCtorIdentCand" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme"))))))
-(DFunDef false "dropCtorIdentCand" (PWild (PList)) (EListLit))
-(DFunDef false "dropCtorIdentCand" ((PVar "ident") (PCons (PAs "c" (PTuple (PVar "i") PWild PWild)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "ident")) (EApp (EApp (EVar "dropCtorIdentCand") (EVar "ident")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EApp (EApp (EVar "dropCtorIdentCand") (EVar "ident")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "insertCtorPop" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyApp (TyCon "SpellingPop") (TyCon "Scheme"))))))
+(DFunDef false "insertCtorPop" (PWild (PList) (PVar "pop")) (EVar "pop"))
+(DFunDef false "insertCtorPop" ((PVar "env") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env")) (EListLit (EVar "d"))) (EVar "pop"))))
+(DFunDef false "insertCtorPop" ((PVar "env") (PCons (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "insertCtorVariants") (EVar "env")) (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataCtors")) (EVar "pop"))))
+(DFunDef false "insertCtorPop" ((PVar "env") (PCons (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeCtor" None) (rf "newtypeOrigin" None)) true) (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "insertCtorRow") (EVar "env")) (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeCtor")) (EVar "pop"))))
+(DFunDef false "insertCtorPop" ((PVar "env") (PCons PWild (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env")) (EVar "rest")) (EVar "pop")))
+(DTypeSig false "insertCtorVariants" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyApp (TyCon "SpellingPop") (TyCon "Scheme"))))))))
+(DFunDef false "insertCtorVariants" (PWild PWild PWild (PList) (PVar "pop")) (EVar "pop"))
+(DFunDef false "insertCtorVariants" ((PVar "env") (PVar "tyName") (PVar "o") (PCons (PCon "Variant" (PVar "cn") PWild) (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EApp (EApp (EVar "insertCtorVariants") (EVar "env")) (EVar "tyName")) (EVar "o")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "insertCtorRow") (EVar "env")) (EVar "tyName")) (EVar "o")) (EVar "cn")) (EVar "pop"))))
+(DTypeSig false "insertCtorRow" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyApp (TyCon "SpellingPop") (TyCon "Scheme"))))))))
+(DFunDef false "insertCtorRow" ((PVar "env") (PVar "tyName") (PVar "o") (PVar "cn") (PVar "pop")) (EMatch (EApp (EApp (EVar "lookupCtor") (EVar "env")) (EVar "cn")) (arm (PCon "None") () (EVar "pop")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EApp (EApp (EVar "spInsert") (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn"))) (EVar "cn")) (EVar "tyName")) (EVar "s")) (EVar "pop")))))
 (DTypeSig false "applyCtorScopeOverrides" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "TcEnv") (TyCon "TcEnv"))))
-(DFunDef false "applyCtorScopeOverrides" ((PVar "prog") (PVar "env")) (EApp (EApp (EApp (EApp (EVar "overrideScopedCtors") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorIdentsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorCollidedRef") "value")) (EVar "env")))
+(DFunDef false "applyCtorScopeOverrides" ((PVar "prog") (PVar "env")) (EBlock (DoLet false false (PVar "pop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")) (DoExpr (EApp (EApp (EApp (EApp (EVar "overrideScopedCtors") (EVar "prog")) (EApp (EVar "spRows") (EVar "pop"))) (EApp (EVar "spCollided") (EVar "pop"))) (EVar "env")))))
 (DTypeSig false "overrideScopedCtors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "TcEnv") (TyCon "TcEnv"))))))
 (DFunDef false "overrideScopedCtors" (PWild PWild (PList) (PVar "env")) (EVar "env"))
 (DFunDef false "overrideScopedCtors" ((PVar "prog") (PVar "cands") (PCons (PVar "n") (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "env2") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "cands")) (arm (PCon "None") () (EVar "env")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EApp (EVar "scopedCtorEntry") (EVar "prog")) (EVar "n")) (EVar "cs")) (arm (PCon "None") () (EVar "env")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "addCtor") (EVar "env")) (EVar "n")) (EVar "s"))))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "overrideScopedCtors") (EVar "prog")) (EVar "cands")) (EVar "rest")) (EVar "env2")))))
@@ -58656,22 +58881,19 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "exportsCtorIdentFor" (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))) (TyCon "Bool")))))
 (DFunDef false "exportsCtorIdentFor" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "exportsCtorIdentFor" ((PVar "n") (PVar "ident") (PCons (PTuple (PVar "cn") PWild (PVar "ci")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "cn") (EVar "n")) (EBinOp "==" (EVar "ci") (EVar "ident"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "exportsCtorIdentFor") (EVar "n")) (EVar "ident")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "insertRecordIdents" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "insertRecordIdents" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "insertRecordIdents" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertRecordIdents") (EVar "rest")) (EApp (EApp (EVar "insertRecordIdents") (EListLit (EVar "d"))) (EVar "acc"))))
-(DFunDef false "insertRecordIdents" ((PCons (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertRecordIdents") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariantIdents") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataCtors")) (EVar "acc"))))
-(DFunDef false "insertRecordIdents" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertRecordIdents") (EVar "rest")) (EVar "acc")))
-(DTypeSig false "insertRecordVariantIdents" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "insertRecordVariantIdents" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "insertRecordVariantIdents" ((PVar "tyName") (PVar "o") (PCons (PCon "Variant" (PVar "cn") (PCon "ConNamed" PWild PWild)) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariantIdents") (EVar "tyName")) (EVar "o")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "addRecordIdentCand") (EVar "tyName")) (EVar "o")) (EVar "cn")) (EVar "acc"))))
-(DFunDef false "insertRecordVariantIdents" ((PVar "tyName") (PVar "o") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariantIdents") (EVar "tyName")) (EVar "o")) (EVar "rest")) (EVar "acc")))
-(DTypeSig false "addRecordIdentCand" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "addRecordIdentCand" ((PVar "tyName") (PVar "o") (PVar "cn") (PTuple (PVar "cands") (PVar "collided"))) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (ETuple (EVar "cands") (EVar "collided"))) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EVar "lookupRecordByName") (EVar "cn")) (arm (PCon "None") () (ETuple (EVar "cands") (EVar "collided"))) (arm (PCon "Some" (PVar "ri")) () (EBlock (DoLet false false (PVar "prior") (EApp (EApp (EVar "dropRecordIdentCand") (EVar "ident")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EVar "cands"))))) (DoLet false false (PVar "next") (EBinOp "++" (EVar "prior") (EListLit (ETuple (EVar "ident") (EVar "tyName") (EVar "ri"))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EVar "cands")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "next")) (ELit (LInt 2))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "cn")) (EVar "collided")))) (EBinOp "::" (EVar "cn") (EVar "collided")) (EVar "collided"))))))))))
-(DTypeSig false "dropRecordIdentCand" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "dropRecordIdentCand" (PWild (PList)) (EListLit))
-(DFunDef false "dropRecordIdentCand" ((PVar "ident") (PCons (PAs "c" (PTuple (PVar "i") PWild PWild)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "ident")) (EApp (EApp (EVar "dropRecordIdentCand") (EVar "ident")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EApp (EApp (EVar "dropRecordIdentCand") (EVar "ident")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "insertRecordPop" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")))))
+(DFunDef false "insertRecordPop" ((PList) (PVar "pop")) (EVar "pop"))
+(DFunDef false "insertRecordPop" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "pop")) (EApp (EApp (EVar "insertRecordPop") (EVar "rest")) (EApp (EApp (EVar "insertRecordPop") (EListLit (EVar "d"))) (EVar "pop"))))
+(DFunDef false "insertRecordPop" ((PCons (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "pop")) (EApp (EApp (EVar "insertRecordPop") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariants") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataCtors")) (EVar "pop"))))
+(DFunDef false "insertRecordPop" ((PCons PWild (PVar "rest")) (PVar "pop")) (EApp (EApp (EVar "insertRecordPop") (EVar "rest")) (EVar "pop")))
+(DTypeSig false "insertRecordVariants" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")))))))
+(DFunDef false "insertRecordVariants" (PWild PWild (PList) (PVar "pop")) (EVar "pop"))
+(DFunDef false "insertRecordVariants" ((PVar "tyName") (PVar "o") (PCons (PCon "Variant" (PVar "cn") (PCon "ConNamed" PWild PWild)) (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariants") (EVar "tyName")) (EVar "o")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "insertRecordRow") (EVar "tyName")) (EVar "o")) (EVar "cn")) (EVar "pop"))))
+(DFunDef false "insertRecordVariants" ((PVar "tyName") (PVar "o") (PCons PWild (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariants") (EVar "tyName")) (EVar "o")) (EVar "rest")) (EVar "pop")))
+(DTypeSig false "insertRecordRow" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")))))))
+(DFunDef false "insertRecordRow" ((PVar "tyName") (PVar "o") (PVar "cn") (PVar "pop")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "cn")) (arm (PCon "None") () (EVar "pop")) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EApp (EApp (EApp (EVar "spInsert") (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn"))) (EVar "cn")) (EVar "tyName")) (EVar "ri")) (EVar "pop")))))
 (DTypeSig false "applyRecordScopeOverrides" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
-(DFunDef false "applyRecordScopeOverrides" ((PVar "prog")) (EApp (EApp (EApp (EVar "overrideScopedRecords") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordCollidedRef") "value")))
+(DFunDef false "applyRecordScopeOverrides" ((PVar "prog")) (EBlock (DoLet false false (PVar "pop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")) (DoExpr (EApp (EApp (EApp (EVar "overrideScopedRecords") (EVar "prog")) (EApp (EVar "spRows") (EVar "pop"))) (EApp (EVar "spCollided") (EVar "pop"))))))
 (DTypeSig false "overrideScopedRecords" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "overrideScopedRecords" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "overrideScopedRecords" ((PVar "prog") (PVar "cands") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "cands")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EApp (EVar "scopedRecordEntry") (EVar "prog")) (EVar "n")) (EVar "cs")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))))))) (DoExpr (EApp (EApp (EApp (EVar "overrideScopedRecords") (EVar "prog")) (EVar "cands")) (EVar "rest")))))
@@ -59452,7 +59674,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "tupleUnifyClash" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "tupleUnifyClash" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "tupleSpine") (EVar "a")) (EApp (EVar "tupleSpine") (EVar "b"))) (arm (PTuple (PCon "Some" (PVar "xs")) (PCon "Some" (PVar "ys"))) () (EBinOp "/=" (EApp (EVar "listLen") (EVar "xs")) (EApp (EVar "listLen") (EVar "ys")))) (arm (PTuple (PCon "Some" PWild) (PCon "None")) () (EApp (EVar "monoSpineHeadIsCon") (EVar "b"))) (arm (PTuple (PCon "None") (PCon "Some" PWild)) () (EApp (EVar "monoSpineHeadIsCon") (EVar "a"))) (arm (PTuple (PCon "None") (PCon "None")) () (EVar "False"))))
 (DTypeSig false "checkBodyImpl" (TyFun (TyCon "ModuleSeed") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "checkBodyImpl" ((PVar "moduleSeed") (PVar "mid") (PVar "implDecls") (PVar "prog0")) (EBlock (DoLet false false (PVar "seed") (EFieldAccess (EVar "moduleSeed") "msSchemes")) (DoLet false false PWild (EApp (EVar "resetState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EVar "mid"))) (DoLet false false (PVar "moduleScope") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "mid")) (EVar "ModuleOwner"))) (DoLet false false PWild (EApp (EVar "openScope") (EVar "moduleScope"))) (DoLet false false PWild (EApp (EVar "recordModuleStart") (EVar "mid"))) (DoLet false false PWild (EApp (EVar "reportAmbiguousImports") (EVar "prog0"))) (DoLet false false (PVar "prog") (EVar "prog0")) (DoLet false false (PVar "aliasSpellings") (EApp (EVar "aliasMethodSpellings") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "seedBuiltinClasses") (EVar "mid")) (EVar "prog"))) (DoLet false false (PVar "stampRes") (EBlock (DoLet false false (PTuple (PVar "top") (PVar "ids")) (EApp (EVar "stampTopScope") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "beginModuleMarking") (EVar "mid")) (EVar "prog")) (EVar "top")) (EVar "moduleSeed"))) (DoExpr (ETuple (EVar "prog") (EVar "ids"))))) (DoLet false false (PVar "progS") (EApp (EVar "fst") (EVar "stampRes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "snd") (EVar "stampRes")))) (EVar "omEmpty")))) (DoLet false false (PVar "groundUniverse") (EVar "implDecls")) (DoLet false false (PVar "superDecls") (EBinOp "++" (EVar "prog") (EVar "implDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "superDecls"))) (DoLet false false PWild (EApp (EVar "checkEffectParams") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkLetRecDecls") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "appendUniverseAccums") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "moduleImplUniv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "ieUniverseAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deImpls"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "residualUnivRef")) (EVar "moduleImplUniv"))) (DoLet false false (PVar "isMethod") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "methodNameDeclaredAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deMethods"))))) (DoLet false false (PVar "definerShadows") (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EVar "definerShadowsFromSet") (EVar "isMethod")) (EVar "prog0")))) (DoLet false false (PVar "importerShadows") (EIf (EApp (EVar "isEmptyL") (EVar "implDecls")) (EListLit) (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EApp (EVar "standaloneShadowsFromSet") (EVar "isMethod")) (EApp (EApp (EVar "omMapValues") (ELam (PWild) (ELit LUnit))) (EFieldAccess (EVar "moduleSeed") "msImportedValues"))) (EVar "prog0"))))) (DoLet false false (PVar "sigs") (EApp (EVar "sigsOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EApp (EApp (EVar "namesToSet") (EVar "definerShadows")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowSigsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls"))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef")) (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EVar "importerShadows") (EVar "definerShadows"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "methodDispatchIdxByIdRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false (PVar "admitted") (EApp (EVar "importDefinersOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "definerRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "originRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "importedSchemeOblsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importedSchemeOblEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (EVar "omEmpty")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeCtxRef")) (EApp (EVar "Some") (ETuple (EVar "prog") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodAliasEntriesRef")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "prog")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasMethodOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EVar "aliasSpellings")) (EVar "omEmpty")))))) (DoLet false false (PVar "dataEnv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false (PVar "cur") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "declEnvSeedDataUniverse") (EVar "mid")) (EVar "envs"))) (DoLet false false (PVar "base") (EApp (EApp (EVar "registerAllData") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv") "value")) (EApp (EApp (EApp (EVar "importedCtorTypeDeclsLastWins") (EVar "prog0")) (EVar "cur")) (EFieldAccess (EVar "envs") "deModules")))) (DoLet false false (PVar "env0") (EApp (EApp (EVar "registerAllData") (EVar "base")) (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "applyRecordScopeOverrides") (EVar "prog0"))) (DoExpr (EApp (EApp (EVar "applyCtorScopeOverrides") (EVar "prog0")) (EVar "env0"))))) (DoLet false false PWild (EApp (EVar "recordInvocationView") (EVar "dataEnv"))) (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVars") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclaredKinds") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclAuthorityUses") (EVar "prog"))) (DoLet false false (PVar "classEnvHere") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (ETuple (EFieldAccess (EVar "envs") "deIfaces") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs")))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkGradedImplHeads") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoLet false false (PVar "currentMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "recordMethodGrants") (EVar "currentMethodRows"))) (DoLet false false (PVar "visibleMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "implDecls"))) (DoLet false false (PVar "visibleMethodRowIndex") (EApp (EApp (EApp (EVar "methodRowsByIdentity") (EApp (EVar "isNonEmptyL") (EVar "importerShadows"))) (EVar "visibleMethodRows")) (EVar "regEmpty"))) (DoLet false false (PVar "externS") (EApp (EApp (EVar "userExternSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "prog"))) (DoLet false false (PVar "globalS") (EBinOp "++" (EApp (EVar "legacyMethodSchemes") (EVar "currentMethodRows")) (EVar "externS"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCrossable") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsLabelled") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsShadow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsReserved") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCatalogRow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false (PVar "envSeed") (EApp (EApp (EVar "extendVars") (EVar "dataEnv")) (EVar "seed"))) (DoLet false false (PVar "shadowLayer") (EBlock (DoLet false false (PVar "ifaceSchemes") (EApp (EVar "legacyMethodSchemes") (EVar "visibleMethodRows"))) (DoLet false false PWild (EApp (EVar "seedNumLitFromIntAnchor") (EVar "visibleMethodRows"))) (DoLet false false (PVar "sm") (EApp (EApp (EApp (EApp (EVar "pickSchemesByDecl") (EVar "importerShadows")) (EVar "ifaceSchemes")) (EVar "visibleMethodRowIndex")) (EFieldAccess (EVar "moduleSeed") "msImportedValues"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef") "value")))) (DoExpr (EApp (EApp (EVar "attachStandaloneSources") (EFieldAccess (EVar "moduleSeed") "msImportedValues")) (EVar "sm"))))) (DoLet false false (PVar "envImported") (EApp (EApp (EApp (EApp (EApp (EVar "annotateImportedMethodRows") (EVar "envSeed")) (EApp (EApp (EVar "importedMethodBindingNames") (EVar "prog0")) (EVar "aliasSpellings"))) (EApp (EVar "nameableIfaceMethodSet") (EVar "prog0"))) (EApp (EApp (EVar "namesToSet") (EVar "importerShadows")) (EVar "omEmpty"))) (EVar "visibleMethodRowIndex"))) (DoLet false false (PVar "envGlobal") (EApp (EApp (EVar "extendVars") (EApp (EApp (EVar "extendMethodRows") (EVar "envImported")) (EVar "currentMethodRows"))) (EVar "externS"))) (DoLet false false (PVar "env1") (EApp (EApp (EVar "extendBindings") (EVar "envGlobal")) (EVar "shadowLayer"))) (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "progS"))) (DoLet false false (PTuple (PVar "topSchemes") (PVar "groupedOut")) (EApp (EApp (EApp (EApp (EApp (EVar "processTopGroups") (EVar "env1")) (EVar "sigs")) (EVar "defs")) (EApp (EApp (EVar "groupNames") (EVar "defs")) (EVar "omEmpty"))) (EApp (EApp (EVar "namesToSet") (EApp (EVar "publicValNames") (EVar "prog"))) (EVar "omEmpty")))) (DoLet false false (PVar "progOut") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EApp (EVar "finishModuleMarking") (EVar "mm")) (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (EVar "groupedOut")) (EVar "progS"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false (PVar "progT") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EVar "stampTailDecls") (EFieldAccess (EVar "mm") "mmTop")) (EVar "progOut"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false PWild (EBlock (DoLet false false (PVar "bodyEnv") (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "inferUserImplBodies") (EVar "bodyEnv")) (EVar "implDecls")) (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoLet false false PWild (EApp (EVar "dedupPredicateSlotsTable") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef")) (EApp (EVar "predicateSlotTableWithoutArgs") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value")))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "emptyMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EApp (EApp (EApp (EVar "attributeMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "attributeModuleSchemeObls") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "groundMultiParamObligations") (EVar "groundUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkImplCompletenessMap") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EBlock (DoLet false false (PVar "obUniv") (EVar "moduleImplUniv")) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "True")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "False")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls") "items") "value"))) (DoLet false false PWild (EApp (EVar "settleDeferredPatLits") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "checkDeferredMatches") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchChecksDeferred") "value")))) (DoLet false false PWild (EApp (EVar "checkFixedWidthLiterals") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRanges") "value"))) (DoLet false false PWild (EApp (EVar "checkWideLiterals") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "wideLitRanges") "value"))) (DoLet false false PWild (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))) (DoExpr (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut")) (EApp (EVar "mapLocalSchemes") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "seedSchemesOut")) (EVar "seed"))) (DoLet false false PWild (EApp (EApp (EVar "appendDataUniverse") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "result") (ETuple (ERecordCreate "ModuleBindings" ((fa "mbSchemes" (EBinOp "++" (EVar "globalS") (EVar "topSchemes"))) (fa "mbStandaloneSchemes" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "topSchemes"))) (EVar "omEmpty"))))) (EVar "progOut"))) (DoLet false false PWild (EApp (EVar "closeScope") (ELit LUnit))) (DoExpr (EVar "result"))))
+(DFunDef false "checkBodyImpl" ((PVar "moduleSeed") (PVar "mid") (PVar "implDecls") (PVar "prog0")) (EBlock (DoLet false false (PVar "seed") (EFieldAccess (EVar "moduleSeed") "msSchemes")) (DoLet false false PWild (EApp (EVar "resetState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EVar "mid"))) (DoLet false false (PVar "moduleScope") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "mid")) (EVar "ModuleOwner"))) (DoLet false false PWild (EApp (EVar "openScope") (EVar "moduleScope"))) (DoLet false false PWild (EApp (EVar "recordModuleStart") (EVar "mid"))) (DoLet false false PWild (EApp (EVar "reportAmbiguousImports") (EVar "prog0"))) (DoLet false false (PVar "prog") (EVar "prog0")) (DoLet false false (PVar "aliasSpellings") (EApp (EVar "aliasMethodSpellings") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "seedBuiltinClasses") (EVar "mid")) (EVar "prog"))) (DoLet false false (PVar "stampRes") (EBlock (DoLet false false (PTuple (PVar "top") (PVar "ids")) (EApp (EVar "stampTopScope") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "beginModuleMarking") (EVar "mid")) (EVar "prog")) (EVar "top")) (EVar "moduleSeed"))) (DoExpr (ETuple (EVar "prog") (EVar "ids"))))) (DoLet false false (PVar "progS") (EApp (EVar "fst") (EVar "stampRes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "snd") (EVar "stampRes")))) (EVar "omEmpty")))) (DoLet false false (PVar "groundUniverse") (EVar "implDecls")) (DoLet false false (PVar "superDecls") (EBinOp "++" (EVar "prog") (EVar "implDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "superDecls"))) (DoLet false false PWild (EApp (EVar "checkEffectParams") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkLetRecDecls") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "appendUniverseAccums") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "moduleImplUniv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "ieUniverseAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deImpls"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "residualUnivRef")) (EVar "moduleImplUniv"))) (DoLet false false (PVar "isMethod") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "methodNameDeclaredAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deMethods"))))) (DoLet false false (PVar "definerShadows") (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EVar "definerShadowsFromSet") (EVar "isMethod")) (EVar "prog0")))) (DoLet false false (PVar "importerShadows") (EIf (EApp (EVar "isEmptyL") (EVar "implDecls")) (EListLit) (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EApp (EVar "standaloneShadowsFromSet") (EVar "isMethod")) (EApp (EApp (EVar "omMapValues") (ELam (PWild) (ELit LUnit))) (EFieldAccess (EVar "moduleSeed") "msImportedValues"))) (EVar "prog0"))))) (DoLet false false (PVar "sigs") (EApp (EVar "sigsOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EApp (EApp (EVar "namesToSet") (EVar "definerShadows")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowSigsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls"))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef")) (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EVar "importerShadows") (EVar "definerShadows"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "methodDispatchIdxByIdRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false (PVar "admitted") (EApp (EVar "importDefinersOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "definerRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "originRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "importedSchemeOblsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importedSchemeOblEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (EVar "omEmpty")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeCtxRef")) (EApp (EVar "Some") (ETuple (EVar "prog") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodAliasEntriesRef")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "prog")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasMethodOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EVar "aliasSpellings")) (EVar "omEmpty")))))) (DoLet false false (PVar "dataEnv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false (PVar "cur") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "declEnvSeedDataUniverse") (EVar "mid")) (EVar "envs"))) (DoLet false false (PVar "base") (EApp (EApp (EVar "registerImportOverlay") (EApp (EVar "withCtors") (EApp (EVar "spFloor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")))) (EApp (EApp (EApp (EVar "importedCtorTypeDeclsLastWins") (EVar "prog0")) (EVar "cur")) (EFieldAccess (EVar "envs") "deModules")))) (DoLet false false (PVar "env0") (EApp (EApp (EVar "registerAllData") (EVar "base")) (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "applyRecordScopeOverrides") (EVar "prog0"))) (DoExpr (EApp (EApp (EVar "applyCtorScopeOverrides") (EVar "prog0")) (EVar "env0"))))) (DoLet false false PWild (EApp (EVar "recordInvocationView") (EVar "dataEnv"))) (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVars") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclaredKinds") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclAuthorityUses") (EVar "prog"))) (DoLet false false (PVar "classEnvHere") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (ETuple (EFieldAccess (EVar "envs") "deIfaces") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs")))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkGradedImplHeads") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoLet false false (PVar "currentMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "recordMethodGrants") (EVar "currentMethodRows"))) (DoLet false false (PVar "visibleMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "implDecls"))) (DoLet false false (PVar "visibleMethodRowIndex") (EApp (EApp (EApp (EVar "methodRowsByIdentity") (EApp (EVar "isNonEmptyL") (EVar "importerShadows"))) (EVar "visibleMethodRows")) (EVar "regEmpty"))) (DoLet false false (PVar "externS") (EApp (EApp (EVar "userExternSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "prog"))) (DoLet false false (PVar "globalS") (EBinOp "++" (EApp (EVar "legacyMethodSchemes") (EVar "currentMethodRows")) (EVar "externS"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCrossable") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsLabelled") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsShadow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsReserved") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCatalogRow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false (PVar "envSeed") (EApp (EApp (EVar "extendVars") (EVar "dataEnv")) (EVar "seed"))) (DoLet false false (PVar "shadowLayer") (EBlock (DoLet false false (PVar "ifaceSchemes") (EApp (EVar "legacyMethodSchemes") (EVar "visibleMethodRows"))) (DoLet false false PWild (EApp (EVar "seedNumLitFromIntAnchor") (EVar "visibleMethodRows"))) (DoLet false false (PVar "sm") (EApp (EApp (EApp (EApp (EVar "pickSchemesByDecl") (EVar "importerShadows")) (EVar "ifaceSchemes")) (EVar "visibleMethodRowIndex")) (EFieldAccess (EVar "moduleSeed") "msImportedValues"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef") "value")))) (DoExpr (EApp (EApp (EVar "attachStandaloneSources") (EFieldAccess (EVar "moduleSeed") "msImportedValues")) (EVar "sm"))))) (DoLet false false (PVar "envImported") (EApp (EApp (EApp (EApp (EApp (EVar "annotateImportedMethodRows") (EVar "envSeed")) (EApp (EApp (EVar "importedMethodBindingNames") (EVar "prog0")) (EVar "aliasSpellings"))) (EApp (EVar "nameableIfaceMethodSet") (EVar "prog0"))) (EApp (EApp (EVar "namesToSet") (EVar "importerShadows")) (EVar "omEmpty"))) (EVar "visibleMethodRowIndex"))) (DoLet false false (PVar "envGlobal") (EApp (EApp (EVar "extendVars") (EApp (EApp (EVar "extendMethodRows") (EVar "envImported")) (EVar "currentMethodRows"))) (EVar "externS"))) (DoLet false false (PVar "env1") (EApp (EApp (EVar "extendBindings") (EVar "envGlobal")) (EVar "shadowLayer"))) (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "progS"))) (DoLet false false (PTuple (PVar "topSchemes") (PVar "groupedOut")) (EApp (EApp (EApp (EApp (EApp (EVar "processTopGroups") (EVar "env1")) (EVar "sigs")) (EVar "defs")) (EApp (EApp (EVar "groupNames") (EVar "defs")) (EVar "omEmpty"))) (EApp (EApp (EVar "namesToSet") (EApp (EVar "publicValNames") (EVar "prog"))) (EVar "omEmpty")))) (DoLet false false (PVar "progOut") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EApp (EVar "finishModuleMarking") (EVar "mm")) (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (EVar "groupedOut")) (EVar "progS"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false (PVar "progT") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EVar "stampTailDecls") (EFieldAccess (EVar "mm") "mmTop")) (EVar "progOut"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false PWild (EBlock (DoLet false false (PVar "bodyEnv") (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "inferUserImplBodies") (EVar "bodyEnv")) (EVar "implDecls")) (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoLet false false PWild (EApp (EVar "dedupPredicateSlotsTable") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef")) (EApp (EVar "predicateSlotTableWithoutArgs") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value")))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "emptyMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EApp (EApp (EApp (EVar "attributeMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "attributeModuleSchemeObls") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "groundMultiParamObligations") (EVar "groundUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkImplCompletenessMap") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EBlock (DoLet false false (PVar "obUniv") (EVar "moduleImplUniv")) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "True")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "False")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls") "items") "value"))) (DoLet false false PWild (EApp (EVar "settleDeferredPatLits") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "checkDeferredMatches") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchChecksDeferred") "value")))) (DoLet false false PWild (EApp (EVar "checkFixedWidthLiterals") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRanges") "value"))) (DoLet false false PWild (EApp (EVar "checkWideLiterals") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "wideLitRanges") "value"))) (DoLet false false PWild (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))) (DoExpr (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut")) (EApp (EVar "mapLocalSchemes") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "seedSchemesOut")) (EVar "seed"))) (DoLet false false PWild (EApp (EApp (EVar "appendDataUniverse") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "result") (ETuple (ERecordCreate "ModuleBindings" ((fa "mbSchemes" (EBinOp "++" (EVar "globalS") (EVar "topSchemes"))) (fa "mbStandaloneSchemes" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "topSchemes"))) (EVar "omEmpty"))))) (EVar "progOut"))) (DoLet false false PWild (EApp (EVar "closeScope") (ELit LUnit))) (DoExpr (EVar "result"))))
 (DTypeSig false "inferPropBodies" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "inferPropBodies" ((PVar "env") (PVar "prog")) (EBlock (DoLet false false (PVar "mark") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "dropGoalsSince") (EVar "mark")) (EListLit (EVar "GKBinopSite") (EVar "GKUnopSite") (EVar "GKArithSite"))))))
 (DTypeSig false "inferPropBodiesGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
@@ -60440,6 +60662,21 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "registerAllDataScoped" ((PVar "env") (PVar "ds") (PVar "allDs")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedParamPolarityFixpointScoped") (EVar "ds")) (EVar "allDs"))) (DoExpr (EApp (EApp (EVar "registerAllDataGo") (EVar "env")) (EVar "ds")))))
 (DTypeSig false "registerAllDataGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
 (DFunDef false "registerAllDataGo" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "d")) (EApp (EVar "recordDeclKinds") (EVar "d")))) (ELit LUnit)) (EVar "ds"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (EVar "registerData")) (EVar "env")) (EVar "ds")))))
+(DTypeSig false "registerImportOverlay" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
+(DFunDef false "registerImportOverlay" ((PVar "env") (PVar "overlay")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedParamPolarityFixpointScoped") (EVar "overlay")) (EVar "overlay"))) (DoLet false false (PVar "ctorPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")) (DoLet false false (PVar "recordPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")) (DoLet false false (PVar "served") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EVar "d") (EApp (EApp (EApp (EVar "overlayCachedRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "d"))))) (EVar "overlay"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EApp (EVar "recordDeclKinds") (EApp (EVar "fst") (EVar "p")))) (arm (PCon "Some" PWild) () (ELit LUnit))))) (ELit LUnit)) (EVar "served"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EApp (EApp (EVar "registerData") (EVar "e")) (EApp (EVar "fst") (EVar "p")))) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EVar "registerCachedRows") (EVar "e")) (EVar "rows")))))) (EVar "env")) (EVar "served")))))
+(DTypeSig false "overlayCachedRows" (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))))
+(DFunDef false "overlayCachedRows" ((PVar "ctorPop") (PVar "recordPop") (PRec "DData" ((rf "dataCtors" None) (rf "dataOrigin" None)) true)) (EApp (EApp (EApp (EApp (EVar "cachedVariantRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "dataOrigin")) (EVar "dataCtors")))
+(DFunDef false "overlayCachedRows" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "cachedVariantRows" (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))))))
+(DFunDef false "cachedVariantRows" (PWild PWild PWild (PList)) (EApp (EVar "Some") (ETuple (EListLit) (EListLit))))
+(DFunDef false "cachedVariantRows" ((PVar "ctorPop") (PVar "recordPop") (PVar "o") (PCons (PCon "Variant" (PVar "cn") (PVar "payload")) (PVar "rest"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn"))) (ELam ((PVar "ident")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "spLookupIdent") (EVar "ident")) (EVar "cn")) (EVar "ctorPop"))) (ELam ((PVar "s")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "cachedRecordRow") (EVar "recordPop")) (EVar "ident")) (EVar "cn")) (EVar "payload"))) (ELam ((PVar "recs")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "cachedVariantRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "o")) (EVar "rest"))) (ELam ((PVar "later")) (EApp (EVar "Some") (ETuple (EBinOp "::" (ETuple (EVar "cn") (EVar "s")) (EApp (EVar "fst") (EVar "later"))) (EBinOp "++" (EVar "recs") (EApp (EVar "snd") (EVar "later"))))))))))))))
+(DTypeSig false "cachedRecordRow" (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyCon "ConPayload") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))))
+(DFunDef false "cachedRecordRow" ((PVar "recordPop") (PVar "ident") (PVar "cn") (PCon "ConNamed" PWild PWild)) (EApp (EApp (EVar "map") (ELam ((PVar "ri")) (EListLit (ETuple (EVar "cn") (EVar "ri"))))) (EApp (EApp (EApp (EVar "spLookupIdent") (EVar "ident")) (EVar "cn")) (EVar "recordPop"))))
+(DFunDef false "cachedRecordRow" (PWild PWild PWild PWild) (EApp (EVar "Some") (EListLit)))
+(DTypeSig false "registerCachedRows" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))) (TyCon "TcEnv"))))
+(DFunDef false "registerCachedRows" ((PVar "env") (PTuple (PVar "ctors") (PVar "recs"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "r")) (EApp (EApp (EVar "registerCachedRecord") (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "snd") (EVar "r"))))) (ELit LUnit)) (EVar "recs"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "e") (PVar "c")) (EApp (EApp (EApp (EVar "addCtor") (EVar "e")) (EApp (EVar "fst") (EVar "c"))) (EApp (EVar "snd") (EVar "c"))))) (EVar "env")) (EVar "ctors")))))
+(DTypeSig false "registerCachedRecord" (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyCon "Unit"))))
+(DFunDef false "registerCachedRecord" ((PVar "key") (PVar "ri")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EApp (EVar "addFieldOwners") (EVar "key")) (EApp (EVar "recordFieldNames") (EVar "ri"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
 (DTypeSig false "recordDeclKinds" (TyFun (TyCon "Decl") (TyCon "Unit")))
 (DFunDef false "recordDeclKinds" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "recordDeclKinds") (EVar "d")))
 (DFunDef false "recordDeclKinds" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "anns")) (rf "dataCtors" (PVar "variants")) (rf "dataOrigin" (PVar "o"))) false)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordCtors") (EVar "o")) (EVar "name")) (EVar "vis")) (EVar "params")) (EVar "variants"))) (DoExpr (EApp (EApp (EApp (EVar "recordParamKinds") (EVar "o")) (EVar "name")) (EApp (EApp (EVar "declParamKinds") (EVar "params")) (EVar "anns"))))))
@@ -61085,11 +61322,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "appendUniverseAccums" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "appendUniverseAccums" ((PVar "mid") (PVar "prog")) (EBlock (DoLet false false PWild (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeFunNamesRef")) (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "prog")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeFunNamesRef") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef") "value") (EApp (EVar "argDispatchIndicesById") (EVar "prog"))))) (DoExpr (ELit LUnit))))
 (DTypeSig false "loadDataUniverse" (TyFun (TyCon "Int") (TyCon "Unit")))
-(DFunDef false "loadDataUniverse" ((PVar "cur")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordByName") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef")) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deData") "deAliases"))))))
-(DTypeSig false "storeDataUniverse" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "storeDataUniverse" (PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordByName")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))
+(DFunDef false "loadDataUniverse" ((PVar "cur")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EVar "spFloor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef")) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deData") "deAliases"))))))
 (DTypeSig false "appendDataUniverse" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "appendDataUniverse" ((PVar "mid") (PVar "prog0")) (EBlock (DoLet false false (PVar "pubDecls") (EApp (EVar "publicDataDecls") (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EVar "registerAllDataScoped") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv") "value")) (EVar "pubDecls")) (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "storeDataUniverse") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv")) (EVar "env2"))) (DoLet false false (PVar "ctorAcc") (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env2")) (EVar "pubDecls")) (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorIdentsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorCollidedRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorIdentsRef")) (EApp (EVar "fst") (EVar "ctorAcc")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorCollidedRef")) (EApp (EVar "snd") (EVar "ctorAcc")))) (DoLet false false (PVar "recAcc") (EApp (EApp (EVar "insertRecordIdents") (EVar "pubDecls")) (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordCollidedRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef")) (EApp (EVar "fst") (EVar "recAcc")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordCollidedRef")) (EApp (EVar "snd") (EVar "recAcc"))))))
+(DFunDef false "appendDataUniverse" ((PVar "mid") (PVar "prog0")) (EBlock (DoLet false false (PVar "pubDecls") (EApp (EVar "publicDataDecls") (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EVar "registerAllDataScoped") (EApp (EVar "withCtors") (EApp (EVar "spFloor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")))) (EVar "pubDecls")) (EVar "prog0"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env2")) (EVar "pubDecls")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop")) (EApp (EApp (EVar "insertRecordPop") (EVar "pubDecls")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value"))))))
 (DTypeSig false "definerShadowsFromSet" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "definerShadowsFromSet" ((PVar "isMethod") (PVar "prog")) (EBlock (DoLet false false (PVar "localNames") (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "prog"))))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "filter") (EVar "isMethod")) (EVar "localNames"))) (DoLet false false (PVar "sm") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value")) (DoLet false false (PVar "bares") (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EListLit (EVar "bare"))) (arm (PCon "None") () (EListLit))))) (EVar "localNames"))) (DoExpr (EApp (EApp (EVar "removeAllS") (EApp (EVar "localBoundNames") (EVar "prog"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "bares")))))))
 (DTypeSig false "standaloneShadowsFromSet" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -61649,7 +61884,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "coreCheckMemoHit" ((PCon "None")) (EVar "None"))
 (DFunDef false "coreCheckMemoHit" ((PCon "Some" (PVar "key"))) (EMatch (EUnOp "!" (EVar "coreCheckMemoRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EFieldAccess (EVar "m") "ccmKey") (EVar "key")) (EApp (EVar "Some") (EVar "m")) (EVar "None")))))
 (DTypeSig false "copyCrossRun" (TyFun (TyCon "CrossRun") (TyCon "CrossRun")))
-(DFunDef false "copyCrossRun" ((PVar "c")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeFunNamesRef") "value"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeMethodDispatchIdxByIdRef") "value"))) (fa "universeRecordByName" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeRecordByName") "value"))) (fa "universeDataCtors" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeDataCtors") "value"))) (fa "universeRecordIdentsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeRecordIdentsRef") "value"))) (fa "universeRecordCollidedRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeRecordCollidedRef") "value"))) (fa "universeDataEnv" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeDataEnv") "value"))) (fa "universeCtorIdentsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeCtorIdentsRef") "value"))) (fa "universeCtorCollidedRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeCtorCollidedRef") "value"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "builtinClassesRef") "value"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsRef") "value"))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsQualRef") "value"))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredRef") "value"))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredQualRef") "value"))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsRef") "value"))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsQualRef") "value"))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "coreSchemeObligationsRef") "value"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleSchemeOblsQualRef") "value"))))))
+(DFunDef false "copyCrossRun" ((PVar "c")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeFunNamesRef") "value"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeMethodDispatchIdxByIdRef") "value"))) (fa "universeDataCtors" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeDataCtors") "value"))) (fa "universeCtorPop" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeCtorPop") "value"))) (fa "universeRecordPop" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeRecordPop") "value"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "builtinClassesRef") "value"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsRef") "value"))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsQualRef") "value"))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredRef") "value"))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredQualRef") "value"))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsRef") "value"))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsQualRef") "value"))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "coreSchemeObligationsRef") "value"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleSchemeOblsQualRef") "value"))))))
 (DTypeSig false "copyDriverState" (TyFun (TyCon "DriverState") (TyCon "DriverState")))
 (DFunDef false "copyDriverState" ((PVar "d")) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "effectDomains") "value"))) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "graphAdmittedMethodsRef") "value"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "graphCtorExportsRef") "value"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "declEnvsRef") "value"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "abstractRecordTypesRef") "value"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "argDispatchIdxByIdRef") "value"))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "dictEligibleRef") "value"))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "dictEligibleSetRef") "value"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "mangledShadowMapRef") "value"))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "mangledFunDefsPresentRef") "value"))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "coherenceUserDecls") "value"))) (fa "stdlibOwnedModsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "stdlibOwnedModsRef") "value"))) (fa "flatEntryIsStdlibRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "flatEntryIsStdlibRef") "value"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "builtinExternNamesRef") "value"))) (fa "superDeclsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "superDeclsRef") "value"))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "standaloneValuesRef") "value"))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "methodDispatchIdxByIdRef") "value"))) (fa "matchOracle" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "matchOracle") "value"))) (fa "matchWarnings" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "matchWarnings") "value"))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "promotionHarvestRef") "value"))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "mainSchemeRef") "value"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "sigNameSetRef") "value"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "sigTyMapRef") "value"))) (fa "currentModuleRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "currentModuleRef") "value"))) (fa "markSetsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "markSetsRef") "value"))) (fa "invocationViewRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "invocationViewRef") "value"))))))
 (DTypeSig false "restoreCoreDriverFields" (TyFun (TyCon "DriverState") (TyCon "Unit")))
@@ -62048,9 +62283,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omDelete" false))))
-(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false) (mem "elemIndex" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregMemberK" false) (mem "sregSize" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregMemberK" false) (mem "sregSize" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "installedDispositionsOpt" false) (mem "restoreDispositions" false) (mem "validateDispositionTable" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
@@ -63487,9 +63722,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "uOblIsDecidableNow" ((PVar "o")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EVar "uOblArgs") (EVar "o")))) (DoExpr (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "args")) (EBinOp "||" (EApp (EVar "allConcreteHeads") (EVar "args")) (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")))))))
 (DData Private "PendingDictApp" () ((variant "PendingDictApp" (ConNamed (field "pdaRoutesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route")))) (field "pdaEv" (TyCon "EvId")) (field "pdaMonos" (TyApp (TyCon "List") (TyCon "Mono"))) (field "pdaIfaces" (TyApp (TyCon "List") (TyCon "IfaceRef"))) (field "pdaArgVecs" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono")))) (field "pdaEncl" (TyCon "String")) (field "pdaLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "pdaScope" (TyCon "ScopeId"))))) ())
 (DData Private "PendingMethodDict" () ((variant "PendingMethodDict" (ConNamed (field "pmdRoutesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route")))) (field "pmdEv" (TyCon "EvId")) (field "pmdSlots" (TyApp (TyCon "List") (TyCon "PredicateSlot"))) (field "pmdEncl" (TyCon "String")) (field "pmdScope" (TyCon "ScopeId"))))) ())
-(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "universeRecordByName" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "universeDataCtors" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyCon "DataVis") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Variant"))))))) (field "universeRecordIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))))) (field "universeRecordCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeDataEnv" (TyApp (TyCon "Ref") (TyCon "TcEnv"))) (field "universeCtorIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))))) (field "universeCtorCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "builtinClassesRef" (TyApp (TyCon "Ref") (TyCon "BuiltinClasses"))) (field "crossModuleFunPredicateSlotsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot")))))) (field "crossModuleFunPredicateSlotsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PredicateSlot")))))) (field "crossModuleFunConstraintDeclaredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "CDeclaredPrefix"))))) (field "crossModuleFunConstraintDeclaredQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CDeclaredPrefix"))))) (field "crossModuleMethodPredicateSlotsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) (field "crossModuleMethodPredicateSlotsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))))) (field "crossModuleSchemeOblsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl"))))))))) ())
+(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "universeDataCtors" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyCon "DataVis") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Variant"))))))) (field "universeCtorPop" (TyApp (TyCon "Ref") (TyApp (TyCon "SpellingPop") (TyCon "Scheme")))) (field "universeRecordPop" (TyApp (TyCon "Ref") (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")))) (field "builtinClassesRef" (TyApp (TyCon "Ref") (TyCon "BuiltinClasses"))) (field "crossModuleFunPredicateSlotsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot")))))) (field "crossModuleFunPredicateSlotsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PredicateSlot")))))) (field "crossModuleFunConstraintDeclaredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "CDeclaredPrefix"))))) (field "crossModuleFunConstraintDeclaredQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CDeclaredPrefix"))))) (field "crossModuleMethodPredicateSlotsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) (field "crossModuleMethodPredicateSlotsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))))) (field "crossModuleSchemeOblsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl"))))))))) ())
 (DTypeSig false "freshCrossRun" (TyFun (TyCon "TcEnv") (TyCon "CrossRun")))
-(DFunDef false "freshCrossRun" ((PVar "env")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRecordByName" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeDataCtors" (EApp (EVar "Ref") (EListLit))) (fa "universeRecordIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeRecordCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "universeDataEnv" (EApp (EVar "Ref") (EVar "env"))) (fa "universeCtorIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeCtorCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EVar "emptyBuiltinClasses"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EListLit))))))
+(DFunDef false "freshCrossRun" ((PVar "env")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "universeDataCtors" (EApp (EVar "Ref") (EListLit))) (fa "universeCtorPop" (EApp (EVar "Ref") (EApp (EVar "spFromFloor") (EApp (EVar "envCtors") (EVar "env"))))) (fa "universeRecordPop" (EApp (EVar "Ref") (EVar "spEmpty"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EVar "emptyBuiltinClasses"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig false "crossRun" (TyApp (TyCon "Ref") (TyCon "CrossRun")))
 (DFunDef false "crossRun" () (EApp (EVar "Ref") (EApp (EVar "freshCrossRun") (EVar "initialEnv"))))
 (DTypeSig false "resetCrossModuleState" (TyFun (TyCon "Unit") (TyCon "Unit")))
@@ -63985,7 +64220,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "paramPolaritiesIn" ((PVar "tab") (PVar "key")) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Ref")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "tab")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DData Private "InvocationView" () ((variant "InvocationView" (ConPos (TyApp (TyCon "List") (TyCon "Scheme")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))) ())
 (DTypeSig false "recordInvocationView" (TyFun (TyCon "TcEnv") (TyCon "Unit")))
-(DFunDef false "recordInvocationView" ((PCon "TcEnv" PWild (PVar "ctors") PWild PWild)) (EBlock (DoLet false false (PVar "universe") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "cands")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PTuple PWild PWild (PVar "sch")) () (EVar "sch"))))) (EVar "cands")))) (EApp (EVar "IdMap.values") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorIdentsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EApp (EVar "InvocationView") (EBinOp "++" (EApp (EVar "IdMap.values") (EVar "ctors")) (EVar "universe"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))))))
+(DFunDef false "recordInvocationView" ((PCon "TcEnv" PWild (PVar "ctors") PWild PWild)) (EBlock (DoLet false false (PVar "universe") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "cands")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PTuple PWild PWild (PVar "sch")) () (EVar "sch"))))) (EVar "cands")))) (EApp (EVar "IdMap.values") (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EApp (EVar "InvocationView") (EBinOp "++" (EApp (EVar "IdMap.values") (EVar "ctors")) (EVar "universe"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))))))
 (DTypeSig true "lastInvocationOps" (TyFun (TyCon "Unit") (TyCon "InvocationOps")))
 (DFunDef false "lastInvocationOps" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef") "value") (arm (PCon "InvocationView" (PVar "ctors") (PVar "pols") (PVar "kinds")) () (EBlock (DoLet false false (PVar "byHead") (EApp (EVar "ctorsByHead") (EVar "ctors"))) (DoExpr (ERecordCreate "InvocationOps" ((fa "headVariances" (ELam ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EApp (EApp (EVar "slotVariances") (EApp (EApp (EVar "paramPolaritiesIn") (EVar "pols")) (EVar "key"))) (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "kinds")))) (arm PWild () (EVar "None"))))) (fa "appliedFields" (ELam ((PVar "applied")) (EBlock (DoLet false false (PTuple (PVar "h") (PVar "args")) (EApp (EVar "spineParts") (EVar "applied"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "instantiateFields") (EVar "args")) (EVar "c")))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "invocationHeadKey") (EVar "h"))) (EVar "byHead")))))))) (fa "headKey" (EVar "invocationHeadKey")))))))))
 (DTypeSig false "invocationHeadKey" (TyFun (TyCon "Mono") (TyCon "String")))
@@ -64648,6 +64883,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "lookupLocalFlag" ((PCon "TcEnv" PWild PWild PWild (PVar "lc")) (PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "lc")))
 (DTypeSig false "addCtor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "TcEnv")))))
 (DFunDef false "addCtor" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "s")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "vs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "s")) (EVar "cs"))) (EVar "al")) (EVar "lc")))
+(DTypeSig false "withCtors" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyCon "TcEnv")))
+(DFunDef false "withCtors" ((PVar "cs")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "omEmpty")) (EVar "cs")) (EListLit)) (EVar "omEmpty")))
+(DTypeSig false "envCtors" (TyFun (TyCon "TcEnv") (TyApp (TyCon "OrdMap") (TyCon "Scheme"))))
+(DFunDef false "envCtors" ((PCon "TcEnv" PWild (PVar "cs") PWild PWild)) (EVar "cs"))
 (DTypeSig false "seedAlphaLets" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "TcEnv")))))
 (DFunDef false "seedAlphaLets" ((PCon "TcEnv" (PVar "vs") (PVar "cs") (PVar "al") (PVar "lc")) (PVar "n") (PVar "rhs")) (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "vs")) (EVar "cs")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EVar "al"))) (EVar "lc")))
 (DTypeSig false "envAlphaLets" (TyFun (TyCon "TcEnv") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder")))))
@@ -65199,14 +65438,61 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferFieldOfRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Mono"))))))
 (DFunDef false "inferFieldOfRecord" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "te")) (EApp (EVar "snd") (EVar "sr")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))) (arm (PCon "Some" (PVar "fm")) () (EApp (EApp (EVar "substRecordField") (EApp (EVar "fst") (EVar "sr"))) (EVar "fm"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "unknownFieldFresh") (EVar "fname")) (EVar "rname")) (EApp (EVar "recordFieldNames") (EVar "ri"))))))))
 (DTypeSig false "fieldSelectionWellTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono")))))))
-(DFunDef false "fieldSelectionWellTyped" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname") (PVar "ft")) (EMatch (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholdingHere") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (arm (PCon "None") () (EVar "ft")) (arm (PCon "Some" (PVar "sib")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-NOT-IN-ALL-CTORS"))) (EApp (EApp (EApp (EVar "fieldNotInAllCtorsMsg") (EVar "fname")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "te")))) (EVar "sib")))) (DoLet false false (PVar "v") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "v")) (EVar "v"))) (DoExpr (EVar "v"))))))
-(DTypeSig false "ctorSiblingWithholdingHere" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "ctorSiblingWithholdingHere" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholdingForHead") (EApp (EVar "headTyconMono") (EVar "te"))) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EVar "rname")) (EVar "fname")))
-(DTypeSig false "ctorSiblingWithholdingForHead" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "ctorSiblingWithholdingForHead" ((PCon "None") PWild PWild PWild) (EVar "None"))
-(DFunDef false "ctorSiblingWithholdingForHead" ((PCon "Some" (PVar "hk")) (PVar "declHead") (PVar "rname") (PVar "fname")) (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EVar "declHead")) (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EApp (EVar "Some") (EVar "hk"))) (EVar "fname")) (EVar "rname")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fieldSelectionWellTyped" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname") (PVar "ft")) (EMatch (EApp (EApp (EApp (EApp (EVar "ctorFieldConflictHere") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (arm (PCon "None") () (EVar "ft")) (arm (PCon "Some" (PVar "conflict")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushCtorFieldConflict") (EVar "fname")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "te")))) (EVar "conflict"))) (DoLet false false (PVar "v") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "v")) (EVar "v"))) (DoExpr (EVar "v"))))))
+(DData Private "CtorFieldConflict" () ((variant "CtorWithholds" (ConPos (TyCon "String"))) (variant "CtorSlotsDiffer" (ConPos (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "Int"))) (variant "CtorTypesDiffer" (ConPos (TyCon "String") (TyCon "Mono") (TyCon "String") (TyCon "Mono")))) ())
+(DTypeSig false "ctorFieldConflictHere" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CtorFieldConflict")))))))
+(DFunDef false "ctorFieldConflictHere" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "hk")) () (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EApp (EApp (EApp (EVar "ctorFieldConflict") (EVar "hk")) (EVar "fname")) (EVar "rname")) (EVar "None")))))
+(DTypeSig false "ctorFieldConflict" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))))
+(DFunDef false "ctorFieldConflict" ((PVar "hk") (PVar "fname") (PVar "rname")) (EMatch (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EApp (EVar "Some") (EVar "hk"))) (EVar "fname")) (EVar "rname")) (arm (PCon "Some" (PVar "sib")) () (EApp (EVar "Some") (EApp (EVar "CtorWithholds") (EVar "sib")))) (arm (PCon "None") () (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EBlock (DoLet false false (PVar "held") (EApp (EApp (EApp (EVar "ctorFieldSlots") (EVar "hk")) (EVar "fname")) (EVar "ctors"))) (DoExpr (EApp (EApp (EVar "orElseOpt") (EApp (EVar "firstSlotDisagreement") (EVar "held"))) (EApp (EApp (EVar "firstTypeDisagreement") (EVar "fname")) (EVar "held")))))) (arm PWild () (EVar "None"))))))
+(DTypeSig false "ctorsOfHead" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ctorsOfHead" ((PVar "hk")) (EMatch (EApp (EVar "ctorOracleKeyOf") (EApp (EVar "Some") (EVar "hk"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")))))
+(DTypeSig false "ctorFieldSlots" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo")))))))
+(DFunDef false "ctorFieldSlots" ((PVar "hk") (PVar "fname") (PVar "ctors")) (EApp (EApp (EMethodRef "filterMap") (EApp (EApp (EVar "ctorFieldSlot") (EVar "hk")) (EVar "fname"))) (EVar "ctors")))
+(DTypeSig false "ctorFieldSlot" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo")))))))
+(DFunDef false "ctorFieldSlot" ((PVar "hk") (PVar "fname") (PVar "k")) (EMatch (EApp (EApp (EVar "ctorRecordOfType") (EVar "hk")) (EVar "k")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (ETuple (EVar "k") (EVar "i") (EVar "ri")))) (EApp (EApp (EVar "elemIndex") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri")))))))
+(DTypeSig false "firstSlotDisagreement" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))
+(DFunDef false "firstSlotDisagreement" ((PList)) (EVar "None"))
+(DFunDef false "firstSlotDisagreement" ((PCons (PTuple (PVar "a") (PVar "i") PWild) (PVar "rest"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "b") (PVar "j"))) (EApp (EApp (EApp (EApp (EVar "CtorSlotsDiffer") (EVar "a")) (EVar "i")) (EVar "b")) (EVar "j")))) (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest"))))
+(DTypeSig false "slotOtherThan" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DFunDef false "slotOtherThan" (PWild (PList)) (EVar "None"))
+(DFunDef false "slotOtherThan" ((PVar "i") (PCons (PTuple (PVar "b") (PVar "j") PWild) (PVar "rest"))) (EIf (EBinOp "/=" (EVar "j") (EVar "i")) (EApp (EVar "Some") (ETuple (EVar "b") (EVar "j"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "slotOtherThan") (EVar "i")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "firstTypeDisagreement" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict")))))
+(DFunDef false "firstTypeDisagreement" (PWild (PList)) (EVar "None"))
+(DFunDef false "firstTypeDisagreement" ((PVar "fname") (PCons (PTuple (PVar "a") PWild (PVar "ra")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ra"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ta")) () (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
+(DTypeSig false "typeOtherThan" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "CtorFieldConflict"))))))))
+(DFunDef false "typeOtherThan" (PWild PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "typeOtherThan" ((PVar "fname") (PVar "a") (PVar "ra") (PVar "ta") (PCons (PTuple (PVar "b") PWild (PVar "rb")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "rb"))) (arm (PCon "Some" (PVar "tb")) () (EBlock (DoLet false false (PTuple (PVar "tsub") (PVar "esub") (PVar "asub")) (EApp (EApp (EApp (EVar "paramRenaming") (EApp (EVar "recordResultMono") (EVar "rb"))) (EApp (EVar "recordResultMono") (EVar "ra"))) (ETuple (EListLit) (EListLit) (EListLit)))) (DoLet false false (PVar "tbOverA") (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "tsub")) (EVar "esub")) (EVar "asub")) (EVar "tb"))) (DoExpr (EIf (EApp (EApp (EVar "fieldTypeSame") (EVar "ta")) (EVar "tbOverA")) (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "CtorTypesDiffer") (EVar "a")) (EVar "ta")) (EVar "b")) (EVar "tbOverA"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "typeOtherThan") (EVar "fname")) (EVar "a")) (EVar "ra")) (EVar "ta")) (EVar "rest")))))
+(DTypeSig false "paramRenaming" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
+(DFunDef false "paramRenaming" ((PVar "from") (PVar "to") (PVar "acc")) (EMatch (EApp (EVar "normalize") (EVar "from")) (arm (PCon "TApp" (PVar "f1") (PVar "a1")) () (EMatch (EApp (EVar "normalize") (EVar "to")) (arm (PCon "TApp" (PVar "f2") (PVar "a2")) () (EApp (EApp (EApp (EVar "paramRenaming") (EVar "f1")) (EVar "f2")) (EApp (EApp (EApp (EVar "renameParam") (EApp (EVar "normalize") (EVar "a1"))) (EVar "a2")) (EVar "acc")))) (arm PWild () (EVar "acc")))) (arm PWild () (EVar "acc"))))
+(DTypeSig false "renameParam" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
+(DFunDef false "renameParam" ((PCon "TVar" (PVar "c")) (PVar "to") (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EBinOp "::" (ETuple (EApp (EVar "tyvarId") (EVar "c")) (EVar "to")) (EVar "ts")) (EVar "es") (EVar "qs")))
+(DFunDef false "renameParam" ((PCon "TEff" (PCon "EffRow" (PList) (PCon "Some" (PVar "e1")))) (PCon "TEff" (PCon "EffRow" (PList) (PCon "Some" (PVar "e2")))) (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EVar "ts") (EBinOp "::" (ETuple (EApp (EVar "effvarId") (EVar "e1")) (EVar "e2")) (EVar "es")) (EVar "qs")))
+(DFunDef false "renameParam" ((PCon "TAuth" (PCon "AVar" (PVar "q1"))) (PCon "TAuth" (PVar "q2")) (PTuple (PVar "ts") (PVar "es") (PVar "qs"))) (ETuple (EVar "ts") (EVar "es") (EBinOp "::" (ETuple (EApp (EVar "authvarId") (EVar "q1")) (EVar "q2")) (EVar "qs"))))
+(DFunDef false "renameParam" (PWild PWild (PVar "acc")) (EVar "acc"))
+(DTypeSig false "fieldTypeSame" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "fieldTypeSame" ((PVar "x") (PVar "y")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "x")) (EApp (EVar "normalize") (EVar "y"))) (arm (PTuple (PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "rowSame") (EVar "r1")) (EVar "r2"))) (EApp (EApp (EVar "fieldTypeSame") (EVar "b1")) (EVar "b2")))) (arm (PTuple (PCon "TApp" (PVar "a1") (PVar "b1")) (PCon "TApp" (PVar "a2") (PVar "b2"))) () (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "fieldTypeSame") (EVar "b1")) (EVar "b2")))) (arm (PTuple (PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) () (EApp (EApp (EVar "rowSame") (EVar "r1")) (EVar "r2"))) (arm (PTuple (PCon "TQual" (PVar "t1") (PVar "q1")) (PCon "TQual" (PVar "t2") (PVar "q2"))) () (EBinOp "&&" (EApp (EApp (EVar "fieldTypeSame") (EVar "t1")) (EVar "t2")) (EApp (EApp (EVar "authSame") (EVar "q1")) (EVar "q2")))) (arm (PTuple (PCon "TAuth" (PVar "q1")) (PCon "TAuth" (PVar "q2"))) () (EApp (EApp (EVar "authSame") (EVar "q1")) (EVar "q2"))) (arm (PTuple (PCon "TFun" PWild PWild PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TApp" PWild PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TEff" PWild) PWild) () (EVar "False")) (arm (PTuple (PCon "TAuth" PWild) PWild) () (EVar "False")) (arm (PTuple (PVar "a") (PVar "b")) () (EApp (EApp (EVar "monoSameGiven") (EVar "a")) (EVar "b")))))
+(DTypeSig false "rowSame" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Bool"))))
+(DFunDef false "rowSame" ((PVar "r1") (PVar "r2")) (EBlock (DoLet false false (PTuple (PVar "atoms1") (PVar "tails1")) (EApp (EVar "rowFlat") (EVar "r1"))) (DoLet false false (PTuple (PVar "atoms2") (PVar "tails2")) (EApp (EVar "rowFlat") (EVar "r2"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EMethodRef "map") (EVar "effvarId")) (EVar "tails1")) (EApp (EApp (EMethodRef "map") (EVar "effvarId")) (EVar "tails2"))) (EApp (EApp (EVar "atomsSame") (EApp (EVar "atomsNorm") (EVar "atoms1"))) (EApp (EVar "atomsNorm") (EVar "atoms2")))))))
+(DTypeSig false "atomsSame" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Bool"))))
+(DFunDef false "atomsSame" ((PList) (PList)) (EVar "True"))
+(DFunDef false "atomsSame" ((PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "atomKey") (EVar "y"))) (EApp (EApp (EVar "authSame") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EApp (EApp (EVar "atomsSame") (EVar "xs")) (EVar "ys"))))
+(DFunDef false "atomsSame" (PWild PWild) (EVar "False"))
+(DTypeSig false "authSame" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
+(DFunDef false "authSame" ((PVar "p") (PVar "q")) (EBinOp "&&" (EApp (EApp (EVar "authSub") (EVar "p")) (EVar "q")) (EApp (EApp (EVar "authSub") (EVar "q")) (EVar "p"))))
+(DTypeSig false "pushCtorFieldConflict" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CtorFieldConflict") (TyCon "Unit")))))
+(DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorWithholds" (PVar "sib"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-NOT-IN-ALL-CTORS"))) (EApp (EApp (EApp (EVar "fieldNotInAllCtorsMsg") (EVar "fname")) (EVar "tname")) (EVar "sib"))))
+(DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorSlotsDiffer" (PVar "a") (PVar "i") (PVar "b") (PVar "j"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-POSITION-DIFFERS"))) (EApp (EApp (EApp (EApp (EVar "fieldPositionDiffersMsg") (EVar "fname")) (EVar "tname")) (ETuple (EVar "a") (EVar "i"))) (ETuple (EVar "b") (EVar "j")))))
+(DFunDef false "pushCtorFieldConflict" ((PVar "fname") (PVar "tname") (PCon "CtorTypesDiffer" (PVar "a") (PVar "ta") (PVar "b") (PVar "tb"))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-TYPE-DIFFERS"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldTypeDiffersMsg") (EVar "fname")) (EVar "tname")) (EVar "a")) (EVar "ta")) (EVar "b")) (EVar "tb"))))
 (DTypeSig false "fieldNotInAllCtorsMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "fieldNotInAllCtorsMsg" ((PVar "fname") (PVar "tname") (PVar "sib")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is not declared by every constructor of '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "': constructor '"))) (EApp (EMethodRef "display") (EVar "sib"))) (ELit (LString "' has no '"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "'. A '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' cannot be resolved; match on the constructor instead"))))
+(DTypeSig false "fieldPositionDiffersMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String"))))))
+(DFunDef false "fieldPositionDiffersMsg" ((PVar "fname") (PVar "tname") (PTuple (PVar "a") (PVar "i")) (PTuple (PVar "b") (PVar "j"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is at different positions in the constructors of '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "': it is field "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString " of '"))) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "' but field "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "j") (ELit (LInt 1)))))) (ELit (LString " of '"))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString "'. A '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' cannot be resolved; match on the constructor instead"))))
+(DTypeSig false "fieldTypeDiffersMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "String"))))))))
+(DFunDef false "fieldTypeDiffersMsg" ((PVar "fname") (PVar "tname") (PVar "a") (PVar "ta") (PVar "b") (PVar "tb")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "sa") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "ta"))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "tb"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' has different types in the constructors of '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "': it is '"))) (EApp (EMethodRef "display") (EVar "sa"))) (ELit (LString "' in '"))) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "' but '"))) (EApp (EMethodRef "display") (EVar "sb"))) (ELit (LString "' in '"))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString "'. A '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' cannot be typed; match on the constructor instead"))))))
+(DTypeSig false "recordUpdateWellTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Unit"))))))
+(DFunDef false "recordUpdateWellTyped" ((PVar "bt") (PVar "rname") (PVar "ri") (PVar "fn")) (EMatch (EApp (EVar "headTyconMono") (EVar "bt")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "hk")) () (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "Some" (PAs "ctors" (PCons PWild (PCons PWild PWild)))) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UPDATE-MULTI-CTOR"))) (EApp (EApp (EApp (EApp (EApp (EVar "updateMultiCtorMsg") (EVar "fn")) (EApp (EApp (EVar "optionOr") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "bt")))) (EVar "rname")) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "fn")))) (EApp (EVar "recordFieldNames") (EVar "ri")))) (EVar "ctors")))) (arm PWild () (ELit LUnit))) (ELit LUnit)))))
+(DTypeSig false "updateMultiCtorMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "updateMultiCtorMsg" ((PVar "fn") (PVar "tname") (PVar "rname") (PVar "others") (PVar "ctors")) (EBlock (DoLet false false (PVar "pat") (EIf (EApp (EVar "isEmptyL") (EVar "others")) (ELit (LString "...")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fn"))) (ELit (LString " = ..."))) (EVar "others")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Record update of '")) (EApp (EMethodRef "display") (EVar "fn"))) (ELit (LString "' is not supported on '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "': it has more than one constructor ("))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ctors")))) (ELit (LString "), and the type does not say which one the value holds. Match on the constructor and build the new value in its arm, e.g. '"))) (EApp (EMethodRef "display") (EVar "rname"))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EVar "pat"))) (ELit (LString " } => "))) (EApp (EMethodRef "display") (EVar "rname"))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EVar "rebuilt"))) (ELit (LString " }'"))))))
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "fieldOwnerReachFilter") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
 (DTypeSig false "fieldOwnerReachFilter" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -65217,13 +65503,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "fieldOwnerAnyReachable" ((PList)) (EVar "False"))
 (DFunDef false "fieldOwnerAnyReachable" ((PCons (PVar "m") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef") "value")) (EApp (EVar "fieldOwnerAnyReachable") (EVar "rest"))))
 (DTypeSig false "resolveFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "te")) (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "receiverTypeWord") (EVar "te")) (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "receiverTypeWord") (EVar "te")) (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
 (DTypeSig false "lookupRecordForReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
 (DFunDef false "lookupRecordForReceiver" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "recordForReceiverIdent") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EMatch (EApp (EVar "lookupRecordByName") (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EIf (EApp (EApp (EVar "recordOfOtherType") (EVar "te")) (EVar "ri")) (EVar "None") (EApp (EVar "Some") (EVar "ri")))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "recordOfOtherType" (TyFun (TyCon "Mono") (TyFun (TyCon "RecordInfo") (TyCon "Bool"))))
 (DFunDef false "recordOfOtherType" ((PVar "te") (PCon "RecordInfo" PWild PWild (PVar "res") PWild PWild)) (EMatch (ETuple (EApp (EVar "receiverTypeIdent") (EVar "te")) (EApp (EVar "receiverTypeIdent") (EVar "res"))) (arm (PTuple (PCon "Some" (PCon "Ident" PWild (PVar "wo") (PVar "wn"))) (PCon "Some" (PCon "Ident" PWild (PVar "ro") (PVar "rn")))) () (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "wn") (EVar "rn")) (EBinOp "==" (EVar "wo") (EVar "ro"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "recordForReceiverIdent" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
-(DFunDef false "recordForReceiverIdent" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
+(DFunDef false "recordForReceiverIdent" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "r")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
 (DTypeSig false "receiverTypeWord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "receiverTypeWord" ((PVar "te") (PVar "r")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (EVar "r"))))
 (DTypeSig false "receiverTypeIdent" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Ident"))))
@@ -65233,27 +65519,39 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "recordCandForType" ((PVar "want") (PCons (PTuple (PVar "ci") (PVar "tyName") (PVar "ri")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "recordCandIsType") (EVar "want")) (EVar "ci")) (EVar "tyName")) (EApp (EVar "Some") (EVar "ri")) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordCandForType") (EVar "want")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordCandIsType" (TyFun (TyCon "Ident") (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "recordCandIsType" ((PCon "Ident" PWild (PVar "wio") (PVar "wname")) (PCon "Ident" PWild (PVar "cio") PWild) (PVar "tyName")) (EBinOp "&&" (EBinOp "==" (EVar "tyName") (EVar "wname")) (EBinOp "==" (EVar "cio") (EVar "wio"))))
-(DTypeSig false "lookupRecordByMangledHead" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
-(DFunDef false "lookupRecordByMangledHead" ((PVar "te") (PVar "head") (PVar "fname")) (EMatch (EApp (EApp (EVar "mangledHeadCandidates") (EVar "head")) (EVar "fname")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PVar "cands") () (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EVar "cands")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm PWild () (EVar "None"))))))))
 (DTypeSig false "recordCandIsReceiverDecl" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "Bool"))))
 (DFunDef false "recordCandIsReceiverDecl" ((PVar "rk") (PTuple PWild (PVar "ri"))) (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
 (DTypeSig false "recordResultMono" (TyFun (TyCon "RecordInfo") (TyCon "Mono")))
 (DFunDef false "recordResultMono" ((PCon "RecordInfo" PWild PWild (PVar "result") PWild PWild)) (EVar "result"))
-(DTypeSig false "mangledHeadCandidates" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "mangledHeadCandidates" ((PVar "head") (PVar "fname")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value")))))
-(DTypeSig false "mangledHeadCandidatesGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "mangledHeadCandidatesGo" (PWild (PList)) (EListLit))
-(DFunDef false "mangledHeadCandidatesGo" ((PVar "head") (PCons (PVar "key") (PVar "rest"))) (EIf (EApp (EApp (EVar "endsWith") (EBinOp "++" (ELit (LString "__")) (EVar "head"))) (EVar "key")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EBlock (DoLet false false (PVar "owners") (EApp (EVar "fieldOwnerNames") (EVar "fname"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ownerDeclOfReceiver") (EVar "te")) (EVar "fname")) (EVar "owners")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "owners") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))))))
+(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EBlock (DoLet false false (PVar "owners") (EApp (EVar "fieldOwnerNames") (EVar "fname"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ownerDeclOfReceiver") (EVar "te")) (EVar "fname")) (EVar "owners")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "owners") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm PWild () (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EApp (EApp (EVar "resolveFieldUnknownReceiver") (EVar "fname")) (EVar "owners"))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EVar "owners")))))))))))
+(DTypeSig false "resolveFieldUnknownReceiver" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "resolveFieldUnknownReceiver" ((PVar "fname") (PVar "owners")) (EMatch (EApp (EApp (EVar "visibleFieldDecls") (EVar "fname")) (EVar "owners")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PList) () (EMatch (EVar "owners") (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))))) (arm (PVar "cands") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EApp (EVar "ambiguousFieldDeclsMsg") (EVar "fname")) (EVar "owners")) (EVar "cands")))) (DoExpr (EVar "None"))))))
+(DTypeSig false "visibleFieldDecls" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "visibleFieldDecls" ((PVar "fname") (PVar "owners")) (EApp (EApp (EVar "dedupBy") (EVar "fieldDeclTypeKey")) (EApp (EVar "fieldDeclReachFilter") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "keyFieldDecls") (EVar "fname"))) (EVar "owners")))))
+(DTypeSig false "keyFieldDecls" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "keyFieldDecls" ((PVar "fname") (PVar "k")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (ETuple (EVar "k") (EApp (EVar "recordCandInfo") (EVar "c"))))) (EApp (EApp (EVar "spCandsOf") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")))) (DoLet false false (PVar "floor") (EMatch (EApp (EVar "pairRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "pair")) () (EListLit (EVar "pair"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EApp (EVar "recordFieldMap") (EApp (EVar "snd") (EVar "c")))))) (EBinOp "++" (EVar "floor") (EVar "rows"))))))
+(DTypeSig false "fieldDeclReachFilter" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
+(DFunDef false "fieldDeclReachFilter" ((PVar "cands")) (EMatch (EApp (EApp (EVar "filterList") (EVar "fieldDeclReachable")) (EVar "cands")) (arm (PList) () (EVar "cands")) (arm (PVar "kept") () (EVar "kept"))))
+(DTypeSig false "fieldDeclReachable" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "Bool")))
+(DFunDef false "fieldDeclReachable" ((PTuple PWild (PVar "ri"))) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "mid")) () (EBlock (DoLet false false (PVar "reach") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef") "value")) (DoExpr (EBinOp "||" (EBinOp "==" (EApp (EVar "omSize") (EVar "reach")) (ELit (LInt 0))) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "reach"))))))))
+(DTypeSig false "fieldDeclTypeKey" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclTypeKey" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri"))) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (EVar "k"))))
+(DTypeSig false "ambiguousFieldDeclsMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyCon "String")))))
+(DFunDef false "ambiguousFieldDeclsMsg" ((PVar "fname") (PVar "owners") (PVar "cands")) (EBlock (DoLet false false (PVar "keys") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "cands"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "dedup") (EVar "keys"))) (EApp (EVar "listLen") (EVar "keys"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")) (EBlock (DoLet false false (PVar "tys") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "fieldDeclTypeName")) (EVar "cands")))) (DoLet false false (PVar "descrs") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "fieldDeclDescr")) (EVar "cands")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous field access: '.")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is declared by "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " and by "))) (EVar "descrs")))) (ELit (LString "; the record type is undetermined. Add a type annotation (e.g. '(r : "))) (EApp (EMethodRef "display") (EApp (EVar "headL") (EVar "tys")))) (ELit (LString ")."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "')")))))))))
+(DTypeSig false "fieldDeclTypeName" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclTypeName" ((PTuple (PVar "k") (PVar "ri"))) (EApp (EApp (EVar "optionOr") (EVar "k")) (EApp (EVar "headTyconNameMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
+(DTypeSig false "fieldDeclDescr" (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "String")))
+(DFunDef false "fieldDeclDescr" ((PTuple (PVar "k") (PVar "ri"))) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "Some" (PVar "mid")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "' from module '"))) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "'")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EApp (EVar "fieldDeclTypeName") (ETuple (EVar "k") (EVar "ri"))))) (ELit (LString "'"))))))
 (DTypeSig false "ownerDeclOfReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "ownerDeclOfReceiver" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "ownerDeclOfReceiver" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "owners")) (arm (PList (PTuple (PVar "k") (PVar "ri"))) () (EIf (EApp (EApp (EApp (EVar "narrowingBlockedByCtorSibling") (EApp (EVar "headTyconMono") (EVar "te"))) (EVar "fname")) (EVar "k")) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri"))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "ownerDeclMatches" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
 (DFunDef false "ownerDeclMatches" (PWild (PList)) (EListLit))
-(DFunDef false "ownerDeclMatches" ((PVar "ident") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "k") (EVar "ri")) (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))))))))
+(DFunDef false "ownerDeclMatches" ((PVar "ident") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value"))) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "k") (EVar "ri")) (EApp (EApp (EVar "ownerDeclMatches") (EVar "ident")) (EVar "rest"))))))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
-(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "fname")) (EVar "owners")))))
+(DFunDef false "resolveFieldAmbiguous" (PWild PWild (PList (PVar "r"))) (EApp (EVar "pairRecordByName") (EVar "r")))
+(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EApp (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "fname")) (EVar "owners")))
 (DTypeSig false "resolveFieldOwnersNarrowed" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldOwnersNarrowed" ((PVar "te") (PVar "fname") (PVar "owners")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "narrowedPick") (EVar "rk")) (EVar "fname")) (EVar "owners")) (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EApp (EVar "ownerCandidates") (EVar "owners")))))))
 (DTypeSig false "narrowedPick" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))))
@@ -65262,15 +65560,20 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "narrowingBlockedByCtorSibling" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "narrowingBlockedByCtorSibling" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EVar "rk")) (EVar "fname")) (EVar "survivorKey"))))
 (DTypeSig false "ctorSiblingWithholdingName" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EVar "ctorOracleKeyOf") (EVar "rk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))))
+(DFunDef false "ctorSiblingWithholdingName" ((PCon "None") PWild PWild) (EVar "None"))
+(DFunDef false "ctorSiblingWithholdingName" ((PCon "Some" (PVar "hk")) (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EVar "ctorsOfHead") (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "hk")) (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))
 (DTypeSig false "ctorOracleKeyOf" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "Option") (TyCon "TabKey"))))
 (DFunDef false "ctorOracleKeyOf" ((PCon "None")) (EVar "None"))
 (DFunDef false "ctorOracleKeyOf" ((PCon "Some" (PVar "hk"))) (EApp (EVar "headKeyDecl") (EVar "hk")))
-(DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "firstCtorSiblingWithholding" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstCtorSiblingWithholding" ((PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "ctorSiblingWithholds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorSiblingWithholds" ((PVar "fname") (PVar "k")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))))) (arm (PCon "None") () (EVar "True"))))
+(DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "firstCtorSiblingWithholding" (PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstCtorSiblingWithholding" ((PVar "hk") (PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "hk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "hk")) (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "hk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "ctorSiblingWithholds" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "ctorSiblingWithholds" ((PVar "hk") (PVar "fname") (PVar "k")) (EMatch (EApp (EApp (EVar "ctorRecordOfType") (EVar "hk")) (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))))) (arm (PCon "None") () (EVar "True"))))
+(DTypeSig false "ctorRecordOfType" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "ctorRecordOfType" ((PVar "hk") (PVar "k")) (EMatch (EApp (EApp (EVar "ctorRecordFromCompanion") (EVar "hk")) (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EIf (EApp (EApp (EVar "recordCandIsReceiverDecl") (EApp (EVar "Some") (EVar "hk"))) (ETuple (EVar "k") (EVar "ri"))) (EApp (EVar "Some") (EVar "ri")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
+(DTypeSig false "ctorRecordFromCompanion" (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "ctorRecordFromCompanion" ((PVar "hk") (PVar "k")) (EMatch (EApp (EVar "headKeyIdent") (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EApp (EVar "spRows") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
 (DTypeSig false "ownerCandidates" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
 (DFunDef false "ownerCandidates" ((PList)) (EListLit))
 (DFunDef false "ownerCandidates" ((PCons (PVar "key") (PVar "rest"))) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EVar "ownerCandidates") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "ownerCandidates") (EVar "rest")))))
@@ -65324,7 +65627,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferRecordUpdateField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono")))))))
 (DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "r")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
 (DTypeSig false "inferRecordUpdatePicked" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
-(DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EApp (EVar "instantiateRecordUpdate") (EVar "rname")) (EVar "ri")) (EApp (EVar "assignedFieldNames") (EVar "fields")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
+(DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EApp (EVar "instantiateRecordUpdate") (EVar "rname")) (EVar "ri")) (EApp (EVar "assignedFieldNames") (EVar "fields")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EMatch (EApp (EVar "firstFieldName") (EVar "fields")) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EVar "recordUpdateWellTyped") (EVar "bt")) (EVar "rname")) (EVar "ri")) (EVar "fn"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferRecordUpdateWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
 (DFunDef false "inferRecordUpdateWith" ((PVar "env") (PVar "rname") (PVar "base") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EApp (EVar "instantiateRecordUpdate") (EVar "rname")) (EVar "ri")) (EApp (EVar "assignedFieldNames") (EVar "fields")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base"))) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferBinopE" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono")))))))
@@ -67318,22 +67621,19 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "exportsIdentFor" (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyCon "Bool")))))
 (DFunDef false "exportsIdentFor" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "exportsIdentFor" ((PVar "n") (PVar "ident") (PCons (PTuple (PVar "en") (PVar "ei")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "en") (EVar "n")) (EBinOp "==" (EVar "ei") (EVar "ident"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "exportsIdentFor") (EVar "n")) (EVar "ident")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "insertCtorIdents" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "insertCtorIdents" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "insertCtorIdents" ((PVar "env") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env")) (EListLit (EVar "d"))) (EVar "acc"))))
-(DFunDef false "insertCtorIdents" ((PVar "env") (PCons (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "insertVariantIdents") (EVar "env")) (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataCtors")) (EVar "acc"))))
-(DFunDef false "insertCtorIdents" ((PVar "env") (PCons (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeCtor" None) (rf "newtypeOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addCtorIdentCand") (EVar "env")) (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeCtor")) (EVar "acc"))))
-(DFunDef false "insertCtorIdents" ((PVar "env") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env")) (EVar "rest")) (EVar "acc")))
-(DTypeSig false "insertVariantIdents" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "insertVariantIdents" (PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "insertVariantIdents" ((PVar "env") (PVar "tyName") (PVar "o") (PCons (PCon "Variant" (PVar "cn") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "insertVariantIdents") (EVar "env")) (EVar "tyName")) (EVar "o")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addCtorIdentCand") (EVar "env")) (EVar "tyName")) (EVar "o")) (EVar "cn")) (EVar "acc"))))
-(DTypeSig false "addCtorIdentCand" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "addCtorIdentCand" ((PVar "env") (PVar "tyName") (PVar "o") (PVar "cn") (PTuple (PVar "cands") (PVar "collided"))) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (ETuple (EVar "cands") (EVar "collided"))) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "lookupCtor") (EVar "env")) (EVar "cn")) (arm (PCon "None") () (ETuple (EVar "cands") (EVar "collided"))) (arm (PCon "Some" (PVar "s")) () (EBlock (DoLet false false (PVar "prior") (EApp (EApp (EVar "dropCtorIdentCand") (EVar "ident")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EVar "cands"))))) (DoLet false false (PVar "next") (EBinOp "++" (EVar "prior") (EListLit (ETuple (EVar "ident") (EVar "tyName") (EVar "s"))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EVar "cands")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "next")) (ELit (LInt 2))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "cn")) (EVar "collided")))) (EBinOp "::" (EVar "cn") (EVar "collided")) (EVar "collided"))))))))))
-(DTypeSig false "dropCtorIdentCand" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme"))))))
-(DFunDef false "dropCtorIdentCand" (PWild (PList)) (EListLit))
-(DFunDef false "dropCtorIdentCand" ((PVar "ident") (PCons (PAs "c" (PTuple (PVar "i") PWild PWild)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "ident")) (EApp (EApp (EVar "dropCtorIdentCand") (EVar "ident")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EApp (EApp (EVar "dropCtorIdentCand") (EVar "ident")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "insertCtorPop" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyApp (TyCon "SpellingPop") (TyCon "Scheme"))))))
+(DFunDef false "insertCtorPop" (PWild (PList) (PVar "pop")) (EVar "pop"))
+(DFunDef false "insertCtorPop" ((PVar "env") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env")) (EListLit (EVar "d"))) (EVar "pop"))))
+(DFunDef false "insertCtorPop" ((PVar "env") (PCons (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "insertCtorVariants") (EVar "env")) (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataCtors")) (EVar "pop"))))
+(DFunDef false "insertCtorPop" ((PVar "env") (PCons (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeCtor" None) (rf "newtypeOrigin" None)) true) (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "insertCtorRow") (EVar "env")) (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeCtor")) (EVar "pop"))))
+(DFunDef false "insertCtorPop" ((PVar "env") (PCons PWild (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env")) (EVar "rest")) (EVar "pop")))
+(DTypeSig false "insertCtorVariants" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyApp (TyCon "SpellingPop") (TyCon "Scheme"))))))))
+(DFunDef false "insertCtorVariants" (PWild PWild PWild (PList) (PVar "pop")) (EVar "pop"))
+(DFunDef false "insertCtorVariants" ((PVar "env") (PVar "tyName") (PVar "o") (PCons (PCon "Variant" (PVar "cn") PWild) (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EApp (EApp (EVar "insertCtorVariants") (EVar "env")) (EVar "tyName")) (EVar "o")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "insertCtorRow") (EVar "env")) (EVar "tyName")) (EVar "o")) (EVar "cn")) (EVar "pop"))))
+(DTypeSig false "insertCtorRow" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyApp (TyCon "SpellingPop") (TyCon "Scheme"))))))))
+(DFunDef false "insertCtorRow" ((PVar "env") (PVar "tyName") (PVar "o") (PVar "cn") (PVar "pop")) (EMatch (EApp (EApp (EVar "lookupCtor") (EVar "env")) (EVar "cn")) (arm (PCon "None") () (EVar "pop")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EApp (EApp (EVar "spInsert") (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn"))) (EVar "cn")) (EVar "tyName")) (EVar "s")) (EVar "pop")))))
 (DTypeSig false "applyCtorScopeOverrides" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "TcEnv") (TyCon "TcEnv"))))
-(DFunDef false "applyCtorScopeOverrides" ((PVar "prog") (PVar "env")) (EApp (EApp (EApp (EApp (EVar "overrideScopedCtors") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorIdentsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorCollidedRef") "value")) (EVar "env")))
+(DFunDef false "applyCtorScopeOverrides" ((PVar "prog") (PVar "env")) (EBlock (DoLet false false (PVar "pop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")) (DoExpr (EApp (EApp (EApp (EApp (EVar "overrideScopedCtors") (EVar "prog")) (EApp (EVar "spRows") (EVar "pop"))) (EApp (EVar "spCollided") (EVar "pop"))) (EVar "env")))))
 (DTypeSig false "overrideScopedCtors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "TcEnv") (TyCon "TcEnv"))))))
 (DFunDef false "overrideScopedCtors" (PWild PWild (PList) (PVar "env")) (EVar "env"))
 (DFunDef false "overrideScopedCtors" ((PVar "prog") (PVar "cands") (PCons (PVar "n") (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "env2") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "cands")) (arm (PCon "None") () (EVar "env")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EApp (EVar "scopedCtorEntry") (EVar "prog")) (EVar "n")) (EVar "cs")) (arm (PCon "None") () (EVar "env")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "addCtor") (EVar "env")) (EVar "n")) (EVar "s"))))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "overrideScopedCtors") (EVar "prog")) (EVar "cands")) (EVar "rest")) (EVar "env2")))))
@@ -67371,22 +67671,19 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "exportsCtorIdentFor" (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))) (TyCon "Bool")))))
 (DFunDef false "exportsCtorIdentFor" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "exportsCtorIdentFor" ((PVar "n") (PVar "ident") (PCons (PTuple (PVar "cn") PWild (PVar "ci")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "cn") (EVar "n")) (EBinOp "==" (EVar "ci") (EVar "ident"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "exportsCtorIdentFor") (EVar "n")) (EVar "ident")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "insertRecordIdents" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "insertRecordIdents" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "insertRecordIdents" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertRecordIdents") (EVar "rest")) (EApp (EApp (EVar "insertRecordIdents") (EListLit (EVar "d"))) (EVar "acc"))))
-(DFunDef false "insertRecordIdents" ((PCons (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertRecordIdents") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariantIdents") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataCtors")) (EVar "acc"))))
-(DFunDef false "insertRecordIdents" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertRecordIdents") (EVar "rest")) (EVar "acc")))
-(DTypeSig false "insertRecordVariantIdents" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "insertRecordVariantIdents" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "insertRecordVariantIdents" ((PVar "tyName") (PVar "o") (PCons (PCon "Variant" (PVar "cn") (PCon "ConNamed" PWild PWild)) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariantIdents") (EVar "tyName")) (EVar "o")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "addRecordIdentCand") (EVar "tyName")) (EVar "o")) (EVar "cn")) (EVar "acc"))))
-(DFunDef false "insertRecordVariantIdents" ((PVar "tyName") (PVar "o") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariantIdents") (EVar "tyName")) (EVar "o")) (EVar "rest")) (EVar "acc")))
-(DTypeSig false "addRecordIdentCand" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "addRecordIdentCand" ((PVar "tyName") (PVar "o") (PVar "cn") (PTuple (PVar "cands") (PVar "collided"))) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (ETuple (EVar "cands") (EVar "collided"))) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EVar "lookupRecordByName") (EVar "cn")) (arm (PCon "None") () (ETuple (EVar "cands") (EVar "collided"))) (arm (PCon "Some" (PVar "ri")) () (EBlock (DoLet false false (PVar "prior") (EApp (EApp (EVar "dropRecordIdentCand") (EVar "ident")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EVar "cands"))))) (DoLet false false (PVar "next") (EBinOp "++" (EVar "prior") (EListLit (ETuple (EVar "ident") (EVar "tyName") (EVar "ri"))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EVar "cands")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "next")) (ELit (LInt 2))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "cn")) (EVar "collided")))) (EBinOp "::" (EVar "cn") (EVar "collided")) (EVar "collided"))))))))))
-(DTypeSig false "dropRecordIdentCand" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "dropRecordIdentCand" (PWild (PList)) (EListLit))
-(DFunDef false "dropRecordIdentCand" ((PVar "ident") (PCons (PAs "c" (PTuple (PVar "i") PWild PWild)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "ident")) (EApp (EApp (EVar "dropRecordIdentCand") (EVar "ident")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EApp (EApp (EVar "dropRecordIdentCand") (EVar "ident")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "insertRecordPop" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")))))
+(DFunDef false "insertRecordPop" ((PList) (PVar "pop")) (EVar "pop"))
+(DFunDef false "insertRecordPop" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "pop")) (EApp (EApp (EVar "insertRecordPop") (EVar "rest")) (EApp (EApp (EVar "insertRecordPop") (EListLit (EVar "d"))) (EVar "pop"))))
+(DFunDef false "insertRecordPop" ((PCons (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "pop")) (EApp (EApp (EVar "insertRecordPop") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariants") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataCtors")) (EVar "pop"))))
+(DFunDef false "insertRecordPop" ((PCons PWild (PVar "rest")) (PVar "pop")) (EApp (EApp (EVar "insertRecordPop") (EVar "rest")) (EVar "pop")))
+(DTypeSig false "insertRecordVariants" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")))))))
+(DFunDef false "insertRecordVariants" (PWild PWild (PList) (PVar "pop")) (EVar "pop"))
+(DFunDef false "insertRecordVariants" ((PVar "tyName") (PVar "o") (PCons (PCon "Variant" (PVar "cn") (PCon "ConNamed" PWild PWild)) (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariants") (EVar "tyName")) (EVar "o")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "insertRecordRow") (EVar "tyName")) (EVar "o")) (EVar "cn")) (EVar "pop"))))
+(DFunDef false "insertRecordVariants" ((PVar "tyName") (PVar "o") (PCons PWild (PVar "rest")) (PVar "pop")) (EApp (EApp (EApp (EApp (EVar "insertRecordVariants") (EVar "tyName")) (EVar "o")) (EVar "rest")) (EVar "pop")))
+(DTypeSig false "insertRecordRow" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")))))))
+(DFunDef false "insertRecordRow" ((PVar "tyName") (PVar "o") (PVar "cn") (PVar "pop")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "cn")) (arm (PCon "None") () (EVar "pop")) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EApp (EApp (EApp (EVar "spInsert") (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn"))) (EVar "cn")) (EVar "tyName")) (EVar "ri")) (EVar "pop")))))
 (DTypeSig false "applyRecordScopeOverrides" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
-(DFunDef false "applyRecordScopeOverrides" ((PVar "prog")) (EApp (EApp (EApp (EVar "overrideScopedRecords") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordCollidedRef") "value")))
+(DFunDef false "applyRecordScopeOverrides" ((PVar "prog")) (EBlock (DoLet false false (PVar "pop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")) (DoExpr (EApp (EApp (EApp (EVar "overrideScopedRecords") (EVar "prog")) (EApp (EVar "spRows") (EVar "pop"))) (EApp (EVar "spCollided") (EVar "pop"))))))
 (DTypeSig false "overrideScopedRecords" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "overrideScopedRecords" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "overrideScopedRecords" ((PVar "prog") (PVar "cands") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "cands")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EApp (EVar "scopedRecordEntry") (EVar "prog")) (EVar "n")) (EVar "cs")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))))))) (DoExpr (EApp (EApp (EApp (EVar "overrideScopedRecords") (EVar "prog")) (EVar "cands")) (EVar "rest")))))
@@ -68167,7 +68464,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "tupleUnifyClash" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "tupleUnifyClash" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "tupleSpine") (EVar "a")) (EApp (EVar "tupleSpine") (EVar "b"))) (arm (PTuple (PCon "Some" (PVar "xs")) (PCon "Some" (PVar "ys"))) () (EBinOp "/=" (EApp (EVar "listLen") (EVar "xs")) (EApp (EVar "listLen") (EVar "ys")))) (arm (PTuple (PCon "Some" PWild) (PCon "None")) () (EApp (EVar "monoSpineHeadIsCon") (EVar "b"))) (arm (PTuple (PCon "None") (PCon "Some" PWild)) () (EApp (EVar "monoSpineHeadIsCon") (EVar "a"))) (arm (PTuple (PCon "None") (PCon "None")) () (EVar "False"))))
 (DTypeSig false "checkBodyImpl" (TyFun (TyCon "ModuleSeed") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "checkBodyImpl" ((PVar "moduleSeed") (PVar "mid") (PVar "implDecls") (PVar "prog0")) (EBlock (DoLet false false (PVar "seed") (EFieldAccess (EVar "moduleSeed") "msSchemes")) (DoLet false false PWild (EApp (EVar "resetState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EVar "mid"))) (DoLet false false (PVar "moduleScope") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "mid")) (EVar "ModuleOwner"))) (DoLet false false PWild (EApp (EVar "openScope") (EVar "moduleScope"))) (DoLet false false PWild (EApp (EVar "recordModuleStart") (EVar "mid"))) (DoLet false false PWild (EApp (EVar "reportAmbiguousImports") (EVar "prog0"))) (DoLet false false (PVar "prog") (EVar "prog0")) (DoLet false false (PVar "aliasSpellings") (EApp (EVar "aliasMethodSpellings") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "seedBuiltinClasses") (EVar "mid")) (EVar "prog"))) (DoLet false false (PVar "stampRes") (EBlock (DoLet false false (PTuple (PVar "top") (PVar "ids")) (EApp (EVar "stampTopScope") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "beginModuleMarking") (EVar "mid")) (EVar "prog")) (EVar "top")) (EVar "moduleSeed"))) (DoExpr (ETuple (EVar "prog") (EVar "ids"))))) (DoLet false false (PVar "progS") (EApp (EVar "fst") (EVar "stampRes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "snd") (EVar "stampRes")))) (EVar "omEmpty")))) (DoLet false false (PVar "groundUniverse") (EVar "implDecls")) (DoLet false false (PVar "superDecls") (EBinOp "++" (EVar "prog") (EVar "implDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "superDecls"))) (DoLet false false PWild (EApp (EVar "checkEffectParams") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkLetRecDecls") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "appendUniverseAccums") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "moduleImplUniv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "ieUniverseAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deImpls"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "residualUnivRef")) (EVar "moduleImplUniv"))) (DoLet false false (PVar "isMethod") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "methodNameDeclaredAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deMethods"))))) (DoLet false false (PVar "definerShadows") (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EVar "definerShadowsFromSet") (EVar "isMethod")) (EVar "prog0")))) (DoLet false false (PVar "importerShadows") (EIf (EApp (EVar "isEmptyL") (EVar "implDecls")) (EListLit) (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EApp (EVar "standaloneShadowsFromSet") (EVar "isMethod")) (EApp (EApp (EVar "omMapValues") (ELam (PWild) (ELit LUnit))) (EFieldAccess (EVar "moduleSeed") "msImportedValues"))) (EVar "prog0"))))) (DoLet false false (PVar "sigs") (EApp (EVar "sigsOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EApp (EApp (EVar "namesToSet") (EVar "definerShadows")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowSigsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls"))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef")) (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EVar "importerShadows") (EVar "definerShadows"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "methodDispatchIdxByIdRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false (PVar "admitted") (EApp (EVar "importDefinersOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "definerRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "originRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "importedSchemeOblsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importedSchemeOblEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (EVar "omEmpty")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeCtxRef")) (EApp (EVar "Some") (ETuple (EVar "prog") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodAliasEntriesRef")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "prog")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasMethodOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EVar "aliasSpellings")) (EVar "omEmpty")))))) (DoLet false false (PVar "dataEnv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false (PVar "cur") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "declEnvSeedDataUniverse") (EVar "mid")) (EVar "envs"))) (DoLet false false (PVar "base") (EApp (EApp (EVar "registerAllData") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv") "value")) (EApp (EApp (EApp (EVar "importedCtorTypeDeclsLastWins") (EVar "prog0")) (EVar "cur")) (EFieldAccess (EVar "envs") "deModules")))) (DoLet false false (PVar "env0") (EApp (EApp (EVar "registerAllData") (EVar "base")) (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "applyRecordScopeOverrides") (EVar "prog0"))) (DoExpr (EApp (EApp (EVar "applyCtorScopeOverrides") (EVar "prog0")) (EVar "env0"))))) (DoLet false false PWild (EApp (EVar "recordInvocationView") (EVar "dataEnv"))) (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVars") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclaredKinds") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclAuthorityUses") (EVar "prog"))) (DoLet false false (PVar "classEnvHere") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (ETuple (EFieldAccess (EVar "envs") "deIfaces") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs")))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkGradedImplHeads") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoLet false false (PVar "currentMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "recordMethodGrants") (EVar "currentMethodRows"))) (DoLet false false (PVar "visibleMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "implDecls"))) (DoLet false false (PVar "visibleMethodRowIndex") (EApp (EApp (EApp (EVar "methodRowsByIdentity") (EApp (EVar "isNonEmptyL") (EVar "importerShadows"))) (EVar "visibleMethodRows")) (EVar "regEmpty"))) (DoLet false false (PVar "externS") (EApp (EApp (EVar "userExternSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "prog"))) (DoLet false false (PVar "globalS") (EBinOp "++" (EApp (EVar "legacyMethodSchemes") (EVar "currentMethodRows")) (EVar "externS"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCrossable") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsLabelled") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsShadow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsReserved") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCatalogRow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false (PVar "envSeed") (EApp (EApp (EVar "extendVars") (EVar "dataEnv")) (EVar "seed"))) (DoLet false false (PVar "shadowLayer") (EBlock (DoLet false false (PVar "ifaceSchemes") (EApp (EVar "legacyMethodSchemes") (EVar "visibleMethodRows"))) (DoLet false false PWild (EApp (EVar "seedNumLitFromIntAnchor") (EVar "visibleMethodRows"))) (DoLet false false (PVar "sm") (EApp (EApp (EApp (EApp (EVar "pickSchemesByDecl") (EVar "importerShadows")) (EVar "ifaceSchemes")) (EVar "visibleMethodRowIndex")) (EFieldAccess (EVar "moduleSeed") "msImportedValues"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef") "value")))) (DoExpr (EApp (EApp (EVar "attachStandaloneSources") (EFieldAccess (EVar "moduleSeed") "msImportedValues")) (EVar "sm"))))) (DoLet false false (PVar "envImported") (EApp (EApp (EApp (EApp (EApp (EVar "annotateImportedMethodRows") (EVar "envSeed")) (EApp (EApp (EVar "importedMethodBindingNames") (EVar "prog0")) (EVar "aliasSpellings"))) (EApp (EVar "nameableIfaceMethodSet") (EVar "prog0"))) (EApp (EApp (EVar "namesToSet") (EVar "importerShadows")) (EVar "omEmpty"))) (EVar "visibleMethodRowIndex"))) (DoLet false false (PVar "envGlobal") (EApp (EApp (EVar "extendVars") (EApp (EApp (EVar "extendMethodRows") (EVar "envImported")) (EVar "currentMethodRows"))) (EVar "externS"))) (DoLet false false (PVar "env1") (EApp (EApp (EVar "extendBindings") (EVar "envGlobal")) (EVar "shadowLayer"))) (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "progS"))) (DoLet false false (PTuple (PVar "topSchemes") (PVar "groupedOut")) (EApp (EApp (EApp (EApp (EApp (EVar "processTopGroups") (EVar "env1")) (EVar "sigs")) (EVar "defs")) (EApp (EApp (EVar "groupNames") (EVar "defs")) (EVar "omEmpty"))) (EApp (EApp (EVar "namesToSet") (EApp (EVar "publicValNames") (EVar "prog"))) (EVar "omEmpty")))) (DoLet false false (PVar "progOut") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EApp (EVar "finishModuleMarking") (EVar "mm")) (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (EVar "groupedOut")) (EVar "progS"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false (PVar "progT") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EVar "stampTailDecls") (EFieldAccess (EVar "mm") "mmTop")) (EVar "progOut"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false PWild (EBlock (DoLet false false (PVar "bodyEnv") (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "inferUserImplBodies") (EVar "bodyEnv")) (EVar "implDecls")) (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoLet false false PWild (EApp (EVar "dedupPredicateSlotsTable") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef")) (EApp (EVar "predicateSlotTableWithoutArgs") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value")))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "emptyMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EApp (EApp (EApp (EVar "attributeMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "attributeModuleSchemeObls") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "groundMultiParamObligations") (EVar "groundUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkImplCompletenessMap") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EBlock (DoLet false false (PVar "obUniv") (EVar "moduleImplUniv")) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "True")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "False")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls") "items") "value"))) (DoLet false false PWild (EApp (EVar "settleDeferredPatLits") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "checkDeferredMatches") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchChecksDeferred") "value")))) (DoLet false false PWild (EApp (EVar "checkFixedWidthLiterals") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRanges") "value"))) (DoLet false false PWild (EApp (EVar "checkWideLiterals") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "wideLitRanges") "value"))) (DoLet false false PWild (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))) (DoExpr (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut")) (EApp (EVar "mapLocalSchemes") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "seedSchemesOut")) (EVar "seed"))) (DoLet false false PWild (EApp (EApp (EVar "appendDataUniverse") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "result") (ETuple (ERecordCreate "ModuleBindings" ((fa "mbSchemes" (EBinOp "++" (EVar "globalS") (EVar "topSchemes"))) (fa "mbStandaloneSchemes" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "topSchemes"))) (EVar "omEmpty"))))) (EVar "progOut"))) (DoLet false false PWild (EApp (EVar "closeScope") (ELit LUnit))) (DoExpr (EVar "result"))))
+(DFunDef false "checkBodyImpl" ((PVar "moduleSeed") (PVar "mid") (PVar "implDecls") (PVar "prog0")) (EBlock (DoLet false false (PVar "seed") (EFieldAccess (EVar "moduleSeed") "msSchemes")) (DoLet false false PWild (EApp (EVar "resetState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EVar "mid"))) (DoLet false false (PVar "moduleScope") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "mid")) (EVar "ModuleOwner"))) (DoLet false false PWild (EApp (EVar "openScope") (EVar "moduleScope"))) (DoLet false false PWild (EApp (EVar "recordModuleStart") (EVar "mid"))) (DoLet false false PWild (EApp (EVar "reportAmbiguousImports") (EVar "prog0"))) (DoLet false false (PVar "prog") (EVar "prog0")) (DoLet false false (PVar "aliasSpellings") (EApp (EVar "aliasMethodSpellings") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "seedBuiltinClasses") (EVar "mid")) (EVar "prog"))) (DoLet false false (PVar "stampRes") (EBlock (DoLet false false (PTuple (PVar "top") (PVar "ids")) (EApp (EVar "stampTopScope") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "beginModuleMarking") (EVar "mid")) (EVar "prog")) (EVar "top")) (EVar "moduleSeed"))) (DoExpr (ETuple (EVar "prog") (EVar "ids"))))) (DoLet false false (PVar "progS") (EApp (EVar "fst") (EVar "stampRes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "snd") (EVar "stampRes")))) (EVar "omEmpty")))) (DoLet false false (PVar "groundUniverse") (EVar "implDecls")) (DoLet false false (PVar "superDecls") (EBinOp "++" (EVar "prog") (EVar "implDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "superDecls"))) (DoLet false false PWild (EApp (EVar "checkEffectParams") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkLetRecDecls") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "appendUniverseAccums") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "moduleImplUniv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "ieUniverseAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deImpls"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "residualUnivRef")) (EVar "moduleImplUniv"))) (DoLet false false (PVar "isMethod") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "methodNameDeclaredAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deMethods"))))) (DoLet false false (PVar "definerShadows") (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EVar "definerShadowsFromSet") (EVar "isMethod")) (EVar "prog0")))) (DoLet false false (PVar "importerShadows") (EIf (EApp (EVar "isEmptyL") (EVar "implDecls")) (EListLit) (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EApp (EVar "standaloneShadowsFromSet") (EVar "isMethod")) (EApp (EApp (EVar "omMapValues") (ELam (PWild) (ELit LUnit))) (EFieldAccess (EVar "moduleSeed") "msImportedValues"))) (EVar "prog0"))))) (DoLet false false (PVar "sigs") (EApp (EVar "sigsOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EApp (EApp (EVar "namesToSet") (EVar "definerShadows")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowSigsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls"))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef")) (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EVar "importerShadows") (EVar "definerShadows"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "methodDispatchIdxByIdRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false (PVar "admitted") (EApp (EVar "importDefinersOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "definerRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "originRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "importedSchemeOblsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importedSchemeOblEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (EVar "omEmpty")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodScopeCtxRef")) (EApp (EVar "Some") (ETuple (EVar "prog") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodAliasEntriesRef")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "prog")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasMethodOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EVar "aliasSpellings")) (EVar "omEmpty")))))) (DoLet false false (PVar "dataEnv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false (PVar "cur") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "declEnvSeedDataUniverse") (EVar "mid")) (EVar "envs"))) (DoLet false false (PVar "base") (EApp (EApp (EVar "registerImportOverlay") (EApp (EVar "withCtors") (EApp (EVar "spFloor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")))) (EApp (EApp (EApp (EVar "importedCtorTypeDeclsLastWins") (EVar "prog0")) (EVar "cur")) (EFieldAccess (EVar "envs") "deModules")))) (DoLet false false (PVar "env0") (EApp (EApp (EVar "registerAllData") (EVar "base")) (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "applyRecordScopeOverrides") (EVar "prog0"))) (DoExpr (EApp (EApp (EVar "applyCtorScopeOverrides") (EVar "prog0")) (EVar "env0"))))) (DoLet false false PWild (EApp (EVar "recordInvocationView") (EVar "dataEnv"))) (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVars") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclaredKinds") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclAuthorityUses") (EVar "prog"))) (DoLet false false (PVar "classEnvHere") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (ETuple (EFieldAccess (EVar "envs") "deIfaces") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs")))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkGradedImplHeads") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoLet false false (PVar "currentMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "recordMethodGrants") (EVar "currentMethodRows"))) (DoLet false false (PVar "visibleMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "implDecls"))) (DoLet false false (PVar "visibleMethodRowIndex") (EApp (EApp (EApp (EVar "methodRowsByIdentity") (EApp (EVar "isNonEmptyL") (EVar "importerShadows"))) (EVar "visibleMethodRows")) (EVar "regEmpty"))) (DoLet false false (PVar "externS") (EApp (EApp (EVar "userExternSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "prog"))) (DoLet false false (PVar "globalS") (EBinOp "++" (EApp (EVar "legacyMethodSchemes") (EVar "currentMethodRows")) (EVar "externS"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCrossable") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsLabelled") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsShadow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsReserved") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCatalogRow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false (PVar "envSeed") (EApp (EApp (EVar "extendVars") (EVar "dataEnv")) (EVar "seed"))) (DoLet false false (PVar "shadowLayer") (EBlock (DoLet false false (PVar "ifaceSchemes") (EApp (EVar "legacyMethodSchemes") (EVar "visibleMethodRows"))) (DoLet false false PWild (EApp (EVar "seedNumLitFromIntAnchor") (EVar "visibleMethodRows"))) (DoLet false false (PVar "sm") (EApp (EApp (EApp (EApp (EVar "pickSchemesByDecl") (EVar "importerShadows")) (EVar "ifaceSchemes")) (EVar "visibleMethodRowIndex")) (EFieldAccess (EVar "moduleSeed") "msImportedValues"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef") "value")))) (DoExpr (EApp (EApp (EVar "attachStandaloneSources") (EFieldAccess (EVar "moduleSeed") "msImportedValues")) (EVar "sm"))))) (DoLet false false (PVar "envImported") (EApp (EApp (EApp (EApp (EApp (EVar "annotateImportedMethodRows") (EVar "envSeed")) (EApp (EApp (EVar "importedMethodBindingNames") (EVar "prog0")) (EVar "aliasSpellings"))) (EApp (EVar "nameableIfaceMethodSet") (EVar "prog0"))) (EApp (EApp (EVar "namesToSet") (EVar "importerShadows")) (EVar "omEmpty"))) (EVar "visibleMethodRowIndex"))) (DoLet false false (PVar "envGlobal") (EApp (EApp (EVar "extendVars") (EApp (EApp (EVar "extendMethodRows") (EVar "envImported")) (EVar "currentMethodRows"))) (EVar "externS"))) (DoLet false false (PVar "env1") (EApp (EApp (EVar "extendBindings") (EVar "envGlobal")) (EVar "shadowLayer"))) (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "progS"))) (DoLet false false (PTuple (PVar "topSchemes") (PVar "groupedOut")) (EApp (EApp (EApp (EApp (EApp (EVar "processTopGroups") (EVar "env1")) (EVar "sigs")) (EVar "defs")) (EApp (EApp (EVar "groupNames") (EVar "defs")) (EVar "omEmpty"))) (EApp (EApp (EVar "namesToSet") (EApp (EVar "publicValNames") (EVar "prog"))) (EVar "omEmpty")))) (DoLet false false (PVar "progOut") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EApp (EVar "finishModuleMarking") (EVar "mm")) (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (EVar "groupedOut")) (EVar "progS"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false (PVar "progT") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EVar "stampTailDecls") (EFieldAccess (EVar "mm") "mmTop")) (EVar "progOut"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false PWild (EBlock (DoLet false false (PVar "bodyEnv") (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "inferUserImplBodies") (EVar "bodyEnv")) (EVar "implDecls")) (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoLet false false PWild (EApp (EVar "dedupPredicateSlotsTable") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef")) (EApp (EVar "predicateSlotTableWithoutArgs") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value")))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "emptyMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EApp (EApp (EApp (EVar "attributeMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "attributeModuleSchemeObls") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "groundMultiParamObligations") (EVar "groundUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkImplCompletenessMap") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EBlock (DoLet false false (PVar "obUniv") (EVar "moduleImplUniv")) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "True")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "False")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls") "items") "value"))) (DoLet false false PWild (EApp (EVar "settleDeferredPatLits") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "checkDeferredMatches") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "matchChecksDeferred") "value")))) (DoLet false false PWild (EApp (EVar "checkFixedWidthLiterals") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRanges") "value"))) (DoLet false false PWild (EApp (EVar "checkWideLiterals") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "wideLitRanges") "value"))) (DoLet false false PWild (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))) (DoExpr (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut")) (EApp (EVar "mapLocalSchemes") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "seedSchemesOut")) (EVar "seed"))) (DoLet false false PWild (EApp (EApp (EVar "appendDataUniverse") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "result") (ETuple (ERecordCreate "ModuleBindings" ((fa "mbSchemes" (EBinOp "++" (EVar "globalS") (EVar "topSchemes"))) (fa "mbStandaloneSchemes" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "topSchemes"))) (EVar "omEmpty"))))) (EVar "progOut"))) (DoLet false false PWild (EApp (EVar "closeScope") (ELit LUnit))) (DoExpr (EVar "result"))))
 (DTypeSig false "inferPropBodies" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "inferPropBodies" ((PVar "env") (PVar "prog")) (EBlock (DoLet false false (PVar "mark") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "dropGoalsSince") (EVar "mark")) (EListLit (EVar "GKBinopSite") (EVar "GKUnopSite") (EVar "GKArithSite"))))))
 (DTypeSig false "inferPropBodiesGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
@@ -69155,6 +69452,21 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "registerAllDataScoped" ((PVar "env") (PVar "ds") (PVar "allDs")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedParamPolarityFixpointScoped") (EVar "ds")) (EVar "allDs"))) (DoExpr (EApp (EApp (EVar "registerAllDataGo") (EVar "env")) (EVar "ds")))))
 (DTypeSig false "registerAllDataGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
 (DFunDef false "registerAllDataGo" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "d")) (EApp (EVar "recordDeclKinds") (EVar "d")))) (ELit LUnit)) (EVar "ds"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (EVar "registerData")) (EVar "env")) (EVar "ds")))))
+(DTypeSig false "registerImportOverlay" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
+(DFunDef false "registerImportOverlay" ((PVar "env") (PVar "overlay")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "seedParamPolarityFixpointScoped") (EVar "overlay")) (EVar "overlay"))) (DoLet false false (PVar "ctorPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")) (DoLet false false (PVar "recordPop") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")) (DoLet false false (PVar "served") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EVar "d") (EApp (EApp (EApp (EVar "overlayCachedRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "d"))))) (EVar "overlay"))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EApp (EVar "recordDeclKinds") (EApp (EVar "fst") (EVar "p")))) (arm (PCon "Some" PWild) () (ELit LUnit))))) (ELit LUnit)) (EVar "served"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "None") () (EApp (EApp (EVar "registerData") (EVar "e")) (EApp (EVar "fst") (EVar "p")))) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EVar "registerCachedRows") (EVar "e")) (EVar "rows")))))) (EVar "env")) (EVar "served")))))
+(DTypeSig false "overlayCachedRows" (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))))
+(DFunDef false "overlayCachedRows" ((PVar "ctorPop") (PVar "recordPop") (PRec "DData" ((rf "dataCtors" None) (rf "dataOrigin" None)) true)) (EApp (EApp (EApp (EApp (EVar "cachedVariantRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "dataOrigin")) (EVar "dataCtors")))
+(DFunDef false "overlayCachedRows" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "cachedVariantRows" (TyFun (TyApp (TyCon "SpellingPop") (TyCon "Scheme")) (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))))))
+(DFunDef false "cachedVariantRows" (PWild PWild PWild (PList)) (EApp (EVar "Some") (ETuple (EListLit) (EListLit))))
+(DFunDef false "cachedVariantRows" ((PVar "ctorPop") (PVar "recordPop") (PVar "o") (PCons (PCon "Variant" (PVar "cn") (PVar "payload")) (PVar "rest"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn"))) (ELam ((PVar "ident")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "spLookupIdent") (EVar "ident")) (EVar "cn")) (EVar "ctorPop"))) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "cachedRecordRow") (EVar "recordPop")) (EVar "ident")) (EVar "cn")) (EVar "payload"))) (ELam ((PVar "recs")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "cachedVariantRows") (EVar "ctorPop")) (EVar "recordPop")) (EVar "o")) (EVar "rest"))) (ELam ((PVar "later")) (EApp (EVar "Some") (ETuple (EBinOp "::" (ETuple (EVar "cn") (EVar "s")) (EApp (EVar "fst") (EVar "later"))) (EBinOp "++" (EVar "recs") (EApp (EVar "snd") (EVar "later"))))))))))))))
+(DTypeSig false "cachedRecordRow" (TyFun (TyApp (TyCon "SpellingPop") (TyCon "RecordInfo")) (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyCon "ConPayload") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))))
+(DFunDef false "cachedRecordRow" ((PVar "recordPop") (PVar "ident") (PVar "cn") (PCon "ConNamed" PWild PWild)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ri")) (EListLit (ETuple (EVar "cn") (EVar "ri"))))) (EApp (EApp (EApp (EVar "spLookupIdent") (EVar "ident")) (EVar "cn")) (EVar "recordPop"))))
+(DFunDef false "cachedRecordRow" (PWild PWild PWild PWild) (EApp (EVar "Some") (EListLit)))
+(DTypeSig false "registerCachedRows" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))) (TyCon "TcEnv"))))
+(DFunDef false "registerCachedRows" ((PVar "env") (PTuple (PVar "ctors") (PVar "recs"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "r")) (EApp (EApp (EVar "registerCachedRecord") (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "snd") (EVar "r"))))) (ELit LUnit)) (EVar "recs"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "e") (PVar "c")) (EApp (EApp (EApp (EVar "addCtor") (EVar "e")) (EApp (EVar "fst") (EVar "c"))) (EApp (EVar "snd") (EVar "c"))))) (EVar "env")) (EVar "ctors")))))
+(DTypeSig false "registerCachedRecord" (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyCon "Unit"))))
+(DFunDef false "registerCachedRecord" ((PVar "key") (PVar "ri")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EApp (EVar "addFieldOwners") (EVar "key")) (EApp (EVar "recordFieldNames") (EVar "ri"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
 (DTypeSig false "recordDeclKinds" (TyFun (TyCon "Decl") (TyCon "Unit")))
 (DFunDef false "recordDeclKinds" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "recordDeclKinds") (EVar "d")))
 (DFunDef false "recordDeclKinds" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "anns")) (rf "dataCtors" (PVar "variants")) (rf "dataOrigin" (PVar "o"))) false)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordCtors") (EVar "o")) (EVar "name")) (EVar "vis")) (EVar "params")) (EVar "variants"))) (DoExpr (EApp (EApp (EApp (EVar "recordParamKinds") (EVar "o")) (EVar "name")) (EApp (EApp (EVar "declParamKinds") (EVar "params")) (EVar "anns"))))))
@@ -69800,11 +70112,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "appendUniverseAccums" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "appendUniverseAccums" ((PVar "mid") (PVar "prog")) (EBlock (DoLet false false PWild (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeFunNamesRef")) (EApp (EApp (EVar "namesToSet") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "prog")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeFunNamesRef") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef") "value") (EApp (EVar "argDispatchIndicesById") (EVar "prog"))))) (DoExpr (ELit LUnit))))
 (DTypeSig false "loadDataUniverse" (TyFun (TyCon "Int") (TyCon "Unit")))
-(DFunDef false "loadDataUniverse" ((PVar "cur")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordByName") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef")) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deData") "deAliases"))))))
-(DTypeSig false "storeDataUniverse" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "storeDataUniverse" (PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordByName")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))
+(DFunDef false "loadDataUniverse" ((PVar "cur")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EVar "spFloor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef")) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deData") "deAliases"))))))
 (DTypeSig false "appendDataUniverse" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "appendDataUniverse" ((PVar "mid") (PVar "prog0")) (EBlock (DoLet false false (PVar "pubDecls") (EApp (EVar "publicDataDecls") (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EVar "registerAllDataScoped") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv") "value")) (EVar "pubDecls")) (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "storeDataUniverse") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv")) (EVar "env2"))) (DoLet false false (PVar "ctorAcc") (EApp (EApp (EApp (EVar "insertCtorIdents") (EVar "env2")) (EVar "pubDecls")) (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorIdentsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorCollidedRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorIdentsRef")) (EApp (EVar "fst") (EVar "ctorAcc")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorCollidedRef")) (EApp (EVar "snd") (EVar "ctorAcc")))) (DoLet false false (PVar "recAcc") (EApp (EApp (EVar "insertRecordIdents") (EVar "pubDecls")) (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordCollidedRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef")) (EApp (EVar "fst") (EVar "recAcc")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordCollidedRef")) (EApp (EVar "snd") (EVar "recAcc"))))))
+(DFunDef false "appendDataUniverse" ((PVar "mid") (PVar "prog0")) (EBlock (DoLet false false (PVar "pubDecls") (EApp (EVar "publicDataDecls") (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EVar "registerAllDataScoped") (EApp (EVar "withCtors") (EApp (EVar "spFloor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")))) (EVar "pubDecls")) (EVar "prog0"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop")) (EApp (EApp (EApp (EVar "insertCtorPop") (EVar "env2")) (EVar "pubDecls")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorPop") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop")) (EApp (EApp (EVar "insertRecordPop") (EVar "pubDecls")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordPop") "value"))))))
 (DTypeSig false "definerShadowsFromSet" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "definerShadowsFromSet" ((PVar "isMethod") (PVar "prog")) (EBlock (DoLet false false (PVar "localNames") (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "prog"))))) (DoLet false false (PVar "direct") (EApp (EApp (EMethodRef "filter") (EVar "isMethod")) (EVar "localNames"))) (DoLet false false (PVar "sm") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value")) (DoLet false false (PVar "bares") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EListLit (EVar "bare"))) (arm (PCon "None") () (EListLit))))) (EVar "localNames"))) (DoExpr (EApp (EApp (EVar "removeAllS") (EApp (EVar "localBoundNames") (EVar "prog"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "bares")))))))
 (DTypeSig false "standaloneShadowsFromSet" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -70364,7 +70674,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "coreCheckMemoHit" ((PCon "None")) (EVar "None"))
 (DFunDef false "coreCheckMemoHit" ((PCon "Some" (PVar "key"))) (EMatch (EUnOp "!" (EVar "coreCheckMemoRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EFieldAccess (EVar "m") "ccmKey") (EVar "key")) (EApp (EVar "Some") (EVar "m")) (EVar "None")))))
 (DTypeSig false "copyCrossRun" (TyFun (TyCon "CrossRun") (TyCon "CrossRun")))
-(DFunDef false "copyCrossRun" ((PVar "c")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeFunNamesRef") "value"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeMethodDispatchIdxByIdRef") "value"))) (fa "universeRecordByName" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeRecordByName") "value"))) (fa "universeDataCtors" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeDataCtors") "value"))) (fa "universeRecordIdentsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeRecordIdentsRef") "value"))) (fa "universeRecordCollidedRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeRecordCollidedRef") "value"))) (fa "universeDataEnv" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeDataEnv") "value"))) (fa "universeCtorIdentsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeCtorIdentsRef") "value"))) (fa "universeCtorCollidedRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeCtorCollidedRef") "value"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "builtinClassesRef") "value"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsRef") "value"))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsQualRef") "value"))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredRef") "value"))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredQualRef") "value"))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsRef") "value"))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsQualRef") "value"))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "coreSchemeObligationsRef") "value"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleSchemeOblsQualRef") "value"))))))
+(DFunDef false "copyCrossRun" ((PVar "c")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeFunNamesRef") "value"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeMethodDispatchIdxByIdRef") "value"))) (fa "universeDataCtors" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeDataCtors") "value"))) (fa "universeCtorPop" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeCtorPop") "value"))) (fa "universeRecordPop" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "universeRecordPop") "value"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "builtinClassesRef") "value"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsRef") "value"))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunPredicateSlotsQualRef") "value"))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredRef") "value"))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleFunConstraintDeclaredQualRef") "value"))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsRef") "value"))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleMethodPredicateSlotsQualRef") "value"))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "coreSchemeObligationsRef") "value"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "c") "crossModuleSchemeOblsQualRef") "value"))))))
 (DTypeSig false "copyDriverState" (TyFun (TyCon "DriverState") (TyCon "DriverState")))
 (DFunDef false "copyDriverState" ((PVar "d")) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "effectDomains") "value"))) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "graphAdmittedMethodsRef") "value"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "graphCtorExportsRef") "value"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "declEnvsRef") "value"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "abstractRecordTypesRef") "value"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "argDispatchIdxByIdRef") "value"))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "dictEligibleRef") "value"))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "dictEligibleSetRef") "value"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "mangledShadowMapRef") "value"))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "mangledFunDefsPresentRef") "value"))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "coherenceUserDecls") "value"))) (fa "stdlibOwnedModsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "stdlibOwnedModsRef") "value"))) (fa "flatEntryIsStdlibRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "flatEntryIsStdlibRef") "value"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "builtinExternNamesRef") "value"))) (fa "superDeclsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "superDeclsRef") "value"))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "standaloneValuesRef") "value"))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "methodDispatchIdxByIdRef") "value"))) (fa "matchOracle" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "matchOracle") "value"))) (fa "matchWarnings" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "matchWarnings") "value"))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "promotionHarvestRef") "value"))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "mainSchemeRef") "value"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "sigNameSetRef") "value"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "sigTyMapRef") "value"))) (fa "currentModuleRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "currentModuleRef") "value"))) (fa "markSetsRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "markSetsRef") "value"))) (fa "invocationViewRef" (EApp (EVar "Ref") (EFieldAccess (EFieldAccess (EVar "d") "invocationViewRef") "value"))))))
 (DTypeSig false "restoreCoreDriverFields" (TyFun (TyCon "DriverState") (TyCon "Unit")))

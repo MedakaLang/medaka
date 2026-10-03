@@ -1,0 +1,22 @@
+-- #3728: a field read on an UNANNOTATED receiver is answered by the declarations
+-- visible here that declare the field, not by the one declaration the bare key
+-- `Plain` resolves to.  Import order `hold` then `plainrec`;
+-- `record_unknown_receiver_variant_vs_record_ba/` is the same program with the
+-- imports swapped.
+--
+-- `hx` is declared only by `hold`'s variant `Plain`, so `g` must read that layout;
+-- `px` is declared only by `plainrec`'s record `Plain`, so `k` must read that one.
+--
+-- Expected output, derived by hand: `mkH = Plain { n = 1, hx = 100 }`, so
+-- `g mkH = 100 + 1 = 101`; `mkP = Plain { px = 2, n = 3 }`, so `k mkP = 2`.
+-- Before the fix both orders were refused with `Field 'hx' does not belong to
+-- record 'Plain'`.
+import hold.{Holder, mkH}
+import plainrec.{Plain, mkP}
+
+g h = h.hx + 1
+
+k p = p.px
+
+main : <IO> Unit
+main = putStrLn ("g=" ++ intToString (g mkH) ++ " k=" ++ intToString (k mkP))

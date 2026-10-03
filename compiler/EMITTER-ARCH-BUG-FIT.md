@@ -184,7 +184,7 @@ plans consume canonical declaration order.
 controls; #1216 is NOT-ESTABLISHED pending a fresh post-#1395 trace.** The closed
 pair originally looked like bare-name tables in `llvm_emit`, but typed Core
 proved the wrong owner was stamped earlier through `resolveFieldRecord ->
-lookupRecordByMangledHead -> resolveFieldByOwners -> resolveFieldAmbiguous ->
+the since-deleted mangled-head lookup -> resolveFieldByOwners -> resolveFieldAmbiguous ->
 pairRecordByName`. PR #1395 narrows that ambiguity by the receiver's declaration
 identity and closes the field-order/type-divergence/memory-safety pair. Its own
 verification says #1216 still reproduces through a residual bare-key path, so

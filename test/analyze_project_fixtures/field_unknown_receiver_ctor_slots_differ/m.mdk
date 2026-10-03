@@ -1,0 +1,7 @@
+-- One type, two named-field constructors, both declaring `x` but at different
+-- slots: field 2 of `R`, field 1 of `W`.
+public export data V = R { z : Int, x : Int } | W { x : Int }
+
+export
+mkW : V
+mkW = W { x = 5 }
