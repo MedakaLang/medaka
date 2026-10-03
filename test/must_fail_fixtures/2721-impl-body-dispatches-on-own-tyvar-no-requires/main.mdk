@@ -1,0 +1,9 @@
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 (Pair a) where
+  show2 (Pair x _) = show2 x
+
+main = println (show2 (Pair 1 2))

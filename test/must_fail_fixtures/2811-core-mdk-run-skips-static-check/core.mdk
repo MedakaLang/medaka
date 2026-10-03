@@ -1,0 +1,3 @@
+main =
+  println "before"
+  println (if True then 1 else "x")

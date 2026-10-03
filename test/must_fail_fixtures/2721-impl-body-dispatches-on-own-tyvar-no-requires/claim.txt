@@ -1,0 +1,16 @@
+issue: 2721
+what: `impl Show2 (Pair a)` has no `requires Show2 a`, yet its body calls `show2 x` on the
+what: impl's own type parameter `a`. `check` accepts the program at exit 0, and both
+what: engines then die at runtime with E-NONEXHAUSTIVE-MATCH (run and the built binary).
+what: The missing obligation `Show2 a` should be a located rejection at the impl.
+cmd: check main.mdk
+exit: 0
+stdout-line: main : <Stdout> Unit
+control: check control.mdk
+why-verb: `check`, because the defect is ACCEPTANCE: the program type-checks with an
+why-verb: undischarged obligation. The fix rejects it at exit 1, which drains this row.
+why-stdout: `main : <Stdout> Unit` proves the check ran to completion and accepted.
+why-control: control.mdk is the same program with `requires Show2 a` on the impl and an
+why-control: `impl Show2 Int`, so the obligation is declared and dischargeable; it must
+why-control: check at exit 0 (and runs printing `int`). A red control means impls with
+why-control: `requires` broke, never that #2721 drained.
