@@ -1,0 +1,8 @@
+import lib.alias3742_mid.{bump}
+import lib.alias3742_other.{S(..)}
+import lib.alias3742_decl.{R(..)}
+
+main =
+  println (R { v = 41 }.v + 1)
+  println (S { w = "s" }.w ++ "!")
+  println (bump R { v = 40 } + 1)
