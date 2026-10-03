@@ -1479,8 +1479,8 @@ renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
 --     this pass and the rename is import-aware through `rm` at the reference sites.
 --   * `DEffect` names an effect, which is neither a value nor a constructor.
 --   * `DTypeAlias` names a TYPE.  `renameDecl`'s `DData` arm renames `dataCtors` and
---     leaves `dataName` alone for the same reason, and `lookupRecordByMangledHead`
---     exists because of that split — an alias arm here would rename half of it.
+--     leaves `dataName` alone for the same reason — an alias arm here would rename half
+--     of that split.
 renameDecl _ (d@(DExtern _ _ _)) = d
 renameDecl _ (d@(DUse _ _ _)) = d
 renameDecl _ (d@(DEffect _ _ _ _ _ _)) = d
