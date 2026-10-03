@@ -1233,6 +1233,11 @@ while IFS= read -r f; do
     # does nightly run, and how". That question is now `tiers` in the registry,
     # and this is the gate that checks it.
     .github/workflows/nightly.yml) add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_tier_drift' ;;
+    # #2533: the macOS smoke. Its steps are a composite action nightly.yml uses,
+    # so they move `tiers` exactly as a nightly.yml edit does, and both files are
+    # read by the CI-reachability gate. Nothing else on Linux can exercise them.
+    .github/workflows/macos.yml|.github/actions/macos-smoke/*)
+                                   add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_tier_drift' ;;
     # Two gates, two different questions, and the guide needs both answered.
     # `check_syntax_examples` proves the chapters' code EXECUTES (native `medaka
     # run`); it says nothing about whether the chapter RENDERS. Since #2386 the

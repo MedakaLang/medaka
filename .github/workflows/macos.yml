@@ -1,0 +1,43 @@
+name: macOS
+
+# PR-time macOS smoke (#2533). Every required check runs on ubuntu-latest, so a
+# macOS-only break ships green unless something here or in nightly.yml's
+# `macos-smoke` job catches it. This workflow covers the paths most likely to
+# break only on macOS, and nothing else: the C runtime, the build driver that
+# invokes clang, the bootstrap scripts, and the release packaging. A compiler
+# change outside those paths is left to the nightly run, by design — a macOS
+# runner on every compiler PR is not worth what it costs.
+#
+# Hand-written, NOT generated (`make gen-ci` owns only ci.yml's gates matrix),
+# and NOT a required check: it is absent from the ruleset on purpose, so a red
+# run here is a signal to read, not a merge blocker. The steps live in
+# .github/actions/macos-smoke, shared with the nightly job.
+on:
+  pull_request:
+    paths:
+      - 'runtime/**'
+      - 'compiler/driver/build_cmd.mdk'
+      - 'test/build_native_medaka.sh'
+      - 'test/bootstrap_from_seed.sh'
+      - 'scripts/make_dist.sh'
+      - 'test/dist_install_smoke.sh'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/macos.yml'
+      - '.github/actions/macos-smoke/**'
+
+concurrency:
+  group: macos-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  macos-smoke:
+    name: macOS smoke (build from seed + check/run/build + dist)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: macOS smoke
+        uses: ./.github/actions/macos-smoke
