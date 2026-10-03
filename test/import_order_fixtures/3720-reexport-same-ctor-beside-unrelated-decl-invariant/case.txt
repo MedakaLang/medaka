@@ -1,0 +1,11 @@
+entry: main.mdk
+what: #3720 one declaration reached by two paths answers its occurrences even
+      when an unrelated module elsewhere in the program declares the same
+      spellings, in every import order
+
+`p`'s `T`/`Mk`/`R` are reached directly and through `mid`; `q` declares its own
+`T`/`Mk`/`R`, used only inside `other`, which `main` imports a value from. The
+typechecker's per-name scope decision is live for every one of these names
+(two declarations in the program), so this grades that it reads `p`'s
+declaration, not only that resolve accepts. Spec answer, hand-derived: `check`
+clean; `run` and the built binary print `7 9 qr` in every ordering.

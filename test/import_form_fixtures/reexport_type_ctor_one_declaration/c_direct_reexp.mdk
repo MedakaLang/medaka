@@ -1,0 +1,6 @@
+-- `p`'s one `Mk`, reached directly and through `mid`'s re-export.
+import p.{T(..)}
+import mid.*
+
+c : T
+c = Mk 7

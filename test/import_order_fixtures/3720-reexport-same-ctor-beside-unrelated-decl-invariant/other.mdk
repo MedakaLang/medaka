@@ -1,0 +1,4 @@
+import q.*
+
+export useQ : Int -> String
+useQ _ = unU (Mk "q") ++ (R { rx = "r" }).rx

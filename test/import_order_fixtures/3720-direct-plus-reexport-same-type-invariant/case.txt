@@ -1,0 +1,7 @@
+entry: main.mdk
+what: #3720 one type imported directly and through a re-export is one type, in
+      either import order
+
+`p` declares `T`; `mid` is `export import p.*`; `main` names `T` in a signature.
+Spec answer, hand-derived: `check` clean, no `R-AMBIGUOUS-TYPE`; `run` and the
+built binary print `7` in every ordering.

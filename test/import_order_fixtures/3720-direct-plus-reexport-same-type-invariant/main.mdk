@@ -1,0 +1,7 @@
+import p.{T, unT}
+import mid.*
+
+f : T -> Int
+f t = unT t
+
+main = println (f (mkT 7))
