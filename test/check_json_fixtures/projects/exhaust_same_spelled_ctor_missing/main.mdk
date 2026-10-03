@@ -1,0 +1,15 @@
+-- #1185: `fq` misses `Leaf` and `gq` misses `Some Leaf`; neither may be
+-- answered with `b`'s `Tip` or with `one`'s single-constructor `Bin`.
+import b.{B}
+import one.{One}
+import a.{A(..)}
+
+fq : A -> Int
+fq (Bin n) = n
+
+gq : Option A -> Int
+gq o = match o
+  None => 0
+  Some (Bin n) => n
+
+main = println (fq (Bin 6) + gq None)

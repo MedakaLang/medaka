@@ -48823,6 +48823,62 @@ importOverlayDecls wildHalf cur rows (DUse _ (p@(UseWild _)) _) =
   if wildHalf then wildOverlayDecls cur rows (usePathModuleId p) else []
 importOverlayDecls _ _ _ _ = []
 
+-- The exhaustiveness oracle's import rows beyond `importedCtorTypeDeclsFirstWins`:
+-- every decl a module ALIAS import's module publishes, and the declarations of the
+-- constructors a wildcard or alias import reaches through that module's own
+-- `export import`.  The oracle reads constructors by bare name (resolve strips `A.`
+-- before inference), so without these rows a same-spelled constructor of a module
+-- loaded earlier answers for them (#1185).  They follow both halves of
+-- `importedCtorTypeDeclsFirstWins` because a bare occurrence means an unaliased
+-- import's constructor.  Kept out of `importOverlayDecls`, whose other reader is the
+-- `dataEnv` overlay.
+oracleImportDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
+oracleImportDecls unitDecls cur rows =
+  flatMap (oracleImportDeclsOf cur rows) unitDecls
+
+oracleImportDeclsOf : Int -> List DeclEnvModule -> Decl -> List Decl
+oracleImportDeclsOf cur rows (DAttrib _ d) = oracleImportDeclsOf cur rows d
+oracleImportDeclsOf cur rows (DUse _ (p@(UseAlias _ _)) _) =
+  let dep = usePathModuleId p
+  wildOverlayDecls cur rows dep ++ reexportedCtorDecls cur rows dep
+oracleImportDeclsOf cur rows (DUse _ (p@(UseWild _)) _) =
+  reexportedCtorDecls cur rows (usePathModuleId p)
+oracleImportDeclsOf _ _ _ = []
+
+-- The decls declaring the constructors `dep` re-exports from other modules, found
+-- through the graph's constructor export index, whose rows carry each constructor's
+-- declaring identity across any chain of `export import`.  One decl per (declaring
+-- module, type), however many of its constructors are re-exported.
+reexportedCtorDecls : Int -> List DeclEnvModule -> String -> List Decl
+reexportedCtorDecls cur rows dep =
+  match omLookup dep driverState.value.graphCtorExportsRef.value
+    None => []
+    Some es =>
+      flatMap
+        (k => reexportedTypeDecl cur rows (fst k) (snd k))
+        (dedupBy (k => "\{fst k}.\{snd k}") (flatMap (reexportedOwner dep) es))
+
+-- (declaring module, owning type) of an export row declared outside `dep`.
+reexportedOwner : String -> (String, String, Ident) -> List (String, String)
+reexportedOwner dep (_, owner, Ident _ io _) =
+  identOriginFold [] (m => if m == dep then [] else [(m, owner)]) io
+
+reexportedTypeDecl : Int -> List DeclEnvModule -> String -> String -> List Decl
+reexportedTypeDecl _ [] _ _ = []
+reexportedTypeDecl cur (m :: rest) declarer tyName =
+  if m.demId == declarer then
+    filterList (declIsOwnedType declarer tyName) (declEnvRowVisible cur m)
+  else
+    reexportedTypeDecl cur rest declarer tyName
+
+declIsOwnedType : String -> String -> Decl -> Bool
+declIsOwnedType mid tyName (DAttrib _ d) = declIsOwnedType mid tyName d
+declIsOwnedType mid tyName (DData { dataName = tn, dataOrigin = o }) =
+  tn == tyName && declOwnedBy mid tn o
+declIsOwnedType mid tyName (DNewtype { newtypeName = tn, newtypeOrigin = o }) =
+  tn == tyName && declOwnedBy mid tn o
+declIsOwnedType _ _ _ = False
+
 -- A wildcard import's overlay: EVERY decl the named module publishes, as the reader at
 -- ordinal `cur` may see it.  A wildcard names no member, so there is nothing to look up
 -- by name — the whole published row IS the answer, and one row is all a module id can
@@ -50182,6 +50238,10 @@ checkModuleFullDiags mid seedVars accData accAll prog =
     seedCheckRun
       (prog
         ++ importedCtorTypeDeclsFirstWins
+          prog
+          (declEnvsOrdOf mid declEnvsHere)
+          declEnvsHere.deModules
+        ++ oracleImportDecls
           prog
           (declEnvsOrdOf mid declEnvsHere)
           declEnvsHere.deModules

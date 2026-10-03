@@ -1,0 +1,11 @@
+-- #733 item 2 / #1185: `b.mdk` reaches the graph only through `c.mdk`, and its
+-- `Bin` shares a spelling with `A`'s. Both `fe` here and `h` in c.mdk are
+-- exhaustive, so no file may report a missing case.
+import c.{h}
+import a.{A(..)}
+
+fe : A -> Int
+fe (Bin n) = n
+fe Leaf = 0
+
+main = println (fe (Bin 6))

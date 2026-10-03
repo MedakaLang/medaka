@@ -1,0 +1,10 @@
+entry: main.mdk
+what: #1185 an alias-qualified constructor is answered by the aliased module's declaration
+
+`a`, `b` and `one` each declare a constructor spelled `Bin`; the entry reaches `a`
+only through `import a as A`. `fe` and `ge` are exhaustive and `gq` misses
+`Some Leaf`, so every ordering owes exactly one W-NONEXHAUSTIVE and prints `7`.
+
+Before #1185's fix an alias import contributed nothing to the oracle's import
+rows: with `b` first, `ge` drew a false `Missing case: 'Some Tip'`, and with
+`one` first `gq`'s real miss went unreported.

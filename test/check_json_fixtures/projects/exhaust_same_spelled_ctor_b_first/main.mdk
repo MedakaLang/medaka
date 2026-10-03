@@ -1,0 +1,20 @@
+-- #1185: three modules declare a constructor spelled `Bin`. Each function
+-- below and in c.mdk and u.mdk covers every constructor of its own type, so
+-- no file has a diagnostic, whatever the import order.
+import b.{B}
+import one.{One}
+import c.{h}
+import u.{f}
+import a.{A(..)}
+
+fe : A -> Int
+fe (Bin n) = n
+fe Leaf = 0
+
+ge : Option A -> Int
+ge o = match o
+  None => 0
+  Some (Bin n) => n
+  Some Leaf => 1
+
+main = println (fe (Bin 6) + ge (Some Leaf) + f Leaf)

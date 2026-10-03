@@ -1,0 +1,30 @@
+-- #1185: `X` and `Y` are `p.mdk`'s constructors, reached through two
+-- re-exporting modules, while `z.mdk` declares another `X`. `f`, `g` and `fa`
+-- are exhaustive; `fq` misses `Y` and `gq` misses `Some Y`.
+import z.{Z}
+import mid.*
+import mid2 as M
+
+f : T -> Int
+f X = 1
+f Y = 2
+
+g : Option T -> Int
+g o = match o
+  None => 0
+  Some X => 3
+  Some Y => 4
+
+fa : M.T -> Int
+fa M.X = 1
+fa M.Y = 2
+
+fq : T -> Int
+fq X = 1
+
+gq : Option T -> Int
+gq o = match o
+  None => 0
+  Some X => 3
+
+main = println (f X + g (Some Y) + fa M.Y + fq X + gq None)
