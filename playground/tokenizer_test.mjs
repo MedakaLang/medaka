@@ -236,5 +236,36 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
   check('expression line: constructor unchanged', typeOf(t, 'Some') === 'constructor');
 }
 
+// R. type position ends where the type does (F8)
+{
+  const t = tokenize('data Post = Post { author : String, text : String }\ndata Box a = Box { items : List a, n : Int }');
+  check('record field names stay variableName',
+        ['author', 'text', 'items', 'n'].every((n) => typeOf(t, n) === 'variableName'),
+        ['author', 'text', 'items', 'n'].map((n) => typeOf(t, n)).join());
+  check('record field type variable stays typeVar', t.filter((x) => x.text === 'a').every((x) => x.type === 'typeVar'));
+}
+{
+  const t = tokenize('list = let nums = [1, 2, 3] : List Int in if True then nums else []');
+  check('ascription ends at `in`: later nums is variableName', t.filter((x) => x.text === 'nums').every((x) => x.type === 'variableName'));
+  const u = tokenize('z = println (length (xs : List Int) + count)');
+  check('ascription ends at closing paren', typeOf(u, 'count') === 'variableName', 'got ' + typeOf(u, 'count'));
+  check('ascribed type is still typeName', typeOf(u, 'List') === 'typeName' && typeOf(u, 'Int') === 'typeName');
+  const v = tokenize('w = (a : List Int, b)');
+  check('ascription ends at `,`', typeOf(v, 'b') === 'variableName', 'got ' + typeOf(v, 'b'));
+}
+{
+  const t = tokenize('import support.util.{\n  lookupAssoc,\n  contains,\n}\nmain = 1');
+  check('multi-line import members stay variableName', typeOf(t, 'lookupAssoc') === 'variableName' && typeOf(t, 'contains') === 'variableName',
+        typeOf(t, 'lookupAssoc') + ',' + typeOf(t, 'contains'));
+}
+{
+  const t = tokenize('f = (x : Int) => x + y');
+  check('annotated lambda body is variableName', t.filter((x) => x.text === 'y' || (x.text === 'x' && x.type !== 'variableName')).every((x) => x.type === 'variableName'));
+  const u = tokenize('g = (n : Int) < m');
+  check('comparison after ascription is not an effect row', typeOf(u, 'm') === 'variableName', 'got ' + typeOf(u, 'm'));
+  const w = tokenize('f : Int -> <Clock, Sign> a\ng : (Int, a) -> a');
+  check('signature type variables and rows unchanged', typeOf(w, 'a') === 'typeVar' || has(w, 'a', 'typeVar'));
+}
+
 console.log('\n=== ' + pass + ' pass / ' + fail + ' fail ===\n');
 process.exit(fail > 0 ? 1 : 0);
