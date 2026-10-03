@@ -27,16 +27,17 @@ Hello world!
 
 `main` is a value, not a function. You define it with `main = …` and never with
 parameters. When you run the program, `main` is evaluated for its effects, in this
-case printing a line.
+case printing a line. If `main` is a plain value instead, such as `main = 2 + 5`,
+running the program prints that value, here `7`.
 
 > ⚠️ **Write `main = …`, not `main () = …`.** A `main` with a parameter is a
 > function that nothing ever calls. The compiler warns about it under `medaka check`,
 > and `medaka run` and `medaka build` refuse to go ahead:
 >
 > ```
-> warning: hello.mdk:1:10: 'main' must be a value of type Unit. Write 'main = …',
-> not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a
-> zero-arg main for its effects)
+> error: hello.mdk:1:10: 'main' must be a value, not a function. Write 'main = …',
+> not 'main () = …' or 'main x = …': a program starts by evaluating 'main', and
+> nothing ever calls it
 > ```
 
 ## Doing several things

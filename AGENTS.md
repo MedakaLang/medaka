@@ -857,8 +857,9 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   unsupported. See `compiler/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`.
 - **[T-ERRORS-ACCUM]** Errors accumulate — phases push into `compiler/driver/diagnostics.mdk`
   rather than raising on first error. Don't add early-exit/raise paths.
-- **[T-MAIN-ZERO-ARG]** `main` must be a zero-arg value (`main = …`). `main () = …` is a silent
-  no-op. Use `main = println …` for probes.
+- **[T-MAIN-ZERO-ARG]** `main` must be a zero-arg value (`main = …`). `main () = …` is a
+  `check` warning and a `run`/`build` error. A non-Unit value `main` is printed on every verb,
+  so `main = 1 + 2` is a valid probe.
 - **[T-LAMBDA]** Multi-arg lambdas are `x y => body`, not curried `x => y => body`.
 - **[T-PRELUDE-DICT]** Prelude is marked+dict-passed only in the **typed** pipeline
   (`markWithPrelude`, `compiler/frontend/marker.mdk`). **Untyped eval** (no marker/typecheck —

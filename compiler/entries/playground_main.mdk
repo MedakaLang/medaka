@@ -330,9 +330,10 @@ warnTriple (p, s, ds) = (p, s, filterWarnings ds)
 -- shaped `main` and a program with no `main` fall through to `doEmit`, which
 -- has no valid nullary main to force and hits a bare wasm `unreachable` trap
 -- with zero diagnostic. Re-parse the user's RAW entry decls here and block on
--- either shape with a located ERROR before ever reaching the emitter. (Mirrors
--- medaka_cli.mdk's findMainFunDef/mainBodyLoc/mainArityMsg; duplicated per this
--- entry's F5 self-contained convention rather than importing the CLI entry.)
+-- either shape with a located ERROR before ever reaching the emitter, as `run`
+-- and `build` do. (Mirrors driver/diagnostics.mdk's `mainEntryError` and its
+-- messages; duplicated per this entry's F5 self-contained convention rather
+-- than importing the driver.)
 -- `warnTriples` carries the (already error-filtered) warning diags per source
 -- file, so a clean-but-warning program can still surface them once we reach
 -- `doEmit` below.  The main-shape guard runs FIRST and unconditionally blocks
@@ -380,7 +381,7 @@ mainHeadLoc body =
 
 mainArityMsg : String
 mainArityMsg =
-  "'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)"
+  "'main' must be a value, not a function. Write 'main = …', not 'main () = …' or 'main x = …': a program starts by evaluating 'main', and nothing ever calls it"
 
 mainMissingMsg : String
 mainMissingMsg =

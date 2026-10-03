@@ -177,13 +177,9 @@ import driver.diagnostics.{
   coherenceWarnCode,
   runBuildWarnCodes,
   isCoherenceWarn,
-  findMainFunDef,
-  mainBodyLoc,
-  mainArityMsg,
-  mainNonUnitMsg,
-  mainArityWarning,
-  mainNonUnitWarning,
   mainShapeWarnings,
+  mainEntryError,
+  ppMainEntryError,
 }
 import json.{
   Json(..),
@@ -206,6 +202,9 @@ import driver.main_autoprint.{
   shouldAsyncWrapMain,
   asyncWrapModules,
   asyncMainShapeError,
+  shouldAutoPrintMain,
+  autoPrintWrapModules,
+  autoPrintPinCore,
 }
 import eval.eval.{
   evalModulesOutputRun,
@@ -1139,13 +1138,8 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       -- scheme assertions are unaffected. `--types` keeps the historical
       -- unadorned full dump (still the byte-identical escape hatch).
       let _ = if typesMode then () else putStrLn (checkOkLine target filtered)
-      -- 0.1.0 beginner-footgun warning (main-shape, see below).  `mainShapeWarnings`
-      -- runs NO elaboration of its own (it has been pure since S-3/#2234) — it reads
-      -- `driverState.value.mainSchemeRef`, which on THIS arm was already populated by
-      -- the `analyzeLocatedG` above (line ~674, via `checkOneDiags` →
-      -- `checkModulesEntryFullSplit`).  Its first three parameters are IGNORED, so
-      -- they are passed empty rather than computed: the `desugar (parsePrelude …)`
-      -- pair this used to build was dead work on every clean single-file check.
+      -- The main-shape warning reads the raw entry decls alone, so its first
+      -- three (ignored) parameters are passed empty.
       let mainWarns = mainShapeWarnings [] [] [] decls
       let _ = emitLocatedWarnings tsrc target (warns ++ mainWarns)
       ()
@@ -1206,34 +1200,17 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
         -- bill of health.  Say so instead of staying silent; `--json` already
         -- reports them per-file.
         let _ = emitHiddenDiagNote hiddenCount
-        -- 0.1.0 main-shape warning (see below).  `mainShapeWarnings` runs no
-        -- elaboration of its own (pure since S-3/#2234); this route's producer of
-        -- `mainSchemeRef` is the `locatedProjectDiags` pass above → `graphCollect`
-        -- / `chainGo`'s terminal clause (types/typecheck.mdk), whose SET-OR-CLEAR
-        -- write on the terminal module fills the ref.  A module-chain memo HIT
-        -- cannot lose it: `matchingStepPrefix` never covers the terminal module, so the
-        -- write runs on every call, and `restoreCoreDriverFields` — the only thing
-        -- a hit restores out of the snapshotted `DriverState` — does not name
-        -- `mainSchemeRef`.
+        -- The main-shape warning, against the entry module's raw decls.
         let mainWarns = match lastModPair mods
           Some (emid, edecls) => mainShapeWarnings rtD coreD modsD edecls
           None => []
         emitLocatedWarnings tsrc target mainWarns
     _ => dieMsg resDiags
 
--- ── main-shape beginner-footgun warning (0.1.0 audit #3; #1236) ─────────────
--- `medaka run` evaluates top-level bindings and checks `main` EXISTS but never
--- APPLIES it: a `main` that isn't a zero-arg Unit-typed value silently no-ops
--- (exit 0, no output, no diagnostic).  Both beginner shapes (`main () = …` /
--- `main x = …`, and a zero-arg non-Unit/non-Async VALUE main) render as an
--- ordinary LOCATED `W-MAIN-SHAPE` Diag now — the SAME `Diag` type every other
--- diagnostic uses, so the human CLI (`ppDiagCliSrc`/`emitLocatedWarnings`),
--- `check --json`, and `run --json` all render/serialize it uniformly.  #1236:
--- `findMainFunDef`/`mainBodyLoc`/`mainArityMsg`/`mainNonUnitMsg`/
--- `mainArityWarning`/`mainNonUnitWarning`/`mainShapeWarnings` live in
--- `compiler/driver/diagnostics.mdk` so `checkJsonSingle`/`checkJsonFile` can fold
--- this into the SAME `{"files":[...]}` envelope `check --json` already builds
--- instead of each CLI surface keeping its own copy of the message.
+-- ── main shape ──────────────────────────────────────────────────────────────
+-- `check`'s warning (`mainShapeWarnings`) and `run`/`build`'s refusal
+-- (`mainEntryError`) live in `compiler/driver/diagnostics.mdk`, beside the
+-- section comment that states which verb reports which shape.
 
 -- Last (String, List Decl) pair — the entry module (loader's `mods` is
 -- dependency-first, entry last).
@@ -2474,7 +2451,7 @@ typecheckGate allowInternal root input =
           let (flatStdlib, ownedStdlib) =
             stdlibOwnership input roots stdlibDir mods
           let _ = setStdlibOwnership flatStdlib ownedStdlib
-          typecheckGateRoute
+          match (typecheckGateRoute
             allowInternal
             trusted
             pathMap
@@ -2483,7 +2460,16 @@ typecheckGate allowInternal root input =
             csrc
             tsrc
             input
-            modsWithPath
+            modsWithPath)
+            Err e => Err e
+            -- A program `build` cannot start is refused here, as `run`
+            -- refuses it, rather than reaching the backend's own `main`
+            -- lookup (`mainEntryError`).
+            Ok _ => match lastModPair mods
+              Some (_, edecls) => match mainEntryError edecls
+                Some d => Err (ppMainEntryError tsrc input d)
+                None => Ok ()
+              None => Ok ()
 
 -- Route by module count.  Both arms run the RAW-TREE passes only and hand the
 -- program to the `medaka_emitter` child, which owns the type verdict for a build
@@ -2642,13 +2628,9 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- because "one document" wins and the document cannot be written until it is known
 -- whether a runtime error joins it.
 --
--- 🔧 #1236 (was: THE MAIN-SHAPE WARNING BELOW IS *NOT* ROUTED THROUGH ANY OF
--- THIS, DELIBERATELY): it now IS, the same way [cohWarns] is — staged into
--- `pendingRunDiags` under `--json` instead of emitted as human caret text on a
--- stream a machine consumer parses as JSON.  `test/error_quality_fixtures/
--- eval/main_not_value.mdk`'s `.json.out` golden moves from caret art to a
--- `Diag` JSON envelope (`test/diff_compiler_eval_json_test.mdk`, re-captured) — that
--- was the bug (#1236 defect 3), not a blessed behaviour to preserve.
+-- An entry `run` cannot start (`mainEntryError`: a function-shaped `main`, or
+-- none) is refused here, before any warning and before anything is forced, on
+-- the same two channels: the `Diag` envelope under `--json`, caret text otherwise.
 -- `postPerf` closes over the caller's phase timestamps and emits the `eval` and
 -- `total` `[perf]` lines.  It is a PARAMETER, not something the caller runs
 -- afterwards, because under `--json` those lines are buffered into the envelope
@@ -2664,30 +2646,21 @@ finishRunEval : String ->
   (Unit -> <IO> Unit) ->
   <IO> Unit
 finishRunEval target jsonMode elaborated mods cohWarns postPerf =
-  -- 0.1.0 main-shape warning: elaborateModules already ran over the WHOLE graph,
-  -- so mainSchemeRef is already populated — no extra typecheck pass needed.
-  let mainWarns = match lastModPair mods
-    Some (_, edecls) => match mainArityWarning edecls
-      Some d => [d]
-      None => match mainNonUnitWarning edecls
-        Some d => [d]
-        None => []
-    None => []
-  -- The demoted coherence warning first, matching `checkRoute`'s `warns ++
-  -- mainWarns` order; on `--json` both fold into the ONE `pendingRunDiags`
-  -- envelope this stream carries (see above), the main-shape one keyed to
-  -- `target`'s own (path, src) pair so it renders with a real `Loc`.
+  let tsrc = readFileSafe target
+  let _ = match lastModPair mods
+    Some (_, edecls) => match mainEntryError edecls
+      Some d => match jsonMode
+        True => runAbortJson [(target, tsrc, [d])]
+        False => runAbort (ppMainEntryError tsrc target d)
+      None => ()
+    None => ()
+  -- On `--json` the warnings fold into the ONE `pendingRunDiags` envelope this
+  -- stream carries (see above).
   let _ =
     if jsonMode then
-      ()
+      pendingRunDiags := nonEmptyTriples cohWarns
     else
       emitWarningLines (flatMap renderTripleWarnings cohWarns)
-  let _ =
-    if jsonMode then
-      pendingRunDiags :=
-        nonEmptyTriples (cohWarns ++ [(target, readFileSafe target, mainWarns)])
-    else
-      emitLocatedWarnings (readFileSafe target) target mainWarns
   currentEvalFile := target
   runJsonMode := jsonMode
   let _ = putStr (runProgramOutput (fst elaborated) (snd elaborated))
@@ -2696,17 +2669,7 @@ finishRunEval target jsonMode elaborated mods cohWarns postPerf =
   -- Reached only when the program did NOT panic (`panic` is a noreturn C abort), so
   -- this and `runtimePanic`'s merge are mutually exclusive — the envelope is emitted
   -- exactly once, never twice and never zero times.
-  let _ = flushPendingRunDiags jsonMode
-  -- #1681: the main-shape warning text already reads as a rejection ("'main'
-  -- must be a value of type Unit …"), but `run` would otherwise exit 0 — making
-  -- a program that computed and discarded a real value indistinguishable, by
-  -- exit code, from one that ran clean. Since `main` was never applied/printed
-  -- in this case (the underlying no-op behavior is unchanged, see the 0.1.0
-  -- audit #3 note above), align the exit code with what the message already
-  -- implies: nonzero, so a script/CI oracle keyed on exit code sees the truth.
-  match mainWarns
-    [] => ()
-    _ :: _ => exit 1
+  flushPendingRunDiags jsonMode
 
 -- C4: the envelope now also carries whatever the two deferred human writers
 -- staged (`staleBinary`, `perf`), so the emptiness test moved INTO
@@ -2944,7 +2907,7 @@ runRunCmd argv =
                     finishRunEval
                       target
                       jsonMode
-                      (coreE, modsE)
+                      (autoPrintElaborated rtD coreD modsD (coreE, modsE))
                       mods
                       (allWarnTriples tsrc target diags)
                       (runEvalPerf perfOn target perfT0 perfTCheck)
@@ -3027,7 +2990,7 @@ runRunCmd argv =
                     finishRunEval
                       target
                       jsonMode
-                      (coreE, modsE)
+                      (autoPrintElaborated rtD coreD modsD (coreE, modsE))
                       mods
                       projWarns
                       (runEvalPerf perfOn target perfT0 perfTCheck)
@@ -3079,6 +3042,26 @@ elaborateRun rtD coreD modsD =
           (elaborateModules rtD coreD (asyncWrapModules "runAsyncMain" modsD))
       else
         plain
+
+-- The trees `run` evaluates for a zero-arg value `main` of a non-Unit type: the
+-- auto-print-wrapped program (driver/main_autoprint.mdk), so `run` prints the
+-- value exactly as `build`'s binary does.  Called only once the gate has
+-- accepted the program, and that gate already re-checked the wrapped program's
+-- `Display` obligation (`analyzeFinish` / `typecheckDiagsFold`), while
+-- `mainSchemeRef` still holds the user's own `main`.  Any other `main` keeps
+-- the elaboration the gate ran.
+autoPrintElaborated : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl)) ->
+  <IO> (List Decl, List (String, List Decl))
+autoPrintElaborated rtD coreD modsD elaborated =
+  if shouldAutoPrintMain coreD modsD then
+    let (coreE, modsE, _, _, _, _) =
+      elaborateModules rtD (autoPrintPinCore coreD) (autoPrintWrapModules modsD)
+    (coreE, modsE)
+  else
+    elaborated
 
 -- The wrapped elaboration's trees, residual and evidence, carrying the PLAIN
 -- program's per-module diagnostics.  The wrapped graph is synthetic — the

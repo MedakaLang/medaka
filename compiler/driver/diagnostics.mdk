@@ -54,7 +54,7 @@ import types.repr.{Scheme}
 import types.typecheck.{
   checkOneDiagsK, checkModulesDiagsChain, chainFullKey, checkModulesK,
   entryOwnSchemes, dropModSchemes, ModDiags, setCoherenceUserDecls,
-  setStdlibOwnership, TcDiag(..), tcMsg, mainTypeIsUnit, mainTypeIsAsync,
+  setStdlibOwnership, TcDiag(..), tcMsg,
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
   -- typechecker because S1's `nameable in M` operand does; see its own comment.
   importedStandaloneShadows,
@@ -2433,32 +2433,19 @@ cjFoldIntoFile path extra ((p, s, ds) :: rest)
   | p == path = (p, s, ds ++ extra) :: rest
   | otherwise = (p, s, ds) :: cjFoldIntoFile path extra rest
 
--- ── main-shape beginner-footgun warning (0.1.0 audit #3; #1236) ─────────────
--- `medaka run` evaluates top-level bindings and checks `main` EXISTS but never
--- APPLIES it: a `main` that isn't a zero-arg Unit-typed value silently no-ops
--- (exit 0, no output, no diagnostic).  Two distinct beginner shapes surface the
--- same way:
---   (1) `main` is a FUNCTION (`main () = …` / `main x = …`) — visible on the
---       raw (pre-desugar) Decl as a non-empty param list; no type info needed.
---   (2) `main` is a zero-arg value whose inferred type is neither Unit nor
---       `Async _` (e.g. `main = 5`) — reuses mainTypeIsUnit/mainTypeIsAsync,
---       the same hooks `runProgramOutput`/the emitter already use to decide how
---       to force `main`; only meaningful once a typecheck driver has stamped
---       typecheck.mdk's mainSchemeRef (`checkModulesEntryFullSplit` or
---       `elaborateModules` — every caller runs one of them first, see
---       `mainShapeWarnings`).
--- Both are ordinary LOCATED `W-MAIN-SHAPE` Diags now — the SAME `Diag` type
--- every other diagnostic uses, so every caller (human CLI, `check --json`,
--- `run --json`, `medaka mcp`) renders/serializes them uniformly instead of each
--- inventing its own presentation.  #1236: this used to be `<unknown location>`
--- text with no `code`, invisible on `check --json`, and raw (non-JSON) text on
--- `run --json` — three separate holes in the SAME message, fixed once here by
--- routing it through the ordinary Diag pipeline instead of a bespoke one.
---
--- Originally lived in medaka_cli.mdk (CLI-only); moved here so `checkJsonSingle`/
--- `checkJsonFile` (below) can fold it into the SAME `{"files":[...]}` envelope
--- `check --json` already builds, and `medaka_cli.mdk`'s human/run-json callers
--- import it from here instead of keeping a second copy.
+-- ── main shape (0.1.0 audit #3; #1236; #2413) ──────────────────────────────
+-- Every verb forces a zero-arg `main`; none applies one.  A zero-arg VALUE
+-- `main` of a non-Unit type is printed through its `Display` impl
+-- (driver/main_autoprint.mdk), so the only shape left to diagnose is a
+-- FUNCTION `main` (`main () = …` / `main x = …`), visible on the raw
+-- (pre-desugar) Decl as a non-empty param list with no type info needed:
+--   * `check` reports it as a `W-MAIN-SHAPE` warning (`mainShapeWarnings`);
+--   * `run` and `build` refuse it, and a program with no `main` at all, with
+--     one error before anything is forced (`mainEntryError`).  `check` says
+--     nothing about a missing `main`: a library module has none.
+-- All of these are ordinary LOCATED Diags, so every caller (human CLI,
+-- `check --json`, `run --json`, `medaka mcp`) renders/serializes them through
+-- the same pipeline as every other diagnostic.
 
 -- Find a top-level `main` DFunDef among a module's raw decls (skipping @attr
 -- wrappers).  Returns its param list + body so callers can inspect arity and
@@ -2497,16 +2484,15 @@ mainBodyLoc _ = None
 export
 mainArityMsg : String
 mainArityMsg =
-  "'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)"
+  "'main' must be a value, not a function. Write 'main = …', not 'main () = …' or 'main x = …': a program starts by evaluating 'main', and nothing ever calls it"
 
 export
-mainNonUnitMsg : String
-mainNonUnitMsg =
-  "'main' must be a value of type Unit (e.g. an IO action). 'medaka run' only forces main for its side effects and prints nothing for a plain value; wrap the intended effect, e.g. 'main = println \"hi\"'"
+mainMissingMsg : String
+mainMissingMsg =
+  "no 'main' found. Add a top-level 'main = …' (e.g. 'main = println \"hi\"')"
 
--- The ARITY shape (`main () = …` / `main x = …`) needs no type info, so it's
--- safe to call before (or without) elaborateModules — and takes precedence
--- over the non-Unit-value check below (no double warning).
+-- The function shape (`main () = …` / `main x = …`) needs no type info, so it
+-- is safe to call before (or without) any typecheck.
 export
 mainArityWarning : List Decl -> Option Diag
 mainArityWarning decls = match findMainFunDef decls
@@ -2514,66 +2500,8 @@ mainArityWarning decls = match findMainFunDef decls
     Some (mkDiag SevWarning "W-MAIN-SHAPE" mainArityMsg (mainBodyLoc body))
   _ => None
 
--- The non-Unit/non-Async VALUE shape (`main = 5`).  Only meaningful once a typecheck
--- driver has populated mainSchemeRef (`checkModulesEntryFullSplit` or
--- `elaborateModules`) FOR THE USER'S OWN PROGRAM — callers must ensure that happened
--- first, and that no synthetic re-check overwrote it since (see
--- `checkOneDiagsSynthetic`, types/typecheck.mdk).
-export
-mainNonUnitWarning : List Decl -> Option Diag
-mainNonUnitWarning decls = match findMainFunDef decls
-  Some ([], body) =>
-    if mainTypeIsUnit () || mainTypeIsAsync () then
-      None
-    else
-      Some (mkDiag SevWarning "W-MAIN-SHAPE" mainNonUnitMsg (mainBodyLoc body))
-  _ => None
-
--- Shared driver: the arity check is free (no typecheck needed); the non-Unit-value
--- check reads `mainSchemeRef`, which EVERY caller has already had populated by the
--- typecheck it ran for its own purposes.
---
--- S-3 (#2234): this used to run a whole extra `elaborateModules` here, on the belief
--- that the routes reaching it had no other producer of `mainSchemeRef`.  That stopped
--- being true at #2155, which made `checkModulesEntryFullSplit` — the driver behind
--- `checkOneDiags` (`analyzeFrom`) and `checkModulesEntryReport` (`runCheck`) alike —
--- write the ref itself.  On the hello-world `medaka check` floor that third prelude
--- typecheck was 228,670,823 Ir, 26.7% of the whole command, for a value the two
--- typechecks before it had already computed twice.
---
--- ⚠️ The producer for each caller, verified rather than assumed (a reader adding a
--- caller owes the same check — this function is silent, not loud, when nothing
--- populated the ref: `mainTypeIsUnit ()` answers False on `None` and the warning
--- FIRES, but a WRONG scheme makes it VANISH):
---   * `checkRoute` single-module (medaka_cli) — `analyzeLocatedG`, then `runCheck`.
---   * `checkRoute` multi-module (medaka_cli) — `locatedProjectDiags`, whose fold
---     writes the ref on the terminal module (`graphCollect`).
---   * `typecheckGateRoute` single-module (medaka_cli, the build/run gate) —
---     `analyzeLocatedG` alone.  This is the caller the deletion nearly broke: see
---     `checkOneDiagsSynthetic` (types/typecheck.mdk) for the auto-print-wrap residue
---     that an elaborate on this path would mask.
---   * `checkJsonSingle` (below) — `analyzeLocatedG` → `analyzeFrom`.
---   * `checkJsonFile` multi-module (below) — `analyzeProject` → `typecheckPassFull` →
---     `checkModulesDiags`.  ⚠️ This bullet used to name `analyzeProject` flatly and
---     was WRONG: until #2246 that chain wrote the ref NOWHERE, which is the F1 hole
---     S-3's deletion of the extra `elaborateModules` left behind (fresh process ⇒
---     `None` ⇒ W-MAIN-SHAPE fired on a clean Unit main; long-lived `mcp`/`lsp`
---     process ⇒ a previous request's scheme masked a real non-Unit warning).  It is
---     a true producer NOW because `checkModulesDiags`'s fold carries the SET-OR-CLEAR
---     write (`graphCollect`/`setMainSchemeIfEntry`, types/typecheck.mdk), mirroring
---     `checkModulesEntryFullSplit`'s.
--- `rtD`/`coreD`/`modsDFull` are retained in the SIGNATURE (they are what a future
--- caller with no prior typecheck of its own would need) but are IGNORED by the body,
--- unconditionally.  ⚠️ #2246: two call sites therefore pass `[] [] []` rather than
--- computing values nothing reads — `checkRoute`'s single-module arm and
--- `typecheckGateRoute`'s single-module arm (both medaka_cli.mdk), where the
--- `desugar (parsePrelude …)` / `desugar (parse …)` pair existed SOLELY to feed these
--- three.  ⚠️ S-1/#2234: the below ×2 (`checkJsonSingle`/`checkJsonFile`'s
--- `mainWarns` arms) were the SAME dead-arg shape, missed by #2246 — they now pass
--- `[] []` for `rtD`/`coreD` too.  `checkRoute`'s multi-module arm (medaka_cli.mdk)
--- and `analyzeFrom` (above) are the real consumers: they already have
--- `rtD`/`coreD`/`modsD` in hand for other purposes (exhaustiveness oracle, resolve),
--- so passing them there costs nothing.
+-- `check`'s main-shape report for the entry module.  The three leading
+-- arguments are ignored: the check reads the raw entry decls alone.
 export
 mainShapeWarnings : List Decl ->
   List Decl ->
@@ -2582,9 +2510,28 @@ mainShapeWarnings : List Decl ->
   List Diag
 mainShapeWarnings _ _ _ entryDecls = match mainArityWarning entryDecls
   Some d => [d]
-  None => match mainNonUnitWarning entryDecls
-    Some d => [d]
-    None => []
+  None => []
+
+-- What `run` and `build` refuse before forcing anything: a function-shaped
+-- `main` (forcing it would only build a closure) or no `main` at all.  The
+-- codes are the ones the playground's pre-emit guard reports for the same two
+-- programs (entries/playground_main.mdk, `mainShapeError`).
+export
+mainEntryError : List Decl -> Option Diag
+mainEntryError decls = match findMainFunDef decls
+  Some (_ :: _, body) =>
+    Some (mkDiag SevError "W-MAIN-SHAPE" mainArityMsg (mainBodyLoc body))
+  Some ([], _) => None
+  None => Some (mkDiag SevError "W-MAIN-MISSING" mainMissingMsg None)
+
+-- The human face of `mainEntryError` for [file] with source [src].  A missing
+-- `main` has no position to point at, so the file itself fills the slot a
+-- `file:L:C:` would occupy rather than `<unknown location>`.
+export
+ppMainEntryError : String -> String -> Diag -> String
+ppMainEntryError _ file (Diag sev _ msg None _ _) =
+  "\{ppSeverity sev}: \{displayPath file}: \{msg}"
+ppMainEntryError src file d = ppDiagCliSrc src file d
 
 -- ── check → structured-diagnostics JSON ─────────────────────────────────────
 --

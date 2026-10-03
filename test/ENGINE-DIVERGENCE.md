@@ -503,12 +503,13 @@ a `wasm:emitter-gap` (native rejects the redefined `Point`; wasm panics on `CRec
 the two backends do NOT reject for the same reason and they are NOT identical-rejection
 fixtures. They stay here.
 
-### 4.6 `native:autoprint-ambiguous` — 1 fixture
+### 4.6 `native:autoprint-ambiguous` — 0 fixtures
 
-`llvm/abort_panic`: `main = panic "boom"` has a polymorphic type, so the value-main
-auto-print wrap (`main = println <e>`) cannot resolve a `Display` instance →
-`Ambiguous instance for Display`. Arguably a real diagnostic gap for bottom-typed
-mains.
+The last row, `llvm/abort_panic` (`main = panic "boom"`), left this category when a
+`main` whose type is an unconstrained type variable became Unit-shaped
+(`mainTypeIsUnit`, `compiler/types/typecheck.mdk`): no auto-print wrap is applied, so
+no `Display` instance is needed, and native and wasm both build it and panic with
+`E-PANIC`. It stays ledgered as `eval:intended-abort` only.
 
 ### 4.7 `wasm:emitter-gap` — count DERIVED, never encoded (see the ⚠️ below)
 
