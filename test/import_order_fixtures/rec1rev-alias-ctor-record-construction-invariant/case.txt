@@ -1,0 +1,5 @@
+entry: main.mdk
+what: the reversed-import twin of rec1-alias-ctor-record-construction-invariant
+
+Same modules and same program as `rec1-alias-ctor-record-construction-invariant/`, with the
+entry's import clauses written `rb` first and `ra` second. Correct answer: `43`, as there.

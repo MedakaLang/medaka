@@ -16,8 +16,8 @@
 -- restores the rejection pinned below.
 --
 -- PAIR: this cell alone does not test the property.  Its control is
--- `record_ctor_siblings_all_declare/` (both constructors declare the field ⇒ two
--- survivors ⇒ the narrowing already fell through, so that cell must not move), and
+-- `record_ctor_siblings_all_declare/` (both constructors declare the field ⇒ one
+-- candidate for `T` ⇒ the narrowing selects, and slot disagreement rejects), and
 -- the ACCEPT cell proving the repair did not simply disable the narrowing is
 -- `test/llvm_fixtures/record_owner_narrowing_flat.mdk`.
 import m1.{T(..), mkOth}

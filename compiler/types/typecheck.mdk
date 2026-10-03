@@ -18922,10 +18922,14 @@ fieldDeclDescr (k, ri) = match recordOwnerModule ri
 -- so the stamp `stampedRecordHead k ri` names the selected declaration's own
 -- module: the emitters apply that declaration's layout.
 --
+-- The matches are collapsed by declaring type (`fieldDeclTypeKey`): every match
+-- is a constructor of the receiver's one type, so two owner keys naming two of its
+-- constructors are one answer, and `fieldSelectionWellTyped` decides afterwards
+-- whether they agree about the field's slot.
+--
 -- Declines (answers `None`, so the ladder runs unchanged) when the receiver
--- carries no identity, when no owner key or more than one owner key holds the
--- receiver's declaration, or when a sibling constructor of the receiver's type
--- withholds the field.  The sibling case is the multi-`ConNamed`-variant shape
+-- carries no identity, when no owner key holds the receiver's declaration, or when
+-- a sibling constructor of the receiver's type withholds the field.  The sibling case is the multi-`ConNamed`-variant shape
 -- `narrowedPick` refuses: the receiver's type does not say which layout applies.
 ownerDeclOfReceiver : Mono ->
   String ->
@@ -18934,7 +18938,7 @@ ownerDeclOfReceiver : Mono ->
 ownerDeclOfReceiver _ _ [] = None
 ownerDeclOfReceiver te fname owners = match receiverTypeIdent te
   None => None
-  Some ident => match ownerDeclMatches ident owners
+  Some ident => match dedupBy fieldDeclTypeKey (ownerDeclMatches ident owners)
     [(k, ri)] =>
       if narrowingBlockedByCtorSibling (headTyconMono te) fname k then
         None
@@ -19015,6 +19019,13 @@ resolveFieldAmbiguous te fname owners =
 --     old expression, so no program that resolved to `None` here can now resolve to
 --     `Some`.
 --
+-- The survivors are collapsed by declaring type (`fieldDeclTypeKey`, as in the
+-- unannotated-receiver path): the named-field constructors of the receiver's type
+-- are one candidate, and `fieldSelectionWellTyped` decides afterwards whether they
+-- agree about the field's slot and type.  Left uncollapsed, two constructors of
+-- one type are two survivors, and the answer becomes the sorted `headL owners`,
+-- which depends on how an unrelated type's constructor is spelled (#3741).
+--
 -- One mint of the receiver's key for the whole filter, not one per candidate, for the
 -- reason `types/registry.mdk` gives against re-minting a `TabKey` per lookup
 -- (`tabKeyOf` → `mkIdent` → `identOriginOf` allocates on the way).
@@ -19028,7 +19039,9 @@ resolveFieldOwnersNarrowed te fname owners =
     rk
     fname
     owners
-    (filterList (recordCandIsReceiverDecl rk) (ownerCandidates owners))
+    (dedupBy
+      fieldDeclTypeKey
+      (filterList (recordCandIsReceiverDecl rk) (ownerCandidates owners)))
 
 -- The singleton gate, plus the guard the comparator's granularity requires.  A
 -- lone survivor is trusted ONLY when the receiver's type does not also have a
