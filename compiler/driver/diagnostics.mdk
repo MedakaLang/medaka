@@ -41,6 +41,9 @@ import frontend.resolve.{
   resErrorDidYouMean,
   resolveModuleG,
   ModuleExports,
+  withStdlibExports,
+  hintableUnboundNames,
+  exportedValueNames,
 }
 import list.{drop}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey}
@@ -79,6 +82,8 @@ import driver.loader.{
   unknownModuleIdOf,
   availableModulesText,
   availableModulesHint,
+  availableModuleIds,
+  fileOfModuleId,
   importModId,
 }
 import support.path.{dirOf}
@@ -119,7 +124,7 @@ public export data Severity = SevError | SevWarning
 -- Stage 2 (DIAGNOSTIC-CODES-DESIGN §6): a Diag optionally carries a human `help`
 -- hint (Option String) and a machine-applicable `fix` (Option Fix).  Both are
 -- surfaced JSON-only (CLI text is unchanged) and are `None` for most diagnostics;
--- today only did-you-mean (resolve UnboundVariable with a suggestion) populates
+-- today only did-you-mean (a resolve error carrying a suggestion) populates
 -- them.  A `Fix` replaces its `Loc` span with the replacement string.
 public export data Fix = Fix Loc String
 
@@ -154,6 +159,75 @@ diagOfResError : ResError -> Diag
 diagOfResError e =
   let (help, fix) = resErrorHelpFix e
   Diag SevError (resErrorCode e) (ppResError e) (resErrorLoc e) help fix
+
+-- ── the stdlib import hint ──────────────────────────────────────────────────
+--
+-- An unbound name that a stdlib module exports gets "did you forget to
+-- import …", even when the file imports nothing.  Resolve only knows the
+-- modules a program loads, so the names the rest of the stdlib exports come in
+-- through `exportsFor`, an explicit argument of every analysis below: given the
+-- unbound names, it returns (module id, which of them that module exports).
+-- `hintResErrors` calls it only when resolve reported an unbound name, so a
+-- program that resolves reads no extra module.  The CLI passes
+-- `stdlibExportsReader` over its stdlib directory, the playground a reader over
+-- the modules it ships, and a caller with no stdlib to offer `noStdlibExports`.
+export
+hintResErrors : (List String -> <e> List (String, List String)) ->
+  List ResError ->
+  <e> List ResError
+hintResErrors exportsFor errs = match hintableUnboundNames errs
+  [] => errs
+  names => withStdlibExports (exportsFor names) errs
+
+export
+noStdlibExports : List String -> List (String, List String)
+noStdlibExports _ = []
+
+-- The stdlib modules under `stdlibDir` that export any of `names`.
+export
+stdlibExportsReader : String -> List String -> <IO> List (String, List String)
+stdlibExportsReader stdlibDir names =
+  exportsAmong
+    names
+    (sourcesMentioning stdlibDir (availableModuleIds stdlibDir) names)
+
+-- The source of each module of `ids` under `root` whose text mentions one of
+-- `names`, keyed by module id.  This is how an unbound name's import hint reads
+-- the stdlib, so it runs only after resolve has reported an unbound name: a
+-- program that resolves reads none of these files.  A module whose text never
+-- spells a name cannot export it, so the substring test spares the parser that
+-- module; an unreadable file contributes nothing.
+export
+sourcesMentioning : String ->
+  List String ->
+  List String ->
+  <IO> List (String, String)
+sourcesMentioning _ _ [] = []
+sourcesMentioning root ids names = flatMap (sourceMentioning root names) ids
+
+sourceMentioning : String -> List String -> String -> <IO> List (String, String)
+sourceMentioning root names mid = match readFile (fileOfModuleId root mid)
+  Ok src =>
+    if any (n => isSome (stringIndexOf n src)) names then [(mid, src)] else []
+  Err _ => []
+
+-- (module id, which of `names` it exports) for each module source given, with
+-- modules that export none of them, or fail to parse, left out.
+export
+exportsAmong : List String ->
+  List (String, String) ->
+  List (String, List String)
+exportsAmong names srcs = flatMap (moduleExportsAmong names) srcs
+
+moduleExportsAmong : List String ->
+  (String, String) ->
+  List (String, List String)
+moduleExportsAmong names (mid, src) = match parseResult src
+  Err _ => []
+  Ok decls =>
+    match filterList (n => contains n names) (exportedValueNames decls)
+      [] => []
+      found => [(mid, found)]
 
 -- Convert a typecheck error `TcDiag` to a Diag.  #159: the code, span, and any
 -- structured help/fix (e.g. the record-field did-you-mean that
@@ -637,6 +711,19 @@ srcLinesCached file cache = match lookupAssoc file cache
 -- `readFileSafe` degrades to `""`, which `ppDiagCliLines` already renders as
 -- header-only (no caret) — the same graceful arm it takes for an out-of-range
 -- line, not a new failure mode.
+-- `hintResErrors` over the per-file resolve errors of a module graph, with one
+-- `exportsFor` call for the names unbound anywhere in it.
+export
+hintResErrorPairs : (List String -> <e> List (String, List String)) ->
+  List (String, List ResError) ->
+  <e> List (String, List ResError)
+hintResErrorPairs exportsFor pairs =
+  match hintableUnboundNames (flatMap snd pairs)
+    [] => pairs
+    names =>
+      let exports = exportsFor names
+      map ((file, errs) => (file, withStdlibExports exports errs)) pairs
+
 export
 ppResolveErrorsByFile : List (String, List ResError) -> <IO> String
 ppResolveErrorsByFile pairs = joinNl (ppResolveErrorLines pairs)
@@ -731,24 +818,35 @@ nthLineArr srcLines n
 export
 analyze : String -> String -> String -> List Diag
 analyze runtimeSrc coreSrc progSrc =
-  analyzeFrom "" runtimeSrc coreSrc (parse progSrc) []
+  analyzeFrom noStdlibExports "" runtimeSrc coreSrc (parse progSrc) []
 
 -- B.10.2b: the LSP path runs the same pipeline but parses the target with
 -- `parseLocated` so the ELoc wrappers carry REAL line/col spans (the pure
 -- `parse` carries placeholder locs).  Type-error Diags then surface the true
 -- expr-level span; runtime/core stay on `parse` (their locs are never reported).
 export
-analyzeLocated : String -> String -> String -> List Diag
-analyzeLocated runtimeSrc coreSrc progSrc =
-  analyzeFrom "" runtimeSrc coreSrc (parseLocated progSrc) []
+analyzeLocated : (List String -> <e> List (String, List String)) ->
+  String ->
+  String ->
+  String ->
+  <e> List Diag
+analyzeLocated exportsFor runtimeSrc coreSrc progSrc =
+  analyzeFrom exportsFor "" runtimeSrc coreSrc (parseLocated progSrc) []
 
 -- B.10.x: like analyzeLocated but enforcing the internal-extern guard unless
 -- `allowInternal` is set (the single-file `medaka check` error path).  Other
 -- callers (LSP, playground) keep `analyzeLocated`, which is unguarded.
 export
-analyzeLocatedG : String -> Bool -> String -> String -> String -> List Diag
-analyzeLocatedG modName allowInternal runtimeSrc coreSrc progSrc =
+analyzeLocatedG : (List String -> <e> List (String, List String)) ->
+  String ->
+  Bool ->
+  String ->
+  String ->
+  String ->
+  <e> List Diag
+analyzeLocatedG exportsFor modName allowInternal runtimeSrc coreSrc progSrc =
   analyzeFrom
+    exportsFor
     modName
     runtimeSrc
     coreSrc
@@ -784,14 +882,15 @@ public export data SurfaceAnalysis = SurfaceAnalysis {
 -- (which would re-parse `tsrc` via `parseLocated` — the loader already ran the
 -- structurally-identical `parseLocatedResult` over the same source).
 export
-analyzeFrom : String ->
+analyzeFrom : (List String -> <e> List (String, List String)) ->
+  String ->
   String ->
   String ->
   List Decl ->
   List String ->
-  List Diag
-analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
-  let s = analyzeSurface modName runtimeSrc coreSrc raw internalGuard
+  <e> List Diag
+analyzeFrom exportsFor modName runtimeSrc coreSrc raw internalGuard =
+  let s = analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard
   let tcDiags = match s.resolveClean
     True =>
       let (tcErrs, tcWarns) = checkOneDiagsK
@@ -808,13 +907,14 @@ analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
 -- the other half.  `run`'s single-file arm takes that half from the elaboration
 -- it already performs for eval instead of from a second, check-only pass.
 export
-analyzeSurface : String ->
+analyzeSurface : (List String -> <e> List (String, List String)) ->
+  String ->
   String ->
   String ->
   List Decl ->
   List String ->
-  SurfaceAnalysis
-analyzeSurface modName runtimeSrc coreSrc raw internalGuard =
+  <e> SurfaceAnalysis
+analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
   let desugared = desugar raw
   let runtimeP = desugaredPrelude runtimeSrc
   let coreP = desugaredPrelude coreSrc
@@ -842,7 +942,10 @@ analyzeSurface modName runtimeSrc coreSrc raw internalGuard =
   -- Derives live only on the RAW tree (`desugar` clears the field), so this reads
   -- `raw`, not `desugared`.
   let deriveDiags = map deriveErrToDiag (checkDerives raw)
-  let resErrs = resolveProgramG2 internalGuard runtimeP coreP desugared
+  let resErrs =
+    hintResErrors
+      exportsFor
+      (resolveProgramG2 internalGuard runtimeP coreP desugared)
   let resDiags = map diagOfResError resErrs
   let _ = setCoherenceUserDecls desugared
   let guardDiags = map guardWarnToDiag guardWarns
@@ -1246,7 +1349,8 @@ preludeDesugared src = desugaredPrelude src
 -- silently accepted an internal-extern violation a multi-module project's
 -- human `check` correctly rejected via the guarded path.
 export
-analyzeProject : Bool ->
+analyzeProject : (List String -> <e> List (String, List String)) ->
+  Bool ->
   List String ->
   Ref (List (String, String)) ->
   Ref (List (String, List Decl)) ->
@@ -1255,10 +1359,11 @@ analyzeProject : Bool ->
   List String ->
   String ->
   String ->
-  <IO> List (String, List Diag)
-analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+  <IO | e> List (String, List Diag)
+analyzeProject exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let (_, results) =
     analyzeProjectFull
+      exportsFor
       allowInternal
       trustedMods
       cacheRef
@@ -1275,7 +1380,8 @@ analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots
 -- typecheck, so its per-module list is empty and only the diagnostics it attributes
 -- to the entry file carry any verdict.
 export
-analyzeProjectFull : Bool ->
+analyzeProjectFull : (List String -> <e> List (String, List String)) ->
+  Bool ->
   List String ->
   Ref (List (String, String)) ->
   Ref (List (String, List Decl)) ->
@@ -1284,8 +1390,8 @@ analyzeProjectFull : Bool ->
   List String ->
   String ->
   String ->
-  <IO> (List ModDiags, List (String, List Diag))
-analyzeProjectFull allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+  <IO | e> (List ModDiags, List (String, List Diag))
+analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
   let runtimeP = preludeDesugared runtimeSrc
@@ -1306,6 +1412,7 @@ analyzeProjectFull allowInternal trustedMods cacheRef parseCacheRef read entry r
     Ok mods =>
       let (full, results) =
         projectDiagsLoadedFull
+          exportsFor
           allowInternal
           trustedMods
           runtimeP
@@ -1319,17 +1426,19 @@ analyzeProjectFull allowInternal trustedMods cacheRef parseCacheRef read entry r
 -- graph the caller has already loaded.  `medaka test` loads once and calls this,
 -- rather than handing `analyzeProject` an entry it would load a second time.
 export
-projectDiagsLoaded : Bool ->
+projectDiagsLoaded : (List String -> <e> List (String, List String)) ->
+  Bool ->
   List String ->
   List Decl ->
   List Decl ->
   Option (Int, Int) ->
   String ->
   List (String, String, List Decl) ->
-  List (String, List Diag)
-projectDiagsLoaded allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
+  <e> List (String, List Diag)
+projectDiagsLoaded exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
   snd
     (projectDiagsLoadedFull
+      exportsFor
       allowInternal
       trustedMods
       runtimeP
@@ -1341,18 +1450,20 @@ projectDiagsLoaded allowInternal trustedMods runtimeP coreP preludeKey chainKey 
 -- `projectDiagsLoaded` also handing back the per-module `(schemes, errs, warns)` --
 -- see `typecheckPassFull`.  One `desugarModule` per module here too: the resolve
 -- half and the typecheck half read the same trees.
-projectDiagsLoadedFull : Bool ->
+projectDiagsLoadedFull : (List String -> <e> List (String, List String)) ->
+  Bool ->
   List String ->
   List Decl ->
   List Decl ->
   Option (Int, Int) ->
   String ->
   List (String, String, List Decl) ->
-  (List ModDiags, List (String, List Diag))
-projectDiagsLoadedFull allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
+  <e> (List ModDiags, List (String, List Diag))
+projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
   let modPairs = desugaredModPairs mods
   let buckets =
     resolvedBuckets
+      exportsFor
       allowInternal
       trustedMods
       preludeKey
@@ -1513,7 +1624,8 @@ resumeResSteps (st :: sts) ((_, path, _) :: ms) known buckets =
 -- module while keys are available; the LAST module of the graph is never
 -- recorded, and a `None` key ends recording for that module and every one after
 -- it, so the returned steps stay positionally aligned.
-resolvePass : Bool ->
+resolvePass : (List String -> <e> List (String, List String)) ->
+  Bool ->
   List String ->
   Option (Int, Int) ->
   List Decl ->
@@ -1522,9 +1634,9 @@ resolvePass : Bool ->
   List (Option String) ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
-  (List (String, List Diag), List ResStep)
-resolvePass _ _ _ _ _ _ _ [] buckets = (buckets, [])
-resolvePass allowInternal trustedMods preludeKey rt core known keys ((mid, path, desugared) :: rest) buckets =
+  <e> (List (String, List Diag), List ResStep)
+resolvePass _ _ _ _ _ _ _ _ [] buckets = (buckets, [])
+resolvePass exportsFor allowInternal trustedMods preludeKey rt core known keys ((mid, path, desugared) :: rest) buckets =
   let (exp, errs) =
     resolveModuleG
       (internalGuardFor (allowInternal || contains mid trustedMods))
@@ -1534,12 +1646,13 @@ resolvePass allowInternal trustedMods preludeKey rt core known keys ((mid, path,
       known
       mid
       desugared
-  let diags = map diagOfResError errs
+  let diags = map diagOfResError (hintResErrors exportsFor errs)
   let (key, keys2) = match keys
     k :: ks => (k, ks)
     [] => (None, [])
   let (buckets2, steps) =
     resolvePass
+      exportsFor
       allowInternal
       trustedMods
       preludeKey
@@ -1698,7 +1811,8 @@ multiModuleAutoPrintDiags runtimeP coreP modPairs =
 -- `projectDiagsFromTc`, which differ only in where the typecheck half comes
 -- from — the two must resolve identically or their verdicts diverge on a
 -- channel that has nothing to do with typing.
-resolvedBuckets : Bool ->
+resolvedBuckets : (List String -> <e> List (String, List String)) ->
+  Bool ->
   List String ->
   Option (Int, Int) ->
   String ->
@@ -1706,8 +1820,8 @@ resolvedBuckets : Bool ->
   List Decl ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
-  List (String, List Diag)
-resolvedBuckets allowInternal trustedMods preludeKey chainKey runtimeP coreP mods modPairs =
+  <e> List (String, List Diag)
+resolvedBuckets exportsFor allowInternal trustedMods preludeKey chainKey runtimeP coreP mods modPairs =
   let seeded = seedAll (map midPath mods) []
   let dmods = desugaredTriples mods modPairs
   match preludeKey
@@ -1716,6 +1830,7 @@ resolvedBuckets allowInternal trustedMods preludeKey chainKey runtimeP coreP mod
     None =>
       fst
         (resolvePass
+          exportsFor
           allowInternal
           trustedMods
           None
@@ -1736,6 +1851,7 @@ resolvedBuckets allowInternal trustedMods preludeKey chainKey runtimeP coreP mod
       let (known, buckets) = resumeResSteps kept mods omEmpty seeded
       let (finalBuckets, newSteps) =
         resolvePass
+          exportsFor
           allowInternal
           trustedMods
           preludeKey
@@ -1774,14 +1890,15 @@ desugaredTriples _ _ = []
 -- No stale-read machinery: the caller loads with a disk-only read, so there is
 -- no unsaved-buffer source for `analyzeProject`'s `staleRef` to collect.
 export
-projectDiagsFromTc : Bool ->
+projectDiagsFromTc : (List String -> <e> List (String, List String)) ->
+  Bool ->
   List String ->
   List Decl ->
   List Decl ->
   List (String, String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
-  List (String, List Diag)
-projectDiagsFromTc allowInternal trustedMods runtimeP coreP mods tcByMid =
+  <e> List (String, List Diag)
+projectDiagsFromTc exportsFor allowInternal trustedMods runtimeP coreP mods tcByMid =
   let modPairs = desugaredModPairs mods
   typecheckDiagsFold
     runtimeP
@@ -1790,6 +1907,7 @@ projectDiagsFromTc allowInternal trustedMods runtimeP coreP mods tcByMid =
     modPairs
     tcByMid
     (resolvedBuckets
+      exportsFor
       allowInternal
       trustedMods
       None
@@ -2009,6 +2127,7 @@ analyzeProjectToLines cacheRef read entry roots runtimeSrc coreSrc =
   joinNl
     (projectLines
       (analyzeProject
+        noStdlibExports
         True
         []
         cacheRef
@@ -2626,31 +2745,33 @@ ppCheckJson (CjRendered json) = json
 ppCheckJson (CjParts _ triples) = cjAllToJson triples
 
 export
-checkJsonSingle : String ->
+checkJsonSingle : (List String -> <e> List (String, List String)) ->
+  String ->
   Bool ->
   String ->
   String ->
   String ->
   String ->
-  (String, Bool)
-checkJsonSingle modName allowInternal rsrc csrc target src =
+  <e> (String, Bool)
+checkJsonSingle exportsFor modName allowInternal rsrc csrc target src =
   let (cj, hasErr) =
-    checkJsonSingleParts modName allowInternal rsrc csrc target src
+    checkJsonSingleParts exportsFor modName allowInternal rsrc csrc target src
   (ppCheckJson cj, hasErr)
 
 export
-checkJsonSingleParts : String ->
+checkJsonSingleParts : (List String -> <e> List (String, List String)) ->
+  String ->
   Bool ->
   String ->
   String ->
   String ->
   String ->
-  (CheckJson, Bool)
-checkJsonSingleParts modName allowInternal rsrc csrc target src =
+  <e> (CheckJson, Bool)
+checkJsonSingleParts exportsFor modName allowInternal rsrc csrc target src =
   match parseResult src
     Err e => (CjRendered (cjParseErrJson target src e), True)
     Ok _ =>
-      let diags = analyzeLocatedG modName allowInternal rsrc csrc src
+      let diags = analyzeLocatedG exportsFor modName allowInternal rsrc csrc src
       let hasErr = anyList diagIsError diags
       -- #1236: fold the main-shape warning (`main () = …` / `main = 1 + 2`) into
       -- the SAME envelope `check --json` already builds, instead of leaving it
@@ -2735,6 +2856,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
             stdlibOwnership target roots stdlibDir mods
           let _ = setStdlibOwnership flatStdlib ownedStdlib
           checkJsonSingleParts
+            (stdlibExportsReader stdlibDir)
             mid
             (allowInternal || contains mid trusted)
             rsrc
@@ -2756,6 +2878,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
           let parseCacheRef = Ref []
           let results =
             analyzeProject
+              (stdlibExportsReader stdlibDir)
               allowInternal
               trusted
               cacheRef

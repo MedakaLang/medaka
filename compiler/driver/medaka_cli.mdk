@@ -136,6 +136,8 @@ import driver.diagnostics.{
   ppDiagCliLines,
   renderTcDiags,
   ppResolveErrorsByFile,
+  hintResErrorPairs,
+  stdlibExportsReader,
   diagOfResError,
   diagOfTypeError,
   relDiagPath,
@@ -616,6 +618,13 @@ unknownSubcommand sub =
   dieMsg "  run `medaka help` for the list of subcommands"
 
 -- ── check ─────────────────────────────────────────────────────────────────
+
+-- The import hint's reader for `check`/`run`/`build`: the stdlib under the same
+-- root every verb resolves `stdlib/` against.  Called only once resolve has
+-- reported an unbound name (`hintResErrors`).
+cliStdlibExports : List String -> <IO> List (String, List String)
+cliStdlibExports names =
+  stdlibExportsReader (envOr "MEDAKA_ROOT" defaultMedakaRoot ++ "/stdlib") names
 -- PARSE-ERROR-LOCATION Stage 1: render a located `ParseError` through the SAME
 -- caret-aware `ppDiagCliSrc` + `Diag` machinery the typecheck/resolve text paths
 -- use, so EVERY CLI-text parse error gets `file:L:C:` + a source snippet + caret
@@ -877,6 +886,7 @@ locatedProjectDiags allowInternal trusted target roots rsrc csrc =
   let parseCacheRef = Ref []
   let (perMod, results) =
     analyzeProjectFull
+      cliStdlibExports
       allowInternal
       trusted
       cacheRef
@@ -1105,6 +1115,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
   -- that re-parse.  Every OTHER `analyzeLocatedG` caller is untouched.
   let diags =
     analyzeFrom
+      cliStdlibExports
       mid
       rsrc
       csrc
@@ -1162,14 +1173,16 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
   -- the entry file.
   let resDiags =
     ppResolveErrorsByFile
-      (resolveModulesErrorsByFile
-        pathMap
-        allowInternal
-        trusted
-        (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
-        rtD
-        coreD
-        modsD)
+      (hintResErrorPairs
+        cliStdlibExports
+        (resolveModulesErrorsByFile
+          pathMap
+          allowInternal
+          trusted
+          (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+          rtD
+          coreD
+          modsD))
   match resDiags
     "" => match locatedProjectDiags allowInternal trusted target roots rsrc csrc
       -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
@@ -2506,6 +2519,7 @@ typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _path,
   -- resolve never reaches the emitter at all.
   let surface =
     analyzeSurface
+      cliStdlibExports
       mid
       rsrc
       csrc
@@ -2527,14 +2541,16 @@ typecheckGateRoute allowInternal trusted pathMap _roots rsrc csrc tsrc target mo
   -- stamped EVERY imported module's error with the entry file's path.
   let resDiags =
     ppResolveErrorsByFile
-      (resolveModulesErrorsByFile
-        pathMap
-        allowInternal
-        trusted
-        (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
-        rtD
-        coreD
-        modsD)
+      (hintResErrorPairs
+        cliStdlibExports
+        (resolveModulesErrorsByFile
+          pathMap
+          allowInternal
+          trusted
+          (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+          rtD
+          coreD
+          modsD))
   match resDiags
     "" => Ok ()
     _ => Err resDiags
@@ -2851,6 +2867,7 @@ runRunCmd argv =
           -- pre-existing; this parity slice does not change it.
           let surface =
             analyzeSurface
+              cliStdlibExports
               runMid
               rsrc
               csrc
@@ -2934,14 +2951,16 @@ runRunCmd argv =
           -- #186/#1360: per-module attribution via the loader's
           -- `pathMap`, the same seam `checkRoute` uses (#41).
           let resolvePairs =
-            resolveModulesErrorsByFile
-              pathMap
-              allowInternal
-              trusted
-              (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
-              rtD
-              coreD
-              modsD
+            hintResErrorPairs
+              cliStdlibExports
+              (resolveModulesErrorsByFile
+                pathMap
+                allowInternal
+                trusted
+                (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+                rtD
+                coreD
+                modsD)
           let resDiags = ppResolveErrorsByFile resolvePairs
           match resDiags
             -- ONE typecheck of the graph (ARCH §E): the elaboration `run` needs
@@ -3589,14 +3608,16 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
   let modsD = map desugarPair mods
   let resDiags =
     ppResolveErrorsByFile
-      (resolveModulesErrorsByFile
-        pathMap
-        False
-        trusted
-        preludeKey
-        rtD
-        coreD
-        modsD)
+      (hintResErrorPairs
+        (stdlibExportsReader stdlibDir)
+        (resolveModulesErrorsByFile
+          pathMap
+          False
+          trusted
+          preludeKey
+          rtD
+          coreD
+          modsD))
   match resDiags
     "" =>
       let _ = resetTypeErrorsSticky ()

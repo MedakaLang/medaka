@@ -1,0 +1,3 @@
+import map.{Map, delet}
+
+main = println 1

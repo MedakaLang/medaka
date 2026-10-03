@@ -1,5 +1,5 @@
 # META
-source_lines=1446
+source_lines=1447
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -93,6 +93,7 @@ stripSuffixStr suf s =
 -- A dotted module ID maps to a nested path: split on `.`, join with `/`, append
 -- `.mdk` (mirrors loader.ml file_of_module_id).  A flat bare name (no `.`) →
 -- `[name]` → `name`, so `<root>/name.mdk` — unchanged from the flat behaviour.
+export
 fileOfModuleId : String -> String -> String
 fileOfModuleId root modId =
   stringConcat [root, "/", joinSlash (splitOnChar "." modId), ".mdk"]
@@ -1470,7 +1471,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "dropPrefix" ((PVar "k") (PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "k")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))
 (DTypeSig false "stripSuffixStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "stripSuffixStr" ((PVar "suf") (PVar "s")) (EIf (EApp (EApp (EVar "endsWith") (EVar "suf")) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "suf")))) (EVar "s")) (EVar "s")))
-(DTypeSig false "fileOfModuleId" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig true "fileOfModuleId" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "fileOfModuleId" ((PVar "root") (PVar "modId")) (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/")) (EApp (EVar "joinSlash") (EApp (EApp (EVar "splitOnChar") (ELit (LString "."))) (EVar "modId"))) (ELit (LString ".mdk")))))
 (DTypeSig false "relUnderRoots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "relUnderRoots" ((PList) (PVar "path")) (EVar "path"))
@@ -1694,7 +1695,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "dropPrefix" ((PVar "k") (PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "k")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))
 (DTypeSig false "stripSuffixStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "stripSuffixStr" ((PVar "suf") (PVar "s")) (EIf (EApp (EApp (EVar "endsWith") (EVar "suf")) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "suf")))) (EVar "s")) (EVar "s")))
-(DTypeSig false "fileOfModuleId" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DTypeSig true "fileOfModuleId" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "fileOfModuleId" ((PVar "root") (PVar "modId")) (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/")) (EApp (EVar "joinSlash") (EApp (EApp (EVar "splitOnChar") (ELit (LString "."))) (EVar "modId"))) (ELit (LString ".mdk")))))
 (DTypeSig false "relUnderRoots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "relUnderRoots" ((PList) (PVar "path")) (EVar "path"))

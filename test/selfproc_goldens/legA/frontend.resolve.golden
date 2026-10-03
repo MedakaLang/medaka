@@ -153,6 +153,7 @@ emptyAdds : ImportAdds
 emptyScope : Scope
 expandMemberErrs : ModuleExports -> UseMember -> List ResError
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
+exportedValueNames : List Decl -> List String
 exportsIn : ExpNs a -> ModuleExports -> List a
 externNames : List Decl -> List String
 externTyOriginScope : List Decl -> Map String TyConOrigin
@@ -186,6 +187,7 @@ foldEffectProvenance : Map String ModuleExports -> Map String (List String) -> L
 foldIfaceMergeProvenance : Map String ModuleExports -> (Map String (List String), Map String Unit) -> List UsePath -> (Map String (List String), Map String Unit)
 foldImports : Map String ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldNamespaceProvenance : (Map String ModuleExports -> UsePath -> List String) -> Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
+foreignKeywordNotes : List (String, String)
 hasFoldable : List Decl -> Bool
 hasNullaryClause : List FunClause -> Bool
 hasOrdering : List Decl -> Bool
@@ -193,6 +195,9 @@ haskellCtorAliases : List (String, String)
 haskellNote : String -> String -> String
 haskellTypeAliases : List (String, String)
 haskellValueAliases : List (String, String)
+hintFromExports : List (String, List String) -> ResError -> ResError
+hintableName : ResError -> List String
+hintableUnboundNames : List ResError -> List String
 ifaceAmbigMods : Env -> String -> List String
 ifaceAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 ifaceDeclaredIn : String -> String -> (String, String)
@@ -205,6 +210,7 @@ ifaceMethodNm : IfaceMethod -> String
 ifaceMethodPairs : ModuleExports -> List String -> List (String, List String)
 ifaceMethodsOf : String -> List (String, List String) -> List String
 implMethodNm : ImplMethod -> String
+importChoices : String -> List String -> String
 importNamesIn : ExpNs String -> Map String ModuleExports -> UsePath -> List String
 importUnmergedIfaceDecls : Map String ModuleExports -> UsePath -> List (String, String)
 importValueBindings : UsePath -> ModuleExports -> List (String, String)
@@ -416,6 +422,7 @@ sugRejectsName : SugQuery -> String -> Int -> Bool -> Bool
 sugTypePool : Env -> List SugCand
 sugValuePool : Env -> List SugCand
 suggestCtor : String -> Option String
+suggestExportName : ModuleExports -> String -> Option String
 suggestName : Env -> Scope -> String -> Option String
 suggestNameFuzzy : Env -> Scope -> String -> Option String
 suggestType : Env -> String -> Option String
@@ -479,3 +486,4 @@ variantFieldTys : Variant -> List Ty
 variantName : Variant -> String
 whenL : Bool -> List a -> List a
 withResErrorLoc : Loc -> ResError -> ResError
+withStdlibExports : List (String, List String) -> List ResError -> List ResError

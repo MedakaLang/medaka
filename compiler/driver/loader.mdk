@@ -89,6 +89,7 @@ stripSuffixStr suf s =
 -- A dotted module ID maps to a nested path: split on `.`, join with `/`, append
 -- `.mdk` (mirrors loader.ml file_of_module_id).  A flat bare name (no `.`) →
 -- `[name]` → `name`, so `<root>/name.mdk` — unchanged from the flat behaviour.
+export
 fileOfModuleId : String -> String -> String
 fileOfModuleId root modId =
   stringConcat [root, "/", joinSlash (splitOnChar "." modId), ".mdk"]

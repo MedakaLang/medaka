@@ -42,7 +42,11 @@ from this branch (base `359c870a`). Exit code in parentheses after the stage.
 | `unbound_type_in_sig` | `Strng` in a signature | `<unknown location>: Unknown type: Strng` | **No location** ("<unknown location>"); message otherwise clear |
 | `unknown_module` | `import collections.HashMap` | `…:1:0: unknown module: collections — available modules: array, async, …, validation` | **Updated (2026-07-04):** now located + names every importable module as a concrete direction (no near-typo match to single out, so still no "did you mean") |
 | `import_unknown_name` | `import list.flatten` (no such name) | *(no output)* | ⚠️ **Silent failure**: exit 1 with **empty stderr and stdout** |
-| `forgot_import` | used `fromList` w/o import | `…:1:23: Unbound variable: fromList` | Clear, but no "did you forget to import?" hint |
+| `forgot_import` | used `fromList` w/o import | `…:1:23: Unbound variable: fromList. (Did you forget to 'import array.{fromList}', … or 'import vector.{fromList}'?)` | Names all seven stdlib modules that export `fromList`, sorted by id; long, but each alternative is a working import |
+| `forgot_stdlib_import` | used `reverse` with nothing imported | `…:3:16: Unbound variable: reverse. (Did you forget to 'import array.{reverse}', 'import list.{reverse}' or 'import string.{reverse}'?)` | The exact stdlib export wins over the edit-distance guess (`traverse`) |
+| `typo_not_exported` | `revrse` for `reverse`, nothing imported | `…:3:16: Unbound variable: revrse` | No stdlib module exports it and no in-scope name is close enough: no hint |
+| `foreign_while` | `while c` loop | `` …:2:2: Unbound variable: while. Medaka has no `while`; write a recursive function `` | Names what Medaka writes instead |
+| `import_missing_export_typo` | `import map.{Map, delet}` | `…:1:17: Module 'map' has no exported name 'delet'. Did you mean 'delete'` | Did-you-mean over the module's exports; `--json` carries `help` + `fix` |
 | `unbound_but_exported_by_import` (added 2026-07-04) | `import list` then bare `reverse` (needs `import list.{reverse}`) | `…:3:16: Unbound variable: reverse — 'reverse' is exported by 'list'; import it with 'import list.{reverse}'` | **Excellent**: names the exporting module and the exact fixed import line; `--json` carries `R-UNBOUND` + a real span, but a second `T-UNBOUND` diagnostic echoes the same fact at the same span (cascade) |
 
 ## typecheck/ (`medaka check`)

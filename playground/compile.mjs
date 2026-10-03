@@ -169,6 +169,13 @@ function buildVfs(source, stdlib) {
   return vfsMap;
 }
 
+// The extra modules buildVfs registered, named to the guest so an unbound
+// name's "did you forget to import" hint can name only modules that are here.
+function shippedModulesArg(stdlib) {
+  const ids = stdlib.extra ? Object.keys(stdlib.extra) : [];
+  return ids.length ? ['--stdlib-modules=' + ids.join(',')] : [];
+}
+
 // ── persistent guest session ─────────────────────────────────────────────────
 // The guest module's `(start $__init)` runs the eager top-level initializers and
 // then `main`, and ALSO exports that `main` as `mdk_main` (compiler/backend/
@@ -416,7 +423,7 @@ export async function compile(source, opts = {}) {
   // argv = <mode> <runtime.mdk> <core.mdk> <entry.mdk> <root>.  Mode 'compile'
   // = today's analyze→emit behavior.  The loader resolves the entry's module id
   // "main" against root "." → "./main.mdk" (a registered key).
-  const argv = ['compile', RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT];
+  const argv = ['compile', RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT, ...shippedModulesArg(stdlib)];
 
   let res;
   try {
@@ -478,7 +485,7 @@ export async function analyze(source, opts = {}) {
     throw new Error('analyze: opts.stdlib { runtime, core } required');
 
   const vfsMap = buildVfs(source, stdlib);
-  const argv = ['analyze', RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT];
+  const argv = ['analyze', RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT, ...shippedModulesArg(stdlib)];
 
   let res;
   try {

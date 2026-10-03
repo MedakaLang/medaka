@@ -1,0 +1,7 @@
+cmd: medaka check
+exit: 1
+---
+error: test/error_quality_fixtures/resolve/typo_not_exported.mdk:3:16: Unbound variable: revrse
+  |
+3 | main = println (revrse nums)
+  |                 ^
