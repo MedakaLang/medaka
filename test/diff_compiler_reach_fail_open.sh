@@ -124,11 +124,11 @@ run_reach() {
 }
 
 # ── arm 0: green baseline — a real diff entirely inside one project ─────────
-rt0="$(printf 'mq/main.mdk\n' | run_reach "$WORK/reach_body.sh")"
+rt0="$(printf 'parsec/main.mdk\n' | run_reach "$WORK/reach_body.sh")"
 out0="$(cat "$rt0/out.txt" 2>/dev/null || true)"
 case "$out0" in
-  *project_reach=full*) red "baseline: an ordinary mq/-only diff produced project_reach=full (should narrow to 'mq'): $out0" ;;
-  *project_reach=mq*)   note "OK  baseline narrows: $out0" ;;
+  *project_reach=full*) red "baseline: an ordinary parsec/-only diff produced project_reach=full (should narrow to 'parsec'): $out0" ;;
+  *project_reach=parsec*)   note "OK  baseline narrows: $out0" ;;
   *)                    red "baseline: unexpected output: $out0 (log: $(cat "$rt0/log.txt")))" ;;
 esac
 
@@ -141,7 +141,7 @@ sed 's|sh test/preflight\.sh|sh '"$WORK"'/broken_preflight.sh|' \
 if [ "$(grep -c 'broken_preflight' "$WORK/reach_body_derivfail.sh")" -lt 1 ]; then
   red "could not patch the preflight invocation for the derivation-failure arm — has the step body's phrasing changed?"
 fi
-rt1="$(printf 'mq/main.mdk\n' | run_reach "$WORK/reach_body_derivfail.sh")"
+rt1="$(printf 'parsec/main.mdk\n' | run_reach "$WORK/reach_body_derivfail.sh")"
 out1="$(cat "$rt1/out.txt" 2>/dev/null || true)"
 reason1="refusing to narrow on a broken derivation"
 case "$out1" in
@@ -181,7 +181,7 @@ PYEOF
 if [ ! -s "$WORK/reach_body_derivfail_gutted.sh" ]; then
   red "could not gut the derivation-failure fail-open branch for the teeth check — has the step body's shape changed?"
 else
-  rt1g="$(printf 'mq/main.mdk\n' | run_reach "$WORK/reach_body_derivfail_gutted.sh")"
+  rt1g="$(printf 'parsec/main.mdk\n' | run_reach "$WORK/reach_body_derivfail_gutted.sh")"
   if grep -q "$reason1" "$rt1g/log.txt"; then
     red "teeth check failed: removing the derivation-failure fail-open branch STILL produced its reason text — the check proves nothing: $(cat "$rt1g/log.txt")"
   else

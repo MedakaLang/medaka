@@ -257,7 +257,6 @@ REF	pds/test/signing_parity.sh	migrated to a `kind = "native"` gate module in #3
 REF	pds/test/protocol_all_engines.sh	migrated to a `kind = "native"` gate module in #3436 (pds/test/protocol_all_engines_test.mdk, registry name unchanged); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
 REF	pds/test/read_routes_all_engines.sh	migrated to a `kind = "native"` gate module in #3436 (pds/test/read_routes_all_engines_test.mdk, registry name unchanged); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
 
-REF	test/README.md	GATE-REGISTRY-DESIGN.md §9 (S-4, #2200) cites this as one of `diff_compiler_prose_classifier.sh`'s 26 probe paths, deliberately naming a file that does not exist to exercise the classifier's NONDOC-vs-PROSE boundary next to `testfile.md` — not a real doc citation
 
 # ── REF: correct AS HISTORY — the citing sentence is ABOUT the old path ─────
 # Surfaced by #2824, which widened the citing corpus from markdown alone to
@@ -287,11 +286,7 @@ REF	test/diff_compiler_parse.sh	TODO(docs-cleanup): the single parse gate was sp
 REF	test/llvm_fixtures/record_owner_narrowing_flat.mdk	TODO(docs-cleanup): test/analyze_project_fixtures/record_ctor_sibling_blocks_narrowing/main_rejects.mdk names it as its flat-layout companion; no such fixture is in test/llvm_fixtures/ today
 REF	sqlite/lib/plan.mdk	TODO(docs-cleanup): sqlite/findings/seek-plan.md records that this module was specified but never created (it would have closed a lib.plan -> lib.select -> lib.plan import cycle); the finding is a CLOSED RECORD, so the citation is arguably history rather than debt
 REF	sqlite/test/inlang_test_oracle.sh	migrated to a `kind = "native"` gate module in #2592 (sqlite/test/inlang_test_oracle_test.mdk); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot and sqlite/findings/inlang-test-suite.md's CLOSED RECORD both record the gate as it existed as a script — legitimate history
-REF	mq/test/check.sh	migrated to a `kind = "native"` gate module (mq/test/check_test.mdk); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot and docs/ops/TESTING-ARCHITECTURE.md's dated 0.27 s measurement both record the gate as it existed as a script — legitimate history
 REF	parsec/test/check.sh	migrated to a `kind = "native"` gate module (parsec/test/check_test.mdk); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
-REF	byteparser/test/check.sh	migrated to a `kind = "native"` gate module (byteparser/test/check_test.mdk); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
-REF	byteparser/lib/byteparser.mdk	archive/design/F1B-MODULE-IDENTITY-DESIGN.md's landed-2026-06-25 record names the planned byteparser/lib/ layout; the parser shipped as stdlib/byteparser.mdk
-REF	byteparser/lib/bytebuilder.mdk	archive/design/SQLITE-WRITE-DESIGN.md's IMPLEMENTED design record names the planned byteparser/lib/ layout; the builder shipped as stdlib/bytebuilder.mdk
 
 # ── REF: the READ-group sqlite oracles, one native runner (#2593) ──────────
 # Ten sqlite/test/*_oracle.sh scripts became ten rows of sqlite/test/oracle_test.mdk,

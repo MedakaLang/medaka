@@ -16,7 +16,8 @@
 -- one per line, sorted by the harness.
 
 import frontend.ast.{
-  Decl(..), Expr(..), Loc(..), Pat, Ty, intMinLiteralMsg, intMinLiteralHelp
+  Decl(..), Expr(..), Loc(..), Pat, Ty, intMinLiteralMsg, intMinLiteralHelp,
+  UsePath(..), UseMember(..), useMemberLocal
 }
 import frontend.parser.{
   parse,
@@ -112,6 +113,7 @@ import support.util.{
   anyList,
   filterList,
   contains,
+  joinDot,
 }
 import support.timer.{takePerfSink}
 import json.{Json(..), jObject, stringify}
@@ -2677,7 +2679,42 @@ mainEntryError decls = match findMainFunDef decls
   Some (_ :: _, body) =>
     Some (mkDiag SevError "W-MAIN-SHAPE" mainArityMsg (mainBodyLoc body))
   Some ([], _) => None
-  None => Some (mkDiag SevError "W-MAIN-MISSING" mainMissingMsg None)
+  None => Some (missingMainDiag decls)
+
+-- The program's `main` is the entry file's own top-level binding, so a `main`
+-- the entry only imports is refused with a message that says so, located at the
+-- import member.  Only the explicit member form (`import m.{main}`,
+-- `import m.{f as main}`) is visible in the entry's decls; a wildcard import
+-- that happens to bring a `main` gets the generic `mainMissingMsg`.
+export
+missingMainDiag : List Decl -> Diag
+missingMainDiag decls = match importedMainMember decls
+  Some (modName, m) =>
+    mkDiag
+      SevError
+      "W-MAIN-MISSING"
+      (mainImportedMsg modName m)
+      (Some (useMemberLoc m))
+  None => mkDiag SevError "W-MAIN-MISSING" mainMissingMsg None
+
+mainImportedMsg : String -> UseMember -> String
+mainImportedMsg modName (UseMember origin _ _ alias) =
+  let written = match alias
+    Some a => "\{origin} as \{a}"
+    None => origin
+  "'main' must be defined in the entry file; 'import \{modName}.{\{written}}' does not count. Add a top-level 'main = …' to this file"
+
+importedMainMember : List Decl -> Option (String, UseMember)
+importedMainMember [] = None
+importedMainMember ((DAttrib _ d) :: rest) = importedMainMember (d :: rest)
+importedMainMember ((DUse _ (UseGroup ns members) _) :: rest) =
+  match filterList (m => useMemberLocal m == "main") members
+    m :: _ => Some (joinDot ns, m)
+    [] => importedMainMember rest
+importedMainMember (_ :: rest) = importedMainMember rest
+
+useMemberLoc : UseMember -> Loc
+useMemberLoc (UseMember _ _ l _) = l
 
 -- The human face of `mainEntryError` for [file] with source [src].  A missing
 -- `main` has no position to point at, so the file itself fills the slot a

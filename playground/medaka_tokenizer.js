@@ -8,7 +8,12 @@
 // token() returns one of these class names per token (mapped to highlight tags
 // by medaka_lang.js's tokenTable):
 //   keyword comment string character number typeName constructor variableName
-//   operator punctuation bool escape interpolation
+//   operator punctuation bool escape interpolation typeVar effectLabel effectVar
+//
+// typeVar is a lowercase identifier in type position; effectLabel an uppercase
+// name inside a `< … >` row or the name after `effect`; effectVar a lowercase
+// name inside a row (`e` in `<e>`, `<Clock | e>`).  Like typeName, all three
+// are positional guesses.
 //
 // typeName vs constructor is a POSITIONAL guess, not a parse: an uppercase
 // identifier is a type in type position and a constructor everywhere else.
@@ -35,6 +40,14 @@
 //                  null if the last significant token was anything else
 //   depth        : open `( [ {` count while in type position (carry-over test)
 //   angle        : open type-position `<` count (effect rows)
+//   effHead      : true after the `effect` keyword until its name is read
+//   imp          : true on an `import` line (and its carried-over lines), whose lowercase
+//                  names are not type variables
+//   pdepth       : open `( [ {` count in ALL positions (line-local; reset at column 0)
+//   ascAt        : pdepth where the current type position was opened by a `:` from
+//                  expression position (an ascription or signature), else null. A
+//                  `)` that closes below it, a keyword like `in`/`then`/`else`, or an
+//                  arithmetic operator / `,` at that depth ends the type position.
 
 // The keyword set, mirroring lexer.mdk's `keywordOrIdent` table.  True/False are
 // NOT here — they lex as TUpper (uppercase), handled as `bool` below.  Derive the
@@ -59,7 +72,7 @@ const OP1_SET = '+-*/%<>=:.|!?@~^&$';   // single-char operator chars
 const PUNCT_SET = '()[],;';             // delimiters (not braces — see below)
 
 export function startState() {
-  return { blockComment: 0, strKind: null, interpStack: [], typePos: false, decl: null, ctorNext: false, last: null, depth: 0, angle: 0 };
+  return { blockComment: 0, strKind: null, interpStack: [], typePos: false, decl: null, ctorNext: false, last: null, depth: 0, angle: 0, effHead: false, imp: false, pdepth: 0, ascAt: null };
 }
 
 export function copyState(s) {
@@ -69,6 +82,7 @@ export function copyState(s) {
     interpStack: s.interpStack.map((f) => ({ brace: f.brace, kind: f.kind })),
     typePos: s.typePos, decl: s.decl, ctorNext: s.ctorNext,
     last: s.last, depth: s.depth, angle: s.angle,
+    effHead: s.effHead, imp: s.imp, pdepth: s.pdepth, ascAt: s.ascAt,
   };
 }
 
@@ -146,18 +160,40 @@ function tokenString(stream, state) {
 // Keywords that put the rest of the line in type position.
 const TYPE_HEAD = new Set(['interface', 'impl', 'requires', 'deriving', 'import', 'effect']);
 
+// Keywords and operators that cannot continue a type, so they end an ascription's
+// type position (`xs : List Int in …`, `(a : Int) + b`). `->`, `=>`, `<`, `>`, `*`
+// and `|` are absent: they occur inside types.
+const ASCRIPTION_END = new Set(['in', 'then', 'else', 'of', 'do', 'if', 'let', 'match']);
+const ASCRIPTION_END_OPS = new Set(['+', '-', '/', '%', '==', '/=', '<=', '>=', '&&', '||', '++', '|>', '>>', '<<', '::', '<-']);
+
+function endsAscription(state) {
+  return state.typePos && state.ascAt !== null && state.ascAt > 0 &&
+    state.pdepth === state.ascAt && state.angle === 0;
+}
+
+function closeAscription(state) {
+  state.typePos = false; state.ascAt = null; state.depth = 0; state.angle = 0;
+}
+
+// A `)` `]` `}` that closes the delimiter an ascription was opened inside ends it.
+function closeDelim(state) {
+  if (state.pdepth > 0) state.pdepth--;
+  if (state.typePos && state.ascAt !== null && state.pdepth < state.ascAt) closeAscription(state);
+}
+
 function tokenCode(stream, state) {
   if (stream.pos === 0) {
     // Line start. A column-0 line is a new top-level declaration; an indented
     // one continues the current declaration (type position only inside a
     // data body — an impl/interface body is expressions again).
     const indented = stream.peek() === ' ' || stream.peek() === '\t';
-    if (!indented) { state.decl = null; state.ctorNext = false; }
+    if (!indented) { state.decl = null; state.ctorNext = false; state.pdepth = 0; }
     const open = state.depth > 0 && (state.last === ',' || state.last === '(' ||
                                      state.last === '<' || state.last === '{');
     const carry = indented && state.typePos && (state.last === '->' || open);
-    if (!carry) { state.depth = 0; state.angle = 0; }
+    if (!carry) { state.depth = 0; state.angle = 0; state.ascAt = null; }
     state.last = null;
+    state.effHead = false; state.imp = carry ? state.imp : false;
     state.typePos = carry || state.decl === 'data' || state.decl === 'alias';
   }
   if (stream.eatSpace()) return null;
@@ -199,7 +235,8 @@ function tokenCode(stream, state) {
   if (c >= 'A' && c <= 'Z') {
     const w = stream.match(/^[A-Za-z0-9_]+/)[0];
     if (w === 'True' || w === 'False') return 'bool';
-    if (state.angle > 0) return 'typeName';
+    if (state.effHead) { state.effHead = false; return 'effectLabel'; }
+    if (state.angle > 0) return 'effectLabel';
     if (state.ctorNext) { state.ctorNext = false; state.typePos = true; return 'constructor'; }
     if (state.typePos) return 'typeName';
     // `M.get`: a module alias, neither a type nor a constructor — keep it neutral.
@@ -214,22 +251,36 @@ function tokenCode(stream, state) {
       if (w === 'data' || w === 'newtype') { state.decl = 'data'; state.typePos = true; }
       else if (w === 'type') { state.decl = 'alias'; state.typePos = true; }
       else if (TYPE_HEAD.has(w)) state.typePos = true;
+      if (w === 'effect') state.effHead = true;
+      if (w === 'import') state.imp = true;
+      if (state.ascAt !== null && ASCRIPTION_END.has(w)) closeAscription(state);
       return 'keyword';
     }
+    if (state.angle > 0) return 'effectVar';
+    // a record field name (`{ x : Int }`) is followed by `:`; it is not a type variable
+    if (state.typePos && !state.imp && !stream.match(/^\s*:(?!:)/, false)) return 'typeVar';
     return 'variableName';
   }
 
   // multi-char operators (longest-first)
   for (const op of OP3) if (stream.match(op)) return 'operator';
-  for (const op of OP2) if (stream.match(op)) return 'operator';
+  for (const op of OP2) {
+    if (stream.match(op)) {
+      if (ASCRIPTION_END_OPS.has(op) && endsAscription(state)) closeAscription(state);
+      return 'operator';
+    }
+  }
 
   // plain delimiters
   if (PUNCT_SET.indexOf(c) >= 0) {
     stream.next();
+    if (c === '(' || c === '[') state.pdepth++;
+    else if (c === ')' || c === ']') closeDelim(state);
     if (state.typePos) {
       if (c === '(' || c === '[') state.depth++;
       else if (c === ')' || c === ']') state.depth = Math.max(0, state.depth - 1);
     }
+    if (c === ',' && state.typePos && state.ascAt !== null && state.pdepth === state.ascAt && state.angle === 0) closeAscription(state);
     return 'punctuation';
   }
 
@@ -237,6 +288,7 @@ function tokenCode(stream, state) {
   if (c === '{' || c === '}') {
     stream.next();
     const top = state.interpStack[state.interpStack.length - 1];
+    if (!top) { if (c === '{') state.pdepth++; else closeDelim(state); }
     if (!top && state.typePos) state.depth = Math.max(0, state.depth + (c === '{' ? 1 : -1));
     if (top) {
       if (c === '{') { top.brace++; return 'punctuation'; }
@@ -250,10 +302,12 @@ function tokenCode(stream, state) {
   // single-char operators — three of them move the type/constructor position
   if (OP1_SET.indexOf(c) >= 0) {
     stream.next();
-    if (c === ':') state.typePos = true;
+    if (ASCRIPTION_END_OPS.has(c) && endsAscription(state)) closeAscription(state);
+    if (c === ':') { if (!state.typePos) state.ascAt = state.pdepth; state.typePos = true; }
     else if (c === '<' && state.typePos) { state.angle++; state.depth++; }
     else if (c === '>' && state.angle > 0) { state.angle--; state.depth = Math.max(0, state.depth - 1); }
     else if (c === '=') {
+      state.ascAt = null;
       if (state.decl === 'data') state.ctorNext = true;
       else if (state.decl !== 'alias') state.typePos = false;
     } else if (c === '|' && state.decl === 'data') state.ctorNext = true;

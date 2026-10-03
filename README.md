@@ -45,8 +45,24 @@ runs. `make medaka` builds the compiler from a checked-in IR seed, so the only
 toolchain it needs is clang and the Boehm GC. See
 [compiler/BOOTSTRAP.md](compiler/BOOTSTRAP.md) for how the self-hosting works.
 Open work is tracked in the
+[0.1.0 milestone](https://github.com/MedakaLang/medaka/milestone/1) and the
 [issue tracker](https://github.com/MedakaLang/medaka/issues); [PLAN.md](PLAN.md)
-is the working log behind it.
+is an older working log, not the current roadmap.
+
+This repository is developed with coding agents. `AGENTS.md` and `.claude/` are their
+playbooks; they are the reason the tree carries more process files than a typical project.
+
+## Projects written in Medaka
+
+Besides the compiler and `stdlib/`, the repository holds several programs and libraries
+written in the language, each with its own `medaka.toml`:
+
+- [`pds/`](pds/README.md): a Bluesky Personal Data Server, from HTTP framing and the
+  cryptographic primitives up.
+- [`sqlite/`](sqlite/README.md): a SQLite file reader and writer with a small SQL engine.
+- [`parsec/`](parsec/README.md): a general parser-combinator library (`sqlite/` uses it).
+- [`gzip/`](gzip/README.md): a DEFLATE/gzip codec.
+- [`demo/`](demo/README.md): two edge plugins used to demonstrate effect-policy checking.
 
 Pipeline stages, in order:
 

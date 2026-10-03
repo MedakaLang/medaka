@@ -339,21 +339,6 @@ toolchain = ["wasm-tools", "node>=24"]
 # see the `tiers` section above and test/diff_compiler_tier_drift.sh.
 
 [[gate]]
-name = "byteparser/test/check"
-area = "engines"
-shard = "gates_3"
-project = "byteparser"
-tiers = ["merge"]
-cost = "cheap"
-kind = "native"
-migration = "done"
-run = "byteparser/test/check_test.mdk"
-oracles = []
-sources = ["byteparser/*"]
-corpus = []
-toolchain = []
-
-[[gate]]
 name = "gzip/test/deflate_oracle"
 area = "engines"
 shard = "gates_5"
@@ -380,21 +365,6 @@ migration = "native-wrap"
 run = "gzip/test/inflate_oracle.sh"
 oracles = []
 sources = ["gzip/*"]
-corpus = []
-toolchain = []
-
-[[gate]]
-name = "mq/test/check"
-area = "engines"
-shard = "gates_3"
-project = "mq"
-tiers = ["merge"]
-cost = "cheap"
-kind = "native"
-migration = "done"
-run = "mq/test/check_test.mdk"
-oracles = []
-sources = ["mq/*"]
 corpus = []
 toolchain = []
 

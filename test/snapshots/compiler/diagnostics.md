@@ -1,5 +1,5 @@
 # META
-source_lines=2944
+source_lines=2981
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -20,7 +20,8 @@ stages=DESUGAR,MARK
 -- one per line, sorted by the harness.
 
 import frontend.ast.{
-  Decl(..), Expr(..), Loc(..), Pat, Ty, intMinLiteralMsg, intMinLiteralHelp
+  Decl(..), Expr(..), Loc(..), Pat, Ty, intMinLiteralMsg, intMinLiteralHelp,
+  UsePath(..), UseMember(..), useMemberLocal
 }
 import frontend.parser.{
   parse,
@@ -116,6 +117,7 @@ import support.util.{
   anyList,
   filterList,
   contains,
+  joinDot,
 }
 import support.timer.{takePerfSink}
 import json.{Json(..), jObject, stringify}
@@ -2681,7 +2683,42 @@ mainEntryError decls = match findMainFunDef decls
   Some (_ :: _, body) =>
     Some (mkDiag SevError "W-MAIN-SHAPE" mainArityMsg (mainBodyLoc body))
   Some ([], _) => None
-  None => Some (mkDiag SevError "W-MAIN-MISSING" mainMissingMsg None)
+  None => Some (missingMainDiag decls)
+
+-- The program's `main` is the entry file's own top-level binding, so a `main`
+-- the entry only imports is refused with a message that says so, located at the
+-- import member.  Only the explicit member form (`import m.{main}`,
+-- `import m.{f as main}`) is visible in the entry's decls; a wildcard import
+-- that happens to bring a `main` gets the generic `mainMissingMsg`.
+export
+missingMainDiag : List Decl -> Diag
+missingMainDiag decls = match importedMainMember decls
+  Some (modName, m) =>
+    mkDiag
+      SevError
+      "W-MAIN-MISSING"
+      (mainImportedMsg modName m)
+      (Some (useMemberLoc m))
+  None => mkDiag SevError "W-MAIN-MISSING" mainMissingMsg None
+
+mainImportedMsg : String -> UseMember -> String
+mainImportedMsg modName (UseMember origin _ _ alias) =
+  let written = match alias
+    Some a => "\{origin} as \{a}"
+    None => origin
+  "'main' must be defined in the entry file; 'import \{modName}.{\{written}}' does not count. Add a top-level 'main = …' to this file"
+
+importedMainMember : List Decl -> Option (String, UseMember)
+importedMainMember [] = None
+importedMainMember ((DAttrib _ d) :: rest) = importedMainMember (d :: rest)
+importedMainMember ((DUse _ (UseGroup ns members) _) :: rest) =
+  match filterList (m => useMemberLocal m == "main") members
+    m :: _ => Some (joinDot ns, m)
+    [] => importedMainMember rest
+importedMainMember (_ :: rest) = importedMainMember rest
+
+useMemberLoc : UseMember -> Loc
+useMemberLoc (UseMember _ _ l _) = l
 
 -- The human face of `mainEntryError` for [file] with source [src].  A missing
 -- `main` has no position to point at, so the file itself fills the slot a
@@ -2947,7 +2984,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
             hasErr,
           )
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "takeFirstN" false))))
@@ -2963,7 +3000,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "dropAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "dropAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
@@ -3317,7 +3354,18 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "mainShapeWarnings" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "mainShapeWarnings" (PWild PWild PWild (PVar "entryDecls")) (EMatch (EApp (EVar "mainArityWarning") (EVar "entryDecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "mainEntryError" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Diag"))))
-(DFunDef false "mainEntryError" ((PVar "decls")) (EMatch (EApp (EVar "findMainFunDef") (EVar "decls")) (arm (PCon "Some" (PTuple (PCons PWild PWild) (PVar "body"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "W-MAIN-SHAPE"))) (EVar "mainArityMsg")) (EApp (EVar "mainBodyLoc") (EVar "body"))))) (arm (PCon "Some" (PTuple (PList) PWild)) () (EVar "None")) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "W-MAIN-MISSING"))) (EVar "mainMissingMsg")) (EVar "None"))))))
+(DFunDef false "mainEntryError" ((PVar "decls")) (EMatch (EApp (EVar "findMainFunDef") (EVar "decls")) (arm (PCon "Some" (PTuple (PCons PWild PWild) (PVar "body"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "W-MAIN-SHAPE"))) (EVar "mainArityMsg")) (EApp (EVar "mainBodyLoc") (EVar "body"))))) (arm (PCon "Some" (PTuple (PList) PWild)) () (EVar "None")) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EVar "missingMainDiag") (EVar "decls"))))))
+(DTypeSig true "missingMainDiag" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Diag")))
+(DFunDef false "missingMainDiag" ((PVar "decls")) (EMatch (EApp (EVar "importedMainMember") (EVar "decls")) (arm (PCon "Some" (PTuple (PVar "modName") (PVar "m"))) () (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "W-MAIN-MISSING"))) (EApp (EApp (EVar "mainImportedMsg") (EVar "modName")) (EVar "m"))) (EApp (EVar "Some") (EApp (EVar "useMemberLoc") (EVar "m"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "W-MAIN-MISSING"))) (EVar "mainMissingMsg")) (EVar "None")))))
+(DTypeSig false "mainImportedMsg" (TyFun (TyCon "String") (TyFun (TyCon "UseMember") (TyCon "String"))))
+(DFunDef false "mainImportedMsg" ((PVar "modName") (PCon "UseMember" (PVar "origin") PWild PWild (PVar "alias"))) (EBlock (DoLet false false (PVar "written") (EMatch (EVar "alias") (arm (PCon "Some" (PVar "a")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "origin"))) (ELit (LString " as "))) (EApp (EVar "display") (EVar "a"))) (ELit (LString "")))) (arm (PCon "None") () (EVar "origin")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'main' must be defined in the entry file; 'import ")) (EApp (EVar "display") (EVar "modName"))) (ELit (LString ".{"))) (EApp (EVar "display") (EVar "written"))) (ELit (LString "}' does not count. Add a top-level 'main = …' to this file"))))))
+(DTypeSig false "importedMainMember" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "UseMember")))))
+(DFunDef false "importedMainMember" ((PList)) (EVar "None"))
+(DFunDef false "importedMainMember" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "importedMainMember") (EBinOp "::" (EVar "d") (EVar "rest"))))
+(DFunDef false "importedMainMember" ((PCons (PCon "DUse" PWild (PCon "UseGroup" (PVar "ns") (PVar "members")) PWild) (PVar "rest"))) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "==" (EApp (EVar "useMemberLocal") (EVar "m")) (ELit (LString "main"))))) (EVar "members")) (arm (PCons (PVar "m") PWild) () (EApp (EVar "Some") (ETuple (EApp (EVar "joinDot") (EVar "ns")) (EVar "m")))) (arm (PList) () (EApp (EVar "importedMainMember") (EVar "rest")))))
+(DFunDef false "importedMainMember" ((PCons PWild (PVar "rest"))) (EApp (EVar "importedMainMember") (EVar "rest")))
+(DTypeSig false "useMemberLoc" (TyFun (TyCon "UseMember") (TyCon "Loc")))
+(DFunDef false "useMemberLoc" ((PCon "UseMember" PWild PWild (PVar "l") PWild)) (EVar "l"))
 (DTypeSig true "ppMainEntryError" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
 (DFunDef false "ppMainEntryError" (PWild (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "None") PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "displayPath") (EVar "file")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))
 (DFunDef false "ppMainEntryError" ((PVar "src") (PVar "file") (PVar "d")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "file")) (EVar "d")))
@@ -3343,7 +3391,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "checkJsonFileParts" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))
 (DFunDef false "checkJsonFileParts" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "loadProgramE") (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "pe"))) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "mpath")) (EVar "msrc")) (EVar "pe"))) (EVar "True"))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "lmsg"))) () (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True"))))) (arm (PCon "Ok" (PVar "mods")) () (EMatch (EVar "mods") (arm (PList (PTuple (PVar "mid") PWild)) () (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleParts") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "mid")) (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src"))))) (arm PWild () (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "results"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "parseCacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EApp (EVar "parseLocated") (EVar "src"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "entryRaw")))))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (DoLet false false (PVar "root") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (DoLet false false (PVar "relTriples") (EApp (EApp (EVar "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples"))) (DoLet false false (PVar "entryKey") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "target"))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))))))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "takeFirstN" false))))
@@ -3359,7 +3407,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "dropAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "dropAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
@@ -3713,7 +3761,18 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "mainShapeWarnings" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "mainShapeWarnings" (PWild PWild PWild (PVar "entryDecls")) (EMatch (EApp (EVar "mainArityWarning") (EVar "entryDecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "mainEntryError" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Diag"))))
-(DFunDef false "mainEntryError" ((PVar "decls")) (EMatch (EApp (EVar "findMainFunDef") (EVar "decls")) (arm (PCon "Some" (PTuple (PCons PWild PWild) (PVar "body"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "W-MAIN-SHAPE"))) (EVar "mainArityMsg")) (EApp (EVar "mainBodyLoc") (EVar "body"))))) (arm (PCon "Some" (PTuple (PList) PWild)) () (EVar "None")) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "W-MAIN-MISSING"))) (EVar "mainMissingMsg")) (EVar "None"))))))
+(DFunDef false "mainEntryError" ((PVar "decls")) (EMatch (EApp (EVar "findMainFunDef") (EVar "decls")) (arm (PCon "Some" (PTuple (PCons PWild PWild) (PVar "body"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "W-MAIN-SHAPE"))) (EVar "mainArityMsg")) (EApp (EVar "mainBodyLoc") (EVar "body"))))) (arm (PCon "Some" (PTuple (PList) PWild)) () (EVar "None")) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EVar "missingMainDiag") (EVar "decls"))))))
+(DTypeSig true "missingMainDiag" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Diag")))
+(DFunDef false "missingMainDiag" ((PVar "decls")) (EMatch (EApp (EVar "importedMainMember") (EVar "decls")) (arm (PCon "Some" (PTuple (PVar "modName") (PVar "m"))) () (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "W-MAIN-MISSING"))) (EApp (EApp (EVar "mainImportedMsg") (EVar "modName")) (EVar "m"))) (EApp (EVar "Some") (EApp (EVar "useMemberLoc") (EVar "m"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "W-MAIN-MISSING"))) (EVar "mainMissingMsg")) (EVar "None")))))
+(DTypeSig false "mainImportedMsg" (TyFun (TyCon "String") (TyFun (TyCon "UseMember") (TyCon "String"))))
+(DFunDef false "mainImportedMsg" ((PVar "modName") (PCon "UseMember" (PVar "origin") PWild PWild (PVar "alias"))) (EBlock (DoLet false false (PVar "written") (EMatch (EVar "alias") (arm (PCon "Some" (PVar "a")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "origin"))) (ELit (LString " as "))) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "")))) (arm (PCon "None") () (EVar "origin")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'main' must be defined in the entry file; 'import ")) (EApp (EMethodRef "display") (EVar "modName"))) (ELit (LString ".{"))) (EApp (EMethodRef "display") (EVar "written"))) (ELit (LString "}' does not count. Add a top-level 'main = …' to this file"))))))
+(DTypeSig false "importedMainMember" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "UseMember")))))
+(DFunDef false "importedMainMember" ((PList)) (EVar "None"))
+(DFunDef false "importedMainMember" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "importedMainMember") (EBinOp "::" (EVar "d") (EVar "rest"))))
+(DFunDef false "importedMainMember" ((PCons (PCon "DUse" PWild (PCon "UseGroup" (PVar "ns") (PVar "members")) PWild) (PVar "rest"))) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "==" (EApp (EVar "useMemberLocal") (EVar "m")) (ELit (LString "main"))))) (EVar "members")) (arm (PCons (PVar "m") PWild) () (EApp (EVar "Some") (ETuple (EApp (EVar "joinDot") (EVar "ns")) (EVar "m")))) (arm (PList) () (EApp (EVar "importedMainMember") (EVar "rest")))))
+(DFunDef false "importedMainMember" ((PCons PWild (PVar "rest"))) (EApp (EVar "importedMainMember") (EVar "rest")))
+(DTypeSig false "useMemberLoc" (TyFun (TyCon "UseMember") (TyCon "Loc")))
+(DFunDef false "useMemberLoc" ((PCon "UseMember" PWild PWild (PVar "l") PWild)) (EVar "l"))
 (DTypeSig true "ppMainEntryError" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
 (DFunDef false "ppMainEntryError" (PWild (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "None") PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "displayPath") (EVar "file")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))
 (DFunDef false "ppMainEntryError" ((PVar "src") (PVar "file") (PVar "d")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "file")) (EVar "d")))

@@ -7,7 +7,7 @@ listed "regex" under string utilities since the start.
 ## 1. Why now
 
 Two sweeps of the tree on 2026-09-11 (one over `compiler/`, one over
-`stdlib/`, `test/`, `pds/`, `sqlite/`, `gzip/`, `parsec/`, `byteparser/`)
+`stdlib/`, `test/`, `pds/`, `sqlite/`, `gzip/`, `parsec/`)
 found roughly 170 candidate sites in the compiler and roughly 100 outside it
 where hand-written character scanning stands in for a pattern. The recurring
 shapes:

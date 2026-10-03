@@ -1,0 +1,2 @@
+export main : Unit
+main = println 5

@@ -1,0 +1,3 @@
+main =
+  let r : Int = forEach (x => println x) [1]
+  println r
