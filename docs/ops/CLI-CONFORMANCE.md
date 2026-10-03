@@ -562,6 +562,14 @@ compiler/driver/medaka_cli.mdk` is empty: `bench` is a dead *declaration keyword
 (parser/typecheck/fmt/LSP surface), not a verb. Wrong subsystem, wrong gates. It stays open on
 its own leg.
 
+**A bare `--` is an unrecognized flag, not an end-of-flags separator (#2371).** Every verb
+that validates flags rejects `--` in a flag position with the same named message as any other
+unknown flag (`unrecognized flag '--' (known: …)`), so `medaka check -- -weird.mdk` is a usage
+error. Two places differ on purpose: under `medaka run <file>`, `--` after the file is passed
+through to the program as an ordinary argument (§2), and `medaka gate reach` treats it as a
+separator. A dash-leading filename is passed with a path prefix (`./-weird.mdk`). Revisit only
+if a real caller needs `--` as a separator.
+
 **Splitting `medaka_cli.mdk` (line count: `make arch-census`) — out of scope.** That is
 #2282. This document makes it more tempting, not less; note findings there rather than
 acting on them.
