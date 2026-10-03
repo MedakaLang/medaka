@@ -1,5 +1,5 @@
 # META
-source_lines=4407
+source_lines=4406
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -4300,11 +4300,11 @@ runReplCmd (bad :: _) =
 -- MEDAKA_ROOT/stdlib/{runtime,core}.mdk, then run the JSON-RPC-over-stdio
 -- loop (initialize handshake + publishDiagnostics on didOpen/didChange).
 --
--- Usage text for `medaka lsp --help` / `-h` — mirrors mcpUsage's one-line
+-- Usage text for `medaka lsp --help` / `-h` — mirrors mcpUsageLine's one-line
 -- description plus the stdio-blocking reminder, adapted for the Language
 -- Server Protocol. A plain String (not a function) so it can be printed to
 -- either stdout (help) or stderr (error), matching newUsageLine's shape
--- (#582) rather than mcpUsage's stdout-only one (#299).
+-- (#582).
 -- `lsp` takes no flags either; same shape as `replArgSpec`.
 lspArgSpec : ArgSpec
 lspArgSpec = spec "lsp" []
@@ -4353,20 +4353,22 @@ runLspServerFromEnv _ =
     Err msg => dieMsg msg
     Ok v => v
 
--- Short usage blurb for `medaka mcp --help` / `-h` — mirrors the one-line
--- description `usage` (line ~284) gives mcp in the top-level help, plus the
--- reminder that it's a stdio server (so a reader knows why it blocks).
-mcpUsage : Unit -> <IO> Unit
-mcpUsage _ =
-  putStrLn
-    (stringConcat [
-      "medaka mcp — Run the MCP server over stdio (JSON-RPC for agents)\n",
-      "\n", "Usage:\n",
-      "  medaka mcp     Start the server; it reads JSON-RPC requests from stdin\n",
-      "                 and writes responses to stdout until stdin closes (EOF).\n",
-      "                 This is the normal, correct behavior for an MCP stdio\n",
-      "                 server — it is not supposed to be interactive.\n"
-    ])
+-- `mcp` takes no flags; same shape as `lspArgSpec`.
+mcpArgSpec : ArgSpec
+mcpArgSpec = spec "mcp" []
+
+-- Usage text for `medaka mcp --help` / `-h`: the one-line description the
+-- top-level help gives mcp, plus the reminder that it's a stdio server (so a
+-- reader knows why it blocks).
+mcpUsageLine : String
+mcpUsageLine = stringConcat [
+  "medaka mcp — Run the MCP server over stdio (JSON-RPC for agents)\n", "\n",
+  "Usage:\n",
+  "  medaka mcp     Start the server; it reads JSON-RPC requests from stdin\n",
+  "                 and writes responses to stdout until stdin closes (EOF).\n",
+  "                 This is the normal, correct behavior for an MCP stdio\n",
+  "                 server — it is not supposed to be interactive.\n"
+]
 
 -- `medaka mcp`: the MCP (Model Context Protocol) stdio server.  Mirrors
 -- runLspCmd exactly — load MEDAKA_ROOT/stdlib/{runtime,core}.mdk and hand the
@@ -4383,18 +4385,15 @@ mcpUsage _ =
 runMcpCmd : List String -> <IO> Unit
 runMcpCmd [] = runMcpServerFromEnv ()
 runMcpCmd ("--help" :: _) =
-  let _ = mcpUsage ()
+  let _ = putStrLn mcpUsageLine
   exit 0
 runMcpCmd ("-h" :: _) =
-  let _ = mcpUsage ()
+  let _ = putStrLn mcpUsageLine
   exit 0
 runMcpCmd (bad :: _) =
-  let _ =
-    ePutStrLn
-      ("medaka mcp: unknown argument '"
-        ++ bad
-        ++ "' (mcp takes no arguments; try 'medaka mcp --help')")
-  exit 1
+  -- C2: `mcp` takes no flags either.
+  let _ = ePutStrLn (unknownFlagMessage mcpArgSpec bad)
+  dieMsg mcpUsageLine
 
 runMcpServerFromEnv : Unit -> <IO> Unit
 runMcpServerFromEnv _ =
@@ -4855,13 +4854,15 @@ runMcpServerFromEnv _ =
 (DFunDef false "runLspCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "unknownFlagMessage") (EVar "lspArgSpec")) (EVar "bad")))) (DoExpr (EApp (EVar "dieMsg") (EVar "lspUsageLine")))))
 (DTypeSig false "runLspServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runLspServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EVar "runServer") (EVar "rsrc")) (EVar "csrc")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
-(DTypeSig false "mcpUsage" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "mcpUsage" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka mcp — Run the MCP server over stdio (JSON-RPC for agents)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka mcp     Start the server; it reads JSON-RPC requests from stdin\n")) (ELit (LString "                 and writes responses to stdout until stdin closes (EOF).\n")) (ELit (LString "                 This is the normal, correct behavior for an MCP stdio\n")) (ELit (LString "                 server — it is not supposed to be interactive.\n"))))))
+(DTypeSig false "mcpArgSpec" (TyCon "ArgSpec"))
+(DFunDef false "mcpArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "mcp"))) (EListLit)))
+(DTypeSig false "mcpUsageLine" (TyCon "String"))
+(DFunDef false "mcpUsageLine" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka mcp — Run the MCP server over stdio (JSON-RPC for agents)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka mcp     Start the server; it reads JSON-RPC requests from stdin\n")) (ELit (LString "                 and writes responses to stdout until stdin closes (EOF).\n")) (ELit (LString "                 This is the normal, correct behavior for an MCP stdio\n")) (ELit (LString "                 server — it is not supposed to be interactive.\n")))))
 (DTypeSig false "runMcpCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runMcpCmd" ((PList)) (EApp (EVar "runMcpServerFromEnv") (ELit LUnit)))
-(DFunDef false "runMcpCmd" ((PCons (PLit (LString "--help")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "mcpUsage") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
-(DFunDef false "runMcpCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "mcpUsage") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
-(DFunDef false "runMcpCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka mcp: unknown argument '")) (EVar "bad")) (ELit (LString "' (mcp takes no arguments; try 'medaka mcp --help')"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
+(DFunDef false "runMcpCmd" ((PCons (PLit (LString "--help")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "mcpUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
+(DFunDef false "runMcpCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "mcpUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
+(DFunDef false "runMcpCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "unknownFlagMessage") (EVar "mcpArgSpec")) (EVar "bad")))) (DoExpr (EApp (EVar "dieMsg") (EVar "mcpUsageLine")))))
 (DTypeSig false "runMcpServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EVar "medakaVersion")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 # MARK
@@ -5310,12 +5311,14 @@ runMcpServerFromEnv _ =
 (DFunDef false "runLspCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "unknownFlagMessage") (EVar "lspArgSpec")) (EVar "bad")))) (DoExpr (EApp (EVar "dieMsg") (EVar "lspUsageLine")))))
 (DTypeSig false "runLspServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runLspServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EVar "runServer") (EVar "rsrc")) (EVar "csrc")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
-(DTypeSig false "mcpUsage" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "mcpUsage" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka mcp — Run the MCP server over stdio (JSON-RPC for agents)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka mcp     Start the server; it reads JSON-RPC requests from stdin\n")) (ELit (LString "                 and writes responses to stdout until stdin closes (EOF).\n")) (ELit (LString "                 This is the normal, correct behavior for an MCP stdio\n")) (ELit (LString "                 server — it is not supposed to be interactive.\n"))))))
+(DTypeSig false "mcpArgSpec" (TyCon "ArgSpec"))
+(DFunDef false "mcpArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "mcp"))) (EListLit)))
+(DTypeSig false "mcpUsageLine" (TyCon "String"))
+(DFunDef false "mcpUsageLine" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka mcp — Run the MCP server over stdio (JSON-RPC for agents)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka mcp     Start the server; it reads JSON-RPC requests from stdin\n")) (ELit (LString "                 and writes responses to stdout until stdin closes (EOF).\n")) (ELit (LString "                 This is the normal, correct behavior for an MCP stdio\n")) (ELit (LString "                 server — it is not supposed to be interactive.\n")))))
 (DTypeSig false "runMcpCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runMcpCmd" ((PList)) (EApp (EVar "runMcpServerFromEnv") (ELit LUnit)))
-(DFunDef false "runMcpCmd" ((PCons (PLit (LString "--help")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "mcpUsage") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
-(DFunDef false "runMcpCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "mcpUsage") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
-(DFunDef false "runMcpCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka mcp: unknown argument '")) (EVar "bad")) (ELit (LString "' (mcp takes no arguments; try 'medaka mcp --help')"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
+(DFunDef false "runMcpCmd" ((PCons (PLit (LString "--help")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "mcpUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
+(DFunDef false "runMcpCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "mcpUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
+(DFunDef false "runMcpCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "unknownFlagMessage") (EVar "mcpArgSpec")) (EVar "bad")))) (DoExpr (EApp (EVar "dieMsg") (EVar "mcpUsageLine")))))
 (DTypeSig false "runMcpServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EVar "medakaVersion")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))

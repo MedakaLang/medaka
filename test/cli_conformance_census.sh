@@ -258,6 +258,8 @@ for v in $VERBS; do
   if [ -z "$known" ]; then
     if [ "$(cli_had_roster)" = 1 ]; then
       printf '%-14s %-22s %s\n' "$v" "-" "(roster present, zero flags)"
+    elif cli_roster_exempt "$v"; then
+      printf '%-14s %-22s %s\n' "$v" "-" "NO ROSTER (documented exemption)"
     else
       printf '%-14s %-22s %s\n' "$v" "-" "NO ROSTER (uncovered)"
     fi

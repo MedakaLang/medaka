@@ -20,7 +20,8 @@
 #
 # ── EVERYTHING IS DERIVED. NOTHING IS ENCODED. ───────────────────────────────
 #
-# No roster of verbs, flags, or subcommands appears anywhere in this file. Every
+# No roster of verbs, flags, or subcommands appears anywhere in this file (the
+# one exception is the documented `CLI_ROSTER_EXEMPT` list below). Every
 # list comes back out of the binary:
 #
 #   verbs        ← `medaka help`'s own usage block
@@ -142,11 +143,11 @@ cli_help_text_of() { cli_probe "$1" --help; cat "$CLI_OUT"; }
 #
 # Bound, stated rather than hidden: a verb whose rejection has NO `(known: …)`
 # substring at all (a custom message shape, e.g. `codemod`'s "unknown codemod
-# 'X'" or `mcp`'s "unknown argument 'X'") yields the empty string, and callers
-# that need to distinguish that from "zero flags" must treat an empty result
-# WITH `$CLI_HAD_ROSTER` still 0 as UNCOVERED. `(known: none)` — the rendering
-# for a genuinely flagless verb that DOES go through `unknownFlagMessage` (e.g.
-# `doc`, `lsp`, `repl`, `new`) — also yields an empty flag list, but is a real,
+# 'X'") yields the empty string, and callers that need to distinguish that
+# from "zero flags" must treat an empty result WITH `$CLI_HAD_ROSTER` still 0
+# as UNCOVERED unless `cli_roster_exempt` names the verb. `(known: none)` — the
+# rendering for a genuinely flagless verb that DOES go through
+# `unknownFlagMessage` (e.g. `doc`, `lsp`, `mcp`, `repl`, `new`) — also yields an empty flag list, but is a real,
 # checked roster of zero flags: `cli_known_flags_of` sets `$CLI_HAD_ROSTER=1` in
 # that case so callers don't count it as uncovered just because there was
 # nothing to list.
@@ -182,6 +183,25 @@ cli_known_flags_of() {
     _kf_all="$_kf_all $(printf '%s' "$_kf_line" | tr -d ',')"
   done
   printf '%s\n' $_kf_all | grep '^--[a-z]' | sort -u
+}
+
+# ── cli_roster_exempt <verb> ─────────────────────────────────────────────────
+#
+# The ONE verb list in this file, and the only one allowed: verbs exempt from
+# printing a `(known: …)` roster, each with its reason. Succeeds (status 0) when
+# <verb> is exempt. Recorded in docs/ops/CLI-CONFORMANCE.md §5g.
+#
+#   codemod  its flag vocabulary is a runtime table, not an ArgSpec — each
+#            registered codemod's own `mk` (compiler/tools/codemod.mdk) decides
+#            which `--flag value` pairs it accepts, so there is no static set
+#            for a roster to name.
+#
+# A verb that prints no roster and is NOT listed here is uncovered, and the
+# gate fails on it.
+CLI_ROSTER_EXEMPT="codemod"
+cli_roster_exempt() {
+  case " $CLI_ROSTER_EXEMPT " in *" $1 "*) return 0 ;; esac
+  return 1
 }
 
 # Whether the LAST `cli_known_flags_of` call saw a real `(known: …)` roster
