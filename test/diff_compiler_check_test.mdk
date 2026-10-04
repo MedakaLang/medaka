@@ -1219,7 +1219,7 @@ expectRunInDir name files target code ok why = match runScratch name files
     let result = match runInDir dir target
       Err e => fail "could not run `medaka run \{target}`: \{e}"
       Ok (c, out, err) =>
-        if c == code && ok out err then
+        if code == c && ok out err then
           pass
         else
           fail
