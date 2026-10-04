@@ -213,11 +213,19 @@ ppValue VFallthrough = "<fallthrough>"
 ppField : (String, Value e) -> String
 ppField (k, v) = "\{k} = \{ppValue v}"
 
--- parenthesize compound atoms (VCon with args / tuples) when nested
+-- Parenthesize a nested constructor argument the way the stdlib's `Debug`/
+-- `Display` do (`derivedShowWrap`): constructor applications, records, and
+-- negative numbers get parens; bracketed renderings (tuples, lists) do not.
 ppValueAtom : Value e -> String
 ppValueAtom (VCon name (x :: xs)) = "(" ++ ppValue (VCon name (x :: xs)) ++ ")"
-ppValueAtom (VTuple vs) = "(" ++ ppValue (VTuple vs) ++ ")"
-ppValueAtom v = ppValue v
+ppValueAtom (VRecord name fields) = "(" ++ ppValue (VRecord name fields) ++ ")"
+ppValueAtom v =
+  let s = ppValue v
+  match v
+    VInt _ if startsWith "-" s => "(" ++ s ++ ")"
+    VFloat _ if startsWith "-" s => "(" ++ s ++ ")"
+    VI64 _ _ if startsWith "-" s => "(" ++ s ++ ")"
+    _ => s
 
 -- ── demangle-on-display for the #1292 ctor-collision rename ──────────────────
 -- `private_mangle.mangleCtorCollisions` renames a CROSS-UNIT-COLLIDING constructor
