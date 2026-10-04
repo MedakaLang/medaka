@@ -50,10 +50,9 @@
    so both remain expressible unchanged.
 
    No row grades `run`'s stderr. The harness grades `check`'s diagnostic
-   code, every engine's stdout and `check`/`run`/`build`'s exit codes; the
-   compiled binary's own exit code and stderr (`binCode`/`binErr`) are
-   carried on `Agreement` but not graded here, same hole the retired shell
-   table had. It cannot assert a runtime panic's signature (#1130), so a row
+   code, every engine's stdout and `check`/`run`/`build`'s exit codes, and
+   for an `AllExact` row the compiled binary's own exit code and a
+   panic signature on its stderr (`binaryRanClean`). It cannot assert a runtime panic's signature (#1130), so a row
    whose pinned failure is a run-time panic pins the exit code and the
    stdout reached, never the reason.
 
@@ -66,7 +65,8 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  Agreement(..), checkRunBuild, runMedaka, summarizeSweep, sweepUnits, verdictOf
+  Agreement(..), binaryRanClean, checkRunBuild, runMedaka, summarizeSweep,
+  sweepUnits, verdictOf
 }
 import fs.{expectUnitCount, fixtureDirs}
 import io.{runVerb}
@@ -3443,6 +3443,8 @@ gradeValue NoValue _ _ = "-"
 gradeValue AllExact pinned a =
   if a.runCode /= 0 || a.buildCode /= 0 then
     "n/a"
+  else if not (binaryRanClean a) then
+    "BINPANIC"
   else if a.runOut == a.binOut && a.runOut == pinned then
     "ok"
   else
@@ -3584,6 +3586,29 @@ corpusUnits = match fixtureDirs corpus
     map
       (names => sort (map basename dirs ++ filter (endsWith ".mdk") names))
       (listDir corpus)
+
+-- An `AllExact` row whose stdout agrees everywhere must still go red when the
+-- built binary exited nonzero or panicked on stderr (#3334).
+test "an AllExact row grades the binary's exit code and panic signature" =
+  let agree = Agreement {
+    checkCode = 0,
+    checkErr = "",
+    runCode = 0,
+    runOut = "1\n",
+    runErr = "",
+    buildCode = 0,
+    buildLog = "",
+    binCode = 0,
+    binOut = "1\n",
+    binErr = "",
+  }
+  let clean = gradeValue AllExact "1\n" agree
+  let badCode = gradeValue AllExact "1\n" { agree | binCode = 1 }
+  let panicked = gradeValue AllExact "1\n" { agree | binErr = "E-PANIC: boom" }
+  if clean == "ok" && badCode == "BINPANIC" && panicked == "BINPANIC" then
+    pass
+  else
+    fail "want ok/BINPANIC/BINPANIC, got \{clean}/\{badCode}/\{panicked}"
 
 test "the table still holds every row it is supposed to" =
   match expectUnitCount tableRows table
