@@ -56,6 +56,7 @@ import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import driver.loader.{
   loadProgramFilesLocatedE,
+  modIdToPath,
   loadErrorMessage,
   LoadError(..),
   entrySearchRoots,
@@ -74,6 +75,8 @@ import eval.eval.{
   Value,
   evalOneRootEnvWith,
   evalModulesRootEnvWith,
+  currentEvalFile,
+  modulePathMap,
   testCapableExterns,
   funNamesOf,
   dropShadowedExp,
@@ -640,6 +643,7 @@ prepareMulti rsrc csrc target roots exempt hasDoctests synthDecls =
       PreparedPair (TestPairErr (loadErrorMessage le)),
     )
     Ok mods =>
+      modulePathMap := map modIdToPath mods
       elaborateFor rsrc csrc target roots mods exempt hasDoctests synthDecls
 
 elaborateFor : String ->
@@ -721,6 +725,7 @@ prepareSingle runtimeDecls coreDecls target roots userDecls =
     else
       dropShadowedExp (funNamesOf userDecls) coreDecls
   let rootId = singleRootId roots target
+  modulePathMap := [(rootId, target)]
   uncurryPair
     (elaborateModulesMangled runtimeDecls livePrelude [(rootId, userDecls)])
 
@@ -781,6 +786,7 @@ driveMulti : List Engine ->
   Bool ->
   <IO> Bool
 driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt userDecls exempt =
+  currentEvalFile := target
   let allExamples = extractExamples (collectComments tsrc)
   let examples = filterExamplesByName filterOpt allExamples
   let synthResults = buildSynthResults userDecls examples
@@ -833,6 +839,7 @@ driveSingle : List Engine ->
   List Decl ->
   <IO> Bool
 driveSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt userDecls =
+  currentEvalFile := target
   let examples =
     filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
   if filterMatchedNothing filterOpt tsrc userDecls then
@@ -988,6 +995,7 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
     else
       dropShadowedExp (funNamesOf allUser) coreDecls
   let rootId = singleRootId roots target
+  modulePathMap := [("__main__", target)]
   let elaborated = elaborateOne runtimeDecls livePrelude (rootId, allUser)
   let env =
     evalOneRootEnvWith (testCapableExterns ()) [] ("__main__", elaborated)

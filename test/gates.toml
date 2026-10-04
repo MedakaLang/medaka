@@ -2529,7 +2529,7 @@ migration = "done"
 run = "test/diff_compiler_stack_overflow_test.mdk"
 oracles = []
 sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
-corpus = ["test/stack_overflow_fixtures"]
+corpus = ["test/stack_overflow_fixtures", "test/stack_overflow_test_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]

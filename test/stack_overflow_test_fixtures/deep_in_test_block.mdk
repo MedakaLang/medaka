@@ -1,0 +1,8 @@
+import test.{expectEqual}
+
+deep : Int -> Int
+deep 0 = 0
+deep n = 1 + deep (n - 1)
+
+test "recursion past the interpreter's depth wall" =
+  expectEqual 100000 (deep 100000)
