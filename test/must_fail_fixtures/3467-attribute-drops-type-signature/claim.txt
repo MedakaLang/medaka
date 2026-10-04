@@ -1,0 +1,18 @@
+issue: 3467
+what: an attribute above a type signature makes the typechecker lose the signature
+what: (`sigsOf` in compiler/types/typecheck.mdk has no DAttrib arm). With `@inline` above
+what: `f : Int -> Int`, the body `f x = x ++ "!"` is inferred as `f : String -> String`,
+what: `check` accepts it at exit 0, and `run` prints `a!`. Without the attribute it is a
+what: type error.
+cmd: check main.mdk
+exit: 0
+stdout-line: f : String -> String
+stdout-line: main : <Stdout> Unit
+control: check control.mdk
+why-verb: `check`, because the defect is ACCEPTANCE of an ill-typed program. The fix
+why-verb: honours the signature and rejects at exit 1, which drains this row.
+why-stdout: `f : String -> String` contradicts the declared `Int -> Int`; `main`'s line
+why-stdout: proves the dump ran.
+why-control: control.mdk is a well-typed attributed function and must check at exit 0. (It
+why-control: currently prints `f : Num a => a -> a`, the same dropped signature, but a
+why-control: control only asserts exit 0.) A red control means attributes broke check.

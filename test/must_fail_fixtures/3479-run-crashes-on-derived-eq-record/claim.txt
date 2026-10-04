@@ -1,0 +1,15 @@
+issue: 3479
+what: `==` on a record type with `deriving (Eq)` crashes the interpreter:
+what: `BoxW 3 == BoxW 3` with `data BoxW = BoxW { w : Int } deriving (Eq)` checks clean,
+what: then `run` dies with E-NONEXHAUSTIVE-MATCH and prints nothing. The native binary
+what: prints True.
+cmd: run main.mdk
+exit: 1
+stdout-bytes:
+control: run control.mdk
+why-verb: `run`, because only the interpreter is wrong; the fix makes it print `True` at
+why-verb: exit 0, which drains this row.
+why-stdout: empty stdout at exit 1 is the crash (the E-NONEXHAUSTIVE-MATCH text goes to
+why-stdout: stderr, which this harness does not grade).
+why-control: control.mdk derives Eq on a positional (non-record) type and must print `True`
+why-control: at exit 0. A red control means derived Eq broke generally.
