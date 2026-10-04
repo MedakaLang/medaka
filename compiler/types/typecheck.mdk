@@ -37981,9 +37981,26 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppPredArgsShared args}"
 -- applicable advice for the right reason under the wrong module's declaration.
 noImplHint : String -> List Mono -> Option String
 noImplHint iface [arg] = match headTyconNameMono arg
-  Some n => noImplHintFor iface n
+  Some n =>
+    if derivableIface iface && headIsStdlibOwned arg then
+      None
+    else
+      noImplHintFor iface n
   None => None
 noImplHint _ _ = None
+
+-- A type declared in a stdlib-owned module cannot take `deriving`, and an
+-- `impl` of a core interface for it would be an orphan (docs/spec/language-design.md
+-- "No Orphan Instances"), so neither remedy of `noImplAdvice` is available to the
+-- caller.  A type with no module identity (builtin, unresolved) is not stdlib-owned.
+headIsStdlibOwned : Mono -> Bool
+headIsStdlibOwned arg = match headTyconMono arg
+  Some (HkDecl (TkIdent (Ident _ io _))) =>
+    identOriginFold
+      False
+      (mid => omHasKey mid driverState.value.stdlibOwnedModsRef.value)
+      io
+  _ => False
 
 noImplHintFor : String -> String -> Option String
 noImplHintFor iface n

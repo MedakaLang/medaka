@@ -78,6 +78,7 @@ import types.typecheck.{
   methodReturnMemoTeardownStats,
   methodReturnTemplatePresenceProbe,
   scopeFrameStats,
+  setStdlibOwnership,
   scopeTraceContext,
   tcCode,
   tcMsg,
@@ -487,6 +488,40 @@ test "prelude-free split graphs retain every builtin class identity" =
         ("use", desugar (parse useSource)),
       ],
     )
+
+-- A type from a stdlib-owned module takes neither `deriving` (not the caller's to edit)
+-- nor an orphan `impl` of a core interface, so the reject carries no hint.
+test "no-impl hint is dropped for a stdlib-owned type" =
+  let eqSource = joinNl [
+    "export interface Eq a where",
+    "  eq : a -> a -> Bool",
+    "export impl Eq Int where",
+    "  eq x y = x == y",
+  ]
+  let boxSource = "public export data Box = Box Int"
+  let useSource = joinNl [
+    "import eq",
+    "import boxes.*",
+    "main = (Box 1) == (Box 2)",
+  ]
+  let mods = [
+    ("eq", desugar (parse eqSource)),
+    ("boxes", desugar (parse boxSource)),
+    ("use", desugar (parse useSource)),
+  ]
+  let ownedReport =
+    let _ = setStdlibOwnership False ["eq", "boxes"]
+    checkModulesEntryReport [] [] mods
+  let userReport =
+    let _ = setStdlibOwnership False ["eq"]
+    checkModulesEntryReport [] [] mods
+  let _ = setStdlibOwnership False []
+  expectEqual
+    (
+      "TYPE ERROR: No impl of Eq for Box",
+      "TYPE ERROR: No impl of Eq for Box; add 'deriving Eq' to the 'Box' type, or write an 'impl Eq Box'.",
+    )
+    (ownedReport, userReport)
 
 test "finalized scheme queries drain numeric predicates on cold and keyed calls" =
   let source = numericValueSource True
