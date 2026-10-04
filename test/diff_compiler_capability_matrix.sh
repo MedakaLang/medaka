@@ -134,12 +134,15 @@ N_ALL="$(wc -l < "$WORK/all.txt" | tr -d ' ')"
 #                       byte-identical.
 #   ioExternBindings  — the host-installed capability table (the "host is the
 #                       handler" seam, docs/spec/EFFECTS-SEMANTICS.md §7). `medaka run`
-#                       installs it; the oracle entries do not.
+#                       installs it; the oracle entries do not.  Its rows live in
+#                       ioHostExterns (host I/O) and buildStampExterns (build stamps).
 # Any NEW table must be added here. The guard below is the backstop if one is
 # forgotten... but it only catches a total parse failure, not a missed table,
 # so keep this list honest.
 sed -n -e '/^externBindings\( _\)\? = \[/,/^\]/p' \
-       -e '/^ioExternBindings\( _\)\? = \[/,/^\]/p' "$EVALMDK" \
+       -e '/^ioExternBindings\( _\)\? = \[/,/^\]/p' \
+       -e '/^ioHostExterns\( _\)\? = \[/,/^\]/p' \
+       -e '/^buildStampExterns\( _\)\? = \[/,/^\]/p' "$EVALMDK" \
   | grep -oE '\("[A-Za-z_][A-Za-z0-9_]*"' | sed -E 's/^\(//' | tr -d '"' | sort -u > "$WORK/interp_impl.txt"
 
 # GUARD: a parse failure must NOT masquerade as "every extern is missing".
