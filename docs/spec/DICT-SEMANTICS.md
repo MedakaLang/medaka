@@ -604,11 +604,15 @@ bindings unified jointly (the #3521 matcher), then that unifier is applied to
   binding of a goal variable would make match, such as a numeric literal not yet
   defaulted. Committing there would decide the overlap by the order the
   variables happen to be solved in, so the goal is left undetermined.
-- `U = {I}`, but `I`'s head does not match `π`, because `I` has a type
-  constructor where `π` has a variable. Committing there would be unification
-  against the instance head, not improvement: the only instance
-  `impl Show (List Int)` never fixes `Show (List t)` to `t = Int`. Only a
-  repeated head variable commits anything.
+- `U = {I}`, but `I`'s head has a type constructor where `π` has a variable
+  that this boundary does not own — a signature's, an impl head's, an
+  argument's, an enclosing binder's. Committing would decide a type the caller
+  or the enclosing scope has the right to choose: the only instance
+  `impl Show (List Int)` never fixes `Show (List t)` to `t = Int` when `t` is
+  the caller's. For a variable the boundary owns, the commit is
+  **determination** (below): the one instance whose head unifies with the goal
+  is the one type the program can have at that position, and it is taken
+  before numeric defaulting. A 1-ary goal is not determined; see §4.2 OD3.
 - The commit would bind a variable of the group's own declared signature. A
   signature variable is rigid, and the check that a body is not less general
   than its signature has already run, so such a goal is left as it is. A fresh
@@ -640,7 +644,9 @@ both instances match. Pinned by
 
 **When.** At a top-level binding group's close, over the obligations the group
 recorded, **before** §6.3's numeric defaulting and before the group
-generalizes (`improveByUniqueImpl`, called from `processSCC`). Before
+generalizes (`improveByUniqueImpl`, called from `processSCC`), and once more
+after defaulting, since defaulting is a substitution like any other. Each time,
+improvement runs before determination (below). Before
 defaulting, so that `Get (Box Float) e` against the only instance
 `Get (Box a) a` fixes `e = Float` before a literal at `e` could default it to
 `Int` (`test/dict_fixtures/impl-improvement-before-num-default.mdk`). Before
@@ -657,12 +663,46 @@ every binding group, so its obligations never reach a group's close. The same
 no instance to emit. Improving there needs the impl head's own variables held
 rigid, as a signature's are here.
 
-This is a separate step from the older head-tycon grounding
-(`groundMultiParamObligations`, gap #44). That step runs at module end and
-commits on the one instance whose first head constructor is the goal's,
-ignoring instances headed by a variable. It never binds a declared signature
-variable: where the instance fits the occurrence only by doing so, it commits
-nothing.
+### Determination by the one unifying instance
+
+**Rule.** At the same group close, after improvement, let `π = C τ̄` be a goal
+of arity two or more that is not closed. The group's **unowned** variables are
+its declared signatures' variables and the variables in an argument position of
+a member's type; every other variable of `π` (a result-position or body-local
+one) the group owns. Let `U` be the instances of `C` whose heads unify with `π`,
+the unowned variables held rigid and the instance's variables fresh. A
+candidate counts only if the acceptance census counts its first head (an
+arrow-, effect- or constraint-headed instance does not; a variable-headed one
+does), and only if its commit leaves every sibling goal on a variable it binds
+satisfiable: a sibling goal the commit closes must have an instance in `IE`
+(joint consistency). If exactly one candidate remains, `π` is unified with a
+fresh instance of its head, the fresh variables minted at the group's own level
+so that a goal variable unified with one still generalizes. Otherwise nothing is
+committed (`determineByUniqueInstance`, called from `processSCC` before
+defaulting and again after it).
+
+The commit is a function of `(IE, π)` alone: with one unifying instance no order
+of solving can produce a different answer, because no other instance can ever
+match. `Index Bytes Int ?v` against the one instance `Index Bytes Int U8` fixes
+`?v = U8`, so `b[i] == 13` compares two `U8`s
+(`test/dict_fixtures/determine-bytes-index-literal-compare.mdk`); the only
+`Ix Float Char` makes the literal in `ix 5 'z'` a `Float`
+(`test/dict_fixtures/determine-unique-instance-sets-literal-type.mdk`). Joint
+consistency is what keeps `useIx 5` at `Ix a Bool =>`, with instances
+`Ix Int Char` and `Ix Bool Bool`, from committing `?a = Bool` against the
+literal's `Num ?a`; the variable then defaults and the closed goal is rejected
+as `No impl of Ix for Int Bool`
+(`test/dict_fixtures/s-nary-truncated-goal-joint-rejects/main.mdk`).
+
+**Reject.** After defaulting, a goal that is still open, that no instance head
+unifies with, and whose variables the group all owns has no type that can
+satisfy it. It is rejected at its site with `T-NO-IMPL`, the vector's variables
+rendered `_` (`No impl of Ix for _ Bool`), unless a given answers it or a
+primary mismatch already explained one of its variables
+(`test/dict_fixtures/determine-no-unifying-instance-rejected.mdk`). Before
+defaulting the same goal may still close, and a closed goal is reported by the
+obligation gate under its own types. The undetermined-goal check asks per
+argument only for a 1-ary goal.
 
 ---
 
@@ -1046,6 +1086,12 @@ across a module boundary exactly as it does within one — see OD6(a).
 **OD3 — a non-ground predicate with no quantifying binder is ambiguous.** If no
 enclosing binding generalizes `π`'s free variables, `π` has no discharge point at all
 and MUST be rejected as ambiguous, save where OD4 applies.
+
+  A goal of arity two or more reaches OD3 only after determination (§3) has had its
+  say at the group's close: one unifying instance commits it, and none, with every
+  variable owned, is `T-NO-IMPL` on the whole vector. A 1-ary goal with exactly one
+  impl is still accepted without being bound (the sole-impl default of the
+  undetermined-goal check), which is not determination.
 
 **OD4 — the impl-channel exemption from OD3 is load-bearing, and is not a mode fork.**
 Predicates arising from **interface-method occurrences** are recorded on a separate
@@ -1731,7 +1777,9 @@ an implementation matter.
   goal `inst` sees is the goal the program means. A goal still not closed at
   quiescence is genuinely undetermined: nothing in the program fixes it, and it is
   **rejected as ambiguous** — never committed to a default instance, and never left
-  to an engine to pick.
+  to an engine to pick. A *default instance* here means one of several: a goal of
+  arity two or more with exactly one unifying instance is determined, not defaulted
+  (§3, "Determination by the one unifying instance").
 
   Note what quiescence is *not* waiting for. `IE` and `CE` are assembled once, before
   any body is elaborated, and do not grow during elaboration (C4, §8 I2/I5) — so the

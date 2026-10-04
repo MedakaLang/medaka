@@ -3412,6 +3412,149 @@ table = [
     pinned = "A<a7>+B[b7]\n",
     codes = [],
   },
+  Row {
+    entry = "determine-bytes-index-literal-compare.mdk",
+    label =
+      "§3 determination, #3437 Bytes face: `Index Bytes Int U8` is the one instance unifying with `Index Bytes Int ?v`, so the literal is a U8 before defaulting (base: Type mismatch Int vs U8)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-bytes-index-literal-let.mdk",
+    label =
+      "§3 determination, #3437 Bytes face with the comparison inside a local `let` (base: rejected like the row above)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-bytes-literal-out-of-range-rejected.mdk",
+    label =
+      "§3 determination bounds the literal by the determined type: 300 against the determined U8 is refused at the literal (base: Type mismatch Int vs U8 plus the #3811 mislocated T-NO-IMPL)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "L-INT-OVERFLOW"],
+  },
+  Row {
+    entry = "determine-unique-instance-sets-literal-type.mdk",
+    label =
+      "§3 determination before defaulting (R4): the only `Ix Float Char` makes the literal a Float (base: No impl of Ix for Int Char)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-two-unifying-instances-default.mdk",
+    label =
+      "§3 determination control: two instances unify, nothing is committed, and defaulting to Int selects `Ix Int Char` exactly as at base",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-result-variable-unique-instance.mdk",
+    label =
+      "§3 determination at an inferred result variable: `Conv (Wrap Int) Bool` fixes `mk : Unit -> Bool` (scheme in section 2; base: Ambiguous instance for Debug)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-array-literal-literal-index.mdk",
+    label =
+      "§3 determination control: `[|3, 4|][0]` with every variable owned; `Index (Array a) Int a` determines the index, defaulting the element, 3 as at base",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-array-u64-index-compare-control.mdk",
+    label =
+      "§3 determination control: an element type the signature already fixes (U64) is left alone, False as at base",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "False\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-no-unifying-instance-rejected.mdk",
+    label =
+      "§3 determination reject half, #3808: no instance head unifies with `Ix ?a Bool` and every variable is owned, so T-NO-IMPL at the call (span in section 6). Base accepted at check by asking per argument and ran into the panic",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "determine-array-float-index-literal-compare.mdk",
+    label =
+      "§3 determination, #3437 Array Float face: the drained must-fail pin `3437-indexed-literal-compare-defaults-to-int`, re-pointed here; `Index (Array a) Int a` makes `1` a Float (base: Type mismatch Int vs Float)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-array-float-index-float-literal-control.mdk",
+    label =
+      "control for the row above, the drained pin`s own: the literal written `1.0`, True with or without determination",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-conditional-instance-scheme.mdk",
+    label =
+      "§3 determination holds argument-position variables rigid: `f`s goal reduces to the residual `Conv a b` (scheme in section 2), nothing is determined",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "no call\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-conditional-instance-two-calls.mdk",
+    label =
+      "§3 the caller decides what determination left open: each call of `f : Conv a b => ...` selects its own instance",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "w:int-bool\nw:char-int\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -3423,7 +3566,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 298
+tableRows = 311
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -3630,7 +3773,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 17
+schemeRows = 19
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -3643,8 +3786,8 @@ schemeTable = [
   SchemeRow {
     entry = "s4-joint-residual-rdict-native.mdk",
     label =
-      "#1560 TYPED SHAPE: reducing the conditional impl leaves exactly one joint two-argument predicate in `f`s principal context",
-    want = "f : Conv c d => a -> b -> String",
+      "#1560 TYPED SHAPE: reducing the conditional impl leaves exactly one joint two-argument predicate in `f`s principal context. Re-pinned from `Conv c d`, whose context variables occur nowhere in the type: that line was the module-end head-tycon grounding rebinding `f`s quantified cells after generalization, and with the grounding deleted the hand-derived `Conv a b` prints",
+    want = "f : Conv a b => a -> b -> String",
   },
   SchemeRow {
     entry = "s4-gen-sig-declared-context-kept.mdk",
@@ -3734,6 +3877,18 @@ schemeTable = [
     label =
       "#1952 on a genuinely POLYMORPHIC multi-argument context with two impls in scope, so the declared `a` and `b` select per call site; the row above pins the same scheme with one impl. Both the structured argument`s parens and the second, bare-tyvar argument are asserted here, so a \"fix\" that parenthesised every argument (`Conv (Wrap a) (b)`) or that dropped back to prec 2 (`Conv Wrap a b`) both go red. At the sprint base `e4587a04` this printed `f : Conv Wrap a b => Wrap a -> b -> String`",
     want = "f : Conv (Wrap a) b => Wrap a -> b -> String",
+  },
+  SchemeRow {
+    entry = "determine-result-variable-unique-instance.mdk",
+    label =
+      "§3 determination binds an inferred binding`s result variable through the one unifying instance `Conv (Wrap Int) Bool`",
+    want = "mk : Unit -> Bool",
+  },
+  SchemeRow {
+    entry = "determine-conditional-instance-scheme.mdk",
+    label =
+      "§3 determination holds argument-position variables rigid, so the residual of the conditional instance stays in `f`s context over `f`s own variables",
+    want = "f : Conv a b => a -> b -> String",
   },
 ]
 
@@ -3999,7 +4154,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 11
+spanRows = 12
 
 spanTable : List SpanRow
 spanTable = [
@@ -4066,6 +4221,12 @@ spanTable = [
     label =
       "issue 1560: the mixed-vector residual is discharged AT THE CALL SITE (`f NoConv True`), like its 1549 sibling -- not at `f`s definition, which is legal on its own",
     want = "45:16",
+  },
+  SpanRow {
+    entry = "determine-no-unifying-instance-rejected.mdk",
+    label =
+      "#3808: the undetermined-vector T-NO-IMPL lands on the `useIx` call that posed `Ix ?a Bool`, not on `main` or the definition",
+    want = "22:16",
   },
 ]
 

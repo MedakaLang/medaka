@@ -595,8 +595,7 @@ resetState → stampBindingIds → decl universes → superDecls
   → imported method admission → declaration-owned bindings + externSchemes → env1
   → processTopGroups
   → cross-module dict snapshot
-  → groundMultiParamObligations
-  → obligation gate, including setNumlitFloats
+  → obligation gate (the Float literal stamp is the graph-end drain's `SSNumlitFloats`)
   → localSchemesOut / seedSchemesOut
 ```
 

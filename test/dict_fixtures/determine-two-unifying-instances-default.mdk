@@ -1,0 +1,16 @@
+-- §3 determination commits only on exactly one instance.  `ix 5 'z'` poses
+-- `Ix ?a Char` with `Num ?a`, and both `Ix Int Char` and `Ix Float Char`
+-- unify with it, so determination commits nothing.  Numeric defaulting
+-- then grounds `?a` to Int and the closed goal `Ix Int Char` selects
+-- `impl Ix Int Char`.
+-- Hand-derived: 1 on all three verbs.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Char where
+  ix _ _ = 1
+
+impl Ix Float Char where
+  ix _ _ = 2
+
+main = println (ix 5 'z')

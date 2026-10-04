@@ -398,7 +398,7 @@ import support.ordmap.{
   omSize,
   omDelete,
 }
-import list.{replicate, drop, take, elemIndex}
+import list.{replicate, drop, take, elemIndex, indexed}
 import support.util.{
   splitOnChar,
   u64HalvesHex,
@@ -9293,8 +9293,8 @@ data Provenance =
 -- instantiated monos).  The impl channel CANNOT: `recordImplObligation` records a
 -- method OCCURRENCE mono against the method's DECLARED type, and the projection
 -- `dispatchMonosOf typarams mty occ` is only meaningful once inference has grounded
--- the shared cells — `groundMultiParamObligations` runs over this very channel
--- immediately before the check and unifies through them.  Projecting at record time
+-- the shared cells — improvement, determination and defaulting at each group's close
+-- unify through them after the occurrence is recorded.  Projecting at record time
 -- would therefore read a vector that is empty or under-determined.
 --
 -- 🚨 THIS IS THE FACT #991'S BODY DID NOT HAVE.  It predicted "byte-identical target:
@@ -11803,7 +11803,7 @@ data PerRun = PerRun {
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
-  declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which `matchEqPairs` and `groundOneObligation` hold rigid; a local's, an interface method's and an expression annotation's variables are not here (#3796, #3797, #3799)
+  declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which `matchEqPairs` holds rigid; a local's, an interface method's and an expression annotation's variables are not here (#3796, #3797, #3799)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
   numlitVarLocs : Ref (List (Mono, Loc)),
   patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
@@ -26329,7 +26329,7 @@ oblDispatchMonosGo iface typarams mty occ
   -- interface typaram.  A return-only typaram (`v` in `Get c v where get1 : c -> v`)
   -- is determined by the impl AFTER the receiver picks it, so it must never be
   -- registered as an independent impl-selection obligation — else the still-unbound
-  -- `v`, grounded later by groundMultiParamObligations, is re-checked as a single-mono
+  -- `v`, which the selected instance determines later, is re-checked as a single-mono
   -- obligation with no matching impl (`No impl of Get for Int`).  dispatchTyparams
   -- = [first typaram], the same receiver classification argDispatchOfMethod uses.
   | otherwise = dispatchMonosOf (dispatchTyparams typarams) mty occ
@@ -31530,7 +31530,8 @@ pickMostSpecificEntry goals (e :: rest) =
 --     COMMITS to the head of the candidate list at exit 0, so declaration order
 --     decides its value (it prints `1`; swap the two `impl` blocks and it prints
 --     `2`), under a warning rather than in silence.  §6.2 T4's actual answer is to
---     DEFER such a goal to quiescence, which this compiler has no pass for; the
+--     DEFER such a goal to quiescence.  The graph-end pass (`drainStampQueue`)
+--     replays route stamping only; it re-runs no selection, so the
 --     residue is pinned as a KNOWN-BAD row in
 --     `test/diff_compiler_dict_semantics_permute.sh` and tracked at #1183.
 --
@@ -32202,8 +32203,8 @@ selectedRowReqMatch goals (ImplRow _ _ _ itys reqs _) =
 -- already keys.  But `headTyconNameTy` also had two readers that decide
 -- **ACCEPTANCE** rather than routing — `implHeadTagForIface` (the impl-head
 -- census `routeUndeterminedTop` counts: one head → stamp it, two or more →
--- `T-AMBIGUOUS-INSTANCE`) and `implTysIfMatch` (`groundOneObligation`'s
--- candidate set, which gives up on more than one match).  Feeding the new arms
+-- `T-AMBIGUOUS-INSTANCE`) and a candidate count that gives up on more than one
+-- match (today `rowCountsInCensus`, determination's).  Feeding the new arms
 -- to THOSE turns an ACCEPT into a REJECT on programs that never dispatch to an
 -- arrow or an effect head at all: `impl C Int` beside `impl C (Int -> Int)` or
 -- `impl C (<Stdout> Bool)` went from a stamped route to *"Ambiguous instance"*,
@@ -32322,15 +32323,12 @@ headTyconTy t = match headTyNode t
 --
 -- Its two readers:
 --   * `implHeadTagForIface` → `implHeadTagsForIface` → `routeUndeterminedTop`
---   * `implTysIfMatch` → `uniqueImplTysFor` → `groundOneObligation`
+--   * `rowCountsInCensus` → `determineGoal` (determination's candidate count)
 --
--- ⚠️ The second one is also UNREACHABLE at `__fun__` by construction, which is
--- the independent corroboration that this split is coherent rather than merely
--- conservative: its `tag` argument comes from `headTyconNameMono`, and that
--- residual deliberately did NOT gain a `TFun` arm (see its own 🚨), so no goal
--- can ever ask this census for `__fun__`.  Answering `Some funHeadTag` here
--- could therefore only ever ENLARGE a match set nothing queries — pure
--- narrowing, no routing gain.
+-- For the second, an extra `Some` turns a determined goal into an undetermined
+-- one: `impl Conv Int Bool` beside `impl Conv (<Stdout> Int) String` determines
+-- `Conv Int ?b` only because the effect-headed row is not counted
+-- (`test/engine_fixtures/fun_head_impl_bystander.mdk`).
 --
 -- Whoever flips this to the narrowing owns F-3c (#1155)'s flip list, an owner
 -- ruling, and fixtures for the programs it stops accepting.  Do not fold it back
@@ -35153,8 +35151,6 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- registerAllData universe (#154 PR-A): the Module path no longer builds `accData ++ prog0`
   -- here — prior modules' public data lives in the persistent DATA-universe accumulators
   -- (universeCtorPop/universeRecordPop), loaded+overlaid at the `dataEnv` binding below.
-  -- groundMultiParamObligations universe: Flat grounds over prog; Module over implDecls.
-  let groundUniverse = implDecls
   -- (#6, #1457) superDeclsRef: unified body OWNS it — Flat = coreProg ++ userProg, Module =
   -- `prog ++ implDecls`.  [implDecls] is core + every EARLIER module ONLY (foldModules never
   -- folds a module into its own universe), so binding it alone EXCLUDED this module's own
@@ -35724,8 +35720,6 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
             perRun.value.schemeObligationsRef.value
           ++ crossRun.value.crossModuleSchemeOblsQualRef.value)
     ()
-  let _ =
-    groundMultiParamObligations groundUniverse perRun.value.implObls.items.value
   -- P0-17: impl missing a required method.  #1557 A-3.5a: ONE call, both modes — the
   -- arm split is gone because `classEnvHere` above already carries the mode's `CE` and
   -- its reading ordinal (Flat: a single-module `CE` over `prog`, which IS `fullUniverse`
@@ -35747,10 +35741,6 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- why re-deriving it here would be a second whole-prefix rebuild for a value that
   -- cannot have changed).  The three `obUniv*` accumulators this used to read are
   -- deleted from `CrossRun`.
-  --
-  -- Site #8 (`groundMultiParamObligations groundUniverse`) is still on the list path
-  -- above, unchanged: `groundUniverse = implDecls` EXCLUDES this module's `prog0`,
-  -- which this projection (like the accumulator before it) includes.
 
   let _ =
     let obUniv = moduleImplUniv
@@ -36711,8 +36701,9 @@ univHasAnyImpl (ImplUniverse _ _ _ anyImpl) iface =
 -- `UObligation` directly.  The projection it performed still happens at CHECK time and
 -- in the same place: `uOblArgs`, via the `OpMethodOcc` arm (NOT `oblDispatchMonos`,
 -- which special-cases Num → [] and would drop a numeric literal's operand).
--- `groundMultiParamObligations` runs BEFORE the gate on both arms and grounds the shared
--- mono cells, so the projected args are already ground for multi-param obligations.
+-- Improvement, determination and defaulting at each group's close run BEFORE the gate
+-- and ground the shared mono cells, so a determined multi-param goal's projected args
+-- are already ground here.
 
 -- #11 soundness (native obligation hole): check each constrained-fn CALL site's
 -- instantiated obligation.  When `f : C a => …` is applied (`g = f "hello"`),
@@ -37320,11 +37311,13 @@ bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
 bucketAnyLonger [] _ = False
 bucketAnyLonger ((tys, _) :: rest) n = listLen tys > n || bucketAnyLonger rest n
 
--- an undetermined-var check per argument of the predicate (at arity 1 this is exactly
--- the old single call).  A goal that a given visible from its scope answers as a whole
--- predicate is determined by that given, whichever kind of binder carries it — a
--- default body's receiver has no tyvar-keyed registration for the per-argument rule
--- to find.
+-- the undetermined-var check of a one-position predicate.  A goal of two or more
+-- positions is decided as a vector at its group's close (`determineByUniqueInstance`:
+-- committed to its one unifying instance, or rejected when none unifies); asking per
+-- argument would accept a vector no instance matches.  A goal that a given visible
+-- from its scope answers as a whole predicate is determined by that given, whichever
+-- kind of binder carries it — a default body's receiver has no tyvar-keyed
+-- registration for the per-argument rule to find.
 checkUndeterminedObligations : ImplUniverse ->
   IfaceRef ->
   List Mono ->
@@ -37334,6 +37327,8 @@ checkUndeterminedObligations : ImplUniverse ->
 checkUndeterminedObligations univ iface args loc scope =
   let request = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
   if isSome (activeFunDictPredOf request scope) then
+    ()
+  else if listLen args >= 2 then
     ()
   else
     checkUndeterminedArgs univ iface args loc scope
@@ -37479,83 +37474,6 @@ setNumlitFloatsGo ((var, fref, n, dref) :: rest) =
     _ => ()
   setNumlitFloatsGo rest
 
--- ── Multi-param-interface element grounding (Shape A / gap #44) ─────────────
--- A container LITERAL (`Set { 3,1,2 }` / `Map { 1 => "a" }`) desugars to a
--- return-position `fromEntries [..] :~ Set _a`.  The head-pin fixes the RESULT to
--- `Set _a`, and the list arg grounds the interface's ELEMENT param `e` (= Int),
--- but nothing ties the result's element var `_a` to `e` — HM does not propagate the
--- impl's `FromEntries (Set a) a` variable-sharing.  So `_a` stays free, and BOTH the
--- return-position `requires Ord a` route AND the enclosing `display`/`debug`'s
--- arg-position element dict drop their dictionaries (null dict → SIGSEGV on the build
--- path; eval recovers via runtime arg-tag fallback, which is why `medaka run` worked).
--- Fix: for each multi-param-interface method occurrence whose dispatch type heads a
--- UNIQUE impl, instantiate that impl's method type (interface typarams ↦ the impl's
--- own type args, freshened) and unify it with the occurrence mono.  This grounds `_a`
--- := Int THROUGH THE SHARED CELL, so every downstream site reading that cell (the
--- `display` arg-stamp) and the return-position route both see `Set Int`.  Runs after
--- inference, before the resolve* passes read the cells.  Single-param interfaces and
--- already-ground occurrences are no-ops.  Mirrors the intent of the oracle's
--- impl_head_subst keying off the FULL concrete_args (the interface's param_vars).
-groundMultiParamObligations : List Decl -> List UObligation -> Unit
-groundMultiParamObligations _ [] = ()
-groundMultiParamObligations prog (o :: rest) =
-  let _ = match o.oblProj
-    OpMethodOcc typarams mty occ =>
-      groundOneObligation prog o.pred.iface.irName typarams mty occ
-    OpExactReturn request =>
-      groundOneObligation
-        prog
-        request.mrrIface.irName
-        request.mrrTyparams
-        request.mrrType
-        request.mrrOccurrence
-    OpProjected => ()
-    OpNumLit _ => ()
-  groundMultiParamObligations prog rest
-
-groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
-groundOneObligation prog iface typarams mty occ
-  | listLen typarams <= 1 = ()
-  | otherwise = match dispatchMonosOf typarams mty occ
-    [] => ()
-    dispMono :: _ => match headTyconNameMono dispMono
-      None => ()
-      Some tag => match uniqueImplTysFor prog iface tag
-        None => ()
-        Some implTys =>
-          let baseMap = zipL typarams implTys
-          let implMethodTy = substTyVars baseMap mty
-          let inst = fst (astTypeFreshTbl implMethodTy)
-          if sigVarsStayFree perRun.value.declaredSigVarIds.value occ inst then
-            unify occ inst
--- build impl method type: interface typaram ↦ impl ty, then freshen the
--- impl's own vars, then unify with the occurrence.
-
--- the type args of the UNIQUE impl of [iface] whose head tycon is [tag]; None when
--- absent or ambiguous (more than one), so an over-determined case is left untouched.
-uniqueImplTysFor : List Decl -> String -> String -> Option (List Ty)
-uniqueImplTysFor prog iface tag = match filterImplTysFor prog iface tag
-  [tys] => Some tys
-  _ => None
-
-filterImplTysFor : List Decl -> String -> String -> List (List Ty)
-filterImplTysFor prog iface tag = flatMap (implTysIfMatch iface tag) prog
-
-implTysIfMatch : String -> String -> Decl -> List (List Ty)
-implTysIfMatch iface tag (DAttrib _ d) = implTysIfMatch iface tag d
--- ⚠️ `censusHeadNameTy`, NOT `headTyconNameTy`: `uniqueImplTysFor` gives up on
--- more than one match, so an extra `Some` here is an ACCEPTANCE narrowing (a
--- multi-param obligation stops being ground, and the cascade is a downstream
--- `T-AMBIGUOUS-INSTANCE`).  The derivation is at `headTyNode`.
-implTysIfMatch iface tag (DImpl { iface = ifn, tys, ... })
-  | ifn == iface = match tys
-    headTy :: _ => match censusHeadNameTy headTy
-      Some t => if t == tag then [tys] else []
-      None => []
-    [] => []
-  | otherwise = []
-implTysIfMatch _ _ _ = []
-
 -- Impl-based improvement (DICT-SEMANTICS §3 "Improvement by the one matching
 -- instance"): when the head matcher (`implHeadSubst`) accepts a goal by binding
 -- the goal's own free variables through a repeated head variable, and that
@@ -37567,10 +37485,9 @@ implTysIfMatch _ _ _ = []
 -- leaves the goal as it is.
 --
 -- It runs at a top-level binding group's close (`processSCC`), before that group's
--- Num defaulting and generalization, and not inside `groundMultiParamObligations`:
--- that pass runs at module end, after both, and it commits on the one impl whose
--- first head tycon is the goal's, ignoring impls headed by a variable, so it does
--- not answer "exactly one instance can match this goal".
+-- Num defaulting and once more after it, each time ahead of
+-- `determineByUniqueInstance`, which commits a goal to its one unifying instance
+-- even where no repeated head variable ties the goal to itself.
 --
 -- [sigIds] are the group's declared-signature variables still free at its close.
 -- The commit never binds one: they take part as constants, and a goal that would
@@ -37580,6 +37497,176 @@ improveByUniqueImpl _ [] = ()
 improveByUniqueImpl sigIds (o :: rest) =
   let _ = improveGoal sigIds o.pred.iface (map normalize (uOblArgs o))
   improveByUniqueImpl sigIds rest
+
+-- Determination by the unique unifying instance (DICT-SEMANTICS §3, the settle
+-- sequence's second step).  A goal of arity two or more that is not closed is
+-- unified with a fresh instance of the one instance head that unifies with it,
+-- every variable in [rigidIds] held rigid.  [rigidIds] are the variables the
+-- boundary does not own: the declared signatures' variables and the variables in
+-- an argument position of a member's type.  Any other variable of the goal is the
+-- boundary's, and the unique instance is the only type the program can have there.
+--
+-- A candidate counts only if the acceptance census counts its first head
+-- (`censusHeadNameTy`; a type-variable head is a candidate too), and only if its
+-- commit leaves every sibling goal on a variable it binds satisfiable: a sibling
+-- the commit closes must have an instance in the table.
+--
+-- With [rejectUnsatisfiable] (the pass after defaulting), a goal still open with no
+-- unifying instance at all and every variable owned is rejected at its site: no type
+-- can satisfy it.  Before defaulting the same goal may yet close, and a closed goal
+-- is reported by the obligation gate under its own types.
+determineByUniqueInstance : Bool -> OrdMap Unit -> List UObligation -> Unit
+determineByUniqueInstance rejectUnsatisfiable rigidIds obls =
+  determineByUniqueInstanceGo rejectUnsatisfiable rigidIds obls obls
+
+determineByUniqueInstanceGo : Bool ->
+  OrdMap Unit ->
+  List UObligation ->
+  List UObligation ->
+  Unit
+determineByUniqueInstanceGo _ _ _ [] = ()
+determineByUniqueInstanceGo rejectUnsatisfiable rigidIds siblings (o :: rest) =
+  let args = map normalize (uOblArgs o)
+  let _ = determineGoal rejectUnsatisfiable rigidIds siblings o args
+  determineByUniqueInstanceGo rejectUnsatisfiable rigidIds siblings rest
+
+determineGoal : Bool ->
+  OrdMap Unit ->
+  List UObligation ->
+  UObligation ->
+  List Mono ->
+  Unit
+determineGoal rejectUnsatisfiable rigidIds siblings o args
+  | listLen args <= 1 || monoVectorClosed args = ()
+  | otherwise =
+    let iface = o.pred.iface
+    let rows = filterList (ieRowOfIface iface) (improvementPool args)
+    let unifying =
+      flatMap
+        (row => match rowHeadSubstRigid rigidIds args row
+          Some subst => [(row, subst)]
+          None => [])
+        rows
+    let candidates =
+      filterList
+        (cand =>
+          rowCountsInCensus (fst cand)
+            && siblingsStaySatisfiable siblings (snd cand))
+        unifying
+    match candidates
+      [(row, _)] =>
+        -- Minted inside the boundary's level: a goal variable unified with one
+        -- of these keeps its level and still generalizes.
+        let _ = enterLevel ()
+        let heads = freshRowHeads row
+        let _ = exitLevel ()
+        commitImprovement rigidIds (zipL args heads)
+      _ =>
+        if rejectUnsatisfiable
+          && isEmptyL unifying
+          && isEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args))
+          && not
+            (anyIn
+              (flatMap monoUnboundIds args)
+              perRun.value.poisonedVars.value)
+          && not (goalGivenAt iface args o.uoScope) then
+          pushTypeErrorOnceAt
+            "T-NO-IMPL"
+            o.loc
+            (undeterminedNoImplMsg iface.irName args)
+
+-- [row]'s head, freshened, unified with [args] in a scratch substitution with
+-- every variable in [rigidIds] held rigid; the substitution, or None.
+rowHeadSubstRigid : OrdMap Unit ->
+  List Mono ->
+  ImplRow ->
+  Option (List (Int, Mono))
+rowHeadSubstRigid rigidIds args row =
+  let heads = freshRowHeads row
+  let scratch = Ref []
+  if listLen heads == listLen args
+    && cohOverlapGo scratch (rigidSigPairs rigidIds (zipL args heads)) then
+    Some !scratch
+  else
+    None
+
+-- The acceptance census's reading of a candidate's first head: an arrow-,
+-- effect- or constraint-headed instance is not counted (see `censusHeadNameTy`).
+-- A type-variable head has no census name and is still an instance that unifies.
+rowCountsInCensus : ImplRow -> Bool
+rowCountsInCensus row = match ieRowTys row
+  headTy :: _ => match headTySpineNode headTy
+    TyVar _ => True
+    _ => isSome (censusHeadNameTy headTy)
+  [] => False
+
+siblingsStaySatisfiable : List UObligation -> List (Int, Mono) -> Bool
+siblingsStaySatisfiable siblings subst =
+  let bound = map fst subst
+  let scratch = Ref subst
+  allList (s => siblingStaysSatisfiable scratch bound s) siblings
+
+siblingStaysSatisfiable : Ref (List (Int, Mono)) ->
+  List Int ->
+  UObligation ->
+  Bool
+siblingStaysSatisfiable scratch bound s =
+  let args = map normalize (uOblArgs s)
+  if not (anyIn (flatMap monoUnboundIds args) bound) then
+    True
+  else
+    let after = map (cohApply scratch) args
+    not (monoVectorClosed after)
+      || anyList
+        (rowHeadMatches after)
+        (filterList (ieRowOfIface s.pred.iface) (improvementPool after))
+
+-- [m] with every variable the scratch substitution binds replaced, deeply.
+cohApply : Ref (List (Int, Mono)) -> Mono -> Mono
+cohApply subst m = match cohResolve subst m
+  TApp a b => TApp (cohApply subst a) (cohApply subst b)
+  TFun a eff b => TFun (cohApply subst a) eff (cohApply subst b)
+  TQual a q => TQual (cohApply subst a) q
+  other => other
+
+freshRowHeads : ImplRow -> List Mono
+freshRowHeads row =
+  let tys = ieRowTys row
+  let tvs = freshTvMap (dedup (flatMap tyVarNames tys))
+  map (fromAstType tvs) tys
+
+-- DIAGNOSTIC-CODES-DESIGN `T-NO-IMPL`, undetermined vector: each variable renders
+-- as `_`, since a letter would read as a name the program wrote.
+undeterminedNoImplMsg : String -> List Mono -> String
+undeterminedNoImplMsg iface args =
+  let holes = map (c => (tyvarId c, TRigid "_")) (flatMap monoVarCells args)
+  let shown = map (substMono holes [] []) args
+  let positions = indexed args
+  let fixed = filterList (p => monoClosed (snd p)) positions
+  let open = filterList (p => not (monoClosed (snd p))) positions
+  let head = "No impl of \{iface} for \{ppPredArgsShared shown}"
+  if isNonEmptyL fixed && allList (p => isBareTyvarMono (snd p)) open then
+    let has =
+      joinWith
+        " and "
+        (map
+          (p =>
+            "`\{ppMonosShared [snd p]}` in its \{ordinalWord (fst p)} position")
+          fixed)
+    let free = joinWith " and " (map (p => ordinalWord (fst p)) open)
+    let noun = if listLen open == 1 then "position" else "positions"
+    "\{head}: no instance of `\{iface}` has \{has}, so no type for the \{free} \{noun} can satisfy it."
+  else
+    "\{head}: no instance of `\{iface}` has that shape, so no choice of types for the `_` can satisfy it."
+
+-- The ordinal of the zero-based position [i].
+ordinalWord : Int -> String
+ordinalWord 0 = "first"
+ordinalWord 1 = "second"
+ordinalWord 2 = "third"
+ordinalWord 3 = "fourth"
+ordinalWord 4 = "fifth"
+ordinalWord i = "\{intToString (i + 1)}th"
 
 improveGoal : OrdMap Unit -> IfaceRef -> List Mono -> Unit
 improveGoal sigIds iface args
@@ -37637,19 +37724,6 @@ rigidSigPairs sigIds pairs =
         (p =>
           (substMono toRigid [] [] (fst p), substMono toRigid [] [] (snd p)))
         pairs
-
--- Can [a] and [b] be made equal without binding a signature variable?  Grounding
--- unifies through shared cells, so it must not run when the only way to make the
--- occurrence fit the instance is to fix a type the caller chooses.  With no
--- signature variable among them the answer is yes: grounding's own `unify` then
--- decides, and a mismatch it reports is the goal's real error.
-sigVarsStayFree : OrdMap Unit -> Mono -> Mono -> Bool
-sigVarsStayFree sigIds a b =
-  match sigRigidBindings sigIds (monoVarCells a ++ monoVarCells b)
-    [] => True
-    toRigid => cohOverlapGo (Ref []) [
-      (substMono toRigid [] [] a, substMono toRigid [] [] b),
-    ]
 
 -- DICT-SEMANTICS §3: a top-level signature's variable is rigid in every matcher.  A
 -- goal that an instance head accepts only by binding one needs it to be a specific
@@ -43009,8 +43083,17 @@ processSCC env sigs grouped0 members =
   -- group's already-generalized var is never touched.
   let protectedSigIds = sccProtectedSignatureIds sigTvMaps
   let addedObls = wWindow perRun.value.implObls oblN0
+  let groupObls = addedObls ++ callUOblsWindow callN0
+  -- Determination holds rigid exactly the variables this group does not own: the
+  -- declared ones and those in an argument position of a member's type, which the
+  -- caller supplies.  A result-position or body-local variable is the group's.
+  let unownedIds =
+    omFromNames
+      (map intToString (flatMap monoArgUnboundIds (map snd placeholders)))
+      protectedSigIds
   let _ = improveByUniqueImpl protectedSigIds addedObls
   let _ = improveByUniqueImpl protectedSigIds (callUOblsWindow callN0)
+  let _ = determineByUniqueInstance False unownedIds groupObls
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
   -- not pendingImplObligations).  See numCallObls/numDictObls.  The synthetic entries
@@ -43019,18 +43102,19 @@ processSCC env sigs grouped0 members =
   let extraNumObls =
     numCallObls (callUOblsWindow callN0) ++ numDictObls (dictAppsSince dictN0)
   let defaultObls = addedObls ++ extraNumObls
-  let _ = finalizeNumBoundary NumBoundary {
-    nbDisposition = NumBoundaryOwnedScc (perRun.value.currentLevel.value + 1),
-    nbMembers = map snd placeholders,
-    nbSurvivingIds = protectedSigIds,
-    nbDefaultObls = defaultObls,
-    nbAmbiguityObls = addedObls,
-  }  -- RETPOS soundness
-  let _ =
-    checkSigVarGoals
-      protectedSigIds
-      sigTvMaps
-      (addedObls ++ callUOblsWindow callN0)
+  let _ = finalizeNumBoundary
+    NumBoundary {
+      nbDisposition = NumBoundaryOwnedScc (perRun.value.currentLevel.value + 1),
+      nbMembers = map snd placeholders,
+      nbSurvivingIds = protectedSigIds,
+      nbDefaultObls = defaultObls,
+      nbAmbiguityObls = addedObls,
+    }  -- RETPOS soundness
+  -- Defaulting is a substitution like any other, so the goals it changed are
+  -- improved and determined once more.
+  let _ = improveByUniqueImpl protectedSigIds groupObls
+  let _ = determineByUniqueInstance True unownedIds groupObls
+  let _ = checkSigVarGoals protectedSigIds sigTvMaps groupObls
   let schemes =
     sccSchemes
       env2
@@ -51203,17 +51287,14 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- The impl universe is `accAll ++ prog`, NOT bare `accAll` — it includes THIS module.
 -- `foldModules` never folds a module into its own
 -- `accAll` (see `checkModuleFullImpl`'s E5 note: "a caller that needs this module's own
--- decls too must fold [prog] in itself"), and `checkBodyImpl`'s `groundUniverse` binding
--- reads `implDecls` RAW on the Module arm — so bare `accAll` makes
--- `groundMultiParamObligations` ground a multi-param obligation against a universe with
--- NONE of the module's own impls in it.  MEASURED, `medaka check` / `medaka build` on
--- `test/engine_fixtures/return_only_param_dispatch.mdk` (a 1-module file: `interface
--- Get c v` + `impl Get (Box a) a` + `main = println (get1 (Box 42))`): with bare
--- `accAll` the return-only `v` never grounds, so the enclosing `Display v` rejects with
--- `Ambiguous instance for `Display``; with `accAll ++ prog` it grounds to `Int` and the
--- program checks, builds and prints `42`, as it does on a one-module graph. The 2+-module
--- promotion of the same shape — the grounding impl in the ENTRY module of a graph — is
--- `test/run_check_agreement_fixtures/accept_own_module_impl_return_only_dispatch.mdk`.
+-- decls too must fold [prog] in itself"), so the readers of `checkBodyImpl`'s
+-- `implDecls` on this arm — `visibleMethodRows`, `inferUserImplBodies`' field-type
+-- universe, `superDecls` and the `importerShadows` emptiness test — see this
+-- module's own declarations only through this fold.  Return-only dispatch on an
+-- own-module impl (`test/engine_fixtures/return_only_param_dispatch.mdk`, and
+-- `test/run_check_agreement_fixtures/accept_own_module_impl_return_only_dispatch.mdk`
+-- for the entry module of a graph) does not depend on it: determination reads the
+-- whole-graph `IE` through `improvementPool`.
 -- Cost: the accumulator grows on the RIGHT, so O(|prog|) per module; this is not the
 -- perf-gated `checkModules` path, which is `cmCheckWorker`'s.
 --

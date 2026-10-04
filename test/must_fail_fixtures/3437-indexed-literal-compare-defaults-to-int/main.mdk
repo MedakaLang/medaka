@@ -1,4 +1,0 @@
-f : Array Float -> Bool
-f a = a[0] == 1
-
-main = println (f [|1.0|])

@@ -15,7 +15,7 @@
 -- they decide ACCEPTANCE.
 --
 -- The multi-param `Conv` block below is one of them, reachable from a fixture
--- that must also BUILD: `groundOneObligation` grounds `b` by asking for the
+-- that must also BUILD: determination fixes `b` by asking for the
 -- UNIQUE `Conv` impl at head tag `Int`, and if the effect-headed sibling were
 -- counted there would be two matches and `b` would stay undetermined — on an
 -- impl that is never dispatched to.
