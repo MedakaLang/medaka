@@ -281,7 +281,7 @@ binopRouteSplit : Route -> (Route, List Route)
 binopSpanLoc : Expr -> Expr -> Option Loc
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
-bodyExtraNumObls : List UObligation -> Int -> Int -> List UObligation
+bodyExtraNumObls : Int -> Int -> List UObligation
 bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
 borrowedEffectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
@@ -2144,7 +2144,6 @@ monoVecSameGiven : List Mono -> List Mono -> Bool
 monoVectorClosed : List Mono -> Bool
 monosTvarIds : List Int -> List Mono -> List Int
 msgAtKey : String -> Option Loc -> String
-multiParamIds : UObligation -> List Int
 nameNotAuthorityMsg : String -> String
 nameableIfaceMethodSet : List Decl -> Map String Unit
 nameableIfaceRows : List Decl -> List (String, List String)

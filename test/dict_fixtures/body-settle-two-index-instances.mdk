@@ -1,0 +1,19 @@
+-- DICT-SEMANTICS §3, determination's joint consistency inside an impl body
+-- (#3809).  A second `Index` instance at head `Array` also unifies with
+-- `Index (Array a) k e`, but committing it sets `k = Rng`, which closes the
+-- sibling `Num k` with no instance; only `Index (Array a) Int a` stays, so
+-- `k = Int` and `e = a`.  Hand-derived: 1.5 + 2.25 = 3.75, then 3 + 4 = 7.
+data Rng = Rng Int Int
+
+impl Index (Array a) Rng (Array a) where
+  index xs (Rng _ _) = xs
+
+interface Report t where
+  report : t -> String
+
+impl Report (Array a) requires Num a, Debug a where
+  report v = debug (v[0] + v[1])
+
+main =
+  println (report [|1.5, 2.25|])
+  println (report [|3, 4|])
