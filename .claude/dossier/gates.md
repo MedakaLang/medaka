@@ -179,3 +179,88 @@ Fixed the same way the codebase already fixed `EMITTER` in stage A: every output
 under a `*.new.$$` name beside its own final path (not under `$WORK`/`mktemp -d`, which can be a
 different filesystem — e.g. tmpfs `/tmp` vs the repo's real disk — making `mv` a non-atomic EXDEV
 copy) and promoted with a same-filesystem `mv`.
+
+## [L-PREFLIGHT] — the full command table
+
+*Full `AGENTS.md` text as of 2026-10-03, moved here verbatim when AGENTS.md was slimmed; AGENTS.md keeps the rule and the command.*
+
+**[L-PREFLIGHT]** Run only the gates your change touches; push; let CI run the rest. Before
+`make medaka`/oracle builds/gates: `medaka fmt --write` + `medaka lint` on touched `.mdk`,
+re-`git add` (T-PERRUN-COMMENTS covers comment-bearing records). ⚠️ If the change affects
+formatter/linter behavior or accepted syntax, **repeat the check with the freshly built binary
+and apply any owed reflow before trusting it.**
+
+```sh
+PREFLIGHT_DRY=1 sh test/preflight.sh                 # ✅ FIRST STEP if unsure — derives the
+                                                      #    gate set for free: builds/runs nothing
+make preflight       # ✅ THE LOOP — derives the gate set from YOUR diff, and the oracle
+                     #    set from those gates. Touching parser.mdk: 9 oracles, 11 gates.
+sh test/run_gates.sh 'diff_compiler_parse*'          # ✅ targeted, by name
+sh test/build_oracles.sh --for 'diff_compiler_*'     # ✅ fresh-worktree recipe, ~2 min — count
+                                                      #    drifts, derive: `sh test/build_oracles.sh
+                                                      #    --for --list 'diff_compiler_*' | wc -l`
+sh test/build_oracles.sh --for --list '<pattern>'    # ✅ DERIVE ONLY — which oracle names a
+                                                      #    pattern resolves to, builds nothing
+FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one <name>   # ✅ exactly one
+sh test/build_oracles.sh --for '<pattern>' --list    # ❌ NOT derive-only — this BUILDS
+sh test/run_gates.sh                                 # ❌ ALL of them — count drifts, derive:
+                                                      #    `ls test/diff_compiler_*.sh | wc -l`
+FORCE=1 sh test/build_oracles.sh                     # ❌ ALL of them — count drifts, derive:
+                                                      #    `sh test/build_oracles.sh --list | wc -l`.
+                                                      #    Almost never right.
+```
+
+⚠️ **[L-DERIVE-ONLY]** `--list` must come IMMEDIATELY after `--for` — reversed fails SILENTLY
+into the expensive path. Derive: `grep -n '"--for"' test/build_oracles.sh`.
+
+🚨 **[L-FOREGROUND-CEILING]** `make preflight` on `compiler/backend/*`,
+`test/diff_compiler_perf_scaling.sh`, `test/diff_compiler_engines.sh`: can exceed the 10-min
+foreground ceiling — `exit 143` at 600s is the ceiling, not a hang. Knobs: `PERF_N=<n>`/
+`PERF_DEEP=1`, `ENGINE_JOBS=<n>`, `ONLY=<glob>` (#723). Remedy: background + poll. Check first:
+`PREFLIGHT_DRY=1`, `PREFLIGHT_CHANGED_FILE=<path>` (does not surface a forced fixpoint, #520,#540).
+
+**[L-SHARED-BOX]** Box is shared — never run full suite/oracle build locally; bare
+`FORCE=1 build_oracles.sh` can outlive your turn. Use targeted forms.
+
+⚠️ **[L-PREFLIGHT-IS-FILTER]** `preflight` is a FILTER, NOT AN AUTHORITY — the MERGE QUEUE is
+(W-MERGE-QUEUE), not a green `pull_request` check. A narrowed shard can report SUCCESS having run
+nothing (not a hole — planner fails closed if a pattern matches no gates anywhere). Verify a
+shard actually ran, never trust the checkmark:
+```sh
+gh api repos/MedakaLang/medaka/actions/runs/<id>/jobs --paginate \
+  --jq '.jobs[] | "\(.name)\t" + ([.steps[]?|"\(.name)=\(.conclusion)"]|join(" | "))'
+```
+
+⚠️ **[L-BLAST-RADIUS]** On `stdlib/*`, `compiler/support/*`, `compiler/entries/*`: `make
+preflight` IS the full gate suite — don't trust a count in this file, derive it (#492):
+`ls test/diff_compiler_*.sh | wc -l`. `PREFLIGHT_NO_FULL=1 sh test/preflight.sh` runs
+**NOTHING** by design. Prefer: push, let CI run it.
+
+⚠️ **[L-NO-FULL-NOT-FIXPOINT]** `PREFLIGHT_NO_FULL` does NOT skip L-FOREGROUND-CEILING's
+fixpoint — run it detached from the ceiling instead (#520,#545): `grep -n need_fixpoint
+test/preflight.sh`. ⚠️ **If you are a SUBAGENT, "background it" means a script or poll loop
+that you wait on within the turn** — a background task's completion notification goes to
+the session that dispatched you, not to you, so ending your turn to await one stalls
+indefinitely (seven recorded dispatches, one stalled four times).
+
+**Full local run justified when:** `compiler/backend/*` changed (`selfcompile_fixpoint.sh`);
+`compiler/support/*`/`stdlib/core.mdk` changed; merging branches on the same subsystem; CI shows
+something unreproducible. Else: push, let CI answer.
+
+**[L-PHANTOM-SKIP]** `run_gates.sh`'s *"phantom skip: oracle/binary not built"* = no oracles
+built (counted FAILED by design), not a regression.
+
+🚨 **[L-SELFPROC-CARVEOUT]** Exception to L-PHANTOM-SKIP: a phantom-skipped
+`diff_compiler_selfproc` on a compiler-source change is NOT dismissible — only local signal for
+the LEG A golden (T-LEGA-GOLDEN). LEG A: `frontend.{ast,desugar,exhaust,lexer,marker,parser,resolve}`,
+`types.{annotate,typecheck}`, `driver.loader`, `eval.eval`, `ir.sexp`, `tools.check`.
+```sh
+for o in check_all_main eval_modules_main eval_typed_modules_main; do
+  FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one "$o"
+done
+sh test/diff_compiler_selfproc.sh        # must read "N ok, 0 failing" — not exit 2
+```
+Cheap discriminator, no build:
+```sh
+grep '<newBinding>' test/selfproc_goldens/legA/<module>.golden || echo "STALE — re-bless"
+```

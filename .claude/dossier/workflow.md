@@ -250,3 +250,119 @@ read-only harness probe. An independent instruction probe also selected the
 correct repair tiers, distinguished informal amendments from post-refusal
 reassignments, and resumed a hypothetical outer cell before its process. This
 does not prove real post-compaction retention; the next sprint tests that.
+
+## [W-REQUIRED-CHECKS] / [W-SHARD-DERIVED] / [W-MODULE-BLIND] / [W-SHARD-NEUTRAL] — full rule text
+
+*Full `AGENTS.md` text as of 2026-10-03, moved here verbatim when AGENTS.md was slimmed; AGENTS.md keeps the rule and the command.*
+
+**[W-REQUIRED-CHECKS] Required checks live in a repo RULESET, not classic branch protection.**
+🚨 **NOT `…/branches/main/protection…` — that endpoint 404s `"Branch not protected"`, which
+reads exactly like "nothing is required here".** (Same rules engine is why `git push origin
+main` fails with `GH013`.) Derive the current set, never trust a list in this file:
+```sh
+gh api repos/MedakaLang/medaka/rulesets --jq '.[]|select(.enforcement=="active")|.id' | while read -r id; do
+  gh api "repos/MedakaLang/medaka/rulesets/$id" \
+    --jq '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'
+done
+```
+🚨 **Adding ANY `.sh` anywhere in the tree — not just under `test/` — can redden a shard**
+(`diff_compiler_ci_shard_coverage.sh`; a repro harness under `.claude/` has done it). A gate
+not enrolled in `test/gates.toml` (with a `shard` field) SILENTLY NEVER RUNS — caught by
+`medaka gate verify` (via `test/diff_compiler_gate_registry.sh`), which owns ENROLMENT;
+`diff_compiler_ci_shard_coverage.sh` owns CI REACHABILITY of what is already enrolled. Enrol
+it in `test/gates.toml`. ⚠️ **[W-SHARD-DERIVED] `shard` is a DERIVED OUTPUT, not a value you
+choose** (#2178): the new entry needs SOME `shard` string because the schema requires one,
+but `medaka gate balance` — not you — decides where it lands, from the measured costs in
+`test/gate_cost_baseline.json`. A hand-edited `shard` reds the REQUIRED `ci-gen-drift`
+context, and it reds even if you also ran `make gen-ci` to keep `ci.yml` consistent with it.
+🚨 A brand-new gate has NO row yet in the cost baseline, so `medaka gate balance` HARD-
+REFUSES to run in the same commit that adds it. ⚠️ **You cannot defer this: `ci-gen-drift`
+is a REQUIRED context and its script runs `medaka gate balance --check`
+(`test/diff_compiler_ci_gen_drift.sh:80`), so the refusal reds a required check and the PR
+cannot merge** — "enrol now, discharge in a follow-up" is not available, and three sprints
+lost a cycle discovering that. Derive the required set rather than trusting this list
+([W-REQUIRED-CHECKS]) — `gate-balance` and `gate-budget` included; this file states no
+membership for either, because its own rule forbids the list. What is durable is the
+CONSEQUENCE: a brand-new gate reds `medaka gate budget` clause (a) as well, alongside this
+same `ci-gen-drift` red, and the clause-(a) message names both. The acknowledgment is a
+`Gate-Budget-Override: uncosted:<name>` trailer, carried until the nightly ingest prices it.
+The discharge, before merge: enrol with a
+guessed `shard`, get a real cost sample, then `medaka gate balance && make gen-ci` and
+commit both. Two traps in getting that sample, each paid for twice: a guessed `shard` can
+name a CLOSED packing row the balancer can never assign into (read the refusal text and
+repoint to an open row), and `gh workflow run ci.yml --ref <branch>` yields a run whose
+overall conclusion is `failure` — precisely because the new gate is unbalanced — which
+`test/gate_cost_collect.sh`'s success-only filter then refuses to ingest even though the
+timing shards each succeeded. Download the shard's timing artifact and run
+`test/gate_cost_ingest.sh` on it directly. (#2602 tracks fixing both.) Registration rules, the `test/CI-COVERAGE-EXCEPTIONS.txt`
+escape hatch, and `[W-SHARD-COST]` (shards are filled by cost, never by theme): the `gates`
+skill. 🚨 **[W-MODULE-BLIND] A module outside every entry's import closure is invisible to
+`make medaka`, `make check-self`, and `test/typecheck_compiler_source.sh`** — none of those
+walk it, so a defect injected into it is caught by nothing (MEASURED, `compiler/types/
+registry.mdk`: the Makefile's `test:` target now names such a module explicitly, since
+`medaka test <file>` typechecks the file before running its doctests). Full incident:
+`.claude/dossier/workflow.md`. ⚠️ **[W-SHARD-NEUTRAL] The eight executor rows are named `gates_1`…`gates_8` and mean
+nothing** (#2178, 2026-08-30) — a row name cannot describe its contents, so it is not allowed
+to try. The thematic names (`gates (frontend)`, `gates (sqlite)`, …) are RETIRED; a doc or
+comment that still names one is describing the pre-rename tree. What a failure was ABOUT comes
+from the registry's `area` field, which the `gates` job surfaces in its annotations and job
+summary — read the area, not the row.
+
+## [W-PROJECT-BY-MANIFEST] — full rule text
+
+*Full `AGENTS.md` text as of 2026-10-03, moved here verbatim when AGENTS.md was slimmed; AGENTS.md keeps the rule and the command.*
+
+⚠️ **[W-PROJECT-BY-MANIFEST] A directory with a `medaka.toml` outside `compiler/` and
+`test/` IS a project, and CI knows it by that manifest — not by anyone remembering.** Such
+a project needs a floor gate under `<project>/test/` (a `pattern:` matching no gate is a
+hard `::error::`, so the gate must exist before the enrolment does), a `shard` field in
+`test/gates.toml` (any row name — `medaka gate balance` then `make gen-ci` derive the real
+placement and the matrix; see `[W-SHARD-DERIVED]`), and nothing at all in `test/preflight.sh` — preflight's generic arm
+derives the project set from `git ls-files '*medaka.toml'` and maps any changed path under
+`<project>/` to `<project>/test/*` on its own. All three legs are re-derived and compared on
+every run by `test/diff_compiler_project_enrolment.sh`, so enrolment drift reds a gate rather
+than going quiet. ⚠️ **An unenrolled project is not merely untested — an UNMAPPED non-prose
+path widens every PR run to the FULL suite** ([W-THIRD-CONSUMER]), so the map gap costs the
+most expensive possible answer while proving nothing. `demo/` and `playground/` have no
+manifest and are NOT projects; preflight derives their gates per-path instead
+(`_gates_for_path`), from which gate scripts actually reference them.
+
+## [W-GH-WRITE-VERIFY] — full rule text
+
+*Full `AGENTS.md` text as of 2026-10-03, moved here verbatim when AGENTS.md was slimmed; AGENTS.md keeps the rule and the command.*
+
+🚨 **[W-GH-WRITE-VERIFY] A `gh` write can report success while writing nothing — always read
+the result back, never the exit code.** Three concrete traps beyond [W-MERGE-EXIT-CODE], the
+first two both hit in one session (#1212):
+  - `gh pr edit --body-file <f>` silently no-opped on Debian's gh 2.46 (a Projects-classic
+    deprecation error): the body was unchanged and the command exited 0. On gh 2.101 (the box's
+    gh since 2026-09-29, [B-ENV]) the same write lands with a clean stderr, but still verify by
+    re-reading the body, not the exit code. Workaround: `gh api -X PATCH repos/OWNER/REPO/pulls/N -F body=@file`.
+  - **`-f body=@file` does NOT expand `@file`** — it writes the four literal characters `@file`
+    as the body. Only `-F` expands `@file` into the file's contents. This is the workaround for
+    the bullet above, so routing around one bug lands directly in the other.
+  - **`gh issue edit --body-file <f>` REPLACES THE WHOLE BODY** — using it to append silently
+    CLOBBERS prior content. Not a no-op and not a literal-string bug — it succeeds and destroys
+    (#1824). For an append: read the existing body first (`gh issue view N --json body -q
+    .body`), concatenate the new content locally, then write the full combined result back —
+    never `--body-file` with just the new fragment. A `-q .body` / `--jq .body` read appends
+    one trailing newline that is not in the body, so a read-then-write round trip grows it by a
+    byte. Strip it (`head -c -1`) before comparing or writing back.
+
+## [W-QUEUE-FROZEN] — full rule text
+
+*Full `AGENTS.md` text as of 2026-10-03, moved here verbatim when AGENTS.md was slimmed; AGENTS.md keeps the rule and the command.*
+
+⚠️ **[W-QUEUE-FROZEN] Once a PR is enqueued, treat its branch as frozen.** The queue merges the
+branch as it stood at enqueue time — a commit pushed afterward can be left behind, landing on
+the branch but not in what actually reaches `main` (#1213). Need a change after enqueue? Dequeue
+first, or land it as a follow-up PR. Checking `origin/<branch>` is NOT sufficient once queued —
+verify against `main` itself:
+```sh
+git merge-base --is-ancestor <sha> origin/main && echo "on main" || echo "NOT on main"
+```
+Same trap, adjacent: a stale check-run in `statusCheckRollup` looks identical to a fresh one.
+Discriminate by `started_at` vs. your push time, not by conclusion alone:
+```sh
+gh api repos/MedakaLang/medaka/commits/$SHA/check-runs --jq '.check_runs[]|"\(.name) \(.conclusion) \(.started_at)"'
+```

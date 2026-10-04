@@ -75,7 +75,8 @@ obligations — `[W-PROJECT-BY-MANIFEST]` in `AGENTS.md`, not this skill.
    one of the `sprint-packet` report self-check questions.
 6. **Import weight is per-module and measured, not free-by-assumption.** The
    compiler may import `stdlib/`, selectively — `[T-STDLIB-IMPORT]` in
-   `AGENTS.md` carries the measurement and the wildcard-collision hazard.
+   `AGENTS.md` carries the rule and the wildcard-collision hazard;
+   `.claude/dossier/traps.md` carries the measurement.
 7. **A directory with its own `medaka.toml` is a PROJECT** and owes CI a floor
    gate plus a `test/gates.toml` row (`[W-PROJECT-BY-MANIFEST]`). Placing new
    code in a new top-level directory is therefore an enrolment decision, not
