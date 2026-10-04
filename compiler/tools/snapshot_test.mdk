@@ -1,0 +1,21 @@
+import test.{expectAll, expectEqual}
+import tools.snapshot.{normalizeText}
+
+-- A run-section line with ordinary periods: a range, a decimal, a dotted name.
+runLine : String
+runLine = "slice [0..9] of 1.5 in a.b\n"
+
+test "absolute root is replaced with <ROOT>" = expectAll [
+  expectEqual
+    "at <ROOT>/stdlib/x.mdk [0..9]\n"
+    (normalizeText "/root/medaka" "at /root/medaka/stdlib/x.mdk [0..9]\n"),
+  expectEqual runLine (normalizeText "/root/medaka" runLine),
+]
+
+test "a relative or empty root never acts as a replace-all needle" = expectAll [
+  expectEqual runLine (normalizeText "." runLine),
+  expectEqual runLine (normalizeText ".." runLine),
+  expectEqual runLine (normalizeText "" runLine),
+  expectEqual runLine (normalizeText "a" runLine),
+  expectEqual runLine (normalizeText "/" runLine),
+]
