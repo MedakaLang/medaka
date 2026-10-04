@@ -630,8 +630,9 @@ against `impl Get (Box a) a`) is rejected at its site in the definition with
 variables are held the same way in its bodies, for a residual over head
 variables alone (W3-inst above). No other declared variable is held rigid yet,
 and a matcher can still bind it: a goal abstracted by a generalized local inside
-a signed function (#3796), an interface method signature's own variable (#3797),
-and a variable written in an expression annotation (#3799). An impl-body
+a signed function (#3796), an interface method signature's own variable (#3797;
+improvement and determination at the body's close hold it rigid, the matcher
+that accepts the goal does not), and a variable written in an expression annotation (#3799). An impl-body
 residual that mixes a head variable with another variable is not rejected
 (#3798).
 
@@ -657,11 +658,22 @@ rather than having a quantified variable bound after the fact
 defaults at its own boundary first. Its obligations still reach the enclosing
 group's close, but a variable already defaulted there is no longer free.
 
-⚠️ **Not yet applied inside a method body.** An `impl` body is inferred outside
-every binding group, so its obligations never reach a group's close. The same
-`pick [] [3, 7]` inside an `impl` method still leaves `t` open, and `build` has
-no instance to emit. Improving there needs the impl head's own variables held
-rigid, as a signature's are here.
+**Inside a method body.** An `impl` body, and an interface's default method
+body, is inferred outside every binding group, so its obligations never reach a
+group's close. The body's own close runs the same steps over the obligations
+the body recorded (`inferMethodBody`): improvement and then determination
+(below) before the body's rigidity and head-prerequisite checks, and once more
+after its numeric defaulting. The body does not own the instance head's
+variables or the method's declared signature's variables, since a construction
+site instantiates both, so both are held rigid; every other variable of a goal
+is the body's. An `impl` body's head and method type carry the rigid
+variables. A default body has no head, and its method type carries the
+receiver's variables as well. `pick [] [3, 7]` inside `impl Q Int`, at the
+declared result `List Int`, fixes `t = Int` as it does at top level
+(`test/dict_fixtures/body-settle-pick-improved.mdk`). `v[0] + v[1]` inside
+`impl Report (Array a)` determines `Index (Array a) k e` to `k = Int`, `e = a`
+against the head's rigid `a`, so the dictionary that runs is the impl's own
+`requires Num a` (`test/dict_fixtures/body-settle-index-element.mdk`).
 
 ### Determination by the one unifying instance
 

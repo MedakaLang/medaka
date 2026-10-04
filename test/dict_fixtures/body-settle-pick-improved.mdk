@@ -1,0 +1,18 @@
+-- DICT-SEMANTICS §3, improvement inside an impl body (#3549).  `pick [] [3, 7]`
+-- at the declared result `List Int` poses `Pick (List t) (List n) (List Int)`;
+-- the only instance `impl Pick a a a` fixes `t = n = Int` at the body's close,
+-- so `build` has an instance to emit.  Hand-derived: `pick` returns its second
+-- argument, [3, 7].
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+interface Q a where
+  q : a -> List Int
+
+impl Q Int where
+  q _ = pick [] [3, 7]
+
+main = println (debug (q (1 : Int)))

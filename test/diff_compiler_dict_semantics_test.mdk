@@ -2737,12 +2737,12 @@ table = [
   Row {
     entry = "impl-head-repeated-var-body-default.mdk",
     label =
-      "an impl body must not default a Num variable that `Index (Array a) Int e` ties to the impl's own, still free, `a`: grounding `e` to Int passed a head match it contradicts and ran an Int dictionary on Floats. Refused as ambiguous by run and build; `check` accepting it is #1641 (a constrained impl head suppresses the ambiguity), and this row reds when #1641 is fixed",
+      "an impl body must not default a Num variable that `Index (Array a) Int e` ties to the impl's own `a`: §3's settle sequence at the body's close holds `a` rigid and determines `e = a` by the one unifying instance before defaulting, so the impl's `requires Num a` dictionary runs. Hand-derived: 1.5 + 2.25 = 3.75, then 3 + 4 = 7. Was refused as ambiguous by run and build",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "total=3.75\ntotal=7\n",
     codes = [],
   },
   Row {
@@ -3633,6 +3633,39 @@ table = [
     pinned = "small\n",
     codes = [],
   },
+  Row {
+    entry = "body-settle-index-element.mdk",
+    label =
+      "§3 settle sequence at an impl body (#3521's impl-body face): `Index (Array a) k e` with the head's `a` rigid has one unifying instance, so `k = Int` and `e = a` before defaulting. Hand-derived: 3.75, then 7. Base ran an Int dictionary on Floats",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "body-settle-pick-improved.mdk",
+    label =
+      "§3 improvement at an impl body (#3549): `pick [] [3, 7]` at `List Int` against the only `impl Pick a a a` fixes the element at the body's close, so the build has an instance to emit. Hand-derived: [3, 7]. Base failed to build",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[3, 7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "body-settle-two-index-instances.mdk",
+    label =
+      "§3 determination's joint consistency at an impl body (#3809): a second `Index (Array a) Rng (Array a)` would close the sibling `Num k` at `Rng`, so only the Int instance is a candidate. Hand-derived: 3.75, then 7. Base was refused by run and build as ambiguous dispatch",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -3644,7 +3677,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 318
+tableRows = 321
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

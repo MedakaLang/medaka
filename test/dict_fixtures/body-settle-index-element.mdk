@@ -1,0 +1,15 @@
+-- DICT-SEMANTICS §3, the settle sequence at an impl body (#3521's impl-body face).
+-- `v[0] + v[1]` poses `Index (Array a) k e` with `Num k`, `Num e`; the impl head's
+-- `a` is rigid in the body and `k`, `e` are the body's.  The one instance
+-- `Index (Array a) Int a` unifies, so `k = Int` and `e = a` before defaulting,
+-- and `Num a` is the impl's own `requires`.  Hand-derived: 1.5 + 2.25 = 3.75,
+-- then 3 + 4 = 7.
+interface Report t where
+  report : t -> String
+
+impl Report (Array a) requires Num a, Debug a where
+  report v = debug (v[0] + v[1])
+
+main =
+  println (report [|1.5, 2.25|])
+  println (report [|3, 4|])

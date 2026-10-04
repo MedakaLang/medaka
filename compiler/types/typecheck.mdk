@@ -26315,22 +26315,12 @@ idSetOf (i :: more) acc = idSetOf more (IdMap.set i () acc)
 -- used as `debug (two ())`): their Num obligation is on the call and
 -- dictionary-application windows, not the body's own, exactly as at a
 -- top-level group (#23).  The body-local boundary grounds them like any other
--- body-local root, except one a multi-parameter obligation of the body still
--- mentions (`e` of `Index (Array a) Int e`): another parameter may fix it, and
--- in an impl body that parameter is the impl's own head variable, still free
--- here, so grounding it to Int would pass a head match it contradicts (#3521).
-bodyExtraNumObls : List UObligation -> Int -> Int -> List UObligation
-bodyExtraNumObls bodyObls callN0 dictN0 =
-  let calls = callUOblsWindow callN0
-  let tied = flatMap multiParamIds (bodyObls ++ calls)
-  filterList
-    (o => not (anyList (id => containsI id tied) (numObligIds o)))
-    (numCallObls calls ++ numDictObls (dictAppsSince dictN0))
-
-multiParamIds : UObligation -> List Int
-multiParamIds o = match uOblArgs o
-  args@(_ :: _ :: _) => flatMap monoUnboundIds args
-  _ => []
+-- body-local root.  A variable a multi-parameter goal ties to the impl's head
+-- (`e` of `Index (Array a) Int e`) is settled before this runs, by the body's
+-- improvement and determination with the head held rigid.
+bodyExtraNumObls : Int -> Int -> List UObligation
+bodyExtraNumObls callN0 dictN0 =
+  numCallObls (callUOblsWindow callN0) ++ numDictObls (dictAppsSince dictN0)
 
 defaultBodyLocalNumWith : Option Int -> OrdMap Unit -> List UObligation -> Unit
 defaultBodyLocalNumWith ownerPolicy protectedIds obls =
@@ -37557,12 +37547,14 @@ setNumlitFloatsGo ((var, fref, n, dref) :: rest) =
 -- including one a later binding of a goal variable would make match) or none
 -- leaves the goal as it is.
 --
--- It runs at a top-level binding group's close (`processSCC`), before that group's
--- Num defaulting and once more after it, each time ahead of
+-- It runs at a top-level binding group's close (`processSCC`) and at a method
+-- body's (`inferMethodBody`), before that boundary's Num defaulting and once more
+-- after it, each time ahead of
 -- `determineByUniqueInstance`, which commits a goal to its one unifying instance
 -- even where no repeated head variable ties the goal to itself.
 --
--- [sigIds] are the group's declared-signature variables still free at its close.
+-- [sigIds] are the group's declared-signature variables still free at its close
+-- (at a method body, its instance head's and declared signature's variables).
 -- The commit never binds one: they take part as constants, and a goal that would
 -- need one bound is left as it is, for `checkSigsTooGeneral` has already run.
 improveByUniqueImpl : OrdMap Unit -> List UObligation -> Unit
@@ -37575,8 +37567,9 @@ improveByUniqueImpl sigIds (o :: rest) =
 -- sequence's second step).  A goal of arity two or more that is not closed is
 -- unified with a fresh instance of the one instance head that unifies with it,
 -- every variable in [rigidIds] held rigid.  [rigidIds] are the variables the
--- boundary does not own: the declared signatures' variables and the variables in
--- an argument position of a member's type.  Any other variable of the goal is the
+-- boundary does not own: at a group, the declared signatures' variables and the
+-- variables in an argument position of a member's type; at a method body, the
+-- instance head's and declared signature's.  Any other variable of the goal is the
 -- boundary's, and the unique instance is the only type the program can have there.
 --
 -- A candidate counts only if the acceptance census counts its first head
@@ -38824,6 +38817,19 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- the survivor check never read, and `check` stayed green on a program whose
   -- built binary printed garbage.
   let addedCallObls = callOblsWindow callN0
+  -- The settle sequence at the method-body boundary (DICT-SEMANTICS §3).  The body
+  -- owns neither the instance head's variables nor its declared signature's: a
+  -- construction site instantiates both, so both are held rigid, and every other
+  -- variable of a goal is the body's.  An impl body's head monos and method type
+  -- carry them; a default body has no head, and its method type carries the
+  -- receiver's variables too.  It runs before the rigidity and head-prerequisite
+  -- checks so that a predicate determination moves onto a head variable is read
+  -- by them, and before the surviving roots are snapshotted.
+  let bodyRigidIds =
+    monoRootIdSet (headMonos ++ [inst.mbiExpected] ++ map snd inst.mbiNamedVars)
+  let bodyObls = addedObls ++ callUOblsWindow callN0
+  let _ = improveByUniqueImpl bodyRigidIds bodyObls
+  let _ = determineByUniqueInstance False bodyRigidIds bodyObls
   let _ =
     checkMethodRigidityCore
       subject
@@ -38905,13 +38911,18 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- ambiguity registration that follows it. Roots carried by the impl head or
   -- declared method dictionaries survive through [survivingNumIds]/[mbiExpected];
   -- deeper generalized locals remain outside this boundary by level.
-  let _ = finalizeNumBoundary NumBoundary {
-    nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
-    nbMembers = [inst.mbiExpected],
-    nbSurvivingIds = survivingNumIds,
-    nbDefaultObls = addedObls ++ bodyExtraNumObls addedObls callN0 dictN0,
-    nbAmbiguityObls = addedObls,
-  }
+  let _ = finalizeNumBoundary
+    NumBoundary {
+      nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
+      nbMembers = [inst.mbiExpected],
+      nbSurvivingIds = survivingNumIds,
+      nbDefaultObls = addedObls ++ bodyExtraNumObls callN0 dictN0,
+      nbAmbiguityObls = addedObls,
+    }
+  -- Defaulting is a substitution like any other, so the goals it changed are
+  -- improved and determined once more.
+  let _ = improveByUniqueImpl bodyRigidIds bodyObls
+  let _ = determineByUniqueInstance True bodyRigidIds bodyObls
   let _ = registerMethodBodyGivens iface kind params mty inst bodyScope
   let _ = match kind
     ImplBody _ => perRun.value.currentImplBody := False
