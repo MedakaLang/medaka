@@ -1,0 +1,12 @@
+-- §3 W3-inst: the body of `impl Show2 (Pair a)` calls `show2 x` with `x : a`, a
+-- predicate on the head's own variable that no `requires` supplies. Rejected at
+-- the call, naming `requires Show2 a`.
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 (Pair a) where
+  show2 (Pair x _) = show2 x
+
+main = println (show2 (Pair 1 2))

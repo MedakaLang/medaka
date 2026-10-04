@@ -1,0 +1,18 @@
+-- §3 W3-inst, the call channel: the body reaches `Show2 a` through a constrained
+-- helper rather than a method occurrence. Rejected at the call, naming
+-- `requires Show2 a`.
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+helper : Show2 b => b -> String
+helper v = show2 v
+
+impl Show2 (Pair a) where
+  show2 (Pair x _) = helper x
+
+main = println (show2 (Pair (1 : Int) 2))
