@@ -1,0 +1,19 @@
+issue: 2811
+what: an entry file named core.mdk is treated like the prelude and skips the static
+what: typecheck on `run`. core.mdk prints "before" and then evaluates an ill-typed
+what: `if True then 1 else "x"`. `check core.mdk` rejects it ("'if' branches have
+what: different types"), but `run core.mdk` evaluates it: it prints `before`, then panics
+what: "putStrLn: not a String" at exit 1. The same text in a file with any other name is
+what: rejected by `run` before anything prints.
+cmd: run core.mdk
+exit: 1
+stdout: before
+control: run control.mdk
+why-verb: `run`, because the defect is that run's static gate is skipped. A correct
+why-verb: rejection also exits 1, so the exit code alone cannot tell them apart; the
+why-verb: discriminator is stdout. When run type-checks core.mdk first, nothing reaches
+why-verb: stdout and this row drains.
+why-stdout: `before` can only appear if the program was evaluated without the static check.
+why-control: control.mdk is the well-typed version (`else 2`) under an ordinary name; it
+why-control: must print `before` and `1` at exit 0. A red control means plain `run` broke,
+why-control: never that #2811 drained.
