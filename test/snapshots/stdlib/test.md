@@ -1,5 +1,5 @@
 # META
-source_lines=660
+source_lines=665
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for unit tests.
@@ -237,7 +237,9 @@ expectErrContains needle r =
    > expectOkThen (n => expectEqual 1 n) (Ok 1 : Result String Int)
    Pass "1" "1"
    > expectOkThen (n => expectEqual 1 n) (Err "boom" : Result String Int)
-   Fail "expected Ok but got Err boom" "Ok _" "Err \"boom\"" -}
+   Fail "expected Ok but got Err boom" "Ok _" "Err \"boom\""
+   > expectOkThen (n => expectEqual 1 n) (Err (Some 7) : Result (Option Int) Int)
+   Fail "expected Ok but got Err (Some 7)" "Ok _" "Err (Some 7)" -}
 export
 expectOkThen : (Debug e, Display e) =>
   (a -> Expectation) ->
@@ -245,7 +247,10 @@ expectOkThen : (Debug e, Display e) =>
   Expectation
 expectOkThen k (Ok v) = k v
 expectOkThen _ (Err e) =
-  Fail "expected Ok but got Err \{display e}" "Ok _" "Err \{debug e}"
+  Fail
+    "expected Ok but got Err \{derivedShowWrap (display e)}"
+    "Ok _"
+    "Err \{derivedShowWrap (debug e)}"
 
 {- | Passes when the option is `Some`.
 
@@ -701,7 +706,7 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 (DFunDef false "expectErrContains" ((PVar "needle") (PVar "r")) (EBlock (DoLet false false (PVar "want") (EBinOp "++" (EBinOp "++" (ELit (LString "Err containing ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "needle")))) (ELit (LString "")))) (DoLet false false (PVar "a") (EApp (EVar "debug") (EVar "r"))) (DoExpr (EMatch (EVar "r") (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected Err but got ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "")))) (EVar "want")) (EVar "a"))) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EApp (EVar "contains") (EVar "needle")) (EApp (EVar "display") (EVar "e"))) (EApp (EApp (EVar "Pass") (EVar "want")) (EVar "a")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected the error to contain ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "needle")))) (ELit (LString " but got "))) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "display") (EVar "e"))))) (ELit (LString "")))) (EVar "want")) (EVar "a"))))))))
 (DTypeSig true "expectOkThen" (TyConstrained ((cstr "Debug" (TyVar "e")) (cstr "Display" (TyVar "e"))) (TyFun (TyFun (TyVar "a") (TyCon "Expectation")) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyCon "Expectation")))))
 (DFunDef false "expectOkThen" ((PVar "k") (PCon "Ok" (PVar "v"))) (EApp (EVar "k") (EVar "v")))
-(DFunDef false "expectOkThen" (PWild (PCon "Err" (PVar "e"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected Ok but got Err ")) (EApp (EVar "display") (EApp (EVar "display") (EVar "e")))) (ELit (LString "")))) (ELit (LString "Ok _"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "e")))) (ELit (LString "")))))
+(DFunDef false "expectOkThen" (PWild (PCon "Err" (PVar "e"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected Ok but got Err ")) (EApp (EVar "display") (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "e"))))) (ELit (LString "")))) (ELit (LString "Ok _"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "display") (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "e"))))) (ELit (LString "")))))
 (DTypeSig true "expectSome" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Expectation"))))
 (DFunDef false "expectSome" ((PVar "o")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "debug") (EVar "o"))) (DoExpr (EMatch (EVar "o") (arm (PCon "Some" PWild) () (EApp (EApp (EVar "Pass") (ELit (LString "Some _"))) (EVar "a"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected Some but got ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "")))) (ELit (LString "Some _"))) (EVar "a")))))))
 (DTypeSig true "expectNone" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Expectation"))))
@@ -816,7 +821,7 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 (DFunDef false "expectErrContains" ((PVar "needle") (PVar "r")) (EBlock (DoLet false false (PVar "want") (EBinOp "++" (EBinOp "++" (ELit (LString "Err containing ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "needle")))) (ELit (LString "")))) (DoLet false false (PVar "a") (EApp (EMethodRef "debug") (EVar "r"))) (DoExpr (EMatch (EVar "r") (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected Err but got ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "")))) (EVar "want")) (EVar "a"))) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EApp (EVar "contains") (EVar "needle")) (EApp (EMethodRef "display") (EVar "e"))) (EApp (EApp (EVar "Pass") (EVar "want")) (EVar "a")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected the error to contain ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "needle")))) (ELit (LString " but got "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EMethodRef "display") (EVar "e"))))) (ELit (LString "")))) (EVar "want")) (EVar "a"))))))))
 (DTypeSig true "expectOkThen" (TyConstrained ((cstr "Debug" (TyVar "e")) (cstr "Display" (TyVar "e"))) (TyFun (TyFun (TyVar "a") (TyCon "Expectation")) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyCon "Expectation")))))
 (DFunDef false "expectOkThen" ((PVar "k") (PCon "Ok" (PVar "v"))) (EApp (EVar "k") (EVar "v")))
-(DFunDef false "expectOkThen" (PWild (PCon "Err" (PVar "e"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected Ok but got Err ")) (EApp (EMethodRef "display") (EApp (EMethodRef "display") (EVar "e")))) (ELit (LString "")))) (ELit (LString "Ok _"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Err ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "e")))) (ELit (LString "")))))
+(DFunDef false "expectOkThen" (PWild (PCon "Err" (PVar "e"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected Ok but got Err ")) (EApp (EMethodRef "display") (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "e"))))) (ELit (LString "")))) (ELit (LString "Ok _"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Err ")) (EApp (EMethodRef "display") (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "e"))))) (ELit (LString "")))))
 (DTypeSig true "expectSome" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Expectation"))))
 (DFunDef false "expectSome" ((PVar "o")) (EBlock (DoLet false false (PVar "a") (EApp (EMethodRef "debug") (EVar "o"))) (DoExpr (EMatch (EVar "o") (arm (PCon "Some" PWild) () (EApp (EApp (EVar "Pass") (ELit (LString "Some _"))) (EVar "a"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected Some but got ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "")))) (ELit (LString "Some _"))) (EVar "a")))))))
 (DTypeSig true "expectNone" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Expectation"))))

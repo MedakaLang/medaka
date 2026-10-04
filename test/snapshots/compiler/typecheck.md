@@ -1,5 +1,5 @@
 # META
-source_lines=53602
+source_lines=53649
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -2049,7 +2049,7 @@ checkAliasPatternSlots params rhs =
     (_ pk => match pk
       (p, Some (KindAuthority l _ False loc)) =>
         if contains p slots then
-          pushTypeErrorOnceAt
+          pushTypeErrorOncePerSite
             "T-AUTHORITY-PATTERN"
             loc
             (ordinaryInPatternSlotMsg p l)
@@ -2077,7 +2077,7 @@ checkAuthorityKindLabel (KindAuthority l o pat loc) =
       pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (authorityAtomicLabelMsg l)
     top =>
       if pat && not (domainHasPatterns top) then
-        pushTypeErrorOnceAt
+        pushTypeErrorOncePerSite
           "T-AUTHORITY-PATTERN"
           loc
           (patternDomainMsg ("Authority " ++ l ++ "*") l)
@@ -10189,8 +10189,9 @@ hadTypeErrors _ = !typeErrorsSticky
 -- hand-placed bump at "the five helpers" would have left that one silent, and the
 -- counter would then have UNDER-counted exactly on the `do`-requires-a-monad path.
 -- ⚠️ #2068: it is also the sole writer of `typeErrorMsgSetRef`, the membership
--- INDEX the three `pushTypeErrorOnce*` helpers test instead of re-scanning the
--- channel.  Keeping the insert HERE — inside the one funnel — is what makes the
+-- INDEX the `pushTypeErrorOnce*` helpers and `alreadyReportedAt` test instead of
+-- re-scanning the channel (it holds the rendered message and a message-at-site
+-- key).  Keeping the insert HERE — inside the one funnel — is what makes the
 -- index unable to disagree with the channel: there is no second push site to
 -- forget.  A rollback of the channel owes the index the same pairing the counter
 -- states above; today there is none within a `perRun` lifetime (see there).
@@ -10202,7 +10203,10 @@ recordTypeError raw =
     (driverState.value.currentModuleRef.value, d) :: typeErrorsStickyDiags.value
   let _ = noteTypeErrorDetected ()
   perRun.value.typeErrorMsgSetRef :=
-    omInsert (tcMsg d) () perRun.value.typeErrorMsgSetRef.value
+    omInsert
+      (msgAtKey (tcMsg d) (tcLoc d))
+      ()
+      (omInsert (tcMsg d) () perRun.value.typeErrorMsgSetRef.value)
   wPush perRun.value.typeErrors d
 
 -- issue 1146 PR2 — the counter's ONLY incrementing statement, so "an error was
@@ -10299,6 +10303,17 @@ pushTypeErrorOnce code msg =
   else
     pushTypeError code msg
 
+-- Membership key for "this message at this span".  A located diagnostic is a
+-- duplicate only of the same text at the same span, so two sites with identical
+-- text each report; an unlocated one folds on text alone.
+msgAtKey : String -> Option Loc -> String
+msgAtKey msg at = "\{msg}\t@@\t\{locKey at}"
+
+alreadyReportedAt : String -> Option Loc -> Bool
+alreadyReportedAt msg None = omHasKey msg perRun.value.typeErrorMsgSetRef.value
+alreadyReportedAt msg at =
+  omHasKey (msgAtKey msg at) perRun.value.typeErrorMsgSetRef.value
+
 -- B.10.2c: push a deduped type error attributing it to the supplied loc rather
 -- than the live `currentLoc` (which is stale during the post-HM obligation
 -- check — inference has long since left the offending ELoc).  The loc was
@@ -10312,6 +10327,20 @@ pushTypeErrorOnceAt code loc msg =
     noteTypeErrorDetected ()
   else
     recordTypeError (TcDiag code 1 (orElseLoc loc !currentLoc) msg None None)
+
+-- Like `pushTypeErrorOnceAt`, but the duplicate test is per SITE: the same text at
+-- another span is a second diagnostic, the same text at the same span (a signature
+-- elaborated twice) still folds.  For messages that describe one site's own fault,
+-- where two sites with identical text must each be reported.  A message about a
+-- shared root cause (an ambiguous goal reached from two dispatch sites) belongs on
+-- `pushTypeErrorOnceAt`, which folds on text alone.
+pushTypeErrorOncePerSite : String -> Option Loc -> String -> Unit
+pushTypeErrorOncePerSite code loc msg =
+  let at = orElseLoc loc !currentLoc
+  if alreadyReportedAt msg at then
+    noteTypeErrorDetected ()
+  else
+    recordTypeError (TcDiag code 1 at msg None None)
 
 -- Push a deduped type error (same dedup rule as pushTypeErrorOnceAt) that also
 -- carries a human `help` string and an optional machine-applicable `fix`
@@ -11821,7 +11850,7 @@ data PerRun = PerRun {
   fieldOwnerModulesRef : Ref (OrdMap (List String)),  -- #1597: field-owner KEY → declaring module ids, graph-global — see fieldOwnerReachable
   fieldOwnerReachRef : Ref (OrdMap Unit),  -- #1597: the module ids THIS module can reach through DUse — see declEnvSeedDataUniverse
   typeErrors : Windowed TcDiag,  -- issue 1146: the diagnostic OUTPUT channel, on the Windowed discipline
-  typeErrorMsgSetRef : Ref (OrdMap Unit),  -- #2068: membership INDEX over typeErrors' rendered messages — see recordTypeError
+  typeErrorMsgSetRef : Ref (OrdMap Unit),  -- #2068: membership INDEX over typeErrors' rendered messages and message-at-site keys — see recordTypeError
   errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
   occursCheckFailed : Ref Bool,
   currentLevel : Ref Int,
@@ -14850,7 +14879,7 @@ authArgOf etbl tvs l pat (TyAuth ps loc) =
           if isPatternParam written then
             ()
           else
-            pushTypeErrorOnceAt
+            pushTypeErrorOncePerSite
               "T-AUTHORITY-PATTERN"
               loc
               (exactInPatternSlotMsg
@@ -14863,7 +14892,7 @@ authArgOf etbl tvs l pat (TyAuth ps loc) =
 authArgOf etbl _ l pat ty =
   let _ = match ordinaryBinderIn etbl pat ty
     Some n =>
-      pushTypeErrorOnceAt
+      pushTypeErrorOncePerSite
         "T-AUTHORITY-PATTERN"
         (firstTyLoc ty)
         (ordinaryInPatternSlotMsg n (effLabelName l))
@@ -37941,7 +37970,8 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppPredArgsShared args}"
 -- hit) does "add deriving" / "write an impl" read as concrete, applicable
 -- advice — a builtin (String/Int/Bool/…) can't take `deriving`, and a function
 -- type is structurally un-implementable, so both stay hint-free (unchanged
--- message) rather than print misleading advice.
+-- message) rather than print misleading advice.  A stdlib-owned type is
+-- hint-free too for the derivable interfaces (`headIsStdlibOwned`).
 -- ⚠️ #1111 A-2.3: the ONE `dataParamKindsRef` consumer that stays a BARE-NAME
 -- question, and it is a membership test rather than a lookup.  A-2.2 has since
 -- landed, so the identity IS reachable here (`headTyconMono` now answers a
@@ -37957,9 +37987,26 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppPredArgsShared args}"
 -- applicable advice for the right reason under the wrong module's declaration.
 noImplHint : String -> List Mono -> Option String
 noImplHint iface [arg] = match headTyconNameMono arg
-  Some n => noImplHintFor iface n
+  Some n =>
+    if derivableIface iface && headIsStdlibOwned arg then
+      None
+    else
+      noImplHintFor iface n
   None => None
 noImplHint _ _ = None
+
+-- A type declared in a stdlib-owned module cannot take `deriving`, and an
+-- `impl` of a core interface for it would be an orphan (docs/spec/language-design.md
+-- "No Orphan Instances"), so neither remedy of `noImplAdvice` is available to the
+-- caller.  A type with no module identity (builtin, unresolved) is not stdlib-owned.
+headIsStdlibOwned : Mono -> Bool
+headIsStdlibOwned arg = match headTyconMono arg
+  Some (HkDecl (TkIdent (Ident _ io _))) =>
+    identOriginFold
+      False
+      (mid => omHasKey mid driverState.value.stdlibOwnedModsRef.value)
+      io
+  _ => False
 
 noImplHintFor : String -> String -> Option String
 noImplHintFor iface n
@@ -53959,11 +54006,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "prog") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "supers" None) (rf "methods" None)) true)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkIfaceHeadKinds") (EVar "name")) (EVar "typarams")) (EApp (EApp (EVar "padAnns") (EVar "typarams")) (EVar "typaramKinds"))) (EVar "methods"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperKinds") (EVar "prog")) (EVar "name")) (EVar "typarams")) (EApp (EApp (EVar "padAnns") (EVar "typarams")) (EVar "typaramKinds"))) (EVar "methods")) (EVar "supers")))))
 (DFunDef false "checkDeclaredKindsDecl" (PWild PWild) (ELit LUnit))
 (DTypeSig false "checkAliasPatternSlots" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (TyFun (TyCon "Ty") (TyCon "Unit"))))
-(DFunDef false "checkAliasPatternSlots" ((PVar "params") (PVar "rhs")) (EBlock (DoLet false false (PVar "slots") (EApp (EVar "patternSlotNamesIn") (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "pk")) (EMatch (EVar "pk") (arm (PTuple (PVar "p") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild (PCon "False") (PVar "loc")))) () (EIf (EApp (EApp (EVar "contains") (EVar "p")) (EVar "slots")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "p")) (EVar "l"))) (ELit LUnit))) (arm PWild () (ELit LUnit))))) (ELit LUnit)) (EVar "params")))))
+(DFunDef false "checkAliasPatternSlots" ((PVar "params") (PVar "rhs")) (EBlock (DoLet false false (PVar "slots") (EApp (EVar "patternSlotNamesIn") (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "pk")) (EMatch (EVar "pk") (arm (PTuple (PVar "p") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild (PCon "False") (PVar "loc")))) () (EIf (EApp (EApp (EVar "contains") (EVar "p")) (EVar "slots")) (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "p")) (EVar "l"))) (ELit LUnit))) (arm PWild () (ELit LUnit))))) (ELit LUnit)) (EVar "params")))))
 (DTypeSig false "checkAuthorityKindLabels" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyCon "Unit")))
 (DFunDef false "checkAuthorityKindLabels" ((PVar "anns")) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "a")) (EMatch (EVar "a") (arm (PCon "Some" (PVar "k")) () (EApp (EVar "checkAuthorityKindLabel") (EVar "k"))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EVar "anns")))
 (DTypeSig false "checkAuthorityKindLabel" (TyFun (TyCon "KindAnn") (TyCon "Unit")))
-(DFunDef false "checkAuthorityKindLabel" ((PCon "KindAuthority" (PVar "l") (PVar "o") (PVar "pat") (PVar "loc"))) (EMatch (EApp (EVar "dtopFor") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (arm (PCon "PUnit") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-KIND"))) (EVar "loc")) (EApp (EVar "authorityAtomicLabelMsg") (EVar "l")))) (arm (PVar "top") () (EIf (EBinOp "&&" (EVar "pat") (EApp (EVar "not") (EApp (EVar "domainHasPatterns") (EVar "top")))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EVar "patternDomainMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EVar "l")) (ELit (LString "*")))) (EVar "l"))) (ELit LUnit)))))
+(DFunDef false "checkAuthorityKindLabel" ((PCon "KindAuthority" (PVar "l") (PVar "o") (PVar "pat") (PVar "loc"))) (EMatch (EApp (EVar "dtopFor") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (arm (PCon "PUnit") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-KIND"))) (EVar "loc")) (EApp (EVar "authorityAtomicLabelMsg") (EVar "l")))) (arm (PVar "top") () (EIf (EBinOp "&&" (EVar "pat") (EApp (EVar "not") (EApp (EVar "domainHasPatterns") (EVar "top")))) (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EVar "patternDomainMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EVar "l")) (ELit (LString "*")))) (EVar "l"))) (ELit LUnit)))))
 (DFunDef false "checkAuthorityKindLabel" ((PCon "KindArrow" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "checkAuthorityKindLabel") (EVar "a"))) (DoExpr (EApp (EVar "checkAuthorityKindLabel") (EVar "b")))))
 (DFunDef false "checkAuthorityKindLabel" (PWild) (ELit LUnit))
 (DTypeSig false "domainHasPatterns" (TyFun (TyCon "Param") (TyCon "Bool")))
@@ -55144,7 +55191,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "hadTypeErrors" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "hadTypeErrors" (PWild) (EUnOp "!" (EVar "typeErrorsSticky")))
 (DTypeSig false "recordTypeError" (TyFun (TyCon "TcDiag") (TyCon "Unit")))
-(DFunDef false "recordTypeError" ((PVar "raw")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "writtenDiag") (EVar "raw"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsStickyDiags")) (EBinOp "::" (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value") (EVar "d")) (EFieldAccess (EVar "typeErrorsStickyDiags") "value")))) (DoLet false false PWild (EApp (EVar "noteTypeErrorDetected") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "tcMsg") (EVar "d"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
+(DFunDef false "recordTypeError" ((PVar "raw")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "writtenDiag") (EVar "raw"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsStickyDiags")) (EBinOp "::" (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value") (EVar "d")) (EFieldAccess (EVar "typeErrorsStickyDiags") "value")))) (DoLet false false PWild (EApp (EVar "noteTypeErrorDetected") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "msgAtKey") (EApp (EVar "tcMsg") (EVar "d"))) (EApp (EVar "tcLoc") (EVar "d")))) (ELit LUnit)) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "tcMsg") (EVar "d"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value"))))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
 (DTypeSig false "noteTypeErrorDetected" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "noteTypeErrorDetected" (PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected")) (EBinOp "+" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value") (ELit (LInt 1)))))
 (DTypeSig false "erredDuring" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyTuple (TyCon "Bool") (TyVar "a"))))
@@ -55158,8 +55205,15 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "locKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ""))))
 (DTypeSig false "pushTypeErrorOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "pushTypeErrorOnce" ((PVar "code") (PVar "msg")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EApp (EVar "pushTypeError") (EVar "code")) (EVar "msg"))))
+(DTypeSig false "msgAtKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))
+(DFunDef false "msgAtKey" ((PVar "msg") (PVar "at")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "\t@@\t"))) (EApp (EVar "display") (EApp (EVar "locKey") (EVar "at")))) (ELit (LString ""))))
+(DTypeSig false "alreadyReportedAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
+(DFunDef false "alreadyReportedAt" ((PVar "msg") (PCon "None")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")))
+(DFunDef false "alreadyReportedAt" ((PVar "msg") (PVar "at")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "msgAtKey") (EVar "msg")) (EVar "at"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")))
 (DTypeSig false "pushTypeErrorOnceAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "pushTypeErrorOnceAt" ((PVar "code") (PVar "loc") (PVar "msg")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EVar "None")) (EVar "None")))))
+(DTypeSig false "pushTypeErrorOncePerSite" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit")))))
+(DFunDef false "pushTypeErrorOncePerSite" ((PVar "code") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "at") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (DoExpr (EIf (EApp (EApp (EVar "alreadyReportedAt") (EVar "msg")) (EVar "at")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None")))))))
 (DTypeSig false "pushTypeErrorHelpFixAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))) (TyCon "Unit")))))))
 (DFunDef false "pushTypeErrorHelpFixAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix")))))
 (DTypeSig false "currentLoc" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -56113,8 +56167,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "kindArgMono" ((PVar "etbl") (PVar "tvs") (PCon "KAuth" (PVar "l") (PVar "pat")) (PVar "arg")) (EBlock (DoLet false false (PVar "q") (EApp (EApp (EApp (EApp (EApp (EVar "authArgOf") (EVar "etbl")) (EVar "tvs")) (EVar "l")) (EVar "pat")) (EVar "arg"))) (DoExpr (EApp (EVar "TAuth") (EIf (EVar "pat") (EApp (EVar "authPatternClose") (EVar "q")) (EVar "q"))))))
 (DTypeSig false "authArgOf" (TyFun (TyCon "SigVars") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "EffLabel") (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyCon "Authority")))))))
 (DFunDef false "authArgOf" ((PVar "etbl") (PVar "tvs") (PVar "l") (PVar "pat") (PCon "TyVar" (PVar "n"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "etbl") "svAuths")) (arm (PCon "Some" (PVar "cell")) () (EBlock (DoLet false false PWild (EIf (EBinOp "&&" (EVar "pat") (EApp (EVar "not") (EApp (EVar "authvarIsPattern") (EVar "cell")))) (EApp (EApp (EVar "pushTypeErrorOnce") (ELit (LString "T-AUTHORITY-PATTERN"))) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "n")) (EApp (EVar "effLabelName") (EVar "l")))) (ELit LUnit))) (DoExpr (EApp (EVar "AVar") (EVar "cell"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeErrorOnce") (ELit (LString "T-AUTHORITY-KIND"))) (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "tvs"))) (EApp (EApp (EVar "typeVarAsAuthorityMsg") (EVar "n")) (EApp (EVar "effLabelName") (EVar "l"))) (EApp (EVar "nameNotAuthorityMsg") (EVar "n"))))) (DoExpr (EApp (EVar "authTop") (EApp (EVar "dtopFor") (EVar "l"))))))))
-(DFunDef false "authArgOf" ((PVar "etbl") (PVar "tvs") (PVar "l") (PVar "pat") (PCon "TyAuth" (PVar "ps") (PVar "loc"))) (EBlock (DoLet false false (PVar "top") (EApp (EVar "dtopFor") (EVar "l"))) (DoLet false false (PVar "lits") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isEPName") (EVar "p"))))) (EVar "ps"))) (DoLet false false (PVar "problems") (EApp (EApp (EApp (EVar "writtenTermProblems") (EApp (EVar "effLabelName") (EVar "l"))) (EVar "top")) (EVar "lits"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "why")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-PARAM"))) (EVar "loc")) (EApp (EApp (EVar "effectParamMsg") (EApp (EVar "effLabelName") (EVar "l"))) (EVar "why"))))) (ELit LUnit)) (EVar "problems"))) (DoLet false false PWild (EIf (EBinOp "&&" (EVar "pat") (EApp (EVar "isEmptyL") (EVar "problems"))) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "lit")) (EBlock (DoLet false false (PVar "written") (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "lit"))) (DoExpr (EIf (EApp (EVar "isPatternParam") (EVar "written")) (ELit LUnit) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EApp (EVar "exactInPatternSlotMsg") (EApp (EVar "effLabelName") (EVar "l"))) (EApp (EApp (EVar "authTermsSurface") (EVar "escStr")) (EListLit (EVar "lit")))) (EApp (EApp (EApp (EVar "ppAuthArg") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EApp (EVar "AConst") (EApp (EVar "extendParam") (EVar "written"))))))))))) (ELit LUnit)) (EVar "lits")) (ELit LUnit))) (DoExpr (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "authTermOf") (EVar "etbl")) (EVar "tvs")) (EVar "l")) (EVar "pat"))) (EVar "ps"))))))
-(DFunDef false "authArgOf" ((PVar "etbl") PWild (PVar "l") (PVar "pat") (PVar "ty")) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EApp (EVar "ordinaryBinderIn") (EVar "etbl")) (EVar "pat")) (EVar "ty")) (arm (PCon "Some" (PVar "n")) () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-PATTERN"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "n")) (EApp (EVar "effLabelName") (EVar "l"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-KIND"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EVar "typeAsAuthorityMsg") (EApp (EVar "ppTy") (EVar "ty"))) (EBinOp "++" (EApp (EVar "effLabelName") (EVar "l")) (EApp (EVar "patternMark") (EVar "pat")))))))) (DoExpr (EApp (EVar "authTop") (EApp (EVar "dtopFor") (EVar "l"))))))
+(DFunDef false "authArgOf" ((PVar "etbl") (PVar "tvs") (PVar "l") (PVar "pat") (PCon "TyAuth" (PVar "ps") (PVar "loc"))) (EBlock (DoLet false false (PVar "top") (EApp (EVar "dtopFor") (EVar "l"))) (DoLet false false (PVar "lits") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isEPName") (EVar "p"))))) (EVar "ps"))) (DoLet false false (PVar "problems") (EApp (EApp (EApp (EVar "writtenTermProblems") (EApp (EVar "effLabelName") (EVar "l"))) (EVar "top")) (EVar "lits"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "why")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-PARAM"))) (EVar "loc")) (EApp (EApp (EVar "effectParamMsg") (EApp (EVar "effLabelName") (EVar "l"))) (EVar "why"))))) (ELit LUnit)) (EVar "problems"))) (DoLet false false PWild (EIf (EBinOp "&&" (EVar "pat") (EApp (EVar "isEmptyL") (EVar "problems"))) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "lit")) (EBlock (DoLet false false (PVar "written") (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "lit"))) (DoExpr (EIf (EApp (EVar "isPatternParam") (EVar "written")) (ELit LUnit) (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EApp (EVar "exactInPatternSlotMsg") (EApp (EVar "effLabelName") (EVar "l"))) (EApp (EApp (EVar "authTermsSurface") (EVar "escStr")) (EListLit (EVar "lit")))) (EApp (EApp (EApp (EVar "ppAuthArg") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EApp (EVar "AConst") (EApp (EVar "extendParam") (EVar "written"))))))))))) (ELit LUnit)) (EVar "lits")) (ELit LUnit))) (DoExpr (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "authTermOf") (EVar "etbl")) (EVar "tvs")) (EVar "l")) (EVar "pat"))) (EVar "ps"))))))
+(DFunDef false "authArgOf" ((PVar "etbl") PWild (PVar "l") (PVar "pat") (PVar "ty")) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EApp (EVar "ordinaryBinderIn") (EVar "etbl")) (EVar "pat")) (EVar "ty")) (arm (PCon "Some" (PVar "n")) () (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (ELit (LString "T-AUTHORITY-PATTERN"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "n")) (EApp (EVar "effLabelName") (EVar "l"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-KIND"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EVar "typeAsAuthorityMsg") (EApp (EVar "ppTy") (EVar "ty"))) (EBinOp "++" (EApp (EVar "effLabelName") (EVar "l")) (EApp (EVar "patternMark") (EVar "pat")))))))) (DoExpr (EApp (EVar "authTop") (EApp (EVar "dtopFor") (EVar "l"))))))
 (DTypeSig false "ordinaryBinderIn" (TyFun (TyCon "SigVars") (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "ordinaryBinderIn" ((PVar "etbl") (PCon "True") (PCon "TyRow" (PList) (PVar "names") PWild)) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "isOrdinaryBinder") (EVar "etbl")) (EVar "n")))) (EVar "names")) (arm (PCons (PVar "n") PWild) () (EApp (EVar "Some") (EVar "n"))) (arm (PList) () (EVar "None"))))
 (DFunDef false "ordinaryBinderIn" (PWild PWild PWild) (EVar "None"))
@@ -60123,8 +60177,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "noImplFoundMsg" ((PVar "iface") (PList (PVar "arg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "No impl of ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " for "))) (EApp (EVar "display") (EApp (EVar "ppMonosShared") (EListLit (EVar "arg"))))) (ELit (LString ""))))
 (DFunDef false "noImplFoundMsg" ((PVar "iface") (PVar "args")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "No impl of ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " for "))) (EApp (EVar "display") (EApp (EVar "ppPredArgsShared") (EVar "args")))) (ELit (LString ""))))
 (DTypeSig false "noImplHint" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "noImplHint" ((PVar "iface") (PList (PVar "arg"))) (EMatch (EApp (EVar "headTyconNameMono") (EVar "arg")) (arm (PCon "Some" (PVar "n")) () (EApp (EApp (EVar "noImplHintFor") (EVar "iface")) (EVar "n"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "noImplHint" ((PVar "iface") (PList (PVar "arg"))) (EMatch (EApp (EVar "headTyconNameMono") (EVar "arg")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp "&&" (EApp (EVar "derivableIface") (EVar "iface")) (EApp (EVar "headIsStdlibOwned") (EVar "arg"))) (EVar "None") (EApp (EApp (EVar "noImplHintFor") (EVar "iface")) (EVar "n")))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "noImplHint" (PWild PWild) (EVar "None"))
+(DTypeSig false "headIsStdlibOwned" (TyFun (TyCon "Mono") (TyCon "Bool")))
+(DFunDef false "headIsStdlibOwned" ((PVar "arg")) (EMatch (EApp (EVar "headTyconMono") (EVar "arg")) (arm (PCon "Some" (PCon "HkDecl" (PCon "TkIdent" (PCon "Ident" PWild (PVar "io") PWild)))) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "False")) (ELam ((PVar "mid")) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value")))) (EVar "io"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "noImplHintFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "noImplHintFor" ((PVar "iface") (PVar "n")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamNameIndexRef") "value")) (EApp (EVar "Some") (EApp (EApp (EVar "noImplAdvice") (EVar "iface")) (EVar "n"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "noImplAdvice" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -62775,11 +62831,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "prog") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "supers" None) (rf "methods" None)) true)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkIfaceHeadKinds") (EVar "name")) (EVar "typarams")) (EApp (EApp (EVar "padAnns") (EVar "typarams")) (EVar "typaramKinds"))) (EVar "methods"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperKinds") (EVar "prog")) (EVar "name")) (EVar "typarams")) (EApp (EApp (EVar "padAnns") (EVar "typarams")) (EVar "typaramKinds"))) (EVar "methods")) (EVar "supers")))))
 (DFunDef false "checkDeclaredKindsDecl" (PWild PWild) (ELit LUnit))
 (DTypeSig false "checkAliasPatternSlots" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (TyFun (TyCon "Ty") (TyCon "Unit"))))
-(DFunDef false "checkAliasPatternSlots" ((PVar "params") (PVar "rhs")) (EBlock (DoLet false false (PVar "slots") (EApp (EVar "patternSlotNamesIn") (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "pk")) (EMatch (EVar "pk") (arm (PTuple (PVar "p") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild (PCon "False") (PVar "loc")))) () (EIf (EApp (EApp (EVar "contains") (EVar "p")) (EVar "slots")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "p")) (EVar "l"))) (ELit LUnit))) (arm PWild () (ELit LUnit))))) (ELit LUnit)) (EVar "params")))))
+(DFunDef false "checkAliasPatternSlots" ((PVar "params") (PVar "rhs")) (EBlock (DoLet false false (PVar "slots") (EApp (EVar "patternSlotNamesIn") (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "pk")) (EMatch (EVar "pk") (arm (PTuple (PVar "p") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild (PCon "False") (PVar "loc")))) () (EIf (EApp (EApp (EVar "contains") (EVar "p")) (EVar "slots")) (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "p")) (EVar "l"))) (ELit LUnit))) (arm PWild () (ELit LUnit))))) (ELit LUnit)) (EVar "params")))))
 (DTypeSig false "checkAuthorityKindLabels" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyCon "Unit")))
 (DFunDef false "checkAuthorityKindLabels" ((PVar "anns")) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "a")) (EMatch (EVar "a") (arm (PCon "Some" (PVar "k")) () (EApp (EVar "checkAuthorityKindLabel") (EVar "k"))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EVar "anns")))
 (DTypeSig false "checkAuthorityKindLabel" (TyFun (TyCon "KindAnn") (TyCon "Unit")))
-(DFunDef false "checkAuthorityKindLabel" ((PCon "KindAuthority" (PVar "l") (PVar "o") (PVar "pat") (PVar "loc"))) (EMatch (EApp (EVar "dtopFor") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (arm (PCon "PUnit") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-KIND"))) (EVar "loc")) (EApp (EVar "authorityAtomicLabelMsg") (EVar "l")))) (arm (PVar "top") () (EIf (EBinOp "&&" (EVar "pat") (EApp (EVar "not") (EApp (EVar "domainHasPatterns") (EVar "top")))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EVar "patternDomainMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EVar "l")) (ELit (LString "*")))) (EVar "l"))) (ELit LUnit)))))
+(DFunDef false "checkAuthorityKindLabel" ((PCon "KindAuthority" (PVar "l") (PVar "o") (PVar "pat") (PVar "loc"))) (EMatch (EApp (EVar "dtopFor") (EApp (EApp (EVar "EffLabel") (EVar "l")) (EVar "o"))) (arm (PCon "PUnit") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-KIND"))) (EVar "loc")) (EApp (EVar "authorityAtomicLabelMsg") (EVar "l")))) (arm (PVar "top") () (EIf (EBinOp "&&" (EVar "pat") (EApp (EVar "not") (EApp (EVar "domainHasPatterns") (EVar "top")))) (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EVar "patternDomainMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EVar "l")) (ELit (LString "*")))) (EVar "l"))) (ELit LUnit)))))
 (DFunDef false "checkAuthorityKindLabel" ((PCon "KindArrow" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "checkAuthorityKindLabel") (EVar "a"))) (DoExpr (EApp (EVar "checkAuthorityKindLabel") (EVar "b")))))
 (DFunDef false "checkAuthorityKindLabel" (PWild) (ELit LUnit))
 (DTypeSig false "domainHasPatterns" (TyFun (TyCon "Param") (TyCon "Bool")))
@@ -63960,7 +64016,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "hadTypeErrors" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "hadTypeErrors" (PWild) (EUnOp "!" (EVar "typeErrorsSticky")))
 (DTypeSig false "recordTypeError" (TyFun (TyCon "TcDiag") (TyCon "Unit")))
-(DFunDef false "recordTypeError" ((PVar "raw")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "writtenDiag") (EVar "raw"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsStickyDiags")) (EBinOp "::" (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value") (EVar "d")) (EFieldAccess (EVar "typeErrorsStickyDiags") "value")))) (DoLet false false PWild (EApp (EVar "noteTypeErrorDetected") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "tcMsg") (EVar "d"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
+(DFunDef false "recordTypeError" ((PVar "raw")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "writtenDiag") (EVar "raw"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsStickyDiags")) (EBinOp "::" (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value") (EVar "d")) (EFieldAccess (EVar "typeErrorsStickyDiags") "value")))) (DoLet false false PWild (EApp (EVar "noteTypeErrorDetected") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "msgAtKey") (EApp (EVar "tcMsg") (EVar "d"))) (EApp (EVar "tcLoc") (EVar "d")))) (ELit LUnit)) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "tcMsg") (EVar "d"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value"))))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
 (DTypeSig false "noteTypeErrorDetected" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "noteTypeErrorDetected" (PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected")) (EBinOp "+" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value") (ELit (LInt 1)))))
 (DTypeSig false "erredDuring" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyTuple (TyCon "Bool") (TyVar "a"))))
@@ -63974,8 +64030,15 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "locKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "line") (PVar "col") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ""))))
 (DTypeSig false "pushTypeErrorOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "pushTypeErrorOnce" ((PVar "code") (PVar "msg")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EApp (EVar "pushTypeError") (EVar "code")) (EVar "msg"))))
+(DTypeSig false "msgAtKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))
+(DFunDef false "msgAtKey" ((PVar "msg") (PVar "at")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "\t@@\t"))) (EApp (EMethodRef "display") (EApp (EVar "locKey") (EVar "at")))) (ELit (LString ""))))
+(DTypeSig false "alreadyReportedAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
+(DFunDef false "alreadyReportedAt" ((PVar "msg") (PCon "None")) (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")))
+(DFunDef false "alreadyReportedAt" ((PVar "msg") (PVar "at")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "msgAtKey") (EVar "msg")) (EVar "at"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")))
 (DTypeSig false "pushTypeErrorOnceAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "pushTypeErrorOnceAt" ((PVar "code") (PVar "loc") (PVar "msg")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EVar "None")) (EVar "None")))))
+(DTypeSig false "pushTypeErrorOncePerSite" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit")))))
+(DFunDef false "pushTypeErrorOncePerSite" ((PVar "code") (PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "at") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (DoExpr (EIf (EApp (EApp (EVar "alreadyReportedAt") (EVar "msg")) (EVar "at")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EVar "at")) (EVar "msg")) (EVar "None")) (EVar "None")))))))
 (DTypeSig false "pushTypeErrorHelpFixAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))) (TyCon "Unit")))))))
 (DFunDef false "pushTypeErrorHelpFixAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "msg")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix")))))
 (DTypeSig false "currentLoc" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -64929,8 +64992,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "kindArgMono" ((PVar "etbl") (PVar "tvs") (PCon "KAuth" (PVar "l") (PVar "pat")) (PVar "arg")) (EBlock (DoLet false false (PVar "q") (EApp (EApp (EApp (EApp (EApp (EVar "authArgOf") (EVar "etbl")) (EVar "tvs")) (EVar "l")) (EVar "pat")) (EVar "arg"))) (DoExpr (EApp (EVar "TAuth") (EIf (EVar "pat") (EApp (EVar "authPatternClose") (EVar "q")) (EVar "q"))))))
 (DTypeSig false "authArgOf" (TyFun (TyCon "SigVars") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "EffLabel") (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyCon "Authority")))))))
 (DFunDef false "authArgOf" ((PVar "etbl") (PVar "tvs") (PVar "l") (PVar "pat") (PCon "TyVar" (PVar "n"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "etbl") "svAuths")) (arm (PCon "Some" (PVar "cell")) () (EBlock (DoLet false false PWild (EIf (EBinOp "&&" (EVar "pat") (EApp (EVar "not") (EApp (EVar "authvarIsPattern") (EVar "cell")))) (EApp (EApp (EVar "pushTypeErrorOnce") (ELit (LString "T-AUTHORITY-PATTERN"))) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "n")) (EApp (EVar "effLabelName") (EVar "l")))) (ELit LUnit))) (DoExpr (EApp (EVar "AVar") (EVar "cell"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeErrorOnce") (ELit (LString "T-AUTHORITY-KIND"))) (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "tvs"))) (EApp (EApp (EVar "typeVarAsAuthorityMsg") (EVar "n")) (EApp (EVar "effLabelName") (EVar "l"))) (EApp (EVar "nameNotAuthorityMsg") (EVar "n"))))) (DoExpr (EApp (EVar "authTop") (EApp (EVar "dtopFor") (EVar "l"))))))))
-(DFunDef false "authArgOf" ((PVar "etbl") (PVar "tvs") (PVar "l") (PVar "pat") (PCon "TyAuth" (PVar "ps") (PVar "loc"))) (EBlock (DoLet false false (PVar "top") (EApp (EVar "dtopFor") (EVar "l"))) (DoLet false false (PVar "lits") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isEPName") (EVar "p"))))) (EVar "ps"))) (DoLet false false (PVar "problems") (EApp (EApp (EApp (EVar "writtenTermProblems") (EApp (EVar "effLabelName") (EVar "l"))) (EVar "top")) (EVar "lits"))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "why")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-PARAM"))) (EVar "loc")) (EApp (EApp (EVar "effectParamMsg") (EApp (EVar "effLabelName") (EVar "l"))) (EVar "why"))))) (ELit LUnit)) (EVar "problems"))) (DoLet false false PWild (EIf (EBinOp "&&" (EVar "pat") (EApp (EVar "isEmptyL") (EVar "problems"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "lit")) (EBlock (DoLet false false (PVar "written") (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "lit"))) (DoExpr (EIf (EApp (EVar "isPatternParam") (EVar "written")) (ELit LUnit) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EApp (EVar "exactInPatternSlotMsg") (EApp (EVar "effLabelName") (EVar "l"))) (EApp (EApp (EVar "authTermsSurface") (EVar "escStr")) (EListLit (EVar "lit")))) (EApp (EApp (EApp (EVar "ppAuthArg") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EApp (EVar "AConst") (EApp (EVar "extendParam") (EVar "written"))))))))))) (ELit LUnit)) (EVar "lits")) (ELit LUnit))) (DoExpr (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "authTermOf") (EVar "etbl")) (EVar "tvs")) (EVar "l")) (EVar "pat"))) (EVar "ps"))))))
-(DFunDef false "authArgOf" ((PVar "etbl") PWild (PVar "l") (PVar "pat") (PVar "ty")) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EApp (EVar "ordinaryBinderIn") (EVar "etbl")) (EVar "pat")) (EVar "ty")) (arm (PCon "Some" (PVar "n")) () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-PATTERN"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "n")) (EApp (EVar "effLabelName") (EVar "l"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-KIND"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EVar "typeAsAuthorityMsg") (EApp (EVar "ppTy") (EVar "ty"))) (EBinOp "++" (EApp (EVar "effLabelName") (EVar "l")) (EApp (EVar "patternMark") (EVar "pat")))))))) (DoExpr (EApp (EVar "authTop") (EApp (EVar "dtopFor") (EVar "l"))))))
+(DFunDef false "authArgOf" ((PVar "etbl") (PVar "tvs") (PVar "l") (PVar "pat") (PCon "TyAuth" (PVar "ps") (PVar "loc"))) (EBlock (DoLet false false (PVar "top") (EApp (EVar "dtopFor") (EVar "l"))) (DoLet false false (PVar "lits") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isEPName") (EVar "p"))))) (EVar "ps"))) (DoLet false false (PVar "problems") (EApp (EApp (EApp (EVar "writtenTermProblems") (EApp (EVar "effLabelName") (EVar "l"))) (EVar "top")) (EVar "lits"))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "why")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-PARAM"))) (EVar "loc")) (EApp (EApp (EVar "effectParamMsg") (EApp (EVar "effLabelName") (EVar "l"))) (EVar "why"))))) (ELit LUnit)) (EVar "problems"))) (DoLet false false PWild (EIf (EBinOp "&&" (EVar "pat") (EApp (EVar "isEmptyL") (EVar "problems"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "lit")) (EBlock (DoLet false false (PVar "written") (EApp (EApp (EVar "writtenParam") (EVar "top")) (EVar "lit"))) (DoExpr (EIf (EApp (EVar "isPatternParam") (EVar "written")) (ELit LUnit) (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (ELit (LString "T-AUTHORITY-PATTERN"))) (EVar "loc")) (EApp (EApp (EApp (EVar "exactInPatternSlotMsg") (EApp (EVar "effLabelName") (EVar "l"))) (EApp (EApp (EVar "authTermsSurface") (EVar "escStr")) (EListLit (EVar "lit")))) (EApp (EApp (EApp (EVar "ppAuthArg") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EApp (EVar "AConst") (EApp (EVar "extendParam") (EVar "written"))))))))))) (ELit LUnit)) (EVar "lits")) (ELit LUnit))) (DoExpr (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "authTermOf") (EVar "etbl")) (EVar "tvs")) (EVar "l")) (EVar "pat"))) (EVar "ps"))))))
+(DFunDef false "authArgOf" ((PVar "etbl") PWild (PVar "l") (PVar "pat") (PVar "ty")) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EApp (EVar "ordinaryBinderIn") (EVar "etbl")) (EVar "pat")) (EVar "ty")) (arm (PCon "Some" (PVar "n")) () (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (ELit (LString "T-AUTHORITY-PATTERN"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "n")) (EApp (EVar "effLabelName") (EVar "l"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AUTHORITY-KIND"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EVar "typeAsAuthorityMsg") (EApp (EVar "ppTy") (EVar "ty"))) (EBinOp "++" (EApp (EVar "effLabelName") (EVar "l")) (EApp (EVar "patternMark") (EVar "pat")))))))) (DoExpr (EApp (EVar "authTop") (EApp (EVar "dtopFor") (EVar "l"))))))
 (DTypeSig false "ordinaryBinderIn" (TyFun (TyCon "SigVars") (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "ordinaryBinderIn" ((PVar "etbl") (PCon "True") (PCon "TyRow" (PList) (PVar "names") PWild)) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "isOrdinaryBinder") (EVar "etbl")) (EVar "n")))) (EVar "names")) (arm (PCons (PVar "n") PWild) () (EApp (EVar "Some") (EVar "n"))) (arm (PList) () (EVar "None"))))
 (DFunDef false "ordinaryBinderIn" (PWild PWild PWild) (EVar "None"))
@@ -68939,8 +69002,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "noImplFoundMsg" ((PVar "iface") (PList (PVar "arg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "No impl of ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " for "))) (EApp (EMethodRef "display") (EApp (EVar "ppMonosShared") (EListLit (EVar "arg"))))) (ELit (LString ""))))
 (DFunDef false "noImplFoundMsg" ((PVar "iface") (PVar "args")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "No impl of ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " for "))) (EApp (EMethodRef "display") (EApp (EVar "ppPredArgsShared") (EVar "args")))) (ELit (LString ""))))
 (DTypeSig false "noImplHint" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "noImplHint" ((PVar "iface") (PList (PVar "arg"))) (EMatch (EApp (EVar "headTyconNameMono") (EVar "arg")) (arm (PCon "Some" (PVar "n")) () (EApp (EApp (EVar "noImplHintFor") (EVar "iface")) (EVar "n"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "noImplHint" ((PVar "iface") (PList (PVar "arg"))) (EMatch (EApp (EVar "headTyconNameMono") (EVar "arg")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp "&&" (EApp (EVar "derivableIface") (EVar "iface")) (EApp (EVar "headIsStdlibOwned") (EVar "arg"))) (EVar "None") (EApp (EApp (EVar "noImplHintFor") (EVar "iface")) (EVar "n")))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "noImplHint" (PWild PWild) (EVar "None"))
+(DTypeSig false "headIsStdlibOwned" (TyFun (TyCon "Mono") (TyCon "Bool")))
+(DFunDef false "headIsStdlibOwned" ((PVar "arg")) (EMatch (EApp (EVar "headTyconMono") (EVar "arg")) (arm (PCon "Some" (PCon "HkDecl" (PCon "TkIdent" (PCon "Ident" PWild (PVar "io") PWild)))) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "False")) (ELam ((PVar "mid")) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value")))) (EVar "io"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "noImplHintFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "noImplHintFor" ((PVar "iface") (PVar "n")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamNameIndexRef") "value")) (EApp (EVar "Some") (EApp (EApp (EVar "noImplAdvice") (EVar "iface")) (EVar "n"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "noImplAdvice" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))

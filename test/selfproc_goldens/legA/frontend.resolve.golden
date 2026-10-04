@@ -282,6 +282,7 @@ newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError
 newtypeTypeOfCtor : String -> ModuleExports -> Option String
 noCarry : UsePath -> ModuleExports -> List a
 noteOriginTrace : String -> List Decl -> Unit
+nsAbstractCtors : ExpNs (String, String)
 nsAbstractData : ExpNs String
 nsCtorOrigins : ExpNs (String, String)
 nsCtors : ExpNs String

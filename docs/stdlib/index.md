@@ -10,7 +10,7 @@ A command-line argument parser.
 - [`Trailing`](args.md#trailing)
 - [`FlagSpec`](args.md#flagspec)
 - [`ArgSpec`](args.md#argspec)
-- [`Args`](args.md#args)
+- [`Args`](args.md#args-1)
 - [`switch`](args.md#switch)
 - [`value`](args.md#value)
 - [`valueList`](args.md#valuelist)
@@ -74,7 +74,7 @@ Operations on `Array a`.
 ## [`async`](async.md)
 
 - [`Wait`](async.md#wait)
-- [`Async`](async.md#async)
+- [`Async`](async.md#async-1)
 - [`Task`](async.md#task)
 - [`liftIO`](async.md#liftio)
 - [`yield`](async.md#yield)
@@ -140,7 +140,7 @@ Parser combinators over `Bytes`.
 
 - [`BResult`](byteparser.md#bresult)
 - [`ByteParserE`](byteparser.md#byteparsere)
-- [`ByteParser`](byteparser.md#byteparser)
+- [`ByteParser`](byteparser.md#byteparser-1)
 - [`runBP`](byteparser.md#runbp)
 - [`onOk`](byteparser.md#onok)
 - [`noMatch`](byteparser.md#nomatch)
@@ -179,7 +179,7 @@ Parser combinators over `Bytes`.
 
 An immutable string of bytes.
 
-- [`Bytes`](bytes.md#bytes)
+- [`Bytes`](bytes.md#bytes-1)
 - [`fromArray`](bytes.md#fromarray)
 - [`fromArrayAssumeByteDomain`](bytes.md#fromarrayassumebytedomain)
 - [`toArray`](bytes.md#toarray)
@@ -291,14 +291,14 @@ The prelude: the types, interfaces, and functions every Medaka program can use w
 - [`isNone`](core.md#isnone)
 - [`optionOr`](core.md#optionor)
 - [`optionOrPanic`](core.md#optionorpanic)
-- [`option`](core.md#option)
+- [`option`](core.md#option-1)
 - [`toResult`](core.md#toresult)
 - [`fromResult`](core.md#fromresult)
 - [`isOk`](core.md#isok)
 - [`isErr`](core.md#iserr)
 - [`resultOr`](core.md#resultor)
 - [`resultOrPanic`](core.md#resultorpanic)
-- [`result`](core.md#result)
+- [`result`](core.md#result-1)
 - [`mapErr`](core.md#maperr)
 - [`identity`](core.md#identity)
 - [`fst`](core.md#fst)
@@ -326,7 +326,7 @@ HMAC-SHA-256 (RFC 2104) over byte strings.
 - [`ctEq`](crypto.hmac.md#cteq)
 - [`hmacSha256`](crypto.hmac.md#hmacsha256)
 - [`HmacSha256Key`](crypto.hmac.md#hmacsha256key)
-- [`hmacSha256Key`](crypto.hmac.md#hmacsha256key)
+- [`hmacSha256Key`](crypto.hmac.md#hmacsha256key-1)
 - [`hmacSha256WithKey`](crypto.hmac.md#hmacsha256withkey)
 
 ## [`crypto.sha256`](crypto.sha256.md)
@@ -539,7 +539,7 @@ Output to standard error, debug printing, and helpers for files and the environm
 
 A JSON value type with a parser and a serializer.
 
-- [`Json`](json.md#json)
+- [`Json`](json.md#json-1)
 - [`jArray`](json.md#jarray)
 - [`jObject`](json.md#jobject)
 - [`stringify`](json.md#stringify)
@@ -590,7 +590,7 @@ Operations on `List a`.
 - [`lookup`](list.md#lookup)
 - [`findMap`](list.md#findmap)
 - [`mapWithIndex`](list.md#mapwithindex)
-- [`indexed`](list.md#indexed)
+- [`indexed`](list.md#indexed-1)
 - [`mapAccumL`](list.md#mapaccuml)
 - [`mapAccumR`](list.md#mapaccumr)
 - [`insertAt`](list.md#insertat)
@@ -638,7 +638,7 @@ Operations on `List a`.
 
 An immutable map from keys to values, ordered by key.
 
-- [`Map`](map.md#map)
+- [`Map`](map.md#map-1)
 - [`singleton`](map.md#singleton)
 - [`fromList`](map.md#fromlist)
 - [`size`](map.md#size)
@@ -725,7 +725,7 @@ TCP connections and name resolution.
 - [`recvString`](net.md#recvstring)
 - [`sendLine`](net.md#sendline)
 - [`recvLine`](net.md#recvline)
-- [`shutdown`](net.md#shutdown)
+- [`shutdown`](net.md#shutdown-1)
 - [`close`](net.md#close)
 - [`closeListener`](net.md#closelistener)
 - [`setTimeout`](net.md#settimeout)
@@ -752,7 +752,7 @@ TCP connections and name resolution.
 
 A list with at least one element.
 
-- [`NonEmpty`](nonempty.md#nonempty)
+- [`NonEmpty`](nonempty.md#nonempty-1)
 - [`singleton`](nonempty.md#singleton)
 - [`fromList`](nonempty.md#fromlist)
 - [`head`](nonempty.md#head)
@@ -780,7 +780,7 @@ Manipulation of `/`-separated paths as text.
 
 Regular expressions, matched in linear time.
 
-- [`Regex`](regex.md#regex)
+- [`Regex`](regex.md#regex-1)
 - [`RegexError`](regex.md#regexerror)
 - [`Group`](regex.md#group)
 - [`Match`](regex.md#match)
@@ -956,7 +956,7 @@ The host primitives.
 
 An immutable set of distinct elements, ordered by `Ord`.
 
-- [`Set`](set.md#set)
+- [`Set`](set.md#set-1)
 - [`singleton`](set.md#singleton)
 - [`fromList`](set.md#fromlist)
 - [`size`](set.md#size)
@@ -1128,7 +1128,7 @@ Durations, a UTC calendar, and the clock.
 A reader for a subset of TOML.
 
 - [`TomlValue`](toml.md#tomlvalue)
-- [`Toml`](toml.md#toml)
+- [`Toml`](toml.md#toml-1)
 - [`parse`](toml.md#parse)
 - [`getString`](toml.md#getstring)
 - [`getArray`](toml.md#getarray)
@@ -1250,7 +1250,7 @@ Unsigned 8-bit integers, the `U8` type.
 
 A result type that collects every error instead of stopping at the first.
 
-- [`Validation`](validation.md#validation)
+- [`Validation`](validation.md#validation-1)
 - [`toResult`](validation.md#toresult)
 - [`fromResult`](validation.md#fromresult)
 
@@ -1258,7 +1258,7 @@ A result type that collects every error instead of stopping at the first.
 
 A growable, mutable array.
 
-- [`Vector`](vector.md#vector)
+- [`Vector`](vector.md#vector-1)
 - [`new`](vector.md#new)
 - [`fromList`](vector.md#fromlist)
 - [`fromArray`](vector.md#fromarray)
