@@ -1,0 +1,19 @@
+-- control for the requires-depth rows: the same chain at depth 10, with the
+-- `requires Tag a` the body needs.  `tag (Q 1)` adds one per `W`: 1 + 10 = 11.
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Int where
+  tag n = n
+
+data W a = W a
+
+impl Tag (W a) requires Tag a where
+  tag (W x) = tag x + 1
+
+data Q a = Q a
+
+impl Tag (Q a) requires Tag a where
+  tag (Q x) = tag (W (W (W (W (W (W (W (W (W (W (x)))))))))))
+
+main = println (tag (Q (1 : Int)))

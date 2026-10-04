@@ -1,3 +1,4 @@
+-- Control: `Get (Box b) b` matches `impl Get (Box a) a` at the rigid `b` itself.
 data Box a = Box a
 
 interface Get c e where

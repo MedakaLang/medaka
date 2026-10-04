@@ -1,0 +1,14 @@
+-- Control: the same body with `requires Show2 a` declared and `impl Show2 Int`
+-- to discharge it. Hand-derived: `show2 (Pair 1 2)` shows the first field, "int 1".
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+impl Show2 (Pair a) requires Show2 a where
+  show2 (Pair x _) = show2 x
+
+main = println (show2 (Pair (1 : Int) 2))

@@ -1,0 +1,16 @@
+-- A cyclic instance context reached from an impl body's goal on a head variable.
+-- Expected: a located rejection at the impl, not a compiler stack overflow.
+interface C a where
+  cc : a -> Int
+
+data Box a = Box a
+
+impl C (Box a) requires C (Box a) where
+  cc _ = 1
+
+data Q a = Q a
+
+impl C (Q a) where
+  cc (Q x) = cc (Box x)
+
+main = println (cc (Q (1 : Int)))

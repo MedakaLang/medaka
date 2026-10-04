@@ -1,0 +1,17 @@
+-- §3 the signature-variable guard on head-tycon grounding applies only when a
+-- signature variable is among the types: `Conv (Wrap String) t`, with `t` a free
+-- variable of `main`, has one head-tycon candidate `impl Conv (Wrap Int) Bool`
+-- that does not fit (String vs Int).  The goal is rejected as having no impl;
+-- "wrap-int-bool" is never printed.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv (Wrap Int) Bool where
+  conv _ _ = "wrap-int-bool"
+
+bottom : Unit -> a
+bottom u = bottom u
+
+main = println (conv (Wrap "s") (bottom ()))

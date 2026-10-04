@@ -1,0 +1,14 @@
+-- §3 W3-inst: `impl Sizer (P c d)` is declared for every `c`, but its body
+-- annotates the `c` field `String`, so it holds only for `impl Sizer (P String d)`.
+-- Rejected at the body; `P 1 2` would otherwise reach it with an Int field.
+interface Sizer x where
+  size : x -> Int
+
+data P c d = P c d
+
+impl Sizer (P c d) where
+  size (P tag n) =
+    let t = tag : String
+    if t == "zzz" then 0 else 5
+
+main = println (size (P 1 2))
