@@ -190,7 +190,9 @@ function tokenCode(stream, state) {
     if (!indented) { state.decl = null; state.ctorNext = false; state.pdepth = 0; }
     const open = state.depth > 0 && (state.last === ',' || state.last === '(' ||
                                      state.last === '<' || state.last === '{');
-    const carry = indented && state.typePos && (state.last === '->' || open);
+    const carry = indented && state.typePos &&
+      (state.last === '->' || state.last === ':' || state.last === '>' || open ||
+       stream.match(/^\s*->/, false) !== null);
     if (!carry) { state.depth = 0; state.angle = 0; state.ascAt = null; }
     state.last = null;
     state.effHead = false; state.imp = carry ? state.imp : false;
@@ -289,6 +291,7 @@ function tokenCode(stream, state) {
     stream.next();
     const top = state.interpStack[state.interpStack.length - 1];
     if (!top) { if (c === '{') state.pdepth++; else closeDelim(state); }
+    if (!top && c === '{') state.ctorNext = false;
     if (!top && state.typePos) state.depth = Math.max(0, state.depth + (c === '{' ? 1 : -1));
     if (top) {
       if (c === '{') { top.brace++; return 'punctuation'; }
@@ -304,8 +307,13 @@ function tokenCode(stream, state) {
     stream.next();
     if (ASCRIPTION_END_OPS.has(c) && endsAscription(state)) closeAscription(state);
     if (c === ':') { if (!state.typePos) state.ascAt = state.pdepth; state.typePos = true; }
-    else if (c === '<' && state.typePos) { state.angle++; state.depth++; }
+    else if (c === '<' && state.typePos) {
+      if (state.ascAt !== null && state.ascAt > 0 && state.pdepth === state.ascAt && state.angle === 0 &&
+          !stream.match(/^\s*([A-Z>]|[a-z_][A-Za-z0-9_]*\s*[>|,])/, false)) closeAscription(state);
+      else { state.angle++; state.depth++; }
+    }
     else if (c === '>' && state.angle > 0) { state.angle--; state.depth = Math.max(0, state.depth - 1); }
+    else if (c === '=' && state.angle > 0) { /* a row's `Label=domain` binding */ }
     else if (c === '=') {
       state.ascAt = null;
       if (state.decl === 'data') state.ctorNext = true;
