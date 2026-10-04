@@ -1399,17 +1399,21 @@ mcpTestEngineHasNative [] = False
 mcpTestEngineHasNative (EngNative :: _) = True
 mcpTestEngineHasNative (_ :: rest) = mcpTestEngineHasNative rest
 
--- The `engine` argument: absent selects the default; a present value must be
--- one of the two known names (an unknown one is an argument error, not a
--- silent fallback to the default).
+-- The `engine` argument: a missing key selects the default; a present value
+-- must be the string "native" or "eval".  Anything else, including a non-string
+-- value and an explicit null, is an argument error, not a silent fallback to the
+-- default.
 mcpTestEnginesArg : Json -> Result String (List Engine)
-mcpTestEnginesArg args = match fieldStr "engine" args
+mcpTestEnginesArg args = match get "engine" args
   None => Ok mcpTestDefaultEngines
-  Some "native" => Ok [EngNative]
-  Some "eval" => Ok [EngInterp]
-  Some other =>
+  Some (JString "native") => Ok [EngNative]
+  Some (JString "eval") => Ok [EngInterp]
+  Some (JString other) =>
     Err
       "medaka_test: unknown engine '\{other}' — 'engine' must be \"native\" (default) or \"eval\""
+  Some _ =>
+    Err
+      "medaka_test: 'engine' must be a string, \"native\" (default) or \"eval\""
 
 -- The caveat sentence, derived from `engines`: an interpreter-only run keeps
 -- the original #81 warning; a run that includes the native engine says which
@@ -1417,7 +1421,7 @@ mcpTestEnginesArg args = match fieldStr "engine" args
 mcpTestCaveat : List Engine -> String
 mcpTestCaveat engines
   | mcpTestEngineHasNative engines =
-    "Results are under the NATIVE backend (\{engineName EngNative}), the same engine `medaka test` defaults to; property tests always run under the interpreter. Pass engine \"eval\" for interpreter results."
+    "Results are under the NATIVE backend, the same engine `medaka test` defaults to; property tests always run under the interpreter. If the native build is unavailable (no clang), engine \"eval\" asks for the interpreter instead."
   | otherwise =
     "⚠️ RESULTS ARE UNDER THE INTERPRETER (\{engineName EngInterp}), NOT the native backend — report as \"passes under eval\", never unqualified (#81)."
 

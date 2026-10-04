@@ -1552,9 +1552,10 @@ testFailSuffix failed errors
 -- doctests+props normally with `None` here, just without the CLI's stderr
 -- notice, since this path has no stderr channel of its own.
 --
--- ⚠️ Results are under the INTERPRETER (eval) — a native-only miscompile is
--- invisible here (see #81); the CALLER must present them as "passes under eval",
--- never an unqualified pass.
+-- Results are under the engine(s) the caller asks for.  An interpreter-only run
+-- cannot see a native-only miscompile (see #81), so a caller that asked for the
+-- interpreter must present its results as "passes under eval", never as an
+-- unqualified pass.
 --
 -- #2295 (d): the return tuple carries a 4th element, the `test "…"` phase's
 -- structured results (`testDeclsReport`, above) — §4 of this slice's packet
