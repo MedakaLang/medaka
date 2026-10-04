@@ -1621,8 +1621,57 @@ parseMatch = defer
   scrut <- parseExpr
   expectTok TIndent
   arms <- parseArms
+  matchArmsGuard arms
   expectTok TDedent
   deferPure (EMatch scrut arms)
+
+-- A match whose first arm failed to parse (`arms` is empty) while the indented
+-- block it opened is a CONTINUATION of the scrutinee (`match f a⏎      b⏎    Arm => …`):
+-- the layout algorithm treats the deeper line after a `match` header as an arms
+-- block (LAYOUT-SEMANTICS §4 I.b, §7.3), so the wrapped scrutinee line is what the
+-- parser trips on, not the `match`.  Reported at that line's first token.
+matchArmsGuard : List Arm -> Parser Unit
+matchArmsGuard [] = defer
+  here <- getPos
+  wrapped <- matchContinuationAhead
+  if wrapped then fatalAtP matchScrutContinuationMsg here else deferPure ()
+matchArmsGuard _ = deferPure ()
+
+matchScrutContinuationMsg : String
+matchScrutContinuationMsg =
+  "a `match` scrutinee cannot continue onto further indented lines — the first deeper line after `match` opens the arms block. Bind the scrutinee to a `let` first, or wrap its arguments in parentheses"
+
+matchContinuationAhead : Parser Bool
+matchContinuationAhead =
+  ParserE (toks pos => POk (continuationBlockShape toks pos 0) pos)
+
+-- Tokens from `i` (just inside an INDENT) up to the matching DEDENT hold no `=>`,
+-- and the logical line right after that DEDENT does: the real arms follow the block.
+continuationBlockShape : Array Token -> Int -> Int -> Bool
+continuationBlockShape toks i depth = match peekTok toks i
+  TEof => False
+  TFatArrow => False
+  TIndent => continuationBlockShape toks (i + 1) (depth + 1)
+  TDedent =>
+    if depth == 0 then
+      armsLineAhead toks (i + 1)
+    else
+      continuationBlockShape toks (i + 1) (depth - 1)
+  _ => continuationBlockShape toks (i + 1) depth
+
+armsLineAhead : Array Token -> Int -> Bool
+armsLineAhead toks i = match peekTok toks i
+  TNewline => armsLineAhead toks (i + 1)
+  _ => lineHasFatArrow toks i
+
+lineHasFatArrow : Array Token -> Int -> Bool
+lineHasFatArrow toks i = match peekTok toks i
+  TFatArrow => True
+  TNewline => False
+  TDedent => False
+  TIndent => False
+  TEof => False
+  _ => lineHasFatArrow toks (i + 1)
 
 parseArms : Parser (List Arm)
 parseArms = defer

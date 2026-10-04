@@ -1,0 +1,9 @@
+g : String -> String -> String -> Option String
+g _ _ _ = None
+
+main =
+  match g "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      "ccccccccccccccccccccccccccccccccccccc"
+    None => println "none"
+    Some s => println s
