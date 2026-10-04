@@ -294,7 +294,13 @@ commentToPair c = (commentLine c, commentText c)
 concatMapC : List (Int, String) -> List (Int, String)
 concatMapC [] = []
 concatMapC (c :: rest) =
-  (if isBlockComment c then expandBlock c else [c]) ++ concatMapC rest
+  (if isBlockComment c then blockWithFences c else [c]) ++ concatMapC rest
+
+-- A block comment ends on its own line, so an adjacent `--` comment would
+-- otherwise read as a continuation of the block's last expected line. Bare `--`
+-- fences on both sides keep the block's examples self-contained.
+blockWithFences : (Int, String) -> List (Int, String)
+blockWithFences c = (clLine c, "--") :: expandBlock c ++ [(clLine c, "--")]
 
 -- ── Synthesizing the per-example binding ────────────────────────────────────
 -- An example with an expected line is rendered through the user-facing `debug`

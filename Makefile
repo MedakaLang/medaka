@@ -145,6 +145,7 @@ test: medaka
 	## without this line nothing walks it at all.
 	./medaka test compiler/tools/gate_cmd_test.mdk
 	./medaka test compiler/tools/check_policy_test.mdk
+	./medaka test compiler/tools/doctest_test.mdk
 	## S-gate-registry (#2735): same reason, for gate_cmd.mdk's sibling. No
 	## gate script invokes `medaka test` on compiler/tools/gate_registry.mdk
 	## either, so without this line its tierPartOf/modePartOf/globMatch/
