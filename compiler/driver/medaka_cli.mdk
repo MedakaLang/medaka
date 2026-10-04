@@ -2793,11 +2793,13 @@ runRunCmd argv =
       -- ["--", "--foo"]), so `run` must NOT route its whole argv through
       -- `assertCliFlags` the way the other verbs do.
       runAbort (unknownFlagMessage runArgSpec target)
-    -- #2366: a path that names no file is a filesystem error, not a module
-    -- the loader failed to find (its "available modules" roster is misleading
-    -- here).  Same wording as `medaka build`.
-    target :: _ if not (fileExists target) =>
-      runAbort ("error: no such file: " ++ target)
+    -- #2366: a path-shaped target (a `/`, or a `.mdk` suffix) that names no
+    -- file is a filesystem error, not a module the loader failed to find (its
+    -- "available modules" roster is misleading here).  A bare name still goes
+    -- to the loader, which resolves it as a module.  Same wording as
+    -- `medaka build`.
+    target :: _ if (hasSlash target || endsWith ".mdk" target)
+      && not (fileExists target) => runAbort ("error: no such file: " ++ target)
     target :: progArgs =>
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"
@@ -4229,6 +4231,13 @@ snapshotStages a = match flagValue "--stages" a
 -- dirname on a POSIX path.  A deliberate duplicate of `support/path.mdk`'s
 -- `dirOf`, on the same license as that file's own `lsp.mdk` duplicate: too
 -- small to be worth the coupling.  Keep the two bodies identical.
+hasSlash : String -> Bool
+hasSlash s = hasSlashFrom s (stringLength s)
+
+hasSlashFrom : String -> Int -> Bool
+hasSlashFrom _ 0 = False
+hasSlashFrom s i = stringSlice (i - 1) i s == "/" || hasSlashFrom s (i - 1)
+
 dirOf2 : String -> String
 dirOf2 path = dirGo2 path (stringLength path)
 

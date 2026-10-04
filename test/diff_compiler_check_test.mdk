@@ -1051,10 +1051,104 @@ parseResultValidProgramRun = match parseResultValidProgramScratch
 
 test "parseResult accepts a well-formed program" = parseResultValidProgramRun
 
-test "run reports a missing file path as a filesystem error, not an unknown module" =
+-- # `run` with a path that names no file
+
+{- | Run `medaka run <target>` with `dir` as the working directory (a bare
+   module name resolves against it) and return exit code, stdout and stderr. -}
+runInDir : String -> String -> <Exec, IO> Result String (Int, String, String)
+runInDir dir target = runVerb "sh" [
+  "-c",
+  "bin=$(cd \"$(dirname \"$0\")\" && pwd)/$(basename \"$0\"); cd \"$1\" && exec \"$bin\" run \"$2\"",
+  medakaBin,
+  dir,
+  target,
+]
+
+runScratch : String ->
+  List (String, String) ->
+  <Exec, FileWrite> Result String String
+runScratch name files = match scratchDir
+  Err e => Err e
+  Ok root => populate "\{root}/\{name}" files
+
+populate : String -> List (String, String) -> <FileWrite> Result String String
+populate dir files = match mkdirAll dir
+  Err e => Err e
+  Ok () => map (() => dir) (writeAll dir files)
+
+expectRunInDir : String ->
+  List (String, String) ->
+  String ->
+  Int ->
+  (String -> String -> Bool) ->
+  String ->
+  <Exec, FileWrite, IO> Expectation
+expectRunInDir name files target code ok why = match runScratch name files
+  Err e => fail "could not make the scratch project: \{e}"
+  Ok dir =>
+    let result = match runInDir dir target
+      Err e => fail "could not run `medaka run \{target}`: \{e}"
+      Ok (c, out, err) =>
+        if c == code && ok out err then
+          pass
+        else
+          fail
+            "run \{target}: expected \{why}, got exit \{intToString c}, stdout \{debug out}, stderr \{debug err}"
+    let _ = runVerb "rm" ["-rf", dir]
+    result
+
+okSrc : List (String, String)
+okSrc = [("ok.mdk", "main = 1 + 2\n")]
+
+test "run reports a missing relative .mdk path as a filesystem error" =
+  expectRunInDir
+    "run_missing_rel"
+    []
+    "missing.mdk"
+    1
+    (_ err => startsWith "error: no such file: missing.mdk" err)
+    "no such file"
+
+test "run reports a missing absolute path as a filesystem error" =
   expectVerbExitStartsWithAndContains
     "run"
-    ["/no/such/dir/file.mdk"]
+    ["/no/such/file.mdk"]
     1
-    "error: no such file: /no/such/dir/file.mdk"
+    "error: no such file: /no/such/file.mdk"
     []
+
+test "run names a missing path containing a space in full" =
+  expectRunInDir
+    "run_missing_space"
+    []
+    "sub dir/nope.mdk"
+    1
+    (_ err => startsWith "error: no such file: sub dir/nope.mdk" err)
+    "no such file"
+
+test "run still resolves a bare module name to the local file" =
+  expectRunInDir
+    "run_bare_ok"
+    okSrc
+    "ok"
+    0
+    (out _ => contains "3" out)
+    "the program to run"
+
+test "run resolves a bare name to a local file that shadows a stdlib module" =
+  expectRunInDir
+    "run_bare_map"
+    [("map.mdk", "main = 1 + 2\n")]
+    "map"
+    0
+    (out _ => contains "3" out)
+    "the local map.mdk to run"
+
+test "run keeps the unknown-module message for a bare name with no file" =
+  expectRunInDir
+    "run_bare_missing"
+    []
+    "nosuchmod"
+    1
+    (_ err => startsWith "unknown module: nosuchmod" err)
+    "unknown module"
