@@ -1,0 +1,13 @@
+-- §3 determination, #3437's Array Float face.  Drained must-fail pin
+-- `3437-indexed-literal-compare-defaults-to-int`, kept here as the regression
+-- guard ([G-PIN-DRAIN]).  `a[0] == 1` poses `Index (Array Float) ?k ?v` with
+-- `Num ?k`, `Num ?v` and `Eq ?v`.  `Index (Array a) Int a` is the one instance
+-- that unifies, and it is consistent with the siblings (`Float` has `Num` and
+-- `Eq`), so `?k = Int` and `?v = Float` before either literal defaults; `1`
+-- is the Float 1.0.  Defaulting first rejected it with "Type mismatch: Int vs
+-- Float".
+-- Hand-derived: element 0 of [|1.0|] is 1.0, so True on all three verbs.
+f : Array Float -> Bool
+f a = a[0] == 1
+
+main = println (f [|1.0|])

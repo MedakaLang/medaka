@@ -1,0 +1,13 @@
+-- §3 determination comes before numeric defaulting.  `ix 5 'z'` poses
+-- `Ix ?a Char` with `Num ?a`, every variable owned by `main`.  The only
+-- instance is `Ix Float Char`; it unifies with the goal and `Float` has
+-- `Num`, so `?a = Float` and the literal `5` is the Float 5.0.  Defaulting
+-- `?a` to Int first would leave `Ix Int Char`, which has no instance.
+-- Hand-derived: 5.0 > 4.5, so `ix` returns 2 on all three verbs.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Float Char where
+  ix x _ = if x > 4.5 then 2 else 0
+
+main = println (ix 5 'z')

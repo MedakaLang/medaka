@@ -1,0 +1,11 @@
+-- §3 determination control: the element type is already fixed by the
+-- signature.  `a[i] /= 0` at `Array U64` poses `Index (Array U64) Int ?v`,
+-- which `Index (Array a) Int a` determines to `?v = U64`, the type the
+-- signature gave it at base too.  The row guards that determination leaves
+-- an already-typed element alone.
+-- Hand-derived: element 0 of [|0, 1|] is 0, and 0 /= 0 is False on all three
+-- verbs.
+isZ : Array U64 -> Int -> Bool
+isZ a i = a[i] /= 0
+
+main = println (isZ [|0, 1|] 0)

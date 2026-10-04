@@ -1,0 +1,13 @@
+-- §3 determination bounds the literal by its determined type.  The goal
+-- `Index Bytes Int ?v` is determined to `?v = U8` by the one instance
+-- `Index Bytes Int U8`, so `300` is a `U8` literal, and 300 is outside U8's
+-- range 0..255.
+-- Hand-derived: REJECT on all three verbs, at the literal, "integer literal
+-- 300 does not fit U8".  Determination widens what the literal may be; it
+-- never lets an out-of-range literal through.
+import bytes.{Bytes, fromArrayAssumeByteDomain}
+
+isBig : Bytes -> Int -> Bool
+isBig input pos = input[pos] == 300
+
+main = println (isBig (fromArrayAssumeByteDomain [|13, 10|]) 0)

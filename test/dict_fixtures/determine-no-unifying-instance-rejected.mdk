@@ -1,0 +1,22 @@
+-- §3 determination's reject half, #3808.  `useIx (absent ())` instantiates
+-- the declared context to `Ix ?a Bool`, where `?a` comes from `absent`'s
+-- polymorphic result: owned by `main`, and no literal, so nothing defaults
+-- it.  The only instance is `Ix Int Char`, whose second position is `Char`,
+-- so no instance head unifies with the vector at any `?a`.
+-- Hand-derived: REJECT on all three verbs, `T-NO-IMPL` at the `useIx` call,
+-- "No impl of Ix for _ Bool".  Asking per argument (`Ix ?a` alone has one
+-- impl, `Bool` alone has one) accepted this program at check and ran into
+-- the panic in `absent`.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+useIx : Ix a Bool => a -> Int
+useIx x = ix x True
+
+absent : Unit -> a
+absent u = panic "never produced"
+
+main = println (useIx (absent ()))

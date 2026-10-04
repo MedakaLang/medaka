@@ -337,6 +337,14 @@ determination either. The acceptance rows are the two scheme lines
 `s4-joint-residual-rdict-native` and `s4-gen-residual-mixed-no-requires-control` and
 the span row for `s4-gen-residual-mixed-vector-rejected`, all already in the table.
 
+Measured result of the implementation (S-determine): determination runs at the group
+boundary only, before and after defaulting, with no quiescence call. A call at module
+end is inert when its rigid set holds every published scheme's and impl head's
+variables, and binds impl-head variables when it does not. `Conv c d` was the deleted
+module-end grounding rebinding `f`'s quantified cells after generalization; without it
+the scheme line prints the hand-derived `f : Conv a b => a -> b -> String`, and H1's
+failure still prints `f : a -> b -> String`.
+
 ---
 
 ## 5. The Bytes/U8 face (answers Q3)

@@ -1,0 +1,22 @@
+-- §3 determination leaves an argument's variables to the caller.  `f x y =
+-- conv (Wrap x) y` poses `Conv (Wrap a) b` with `a` and `b` in argument
+-- position of `f`'s type, so both are rigid for determination, and the
+-- conditional instance `Conv (Wrap a) b requires Conv a b` reduces the goal
+-- to the residual `Conv a b`: `f : Conv a b => a -> b -> String` (scheme
+-- asserted in section 2).
+-- Hand-derived: `main` never calls `f`, so it prints "no call" on all three
+-- verbs.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv Int Bool where
+  conv _ _ = "int-bool"
+
+impl Conv (Wrap a) b requires Conv a b where
+  conv (Wrap x) y = "w:\{conv x y}"
+
+f x y = conv (Wrap x) y
+
+main = println "no call"
