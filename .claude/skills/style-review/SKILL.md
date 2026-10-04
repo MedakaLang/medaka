@@ -1,6 +1,6 @@
 ---
 name: style-review
-description: The end-of-sprint style and idiom pass over a sprint diff — a checklist where every section points at a single source (duplication, comment register, test vehicle, placement, diagnostics rubric, doc register, CLI conformance) plus a DECLINED register of demands a reviewer must NOT make. Run once per sprint in the END round, at the same pinned SHA as sprint-reviewer, on a cheap model. Not per-PR, not a CI check. Load when reviewing a diff for craft/idiom, or when deciding whether a style finding is legitimate.
+description: End-of-sprint style/idiom checklist over a sprint diff, with a DECLINED register of demands a reviewer must not make. Once per sprint, not per PR. Load when judging whether a style finding is legitimate.
 ---
 
 # Style review — the pointer checklist

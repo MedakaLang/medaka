@@ -1,6 +1,6 @@
 ---
 name: jev-judgments
-description: Design, measure, and iterate a set of Jev (TypeSafe) questions over Medaka candidates — enumerate in code, sample, hand-label, ask, read AUC and calibration, revise the question or the state, ship with numbers. Use when asked to test Jev against a class of fix candidates, to add or change a question in scripts/jev, to build any new Jev-backed tool from the roadmap in docs/design/JEV-DESIGN.md, or when a Jev ranking looks wrong and you need to know whether the question, the state, or the labels are at fault.
+description: Design, measure and iterate Jev (TypeSafe) questions over Medaka candidates. Use when testing Jev on a class of fix candidates, changing a question in scripts/jev, building a Jev-backed tool, or when a Jev ranking looks wrong.
 ---
 
 # Jev judgments — measure before you trust

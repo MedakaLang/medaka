@@ -1,6 +1,6 @@
 ---
 name: sprint-packet
-description: The one-page packet contract for Medaka sprint slices — the handoff format the orchestrator writes and the implementer executes, the refusal license, and the short report format every dispatched agent returns. Load when writing a packet, executing one, or reading a report.
+description: The one-page sprint slice packet and report format. Load when writing or executing a packet, or reading a report.
 ---
 
 # The packet contract (v8)

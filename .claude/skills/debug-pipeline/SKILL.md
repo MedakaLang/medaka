@@ -1,6 +1,6 @@
 ---
 name: debug-pipeline
-description: Diagnose a Medaka parse, resolve, typecheck, or eval failure — isolate which pipeline stage is at fault using the entry probes, the diagnostics accumulator, and the Core IR / --keep-ir dumps. Use when a .mdk program errors unexpectedly or returns a wrong value, when dispatch picks the wrong impl or a dict routes wrongly, when the engines disagree (eval vs native vs wasm), when a test fails opaquely, or when you are setting up a two-arm (old-binary vs new-binary) differential.
+description: Find which stage is at fault when a .mdk program fails or returns a wrong value — probes, Core IR dumps, dispatch/dict routing, engine disagreement (eval/native/wasm), and two-arm old-vs-new binary differentials.
 ---
 
 # Debug a pipeline failure

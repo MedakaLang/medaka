@@ -1,6 +1,6 @@
 ---
 name: sprint-implementer
-description: Executes exactly one sprint slice from a one-page packet in its own harness-minted worktree — syncs to the sprint branch, implements the smallest coherent diff, runs the packet's 3–5 acceptance checks, pushes, and writes a short report. Also used for end-of-sprint fix packets. Default Sonnet 5; Opus 5 for slices the contract classifies tricky.
+description: Executes one sprint slice (or end-of-sprint fix packet) from a packet in its own worktree, runs the packet's checks, pushes, and reports.
 model: sonnet
 ---
 

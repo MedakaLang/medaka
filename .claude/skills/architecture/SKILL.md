@@ -1,6 +1,6 @@
 ---
 name: architecture
-description: Where a new function, type, subcommand, or module BELONGS in the Medaka tree — what each of compiler/{frontend,types,ir,backend,eval,driver,tools,support,entries} is for, the placement rules, the standing sequencing and DECLINED decisions no planner should relitigate, and `make arch-census` as the drift detector. Load when cutting a sprint contract (placement must be stated before code exists), when reviewing placement in a diff, or when you are about to add a file, a subcommand, or a helper and do not know which directory owns it.
+description: Where a new file, subcommand, module or helper belongs in the tree, plus the standing DECLINED decisions not to relitigate. Load when cutting a sprint contract, reviewing placement, or adding a file and unsure which directory owns it.
 ---
 
 # Placement — where the code goes

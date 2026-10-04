@@ -1,6 +1,6 @@
 ---
 name: sprint-plan
-description: Cut a sprint — choose a coherent set of 3–5 implementation slices and write a short sprint contract. Run ONCE per sprint, before the orchestrator session starts; judgment-heavy, so run on Opus 5 minimum. The contract it produces is what sprint-orchestrator executes.
+description: Cut a sprint — choose 3–5 coherent slices and write the contract sprint-orchestrator executes. Run once per sprint, before orchestration, on Opus.
 ---
 
 # Sprint planning — cutting the slice set

@@ -1,6 +1,6 @@
 ---
 name: add-primitive
-description: Add or modify a Medaka stdlib primitive (extern) — declare its type signature in stdlib/runtime.mdk and implement it in compiler/eval/eval.mdk. Use when a built-in function/operation is needed that can't be written in Medaka itself.
+description: Add or modify a native stdlib extern — signature in stdlib/runtime.mdk, implementation in compiler/eval/eval.mdk. Use when a built-in can't be written in Medaka.
 ---
 
 # Add a stdlib primitive (extern)

@@ -1,6 +1,6 @@
 ---
 name: harden-typechecker
-description: Typechecker-internal correctness and diagnostics work in compiler/types/typecheck.mdk — add or refine a type error, tighten constraint/coherence/unification logic, or fix an over/under-generalization bug. Use for the archive/PLAN-ARCHIVE.md Phase 62–72 hardening arc, or whenever the fix lives inside the type checker rather than threading new surface syntax.
+description: Typechecker-internal work in compiler/types/typecheck.mdk — type errors, constraint/coherence/unification logic, over/under-generalization. Use when the fix lives inside the typechecker, not in new surface syntax.
 ---
 
 # Harden the typechecker

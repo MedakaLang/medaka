@@ -1,6 +1,6 @@
 ---
 name: sprint-reviewer
-description: The end-of-sprint thorough review round — one agent that adversarially reviews the WHOLE sprint diff at a pinned SHA in its own worktree, combining first-hand breakage attempts (build the binary, construct programs the gates never contained) with spec/contract conformance reading. Dispatch once, after all slices land, with the sprint head SHA, the merge-base with main, the contract path, and NOTES.md; name any domain property classes the contract flagged. Reports ranked findings; never fixes, files, or merges.
+description: The one end-of-sprint adversarial review of the whole sprint diff at a pinned SHA — builds and breaks the binary, checks contract conformance, reports ranked findings. Never fixes, files or merges.
 model: opus
 ---
 

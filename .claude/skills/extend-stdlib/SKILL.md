@@ -1,6 +1,6 @@
 ---
 name: extend-stdlib
-description: Implement or extend a pure-Medaka stdlib function/instance in stdlib/{core,list,string,array}.mdk (function bodies, typeclass impls, doctests, props) — as opposed to native externs. Use when explicitly asked to add stdlib logic per docs/stdlib/STDLIB.md. For native primitives (externs) use add-primitive instead.
+description: Write pure-Medaka stdlib functions, impls, doctests and props (not externs, see add-primitive). Use only when explicitly asked to add stdlib logic.
 ---
 
 # Extend the Medaka stdlib (pure-Medaka modules)
