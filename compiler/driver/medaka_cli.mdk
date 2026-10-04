@@ -2793,6 +2793,11 @@ runRunCmd argv =
       -- ["--", "--foo"]), so `run` must NOT route its whole argv through
       -- `assertCliFlags` the way the other verbs do.
       runAbort (unknownFlagMessage runArgSpec target)
+    -- #2366: a path that names no file is a filesystem error, not a module
+    -- the loader failed to find (its "available modules" roster is misleading
+    -- here).  Same wording as `medaka build`.
+    target :: _ if not (fileExists target) =>
+      runAbort ("error: no such file: " ++ target)
     target :: progArgs =>
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"

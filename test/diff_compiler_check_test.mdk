@@ -85,7 +85,12 @@
    corpora, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  batchSection, chompNewlines, stripUnitAutoPrint, summarizeSweep, sweepUnits
+  batchSection,
+  chompNewlines,
+  expectVerbExitStartsWithAndContains,
+  stripUnitAutoPrint,
+  summarizeSweep,
+  sweepUnits,
 }
 import fs.{fixtureDirs, fixtureFiles, mkdirAll}
 import io.{runVerb}
@@ -1045,3 +1050,11 @@ parseResultValidProgramRun = match parseResultValidProgramScratch
           Some m => fail m
 
 test "parseResult accepts a well-formed program" = parseResultValidProgramRun
+
+test "run reports a missing file path as a filesystem error, not an unknown module" =
+  expectVerbExitStartsWithAndContains
+    "run"
+    ["/no/such/dir/file.mdk"]
+    1
+    "error: no such file: /no/such/dir/file.mdk"
+    []
