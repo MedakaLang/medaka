@@ -1,0 +1,10 @@
+all|val|allUse  DEF all.mdk:6:0  USES 0  
+m|ctor|PA  DEF m.mdk:2:19  USES 1  all.mdk:6:9
+m|ctor|PB  DEF m.mdk:2:19  USES 0  
+m|ty|Pub  DEF m.mdk:2:19  USES 2  plain.mdk:11:10 all.mdk:5:9
+main|val|main  DEF main.mdk:6:0  USES 0  
+plain|ctor|PA  DEF plain.mdk:4:5  USES 1  plain.mdk:8:11
+plain|ctor|Qq  DEF plain.mdk:4:5  USES 0  
+plain|ty|Mine  DEF plain.mdk:4:5  USES 1  plain.mdk:7:11
+plain|val|plainTy  DEF plain.mdk:12:0  USES 0  
+plain|val|plainUse  DEF plain.mdk:8:0  USES 0  

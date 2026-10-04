@@ -505,6 +505,7 @@ referencesFixtures : List String
 referencesFixtures = [
   "binder_loc",
   "correctness",
+  "ctor_import",
   "dup_field_def",
   "iface_collide",
   "iface_method_loc",

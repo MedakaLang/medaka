@@ -1,0 +1,6 @@
+-- `import m.{Pub(..)}` binds PA to m's ctor.
+import m.{Pub(..)}
+
+export
+allUse : Pub
+allUse = PA
