@@ -1,6 +1,6 @@
 ---
 name: write-tests
-description: Pick the right vehicle for a new Medaka-repo test — doctest, property, `test` block in a `*_test.mdk` sibling, or a shell/`medaka gate` differential — before writing one. Use when asked to "write tests for X" / "add unit tests for X" / "test this module", so the test lands in the vehicle that fits instead of whatever fixture is nearby.
+description: Pick the test vehicle (doctest, prop, `test` block in a `*_test.mdk` sibling, or a gate) before writing one. Use when asked to write or add tests for a module.
 ---
 
 # Write tests — pick the vehicle first

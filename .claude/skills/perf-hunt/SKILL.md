@@ -1,6 +1,6 @@
 ---
 name: perf-hunt
-description: Find and fix a performance problem in the Medaka compiler — especially an accidental O(n²). Profile per-stage time AND allocation, name the hot symbol with perf, confirm by stub-and-measure. Use when a stage is unexpectedly slow, when diff_compiler_perf_scaling.sh goes red, or when a compile takes longer than the sum of its profiled stages.
+description: Find and fix a compiler performance problem, especially an accidental O(n²), by profiling time AND allocation. Use when a stage is unexpectedly slow or diff_compiler_perf_scaling.sh is red.
 ---
 
 # Hunting a performance bug (usually an O(n²))

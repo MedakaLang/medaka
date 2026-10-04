@@ -203,3 +203,71 @@ escaper used to pass control characters through untouched — the raw byte survi
 reformat. The same defect put a literal NUL in `printer.mdk`, which made that file BINARY to
 grep (see `printer.mdk`'s `escStringLit` note). The escaper now emits `\0` and `\u{XX}`, so the
 `\u{01}` form round-trips instead of being lowered back to a raw byte.
+
+## Pre-commit hook bullets — full text
+
+*Full `AGENTS.md` text as of 2026-10-03, moved here verbatim when AGENTS.md was slimmed; AGENTS.md keeps the rule and the command.*
+
+`.githooks/pre-commit`: fmt+lint+baselined-lint+shout-diff+comment-register-baseline always,
+snapshot+lextok if staged,
+over staged `.mdk` (`test/` fixtures excluded). Re-install: `cp .githooks/pre-commit
+"$(git rev-parse --git-common-dir)/hooks/pre-commit"`.
+
+- **[H-FMT] Format** — **Run `medaka fmt --write <changed.mdk>` and re-`git add` before
+  committing any `.mdk` edit.** Bare `medaka fmt <file>` is READ-ONLY. ⚠️ **Tree is NOT
+  fully fmt-clean** — the list of which files fail `medaka fmt --check` is DERIVED, not
+  hand-typed (a hand-typed list here rotted twice over, #1794): `make fmt-clean-census`
+  (`test/fmt_clean_census.sh`) reports the current set on demand. → dossier
+- **[H-LINT] Lint** — **MAX RATCHET, all ~20 rules gated.** Also runs `medaka lint compiler
+  stdlib sqlite`. **Run `medaka lint` on files you touch.** Disable inline: `-- lint-disable-
+  next-line <rule>` (also `-line`, `-file`; omit rule = all). ⚠️ `--fix` bails on any decl with
+  an interior comment. 🚨 Exit code alone does not reflect findings unless `--deny` is used
+  (#1822) — read the output, not just `$?`.
+- **[H-SNAPSHOT] Snapshot** — CHECK ONLY. **Run `make snapshot-check` first**; bless with `sh
+  test/snapshot_bless.sh --bless <file.mdk>`, re-stage `test/snapshots/`.
+  - **[H-SNAPSHOT-NEW]** New source file → `--new` (**SUITE-WIDE**, never overwrites). ⇒ run
+    `--new`, `diff -rq` vs a before-copy to verify, **RE-RUN the plain check**. → dossier
+  - **[H-SNAPSHOT-UNSTAGED]** ⚠️ Reads the **WORKING TREE**: `git add` any blessed snapshot
+    before committing.
+  - **[H-DEFER]** **`PRECOMMIT_SNAPSHOT_DEFER=1 git commit ...`** opts one source-only commit
+    out of check 4 alone (fmt/lint/lextok stay live; `--no-verify` drops all four).
+  - **[H-DEFER-VS-GUARD]** 🚨 Does NOT reach [H-SNAPSHOT-UNSTAGED]. **Bless and stage goldens
+    LAST**, after every `.mdk`-staging commit is in — or stash across it. `--no-verify` and
+    `core.hooksPath=/dev/null` are not substitutes. → dossier
+- **[H-LEXTOK] Lextok** — OPPORTUNISTIC (needs `test/bin/lex_main` + a sibling
+  `.lextok.golden`). Stale golden: `sh test/capture_goldens.sh --frozen lextok`,
+  re-stage `.lextok.golden`.
+- **[H-LINT-BASELINE] Baselined lint** — a per-file COUNT ratchet for a rule the tree isn't
+  clean of yet (`rule-stdlib-reimpl`), scoped to `$LINT_ROOTS` (`compiler stdlib sqlite`).
+  A count may only fall; regenerate via `sh test/diff_compiler_lint_baseline.sh --write`,
+  never by hand. See `.githooks/pre-commit` check 2b.
+- **[H-EMOJI-SHOUT] Shout diff** — rejects a commit that ADDS a new shout line to a staged
+  `.mdk` (diff-scoped, added lines only): a 🚨/⚠️/🔒 sigil line anywhere, or the sigil-free
+  shout register (3+ consecutive ALL-CAPS words) on a comment-scope line, so stripping the
+  sigil off a shout is not a drain. ⚠️ Rewriting an existing sigil-bearing line makes it an
+  ADDED line — drop the sigil in the same edit or the check reds. See `.githooks/pre-commit`
+  check 6 and `[T-COMMENT-REGISTER]`.
+- **[H-COMMENT-REGISTER] Comment-register baseline** — a per-(file, class) COUNT ratchet over
+  the 8 baselined comment-register classes, scoped to tracked `compiler/`/`stdlib/` `.mdk`.
+  A count may only fall; a nonzero count with no row fails closed. Regenerate via `sh
+  test/comment_register_census.sh --write test/comment_register_baseline.toml`, never by
+  hand. See `.githooks/pre-commit` check 6b; CI twin is
+  `test/diff_compiler_comment_shout_diff.sh`'s second assertion.
+
+Bypass: `git commit --no-verify`. Unbuilt `medaka`: hook warns and allows.
+
+## [D-TWO-ARM-STDLIB] — full rule text
+
+*Full `AGENTS.md` text as of 2026-10-03, moved here verbatim when AGENTS.md was slimmed; AGENTS.md keeps the rule and the command.*
+
+🚨 **[D-TWO-ARM-STDLIB] Two-arm differential is UNSOUND when the target is a `stdlib/*` file**
+— manufactures false FINDINGS, because a `medaka` binary resolves emitter + stdlib from
+`exeDir` ([D-TWO-ARM]), never cwd. ⇒ **Give each arm its own tree or set `MEDAKA_ROOT` per
+arm.** → dossier
+
+Writing a diagnostic: `compiler/ERROR-QUALITY.md` + `compiler/DIAGNOSTIC-CODES-DESIGN.md`.
+
+**Playground e2e:** `cd playground/e2e && ./run.sh`. Needs node v24+,
+`playground/dist/playground.wasm` pre-built. See `playground/e2e/README.md`.
+The spec takes a base url as its first argument, so it also verifies a LIVE
+origin: `node tests/playground.spec.mjs https://medaka-lang.dev /tmp/shots`.

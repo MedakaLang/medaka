@@ -1,0 +1,9 @@
+interface Def a where
+  def : a
+impl Def Int where
+  def = 7
+impl Def (Option a) requires Def a where
+  def = Some def
+main = println (match def
+  Some _ => "some"
+  None => "none")

@@ -1,6 +1,6 @@
 ---
 name: bug-hunt
-description: Adversarially hunt for lurking silent-wrongness (S0) and loud-breakage (S1) bugs in the Medaka implementation by fanning out isolated-worktree subagents across the hot subsystems, verifying every candidate first-hand, and filing deduped issues backed by self-draining pinned fixtures. Use when asked to stress-test / find bugs / "break" the compiler, and ESPECIALLY right after a batch of S0/S1s is closed — the adjacent ones hide next to the fixed ones.
+description: Adversarial S0/S1 bug hunt — fan out worktree subagents, verify each candidate first-hand, file deduped issues with pinned fixtures. Use when asked to stress-test or break the compiler, especially right after a batch of S0/S1s closes.
 ---
 
 # Hunting for lurking S0/S1 bugs

@@ -1,6 +1,6 @@
 ---
 name: benchmark-emitter
-description: Benchmark or validate a change to the Medaka LLVM/WasmGC emitter (compiler/backend/*) without measuring the exact opposite of reality. Covers the two-rebuild rule for a single-generation emitter, why a shared medaka_emitter is not a baseline, and when a stale seed must be re-minted. Use before timing ANY codegen change, and when the self-compile fixpoint fails on a change that looks correct.
+description: Benchmark or validate a compiler/backend/* (emitter) change without measuring the wrong binary. Use before timing any codegen change, or when the self-compile fixpoint fails on a change that looks correct.
 ---
 
 # Benchmarking / validating an EMITTER change

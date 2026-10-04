@@ -1,6 +1,6 @@
 ---
 name: sprint-orchestrator
-description: Run a Medaka implementation sprint (v8) — a series of implementers executed serially (parallel only with proven disjointness), minimal per-slice verification, one thorough review round at the end, a fix round, then the merge queue. Single-session front seat; no persistent daughters. Invoke at sprint start in a dedicated session.
+description: Run a Medaka implementation sprint (v8) — serial implementers, one end review, a fix round, then the merge queue. Invoke at sprint start in a dedicated session.
 ---
 
 # Sprint orchestrator (v8)

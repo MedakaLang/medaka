@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Review an agent-authored PR diff for craft — style, efficiency, missing tests, lying comments, leftover workarounds. Read-only. Run AFTER CI is green; gates prove behavior, this judges craft.
+description: Read-only craft review of an agent-authored PR diff (style, efficiency, missing tests, lying comments). Run after CI is green.
 ---
 
 # PR review playbook

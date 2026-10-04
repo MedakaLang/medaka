@@ -1,6 +1,6 @@
 ---
 name: orchestrator-wrapup
-description: Close out an orchestration session cleanly — verify every issue encountered is tracked, every pinnable open bug has a self-draining fixture, all child worktrees and orphan processes and scratch artifacts are reaped, and any durable learnings are written into the docs/memories/skills so the next session inherits them. Run at the END of any multi-agent orchestration run (a bug-fix campaign, a bug hunt, a staged feature) — BEFORE you tell the user "done."
+description: Close out a multi-agent orchestration run — every issue tracked, open bugs pinned, worktrees/processes/scratch reaped, learnings recorded. Run at the end, before telling the user "done".
 ---
 
 # Orchestrator session wrap-up
