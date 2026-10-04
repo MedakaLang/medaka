@@ -195,7 +195,7 @@ rows = [
     goldenSuffix = ".fixed",
     sorted = False,
     stripUnit = False,
-    fixtures = 23,
+    fixtures = 28,
   },
 ]
 

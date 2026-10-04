@@ -124,6 +124,7 @@ import regex.{
   escape,
 }
 import ir.sexp.{exprSexp, patSexp}
+import frontend.marker.{declRefs}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorSiblings}
 import frontend.lexer.{
   Comment,
@@ -1017,58 +1018,99 @@ applyFixes : List String ->
 applyFixes only disable src prog pos =
   let rules = filterList (ruleActiveFixable only disable) allRules
   let orc = buildOracle prog
-  let cmtLines = map commentLine (collectComments src)
+  let cmts = collectComments src
+  let cmtLines = map commentLine cmts
   let declPos = zipDeclPos prog (positionsDecls pos)
-  let splices = collectSplices cmtLines orc rules declPos
-  let allSplices =
-    insertImportSplice cmtLines (introducedTestVerbs splices) declPos splices
-  (applySplices src allSplices, listLen splices)
+  let tagged = collectSplices cmtLines orc rules declPos
+  let (kept, widen) = reconcileTestImport cmts declPos tagged
+  (applySplices src (withWiden widen kept), listLen kept)
 
--- The `stdlib/test.mdk` verbs a fixer can introduce that the decl did not
--- already call.  Every other name a fixer emits is prelude-global.
+withWiden : Option (Int, Int, String) ->
+  List (Int, Int, String) ->
+  List (Int, Int, String)
+withWiden None splices = splices
+withWiden (Some sp) splices = insertSpliceAsc sp splices
+
+-- The `stdlib/test.mdk` verbs a fixer can introduce.  Every other name a fixer
+-- emits is prelude-global.
 testVerbNames : List String
 testVerbNames = ["expectEqual", "expectNotEqual", "expectTrue", "expectFalse"]
 
--- The verbs whose whole word occurs in some replacement text.  Over-approximate
--- on purpose: a verb the file already imports is filtered out by the widener.
-introducedTestVerbs : List (Int, Int, String) -> List String
-introducedTestVerbs splices =
-  filterList
-    (v => anyList (sp => wholeWordIn v (third3 sp)) splices)
-    testVerbNames
-
-third3 : (Int, Int, String) -> String
-third3 (_, _, t) = t
+-- The test verbs a fixer's replacement decls call, read off the rewritten AST
+-- (never the rendered text, where a string literal could name a verb).
+introducedTestVerbs : List Decl -> List String
+introducedTestVerbs ds =
+  let refs = flatMap declRefs ds
+  filterList (v => contains v refs) testVerbNames
 
 -- A fix that introduces a call to a `test` verb must leave the file's
 -- `import test.{…}` list naming it, or the next `check` fails with an unbound
--- variable.  Only a selective `test` group needs widening: `import test.*` already
--- binds the verb, and a bare or aliased `import test` never bound it unqualified,
--- so no fixer fires on it.  A group whose span holds a comment is left alone.
--- The widened import is spliced in at its own line, keeping the splices ordered.
-insertImportSplice : List Int ->
-  List String ->
+-- variable.  Returns the splices to apply plus the (zero or one) splice that
+-- widens the import.  A fix whose verb is missing from every `import test.{…}`
+-- group is kept only when some group can be widened without losing a comment:
+-- otherwise it is dropped and stays a finding.  A file with no selective `test`
+-- import is untouched (`import test.*` already binds the verbs, and a bare or
+-- aliased `import test` never bound them unqualified, so no fixer fires there).
+reconcileTestImport : List Comment ->
   List (Decl, DeclPos) ->
-  List (Int, Int, String) ->
-  List (Int, Int, String)
-insertImportSplice _ [] _ splices = splices
-insertImportSplice _ _ [] splices = splices
-insertImportSplice cmtLines verbs ((DUse pub (UseGroup path members) loc, dp) :: rest) splices
-  | path == ["test"] =
-    let missing =
-      filterList (v => not (anyList (m => useMemberLocal m == v) members)) verbs
-    if isEmptyL missing
-      || spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp) then
-      splices
-    else
-      let widened =
-        UseGroup path (members ++ map (v => UseMember v False loc None) missing)
-      insertSpliceAsc
-        (declPosLine dp, declPosEndLine dp, declToString (DUse pub widened loc))
-        splices
-  | otherwise = insertImportSplice cmtLines verbs rest splices
-insertImportSplice cmtLines verbs (_ :: rest) splices =
-  insertImportSplice cmtLines verbs rest splices
+  List ((Int, Int, String), List String) ->
+  (List (Int, Int, String), Option (Int, Int, String))
+reconcileTestImport cmts declPos tagged =
+  let groups = testGroups declPos
+  let listed = flatMap (g => map useMemberLocal (fst g)) groups
+  let wild = anyList isTestWild (map fst declPos)
+  if isEmptyL groups || wild then
+    (map fst tagged, None)
+  else
+    let missingOf = verbs => filterList (v => not (contains v listed)) verbs
+    let target = findWidenable cmts groups
+    let kept =
+      filterList (t => isEmptyL (missingOf (snd t)) || isSome target) tagged
+    let missing = dedup (flatMap (t => missingOf (snd t)) kept)
+    match target
+      Some (pub, path, members, loc, dp, trailing) =>
+        if isEmptyL missing then
+          (map fst kept, None)
+        else
+          let widened =
+            UseGroup
+              path
+              (members ++ map (v => UseMember v False loc None) missing)
+          let txt = declToString (DUse pub widened loc) ++ trailing
+          (map fst kept, Some (declPosLine dp, declPosEndLine dp, txt))
+      None => (map fst kept, None)
+
+isTestWild : Decl -> Bool
+isTestWild (DUse _ (UseWild path) _) = path == ["test"]
+isTestWild _ = False
+
+testGroups : List (Decl, DeclPos) ->
+  List (List UseMember, (Bool, List String, Loc, DeclPos))
+testGroups [] = []
+testGroups ((DUse pub (UseGroup path members) loc, dp) :: rest)
+  | path == ["test"] = (members, (pub, path, loc, dp)) :: testGroups rest
+testGroups (_ :: rest) = testGroups rest
+
+-- The first `import test.{…}` group whose span holds no comment, or only a
+-- `--` comment on its last line, which the rewritten import re-appends.
+findWidenable : List Comment ->
+  List (List UseMember, (Bool, List String, Loc, DeclPos)) ->
+  Option (Bool, List String, List UseMember, Loc, DeclPos, String)
+findWidenable _ [] = None
+findWidenable cmts ((members, (pub, path, loc, dp)) :: rest) =
+  match spanComments cmts (declPosLine dp) (declPosEndLine dp)
+    [] => Some (pub, path, members, loc, dp, "")
+    [c] =>
+      if commentLine c == declPosEndLine dp
+        && startsWith "--" (commentText c) then
+        Some (pub, path, members, loc, dp, " " ++ commentText c)
+      else
+        findWidenable cmts rest
+    _ => findWidenable cmts rest
+
+spanComments : List Comment -> Int -> Int -> List Comment
+spanComments cmts s e =
+  filterList (c => s <= commentLine c && commentLine c <= e) cmts
 
 insertSpliceAsc : (Int, Int, String) ->
   List (Int, Int, String) ->
@@ -1110,14 +1152,17 @@ collectSplices : List Int ->
   Oracle ->
   List Rule ->
   List (Decl, DeclPos) ->
-  List (Int, Int, String)
+  List ((Int, Int, String), List String)
 collectSplices _ _ _ [] = []
 collectSplices cmtLines orc rules ((d, dp) :: rest) = match firstFix orc rules d
   Some newDecls =>
     if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp) then
       collectSplices cmtLines orc rules rest
     else
-      (declPosLine dp, declPosEndLine dp, renderDecls newDecls)
+      (
+          (declPosLine dp, declPosEndLine dp, renderDecls newDecls),
+          introducedTestVerbs newDecls,
+        )
         :: collectSplices cmtLines orc rules rest
   None => collectSplices cmtLines orc rules rest
 
