@@ -167,7 +167,7 @@ emitPhase False _ _ _ = ()
 emitPhase True label elapsed ops =
   emitTimerLine "[perf] \{label}\t\{floatToString elapsed}s\t\{ops}"
 
--- Start time of the verb currently running, recorded by `perfBegin`; negative
+-- Start time of the verb currently running, recorded by `perfArm`; negative
 -- means "no verb started", or the abort total was already emitted.
 perfStartT : Ref Float
 perfStartT = Ref (0.0 - 1.0)
