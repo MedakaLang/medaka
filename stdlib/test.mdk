@@ -233,7 +233,9 @@ expectErrContains needle r =
    > expectOkThen (n => expectEqual 1 n) (Ok 1 : Result String Int)
    Pass "1" "1"
    > expectOkThen (n => expectEqual 1 n) (Err "boom" : Result String Int)
-   Fail "expected Ok but got Err boom" "Ok _" "Err \"boom\"" -}
+   Fail "expected Ok but got Err boom" "Ok _" "Err \"boom\""
+   > expectOkThen (n => expectEqual 1 n) (Err (Some 7) : Result (Option Int) Int)
+   Fail "expected Ok but got Err (Some 7)" "Ok _" "Err (Some 7)" -}
 export
 expectOkThen : (Debug e, Display e) =>
   (a -> Expectation) ->
@@ -241,7 +243,10 @@ expectOkThen : (Debug e, Display e) =>
   Expectation
 expectOkThen k (Ok v) = k v
 expectOkThen _ (Err e) =
-  Fail "expected Ok but got Err \{display e}" "Ok _" "Err \{debug e}"
+  Fail
+    "expected Ok but got Err \{derivedShowWrap (display e)}"
+    "Ok _"
+    "Err \{derivedShowWrap (debug e)}"
 
 {- | Passes when the option is `Some`.
 
