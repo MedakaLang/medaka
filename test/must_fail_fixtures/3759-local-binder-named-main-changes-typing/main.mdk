@@ -1,3 +1,0 @@
-f x = let main = x + 1 in main * 2
-
-main = println (f 3)
