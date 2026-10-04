@@ -551,6 +551,27 @@ findInRoots (r :: rs) modId =
   let path = fileOfModuleId r modId
   if fileExists path then Some (path, r) else findInRoots rs modId
 
+-- The ENTRY's id is derived from its path (`moduleIdOfPath`), so an entry file
+-- with an interior dot (`probe.perm.mdk`) carries the id `probe.perm`, which
+-- `findModuleFile` reads as the nested path `probe/perm.mdk`.  Only for the
+-- entry, fall back to the literal flat file `<root>/<id>.mdk`; an import never
+-- gets this fallback, so `import probe.perm` still means `probe/perm.mdk`.
+findModuleOrEntryFile : List (String, String) ->
+  List String ->
+  Bool ->
+  String ->
+  <IO> Option (String, String)
+findModuleOrEntryFile deps roots isEntry modId =
+  match findModuleFile deps roots modId
+    Some pathRoot => Some pathRoot
+    None => if isEntry then findFlatInRoots roots modId else None
+
+findFlatInRoots : List String -> String -> <IO> Option (String, String)
+findFlatInRoots [] _ = None
+findFlatInRoots (r :: rs) modId =
+  let path = stringConcat [r, "/", modId, ".mdk"]
+  if fileExists path then Some (path, r) else findFlatInRoots rs modId
+
 -- ── the loader's error channel (issue #100) ─────────────────────────────────
 --
 -- A load failure is DATA, not a panic.  `LoadMsg` carries the pre-existing
@@ -604,10 +625,11 @@ readModuleProgF : (String -> Result ParseError (List Decl)) ->
   (String -> Option String) ->
   List (String, String) ->
   List String ->
+  Bool ->
   String ->
   <IO> Result LoadError (String, String, List Decl)
-readModuleProgF parseFn read deps roots modId =
-  match findModuleFile deps roots modId
+readModuleProgF parseFn read deps roots isEntry modId =
+  match findModuleOrEntryFile deps roots isEntry modId
     None => Err (LoadMsg (stringConcat ["unknown module: ", modId]))
     Some (path, owningRoot) => match read path
       Some src => parsedModule parseFn owningRoot path src
@@ -1302,7 +1324,7 @@ visitModF parseFn read deps roots stack visited acc importer modId =
         ])
         importer
         (cycleSite deps roots importer modId))
-  else match readModuleProgF parseFn read deps roots modId
+  else match readModuleProgF parseFn read deps roots (stack == []) modId
     Err e => Err e
     Ok (owningRoot, path, prog) =>
       let croots = childRoots owningRoot roots

@@ -114,6 +114,30 @@ fi
 #    project with no doctests reports "(no doctests found)" cleanly.
 check_no_unknown_module 'test/root' "$MEDAKA" test src/main.mdk
 
+# 7. #1159: an entry file with an interior dot (`probe.perm.mdk`) used to be read
+#    as the qualified module `probe/perm.mdk` ("unknown module: probe.perm").
+mkdir -p "$TMP/dotted"
+cat > "$TMP/dotted/probe.perm.mdk" <<'EOF'
+main = println "hello from dotted"
+EOF
+cd "$TMP/dotted"
+check_dotted() {
+  label="$1"; shift
+  out="$(bound "$@" 2>&1)"
+  code=$?
+  if [ "$code" -eq 0 ] && printf '%s' "$out" | grep -q "$DOTTED_EXPECT"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    printf 'FAIL %s (exit=%s): %s\n' "$label" "$code" "$out"
+  fi
+}
+DOTTED_EXPECT='hello from dotted'
+check_dotted 'run/dotted-rel' "$MEDAKA" run probe.perm.mdk
+check_dotted 'run/dotted-abs' "$MEDAKA" run "$TMP/dotted/probe.perm.mdk"
+DOTTED_EXPECT='0 errors'
+check_dotted 'check/dotted' "$MEDAKA" check probe.perm.mdk
+
 cd "$START"
 printf '%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 [ "$fail" -eq 0 ]
