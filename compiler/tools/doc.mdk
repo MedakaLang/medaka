@@ -22,6 +22,10 @@
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.parser.{
   parseWithPositions,
+  parseResult,
+  parseErrorLine,
+  parseErrorCol,
+  parseErrorMessage,
   Positions,
   DeclPos,
   positionsDecls,
@@ -1379,6 +1383,17 @@ docModuleName roots filename = match reverseL roots
     else
       chopExt (baseOf filename)
   [] => chopExt (baseOf filename)
+
+-- Library mode documents a batch of files; a file that does not parse must be
+-- reported by path (`path:line:col: message`), since `computeModuleDoc` would
+-- otherwise panic with a bare "parse error" that names no file.
+export
+docParseError : String -> String -> Option String
+docParseError path src = match parseResult src
+  Ok _ => None
+  Err e =>
+    Some
+      "\{path}:\{parseErrorLine e}:\{parseErrorCol e}: \{parseErrorMessage e}"
 
 export
 computeModuleDoc : String ->

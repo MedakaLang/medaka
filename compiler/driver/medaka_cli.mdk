@@ -243,6 +243,7 @@ import tools.doc.{
   runDoc,
   ModuleDoc,
   computeModuleDoc,
+  docParseError,
   mdName,
   renderModulePage,
   renderIndex,
@@ -3467,11 +3468,13 @@ collectModuleDocs : String ->
   <IO> Result String (List ModuleDoc)
 collectModuleDocs _ _ _ [] = Ok []
 collectModuleDocs rsrc csrc stdlibDir (target :: rest) = match readSource target
-  Err msg => Err msg
-  Ok tsrc =>
-    let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
-    let md = computeModuleDoc rsrc csrc tsrc target roots
-    map (md :: _) (collectModuleDocs rsrc csrc stdlibDir rest)
+  Err msg => Err "\{target}: \{msg}"
+  Ok tsrc => match docParseError target tsrc
+    Some msg => Err msg
+    None =>
+      let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
+      let md = computeModuleDoc rsrc csrc tsrc target roots
+      map (md :: _) (collectModuleDocs rsrc csrc stdlibDir rest)
 
 -- A library page is named for its module's DERIVED name (`mdName`: a stdlib
 -- module's import id, otherwise the basename minus `.mdk`), so two non-stdlib
