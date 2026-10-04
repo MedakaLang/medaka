@@ -1,0 +1,18 @@
+issue: 3390
+what: the native runtime's writeFile ignores the result of fwrite and fclose
+what: (`mdk_write_impl` in runtime/medaka_rt.c), so a write that fails returns Ok.
+what: Writing to /dev/full fails with ENOSPC at close, yet the built binary takes the
+what: `Ok` arm and prints `Ok` at exit 0. `mdk_write_file_bytes` has the same shape;
+what: `mdk_write_file_mode` already checks both results.
+cmd: build-run main.mdk
+exit: 0
+stdout: Ok
+control: build-run control.mdk
+why-verb: `build-run`, because the defect is in the native runtime; the interpreter's file
+why-verb: externs are canned by design, so `run` cannot see it. Linux-only: /dev/full makes
+why-verb: the failure deterministic, and this gate runs in the ubuntu soundness job.
+why-stdout: `Ok` can only print if the failed write was reported as success; the fix prints
+why-stdout: `Err` and drains this row.
+why-control: control.mdk writes the same text to /dev/null, which succeeds; it must build
+why-control: and print `Ok` at exit 0. A red control means writeFile or native build broke,
+why-control: never that #3390 drained.

@@ -1,0 +1,3 @@
+data BoxP = BoxP Int deriving (Eq)
+
+main = println (BoxP 3 == BoxP 3)
