@@ -258,7 +258,7 @@ fi
 # in shell. `check --json`'s `{"files":[...]}` envelope carries one entry per
 # module in the transitive closure, each with a "file" path, REGARDLESS of
 # whether that module has any diagnostics (every module gets a bucket, even a
-# clean one — compiler/driver/diagnostics.mdk's `cjAllToJson`/`mergeMainWarns`).
+# clean one — compiler/driver/diagnostics.mdk's `cjAllToJson`/`cjAllToJsonWith`).
 # `check` never shells out to clang or produces a `test/bin/*` binary — only
 # `medaka build` does — so this is a genuine no-build discriminator: it needs
 # `./medaka` to exist (bootstrapping it if absent, same as the default path

@@ -16,7 +16,8 @@
 # WHAT IT CHECKS (pure text analysis — no compiler build, no toolchain, safe
 # to run anywhere, always): every INLINE single-backtick span in the
 # agent-facing docs (AGENTS.md, .claude/skills/*/SKILL.md,
-# .claude/workstreams/*.md, .claude/ORCHESTRATING.md) that is SHAPED like a
+# .claude/workstreams/*.md, .claude/ORCHESTRATING.md; plus, source-path-gated,
+# docs/spec, docs/stdlib and test/*.sh gate prose) that is SHAPED like a
 # Medaka code identifier — and requires it to appear somewhere in the actual
 # compiler/stdlib/runtime source.
 #
@@ -184,7 +185,20 @@ git ls-files 'AGENTS.md' '.claude/skills/*/SKILL.md' '.claude/workstreams/*.md' 
 # fence itself has no source-path citation on the same line, so it is inert
 # under this tier; the surrounding prose that DOES cite `stdlib/X.mdk` is
 # what gets checked).
-git ls-files 'docs/spec/*.md' 'docs/stdlib/*.md' > "$WORK/doc_files_scoped.txt"
+# test/*.sh (#1574) joins the SCOPED tier: shell-gate prose (allowlist rows,
+# ledger entries, tripwire premises) cites symbols to constrain a future edit,
+# and a stale citation there was caught by nothing. BROAD is the wrong tier —
+# it measured 176 dead findings, mostly legitimate history ("this used to read
+# X") and placeholder names — while SCOPED (symbol AND a compiler/stdlib/runtime
+# source path on the same line) measured 7, all triaged.
+git ls-files 'docs/spec/*.md' 'docs/stdlib/*.md' 'test/*.sh' > "$WORK/doc_files_scoped.txt"
+
+# Coverage tripwire: the hole #1574 closed was a corpus that silently held no
+# shell gate. Fail loudly if the scoped list ever stops containing one.
+if ! grep -q '^test/.*\.sh$' "$WORK/doc_files_scoped.txt"; then
+  echo "FAIL: the scoped doc corpus contains no test/*.sh gate (#1574 — gate prose is not scanned)"
+  exit 1
+fi
 
 # Basenames of the SAME three directories the resolution corpus (step 3)
 # reads from — used below so a bare `typecheck.mdk:11422` cite (no directory
