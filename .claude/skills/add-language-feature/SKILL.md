@@ -1,6 +1,6 @@
 ---
 name: add-language-feature
-description: Thread a new language construct (syntax/expression/declaration/pattern) through the full Medaka compiler pipeline — lexer, parser, AST, resolver, type checker, exhaustiveness, desugar, evaluator — plus grammar, LSP, and tests. Use when adding or extending Medaka language syntax or semantics.
+description: Thread a new or changed language construct (syntax, expression, declaration, pattern) through the whole pipeline, lexer to evaluator, plus LSP and tests. Use when adding or extending Medaka syntax or semantics.
 ---
 
 # Add a language feature end-to-end
