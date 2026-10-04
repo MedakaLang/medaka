@@ -1273,9 +1273,17 @@ stage_ir() {
   case "$_v" in
     ''|*[!0-9]*)
       echo "FAIL: no inclusive Ir for symbol '$2' in the $1 profile." >&2
-      echo "  The stage entry point was renamed, inlined, or never ran — this gate" >&2
-      echo "  cannot grade it and must not pretend it graded 0. Re-derive with:" >&2
-      echo "    nm $PROFILE | grep $2" >&2
+      # A listing with no Medaka symbol at all means valgrind could not read the
+      # profiler's symbol table, which no edit to the stage itself explains.
+      if grep -q -F ':mdk_' "$WORK/ann_$1.txt"; then
+        echo "  The stage entry point was renamed, inlined, or never ran — this gate" >&2
+        echo "  cannot grade it and must not pretend it graded 0. Re-derive with:" >&2
+        echo "    nm $PROFILE | grep $2" >&2
+      else
+        echo "  The listing names NO Medaka function: valgrind read no symbols from the" >&2
+        echo "  profiler binary, so no stage can be graded. Check the profiler's link" >&2
+        echo "  mode (test/build_oracles.sh, --build-one) against this valgrind." >&2
+      fi
       return 1 ;;
   esac
   printf '%s' "$_v"
