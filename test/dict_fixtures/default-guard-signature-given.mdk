@@ -1,0 +1,12 @@
+-- §6.3 D3 clause 3 consults givens: the declared `Index c Int e` covers the goal
+-- after the key literals default, so they ground.  Hand-derived: 1.5 + 2.25 =
+-- 3.75, then 3 + 4 = 7.
+impl Index (Array a) Float a where
+  index xs _ = xs[1]
+
+sumG : (Index c Int e, Num e) => c -> e
+sumG v = v[0] + v[1]
+
+main =
+  println (debug (sumG [|1.5, 2.25|]))
+  println (debug (sumG [|3, 4|]))

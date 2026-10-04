@@ -170,6 +170,7 @@ arithGoalsIn : List Obligation -> List (Ref Route, Mono)
 armDictSites : Arm -> List (List Route)
 armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
+armNumGuard : NumGuard -> ArmedGuard
 armSites : Arm -> List (Ref Route)
 armUnreachable : Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
 arrowArity : Mono -> Int
@@ -821,16 +822,17 @@ dedupPredicateSlotEntry : (String, List PredicateSlot) -> (String, List Predicat
 dedupPredicateSlotsTable : Unit -> Unit
 dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
 dedupVecObls : List VecObl -> List VecObl
-defaultAbsentNumWith : Option Int -> Map String Unit -> List UObligation -> List Mono -> Unit
-defaultAmbiguousNumWith : Option Int -> Map String Unit -> List UObligation -> Mono -> Unit
+defaultAbsentNumWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
+defaultAmbiguousNumWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> Mono -> Unit
 defaultBodyBinderNamesProbe : Unit -> List String
-defaultBodyLocalNumWith : Option Int -> Map String Unit -> List UObligation -> Unit
+defaultBodyLocalNumWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> Unit
 defaultClosedBodyNum : Int -> Int -> Int -> Unit
 defaultClosedBodyNumGo : Int -> IfaceRef -> List UObligation -> Unit
 defaultDeferredPatLitsIn : Int -> Mono -> Unit
-defaultEachMemberWith : Option Int -> Map String Unit -> List UObligation -> List Mono -> Unit
+defaultEachMemberWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
 defaultEffectLaunderMsg : String -> List Atom -> String
-defaultGroupNumWith : Option Int -> Map String Unit -> List UObligation -> List Mono -> Unit
+defaultGroupNumWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
+defaultKeepsGoalsSatisfiable : ArmedGuard -> Int -> Bool
 defaultPatLitVarsIn : List Int -> List (Mono, Int, Option Loc) -> Unit
 defaultReceiverOrdinal : Int
 defaultSourcelessAuthorities : Map Int Unit -> EffRow -> Mono -> Unit
@@ -1141,7 +1143,7 @@ fileGrantExterns : Map String (Int, Int)
 fileValueKey : String -> Expr -> Option String
 fileValueShape : Expr -> String
 filterNonSelf : String -> List String -> List String
-finalizeNumBoundary : NumBoundary -> Unit
+finalizeNumBoundary : NumBoundary -> List Mono
 findIfaceDecl : List Decl -> String -> Option (List String, List (Option KindAnn), List IfaceMethod)
 findMatchingImplReqsU : ImplUniverse -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 findMostSpecificEntry : List KeyEntry -> List KeyEntry -> Option KeyEntry
@@ -1280,6 +1282,8 @@ goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
 goalPredOf : String -> Mono -> Option PredicateRequest
 goalPredOfOp : String -> Option PredicateRequest
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
+goalSatisfiable : Map String Unit -> UObligation -> List Mono -> Bool
+goalSatisfiableAfterDefault : ArmedGuard -> Int -> UObligation -> Bool
 goalSiteLoc : Ref (Option Loc)
 goalSlotStillOpen : List Mono -> Bool
 goalWindowOf : List UObligation -> GoalWindow
@@ -1330,7 +1334,8 @@ graphPubDefiners : String -> List (String, (String, String))
 graphRun : Ref GraphRun
 groundAdmittedGo : TcEnv -> String -> List IfaceRef -> List Mono -> Option Loc -> Unit
 groundAdmittedReceivers : TcEnv -> String -> List Mono -> Option Loc -> Unit
-groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
+groundNumVarsWith : Option Int -> ArmedGuard -> List UObligation -> List Int -> Unit
+groundOrWithhold : ArmedGuard -> Int -> Mono -> Unit
 groundShadowReceiver : Option Mono -> Mono -> Bool -> Option Loc -> Unit
 groundedSignatureVariable : List (String, Mono) -> Option (String, Mono)
 groupClauses : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr))
@@ -1344,6 +1349,7 @@ guardArmEVars : GuardArm -> List String
 guardDictSites : Guard -> List (List Route)
 guardEVars : Guard -> List String
 guardSites : Guard -> List (Ref Route)
+guardsDefaulting : UObligation -> Bool
 hadMatchWarnings : Unit -> Bool
 hadTypeErrors : Unit -> Bool
 hasDupI : List Int -> Bool
@@ -1859,6 +1865,7 @@ localBindingSummary : LetBind -> (String, BindingSummary)
 localDeclaredConstraintFor : String -> CDeclared
 localDictPat : String -> Pat
 localGrantIds : String -> List Int
+localNumGuard : List UObligation -> Int -> NumGuard
 localRole : Bool -> BindingRole
 localSlotArgs : List (Int, Mono) -> PredicateSlot -> List Mono
 localSlotLead : List (Int, Mono) -> PredicateSlot -> Mono
@@ -2270,6 +2277,7 @@ ordinaryValueScheme : Scheme -> ValueScheme
 originMethodName : String -> String
 originPhrase : TyConOrigin -> String
 originRowsOf : List (String, (String, String)) -> List (String, String)
+outerRigidIds : Option Int -> List Mono -> Map String Unit -> Map String Unit
 overAppliedMsg : String -> Int -> Int -> String
 overlayCachedRows : SpellingPop Scheme -> SpellingPop RecordInfo -> Decl -> Option (List (String, Scheme), List (String, RecordInfo))
 overlayDecided : Bool -> (Option Decl, Option Decl, Option Decl) -> Bool
@@ -2643,6 +2651,7 @@ registersElementDict : String -> List String -> Bool
 rejectAdmittedValueOccurrence : String -> Unit
 rejectCyclicAliases : Unit -> Unit
 rejectUndeterminedVectors : Map String Unit -> List UObligation -> List UObligation -> Unit
+rejectWithheldAmbiguity : Map String Unit -> List Mono -> List UObligation -> Unit
 removeAllS : List String -> List String -> List String
 renameAliasedMethods : List Decl -> List (String, List Decl) -> List (String, List Decl)
 renameAliasedMethodsIn : List (String, List String) -> (String, List Decl) -> (String, List Decl)
@@ -3203,6 +3212,8 @@ withAliasMethodNames : List (String, String) -> Map String Unit -> Map String Un
 withCtors : Map String Scheme -> TcEnv
 withDeclParamKinds : List Decl -> (Unit -> a) -> a
 withFreeAuths : List (String, Ref Authvar) -> SigVars -> SigVars
+withheldGoals : List Mono -> List UObligation -> List UObligation
+withheldVectorVerdict : Map String Unit -> GoalWindow -> UObligation -> Unit
 withoutVar : Ref Authvar -> Authority -> List Authority
 writtenAxis : (String, EffParamTy) -> (String, Param)
 writtenAxisTerm : SigVars -> List (String, EffParamTy) -> (String, Param) -> (String, Authority)

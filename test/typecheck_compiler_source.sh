@@ -1310,7 +1310,8 @@ printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
 done || exit 1
 
 numeric_boundary_expected="$(printf '%s\n' "$numeric_boundaries" | wc -l | tr -d ' ')"
-numeric_boundary_actual="$(grep -Fc 'let _ = finalizeNumBoundary' "$predicate_slot_src")"
+# A group and a method body keep the candidates D3 clause 3 withheld for their verdict.
+numeric_boundary_actual="$(grep -Ec 'let (_|withheld) = finalizeNumBoundary' "$predicate_slot_src")"
 if [ "$numeric_boundary_actual" -ne "$numeric_boundary_expected" ]; then
   echo "FAIL: numeric boundary descriptor census changed: $numeric_boundary_actual calls, $numeric_boundary_expected checked boundaries"
   exit 1

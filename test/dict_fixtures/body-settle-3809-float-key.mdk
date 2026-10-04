@@ -1,0 +1,19 @@
+-- DICT-SEMANTICS §6.3 D3 clause 3, joint consistency at defaulting, at an impl
+-- body (#3809).  Both `Index (Array a) Int a` and `Index (Array a) Float a` unify
+-- with `Index (Array a) k e`, and both keys satisfy `Num`, so nothing is
+-- determined before defaulting.  `k` defaults to `Int`.  Grounding `e` to `Int`
+-- would leave `Index (Array a) k Int`, which no head unifies with while the head's
+-- `a` is held, so `e` is withheld and the second determination fixes `e = a`.
+-- Hand-derived: 1.5 + 2.25 = 3.75, then 3 + 4 = 7.
+impl Index (Array a) Float a where
+  index xs _ = xs[1]
+
+interface Report t where
+  report : t -> String
+
+impl Report (Array a) requires Num a, Debug a where
+  report v = debug (v[0] + v[1])
+
+main =
+  println (report [|1.5, 2.25|])
+  println (report [|3, 4|])
