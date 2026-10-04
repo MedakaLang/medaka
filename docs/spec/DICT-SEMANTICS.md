@@ -682,20 +682,26 @@ of arity two or more that is not closed. The group's **unowned** variables are
 its declared signatures' variables and the variables in an argument position of
 a member's type; every other variable of `π` (a result-position or body-local
 one) the group owns. Let `U` be the instances of `C` whose heads unify with `π`,
-the unowned variables held rigid and the instance's variables fresh. A
-candidate counts only if the acceptance census counts its first head (an
-arrow-, effect- or constraint-headed instance does not; a variable-headed one
-does), and only if its commit leaves every sibling goal on a variable it binds
-satisfiable: a sibling goal the commit closes must have an instance in `IE`
-(joint consistency). If exactly one candidate remains, `π` is unified with a
-fresh instance of its head, the fresh variables minted at the group's own level
-so that a goal variable unified with one still generalizes. Otherwise nothing is
-committed (`determineByUniqueInstance`, called from `processSCC` before
-defaulting and again after it).
+the unowned variables held rigid and the instance's variables fresh. Every
+instance in `U` is a candidate except one whose first head unifies with `π` only
+by peeling a qualifier: an effect- or constraint-qualified head (`<Stdout> Int`)
+elaborates to the type under the qualifier, and is not a second type `π` could
+have. An arrow-, tuple- or variable-headed instance unifies by its structure and
+counts. A candidate is kept only if its commit leaves every sibling goal on a
+variable it binds satisfiable: a sibling goal the commit closes must have an
+instance in `IE` (joint consistency). If exactly one candidate remains, `π` is
+unified with a fresh instance of its head, the fresh variables minted at the
+group's own level so that a goal variable unified with one still generalizes.
+Otherwise nothing is committed. Each pass sweeps the group's goals until a sweep
+commits nothing, so a goal that another goal's commit makes unique is determined
+in the same pass, whatever order the goals were recorded in
+(`determineByUniqueInstance`, called from `processSCC` before defaulting and
+again after it; `test/dict_fixtures/determine-quiescence-apply-order.mdk`).
 
-The commit is a function of `(IE, π)` alone: with one unifying instance no order
-of solving can produce a different answer, because no other instance can ever
-match. `Index Bytes Int ?v` against the one instance `Index Bytes Int U8` fixes
+The commit is a function of `IE`, `π` and the goals that share `π`'s variables:
+with one candidate no order of solving can produce a different answer, because
+every other instance of `C` either fails to unify with `π` or reaches it only
+through a peeled qualifier. `Index Bytes Int ?v` against the one instance `Index Bytes Int U8` fixes
 `?v = U8`, so `b[i] == 13` compares two `U8`s
 (`test/dict_fixtures/determine-bytes-index-literal-compare.mdk`); the only
 `Ix Float Char` makes the literal in `ix 5 'z'` a `Float`
@@ -706,15 +712,25 @@ literal's `Num ?a`; the variable then defaults and the closed goal is rejected
 as `No impl of Ix for Int Bool`
 (`test/dict_fixtures/s-nary-truncated-goal-joint-rejects/main.mdk`).
 
-**Reject.** After defaulting, a goal that is still open, that no instance head
-unifies with, and whose variables the group all owns has no type that can
-satisfy it. It is rejected at its site with `T-NO-IMPL`, the vector's variables
+**Reject.** A goal that generalization abstracts belongs to the caller: when
+every free variable of it is quantified by a member's scheme (a result-position
+variable of the member's type), the goal enters that scheme and each caller
+discharges it at its own type. `mk () = conv (Wrap 1)` with no instance of
+`Conv` publishes `mk : Conv (Wrap Int) a => Unit -> a`, and an importer that
+never calls `mk` owes nothing for it
+(`test/dict_fixtures/determine-scheme-variable-exempt.mdk`,
+`test/dict_fixtures/determine-scheme-variable-library/main.mdk`). After
+defaulting, a goal that is still open, that no instance head unifies with, whose
+variables the group all owns, and that generalization does not abstract has no
+type that can satisfy it, because a variable in no member's type has no later
+boundary. It is rejected at its site with `T-NO-IMPL`, the vector's variables
 rendered `_` (`No impl of Ix for _ Bool`), unless a given answers it or a
 primary mismatch already explained one of its variables
-(`test/dict_fixtures/determine-no-unifying-instance-rejected.mdk`). Before
-defaulting the same goal may still close, and a closed goal is reported by the
-obligation gate under its own types. The undetermined-goal check asks per
-argument only for a 1-ary goal.
+(`test/dict_fixtures/determine-no-unifying-instance-rejected.mdk`). The check
+runs once the group's schemes are registered, and at a method body after its
+last determination. Before defaulting the same goal may still close, and a
+closed goal is reported by the obligation gate under its own types. The
+undetermined-goal check asks per argument only for a 1-ary goal.
 
 ---
 

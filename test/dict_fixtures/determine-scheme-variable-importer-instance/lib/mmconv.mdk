@@ -1,0 +1,6 @@
+public export data Wrap a = Wrap a
+
+export interface Conv s t where
+  conv : s -> t
+
+export mk () = conv (Wrap 1)

@@ -1,0 +1,10 @@
+-- §3 determination's reject half across a module boundary.  `lib/mmconv.mdk`
+-- exports `mk () = conv (Wrap 1)` and declares no instance of `Conv`; its goal
+-- `Conv (Wrap Int) ?t` has `mk`'s result variable in it, so `mk`'s scheme
+-- abstracts it (`mk : Conv (Wrap Int) a => Unit -> a`).  This importer takes only
+-- `Wrap`, declares no instance and never calls `mk`, so nothing it does can make
+-- the library's binding invalid.
+-- Hand-derived: ACCEPT on all three verbs, prints 1.
+import lib.mmconv.{Wrap(..)}
+
+main = println (debug 1)
