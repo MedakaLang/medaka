@@ -372,7 +372,7 @@ echo "  ok: $(printf '%s\n' "$declun_actual" | grep -c .) decl-layer producer fi
 # gets lost.
 # ⚠️ `compiler/types/route_key.mdk` IS ON THIS LIST FOR ITS DOCTEST FIXTURES ALONE,
 # and it has been RED SINCE `B-2.2-a` LANDED THAT FILE (2026-08-13) — this ratchet
-# is a `git grep` over TRACKED files, not over an import closure, so the module was
+# is a `git grep` over tracked and untracked files, not over an import closure, so the module was
 # never invisible to it; `a` simply ran no gate beyond build/check-self/snapshot and
 # nobody looked. Recorded rather than quietly fixed, because "a call-site-free module
 # is in no gate" is true of the COMPILER's gates and false of this one.
