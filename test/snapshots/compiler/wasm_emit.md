@@ -1,5 +1,5 @@
 # META
-source_lines=12891
+source_lines=12922
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -223,6 +223,7 @@ import support.ordmap.{
   omFromPairs,
   omMapValues,
   omEmpty,
+  omDelete,
 }
 import support.util.{
   joinNl,
@@ -4342,7 +4343,8 @@ emitRefMain prog groups = match findMain (progEmit prog) groups
     -- then-branch, and a driver whose first arm is `panic …` was printed as an
     -- Int (#2424's second face, the pds engine drivers).
     let k =
-      if mainBodyIsUnit prog body || declRetTypeOf prog "main" == "Unit" then
+      if mainBodyIsUnit prog (cafBodies groups) body
+        || declRetTypeOf prog "main" == "Unit" then
         WUnit
       else if inputMainIsFloat (progInput prog) then
         WFloat
@@ -4360,18 +4362,27 @@ emitRefMain prog groups = match findMain (progEmit prog) groups
 -- NOT auto-print its result — the structural `refMainKind` can't see through the
 -- wrapper, so it would route the Unit result to the Int printer (a trailing `0`).
 -- Reads the installed declared-return-type table; empty ⇒ "" ⇒ False (unchanged).
-mainBodyIsUnit : Prog -> CExpr -> Bool
-mainBodyIsUnit prog (CApp f _) = match appHead f
+-- `cafs` maps each top-level nullary value binding still in scope to its body: a
+-- reference to an unannotated CAF (`go = println "x"; main = go`) is Unit iff that
+-- body is.  Following a CAF removes it from the map, so a cyclic chain ends False.
+mainBodyIsUnit : Prog -> OrdMap CExpr -> CExpr -> Bool
+mainBodyIsUnit prog _ (CApp f _) = match appHead f
   CVar fn _ => declRetTypeOf prog fn == "Unit"
   -- `println`/`print` are `Display a =>` constrained → the dict-pass rewrites the
   -- head to a CDict (or CMethod) carrying the routes; recover the bare name.
   CDict fn _ => declRetTypeOf prog fn == "Unit"
   CMethod fn _ _ _ _ _ => declRetTypeOf prog fn == "Unit"
   _ => False
-mainBodyIsUnit prog (CVar fn _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog (CDict fn _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog (CMethod fn _ _ _ _ _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog (CLet _ _ _ b) = mainBodyIsUnit prog b
+mainBodyIsUnit prog cafs (CVar fn _) =
+  if declRetTypeOf prog fn == "Unit" then
+    True
+  else match omLookup fn cafs
+    Some body => mainBodyIsUnit prog (omDelete fn cafs) body
+    None => False
+mainBodyIsUnit prog _ (CDict fn _) = declRetTypeOf prog fn == "Unit"
+mainBodyIsUnit prog _ (CMethod fn _ _ _ _ _) = declRetTypeOf prog fn == "Unit"
+mainBodyIsUnit prog cafs (CLet _ pat _ b) =
+  mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) b
 -- the native branch-(2) equivalent: an UNANNOTATED `main = match … { … }` whose
 -- Unit-ness is only knowable from its inferred body type (e.g. check_main's
 -- `match args () { [r,c,f] => withFiles … ; _ => ePutStrLn … }`).  Type-erased here,
@@ -4379,26 +4390,46 @@ mainBodyIsUnit prog (CLet _ _ _ b) = mainBodyIsUnit prog b
 -- (an IO-extern returning Unit, a fn whose declared ret is Unit, or another all-Unit
 -- match).  Conservative — a single non-Unit leaf ⇒ False, so a value main is never
 -- suppressed.  Block/Let tails recurse to their final expr.
-mainBodyIsUnit prog (CDecision _ arms _) = allArmsUnit prog arms
-mainBodyIsUnit prog (CMatch _ arms) = allArmsUnit prog arms
-mainBodyIsUnit prog (CBlock stmts) = blockTailIsUnit prog stmts
-mainBodyIsUnit prog _ = False
+mainBodyIsUnit prog cafs (CDecision _ arms _) = allArmsUnit prog cafs arms
+mainBodyIsUnit prog cafs (CMatch _ arms) = allArmsUnit prog cafs arms
+mainBodyIsUnit prog cafs (CBlock stmts) = blockTailIsUnit prog cafs stmts
+mainBodyIsUnit _ _ _ = False
 
 -- True iff every match/decision arm body is itself a Unit main body.  Empty ⇒ False
 -- (no leaves to prove Unit ⇒ don't suppress).
-allArmsUnit : Prog -> List CArm -> Bool
-allArmsUnit _ [] = False
-allArmsUnit prog arms = allArmsUnitGo prog arms
+allArmsUnit : Prog -> OrdMap CExpr -> List CArm -> Bool
+allArmsUnit _ _ [] = False
+allArmsUnit prog cafs arms = allArmsUnitGo prog cafs arms
 
-allArmsUnitGo : Prog -> List CArm -> Bool
-allArmsUnitGo _ [] = True
-allArmsUnitGo prog ((CArm _ _ body) :: rest) =
-  if mainBodyIsUnit prog body then allArmsUnitGo prog rest else False
+allArmsUnitGo : Prog -> OrdMap CExpr -> List CArm -> Bool
+allArmsUnitGo _ _ [] = True
+allArmsUnitGo prog cafs ((CArm pat _ body) :: rest) =
+  if mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) body then
+    allArmsUnitGo prog cafs rest
+  else
+    False
 
-blockTailIsUnit : Prog -> List CStmt -> Bool
-blockTailIsUnit _ [] = False
-blockTailIsUnit prog [CSExpr e] = mainBodyIsUnit prog e
-blockTailIsUnit prog (_ :: rest) = blockTailIsUnit prog rest
+blockTailIsUnit : Prog -> OrdMap CExpr -> List CStmt -> Bool
+blockTailIsUnit _ _ [] = False
+blockTailIsUnit prog cafs [CSExpr e] = mainBodyIsUnit prog cafs e
+blockTailIsUnit prog cafs ((CSLet _ pat _) :: rest) =
+  blockTailIsUnit prog (shadowCafs (patVars pat) cafs) rest
+blockTailIsUnit prog cafs (_ :: rest) = blockTailIsUnit prog cafs rest
+
+-- The top-level nullary value bindings, name -> body (`isValBind`: never `main`).
+cafBodies : List CBind -> OrdMap CExpr
+cafBodies groups = omFromPairs (cafBodyRows groups) omEmpty
+
+cafBodyRows : List CBind -> List (String, CExpr)
+cafBodyRows [] = []
+cafBodyRows ((CBind name [CClause [] body]) :: rest) =
+  if name == "main" then cafBodyRows rest else (name, body) :: cafBodyRows rest
+cafBodyRows (_ :: rest) = cafBodyRows rest
+
+-- A local binder of the same name hides a top-level CAF below it.
+shadowCafs : List String -> OrdMap CExpr -> OrdMap CExpr
+shadowCafs [] cafs = cafs
+shadowCafs (x :: xs) cafs = shadowCafs xs (omDelete x cafs)
 
 -- the printable static kind of a ref-mode main body: an Int (decimal) or a Bool
 -- (true/false).  Determined structurally — arithmetic/Int-lit → Int; a comparison
@@ -12897,7 +12928,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "ifaceIdMatches" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "isSelfHead" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
@@ -13625,27 +13656,37 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitRefForceFn" ((PVar "prog") (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "body"))))) (EBlock (DoLet false false (PVar "g") (EApp (EVar "gname") (EVar "name"))) (DoLet false false (PVar "instrs") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EListLit)) (ELit (LInt 0))) (EVar "body"))) (DoLet false false (PVar "bodyLocals") (EApp (EVar "dedupKeep") (EApp (EVar "collectExprLocals") (EVar "body")))) (DoLet false false (PVar "maxDepth") (EApp (EVar "maxRefDepth") (EVar "body"))) (DoLet false false (PVar "scratch") (EApp (EVar "scratchLocals") (EVar "maxDepth"))) (DoLet false false (PVar "localDecls") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "localDeclRef") (EVar "l"))))) (EBinOp "++" (EVar "bodyLocals") (EVar "scratch")))) (DoLet false false (PVar "w7Decls") (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "  ")) (EVar "_s")))) (EApp (EApp (EVar "w7LocalDecls") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "maxDepth")))) (DoLet false false (PVar "cyclic") (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LString "E-CYCLIC-VALUE"))) (EBinOp "++" (EVar "name") (ELit (LString " refers to itself during initialization (non-productive cyclic value)"))))) (DoLet false false (PVar "unforced") (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "    i32.const 1")) (EBinOp "++" (ELit (LString "    global.set $gs_")) (EVar "g"))) (EApp (EVar "indent") (EVar "instrs"))) (EListLit (ELit (LString "    local.set $__frcv")) (ELit (LString "    local.get $__frcv")) (EBinOp "++" (ELit (LString "    global.set $")) (EVar "g")) (ELit (LString "    i32.const 2")) (EBinOp "++" (ELit (LString "    global.set $gs_")) (EVar "g")) (ELit (LString "    local.get $__frcv")) (ELit (LString "    ref.as_non_null"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  (func $force_")) (EVar "g")) (ELit (LString " (result (ref eq))"))) (ELit (LString "  (local $__frcv (ref null eq))"))) (EVar "localDecls")) (EVar "w7Decls")) (EListLit (EBinOp "++" (ELit (LString "    global.get $gs_")) (EVar "g")) (ELit (LString "    i32.const 2")) (ELit (LString "    i32.eq")) (ELit (LString "    if (result (ref eq))")) (EBinOp "++" (ELit (LString "    global.get $")) (EVar "g")) (ELit (LString "    ref.as_non_null")) (ELit (LString "    else")) (EBinOp "++" (ELit (LString "    global.get $gs_")) (EVar "g")) (ELit (LString "    i32.const 1")) (ELit (LString "    i32.eq")) (ELit (LString "    if (result (ref eq))")))) (EApp (EVar "indent") (EVar "cyclic"))) (EListLit (ELit (LString "    else")))) (EVar "unforced")) (EListLit (ELit (LString "    end")) (ELit (LString "    end")) (ELit (LString "  )")))))))
 (DFunDef false "emitRefForceFn" ((PVar "prog") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "value binding must be a nullary clause"))))
 (DTypeSig false "emitRefMain" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "emitRefMain" ((PVar "prog") (PVar "groups")) (EMatch (EApp (EApp (EVar "findMain") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "groups")) (arm (PCon "Some" (PVar "body")) () (EBlock (DoLet false false (PVar "instrs") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EListLit)) (ELit (LInt 0))) (EVar "body"))) (DoLet false false (PVar "k") (EIf (EBinOp "||" (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "body")) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (ELit (LString "main"))) (ELit (LString "Unit")))) (EVar "WUnit") (EIf (EApp (EVar "inputMainIsFloat") (EApp (EVar "progInput") (EVar "prog"))) (EVar "WFloat") (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EVar "body"))))) (DoExpr (EMatch (EVar "k") (arm (PCon "WUnit") () (EBinOp "++" (EApp (EVar "indent") (EVar "instrs")) (EListLit (ELit (LString "    drop"))))) (arm PWild () (EBinOp "++" (EApp (EVar "indent") (EVar "instrs")) (EApp (EApp (EVar "refPrintFor") (EVar "prog")) (EVar "k")))))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "no `main` binding"))))))
-(DTypeSig false "mainBodyIsUnit" (TyFun (TyCon "Prog") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CApp" (PVar "f") PWild)) (EMatch (EApp (EVar "appHead") (EVar "f")) (arm (PCon "CVar" (PVar "fn") PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm (PCon "CDict" (PVar "fn") PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm (PCon "CMethod" (PVar "fn") PWild PWild PWild PWild PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm PWild () (EVar "False"))))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CVar" (PVar "fn") PWild)) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CDict" (PVar "fn") PWild)) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CMethod" (PVar "fn") PWild PWild PWild PWild PWild)) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "b")))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "arms")))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "arms")))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "stmts")))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") PWild) (EVar "False"))
-(DTypeSig false "allArmsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool"))))
-(DFunDef false "allArmsUnit" (PWild (PList)) (EVar "False"))
-(DFunDef false "allArmsUnit" ((PVar "prog") (PVar "arms")) (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "arms")))
-(DTypeSig false "allArmsUnitGo" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool"))))
-(DFunDef false "allArmsUnitGo" (PWild (PList)) (EVar "True"))
-(DFunDef false "allArmsUnitGo" ((PVar "prog") (PCons (PCon "CArm" PWild PWild (PVar "body")) (PVar "rest"))) (EIf (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "body")) (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "rest")) (EVar "False")))
-(DTypeSig false "blockTailIsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Bool"))))
-(DFunDef false "blockTailIsUnit" (PWild (PList)) (EVar "False"))
-(DFunDef false "blockTailIsUnit" ((PVar "prog") (PList (PCon "CSExpr" (PVar "e")))) (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "e")))
-(DFunDef false "blockTailIsUnit" ((PVar "prog") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "rest")))
+(DFunDef false "emitRefMain" ((PVar "prog") (PVar "groups")) (EMatch (EApp (EApp (EVar "findMain") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "groups")) (arm (PCon "Some" (PVar "body")) () (EBlock (DoLet false false (PVar "instrs") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EListLit)) (ELit (LInt 0))) (EVar "body"))) (DoLet false false (PVar "k") (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EVar "cafBodies") (EVar "groups"))) (EVar "body")) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (ELit (LString "main"))) (ELit (LString "Unit")))) (EVar "WUnit") (EIf (EApp (EVar "inputMainIsFloat") (EApp (EVar "progInput") (EVar "prog"))) (EVar "WFloat") (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EVar "body"))))) (DoExpr (EMatch (EVar "k") (arm (PCon "WUnit") () (EBinOp "++" (EApp (EVar "indent") (EVar "instrs")) (EListLit (ELit (LString "    drop"))))) (arm PWild () (EBinOp "++" (EApp (EVar "indent") (EVar "instrs")) (EApp (EApp (EVar "refPrintFor") (EVar "prog")) (EVar "k")))))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "no `main` binding"))))))
+(DTypeSig false "mainBodyIsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyCon "CExpr") (TyCon "Bool")))))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") PWild (PCon "CApp" (PVar "f") PWild)) (EMatch (EApp (EVar "appHead") (EVar "f")) (arm (PCon "CVar" (PVar "fn") PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm (PCon "CDict" (PVar "fn") PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm (PCon "CMethod" (PVar "fn") PWild PWild PWild PWild PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm PWild () (EVar "False"))))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CVar" (PVar "fn") PWild)) (EIf (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))) (EVar "True") (EMatch (EApp (EApp (EVar "omLookup") (EVar "fn")) (EVar "cafs")) (arm (PCon "Some" (PVar "body")) () (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EApp (EVar "omDelete") (EVar "fn")) (EVar "cafs"))) (EVar "body"))) (arm (PCon "None") () (EVar "False")))))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") PWild (PCon "CDict" (PVar "fn") PWild)) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") PWild (PCon "CMethod" (PVar "fn") PWild PWild PWild PWild PWild)) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CLet" PWild (PVar "pat") PWild (PVar "b"))) (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EApp (EVar "shadowCafs") (EApp (EVar "patVars") (EVar "pat"))) (EVar "cafs"))) (EVar "b")))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CMatch" PWild (PVar "arms"))) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "stmts")))
+(DFunDef false "mainBodyIsUnit" (PWild PWild PWild) (EVar "False"))
+(DTypeSig false "allArmsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
+(DFunDef false "allArmsUnit" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "allArmsUnit" ((PVar "prog") (PVar "cafs") (PVar "arms")) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
+(DTypeSig false "allArmsUnitGo" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
+(DFunDef false "allArmsUnitGo" (PWild PWild (PList)) (EVar "True"))
+(DFunDef false "allArmsUnitGo" ((PVar "prog") (PVar "cafs") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EApp (EVar "shadowCafs") (EApp (EVar "patVars") (EVar "pat"))) (EVar "cafs"))) (EVar "body")) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "rest")) (EVar "False")))
+(DTypeSig false "blockTailIsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Bool")))))
+(DFunDef false "blockTailIsUnit" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "blockTailIsUnit" ((PVar "prog") (PVar "cafs") (PList (PCon "CSExpr" (PVar "e")))) (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "e")))
+(DFunDef false "blockTailIsUnit" ((PVar "prog") (PVar "cafs") (PCons (PCon "CSLet" PWild (PVar "pat") PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EApp (EApp (EVar "shadowCafs") (EApp (EVar "patVars") (EVar "pat"))) (EVar "cafs"))) (EVar "rest")))
+(DFunDef false "blockTailIsUnit" ((PVar "prog") (PVar "cafs") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "rest")))
+(DTypeSig false "cafBodies" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CExpr"))))
+(DFunDef false "cafBodies" ((PVar "groups")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "cafBodyRows") (EVar "groups"))) (EVar "omEmpty")))
+(DTypeSig false "cafBodyRows" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "CExpr")))))
+(DFunDef false "cafBodyRows" ((PList)) (EListLit))
+(DFunDef false "cafBodyRows" ((PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "body")))) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (ELit (LString "main"))) (EApp (EVar "cafBodyRows") (EVar "rest")) (EBinOp "::" (ETuple (EVar "name") (EVar "body")) (EApp (EVar "cafBodyRows") (EVar "rest")))))
+(DFunDef false "cafBodyRows" ((PCons PWild (PVar "rest"))) (EApp (EVar "cafBodyRows") (EVar "rest")))
+(DTypeSig false "shadowCafs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyApp (TyCon "OrdMap") (TyCon "CExpr")))))
+(DFunDef false "shadowCafs" ((PList) (PVar "cafs")) (EVar "cafs"))
+(DFunDef false "shadowCafs" ((PCons (PVar "x") (PVar "xs")) (PVar "cafs")) (EApp (EApp (EVar "shadowCafs") (EVar "xs")) (EApp (EApp (EVar "omDelete") (EVar "x")) (EVar "cafs"))))
 (DTypeSig false "isWBool" (TyFun (TyCon "WTy") (TyCon "Bool")))
 (DFunDef false "isWBool" ((PCon "WBool")) (EVar "True"))
 (DFunDef false "isWBool" (PWild) (EVar "False"))
@@ -15256,7 +15297,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "ifaceIdMatches" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "isSelfHead" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
@@ -15984,27 +16025,37 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitRefForceFn" ((PVar "prog") (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "body"))))) (EBlock (DoLet false false (PVar "g") (EApp (EVar "gname") (EVar "name"))) (DoLet false false (PVar "instrs") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EListLit)) (ELit (LInt 0))) (EVar "body"))) (DoLet false false (PVar "bodyLocals") (EApp (EVar "dedupKeep") (EApp (EVar "collectExprLocals") (EVar "body")))) (DoLet false false (PVar "maxDepth") (EApp (EVar "maxRefDepth") (EVar "body"))) (DoLet false false (PVar "scratch") (EApp (EVar "scratchLocals") (EVar "maxDepth"))) (DoLet false false (PVar "localDecls") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "localDeclRef") (EVar "l"))))) (EBinOp "++" (EVar "bodyLocals") (EVar "scratch")))) (DoLet false false (PVar "w7Decls") (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "  ")) (EVar "_s")))) (EApp (EApp (EVar "w7LocalDecls") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "maxDepth")))) (DoLet false false (PVar "cyclic") (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LString "E-CYCLIC-VALUE"))) (EBinOp "++" (EVar "name") (ELit (LString " refers to itself during initialization (non-productive cyclic value)"))))) (DoLet false false (PVar "unforced") (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "    i32.const 1")) (EBinOp "++" (ELit (LString "    global.set $gs_")) (EVar "g"))) (EApp (EVar "indent") (EVar "instrs"))) (EListLit (ELit (LString "    local.set $__frcv")) (ELit (LString "    local.get $__frcv")) (EBinOp "++" (ELit (LString "    global.set $")) (EVar "g")) (ELit (LString "    i32.const 2")) (EBinOp "++" (ELit (LString "    global.set $gs_")) (EVar "g")) (ELit (LString "    local.get $__frcv")) (ELit (LString "    ref.as_non_null"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  (func $force_")) (EVar "g")) (ELit (LString " (result (ref eq))"))) (ELit (LString "  (local $__frcv (ref null eq))"))) (EVar "localDecls")) (EVar "w7Decls")) (EListLit (EBinOp "++" (ELit (LString "    global.get $gs_")) (EVar "g")) (ELit (LString "    i32.const 2")) (ELit (LString "    i32.eq")) (ELit (LString "    if (result (ref eq))")) (EBinOp "++" (ELit (LString "    global.get $")) (EVar "g")) (ELit (LString "    ref.as_non_null")) (ELit (LString "    else")) (EBinOp "++" (ELit (LString "    global.get $gs_")) (EVar "g")) (ELit (LString "    i32.const 1")) (ELit (LString "    i32.eq")) (ELit (LString "    if (result (ref eq))")))) (EApp (EVar "indent") (EVar "cyclic"))) (EListLit (ELit (LString "    else")))) (EVar "unforced")) (EListLit (ELit (LString "    end")) (ELit (LString "    end")) (ELit (LString "  )")))))))
 (DFunDef false "emitRefForceFn" ((PVar "prog") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "value binding must be a nullary clause"))))
 (DTypeSig false "emitRefMain" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "emitRefMain" ((PVar "prog") (PVar "groups")) (EMatch (EApp (EApp (EVar "findMain") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "groups")) (arm (PCon "Some" (PVar "body")) () (EBlock (DoLet false false (PVar "instrs") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EListLit)) (ELit (LInt 0))) (EVar "body"))) (DoLet false false (PVar "k") (EIf (EBinOp "||" (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "body")) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (ELit (LString "main"))) (ELit (LString "Unit")))) (EVar "WUnit") (EIf (EApp (EVar "inputMainIsFloat") (EApp (EVar "progInput") (EVar "prog"))) (EVar "WFloat") (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EVar "body"))))) (DoExpr (EMatch (EVar "k") (arm (PCon "WUnit") () (EBinOp "++" (EApp (EVar "indent") (EVar "instrs")) (EListLit (ELit (LString "    drop"))))) (arm PWild () (EBinOp "++" (EApp (EVar "indent") (EVar "instrs")) (EApp (EApp (EVar "refPrintFor") (EVar "prog")) (EVar "k")))))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "no `main` binding"))))))
-(DTypeSig false "mainBodyIsUnit" (TyFun (TyCon "Prog") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CApp" (PVar "f") PWild)) (EMatch (EApp (EVar "appHead") (EVar "f")) (arm (PCon "CVar" (PVar "fn") PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm (PCon "CDict" (PVar "fn") PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm (PCon "CMethod" (PVar "fn") PWild PWild PWild PWild PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm PWild () (EVar "False"))))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CVar" (PVar "fn") PWild)) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CDict" (PVar "fn") PWild)) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CMethod" (PVar "fn") PWild PWild PWild PWild PWild)) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "b")))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "arms")))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "arms")))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "stmts")))
-(DFunDef false "mainBodyIsUnit" ((PVar "prog") PWild) (EVar "False"))
-(DTypeSig false "allArmsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool"))))
-(DFunDef false "allArmsUnit" (PWild (PList)) (EVar "False"))
-(DFunDef false "allArmsUnit" ((PVar "prog") (PVar "arms")) (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "arms")))
-(DTypeSig false "allArmsUnitGo" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool"))))
-(DFunDef false "allArmsUnitGo" (PWild (PList)) (EVar "True"))
-(DFunDef false "allArmsUnitGo" ((PVar "prog") (PCons (PCon "CArm" PWild PWild (PVar "body")) (PVar "rest"))) (EIf (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "body")) (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "rest")) (EVar "False")))
-(DTypeSig false "blockTailIsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Bool"))))
-(DFunDef false "blockTailIsUnit" (PWild (PList)) (EVar "False"))
-(DFunDef false "blockTailIsUnit" ((PVar "prog") (PList (PCon "CSExpr" (PVar "e")))) (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "e")))
-(DFunDef false "blockTailIsUnit" ((PVar "prog") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "rest")))
+(DFunDef false "emitRefMain" ((PVar "prog") (PVar "groups")) (EMatch (EApp (EApp (EVar "findMain") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "groups")) (arm (PCon "Some" (PVar "body")) () (EBlock (DoLet false false (PVar "instrs") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EListLit)) (ELit (LInt 0))) (EVar "body"))) (DoLet false false (PVar "k") (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EVar "cafBodies") (EVar "groups"))) (EVar "body")) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (ELit (LString "main"))) (ELit (LString "Unit")))) (EVar "WUnit") (EIf (EApp (EVar "inputMainIsFloat") (EApp (EVar "progInput") (EVar "prog"))) (EVar "WFloat") (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EVar "body"))))) (DoExpr (EMatch (EVar "k") (arm (PCon "WUnit") () (EBinOp "++" (EApp (EVar "indent") (EVar "instrs")) (EListLit (ELit (LString "    drop"))))) (arm PWild () (EBinOp "++" (EApp (EVar "indent") (EVar "instrs")) (EApp (EApp (EVar "refPrintFor") (EVar "prog")) (EVar "k")))))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "no `main` binding"))))))
+(DTypeSig false "mainBodyIsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyCon "CExpr") (TyCon "Bool")))))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") PWild (PCon "CApp" (PVar "f") PWild)) (EMatch (EApp (EVar "appHead") (EVar "f")) (arm (PCon "CVar" (PVar "fn") PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm (PCon "CDict" (PVar "fn") PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm (PCon "CMethod" (PVar "fn") PWild PWild PWild PWild PWild) () (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (arm PWild () (EVar "False"))))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CVar" (PVar "fn") PWild)) (EIf (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))) (EVar "True") (EMatch (EApp (EApp (EVar "omLookup") (EVar "fn")) (EVar "cafs")) (arm (PCon "Some" (PVar "body")) () (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EApp (EVar "omDelete") (EVar "fn")) (EVar "cafs"))) (EVar "body"))) (arm (PCon "None") () (EVar "False")))))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") PWild (PCon "CDict" (PVar "fn") PWild)) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") PWild (PCon "CMethod" (PVar "fn") PWild PWild PWild PWild PWild)) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CLet" PWild (PVar "pat") PWild (PVar "b"))) (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EApp (EVar "shadowCafs") (EApp (EVar "patVars") (EVar "pat"))) (EVar "cafs"))) (EVar "b")))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CMatch" PWild (PVar "arms"))) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
+(DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "stmts")))
+(DFunDef false "mainBodyIsUnit" (PWild PWild PWild) (EVar "False"))
+(DTypeSig false "allArmsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
+(DFunDef false "allArmsUnit" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "allArmsUnit" ((PVar "prog") (PVar "cafs") (PVar "arms")) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
+(DTypeSig false "allArmsUnitGo" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
+(DFunDef false "allArmsUnitGo" (PWild PWild (PList)) (EVar "True"))
+(DFunDef false "allArmsUnitGo" ((PVar "prog") (PVar "cafs") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EApp (EVar "shadowCafs") (EApp (EVar "patVars") (EVar "pat"))) (EVar "cafs"))) (EVar "body")) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "rest")) (EVar "False")))
+(DTypeSig false "blockTailIsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Bool")))))
+(DFunDef false "blockTailIsUnit" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "blockTailIsUnit" ((PVar "prog") (PVar "cafs") (PList (PCon "CSExpr" (PVar "e")))) (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "e")))
+(DFunDef false "blockTailIsUnit" ((PVar "prog") (PVar "cafs") (PCons (PCon "CSLet" PWild (PVar "pat") PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EApp (EApp (EVar "shadowCafs") (EApp (EVar "patVars") (EVar "pat"))) (EVar "cafs"))) (EVar "rest")))
+(DFunDef false "blockTailIsUnit" ((PVar "prog") (PVar "cafs") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "rest")))
+(DTypeSig false "cafBodies" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CExpr"))))
+(DFunDef false "cafBodies" ((PVar "groups")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "cafBodyRows") (EVar "groups"))) (EVar "omEmpty")))
+(DTypeSig false "cafBodyRows" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "CExpr")))))
+(DFunDef false "cafBodyRows" ((PList)) (EListLit))
+(DFunDef false "cafBodyRows" ((PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "body")))) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (ELit (LString "main"))) (EApp (EVar "cafBodyRows") (EVar "rest")) (EBinOp "::" (ETuple (EVar "name") (EVar "body")) (EApp (EVar "cafBodyRows") (EVar "rest")))))
+(DFunDef false "cafBodyRows" ((PCons PWild (PVar "rest"))) (EApp (EVar "cafBodyRows") (EVar "rest")))
+(DTypeSig false "shadowCafs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyApp (TyCon "OrdMap") (TyCon "CExpr")))))
+(DFunDef false "shadowCafs" ((PList) (PVar "cafs")) (EVar "cafs"))
+(DFunDef false "shadowCafs" ((PCons (PVar "x") (PVar "xs")) (PVar "cafs")) (EApp (EApp (EVar "shadowCafs") (EVar "xs")) (EApp (EApp (EVar "omDelete") (EVar "x")) (EVar "cafs"))))
 (DTypeSig false "isWBool" (TyFun (TyCon "WTy") (TyCon "Bool")))
 (DFunDef false "isWBool" ((PCon "WBool")) (EVar "True"))
 (DFunDef false "isWBool" (PWild) (EVar "False"))
