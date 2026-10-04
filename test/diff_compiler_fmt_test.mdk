@@ -100,7 +100,7 @@ import compiler_cli_test_support.{chompNewlines, stripUnitAutoPrint}
 import fs.{fixtureDirs, fixtureFiles}
 import io.{runVerb}
 import json.{Json, asArray, asInt, asString, get, parse}
-import list.{dropWhile, lookup, partitionResults, somes, sort, span}
+import list.{dropWhile, lookup, partitionResults, somes, sort, span, take}
 import path.{basename, dirname, stem}
 import probe_runner.{
   Row, countFloor, diffNote, errorPathFailures, gradeProbeRows, processFailure,
@@ -1541,6 +1541,57 @@ test "draft-semantic transport survives every current emitter input" = report
     Ok dirs =>
       countFloor draftSemanticFixturesDir 1 dirs
         ++ somes (map draftSemanticFixtureFailure (sort dirs)))
+
+{- | The words of the shell statement in `capture_goldens.sh` that starts at
+   the first line containing `marker` and runs through its backslash
+   continuations, with quotes, `;` and continuation backslashes dropped. -}
+shStatementWords : List String -> String -> List String
+shStatementWords ls marker =
+  let from = dropWhile (l => not (contains marker l)) ls
+  let (cont, rest) = span (endsWith "\\") from
+  let stmt = join " " (cont ++ take 1 rest)
+  filter
+    (/= "")
+    (split
+      " "
+      (replaceAll "\\" " " (replaceAll ";" " " (replaceAll "\"" "" stmt))))
+
+{- | Disagreement between a corpus list in this module and the list the
+   matching `capture_goldens.sh --frozen` arm iterates: the golden the arm
+   writes and the golden the gate grades must describe the same corpus. -}
+corpusAgreement : String -> List String -> List String -> List String
+corpusAgreement what here script =
+  map
+      (n => "\{what}: \{n} is in capture_goldens.sh but not in this module")
+      (filter (n => not (elem n here)) script)
+    ++ map
+      (n => "\{what}: \{n} is in this module but not in capture_goldens.sh")
+      (filter (n => not (elem n script)) here)
+
+captureCorpusFailures : List String
+captureCorpusFailures = match readFile (underRoot "test/capture_goldens.sh")
+  Err e => ["test/capture_goldens.sh: \{e}"]
+  Ok raw =>
+    let ls = lines raw
+    let rootPaths =
+      marker => somes (map (stripPrefix "$ROOT/") (shStatementWords ls marker))
+    corpusAgreement
+        "lextok arm vs lexCorpus"
+        lexCorpus
+        (rootPaths "regen_frozen lex_main lextok.golden")
+      ++ corpusAgreement
+        "test arm vs testReportCorpus"
+        testReportCorpus
+        (rootPaths "for f in \"$ROOT\"/stdlib/core.mdk")
+      ++ corpusAgreement
+        "references_correctness arm vs referencesFixtures"
+        referencesFixtures
+        (filter
+          (w => not (elem w ["for", "name", "in", "do"]))
+          (shStatementWords ls "for name in binder_loc"))
+
+test "capture_goldens.sh iterates the same corpora this module grades" =
+  report "capture-corpus" captureCorpusFailures
 
 test "reference-index dumps match binders, not strings" =
   report
