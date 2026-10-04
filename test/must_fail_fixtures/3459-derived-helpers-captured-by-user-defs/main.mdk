@@ -1,0 +1,11 @@
+data T = T Int Int deriving (Eq, Hashable, Debug)
+
+derivedHashStep : Int -> Int -> Int
+derivedHashStep a b = 7
+
+derivedShowWrap : String -> String
+derivedShowWrap s = "HIJACK"
+
+main =
+  println (hash (T 1 2), hash (T 3 4))
+  println (debug (T 1 2))

@@ -1,0 +1,3 @@
+import a.{R(..)}
+
+main = println (R { v = 1 }).v

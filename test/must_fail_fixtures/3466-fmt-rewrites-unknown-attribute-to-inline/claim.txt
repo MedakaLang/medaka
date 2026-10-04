@@ -1,0 +1,15 @@
+issue: 3466
+what: the parser maps every unrecognised `@name` to AttrInline (`mkAttr _ _ =
+what: AttrInline` in compiler/frontend/parser.mdk), so `medaka fmt --write` silently
+what: rewrites `@foo` and the misspelt `@deprecatd "use triple"` to `@inline`, destroying
+what: source at exit 0. `check` also accepts the unknown attributes without a word.
+cmd: fmt-write main.mdk
+exit: 0
+file-after: @inline\ndouble : Int -> Int\ndouble x = x * 2\n\n@inline\nhalve : Int -> Int\nhalve x = x / 2\n\nmain = println (double (halve 4))
+control: check control.mdk
+why-verb: `fmt-write`, because the defect is the rewritten bytes. A fix that rejects an
+why-verb: unknown attribute exits nonzero; one that preserves it writes `@foo`. Either drains.
+why-file-after: both declarations are pinned because the bare unknown (`@foo`) and the
+why-file-after: misspelt known one (`@deprecatd`) take different routes through the parser.
+why-control: control.mdk uses the real `@inline` and must check at exit 0; a red control
+why-control: means attribute parsing broke, never that #3466 drained.

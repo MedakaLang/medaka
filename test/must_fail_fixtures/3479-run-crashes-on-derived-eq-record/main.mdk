@@ -1,0 +1,3 @@
+data BoxW = BoxW { w : Int } deriving (Eq)
+
+main = println (BoxW 3 == BoxW 3)

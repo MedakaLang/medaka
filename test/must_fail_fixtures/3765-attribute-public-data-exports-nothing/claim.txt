@@ -1,0 +1,17 @@
+issue: 3765
+what: an attribute above `public export data` makes the module export no constructors or
+what: record: a.mdk has `@deprecated` over `public export data R = R { v : Int }`, and an
+what: importer of `R(..)` fails with `Unknown record type: R`. The same declaration without
+what: the attribute works (control).
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-UNKNOWN-RECORD 2:16-2:27
+diag-code: T-UNKNOWN-FIELD 2:15-2:28
+diag-code: T-AMBIGUOUS-INSTANCE 2:7-2:14
+control: run control.mdk
+why-verb: `check-json`, so the codes are graded and the prose is free. The fix accepts the
+why-verb: program at exit 0, which drains this row.
+why-diag-code: the last two rows cascade from the first; all three go when the record is
+why-diag-code: exported.
+why-control: control.mdk imports b.mdk, the same declaration without the attribute; it must
+why-control: print 1 at exit 0. Related: #3467 (an attribute drops a type signature).
