@@ -820,5 +820,28 @@ else
   printf '  got:  [%s] rc=%s\n' "$tj_json" "$tj_rc"
 fi
 
+# ── test --filter --json: the value is consumed once ──────────────────────
+# A value flag takes the next token as its value even when that token is a
+# flag the verb also declares, so `--json` here is the filter substring and
+# JSON mode stays OFF. Both halves are asserted: the report is the human one
+# (no envelope), and exactly the test whose name contains `--json` ran.
+fj_f="$TMP/filter_json.mdk"
+printf '%s\n' 'import test.{expectTrue}' '' \
+  'test "a name carrying --json" = expectTrue True' '' \
+  'test "an unrelated name" = expectTrue True' > "$fj_f"
+fj_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test --engines eval --filter --json "$fj_f" 2>"$TMP/fj.err")"
+fj_rc=$?
+fj_ok=1
+case "$fj_out" in '{'*|*'"tests"'*) fj_ok=0 ;; esac
+case "$fj_out" in *'filter_json.mdk: 1/1 passed'*) ;; *) fj_ok=0 ;; esac
+case "$fj_out" in *'an unrelated name'*) fj_ok=0 ;; esac
+if [ "$fj_ok" -eq 1 ] && [ "$fj_rc" -eq 0 ]; then
+  pass=$((pass+1)); printf 'ok   test/filter-value-is-not-a-mode\n'
+else
+  fail=$((fail+1))
+  printf 'FAIL test/filter-value-is-not-a-mode (want human output, filter_json.mdk: 1/1 passed, exit 0)\n'
+  printf '  got:  [%s] rc=%s\n  stderr: [%s]\n' "$fj_out" "$fj_rc" "$(cat "$TMP/fj.err")"
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

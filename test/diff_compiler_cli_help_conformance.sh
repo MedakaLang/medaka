@@ -61,9 +61,11 @@
 #     the process it is — `medaka gate run --jobs` is exactly that, and is
 #     documented as accepted-and-ignored in its own help, so it is CONFORMING
 #     dead surface and this gate must not flag it.
-#   * C covers only the verbs that PRINT a roster. A verb with no
-#     rejection roster is listed as `NO ROSTER (uncovered)` in the report
-#     and asserted on in neither direction of C. `(known: none)` — a genuinely
+#   * C covers only the verbs that PRINT a roster. A verb with no rejection
+#     roster FAILS C, unless `CLI_ROSTER_EXEMPT` (test/cli_conformance_lib.sh)
+#     names it with a reason; an exempt verb is reported as `C EXEMPT` and
+#     asserted on in neither direction of C. Today that is `codemod` alone,
+#     whose flag vocabulary is a runtime table. `(known: none)` — a genuinely
 #     flagless verb — is covered vacuously and correctly.
 #   * `build` shells out to clang, so its probes are the slow ones; NO_BUILD=1
 #     skips them and SAYS SO in the report rather than quietly narrowing.
@@ -153,7 +155,7 @@ echo
 
 # ── C: every parsed flag is advertised ───────────────────────────────────────
 echo "-- C: parsed ⊆ advertised (each verb's own \`(known: …)\` roster) --"
-c_ok=0; c_uncov=""
+c_ok=0; c_uncov=""; c_exempt=""
 for v in $VERBS; do
   case "$v" in help|version) continue ;; esac
   if skip_build "$v"; then c_uncov="$c_uncov $v(NO_BUILD)"; continue; fi
@@ -166,9 +168,15 @@ for v in $VERBS; do
       continue
     fi
     # No `(known: …)` substring at all — cannot distinguish "no flags" from
-    # "no roster" — so this is UNCOVERED, and says so, rather than counting
-    # as a pass.
-    c_uncov="$c_uncov $v"
+    # "no roster". A documented exemption (`cli_roster_exempt`) is reported
+    # as such; any other verb is UNCOVERED and fails, so a new roster-less
+    # verb cannot read as covered.
+    if cli_roster_exempt "$v"; then
+      c_exempt="$c_exempt $v"
+    else
+      c_uncov="$c_uncov $v"
+      fail "C \`medaka $v --zzz-not-a-flag\` prints no \`(known: …)\` roster and $v is not in CLI_ROSTER_EXEMPT (test/cli_conformance_lib.sh)"
+    fi
     continue
   fi
   helptext=$(cli_help_text_of "$v")
@@ -182,6 +190,7 @@ for v in $VERBS; do
   echo "   $v: $(printf '%s ' $known)"
 done
 echo "   C: $c_ok parsed flags are advertised."
+[ -n "$c_exempt" ] && echo "   C EXEMPT (documented in CLI_ROSTER_EXEMPT, test/cli_conformance_lib.sh):$c_exempt"
 [ -n "$c_uncov" ] && echo "   C UNCOVERED (verb prints no \`(known: …)\` roster):$c_uncov"
 echo
 

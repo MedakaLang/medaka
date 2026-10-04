@@ -79,7 +79,7 @@ check_mcp_arg () {
       fi
       ;;
     reject)
-      if [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -qi "unknown argument"; then
+      if [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -qF "unrecognized flag '$argdesc' (known: none)"; then
         pass=$((pass+1)); printf 'ok   mcp-arg(%s)\n' "$argdesc"
       else
         fail=$((fail+1)); printf 'FAIL mcp-arg(%s): rc=%d err=%s\n' "$argdesc" "$rc" "$err"
@@ -92,6 +92,7 @@ if [ -x "$MEDAKA" ]; then
   check_mcp_arg "--help" usage --help
   check_mcp_arg "-h" usage -h
   check_mcp_arg "bogusarg" reject bogusarg
+  check_mcp_arg "--zzz" reject --zzz
 fi
 
 for req in "$FIXDIR"/*.jsonl; do

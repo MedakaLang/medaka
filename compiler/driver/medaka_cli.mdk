@@ -4296,11 +4296,11 @@ runReplCmd (bad :: _) =
 -- MEDAKA_ROOT/stdlib/{runtime,core}.mdk, then run the JSON-RPC-over-stdio
 -- loop (initialize handshake + publishDiagnostics on didOpen/didChange).
 --
--- Usage text for `medaka lsp --help` / `-h` — mirrors mcpUsage's one-line
+-- Usage text for `medaka lsp --help` / `-h` — mirrors mcpUsageLine's one-line
 -- description plus the stdio-blocking reminder, adapted for the Language
 -- Server Protocol. A plain String (not a function) so it can be printed to
 -- either stdout (help) or stderr (error), matching newUsageLine's shape
--- (#582) rather than mcpUsage's stdout-only one (#299).
+-- (#582).
 -- `lsp` takes no flags either; same shape as `replArgSpec`.
 lspArgSpec : ArgSpec
 lspArgSpec = spec "lsp" []
@@ -4349,20 +4349,22 @@ runLspServerFromEnv _ =
     Err msg => dieMsg msg
     Ok v => v
 
--- Short usage blurb for `medaka mcp --help` / `-h` — mirrors the one-line
--- description `usage` (line ~284) gives mcp in the top-level help, plus the
--- reminder that it's a stdio server (so a reader knows why it blocks).
-mcpUsage : Unit -> <IO> Unit
-mcpUsage _ =
-  putStrLn
-    (stringConcat [
-      "medaka mcp — Run the MCP server over stdio (JSON-RPC for agents)\n",
-      "\n", "Usage:\n",
-      "  medaka mcp     Start the server; it reads JSON-RPC requests from stdin\n",
-      "                 and writes responses to stdout until stdin closes (EOF).\n",
-      "                 This is the normal, correct behavior for an MCP stdio\n",
-      "                 server — it is not supposed to be interactive.\n"
-    ])
+-- `mcp` takes no flags; same shape as `lspArgSpec`.
+mcpArgSpec : ArgSpec
+mcpArgSpec = spec "mcp" []
+
+-- Usage text for `medaka mcp --help` / `-h`: the one-line description the
+-- top-level help gives mcp, plus the reminder that it's a stdio server (so a
+-- reader knows why it blocks).
+mcpUsageLine : String
+mcpUsageLine = stringConcat [
+  "medaka mcp — Run the MCP server over stdio (JSON-RPC for agents)\n", "\n",
+  "Usage:\n",
+  "  medaka mcp     Start the server; it reads JSON-RPC requests from stdin\n",
+  "                 and writes responses to stdout until stdin closes (EOF).\n",
+  "                 This is the normal, correct behavior for an MCP stdio\n",
+  "                 server — it is not supposed to be interactive.\n"
+]
 
 -- `medaka mcp`: the MCP (Model Context Protocol) stdio server.  Mirrors
 -- runLspCmd exactly — load MEDAKA_ROOT/stdlib/{runtime,core}.mdk and hand the
@@ -4379,18 +4381,15 @@ mcpUsage _ =
 runMcpCmd : List String -> <IO> Unit
 runMcpCmd [] = runMcpServerFromEnv ()
 runMcpCmd ("--help" :: _) =
-  let _ = mcpUsage ()
+  let _ = putStrLn mcpUsageLine
   exit 0
 runMcpCmd ("-h" :: _) =
-  let _ = mcpUsage ()
+  let _ = putStrLn mcpUsageLine
   exit 0
 runMcpCmd (bad :: _) =
-  let _ =
-    ePutStrLn
-      ("medaka mcp: unknown argument '"
-        ++ bad
-        ++ "' (mcp takes no arguments; try 'medaka mcp --help')")
-  exit 1
+  -- C2: `mcp` takes no flags either.
+  let _ = ePutStrLn (unknownFlagMessage mcpArgSpec bad)
+  dieMsg mcpUsageLine
 
 runMcpServerFromEnv : Unit -> <IO> Unit
 runMcpServerFromEnv _ =
