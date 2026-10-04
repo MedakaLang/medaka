@@ -1,7 +1,0 @@
-interface Pick a b c where
-  pick : a -> b -> c
-impl Pick a a a where
-  pick _ y = y
-f : Int -> List Int
-f y = pick [y] [1]
-main = println (debug (f (5 : Int)))

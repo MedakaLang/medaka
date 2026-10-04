@@ -1,0 +1,16 @@
+issue: 3800
+what: a method-level constraint on the interface parameter (`desc : Show2 a => a ->
+what: String`), used by `impl Desc (Pair b)` whose body calls `show2 p`, checks clean and
+what: `run` prints "int 1", but the built binary dies with a segmentation fault before
+what: printing anything.
+cmd: build-run main.mdk
+exit: 139
+stdout-bytes:
+control: build-run control.mdk
+why-verb: `build-run`, because only the built binary is wrong.  The fix prints "int 1"
+why-verb: at exit 0, which drains this row.
+why-stdout: `stdout-bytes` with no value pins an EMPTY stdout: the binary faults before
+why-stdout: its first write.  The fault's E-FATAL-SIGNAL line goes to stderr, which this
+why-stdout: verb does not grade; exit 139 is the signal.
+why-control: control.mdk moves the constraint onto the impl as `requires Show2 b` and
+why-control: drops it from the method; it must build and run at exit 0.

@@ -1,0 +1,17 @@
+issue: 3799
+what: a type variable written in an expression annotation is bound by the instance
+what: matcher.  `let h : a -> List Int = y => pick [y] [1]` poses
+what: `Pick (List a) (List Int) (List Int)`, which `impl Pick a a a` matches only if `a`
+what: is Int; the annotation says `a` is any type.  The top-level twin
+what: `f : a -> List Int; f y = pick [y] [1]` is rejected with T-MISSING-CONSTRAINT.  This
+what: one checks clean, and `h "s"` prints [1] from a `Pick (List String) (List Int)
+what: (List Int)` instance that does not exist, on `run` and on the built binary.
+cmd: run main.mdk
+exit: 0
+stdout: [1]
+control: run control.mdk
+why-verb: `run`, because it shows the wrong answer itself: the right answer is a reject,
+why-verb: which exits 1 with no `[1]` and drains this row.
+why-stdout: `[1]` is the value of a call no instance can answer.
+why-control: control.mdk annotates `h : a -> List a` with body `pick [y] []`, which the
+why-control: instance answers without binding `a`; it must run at exit 0.

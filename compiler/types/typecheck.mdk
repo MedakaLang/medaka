@@ -11803,6 +11803,7 @@ data PerRun = PerRun {
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
+  declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which `matchEqPairs` and `groundOneObligation` hold rigid; a local's, an interface method's and an expression annotation's variables are not here (#3796, #3797, #3799)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
   numlitVarLocs : Ref (List (Mono, Loc)),
   patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
@@ -11911,6 +11912,7 @@ freshPerRun _ = PerRun {
   implObls = wNew (),
   poisonedVars = Ref [],
   deferrableVarIds = Ref [],
+  declaredSigVarIds = Ref omEmpty,
   tupleCallCandidates = Ref [],
   numlitVarLocs = Ref [],
   numlitRanges = Ref [],
@@ -32462,8 +32464,13 @@ implHeadSubst pats concretes
       else
         None
 
+-- A declared signature variable of a closed group is a constant here, not one of
+-- the goal's free variables: a repeated head variable never equates it with
+-- another type (DICT-SEMANTICS §3).
 matchEqPairs : List (Mono, Mono) -> Bool
-matchEqPairs pairs =
+matchEqPairs [] = True
+matchEqPairs pairs0 =
+  let pairs = rigidSigPairs perRun.value.declaredSigVarIds.value pairs0
   let subst = Ref []
   cohOverlapGo subst pairs
     && allList (p => matchEqMono subst (fst p) (snd p)) pairs
@@ -37519,7 +37526,8 @@ groundOneObligation prog iface typarams mty occ
           let baseMap = zipL typarams implTys
           let implMethodTy = substTyVars baseMap mty
           let inst = fst (astTypeFreshTbl implMethodTy)
-          unify occ inst
+          if sigVarsStayFree perRun.value.declaredSigVarIds.value occ inst then
+            unify occ inst
 -- build impl method type: interface typaram ↦ impl ty, then freshen the
 -- impl's own vars, then unify with the occurrence.
 
@@ -37593,20 +37601,14 @@ improveGoal sigIds iface args
 commitImprovement : OrdMap Unit -> List (Mono, Mono) -> Unit
 commitImprovement sigIds pairs =
   let cells = flatMap (p => monoVarCells (fst p) ++ monoVarCells (snd p)) pairs
-  let sigCells =
-    filterList (c => isSome (omLookup (intToString (tyvarId c)) sigIds)) cells
-  let toRigid = map (c => (tyvarId c, TRigid (sigStandIn c))) sigCells
-  let fromRigid = map (c => (sigStandIn c, TVar c)) sigCells
+  let sigCells = sigCellsOf sigIds cells
   let scratch = Ref []
-  let rigidPairs =
-    map
-      (p => (substMono toRigid [] [] (fst p), substMono toRigid [] [] (snd p)))
-      pairs
+  let rigidPairs = rigidSigPairs sigIds pairs
   let cellsById = map (c => (tyvarId c, c)) cells
   if cohOverlapGo scratch rigidPairs then
     fold
       (_ binding => match lookupAssocI (fst binding) cellsById
-        Some cell => unify (TVar cell) (unrigidSig fromRigid (snd binding))
+        Some cell => unify (TVar cell) (unrigidSig sigCells (snd binding))
         None => ())
       ()
       (reverseL !scratch)
@@ -37615,12 +37617,120 @@ commitImprovement sigIds pairs =
 sigStandIn : Ref Tyvar -> String
 sigStandIn cell = "%sig\{intToString (tyvarId cell)}"
 
-unrigidSig : List (String, Mono) -> Mono -> Mono
-unrigidSig back t = match normalize t
-  TRigid n => optionOr (TRigid n) (lookupAssoc n back)
-  TApp a b => TApp (unrigidSig back a) (unrigidSig back b)
-  TFun a eff b => TFun (unrigidSig back a) eff (unrigidSig back b)
-  TQual a q => TQual (unrigidSig back a) q
+sigCellsOf : OrdMap Unit -> List (Ref Tyvar) -> List (Ref Tyvar)
+sigCellsOf sigIds cells =
+  filterList (c => omHasKey (intToString (tyvarId c)) sigIds) cells
+
+-- Each signature variable among [cells], bound to its rigid stand-in.
+sigRigidBindings : OrdMap Unit -> List (Ref Tyvar) -> List (Int, Mono)
+sigRigidBindings sigIds cells =
+  map (c => (tyvarId c, TRigid (sigStandIn c))) (sigCellsOf sigIds cells)
+
+-- [pairs] with every signature variable replaced by its rigid stand-in.
+rigidSigPairs : OrdMap Unit -> List (Mono, Mono) -> List (Mono, Mono)
+rigidSigPairs sigIds pairs =
+  let cells = flatMap (p => monoVarCells (fst p) ++ monoVarCells (snd p)) pairs
+  match sigRigidBindings sigIds cells
+    [] => pairs
+    toRigid =>
+      map
+        (p =>
+          (substMono toRigid [] [] (fst p), substMono toRigid [] [] (snd p)))
+        pairs
+
+-- Can [a] and [b] be made equal without binding a signature variable?  Grounding
+-- unifies through shared cells, so it must not run when the only way to make the
+-- occurrence fit the instance is to fix a type the caller chooses.  With no
+-- signature variable among them the answer is yes: grounding's own `unify` then
+-- decides, and a mismatch it reports is the goal's real error.
+sigVarsStayFree : OrdMap Unit -> Mono -> Mono -> Bool
+sigVarsStayFree sigIds a b =
+  match sigRigidBindings sigIds (monoVarCells a ++ monoVarCells b)
+    [] => True
+    toRigid => cohOverlapGo (Ref []) [
+      (substMono toRigid [] [] a, substMono toRigid [] [] b),
+    ]
+
+-- DICT-SEMANTICS §3: a top-level signature's variable is rigid in every matcher.  A
+-- goal that an instance head accepts only by binding one needs it to be a specific
+-- type, which the caller chooses, so the goal is rejected at its site in the
+-- definition unless the declared context gives it.  The head matcher with the
+-- group's signature variables free (`rowHeadMatches` on [args]) and the same
+-- matcher with them rigid disagree on exactly such a goal.  It runs at the group's
+-- close, after improvement and defaulting, while the variables are still free
+-- cells; [sigIds] are the group's declared variables (`sccProtectedSignatureIds`).
+checkSigVarGoals : OrdMap Unit ->
+  List (String, Ty, List (String, Mono)) ->
+  List UObligation ->
+  Unit
+checkSigVarGoals sigIds sigTvMaps obls
+  | omSize sigIds == 0 = ()
+  | otherwise = fold (_ o => checkSigVarGoal sigIds sigTvMaps o) () obls
+
+checkSigVarGoal : OrdMap Unit ->
+  List (String, Ty, List (String, Mono)) ->
+  UObligation ->
+  Unit
+checkSigVarGoal sigIds sigTvMaps o =
+  let args = map normalize (uOblArgs o)
+  match sigRigidBindings sigIds (flatMap monoVarCells args)
+    [] => ()
+    toRigid =>
+      let iface = o.pred.iface
+      let rows = filterList (ieRowOfIface iface) (improvementPool args)
+      let rigidArgs = map (substMono toRigid [] []) args
+      if anyList (rowHeadMatches args) rows
+        && not (anyList (rowHeadMatches rigidArgs) rows)
+        && not (goalGivenAt iface args o.uoScope) then
+        pushTypeErrorOnceAt
+          "T-MISSING-CONSTRAINT"
+          o.loc
+          (sigVarGoalMsg sigTvMaps (map fst toRigid) iface args)
+
+goalGivenAt : IfaceRef -> List Mono -> ScopeId -> Bool
+goalGivenAt iface args scope =
+  isSome
+      (activeFunDictPredOf
+        PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
+        scope)
+    || goalMatchesGiven scope iface args
+
+-- The goal is rendered with each signature variable under its declared name; the
+-- renderer names every other variable with a letter those names leave free.
+sigVarGoalMsg : List (String, Ty, List (String, Mono)) ->
+  List Int ->
+  IfaceRef ->
+  List Mono ->
+  String
+sigVarGoalMsg sigTvMaps sigVarIds iface args =
+  let owners = flatMap (sigVarOwner sigTvMaps) (dedupI sigVarIds)
+  let member = match owners
+    (m, _) :: _ => m
+    [] => ""
+  let named = map snd owners
+  let pred =
+    "\{iface.irName} \{joinWith " " (ppEach (Ref named) (Ref 0) 3 args)}"
+  let vars = joinWith " and " (map (owner => "'\{snd (snd owner)}'") owners)
+  "Could not deduce '\{pred}' from the signature of '\{member}'. Its body requires it, and an instance matches it only if \{vars} is a specific type, but the caller chooses \{vars}. Write that type in the signature, or add '\{pred} =>' to the declared type"
+
+-- (member, (id, declared name)) for the signature in [sigTvMaps] that declares [id].
+sigVarOwner : List (String, Ty, List (String, Mono)) ->
+  Int ->
+  List (String, (Int, String))
+sigVarOwner [] _ = []
+sigVarOwner ((m, _, tvs) :: rest) id = match findTvName id tvs
+  Some n => [(m, (id, n))]
+  None => sigVarOwner rest id
+
+-- [t] with the rigid stand-in of each of [sigCells] replaced by that variable.
+unrigidSig : List (Ref Tyvar) -> Mono -> Mono
+unrigidSig sigCells t = match normalize t
+  TRigid n => match filterList (c => sigStandIn c == n) sigCells
+    c :: _ => TVar c
+    [] => TRigid n
+  TApp a b => TApp (unrigidSig sigCells a) (unrigidSig sigCells b)
+  TFun a eff b => TFun (unrigidSig sigCells a) eff (unrigidSig sigCells b)
+  TQual a q => TQual (unrigidSig sigCells a) q
   other => other
 
 monoVarCells : Mono -> List (Ref Tyvar)
@@ -38484,6 +38594,9 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
   let inst = instantiateMethodBody kind params mty gscope
+  let headBefore = match kind
+    ImplBody site => implHeadVarRoots site.ibImplTvMap
+    DefaultBody => []
   let _ =
     registerMethodBodyGrants
       iface
@@ -38576,6 +38689,15 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
       addedCallObls
       loc
   let _ = match kind
+    ImplBody site =>
+      checkImplHeadRigidity
+        subject
+        iface.irName
+        site
+        headBefore
+        (orElseLoc (firstExprLoc body) loc)
+    DefaultBody => ()
+  let _ = match kind
     ImplBody _ => effVarRigidity ()
     DefaultBody => ()
   -- The rigidity read above can normalize/alias union-find roots. Snapshot
@@ -38596,6 +38718,17 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
         site.ibRequires
         survivingNumIds
         addedObls
+    DefaultBody => ()
+  let _ = match kind
+    ImplBody site =>
+      checkImplHeadPrerequisites
+        subject
+        iface
+        site
+        (zipL params site.ibHeadMonos ++ inst.mbiNamedVars)
+        mty
+        addedObls
+        addedCallObls
     DefaultBody => ()
   let _ = exitLevel ()
   -- #518 (S0, silent wrongness): PLAN.md #11 Num defaulting NEVER RAN over a method
@@ -39275,9 +39408,10 @@ checkSurvivorObligations subject ownIface ownTyparams mty extraMap (o :: rest) l
 
 -- #563's narrow instance-head prerequisite check. This reads the SAME protected
 -- root set that body-local Num defaulting consumes, then asks only whether a root
--- carried by [implTvMap] has declared evidence in this impl's `requires`. It does
--- not judge non-Num pinning or any head variable the body's Num obligations do not
--- reach; those remain #1136/#819.
+-- carried by [implTvMap] has declared evidence in this impl's `requires`. Pinning is
+-- `checkImplHeadRigidity`'s, and every other predicate on a head variable is
+-- `checkImplHeadPrerequisites`'s, which renders a Num residual with this same
+-- message, so the two report it once.
 checkImplHeadNumObligations : String ->
   List (String, Mono) ->
   List Require ->
@@ -39330,6 +39464,213 @@ requireArgsAreRoot id implTvMap [TyVar name] = match lookupAssoc name implTvMap
     _ => False
   None => False
 requireArgsAreRoot _ _ _ = False
+
+-- W3-inst (DICT-SEMANTICS §3): an impl head's type variables are the instance's
+-- quantifiers, and its bodies are checked against them as a signature's body is
+-- against its own.  Each head variable's union-find root while it is still a
+-- variable; a variable already fixed to a constructed type is absent.
+implHeadVarRoots : List (String, Mono) -> List (String, Int)
+implHeadVarRoots implTvMap =
+  flatMap
+    (p => match normalize (snd p)
+      TVar cell => [(fst p, tyvarId cell)]
+      _ => [])
+    implTvMap
+
+-- The head variables this body narrowed: each one that was a variable before the
+-- body and is now fixed to a constructed type, or now shares its root with another
+-- head variable that was distinct before.  A variable an earlier sibling body
+-- narrowed is not in [before], so it is reported once, by that body.
+headVarsNarrowedBy : List (String, Int) -> List (String, Mono) -> List String
+headVarsNarrowedBy before implTvMap =
+  let after = implHeadVarRoots implTvMap
+  map fst (filterList (headVarNarrowed before after) before)
+
+headVarNarrowed : List (String, Int) ->
+  List (String, Int) ->
+  (String, Int) ->
+  Bool
+headVarNarrowed before after (name, id0) = match lookupAssoc name after
+  None => True
+  Some id =>
+    anyList
+      (other =>
+        snd other /= id0
+          && optionOr (0 - 1) (lookupAssoc (fst other) after) == id)
+      before
+
+-- A body that fixes a head variable holds only for the narrower head it implies,
+-- yet the instance is registered for the written one, so a receiver the written
+-- head admits and the body does not reaches the body with a value of another type.
+checkImplHeadRigidity : String ->
+  String ->
+  ImplBodySite ->
+  List (String, Int) ->
+  Option Loc ->
+  Unit
+checkImplHeadRigidity subject iface site before loc =
+  match headVarsNarrowedBy before site.ibImplTvMap
+    [] => ()
+    narrowed =>
+      pushTypeErrorOnceAt
+        "T-IMPL-TOO-SPECIFIC"
+        loc
+        (narrowsImplHeadMsg subject narrowed (narrowedImplHead iface site))
+
+-- The head the body actually supports, each still-free head variable under its
+-- written name.
+narrowedImplHead : String -> ImplBodySite -> String
+narrowedImplHead iface site =
+  let named = map (p => (snd p, fst p)) (implHeadVarRoots site.ibImplTvMap)
+  joinWith
+    " "
+    ("impl" :: iface :: ppEach (Ref named) (Ref 0) 3 site.ibHeadMonos)
+
+narrowsImplHeadMsg : String -> List String -> String -> String
+narrowsImplHeadMsg subject narrowed head =
+  "\{subject} fixes the instance-head type variable(s) \{quotedNames narrowed}, but the impl is declared for every type in their place, so a receiver of another type would reach this body with a value of the wrong type. Narrow the head to `\{head}`, or make the body parametric in \{quotedNames narrowed}."
+
+-- The constraint axis of W3-inst: every predicate this body leaves on head variables
+-- must be given by the impl.  Each goal mentioning a head variable is reduced through
+-- the instances (§3 `inst`), a goal the impl gives ending the reduction (§3 `assum`
+-- before `inst`), and a residual over head variables alone that no given answers is
+-- reported at the goal's site.  The givens are the impl's own head, its `requires`
+-- with their superinterfaces, and the method signature's own `=>` context.
+-- A goal no instance matches is not reported here.  A residual that mixes a head
+-- variable with another variable is not reported here either, and no other check
+-- rejects it (#3798).
+checkImplHeadPrerequisites : String ->
+  IfaceRef ->
+  ImplBodySite ->
+  List (String, Mono) ->
+  Ty ->
+  List UObligation ->
+  List (IfaceRef, List Mono, Option Loc) ->
+  Unit
+checkImplHeadPrerequisites subject iface site methodTvs mty addedObls addedCallObls =
+  match implHeadVarRoots site.ibImplTvMap
+    [] => ()
+    roots =>
+      let givens = implBodyGivens iface site methodTvs mty
+      let goals =
+        flatMap oblPredOf addedObls ++ flatMap callPredOf addedCallObls
+      fold (_ g => checkImplHeadGoal subject roots givens g) () goals
+
+checkImplHeadGoal : String ->
+  List (String, Int) ->
+  List PredicateSlot ->
+  (IfaceRef, List Mono, Option Loc) ->
+  Unit
+checkImplHeadGoal subject roots givens (iface, ds, loc) =
+  let args = map normalize ds
+  if anyIn (flatMap monoUnboundIds args) (map snd roots) then
+    let headIds = omFromNames (map (r => intToString (snd r)) roots) omEmpty
+    goalSiteLoc := loc
+    let leaves = implGoalResiduals residualReduceFuel headIds givens iface args
+    goalSiteLoc := None
+    fold (_ leaf => reportImplHeadResidual subject roots loc leaf) () leaves
+
+-- The head variables are matched as constants, the representation a declared
+-- signature's variables have in every instance matcher (`sigRigidBindings`): an
+-- instance that accepts the goal only by fixing a head variable does not reduce
+-- it, and the goal itself is the residual.  A goal whose arguments are all type
+-- variables is its own residual, as in a signature's body: no instance reduces it,
+-- a blanket one included.  Running out of fuel is `T-REQUIRES-DEPTH`, as in
+-- `residualPredsOf`.
+implGoalResiduals : Int ->
+  OrdMap Unit ->
+  List PredicateSlot ->
+  IfaceRef ->
+  List Mono ->
+  List (IfaceRef, List Mono)
+implGoalResiduals fuel headIds givens iface args
+  | anyList (givenAnswers iface args) givens = []
+  | not (anyConcreteHead args) = [(iface, args)]
+  | fuel <= 0 =
+    let _ =
+      pushTypeErrorOnceAt
+        "T-REQUIRES-DEPTH"
+        !goalSiteLoc
+        (requiresDepthMsg iface args)
+    []
+  | otherwise =
+    let univ = perRun.value.residualUnivRef.value
+    let cells = sigCellsOf headIds (flatMap monoVarCells args)
+    let toRigid = sigRigidBindings headIds cells
+    match findMatchingImplReqsU univ iface (map (substMono toRigid [] []) args)
+      None => if implMatchesU univ iface args then [(iface, args)] else []
+      Some (subst, reqs) =>
+        flatMap
+          (r =>
+            implGoalResiduals
+              (fuel - 1)
+              headIds
+              givens
+              (fst r)
+              (map (unrigidSig cells) (snd r)))
+          (map (reqToObligation subst) reqs)
+
+givenAnswers : IfaceRef -> List Mono -> PredicateSlot -> Bool
+givenAnswers iface args slot =
+  sameIfaceDecl slot.psIface iface
+    && (match slot.psArgs
+      PSArgsKnown gargs => monoVecSameGiven gargs args
+      PSArgsUnknown => False)
+
+-- The impl's own head is given as written: its superinterfaces are separate
+-- instances whose own contexts must hold, so they are not given with it.
+implBodyGivens : IfaceRef ->
+  ImplBodySite ->
+  List (String, Mono) ->
+  Ty ->
+  List PredicateSlot
+implBodyGivens iface site methodTvs mty =
+  let declared =
+    map (requirePredicateSlot site.ibImplTvMap) site.ibRequires
+      ++ map (constraintPredicateSlot methodTvs) (sigConstraintsOf mty)
+  knownPredicateSlot iface site.ibHeadMonos
+    :: declared ++ flatMap (s => map fst (predicateSlotKnownSupers s)) declared
+
+requirePredicateSlot : List (String, Mono) -> Require -> PredicateSlot
+requirePredicateSlot implTvMap (Require { requireHead = h, requireArgs = rargs, requireOrigin = o }) =
+  knownPredicateSlot
+    IfaceRef { irName = h, irOrigin = o }
+    (map (fromAstType implTvMap) rargs)
+
+constraintPredicateSlot : List (String, Mono) -> Constraint -> PredicateSlot
+constraintPredicateSlot tvs (Constraint { constraintHead = h, constraintArgs = cargs, constraintOrigin = o }) =
+  knownPredicateSlot
+    IfaceRef { irName = h, irOrigin = o }
+    (map (fromAstType tvs) cargs)
+
+knownPredicateSlot : IfaceRef -> List Mono -> PredicateSlot
+knownPredicateSlot iface args = PredicateSlot {
+  psIface = iface,
+  psArgs = PSArgsKnown args,
+  psBoundIds = dedupI (flatMap monoTyvarIds args),
+}
+
+reportImplHeadResidual : String ->
+  List (String, Int) ->
+  Option Loc ->
+  (IfaceRef, List Mono) ->
+  Unit
+reportImplHeadResidual subject roots loc (iface, args) =
+  let ids = flatMap monoUnboundIds args
+  let headIds = map snd roots
+  if isEmptyL ids || not (allList (i => containsI i headIds) ids) then
+    ()
+  else
+    let named = map (p => (snd p, fst p)) roots
+    let rendered = ppEach (Ref named) (Ref 0) 3 args
+    let msg = match (map normalize args, rendered)
+      ([TVar _], [vname]) =>
+        undeclaredImplPrerequisiteMsg subject iface.irName vname
+      _ =>
+        undeclaredImplPredicateMsg
+          subject
+          "\{iface.irName} \{joinWith " " rendered}"
+    pushTypeErrorOnceAt "T-IMPL-MISSING-REQUIRES" loc msg
 
 -- the CALL-obligation half of the constraint axis: recordCallObligations pushes
 -- (iface, [constraint-var mono], loc) for each dict slot a constrained CALLEE
@@ -39749,6 +40090,10 @@ undeclaredConstraintMsg subject mty oiface vname =
 undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 undeclaredImplPrerequisiteMsg subject oiface vname =
   "\{subject} requires '\{oiface}' on the instance-head type variable '\{vname}', but the impl does not declare that prerequisite. Add `requires \{oiface} \{vname}` to the impl."
+
+undeclaredImplPredicateMsg : String -> String -> String
+undeclaredImplPredicateMsg subject pred =
+  "\{subject} requires '\{pred}' on the instance head's type variables, but the impl does not declare that prerequisite. Add `requires \{pred}` to the impl."
 
 collapsesTyvarsMsg : String -> Ty -> String
 collapsesTyvarsMsg subject mty =
@@ -42681,6 +43026,11 @@ processSCC env sigs grouped0 members =
     nbDefaultObls = defaultObls,
     nbAmbiguityObls = addedObls,
   }  -- RETPOS soundness
+  let _ =
+    checkSigVarGoals
+      protectedSigIds
+      sigTvMaps
+      (addedObls ++ callUOblsWindow callN0)
   let schemes =
     sccSchemes
       env2
@@ -42725,6 +43075,11 @@ processSCC env sigs grouped0 members =
       addedObls
       schemes
   let _ = registerInferredConstraints sigs callOblsDelta addedObls scopedSchemes
+  -- From here on every instance-head matcher holds this group's declared variables
+  -- rigid; the group's own generalization above reads them as free variables, so a
+  -- goal `checkSigVarGoals` rejected is not reported a second time.
+  perRun.value.declaredSigVarIds :=
+    omFromNames (omKeys protectedSigIds) perRun.value.declaredSigVarIds.value
   -- The group's own occurrences of the members it just promoted (see
   -- `markRecursiveOccurrences`); Flat marks nothing here.
   let groupedOut = match marking

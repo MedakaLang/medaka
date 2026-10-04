@@ -1,0 +1,13 @@
+-- Control: `requires Ord a` supplies `Eq a`, its superinterface, so the body's
+-- `x == y` is given. Hand-derived: 1 == 1 is True, 1 == 2 is False.
+data Pair a = Pair a a
+
+interface Same a where
+  same : a -> Bool
+
+impl Same (Pair a) requires Ord a where
+  same (Pair x y) = x == y
+
+main =
+  println (same (Pair 1 1))
+  println (same (Pair 1 2))

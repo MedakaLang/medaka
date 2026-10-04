@@ -1,0 +1,19 @@
+issue: 3798
+what: an impl-body residual that mixes a head variable with another variable is not
+what: rejected.  `impl Mk (Wr b)` whose body is `Wr (get (Box []))` poses
+what: `Get (Box (List t)) b`, which `impl Get (Box a) a` matches only if the head's `b` is
+what: `List t`.  W3-inst reports only a residual over head variables alone, so `check`
+what: exits 0; `run` dies with E-PANIC unknown op '+', and `build` fails in the emitter
+what: with "no impl of method 'get'".
+cmd: check main.mdk
+exit: 0
+stdout-line: unwr : Wr a -> a
+stdout-line: main : <Stdout> Unit
+control: check control.mdk
+why-verb: `check`, because the right answer is a check-time reject at the impl body
+why-verb: (DICT-SEMANTICS §3 W3-inst).  That exits 1 and drains this row.
+why-stdout: `unwr`'s and `main`'s lines prove `check` accepted the program and ran to
+why-stdout: the end.
+why-control: control.mdk is main.mdk with the body's goal on the head variable alone
+why-control: (`get (Box v)` at `v : b`, `Get (Box b) b`), matched with `b` rigid; it must
+why-control: check at exit 0.

@@ -1,0 +1,19 @@
+-- A dictionary-abstracted local used at two types inside an impl body whose
+-- `requires Show2 a` gives the goal.  Must print "int 1/int 2 | s:hi".
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+impl Show2 String where
+  show2 s = "s:\{s}"
+
+impl Show2 (Pair a) requires Show2 a where
+  show2 (Pair x y) =
+    let s z = show2 z
+    "\{s x}/\{s y} | \{s "hi"}"
+
+main = println (show2 (Pair (1 : Int) 2))

@@ -1,0 +1,17 @@
+issue: 3801
+what: a self-naming instance context (`impl C (Box a) requires C (Box a)`) reached from
+what: another impl's body goal (`impl C (Q a)`, body `cc (Box x)`) overflows the
+what: compiler's stack on `check` and `run` (exit 134) and inside the emitter on `build`.
+what: The right answer is a located reject.  Pinned the way 1575-self-naming-requires-
+what: aborts-compiler pins its top-level twin; the two may share a cause.
+cmd: build main.mdk
+exit: 1
+stdout-line: runtime error [E-STACK-OVERFLOW]: stack overflow (recursion too deep)
+control: build control.mdk
+why-verb: `build`, the only verb whose graded stream merges stderr, where the overflow
+why-verb: line lands (see the 1575 fixture's claim for the full reasoning).
+why-stdout: `stdout-line`, not `stdout`: the merged stream can carry a staleness
+why-stdout: warning and a path-bearing "emitter failed compiling" line.  Only the compiler
+why-stdout: running out of stack prints this line.
+why-control: control.mdk is main.mdk without the `requires C (Box a)` clause; it must
+why-control: build at exit 0.

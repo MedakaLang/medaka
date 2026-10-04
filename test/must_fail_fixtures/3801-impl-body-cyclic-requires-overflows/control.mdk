@@ -1,0 +1,15 @@
+-- main.mdk without the self-naming `requires C (Box a)`.  Must build.
+interface C a where
+  cc : a -> Int
+
+data Box a = Box a
+
+impl C (Box a) where
+  cc _ = 1
+
+data Q a = Q a
+
+impl C (Q a) where
+  cc (Q x) = cc (Box x)
+
+main = println (cc (Q (1 : Int)))
