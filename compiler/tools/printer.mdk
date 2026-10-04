@@ -1689,7 +1689,7 @@ printIf c t els = group (ifLadder c t els)
 
 ifLadder : Expr -> Expr -> Expr -> Doc
 ifLadder c t els =
-  let condD = noClaimDoc (_ => printExpr precTop c)
+  let condD = noClaimDoc (_ => condExprDoc c)
   let thenD = withBound (spanStart (exprSpan els)) (_ => ifBranch "then" t)
   let elseD = ifElsePart els
   Cat (text "if ") (Cat condD (Cat (text " ") (Cat thenD elseD)))
@@ -1831,9 +1831,16 @@ matchGuardsDoc guards =
   Cat (text " if ") (sepBy (text ", ") (map guardDoc guards))
 
 guardDoc : Guard -> Doc
-guardDoc (GBool g) = printExpr precTop g
-guardDoc (GBind gp g) =
-  Cat (printPat gp) (Cat (text " <- ") (printExpr precTop g))
+guardDoc (GBool g) = condExprDoc g
+guardDoc (GBind gp g) = Cat (printPat gp) (Cat (text " <- ") (condExprDoc g))
+
+-- A condition (`if c then`, a guard) is followed by more text on its last line,
+-- so a `match` there must keep its parentheses: its arms block would
+-- otherwise swallow what follows.
+condExprDoc : Expr -> Doc
+condExprDoc c = match stripLocE c
+  EMatch _ _ => Cat (text "(") (Cat (printExpr precTop c) (text ")"))
+  _ => printExpr precTop c
 
 -- Function/where guard arms: indented block of `| guards = body`.
 guardArmPiece : GuardArm -> Piece
