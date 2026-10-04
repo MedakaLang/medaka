@@ -1,5 +1,5 @@
 # META
-source_lines=1838
+source_lines=1833
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -470,17 +470,12 @@ renameKeyCollides collided (n, _) = omHasKey n collided
 --     (two DISTINCT modules BOTH loaded, BOTH reaching `checkSymbolsInjective`,
 --     colliding on module id) remains UNPROVEN either way — neither confirmed nor
 --     derived unreachable.
---   * #1792 CONFIRMED reachable (not merely theoretical) a DIFFERENT, upstream
---     claim: entry-path substitution at LOAD time, not the guard mis-handling two
---     loaded modules.  `moduleIdOfPath` (`driver/loader.mdk`) collapses a flat file
---     with a literal `.` in its name (`<root>/a.b.mdk`) and a nested file
---     (`<root>/a/b.mdk`) to the identical module id "a.b", and
---     `loadProgramFilesE` resolves the entry's file BY that collapsed id
---     (`fileOfModuleId`) rather than by the entry's own path, so only ONE file is
---     ever loaded: `medaka run <root>/a.b.mdk` silently loads and runs
---     `<root>/a/b.mdk`'s bytes instead — exit 0, no diagnostic. The flat file's own
---     content never reaches the guard at all. Repro: `test/must_fail_fixtures/
---     1792-flat-dotted-file-collides-nested-path/`.
+--   * The loader resolves the ENTRY by the path it was given
+--     (`driver/loader.mdk` `findModuleOrEntryFile`), so a flat entry with a literal
+--     `.` in its name (`<root>/a.b.mdk`) and a nested module (`<root>/a/b.mdk`),
+--     which share canonical module id "a.b", no longer substitute for each other
+--     at load time.  An entry whose id equals an IMPORTED nested module's id is a
+--     loud cycle error, not a silent substitution.
 -- Functions and constructors are checked as SEPARATE domains: they are emitted into
 -- separate symbol namespaces (a ctor becomes `@mdk_ctorpap_<sym>_<n>`), so merging
 -- them could only manufacture a false positive, never catch a real collision.
