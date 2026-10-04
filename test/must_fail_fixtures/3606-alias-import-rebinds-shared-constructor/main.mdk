@@ -1,0 +1,7 @@
+import map as M
+import set.{Set(..), has}
+
+empty : Set Int
+empty = Tip
+
+main = println (if has 1 empty then "yes" else "no")
