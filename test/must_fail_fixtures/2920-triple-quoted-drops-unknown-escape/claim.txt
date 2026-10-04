@@ -1,0 +1,17 @@
+issue: 2920
+what: a triple-quoted string silently drops an unknown escape: `"""\d+"""` evaluates to
+what: `d+`, at exit 0 with no diagnostic, while the plain string `"\d+"` is rejected at
+what: lex time ("invalid escape sequence '\d'"). With stdlib/regex.mdk in the tree, a
+what: regex pattern written in a triple-quoted string silently loses its `\d`.
+cmd: run main.mdk
+exit: 0
+stdout: d+
+control: run control.mdk
+why-verb: `run`, because the defect is a silent wrong value at exit 0. The conservative
+why-verb: fix (reject the unknown escape, as a plain string does) exits 1 with a lex error;
+why-verb: a fix that made `"""` raw would print `\d+`. Either drains this row.
+why-stdout: `d+` can only come from the escape being dropped.
+why-control: control.mdk writes the escape correctly (`"""\\d+"""`) and must print `\d+`
+why-control: at exit 0; a red control means triple-quoted strings broke, never that #2920
+why-control: drained. (If #2922 later makes `"""` raw, this control's expected output
+why-control: changes and the row needs revisiting.)
