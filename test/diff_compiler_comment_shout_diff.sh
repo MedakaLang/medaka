@@ -134,7 +134,14 @@ if [ "$baseline_status" -ne 0 ]; then
 fi
 echo "-- comment register baseline: ok"
 
+# A failing git diff (unresolvable ref, too-shallow clone) must fail the gate:
+# an empty $files from an error is not "no .mdk changed" (#3040).
 files="$(git diff --name-only --diff-filter=ACM "$BASE" "$HEAD" -- '*.mdk' ':(exclude)test/**')"
+files_status=$?
+if [ "$files_status" -ne 0 ]; then
+  echo "FAIL: git diff --name-only $BASE $HEAD failed (exit $files_status) -- unresolvable ref or too-shallow clone; cannot enforce the shout diff"
+  exit 2
+fi
 if [ -z "$files" ]; then
   echo "-- comment shout diff: ok (no staged .mdk outside test/, $BASE..$HEAD)"
   exit 0
@@ -142,7 +149,11 @@ fi
 
 bad=""
 for f in $files; do
-  added="$(git diff -U0 "$BASE" "$HEAD" -- "$f" | grep '^+' | grep -v '^+++')"
+  full_diff="$(git diff -U0 "$BASE" "$HEAD" -- "$f")" || {
+    echo "FAIL: git diff -U0 $BASE $HEAD -- $f failed -- cannot enforce the shout diff"
+    exit 2
+  }
+  added="$(printf '%s\n' "$full_diff" | grep '^+' | grep -v '^+++')"
   [ -z "$added" ] && continue
   sigil_hit="$(printf '%s\n' "$added" | grep -E "$re_emoji")"
   comment_added="$(printf '%s\n' "$added" | scoped_added_lines "$HEAD:$f" | sed '/^$/d' | sort -u)"
