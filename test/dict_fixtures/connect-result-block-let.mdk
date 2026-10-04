@@ -1,0 +1,19 @@
+-- DICT-SEMANTICS §6.3 D3 clause 2 at a block `let` (#3521's top-level face,
+-- local spelling).  A local function generalizes (§4.1 G1, G2), and `e` of
+-- `Get c e` is in `dbl`'s type and connected to its argument `c`, so it is
+-- not defaulted at the `let`: dbl : (Get c e, Num e) => c -> e.  At
+-- `Box Float` the one instance fixes `e := Float`; 3.0 is not > 4: "small".
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+classify : Box Float -> String
+classify b =
+  let dbl c = get c + get c
+  if dbl b > 4 then "big" else "small"
+
+main = println (classify (Box 1.5))

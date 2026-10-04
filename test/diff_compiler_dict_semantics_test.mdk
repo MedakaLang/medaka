@@ -3556,6 +3556,83 @@ table = [
     pinned = "w:int-bool\nw:char-int\n",
     codes = [],
   },
+  Row {
+    entry = "connect-result-top-level.mdk",
+    label =
+      "§6.3 D3 clause 2, #3521 top-level face: `e` of `Get b e` is in `dbl`s type and connected to the argument `b`, so it is not a defaulting candidate (scheme in section 2); the caller`s `Box Float` fixes it. Base defaulted `e` to Int and rejected `No impl of Get for (Box Float) Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "small\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-index-sum-unsigned.mdk",
+    label =
+      "§6.3 D3 clause 2, connection through two goals: the result `d` of `Index a b d` and `Index a c d` generalizes (scheme in section 2), and each call fixes it through the array`s one instance. Base rejected `No impl of Index for (Array Float) Int Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-outside-type-defaults.mdk",
+    label =
+      "§6.3 D3 clause 2 control: `k` of `Ix a k` is connected to the argument but in no type of `f`, so it still defaults, and `f 1` selects `Ix Int Int`: 9 as at base",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "9\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-outside-type-rejected.mdk",
+    label =
+      "§6.3 D3 clause 2 control, reject half: `e` of `Get c e` is in no type of `f`, so it defaults to Int and the call at `Box Float` is T-NO-IMPL (span in section 6), as at base",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "connect-result-block-let.mdk",
+    label =
+      "§6.3 D3 clause 2 at a block `let`: the local `dbl` generalizes with `e` connected to its argument, so the `let` does not default it; `small`. Base defaulted it at the `let` and rejected `No impl of Get for (Box Float) Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "small\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-result-let-in.mdk",
+    label =
+      "§6.3 D3 clause 2 at a `let … in`: the inline spelling of the row above, `small`. Base rejected as above",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "small\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-result-where.mdk",
+    label =
+      "§6.3 D3 clause 2 at a `where` component: the component already withholds every variable a member`s type mentions, so `small` as at base; the twin of the two `let` rows",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "small\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -3567,7 +3644,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 311
+tableRows = 318
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -3799,7 +3876,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 19
+schemeRows = 21
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -3915,6 +3992,18 @@ schemeTable = [
     label =
       "§3 determination holds argument-position variables rigid, so the residual of the conditional instance stays in `f`s context over `f`s own variables",
     want = "f : Conv a b => a -> b -> String",
+  },
+  SchemeRow {
+    entry = "connect-result-top-level.mdk",
+    label =
+      "§6.3 D3 clause 2: the result variable connected to the argument through `Get` generalizes with its `Num`, so the caller`s type fixes it",
+    want = "dbl : (Get a b, Num b) => a -> b",
+  },
+  SchemeRow {
+    entry = "connect-index-sum-unsigned.mdk",
+    label =
+      "§6.3 D3 clause 2: the result variable connected to the arguments through two `Index` goals generalizes with both goals and its `Num`",
+    want = "sumAt : (Index a b d, Index a c d, Num d) => a -> b -> c -> d",
   },
 ]
 
@@ -4180,7 +4269,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 12
+spanRows = 13
 
 spanTable : List SpanRow
 spanTable = [
@@ -4253,6 +4342,12 @@ spanTable = [
     label =
       "#3808: the undetermined-vector T-NO-IMPL lands on the `useIx` call that posed `Ix ?a Bool`, not on `main` or the definition",
     want = "22:16",
+  },
+  SpanRow {
+    entry = "connect-outside-type-rejected.mdk",
+    label =
+      "§6.3 D3 clause 2 control: the defaulted `Get (Box Float) Int` is reported at the `f` call that posed it, not at `f`s definition",
+    want = "16:16",
   },
 ]
 

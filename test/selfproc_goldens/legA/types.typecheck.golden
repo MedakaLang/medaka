@@ -1,3 +1,4 @@
+absorbMeeting : Map Int Unit -> List (List Int) -> List (List Int) -> Bool -> (Map Int Unit, List (List Int), Bool)
 abstractFieldMsg : String -> String -> String
 abstractSlotIds : List Mono -> List Int
 abstractTypeWords : String -> List Decl -> List String
@@ -606,6 +607,9 @@ computeMangledShadowMap : List Decl -> List (String, List Decl) -> List (String,
 concreteAtom : Atom -> Bool
 concreteHeadVarIds : Mono -> List Int
 concreteReqMatchByIface : IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
+connectClosure : Map Int Unit -> List (List Int) -> Map Int Unit
+connectedIds : Map Int Unit -> List UObligation -> Map Int Unit
+connectedTiedIds : List Mono -> List UObligation -> List Int
 consOp : Mono -> Mono -> Mono
 consSiteFn : String -> a -> Map String (List a) -> Map String (List a)
 constrainedApplicationHelp : Mono -> Mono -> Option String
@@ -1364,6 +1368,7 @@ headVarsNarrowedBy : List (String, Int) -> List (String, Mono) -> List String
 headlessBucketKey : RegKey
 i64RangeText : String
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
+idSetOf : List Int -> Map Int Unit -> Map Int Unit
 identKeysByName : Map String (List String) -> List (String, Ident) -> Map String (List String)
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
 ieAnyRowForIface : List ImplRow -> IfaceRef -> Bool
@@ -3008,6 +3013,7 @@ tconIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 tconTupleHead : Int -> Mono
 tconUnresolved : String -> Mono
 third3 : (a, b, c) -> c
+tiedSurvivors : List Mono -> List UObligation -> Map String Unit -> Map String Unit
 toggles : Ref Toggles
 topAbsorbs : String -> Expr -> Expr
 topGrantIds : String -> String -> List Int
