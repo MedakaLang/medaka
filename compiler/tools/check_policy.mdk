@@ -77,7 +77,10 @@ import types.typecheck.{
   ioAliasLabels,
   bindingGrantArity,
 }
-import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
+import eval.eval.{
+  Value(..), evalModulesRootEnvWith, buildStampExterns, apply, outputRef,
+  ppValue
+}
 import support.util.{
   sortUniqS, joinWith, reverseL, escStr, lookupAssoc, contains, filterList,
   listLen, escOneHex2, anyList
@@ -595,7 +598,8 @@ runPlugin fnName grants (coreD, modules, _, _, _, _) =
   -- plain prelude-level values the evaluator binds after the prelude.
   let (coreE, modulesE) = mangleCtorCollisionsPair (coreD, modules)
   outputRef := ""
-  let rootEnv = evalModulesRootEnv (coreE ++ stubD) modulesE
+  let rootEnv =
+    evalModulesRootEnvWith (buildStampExterns ()) (coreE ++ stubD) modulesE
   match lookupValue fnName rootEnv
     None => "   (no '" ++ fnName ++ "' binding in output)\n"
     Some fnVal =>

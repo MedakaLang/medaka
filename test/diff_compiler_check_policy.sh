@@ -78,6 +78,7 @@ one_case "named-entry-sample" test/check_policy_fixtures/named_entry_plugin.mdk 
 one_case "io-join-accept"     test/check_policy_fixtures/io_join_plugin.mdk "Clock,Env,Exec,FileRead,FileWrite,Net,Rand,Signal,Stderr,Stdin,Stdout" transform io_join_accept
 # The sample line follows `--fn`, not a fixed entry name.
 one_case "renamed-entry-sample" test/check_policy_fixtures/renamed_entry_plugin.mdk "Audit" rewrite renamed_entry_accept
+one_case "build-stamp-sample" test/check_policy_fixtures/build_stamp_plugin.mdk "Audit" stamp build_stamp_accept
 one_case "thunk-entry-accept" test/check_policy_fixtures/thunk_entry_plugin.mdk "Audit" tick thunk_entry_accept
 # Multi-file targets load through the module loader, as `manifest` does (#3331):
 # the effect arrives from an imported sibling, the sample run evaluates the

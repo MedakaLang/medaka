@@ -4995,9 +4995,22 @@ pOsEntropyBytes : Value e -> <Rand | e> Value e
 pOsEntropyBytes (VInt n) = vIntArray (osEntropyBytes n)
 pOsEntropyBytes _ = panic "osEntropyBytes: expected Int"
 
+-- The pure build-stamp externs, shared by `medaka run` (ioExternBindings) and
+-- `medaka check-policy`'s sample run so an entry using them evaluates in both.
+export
+buildStampExterns : Unit -> List (String, Value e)
+buildStampExterns _ = [
+  ("buildFingerprint", prim1M pBuildFingerprint),
+  ("buildCommit", prim1M pBuildCommit),
+  ("buildDate", prim1M pBuildDate),
+]
+
 export
 ioExternBindings : Unit -> List (String, Value <IO>)
-ioExternBindings _ = [
+ioExternBindings _ = buildStampExterns () ++ ioHostExterns ()
+
+ioHostExterns : Unit -> List (String, Value <IO>)
+ioHostExterns _ = [
   -- Clock / GC / stderr — these OVERRIDE the frozen constants in externBindings
   ("wallTimeSec", prim1M pWallTimeSecIO),
   ("monotonicSec", prim1M pMonotonicSecIO),
@@ -5026,9 +5039,6 @@ ioExternBindings _ = [
   ("args", prim1M pArgs),
   ("getEnv", prim1 pGetEnv),
   ("executablePath", prim1M pExecutablePath),
-  ("buildFingerprint", prim1M pBuildFingerprint),
-  ("buildCommit", prim1M pBuildCommit),
-  ("buildDate", prim1M pBuildDate),
   -- Stdin
   ("readLine", prim1M pReadLine),
   ("readLineOpt", prim1M pReadLineOpt),
