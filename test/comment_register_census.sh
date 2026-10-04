@@ -114,7 +114,7 @@ fi
 #     ("is/are/was/be/been used to") — a real false-positive shape naive
 #     "used to" matching hits; see #2281's adversarial review for measured
 #     rates, not asserted here.
-re_history='Until 2026-|formerly|The old |withdrawn|used to'
+re_history='Until 2026-|formerly|The old |withdrawn|(^|[^[:alnum:]_])used to([^[:alnum:]_]|$)'
 re_history_exclude='(is|are|was|be|been) used to'
 #  2 reviewer-addressed ruling vocabulary — MEASURED is provenance this repo
 #     wants, tracked as its own separate metric below, never folded in here.
