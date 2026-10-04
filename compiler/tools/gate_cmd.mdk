@@ -1365,7 +1365,7 @@ duplicateNameViolations gates = dupNameFrom gates (sortUniqS (gateNames gates))
 -- paths differ can derive the same key and silently share one cost-history
 -- row.  A migration that does this on purpose says so with a per-row
 -- `shares_baseline_with = "<other entry>"`: a collision group is allowed when
--- every entry but one names another member of the group.  The declaration is
+-- every entry but exactly one (the anchor) names another member of the group.  The declaration is
 -- checked for staleness so it cannot outlive the collision it excuses.
 namesWithKey : String -> List Gate -> List String
 namesWithKey _ [] = []
@@ -1402,11 +1402,15 @@ dupKeyFrom _ [] = []
 dupKeyFrom gates (k :: ks) =
   let owners = namesWithKey k gates
   let rest = dupKeyFrom gates ks
-  if listLen owners > 1 && countUndeclared gates owners > 1 then
-    "\{k}: entries \{joinWith ", " owners} derive the same baselineKey — their cost histories would be spliced together; declare a deliberate migration with shares_baseline_with"
+  let open = countUndeclared gates owners
+  if listLen owners < 2 || open == 1 then
+    rest
+  else if open == 0 then
+    "\{k}: entries \{joinWith ", " owners} all declare shares_baseline_with, so the group has no anchor row — exactly one entry must stay unhatched"
       :: rest
   else
-    rest
+    "\{k}: entries \{joinWith ", " owners} derive the same baselineKey — their cost histories would be spliced together; declare a deliberate migration with shares_baseline_with"
+      :: rest
 
 staleShareViolations : List Gate -> List String
 staleShareViolations [] = []

@@ -19,7 +19,8 @@ import tools.gate_cmd.{
   ImportTarget(..), gradeViolations, duplicateBaselineKeyViolations,
   verifyClasses
 }
-import tools.gate_registry.{Gate, parseRegistry}
+import tools.gate_registry.{Gate, parseRegistry, renderJson}
+import string.{contains}
 import support.util.{listLen, joinNl}
 
 -- ── the fixture resolver ─────────────────────────────────────────────────────
@@ -430,3 +431,49 @@ test "verifyClasses reports the baselineKey class through the real entry point" 
 lookupClass : String -> List (String, List String) -> Option (List String)
 lookupClass _ [] = None
 lookupClass t ((n, vs) :: rest) = if n == t then Some vs else lookupClass t rest
+
+noAnchorMsg : String -> String
+noAnchorMsg names =
+  "a: entries \{names} all declare shares_baseline_with, so the group has no anchor row — exactly one entry must stay unhatched"
+
+test "a mutual pair has no anchor and fails" =
+  expectEqual
+    [noAnchorMsg "a_native, a_shell"]
+    (keyViolationsOf [
+      ("a_native", "test/a_test.mdk", "a_shell"),
+      ("a_shell", "test/a.sh", "a_native"),
+    ])
+
+test "a three-cycle has no anchor and fails" =
+  expectEqual
+    [noAnchorMsg "a_native, a_shell, a_tmp"]
+    (keyViolationsOf [
+      ("a_native", "test/a_test.mdk", "a_shell"),
+      ("a_shell", "test/a.sh", "a_tmp"),
+      ("a_tmp", "test/a_test.mdk", "a_native"),
+    ])
+
+test "a chain ending at one unhatched anchor passes" =
+  expectEqual
+    []
+    (keyViolationsOf [
+      ("a_native", "test/a_test.mdk", "a_tmp"),
+      ("a_tmp", "test/a_test.mdk", "a_shell"),
+      ("a_shell", "test/a.sh", ""),
+    ])
+
+jsonOf : List (String, String, String) -> String
+jsonOf rows = match regOf rows
+  Ok gs => renderJson gs
+  Err e => e
+
+test "gate list --json shows shares_baseline_with when set" =
+  expectTrue
+    (contains
+      "\"shares_baseline_with\":\"a_shell\""
+      (jsonOf [("a_native", "test/a_test.mdk", "a_shell")]))
+
+test "gate list --json omits shares_baseline_with when unset" =
+  expectTrue
+    (not
+      (contains "shares_baseline_with" (jsonOf [("a_shell", "test/a.sh", "")])))

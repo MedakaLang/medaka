@@ -558,7 +558,15 @@ renderNames [] = ""
 renderNames (g :: gs) = "\{g.name}\n" ++ renderNames gs
 
 gateJson : Gate -> Json
-gateJson g = jObject [
+gateJson g = jObject (gateFields g ++ shareField g)
+
+shareField : Gate -> List (String, Json)
+shareField g
+  | g.sharesBaselineWith == "" = []
+  | otherwise = [("shares_baseline_with", JString g.sharesBaselineWith)]
+
+gateFields : Gate -> List (String, Json)
+gateFields g = [
   ("name", JString g.name),
   ("baselineKey", JString (baselineKey g.run)),
   ("area", JString g.area),
@@ -576,7 +584,7 @@ gateJson g = jObject [
 ]
 
 {- | The `--json` rendering: a JSON array of entry objects, in registry order,
-   every schema field present. -}
+   every schema field present; `shares_baseline_with` only when set. -}
 export
 renderJson : List Gate -> String
 renderJson gs = stringify (jArray (map gateJson gs))
