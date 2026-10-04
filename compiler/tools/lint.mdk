@@ -42,6 +42,7 @@ import frontend.ast.{
   Pat(..),
   UsePath(..),
   UseMember(..),
+  useMemberLocal,
   qualifiedLocal,
   RecPatField(..),
   Guard(..),
@@ -1017,9 +1018,65 @@ applyFixes only disable src prog pos =
   let rules = filterList (ruleActiveFixable only disable) allRules
   let orc = buildOracle prog
   let cmtLines = map commentLine (collectComments src)
-  let splices =
-    collectSplices cmtLines orc rules (zipDeclPos prog (positionsDecls pos))
-  (applySplices src splices, listLen splices)
+  let declPos = zipDeclPos prog (positionsDecls pos)
+  let splices = collectSplices cmtLines orc rules declPos
+  let allSplices =
+    insertImportSplice cmtLines (introducedTestVerbs splices) declPos splices
+  (applySplices src allSplices, listLen splices)
+
+-- The `stdlib/test.mdk` verbs a fixer can introduce that the decl did not
+-- already call.  Every other name a fixer emits is prelude-global.
+testVerbNames : List String
+testVerbNames = ["expectEqual", "expectNotEqual", "expectTrue", "expectFalse"]
+
+-- The verbs whose whole word occurs in some replacement text.  Over-approximate
+-- on purpose: a verb the file already imports is filtered out by the widener.
+introducedTestVerbs : List (Int, Int, String) -> List String
+introducedTestVerbs splices =
+  filterList
+    (v => anyList (sp => wholeWordIn v (third3 sp)) splices)
+    testVerbNames
+
+third3 : (Int, Int, String) -> String
+third3 (_, _, t) = t
+
+-- A fix that introduces a call to a `test` verb must leave the file's
+-- `import test.{…}` list naming it, or the next `check` fails with an unbound
+-- variable.  Only a selective `test` group needs widening: `import test.*` already
+-- binds the verb, and a bare or aliased `import test` never bound it unqualified,
+-- so no fixer fires on it.  A group whose span holds a comment is left alone.
+-- The widened import is spliced in at its own line, keeping the splices ordered.
+insertImportSplice : List Int ->
+  List String ->
+  List (Decl, DeclPos) ->
+  List (Int, Int, String) ->
+  List (Int, Int, String)
+insertImportSplice _ [] _ splices = splices
+insertImportSplice _ _ [] splices = splices
+insertImportSplice cmtLines verbs ((DUse pub (UseGroup path members) loc, dp) :: rest) splices
+  | path == ["test"] =
+    let missing =
+      filterList (v => not (anyList (m => useMemberLocal m == v) members)) verbs
+    if isEmptyL missing
+      || spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp) then
+      splices
+    else
+      let widened =
+        UseGroup path (members ++ map (v => UseMember v False loc None) missing)
+      insertSpliceAsc
+        (declPosLine dp, declPosEndLine dp, declToString (DUse pub widened loc))
+        splices
+  | otherwise = insertImportSplice cmtLines verbs rest splices
+insertImportSplice cmtLines verbs (_ :: rest) splices =
+  insertImportSplice cmtLines verbs rest splices
+
+insertSpliceAsc : (Int, Int, String) ->
+  List (Int, Int, String) ->
+  List (Int, Int, String)
+insertSpliceAsc sp [] = [sp]
+insertSpliceAsc (s, e, t) ((s2, e2, t2) :: rest)
+  | s < s2 = (s, e, t) :: (s2, e2, t2) :: rest
+  | otherwise = (s2, e2, t2) :: insertSpliceAsc (s, e, t) rest
 
 -- a rule participates in `--fix` iff it is enabled, passes the --only/--disable
 -- filters, AND carries a fixer.
