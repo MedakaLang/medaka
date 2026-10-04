@@ -1,0 +1,9 @@
+-- #1014 fixture, module 1 of 2: the interface plus an impl in its OWN module.
+-- The `Sized` token in the impl header below is a use of `a|ty|Sized`.
+export interface Sized x where
+  size : x -> Int
+
+public export data Box = Box Int
+
+export impl Sized Box where
+  size (Box n) = n

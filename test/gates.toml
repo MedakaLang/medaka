@@ -2393,7 +2393,7 @@ kind = "exec"
 migration = "native-wrap"
 run = "test/diff_compiler_run_entry_subdir.sh"
 oracles = []
-sources = ["test/diff_compiler_run_entry_subdir.sh"]
+sources = ["compiler/driver/loader.mdk", "test/diff_compiler_run_entry_subdir.sh"]
 corpus = []
 toolchain = []
 

@@ -40,10 +40,9 @@
 
    Three things this runner does that the retired scripts did not:
 
-   - It reads the oracle's EXIT CODE and STDERR, not stdout alone. The
-     scripts piped stderr to `/dev/null` and never looked at `$?`, which is
-     how `eval_prelude_fixtures/string_interp.mdk` sat green for a year while
-     its oracle panicked (`expectedPanics` below).
+   - It reads the oracle's EXIT CODE and STDERR, not stdout alone, so an
+     oracle that panics reds the row instead of passing on empty stdout
+     (`expectedPanics` below pins any deliberate exception).
    - It asserts each corpus still holds the number of fixtures it held when
      the rows were written, so a corpus that silently shrinks reds rather
      than passing over fewer rows.
@@ -399,24 +398,9 @@ evalSection raw =
    The unit is a fixture path for a per-fixture row and the corpus path for
    a batch row, whose one process carries the whole corpus's behavior.
 
-   `test/eval_prelude_fixtures/string_interp.mdk` panics with
-   `intToString: not an Int` under both prelude oracles, printing nothing —
-   and its committed golden is zero bytes, so the three shell gates that
-   graded it compared "" against "" and reported `ok`. Neither the panic nor
-   the empty pin is fixed here: this runner's job was to make them visible,
-   and they are now two named rows rather than three silent passes. -}
+   The roster is empty: every row currently runs clean. -}
 expectedPanics : List (String, String)
-expectedPanics = [
-  (
-    "test/bin/eval_prelude_main",
-    "test/eval_prelude_fixtures/string_interp.mdk",
-  ),
-  (
-    "test/bin/core_ir_prelude_main",
-    "test/eval_prelude_fixtures/string_interp.mdk",
-  ),
-  ("test/bin/eval_prelude_batch", "test/eval_prelude_fixtures"),
-]
+expectedPanics = []
 
 {- | Fixtures that ship no `=== EVAL ===` golden, so this gate spawns them
    but has no value to hold them to. Each is still graded on its exit code

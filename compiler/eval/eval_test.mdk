@@ -46,6 +46,7 @@ implDecl iface origin count = DImpl {
   reqs = [],
   methods = [methodWithDicts "fromInt" count],
   implOrigin = origin,
+  implIfaceLoc = None,
 }
 
 lookupCount : (String, String) -> List ((String, String), Int) -> Option Int

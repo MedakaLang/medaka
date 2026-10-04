@@ -444,13 +444,17 @@ expectAll es
 
 Passes when every expectation in the list passes.
 
-The result is the first `Fail`, when there is one.
+The result is the first `Fail`, with its message prefixed by the member's
+position and the list's length, so a long list locates the failing fact.
+The `Fail`'s operands are that member's own.
 
 ```medaka
 > expectAll [pass, pass, pass]
 Pass "" ""
 > expectAll [pass, fail "oops", pass]
-Fail "oops" "" ""
+Fail "member 2 of 3: oops" "" ""
+> expectAll [expectEqual 1 1, expectEqual 2 3, expectEqual 4 5]
+Fail "member 2 of 3: expected 2 but got 3" "2" "3"
 ```
 
 ### `labelFail`

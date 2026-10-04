@@ -3182,10 +3182,23 @@ stringLitFor : Token -> Parser String
 stringLitFor (TString s) = emit s
 stringLitFor _ = failP "expected string literal"
 
+-- A `prop`/`test` name is a static label, so a string with `\{…}` interpolation
+-- is rejected at the keyword rather than falling through to a generic failure.
+interpolatedNameMsg : String -> String
+interpolatedNameMsg kw =
+  "`\{kw}` names must be plain string literals; string interpolation is not allowed in a `\{kw}` name"
+
+propNameFor : Int -> Token -> Parser String
+propNameFor propPos (TInterpOpen _) =
+  fatalAtP (interpolatedNameMsg "prop") propPos
+propNameFor _ t = stringLitFor t
+
 parseProp : Bool -> Parser Decl
 parseProp pub = defer
+  propPos <- getPos
   expectTok TProp
-  name <- stringLitP
+  t <- peekP
+  name <- propNameFor propPos t
   params <- many propParam
   expectTok TEqual
   body <- parseBody
@@ -3226,6 +3239,8 @@ parseTestRest pub _ (TString _) = defer
   body <- parseBody
   skipNewlines
   deferPure (DTest pub name body)
+parseTestRest _ testPos (TInterpOpen _) =
+  fatalAtP (interpolatedNameMsg "test") testPos
 parseTestRest _ testPos _ = fatalAtP (reservedKeywordMsg "test") testPos
 
 -- `bench "name" = expr` is removed: no verb and no runner ever consumed the
@@ -3471,9 +3486,12 @@ parseImpl pub = defer
 -- removed; a lowercase head or a stray `of` now yields a clean parse error.)
 implHead : Bool -> Int -> Token -> Parser Decl
 implHead pub kw (TUpper u) = defer
+  s <- getPos
   advance
   n <- upperQualTail u
-  implRest pub kw n
+  q <- getPos
+  d <- implRest pub kw n
+  deferPure (setDeclNameLoc (locOfSpan s q) d)
 implHead _ _ (TIdent _) = failP namedImplRemovedMsg
 implHead _ _ _ = failP "expected impl head"
 

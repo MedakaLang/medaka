@@ -1,5 +1,5 @@
 # META
-source_lines=1824
+source_lines=1846
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -651,9 +651,10 @@ walkStmts w scope curLoc ((DoBind p e) :: rest) =
   let _ = walkExpr w scope curLoc e
   let frame = mkNamedFrame w (patBinders curLoc p)
   walkStmts w (frame :: scope) curLoc rest
-walkStmts w scope curLoc ((DoLet _ _ p e) :: rest) =
-  let _ = walkExpr w scope curLoc e
+walkStmts w scope curLoc ((DoLet _ isRec p e) :: rest) =
   let frame = mkNamedFrame w (patBinders curLoc p)
+  let rhsScope = if isRec then frame :: scope else scope
+  let _ = walkExpr w rhsScope curLoc e
   walkStmts w (frame :: scope) curLoc rest
 walkStmts w scope curLoc ((DoAssign _ e) :: rest) =
   let _ = walkExpr w scope curLoc e
@@ -1062,6 +1063,26 @@ implHeadsGo w ifaceMid loc ((ImplMethod n _ _) :: rest) (c :: cs) =
   let _ = recordImplHead w ifaceMid n (childLocOr loc c)
   implHeadsGo w ifaceMid loc rest cs
 
+-- The `Sized` token of `impl Sized Box` is a USE of the interface (#1014).  The
+-- interface's one recorded binder lives in `nsTy` (see `nsIface`: no def is ever
+-- recorded under `nsIface`), so the use is filed under the `nsTy` twin of the key
+-- `resolveIface` found, which is the key `references` on the declaration reads.
+-- `None` for a compiler-generated impl (`deriving`), which has no token.
+recordImplIfaceUse : W -> String -> Option Loc -> Unit
+recordImplIfaceUse _ _ None = ()
+recordImplIfaceUse w iface (Some l) =
+  recordRef
+    (ctxOf w)
+    (ifaceTyKey (resolveIface w iface))
+    (uriOf w)
+    (locWithUriOf w l)
+
+-- `<mid>\tiface\t<name>` -> `<mid>\tty\t<name>`.
+ifaceTyKey : String -> String
+ifaceTyKey k = match splitOnChar '\t' k
+  mid :: _ :: name :: _ => mkKey mid nsTy name
+  _ => k
+
 childLocOr : Loc -> Option Loc -> Loc
 childLocOr fb None = fb
 childLocOr _ (Some l) = l
@@ -1083,7 +1104,8 @@ walkDeclBody w (DNewtype { newtypeFieldTy = fieldTy }) loc =
 walkDeclBody w (DTypeAlias { tyAliasRhs = rhs }) loc = walkTy w loc rhs
 walkDeclBody w (DInterface { methods, ... }) loc =
   walkIfaceMethods w loc methods
-walkDeclBody w (DImpl { tys, methods, ... }) loc =
+walkDeclBody w (DImpl { iface, implIfaceLoc, tys, methods, ... }) loc =
+  let _ = recordImplIfaceUse w iface implIfaceLoc
   let _ = walkTys w loc tys
   walkImplMethods w loc methods
 walkDeclBody w (DProp _ _ params body) loc =
@@ -1988,7 +2010,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "walkStmts" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "rest")))))
 (DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e"))) (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "patBinders") (EVar "curLoc")) (EVar "p")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EBinOp "::" (EVar "frame") (EVar "scope"))) (EVar "curLoc")) (EVar "rest")))))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoLet" PWild PWild (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e"))) (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "patBinders") (EVar "curLoc")) (EVar "p")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EBinOp "::" (EVar "frame") (EVar "scope"))) (EVar "curLoc")) (EVar "rest")))))
+(DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoLet" PWild (PVar "isRec") (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "patBinders") (EVar "curLoc")) (EVar "p")))) (DoLet false false (PVar "rhsScope") (EIf (EVar "isRec") (EBinOp "::" (EVar "frame") (EVar "scope")) (EVar "scope"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "rhsScope")) (EVar "curLoc")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EBinOp "::" (EVar "frame") (EVar "scope"))) (EVar "curLoc")) (EVar "rest")))))
 (DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoAssign" PWild (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "rest")))))
 (DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoFieldAssign" PWild PWild (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "rest")))))
 (DTypeSig false "walkArms" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))))
@@ -2114,6 +2136,11 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "implHeadsGo" (PWild PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "implHeadsGo" ((PVar "w") (PVar "ifaceMid") (PVar "loc") (PCons (PCon "ImplMethod" (PVar "n") PWild PWild) (PVar "rest")) (PList)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHead") (EVar "w")) (EVar "ifaceMid")) (EVar "n")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "implHeadsGo") (EVar "w")) (EVar "ifaceMid")) (EVar "loc")) (EVar "rest")) (EListLit)))))
 (DFunDef false "implHeadsGo" ((PVar "w") (PVar "ifaceMid") (PVar "loc") (PCons (PCon "ImplMethod" (PVar "n") PWild PWild) (PVar "rest")) (PCons (PVar "c") (PVar "cs"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHead") (EVar "w")) (EVar "ifaceMid")) (EVar "n")) (EApp (EApp (EVar "childLocOr") (EVar "loc")) (EVar "c")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "implHeadsGo") (EVar "w")) (EVar "ifaceMid")) (EVar "loc")) (EVar "rest")) (EVar "cs")))))
+(DTypeSig false "recordImplIfaceUse" (TyFun (TyCon "W") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))
+(DFunDef false "recordImplIfaceUse" (PWild PWild (PCon "None")) (ELit LUnit))
+(DFunDef false "recordImplIfaceUse" ((PVar "w") (PVar "iface") (PCon "Some" (PVar "l"))) (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EVar "ifaceTyKey") (EApp (EApp (EVar "resolveIface") (EVar "w")) (EVar "iface")))) (EApp (EVar "uriOf") (EVar "w"))) (EApp (EApp (EVar "locWithUriOf") (EVar "w")) (EVar "l"))))
+(DTypeSig false "ifaceTyKey" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ifaceTyKey" ((PVar "k")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "\t"))) (EVar "k")) (arm (PCons (PVar "mid") (PCons PWild (PCons (PVar "name") PWild))) () (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "name"))) (arm PWild () (EVar "k"))))
 (DTypeSig false "childLocOr" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Loc"))))
 (DFunDef false "childLocOr" ((PVar "fb") (PCon "None")) (EVar "fb"))
 (DFunDef false "childLocOr" (PWild (PCon "Some" (PVar "l"))) (EVar "l"))
@@ -2127,7 +2154,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DNewtype" ((rf "newtypeFieldTy" (PVar "fieldTy"))) false) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "fieldTy")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DTypeAlias" ((rf "tyAliasRhs" (PVar "rhs"))) false) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "rhs")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DInterface" ((rf "methods" None)) true) (PVar "loc")) (EApp (EApp (EApp (EVar "walkIfaceMethods") (EVar "w")) (EVar "loc")) (EVar "methods")))
-(DFunDef false "walkDeclBody" ((PVar "w") (PRec "DImpl" ((rf "tys" None) (rf "methods" None)) true) (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTys") (EVar "w")) (EVar "loc")) (EVar "tys"))) (DoExpr (EApp (EApp (EApp (EVar "walkImplMethods") (EVar "w")) (EVar "loc")) (EVar "methods")))))
+(DFunDef false "walkDeclBody" ((PVar "w") (PRec "DImpl" ((rf "iface" None) (rf "implIfaceLoc" None) (rf "tys" None) (rf "methods" None)) true) (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordImplIfaceUse") (EVar "w")) (EVar "iface")) (EVar "implIfaceLoc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTys") (EVar "w")) (EVar "loc")) (EVar "tys"))) (DoExpr (EApp (EApp (EApp (EVar "walkImplMethods") (EVar "w")) (EVar "loc")) (EVar "methods")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DProp" PWild PWild (PVar "params") (PVar "body")) (PVar "loc")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "map") (EVar "ppNameLoc")) (EVar "params")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EListLit (EVar "frame"))) (EVar "loc")) (EVar "body")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DTest" PWild PWild (PVar "body")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EListLit)) (EVar "loc")) (EVar "body")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DLetGroup" PWild (PVar "binds")) (PVar "loc")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "namesAtLoc") (EVar "loc")) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkBinds") (EVar "w")) (EListLit (EVar "frame"))) (EVar "loc")) (EVar "binds")))))
@@ -2504,7 +2531,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "walkStmts" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "rest")))))
 (DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e"))) (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "patBinders") (EVar "curLoc")) (EVar "p")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EBinOp "::" (EVar "frame") (EVar "scope"))) (EVar "curLoc")) (EVar "rest")))))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoLet" PWild PWild (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e"))) (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "patBinders") (EVar "curLoc")) (EVar "p")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EBinOp "::" (EVar "frame") (EVar "scope"))) (EVar "curLoc")) (EVar "rest")))))
+(DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoLet" PWild (PVar "isRec") (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "patBinders") (EVar "curLoc")) (EVar "p")))) (DoLet false false (PVar "rhsScope") (EIf (EVar "isRec") (EBinOp "::" (EVar "frame") (EVar "scope")) (EVar "scope"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "rhsScope")) (EVar "curLoc")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EBinOp "::" (EVar "frame") (EVar "scope"))) (EVar "curLoc")) (EVar "rest")))))
 (DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoAssign" PWild (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "rest")))))
 (DFunDef false "walkStmts" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "DoFieldAssign" PWild PWild (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "rest")))))
 (DTypeSig false "walkArms" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))))
@@ -2630,6 +2657,11 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "implHeadsGo" (PWild PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "implHeadsGo" ((PVar "w") (PVar "ifaceMid") (PVar "loc") (PCons (PCon "ImplMethod" (PVar "n") PWild PWild) (PVar "rest")) (PList)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHead") (EVar "w")) (EVar "ifaceMid")) (EVar "n")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "implHeadsGo") (EVar "w")) (EVar "ifaceMid")) (EVar "loc")) (EVar "rest")) (EListLit)))))
 (DFunDef false "implHeadsGo" ((PVar "w") (PVar "ifaceMid") (PVar "loc") (PCons (PCon "ImplMethod" (PVar "n") PWild PWild) (PVar "rest")) (PCons (PVar "c") (PVar "cs"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHead") (EVar "w")) (EVar "ifaceMid")) (EVar "n")) (EApp (EApp (EVar "childLocOr") (EVar "loc")) (EVar "c")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "implHeadsGo") (EVar "w")) (EVar "ifaceMid")) (EVar "loc")) (EVar "rest")) (EVar "cs")))))
+(DTypeSig false "recordImplIfaceUse" (TyFun (TyCon "W") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))
+(DFunDef false "recordImplIfaceUse" (PWild PWild (PCon "None")) (ELit LUnit))
+(DFunDef false "recordImplIfaceUse" ((PVar "w") (PVar "iface") (PCon "Some" (PVar "l"))) (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EVar "ifaceTyKey") (EApp (EApp (EVar "resolveIface") (EVar "w")) (EVar "iface")))) (EApp (EVar "uriOf") (EVar "w"))) (EApp (EApp (EVar "locWithUriOf") (EVar "w")) (EVar "l"))))
+(DTypeSig false "ifaceTyKey" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ifaceTyKey" ((PVar "k")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "\t"))) (EVar "k")) (arm (PCons (PVar "mid") (PCons PWild (PCons (PVar "name") PWild))) () (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "name"))) (arm PWild () (EVar "k"))))
 (DTypeSig false "childLocOr" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Loc"))))
 (DFunDef false "childLocOr" ((PVar "fb") (PCon "None")) (EVar "fb"))
 (DFunDef false "childLocOr" (PWild (PCon "Some" (PVar "l"))) (EVar "l"))
@@ -2643,7 +2675,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DNewtype" ((rf "newtypeFieldTy" (PVar "fieldTy"))) false) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "fieldTy")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DTypeAlias" ((rf "tyAliasRhs" (PVar "rhs"))) false) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "rhs")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DInterface" ((rf "methods" None)) true) (PVar "loc")) (EApp (EApp (EApp (EVar "walkIfaceMethods") (EVar "w")) (EVar "loc")) (EVar "methods")))
-(DFunDef false "walkDeclBody" ((PVar "w") (PRec "DImpl" ((rf "tys" None) (rf "methods" None)) true) (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTys") (EVar "w")) (EVar "loc")) (EVar "tys"))) (DoExpr (EApp (EApp (EApp (EVar "walkImplMethods") (EVar "w")) (EVar "loc")) (EVar "methods")))))
+(DFunDef false "walkDeclBody" ((PVar "w") (PRec "DImpl" ((rf "iface" None) (rf "implIfaceLoc" None) (rf "tys" None) (rf "methods" None)) true) (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordImplIfaceUse") (EVar "w")) (EVar "iface")) (EVar "implIfaceLoc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTys") (EVar "w")) (EVar "loc")) (EVar "tys"))) (DoExpr (EApp (EApp (EApp (EVar "walkImplMethods") (EVar "w")) (EVar "loc")) (EVar "methods")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DProp" PWild PWild (PVar "params") (PVar "body")) (PVar "loc")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EMethodRef "map") (EVar "ppNameLoc")) (EVar "params")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EListLit (EVar "frame"))) (EVar "loc")) (EVar "body")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DTest" PWild PWild (PVar "body")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EListLit)) (EVar "loc")) (EVar "body")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DLetGroup" PWild (PVar "binds")) (PVar "loc")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "namesAtLoc") (EVar "loc")) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkBinds") (EVar "w")) (EListLit (EVar "frame"))) (EVar "loc")) (EVar "binds")))))

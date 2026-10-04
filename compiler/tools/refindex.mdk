@@ -647,9 +647,10 @@ walkStmts w scope curLoc ((DoBind p e) :: rest) =
   let _ = walkExpr w scope curLoc e
   let frame = mkNamedFrame w (patBinders curLoc p)
   walkStmts w (frame :: scope) curLoc rest
-walkStmts w scope curLoc ((DoLet _ _ p e) :: rest) =
-  let _ = walkExpr w scope curLoc e
+walkStmts w scope curLoc ((DoLet _ isRec p e) :: rest) =
   let frame = mkNamedFrame w (patBinders curLoc p)
+  let rhsScope = if isRec then frame :: scope else scope
+  let _ = walkExpr w rhsScope curLoc e
   walkStmts w (frame :: scope) curLoc rest
 walkStmts w scope curLoc ((DoAssign _ e) :: rest) =
   let _ = walkExpr w scope curLoc e
@@ -1058,6 +1059,26 @@ implHeadsGo w ifaceMid loc ((ImplMethod n _ _) :: rest) (c :: cs) =
   let _ = recordImplHead w ifaceMid n (childLocOr loc c)
   implHeadsGo w ifaceMid loc rest cs
 
+-- The `Sized` token of `impl Sized Box` is a USE of the interface (#1014).  The
+-- interface's one recorded binder lives in `nsTy` (see `nsIface`: no def is ever
+-- recorded under `nsIface`), so the use is filed under the `nsTy` twin of the key
+-- `resolveIface` found, which is the key `references` on the declaration reads.
+-- `None` for a compiler-generated impl (`deriving`), which has no token.
+recordImplIfaceUse : W -> String -> Option Loc -> Unit
+recordImplIfaceUse _ _ None = ()
+recordImplIfaceUse w iface (Some l) =
+  recordRef
+    (ctxOf w)
+    (ifaceTyKey (resolveIface w iface))
+    (uriOf w)
+    (locWithUriOf w l)
+
+-- `<mid>\tiface\t<name>` -> `<mid>\tty\t<name>`.
+ifaceTyKey : String -> String
+ifaceTyKey k = match splitOnChar '\t' k
+  mid :: _ :: name :: _ => mkKey mid nsTy name
+  _ => k
+
 childLocOr : Loc -> Option Loc -> Loc
 childLocOr fb None = fb
 childLocOr _ (Some l) = l
@@ -1079,7 +1100,8 @@ walkDeclBody w (DNewtype { newtypeFieldTy = fieldTy }) loc =
 walkDeclBody w (DTypeAlias { tyAliasRhs = rhs }) loc = walkTy w loc rhs
 walkDeclBody w (DInterface { methods, ... }) loc =
   walkIfaceMethods w loc methods
-walkDeclBody w (DImpl { tys, methods, ... }) loc =
+walkDeclBody w (DImpl { iface, implIfaceLoc, tys, methods, ... }) loc =
+  let _ = recordImplIfaceUse w iface implIfaceLoc
   let _ = walkTys w loc tys
   walkImplMethods w loc methods
 walkDeclBody w (DProp _ _ params body) loc =

@@ -1,5 +1,5 @@
 # META
-source_lines=1795
+source_lines=1826
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -1389,35 +1389,49 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
 
 -- ── medaka_test tool ──────────────────────────────────────────────────────────
 
--- The engine(s) `medaka_test` actually runs. SINGLE SOURCE OF TRUTH: the tool
--- description (below) and the payload's `engine`/`note` fields
--- (`testReportJson`) are both DERIVED from this list rather than each
--- carrying its own hand-written "eval" literal — three independent hardcodes
--- that would silently start lying together (or, worse, drift apart from one
--- another) the day this tool gains a native arm.  Today it is interpreter-only
--- (#81 Stage 3 wires `--native` into the human `medaka test` CLI only, not
--- this tool), so the list is `[EngInterp]`.
-mcpTestEngines : List Engine
-mcpTestEngines = [EngInterp]
+-- The engine `medaka_test` runs when the caller names none: native, the same
+-- default `medaka test` has (`parseTestEngines`, tools/test_cmd.mdk), so an
+-- agent and a human running the same file get the same verdict.  The optional
+-- `engine` argument ("native" | "eval") opts into the interpreter.  The tool
+-- description and the payload's `engine`/`note` fields are DERIVED from the
+-- engine list that was asked for / actually ran, never a hand-written literal.
+mcpTestDefaultEngines : List Engine
+mcpTestDefaultEngines = [EngNative]
 
 mcpTestEngineHasNative : List Engine -> Bool
 mcpTestEngineHasNative [] = False
 mcpTestEngineHasNative (EngNative :: _) = True
 mcpTestEngineHasNative (_ :: rest) = mcpTestEngineHasNative rest
 
--- The caveat sentence, derived from `engines`: interpreter-only gets the
--- original #81 warning; a list that includes the native engine gets an
--- honest statement instead of a now-false "results are eval-only" claim.
+-- The `engine` argument: a missing key selects the default; a present value
+-- must be the string "native" or "eval".  Anything else, including a non-string
+-- value and an explicit null, is an argument error, not a silent fallback to the
+-- default.
+mcpTestEnginesArg : Json -> Result String (List Engine)
+mcpTestEnginesArg args = match get "engine" args
+  None => Ok mcpTestDefaultEngines
+  Some (JString "native") => Ok [EngNative]
+  Some (JString "eval") => Ok [EngInterp]
+  Some (JString other) =>
+    Err
+      "medaka_test: unknown engine '\{other}' — 'engine' must be \"native\" (default) or \"eval\""
+  Some _ =>
+    Err
+      "medaka_test: 'engine' must be a string, \"native\" (default) or \"eval\""
+
+-- The caveat sentence, derived from `engines`: an interpreter-only run keeps
+-- the original #81 warning; a run that includes the native engine says which
+-- engine the verdict is under and that property tests stay on the interpreter.
 mcpTestCaveat : List Engine -> String
 mcpTestCaveat engines
   | mcpTestEngineHasNative engines =
-    "Results include the NATIVE backend engine (not just the interpreter) — a native-only miscompile is observed here."
+    "Results are under the NATIVE backend, the same engine `medaka test` defaults to; property tests always run under the interpreter. If the native build is unavailable (no clang), engine \"eval\" asks for the interpreter instead."
   | otherwise =
     "⚠️ RESULTS ARE UNDER THE INTERPRETER (\{engineName EngInterp}), NOT the native backend — report as \"passes under eval\", never unqualified (#81)."
 
 mcpTestDescription : String
 mcpTestDescription =
-  "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. \{mcpTestCaveat mcpTestEngines} Bare `test \"…\"` decls are NOT run here."
+  "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. Runs under the native backend by default, like `medaka test` (one clang build per call); optional `engine` \"eval\" runs the interpreter instead. Bare `test \"…\"` decls are NOT run here."
 
 -- inputSchema: `file` (path), required.
 medakaTestSchema : Json
@@ -1434,6 +1448,18 @@ medakaTestSchema = jObject [
             "description",
             JString
               "Path to the .mdk file whose doctests (and property tests, if any) to run.",
+          ),
+        ],
+      ),
+      (
+        "engine",
+        jObject [
+          ("type", JString "string"),
+          ("enum", jArray [JString "native", JString "eval"]),
+          (
+            "description",
+            JString
+              "Execution engine for the doctests. Default \"native\" (what `medaka test` defaults to); \"eval\" runs the interpreter.",
           ),
         ],
       ),
@@ -1488,7 +1514,7 @@ countFailProps [] = 0
 countFailProps (p :: rest) =
   (if propResultPassed p then 0 else 1) + countFailProps rest
 
--- The first (today: only) doctest run, keyed off whichever engine actually
+-- The first (a call runs exactly one engine) doctest run, keyed off whichever engine actually
 -- ran it — `runTestReport` positionally tags each `RunResult` by the `Engine`
 -- that produced it, so this never has to assume which one that was.
 primaryDoctestRun : List (Engine, RunResult) -> RunResult
@@ -1514,13 +1540,13 @@ allDoctestRunsOk ((_, run) :: rest) =
   runFailed run == 0 && runErrors run == 0 && allDoctestRunsOk rest
 
 -- The engine name(s) that actually produced `runs` — DERIVED, never a literal
--- "eval": a hardcoded string would silently start lying the day this tool
--- runs more than the interpreter.
+-- "eval": a hardcoded string would lie as soon as the engine is not the
+-- interpreter.
 doctestRunEngineNames : List (Engine, RunResult) -> List Engine
 doctestRunEngineNames [] = []
 doctestRunEngineNames ((e, _) :: rest) = e :: doctestRunEngineNames rest
 
--- Today `runs` is always a singleton (`mcpTestEngines == [EngInterp]`), so the
+-- `runs` is always a singleton (one `engine` per call), so the
 -- top-level "engine" field is that one engine's name — derived from the list
 -- that actually ran, never a bare literal.
 primaryEngineName : List Engine -> String
@@ -1561,23 +1587,24 @@ typecheckSkippedField True = [("typecheckSkipped", JBool True)]
 testDeclsSkippedField : List (String, Json)
 testDeclsSkippedField = [("testDeclsSkipped", JBool True)]
 
--- The full structured result body.  `engine`/`note` carry the interpreter
+-- The full structured result body.  `engine`/`note` carry the engine
 -- caveat INTO the payload (not just the tool description) so a consumer that
 -- never read the description is still told what these results cover — and,
 -- like the description, both are DERIVED from the engines that actually ran
 -- (`doctestRunEngineNames runs`) when the module type-checked, or from the
--- engines that WOULD have run (`mcpTestEngines`) when a type error short-
+-- engines that WOULD have run (`requested`) when a type error short-
 -- circuited the run before any engine touched it (`runs` is `[]` there, so
 -- `doctestRunEngineNames runs` would wrongly read "unknown").
 testReportJson : String ->
+  List Engine ->
   Option String ->
   List (Engine, RunResult) ->
   List PropResult ->
   Bool ->
   Json
-testReportJson path typeError runs props typecheckSkipped =
+testReportJson path requested typeError runs props typecheckSkipped =
   let engines =
-    if isNone typeError then doctestRunEngineNames runs else mcpTestEngines
+    if isNone typeError then doctestRunEngineNames runs else requested
   jObject
     ([
         ("file", JString path),
@@ -1616,39 +1643,43 @@ testReportJson path typeError runs props typecheckSkipped =
 -- failed (mirrors medaka_check's convention: isError flags a bad OUTCOME, with
 -- the detail in the structured content).  A missing/unreadable file is an
 -- argument error, not a crash.  Which engine(s) ran is reported per `engine`/
--- `note`, DERIVED from `mcpTestEngines` — see the tool description too.
+-- `note`, DERIVED from the requested `engine` (default native) — see the tool
+-- description too.
 runTestTool : String -> String -> String -> Json -> <IO> Json
 runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
   None =>
     toolArgError
       "medaka_test: missing or invalid argument — require 'file' (string)"
-  Some path => match readFile path
-    Err e =>
-      toolArgError
-        (stringConcat ["medaka_test: cannot read file '", path, "': ", e])
-    Ok tsrc =>
-      -- #2295 (d): `runTestReport` also returns the `test "…"` phase's
-      -- structured results (a 4th tuple element, for `medaka test --json`'s
-      -- benefit) and (F7) whether the module was typecheck-exempt (a 5th) —
-      -- this tool deliberately ignores the former (medaka_test covers
-      -- doctests + props only, per #252/#1443) by passing `includeTestDecls =
-      -- False`, which (F3) also means the test-decl phase is never EVALUATED
-      -- here, not merely unreported — a panicking `test "…"` decl in the
-      -- target file can no longer crash the MCP server on this path.
-      let (typeError, runs, props, _testResults, typecheckSkipped) =
-        runTestReport
-          mcpTestEngines
-          runtimeSrc
-          coreSrc
-          path
-          tsrc
-          stdlibDir
-          100
-          None
-          False
-      toolTextResult
-        (stringify (testReportJson path typeError runs props typecheckSkipped))
-        (not (testReportOk typeError runs props))
+  Some path => match mcpTestEnginesArg args
+    Err msg => toolArgError msg
+    Ok engines => match readFile path
+      Err e =>
+        toolArgError
+          (stringConcat ["medaka_test: cannot read file '", path, "': ", e])
+      Ok tsrc =>
+        -- #2295 (d): `runTestReport` also returns the `test "…"` phase's
+        -- structured results (a 4th tuple element, for `medaka test --json`'s
+        -- benefit) and (F7) whether the module was typecheck-exempt (a 5th) —
+        -- this tool deliberately ignores the former (medaka_test covers
+        -- doctests + props only, per #252/#1443) by passing `includeTestDecls =
+        -- False`, which (F3) also means the test-decl phase is never EVALUATED
+        -- here, not merely unreported — a panicking `test "…"` decl in the
+        -- target file can no longer crash the MCP server on this path.
+        let (typeError, runs, props, _testResults, typecheckSkipped) =
+          runTestReport
+            engines
+            runtimeSrc
+            coreSrc
+            path
+            tsrc
+            stdlibDir
+            100
+            None
+            False
+        toolTextResult
+          (stringify
+            (testReportJson path engines typeError runs props typecheckSkipped))
+          (not (testReportOk typeError runs props))
 
 -- ── tools/call handler ───────────────────────────────────────────────────────
 
@@ -1972,18 +2003,20 @@ unit = ()
 (DFunDef false "anyDiagErr" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "diagIsError") (EVar "d")) (EApp (EVar "anyDiagErr") (EVar "rest"))))
 (DTypeSig false "runLintTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
 (DFunDef false "runLintTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EVar "pathsArg") (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_lint: missing or invalid argument — require 'paths' (array of strings)")))) (arm (PCon "Some" (PVar "paths")) () (EBlock (DoLet false false (PVar "disable") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "disable"))) (EVar "args"))) (DoLet false false (PVar "only") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "only"))) (EVar "args"))) (DoLet false false (PVar "deny") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "deny"))) (EVar "args"))) (DoLet false false (PVar "idx") (EIf (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EVar "disable")) (EVar "buildStdlibIndex") (EVar "emptyStdlibIndex"))) (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagQuads") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "paths"))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EVar "crossFileMcpFindings") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "cross")) (EVar "triples"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "cjAllToJson") (EVar "merged"))) (EApp (EVar "anyTripleHasErr") (EVar "merged"))))))))
-(DTypeSig false "mcpTestEngines" (TyApp (TyCon "List") (TyCon "Engine")))
-(DFunDef false "mcpTestEngines" () (EListLit (EVar "EngInterp")))
+(DTypeSig false "mcpTestDefaultEngines" (TyApp (TyCon "List") (TyCon "Engine")))
+(DFunDef false "mcpTestDefaultEngines" () (EListLit (EVar "EngNative")))
 (DTypeSig false "mcpTestEngineHasNative" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyCon "Bool")))
 (DFunDef false "mcpTestEngineHasNative" ((PList)) (EVar "False"))
 (DFunDef false "mcpTestEngineHasNative" ((PCons (PCon "EngNative") PWild)) (EVar "True"))
 (DFunDef false "mcpTestEngineHasNative" ((PCons PWild (PVar "rest"))) (EApp (EVar "mcpTestEngineHasNative") (EVar "rest")))
+(DTypeSig false "mcpTestEnginesArg" (TyFun (TyCon "Json") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
+(DFunDef false "mcpTestEnginesArg" ((PVar "args")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "engine"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "mcpTestDefaultEngines"))) (arm (PCon "Some" (PCon "JString" (PLit (LString "native")))) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PCon "Some" (PCon "JString" (PLit (LString "eval")))) () (EApp (EVar "Ok") (EListLit (EVar "EngInterp")))) (arm (PCon "Some" (PCon "JString" (PVar "other"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka_test: unknown engine '")) (EApp (EVar "display") (EVar "other"))) (ELit (LString "' — 'engine' must be \"native\" (default) or \"eval\""))))) (arm (PCon "Some" PWild) () (EApp (EVar "Err") (ELit (LString "medaka_test: 'engine' must be a string, \"native\" (default) or \"eval\""))))))
 (DTypeSig false "mcpTestCaveat" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyCon "String")))
-(DFunDef false "mcpTestCaveat" ((PVar "engines")) (EIf (EApp (EVar "mcpTestEngineHasNative") (EVar "engines")) (ELit (LString "Results include the NATIVE backend engine (not just the interpreter) — a native-only miscompile is observed here.")) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "⚠️ RESULTS ARE UNDER THE INTERPRETER (")) (EApp (EVar "display") (EApp (EVar "engineName") (EVar "EngInterp")))) (ELit (LString "), NOT the native backend — report as \"passes under eval\", never unqualified (#81)."))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "mcpTestCaveat" ((PVar "engines")) (EIf (EApp (EVar "mcpTestEngineHasNative") (EVar "engines")) (ELit (LString "Results are under the NATIVE backend, the same engine `medaka test` defaults to; property tests always run under the interpreter. If the native build is unavailable (no clang), engine \"eval\" asks for the interpreter instead.")) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "⚠️ RESULTS ARE UNDER THE INTERPRETER (")) (EApp (EVar "display") (EApp (EVar "engineName") (EVar "EngInterp")))) (ELit (LString "), NOT the native backend — report as \"passes under eval\", never unqualified (#81)."))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "mcpTestDescription" (TyCon "String"))
-(DFunDef false "mcpTestDescription" () (EBinOp "++" (EBinOp "++" (ELit (LString "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. ")) (EApp (EVar "display") (EApp (EVar "mcpTestCaveat") (EVar "mcpTestEngines")))) (ELit (LString " Bare `test \"…\"` decls are NOT run here."))))
+(DFunDef false "mcpTestDescription" () (ELit (LString "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. Runs under the native backend by default, like `medaka test` (one clang build per call); optional `engine` \"eval\" runs the interpreter instead. Bare `test \"…\"` decls are NOT run here.")))
 (DTypeSig false "medakaTestSchema" (TyCon "Json"))
-(DFunDef false "medakaTestSchema" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "object")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Path to the .mdk file whose doctests (and property tests, if any) to run.")))))))))) (ETuple (ELit (LString "required")) (EApp (EVar "jArray") (EListLit (EApp (EVar "JString") (ELit (LString "file")))))))))
+(DFunDef false "medakaTestSchema" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "object")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Path to the .mdk file whose doctests (and property tests, if any) to run."))))))) (ETuple (ELit (LString "engine")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "enum")) (EApp (EVar "jArray") (EListLit (EApp (EVar "JString") (ELit (LString "native"))) (EApp (EVar "JString") (ELit (LString "eval")))))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Execution engine for the doctests. Default \"native\" (what `medaka test` defaults to); \"eval\" runs the interpreter.")))))))))) (ETuple (ELit (LString "required")) (EApp (EVar "jArray") (EListLit (EApp (EVar "JString") (ELit (LString "file")))))))))
 (DTypeSig false "exampleJson" (TyFun (TyTuple (TyCon "Example") (TyCon "ExResult")) (TyCon "Json")))
 (DFunDef false "exampleJson" ((PTuple (PVar "ex") (PVar "res"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EApp (EVar "exampleLine") (EVar "ex")))) (ETuple (ELit (LString "input")) (EApp (EVar "JString") (EApp (EVar "exampleInput") (EVar "ex"))))) (EApp (EVar "exResultJsonFields") (EVar "res")))))
 (DTypeSig false "doctestsJson" (TyFun (TyCon "RunResult") (TyCon "Json")))
@@ -2021,10 +2054,10 @@ unit = ()
 (DFunDef false "typecheckSkippedField" ((PCon "True")) (EListLit (ETuple (ELit (LString "typecheckSkipped")) (EApp (EVar "JBool") (EVar "True")))))
 (DTypeSig false "testDeclsSkippedField" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))
 (DFunDef false "testDeclsSkippedField" () (EListLit (ETuple (ELit (LString "testDeclsSkipped")) (EApp (EVar "JBool") (EVar "True")))))
-(DTypeSig false "testReportJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyFun (TyCon "Bool") (TyCon "Json")))))))
-(DFunDef false "testReportJson" ((PVar "path") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "typecheckSkipped")) (EBlock (DoLet false false (PVar "engines") (EIf (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "doctestRunEngineNames") (EVar "runs")) (EVar "mcpTestEngines"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "primaryEngineName") (EVar "engines")))) (ETuple (ELit (LString "note")) (EApp (EVar "JString") (EApp (EVar "mcpTestCaveat") (EVar "engines"))))) (EApp (EVar "typeErrorField") (EVar "typeError"))) (EApp (EVar "typecheckSkippedField") (EVar "typecheckSkipped"))) (EVar "testDeclsSkippedField")) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "doctestsJson") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "propJson")) (EVar "props")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "countPassProps") (EVar "props"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (EApp (EVar "countFailProps") (EVar "props"))))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
+(DTypeSig false "testReportJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyFun (TyCon "Bool") (TyCon "Json"))))))))
+(DFunDef false "testReportJson" ((PVar "path") (PVar "requested") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "typecheckSkipped")) (EBlock (DoLet false false (PVar "engines") (EIf (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "doctestRunEngineNames") (EVar "runs")) (EVar "requested"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "primaryEngineName") (EVar "engines")))) (ETuple (ELit (LString "note")) (EApp (EVar "JString") (EApp (EVar "mcpTestCaveat") (EVar "engines"))))) (EApp (EVar "typeErrorField") (EVar "typeError"))) (EApp (EVar "typecheckSkippedField") (EVar "typecheckSkipped"))) (EVar "testDeclsSkippedField")) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "doctestsJson") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "propJson")) (EVar "props")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "countPassProps") (EVar "props"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (EApp (EVar "countFailProps") (EVar "props"))))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
 (DTypeSig false "runTestTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runTestTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_test: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_test: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "_testResults") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestReport") (EVar "mcpTestEngines")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "tsrc")) (EVar "stdlibDir")) (ELit (LInt 100))) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "typecheckSkipped")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))
+(DFunDef false "runTestTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_test: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "mcpTestEnginesArg") (EVar "args")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "toolArgError") (EVar "msg"))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_test: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "_testResults") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestReport") (EVar "engines")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "tsrc")) (EVar "stdlibDir")) (ELit (LInt 100))) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "engines")) (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "typecheckSkipped")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
 (DTypeSig false "handleToolsCall" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyEffect ("IO") None (TyCon "Unit")))))))))
 (DFunDef false "handleToolsCall" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "idJson") (PVar "params") (PVar "stalenessCheck")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "name"))) (EVar "params")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32602)))) (ELit (LString "tools/call: missing 'name'"))))) (arm (PCon "Some" (PVar "name")) () (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "fieldOr") (ELit (LString "arguments"))) (EVar "params"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "logMcpCall") (ELit (LString "tools/call"))) (EVar "name")) (EApp (EVar "stringify") (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "callTool") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "name")) (EVar "args")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Unknown tool: ")) (EVar "name")))))) (arm (PCon "Some" (PVar "result")) () (EBlock (DoLet false false (PVar "augmented") (EApp (EApp (EVar "attachStaleness") (EVar "stalenessCheck")) (EVar "result"))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "augmented"))))))))))))
 (DTypeSig false "dispatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))))
@@ -2212,18 +2245,20 @@ unit = ()
 (DFunDef false "anyDiagErr" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "diagIsError") (EVar "d")) (EApp (EVar "anyDiagErr") (EVar "rest"))))
 (DTypeSig false "runLintTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
 (DFunDef false "runLintTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EVar "pathsArg") (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_lint: missing or invalid argument — require 'paths' (array of strings)")))) (arm (PCon "Some" (PVar "paths")) () (EBlock (DoLet false false (PVar "disable") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "disable"))) (EVar "args"))) (DoLet false false (PVar "only") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "only"))) (EVar "args"))) (DoLet false false (PVar "deny") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "deny"))) (EVar "args"))) (DoLet false false (PVar "idx") (EIf (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EVar "disable")) (EVar "buildStdlibIndex") (EVar "emptyStdlibIndex"))) (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagQuads") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "paths"))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EVar "crossFileMcpFindings") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "cross")) (EVar "triples"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "cjAllToJson") (EVar "merged"))) (EApp (EVar "anyTripleHasErr") (EVar "merged"))))))))
-(DTypeSig false "mcpTestEngines" (TyApp (TyCon "List") (TyCon "Engine")))
-(DFunDef false "mcpTestEngines" () (EListLit (EVar "EngInterp")))
+(DTypeSig false "mcpTestDefaultEngines" (TyApp (TyCon "List") (TyCon "Engine")))
+(DFunDef false "mcpTestDefaultEngines" () (EListLit (EVar "EngNative")))
 (DTypeSig false "mcpTestEngineHasNative" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyCon "Bool")))
 (DFunDef false "mcpTestEngineHasNative" ((PList)) (EVar "False"))
 (DFunDef false "mcpTestEngineHasNative" ((PCons (PCon "EngNative") PWild)) (EVar "True"))
 (DFunDef false "mcpTestEngineHasNative" ((PCons PWild (PVar "rest"))) (EApp (EVar "mcpTestEngineHasNative") (EVar "rest")))
+(DTypeSig false "mcpTestEnginesArg" (TyFun (TyCon "Json") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
+(DFunDef false "mcpTestEnginesArg" ((PVar "args")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "engine"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "mcpTestDefaultEngines"))) (arm (PCon "Some" (PCon "JString" (PLit (LString "native")))) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PCon "Some" (PCon "JString" (PLit (LString "eval")))) () (EApp (EVar "Ok") (EListLit (EVar "EngInterp")))) (arm (PCon "Some" (PCon "JString" (PVar "other"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka_test: unknown engine '")) (EApp (EMethodRef "display") (EVar "other"))) (ELit (LString "' — 'engine' must be \"native\" (default) or \"eval\""))))) (arm (PCon "Some" PWild) () (EApp (EVar "Err") (ELit (LString "medaka_test: 'engine' must be a string, \"native\" (default) or \"eval\""))))))
 (DTypeSig false "mcpTestCaveat" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyCon "String")))
-(DFunDef false "mcpTestCaveat" ((PVar "engines")) (EIf (EApp (EVar "mcpTestEngineHasNative") (EVar "engines")) (ELit (LString "Results include the NATIVE backend engine (not just the interpreter) — a native-only miscompile is observed here.")) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "⚠️ RESULTS ARE UNDER THE INTERPRETER (")) (EApp (EMethodRef "display") (EApp (EVar "engineName") (EVar "EngInterp")))) (ELit (LString "), NOT the native backend — report as \"passes under eval\", never unqualified (#81)."))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "mcpTestCaveat" ((PVar "engines")) (EIf (EApp (EVar "mcpTestEngineHasNative") (EVar "engines")) (ELit (LString "Results are under the NATIVE backend, the same engine `medaka test` defaults to; property tests always run under the interpreter. If the native build is unavailable (no clang), engine \"eval\" asks for the interpreter instead.")) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "⚠️ RESULTS ARE UNDER THE INTERPRETER (")) (EApp (EMethodRef "display") (EApp (EVar "engineName") (EVar "EngInterp")))) (ELit (LString "), NOT the native backend — report as \"passes under eval\", never unqualified (#81)."))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "mcpTestDescription" (TyCon "String"))
-(DFunDef false "mcpTestDescription" () (EBinOp "++" (EBinOp "++" (ELit (LString "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. ")) (EApp (EMethodRef "display") (EApp (EVar "mcpTestCaveat") (EVar "mcpTestEngines")))) (ELit (LString " Bare `test \"…\"` decls are NOT run here."))))
+(DFunDef false "mcpTestDescription" () (ELit (LString "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. Runs under the native backend by default, like `medaka test` (one clang build per call); optional `engine` \"eval\" runs the interpreter instead. Bare `test \"…\"` decls are NOT run here.")))
 (DTypeSig false "medakaTestSchema" (TyCon "Json"))
-(DFunDef false "medakaTestSchema" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "object")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Path to the .mdk file whose doctests (and property tests, if any) to run.")))))))))) (ETuple (ELit (LString "required")) (EApp (EVar "jArray") (EListLit (EApp (EVar "JString") (ELit (LString "file")))))))))
+(DFunDef false "medakaTestSchema" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "object")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Path to the .mdk file whose doctests (and property tests, if any) to run."))))))) (ETuple (ELit (LString "engine")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "enum")) (EApp (EVar "jArray") (EListLit (EApp (EVar "JString") (ELit (LString "native"))) (EApp (EVar "JString") (ELit (LString "eval")))))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Execution engine for the doctests. Default \"native\" (what `medaka test` defaults to); \"eval\" runs the interpreter.")))))))))) (ETuple (ELit (LString "required")) (EApp (EVar "jArray") (EListLit (EApp (EVar "JString") (ELit (LString "file")))))))))
 (DTypeSig false "exampleJson" (TyFun (TyTuple (TyCon "Example") (TyCon "ExResult")) (TyCon "Json")))
 (DFunDef false "exampleJson" ((PTuple (PVar "ex") (PVar "res"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EApp (EVar "exampleLine") (EVar "ex")))) (ETuple (ELit (LString "input")) (EApp (EVar "JString") (EApp (EVar "exampleInput") (EVar "ex"))))) (EApp (EVar "exResultJsonFields") (EVar "res")))))
 (DTypeSig false "doctestsJson" (TyFun (TyCon "RunResult") (TyCon "Json")))
@@ -2261,10 +2296,10 @@ unit = ()
 (DFunDef false "typecheckSkippedField" ((PCon "True")) (EListLit (ETuple (ELit (LString "typecheckSkipped")) (EApp (EVar "JBool") (EVar "True")))))
 (DTypeSig false "testDeclsSkippedField" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))
 (DFunDef false "testDeclsSkippedField" () (EListLit (ETuple (ELit (LString "testDeclsSkipped")) (EApp (EVar "JBool") (EVar "True")))))
-(DTypeSig false "testReportJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyFun (TyCon "Bool") (TyCon "Json")))))))
-(DFunDef false "testReportJson" ((PVar "path") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "typecheckSkipped")) (EBlock (DoLet false false (PVar "engines") (EIf (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "doctestRunEngineNames") (EVar "runs")) (EVar "mcpTestEngines"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "primaryEngineName") (EVar "engines")))) (ETuple (ELit (LString "note")) (EApp (EVar "JString") (EApp (EVar "mcpTestCaveat") (EVar "engines"))))) (EApp (EVar "typeErrorField") (EVar "typeError"))) (EApp (EVar "typecheckSkippedField") (EVar "typecheckSkipped"))) (EVar "testDeclsSkippedField")) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "doctestsJson") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "propJson")) (EVar "props")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "countPassProps") (EVar "props"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (EApp (EVar "countFailProps") (EVar "props"))))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
+(DTypeSig false "testReportJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyFun (TyCon "Bool") (TyCon "Json"))))))))
+(DFunDef false "testReportJson" ((PVar "path") (PVar "requested") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "typecheckSkipped")) (EBlock (DoLet false false (PVar "engines") (EIf (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "doctestRunEngineNames") (EVar "runs")) (EVar "requested"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "primaryEngineName") (EVar "engines")))) (ETuple (ELit (LString "note")) (EApp (EVar "JString") (EApp (EVar "mcpTestCaveat") (EVar "engines"))))) (EApp (EVar "typeErrorField") (EVar "typeError"))) (EApp (EVar "typecheckSkippedField") (EVar "typecheckSkipped"))) (EVar "testDeclsSkippedField")) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "doctestsJson") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "propJson")) (EVar "props")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "countPassProps") (EVar "props"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (EApp (EVar "countFailProps") (EVar "props"))))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
 (DTypeSig false "runTestTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runTestTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_test: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_test: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "_testResults") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestReport") (EVar "mcpTestEngines")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "tsrc")) (EVar "stdlibDir")) (ELit (LInt 100))) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "typecheckSkipped")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))
+(DFunDef false "runTestTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_test: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "mcpTestEnginesArg") (EVar "args")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "toolArgError") (EVar "msg"))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_test: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "_testResults") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestReport") (EVar "engines")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "tsrc")) (EVar "stdlibDir")) (ELit (LInt 100))) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "engines")) (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "typecheckSkipped")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
 (DTypeSig false "handleToolsCall" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyEffect ("IO") None (TyCon "Unit")))))))))
 (DFunDef false "handleToolsCall" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "idJson") (PVar "params") (PVar "stalenessCheck")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "name"))) (EVar "params")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32602)))) (ELit (LString "tools/call: missing 'name'"))))) (arm (PCon "Some" (PVar "name")) () (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "fieldOr") (ELit (LString "arguments"))) (EVar "params"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "logMcpCall") (ELit (LString "tools/call"))) (EVar "name")) (EApp (EVar "stringify") (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "callTool") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "name")) (EVar "args")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Unknown tool: ")) (EVar "name")))))) (arm (PCon "Some" (PVar "result")) () (EBlock (DoLet false false (PVar "augmented") (EApp (EApp (EVar "attachStaleness") (EVar "stalenessCheck")) (EVar "result"))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "augmented"))))))))))))
 (DTypeSig false "dispatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))))

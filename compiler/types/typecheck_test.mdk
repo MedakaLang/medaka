@@ -2951,6 +2951,19 @@ test "attributed-direct Num declarations reject mismatches without cross-pairing
     )
     (flatMessages mixedAttrFirstSource, flatMessages mixedDirectFirstSource)
 
+test "an else-less if names its missing branch and a written else does not" =
+  expectEqual
+    (
+      [
+        "Type mismatch: String vs Unit — an `if` without `else` has type Unit, so its `then` branch must be Unit too; add an `else` branch",
+      ],
+      ["Type mismatch: String vs Bool"],
+    )
+    (
+      flatMessages "f n = if n > 0 then \"pos\"",
+      flatMessages "g n = if n > 0 then \"pos\" else True",
+    )
+
 test "unresolved interface givens resolve as a direct predicate" =
   let source = joinNl [
     "data Wrap a = Wrap a",

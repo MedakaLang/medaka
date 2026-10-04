@@ -1,5 +1,5 @@
 -- string interpolation (\{e} desugars to display e) over builtin + nested types
-data Color = Red | Green deriving (Debug)
+data Color = Red | Green deriving (Debug, Display)
 greet name n = "hi \{name}, you have \{n} messages"
 main =
   ( "val=\{40 + 2} ok=\{True}"

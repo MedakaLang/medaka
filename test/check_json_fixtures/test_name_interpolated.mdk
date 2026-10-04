@@ -1,0 +1,8 @@
+-- #2574: an interpolated `test` name is rejected with a message about the name,
+-- not the reserved-keyword rename advice.
+x = 3
+
+test "name \{intToString x}" =
+  expectEqual 1 1
+
+main = println 1

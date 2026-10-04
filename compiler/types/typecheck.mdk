@@ -7195,6 +7195,7 @@ ieSameImplIn m = DImpl {
   reqs = [],
   methods = [],
   implOrigin = OriginModule m,
+  implIfaceLoc = None,
 }
 
 -- the concrete-bucket key module [m]'s own `impl Same Blob` is indexed under.
@@ -7342,6 +7343,7 @@ ieOtherImplIn m = DImpl {
   reqs = [],
   methods = [],
   implOrigin = OriginModule m,
+  implIfaceLoc = None,
 }
 
 -- a fully-general `impl Gen a`: `univReceiverTag` answers `None` for a `TyVar` head,
@@ -7354,6 +7356,7 @@ ieGenImplIn m = DImpl {
   reqs = [],
   methods = [],
   implOrigin = OriginModule m,
+  implIfaceLoc = None,
 }
 
 -- `impl Loose Blob` with an IDENTITY-LESS interface: `oblIfaceKeys` mints ONE key for
@@ -7368,6 +7371,7 @@ ieLooseImplIn m = DImpl {
   reqs = [],
   methods = [],
   implOrigin = OriginUnresolved,
+  implIfaceLoc = None,
 }
 
 ieHeadProbeAmod : List Decl
@@ -10400,10 +10404,21 @@ currentDoDeferred = Ref False
 currentMethodMismatch : Ref (Option String)
 currentMethodMismatch = Ref None
 
+-- The construct that demands a value join's alternatives agree.
+data JoinContext =
+  | JoinIf
+  | JoinElselessIf
+  | JoinList
+  | JoinCons
+  | JoinArray
+  | JoinMatch
+  | JoinArgument
+  | JoinClause
+
 -- The context of the value join whose unify is running (`joinValueEqual`), so a
 -- mismatch that unify reports can say which construct demanded the two types
 -- agree.  `None` outside a join.
-currentJoinContext : Ref (Option String)
+currentJoinContext : Ref (Option JoinContext)
 currentJoinContext = Ref None
 
 -- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
@@ -11813,7 +11828,7 @@ data PerRun = PerRun {
   wideLitRanges : Ref (List (Mono, String, Int, Int, Bool, Option Loc)),  -- every wide literal's (var, lexeme, halves, negated, loc), for `checkWideLiterals`
   numlitUntainted : Ref (List (Mono, Loc)),
   numlitOpLocs : Ref (List Loc),
-  numlitCtxTags : Ref (List (Loc, String)),
+  numlitCtxTags : Ref (List (Loc, JoinContext)),
   localBindRefs : Ref (List (String, Option Loc, Mono)),
   localSchemesOut : Ref (List (String, Option Loc, Scheme)),
   seedSchemesOut : Ref (List (String, Scheme)),
@@ -12849,7 +12864,7 @@ typeMismatchReport a b = match !currentMethodMismatch
 -- with no application to fill it names the interface that variable stands for.
 typeMismatchReportJoin : Mono -> Mono -> Unit
 typeMismatchReportJoin a b = match !currentJoinContext
-  Some ctx if ctx == elselessIfContext =>
+  Some JoinElselessIf =>
     pushTypeErrorHelpFixAt
       "T-TYPE-MISMATCH"
       !currentLoc
@@ -12865,11 +12880,6 @@ typeMismatchReportJoin a b = match !currentJoinContext
         help
         None
     _ => typeMismatchReportRest a b
-
--- The join context `inferIf` passes for an `if` whose `else` was omitted
--- (`isOmittedElse`).
-elselessIfContext : String
-elselessIfContext = "if without else"
 
 elselessIfHelp : String
 elselessIfHelp =
@@ -15856,7 +15866,7 @@ doChainIsDeferred _ = False
 
 inferArrayLit : TcEnv -> List Expr -> Mono
 inferArrayLit env es =
-  let elem = joinValueTypes "array" (inferProduced env es)
+  let elem = joinValueTypes JoinArray (inferProduced env es)
   TApp (tconBuiltin "Array") elem
 
 -- [lo..hi] : List Int, [|lo..hi|] : Array Int
@@ -20318,7 +20328,7 @@ sameRootId id v = rootIdOf v == id
 -- Chunk D: if one of [a]/[b] is a still-unbound literal var and the other is
 -- concrete-headed, tag that literal's loc with [kind] so the reframe can use
 -- site-specific wording.  Pure state capture — never alters unification.
-noteNumlitCtx : Mono -> Mono -> String -> Unit
+noteNumlitCtx : Mono -> Mono -> JoinContext -> Unit
 noteNumlitCtx a b kind =
   let _ = tagNumlitCtxIf a b kind
   tagNumlitCtxIf b a kind
@@ -20327,18 +20337,18 @@ noteNumlitCtx a b kind =
 -- has a concrete head — so a heterogeneous list forcing several literals to one
 -- type tags them all with the same [kind], letting their reframed messages dedup to
 -- a single "list elements have different types" line.
-tagNumlitCtxIf : Mono -> Mono -> String -> Unit
+tagNumlitCtxIf : Mono -> Mono -> JoinContext -> Unit
 tagNumlitCtxIf v other kind
   | isSome (headTyconNameMono other) = tagAllLitLocs v kind
   | otherwise = ()
 
-tagAllLitLocs : Mono -> String -> Unit
+tagAllLitLocs : Mono -> JoinContext -> Unit
 tagAllLitLocs v kind = match normalize v
   TVar cell =>
     tagLitLocsWithRoot (tyvarId cell) kind perRun.value.numlitVarLocs.value
   _ => ()
 
-tagLitLocsWithRoot : Int -> String -> List (Mono, Loc) -> Unit
+tagLitLocsWithRoot : Int -> JoinContext -> List (Mono, Loc) -> Unit
 tagLitLocsWithRoot _ _ [] = ()
 tagLitLocsWithRoot id kind ((mv, l) :: rest) =
   let _ =
@@ -20398,11 +20408,11 @@ boolOp lt rt =
 consOp : Mono -> Mono -> Mono
 consOp lt rt =
   let tailElem = freshVar ()
-  let _ = noteNumlitCtx lt rt "cons"  -- Chunk D: tag cons head-vs-list Num mismatch
+  let _ = noteNumlitCtx lt rt JoinCons  -- Chunk D: tag cons head-vs-list Num mismatch
   let _ = unify rt (TApp (tconBuiltin "List") tailElem)
   TApp
     (tconBuiltin "List")
-    (joinValueTypes "cons" [
+    (joinValueTypes JoinCons [
       (!currentLoc, lt),
       (!currentLoc, tailElem),
     ])
@@ -21498,7 +21508,9 @@ bindValueUpper cell lower =
   if not perRun.value.occursCheckFailed.value then
     let upper =
       optionOrFresh
-        (joinProducedEnvelope (valueJoinOps "argument" collectValueAllowance) [
+        (joinProducedEnvelope (valueJoinOps
+          JoinArgument
+          collectValueAllowance) [
           (!currentLoc, lower),
         ])
     let _ = recordFileValueFlow !currentLoc upper lower
@@ -23901,7 +23913,7 @@ inferIf env c t e =
   let _ = unify (infer env c) (tconBuiltin "Bool")
   let tt = infer env t
   let ee = infer env e
-  let context = if isOmittedElse e then elselessIfContext else "if"
+  let context = if isOmittedElse e then JoinElselessIf else JoinIf
   joinValueTypes context [(exprLoc t, tt), (exprLoc e, ee)]
 
 -- The parser builds an omitted `else` as a bare unit literal (`elseBranch`,
@@ -23916,7 +23928,7 @@ isOmittedElse _ = False
 
 -- Inference owns source locations and variance metadata; effect_values owns
 -- the structural join. Unknown constructor slots remain exact.
-joinValueTypes : String -> List (Option Loc, Mono) -> Mono
+joinValueTypes : JoinContext -> List (Option Loc, Mono) -> Mono
 joinValueTypes context values =
   let upper =
     optionOrFresh
@@ -23924,14 +23936,18 @@ joinValueTypes context values =
   let _ = map ((loc, lower) => recordFileValueFlow loc upper lower) values
   upper
 
-valueJoinOps : String -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
+valueJoinOps : JoinContext ->
+  (List EffRow -> EffRow) ->
+  ValueJoinOps (Option Loc)
 valueJoinOps context collector =
   let ops = decidingJoinOps context collector
   { ops | vjoDefer = values => deferJoin ops values }
 
 -- The join services that decide on the spot: resolving a recorded join
 -- must not record it again.
-decidingJoinOps : String -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
+decidingJoinOps : JoinContext ->
+  (List EffRow -> EffRow) ->
+  ValueJoinOps (Option Loc)
 decidingJoinOps context collector = ValueJoinOps {
   vjoEqual = joinValueEqual context,
   vjoCovariants = producedSlotCovariants,
@@ -24091,7 +24107,7 @@ publishProducedResults owned values =
   let produced =
     optionOrFresh
       (joinProducedEnvelope
-        (valueJoinOps "clause" collectProducedSummary)
+        (valueJoinOps JoinClause collectProducedSummary)
         results)
   let _ = map ((loc, lower) => recordFileValueFlow loc produced lower) results
   match resultAfterArrows owned.bsArity owned.bsValue
@@ -24106,7 +24122,7 @@ clauseResult arity (loc, value) = match resultAfterArrows arity value
 checkRecursiveValue : BindingSummary -> Unit
 checkRecursiveValue owned = unifyInto True owned.bsRecursiveValue owned.bsValue
 
-joinValueEqual : String -> Option Loc -> Mono -> Mono -> Unit
+joinValueEqual : JoinContext -> Option Loc -> Mono -> Mono -> Unit
 joinValueEqual context loc left right =
   let saved = !currentLoc
   let savedContext = !currentJoinContext
@@ -24155,7 +24171,7 @@ inferEach env (e :: es) =
 
 inferListLit : TcEnv -> List Expr -> Mono
 inferListLit env es =
-  let elem = joinValueTypes "list" (inferProduced env es)
+  let elem = joinValueTypes JoinList (inferProduced env es)
   TApp (tconBuiltin "List") elem
 
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
@@ -24218,7 +24234,7 @@ checkAnnotTooGeneral ty resolved =
 
 inferMatch : TcEnv -> Mono -> List Arm -> Mono
 inferMatch env scrutTy arms =
-  let result = joinValueTypes "match" (inferArms env scrutTy arms)
+  let result = joinValueTypes JoinMatch (inferArms env scrutTy arms)
   let _ = match normalize scrutTy
     TVar _ =>
       perRun.value.matchChecksDeferred :=
@@ -38207,11 +38223,11 @@ numlitReframeLoc None = False
 -- a bare literal-vs-type mismatch.  `Int` is the numeric default the literal takes.
 numlitMismatchMsg : Option Loc -> List Mono -> String
 numlitMismatchMsg loc args = match numlitCtxKind loc
-  Some "if" =>
+  Some JoinIf =>
     "'if' branches have different types: Int vs \{ppMonosShared args}"
-  Some "list" =>
+  Some JoinList =>
     "List elements have different types: Int vs \{ppMonosShared args}"
-  Some "cons" =>
+  Some JoinCons =>
     "Cons (::) type mismatch: head is Int but the list holds \{ppMonosShared args}"
   _ => "Type mismatch: Int literal vs \{ppMonosShared args}"
 
@@ -38221,20 +38237,20 @@ numlitMismatchMsg loc args = match numlitCtxKind loc
 -- context-less fallback (`_`) — there's no branch/element/head to name.
 numlitMismatchHint : Option Loc -> List Mono -> String
 numlitMismatchHint loc args = match numlitCtxKind loc
-  Some "if" =>
+  Some JoinIf =>
     ". Both branches must have the same type; change the else branch to Int, or the then branch to \{ppMonosShared args}."
-  Some "list" =>
+  Some JoinList =>
     ". All elements must have the same type; convert the \{ppMonosShared args} element, or make the list hold \{ppMonosShared args}."
-  Some "cons" =>
+  Some JoinCons =>
     ". The head's type must match the list's elements; change the head to \{ppMonosShared args}, or use a list of Int."
-  Some ctx if ctx == elselessIfContext => " — \{elselessIfHelp}"
+  Some JoinElselessIf => " — \{elselessIfHelp}"
   _ => ""
 
-numlitCtxKind : Option Loc -> Option String
+numlitCtxKind : Option Loc -> Option JoinContext
 numlitCtxKind (Some l) = lookupCtxKind l perRun.value.numlitCtxTags.value
 numlitCtxKind None = None
 
-lookupCtxKind : Loc -> List (Loc, String) -> Option String
+lookupCtxKind : Loc -> List (Loc, JoinContext) -> Option JoinContext
 lookupCtxKind _ [] = None
 lookupCtxKind l ((l2, k) :: rest) =
   if locEq l l2 then Some k else lookupCtxKind l rest
@@ -45587,6 +45603,7 @@ methodReturnProbeImpl moduleId ifaceName = DImpl {
   reqs = [],
   methods = [ImplMethod "make" [] (ELit LUnit)],
   implOrigin = OriginModule moduleId,
+  implIfaceLoc = None,
 }
 
 methodReturnProbeScope : String -> ScopeId

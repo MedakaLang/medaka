@@ -42,7 +42,7 @@ one-line version (positions are 0-based, LSP-style).
 | `medaka_references` | `file`, `line`, `col`, `includeDeclaration?` | Find every use of the identifier at a position, project-wide — resolves by binder identity, not spelling |
 | `medaka_fmt` | `file` \| `source`, `check?` | Format source with the canonical formatter; never writes to disk |
 | `medaka_lint` | `paths`, `deny?`, `only?`, `disable?` | Run the style linter over one or more files |
-| `medaka_test` | `file` | Run a file's doctests (and property tests, if any) |
+| `medaka_test` | `file`, optional `engine` (`native` default, or `eval`) | Run a file's doctests (and property tests, if any) |
 
 **`medaka_type_at`/`medaka_definition` addressing (#849):** give `line` plus
 EXACTLY ONE of `col` (0-based, LSP-style — the original form, unchanged) or
@@ -133,9 +133,12 @@ Two traps this creates:
 
 ## 5. Honesty caveats — read before trusting a result
 
-- ⚠️ **`medaka_test` runs under the INTERPRETER (eval), not the native
-  backend.** A native-only miscompile is invisible to it (#81) — treat a
-  green result as "passes under eval," never an unqualified "passes."
+- **`medaka_test` runs under the NATIVE backend by default**, the same engine
+  `medaka test` defaults to, so the two agree on a file (#3441); it costs one
+  clang build per call. Pass `engine: "eval"` for the interpreter, whose
+  results must be reported as "passes under eval," never an unqualified
+  "passes" (#81). Property tests always run under the interpreter. The
+  payload's `engine` and `note` fields say which engine produced a result.
 - ⚠️ **`medaka_symbols`/`medaka_definition` ranges are LINE-granular** —
   `character` is always 0 (#331 tracks true name-column fidelity).
 - ⚠️ **`medaka_definition` is INTRA-FILE ONLY.** A use of a name defined in

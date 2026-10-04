@@ -141,6 +141,7 @@
 #         JOBS=8 bash test/diff_compiler_engines.sh
 #         VERBOSE=1 bash test/diff_compiler_engines.sh    # every fixture's signature
 #         CAPTURE=1 bash test/diff_compiler_engines.sh    # rewrite the ledger (review the diff!)
+#                                                          # (refused under ONLY/CORPUS_GLOB)
 #         ONLY='llvmM/*' bash test/diff_compiler_engines.sh   # scope to a SUBSET by corpus key
 #                                                              # (CORPUS_GLOB= is an alias) —
 #                                                              # runs the real ledger/pin
@@ -154,6 +155,15 @@
 # substitution" and exit 2 — which run_gates would (correctly) call a phantom skip.
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -u
+
+# CAPTURE rewrites the whole shared ledger from the fixtures compared in THIS run, so
+# under a scope (ONLY / CORPUS_GLOB) it would drop every ledger row outside the scope.
+# Refuse before any work; exit 1 so run_gates.sh cannot reclassify it as a phantom skip.
+if [ -n "${CAPTURE:-}" ] && [ -n "${ONLY:-${CORPUS_GLOB:-}}" ]; then
+  echo "REFUSED: CAPTURE=1 with ONLY/CORPUS_GLOB would truncate test/engine_divergence.txt to the scoped rows (#1524)." >&2
+  echo "         Run CAPTURE=1 over the full corpus (unset ONLY/CORPUS_GLOB), or hand-append the one new row." >&2
+  exit 1
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"
