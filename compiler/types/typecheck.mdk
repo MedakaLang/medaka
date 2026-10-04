@@ -37645,7 +37645,7 @@ undeterminedNoImplMsg iface args =
   let fixed = filterList (p => monoClosed (snd p)) positions
   let open = filterList (p => not (monoClosed (snd p))) positions
   let head = "No impl of \{iface} for \{ppPredArgsShared shown}"
-  if isNonEmptyL fixed && allList (p => isBareVar (snd p)) open then
+  if isNonEmptyL fixed && allList (p => isBareTyvarMono (snd p)) open then
     let has =
       joinWith
         " and "
@@ -37658,11 +37658,6 @@ undeterminedNoImplMsg iface args =
     "\{head}: no instance of `\{iface}` has \{has}, so no type for the \{free} \{noun} can satisfy it."
   else
     "\{head}: no instance of `\{iface}` has that shape, so no choice of types for the `_` can satisfy it."
-
-isBareVar : Mono -> Bool
-isBareVar m = match normalize m
-  TVar _ => True
-  _ => False
 
 -- The ordinal of the zero-based position [i].
 ordinalWord : Int -> String

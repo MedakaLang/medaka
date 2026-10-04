@@ -1727,7 +1727,6 @@ ioLabel : EffLabel
 isAliasDecl : Decl -> Bool
 isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
 isBareTyvarMono : Mono -> Bool
-isBareVar : Mono -> Bool
 isCompareMethod : String -> Bool
 isConPat : Pat -> Bool
 isConstrainedTy : Ty -> Bool
