@@ -1,0 +1,7 @@
+interface Pick a b c where
+  pick : a -> b -> c
+impl Pick a a a where
+  pick _ y = y
+q : Int -> List Int
+q _ = pick [] [3, 7]
+main = println (debug (q (1 : Int)))

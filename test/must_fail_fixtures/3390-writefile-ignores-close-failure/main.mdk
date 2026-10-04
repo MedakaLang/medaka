@@ -1,0 +1,5 @@
+main : <FileWrite, Stdout> Unit
+main =
+  match writeFile "/dev/full" "hello"
+    Ok _ => println "Ok"
+    Err _ => println "Err"

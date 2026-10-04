@@ -1,0 +1,17 @@
+issue: 3437
+what: `a[0] == 1` with `a : Array Float` is falsely rejected: the literal 1 is defaulted
+what: to Int before Index fixes the element type, giving "Type mismatch: Int vs Float"
+what: and "No impl of Index for (Array Float) Int Int". The same shape on Bytes/U8
+what: fails the same way.
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-TYPE-MISMATCH 3:15-3:26
+diag-code: T-NO-IMPL 0:0-0:0
+control: check control.mdk
+why-verb: `check-json`, so code and range are graded and the message prose is free. The
+why-verb: fix accepts the program at exit 0, which drains this row.
+why-diag-code: the second row's 0:0 range is #3438's mislocation. If #3438 is fixed first,
+why-diag-code: this row goes red without #3437 being fixed: re-derive the ranges with
+why-diag-code: `medaka check --json main.mdk` before reading a red row as a drain.
+why-control: control.mdk writes the literal as `1.0`, which checks and runs (`True`); a red
+why-control: control means array indexing or Float compare broke.

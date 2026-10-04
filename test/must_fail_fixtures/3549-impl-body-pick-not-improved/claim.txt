@@ -1,0 +1,18 @@
+issue: 3549
+what: improvement by the one matching instance does not reach impl method bodies.
+what: `pick [] [3, 7]` inside `impl Q Int` checks clean and `run` prints `[3, 7]`, but
+what: `build` stamps the bare head word and the emitter fails with "no impl of method
+what: 'pick' for instance 'List'" at exit 1. The same call in a top-level function builds.
+cmd: build main.mdk
+exit: 1
+stdout-line: runtime error [E-PANIC]: no impl of method 'pick' for instance 'List'
+control: build-run control.mdk
+why-verb: `build`, because only the emitter path fails. The fix builds the program at
+why-verb: exit 0, which drains this row.
+why-stdout: the E-PANIC line is the emitter's own failure, graded from build's combined
+why-stdout: output. The preceding "emitter failed compiling <path>" line carries a
+why-stdout: machine-specific path, so it is not pinned.
+why-control: control.mdk makes the same call from a top-level function; it must build and
+why-control: print `[3, 7]` at exit 0. Per the issue body, the fix may move the
+why-control: `1641-constrained-impl-head-suppresses-ambiguity` pin; check its polarity when this
+why-control: row drains.

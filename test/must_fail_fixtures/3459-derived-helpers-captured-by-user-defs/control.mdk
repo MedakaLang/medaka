@@ -1,0 +1,5 @@
+data T = T Int Int deriving (Eq, Hashable, Debug)
+
+main =
+  println (hash (T 1 2) == hash (T 1 2))
+  println (debug (T 1 2))

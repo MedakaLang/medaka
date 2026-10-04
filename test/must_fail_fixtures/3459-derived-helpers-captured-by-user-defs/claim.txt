@@ -1,0 +1,18 @@
+issue: 3459
+what: derived instances call prelude helpers by bare name (desugar emits
+what: `EVar "derivedShowWrap"` and folds with `derivedHashStep`), so a program that
+what: defines functions with those names hijacks every derived Debug and Hashable impl:
+what: `hash (T 1 2)` and `hash (T 3 4)` both print 7, and `debug (T 1 2)` prints
+what: `T HIJACK HIJACK`, at exit 0 with no diagnostic.
+cmd: run main.mdk
+exit: 0
+stdout: (7, 7)
+stdout: T HIJACK HIJACK
+control: run control.mdk
+why-verb: `run`, because the defect is a silent wrong value at exit 0. Per Val's ruling on
+why-verb: #2640, deriving gets a reserved route to its helpers; then the user functions are
+why-verb: ordinary bindings and the real hash and `T 1 2` print, draining this row.
+why-stdout: both lines are pinned because the Hashable and Debug captures can be fixed
+why-stdout: separately; either changing reads as progress, so read the actual output first.
+why-control: control.mdk derives the same instances with no user helpers; it must print
+why-control: `True` and `T 1 2` at exit 0. A red control means deriving itself broke.
