@@ -1,0 +1,23 @@
+-- §6.3 D3 clause 3 withholds the key itself: `At (Box a) Float` and
+-- `At (Box a) U64` are the rows, both keys satisfy `Num`, and `Int` has none, so
+-- `k` is withheld and two rows still unify.  No fallback to another default type
+-- is tried.  Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE at the
+-- `at` occurrence.
+data Box a = Box a
+
+interface At c k where
+  at : c -> k -> String
+
+impl At (Box a) Float where
+  at _ _ = "float"
+
+impl At (Box a) U64 where
+  at _ _ = "u64"
+
+interface Report t where
+  report : t -> String
+
+impl Report (Box a) where
+  report b = at b 0
+
+main = println (report (Box True))

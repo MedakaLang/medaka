@@ -3842,6 +3842,138 @@ table = [
     pinned = "True\n",
     codes = [],
   },
+  Row {
+    entry = "body-settle-3809-float-key.mdk",
+    label =
+      "§6.3 D3 clause 3 at an impl body (#3809): both keys satisfy `Num`, so `k` defaults; grounding `e` would leave `Index (Array a) Int Int` with no instance while `a` is held, so `e` is withheld and the second determination fixes `e = a`. Hand-derived: 3.75, then 7. Base checked clean and failed at run and build as ambiguous dispatch",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-float-key-call.mdk",
+    label =
+      "§6.3 D3 clause 3 with the element's `Num` on the call window (a constrained callee): `e` is withheld and determined. Hand-derived: 3.0, then 6",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.0\n6\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-one-index.mdk",
+    label =
+      "§6.3 D3 clause 3 lets the key ground when `Index (Array a) Int ?e` still has an instance. Hand-derived: 1.5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1.5\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-let-keys-annotated.mdk",
+    label =
+      "§6.3 D3 clause 3 through a local `let` in an impl body, keys written `Int`: the `let` holds the body's `a` and withholds `e`; the body determines it. Hand-derived: 3.75, then 7. Base rejected with a missing `Index (Array a) Int Int` prerequisite",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-signature-given.mdk",
+    label =
+      "§6.3 D3 clause 3 consults givens: the declared `Index c Int e` covers the goal once the keys default. Hand-derived: 3.75, then 7",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-top-level-control.mdk",
+    label =
+      "§6.3 D3 clause 3's control: at a top-level group an argument-position variable is not held for satisfiability, so the keys ground and `e` generalizes (scheme in section 2). Hand-derived: 3.75, then 7",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-withheld-ambiguous-method-body.mdk",
+    label =
+      "§6.3 D3 clause 3 and §3 Reject at an impl body: `e` is withheld and both `Get (Box a) Int Float` and `Get (Box a) Int N` still unify, `a` held rigid, so the goal is ambiguous (span in section 6). Base rejected with `T-NO-IMPL` for the defaulted `Int`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "default-guard-withheld-ambiguous-group.mdk",
+    label =
+      "§6.3 D3 clause 3 and §3 Reject at a top-level group: `e` is withheld and two rows still unify (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "default-guard-withheld-ambiguous-let.mdk",
+    label =
+      "§6.3 D3 clause 3 and §3 Reject through a local `let`: the `let` and the enclosing group both withhold `e`, and two rows still unify (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "default-guard-withheld-ambiguous-key.mdk",
+    label =
+      "§6.3 D3 clause 3 withholds the key itself when `Int` has no row and `Float` and `U64` both do; no other default type is tried, so the goal is ambiguous (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-vector-ambiguous-unused-dictionary.mdk",
+    label =
+      "§3 the call window`s vector verdict depends on the goal alone: `useMk` never reads its dictionary, and `Mk Int ?b` is still ambiguous (span in section 6). Base printed 7",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "default-guard-let-in-body-ownership-gap.mdk",
+    label =
+      "#3809 through a local `let` with unannotated keys. Hand-derived: 3.75, then 7; blocked by an ownership gap (the key literals reach no defaulting boundary), so `Index (Array a) k e` keeps two candidates and D3 clause 3`s verdict rejects it. Pinned REJECT until the gap is fixed; base checked clean and failed at run and build",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -3853,7 +3985,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 337
+tableRows = 349
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4085,7 +4217,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 22
+schemeRows = 23
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -4219,6 +4351,12 @@ schemeTable = [
     label =
       "§4.2 OD3, scheme variables exempt: the goal with no unifying instance on `mk`s result variable stays in `mk`s context",
     want = "mk : Conv (Wrap Int) a => Unit -> a",
+  },
+  SchemeRow {
+    entry = "default-guard-top-level-control.mdk",
+    label =
+      "§6.3 D3 clause 3 keeps the top-level control's scheme: the key grounds, the `Index` goal and the element's `Num` stay",
+    want = "sumTwo : (Index a Int b, Num b) => a -> b",
   },
 ]
 
@@ -4484,7 +4622,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 19
+spanRows = 24
 
 spanTable : List SpanRow
 spanTable = [
@@ -4597,6 +4735,35 @@ spanTable = [
     label =
       "§3 the undetermined `Display ?b` is reported at the `println` call that poses it",
     want = "14:7",
+  },
+  SpanRow {
+    entry = "default-guard-withheld-ambiguous-method-body.mdk",
+    label =
+      "§6.3 D3 clause 3`s verdict lands on the `get` occurrence inside `report`",
+    want = "41:24",
+  },
+  SpanRow {
+    entry = "default-guard-withheld-ambiguous-group.mdk",
+    label =
+      "§6.3 D3 clause 3`s verdict lands on the `get` occurrence inside `h`",
+    want = "36:17",
+  },
+  SpanRow {
+    entry = "default-guard-withheld-ambiguous-let.mdk",
+    label =
+      "§6.3 D3 clause 3`s verdict lands on the `get` occurrence in the local `let`",
+    want = "37:10",
+  },
+  SpanRow {
+    entry = "default-guard-withheld-ambiguous-key.mdk",
+    label =
+      "§6.3 D3 clause 3`s verdict lands on the `at` occurrence inside `report`",
+    want = "21:13",
+  },
+  SpanRow {
+    entry = "determine-vector-ambiguous-unused-dictionary.mdk",
+    label = "§3 the verdict lands on the `useMk 3` call",
+    want = "18:16",
   },
 ]
 

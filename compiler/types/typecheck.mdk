@@ -18100,6 +18100,7 @@ blockRecLet env x xloc e =
     nbSurvivingIds = memberTiedSurvivors t1 addedObls callN0,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
+    nbGuard = localNumGuard addedObls callN0,
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x xloc t1  -- LSP hover (block rec-let bypasses inferPat)
   let sch = genBindingRestricted Tip (residualsOf 0 residuals) True pureRow t1  -- #866
@@ -18127,6 +18128,7 @@ blockLet env (PVar x xloc) e =
     nbSurvivingIds = memberTiedSurvivors t addedObls callN0,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
+    nbGuard = localNumGuard addedObls callN0,
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x (Some xloc) t  -- LSP hover (block let bypasses inferPat)
   let sch =
@@ -23772,6 +23774,7 @@ inferRecLet env x xloc e1 e2 =
     nbSurvivingIds = memberTiedSurvivors t1 addedObls callN0,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
+    nbGuard = localNumGuard addedObls callN0,
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x xloc t1  -- LSP hover (recursive PVar let bypasses inferPat)
   let sch = genBindingRestricted Tip (residualsOf 0 residuals) True pureRow t1  -- #866
@@ -23871,6 +23874,7 @@ inferLetSimple env pat e1 e2 =
     nbSurvivingIds = memberTiedSurvivors t1 addedObls callN0,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
+    nbGuard = localNumGuard addedObls callN0,
   }
   inferLetBody env pat t1 residuals e1 e2 oblN0 callN0 dictN0 lscope
 
@@ -25924,6 +25928,7 @@ processLetGroup env binds =
     nbSurvivingIds = omEmpty,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
+    nbGuard = localNumGuard addedObls callN0,
   }  -- RETPOS soundness
   let genv = generalizeGroup env residuals 0 (zipL binds placeholders)
   -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
@@ -26094,11 +26099,84 @@ data NumBoundary = NumBoundary {
   nbSurvivingIds : OrdMap Unit,
   nbDefaultObls : List UObligation,
   nbAmbiguityObls : List UObligation,
+  nbGuard : NumGuard,
 }
 
--- D1: one operation performs defaulting first, then ambiguity registration.
-finalizeNumBoundary : NumBoundary -> Unit
+-- What D3 clause 3 reads at one boundary: the goals it tests, the variables the
+-- boundary holds for every instantiation, and, at a member or group, the level
+-- below which a goal variable is an enclosing binder's and is held too.
+data NumGuard = NumGuard {
+  ngGoals : List UObligation,
+  ngRigidIds : OrdMap Unit,
+  ngOuterBelow : Option Int,
+}
+
+-- D3 clause 3 at work over one boundary.  Its goals are taken once, before the
+-- first candidate is grounded, so the outcome does not depend on candidate order.
+data ArmedGuard = ArmedGuard {
+  agWindow : GoalWindow,
+  agRigidIds : OrdMap Unit,
+  agOuterBelow : Option Int,
+  agWithheld : Ref (List Mono),
+}
+
+armNumGuard : NumGuard -> ArmedGuard
+armNumGuard guard = ArmedGuard {
+  agWindow = goalWindowOf (filterList guardsDefaulting guard.ngGoals),
+  agRigidIds = guard.ngRigidIds,
+  agOuterBelow = guard.ngOuterBelow,
+  agWithheld = Ref [],
+}
+
+-- In D3 clause 3's scope: arity two or more, and two or more distinct variables.
+guardsDefaulting : UObligation -> Bool
+guardsDefaulting o =
+  hasVectorArgs o && listLen (dedupI (flatMap monoUnboundIds (uOblArgs o))) > 1
+
+-- Grounding [id] to Int leaves satisfiable every in-scope goal on it that is
+-- satisfiable now.
+defaultKeepsGoalsSatisfiable : ArmedGuard -> Int -> Bool
+defaultKeepsGoalsSatisfiable guard id =
+  allList
+    (i => match IdMap.get i guard.agWindow.gwByIndex
+      Some o => goalSatisfiableAfterDefault guard id o
+      None => True)
+    (goalsOnVar guard.agWindow id)
+
+-- A goal unsatisfiable with [id] open is unsatisfiable at every type, so
+-- withholding [id] could not help it.
+goalSatisfiableAfterDefault : ArmedGuard -> Int -> UObligation -> Bool
+goalSatisfiableAfterDefault guard id o =
+  let args = map normalize (uOblArgs o)
+  if not (containsI id (flatMap monoUnboundIds args)) then
+    True
+  else
+    let after = map (cohApply (Ref [(id, tconBuiltin "Int")])) args
+    let rigidIds = outerRigidIds guard.agOuterBelow args guard.agRigidIds
+    goalSatisfiable rigidIds o after || not (goalSatisfiable rigidIds o args)
+
+-- Some instance head unifies with [args], [rigidIds] held rigid and the
+-- instance's variables fresh, or a given covers them.
+goalSatisfiable : OrdMap Unit -> UObligation -> List Mono -> Bool
+goalSatisfiable rigidIds o args =
+  isNonEmptyL (unifyingRows rigidIds o.pred.iface args)
+    || goalGivenAt o.pred.iface args o.uoScope
+
+-- [base] plus each variable of [args] whose level is below [level].
+outerRigidIds : Option Int -> List Mono -> OrdMap Unit -> OrdMap Unit
+outerRigidIds None _ base = base
+outerRigidIds (Some level) args base =
+  omFromNames
+    (map
+      (p => intToString (fst p))
+      (filterList (p => snd p < level) (flatMap monoUnboundVarLevels args)))
+    base
+
+-- D1: one operation performs defaulting first, then ambiguity registration.  It
+-- returns the candidates D3 clause 3 withheld, for the boundary's verdict.
+finalizeNumBoundary : NumBoundary -> List Mono
 finalizeNumBoundary boundary =
+  let guard = armNumGuard boundary.nbGuard
   let defaultOwnerPolicy = match boundary.nbDisposition
     NumBoundaryOwnedMember owner => Some owner
     NumBoundaryOwnedGroup owner => Some owner
@@ -26114,6 +26192,7 @@ finalizeNumBoundary boundary =
       [member] =>
         defaultAmbiguousNumWith
           defaultOwnerPolicy
+          guard
           boundary.nbSurvivingIds
           boundary.nbDefaultObls
           member
@@ -26121,6 +26200,7 @@ finalizeNumBoundary boundary =
     NumBoundaryOwnedGroup _ =>
       defaultAbsentNumWith
         defaultOwnerPolicy
+        guard
         boundary.nbSurvivingIds
         boundary.nbDefaultObls
         boundary.nbMembers
@@ -26128,11 +26208,13 @@ finalizeNumBoundary boundary =
       let _ =
         defaultGroupNumWith
           defaultOwnerPolicy
+          guard
           boundary.nbSurvivingIds
           boundary.nbDefaultObls
           boundary.nbMembers
       defaultEachMemberWith
         defaultOwnerPolicy
+        guard
         boundary.nbSurvivingIds
         boundary.nbDefaultObls
         boundary.nbMembers
@@ -26140,28 +26222,32 @@ finalizeNumBoundary boundary =
       [_] =>
         defaultBodyLocalNumWith
           defaultOwnerPolicy
+          guard
           boundary.nbSurvivingIds
           boundary.nbDefaultObls
       _ => panic "NumBoundaryOwnedMethodBody must carry exactly one member"
-  match ambiguityOwner
+  let _ = match ambiguityOwner
     Some owner =>
       registerAmbiguousConstraintsOwnedBy
         owner
         boundary.nbAmbiguityObls
         boundary.nbMembers
     None => ()
+  !guard.agWithheld
 
 defaultAmbiguousNumWith : Option Int ->
+  ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   Mono ->
   Unit
-defaultAmbiguousNumWith ownerPolicy protectedIds obls t =
+defaultAmbiguousNumWith ownerPolicy guard protectedIds obls t =
   let argIds = monoArgUnboundIds t
   let inT = monoUnboundIds t
   let candidates = unprotectedNumCandidates protectedIds obls
   groundNumVarsWith
     ownerPolicy
+    guard
     obls
     (filterList
       (id => containsI id inT && not (containsI id argIds))
@@ -26175,15 +26261,17 @@ defaultAmbiguousNumWith ownerPolicy protectedIds obls t =
 -- body surfaces in no type but must still ground — `let n = tag [1,2,3]`).  Mirrors
 -- process_letrec_group's group_arg_ids over added_obligs/added_methods.
 defaultGroupNumWith : Option Int ->
+  ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   List Mono ->
   Unit
-defaultGroupNumWith ownerPolicy protectedIds obls monos =
+defaultGroupNumWith ownerPolicy guard protectedIds obls monos =
   let argIds = flatMap monoArgUnboundIds monos
   let candidates = unprotectedNumCandidates protectedIds obls
   groundNumVarsWith
     ownerPolicy
+    guard
     obls
     (filterList (id => not (containsI id argIds)) candidates)
 
@@ -26191,15 +26279,17 @@ defaultGroupNumWith ownerPolicy protectedIds obls monos =
 -- member's type mentions (a var consumed inside a body, `n = length [1, 2]`).
 -- A var a member's type mentions generalizes with its constraint instead.
 defaultAbsentNumWith : Option Int ->
+  ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   List Mono ->
   Unit
-defaultAbsentNumWith ownerPolicy protectedIds obls monos =
+defaultAbsentNumWith ownerPolicy guard protectedIds obls monos =
   let inTypes = flatMap monoUnboundIds monos
   let candidates = unprotectedNumCandidates protectedIds obls
   groundNumVarsWith
     ownerPolicy
+    guard
     obls
     (filterList (id => not (containsI id inTypes)) candidates)
 
@@ -26241,6 +26331,16 @@ tiedSurvivors members obls base =
 memberTiedSurvivors : Mono -> List UObligation -> Int -> OrdMap Unit
 memberTiedSurvivors member addedObls callN0 =
   tiedSurvivors [member] (addedObls ++ callUOblsWindow callN0) omEmpty
+
+-- A local binding's or `where` component's D3 clause 3 inputs: its goals on both
+-- windows, with the variables of an enclosing binder held rigid.  Called right
+-- after the boundary's level is exited.
+localNumGuard : List UObligation -> Int -> NumGuard
+localNumGuard addedObls callN0 = NumGuard {
+  ngGoals = addedObls ++ callUOblsWindow callN0,
+  ngRigidIds = omEmpty,
+  ngOuterBelow = Some (perRun.value.currentLevel.value + 1),
+}
 
 connectedTiedIds : List Mono -> List UObligation -> List Int
 connectedTiedIds members obls = match flatMap monoArgUnboundIds members
@@ -26313,21 +26413,26 @@ idSetOf (i :: more) acc = idSetOf more (IdMap.set i () acc)
 -- `t _ = s [1, 2]` is consumed entirely inside the body and surfaces nowhere in
 -- `t : Option2 Int -> Int`, so nothing outside the body can ever determine it.  That
 -- var, and only that var, is what this grounds.
-defaultBodyLocalNumWith : Option Int -> OrdMap Unit -> List UObligation -> Unit
-defaultBodyLocalNumWith ownerPolicy protectedIds obls =
+defaultBodyLocalNumWith : Option Int ->
+  ArmedGuard ->
+  OrdMap Unit ->
+  List UObligation ->
+  Unit
+defaultBodyLocalNumWith ownerPolicy guard protectedIds obls =
   let candidates = unprotectedNumCandidates protectedIds obls
-  groundNumVarsWith ownerPolicy obls candidates
+  groundNumVarsWith ownerPolicy guard obls candidates
 
 -- per-binding defaulting: run the member rule on each placeholder mono
 defaultEachMemberWith : Option Int ->
+  ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   List Mono ->
   Unit
-defaultEachMemberWith _ _ _ [] = ()
-defaultEachMemberWith ownerPolicy protectedIds obls (m :: rest) =
-  let _ = defaultAmbiguousNumWith ownerPolicy protectedIds obls m
-  defaultEachMemberWith ownerPolicy protectedIds obls rest
+defaultEachMemberWith _ _ _ _ [] = ()
+defaultEachMemberWith ownerPolicy guard protectedIds obls (m :: rest) =
+  let _ = defaultAmbiguousNumWith ownerPolicy guard protectedIds obls m
+  defaultEachMemberWith ownerPolicy guard protectedIds obls rest
 
 -- RETPOS soundness — ambiguous interface constraint (run≠build hole).
 -- A method obligation recorded inside a binding whose discriminating tyvar is
@@ -26528,18 +26633,30 @@ numDefaultOwnerAllows (Some level) m = match normalize m
 -- True
 
 -- Ground each id to Int by unifying the live var carrying it (found among [obls]'
--- Num operand monos — refs alias post-unify, grounding any grounds all).
-groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
-groundNumVarsWith _ _ [] = ()
-groundNumVarsWith ownerPolicy obls (id :: rest)
+-- Num operand monos — refs alias post-unify, grounding any grounds all), unless
+-- D3 clause 3 withholds it.
+groundNumVarsWith : Option Int ->
+  ArmedGuard ->
+  List UObligation ->
+  List Int ->
+  Unit
+groundNumVarsWith _ _ _ [] = ()
+groundNumVarsWith ownerPolicy guard obls (id :: rest)
   | omHasKey (intToString id) graphRun.value.localAbs.lasQuantified.value =
-    groundNumVarsWith ownerPolicy obls rest
-groundNumVarsWith ownerPolicy obls (id :: rest) =
+    groundNumVarsWith ownerPolicy guard obls rest
+groundNumVarsWith ownerPolicy guard obls (id :: rest) =
   let _ = match liveNumVarGo id obls
     Some m =>
-      if numDefaultOwnerAllows ownerPolicy m then unify m (tconBuiltin "Int")
+      if numDefaultOwnerAllows ownerPolicy m then groundOrWithhold guard id m
     None => ()
-  groundNumVarsWith ownerPolicy obls rest
+  groundNumVarsWith ownerPolicy guard obls rest
+
+groundOrWithhold : ArmedGuard -> Int -> Mono -> Unit
+groundOrWithhold guard id m =
+  if defaultKeepsGoalsSatisfiable guard id then
+    unify m (tconBuiltin "Int")
+  else
+    guard.agWithheld := m :: !guard.agWithheld
 
 liveNumVarGo : Int -> List UObligation -> Option Mono
 liveNumVarGo _ [] = None
@@ -37695,6 +37812,50 @@ undeterminedVectorVerdict rigidIds callWindow o =
           (ambiguousImplMsg iface.irName)
     _ => ()
 
+-- The verdict on the goals on a variable D3 clause 3 withheld, once the second
+-- determination has run.  The boundary owns that variable and nothing after it
+-- can choose it, so a goal on it that two or more candidates still unify with is
+-- `T-AMBIGUOUS-INSTANCE`, even when it also mentions a rigid variable: the
+-- candidates are counted with [rigidIds] held rigid, and an instantiation of a
+-- rigid variable can only add candidates, never remove one.  Zero candidates is
+-- left to `rejectUndeterminedVectors`, whose `T-NO-IMPL` keeps the rigid
+-- exemption.
+rejectWithheldAmbiguity : OrdMap Unit -> List Mono -> List UObligation -> Unit
+rejectWithheldAmbiguity _ [] _ = ()
+rejectWithheldAmbiguity rigidIds withheld obls =
+  match withheldGoals withheld obls
+    [] => ()
+    held =>
+      let window = goalWindowOf obls
+      fold (_ o => withheldVectorVerdict rigidIds window o) () held
+
+-- The goals of [obls] that mention a still-open variable of [withheld].
+withheldGoals : List Mono -> List UObligation -> List UObligation
+withheldGoals withheld obls =
+  let heldIds = idSetOf (flatMap monoUnboundIds withheld) Tip
+  filterList
+    (o =>
+      anyList (i => IdMap.has i heldIds) (flatMap monoUnboundIds (uOblArgs o)))
+    obls
+
+withheldVectorVerdict : OrdMap Unit -> GoalWindow -> UObligation -> Unit
+withheldVectorVerdict rigidIds window o =
+  let args = map normalize (uOblArgs o)
+  let iface = o.pred.iface
+  if listLen args <= 1
+    || monoVectorClosed args
+    || anyIn (flatMap monoUnboundIds args) perRun.value.poisonedVars.value
+    || goalGivenAt iface args o.uoScope
+    || allList (declaredOblArgOk perRun.value.deferrableVarIds.value) args then
+    ()
+  else if listLen
+      (determinationCandidates window (unifyingRows rigidIds iface args))
+    >= 2 then
+    pushTypeErrorOnceAt
+      "T-AMBIGUOUS-INSTANCE"
+      o.loc
+      (ambiguousImplMsg iface.irName)
+
 hasVectorArgs : UObligation -> Bool
 hasVectorArgs o = listLen (uOblArgs o) >= 2
 
@@ -39026,14 +39187,22 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- The just-exited method-body level owns both body-local defaulting and the
   -- ambiguity registration that follows it. Roots carried by the impl head or
   -- declared method dictionaries survive through [survivingNumIds]/[mbiExpected];
-  -- deeper generalized locals remain outside this boundary by level.
-  let _ = finalizeNumBoundary
+  -- deeper generalized locals remain outside this boundary by level.  A variable a
+  -- multi-parameter goal ties to the head (`e` of `Index (Array a) k e`) is not in
+  -- that set: D3 clause 3 withholds it when grounding it would leave the goal no
+  -- instance, and the second determination below settles it.
+  let withheld = finalizeNumBoundary
     NumBoundary {
       nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
       nbMembers = [inst.mbiExpected],
       nbSurvivingIds = survivingNumIds,
       nbDefaultObls = addedObls ++ calleeNumObls callN0 dictN0,
       nbAmbiguityObls = addedObls,
+      nbGuard = NumGuard {
+        ngGoals = bodyObls,
+        ngRigidIds = bodyRigidIds,
+        ngOuterBelow = None,
+      },
     }
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
@@ -39041,6 +39210,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   let _ = determineByUniqueInstance bodyRigidIds bodyObls
   let _ =
     rejectUndeterminedVectors bodyRigidIds addedObls (callUOblsWindow callN0)
+  let _ = rejectWithheldAmbiguity bodyRigidIds withheld bodyObls
   let _ = registerMethodBodyGivens iface kind params mty inst bodyScope
   let _ = match kind
     ImplBody _ => perRun.value.currentImplBody := False
@@ -43311,7 +43481,7 @@ processSCC env sigs grouped0 members =
   -- feed ONLY the Num-defaulting search; addedObls alone still drives the
   -- ambiguous-constraint/scheme-obligation registration below.
   let defaultObls = addedObls ++ calleeNumObls callN0 dictN0
-  let _ = finalizeNumBoundary
+  let withheld = finalizeNumBoundary
     NumBoundary {
       nbDisposition = NumBoundaryOwnedScc (perRun.value.currentLevel.value + 1),
       nbMembers = map snd placeholders,
@@ -43319,6 +43489,11 @@ processSCC env sigs grouped0 members =
         tiedSurvivors (map snd placeholders) groupObls protectedSigIds,
       nbDefaultObls = defaultObls,
       nbAmbiguityObls = addedObls,
+      nbGuard = NumGuard {
+        ngGoals = groupObls,
+        ngRigidIds = protectedSigIds,
+        ngOuterBelow = None,
+      },
     }  -- RETPOS soundness
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
@@ -43357,6 +43532,7 @@ processSCC env sigs grouped0 members =
       schemes
   let _ =
     rejectUndeterminedVectors unownedIds addedObls (callUOblsWindow callN0)
+  let _ = rejectWithheldAmbiguity unownedIds withheld groupObls
   -- SIGNATURE CONSTRAINT SOUNDNESS: a signed member whose body induces an
   -- interface constraint on one of its own quantified vars that its declared `=>`
   -- context (superclass-closed) does NOT cover severs the constraint for callers

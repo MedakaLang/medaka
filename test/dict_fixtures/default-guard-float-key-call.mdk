@@ -1,0 +1,19 @@
+-- §6.3 D3 clause 3 with the element reaching defaulting through a constrained
+-- callee's `Num x` (the call window).  `k` defaults, `e` is withheld, and the
+-- second determination fixes `e = a`.  Hand-derived: 1.5 + 1.5 = 3.0, then
+-- 3 + 3 = 6.
+impl Index (Array a) Float a where
+  index xs _ = xs[1]
+
+twice : Num x => x -> x
+twice x = x + x
+
+interface Report t where
+  report : t -> String
+
+impl Report (Array a) requires Num a, Debug a where
+  report v = debug (twice v[0])
+
+main =
+  println (report [|1.5, 2.25|])
+  println (report [|3, 4|])

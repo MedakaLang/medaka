@@ -731,6 +731,17 @@ runs once the group's schemes are registered, and at a method body after its
 last determination. Before defaulting the same goal may still close, and a
 closed goal is reported by the obligation gate under its own types. The
 undetermined-goal check asks per argument only for a 1-ary goal.
+Such a goal that a call to a constrained binding posed and that two or more
+candidates unify with has no type to choose its evidence by and is rejected at
+the call with `T-AMBIGUOUS-INSTANCE`
+(`test/dict_fixtures/determine-vector-ambiguous-two-instances.mdk`). So is such
+a goal on a variable that defaulting withheld (§6.3 D3 clause 3), wherever it was
+posed: the boundary owns the variable and nothing after it can choose
+(`test/dict_fixtures/default-guard-withheld-ambiguous-method-body.mdk`). Its
+candidates are counted with the boundary's rigid variables held rigid, so a rigid
+variable in it does not exempt it: an instantiation of a rigid variable can only
+add candidates. Any other such goal posed by an interface method's own
+occurrence gets no verdict there.
 
 ---
 
@@ -1899,7 +1910,8 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   body's goals, the instance head's and the declared signature's variables held
   rigid: improvement and determination, then body-local defaulting of the `Num`
   roots that neither the head nor a declared method dictionary carries, then
-  improvement and determination once more. A
+  improvement and determination once more. A candidate D3 clause 3 withholds is
+  left to that last improvement and determination. A
   local `let` defaults at its own close, before its goals reach the enclosing group's
   sequence. Which variables each boundary may touch is D3's: at a top-level group and
   a local `let`, a variable of a member's type that a goal connects to an argument is
@@ -2026,6 +2038,34 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   intersection remain body-local and default normally. This is the numeric case of
   §3 W3-inst, which states the rule for every predicate on a head variable and for
   pinning one.
+
+  **Clause 3 — joint consistency at defaulting.** A candidate `v` is grounded to its
+  default only if every goal `g` of the boundary's window that is in scope passes.
+  `g` is in scope when its arity is two or more, it mentions `v`, and it mentioned
+  at least two distinct variables when the boundary began defaulting; that set is
+  taken once per boundary, so the outcome does not depend on the order candidates
+  are visited in. `g` passes when, after `v := Int`, some instance head unifies with
+  it or a given covers it, the boundary's rigid set held rigid and the instance's
+  variables fresh; or when it was already unsatisfiable before the substitution,
+  since withholding `v` could not help it. The rigid set is only what the boundary
+  must hold for every instantiation: a top-level group's declared signature
+  variables (an argument-position variable is the caller's to choose, so for
+  satisfiability it is not held); an impl or default method body's head and
+  declared-signature variables; and, at a local `let` or `where` component, every
+  goal variable of an enclosing binder. A candidate clause 3 withholds stays open
+  for the improvement and determination that follow (D1); it is never tried at
+  another default type, since that would turn an ambiguity into a value chosen by
+  the order of defaults. In `report v = debug (v[0] + v[1])` at
+  `impl Report (Array a)`, beside a second instance `Index (Array a) Float a`, the
+  key defaults to `Int`, and grounding the element `e` would leave
+  `Index (Array a) Int Int`, which no head unifies with while `a` is held; so `e`
+  is withheld, and the second determination fixes `e = a`
+  (`test/dict_fixtures/body-settle-3809-float-key.mdk`). A goal on a withheld
+  variable that determination still leaves open is rejected (§3 "Reject"). The
+  clause runs at the four boundaries that default — a top-level group, a `where`
+  component, a local `let`, and a method body. A closed `test` or property body
+  defaults without it, since it has no determination and no verdict after
+  defaulting.
 
 - **D4 — Scope, and the level discipline.** Defaulting, and the ambiguity check that
   follows it, are scoped to the variables the boundary **owns**. A variable belonging

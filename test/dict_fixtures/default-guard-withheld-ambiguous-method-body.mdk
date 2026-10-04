@@ -1,0 +1,43 @@
+-- §6.3 D3 clause 3 and §3 Reject at an impl body.  `Get (Box a) Int Float` and
+-- `Get (Box a) Int N` both unify with `Get (Box a) k e`.  `k` defaults to `Int`;
+-- `e := Int` would leave no instance, so `e` is withheld, and both rows still
+-- unify after the second determination, `a` held rigid.  Nothing outside the body
+-- can choose `e`.  Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE
+-- at the `get` occurrence.
+data Box a = Box a
+
+data N = N Int
+
+impl Eq N where
+  eq (N x) (N y) = x == y
+
+impl Debug N where
+  debug (N x) = "N \{debug x}"
+
+impl Num N where
+  add (N x) (N y) = N (x + y)
+  sub (N x) (N y) = N (x - y)
+  mul (N x) (N y) = N (x * y)
+  div (N x) (N y) = N (x / y)
+  negate (N x) = N (0 - x)
+  abs (N x) = N x
+  signum (N x) = N x
+  fromInt x = N x
+  rem (N x) (N y) = N (x % y)
+
+interface Get c k e where
+  get : c -> k -> e
+
+impl Get (Box a) Int Float where
+  get _ _ = 1.5
+
+impl Get (Box a) Int N where
+  get _ _ = N 7
+
+interface Report t where
+  report : t -> String
+
+impl Report (Box a) where
+  report b = const "x" (get b 0 + 1)
+
+main = println (report (Box True))

@@ -1,0 +1,18 @@
+-- §6.3 D3 clause 3 through a local `let` in an impl body, the keys written
+-- `Int`.  The `let`'s boundary holds the enclosing body's `a`, so grounding `e`
+-- would leave `Index (Array a) Int Int` with no instance, and `e` is withheld;
+-- the body's second determination fixes `e = a`.  Hand-derived: 3.75, then 7.
+impl Index (Array a) Float a where
+  index xs _ = xs[1]
+
+interface Report t where
+  report : t -> String
+
+impl Report (Array a) requires Num a, Debug a where
+  report v =
+    let s = v[0 : Int] + v[1 : Int]
+    debug s
+
+main =
+  println (report [|1.5, 2.25|])
+  println (report [|3, 4|])
