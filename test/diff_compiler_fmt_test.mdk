@@ -498,7 +498,7 @@ draftSemanticIsolation name bin rt core entry dir baseline =
 
 -- # `diff_compiler_references_correctness`
 
--- | The eight project fixtures the retired script dumped, in its own
+-- | The project fixtures the retired script dumped, in its own
 -- order. `test/references_fixtures/query` is a DIFFERENT gate's corpus
 -- (JSONL query goldens, not `expected.golden`) and stays out.
 referencesFixtures : List String
@@ -512,6 +512,7 @@ referencesFixtures = [
   "iface_ty_collide",
   "impl_method",
   "multiclause",
+  "self_rec_local",
 ]
 
 {- | Everything wrong with one `references_fixtures/<name>/` project: a
@@ -1543,7 +1544,7 @@ test "draft-semantic transport survives every current emitter input" = report
 test "reference-index dumps match binders, not strings" =
   report
     "references-correctness"
-    (countFloor "references_fixtures" 9 referencesFixtures
+    (countFloor "references_fixtures" 10 referencesFixtures
       ++ somes (map referencesFixtureFailure referencesFixtures))
 
 test "the parameterized effect surface typechecks through the real front-end" =

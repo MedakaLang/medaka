@@ -647,9 +647,10 @@ walkStmts w scope curLoc ((DoBind p e) :: rest) =
   let _ = walkExpr w scope curLoc e
   let frame = mkNamedFrame w (patBinders curLoc p)
   walkStmts w (frame :: scope) curLoc rest
-walkStmts w scope curLoc ((DoLet _ _ p e) :: rest) =
-  let _ = walkExpr w scope curLoc e
+walkStmts w scope curLoc ((DoLet _ isRec p e) :: rest) =
   let frame = mkNamedFrame w (patBinders curLoc p)
+  let rhsScope = if isRec then frame :: scope else scope
+  let _ = walkExpr w rhsScope curLoc e
   walkStmts w (frame :: scope) curLoc rest
 walkStmts w scope curLoc ((DoAssign _ e) :: rest) =
   let _ = walkExpr w scope curLoc e
