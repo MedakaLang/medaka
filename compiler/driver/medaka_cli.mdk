@@ -4228,9 +4228,6 @@ snapshotStages a = match flagValue "--stages" a
 -- the non-flag args minus every value-taking flag's VALUE, and `flagValue` is
 -- the first-occurrence read `snapFlagValue` performed.
 
--- dirname on a POSIX path.  A deliberate duplicate of `support/path.mdk`'s
--- `dirOf`, on the same license as that file's own `lsp.mdk` duplicate: too
--- small to be worth the coupling.  Keep the two bodies identical.
 hasSlash : String -> Bool
 hasSlash s = hasSlashFrom s (stringLength s)
 
@@ -4238,6 +4235,9 @@ hasSlashFrom : String -> Int -> Bool
 hasSlashFrom _ 0 = False
 hasSlashFrom s i = stringSlice (i - 1) i s == "/" || hasSlashFrom s (i - 1)
 
+-- dirname on a POSIX path.  A deliberate duplicate of `support/path.mdk`'s
+-- `dirOf`, on the same license as that file's own `lsp.mdk` duplicate: too
+-- small to be worth the coupling.  Keep the two bodies identical.
 dirOf2 : String -> String
 dirOf2 path = dirGo2 path (stringLength path)
 
