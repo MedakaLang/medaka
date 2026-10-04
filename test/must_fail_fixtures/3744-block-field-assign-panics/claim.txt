@@ -1,0 +1,15 @@
+issue: 3744
+what: block field assignment `v.x = 9`, still documented in docs/spec/SYNTAX.md, panics
+what: the typechecker with `typecheck: unsupported block statement` on every verb, with no
+what: location and no JSON diagnostic.
+cmd: check-json main.mdk
+exit: 1
+stdout-bytes:
+control: run control.mdk
+why-verb: `check-json`, because Val ruled (2026-10-03) that the construct is removed and
+why-verb: rejected with a located diagnostic suggesting `{ v | x = 9 }`. That fix also exits 1,
+why-verb: so the exit code cannot tell them apart; the JSON can.
+why-stdout: a panic writes nothing to stdout. The fix emits a JSON diagnostic there, which
+why-stdout: drains this row.
+why-control: control.mdk does the same with `{ v | x = 9 }` and must print 9 at exit 0. A red
+why-control: control means record update broke.

@@ -1,0 +1,14 @@
+data T =
+  | A { x : Int, y : Int }
+  | B { x : Int }
+
+tag : T -> String
+tag t = match t
+  A { x, y } => "A \{x} \{y}"
+  B { x } => "B \{x}"
+
+mkB : T
+mkB = B { x = 1 }
+
+main : <IO> Unit
+main = println (tag (A { mkB | x = 5 }))

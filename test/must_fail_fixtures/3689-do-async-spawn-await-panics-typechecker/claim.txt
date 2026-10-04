@@ -1,0 +1,15 @@
+issue: 3689
+what: a `do` block over Async with `spawnTask` and `await` panics the typechecker:
+what: `check` prints `runtime error [E-PANIC]: ordinary return solver outcome failed
+what: validation`, unlocated, at exit 1. `run` and `build` die the same way.
+cmd: check main.mdk
+exit: 1
+stdout-bytes:
+control: check control.mdk
+why-verb: `check`, because the program is well-typed and the fix accepts it at exit 0,
+why-verb: which drains this row.
+why-stdout: the panic writes nothing to stdout.
+why-control: control.mdk runs an Async action without `do` and must check at exit 0. (A
+why-control: `do` block over Async with no spawn or await panics the same way on this
+why-control: binary, so the defect is wider than the title; see the issue.) A red control
+why-control: means Async itself broke.
