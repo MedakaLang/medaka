@@ -219,6 +219,7 @@ import support.ordmap.{
   omFromPairs,
   omMapValues,
   omEmpty,
+  omDelete,
 }
 import support.util.{
   joinNl,
@@ -4338,7 +4339,8 @@ emitRefMain prog groups = match findMain (progEmit prog) groups
     -- then-branch, and a driver whose first arm is `panic …` was printed as an
     -- Int (#2424's second face, the pds engine drivers).
     let k =
-      if mainBodyIsUnit prog body || declRetTypeOf prog "main" == "Unit" then
+      if mainBodyIsUnit prog (cafBodies groups) body
+        || declRetTypeOf prog "main" == "Unit" then
         WUnit
       else if inputMainIsFloat (progInput prog) then
         WFloat
@@ -4356,18 +4358,27 @@ emitRefMain prog groups = match findMain (progEmit prog) groups
 -- NOT auto-print its result — the structural `refMainKind` can't see through the
 -- wrapper, so it would route the Unit result to the Int printer (a trailing `0`).
 -- Reads the installed declared-return-type table; empty ⇒ "" ⇒ False (unchanged).
-mainBodyIsUnit : Prog -> CExpr -> Bool
-mainBodyIsUnit prog (CApp f _) = match appHead f
+-- `cafs` maps each top-level nullary value binding still in scope to its body: a
+-- reference to an unannotated CAF (`go = println "x"; main = go`) is Unit iff that
+-- body is.  Following a CAF removes it from the map, so a cyclic chain ends False.
+mainBodyIsUnit : Prog -> OrdMap CExpr -> CExpr -> Bool
+mainBodyIsUnit prog _ (CApp f _) = match appHead f
   CVar fn _ => declRetTypeOf prog fn == "Unit"
   -- `println`/`print` are `Display a =>` constrained → the dict-pass rewrites the
   -- head to a CDict (or CMethod) carrying the routes; recover the bare name.
   CDict fn _ => declRetTypeOf prog fn == "Unit"
   CMethod fn _ _ _ _ _ => declRetTypeOf prog fn == "Unit"
   _ => False
-mainBodyIsUnit prog (CVar fn _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog (CDict fn _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog (CMethod fn _ _ _ _ _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog (CLet _ _ _ b) = mainBodyIsUnit prog b
+mainBodyIsUnit prog cafs (CVar fn _) =
+  if declRetTypeOf prog fn == "Unit" then
+    True
+  else match omLookup fn cafs
+    Some body => mainBodyIsUnit prog (omDelete fn cafs) body
+    None => False
+mainBodyIsUnit prog _ (CDict fn _) = declRetTypeOf prog fn == "Unit"
+mainBodyIsUnit prog _ (CMethod fn _ _ _ _ _) = declRetTypeOf prog fn == "Unit"
+mainBodyIsUnit prog cafs (CLet _ pat _ b) =
+  mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) b
 -- the native branch-(2) equivalent: an UNANNOTATED `main = match … { … }` whose
 -- Unit-ness is only knowable from its inferred body type (e.g. check_main's
 -- `match args () { [r,c,f] => withFiles … ; _ => ePutStrLn … }`).  Type-erased here,
@@ -4375,26 +4386,46 @@ mainBodyIsUnit prog (CLet _ _ _ b) = mainBodyIsUnit prog b
 -- (an IO-extern returning Unit, a fn whose declared ret is Unit, or another all-Unit
 -- match).  Conservative — a single non-Unit leaf ⇒ False, so a value main is never
 -- suppressed.  Block/Let tails recurse to their final expr.
-mainBodyIsUnit prog (CDecision _ arms _) = allArmsUnit prog arms
-mainBodyIsUnit prog (CMatch _ arms) = allArmsUnit prog arms
-mainBodyIsUnit prog (CBlock stmts) = blockTailIsUnit prog stmts
-mainBodyIsUnit prog _ = False
+mainBodyIsUnit prog cafs (CDecision _ arms _) = allArmsUnit prog cafs arms
+mainBodyIsUnit prog cafs (CMatch _ arms) = allArmsUnit prog cafs arms
+mainBodyIsUnit prog cafs (CBlock stmts) = blockTailIsUnit prog cafs stmts
+mainBodyIsUnit _ _ _ = False
 
 -- True iff every match/decision arm body is itself a Unit main body.  Empty ⇒ False
 -- (no leaves to prove Unit ⇒ don't suppress).
-allArmsUnit : Prog -> List CArm -> Bool
-allArmsUnit _ [] = False
-allArmsUnit prog arms = allArmsUnitGo prog arms
+allArmsUnit : Prog -> OrdMap CExpr -> List CArm -> Bool
+allArmsUnit _ _ [] = False
+allArmsUnit prog cafs arms = allArmsUnitGo prog cafs arms
 
-allArmsUnitGo : Prog -> List CArm -> Bool
-allArmsUnitGo _ [] = True
-allArmsUnitGo prog ((CArm _ _ body) :: rest) =
-  if mainBodyIsUnit prog body then allArmsUnitGo prog rest else False
+allArmsUnitGo : Prog -> OrdMap CExpr -> List CArm -> Bool
+allArmsUnitGo _ _ [] = True
+allArmsUnitGo prog cafs ((CArm pat _ body) :: rest) =
+  if mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) body then
+    allArmsUnitGo prog cafs rest
+  else
+    False
 
-blockTailIsUnit : Prog -> List CStmt -> Bool
-blockTailIsUnit _ [] = False
-blockTailIsUnit prog [CSExpr e] = mainBodyIsUnit prog e
-blockTailIsUnit prog (_ :: rest) = blockTailIsUnit prog rest
+blockTailIsUnit : Prog -> OrdMap CExpr -> List CStmt -> Bool
+blockTailIsUnit _ _ [] = False
+blockTailIsUnit prog cafs [CSExpr e] = mainBodyIsUnit prog cafs e
+blockTailIsUnit prog cafs ((CSLet _ pat _) :: rest) =
+  blockTailIsUnit prog (shadowCafs (patVars pat) cafs) rest
+blockTailIsUnit prog cafs (_ :: rest) = blockTailIsUnit prog cafs rest
+
+-- The top-level nullary value bindings, name -> body (`isValBind`: never `main`).
+cafBodies : List CBind -> OrdMap CExpr
+cafBodies groups = omFromPairs (cafBodyRows groups) omEmpty
+
+cafBodyRows : List CBind -> List (String, CExpr)
+cafBodyRows [] = []
+cafBodyRows ((CBind name [CClause [] body]) :: rest) =
+  if name == "main" then cafBodyRows rest else (name, body) :: cafBodyRows rest
+cafBodyRows (_ :: rest) = cafBodyRows rest
+
+-- A local binder of the same name hides a top-level CAF below it.
+shadowCafs : List String -> OrdMap CExpr -> OrdMap CExpr
+shadowCafs [] cafs = cafs
+shadowCafs (x :: xs) cafs = shadowCafs xs (omDelete x cafs)
 
 -- the printable static kind of a ref-mode main body: an Int (decimal) or a Bool
 -- (true/false).  Determined structurally — arithmetic/Int-lit → Int; a comparison

@@ -1,0 +1,6 @@
+-- A chain of nullary references to a Unit binding is still a Unit `main` (#3758).
+main = a
+
+a = b
+
+b = println "x"
