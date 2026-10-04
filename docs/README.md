@@ -91,6 +91,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`BYTES-DESIGN.md`](design/BYTES-DESIGN.md) | Bytes — a packed byte string for Medaka | B1, B2 and B3 have all shipped |
 | [`CAPABILITY-EFFECTS.md`](design/CAPABILITY-EFFECTS.md) | Capability-safe effects — Medaka's headline direction | PARTIAL |
 | [`CAPABILITY-PLATFORM.md`](design/CAPABILITY-PLATFORM.md) | The capability platform — runtime/product architecture | OPEN |
+| [`D3-DEFAULTING-DESIGN.md`](design/D3-DEFAULTING-DESIGN.md) | Numeric defaulting at a multi-parameter goal — the D3 rule, determination, and the settle sequence | design pass, 2026-10-03/04 |
 | [`EFFECTS-CONFORMANCE-ROADMAP.md`](design/EFFECTS-CONFORMANCE-ROADMAP.md) | Effect-and-Capability Conformance Roadmap | PARTIAL |
 | [`EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md`](design/EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md) | Effects issues against the architecture | REVIEWED |
 | [`GAP3-SLICE7-DESIGN.md`](design/GAP3-SLICE7-DESIGN.md) | Gap 3 — slice-7 arg-tag dispatch on a generic prelude free function | OPEN |
