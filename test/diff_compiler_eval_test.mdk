@@ -40,10 +40,9 @@
 
    Three things this runner does that the retired scripts did not:
 
-   - It reads the oracle's EXIT CODE and STDERR, not stdout alone. The
-     scripts piped stderr to `/dev/null` and never looked at `$?`, which is
-     how an ill-typed `eval_prelude_fixtures/string_interp.mdk` sat green for
-     a year while its oracle panicked (`expectedPanics` below).
+   - It reads the oracle's EXIT CODE and STDERR, not stdout alone, so an
+     oracle that panics reds the row instead of passing on empty stdout
+     (`expectedPanics` below pins any deliberate exception).
    - It asserts each corpus still holds the number of fixtures it held when
      the rows were written, so a corpus that silently shrinks reds rather
      than passing over fewer rows.
