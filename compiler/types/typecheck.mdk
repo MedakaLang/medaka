@@ -18097,7 +18097,8 @@ blockRecLet env x xloc e =
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t1],
-    nbSurvivingIds = omEmpty,
+    nbSurvivingIds =
+      tiedSurvivors [t1] (addedObls ++ callUOblsWindow callN0) omEmpty,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
   }  -- PLAN.md #11 / RETPOS soundness
@@ -18124,7 +18125,8 @@ blockLet env (PVar x xloc) e =
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t],
-    nbSurvivingIds = omEmpty,
+    nbSurvivingIds =
+      tiedSurvivors [t] (addedObls ++ callUOblsWindow callN0) omEmpty,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
   }  -- PLAN.md #11 / RETPOS soundness
@@ -23769,7 +23771,8 @@ inferRecLet env x xloc e1 e2 =
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t1],
-    nbSurvivingIds = omEmpty,
+    nbSurvivingIds =
+      tiedSurvivors [t1] (addedObls ++ callUOblsWindow callN0) omEmpty,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
   }  -- PLAN.md #11 / RETPOS soundness
@@ -23868,7 +23871,8 @@ inferLetSimple env pat e1 e2 =
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t1],
-    nbSurvivingIds = omEmpty,
+    nbSurvivingIds =
+      tiedSurvivors [t1] (addedObls ++ callUOblsWindow callN0) omEmpty,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
   }
@@ -26224,6 +26228,59 @@ numChannelRootSet obls channels =
       (name => omHasKey name channelIds)
       (map intToString (dedupI (numConstrainedIds obls))))
     omEmpty
+
+-- D3 clause 2, the argument channel closed under connection: [base] plus the
+-- variables of [members]' types, outside an argument position, that a
+-- multi-variable goal of [obls] connects, transitively, to an argument-position
+-- variable.  A caller fixes them through those goals, so they are not defaulting
+-- candidates.  Only defaulting reads this set: improvement and determination keep
+-- the declared-signature and unowned sets, since holding a connected variable rigid
+-- there would stop the unique instance from fixing it.
+tiedSurvivors : List Mono -> List UObligation -> OrdMap Unit -> OrdMap Unit
+tiedSurvivors members obls base =
+  omFromNames (map intToString (connectedTiedIds members obls)) base
+
+connectedTiedIds : List Mono -> List UObligation -> List Int
+connectedTiedIds members obls = match flatMap monoArgUnboundIds members
+  [] => []
+  argList =>
+    let argIds = idSetOf argList Tip
+    let reached = connectedIds argIds obls
+    filterList
+      (id => IdMap.has id reached && not (IdMap.has id argIds))
+      (dedupI (flatMap monoUnboundIds members))
+
+-- [seeds] grown by the variables of every goal of [obls] that meets them.
+connectedIds : Map Int Unit -> List UObligation -> Map Int Unit
+connectedIds seeds obls =
+  connectClosure
+    seeds
+    (filterList
+      (ids => listLen ids > 1)
+      (map (o => dedupI (flatMap monoUnboundIds (uOblArgs o))) obls))
+
+-- Each pass absorbs every vector that meets [reached] and keeps the rest for the
+-- next pass, so a vector is absorbed at most once.
+connectClosure : Map Int Unit -> List (List Int) -> Map Int Unit
+connectClosure reached vectors = match absorbMeeting reached vectors [] False
+  (grown, rest, True) => connectClosure grown rest
+  (grown, _, False) => grown
+
+absorbMeeting : Map Int Unit ->
+  List (List Int) ->
+  List (List Int) ->
+  Bool ->
+  (Map Int Unit, List (List Int), Bool)
+absorbMeeting reached [] rest grew = (reached, rest, grew)
+absorbMeeting reached (v :: vs) rest grew =
+  if anyList (i => IdMap.has i reached) v then
+    absorbMeeting (idSetOf v reached) vs rest True
+  else
+    absorbMeeting reached vs (v :: rest) grew
+
+idSetOf : List Int -> Map Int Unit -> Map Int Unit
+idSetOf [] acc = acc
+idSetOf (i :: more) acc = idSetOf more (IdMap.set i () acc)
 
 -- #518/#563: BODY-LOCAL defaulting — ground only Num-constrained roots absent from
 -- [protectedIds], the boundary's explicit set of still-live determination channels.
@@ -43122,7 +43179,8 @@ processSCC env sigs grouped0 members =
     NumBoundary {
       nbDisposition = NumBoundaryOwnedScc (perRun.value.currentLevel.value + 1),
       nbMembers = map snd placeholders,
-      nbSurvivingIds = protectedSigIds,
+      nbSurvivingIds =
+        tiedSurvivors (map snd placeholders) groupObls protectedSigIds,
       nbDefaultObls = defaultObls,
       nbAmbiguityObls = addedObls,
     }  -- RETPOS soundness

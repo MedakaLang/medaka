@@ -1,0 +1,16 @@
+-- DICT-SEMANTICS §6.3 D3 clause 2, the reject half of the control:
+-- `f b = (get b + 1) > 3` poses `Get c e` and `Num e`.  `e` is connected to
+-- the argument `c` but is in no type of `f` (`c -> Bool`), so it defaults to
+-- Int: f : Get c Int => c -> Bool.  The call at `Box Float` then has no
+-- instance: T-NO-IMPL `No impl of Get for (Box Float) Int` at the call.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+f b = (get b + 1) > 3
+
+main = println (f (Box 2.5))

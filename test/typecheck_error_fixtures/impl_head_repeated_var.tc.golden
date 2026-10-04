@@ -1,2 +1,4 @@
-TYPE ERROR: No impl of Get for (Box Float) Int
-TYPE ERROR: No impl of Index for (Array Float) Int Int
+classify : Box Float -> String
+dbl : (Get a b, Num b) => a -> b
+get : a -> b
+local : Array Float -> String

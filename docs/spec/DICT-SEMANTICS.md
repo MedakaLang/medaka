@@ -1862,8 +1862,17 @@ Rejecting every such program is unusable, so the language **defaults** the varia
 Defaulting is a *solving* step, not an inference step, and it owes three statements:
 where it sits, which variables it may touch, and what it is not allowed to do.
 
-- **D1 — Placement.** Defaulting is the **last determination step** at the boundary it
-  runs at, and therefore runs:
+- **D1 — Placement.** Defaulting is the **third step of the settle sequence** at the
+  boundary it runs at. At a top-level group's close (§3 "When") the group's goals are
+  improved and determined first, so a goal whose one instance fixes a variable leaves
+  nothing to default there; then the candidates D3 admits are defaulted; then
+  improvement and determination run once more over the goals defaulting changed. A
+  local `let` defaults at its own close, before its goals reach the enclosing group's
+  sequence. Which variables each boundary may touch is D3's: at a top-level group and
+  a local `let`, a variable of a member's type that a goal connects to an argument is
+  withheld (D3 clause 2); a `where` component already withholds every variable any
+  member's type mentions, which includes every variable that connection reaches.
+  Defaulting therefore runs:
   * **after** the boundary's bodies are inferred — nothing later can constrain the
     variable *through the body*;
   * **before** generalization at that boundary — a defaulted variable must not be
@@ -1903,12 +1912,32 @@ where it sits, which variables it may touch, and what it is not allowed to do.
 
   Clause 2 is the substantive half, and it must be stated **by channel**, not by
   syntactic position, because the available channels differ by binder kind. The
-  channels are: an **argument** the caller supplies; the binding's own **result**,
-  when the binding's type is a *declared* scheme somebody else instantiates; and a
+  channels are: an **argument** the caller supplies, closed under connection (below);
+  the binding's own **result**, when the binding's type is a *declared* scheme
+  somebody else instantiates; and a
   **dictionary** — an abstracted `d̄` (§4 `gen`), the method dictionary of an
   `impl`-method body, or the matcher `φ` of the instance head that body is checked at
   (§3 `inst`) — each of which lets a caller or a construction goal choose the
   variable.
+
+  **The argument channel is closed under connection.** It reaches every variable in an
+  argument position of a member's type, and every variable of a member's type that the
+  boundary's goals connect to one, where two variables are connected when one goal
+  mentions both, transitively. `dbl b = get b + get b` poses `Get b e` and `Num e`; `e`
+  is in `dbl`'s type and `Get b e` connects it to the argument `b`, so the caller's `b`
+  determines it and it is not a candidate: `dbl : (Get a b, Num b) => a -> b`, and
+  `dbl (Box 1.5)` fixes `e := Float` through the one instance `Get (Box a) a`
+  (`test/dict_fixtures/connect-result-top-level.mdk`; the block-`let`, `let … in` and
+  `where` spellings are `test/dict_fixtures/connect-result-block-let.mdk`,
+  `test/dict_fixtures/connect-result-let-in.mdk` and
+  `test/dict_fixtures/connect-result-where.mdk`). A variable in no member's type has
+  no channel even when a goal connects it to an argument, and is a candidate:
+  `f x = ix x 0` poses `Ix a k` and `Num k`, and `k` defaults
+  (`test/dict_fixtures/connect-outside-type-defaults.mdk`,
+  `test/dict_fixtures/connect-outside-type-rejected.mdk`). Connection excludes a
+  variable from defaulting only. Improvement and determination (§3) still treat it as
+  the boundary's own, so the one instance whose head unifies with a goal may bind it
+  there (`wrap y = pick [y] []` still generalizes to `a -> List a`).
 
   🚨 **Clause 2's dictionary channel is evaluated as the channels stand BEFORE
   generalization, and that is a resolution of a circularity, not a refinement.** At a

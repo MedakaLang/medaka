@@ -1,0 +1,16 @@
+-- DICT-SEMANTICS §6.3 D3 clause 2, the control for connection: `f x = ix x 0`
+-- poses `Ix a k` and `Num k`.  `k` is connected to the argument `a` but is in
+-- no type of `f`, so no caller can reach it and it defaults:
+-- f : Ix a Int => a -> Int.  `f 1` selects `Ix Int Int`: 9.
+interface Ix a k where
+  ix : a -> k -> Int
+
+impl Ix Int Int where
+  ix _ _ = 9
+
+impl Ix Int Char where
+  ix _ _ = 7
+
+f x = ix x 0
+
+main = println (f 1)
