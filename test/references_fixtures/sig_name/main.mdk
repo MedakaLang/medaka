@@ -1,0 +1,26 @@
+-- #1025 regression fixture: a value signature's name token is a DEF site of the
+-- binding it types, under the binding's own key. Without it, renaming `half`
+-- rewrites the binding and its uses but leaves `export half : Float` orphaned,
+-- so `1 / 2` silently re-defaults to Int and the program prints 0 instead of 0.5.
+--
+-- Read expected.golden as the assertion: each `main|val|<name>` line lists the
+-- signature's name token (line:col of the name, after any `export `) alongside
+-- the binding's own def sites.
+
+-- Exported signature: name token sits at column 7, after `export `.
+export half : Float
+half = 1 / 2
+
+-- Plain signature: name token at column 0.
+quarter : Float
+quarter = half / 2
+
+-- Multi-clause binding: ONE signature def plus one def per clause head.
+export pick : Int -> String
+pick 0 = "zero"
+pick _ = "many"
+
+-- Control: no signature, so no extra def site.
+bare = pick 1
+
+main = println (pick 0)
