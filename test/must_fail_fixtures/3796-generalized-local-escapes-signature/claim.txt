@@ -1,0 +1,22 @@
+issue: 3796
+what: a goal abstracted by a generalized local inside a signed function escapes the
+what: signature's rigid variable.  `weird2 : b -> b` whose body is `let k u = get (Box [])`
+what: then `k x` poses `Get (Box (List t)) b`, which `impl Get (Box a) a` matches only if
+what: `b` is `List t`; the caller chooses `b`.  The top-level `weird : b -> b; weird _ =
+what: get (Box [])` is rejected with T-MISSING-CONSTRAINT.  This one: `check` exits 0
+what: printing `weird2 : a -> a`, `run` dies with E-PANIC unknown op '+', and the built
+what: binary prints a garbage Int at exit 0.
+cmd: check main.mdk
+exit: 0
+stdout-line: weird2 : a -> a
+stdout-line: main : <Stdout> Unit
+control: check control.mdk
+why-verb: `check`, because the right answer is a check-time reject (T-MISSING-CONSTRAINT,
+why-verb: DICT-SEMANTICS §3 "Signature variables in every matcher").  That exits 1 and
+why-verb: drains this row.  The built binary's garbage value is not pinned: it is a
+why-verb: reinterpreted heap word that an unrelated runtime change could move.
+why-stdout: `weird2 : a -> a` is the accepted declared scheme; `main`'s line proves the
+why-stdout: command ran to the end.
+why-control: control.mdk is a dictionary-abstracted local used at two types inside an
+why-control: impl body whose `requires` gives the goal; it must check at exit 0, so local
+why-control: generalization itself still works.

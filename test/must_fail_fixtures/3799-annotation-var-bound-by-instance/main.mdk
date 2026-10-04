@@ -1,0 +1,12 @@
+-- #3550 shape on a `let` expression annotation: `h : a -> List Int` poses
+-- `Pick (List a) (List Int) (List Int)`.  Expected: rejected, like the top-level
+-- `f : a -> List Int; f y = pick [y] [1]`.
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+main =
+  let h : a -> List Int = y => pick [y] [1]
+  println (debug (h "s"))

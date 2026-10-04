@@ -1,9 +1,11 @@
 issue: 3437
 what: `a[0] == 1` with `a : Array Float` is falsely rejected: the literal 1 is defaulted
-what: to Int before Index fixes the element type, giving "No impl of Index for
-what: (Array Float) Int Int". The same shape on Bytes/U8 fails the same way.
+what: to Int before Index fixes the element type, giving "Type mismatch: Int vs Float"
+what: and "No impl of Index for (Array Float) Int Int". The same shape on Bytes/U8
+what: fails the same way.
 cmd: check-json main.mdk
 exit: 1
+diag-code: T-TYPE-MISMATCH 3:15-3:26
 diag-code: T-NO-IMPL 0:0-0:0
 control: check control.mdk
 why-verb: `check-json`, so code and range are graded and the message prose is free. The

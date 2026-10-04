@@ -2998,6 +2998,50 @@ table = [
     codes = [Present "T-IMPL-MISSING-REQUIRES"],
   },
   Row {
+    entry = "impl-head-requires-depth-at-fuel.mdk",
+    label =
+      "§3 W3-inst at the requires fuel: the body's `Tag (W^32 a)` reduces in 32 steps to the residual `Tag a`, which no `requires` gives, so the impl is refused naming `requires Tag a`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-requires-depth-past-fuel.mdk",
+    label =
+      "§3 W3-inst one step past the requires fuel: `Tag (W^33 a)` exhausts the fuel before reaching `Tag a`, which is a located T-REQUIRES-DEPTH, as on the signature path. Running out of fuel used to return no residual, so `check` accepted the impl, `run` printed 34 and the built binary died with SIGSEGV",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-DEPTH"],
+  },
+  Row {
+    entry = "impl-head-deep-requires-control.mdk",
+    label =
+      "control for the requires-depth rows: the same chain at depth 10 with `requires Tag a` declared. Hand-derived: `tag` adds one per `W` to 1, so 11",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "11\n",
+    codes = [],
+  },
+  Row {
+    entry = "ground-no-sig-var-mismatch-rejected.mdk",
+    label =
+      "§3 the signature-variable guard on module-end grounding applies only when a signature variable occurs: `Conv (Wrap String) t`, with `t` free in `main`, has no instance (the one head-tycon candidate is `impl Conv (Wrap Int) Bool`), so it is rejected. With the guard applied to every goal, grounding skipped the failing unify and `check` accepted the program",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
     entry = "impl-heads-cycle-no-overlap.mdk",
     label =
       "§4 coherence: `Tri a (List a) a` and `Tri b b b` share an instance only if `a = List a`, so they do not overlap; the check terminates (it looped on main). Hand-derived: `tri 1 [1] 1` is the first impl, `one`; `tri True True True` the second, `two`",
@@ -3379,7 +3423,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 294
+tableRows = 298
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -3688,7 +3732,7 @@ schemeTable = [
   SchemeRow {
     entry = "s-nary-given-declared-vector-selects.mdk",
     label =
-      "#1952 on a genuinely POLYMORPHIC multi-argument context, which the row above cannot show because single-impl improvement monomorphises its `a`. Both the structured argument`s parens and the second, bare-tyvar argument are asserted here, so a \"fix\" that parenthesised every argument (`Conv (Wrap a) (b)`) or that dropped back to prec 2 (`Conv Wrap a b`) both go red. At the sprint base `e4587a04` this printed `f : Conv Wrap a b => Wrap a -> b -> String`",
+      "#1952 on a genuinely POLYMORPHIC multi-argument context with two impls in scope, so the declared `a` and `b` select per call site; the row above pins the same scheme with one impl. Both the structured argument`s parens and the second, bare-tyvar argument are asserted here, so a \"fix\" that parenthesised every argument (`Conv (Wrap a) (b)`) or that dropped back to prec 2 (`Conv Wrap a b`) both go red. At the sprint base `e4587a04` this printed `f : Conv Wrap a b => Wrap a -> b -> String`",
     want = "f : Conv (Wrap a) b => Wrap a -> b -> String",
   },
 ]

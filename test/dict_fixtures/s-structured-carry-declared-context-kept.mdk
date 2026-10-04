@@ -11,8 +11,8 @@
 -- both sides of the fix and pins nothing.  What moved is the SCHEME, which
 -- Section 2 asserts:
 --
---     base: f : Wrap Int -> Bool -> String                        (context ERASED)
---     head: f : Conv Wrap Int Bool => Wrap Int -> Bool -> String  (context KEPT)
+--     base: f : Wrap Int -> Bool -> String                (context ERASED)
+--     now:  f : Conv (Wrap a) b => Wrap a -> b -> String  (context KEPT)
 --
 -- This is #607's and #610's discriminating shape one scope over -- the right
 -- value printed with the constraint silently dropped from the type -- and the
@@ -24,13 +24,13 @@
 -- variable is rigid in that matcher too (DICT-SEMANTICS §3, "Signature
 -- variables in every matcher").
 --
--- ⚠️ The pinned scheme text renders the predicate WITHOUT parentheses --
--- `Conv Wrap Int Bool` for `Conv (Wrap Int) Bool`, which reads as four arguments
--- to a two-parameter interface and does not round-trip through the parser.  That
--- is a printer defect (#1952, `S2: misleading`), newly REACHABLE here because
--- before this change the context was erased and never printed at all.  The pin
--- records what the binary prints today; when #1952 lands this row goes RED and
--- must be re-pinned to the parenthesised form.
+-- The pinned scheme text renders the predicate's structured argument in
+-- parentheses -- `Conv (Wrap a) b` -- so the printed context round-trips
+-- through the parser (#1952, landed).  Before #1952 the same predicate printed
+-- as `Conv Wrap a b`, which reads as three arguments to a two-parameter
+-- interface.  The s-nary-given-declared-vector-selects row pins the same scheme
+-- with two impls in scope; this row's claim is that the declared context
+-- survives at all.
 data Wrap a = Wrap a
 
 interface Conv a b where

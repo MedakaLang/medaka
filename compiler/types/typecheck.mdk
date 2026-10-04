@@ -11774,7 +11774,7 @@ data PerRun = PerRun {
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
-  declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which every instance-head matcher holds rigid (`matchEqPairs`, `groundOneObligation`)
+  declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which `matchEqPairs` and `groundOneObligation` hold rigid; a local's, an interface method's and an expression annotation's variables are not here (#3796, #3797, #3799)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
   numlitVarLocs : Ref (List (Mono, Loc)),
   patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
@@ -37573,14 +37573,13 @@ commitImprovement : OrdMap Unit -> List (Mono, Mono) -> Unit
 commitImprovement sigIds pairs =
   let cells = flatMap (p => monoVarCells (fst p) ++ monoVarCells (snd p)) pairs
   let sigCells = sigCellsOf sigIds cells
-  let fromRigid = map (c => (sigStandIn c, TVar c)) sigCells
   let scratch = Ref []
   let rigidPairs = rigidSigPairs sigIds pairs
   let cellsById = map (c => (tyvarId c, c)) cells
   if cohOverlapGo scratch rigidPairs then
     fold
       (_ binding => match lookupAssocI (fst binding) cellsById
-        Some cell => unify (TVar cell) (unrigidSig fromRigid (snd binding))
+        Some cell => unify (TVar cell) (unrigidSig sigCells (snd binding))
         None => ())
       ()
       (reverseL !scratch)
@@ -37612,13 +37611,18 @@ rigidSigPairs sigIds pairs =
 
 -- Can [a] and [b] be made equal without binding a signature variable?  Grounding
 -- unifies through shared cells, so it must not run when the only way to make the
--- occurrence fit the instance is to fix a type the caller chooses.
+-- occurrence fit the instance is to fix a type the caller chooses.  With no
+-- signature variable among them the answer is yes: grounding's own `unify` then
+-- decides, and a mismatch it reports is the goal's real error.
 sigVarsStayFree : OrdMap Unit -> Mono -> Mono -> Bool
-sigVarsStayFree sigIds a b = match rigidSigPairs sigIds [(a, b)]
-  [(ra, rb)] => cohOverlapGo (Ref []) [(ra, rb)]
-  _ => True
+sigVarsStayFree sigIds a b =
+  match sigRigidBindings sigIds (monoVarCells a ++ monoVarCells b)
+    [] => True
+    toRigid => cohOverlapGo (Ref []) [
+      (substMono toRigid [] [] a, substMono toRigid [] [] b),
+    ]
 
--- DICT-SEMANTICS §3: a declared signature variable is rigid in every matcher.  A
+-- DICT-SEMANTICS §3: a top-level signature's variable is rigid in every matcher.  A
 -- goal that an instance head accepts only by binding one needs it to be a specific
 -- type, which the caller chooses, so the goal is rejected at its site in the
 -- definition unless the declared context gives it.  The head matcher with the
@@ -37689,12 +37693,15 @@ sigVarOwner ((m, _, tvs) :: rest) id = match findTvName id tvs
   Some n => [(m, (id, n))]
   None => sigVarOwner rest id
 
-unrigidSig : List (String, Mono) -> Mono -> Mono
-unrigidSig back t = match normalize t
-  TRigid n => optionOr (TRigid n) (lookupAssoc n back)
-  TApp a b => TApp (unrigidSig back a) (unrigidSig back b)
-  TFun a eff b => TFun (unrigidSig back a) eff (unrigidSig back b)
-  TQual a q => TQual (unrigidSig back a) q
+-- [t] with the rigid stand-in of each of [sigCells] replaced by that variable.
+unrigidSig : List (Ref Tyvar) -> Mono -> Mono
+unrigidSig sigCells t = match normalize t
+  TRigid n => match filterList (c => sigStandIn c == n) sigCells
+    c :: _ => TVar c
+    [] => TRigid n
+  TApp a b => TApp (unrigidSig sigCells a) (unrigidSig sigCells b)
+  TFun a eff b => TFun (unrigidSig sigCells a) eff (unrigidSig sigCells b)
+  TQual a q => TQual (unrigidSig sigCells a) q
   other => other
 
 monoVarCells : Mono -> List (Ref Tyvar)
@@ -39482,8 +39489,9 @@ narrowsImplHeadMsg subject narrowed head =
 -- before `inst`), and a residual over head variables alone that no given answers is
 -- reported at the goal's site.  The givens are the impl's own head, its `requires`
 -- with their superinterfaces, and the method signature's own `=>` context.
--- A goal the instances cannot reduce, or a residual mentioning a variable that is not
--- a head variable, is left to the obligation checkers that own it.
+-- A goal no instance matches is not reported here.  A residual that mixes a head
+-- variable with another variable is not reported here either, and no other check
+-- rejects it (#3798).
 checkImplHeadPrerequisites : String ->
   IfaceRef ->
   ImplBodySite ->
@@ -39518,7 +39526,10 @@ checkImplHeadGoal subject roots givens (iface, ds, loc) =
 -- The head variables are matched as constants, the representation a declared
 -- signature's variables have in every instance matcher (`sigRigidBindings`): an
 -- instance that accepts the goal only by fixing a head variable does not reduce
--- it, and the goal itself is the residual.
+-- it, and the goal itself is the residual.  A goal whose arguments are all type
+-- variables is its own residual, as in a signature's body: no instance reduces it,
+-- a blanket one included.  Running out of fuel is `T-REQUIRES-DEPTH`, as in
+-- `residualPredsOf`.
 implGoalResiduals : Int ->
   OrdMap Unit ->
   List PredicateSlot ->
@@ -39528,12 +39539,17 @@ implGoalResiduals : Int ->
 implGoalResiduals fuel headIds givens iface args
   | anyList (givenAnswers iface args) givens = []
   | not (anyConcreteHead args) = [(iface, args)]
-  | fuel <= 0 = []
+  | fuel <= 0 =
+    let _ =
+      pushTypeErrorOnceAt
+        "T-REQUIRES-DEPTH"
+        !goalSiteLoc
+        (requiresDepthMsg iface args)
+    []
   | otherwise =
     let univ = perRun.value.residualUnivRef.value
     let cells = sigCellsOf headIds (flatMap monoVarCells args)
     let toRigid = sigRigidBindings headIds cells
-    let fromRigid = map (c => (sigStandIn c, TVar c)) cells
     match findMatchingImplReqsU univ iface (map (substMono toRigid [] []) args)
       None => if implMatchesU univ iface args then [(iface, args)] else []
       Some (subst, reqs) =>
@@ -39544,7 +39560,7 @@ implGoalResiduals fuel headIds givens iface args
               headIds
               givens
               (fst r)
-              (map (unrigidSig fromRigid) (snd r)))
+              (map (unrigidSig cells) (snd r)))
           (map (reqToObligation subst) reqs)
 
 givenAnswers : IfaceRef -> List Mono -> PredicateSlot -> Bool
@@ -42886,8 +42902,8 @@ processSCC env sigs grouped0 members =
       schemes
   let _ = registerInferredConstraints sigs callOblsDelta addedObls scopedSchemes
   -- From here on every instance-head matcher holds this group's declared variables
-  -- rigid; the group's own generalization above still reads them as it always has,
-  -- so a goal `checkSigVarGoals` rejected is not reported a second time.
+  -- rigid; the group's own generalization above reads them as free variables, so a
+  -- goal `checkSigVarGoals` rejected is not reported a second time.
   perRun.value.declaredSigVarIds :=
     omFromNames (omKeys protectedSigIds) perRun.value.declaredSigVarIds.value
   -- The group's own occurrences of the members it just promoted (see
