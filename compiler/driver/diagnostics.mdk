@@ -89,7 +89,6 @@ import driver.loader.{
   stdlibOwnership,
   entrySearchRoots,
   findImportLoc,
-  loadCycleSite,
   unknownModuleIdOf,
   availableModulesText,
   availableModulesHint,
@@ -1434,7 +1433,7 @@ analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef r
     )
     -- The cycle is reported at the `import` that closes it, in the module that
     -- holds that import.
-    Err (LoadCycle e cpath mid) => match loadCycleSite cpath mid
+    Err (LoadCycle e cpath csite) => match csite
       Some (_, loc) => (
         [],
         appendStale staleRef [
@@ -2903,7 +2902,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
       -- the MODULE's file and rendered against the module's OWN source.
       Err (LoadParseFailed mpath msrc pe) =>
         (CjRendered (cjParseErrJson mpath msrc pe), True)
-      Err (LoadCycle cmsg cpath cmid) => match loadCycleSite cpath cmid
+      Err (LoadCycle cmsg cpath csite) => match csite
         Some (csrc, cloc) => (
           CjParts target [
             (

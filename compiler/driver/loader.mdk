@@ -462,18 +462,6 @@ findImportLoc mid ((DUse _ path loc) :: rest) =
 findImportLoc mid ((DAttrib _ d) :: rest) = findImportLoc mid (d :: rest)
 findImportLoc mid (_ :: rest) = findImportLoc mid rest
 
--- Where a `LoadCycle` points: the `import` of `mid` inside the module at
--- `path` that closes the cycle.  The loader's own decls may carry placeholder
--- locs (`parseResult`), so the importer's source (as the loader parsed it) is
--- re-parsed with `parseLocated`.  Returns that source with the span, or `None`
--- when the importer is unknown (a self-cycle through the entry has `path` of the
--- entry itself; an empty `path` never occurs for a cycle) or has no such import.
-export
-loadCycleSite : String -> String -> Option (String, Loc)
-loadCycleSite path mid = match loadedSourceOf path
-  None => None
-  Some src => map (loc => (src, loc)) (findImportLoc mid (parseLocated src))
-
 -- ── F: available-module hint enumeration ────────────────────────────────────
 -- List the importable stdlib module ids — used to build the "available
 -- modules: ..." hint on an `unknown module` error (see moduleLoadErrText /
@@ -581,7 +569,7 @@ findInRoots (r :: rs) modId =
 public export data LoadError =
   | LoadMsg String
   | LoadParseFailed String String ParseError
-  | LoadCycle String String String
+  | LoadCycle String String (Option (String, Loc))
 
 -- Flatten a LoadError to the free-text message the pre-#100 `Result String` API
 -- returned.  Keeps the ~15 callers that only report a string a one-line change,
@@ -1274,6 +1262,24 @@ modIdToPath (mid, path, _) = (mid, path)
 -- callback (unsaved buffers win) and the accumulator carries the FILE PATH
 -- alongside (modId, decls), so analyzeProject can bucket diagnostics by file.
 
+-- Where a `LoadCycle` points: the `import` of `modId` inside the module at
+-- `importer`, as `(source, span)`.  `deps`/`roots` are the importer's own, so
+-- its raw import spellings are rewritten to canonical module ids exactly as the
+-- walk rewrote them, and `modId` (canonical) matches by resolved id.  The
+-- importer's source is re-parsed with `parseLocated` because the plain loader's
+-- decls carry placeholder locs.  `None` when no such import is found.
+cycleSite : List (String, String) ->
+  List String ->
+  String ->
+  String ->
+  <IO> Option (String, Loc)
+cycleSite deps roots importer modId = match loadedSourceOf importer
+  None => None
+  Some src =>
+    map
+      (loc => (src, loc))
+      (findImportLoc modId (rewriteDecls deps roots (parseLocated src)))
+
 visitModF : (String -> Result ParseError (List Decl)) ->
   (String -> Option String) ->
   List (String, String) ->
@@ -1295,7 +1301,7 @@ visitModF parseFn read deps roots stack visited acc importer modId =
           joinArrow (cycleChain modId stack),
         ])
         importer
-        modId)
+        (cycleSite deps roots importer modId))
   else match readModuleProgF parseFn read deps roots modId
     Err e => Err e
     Ok (owningRoot, path, prog) =>

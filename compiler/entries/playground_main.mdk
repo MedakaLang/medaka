@@ -90,7 +90,6 @@ import driver.loader.{
   loadProgramFilesLocatedCachedE,
   unknownModuleIdOf,
   findImportLoc,
-  loadCycleSite,
 }
 import driver.diagnostics.{
   analyzeProject,
@@ -253,8 +252,8 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
             -- #100: a parse/lex error in an IMPORTED module squiggles THAT module,
             -- exactly as an entry-file parse error squiggles the entry.
             Err (LoadParseFailed mpath _ pe) => emitParseError mpath pe
-            Err (LoadCycle cmsg cpath cmid) =>
-              let (cfile, csrc, cloc) = match loadCycleSite cpath cmid
+            Err (LoadCycle cmsg cpath csite) =>
+              let (cfile, csrc, cloc) = match csite
                 Some (s, l) => (cpath, s, Some l)
                 None => (entry, tsrc, None)
               emitDiagnostics

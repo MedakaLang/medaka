@@ -58,7 +58,6 @@ import driver.loader.{
   loadProgramFilesLocatedE,
   modIdToPath,
   loadErrorMessage,
-  loadCycleSite,
   LoadError(..),
   entrySearchRoots,
   canonicalPathId,
@@ -496,7 +495,7 @@ loadGate False target le = renderGate (loadErrorDiags target le)
 loadErrorDiags : String -> LoadError -> List (String, List Diag)
 loadErrorDiags _ (LoadParseFailed mpath _ pe) =
   [(mpath, [parseErrDiag mpath pe])]
-loadErrorDiags target (LoadCycle e cpath cmid) = match loadCycleSite cpath cmid
+loadErrorDiags target (LoadCycle e cpath csite) = match csite
   Some (_, loc) => [(cpath, [mkDiag SevError "R-MODULE-LOAD" e (Some loc)])]
   None => [(target, [mkDiag SevError "R-MODULE-LOAD" e None])]
 loadErrorDiags target (LoadMsg e) =
