@@ -1,0 +1,4 @@
+-- A nullary reference to a non-Unit binding is still auto-printed (#3758).
+n = 42
+
+main = n

@@ -72,7 +72,7 @@ const OP1_SET = '+-*/%<>=:.|!?@~^&$';   // single-char operator chars
 const PUNCT_SET = '()[],;';             // delimiters (not braces — see below)
 
 export function startState() {
-  return { blockComment: 0, strKind: null, interpStack: [], typePos: false, decl: null, ctorNext: false, last: null, depth: 0, angle: 0, effHead: false, imp: false, pdepth: 0, ascAt: null };
+  return { blockComment: 0, strKind: null, interpStack: [], typePos: false, decl: null, ctorNext: false, last: null, depth: 0, angle: 0, effHead: false, imp: false, pdepth: 0, ascAt: null, sigColon: false };
 }
 
 export function copyState(s) {
@@ -82,7 +82,7 @@ export function copyState(s) {
     interpStack: s.interpStack.map((f) => ({ brace: f.brace, kind: f.kind })),
     typePos: s.typePos, decl: s.decl, ctorNext: s.ctorNext,
     last: s.last, depth: s.depth, angle: s.angle,
-    effHead: s.effHead, imp: s.imp, pdepth: s.pdepth, ascAt: s.ascAt,
+    effHead: s.effHead, imp: s.imp, pdepth: s.pdepth, ascAt: s.ascAt, sigColon: s.sigColon,
   };
 }
 
@@ -166,6 +166,14 @@ const TYPE_HEAD = new Set(['interface', 'impl', 'requires', 'deriving', 'import'
 const ASCRIPTION_END = new Set(['in', 'then', 'else', 'of', 'do', 'if', 'let', 'match']);
 const ASCRIPTION_END_OPS = new Set(['+', '-', '/', '%', '==', '/=', '<=', '>=', '&&', '||', '++', '|>', '>>', '<<', '::', '<-']);
 
+// What precedes the `:` of a type signature: an unindented line holding only
+// optional visibility modifiers and one binder, a name or a parenthesised
+// operator (`g`, `export h`, `(<+>)`). Anything longer (`for x in xs`, `if x > 0`)
+// is not a declaration head.
+const SIG_HEAD = /^(?:(?:export|public|internal)\s+)*(?:[a-z_][A-Za-z0-9_']*|\([^()\s]+\))\s*$/;
+// Block-opening words of Python-style code that otherwise look like a bare binder.
+const NOT_SIG = new Set(['try', 'except', 'finally', 'else', 'elif']);
+
 function endsAscription(state) {
   return state.typePos && state.ascAt !== null && state.ascAt > 0 &&
     state.pdepth === state.ascAt && state.angle === 0;
@@ -190,7 +198,12 @@ function tokenCode(stream, state) {
     if (!indented) { state.decl = null; state.ctorNext = false; state.pdepth = 0; }
     const open = state.depth > 0 && (state.last === ',' || state.last === '(' ||
                                      state.last === '<' || state.last === '{');
-    const carry = indented && state.typePos && (state.last === '->' || open);
+    // A line ending in `:` carries type position only when that `:` closed a
+    // declaration head (`g :`, see SIG_HEAD); a Python-style `for x in xs:` or
+    // `try:` opens an expression block, so its next line is code.
+    const carry = indented && state.typePos &&
+      (state.last === '->' || (state.last === ':' && state.sigColon) || state.last === '>' || open ||
+       stream.match(/^\s*->/, false) !== null);
     if (!carry) { state.depth = 0; state.angle = 0; state.ascAt = null; }
     state.last = null;
     state.effHead = false; state.imp = carry ? state.imp : false;
@@ -289,6 +302,7 @@ function tokenCode(stream, state) {
     stream.next();
     const top = state.interpStack[state.interpStack.length - 1];
     if (!top) { if (c === '{') state.pdepth++; else closeDelim(state); }
+    if (!top && c === '{') state.ctorNext = false;
     if (!top && state.typePos) state.depth = Math.max(0, state.depth + (c === '{' ? 1 : -1));
     if (top) {
       if (c === '{') { top.brace++; return 'punctuation'; }
@@ -303,9 +317,22 @@ function tokenCode(stream, state) {
   if (OP1_SET.indexOf(c) >= 0) {
     stream.next();
     if (ASCRIPTION_END_OPS.has(c) && endsAscription(state)) closeAscription(state);
-    if (c === ':') { if (!state.typePos) state.ascAt = state.pdepth; state.typePos = true; }
-    else if (c === '<' && state.typePos) { state.angle++; state.depth++; }
+    if (c === ':') {
+      state.sigColon = SIG_HEAD.test(stream.string.slice(0, stream.start)) && !NOT_SIG.has(stream.string.trim().split(/[\s:]/)[0]);
+      if (!state.typePos) state.ascAt = state.pdepth;
+      state.typePos = true;
+    }
+    else if (c === '<' && state.typePos) {
+      // Inside an ascription's own parentheses a `<` opens an effect row only
+      // when a row can follow: a label (`Upper`), a closing `>`, or a lowercase
+      // variable then `>` `|` or `,`. Otherwise it is a comparison (`n : Int < m`)
+      // and ends the ascription.
+      if (state.ascAt !== null && state.ascAt > 0 && state.pdepth === state.ascAt && state.angle === 0 &&
+          !stream.match(/^\s*([A-Z>]|[a-z_][A-Za-z0-9_]*\s*[>|,])/, false)) closeAscription(state);
+      else { state.angle++; state.depth++; }
+    }
     else if (c === '>' && state.angle > 0) { state.angle--; state.depth = Math.max(0, state.depth - 1); }
+    else if (c === '=' && state.angle > 0) { /* a row's `Label=domain` binding */ }
     else if (c === '=') {
       state.ascAt = null;
       if (state.decl === 'data') state.ctorNext = true;

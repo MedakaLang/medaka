@@ -535,6 +535,34 @@ async function main() {
           && !inf.includes('killed: time limit'), JSON.stringify(inf));
     }
 
+    // Console keeps up with output (#3719): 5,000 printed lines render promptly,
+    // in order, with the pane scrolled to the last line. Measured ~1.4 s on the
+    // batched console vs ~20.8 s when every line forced a layout.
+    {
+      console.log('Test: console keeps up with 5,000 lines');
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('.cm-editor .cm-content', { timeout: 15000 });
+      await setSource(page, batterySource('43_large_output'));
+      await page.waitForSelector('#run-btn:not([disabled])', { timeout: 15000 });
+      const t0 = Date.now();
+      await page.click('#run-btn');
+      await page.waitForFunction(
+        () => document.querySelector('#console').textContent.includes('compiled & ran'),
+        null, { timeout: 60000 });
+      const ms = Date.now() - t0;
+      check(`5,000 lines rendered in ${ms} ms (ceiling 8000 ms)`, ms < 8000);
+      const big = await page.$eval('#console', (el) => {
+        const lines = el.textContent.split('\n').filter((l) => /^\d+$/.test(l));
+        const inOrder = lines.length === 5000 && lines.every((l, i) => Number(l) === i + 1);
+        return { inOrder, atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 4 };
+      });
+      check('5,000 lines appear complete and in order', big.inOrder, JSON.stringify(big));
+      check('console is scrolled to the last line', big.atBottom, JSON.stringify(big));
+      await runBattery(page, '13_int_div_zero');
+      const stderrCount = await page.$$eval('#console .con-stderr', (els) => els.length);
+      check('stderr output keeps its con-stderr class', stderrCount > 0, String(stderrCount));
+    }
+
     if (pageErrors.length) {
       console.log('Uncaught page errors observed during run:', pageErrors);
     }

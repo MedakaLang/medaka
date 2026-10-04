@@ -525,6 +525,7 @@ clauseImplDictUser : TyConOrigin -> Int -> ImplMethod -> List String
 clauseIsNonFunction : FunClause -> Bool
 clauseIsValue : TcEnv -> FunClause -> Bool
 clauseRefs : (List Pat, Expr) -> List String
+clauseRefsUnder : Map String Unit -> (List Pat, Expr) -> List String
 clauseResult : Int -> (Option Loc, Mono) -> (Option Loc, Mono)
 clausesAreValue : TcEnv -> List FunClause -> Bool
 clausesAt : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
@@ -1183,10 +1184,20 @@ foreachUnit : (a -> Unit) -> List a -> Unit
 forgetLocalAbs : String -> Unit
 formBareLocals : UsePath -> BareLocals -> BareLocals
 forwardedVecObls : List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
+freeArmEVars : Map String Unit -> Arm -> List String
 freeAuthorityNames : List String -> List EffAtomTy -> List String
 freeAuthvars : Mono -> List Int
+freeEVars : Map String Unit -> Expr -> List String
 freeEffvars : Mono -> List Int
+freeFieldEVars : Map String Unit -> FieldAssign -> List String
 freeGenVars : Int -> Mono -> List Int
+freeGuardArmEVars : Map String Unit -> GuardArm -> List String
+freeGuardsEVars : Map String Unit -> List Guard -> Expr -> List String
+freeInterpEVars : Map String Unit -> InterpPart -> List String
+freeKvEVars : Map String Unit -> (Expr, Expr) -> List String
+freeLetBindEVars : Map String Unit -> LetBind -> List String
+freeName : Map String Unit -> String -> List String
+freeStmtsEVars : Map String Unit -> List DoStmt -> List String
 freshAuthBinderRanged : Bool -> (String, Param) -> (String, Ref Authvar)
 freshAuthSubstFor : List Int -> Mono -> EffRow -> List (Int, Authority)
 freshAuthSubstOpening : List Int -> Mono -> (List (Int, Authority), List (Ref Authvar))

@@ -267,5 +267,33 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
   check('signature type variables and rows unchanged', typeOf(w, 'a') === 'typeVar' || has(w, 'a', 'typeVar'));
 }
 
+// S. a wrapped signature highlights like an unwrapped one (#3718)
+{
+  const t = tokenize('h : Int ->\n  <Store "a/*">\n  Result String Int');
+  check('row ending a line: later lines stay type position',
+        ['Result', 'String', 'Int'].every((n) => typeOf(t, n) === 'typeName'), ['Result', 'String', 'Int'].map((n) => typeOf(t, n)).join());
+  const u = tokenize('f : <Http Host=host Method=method> Int');
+  check('row `Label=domain` binding keeps type position', typeOf(u, 'Int') === 'typeName', 'got ' + typeOf(u, 'Int'));
+  const v = tokenize('g :\n  Int -> String');
+  check('signature wrapped after `:`', typeOf(v, 'Int') === 'typeName' && typeOf(v, 'String') === 'typeName', 'got ' + typeOf(v, 'Int') + ',' + typeOf(v, 'String'));
+  const w = tokenize('g : Int\n  -> String');
+  check('signature wrapped before `->`', typeOf(w, 'String') === 'typeName', 'got ' + typeOf(w, 'String'));
+  const x = tokenize('x = (n : Int < m)');
+  check('`<` comparison inside an ascription is not a row', typeOf(x, 'm') === 'variableName', 'got ' + typeOf(x, 'm'));
+  const y = tokenize('data Box a = { items : List a }');
+  check('record body straight after `=`: field type is typeName', typeOf(y, 'List') === 'typeName', 'got ' + typeOf(y, 'List'));
+}
+
+// T. a Python-style line ending in `:` does not open type position (#3718)
+{
+  for (const head of ['for x in [1,2,3]:', 'if x > 0:', 'elif x > 0:', 'class Foo:', 'try:', 'except:', 'finally:']) {
+    const t = tokenize(head + '\n  println x');
+    const xs = t.filter((k) => k.text === 'x').map((k) => k.type);
+    check('python-style `' + head + '`: next line x is not typeVar', xs[xs.length - 1] === 'variableName', 'got ' + xs);
+  }
+  const e = tokenize('export g :\n  Int -> String');
+  check('modifier-led signature wrapped after `:`', typeOf(e, 'Int') === 'typeName' && typeOf(e, 'String') === 'typeName');
+}
+
 console.log('\n=== ' + pass + ' pass / ' + fail + ' fail ===\n');
 process.exit(fail > 0 ? 1 : 0);
