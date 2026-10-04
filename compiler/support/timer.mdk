@@ -172,14 +172,12 @@ emitPhase True label elapsed ops =
 perfStartT : Ref Float
 perfStartT = Ref (0.0 - 1.0)
 
--- `now ()`, additionally recording it as the verb's start so an error exit can
--- still close the table with a `total` row (`emitAbortTotal`).
+-- Record `t0` as the verb's start so an error exit can still close the table
+-- with a `total` row (`emitAbortTotal`).  Called once a verb has validated its
+-- arguments; a usage error never arms it and so prints no `[perf]` row.
 export
-perfBegin : Unit -> <IO> Float
-perfBegin () =
-  let t = now ()
-  perfStartT := t
-  t
+perfArm : Float -> <IO> Unit
+perfArm t0 = perfStartT := t0
 
 -- Close the `[perf]` table on an error exit: emit `total` from the recorded
 -- start when MEDAKA_PERF is on.  One-shot (it clears the start), so layered

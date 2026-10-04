@@ -860,5 +860,15 @@ for pf in "check $pf_good" "run $pf_good" "build $pf_good -o $TMP/perf_bin" "che
   esac
 done
 
+# A usage error (no target, no such file) did no work, so it prints no [perf] row.
+for pf in "run" "build" "check" "build $TMP/perf_no_such_file.mdk"; do
+  # shellcheck disable=SC2086
+  pf_err="$(MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" MEDAKA_PERF=1 bound "$MEDAKA" $pf 2>&1 >/dev/null)"
+  case "$pf_err" in
+    *'[perf]'*) fail=$((fail+1)); printf 'FAIL perf/usage-no-row (%s: want no [perf] row)\n  got: [%s]\n' "$pf" "$pf_err" ;;
+    *) pass=$((pass+1)); printf 'ok   perf/usage-no-row (%s)\n' "$pf" ;;
+  esac
+done
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

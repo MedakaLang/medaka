@@ -64,7 +64,7 @@ import support.timer.{
   now,
   emitPhase,
   emitTotal,
-  perfBegin,
+  perfArm,
   emitAbortTotal,
   perfSinkOn,
   flushPerfSinkProse,
@@ -707,12 +707,13 @@ runCheckCmd argv =
   -- CLI-CONFORMANCE.md §5a, exemplar X3).
   let a = requireArgs checkArgSpec argv
   let perfOn = perfEnabled ()
-  let perfT0 = perfBegin ()
+  let perfT0 = now ()
   let jsonMode = flag "--json" a
   let allowInternal = flag "--allow-internal" a
   let typesMode = flag "--types" a
   match a.positionals
     [target] =>
+      perfArm perfT0
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
@@ -2323,13 +2324,14 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
 runBuildPlainCmd : Args -> <IO> Unit
 runBuildPlainCmd a =
   let perfOn = perfEnabled ()
-  let perfT0 = perfBegin ()
+  let perfT0 = now ()
   match parseBuildArgs a
     Err msg => dieMsg msg
     Ok (input, outOpt, target) =>
       if not (fileExists input) then
         dieMsg ("error: no such file: " ++ input)
       else
+        perfArm perfT0
         let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
         let medaka = envOr "MEDAKA" "medaka"
         let cc = envOr "CC" "clang"
@@ -2780,7 +2782,7 @@ runEvalPerf perfOn target perfT0 perfTCheck _ =
 runRunCmd : List String -> <IO> Unit
 runRunCmd argv =
   let perfOn = perfEnabled ()
-  let perfT0 = perfBegin ()
+  let perfT0 = now ()
   let jsonMode = runFlagGiven "--json" argv
   -- C4: under `--json` stderr is this verb's MACHINE channel, so `MEDAKA_PERF`'s
   -- `[perf]` lines must not be written to it as prose.  Arm `timer.mdk`'s sink
@@ -2816,6 +2818,7 @@ runRunCmd argv =
     target :: _ if (hasSlash target || endsWith ".mdk" target)
       && not (fileExists target) => runAbort ("error: no such file: " ++ target)
     target :: progArgs =>
+      perfArm perfT0
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
