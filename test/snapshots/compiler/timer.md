@@ -1,5 +1,5 @@
 # META
-source_lines=220
+source_lines=245
 stages=DESUGAR,MARK
 # SOURCE
 -- Per-stage wall-clock timing helpers for the self-hosted pipeline.
@@ -171,6 +171,31 @@ emitPhase False _ _ _ = ()
 emitPhase True label elapsed ops =
   emitTimerLine "[perf] \{label}\t\{floatToString elapsed}s\t\{ops}"
 
+-- Start time of the verb currently running, recorded by `perfArm`; negative
+-- means "no verb started", or the abort total was already emitted.
+perfStartT : Ref Float
+perfStartT = Ref (0.0 - 1.0)
+
+-- Record `t0` as the verb's start so an error exit can still close the table
+-- with a `total` row (`emitAbortTotal`).  Called once a verb has validated its
+-- arguments; a usage error never arms it and so prints no `[perf]` row.
+export
+perfArm : Float -> <IO> Unit
+perfArm t0 = perfStartT := t0
+
+-- Close the `[perf]` table on an error exit: emit `total` from the recorded
+-- start when MEDAKA_PERF is on.  One-shot (it clears the start), so layered
+-- abort helpers cannot print two totals; a no-op when no verb recorded a start.
+export
+emitAbortTotal : Unit -> <IO> Unit
+emitAbortTotal () =
+  let t0 = !perfStartT
+  if t0 < 0.0 then
+    ()
+  else
+    perfStartT := 0.0 - 1.0
+    emitTotal (perfEnabled ()) (now () - t0)
+
 -- Emit the total pipeline time to stderr.  No-op when on = False.
 export
 emitTotal : Bool -> Float -> <IO> Unit
@@ -256,6 +281,12 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DTypeSig true "emitPhase" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "emitPhase" ((PCon "False") PWild PWild PWild) (ELit LUnit))
 (DFunDef false "emitPhase" ((PCon "True") (PVar "label") (PVar "elapsed") (PVar "ops")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EVar "display") (EVar "ops"))) (ELit (LString "")))))
+(DTypeSig false "perfStartT" (TyApp (TyCon "Ref") (TyCon "Float")))
+(DFunDef false "perfStartT" () (EApp (EVar "Ref") (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0)))))
+(DTypeSig true "perfArm" (TyFun (TyCon "Float") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "perfArm" ((PVar "t0")) (EApp (EApp (EVar "setRef") (EVar "perfStartT")) (EVar "t0")))
+(DTypeSig true "emitAbortTotal" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "emitAbortTotal" ((PLit LUnit)) (EBlock (DoLet false false (PVar "t0") (EUnOp "!" (EVar "perfStartT"))) (DoExpr (EIf (EBinOp "<" (EVar "t0") (ELit (LFloat 0.0))) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "perfStartT")) (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0))))) (DoExpr (EApp (EApp (EVar "emitTotal") (EApp (EVar "perfEnabled") (ELit LUnit))) (EBinOp "-" (EApp (EVar "now") (ELit LUnit)) (EVar "t0")))))))))
 (DTypeSig true "emitTotal" (TyFun (TyCon "Bool") (TyFun (TyCon "Float") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "emitTotal" ((PCon "False") PWild) (ELit LUnit))
 (DFunDef false "emitTotal" ((PCon "True") (PVar "elapsed")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] total\t")) (EApp (EVar "floatToString") (EVar "elapsed"))) (ELit (LString "s")))))
@@ -307,6 +338,12 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DTypeSig true "emitPhase" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "emitPhase" ((PCon "False") PWild PWild PWild) (ELit LUnit))
 (DFunDef false "emitPhase" ((PCon "True") (PVar "label") (PVar "elapsed") (PVar "ops")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EMethodRef "display") (EVar "ops"))) (ELit (LString "")))))
+(DTypeSig false "perfStartT" (TyApp (TyCon "Ref") (TyCon "Float")))
+(DFunDef false "perfStartT" () (EApp (EVar "Ref") (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0)))))
+(DTypeSig true "perfArm" (TyFun (TyCon "Float") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "perfArm" ((PVar "t0")) (EApp (EApp (EVar "setRef") (EVar "perfStartT")) (EVar "t0")))
+(DTypeSig true "emitAbortTotal" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "emitAbortTotal" ((PLit LUnit)) (EBlock (DoLet false false (PVar "t0") (EUnOp "!" (EVar "perfStartT"))) (DoExpr (EIf (EBinOp "<" (EVar "t0") (ELit (LFloat 0.0))) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "perfStartT")) (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0))))) (DoExpr (EApp (EApp (EVar "emitTotal") (EApp (EVar "perfEnabled") (ELit LUnit))) (EBinOp "-" (EApp (EVar "now") (ELit LUnit)) (EVar "t0")))))))))
 (DTypeSig true "emitTotal" (TyFun (TyCon "Bool") (TyFun (TyCon "Float") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "emitTotal" ((PCon "False") PWild) (ELit LUnit))
 (DFunDef false "emitTotal" ((PCon "True") (PVar "elapsed")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] total\t")) (EApp (EVar "floatToString") (EVar "elapsed"))) (ELit (LString "s")))))

@@ -1,5 +1,5 @@
 # META
-source_lines=5138
+source_lines=5134
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -3051,19 +3051,15 @@ updateEvalLoc (Loc f sl sc el ec)
 -- formatted INTO the panic string here (Fork B option iii).  The text prefix
 -- is `file:L:C:` with a 0-based column.
 --
--- ⚠️ #2400 SITE CENSUS: this is ONE OF THREE hand-built human diagnostic lines
+-- #2400 site census: this is one of two hand-built human diagnostic lines
 -- left in the compiler — every OTHER compile-time channel now renders through
 -- `driver.diagnostics.ppDiagCliLines` (severity prefix + `file:L:C:` + caret).
--- The other two are filed, not fixed, and are NOT this site's residual:
+-- The other is filed, not fixed, and is NOT this site's residual:
 --   • `runCheckModulesFromDiags`'s multi-module warning dump (`compiler/tools/check.mdk`
 --     `entryExhaust` → `frontend.exhaust.exhaustToLinesWith`), printed bare on
 --     STDOUT by `checkRoute`'s multi-module arm — capital `Warning:`, no loc, no
 --     caret, where the single-file arm strips and re-emits the same warnings
 --     located on stderr.  Filed as #2472.
---   • the loader's `LoadMsg` cyclic-dependency line (`driver/loader.mdk:1105`,
---     `"cyclic dependency: a -> b -> a"`), returned verbatim by
---     `moduleLoadErrText`'s `LoadMsg` arm whenever `unknownModuleIdOf` does not
---     match — bare, no severity prefix, no location.  Filed as #2473.
 -- THIS site is NOT routed through the renderer either, and its reason is
 -- structural rather than an oversight:
 -- `panic` is a noreturn C-abort reached from the middle of evaluation, and this

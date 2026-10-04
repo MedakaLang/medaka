@@ -263,6 +263,7 @@ interpOpenFor : Token -> ParserE <> String
 interpOpenStr : ParserE <> String
 interpRest : ParserE <> (List InterpPart)
 interpRestFor : Expr -> Token -> ParserE <> (List InterpPart)
+interpolatedNameMsg : String -> String
 isBinderTok : Token -> Bool
 isBracketCloseTok : Token -> Bool
 isBracketOpenTok : Token -> Bool
@@ -544,6 +545,7 @@ productAxisVal : Bool -> ParserE <> EffParamTy
 productAxisValFor : Bool -> Token -> ParserE <> EffParamTy
 productParamP : Bool -> ParserE <> EffParamTy
 programWithSpans : ParserE <> (List (Decl, Int, Int))
+propNameFor : Int -> Token -> ParserE <> String
 propParam : ParserE <> PropParam
 rangeAfter : Expr -> Bool -> ParserE <> Expr
 recordFieldExpr : ParserE <> (List String, Expr)
