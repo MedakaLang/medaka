@@ -3651,6 +3651,52 @@ test "a parameter shadowing a top-level name keeps the enclosing scheme its own"
       "main = h",
     ])
 
+test "a match-arm pattern shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "(a, b) -> a")
+    (binderShadowObserved "f" [
+      "f x = match x",
+      "  (h, _) => h * 2",
+      "h = shout (f (3, 0))",
+      "g = f (1.5, 0)",
+      "main = h",
+    ])
+
+test "a pattern-guard binder shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "Opt a -> a")
+    (binderShadowObserved "f" [
+      "data Opt a = No | Yes a",
+      "f x = match x",
+      "  y if (Yes h) <- y => h * 2",
+      "  _ => 0",
+      "h = shout (f (Yes 3))",
+      "g = f (Yes 1.5)",
+      "main = h",
+    ])
+
+test "a lambda parameter shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "a -> a")
+    (binderShadowObserved "f" [
+      "f x = (h => h * 2) x",
+      "h = shout (f 3)",
+      "g = f 1.5",
+      "main = h",
+    ])
+
+test "a block-statement let shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "a -> a")
+    (binderShadowObserved "f" [
+      "f x =",
+      "  let h = x + 1",
+      "  h * 2",
+      "h = shout (f 3)",
+      "g = f 1.5",
+      "main = h",
+    ])
+
 test "a let binder shadowing a where sibling keeps the sibling's group apart" =
   expectEqual
     ([], Some "Float -> Float")

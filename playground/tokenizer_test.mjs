@@ -284,5 +284,16 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
   check('record body straight after `=`: field type is typeName', typeOf(y, 'List') === 'typeName', 'got ' + typeOf(y, 'List'));
 }
 
+// T. a Python-style line ending in `:` does not open type position (#3718)
+{
+  for (const head of ['for x in [1,2,3]:', 'if x > 0:', 'elif x > 0:', 'class Foo:', 'try:', 'except:', 'finally:']) {
+    const t = tokenize(head + '\n  println x');
+    const xs = t.filter((k) => k.text === 'x').map((k) => k.type);
+    check('python-style `' + head + '`: next line x is not typeVar', xs[xs.length - 1] === 'variableName', 'got ' + xs);
+  }
+  const e = tokenize('export g :\n  Int -> String');
+  check('modifier-led signature wrapped after `:`', typeOf(e, 'Int') === 'typeName' && typeOf(e, 'String') === 'typeName');
+}
+
 console.log('\n=== ' + pass + ' pass / ' + fail + ' fail ===\n');
 process.exit(fail > 0 ? 1 : 0);

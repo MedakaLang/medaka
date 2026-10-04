@@ -41747,8 +41747,8 @@ allEVars (EStringInterp parts) = flatMap interpEVars parts
 allEVars (EGuards arms) = flatMap guardArmEVars arms
 allEVars (ESection s) = sectionEVars s
 -- The arms above mirror `rewriteArgScoped`'s traversal (children only, binders
--- ignored).  What is left for the
--- catch-all, derived against `Expr`'s full constructor set, is exactly four
+-- ignored).  What is left for the catch-all, derived against `Expr`'s full
+-- constructor set, is exactly four
 -- constructors that carry no sub-`Expr` reachable here:
 --   ENumLit, EDictApp  — leaves;
 --   EMethodRef         — no production verb mints one (see `declRefNames` below);
@@ -41804,6 +41804,9 @@ fieldAssignEVars (FieldAssign _ e) = allEVars e
 -- its `<-` guards, and a statement's pattern for the statements after it.  An
 -- `EVarId` is read by its name: a local letrec's bodies are stamped before they
 -- are grouped, and every local occurrence carries the same id 0.
+-- A recursive `DoLet` and a recursive non-`PVar` `ELet` bind the pattern in their own
+-- right-hand side here, wider than `stampExpr`; the worst case is a group split that
+-- could have stayed merged.
 freeEVars : OrdMap Unit -> Expr -> List String
 freeEVars bound (EVar x) = freeName bound x
 freeEVars bound (EVarId x _) = freeName bound x
@@ -48887,8 +48890,9 @@ ambiguousAdmitted occ path amb = match importedBindings path
   None => filterList (r => omHasKey (fst r) occ) amb
   Some bindings => filterList (r => anyList (b => fst b == fst r) bindings) amb
 
--- every name this module's own decl bodies REFERENCE, as a set.  Mirrors `groupRefs`'
--- `allEVars` collector one level up, at the decl layer: the top-level clause bodies plus
+-- every name this module's own decl bodies REFERENCE, as a set.  Parallels `groupRefs`'
+-- collector (`freeEVars`, which skips locally bound names; `allEVars` here keeps every
+-- occurrence) one level up, at the decl layer: the top-level clause bodies plus
 -- the impl/default/prop/test bodies, which is every place a user program can spell
 -- an imported value.  Alias-qualified references arrive here already flattened into a
 -- single dotted `EVar "A.g"` by desugar's `rewriteAliasQual` (via `qualifiedLocal`), so
