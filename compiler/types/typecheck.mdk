@@ -2045,7 +2045,7 @@ checkAliasPatternSlots params rhs =
     (_ pk => match pk
       (p, Some (KindAuthority l _ False loc)) =>
         if contains p slots then
-          pushTypeErrorOnceAt
+          pushTypeErrorOncePerSite
             "T-AUTHORITY-PATTERN"
             loc
             (ordinaryInPatternSlotMsg p l)
@@ -2073,7 +2073,7 @@ checkAuthorityKindLabel (KindAuthority l o pat loc) =
       pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (authorityAtomicLabelMsg l)
     top =>
       if pat && not (domainHasPatterns top) then
-        pushTypeErrorOnceAt
+        pushTypeErrorOncePerSite
           "T-AUTHORITY-PATTERN"
           loc
           (patternDomainMsg ("Authority " ++ l ++ "*") l)
@@ -10185,8 +10185,9 @@ hadTypeErrors _ = !typeErrorsSticky
 -- hand-placed bump at "the five helpers" would have left that one silent, and the
 -- counter would then have UNDER-counted exactly on the `do`-requires-a-monad path.
 -- ⚠️ #2068: it is also the sole writer of `typeErrorMsgSetRef`, the membership
--- INDEX the three `pushTypeErrorOnce*` helpers test instead of re-scanning the
--- channel.  Keeping the insert HERE — inside the one funnel — is what makes the
+-- INDEX the `pushTypeErrorOnce*` helpers and `alreadyReportedAt` test instead of
+-- re-scanning the channel (it holds the rendered message and a message-at-site
+-- key).  Keeping the insert HERE — inside the one funnel — is what makes the
 -- index unable to disagree with the channel: there is no second push site to
 -- forget.  A rollback of the channel owes the index the same pairing the counter
 -- states above; today there is none within a `perRun` lifetime (see there).
@@ -10198,7 +10199,10 @@ recordTypeError raw =
     (driverState.value.currentModuleRef.value, d) :: typeErrorsStickyDiags.value
   let _ = noteTypeErrorDetected ()
   perRun.value.typeErrorMsgSetRef :=
-    omInsert (tcMsg d) () perRun.value.typeErrorMsgSetRef.value
+    omInsert
+      (msgAtKey (tcMsg d) (tcLoc d))
+      ()
+      (omInsert (tcMsg d) () perRun.value.typeErrorMsgSetRef.value)
   wPush perRun.value.typeErrors d
 
 -- issue 1146 PR2 — the counter's ONLY incrementing statement, so "an error was
@@ -10295,6 +10299,17 @@ pushTypeErrorOnce code msg =
   else
     pushTypeError code msg
 
+-- Membership key for "this message at this span".  A located diagnostic is a
+-- duplicate only of the same text at the same span, so two sites with identical
+-- text each report; an unlocated one folds on text alone.
+msgAtKey : String -> Option Loc -> String
+msgAtKey msg at = "\{msg}\t@@\t\{locKey at}"
+
+alreadyReportedAt : String -> Option Loc -> Bool
+alreadyReportedAt msg None = omHasKey msg perRun.value.typeErrorMsgSetRef.value
+alreadyReportedAt msg at =
+  omHasKey (msgAtKey msg at) perRun.value.typeErrorMsgSetRef.value
+
 -- B.10.2c: push a deduped type error attributing it to the supplied loc rather
 -- than the live `currentLoc` (which is stale during the post-HM obligation
 -- check — inference has long since left the offending ELoc).  The loc was
@@ -10308,6 +10323,20 @@ pushTypeErrorOnceAt code loc msg =
     noteTypeErrorDetected ()
   else
     recordTypeError (TcDiag code 1 (orElseLoc loc !currentLoc) msg None None)
+
+-- Like `pushTypeErrorOnceAt`, but the duplicate test is per SITE: the same text at
+-- another span is a second diagnostic, the same text at the same span (a signature
+-- elaborated twice) still folds.  For messages that describe one site's own fault,
+-- where two sites with identical text must each be reported.  A message about a
+-- shared root cause (an ambiguous goal reached from two dispatch sites) belongs on
+-- `pushTypeErrorOnceAt`, which folds on text alone.
+pushTypeErrorOncePerSite : String -> Option Loc -> String -> Unit
+pushTypeErrorOncePerSite code loc msg =
+  let at = orElseLoc loc !currentLoc
+  if alreadyReportedAt msg at then
+    noteTypeErrorDetected ()
+  else
+    recordTypeError (TcDiag code 1 at msg None None)
 
 -- Push a deduped type error (same dedup rule as pushTypeErrorOnceAt) that also
 -- carries a human `help` string and an optional machine-applicable `fix`
@@ -11818,7 +11847,7 @@ data PerRun = PerRun {
   fieldOwnerModulesRef : Ref (OrdMap (List String)),  -- #1597: field-owner KEY → declaring module ids, graph-global — see fieldOwnerReachable
   fieldOwnerReachRef : Ref (OrdMap Unit),  -- #1597: the module ids THIS module can reach through DUse — see declEnvSeedDataUniverse
   typeErrors : Windowed TcDiag,  -- issue 1146: the diagnostic OUTPUT channel, on the Windowed discipline
-  typeErrorMsgSetRef : Ref (OrdMap Unit),  -- #2068: membership INDEX over typeErrors' rendered messages — see recordTypeError
+  typeErrorMsgSetRef : Ref (OrdMap Unit),  -- #2068: membership INDEX over typeErrors' rendered messages and message-at-site keys — see recordTypeError
   errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
   occursCheckFailed : Ref Bool,
   currentLevel : Ref Int,
@@ -14848,7 +14877,7 @@ authArgOf etbl tvs l pat (TyAuth ps loc) =
           if isPatternParam written then
             ()
           else
-            pushTypeErrorOnceAt
+            pushTypeErrorOncePerSite
               "T-AUTHORITY-PATTERN"
               loc
               (exactInPatternSlotMsg
@@ -14861,7 +14890,7 @@ authArgOf etbl tvs l pat (TyAuth ps loc) =
 authArgOf etbl _ l pat ty =
   let _ = match ordinaryBinderIn etbl pat ty
     Some n =>
-      pushTypeErrorOnceAt
+      pushTypeErrorOncePerSite
         "T-AUTHORITY-PATTERN"
         (firstTyLoc ty)
         (ordinaryInPatternSlotMsg n (effLabelName l))
@@ -38047,7 +38076,8 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppPredArgsShared args}"
 -- hit) does "add deriving" / "write an impl" read as concrete, applicable
 -- advice — a builtin (String/Int/Bool/…) can't take `deriving`, and a function
 -- type is structurally un-implementable, so both stay hint-free (unchanged
--- message) rather than print misleading advice.
+-- message) rather than print misleading advice.  A stdlib-owned type is
+-- hint-free too for the derivable interfaces (`headIsStdlibOwned`).
 -- ⚠️ #1111 A-2.3: the ONE `dataParamKindsRef` consumer that stays a BARE-NAME
 -- question, and it is a membership test rather than a lookup.  A-2.2 has since
 -- landed, so the identity IS reachable here (`headTyconMono` now answers a
@@ -38063,9 +38093,26 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppPredArgsShared args}"
 -- applicable advice for the right reason under the wrong module's declaration.
 noImplHint : String -> List Mono -> Option String
 noImplHint iface [arg] = match headTyconNameMono arg
-  Some n => noImplHintFor iface n
+  Some n =>
+    if derivableIface iface && headIsStdlibOwned arg then
+      None
+    else
+      noImplHintFor iface n
   None => None
 noImplHint _ _ = None
+
+-- A type declared in a stdlib-owned module cannot take `deriving`, and an
+-- `impl` of a core interface for it would be an orphan (docs/spec/language-design.md
+-- "No Orphan Instances"), so neither remedy of `noImplAdvice` is available to the
+-- caller.  A type with no module identity (builtin, unresolved) is not stdlib-owned.
+headIsStdlibOwned : Mono -> Bool
+headIsStdlibOwned arg = match headTyconMono arg
+  Some (HkDecl (TkIdent (Ident _ io _))) =>
+    identOriginFold
+      False
+      (mid => omHasKey mid driverState.value.stdlibOwnedModsRef.value)
+      io
+  _ => False
 
 noImplHintFor : String -> String -> Option String
 noImplHintFor iface n

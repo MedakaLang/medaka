@@ -1,0 +1,27 @@
+choose x =
+  if (match x
+    Some n => n > 0
+    None => False) then
+    1
+  else
+    0
+
+guarded x
+  | (match x
+    Some n => n > 0
+    None => False) = 1
+  | otherwise = 0
+
+armGuard x = match x
+  Some n if (match n
+    1 => True
+    _ => False) => 1
+  _ => 0
+
+bindGuard x
+  | (Some n) <- (match x
+    Some m => Some m
+    None => None) = n
+  | otherwise = 0
+
+main = println (choose (Some 1))

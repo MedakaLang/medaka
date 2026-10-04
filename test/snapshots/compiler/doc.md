@@ -1,5 +1,5 @@
 # META
-source_lines=1758
+source_lines=1827
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -85,7 +85,7 @@ import regex.{
 -- parsing `de_sig` back — the sig is a rendering, not a data structure) /
 -- de_line (the declaration's source line, which is what places a `-- # Title`
 -- section heading relative to the entries around it).
-data DocEntry = DocEntry String String String String DocKind Int
+public export data DocEntry = DocEntry String String String String DocKind Int
 
 -- What kind of declaration produced an entry, for the library-mode impl
 -- rebucketing pass (`rebucketLibraryImpls`).  `KTypeDecl` marks a `data`/
@@ -96,7 +96,11 @@ data DocEntry = DocEntry String String String String DocKind Int
 -- has no owner by construction.  `KSection` is not a declaration at all: a
 -- `-- # Title` comment between declarations, rendered as a page section and
 -- excluded from the index and the inventory.  Everything else is `KPlain`.
-data DocKind = KPlain | KTypeDecl | KImplOn (Option String) | KSection
+public export data DocKind =
+  | KPlain
+  | KTypeDecl
+  | KImplOn (Option String)
+  | KSection
 
 -- One row of the comment table: (source line, text, block).  `block` is the
 -- start line of the `{- -}` comment the row came from, or 0 for a line
@@ -1147,12 +1151,13 @@ renderMarkdown moduleName header entries =
   let headerBlock = if headerProse == "" then "" else headerProse ++ "\n\n"
   let sectioned = anyDoc isSection entries
   let main = filterDoc (e => not (isListedImpl e)) entries
+  let tbl = pageAnchors moduleName entries
   stringConcat
     (titleBlock
       :: primitiveLayerBanner moduleName
       :: headerBlock
-      :: map (renderEntry sectioned entries) main
-        ++ [renderInstancesSection entries])
+      :: map (renderEntry sectioned tbl entries) main
+        ++ [renderInstancesSection tbl entries])
 
 -- The prelude-only page publishes host externs whose `<type><Op>` names sit
 -- beside the library layer's (`stringToUpper` / `string.toUpper`); the page
@@ -1204,15 +1209,15 @@ instanceKey : DocEntry -> String
 instanceKey (DocEntry _ _ _ _ (KImplOn (Some hd)) _) = hd
 instanceKey (DocEntry name _ _ _ _ _) = instanceHead name
 
-renderEntry : Bool -> List DocEntry -> DocEntry -> String
-renderEntry _ _ (DocEntry title _ _ _ KSection _) = "## " ++ title ++ "\n\n"
-renderEntry sectioned entries (DocEntry name sig head doc kind _) =
+renderEntry : Bool -> AnchorTable -> List DocEntry -> DocEntry -> String
+renderEntry _ _ _ (DocEntry title _ _ _ KSection _) = "## " ++ title ++ "\n\n"
+renderEntry sectioned tbl entries (DocEntry name sig head doc kind _) =
   let level = if sectioned then "### " else "## "
   let header = "\{level}`\{name}`\n\n"
   let headLine = if head == "" then "" else "\n" ++ head
   let sigBlock = "```\n\{sig}\{headLine}\n```\n"
   let instances = match kind
-    KTypeDecl => instanceLine (instancesOf name entries)
+    KTypeDecl => instanceLine tbl (instancesOf name entries)
     _ => ""
   let rendered = renderDocProse doc
   let docBlock = if rendered == "" then "" else "\n" ++ rendered ++ "\n"
@@ -1228,41 +1233,42 @@ implHeadIs _ _ = False
 
 -- `Instances: \`Eq\`, \`Ord\`, [\`Debug\`](#debug-list-a)` — a documented
 -- impl links to its own heading, an undocumented one is just named.
-instanceLine : List DocEntry -> String
-instanceLine [] = ""
-instanceLine impls =
-  "\nInstances: " ++ joinWith ", " (map instanceRef impls) ++ "\n"
+instanceLine : AnchorTable -> List DocEntry -> String
+instanceLine _ [] = ""
+instanceLine tbl impls =
+  "\nInstances: " ++ joinWith ", " (map (instanceRef tbl) impls) ++ "\n"
 
-instanceRef : DocEntry -> String
-instanceRef (DocEntry name _ _ doc _ _) =
-  let iface = "`" ++ instanceIface name ++ "`"
-  if doc == "" then iface else "[\{iface}](#\{slugifyAnchor name})"
+instanceRef : AnchorTable -> DocEntry -> String
+instanceRef tbl e = match e
+  DocEntry name _ _ doc _ _ =>
+    let iface = "`" ++ instanceIface name ++ "`"
+    if doc == "" then iface else "[\{iface}](#\{anchorOf tbl e})"
 
 -- The closing section: one list line per type the page does not declare
 -- (`Eq Int` on `core`, `Debug (a, b)`), in first-seen order, followed by the
 -- documented impls as entries.  Empty when the page lists no impl at all.
-renderInstancesSection : List DocEntry -> String
-renderInstancesSection entries =
+renderInstancesSection : AnchorTable -> List DocEntry -> String
+renderInstancesSection tbl entries =
   let listed = filterDoc isListedImpl entries
   let orphans = filterDoc (e => not (hasTypeEntry entries e)) listed
   let keys = uniqueDoc (map instanceKey orphans)
   let bullets = match keys
     [] => ""
-    _ => "\{joinWith "\n" (map (orphanLine orphans) keys)}\n\n"
+    _ => "\{joinWith "\n" (map (orphanLine tbl orphans) keys)}\n\n"
   let documented =
     stringConcat
       (map
-        (renderEntry True entries)
+        (renderEntry True tbl entries)
         (filterDoc (e => entryDoc e /= "") listed))
   if bullets == "" && documented == "" then
     ""
   else
     "## Instances\n\n\{bullets}\{documented}"
 
-orphanLine : List DocEntry -> String -> String
-orphanLine orphans key =
+orphanLine : AnchorTable -> List DocEntry -> String -> String
+orphanLine tbl orphans key =
   let mine = filterDoc (e => instanceKey e == key) orphans
-  "- `\{key}`: \{joinWith ", " (map instanceRef mine)}"
+  "- `\{key}`: \{joinWith ", " (map (instanceRef tbl) mine)}"
 
 hasTypeEntry : List DocEntry -> DocEntry -> Bool
 hasTypeEntry entries (DocEntry _ _ _ _ (KImplOn (Some hd)) _) =
@@ -1302,10 +1308,11 @@ runDoc runtimeSrc coreSrc src filename roots =
 -- type names the module DECLARES — public or private, straight off the raw
 -- decls, which is the ownership evidence `rebucketLibraryImpls` reads (S2-1;
 -- the entries alone cannot answer it, see `declaredTypeNames`).
--- Abstract export: `medaka_cli.mdk`'s library-mode driver reads it only
--- through `mdName` + `renderModulePage`/`renderIndex`/`libraryInventoryJson`
--- below, never by constructing/pattern-matching it itself.
-export data ModuleDoc = ModuleDoc String String (List DocEntry) (List String)
+-- Constructors are public (with `DocEntry`/`DocKind`) so `doc_test.mdk` can
+-- build pages; `medaka_cli.mdk`'s library-mode driver still reads it only
+-- through `mdName` + `renderModulePage`/`renderIndex`/`libraryInventoryJson`.
+public export data ModuleDoc =
+  | ModuleDoc String String (List DocEntry) (List String)
 
 export
 mdName : ModuleDoc -> String
@@ -1624,6 +1631,67 @@ slugifyAnchor : String -> String
 slugifyAnchor name =
   stringTrimDashes (replaceAll nonSlugRunRe "-" (toLower name))
 
+-- One resolved anchor per heading a page renders: (heading text, source line,
+-- entry tag, anchor).  The tag tells a section / impl / ordinary entry apart,
+-- so a type and a function that share a name keep distinct rows.
+type AnchorTable = List (String, Int, String, String)
+
+entryTag : DocEntry -> String
+entryTag e
+  | isSection e = "s"
+  | isImpl e = "i"
+  | otherwise = "p"
+
+-- GitHub gives the n-th heading whose slug repeats the suffix `-(n-1)`, so a
+-- link to the later heading must carry that suffix too.  Headings are taken in
+-- the order `renderMarkdown` emits them: the page title, the main entries, the
+-- closing "Instances" heading, then the documented impls under it.
+pageAnchors : String -> List DocEntry -> AnchorTable
+pageAnchors moduleName entries =
+  let listed = filterDoc isListedImpl entries
+  let orphans = filterDoc (e => not (hasTypeEntry entries e)) listed
+  let documented = filterDoc (e => entryDoc e /= "") listed
+  let main = filterDoc (e => not (isListedImpl e)) entries
+  let hasInstances = not (isNilDoc orphans) || not (isNilDoc documented)
+  let instHead = if hasInstances then [("Instances", 0 - 1, "h")] else []
+  let rows =
+    [(moduleName, 0 - 1, "h")]
+      ++ map entryRow main
+      ++ instHead
+      ++ map entryRow documented
+  assignAnchors [] rows
+
+isNilDoc : List a -> Bool
+isNilDoc [] = True
+isNilDoc _ = False
+
+entryRow : DocEntry -> (String, Int, String)
+entryRow e = match e
+  DocEntry name _ _ _ _ line => (name, line, entryTag e)
+
+assignAnchors : List String -> List (String, Int, String) -> AnchorTable
+assignAnchors _ [] = []
+assignAnchors used ((name, line, tag) :: rest) =
+  let a = freshAnchor used (slugifyAnchor name) 0
+  (name, line, tag, a) :: assignAnchors (a :: used) rest
+
+freshAnchor : List String -> String -> Int -> String
+freshAnchor used base n =
+  let cand = if n == 0 then base else "\{base}-\{n}"
+  if anyDoc (== cand) used then freshAnchor used base (n + 1) else cand
+
+anchorOf : AnchorTable -> DocEntry -> String
+anchorOf tbl e = match e
+  DocEntry name _ _ _ _ line => lookupAnchor tbl name line (entryTag e)
+
+lookupAnchor : AnchorTable -> String -> Int -> String -> String
+lookupAnchor [] name _ _ = slugifyAnchor name
+lookupAnchor ((n, l, t, a) :: rest) name line tag =
+  if n == name && l == line && t == tag then
+    a
+  else
+    lookupAnchor rest name line tag
+
 stringTrimDashes : String -> String
 stringTrimDashes s = stringTrimDashEnd (stringTrimDashStart s)
 
@@ -1674,12 +1742,13 @@ renderIndexModule (ModuleDoc name header entries _) =
   let summary = firstSentence (renderDocProse header)
   let summaryBlock = if summary == "" then "" else summary ++ "\n\n"
   let listed = filterDoc (e => not (isImpl e) && not (isSection e)) entries
-  let links = joinWith "\n" (map (renderIndexLink name) listed)
+  let tbl = pageAnchors name entries
+  let links = joinWith "\n" (map (renderIndexLink name tbl) listed)
   "\{head}\{summaryBlock}\{links}\n\n"
 
-renderIndexLink : String -> DocEntry -> String
-renderIndexLink moduleName (DocEntry name _ _ _ _ _) =
-  "- [`\{name}`](\{moduleName}.md#\{slugifyAnchor name})"
+renderIndexLink : String -> AnchorTable -> DocEntry -> String
+renderIndexLink moduleName tbl e = match e
+  DocEntry name _ _ _ _ _ => "- [`\{name}`](\{moduleName}.md#\{anchorOf tbl e})"
 
 -- The first sentence of a prose block: up to and including the first `.`
 -- that ends a word, or the first line when there is none.  Newlines inside
@@ -1774,8 +1843,8 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "replaceAll" false) (mem "escape" false) (mem "find" false) (mem "findAll" false))))
-(DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
-(DData Private "DocKind" () ((variant "KPlain" (ConPos)) (variant "KTypeDecl" (ConPos)) (variant "KImplOn" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "KSection" (ConPos))) ())
+(DData Public "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
+(DData Public "DocKind" () ((variant "KPlain" (ConPos)) (variant "KTypeDecl" (ConPos)) (variant "KImplOn" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "KSection" (ConPos))) ())
 (DTypeAlias false "CommentRow" () (TyTuple (TyCon "Int") (TyCon "String") (TyCon "Int")))
 (DTypeSig false "dlen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "dlen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
@@ -2043,7 +2112,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "collectHeaderLines" (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "CommentRow")))))
 (DFunDef false "collectHeaderLines" ((PVar "tbl") (PVar "line")) (EMatch (EApp (EApp (EVar "lookupLineLast") (EVar "tbl")) (EVar "line")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "t") (PVar "b"))) () (EBinOp "::" (ETuple (EVar "line") (EVar "t") (EVar "b")) (EApp (EApp (EVar "collectHeaderLines") (EVar "tbl")) (EBinOp "+" (EVar "line") (ELit (LInt 1))))))))
 (DTypeSig false "renderMarkdown" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))))
-(DFunDef false "renderMarkdown" ((PVar "moduleName") (PVar "header") (PVar "entries")) (EBlock (DoLet false false (PVar "titleBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "# ")) (EVar "moduleName")) (ELit (LString "\n\n")))) (DoLet false false (PVar "headerProse") (EApp (EVar "renderDocProse") (EVar "header"))) (DoLet false false (PVar "headerBlock") (EIf (EBinOp "==" (EVar "headerProse") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "headerProse") (ELit (LString "\n\n"))))) (DoLet false false (PVar "sectioned") (EApp (EApp (EVar "anyDoc") (EVar "isSection")) (EVar "entries"))) (DoLet false false (PVar "main") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isListedImpl") (EVar "e"))))) (EVar "entries"))) (DoExpr (EApp (EVar "stringConcat") (EBinOp "::" (EVar "titleBlock") (EBinOp "::" (EApp (EVar "primitiveLayerBanner") (EVar "moduleName")) (EBinOp "::" (EVar "headerBlock") (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EApp (EVar "renderEntry") (EVar "sectioned")) (EVar "entries"))) (EVar "main")) (EListLit (EApp (EVar "renderInstancesSection") (EVar "entries")))))))))))
+(DFunDef false "renderMarkdown" ((PVar "moduleName") (PVar "header") (PVar "entries")) (EBlock (DoLet false false (PVar "titleBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "# ")) (EVar "moduleName")) (ELit (LString "\n\n")))) (DoLet false false (PVar "headerProse") (EApp (EVar "renderDocProse") (EVar "header"))) (DoLet false false (PVar "headerBlock") (EIf (EBinOp "==" (EVar "headerProse") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "headerProse") (ELit (LString "\n\n"))))) (DoLet false false (PVar "sectioned") (EApp (EApp (EVar "anyDoc") (EVar "isSection")) (EVar "entries"))) (DoLet false false (PVar "main") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isListedImpl") (EVar "e"))))) (EVar "entries"))) (DoLet false false (PVar "tbl") (EApp (EApp (EVar "pageAnchors") (EVar "moduleName")) (EVar "entries"))) (DoExpr (EApp (EVar "stringConcat") (EBinOp "::" (EVar "titleBlock") (EBinOp "::" (EApp (EVar "primitiveLayerBanner") (EVar "moduleName")) (EBinOp "::" (EVar "headerBlock") (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "renderEntry") (EVar "sectioned")) (EVar "tbl")) (EVar "entries"))) (EVar "main")) (EListLit (EApp (EApp (EVar "renderInstancesSection") (EVar "tbl")) (EVar "entries")))))))))))
 (DTypeSig false "primitiveLayerBanner" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "primitiveLayerBanner" ((PVar "moduleName")) (EIf (EApp (EVar "preludeOnlyModule") (EVar "moduleName")) (ELit (LString "> These are the host primitives. They are in scope everywhere without an\n> import, and their `<type><Op>` names (`stringToUpper`, `intToString`)\n> mark them as the primitive layer. Prefer the library name where one\n> exists (`string.toUpper`, `string.toFloat`), and reach for a name on this\n> page only when no library module covers it.\n\n")) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isSection" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
@@ -2065,23 +2134,23 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "instanceKey" (TyFun (TyCon "DocEntry") (TyCon "String")))
 (DFunDef false "instanceKey" ((PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EVar "hd"))
 (DFunDef false "instanceKey" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EApp (EVar "instanceHead") (EVar "name")))
-(DTypeSig false "renderEntry" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "DocEntry") (TyCon "String")))))
-(DFunDef false "renderEntry" (PWild PWild (PCon "DocEntry" (PVar "title") PWild PWild PWild (PCon "KSection") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "## ")) (EVar "title")) (ELit (LString "\n\n"))))
-(DFunDef false "renderEntry" ((PVar "sectioned") (PVar "entries") (PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "head") (PVar "doc") (PVar "kind") PWild)) (EBlock (DoLet false false (PVar "level") (EIf (EVar "sectioned") (ELit (LString "### ")) (ELit (LString "## ")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "level"))) (ELit (LString "`"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`\n\n")))) (DoLet false false (PVar "headLine") (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (ELit (LString "\n")) (EVar "head")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EApp (EVar "display") (EVar "sig"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "headLine"))) (ELit (LString "\n```\n")))) (DoLet false false (PVar "instances") (EMatch (EVar "kind") (arm (PCon "KTypeDecl") () (EApp (EVar "instanceLine") (EApp (EApp (EVar "instancesOf") (EVar "name")) (EVar "entries")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "docBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "instances"))) (ELit (LString "\n"))))))
+(DTypeSig false "renderEntry" (TyFun (TyCon "Bool") (TyFun (TyCon "AnchorTable") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "DocEntry") (TyCon "String"))))))
+(DFunDef false "renderEntry" (PWild PWild PWild (PCon "DocEntry" (PVar "title") PWild PWild PWild (PCon "KSection") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "## ")) (EVar "title")) (ELit (LString "\n\n"))))
+(DFunDef false "renderEntry" ((PVar "sectioned") (PVar "tbl") (PVar "entries") (PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "head") (PVar "doc") (PVar "kind") PWild)) (EBlock (DoLet false false (PVar "level") (EIf (EVar "sectioned") (ELit (LString "### ")) (ELit (LString "## ")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "level"))) (ELit (LString "`"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`\n\n")))) (DoLet false false (PVar "headLine") (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (ELit (LString "\n")) (EVar "head")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EApp (EVar "display") (EVar "sig"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "headLine"))) (ELit (LString "\n```\n")))) (DoLet false false (PVar "instances") (EMatch (EVar "kind") (arm (PCon "KTypeDecl") () (EApp (EApp (EVar "instanceLine") (EVar "tbl")) (EApp (EApp (EVar "instancesOf") (EVar "name")) (EVar "entries")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "docBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "instances"))) (ELit (LString "\n"))))))
 (DTypeSig false "instancesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "instancesOf" ((PVar "tyName") (PVar "entries")) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EApp (EVar "implHeadIs") (EVar "tyName")) (EVar "e")))) (EVar "entries")))
 (DTypeSig false "implHeadIs" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "Bool"))))
 (DFunDef false "implHeadIs" ((PVar "tyName") (PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EBinOp "==" (EVar "hd") (EVar "tyName")))
 (DFunDef false "implHeadIs" (PWild PWild) (EVar "False"))
-(DTypeSig false "instanceLine" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
-(DFunDef false "instanceLine" ((PList)) (ELit (LString "")))
-(DFunDef false "instanceLine" ((PVar "impls")) (EBinOp "++" (EBinOp "++" (ELit (LString "\nInstances: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "instanceRef")) (EVar "impls")))) (ELit (LString "\n"))))
-(DTypeSig false "instanceRef" (TyFun (TyCon "DocEntry") (TyCon "String")))
-(DFunDef false "instanceRef" ((PCon "DocEntry" (PVar "name") PWild PWild (PVar "doc") PWild PWild)) (EBlock (DoLet false false (PVar "iface") (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "instanceIface") (EVar "name"))) (ELit (LString "`")))) (DoExpr (EIf (EBinOp "==" (EVar "doc") (ELit (LString ""))) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "](#"))) (EApp (EVar "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")")))))))
-(DTypeSig false "renderInstancesSection" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
-(DFunDef false "renderInstancesSection" ((PVar "entries")) (EBlock (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (EVar "isListedImpl")) (EVar "entries"))) (DoLet false false (PVar "orphans") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "hasTypeEntry") (EVar "entries")) (EVar "e"))))) (EVar "listed"))) (DoLet false false (PVar "keys") (EApp (EVar "uniqueDoc") (EApp (EApp (EVar "map") (EVar "instanceKey")) (EVar "orphans")))) (DoLet false false (PVar "bullets") (EMatch (EVar "keys") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "orphanLine") (EVar "orphans"))) (EVar "keys"))))) (ELit (LString "\n\n")))))) (DoLet false false (PVar "documented") (EApp (EVar "stringConcat") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renderEntry") (EVar "True")) (EVar "entries"))) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "/=" (EApp (EVar "entryDoc") (EVar "e")) (ELit (LString ""))))) (EVar "listed"))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "bullets") (ELit (LString ""))) (EBinOp "==" (EVar "documented") (ELit (LString "")))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## Instances\n\n")) (EApp (EVar "display") (EVar "bullets"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "documented"))) (ELit (LString "")))))))
-(DTypeSig false "orphanLine" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "orphanLine" ((PVar "orphans") (PVar "key")) (EBlock (DoLet false false (PVar "mine") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "instanceKey") (EVar "e")) (EVar "key")))) (EVar "orphans"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- `")) (EApp (EVar "display") (EVar "key"))) (ELit (LString "`: "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "instanceRef")) (EVar "mine"))))) (ELit (LString ""))))))
+(DTypeSig false "instanceLine" (TyFun (TyCon "AnchorTable") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
+(DFunDef false "instanceLine" (PWild (PList)) (ELit (LString "")))
+(DFunDef false "instanceLine" ((PVar "tbl") (PVar "impls")) (EBinOp "++" (EBinOp "++" (ELit (LString "\nInstances: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EApp (EVar "instanceRef") (EVar "tbl"))) (EVar "impls")))) (ELit (LString "\n"))))
+(DTypeSig false "instanceRef" (TyFun (TyCon "AnchorTable") (TyFun (TyCon "DocEntry") (TyCon "String"))))
+(DFunDef false "instanceRef" ((PVar "tbl") (PVar "e")) (EMatch (EVar "e") (arm (PCon "DocEntry" (PVar "name") PWild PWild (PVar "doc") PWild PWild) () (EBlock (DoLet false false (PVar "iface") (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "instanceIface") (EVar "name"))) (ELit (LString "`")))) (DoExpr (EIf (EBinOp "==" (EVar "doc") (ELit (LString ""))) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "](#"))) (EApp (EVar "display") (EApp (EApp (EVar "anchorOf") (EVar "tbl")) (EVar "e")))) (ELit (LString ")")))))))))
+(DTypeSig false "renderInstancesSection" (TyFun (TyCon "AnchorTable") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
+(DFunDef false "renderInstancesSection" ((PVar "tbl") (PVar "entries")) (EBlock (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (EVar "isListedImpl")) (EVar "entries"))) (DoLet false false (PVar "orphans") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "hasTypeEntry") (EVar "entries")) (EVar "e"))))) (EVar "listed"))) (DoLet false false (PVar "keys") (EApp (EVar "uniqueDoc") (EApp (EApp (EVar "map") (EVar "instanceKey")) (EVar "orphans")))) (DoLet false false (PVar "bullets") (EMatch (EVar "keys") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "orphanLine") (EVar "tbl")) (EVar "orphans"))) (EVar "keys"))))) (ELit (LString "\n\n")))))) (DoLet false false (PVar "documented") (EApp (EVar "stringConcat") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "renderEntry") (EVar "True")) (EVar "tbl")) (EVar "entries"))) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "/=" (EApp (EVar "entryDoc") (EVar "e")) (ELit (LString ""))))) (EVar "listed"))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "bullets") (ELit (LString ""))) (EBinOp "==" (EVar "documented") (ELit (LString "")))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## Instances\n\n")) (EApp (EVar "display") (EVar "bullets"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "documented"))) (ELit (LString "")))))))
+(DTypeSig false "orphanLine" (TyFun (TyCon "AnchorTable") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "orphanLine" ((PVar "tbl") (PVar "orphans") (PVar "key")) (EBlock (DoLet false false (PVar "mine") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "instanceKey") (EVar "e")) (EVar "key")))) (EVar "orphans"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- `")) (EApp (EVar "display") (EVar "key"))) (ELit (LString "`: "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EApp (EVar "instanceRef") (EVar "tbl"))) (EVar "mine"))))) (ELit (LString ""))))))
 (DTypeSig false "hasTypeEntry" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "DocEntry") (TyCon "Bool"))))
 (DFunDef false "hasTypeEntry" ((PVar "entries") (PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EApp (EApp (EVar "anyDoc") (ELam ((PVar "e")) (EApp (EApp (EVar "isTypeNamed") (EVar "hd")) (EVar "e")))) (EVar "entries")))
 (DFunDef false "hasTypeEntry" (PWild PWild) (EVar "False"))
@@ -2095,7 +2164,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "uniqueDoc" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EApp (EVar "uniqueDoc") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "x")))) (EVar "xs")))))
 (DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String"))))))))
 (DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src")) (EVar "filename")) (EVar "roots")) (arm (PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild) () (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))))
-(DData Abstract "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DData Public "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "mdName" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "docOnlyExcluded" (TyApp (TyCon "List") (TyCon "String")))
@@ -2158,6 +2227,26 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "nonSlugRunRe" () (EApp (EVar "mustCompile") (ELit (LString "[^a-z0-9_-]+"))))
 (DTypeSig false "slugifyAnchor" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "slugifyAnchor" ((PVar "name")) (EApp (EVar "stringTrimDashes") (EApp (EApp (EApp (EVar "replaceAll") (EVar "nonSlugRunRe")) (ELit (LString "-"))) (EApp (EVar "toLower") (EVar "name")))))
+(DTypeAlias false "AnchorTable" () (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))
+(DTypeSig false "entryTag" (TyFun (TyCon "DocEntry") (TyCon "String")))
+(DFunDef false "entryTag" ((PVar "e")) (EIf (EApp (EVar "isSection") (EVar "e")) (ELit (LString "s")) (EIf (EApp (EVar "isImpl") (EVar "e")) (ELit (LString "i")) (EIf (EVar "otherwise") (ELit (LString "p")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "pageAnchors" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "AnchorTable"))))
+(DFunDef false "pageAnchors" ((PVar "moduleName") (PVar "entries")) (EBlock (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (EVar "isListedImpl")) (EVar "entries"))) (DoLet false false (PVar "orphans") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "hasTypeEntry") (EVar "entries")) (EVar "e"))))) (EVar "listed"))) (DoLet false false (PVar "documented") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "/=" (EApp (EVar "entryDoc") (EVar "e")) (ELit (LString ""))))) (EVar "listed"))) (DoLet false false (PVar "main") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isListedImpl") (EVar "e"))))) (EVar "entries"))) (DoLet false false (PVar "hasInstances") (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isNilDoc") (EVar "orphans"))) (EApp (EVar "not") (EApp (EVar "isNilDoc") (EVar "documented"))))) (DoLet false false (PVar "instHead") (EIf (EVar "hasInstances") (EListLit (ETuple (ELit (LString "Instances")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LString "h")))) (EListLit))) (DoLet false false (PVar "rows") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (EVar "moduleName") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LString "h")))) (EApp (EApp (EVar "map") (EVar "entryRow")) (EVar "main"))) (EVar "instHead")) (EApp (EApp (EVar "map") (EVar "entryRow")) (EVar "documented")))) (DoExpr (EApp (EApp (EVar "assignAnchors") (EListLit)) (EVar "rows")))))
+(DTypeSig false "isNilDoc" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
+(DFunDef false "isNilDoc" ((PList)) (EVar "True"))
+(DFunDef false "isNilDoc" (PWild) (EVar "False"))
+(DTypeSig false "entryRow" (TyFun (TyCon "DocEntry") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))))
+(DFunDef false "entryRow" ((PVar "e")) (EMatch (EVar "e") (arm (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild (PVar "line")) () (ETuple (EVar "name") (EVar "line") (EApp (EVar "entryTag") (EVar "e"))))))
+(DTypeSig false "assignAnchors" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyCon "AnchorTable"))))
+(DFunDef false "assignAnchors" (PWild (PList)) (EListLit))
+(DFunDef false "assignAnchors" ((PVar "used") (PCons (PTuple (PVar "name") (PVar "line") (PVar "tag")) (PVar "rest"))) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EApp (EVar "freshAnchor") (EVar "used")) (EApp (EVar "slugifyAnchor") (EVar "name"))) (ELit (LInt 0)))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EVar "tag") (EVar "a")) (EApp (EApp (EVar "assignAnchors") (EBinOp "::" (EVar "a") (EVar "used"))) (EVar "rest"))))))
+(DTypeSig false "freshAnchor" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "freshAnchor" ((PVar "used") (PVar "base") (PVar "n")) (EBlock (DoLet false false (PVar "cand") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "base") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "-"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))) (DoExpr (EIf (EApp (EApp (EVar "anyDoc") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "cand")))) (EVar "used")) (EApp (EApp (EApp (EVar "freshAnchor") (EVar "used")) (EVar "base")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "cand")))))
+(DTypeSig false "anchorOf" (TyFun (TyCon "AnchorTable") (TyFun (TyCon "DocEntry") (TyCon "String"))))
+(DFunDef false "anchorOf" ((PVar "tbl") (PVar "e")) (EMatch (EVar "e") (arm (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild (PVar "line")) () (EApp (EApp (EApp (EApp (EVar "lookupAnchor") (EVar "tbl")) (EVar "name")) (EVar "line")) (EApp (EVar "entryTag") (EVar "e"))))))
+(DTypeSig false "lookupAnchor" (TyFun (TyCon "AnchorTable") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))))
+(DFunDef false "lookupAnchor" ((PList) (PVar "name") PWild PWild) (EApp (EVar "slugifyAnchor") (EVar "name")))
+(DFunDef false "lookupAnchor" ((PCons (PTuple (PVar "n") (PVar "l") (PVar "t") (PVar "a")) (PVar "rest")) (PVar "name") (PVar "line") (PVar "tag")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "==" (EVar "l") (EVar "line"))) (EBinOp "==" (EVar "t") (EVar "tag"))) (EVar "a") (EApp (EApp (EApp (EApp (EVar "lookupAnchor") (EVar "rest")) (EVar "name")) (EVar "line")) (EVar "tag"))))
 (DTypeSig false "stringTrimDashes" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stringTrimDashes" ((PVar "s")) (EApp (EVar "stringTrimDashEnd") (EApp (EVar "stringTrimDashStart") (EVar "s"))))
 (DTypeSig false "stringTrimDashStart" (TyFun (TyCon "String") (TyCon "String")))
@@ -2173,9 +2262,9 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig true "renderIndex" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyCon "String")))
 (DFunDef false "renderIndex" ((PVar "mds")) (EApp (EVar "stringConcat") (EBinOp "::" (ELit (LString "# Library Index\n\n")) (EApp (EApp (EVar "map") (EVar "renderIndexModule")) (EVar "mds")))))
 (DTypeSig false "renderIndexModule" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
-(DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EBlock (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## [`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ".md)\n\n")))) (DoLet false false (PVar "summary") (EApp (EVar "firstSentence") (EApp (EVar "renderDocProse") (EVar "header")))) (DoLet false false (PVar "summaryBlock") (EIf (EBinOp "==" (EVar "summary") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "summary") (ELit (LString "\n\n"))))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isImpl") (EVar "e"))) (EApp (EVar "not") (EApp (EVar "isSection") (EVar "e")))))) (EVar "entries"))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "renderIndexLink") (EVar "name"))) (EVar "listed")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "summaryBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "links"))) (ELit (LString "\n\n"))))))
-(DTypeSig false "renderIndexLink" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "String"))))
-(DFunDef false "renderIndexLink" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EVar "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EVar "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")"))))
+(DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EBlock (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## [`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ".md)\n\n")))) (DoLet false false (PVar "summary") (EApp (EVar "firstSentence") (EApp (EVar "renderDocProse") (EVar "header")))) (DoLet false false (PVar "summaryBlock") (EIf (EBinOp "==" (EVar "summary") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "summary") (ELit (LString "\n\n"))))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isImpl") (EVar "e"))) (EApp (EVar "not") (EApp (EVar "isSection") (EVar "e")))))) (EVar "entries"))) (DoLet false false (PVar "tbl") (EApp (EApp (EVar "pageAnchors") (EVar "name")) (EVar "entries"))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renderIndexLink") (EVar "name")) (EVar "tbl"))) (EVar "listed")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "summaryBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "links"))) (ELit (LString "\n\n"))))))
+(DTypeSig false "renderIndexLink" (TyFun (TyCon "String") (TyFun (TyCon "AnchorTable") (TyFun (TyCon "DocEntry") (TyCon "String")))))
+(DFunDef false "renderIndexLink" ((PVar "moduleName") (PVar "tbl") (PVar "e")) (EMatch (EVar "e") (arm (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EVar "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EVar "display") (EApp (EApp (EVar "anchorOf") (EVar "tbl")) (EVar "e")))) (ELit (LString ")"))))))
 (DTypeSig false "periodRe" (TyCon "Regex"))
 (DFunDef false "periodRe" () (EApp (EVar "mustCompile") (ELit (LString "\\."))))
 (DTypeSig false "newlineRe" (TyCon "Regex"))
@@ -2203,8 +2292,8 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "replaceAll" false) (mem "escape" false) (mem "find" false) (mem "findAll" false))))
-(DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
-(DData Private "DocKind" () ((variant "KPlain" (ConPos)) (variant "KTypeDecl" (ConPos)) (variant "KImplOn" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "KSection" (ConPos))) ())
+(DData Public "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
+(DData Public "DocKind" () ((variant "KPlain" (ConPos)) (variant "KTypeDecl" (ConPos)) (variant "KImplOn" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "KSection" (ConPos))) ())
 (DTypeAlias false "CommentRow" () (TyTuple (TyCon "Int") (TyCon "String") (TyCon "Int")))
 (DTypeSig false "dlen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "dlen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
@@ -2472,7 +2561,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "collectHeaderLines" (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "CommentRow")))))
 (DFunDef false "collectHeaderLines" ((PVar "tbl") (PVar "line")) (EMatch (EApp (EApp (EVar "lookupLineLast") (EVar "tbl")) (EVar "line")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "t") (PVar "b"))) () (EBinOp "::" (ETuple (EVar "line") (EVar "t") (EVar "b")) (EApp (EApp (EVar "collectHeaderLines") (EVar "tbl")) (EBinOp "+" (EVar "line") (ELit (LInt 1))))))))
 (DTypeSig false "renderMarkdown" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))))
-(DFunDef false "renderMarkdown" ((PVar "moduleName") (PVar "header") (PVar "entries")) (EBlock (DoLet false false (PVar "titleBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "# ")) (EVar "moduleName")) (ELit (LString "\n\n")))) (DoLet false false (PVar "headerProse") (EApp (EVar "renderDocProse") (EVar "header"))) (DoLet false false (PVar "headerBlock") (EIf (EBinOp "==" (EVar "headerProse") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "headerProse") (ELit (LString "\n\n"))))) (DoLet false false (PVar "sectioned") (EApp (EApp (EVar "anyDoc") (EVar "isSection")) (EVar "entries"))) (DoLet false false (PVar "main") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isListedImpl") (EVar "e"))))) (EVar "entries"))) (DoExpr (EApp (EVar "stringConcat") (EBinOp "::" (EVar "titleBlock") (EBinOp "::" (EApp (EVar "primitiveLayerBanner") (EVar "moduleName")) (EBinOp "::" (EVar "headerBlock") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renderEntry") (EVar "sectioned")) (EVar "entries"))) (EVar "main")) (EListLit (EApp (EVar "renderInstancesSection") (EVar "entries")))))))))))
+(DFunDef false "renderMarkdown" ((PVar "moduleName") (PVar "header") (PVar "entries")) (EBlock (DoLet false false (PVar "titleBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "# ")) (EVar "moduleName")) (ELit (LString "\n\n")))) (DoLet false false (PVar "headerProse") (EApp (EVar "renderDocProse") (EVar "header"))) (DoLet false false (PVar "headerBlock") (EIf (EBinOp "==" (EVar "headerProse") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "headerProse") (ELit (LString "\n\n"))))) (DoLet false false (PVar "sectioned") (EApp (EApp (EVar "anyDoc") (EVar "isSection")) (EVar "entries"))) (DoLet false false (PVar "main") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isListedImpl") (EVar "e"))))) (EVar "entries"))) (DoLet false false (PVar "tbl") (EApp (EApp (EVar "pageAnchors") (EVar "moduleName")) (EVar "entries"))) (DoExpr (EApp (EVar "stringConcat") (EBinOp "::" (EVar "titleBlock") (EBinOp "::" (EApp (EVar "primitiveLayerBanner") (EVar "moduleName")) (EBinOp "::" (EVar "headerBlock") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "renderEntry") (EVar "sectioned")) (EVar "tbl")) (EVar "entries"))) (EVar "main")) (EListLit (EApp (EApp (EVar "renderInstancesSection") (EVar "tbl")) (EVar "entries")))))))))))
 (DTypeSig false "primitiveLayerBanner" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "primitiveLayerBanner" ((PVar "moduleName")) (EIf (EApp (EVar "preludeOnlyModule") (EVar "moduleName")) (ELit (LString "> These are the host primitives. They are in scope everywhere without an\n> import, and their `<type><Op>` names (`stringToUpper`, `intToString`)\n> mark them as the primitive layer. Prefer the library name where one\n> exists (`string.toUpper`, `string.toFloat`), and reach for a name on this\n> page only when no library module covers it.\n\n")) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isSection" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
@@ -2494,23 +2583,23 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "instanceKey" (TyFun (TyCon "DocEntry") (TyCon "String")))
 (DFunDef false "instanceKey" ((PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EVar "hd"))
 (DFunDef false "instanceKey" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EApp (EVar "instanceHead") (EVar "name")))
-(DTypeSig false "renderEntry" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "DocEntry") (TyCon "String")))))
-(DFunDef false "renderEntry" (PWild PWild (PCon "DocEntry" (PVar "title") PWild PWild PWild (PCon "KSection") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "## ")) (EVar "title")) (ELit (LString "\n\n"))))
-(DFunDef false "renderEntry" ((PVar "sectioned") (PVar "entries") (PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "head") (PVar "doc") (PVar "kind") PWild)) (EBlock (DoLet false false (PVar "level") (EIf (EVar "sectioned") (ELit (LString "### ")) (ELit (LString "## ")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "level"))) (ELit (LString "`"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`\n\n")))) (DoLet false false (PVar "headLine") (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (ELit (LString "\n")) (EVar "head")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EApp (EMethodRef "display") (EVar "sig"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "headLine"))) (ELit (LString "\n```\n")))) (DoLet false false (PVar "instances") (EMatch (EVar "kind") (arm (PCon "KTypeDecl") () (EApp (EVar "instanceLine") (EApp (EApp (EVar "instancesOf") (EVar "name")) (EVar "entries")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "docBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "instances"))) (ELit (LString "\n"))))))
+(DTypeSig false "renderEntry" (TyFun (TyCon "Bool") (TyFun (TyCon "AnchorTable") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "DocEntry") (TyCon "String"))))))
+(DFunDef false "renderEntry" (PWild PWild PWild (PCon "DocEntry" (PVar "title") PWild PWild PWild (PCon "KSection") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "## ")) (EVar "title")) (ELit (LString "\n\n"))))
+(DFunDef false "renderEntry" ((PVar "sectioned") (PVar "tbl") (PVar "entries") (PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "head") (PVar "doc") (PVar "kind") PWild)) (EBlock (DoLet false false (PVar "level") (EIf (EVar "sectioned") (ELit (LString "### ")) (ELit (LString "## ")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "level"))) (ELit (LString "`"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`\n\n")))) (DoLet false false (PVar "headLine") (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (ELit (LString "\n")) (EVar "head")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EApp (EMethodRef "display") (EVar "sig"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "headLine"))) (ELit (LString "\n```\n")))) (DoLet false false (PVar "instances") (EMatch (EVar "kind") (arm (PCon "KTypeDecl") () (EApp (EApp (EVar "instanceLine") (EVar "tbl")) (EApp (EApp (EVar "instancesOf") (EVar "name")) (EVar "entries")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "docBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "instances"))) (ELit (LString "\n"))))))
 (DTypeSig false "instancesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "instancesOf" ((PVar "tyName") (PVar "entries")) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EApp (EVar "implHeadIs") (EVar "tyName")) (EVar "e")))) (EVar "entries")))
 (DTypeSig false "implHeadIs" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "Bool"))))
 (DFunDef false "implHeadIs" ((PVar "tyName") (PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EBinOp "==" (EVar "hd") (EVar "tyName")))
 (DFunDef false "implHeadIs" (PWild PWild) (EVar "False"))
-(DTypeSig false "instanceLine" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
-(DFunDef false "instanceLine" ((PList)) (ELit (LString "")))
-(DFunDef false "instanceLine" ((PVar "impls")) (EBinOp "++" (EBinOp "++" (ELit (LString "\nInstances: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "instanceRef")) (EVar "impls")))) (ELit (LString "\n"))))
-(DTypeSig false "instanceRef" (TyFun (TyCon "DocEntry") (TyCon "String")))
-(DFunDef false "instanceRef" ((PCon "DocEntry" (PVar "name") PWild PWild (PVar "doc") PWild PWild)) (EBlock (DoLet false false (PVar "iface") (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "instanceIface") (EVar "name"))) (ELit (LString "`")))) (DoExpr (EIf (EBinOp "==" (EVar "doc") (ELit (LString ""))) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "](#"))) (EApp (EMethodRef "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")")))))))
-(DTypeSig false "renderInstancesSection" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
-(DFunDef false "renderInstancesSection" ((PVar "entries")) (EBlock (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (EVar "isListedImpl")) (EVar "entries"))) (DoLet false false (PVar "orphans") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "hasTypeEntry") (EVar "entries")) (EVar "e"))))) (EVar "listed"))) (DoLet false false (PVar "keys") (EApp (EVar "uniqueDoc") (EApp (EApp (EMethodRef "map") (EVar "instanceKey")) (EVar "orphans")))) (DoLet false false (PVar "bullets") (EMatch (EVar "keys") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "orphanLine") (EVar "orphans"))) (EVar "keys"))))) (ELit (LString "\n\n")))))) (DoLet false false (PVar "documented") (EApp (EVar "stringConcat") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renderEntry") (EVar "True")) (EVar "entries"))) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "/=" (EApp (EVar "entryDoc") (EVar "e")) (ELit (LString ""))))) (EVar "listed"))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "bullets") (ELit (LString ""))) (EBinOp "==" (EVar "documented") (ELit (LString "")))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## Instances\n\n")) (EApp (EMethodRef "display") (EVar "bullets"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "documented"))) (ELit (LString "")))))))
-(DTypeSig false "orphanLine" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "orphanLine" ((PVar "orphans") (PVar "key")) (EBlock (DoLet false false (PVar "mine") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "instanceKey") (EVar "e")) (EVar "key")))) (EVar "orphans"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- `")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "instanceRef")) (EVar "mine"))))) (ELit (LString ""))))))
+(DTypeSig false "instanceLine" (TyFun (TyCon "AnchorTable") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
+(DFunDef false "instanceLine" (PWild (PList)) (ELit (LString "")))
+(DFunDef false "instanceLine" ((PVar "tbl") (PVar "impls")) (EBinOp "++" (EBinOp "++" (ELit (LString "\nInstances: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "instanceRef") (EVar "tbl"))) (EVar "impls")))) (ELit (LString "\n"))))
+(DTypeSig false "instanceRef" (TyFun (TyCon "AnchorTable") (TyFun (TyCon "DocEntry") (TyCon "String"))))
+(DFunDef false "instanceRef" ((PVar "tbl") (PVar "e")) (EMatch (EVar "e") (arm (PCon "DocEntry" (PVar "name") PWild PWild (PVar "doc") PWild PWild) () (EBlock (DoLet false false (PVar "iface") (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "instanceIface") (EVar "name"))) (ELit (LString "`")))) (DoExpr (EIf (EBinOp "==" (EVar "doc") (ELit (LString ""))) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "](#"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "anchorOf") (EVar "tbl")) (EVar "e")))) (ELit (LString ")")))))))))
+(DTypeSig false "renderInstancesSection" (TyFun (TyCon "AnchorTable") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
+(DFunDef false "renderInstancesSection" ((PVar "tbl") (PVar "entries")) (EBlock (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (EVar "isListedImpl")) (EVar "entries"))) (DoLet false false (PVar "orphans") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "hasTypeEntry") (EVar "entries")) (EVar "e"))))) (EVar "listed"))) (DoLet false false (PVar "keys") (EApp (EVar "uniqueDoc") (EApp (EApp (EMethodRef "map") (EVar "instanceKey")) (EVar "orphans")))) (DoLet false false (PVar "bullets") (EMatch (EVar "keys") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "orphanLine") (EVar "tbl")) (EVar "orphans"))) (EVar "keys"))))) (ELit (LString "\n\n")))))) (DoLet false false (PVar "documented") (EApp (EVar "stringConcat") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "renderEntry") (EVar "True")) (EVar "tbl")) (EVar "entries"))) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "/=" (EApp (EVar "entryDoc") (EVar "e")) (ELit (LString ""))))) (EVar "listed"))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "bullets") (ELit (LString ""))) (EBinOp "==" (EVar "documented") (ELit (LString "")))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## Instances\n\n")) (EApp (EMethodRef "display") (EVar "bullets"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "documented"))) (ELit (LString "")))))))
+(DTypeSig false "orphanLine" (TyFun (TyCon "AnchorTable") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "orphanLine" ((PVar "tbl") (PVar "orphans") (PVar "key")) (EBlock (DoLet false false (PVar "mine") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "instanceKey") (EVar "e")) (EVar "key")))) (EVar "orphans"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- `")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "instanceRef") (EVar "tbl"))) (EVar "mine"))))) (ELit (LString ""))))))
 (DTypeSig false "hasTypeEntry" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "DocEntry") (TyCon "Bool"))))
 (DFunDef false "hasTypeEntry" ((PVar "entries") (PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EApp (EApp (EVar "anyDoc") (ELam ((PVar "e")) (EApp (EApp (EVar "isTypeNamed") (EVar "hd")) (EVar "e")))) (EVar "entries")))
 (DFunDef false "hasTypeEntry" (PWild PWild) (EVar "False"))
@@ -2524,7 +2613,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "uniqueDoc" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EApp (EVar "uniqueDoc") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "x")))) (EVar "xs")))))
 (DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String"))))))))
 (DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src")) (EVar "filename")) (EVar "roots")) (arm (PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild) () (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))))
-(DData Abstract "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))) ())
+(DData Public "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "mdName" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "docOnlyExcluded" (TyApp (TyCon "List") (TyCon "String")))
@@ -2587,6 +2676,26 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "nonSlugRunRe" () (EApp (EVar "mustCompile") (ELit (LString "[^a-z0-9_-]+"))))
 (DTypeSig false "slugifyAnchor" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "slugifyAnchor" ((PVar "name")) (EApp (EVar "stringTrimDashes") (EApp (EApp (EApp (EVar "replaceAll") (EVar "nonSlugRunRe")) (ELit (LString "-"))) (EApp (EVar "toLower") (EVar "name")))))
+(DTypeAlias false "AnchorTable" () (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))
+(DTypeSig false "entryTag" (TyFun (TyCon "DocEntry") (TyCon "String")))
+(DFunDef false "entryTag" ((PVar "e")) (EIf (EApp (EVar "isSection") (EVar "e")) (ELit (LString "s")) (EIf (EApp (EVar "isImpl") (EVar "e")) (ELit (LString "i")) (EIf (EVar "otherwise") (ELit (LString "p")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "pageAnchors" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "AnchorTable"))))
+(DFunDef false "pageAnchors" ((PVar "moduleName") (PVar "entries")) (EBlock (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (EVar "isListedImpl")) (EVar "entries"))) (DoLet false false (PVar "orphans") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "hasTypeEntry") (EVar "entries")) (EVar "e"))))) (EVar "listed"))) (DoLet false false (PVar "documented") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "/=" (EApp (EVar "entryDoc") (EVar "e")) (ELit (LString ""))))) (EVar "listed"))) (DoLet false false (PVar "main") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isListedImpl") (EVar "e"))))) (EVar "entries"))) (DoLet false false (PVar "hasInstances") (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isNilDoc") (EVar "orphans"))) (EApp (EVar "not") (EApp (EVar "isNilDoc") (EVar "documented"))))) (DoLet false false (PVar "instHead") (EIf (EVar "hasInstances") (EListLit (ETuple (ELit (LString "Instances")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LString "h")))) (EListLit))) (DoLet false false (PVar "rows") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (EVar "moduleName") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LString "h")))) (EApp (EApp (EMethodRef "map") (EVar "entryRow")) (EVar "main"))) (EVar "instHead")) (EApp (EApp (EMethodRef "map") (EVar "entryRow")) (EVar "documented")))) (DoExpr (EApp (EApp (EVar "assignAnchors") (EListLit)) (EVar "rows")))))
+(DTypeSig false "isNilDoc" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
+(DFunDef false "isNilDoc" ((PList)) (EVar "True"))
+(DFunDef false "isNilDoc" (PWild) (EVar "False"))
+(DTypeSig false "entryRow" (TyFun (TyCon "DocEntry") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))))
+(DFunDef false "entryRow" ((PVar "e")) (EMatch (EVar "e") (arm (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild (PVar "line")) () (ETuple (EVar "name") (EVar "line") (EApp (EVar "entryTag") (EVar "e"))))))
+(DTypeSig false "assignAnchors" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyCon "AnchorTable"))))
+(DFunDef false "assignAnchors" (PWild (PList)) (EListLit))
+(DFunDef false "assignAnchors" ((PVar "used") (PCons (PTuple (PVar "name") (PVar "line") (PVar "tag")) (PVar "rest"))) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EApp (EVar "freshAnchor") (EVar "used")) (EApp (EVar "slugifyAnchor") (EVar "name"))) (ELit (LInt 0)))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EVar "tag") (EVar "a")) (EApp (EApp (EVar "assignAnchors") (EBinOp "::" (EVar "a") (EVar "used"))) (EVar "rest"))))))
+(DTypeSig false "freshAnchor" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "freshAnchor" ((PVar "used") (PVar "base") (PVar "n")) (EBlock (DoLet false false (PVar "cand") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "base") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "-"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))) (DoExpr (EIf (EApp (EApp (EVar "anyDoc") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "cand")))) (EVar "used")) (EApp (EApp (EApp (EVar "freshAnchor") (EVar "used")) (EVar "base")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "cand")))))
+(DTypeSig false "anchorOf" (TyFun (TyCon "AnchorTable") (TyFun (TyCon "DocEntry") (TyCon "String"))))
+(DFunDef false "anchorOf" ((PVar "tbl") (PVar "e")) (EMatch (EVar "e") (arm (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild (PVar "line")) () (EApp (EApp (EApp (EApp (EVar "lookupAnchor") (EVar "tbl")) (EVar "name")) (EVar "line")) (EApp (EVar "entryTag") (EVar "e"))))))
+(DTypeSig false "lookupAnchor" (TyFun (TyCon "AnchorTable") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))))
+(DFunDef false "lookupAnchor" ((PList) (PVar "name") PWild PWild) (EApp (EVar "slugifyAnchor") (EVar "name")))
+(DFunDef false "lookupAnchor" ((PCons (PTuple (PVar "n") (PVar "l") (PVar "t") (PVar "a")) (PVar "rest")) (PVar "name") (PVar "line") (PVar "tag")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "==" (EVar "l") (EVar "line"))) (EBinOp "==" (EVar "t") (EVar "tag"))) (EVar "a") (EApp (EApp (EApp (EApp (EVar "lookupAnchor") (EVar "rest")) (EVar "name")) (EVar "line")) (EVar "tag"))))
 (DTypeSig false "stringTrimDashes" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stringTrimDashes" ((PVar "s")) (EApp (EVar "stringTrimDashEnd") (EApp (EVar "stringTrimDashStart") (EVar "s"))))
 (DTypeSig false "stringTrimDashStart" (TyFun (TyCon "String") (TyCon "String")))
@@ -2602,9 +2711,9 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig true "renderIndex" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyCon "String")))
 (DFunDef false "renderIndex" ((PVar "mds")) (EApp (EVar "stringConcat") (EBinOp "::" (ELit (LString "# Library Index\n\n")) (EApp (EApp (EMethodRef "map") (EVar "renderIndexModule")) (EVar "mds")))))
 (DTypeSig false "renderIndexModule" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
-(DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EBlock (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## [`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ".md)\n\n")))) (DoLet false false (PVar "summary") (EApp (EVar "firstSentence") (EApp (EVar "renderDocProse") (EVar "header")))) (DoLet false false (PVar "summaryBlock") (EIf (EBinOp "==" (EVar "summary") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "summary") (ELit (LString "\n\n"))))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isImpl") (EVar "e"))) (EApp (EVar "not") (EApp (EVar "isSection") (EVar "e")))))) (EVar "entries"))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderIndexLink") (EVar "name"))) (EVar "listed")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "summaryBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "links"))) (ELit (LString "\n\n"))))))
-(DTypeSig false "renderIndexLink" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "String"))))
-(DFunDef false "renderIndexLink" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EMethodRef "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EMethodRef "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")"))))
+(DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EBlock (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## [`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ".md)\n\n")))) (DoLet false false (PVar "summary") (EApp (EVar "firstSentence") (EApp (EVar "renderDocProse") (EVar "header")))) (DoLet false false (PVar "summaryBlock") (EIf (EBinOp "==" (EVar "summary") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "summary") (ELit (LString "\n\n"))))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isImpl") (EVar "e"))) (EApp (EVar "not") (EApp (EVar "isSection") (EVar "e")))))) (EVar "entries"))) (DoLet false false (PVar "tbl") (EApp (EApp (EVar "pageAnchors") (EVar "name")) (EVar "entries"))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renderIndexLink") (EVar "name")) (EVar "tbl"))) (EVar "listed")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "summaryBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "links"))) (ELit (LString "\n\n"))))))
+(DTypeSig false "renderIndexLink" (TyFun (TyCon "String") (TyFun (TyCon "AnchorTable") (TyFun (TyCon "DocEntry") (TyCon "String")))))
+(DFunDef false "renderIndexLink" ((PVar "moduleName") (PVar "tbl") (PVar "e")) (EMatch (EVar "e") (arm (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EMethodRef "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "anchorOf") (EVar "tbl")) (EVar "e")))) (ELit (LString ")"))))))
 (DTypeSig false "periodRe" (TyCon "Regex"))
 (DFunDef false "periodRe" () (EApp (EVar "mustCompile") (ELit (LString "\\."))))
 (DTypeSig false "newlineRe" (TyCon "Regex"))

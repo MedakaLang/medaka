@@ -1,5 +1,5 @@
 defs|ctor|Green  DEF defs.mdk:8:19  USES 0  
-defs|ctor|Red  DEF defs.mdk:8:19  USES 1  defs.mdk:27:24
+defs|ctor|Red  DEF defs.mdk:8:19  USES 3  defs.mdk:27:24 main.mdk:36:10 main.mdk:42:25
 defs|local|x|1  DEF defs.mdk:6:7  USES 1  defs.mdk:6:11
 defs|method|sizeOf  DEF defs.mdk:20:2 defs.mdk:23:2  USES 2  defs.mdk:27:17 main.mdk:42:18
 defs|ty|Color  DEF defs.mdk:8:19  USES 2  defs.mdk:22:21 main.mdk:35:10

@@ -1,5 +1,5 @@
 # META
-source_lines=504
+source_lines=510
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running.
@@ -298,7 +298,13 @@ commentToPair c = (commentLine c, commentText c)
 concatMapC : List (Int, String) -> List (Int, String)
 concatMapC [] = []
 concatMapC (c :: rest) =
-  (if isBlockComment c then expandBlock c else [c]) ++ concatMapC rest
+  (if isBlockComment c then blockWithFences c else [c]) ++ concatMapC rest
+
+-- A block comment ends on its own line, so an adjacent `--` comment would
+-- otherwise read as a continuation of the block's last expected line. Bare `--`
+-- fences on both sides keep the block's examples self-contained.
+blockWithFences : (Int, String) -> List (Int, String)
+blockWithFences c = (clLine c, "--") :: expandBlock c ++ [(clLine c, "--")]
 
 -- ── Synthesizing the per-example binding ────────────────────────────────────
 -- An example with an expected line is rendered through the user-facing `debug`
@@ -593,7 +599,9 @@ isUse _ = False
 (DFunDef false "commentToPair" ((PVar "c")) (ETuple (EApp (EVar "commentLine") (EVar "c")) (EApp (EVar "commentText") (EVar "c"))))
 (DTypeSig false "concatMapC" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "concatMapC" ((PList)) (EListLit))
-(DFunDef false "concatMapC" ((PCons (PVar "c") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EVar "isBlockComment") (EVar "c")) (EApp (EVar "expandBlock") (EVar "c")) (EListLit (EVar "c"))) (EApp (EVar "concatMapC") (EVar "rest"))))
+(DFunDef false "concatMapC" ((PCons (PVar "c") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EVar "isBlockComment") (EVar "c")) (EApp (EVar "blockWithFences") (EVar "c")) (EListLit (EVar "c"))) (EApp (EVar "concatMapC") (EVar "rest"))))
+(DTypeSig false "blockWithFences" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "blockWithFences" ((PVar "c")) (EBinOp "::" (ETuple (EApp (EVar "clLine") (EVar "c")) (ELit (LString "--"))) (EBinOp "++" (EApp (EVar "expandBlock") (EVar "c")) (EListLit (ETuple (EApp (EVar "clLine") (EVar "c")) (ELit (LString "--")))))))
 (DTypeSig true "synthName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "synthName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__dt_")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "__"))))
 (DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
@@ -745,7 +753,9 @@ isUse _ = False
 (DFunDef false "commentToPair" ((PVar "c")) (ETuple (EApp (EVar "commentLine") (EVar "c")) (EApp (EVar "commentText") (EVar "c"))))
 (DTypeSig false "concatMapC" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "concatMapC" ((PList)) (EListLit))
-(DFunDef false "concatMapC" ((PCons (PVar "c") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EVar "isBlockComment") (EVar "c")) (EApp (EVar "expandBlock") (EVar "c")) (EListLit (EVar "c"))) (EApp (EVar "concatMapC") (EVar "rest"))))
+(DFunDef false "concatMapC" ((PCons (PVar "c") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EVar "isBlockComment") (EVar "c")) (EApp (EVar "blockWithFences") (EVar "c")) (EListLit (EVar "c"))) (EApp (EVar "concatMapC") (EVar "rest"))))
+(DTypeSig false "blockWithFences" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "blockWithFences" ((PVar "c")) (EBinOp "::" (ETuple (EApp (EVar "clLine") (EVar "c")) (ELit (LString "--"))) (EBinOp "++" (EApp (EVar "expandBlock") (EVar "c")) (EListLit (ETuple (EApp (EVar "clLine") (EVar "c")) (ELit (LString "--")))))))
 (DTypeSig true "synthName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "synthName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__dt_")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "__"))))
 (DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))

@@ -149,6 +149,27 @@ drive() {
   [ -s "$TMP/out.ndjson" ] || { echo "the session produced no response frames" >&2; exit 1; }
 }
 
+# Run one `medaka` verb into $2, grading what `drive` grades: stderr must be
+# empty (a stale-binary warning or a crash is not a golden's content) and the
+# exit status must equal the one the row expects. $1 names the spawn, $3 is that
+# expected status; the rest is the command. An error fixture's `check --json`
+# legitimately exits 1, so the expectation is per row, never a blanket 0.
+spawn() {
+  what="$1"; dest="$2"; want="$3"; shift 3
+  rc=0
+  MEDAKA_ROOT="$ROOT" bounded "$@" > "$dest" 2> "$TMP/spawn.err" || rc=$?
+  if [ "$rc" -ne "$want" ]; then
+    echo "$what exited $rc (expected $want) — refusing to mint a golden from it" >&2
+    sed 's/^/    /' "$TMP/spawn.err" >&2
+    exit 1
+  fi
+  if [ -s "$TMP/spawn.err" ]; then
+    echo "$what wrote to stderr — refusing to mint a golden from it" >&2
+    sed 's/^/    /' "$TMP/spawn.err" >&2
+    exit 1
+  fi
+}
+
 # Persist $TMP/out.ndjson (or a named file) as a golden, and say so.
 finish() {
   cp "$2" "$GOLD/$1"
@@ -160,15 +181,15 @@ finish() {
 
 if wanted check_clean.json "$@"; then
   printf 'main = println "hi"\n' > "$TMP/clean.mdk"
-  MEDAKA_ROOT="$ROOT" bounded "$MEDAKA" check --json "$TMP/clean.mdk" 2>/dev/null \
-    | sed "s|$TMP/||g" > "$TMP/g"
+  spawn "medaka check --json (clean)" "$TMP/raw" 0 "$MEDAKA" check --json "$TMP/clean.mdk"
+  sed "s|$TMP/||g" "$TMP/raw" > "$TMP/g"
   finish check_clean.json "$TMP/g"
 fi
 
 if wanted check_err.json "$@"; then
   printf 'main = 1 + "x"\n' > "$TMP/err.mdk"
-  MEDAKA_ROOT="$ROOT" bounded "$MEDAKA" check --json "$TMP/err.mdk" 2>/dev/null \
-    | sed "s|$TMP/||g" > "$TMP/g"
+  spawn "medaka check --json (error fixture)" "$TMP/raw" 1 "$MEDAKA" check --json "$TMP/err.mdk"
+  sed "s|$TMP/||g" "$TMP/raw" > "$TMP/g"
   finish check_err.json "$TMP/g"
 fi
 
@@ -180,8 +201,8 @@ if wanted check_project.json "$@"; then
   printf 'import lib_clean.{double}\nimport lib_bad.{oops}\n\nmain = println (double 21)\n' > "$PROJ/main_app.mdk"
   # Every file under $PROJ, not just the entry, needs its directory stripped for
   # a golden that is byte-stable across machines.
-  MEDAKA_ROOT="$ROOT" bounded "$MEDAKA" check --json "$PROJ/main_app.mdk" 2>/dev/null \
-    | sed "s|$PROJ/||g" > "$TMP/g"
+  spawn "medaka check --json (project fixture)" "$TMP/raw" 1 "$MEDAKA" check --json "$PROJ/main_app.mdk"
+  sed "s|$PROJ/||g" "$TMP/raw" > "$TMP/g"
   finish check_project.json "$TMP/g"
 fi
 
@@ -189,7 +210,7 @@ fi
 
 if wanted b3_fmt.txt "$@"; then
   printf 'main   =   println    "hi"\n\n\n' > "$TMP/unfmt.mdk"
-  MEDAKA_ROOT="$ROOT" bounded "$MEDAKA" fmt --stdout "$TMP/unfmt.mdk" 2>/dev/null > "$TMP/g"
+  spawn "medaka fmt --stdout" "$TMP/g" 0 "$MEDAKA" fmt --stdout "$TMP/unfmt.mdk"
   finish b3_fmt.txt "$TMP/g"
 fi
 

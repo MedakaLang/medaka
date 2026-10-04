@@ -160,6 +160,10 @@ public export data ResError =
   -- data constructor directly (`import m.{Red}`) rather than its type.
   -- Ruled a reject, not a warning (#3314) — the fix is `T(..)` to bring the
   -- type's constructors in as a set, or an aliased `Alias.Ctor` reference.
+  | AbstractCtorImport String String String (Option Loc)
+  -- ctor name as written, owning type, owning module: a selective member list
+  -- names a constructor of a type the module exports abstractly
+  -- (`export data`, no `public`).  The ctor exists but is withheld.
   | EffectLabelNoMembers String String (Option Loc)
   -- effect label name, owning module: `Label(..)` on an effect label — an
   -- effect label has no constructors or fields to bring, unlike a type, so
@@ -306,6 +310,7 @@ resErrorLoc (PrivateNameAccess _ _ l _) = l
 resErrorLoc (NoExportedConstructors _ _ l) = l
 resErrorLoc (NewtypeCtorNotExported _ _ l) = l
 resErrorLoc (BareCtorImport _ _ l) = l
+resErrorLoc (AbstractCtorImport _ _ _ l) = l
 resErrorLoc (EffectLabelNoMembers _ _ l) = l
 resErrorLoc (AbstractFieldAccess _ _ l) = l
 resErrorLoc (UnknownModule _ l) = l
@@ -2772,6 +2777,8 @@ resErrorSexp (NoExportedConstructors n m _) =
 resErrorSexp (NewtypeCtorNotExported n m _) =
   "(NewtypeCtorNotExported \{escStr n} \{escStr m})"
 resErrorSexp (BareCtorImport n t _) = "(BareCtorImport \{escStr n} \{escStr t})"
+resErrorSexp (AbstractCtorImport n t m _) =
+  "(AbstractCtorImport \{escStr n} \{escStr t} \{escStr m})"
 resErrorSexp (EffectLabelNoMembers n m _) =
   "(EffectLabelNoMembers \{escStr n} \{escStr m})"
 resErrorSexp (AbstractFieldAccess t f _) =
@@ -2930,6 +2937,8 @@ ppResError (NewtypeCtorNotExported n m _) =
   "'\{n}' exports no constructors: a `newtype`'s constructor is always module-private, and `public` is a parse error on `newtype`. Expose it with an accessor function, or declare '\{n}' as a `public export data` with one variant"
 ppResError (BareCtorImport n t _) =
   "'\{n}' is a constructor of '\{t}'. Import it as `\{t}(..)` to bring in \{t}'s constructors as a set, or alias the module and write `<alias>.\{n}`"
+ppResError (AbstractCtorImport n t m _) =
+  "'\{n}' is a constructor of '\{t}', which module '\{m}' exports abstractly, so its constructors are not exported. Declare '\{t}' a `public export data` where it is defined to export them"
 ppResError (EffectLabelNoMembers n m _) =
   "'\{n}' is an effect label, not a type: `(..)` names constructors to bring into scope, and an effect label has none. Remove `(..)` and import '\{n}' directly"
 ppResError (AbstractFieldAccess t f _) =
@@ -3032,6 +3041,7 @@ resErrorCode (PrivateNameAccess _ _ _ _) = "R-PRIVATE-NAME"
 resErrorCode (NoExportedConstructors _ _ _) = "R-NO-EXPORTED-CTORS"
 resErrorCode (NewtypeCtorNotExported _ _ _) = "R-NEWTYPE-CTOR-PRIVATE"
 resErrorCode (BareCtorImport _ _ _) = "R-BARE-CTOR-IMPORT"
+resErrorCode (AbstractCtorImport _ _ _ _) = "R-ABSTRACT-CTOR-IMPORT"
 resErrorCode (EffectLabelNoMembers _ _ _) = "R-EFFECT-LABEL-NO-MEMBERS"
 resErrorCode (AbstractFieldAccess _ _ _) = "R-ABSTRACT-FIELD"
 resErrorCode (UnknownModule _ _) = "R-UNKNOWN-MODULE"
@@ -3139,6 +3149,11 @@ public export data ModuleExports = ModuleExports {
   -- with a located, explanatory diagnostic instead of silently admitting it
   -- and leaving typecheck to fail with a bare `Unbound variable`.
   expNewtypeCtors : List (String, String),
+  -- (ctorName, typeName) for the constructors of `export data` without
+  -- `public`.  Like `expNewtypeCtors` it exists only so the import path can
+  -- refuse a bare `import m.{Ctor}` with a diagnostic that says the ctor is
+  -- withheld; it crosses no `export import` hop.
+  expAbstractCtors : List (String, String),
 }
 -- public type → its exported ctors
 -- (field, owner type/ctor)
@@ -3374,7 +3389,9 @@ expandMemberNames exp (m@(UseMember name False loc _))
     Some _ => []
     None => match typeOfCtor name exp
       Some _ => []
-      None => [(name, useMemberLocal m, loc)]
+      None => match lookupAssoc name exp.expAbstractCtors
+        Some _ => []
+        None => [(name, useMemberLocal m, loc)]
 expandMemberNames exp (m@(UseMember name True loc _))
   | isNewtypeExport name exp =
     -- keep the TYPE name bound (mirrors abstract `data`: `NT` itself is
@@ -3403,7 +3420,9 @@ expandMemberErrs exp (UseMember name False loc _)
     Some tyName => [NewtypeCtorNotExported tyName exp.modId (Some loc)]
     None => match typeOfCtor name exp
       Some tyName => [BareCtorImport name tyName (Some loc)]
-      None => []
+      None => match lookupAssoc name exp.expAbstractCtors
+        Some tyName => [AbstractCtorImport name tyName exp.modId (Some loc)]
+        None => []
 expandMemberErrs exp (UseMember name True loc _)
   | isNewtypeExport name exp =
     [NewtypeCtorNotExported name exp.modId (Some loc)]
@@ -4420,6 +4439,7 @@ coreExports preludeDecls = ModuleExports {
     map (n => (n, ("core", n))) (preludeValueNames preludeDecls),
   expEffects = effectNames preludeDecls,
   expEffectOrigins = map (n => (n, "core")) (effectNames preludeDecls),
+  expAbstractCtors = [],
   expNewtypeCtors = [],  -- the prelude declares no `newtype` today; nothing to refuse
 }
 
@@ -4727,6 +4747,19 @@ nsNewtypeCtors = ExpNs {
   nsCarry = noCarry,
 }
 
+-- (ctorName, typeName) of every `export data` (no `public`) constructor; see
+-- `expAbstractCtors`.  No carriage, as for `nsNewtypeCtors`.
+nsAbstractCtors : ExpNs (String, String)
+nsAbstractCtors = ExpNs {
+  nsGet = exp => exp.expAbstractCtors,
+  nsDirectOf =
+    d => match d
+      DData { dataVis = VisAbstract, dataName = n, dataCtors = vs } =>
+        map (v => (variantName v, n)) vs
+      _ => [],
+  nsCarry = noCarry,
+}
+
 noCarry : UsePath -> ModuleExports -> List a
 noCarry _ _ = []
 
@@ -4808,6 +4841,7 @@ buildExportsWith coreExp known modId prog ifaceVals = ModuleExports {
     map (n => (n, modId)) (directIn nsEffects prog)
       ++ carriedIn nsEffectOrigins coreExp known prog,
   expNewtypeCtors = directIn nsNewtypeCtors prog,
+  expAbstractCtors = directIn nsAbstractCtors prog,
 }
 
 -- methods of PUBLIC interfaces that are bound as values (lib's final iter loop)

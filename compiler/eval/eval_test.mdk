@@ -12,7 +12,7 @@ import frontend.ast.{
   Loc(..),
 }
 import types.route_key.{implRouteKeyWord}
-import eval.eval.{buildMethodReqCounts}
+import eval.eval.{buildMethodReqCounts, Value(..), ppValue}
 
 testLoc : Loc
 testLoc = Loc "" 1 0 1 0
@@ -72,3 +72,18 @@ test "method requires counts are keyed by the canonical route word only" =
       expectEqual (Some 2) (lookupCount ("fromInt", forgeKey) counts),
       expectEqual None (lookupCount ("missing", numKey) counts),
     ]
+
+-- The REPL printer parenthesizes nested payloads the way `Debug`/`Display`
+-- do: negatives, constructor applications and records get parens, tuples and
+-- lists keep their own brackets.
+test "ppValue parenthesizes nested negative and compound payloads" = expectAll [
+  expectEqual "Some (-3)" (ppValue (VCon "Some" [VInt (-3)])),
+  expectEqual "Some (-1.5)" (ppValue (VCon "Some" [VFloat (-1.5)])),
+  expectEqual "Some 3" (ppValue (VCon "Some" [VInt 3])),
+  expectEqual "Ok (Some (-2))" (ppValue (VCon "Ok" [VCon "Some" [VInt (-2)]])),
+  expectEqual
+    "[Some (-1), None]"
+    (ppValue (VList [VCon "Some" [VInt (-1)], VCon "None" []])),
+  expectEqual "Some (1, 2)" (ppValue (VCon "Some" [VTuple [VInt 1, VInt 2]])),
+  expectEqual "Some [1, 2]" (ppValue (VCon "Some" [VList [VInt 1, VInt 2]])),
+]

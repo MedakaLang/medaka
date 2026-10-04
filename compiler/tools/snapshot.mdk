@@ -392,7 +392,18 @@ normalizeText root text = blockOf (map (normalizeLine root) (contentLines text))
 
 normalizeLine : String -> String -> String
 normalizeLine root line =
-  trimRight (normDurations (normTmp (replaceAll root "<ROOT>" line)))
+  trimRight (normDurations (normTmp (normRoot root line)))
+
+-- Only an absolute root is a discriminating needle.  A relative one (`.`, `..`, `''` or
+-- `a/b`) is a substring of ordinary text, so as a replace-all pattern it would rewrite
+-- every period of a range or decimal; a relative root also cannot appear in a diagnostic
+-- as an absolute path, so there is nothing to normalize.  `/` alone has the same flaw.
+normRoot : String -> String -> String
+normRoot root line =
+  if startsWith "/" root && root /= "/" then
+    replaceAll root "<ROOT>" line
+  else
+    line
 
 -- `mktemp -d /tmp/medaka_build_XXXXXX` — the suffix is exactly 6 random chars, so the
 -- random run has a known length and needs no scanner.

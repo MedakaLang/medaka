@@ -1,0 +1,5 @@
+-- > deep 100000
+-- 100000
+deep : Int -> Int
+deep 0 = 0
+deep n = 1 + deep (n - 1)

@@ -766,13 +766,19 @@ EQUAL
 INDENT
 UPPER "Fail"
 INTERP_OPEN "expected Ok but got Err "
+IDENT "derivedShowWrap"
+LPAREN
 IDENT "display"
 IDENT "e"
+RPAREN
 INTERP_END ""
 STRING "Ok _"
 INTERP_OPEN "Err "
+IDENT "derivedShowWrap"
+LPAREN
 IDENT "debug"
 IDENT "e"
+RPAREN
 INTERP_END ""
 NEWLINE
 DEDENT

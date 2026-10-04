@@ -1,0 +1,3 @@
+-- The single declarer.  `Account` is exported abstractly (`export data`, no
+-- `public`): its constructor `Open` exists but is withheld.
+export data Account = Open | Closed

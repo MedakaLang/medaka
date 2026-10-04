@@ -2529,7 +2529,7 @@ migration = "done"
 run = "test/diff_compiler_stack_overflow_test.mdk"
 oracles = []
 sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
-corpus = ["test/stack_overflow_fixtures"]
+corpus = ["test/stack_overflow_fixtures", "test/stack_overflow_test_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -3451,7 +3451,7 @@ kind = "native"
 migration = "done"
 run = "pds/test/deploy_config_lint_test.mdk"
 oracles = []
-sources = ["pds/pds.service", "pds/Caddyfile"]
+sources = ["pds/pds.service", "pds/Caddyfile", "pds/pds-egress.service", "pds/Caddyfile.egress", "pds/pds-backup.service", "pds/pds-backup.timer", "pds/pds-healthping.service", "pds/pds-healthping.timer", "pds/pds-alert@.service"]
 corpus = []
 toolchain = []
 

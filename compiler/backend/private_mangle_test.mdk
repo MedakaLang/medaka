@@ -1,0 +1,270 @@
+-- Regression tests for the constructor-export table and rename maps in
+-- private_mangle.mdk.  The table builders are private, so each case drives the
+-- exported `mangleUnits` over parsed module sources and reads back the symbol an
+-- importing unit's reference was rewritten to.
+
+import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import frontend.ast.{Decl(..), Expr(..), Pat(..), Variant(..)}
+import frontend.parser.{parse}
+import backend.private_mangle.{
+  isReservedCtor,
+  mangleCtorCollisions,
+  mangleUnits,
+  mangledName,
+  sanitizeId,
+}
+
+-- (module id, source) units in dependency order; the last one is the entry.
+parseUnits : List (String, String) -> List (String, List Decl)
+parseUnits units = map (u => (fst u, parse (snd u))) units
+
+mangled : List (String, String) -> List (String, List Decl)
+mangled units = snd (mangleUnits [] (parseUnits units))
+
+declsOf : String -> List (String, List Decl) -> List Decl
+declsOf mid units = match lookupUnit mid units
+  Some ds => ds
+  None => []
+
+lookupUnit : String -> List (String, List Decl) -> Option (List Decl)
+lookupUnit _ [] = None
+lookupUnit k ((m, ds) :: rest) = if k == m then Some ds else lookupUnit k rest
+
+-- the name a zero-argument binding `fname = <var>` refers to, after the rewrite
+refName : String -> List Decl -> Option String
+refName _ [] = None
+refName fname ((DFunDef _ n [] e) :: rest) =
+  if n == fname then varOf e else refName fname rest
+refName fname (_ :: rest) = refName fname rest
+
+varOf : Expr -> Option String
+varOf (ELoc _ e) = varOf e
+varOf (EVar v) = Some v
+varOf _ = None
+
+-- every constructor name declared by a `DData` in the decl list
+ctorNames : List Decl -> List String
+ctorNames decls = flatMap declCtors decls
+
+declCtors : Decl -> List String
+declCtors (DData { dataCtors = vs }) =
+  map
+    (v => match v
+      Variant n _ => n)
+    vs
+declCtors _ = []
+
+amod : String
+amod = "public export data Wid = Wid Int | Gad\nexport mk x = x\n"
+
+useIn : String -> String
+useIn imp = imp ++ "\nmain = Wid\n"
+
+refIn : List (String, String) -> Option String
+refIn units = refName "main" (declsOf (fst (lastUnit units)) (mangled units))
+
+lastUnit : List (String, String) -> (String, String)
+lastUnit [] = ("", "")
+lastUnit [u] = u
+lastUnit (_ :: rest) = lastUnit rest
+
+test "plain import maps a ctor to its declaring module" =
+  expectEqual
+    (Some "amod__Wid")
+    (refIn [("amod", amod), ("app", useIn "import amod.{Wid(..)}")])
+
+test "a constructor's definition is renamed to the declaring module's symbol" =
+  expectEqual
+    ["amod__Wid", "amod__Gad"]
+    (ctorNames
+      (declsOf "amod" (mangled [("amod", amod), ("app", "main = 1\n")])))
+
+test "one-hop re-export resolves to the original definer, not the re-exporter" =
+  expectEqual
+    (Some "amod__Wid")
+    (refIn [
+      ("amod", amod),
+      ("bmod", "export import amod.{Wid(..)}\n"),
+      ("app", useIn "import bmod.{Wid(..)}"),
+    ])
+
+test "multi-hop re-export chain still resolves to the original definer" =
+  expectEqual
+    (Some "amod__Wid")
+    (refIn [
+      ("amod", amod),
+      ("bmod", "export import amod.{Wid(..)}\n"),
+      ("cmod", "export import bmod.{Wid(..)}\n"),
+      ("app", useIn "import cmod.{Wid(..)}"),
+    ])
+
+test "wildcard re-export and wildcard import resolve to the original definer" =
+  expectEqual
+    (Some "amod__Wid")
+    (refIn [
+      ("amod", amod),
+      ("bmod", "export import amod.*\n"),
+      ("app", useIn "import bmod.*"),
+    ])
+
+test "bare ctor member of a re-export resolves to the original definer" =
+  expectEqual
+    (Some "amod__Gad")
+    (refName
+      "main"
+      (declsOf
+        "app"
+        (mangled [
+          ("amod", amod),
+          ("bmod", "export import amod.{Wid(..)}\n"),
+          ("app", "import bmod.{Gad}\nmain = Gad\n"),
+        ])))
+
+test "a re-export that names one ctor offers only that type" = expectAll
+  [
+    expectEqual
+      (Some "amod__Gad")
+      (refName
+        "main"
+        (declsOf
+          "app"
+          (mangled
+            [
+              ("amod", amod),
+              ("bmod", "export import amod.{Gad}\n"),
+              ("app", "import bmod.{Gad}\nmain = Gad\n"),
+            ]))),
+    -- a non-ctor member contributes no entry, so `Wid` stays unrewritten
+    expectEqual
+      (Some "Wid")
+      (refName
+        "main"
+        (declsOf
+          "app"
+          (mangled [
+            ("amod", amod),
+            ("bmod", "export import amod.{Gad}\n"),
+            ("app", "import bmod.{Gad}\nmain = Wid\n"),
+          ]))),
+  ]
+
+test "a private re-export is not offered to importers" =
+  expectEqual
+    (Some "Wid")
+    (refIn [
+      ("amod", amod),
+      ("bmod", "import amod.{Wid(..)}\n"),
+      ("app", useIn "import bmod.{Wid(..)}"),
+    ])
+
+test "a local constructor shadows an imported one of the same spelling" =
+  expectEqual
+    (Some "app__Wid")
+    (refIn [
+      ("amod", amod),
+      ("app", "import amod.{Wid(..)}\ndata Mine = Wid Int Int\nmain = Wid\n"),
+    ])
+
+test "a private ctor spelled like a public type is not offered" =
+  expectEqual
+    (Some "mq__Zz")
+    (refName
+      "main"
+      (declsOf
+        "app"
+        (mangled [
+          ("mp", "public export data Zz = Mk Int\ndata Hidden = Zz Int Int\n"),
+          ("mq", "public export data Q = Zz Int\n"),
+          ("app", "import mp.{Zz(..)}\nimport mq.{Zz}\nmain = Zz\n"),
+        ])))
+
+test "reserved constructors are never mangled" = expectAll [
+  expectEqual
+    ["None", "amod__Mk"]
+    (ctorNames
+      (declsOf
+        "amod"
+        (mangled [
+          ("amod", "public export data Opt = None | Mk\n"),
+          ("app", "main = 1\n"),
+        ]))),
+  expectTrue (isReservedCtor "Cons"),
+  expectTrue (isReservedCtor "False"),
+  expectFalse (isReservedCtor "Pass"),
+  expectFalse (isReservedCtor "Wid"),
+]
+
+test "mangledName and sanitizeId build a legal module-qualified symbol" = expectAll
+  [
+    expectEqual "lib_plain" (sanitizeId "lib.plain"),
+    expectEqual "a_b_c" (sanitizeId "a/b-c"),
+    expectEqual "plain_9" (sanitizeId "plain_9"),
+    expectEqual "amod__Wid" (mangledName "amod" "Wid"),
+    expectEqual "lib_plain__f" (mangledName "lib.plain" "f"),
+  ]
+
+test "re-exported function resolves to the original definer" =
+  expectEqual
+    (Some "amod__mk")
+    (refName
+      "main"
+      (declsOf
+        "app"
+        (mangled [
+          ("amod", amod),
+          ("bmod", "export import amod.{mk}\n"),
+          ("app", "import bmod.{mk}\nmain = mk\n"),
+        ])))
+
+test "mangleCtorCollisions returns a collision-free program unchanged" =
+  expectEqual
+    ["Wid", "Gad"]
+    (ctorNames
+      (declsOf
+        "amod"
+        (snd
+          (mangleCtorCollisions
+            []
+            (parseUnits [("amod", amod), ("app", "main = 1\n")])))))
+
+test "mangleCtorCollisions renames only ctors declared by two units" = expectAll
+  [
+    expectEqual
+      ["amod__Wid", "Gad"]
+      (ctorNames
+        (declsOf
+          "amod"
+          (snd
+            (mangleCtorCollisions
+              []
+              (parseUnits [
+                ("amod", amod),
+                ("bmod", "public export data Other = Wid\n"),
+              ]))))),
+    expectEqual
+      ["bmod__Wid"]
+      (ctorNames
+        (declsOf
+          "bmod"
+          (snd
+            (mangleCtorCollisions
+              []
+              (parseUnits [
+                ("amod", amod),
+                ("bmod", "public export data Other = Wid\n"),
+              ]))))),
+  ]
+
+test "mangleCtorCollisions exempts Pass and Fail" =
+  expectEqual
+    ["Pass"]
+    (ctorNames
+      (declsOf
+        "bmod"
+        (snd
+          (mangleCtorCollisions
+            []
+            (parseUnits [
+              ("amod", "public export data A = Pass\n"),
+              ("bmod", "public export data B = Pass\n"),
+            ])))))

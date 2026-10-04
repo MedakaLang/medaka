@@ -1,0 +1,12 @@
+-- `import m.{Pub}` (no `(..)`) must NOT bind m's PA: the local PA wins.
+import m.{Pub}
+
+data Mine = PA | Qq
+
+export
+plainUse : Mine
+plainUse = PA
+
+export
+plainTy : Pub -> Int
+plainTy _ = 0

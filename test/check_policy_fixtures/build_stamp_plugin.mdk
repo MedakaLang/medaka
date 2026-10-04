@@ -1,0 +1,4 @@
+-- A sample run evaluates an entry that reads the build-stamp externs.
+-- lint-disable-file rule-dead-code
+stamp : String -> String
+stamp s = s ++ (if buildCommit () == buildCommit () && buildDate () == buildDate () then "!" else "?")

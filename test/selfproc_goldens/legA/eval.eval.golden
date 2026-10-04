@@ -34,6 +34,7 @@ buildCtorToType : List Decl -> List (String, String)
 buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildModInfos : List (String, Ref (Value a)) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildStampExterns : Unit -> List (String, Value a)
 buildWith : Value a -> Int -> Int -> <a> List (Value a)
 bytesBEGo : Array Int -> Int -> U64 -> U64
 bytesBEToU64 : Array Int -> U64
@@ -210,6 +211,7 @@ intOverflow : String -> Value a
 intSeq : Int -> Int -> List Int
 intSeqIncl : Int -> Int -> List Int
 ioExternBindings : Unit -> List (String, Value <IO>)
+ioHostExterns : Unit -> List (String, Value <IO>)
 isDispatching : Value a -> Bool
 isInheritedEntry : String -> String -> Bool
 isMethodBinding : Value a -> Bool

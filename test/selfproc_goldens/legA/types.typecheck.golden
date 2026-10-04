@@ -82,6 +82,7 @@ allInRange : List Int -> Int -> Bool
 allMethodParamsMentioned : List String -> Ty -> Bool
 allModuleLines : List (String, List (String, Scheme)) -> List String
 allPairsIn : IfaceRef -> List Int -> List (IfaceRef, Int) -> Bool
+alreadyReportedAt : String -> Option Loc -> Bool
 ambigReexportHelp : String -> String -> List String -> String
 ambigReexportMsg : String -> String -> List String -> String
 ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
@@ -1344,6 +1345,7 @@ headAnnotTy : Ty -> Mono
 headAtomsOr : List (List Atom) -> List Atom
 headBucketKey : Option HeadKey -> RegKey
 headIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
+headIsStdlibOwned : Mono -> Bool
 headL : List String -> String
 headMonoNode : Mono -> Mono
 headRemainingKinds : TyConOrigin -> String -> Int -> Option (List Kind)
@@ -2136,6 +2138,7 @@ monoVarCells : Mono -> List (Ref Tyvar)
 monoVecSameGiven : List Mono -> List Mono -> Bool
 monoVectorClosed : List Mono -> Bool
 monosTvarIds : List Int -> List Mono -> List Int
+msgAtKey : String -> Option Loc -> String
 multiParamIds : UObligation -> List Int
 nameNotAuthorityMsg : String -> String
 nameableIfaceMethodSet : List Decl -> Map String Unit
@@ -2436,6 +2439,7 @@ pushTypeErrorAt : String -> Option Loc -> String -> Unit
 pushTypeErrorHelpFixAt : String -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
 pushTypeErrorOnce : String -> String -> Unit
 pushTypeErrorOnceAt : String -> Option Loc -> String -> Unit
+pushTypeErrorOncePerSite : String -> Option Loc -> String -> Unit
 pushUnknownField : String -> String -> Unit
 pushUnknownFieldMaybeSuggest : String -> String -> List String -> Unit
 qualConstraintDecl : String -> Option CDeclared

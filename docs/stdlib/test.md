@@ -278,6 +278,8 @@ fails says why. The payload needs no `Debug` instance, so this accepts a
 Pass "1" "1"
 > expectOkThen (n => expectEqual 1 n) (Err "boom" : Result String Int)
 Fail "expected Ok but got Err boom" "Ok _" "Err \"boom\""
+> expectOkThen (n => expectEqual 1 n) (Err (Some 7) : Result (Option Int) Int)
+Fail "expected Ok but got Err (Some 7)" "Ok _" "Err (Some 7)"
 ```
 
 ### `expectSome`
