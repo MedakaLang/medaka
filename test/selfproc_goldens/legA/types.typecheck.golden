@@ -858,9 +858,11 @@ depGraphMap : List String -> Map String (List (List Pat, Expr)) -> Map String (L
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
 derefOp : Mono -> Mono
 derivableIface : String -> Bool
-determineByUniqueInstance : Bool -> Map String Unit -> List UObligation -> Unit
-determineByUniqueInstanceGo : Bool -> Map String Unit -> List UObligation -> List UObligation -> Unit
-determineGoal : Bool -> Map String Unit -> List UObligation -> UObligation -> List Mono -> Unit
+determinationCandidates : GoalWindow -> List (ImplRow, List (Int, Mono)) -> List (ImplRow, List (Int, Mono))
+determineByUniqueInstance : Map String Unit -> List UObligation -> Unit
+determineByUniqueInstanceGo : Map String Unit -> GoalWindow -> Bool -> List (Int, UObligation) -> Bool
+determineGoal : Map String Unit -> GoalWindow -> UObligation -> List Mono -> Bool
+determineSweeps : Map String Unit -> GoalWindow -> Int -> Unit
 dictAppEntry : Obligation -> List PendingDictApp
 dictAppsIn : List Obligation -> List PendingDictApp
 dictAppsSince : Int -> List PendingDictApp
@@ -1134,6 +1136,7 @@ fileBoundExpr : List GrantBinder -> EffRow -> Expr -> Expr
 fileBoundKey : Loc -> String
 fileBoundSite : String -> Loc -> String
 fileBoundValue : List GrantBinder -> Mono -> Expr -> Expr
+fileGoal : Int -> UObligation -> Map Int (List Int) -> Map Int (List Int)
 fileGrantExterns : Map String (Int, Int)
 fileValueKey : String -> Expr -> Option String
 fileValueShape : Expr -> String
@@ -1279,9 +1282,11 @@ goalPredOfOp : String -> Option PredicateRequest
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalSiteLoc : Ref (Option Loc)
 goalSlotStillOpen : List Mono -> Bool
+goalWindowOf : List UObligation -> GoalWindow
 goalsClosed : List Mono -> Bool
 goalsMark : Unit -> Int
 goalsOfKindIn : GoalKind -> List Obligation -> List Obligation
+goalsOnVar : GoalWindow -> Int -> List Int
 goalsSince : Int -> List Obligation
 grantArrows : Int -> Ty -> Ty
 grantBody : Expr -> Expr
@@ -2583,6 +2588,7 @@ reexportedOriginsOf : Decl -> String -> List (String, String)
 reexportedOwner : String -> (String, String, Ident) -> List (String, String)
 reexportedTypeDecl : Int -> List DeclEnvModule -> String -> String -> List Decl
 refStored : Mono -> Mono
+refileGoals : GoalWindow -> List Int -> Unit
 refuseBoxedLitPat : String -> String -> Option Loc -> Unit
 refuseOpenedExistentials : Unit -> Unit
 regIfaceMonosFor : String -> List ConstraintReg -> List (IfaceRef, List Mono)
@@ -2634,6 +2640,7 @@ registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List (Option
 registersElementDict : String -> List String -> Bool
 rejectAdmittedValueOccurrence : String -> Unit
 rejectCyclicAliases : Unit -> Unit
+rejectUndeterminedVectors : Map String Unit -> List UObligation -> Unit
 removeAllS : List String -> List String -> List String
 renameAliasedMethods : List Decl -> List (String, List Decl) -> List (String, List Decl)
 renameAliasedMethodsIn : List (String, List String) -> (String, List Decl) -> (String, List Decl)
@@ -2872,7 +2879,7 @@ shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
 sharedAuthority : Int -> Option (Ref Authvar) -> Authority
 siblingStaysSatisfiable : Ref (List (Int, Mono)) -> List Int -> UObligation -> Bool
-siblingsStaySatisfiable : List UObligation -> List (Int, Mono) -> Bool
+siblingsStaySatisfiable : GoalWindow -> List (Int, Mono) -> Bool
 sigCellsOf : Map String Unit -> List (Ref Tyvar) -> List (Ref Tyvar)
 sigConstraintArgTys : Ty -> List (List Ty)
 sigConstraints : Ty -> List (IfaceRef, List String)
@@ -3037,6 +3044,7 @@ tyConNamesInConstraint : Constraint -> List String
 tyConNamesInTy : Ty -> List String
 tyHeadEqV : List Ty -> List Ty -> Bool
 tyIsConcrete : Ty -> Bool
+tyIsQualified : Ty -> Bool
 tyMatchesAst : Ty -> Ty -> Bool
 tyOfMsg : Option TabKey -> String
 tyStep : Ty -> Ty -> MStep String Ty Ty
@@ -3081,6 +3089,7 @@ undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 undeterminedNoImplMsg : String -> List Mono -> String
 undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
 undeterminedRoute : ScopeId -> Undetermined -> Route
+undeterminedVectorVerdict : Map String Unit -> UObligation -> Unit
 unify : Mono -> Mono -> Unit
 unifyAll : Mono -> List Mono -> Unit
 unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> String -> Expr -> Unit
@@ -3109,6 +3118,7 @@ unifyStandaloneDomain : Mono -> Mono -> Option Loc -> Unit
 unifyStruct : Mono -> Mono -> Unit
 unifyValue : Mono -> Mono -> Unit
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
+unifyingRows : Map String Unit -> IfaceRef -> List Mono -> List (ImplRow, List (Int, Mono))
 uniqueMethodTemplateGiven : MethodPredicateTemplate -> ScopeId -> List GivenEntry -> Option GivenEntry
 unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
 unitMangledShadows : List String -> (String, List Decl) -> List (String, String)

@@ -32267,7 +32267,7 @@ selectedRowReqMatch goals (ImplRow _ _ _ itys reqs _) =
 -- **ACCEPTANCE** rather than routing — `implHeadTagForIface` (the impl-head
 -- census `routeUndeterminedTop` counts: one head → stamp it, two or more →
 -- `T-AMBIGUOUS-INSTANCE`) and a candidate count that gives up on more than one
--- match (today `rowCountsInCensus`, determination's).  Feeding the new arms
+-- match.  Feeding the new arms
 -- to THOSE turns an ACCEPT into a REJECT on programs that never dispatch to an
 -- arrow or an effect head at all: `impl C Int` beside `impl C (Int -> Int)` or
 -- `impl C (<Stdout> Bool)` went from a stamped route to *"Ambiguous instance"*,
@@ -32384,14 +32384,10 @@ headTyconTy t = match headTyNode t
 -- candidate when the goal is still undetermined?"* — where an extra `Some`
 -- turns a stamped route into `T-AMBIGUOUS-INSTANCE`, i.e. rejects a program.
 --
--- Its two readers:
---   * `implHeadTagForIface` → `implHeadTagsForIface` → `routeUndeterminedTop`
---   * `rowCountsInCensus` → `determineGoal` (determination's candidate count)
---
--- For the second, an extra `Some` turns a determined goal into an undetermined
--- one: `impl Conv Int Bool` beside `impl Conv (<Stdout> Int) String` determines
--- `Conv Int ?b` only because the effect-headed row is not counted
--- (`test/engine_fixtures/fun_head_impl_bystander.mdk`).
+-- Its reader: `implHeadTagForIface` → `implHeadTagsForIface` → `routeUndeterminedTop`.
+-- Determination's candidate count (`rowCountsInCensus`) does not read it: there an
+-- arrow-headed instance that unifies with the goal is a second candidate, and only a
+-- head the matcher reaches by peeling a qualifier is not counted.
 --
 -- Whoever flips this to the narrowing owns F-3c (#1155)'s flip list, an owner
 -- ruling, and fixtures for the programs it stops accepting.  Do not fold it back
@@ -37375,9 +37371,11 @@ bucketAnyLonger [] _ = False
 bucketAnyLonger ((tys, _) :: rest) n = listLen tys > n || bucketAnyLonger rest n
 
 -- the undetermined-var check of a one-position predicate.  A goal of two or more
--- positions is decided as a vector at its group's close (`determineByUniqueInstance`:
--- committed to its one unifying instance, or rejected when none unifies); asking per
--- argument would accept a vector no instance matches.  A goal that a given visible
+-- positions is decided as a vector at its boundary: `determineByUniqueInstance`
+-- commits it to its one candidate, and `rejectUndeterminedVectors` rejects what
+-- stays open, is the boundary's and has no unifying instance.  A goal two or more
+-- candidates unify with is decided by neither.  Asking per argument would accept
+-- a vector no instance matches.  A goal that a given visible
 -- from its scope answers as a whole predicate is determined by that given, whichever
 -- kind of binder carries it — a default body's receiver has no tyvar-keyed
 -- registration for the per-argument rule to find.
@@ -37572,74 +37570,157 @@ improveByUniqueImpl sigIds (o :: rest) =
 -- instance head's and declared signature's.  Any other variable of the goal is the
 -- boundary's, and the unique instance is the only type the program can have there.
 --
--- A candidate counts only if the acceptance census counts its first head
--- (`censusHeadNameTy`; a type-variable head is a candidate too), and only if its
--- commit leaves every sibling goal on a variable it binds satisfiable: a sibling
--- the commit closes must have an instance in the table.
+-- A candidate counts unless its first head unifies only by peeling a qualifier
+-- (`rowCountsInCensus`), and only if its commit leaves every sibling goal on a
+-- variable it binds satisfiable: a sibling the commit closes must have an instance
+-- in the table.
 --
--- With [rejectUnsatisfiable] (the pass after defaulting), a goal still open with no
--- unifying instance at all and every variable owned is rejected at its site: no type
--- can satisfy it.  Before defaulting the same goal may yet close, and a closed goal
--- is reported by the obligation gate under its own types.
-determineByUniqueInstance : Bool -> OrdMap Unit -> List UObligation -> Unit
-determineByUniqueInstance rejectUnsatisfiable rigidIds obls =
-  determineByUniqueInstanceGo rejectUnsatisfiable rigidIds obls obls
+-- Sweeps repeat until one commits nothing, so a goal that another goal's commit
+-- makes unique is determined in the same pass whatever order the window lists
+-- them in.  What stays open gets its verdict from `rejectUndeterminedVectors`.
+determineByUniqueInstance : OrdMap Unit -> List UObligation -> Unit
+determineByUniqueInstance rigidIds obls =
+  let window = goalWindowOf obls
+  determineSweeps rigidIds window (listLen obls + 1)
 
-determineByUniqueInstanceGo : Bool ->
-  OrdMap Unit ->
-  List UObligation ->
-  List UObligation ->
-  Unit
-determineByUniqueInstanceGo _ _ _ [] = ()
-determineByUniqueInstanceGo rejectUnsatisfiable rigidIds siblings (o :: rest) =
+-- The fuel only bounds the loop: every sweep but the last changes some goal's
+-- shape.
+determineSweeps : OrdMap Unit -> GoalWindow -> Int -> Unit
+determineSweeps rigidIds window fuel =
+  if fuel > 0
+    && determineByUniqueInstanceGo rigidIds window False window.gwGoals then
+    determineSweeps rigidIds window (fuel - 1)
+
+-- One sweep over the window; True when some goal took its instance's shape.
+determineByUniqueInstanceGo : OrdMap Unit ->
+  GoalWindow ->
+  Bool ->
+  List (Int, UObligation) ->
+  Bool
+determineByUniqueInstanceGo _ _ changed [] = changed
+determineByUniqueInstanceGo rigidIds window changed ((_, o) :: rest) =
   let args = map normalize (uOblArgs o)
-  let _ = determineGoal rejectUnsatisfiable rigidIds siblings o args
-  determineByUniqueInstanceGo rejectUnsatisfiable rigidIds siblings rest
+  let now = determineGoal rigidIds window o args
+  determineByUniqueInstanceGo rigidIds window (now || changed) rest
 
-determineGoal : Bool ->
-  OrdMap Unit ->
-  List UObligation ->
-  UObligation ->
-  List Mono ->
-  Unit
-determineGoal rejectUnsatisfiable rigidIds siblings o args
-  | listLen args <= 1 || monoVectorClosed args = ()
+-- True when the commit changed the goal's shape.  A commit that only renames the
+-- goal's variables to the instance's fresh ones leaves the goal's size and its
+-- count of distinct variables as they were; the window is re-filed either way,
+-- since the goal's variables are no longer the ones it was filed under.
+determineGoal : OrdMap Unit -> GoalWindow -> UObligation -> List Mono -> Bool
+determineGoal rigidIds window o args
+  | listLen args <= 1 || monoVectorClosed args = False
   | otherwise =
-    let iface = o.pred.iface
-    let rows = filterList (ieRowOfIface iface) (improvementPool args)
-    let unifying =
-      flatMap
-        (row => match rowHeadSubstRigid rigidIds args row
-          Some subst => [(row, subst)]
-          None => [])
-        rows
-    let candidates =
-      filterList
-        (cand =>
-          rowCountsInCensus (fst cand)
-            && siblingsStaySatisfiable siblings (snd cand))
-        unifying
-    match candidates
+    let unifying = unifyingRows rigidIds o.pred.iface args
+    match determinationCandidates window unifying
       [(row, _)] =>
+        let oldIds = dedupI (flatMap monoUnboundIds args)
+        let sizeBefore = monoSizes args
         -- Minted inside the boundary's level: a goal variable unified with one
         -- of these keeps its level and still generalizes.
         let _ = enterLevel ()
         let heads = freshRowHeads row
         let _ = exitLevel ()
-        commitImprovement rigidIds (zipL args heads)
-      _ =>
-        if rejectUnsatisfiable
-          && isEmptyL unifying
-          && isEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args))
-          && not
-            (anyIn
-              (flatMap monoUnboundIds args)
-              perRun.value.poisonedVars.value)
-          && not (goalGivenAt iface args o.uoScope) then
-          pushTypeErrorOnceAt
-            "T-NO-IMPL"
-            o.loc
-            (undeterminedNoImplMsg iface.irName args)
+        let _ = commitImprovement rigidIds (zipL args heads)
+        let _ = refileGoals window oldIds
+        monoSizes args /= sizeBefore
+          || listLen (dedupI (flatMap monoUnboundIds args)) /= listLen oldIds
+      _ => False
+
+-- The instances of [iface] whose heads unify with [args], [rigidIds] held rigid,
+-- each with the substitution that unifies it.
+unifyingRows : OrdMap Unit ->
+  IfaceRef ->
+  List Mono ->
+  List (ImplRow, List (Int, Mono))
+unifyingRows rigidIds iface args =
+  flatMap
+    (row => match rowHeadSubstRigid rigidIds args row
+      Some subst => [(row, subst)]
+      None => [])
+    (filterList (ieRowOfIface iface) (improvementPool args))
+
+determinationCandidates : GoalWindow ->
+  List (ImplRow, List (Int, Mono)) ->
+  List (ImplRow, List (Int, Mono))
+determinationCandidates window unifying =
+  filterList
+    (cand =>
+      rowCountsInCensus (fst cand) && siblingsStaySatisfiable window (snd cand))
+    unifying
+
+-- The verdict on a goal of arity two or more that determination left open
+-- (DICT-SEMANTICS §3, §4.2 OD3).  A goal generalization abstracts is the caller's:
+-- every free variable in it is quantified by a scheme, the test residual
+-- selection admits a predicate into a scheme by (`declaredOblArgOk`).  So is a
+-- goal with a variable the boundary does not own.  A goal a given answers, or one
+-- whose variable a primary mismatch already explained, gets no verdict either.
+-- Any other such goal that no instance head unifies with is `T-NO-IMPL`: no
+-- later boundary can satisfy it.  A goal two or more candidates unify with gets
+-- no verdict here.  At a group it runs once the group's schemes are registered.
+rejectUndeterminedVectors : OrdMap Unit -> List UObligation -> Unit
+rejectUndeterminedVectors rigidIds obls =
+  fold (_ o => undeterminedVectorVerdict rigidIds o) () obls
+
+undeterminedVectorVerdict : OrdMap Unit -> UObligation -> Unit
+undeterminedVectorVerdict rigidIds o =
+  let args = map normalize (uOblArgs o)
+  let iface = o.pred.iface
+  if listLen args <= 1
+    || monoVectorClosed args
+    || isNonEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args))
+    || anyIn (flatMap monoUnboundIds args) perRun.value.poisonedVars.value
+    || goalGivenAt iface args o.uoScope
+    || allList (declaredOblArgOk perRun.value.deferrableVarIds.value) args
+    || isNonEmptyL (unifyingRows rigidIds iface args) then
+    ()
+  else
+    pushTypeErrorOnceAt
+      "T-NO-IMPL"
+      o.loc
+      (undeterminedNoImplMsg iface.irName args)
+
+-- A boundary's goals by position in the window, and the positions of the goals on
+-- each free variable, so a commit is tested against the siblings that share a
+-- variable it binds rather than against the whole window.  An entry may be stale
+-- after a commit re-files a goal; a stale entry costs one test and nothing else.
+data GoalWindow = GoalWindow {
+  gwGoals : List (Int, UObligation),
+  gwByIndex : Map Int UObligation,
+  gwByVar : Ref (Map Int (List Int)),
+}
+
+goalWindowOf : List UObligation -> GoalWindow
+goalWindowOf obls =
+  let goals = indexed obls
+  GoalWindow {
+    gwGoals = goals,
+    gwByIndex = fold (m (i, o) => IdMap.set i o m) Tip goals,
+    gwByVar = Ref (fold (m (i, o) => fileGoal i o m) Tip goals),
+  }
+
+fileGoal : Int -> UObligation -> Map Int (List Int) -> Map Int (List Int)
+fileGoal i o byVar =
+  fold
+    (m id => IdMap.set id (i :: optionOr [] (IdMap.get id m)) m)
+    byVar
+    (dedupI (flatMap monoUnboundIds (uOblArgs o)))
+
+goalsOnVar : GoalWindow -> Int -> List Int
+goalsOnVar window id = optionOr [] (IdMap.get id window.gwByVar.value)
+
+-- A commit binds only variables of the committed goal and of the instance's fresh
+-- head, so the goals whose variables it can change are the ones filed under the
+-- committed goal's variables.
+refileGoals : GoalWindow -> List Int -> Unit
+refileGoals window oldIds =
+  window.gwByVar :=
+    fold
+      (acc i => match IdMap.get i window.gwByIndex
+        Some g => fileGoal i g acc
+        None => acc)
+      window.gwByVar.value
+      (dedupI (flatMap (goalsOnVar window) oldIds))
 
 -- [row]'s head, freshened, unified with [args] in a scratch substitution with
 -- every variable in [rigidIds] held rigid; the substitution, or None.
@@ -37656,21 +37737,32 @@ rowHeadSubstRigid rigidIds args row =
   else
     None
 
--- The acceptance census's reading of a candidate's first head: an arrow-,
--- effect- or constraint-headed instance is not counted (see `censusHeadNameTy`).
--- A type-variable head has no census name and is still an instance that unifies.
+-- A candidate does not count when its first head unifies with the goal only by
+-- peeling a qualifier: `<Stdout> Int` elaborates to `Int`, and the head matcher
+-- reads through a constraint or authority qualifier the same way, so such an
+-- instance is not a second type the goal could have
+-- (`test/engine_fixtures/fun_head_impl_bystander.mdk`).  An arrow-, tuple- or
+-- variable-headed instance unifies by its structure and counts.
 rowCountsInCensus : ImplRow -> Bool
 rowCountsInCensus row = match ieRowTys row
-  headTy :: _ => match headTySpineNode headTy
-    TyVar _ => True
-    _ => isSome (censusHeadNameTy headTy)
+  headTy :: _ => not (tyIsQualified (headTySpineNode headTy))
   [] => False
 
-siblingsStaySatisfiable : List UObligation -> List (Int, Mono) -> Bool
-siblingsStaySatisfiable siblings subst =
+tyIsQualified : Ty -> Bool
+tyIsQualified (TyEffect _ _ _) = True
+tyIsQualified (TyConstrained _ _) = True
+tyIsQualified (TyQual _ _ _) = True
+tyIsQualified _ = False
+
+siblingsStaySatisfiable : GoalWindow -> List (Int, Mono) -> Bool
+siblingsStaySatisfiable window subst =
   let bound = map fst subst
   let scratch = Ref subst
-  allList (s => siblingStaysSatisfiable scratch bound s) siblings
+  allList
+    (i => match IdMap.get i window.gwByIndex
+      Some s => siblingStaysSatisfiable scratch bound s
+      None => True)
+    (dedupI (flatMap (goalsOnVar window) bound))
 
 siblingStaysSatisfiable : Ref (List (Int, Mono)) ->
   List Int ->
@@ -38829,7 +38921,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
     monoRootIdSet (headMonos ++ [inst.mbiExpected] ++ map snd inst.mbiNamedVars)
   let bodyObls = addedObls ++ callUOblsWindow callN0
   let _ = improveByUniqueImpl bodyRigidIds bodyObls
-  let _ = determineByUniqueInstance False bodyRigidIds bodyObls
+  let _ = determineByUniqueInstance bodyRigidIds bodyObls
   let _ =
     checkMethodRigidityCore
       subject
@@ -38922,7 +39014,8 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
   let _ = improveByUniqueImpl bodyRigidIds bodyObls
-  let _ = determineByUniqueInstance True bodyRigidIds bodyObls
+  let _ = determineByUniqueInstance bodyRigidIds bodyObls
+  let _ = rejectUndeterminedVectors bodyRigidIds bodyObls
   let _ = registerMethodBodyGivens iface kind params mty inst bodyScope
   let _ = match kind
     ImplBody _ => perRun.value.currentImplBody := False
@@ -43177,7 +43270,7 @@ processSCC env sigs grouped0 members =
       protectedSigIds
   let _ = improveByUniqueImpl protectedSigIds addedObls
   let _ = improveByUniqueImpl protectedSigIds (callUOblsWindow callN0)
-  let _ = determineByUniqueInstance False unownedIds groupObls
+  let _ = determineByUniqueInstance unownedIds groupObls
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
   -- not pendingImplObligations).  See numCallObls/numDictObls.  The synthetic entries
@@ -43198,7 +43291,7 @@ processSCC env sigs grouped0 members =
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
   let _ = improveByUniqueImpl protectedSigIds groupObls
-  let _ = determineByUniqueInstance True unownedIds groupObls
+  let _ = determineByUniqueInstance unownedIds groupObls
   let _ = checkSigVarGoals protectedSigIds sigTvMaps groupObls
   let schemes =
     sccSchemes
@@ -43230,6 +43323,7 @@ processSCC env sigs grouped0 members =
       callOblsDelta
       addedObls
       schemes
+  let _ = rejectUndeterminedVectors unownedIds groupObls
   -- SIGNATURE CONSTRAINT SOUNDNESS: a signed member whose body induces an
   -- interface constraint on one of its own quantified vars that its declared `=>`
   -- context (superclass-closed) does NOT cover severs the constraint for callers

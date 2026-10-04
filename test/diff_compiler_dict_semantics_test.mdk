@@ -3666,6 +3666,94 @@ table = [
     pinned = "3.75\n7\n",
     codes = [],
   },
+  Row {
+    entry = "determine-scheme-variable-exempt.mdk",
+    label =
+      "§3 / §4.2 OD3, Val 2026-10-04 \"exempt scheme variables\": `Conv (Wrap Int) ?t` has no unifying instance, but `?t` is `mk`s result variable, so the goal enters `mk`s scheme (scheme in section 2) instead of a T-NO-IMPL at the definition. Hand-derived: 1",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-scheme-variable-library/main.mdk",
+    label =
+      "§3 / §4.2 OD3 across modules: the library exports `mk () = conv (Wrap 1)` with no instance; an importer that takes only `Wrap` and never calls `mk` is not refused for it. Hand-derived: 1",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-scheme-variable-importer-instance/main.mdk",
+    label =
+      "§3 across modules, the importer-instance twin: the importer`s `impl Conv (Wrap Int) Bool` is the one instance, and `mk ()` at Bool holds 1 > 0. Hand-derived: True",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-quiescence-nested-call.mdk",
+    label =
+      "§3 determination to quiescence, nested-call spelling: `Mk Int Float` fixes `?e = Float`, then `Pr Float Float` fixes the literal. Hand-derived: 4.0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-quiescence-lambda.mdk",
+    label =
+      "§3 determination to quiescence, lambda-application spelling of the same program. Hand-derived: 4.0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-quiescence-top-level-value.mdk",
+    label =
+      "§3 determination to quiescence, top-level-value spelling (`e = mk 0`). Hand-derived: 4.0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-quiescence-apply-order.mdk",
+    label =
+      "§3 determination to quiescence: the window lists `Pr ?e ?r` before `Mk ?n ?e`, so `Pr` is determined only by the sweep after `Mk`s commit. Hand-derived: 4.0. One sweep refused it as `No impl of Pr for Float Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-arrow-instance-counts.mdk",
+    label =
+      "§3 determination`s candidate count: `Conv (Int -> Int) Bool` unifies with `Conv ?a ?b` structurally and counts beside `Conv Int String`, so nothing is committed and `Display ?b` is ambiguous at the `println` call (span in section 6). Counting census-named heads only committed `Conv Int String` and printed `int`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -3677,7 +3765,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 321
+tableRows = 329
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -3909,7 +3997,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 21
+schemeRows = 22
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -4037,6 +4125,12 @@ schemeTable = [
     label =
       "§6.3 D3 clause 2: the result variable connected to the arguments through two `Index` goals generalizes with both goals and its `Num`",
     want = "sumAt : (Index a b d, Index a c d, Num d) => a -> b -> c -> d",
+  },
+  SchemeRow {
+    entry = "determine-scheme-variable-exempt.mdk",
+    label =
+      "§4.2 OD3, scheme variables exempt: the goal with no unifying instance on `mk`s result variable stays in `mk`s context",
+    want = "mk : Conv (Wrap Int) a => Unit -> a",
   },
 ]
 
@@ -4302,7 +4396,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 13
+spanRows = 14
 
 spanTable : List SpanRow
 spanTable = [
@@ -4381,6 +4475,12 @@ spanTable = [
     label =
       "§6.3 D3 clause 2 control: the defaulted `Get (Box Float) Int` is reported at the `f` call that posed it, not at `f`s definition",
     want = "16:16",
+  },
+  SpanRow {
+    entry = "determine-arrow-instance-counts.mdk",
+    label =
+      "§3 candidate count: with two `Conv` candidates nothing is committed, and the undetermined `Display ?b` is reported at the `println` call that poses it",
+    want = "18:7",
   },
 ]
 
