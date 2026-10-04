@@ -2899,6 +2899,105 @@ table = [
     codes = [],
   },
   Row {
+    entry = "impl-head-pinned-by-body.mdk",
+    label =
+      "§3 W3-inst: `impl Sizer (P c d)` whose body annotates the `c` field `String` holds only for `impl Sizer (P String d)`, so it is refused at the body naming that head (#819). Drained from the must-fail pin 819-impl-head-tyvar-pinned: `run` printed 5 and the built binary for `size (P 1 2)` died with SIGSEGV",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-TOO-SPECIFIC"],
+  },
+  Row {
+    entry = "impl-head-pinned-narrowed-control.mdk",
+    label =
+      "control for the pinned-head row: the head narrowed to `impl Sizer (P String d)` and called at `P \"a\" 2`. Hand-derived: \"a\" is not \"zzz\", 5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-missing-requires.mdk",
+    label =
+      "§3 W3-inst: `impl Show2 (Pair a)` whose body calls `show2 x` at the head's `a` with no `requires Show2 a` is refused at the call (#2721). Drained from the must-fail pin 2721-impl-body-dispatches-on-own-tyvar-no-requires: `check` accepted, and run and the binary died with E-NONEXHAUSTIVE-MATCH",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-missing-requires-via-helper.mdk",
+    label =
+      "§3 W3-inst on the call channel: the body reaches `Show2 a` through the constrained helper `helper : Show2 b => b -> String`, not a method occurrence, and is refused the same way. `check` used to accept it while `run` reported an unlocated ambiguity",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-requires-control.mdk",
+    label =
+      "control for the missing-requires rows: `requires Show2 a` declared and `impl Show2 Int` to discharge it. Hand-derived: the first field, \"int 1\"",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "int 1\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-super-requires-control.mdk",
+    label =
+      "§3 W3-inst entailment includes superinterfaces: `requires Ord a` supplies the body's `Eq a`. Hand-derived: 1 == 1 is True, 1 == 2 is False",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\nFalse\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-requires-other-predicate.mdk",
+    label =
+      "§3 W3-inst entailment is by predicate, not by mention: `requires Display a` names the head's `a` but does not entail the body's `Show2 a`, so the impl is refused at the call",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-structured-requires-control.mdk",
+    label =
+      "§3 `assum` before `inst` at an impl body: `requires Show2 (List a)` gives the body's goal `Show2 (List a)` as written, so it is not reduced to an undeclared `Show2 a`. Hand-derived: `show2 [1]` shows the head element, \"int 1\"",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "int 1\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-rigid-repeated-head-var.mdk",
+    label =
+      "§3 W3-inst: an impl head's variable is rigid in the instance matcher as a signature's is. The body's `Pick a Int Int` matches `impl Pick x x x` only if `a` is Int, so it is an undeclared prerequisite. Was accepted on every verb, answering `get (Box \"s\")` from a `Pick String Int Int` instance that does not exist",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
     entry = "impl-heads-cycle-no-overlap.mdk",
     label =
       "§4 coherence: `Tri a (List a) a` and `Tri b b b` share an instance only if `a = List a`, so they do not overlap; the check terminates (it looped on main). Hand-derived: `tri 1 [1] 1` is the first impl, `one`; `tri True True True` the second, `two`",
@@ -3280,7 +3379,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 285
+tableRows = 294
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

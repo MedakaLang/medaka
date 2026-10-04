@@ -1,0 +1,14 @@
+-- §3 W3-inst: `requires Display a` mentions the head variable, but through a
+-- predicate that does not entail the body's `Show2 a`. Rejected at the call.
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+impl Show2 (Pair a) requires Display a where
+  show2 (Pair x _) = show2 x
+
+main = println (show2 (Pair (1 : Int) 2))
