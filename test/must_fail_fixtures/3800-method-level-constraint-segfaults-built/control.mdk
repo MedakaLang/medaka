@@ -1,0 +1,20 @@
+-- main.mdk with the method-level `Show2 a =>` constraint moved onto the impl as
+-- `requires Show2 b`.  Must print "int 1".
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+impl Show2 (Pair b) requires Show2 b where
+  show2 (Pair x _) = show2 x
+
+interface Desc a where
+  desc : a -> String
+
+impl Desc (Pair b) requires Show2 b where
+  desc p = show2 p
+
+main = println (desc (Pair (1 : Int) 2))

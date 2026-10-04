@@ -1,0 +1,15 @@
+issue: 3802
+what: the `requires` reduction stops after 32 steps even when a given would end the
+what: chain later.  `g : Tag a => a -> Int; g x = tag (W^40 x)` with
+what: `impl Tag (W a) requires Tag a` reduces `Tag (W^40 a)` toward `Tag a`, which `g`'s
+what: context gives, but the walk runs out of fuel at `Tag (W^8 a)` and rejects with
+what: T-REQUIRES-DEPTH.  The right answer is to accept and print 41.  The impl-body path
+what: (`requires Tag a` on an impl whose body poses the same chain) rejects the same way.
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-REQUIRES-DEPTH 15:6-15:9
+control: check control.mdk
+why-verb: `check-json`, so the code and range are graded and the message prose is free.
+why-verb: The fix accepts the program at exit 0, which drains this row.
+why-control: control.mdk is main.mdk at depth 10, inside the fuel; it must check at exit
+why-control: 0, so the chain and the given work when the fuel is not reached.

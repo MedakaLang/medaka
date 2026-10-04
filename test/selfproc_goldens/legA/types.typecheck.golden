@@ -3105,7 +3105,7 @@ unopMethodApp : String -> Expr -> Ref Route -> Expr
 unprotectedNumCandidates : Map String Unit -> List UObligation -> List Int
 unquantifiedAuthIds : Scheme -> Map Int Unit
 unreachableArmWarning : String
-unrigidSig : List (String, Mono) -> Mono -> Mono
+unrigidSig : List (Ref Tyvar) -> Mono -> Mono
 unroutedGroundReqs : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 unroutedResidual : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 unsettledFileRow : EffRow -> EffRow -> Bool

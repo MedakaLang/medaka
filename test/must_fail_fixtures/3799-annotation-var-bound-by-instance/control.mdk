@@ -1,0 +1,12 @@
+-- main.mdk with an annotation the instance answers without binding `a`:
+-- `pick [y] []` poses `Pick (List a) (List t) (List a)`, and improvement fixes
+-- `t = a`.  Must print [].
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+main =
+  let h : a -> List a = y => pick [y] []
+  println (debug (h "s"))

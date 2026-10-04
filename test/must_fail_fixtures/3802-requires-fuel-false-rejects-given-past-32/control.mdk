@@ -1,0 +1,16 @@
+-- main.mdk at depth 10, inside the requires fuel.  Must print 11.
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Int where
+  tag n = n
+
+data W a = W a
+
+impl Tag (W a) requires Tag a where
+  tag (W x) = tag x + 1
+
+g : Tag a => a -> Int
+g x = tag (W (W (W (W (W (W (W (W (W (W (x)))))))))))
+
+main = println (g (1 : Int))
