@@ -16,9 +16,10 @@
 
 import test.{Expectation, expectEqual, expectTextContainsAll, expectTrue}
 import tools.gate_cmd.{
-  ImportTarget(..), gradeViolations, duplicateBaselineKeyViolations
+  ImportTarget(..), gradeViolations, duplicateBaselineKeyViolations,
+  verifyClasses
 }
-import tools.gate_registry.{parseRegistry}
+import tools.gate_registry.{Gate, parseRegistry}
 import support.util.{listLen, joinNl}
 
 -- ── the fixture resolver ─────────────────────────────────────────────────────
@@ -334,25 +335,98 @@ test "a grading arm behind a non-grading one is still found" =
   expectEqual [] (violations okLaterArmTable gateOverOkIntSrc)
 
 -- baselineKey uniqueness (#3335)
-gateToml : String -> String -> String
-gateToml name run =
-  "[[gate]]\nname = \"\{name}\"\narea = \"a\"\nshard = \"s\"\nproject = \"p\"\ntiers = [\"pr\"]\ncost = \"cheap\"\nkind = \"shell\"\nmigration = \"none\"\nrun = \"\{run}\"\noracles = []\nsources = []\ncorpus = []\ntoolchain = []\n\n"
+shareLine : String -> String
+shareLine "" = ""
+shareLine shares = "shares_baseline_with = \"\{shares}\"\n"
 
-keyViolationsOf : List (String, String) -> List String
-keyViolationsOf rows =
-  match parseRegistry (joinNl (map (r => gateToml (fst r) (snd r)) rows))
-    Ok gs => duplicateBaselineKeyViolations gs
-    Err e => [e]
+gateToml : String -> String -> String -> String
+gateToml name run shares =
+  "[[gate]]\nname = \"\{name}\"\narea = \"a\"\nshard = \"s\"\nproject = \"p\"\ntiers = [\"pr\"]\ncost = \"cheap\"\nkind = \"shell\"\nmigration = \"none\"\nrun = \"\{run}\"\noracles = []\nsources = []\ncorpus = []\ntoolchain = []\n\{shareLine shares}\n"
+
+regOf : List (String, String, String) -> Result String (List Gate)
+regOf rows = parseRegistry (joinNl (map ((n, r, h) => gateToml n r h) rows))
+
+keyViolationsOf : List (String, String, String) -> List String
+keyViolationsOf rows = match regOf rows
+  Ok gs => duplicateBaselineKeyViolations gs
+  Err e => [e]
+
+collisionMsg : String -> String
+collisionMsg names =
+  "a: entries \{names} derive the same baselineKey — their cost histories would be spliced together; declare a deliberate migration with shares_baseline_with"
 
 test "distinct run paths with distinct keys pass" =
-  expectEqual [] (keyViolationsOf [("a", "test/a.sh"), ("b", "test/b.sh")])
-
-test "a native replacement and its shell original collide on one key" =
   expectEqual
-    [
-      "a: entries a_native, a_shell derive the same baselineKey — their cost histories would be spliced together",
-    ]
+    []
+    (keyViolationsOf [("a", "test/a.sh", ""), ("b", "test/b.sh", "")])
+
+test "a native replacement and its shell original collide without a hatch" =
+  expectEqual
+    [collisionMsg "a_native, a_shell"]
     (keyViolationsOf [
-      ("a_native", "test/a_test.mdk"),
-      ("a_shell", "test/a.sh"),
+      ("a_native", "test/a_test.mdk", ""),
+      ("a_shell", "test/a.sh", ""),
     ])
+
+test "one correct shares_baseline_with excuses the collision" =
+  expectEqual
+    []
+    (keyViolationsOf [
+      ("a_native", "test/a_test.mdk", "a_shell"),
+      ("a_shell", "test/a.sh", ""),
+    ])
+
+test "a three-way group with two hatches passes" =
+  expectEqual
+    []
+    (keyViolationsOf [
+      ("a_native", "test/a_test.mdk", "a_shell"),
+      ("a_shell", "test/a.sh", ""),
+      ("a_tmp", "test/a_test.mdk", "a_shell"),
+    ])
+
+test "a three-way group with one hatch still fails" =
+  expectEqual
+    [collisionMsg "a_native, a_shell, a_tmp"]
+    (keyViolationsOf [
+      ("a_native", "test/a_test.mdk", "a_shell"),
+      ("a_shell", "test/a.sh", ""),
+      ("a_tmp", "test/a_test.mdk", ""),
+    ])
+
+staleMsg : String -> String -> String
+staleMsg n t =
+  "\{n}: stale shares_baseline_with '\{t}' — it must name another entry deriving the same baselineKey; remove it once the old entry is gone"
+
+test "a hatch with no collision is stale" =
+  expectEqual
+    [staleMsg "b" "a"]
+    (keyViolationsOf [("a", "test/a.sh", ""), ("b", "test/b.sh", "a")])
+
+test "a hatch naming a missing entry is stale" =
+  expectEqual
+    [staleMsg "a" "ghost"]
+    (keyViolationsOf [("a", "test/a.sh", "ghost")])
+
+test "a hatch naming itself is stale" =
+  expectEqual [staleMsg "a" "a"] (keyViolationsOf [("a", "test/a.sh", "a")])
+
+collidingRows : List (String, String, String)
+collidingRows = [
+  ("a_native", "test/a_test.mdk", ""),
+  ("a_shell", "test/a.sh", ""),
+]
+
+test "verifyClasses reports the baselineKey class through the real entry point" =
+  match regOf collidingRows
+    Err e => expectEqual "" e
+    Ok gs => match verifyClasses "." gs []
+      Err m => expectEqual "" m
+      Ok classes =>
+        expectEqual
+          (Some [collisionMsg "a_native, a_shell"])
+          (lookupClass "duplicate baselineKeys" classes)
+
+lookupClass : String -> List (String, List String) -> Option (List String)
+lookupClass _ [] = None
+lookupClass t ((n, vs) :: rest) = if n == t then Some vs else lookupClass t rest

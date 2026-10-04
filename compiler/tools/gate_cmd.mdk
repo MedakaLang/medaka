@@ -1359,11 +1359,14 @@ dupNameFrom gates (n :: ns) =
 duplicateNameViolations : List Gate -> List String
 duplicateNameViolations gates = dupNameFrom gates (sortUniqS (gateNames gates))
 
--- Check 6b (#3335): derived `baselineKey`s are UNIQUE across entries.  The key
--- is deliberately non-injective (an `X_test.mdk` inherits `X.sh`'s cost
--- history), so two entries whose `run` paths differ can still derive the same
--- key and silently share one cost-history row.  Entries are named in the
--- message so the collision is attributable.
+-- Check 6b (#3335): derived `baselineKey`s are UNIQUE across entries, unless
+-- the collision is declared.  The key is deliberately non-injective (an
+-- `X_test.mdk` inherits `X.sh`'s cost history), so two entries whose `run`
+-- paths differ can derive the same key and silently share one cost-history
+-- row.  A migration that does this on purpose says so with a per-row
+-- `shares_baseline_with = "<other entry>"`: a collision group is allowed when
+-- every entry but one names another member of the group.  The declaration is
+-- checked for staleness so it cannot outlive the collision it excuses.
 namesWithKey : String -> List Gate -> List String
 namesWithKey _ [] = []
 namesWithKey k (g :: gs) =
@@ -1372,21 +1375,58 @@ namesWithKey k (g :: gs) =
   else
     namesWithKey k gs
 
+findGate : String -> List Gate -> Option Gate
+findGate _ [] = None
+findGate n (g :: gs) = if g.name == n then Some g else findGate n gs
+
+-- True when `g` declares a partner that exists, is another entry, and has the
+-- same derived key.
+declaresLiveShare : List Gate -> Gate -> Bool
+declaresLiveShare gates g
+  | g.sharesBaselineWith == "" = False
+  | g.sharesBaselineWith == g.name = False
+  | otherwise = match findGate g.sharesBaselineWith gates
+    None => False
+    Some o => baselineKey o.run == baselineKey g.run
+
+countUndeclared : List Gate -> List String -> Int
+countUndeclared _ [] = 0
+countUndeclared gates (n :: ns) =
+  let rest = countUndeclared gates ns
+  match findGate n gates
+    Some g => if declaresLiveShare gates g then rest else rest + 1
+    None => rest + 1
+
 dupKeyFrom : List Gate -> List String -> List String
 dupKeyFrom _ [] = []
 dupKeyFrom gates (k :: ks) =
   let owners = namesWithKey k gates
   let rest = dupKeyFrom gates ks
-  if listLen owners > 1 then
-    "\{k}: entries \{joinWith ", " owners} derive the same baselineKey — their cost histories would be spliced together"
+  if listLen owners > 1 && countUndeclared gates owners > 1 then
+    "\{k}: entries \{joinWith ", " owners} derive the same baselineKey — their cost histories would be spliced together; declare a deliberate migration with shares_baseline_with"
       :: rest
   else
     rest
+
+staleShareViolations : List Gate -> List String
+staleShareViolations [] = []
+staleShareViolations all = staleShareFrom all all
+
+staleShareFrom : List Gate -> List Gate -> List String
+staleShareFrom _ [] = []
+staleShareFrom all (g :: gs) =
+  let rest = staleShareFrom all gs
+  if g.sharesBaselineWith == "" || declaresLiveShare all g then
+    rest
+  else
+    "\{g.name}: stale shares_baseline_with '\{g.sharesBaselineWith}' — it must name another entry deriving the same baselineKey; remove it once the old entry is gone"
+      :: rest
 
 export
 duplicateBaselineKeyViolations : List Gate -> List String
 duplicateBaselineKeyViolations gates =
   dupKeyFrom gates (sortUniqS (map (g => baselineKey g.run) gates))
+    ++ staleShareViolations gates
 
 -- Check 7 (#2204): every `name` — a gate's and a `[[shard]]` row's — is inside
 -- a CONSERVATIVE CHARSET.
@@ -2444,6 +2484,7 @@ nativeGradeViolations root (g :: gs) =
 
 -- ── assembling and rendering the violation classes ──────────────────────────
 
+export
 verifyClasses : String ->
   List Gate ->
   List Shard ->

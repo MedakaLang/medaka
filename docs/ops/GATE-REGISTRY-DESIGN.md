@@ -153,6 +153,8 @@ corpus      = ["test/parse_error_fixtures"]      # fixture DIRECTORIES read (lit
                                #   project dir here binds that project to this gate for
                                #   queue scoping (#2179).
 toolchain   = []               # e.g. ["clang"] ["wasm-tools","node>=24"] ["sqlite3"] ["valgrind"]
+shares_baseline_with = "<entry name>"  # OPTIONAL (the one non-required field, #3335): declares a deliberate
+                               #   baselineKey collision during a native migration. Stale ones are a `gate verify` violation.
 ```
 
 Four rules the reader enforces, each because the alternative fails quietly:

@@ -32,6 +32,10 @@
 #      `shell-because: <class>` header line, which must name the same class
 #      (#2591). A `shell:*` value is a permanent exemption from the migration;
 #      unpaired, it is a claim one side grants itself and nothing reads.
+#  13. derived `baselineKey`s are UNIQUE across entries (#3335) unless the
+#      collision is declared with `shares_baseline_with`; a declaration that
+#      no longer matches a collision is itself a violation. (Check 12 is the
+#      `blocked:*` pairing, described below.)
 #
 # TEXT-ONLY, NO BUILD beyond `./medaka` itself already existing — this does not
 # invoke clang, an oracle probe, or any other compiler. `verify` shells out to

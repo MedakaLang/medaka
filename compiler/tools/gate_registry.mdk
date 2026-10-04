@@ -152,6 +152,7 @@ public export data Gate = Gate {
   sources : List String,
   corpus : List String,
   toolchain : List String,
+  sharesBaselineWith : String,
 }
 
 -- ── Registry reading ────────────────────────────────────────────────────────
@@ -193,6 +194,9 @@ readGateEntry i e = do
   sources <- reqArr i "sources" e
   corpus <- reqArr i "corpus" e
   toolchain <- reqArr i "toolchain" e
+  let sharesBaselineWith = match getString "shares_baseline_with" e
+    Some v => v
+    None => ""
   Ok Gate {
     name = name,
     area = area,
@@ -207,6 +211,7 @@ readGateEntry i e = do
     sources = sources,
     corpus = corpus,
     toolchain = toolchain,
+    sharesBaselineWith = sharesBaselineWith,
   }
 
 readGatesFrom : Toml -> Int -> Int -> List Gate -> Result String (List Gate)
