@@ -843,5 +843,22 @@ else
   printf '  got:  [%s] rc=%s\n  stderr: [%s]\n' "$fj_out" "$fj_rc" "$(cat "$TMP/fj.err")"
 fi
 
+# ── MEDAKA_PERF=1 on an error exit still closes the table (#2064) ───────────
+# A failing check/run/build used to leave the [perf] rows truncated, with no
+# `total`.  Timings vary, so assert shape: stderr's LAST [perf] row is `total`
+# and the error text still follows it.  Parse-error and type-error both.
+pf_good="$FIX/error/type_mismatch.mdk"
+pf_parse="$TMP/perf_parse.mdk"
+printf '%s\n' 'main = (1 +' > "$pf_parse"
+for pf in "check $pf_good" "run $pf_good" "build $pf_good -o $TMP/perf_bin" "check $pf_parse"; do
+  # shellcheck disable=SC2086
+  pf_err="$(MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" MEDAKA_PERF=1 bound "$MEDAKA" $pf 2>&1 >/dev/null)"
+  pf_last="$(printf '%s\n' "$pf_err" | grep '^\[perf\]' | tail -n 1)"
+  case "$pf_last" in
+    '[perf] total'*) pass=$((pass+1)); printf 'ok   perf/error-total (%s)\n' "${pf%% *}" ;;
+    *) fail=$((fail+1)); printf 'FAIL perf/error-total (%s: want the last [perf] row to be total)\n  got: [%s]\n' "${pf%% *}" "$pf_err" ;;
+  esac
+done
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -64,6 +64,8 @@ import support.timer.{
   now,
   emitPhase,
   emitTotal,
+  perfBegin,
+  emitAbortTotal,
   perfSinkOn,
   flushPerfSinkProse,
 }
@@ -494,12 +496,14 @@ flushStaleNoticeProse _ = match !pendingStaleNotice
 dieMsg : String -> <IO> Unit
 -- lint-disable-next-line rule-duplicate-body
 dieMsg msg =
+  let _ = emitAbortTotal ()
   let _ = ePutStrLn msg
   exit 1
 
 runAbort : String -> <IO> Unit
 runAbort msg =
   let _ = flushStaleNoticeProse ()
+  let _ = emitAbortTotal ()
   let _ = flushPerfSinkProse ()
   dieMsg msg
 
@@ -703,7 +707,7 @@ runCheckCmd argv =
   -- CLI-CONFORMANCE.md §5a, exemplar X3).
   let a = requireArgs checkArgSpec argv
   let perfOn = perfEnabled ()
-  let perfT0 = now ()
+  let perfT0 = perfBegin ()
   let jsonMode = flag "--json" a
   let allowInternal = flag "--allow-internal" a
   let typesMode = flag "--types" a
@@ -742,6 +746,7 @@ runCheckCmd argv =
                 -- line instead of the actual use site.
                 Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
                   Err lerr =>
+                    let _ = emitAbortTotal ()
                     let _ =
                       ePutStrLn (moduleLoadErrText tsrc target stdlibDir lerr)
                     exit 1
@@ -943,6 +948,7 @@ isHiddenNonEntryWarn d = diagIsWarn d && not (isCoherenceWarn d)
 -- being flushed as prose ahead of it the way `runAbort` does.
 runAbortJson : List (String, String, List Diag) -> <IO> Unit
 runAbortJson triples =
+  let _ = emitAbortTotal ()
   pendingRunDiags := nonEmptyTriples triples
   let _ = flushPendingRunDiags True
   exit 1
@@ -1163,6 +1169,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       let _ = emitLocatedWarnings tsrc target (warns ++ mainWarns)
       ()
     _ =>
+      let _ = emitAbortTotal ()
       let _ =
         ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
       exit 1
@@ -1203,6 +1210,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
       -- `analyzeProject` pass, keeping the coherence warnings its `fst` discards.
 
       (Some errText, _, _, _) =>
+        let _ = emitAbortTotal ()
         let _ = putStr errText
         exit 1
       (None, projWarns, hiddenCount, perMod) =>
@@ -2315,7 +2323,7 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
 runBuildPlainCmd : Args -> <IO> Unit
 runBuildPlainCmd a =
   let perfOn = perfEnabled ()
-  let perfT0 = now ()
+  let perfT0 = perfBegin ()
   match parseBuildArgs a
     Err msg => dieMsg msg
     Ok (input, outOpt, target) =>
@@ -2772,7 +2780,7 @@ runEvalPerf perfOn target perfT0 perfTCheck _ =
 runRunCmd : List String -> <IO> Unit
 runRunCmd argv =
   let perfOn = perfEnabled ()
-  let perfT0 = now ()
+  let perfT0 = perfBegin ()
   let jsonMode = runFlagGiven "--json" argv
   -- C4: under `--json` stderr is this verb's MACHINE channel, so `MEDAKA_PERF`'s
   -- `[perf]` lines must not be written to it as prose.  Arm `timer.mdk`'s sink

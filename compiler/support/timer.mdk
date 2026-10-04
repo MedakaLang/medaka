@@ -167,6 +167,33 @@ emitPhase False _ _ _ = ()
 emitPhase True label elapsed ops =
   emitTimerLine "[perf] \{label}\t\{floatToString elapsed}s\t\{ops}"
 
+-- Start time of the verb currently running, recorded by `perfBegin`; negative
+-- means "no verb started", or the abort total was already emitted.
+perfStartT : Ref Float
+perfStartT = Ref (0.0 - 1.0)
+
+-- `now ()`, additionally recording it as the verb's start so an error exit can
+-- still close the table with a `total` row (`emitAbortTotal`).
+export
+perfBegin : Unit -> <IO> Float
+perfBegin () =
+  let t = now ()
+  perfStartT := t
+  t
+
+-- Close the `[perf]` table on an error exit: emit `total` from the recorded
+-- start when MEDAKA_PERF is on.  One-shot (it clears the start), so layered
+-- abort helpers cannot print two totals; a no-op when no verb recorded a start.
+export
+emitAbortTotal : Unit -> <IO> Unit
+emitAbortTotal () =
+  let t0 = !perfStartT
+  if t0 < 0.0 then
+    ()
+  else
+    perfStartT := 0.0 - 1.0
+    emitTotal (perfEnabled ()) (now () - t0)
+
 -- Emit the total pipeline time to stderr.  No-op when on = False.
 export
 emitTotal : Bool -> Float -> <IO> Unit
