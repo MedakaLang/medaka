@@ -3451,7 +3451,7 @@ kind = "native"
 migration = "done"
 run = "pds/test/deploy_config_lint_test.mdk"
 oracles = []
-sources = ["pds/pds.service", "pds/Caddyfile"]
+sources = ["pds/pds.service", "pds/Caddyfile", "pds/pds-egress.service", "pds/Caddyfile.egress", "pds/pds-backup.service", "pds/pds-backup.timer", "pds/pds-healthping.service", "pds/pds-healthping.timer", "pds/pds-alert@.service"]
 corpus = []
 toolchain = []
 
