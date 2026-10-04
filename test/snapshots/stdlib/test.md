@@ -1,5 +1,5 @@
 # META
-source_lines=665
+source_lines=675
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for unit tests.
@@ -438,7 +438,7 @@ expectEqualLines expected actual =
   else
     Fail (diffLineMsg 1 (lines expected) (lines actual)) expected actual
 
--- Helper for expectAll: accumulate the first Fail, or stay Pass.  An
+-- expectEach's accumulator: keep the first Fail, or stay Pass.  An
 -- aggregate pass has no single pair of operands to report, so it collapses
 -- to `pass` rather than keeping some arbitrary member's.
 expectAllStep : Expectation -> Expectation -> Expectation
@@ -448,15 +448,24 @@ expectAllStep (Pass _ _) (Pass _ _) = pass
 
 {- | Passes when every expectation in the list passes.
 
-   The result is the first `Fail`, when there is one.
+   The result is the first `Fail`, with its message prefixed by the member's
+   position and the list's length, so a long list locates the failing fact.
+   The `Fail`'s operands are that member's own.
 
    > expectAll [pass, pass, pass]
    Pass "" ""
    > expectAll [pass, fail "oops", pass]
-   Fail "oops" "" "" -}
+   Fail "member 2 of 3: oops" "" ""
+   > expectAll [expectEqual 1 1, expectEqual 2 3, expectEqual 4 5]
+   Fail "member 2 of 3: expected 2 but got 3" "2" "3" -}
 export
 expectAll : List Expectation -> Expectation
-expectAll es = fold expectAllStep pass es
+expectAll es = expectAllAt 1 (length es) es
+
+expectAllAt : Int -> Int -> List Expectation -> Expectation
+expectAllAt _ _ [] = pass
+expectAllAt k n ((Pass _ _) :: rest) = expectAllAt (k + 1) n rest
+expectAllAt k n ((Fail msg e a) :: _) = Fail "member \{k} of \{n}: \{msg}" e a
 
 {- | The expectation with `label` prefixed onto its message when it is a
    `Fail`, and unchanged when it is a `Pass`.
@@ -485,7 +494,8 @@ labelFail label (Fail m e a) = Fail "\{label}: \{m}" e a
    Fail "b: oops" "" "" -}
 export
 expectEach : List (String, Expectation) -> Expectation
-expectEach rows = expectAll (map ((label, e) => labelFail label e) rows)
+expectEach rows =
+  fold expectAllStep pass (map ((label, e) => labelFail label e) rows)
 
 -- # Grading a check's findings
 
@@ -741,12 +751,16 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 (DFunDef false "expectAllStep" ((PCon "Pass" PWild PWild) (PCon "Fail" (PVar "msg") (PVar "e") (PVar "a"))) (EApp (EApp (EApp (EVar "Fail") (EVar "msg")) (EVar "e")) (EVar "a")))
 (DFunDef false "expectAllStep" ((PCon "Pass" PWild PWild) (PCon "Pass" PWild PWild)) (EVar "pass"))
 (DTypeSig true "expectAll" (TyFun (TyApp (TyCon "List") (TyCon "Expectation")) (TyCon "Expectation")))
-(DFunDef false "expectAll" ((PVar "es")) (EApp (EApp (EApp (EVar "fold") (EVar "expectAllStep")) (EVar "pass")) (EVar "es")))
+(DFunDef false "expectAll" ((PVar "es")) (EApp (EApp (EApp (EVar "expectAllAt") (ELit (LInt 1))) (EApp (EVar "length") (EVar "es"))) (EVar "es")))
+(DTypeSig false "expectAllAt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Expectation")) (TyCon "Expectation")))))
+(DFunDef false "expectAllAt" (PWild PWild (PList)) (EVar "pass"))
+(DFunDef false "expectAllAt" ((PVar "k") (PVar "n") (PCons (PCon "Pass" PWild PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "expectAllAt") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "n")) (EVar "rest")))
+(DFunDef false "expectAllAt" ((PVar "k") (PVar "n") (PCons (PCon "Fail" (PVar "msg") (PVar "e") (PVar "a")) PWild)) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "member ")) (EApp (EVar "display") (EVar "k"))) (ELit (LString " of "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "")))) (EVar "e")) (EVar "a")))
 (DTypeSig true "labelFail" (TyFun (TyCon "String") (TyFun (TyCon "Expectation") (TyCon "Expectation"))))
 (DFunDef false "labelFail" (PWild (PCon "Pass" (PVar "e") (PVar "a"))) (EApp (EApp (EVar "Pass") (EVar "e")) (EVar "a")))
 (DFunDef false "labelFail" ((PVar "label") (PCon "Fail" (PVar "m") (PVar "e") (PVar "a"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))) (EVar "e")) (EVar "a")))
 (DTypeSig true "expectEach" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expectation"))) (TyCon "Expectation")))
-(DFunDef false "expectEach" ((PVar "rows")) (EApp (EVar "expectAll") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "label") (PVar "e"))) (EApp (EApp (EVar "labelFail") (EVar "label")) (EVar "e")))) (EVar "rows"))))
+(DFunDef false "expectEach" ((PVar "rows")) (EApp (EApp (EApp (EVar "fold") (EVar "expectAllStep")) (EVar "pass")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "label") (PVar "e"))) (EApp (EApp (EVar "labelFail") (EVar "label")) (EVar "e")))) (EVar "rows"))))
 (DTypeSig false "indentFinding" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "indentFinding" ((PVar "hit")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "hit"))) (ELit (LString ""))))
 (DTypeSig true "expectNoFindings" (TyFun (TyCon "String") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Expectation"))))
@@ -856,12 +870,16 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 (DFunDef false "expectAllStep" ((PCon "Pass" PWild PWild) (PCon "Fail" (PVar "msg") (PVar "e") (PVar "a"))) (EApp (EApp (EApp (EVar "Fail") (EVar "msg")) (EVar "e")) (EVar "a")))
 (DFunDef false "expectAllStep" ((PCon "Pass" PWild PWild) (PCon "Pass" PWild PWild)) (EVar "pass"))
 (DTypeSig true "expectAll" (TyFun (TyApp (TyCon "List") (TyCon "Expectation")) (TyCon "Expectation")))
-(DFunDef false "expectAll" ((PVar "es")) (EApp (EApp (EApp (EMethodRef "fold") (EVar "expectAllStep")) (EVar "pass")) (EVar "es")))
+(DFunDef false "expectAll" ((PVar "es")) (EApp (EApp (EApp (EVar "expectAllAt") (ELit (LInt 1))) (EApp (EMethodRef "length") (EVar "es"))) (EVar "es")))
+(DTypeSig false "expectAllAt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Expectation")) (TyCon "Expectation")))))
+(DFunDef false "expectAllAt" (PWild PWild (PList)) (EVar "pass"))
+(DFunDef false "expectAllAt" ((PVar "k") (PVar "n") (PCons (PCon "Pass" PWild PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "expectAllAt") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "n")) (EVar "rest")))
+(DFunDef false "expectAllAt" ((PVar "k") (PVar "n") (PCons (PCon "Fail" (PVar "msg") (PVar "e") (PVar "a")) PWild)) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "member ")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString " of "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "")))) (EVar "e")) (EVar "a")))
 (DTypeSig true "labelFail" (TyFun (TyCon "String") (TyFun (TyCon "Expectation") (TyCon "Expectation"))))
 (DFunDef false "labelFail" (PWild (PCon "Pass" (PVar "e") (PVar "a"))) (EApp (EApp (EVar "Pass") (EVar "e")) (EVar "a")))
 (DFunDef false "labelFail" ((PVar "label") (PCon "Fail" (PVar "m") (PVar "e") (PVar "a"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))) (EVar "e")) (EVar "a")))
 (DTypeSig true "expectEach" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expectation"))) (TyCon "Expectation")))
-(DFunDef false "expectEach" ((PVar "rows")) (EApp (EVar "expectAll") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "label") (PVar "e"))) (EApp (EApp (EVar "labelFail") (EVar "label")) (EVar "e")))) (EVar "rows"))))
+(DFunDef false "expectEach" ((PVar "rows")) (EApp (EApp (EApp (EMethodRef "fold") (EVar "expectAllStep")) (EVar "pass")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "label") (PVar "e"))) (EApp (EApp (EVar "labelFail") (EVar "label")) (EVar "e")))) (EVar "rows"))))
 (DTypeSig false "indentFinding" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "indentFinding" ((PVar "hit")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "hit"))) (ELit (LString ""))))
 (DTypeSig true "expectNoFindings" (TyFun (TyCon "String") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Expectation"))))

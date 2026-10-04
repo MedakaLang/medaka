@@ -1,0 +1,14 @@
+-- #1003 regression fixture: a self-recursive LOCAL `let` (multi-line, no `in`)
+-- must record its own recursive call as a use of the LOCAL binder.
+-- Read expected.golden as the assertion: `main|local|go|*` lists the decl and
+-- BOTH uses (the recursive `go (k - 1)` and the outer `go n`), and the
+-- top-level `go` namesake (the silent-rename hazard) keeps USES 0.
+go : Int -> Int
+go k = 100
+
+outer : Int -> Int
+outer n =
+  let go k = if k <= 0 then 0 else k + go (k - 1)
+  go n
+
+main = println (outer 4)

@@ -1637,8 +1637,16 @@ fi
 # against a preflight that spends ~1m41s building ./medaka before it runs anything. It
 # adds ZERO gates — it is a separate step, like need_fixpoint — so the `would run N
 # gate(s)` count is unchanged by design.
-inlang_files=$(awk '/^test: medaka$/{f=1;next} f&&/^\t/{print} f&&!/^\t/{exit}' "$ROOT/Makefile" \
+# Each entry is the recipe line after `./medaka test`: optional flags (`--native`), then
+# the target as the LAST word. The flags must reach the run, or a roster the Makefile
+# grades natively runs under the interpreter here (#3302).
+inlang_lines=$(awk '/^test: medaka$/{f=1;next} f&&/^\t/{print} f&&!/^\t/{exit}' "$ROOT/Makefile" \
   | sed -n 's|^	\./medaka test ||p')
+inlang_files=$(printf '%s\n' "$inlang_lines" | awk 'NF{print $NF}')
+# Prints the flags the Makefile passes for target $1 (empty when none).
+_inlang_flags() {
+  printf '%s\n' "$inlang_lines" | awk -v t="$1" 'NF && $NF == t { $NF = ""; sub(/[ \t]+$/, ""); print; exit }'
+}
 inlang_run=""
 while IFS= read -r f; do
   for _if in $inlang_files; do
@@ -1803,7 +1811,10 @@ if [ -n "${PREFLIGHT_DRY:-}" ]; then
     # resulting short gate list misleading. Do not repeat that here: a step the real
     # run will perform must appear in the dry-run's account of the real run.
     printf '── would also run the IN-LANGUAGE suite (`make test`; the `inlang` check) ─────\n'
-    for _if in $inlang_run; do printf '  INLANG    ./medaka test %s\n' "$_if"; done
+    for _if in $inlang_run; do
+      _ifl="$(_inlang_flags "$_if")"
+      printf '  INLANG    ./medaka test %s%s\n' "${_ifl:+$_ifl }" "$_if"
+    done
   fi
   if [ -n "$unmapped" ]; then
     printf '── %s path(s) the change→gate map has NO OPINION about ─────\n' \
@@ -2055,7 +2066,8 @@ if [ -n "$inlang_run" ]; then
   echo
   echo "── in-language suite (\`make test\` names these; the \`inlang\` required check) ──"
   for _if in $inlang_run; do
-    "$ROOT/medaka" test "$ROOT/$_if" || rc=1
+    # shellcheck disable=SC2046 # flags are plain words, split on purpose
+    "$ROOT/medaka" test $(_inlang_flags "$_if") "$ROOT/$_if" || rc=1
   done
 fi
 

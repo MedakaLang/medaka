@@ -152,6 +152,7 @@ public export data Gate = Gate {
   sources : List String,
   corpus : List String,
   toolchain : List String,
+  sharesBaselineWith : String,
 }
 
 -- ── Registry reading ────────────────────────────────────────────────────────
@@ -193,6 +194,9 @@ readGateEntry i e = do
   sources <- reqArr i "sources" e
   corpus <- reqArr i "corpus" e
   toolchain <- reqArr i "toolchain" e
+  let sharesBaselineWith = match getString "shares_baseline_with" e
+    Some v => v
+    None => ""
   Ok Gate {
     name = name,
     area = area,
@@ -207,6 +211,7 @@ readGateEntry i e = do
     sources = sources,
     corpus = corpus,
     toolchain = toolchain,
+    sharesBaselineWith = sharesBaselineWith,
   }
 
 readGatesFrom : Toml -> Int -> Int -> List Gate -> Result String (List Gate)
@@ -553,7 +558,15 @@ renderNames [] = ""
 renderNames (g :: gs) = "\{g.name}\n" ++ renderNames gs
 
 gateJson : Gate -> Json
-gateJson g = jObject [
+gateJson g = jObject (gateFields g ++ shareField g)
+
+shareField : Gate -> List (String, Json)
+shareField g
+  | g.sharesBaselineWith == "" = []
+  | otherwise = [("shares_baseline_with", JString g.sharesBaselineWith)]
+
+gateFields : Gate -> List (String, Json)
+gateFields g = [
   ("name", JString g.name),
   ("baselineKey", JString (baselineKey g.run)),
   ("area", JString g.area),
@@ -571,7 +584,7 @@ gateJson g = jObject [
 ]
 
 {- | The `--json` rendering: a JSON array of entry objects, in registry order,
-   every schema field present. -}
+   every schema field present; `shares_baseline_with` only when set. -}
 export
 renderJson : List Gate -> String
 renderJson gs = stringify (jArray (map gateJson gs))

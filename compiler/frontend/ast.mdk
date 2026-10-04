@@ -1880,6 +1880,7 @@ public export data Decl =
     reqs : List Require,
     methods : List ImplMethod,
     implOrigin : TyConOrigin,
+    implIfaceLoc : Option Loc,
   }
   -- `tyAliasRhs` is the expansion; `tyAliasOrigin` is #1110 decl identity.
   | DTypeAlias {
@@ -2036,6 +2037,7 @@ dImplUnresolved pub iface tys reqs methods = DImpl {
   reqs = reqs,
   methods = methods,
   implOrigin = OriginUnresolved,
+  implIfaceLoc = None,
 }
 
 export
@@ -2072,6 +2074,9 @@ setDeclNameLoc l (d@(DTypeAlias { tyAliasName = _ })) =
   DTypeAlias { d | tyAliasNameLoc = Some l }
 setDeclNameLoc l (d@(DInterface { ifaceOrigin = _ })) =
   DInterface { d | ifaceNameLoc = Some l }
+-- An `impl`'s "name" is the interface it names: the span of that token.
+setDeclNameLoc l (d@(DImpl { implOrigin = _ })) =
+  DImpl { d | implIfaceLoc = Some l }
 setDeclNameLoc _ d = d
 
 -- The span of a declaration's name where the declaration records one.

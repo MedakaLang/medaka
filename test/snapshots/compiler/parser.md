@@ -1,5 +1,5 @@
 # META
-source_lines=6223
+source_lines=6241
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -3186,10 +3186,23 @@ stringLitFor : Token -> Parser String
 stringLitFor (TString s) = emit s
 stringLitFor _ = failP "expected string literal"
 
+-- A `prop`/`test` name is a static label, so a string with `\{…}` interpolation
+-- is rejected at the keyword rather than falling through to a generic failure.
+interpolatedNameMsg : String -> String
+interpolatedNameMsg kw =
+  "`\{kw}` names must be plain string literals; string interpolation is not allowed in a `\{kw}` name"
+
+propNameFor : Int -> Token -> Parser String
+propNameFor propPos (TInterpOpen _) =
+  fatalAtP (interpolatedNameMsg "prop") propPos
+propNameFor _ t = stringLitFor t
+
 parseProp : Bool -> Parser Decl
 parseProp pub = defer
+  propPos <- getPos
   expectTok TProp
-  name <- stringLitP
+  t <- peekP
+  name <- propNameFor propPos t
   params <- many propParam
   expectTok TEqual
   body <- parseBody
@@ -3230,6 +3243,8 @@ parseTestRest pub _ (TString _) = defer
   body <- parseBody
   skipNewlines
   deferPure (DTest pub name body)
+parseTestRest _ testPos (TInterpOpen _) =
+  fatalAtP (interpolatedNameMsg "test") testPos
 parseTestRest _ testPos _ = fatalAtP (reservedKeywordMsg "test") testPos
 
 -- `bench "name" = expr` is removed: no verb and no runner ever consumed the
@@ -3475,9 +3490,12 @@ parseImpl pub = defer
 -- removed; a lowercase head or a stray `of` now yields a clean parse error.)
 implHead : Bool -> Int -> Token -> Parser Decl
 implHead pub kw (TUpper u) = defer
+  s <- getPos
   advance
   n <- upperQualTail u
-  implRest pub kw n
+  q <- getPos
+  d <- implRest pub kw n
+  deferPure (setDeclNameLoc (locOfSpan s q) d)
 implHead _ _ (TIdent _) = failP namedImplRemovedMsg
 implHead _ _ _ = failP "expected impl head"
 
@@ -7217,14 +7235,20 @@ parseResultWith src tokList offList =
 (DTypeSig false "stringLitFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "String"))))
 (DFunDef false "stringLitFor" ((PCon "TString" (PVar "s"))) (EApp (EVar "emit") (EVar "s")))
 (DFunDef false "stringLitFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected string literal"))))
+(DTypeSig false "interpolatedNameMsg" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "interpolatedNameMsg" ((PVar "kw")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "kw"))) (ELit (LString "` names must be plain string literals; string interpolation is not allowed in a `"))) (EApp (EVar "display") (EVar "kw"))) (ELit (LString "` name"))))
+(DTypeSig false "propNameFor" (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "String")))))
+(DFunDef false "propNameFor" ((PVar "propPos") (PCon "TInterpOpen" PWild)) (EApp (EApp (EVar "fatalAtP") (EApp (EVar "interpolatedNameMsg") (ELit (LString "prop")))) (EVar "propPos")))
+(DFunDef false "propNameFor" (PWild (PVar "t")) (EApp (EVar "stringLitFor") (EVar "t")))
 (DTypeSig false "parseProp" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Decl"))))
-(DFunDef false "parseProp" ((PVar "pub")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TProp"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "stringLitP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EApp (EVar "many") (EVar "propParam"))) (ELam ((PVar "params")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EVar "body"))))))))))))))))
+(DFunDef false "parseProp" ((PVar "pub")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "propPos")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TProp"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "propNameFor") (EVar "propPos")) (EVar "t"))) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EApp (EVar "many") (EVar "propParam"))) (ELam ((PVar "params")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EVar "body"))))))))))))))))))))
 (DTypeSig false "propParam" (TyApp (TyCon "Parser") (TyCon "PropParam")))
 (DFunDef false "propParam" () (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TLParen"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseTy")) (ELam ((PVar "ty")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "PropParam") (EVar "name")) (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 1))))) (EVar "ty"))))))))))))))))
 (DTypeSig false "parseTest" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Decl"))))
 (DFunDef false "parseTest" ((PVar "pub")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "testPos")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TTest"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "parseTestRest") (EVar "pub")) (EVar "testPos")) (EVar "t")))))))))
 (DTypeSig false "parseTestRest" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Decl"))))))
 (DFunDef false "parseTestRest" ((PVar "pub") PWild (PCon "TString" PWild)) (EApp (EApp (EVar "deferThen") (EVar "stringLitP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EVar "body"))))))))))))
+(DFunDef false "parseTestRest" (PWild (PVar "testPos") (PCon "TInterpOpen" PWild)) (EApp (EApp (EVar "fatalAtP") (EApp (EVar "interpolatedNameMsg") (ELit (LString "test")))) (EVar "testPos")))
 (DFunDef false "parseTestRest" (PWild (PVar "testPos") PWild) (EApp (EApp (EVar "fatalAtP") (EApp (EVar "reservedKeywordMsg") (ELit (LString "test")))) (EVar "testPos")))
 (DTypeSig false "benchRemovedMsg" (TyCon "String"))
 (DFunDef false "benchRemovedMsg" () (ELit (LString "`bench` has been removed — no runner ever consumed a `bench` declaration. Benchmark with `test/bench.sh`")))
@@ -7289,7 +7313,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseImpl" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Decl"))))
 (DFunDef false "parseImpl" ((PVar "pub")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "kw")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TImpl"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "implHead") (EVar "pub")) (EVar "kw")) (EVar "t")))))))))
 (DTypeSig false "implHead" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Decl"))))))
-(DFunDef false "implHead" ((PVar "pub") (PVar "kw") (PCon "TUpper" (PVar "u"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "upperQualTail") (EVar "u"))) (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "implRest") (EVar "pub")) (EVar "kw")) (EVar "n")))))))
+(DFunDef false "implHead" ((PVar "pub") (PVar "kw") (PCon "TUpper" (PVar "u"))) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "upperQualTail") (EVar "u"))) (ELam ((PVar "n")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EApp (EVar "implRest") (EVar "pub")) (EVar "kw")) (EVar "n"))) (ELam ((PVar "d")) (EApp (EVar "deferPure") (EApp (EApp (EVar "setDeclNameLoc") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))) (EVar "d"))))))))))))))
 (DFunDef false "implHead" (PWild PWild (PCon "TIdent" PWild)) (EApp (EVar "failP") (EVar "namedImplRemovedMsg")))
 (DFunDef false "implHead" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected impl head"))))
 (DTypeSig false "implRest" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyCon "Decl"))))))
@@ -8981,14 +9005,20 @@ parseResultWith src tokList offList =
 (DTypeSig false "stringLitFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "String"))))
 (DFunDef false "stringLitFor" ((PCon "TString" (PVar "s"))) (EApp (EVar "emit") (EVar "s")))
 (DFunDef false "stringLitFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected string literal"))))
+(DTypeSig false "interpolatedNameMsg" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "interpolatedNameMsg" ((PVar "kw")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "kw"))) (ELit (LString "` names must be plain string literals; string interpolation is not allowed in a `"))) (EApp (EMethodRef "display") (EVar "kw"))) (ELit (LString "` name"))))
+(DTypeSig false "propNameFor" (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "String")))))
+(DFunDef false "propNameFor" ((PVar "propPos") (PCon "TInterpOpen" PWild)) (EApp (EApp (EVar "fatalAtP") (EApp (EVar "interpolatedNameMsg") (ELit (LString "prop")))) (EVar "propPos")))
+(DFunDef false "propNameFor" (PWild (PVar "t")) (EApp (EVar "stringLitFor") (EVar "t")))
 (DTypeSig false "parseProp" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Decl"))))
-(DFunDef false "parseProp" ((PVar "pub")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TProp"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "stringLitP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "many") (EVar "propParam"))) (ELam ((PVar "params")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EVar "body"))))))))))))))))
+(DFunDef false "parseProp" ((PVar "pub")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "propPos")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TProp"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "propNameFor") (EVar "propPos")) (EVar "t"))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "many") (EVar "propParam"))) (ELam ((PVar "params")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EVar "body"))))))))))))))))))))
 (DTypeSig false "propParam" (TyApp (TyCon "Parser") (TyCon "PropParam")))
 (DFunDef false "propParam" () (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TLParen"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseTy")) (ELam ((PVar "ty")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "PropParam") (EVar "name")) (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 1))))) (EVar "ty"))))))))))))))))
 (DTypeSig false "parseTest" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Decl"))))
 (DFunDef false "parseTest" ((PVar "pub")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "testPos")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TTest"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "parseTestRest") (EVar "pub")) (EVar "testPos")) (EVar "t")))))))))
 (DTypeSig false "parseTestRest" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Decl"))))))
 (DFunDef false "parseTestRest" ((PVar "pub") PWild (PCon "TString" PWild)) (EApp (EApp (EMethodRef "deferThen") (EVar "stringLitP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EVar "body"))))))))))))
+(DFunDef false "parseTestRest" (PWild (PVar "testPos") (PCon "TInterpOpen" PWild)) (EApp (EApp (EVar "fatalAtP") (EApp (EVar "interpolatedNameMsg") (ELit (LString "test")))) (EVar "testPos")))
 (DFunDef false "parseTestRest" (PWild (PVar "testPos") PWild) (EApp (EApp (EVar "fatalAtP") (EApp (EVar "reservedKeywordMsg") (ELit (LString "test")))) (EVar "testPos")))
 (DTypeSig false "benchRemovedMsg" (TyCon "String"))
 (DFunDef false "benchRemovedMsg" () (ELit (LString "`bench` has been removed — no runner ever consumed a `bench` declaration. Benchmark with `test/bench.sh`")))
@@ -9053,7 +9083,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseImpl" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Decl"))))
 (DFunDef false "parseImpl" ((PVar "pub")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "kw")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TImpl"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "implHead") (EVar "pub")) (EVar "kw")) (EVar "t")))))))))
 (DTypeSig false "implHead" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Decl"))))))
-(DFunDef false "implHead" ((PVar "pub") (PVar "kw") (PCon "TUpper" (PVar "u"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "upperQualTail") (EVar "u"))) (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "implRest") (EVar "pub")) (EVar "kw")) (EVar "n")))))))
+(DFunDef false "implHead" ((PVar "pub") (PVar "kw") (PCon "TUpper" (PVar "u"))) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "upperQualTail") (EVar "u"))) (ELam ((PVar "n")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EApp (EVar "implRest") (EVar "pub")) (EVar "kw")) (EVar "n"))) (ELam ((PVar "d")) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "setDeclNameLoc") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))) (EVar "d"))))))))))))))
 (DFunDef false "implHead" (PWild PWild (PCon "TIdent" PWild)) (EApp (EVar "failP") (EVar "namedImplRemovedMsg")))
 (DFunDef false "implHead" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected impl head"))))
 (DTypeSig false "implRest" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyCon "Decl"))))))

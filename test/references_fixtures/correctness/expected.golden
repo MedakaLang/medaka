@@ -3,7 +3,7 @@ defs|ctor|Red  DEF defs.mdk:8:19  USES 3  defs.mdk:27:24 main.mdk:36:10 main.mdk
 defs|local|x|1  DEF defs.mdk:6:7  USES 1  defs.mdk:6:11
 defs|method|sizeOf  DEF defs.mdk:20:2 defs.mdk:23:2  USES 2  defs.mdk:27:17 main.mdk:42:18
 defs|ty|Color  DEF defs.mdk:8:19  USES 2  defs.mdk:22:21 main.mdk:35:10
-defs|ty|Sizeable  DEF defs.mdk:19:17  USES 0  
+defs|ty|Sizeable  DEF defs.mdk:19:17  USES 1  defs.mdk:22:12
 defs|val|g  DEF defs.mdk:3:0  USES 3  defs.mdk:14:12 defs.mdk:14:23 main.mdk:24:11
 defs|val|helper  DEF defs.mdk:6:0  USES 4  defs.mdk:14:16 main.mdk:20:6 main.mdk:28:15 main.mdk:32:0
 defs|val|shared  DEF defs.mdk:11:0  USES 0  

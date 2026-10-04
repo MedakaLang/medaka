@@ -371,7 +371,7 @@ baseline.**
 | `lint` | `medaka lint: no .mdk files found` | stderr | 1 | ✅ |
 | `codemod` | `medaka codemod: missing codemod name — 'empty' is a path, and a codemod name must come first` | stderr | 1 | ✅ (no longer reads the directory as a codemod NAME) |
 | `check` / `doc` / `check-policy` / `manifest` | `Is a directory` | stderr | 1 | ⚠️ raw `errno` text, no verb prefix, no path (residual — see below) |
-| `run` | `unknown module: empty — available modules: array, async, …` | stderr | 1 | ⚠️ a missing/wrong path is reported as a missing MODULE (residual — see below) |
+| `run` | `unknown module: empty — available modules: array, async, …` | stderr | 1 | ⚠️ a directory target is reported as a missing MODULE (residual); a missing file path is reported as `error: no such file: <path>` |
 | `snapshot` | usage line | stderr | 1 | ✅ |
 
 ### 5c. `--json` availability and channel (C4) — probe `medaka <verb> --json bad.mdk`

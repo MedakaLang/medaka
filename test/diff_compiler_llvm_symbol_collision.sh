@@ -53,7 +53,7 @@
 # local constructors). Within it, the guard makes the `(module, name) -> symbol`
 # map injective for DISTINCT MODULE IDS ONLY — two distinct source units sharing
 # ONE module id collapse invisibly (the `prev == pre` skip in
-# `checkSymbolsInjective`). Uncovered, tracked: #1792.
+# `checkSymbolsInjective`). Uncovered.
 #
 # Section 4 grades part — not all — of the emitter-MINTED domain `mangleUnits`
 # never sees: the C7 impl symbols `mdk_impl_<symTag>_<method>` and the per-instance

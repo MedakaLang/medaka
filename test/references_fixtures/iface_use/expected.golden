@@ -1,0 +1,8 @@
+a|ctor|Box  DEF a.mdk:6:19  USES 0  
+a|local|n|1  DEF a.mdk:9:12  USES 1  a.mdk:9:17
+a|method|size  DEF a.mdk:4:2 a.mdk:9:2 main.mdk:8:2  USES 0  
+a|ty|Box  DEF a.mdk:6:19  USES 1  a.mdk:8:18
+a|ty|Sized  DEF a.mdk:3:17  USES 2  a.mdk:8:12 main.mdk:7:5
+main|ctor|Sack  DEF main.mdk:5:5  USES 0  
+main|ty|Sack  DEF main.mdk:5:5  USES 1  main.mdk:7:11
+main|val|main  DEF main.mdk:11:0  USES 0  

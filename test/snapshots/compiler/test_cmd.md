@@ -1,5 +1,5 @@
 # META
-source_lines=2391
+source_lines=2395
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -499,6 +499,9 @@ loadGate False target le = renderGate (loadErrorDiags target le)
 loadErrorDiags : String -> LoadError -> List (String, List Diag)
 loadErrorDiags _ (LoadParseFailed mpath _ pe) =
   [(mpath, [parseErrDiag mpath pe])]
+loadErrorDiags target (LoadCycle e cpath csite) = match csite
+  Some (_, loc) => [(cpath, [mkDiag SevError "R-MODULE-LOAD" e (Some loc)])]
+  None => [(target, [mkDiag SevError "R-MODULE-LOAD" e None])]
 loadErrorDiags target (LoadMsg e) =
   [(target, [mkDiag SevError "R-MODULE-LOAD" e None])]
 
@@ -1553,9 +1556,10 @@ testFailSuffix failed errors
 -- doctests+props normally with `None` here, just without the CLI's stderr
 -- notice, since this path has no stderr channel of its own.
 --
--- ⚠️ Results are under the INTERPRETER (eval) — a native-only miscompile is
--- invisible here (see #81); the CALLER must present them as "passes under eval",
--- never an unqualified pass.
+-- Results are under the engine(s) the caller asks for.  An interpreter-only run
+-- cannot see a native-only miscompile (see #81), so a caller that asked for the
+-- interpreter must present its results as "passes under eval", never as an
+-- unqualified pass.
 --
 -- #2295 (d): the return tuple carries a 4th element, the `test "…"` phase's
 -- structured results (`testDeclsReport`, above) — §4 of this slice's packet
@@ -2445,6 +2449,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "loadGate" ((PCon "False") (PVar "target") (PVar "le")) (EApp (EVar "renderGate") (EApp (EApp (EVar "loadErrorDiags") (EVar "target")) (EVar "le"))))
 (DTypeSig false "loadErrorDiags" (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "loadErrorDiags" (PWild (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe"))) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe"))))))
+(DFunDef false "loadErrorDiags" ((PVar "target") (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "Some" (PTuple PWild (PVar "loc"))) () (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc"))))))) (arm (PCon "None") () (EListLit (ETuple (EVar "target") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))))
 (DFunDef false "loadErrorDiags" ((PVar "target") (PCon "LoadMsg" (PVar "e"))) (EListLit (ETuple (EVar "target") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))
 (DTypeSig false "renderGate" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "renderGate" ((PVar "results")) (EMatch (EApp (EApp (EVar "flatMap") (EVar "renderFileErrors")) (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (arm (PList) () (EVar "None")) (arm (PVar "rendered") () (EApp (EVar "Some") (EApp (EVar "joinNl") (EVar "rendered"))))))
@@ -2793,6 +2798,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "loadGate" ((PCon "False") (PVar "target") (PVar "le")) (EApp (EVar "renderGate") (EApp (EApp (EVar "loadErrorDiags") (EVar "target")) (EVar "le"))))
 (DTypeSig false "loadErrorDiags" (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "loadErrorDiags" (PWild (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe"))) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe"))))))
+(DFunDef false "loadErrorDiags" ((PVar "target") (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "Some" (PTuple PWild (PVar "loc"))) () (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc"))))))) (arm (PCon "None") () (EListLit (ETuple (EVar "target") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))))
 (DFunDef false "loadErrorDiags" ((PVar "target") (PCon "LoadMsg" (PVar "e"))) (EListLit (ETuple (EVar "target") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None"))))))
 (DTypeSig false "renderGate" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "renderGate" ((PVar "results")) (EMatch (EApp (EApp (EDictApp "flatMap") (EVar "renderFileErrors")) (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))) (arm (PList) () (EVar "None")) (arm (PVar "rendered") () (EApp (EVar "Some") (EApp (EVar "joinNl") (EVar "rendered"))))))

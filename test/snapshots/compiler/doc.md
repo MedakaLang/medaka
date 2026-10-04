@@ -1,5 +1,5 @@
 # META
-source_lines=1827
+source_lines=1842
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -26,6 +26,10 @@ stages=DESUGAR,MARK
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.parser.{
   parseWithPositions,
+  parseResult,
+  parseErrorLine,
+  parseErrorCol,
+  parseErrorMessage,
   Positions,
   DeclPos,
   positionsDecls,
@@ -1384,6 +1388,17 @@ docModuleName roots filename = match reverseL roots
       chopExt (baseOf filename)
   [] => chopExt (baseOf filename)
 
+-- Library mode documents a batch of files; a file that does not parse must be
+-- reported by path (`path:line:col: message`), since `computeModuleDoc` would
+-- otherwise panic with a bare "parse error" that names no file.
+export
+docParseError : String -> String -> Option String
+docParseError path src = match parseResult src
+  Ok _ => None
+  Err e =>
+    Some
+      "\{path}:\{parseErrorLine e}:\{parseErrorCol e}: \{parseErrorMessage e}"
+
 export
 computeModuleDoc : String ->
   String ->
@@ -1831,7 +1846,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
     Some schemes => schemes
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Decl" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSource" false) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
@@ -2176,6 +2191,8 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EBinOp "||" (EApp (EApp (EVar "elem") (EVar "name")) (EVar "internalExterns")) (EApp (EApp (EVar "elem") (EVar "name")) (EVar "docOnlyExcluded"))))
 (DTypeSig false "docModuleName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyCon "String")))))
 (DFunDef false "docModuleName" ((PVar "roots") (PVar "filename")) (EMatch (EApp (EVar "reverseL") (EVar "roots")) (arm (PCons (PVar "stdlibDir") PWild) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "canonicalizePath") (EVar "stdlibDir"))) (DoLet false false (PVar "path") (EApp (EVar "canonicalizePath") (EVar "filename"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EBinOp "++" (EVar "dir") (ELit (LString "/")))) (EVar "path")) (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "dir"))) (EVar "path")) (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename"))))))) (arm (PList) () (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename"))))))
+(DTypeSig true "docParseError" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "docParseError" ((PVar "path") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Ok" PWild) () (EVar "None")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "parseErrorLine") (EVar "e")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "parseErrorCol") (EVar "e")))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "parseErrorMessage") (EVar "e")))) (ELit (LString "")))))))
 (DTypeSig true "computeModuleDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "ModuleDoc"))))))))
 (DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "origins") (EApp (EApp (EApp (EApp (EVar "originSchemeTable") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EApp (EVar "docModuleName") (EVar "roots")) (EVar "filename"))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "primitiveLayer") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "dropInternalExterns") (EVar "primitiveLayer")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "primitiveLayer")) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "origins")) (EVar "comments")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EApp (EApp (EVar "insertSections") (EApp (EVar "sectionsFrom") (EVar "tbl"))) (EVar "entries"))) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
 (DTypeSig false "dedupHeader" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
@@ -2280,7 +2297,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EVar "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoLet false false PWild (EApp (EVar "exit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Decl" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSource" false) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
@@ -2625,6 +2642,8 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EBinOp "||" (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "internalExterns")) (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "docOnlyExcluded"))))
 (DTypeSig false "docModuleName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyCon "String")))))
 (DFunDef false "docModuleName" ((PVar "roots") (PVar "filename")) (EMatch (EApp (EVar "reverseL") (EVar "roots")) (arm (PCons (PVar "stdlibDir") PWild) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "canonicalizePath") (EVar "stdlibDir"))) (DoLet false false (PVar "path") (EApp (EVar "canonicalizePath") (EVar "filename"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EBinOp "++" (EVar "dir") (ELit (LString "/")))) (EVar "path")) (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "dir"))) (EVar "path")) (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename"))))))) (arm (PList) () (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename"))))))
+(DTypeSig true "docParseError" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "docParseError" ((PVar "path") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Ok" PWild) () (EVar "None")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "parseErrorLine") (EVar "e")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "parseErrorCol") (EVar "e")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "parseErrorMessage") (EVar "e")))) (ELit (LString "")))))))
 (DTypeSig true "computeModuleDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "ModuleDoc"))))))))
 (DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "origins") (EApp (EApp (EApp (EApp (EVar "originSchemeTable") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EApp (EVar "docModuleName") (EVar "roots")) (EVar "filename"))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "primitiveLayer") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "dropInternalExterns") (EVar "primitiveLayer")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "primitiveLayer")) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "origins")) (EVar "comments")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EApp (EApp (EVar "insertSections") (EApp (EVar "sectionsFrom") (EVar "tbl"))) (EVar "entries"))) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
 (DTypeSig false "dedupHeader" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))

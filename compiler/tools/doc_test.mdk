@@ -4,9 +4,10 @@
 -- names slugify identically get GitHub's `-1` suffix on the later heading, and
 -- every link (index, Instances line) names the anchor of the heading it means.
 
-import test.{Expectation, expectTextContainsAll}
+import test.{Expectation, expectEqual, expectTextContainsAll}
 import tools.doc.{
-  DocEntry(..), DocKind(..), ModuleDoc(..), renderIndex, renderModulePage
+  docParseError, DocEntry(..), DocKind(..), ModuleDoc(..), renderIndex,
+  renderModulePage
 }
 
 -- `data HmacKey` at line 3, `hmacKey` at line 9: same slug `hmackey`.
@@ -60,3 +61,12 @@ instancePage =
 
 test "an instance link skips the anchor of a same-named section" =
   expectTextContainsAll ["(#debug-foo-1)"] (renderModulePage instancePage)
+
+-- Library mode names the file whose source does not parse (#2420).
+test "a parse failure is reported with the file path" =
+  match docParseError "pkg/bad.mdk" "x = (\n"
+    Some msg => expectTextContainsAll ["pkg/bad.mdk:"] msg
+    None => expectEqual "a parse error" "no error"
+
+test "a parsing source reports no error" =
+  expectEqual None (docParseError "pkg/ok.mdk" "x = 1\n")

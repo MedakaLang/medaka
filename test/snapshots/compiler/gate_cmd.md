@@ -1,5 +1,5 @@
 # META
-source_lines=3625
+source_lines=3701
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -75,6 +75,7 @@ import tools.gate_registry.{
   renderNames,
   joinSpace,
 }
+import tools.gate_cost.{baselineKey}
 import tools.gate_pack.{
   balNewText,
   budgetOutput,
@@ -1362,6 +1363,79 @@ dupNameFrom gates (n :: ns) =
 duplicateNameViolations : List Gate -> List String
 duplicateNameViolations gates = dupNameFrom gates (sortUniqS (gateNames gates))
 
+-- Check 6b (#3335): derived `baselineKey`s are UNIQUE across entries, unless
+-- the collision is declared.  The key is deliberately non-injective (an
+-- `X_test.mdk` inherits `X.sh`'s cost history), so two entries whose `run`
+-- paths differ can derive the same key and silently share one cost-history
+-- row.  A migration that does this on purpose says so with a per-row
+-- `shares_baseline_with = "<other entry>"`: a collision group is allowed when
+-- every entry but exactly one (the anchor) names another member of the group.  The declaration is
+-- checked for staleness so it cannot outlive the collision it excuses.
+namesWithKey : String -> List Gate -> List String
+namesWithKey _ [] = []
+namesWithKey k (g :: gs) =
+  if baselineKey g.run == k then
+    g.name :: namesWithKey k gs
+  else
+    namesWithKey k gs
+
+findGate : String -> List Gate -> Option Gate
+findGate _ [] = None
+findGate n (g :: gs) = if g.name == n then Some g else findGate n gs
+
+-- True when `g` declares a partner that exists, is another entry, and has the
+-- same derived key.
+declaresLiveShare : List Gate -> Gate -> Bool
+declaresLiveShare gates g
+  | g.sharesBaselineWith == "" = False
+  | g.sharesBaselineWith == g.name = False
+  | otherwise = match findGate g.sharesBaselineWith gates
+    None => False
+    Some o => baselineKey o.run == baselineKey g.run
+
+countUndeclared : List Gate -> List String -> Int
+countUndeclared _ [] = 0
+countUndeclared gates (n :: ns) =
+  let rest = countUndeclared gates ns
+  match findGate n gates
+    Some g => if declaresLiveShare gates g then rest else rest + 1
+    None => rest + 1
+
+dupKeyFrom : List Gate -> List String -> List String
+dupKeyFrom _ [] = []
+dupKeyFrom gates (k :: ks) =
+  let owners = namesWithKey k gates
+  let rest = dupKeyFrom gates ks
+  let open = countUndeclared gates owners
+  if listLen owners < 2 || open == 1 then
+    rest
+  else if open == 0 then
+    "\{k}: entries \{joinWith ", " owners} all declare shares_baseline_with, so the group has no anchor row — exactly one entry must stay unhatched"
+      :: rest
+  else
+    "\{k}: entries \{joinWith ", " owners} derive the same baselineKey — their cost histories would be spliced together; declare a deliberate migration with shares_baseline_with"
+      :: rest
+
+staleShareViolations : List Gate -> List String
+staleShareViolations [] = []
+staleShareViolations all = staleShareFrom all all
+
+staleShareFrom : List Gate -> List Gate -> List String
+staleShareFrom _ [] = []
+staleShareFrom all (g :: gs) =
+  let rest = staleShareFrom all gs
+  if g.sharesBaselineWith == "" || declaresLiveShare all g then
+    rest
+  else
+    "\{g.name}: stale shares_baseline_with '\{g.sharesBaselineWith}' — it must name another entry deriving the same baselineKey; remove it once the old entry is gone"
+      :: rest
+
+export
+duplicateBaselineKeyViolations : List Gate -> List String
+duplicateBaselineKeyViolations gates =
+  dupKeyFrom gates (sortUniqS (map (g => baselineKey g.run) gates))
+    ++ staleShareViolations gates
+
 -- Check 7 (#2204): every `name` — a gate's and a `[[shard]]` row's — is inside
 -- a CONSERVATIVE CHARSET.
 --
@@ -2418,6 +2492,7 @@ nativeGradeViolations root (g :: gs) =
 
 -- ── assembling and rendering the violation classes ──────────────────────────
 
+export
 verifyClasses : String ->
   List Gate ->
   List Shard ->
@@ -2435,6 +2510,7 @@ verifyClasses root gates shs = match gateCandidates root
       ("missing corpus targets", corpusTargetViolations root gates),
       ("unreachable entries", reachabilityViolations gates gates),
       ("duplicate entry names", duplicateNameViolations gates),
+      ("duplicate baselineKeys", duplicateBaselineKeyViolations gates),
       ("unsafe entry names", unsafeNameViolations gates shs),
       ("invalid cost class", invalidCostViolations gates),
       ("invalid tiers", invalidTiersViolations gates),
@@ -3635,6 +3711,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "withStrictDash" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
 (DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "Selector" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "globMatch" false) (mem "parseSelector" false) (mem "tierPartOf" false) (mem "modePartOf" false) (mem "selectGates" false) (mem "renderJson" false) (mem "renderShardsJson" false) (mem "renderShards" false) (mem "renderNames" false) (mem "joinSpace" false))))
+(DUse false (UseGroup ("tools" "gate_cost") ((mem "baselineKey" false))))
 (DUse false (UseGroup ("tools" "gate_pack") ((mem "balNewText" false) (mem "budgetOutput" false) (mem "timeoutFor" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "endsWith" false) (mem "escStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false "strContains") (mem "fromChars" false) (mem "isAlpha" false) (mem "isAlphaNum" false) (mem "isDigit" false) (mem "split" false "strSplit"))))
@@ -3880,6 +3957,28 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "dupNameFrom" ((PVar "gates") (PCons (PVar "n") (PVar "ns"))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EVar "countName") (EVar "n")) (EVar "gates"))) (DoLet false false (PVar "rest") (EApp (EApp (EVar "dupNameFrom") (EVar "gates")) (EVar "ns"))) (DoExpr (EIf (EBinOp ">" (EVar "k") (ELit (LInt 1))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString " entries share this name — a gate's shard row must not be ambiguous"))) (EVar "rest")) (EVar "rest")))))
 (DTypeSig false "duplicateNameViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "duplicateNameViolations" ((PVar "gates")) (EApp (EApp (EVar "dupNameFrom") (EVar "gates")) (EApp (EVar "sortUniqS") (EApp (EVar "gateNames") (EVar "gates")))))
+(DTypeSig false "namesWithKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "namesWithKey" (PWild (PList)) (EListLit))
+(DFunDef false "namesWithKey" ((PVar "k") (PCons (PVar "g") (PVar "gs"))) (EIf (EBinOp "==" (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run")) (EVar "k")) (EBinOp "::" (EFieldAccess (EVar "g") "name") (EApp (EApp (EVar "namesWithKey") (EVar "k")) (EVar "gs"))) (EApp (EApp (EVar "namesWithKey") (EVar "k")) (EVar "gs"))))
+(DTypeSig false "findGate" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "Option") (TyCon "Gate")))))
+(DFunDef false "findGate" (PWild (PList)) (EVar "None"))
+(DFunDef false "findGate" ((PVar "n") (PCons (PVar "g") (PVar "gs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "g") "name") (EVar "n")) (EApp (EVar "Some") (EVar "g")) (EApp (EApp (EVar "findGate") (EVar "n")) (EVar "gs"))))
+(DTypeSig false "declaresLiveShare" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyCon "Gate") (TyCon "Bool"))))
+(DFunDef false "declaresLiveShare" ((PVar "gates") (PVar "g")) (EIf (EBinOp "==" (EFieldAccess (EVar "g") "sharesBaselineWith") (ELit (LString ""))) (EVar "False") (EIf (EBinOp "==" (EFieldAccess (EVar "g") "sharesBaselineWith") (EFieldAccess (EVar "g") "name")) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "findGate") (EFieldAccess (EVar "g") "sharesBaselineWith")) (EVar "gates")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "o")) () (EBinOp "==" (EApp (EVar "baselineKey") (EFieldAccess (EVar "o") "run")) (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "countUndeclared" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
+(DFunDef false "countUndeclared" (PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "countUndeclared" ((PVar "gates") (PCons (PVar "n") (PVar "ns"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "countUndeclared") (EVar "gates")) (EVar "ns"))) (DoExpr (EMatch (EApp (EApp (EVar "findGate") (EVar "n")) (EVar "gates")) (arm (PCon "Some" (PVar "g")) () (EIf (EApp (EApp (EVar "declaresLiveShare") (EVar "gates")) (EVar "g")) (EVar "rest") (EBinOp "+" (EVar "rest") (ELit (LInt 1))))) (arm (PCon "None") () (EBinOp "+" (EVar "rest") (ELit (LInt 1))))))))
+(DTypeSig false "dupKeyFrom" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "dupKeyFrom" (PWild (PList)) (EListLit))
+(DFunDef false "dupKeyFrom" ((PVar "gates") (PCons (PVar "k") (PVar "ks"))) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EVar "namesWithKey") (EVar "k")) (EVar "gates"))) (DoLet false false (PVar "rest") (EApp (EApp (EVar "dupKeyFrom") (EVar "gates")) (EVar "ks"))) (DoLet false false (PVar "open") (EApp (EApp (EVar "countUndeclared") (EVar "gates")) (EVar "owners"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EApp (EVar "listLen") (EVar "owners")) (ELit (LInt 2))) (EBinOp "==" (EVar "open") (ELit (LInt 1)))) (EVar "rest") (EIf (EBinOp "==" (EVar "open") (ELit (LInt 0))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "k"))) (ELit (LString ": entries "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "owners")))) (ELit (LString " all declare shares_baseline_with, so the group has no anchor row — exactly one entry must stay unhatched"))) (EVar "rest")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "k"))) (ELit (LString ": entries "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "owners")))) (ELit (LString " derive the same baselineKey — their cost histories would be spliced together; declare a deliberate migration with shares_baseline_with"))) (EVar "rest")))))))
+(DTypeSig false "staleShareViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "staleShareViolations" ((PList)) (EListLit))
+(DFunDef false "staleShareViolations" ((PVar "all")) (EApp (EApp (EVar "staleShareFrom") (EVar "all")) (EVar "all")))
+(DTypeSig false "staleShareFrom" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "staleShareFrom" (PWild (PList)) (EListLit))
+(DFunDef false "staleShareFrom" ((PVar "all") (PCons (PVar "g") (PVar "gs"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "staleShareFrom") (EVar "all")) (EVar "gs"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "g") "sharesBaselineWith") (ELit (LString ""))) (EApp (EApp (EVar "declaresLiveShare") (EVar "all")) (EVar "g"))) (EVar "rest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": stale shares_baseline_with '"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "sharesBaselineWith"))) (ELit (LString "' — it must name another entry deriving the same baselineKey; remove it once the old entry is gone"))) (EVar "rest"))))))
+(DTypeSig true "duplicateBaselineKeyViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "duplicateBaselineKeyViolations" ((PVar "gates")) (EBinOp "++" (EApp (EApp (EVar "dupKeyFrom") (EVar "gates")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (ELam ((PVar "g")) (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run")))) (EVar "gates")))) (EApp (EVar "staleShareViolations") (EVar "gates"))))
 (DTypeSig false "nameCharOk" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nameCharOk" ((PVar "c")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "a"))) (EBinOp "<=" (EVar "c") (ELit (LString "z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "A"))) (EBinOp "<=" (EVar "c") (ELit (LString "Z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "_"))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "."))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "/"))) (EVar "True") (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "nameLeadOk" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -4110,8 +4209,8 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "nativeGradeViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "nativeGradeViolations" (PWild (PList)) (EListLit))
 (DFunDef false "nativeGradeViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "nativeGradeErrors") (EVar "root")) (EVar "g")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gs"))))
-(DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid tiers")) (EApp (EVar "invalidTiersViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid migration class")) (EApp (EVar "invalidMigrationViolations") (EVar "gates"))) (ETuple (ELit (LString "unpaired shell-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "shellPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unpaired blocked-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "blockedPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "native gate stdout-only grading")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gates"))))))))))
+(DTypeSig true "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
+(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "duplicate baselineKeys")) (EApp (EVar "duplicateBaselineKeyViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid tiers")) (EApp (EVar "invalidTiersViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid migration class")) (EApp (EVar "invalidMigrationViolations") (EVar "gates"))) (ETuple (ELit (LString "unpaired shell-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "shellPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unpaired blocked-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "blockedPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "native gate stdout-only grading")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gates"))))))))))
 (DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": 0\n"))))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PVar "vs"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "joinNl") (EApp (EVar "indentedNames") (EVar "vs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "names"))) (ELit (LString "\n"))))))
@@ -4381,6 +4480,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "withStrictDash" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
 (DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "Selector" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "globMatch" false) (mem "parseSelector" false) (mem "tierPartOf" false) (mem "modePartOf" false) (mem "selectGates" false) (mem "renderJson" false) (mem "renderShardsJson" false) (mem "renderShards" false) (mem "renderNames" false) (mem "joinSpace" false))))
+(DUse false (UseGroup ("tools" "gate_cost") ((mem "baselineKey" false))))
 (DUse false (UseGroup ("tools" "gate_pack") ((mem "balNewText" false) (mem "budgetOutput" false) (mem "timeoutFor" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "endsWith" false) (mem "escStr" false) (mem "filterList" false) (mem "isSome" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false "strContains") (mem "fromChars" false) (mem "isAlpha" false) (mem "isAlphaNum" false) (mem "isDigit" false) (mem "split" false "strSplit"))))
@@ -4626,6 +4726,28 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "dupNameFrom" ((PVar "gates") (PCons (PVar "n") (PVar "ns"))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EVar "countName") (EVar "n")) (EVar "gates"))) (DoLet false false (PVar "rest") (EApp (EApp (EVar "dupNameFrom") (EVar "gates")) (EVar "ns"))) (DoExpr (EIf (EBinOp ">" (EVar "k") (ELit (LInt 1))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString " entries share this name — a gate's shard row must not be ambiguous"))) (EVar "rest")) (EVar "rest")))))
 (DTypeSig false "duplicateNameViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "duplicateNameViolations" ((PVar "gates")) (EApp (EApp (EVar "dupNameFrom") (EVar "gates")) (EApp (EVar "sortUniqS") (EApp (EVar "gateNames") (EVar "gates")))))
+(DTypeSig false "namesWithKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "namesWithKey" (PWild (PList)) (EListLit))
+(DFunDef false "namesWithKey" ((PVar "k") (PCons (PVar "g") (PVar "gs"))) (EIf (EBinOp "==" (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run")) (EVar "k")) (EBinOp "::" (EFieldAccess (EVar "g") "name") (EApp (EApp (EVar "namesWithKey") (EVar "k")) (EVar "gs"))) (EApp (EApp (EVar "namesWithKey") (EVar "k")) (EVar "gs"))))
+(DTypeSig false "findGate" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "Option") (TyCon "Gate")))))
+(DFunDef false "findGate" (PWild (PList)) (EVar "None"))
+(DFunDef false "findGate" ((PVar "n") (PCons (PVar "g") (PVar "gs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "g") "name") (EVar "n")) (EApp (EVar "Some") (EVar "g")) (EApp (EApp (EVar "findGate") (EVar "n")) (EVar "gs"))))
+(DTypeSig false "declaresLiveShare" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyCon "Gate") (TyCon "Bool"))))
+(DFunDef false "declaresLiveShare" ((PVar "gates") (PVar "g")) (EIf (EBinOp "==" (EFieldAccess (EVar "g") "sharesBaselineWith") (ELit (LString ""))) (EVar "False") (EIf (EBinOp "==" (EFieldAccess (EVar "g") "sharesBaselineWith") (EFieldAccess (EVar "g") "name")) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "findGate") (EFieldAccess (EVar "g") "sharesBaselineWith")) (EVar "gates")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "o")) () (EBinOp "==" (EApp (EVar "baselineKey") (EFieldAccess (EVar "o") "run")) (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "countUndeclared" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
+(DFunDef false "countUndeclared" (PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "countUndeclared" ((PVar "gates") (PCons (PVar "n") (PVar "ns"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "countUndeclared") (EVar "gates")) (EVar "ns"))) (DoExpr (EMatch (EApp (EApp (EVar "findGate") (EVar "n")) (EVar "gates")) (arm (PCon "Some" (PVar "g")) () (EIf (EApp (EApp (EVar "declaresLiveShare") (EVar "gates")) (EVar "g")) (EVar "rest") (EBinOp "+" (EVar "rest") (ELit (LInt 1))))) (arm (PCon "None") () (EBinOp "+" (EVar "rest") (ELit (LInt 1))))))))
+(DTypeSig false "dupKeyFrom" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "dupKeyFrom" (PWild (PList)) (EListLit))
+(DFunDef false "dupKeyFrom" ((PVar "gates") (PCons (PVar "k") (PVar "ks"))) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EVar "namesWithKey") (EVar "k")) (EVar "gates"))) (DoLet false false (PVar "rest") (EApp (EApp (EVar "dupKeyFrom") (EVar "gates")) (EVar "ks"))) (DoLet false false (PVar "open") (EApp (EApp (EVar "countUndeclared") (EVar "gates")) (EVar "owners"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EApp (EVar "listLen") (EVar "owners")) (ELit (LInt 2))) (EBinOp "==" (EVar "open") (ELit (LInt 1)))) (EVar "rest") (EIf (EBinOp "==" (EVar "open") (ELit (LInt 0))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString ": entries "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "owners")))) (ELit (LString " all declare shares_baseline_with, so the group has no anchor row — exactly one entry must stay unhatched"))) (EVar "rest")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString ": entries "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "owners")))) (ELit (LString " derive the same baselineKey — their cost histories would be spliced together; declare a deliberate migration with shares_baseline_with"))) (EVar "rest")))))))
+(DTypeSig false "staleShareViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "staleShareViolations" ((PList)) (EListLit))
+(DFunDef false "staleShareViolations" ((PVar "all")) (EApp (EApp (EVar "staleShareFrom") (EDictApp "all")) (EDictApp "all")))
+(DTypeSig false "staleShareFrom" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "staleShareFrom" (PWild (PList)) (EListLit))
+(DFunDef false "staleShareFrom" ((PVar "all") (PCons (PVar "g") (PVar "gs"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "staleShareFrom") (EDictApp "all")) (EVar "gs"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "g") "sharesBaselineWith") (ELit (LString ""))) (EApp (EApp (EVar "declaresLiveShare") (EDictApp "all")) (EVar "g"))) (EVar "rest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": stale shares_baseline_with '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "sharesBaselineWith"))) (ELit (LString "' — it must name another entry deriving the same baselineKey; remove it once the old entry is gone"))) (EVar "rest"))))))
+(DTypeSig true "duplicateBaselineKeyViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "duplicateBaselineKeyViolations" ((PVar "gates")) (EBinOp "++" (EApp (EApp (EVar "dupKeyFrom") (EVar "gates")) (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (ELam ((PVar "g")) (EApp (EVar "baselineKey") (EFieldAccess (EVar "g") "run")))) (EVar "gates")))) (EApp (EVar "staleShareViolations") (EVar "gates"))))
 (DTypeSig false "nameCharOk" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nameCharOk" ((PVar "c")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "a"))) (EBinOp "<=" (EVar "c") (ELit (LString "z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "A"))) (EBinOp "<=" (EVar "c") (ELit (LString "Z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "_"))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "."))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "/"))) (EVar "True") (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "nameLeadOk" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -4856,8 +4978,8 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "nativeGradeViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "nativeGradeViolations" (PWild (PList)) (EListLit))
 (DFunDef false "nativeGradeViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "nativeGradeErrors") (EVar "root")) (EVar "g")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gs"))))
-(DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid tiers")) (EApp (EVar "invalidTiersViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid migration class")) (EApp (EVar "invalidMigrationViolations") (EVar "gates"))) (ETuple (ELit (LString "unpaired shell-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "shellPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unpaired blocked-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "blockedPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "native gate stdout-only grading")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gates"))))))))))
+(DTypeSig true "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
+(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "duplicate baselineKeys")) (EApp (EVar "duplicateBaselineKeyViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid tiers")) (EApp (EVar "invalidTiersViolations") (EVar "gates"))) (ETuple (ELit (LString "invalid migration class")) (EApp (EVar "invalidMigrationViolations") (EVar "gates"))) (ETuple (ELit (LString "unpaired shell-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "shellPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unpaired blocked-because")) (EApp (EApp (EApp (EVar "pairedHeaderViolations") (EVar "blockedPairing")) (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "native gate stdout-only grading")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gates"))))))))))
 (DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": 0\n"))))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PVar "vs"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "joinNl") (EApp (EVar "indentedNames") (EVar "vs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "names"))) (ELit (LString "\n"))))))

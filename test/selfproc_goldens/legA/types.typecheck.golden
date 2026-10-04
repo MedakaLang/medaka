@@ -680,7 +680,7 @@ ctorsByHead : List Scheme -> Map String (List (List Mono, List Mono))
 ctorsOfHead : HeadKey -> Option (List String)
 currentDoDeferred : Ref Bool
 currentDoOrigin : Ref (Option Loc)
-currentJoinContext : Ref (Option String)
+currentJoinContext : Ref (Option JoinContext)
 currentLoc : Ref (Option Loc)
 currentLocalSchemes : Unit -> List (String, Scheme)
 currentLocalSchemesLoc : Unit -> List (String, Option Loc, Scheme)
@@ -730,7 +730,7 @@ deSeedChainProbe : DeclEnvSeedAcc
 deSeedChainProbeZero : DeclEnvSeedAcc
 deSeedNameParity : String -> Bool
 deSeedRowN : DeclEnvModule
-decidingJoinOps : String -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
+decidingJoinOps : JoinContext -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
 declBareLocals : List Decl -> BareLocals -> BareLocals
 declBodyVars : String -> List Decl -> List String
 declBodyVarsOf : String -> Decl -> List String
@@ -952,7 +952,6 @@ elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> L
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable)
 elaborateModulesWithSchemes : List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), List (String, Scheme), List (String, Scheme))
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
-elselessIfContext : String
 elselessIfHelp : String
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
@@ -1777,8 +1776,8 @@ joinPolarities : List Polarity -> Polarity
 joinPolaritiesGo : Polarity -> List Polarity -> Polarity
 joinResultIs : Int -> PendingJoin -> Bool
 joinSideCheck : Bool -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
-joinValueEqual : String -> Option Loc -> Mono -> Mono -> Unit
-joinValueTypes : String -> List (Option Loc, Mono) -> Mono
+joinValueEqual : JoinContext -> Option Loc -> Mono -> Mono -> Unit
+joinValueTypes : JoinContext -> List (Option Loc, Mono) -> Mono
 kauthArgVarNames : List Kind -> List Ty -> List (String, Param)
 kauthCells : List String -> List Kind -> List Mono -> List (String, Ref Authvar)
 keepBetterField : String -> Int -> Option (String, Int) -> Option (String, Int)
@@ -1856,7 +1855,7 @@ localSourceName : String -> String
 lookupBinding : TcEnv -> String -> Option EnvBinding
 lookupBy : (a -> a -> Bool) -> a -> List (a, b) -> Option b
 lookupCtor : TcEnv -> String -> Option Scheme
-lookupCtxKind : Loc -> List (Loc, String) -> Option String
+lookupCtxKind : Loc -> List (Loc, JoinContext) -> Option JoinContext
 lookupDomain : String -> List (String, Param) -> Param
 lookupIdxById : IfaceRef -> String -> List ((IfaceRef, String), Int) -> Option Int
 lookupIfaceById : Int -> List VecObl -> Option IfaceRef
@@ -2186,7 +2185,7 @@ noteMethodReturnTrace : MethodReturnTraceStage -> MethodReturnRequest -> Option 
 noteNumericEntailment : EntailKind -> ScopeId -> Option IfaceRef -> Route -> List Route -> Unit
 noteNumericObligationChecked : UObligation -> List Mono -> Unit
 noteNumericPredicateTrace : NumericPredicateTraceStage -> ClassPredicate -> ScopeId -> Option Loc -> Option IfaceRef -> Option Route -> List Route -> Unit
-noteNumlitCtx : Mono -> Mono -> String -> Unit
+noteNumlitCtx : Mono -> Mono -> JoinContext -> Unit
 noteTypeErrorDetected : Unit -> Unit
 nthArgMono : Int -> Mono -> Option Mono
 nthFunDomain : Int -> Mono -> Option Mono
@@ -2208,7 +2207,7 @@ numUnimplementableHead : Mono -> Bool
 numericPredicateTraceEnabled : Ref Bool
 numericPredicateTraceEntries : Ref (List NumericPredicateTraceEntry)
 numericReturnRoute : Route -> List Route -> Route
-numlitCtxKind : Option Loc -> Option String
+numlitCtxKind : Option Loc -> Option JoinContext
 numlitMismatchHint : Option Loc -> List Mono -> String
 numlitMismatchMsg : Option Loc -> List Mono -> String
 numlitMismatchPush : List Mono -> Option Loc -> Unit
@@ -2985,10 +2984,10 @@ survivorNameOfId : Int -> List (String, Mono) -> Option String
 survivorObligationEntailed : String -> List String -> String -> String -> Ty -> Bool
 synthesizedAdmissions : List (String, List String) -> List Decl -> List (String, String)
 tabKeyElem : List TabKey -> TabKey -> Bool
-tagAllLitLocs : Mono -> String -> Unit
-tagLitLocsWithRoot : Int -> String -> List (Mono, Loc) -> Unit
+tagAllLitLocs : Mono -> JoinContext -> Unit
+tagLitLocsWithRoot : Int -> JoinContext -> List (Mono, Loc) -> Unit
 tagModuleExports : Map String Scheme -> List (String, Scheme) -> List (String, ExportBinding)
-tagNumlitCtxIf : Mono -> Mono -> String -> Unit
+tagNumlitCtxIf : Mono -> Mono -> JoinContext -> Unit
 tailCell : SigVars -> List String -> Option (Ref Effvar)
 tailCellsOf : SigVars -> List String -> List (Ref Effvar)
 taintAndDrop : Int -> List (Mono, Loc) -> List (Mono, Loc)
@@ -3145,7 +3144,7 @@ usePathWitnesses : UsePath -> Bool -> String -> (Ident, (IfaceRef, List String, 
 usePathWitnessesCtor : UsePath -> String -> String -> Ident -> Bool
 userExternSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 usesImplDict : String -> Int -> Int -> Expr -> Bool
-valueJoinOps : String -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
+valueJoinOps : JoinContext -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
 varHeadApps : String -> Ty -> List (List Ty)
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
