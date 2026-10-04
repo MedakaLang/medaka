@@ -1,0 +1,23 @@
+-- §3 determination's joint consistency against truncated siblings, two local
+-- `let`s: the one-position goals `Mk ?` and `Pr ?` beside the joint ones do not
+-- refute `Mk Int Float`, so it fixes `?e = Float`, and `Pr Float Float` then
+-- fixes `s`.  Hand-derived: 1.5 * 2.0 + 1 = 4.0, on all three verbs.
+interface Mk a b where
+  mk : a -> b
+
+impl Mk Int Float where
+  mk _ = 1.5
+
+interface Pr a b where
+  pr : a -> b
+
+impl Pr Float Float where
+  pr x = x * 2.0
+
+impl Pr Int Int where
+  pr x = x * 3
+
+main =
+  let e = mk 0
+  let s = pr e
+  println (s + 1)

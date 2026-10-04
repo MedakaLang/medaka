@@ -1895,6 +1895,11 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   improved and determined first, so a goal whose one instance fixes a variable leaves
   nothing to default there; then the candidates D3 admits are defaulted; then
   improvement and determination run once more over the goals defaulting changed. A
+  method body's close (§3 "Inside a method body") runs the same sequence over the
+  body's goals, the instance head's and the declared signature's variables held
+  rigid: improvement and determination, then body-local defaulting of the `Num`
+  roots that neither the head nor a declared method dictionary carries, then
+  improvement and determination once more. A
   local `let` defaults at its own close, before its goals reach the enclosing group's
   sequence. Which variables each boundary may touch is D3's: at a top-level group and
   a local `let`, a variable of a member's type that a goal connects to an argument is
