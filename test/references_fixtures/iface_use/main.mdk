@@ -1,0 +1,11 @@
+-- #1014 fixture, module 2 of 2: an impl in ANOTHER module that imports the
+-- interface selectively. Its header `Sized` is also a use of `a|ty|Sized`.
+import a.{Sized, Box(..)}
+
+data Sack = Sack
+
+impl Sized Sack where
+  size Sack = 3
+
+main : Int
+main = 0

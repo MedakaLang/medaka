@@ -7195,6 +7195,7 @@ ieSameImplIn m = DImpl {
   reqs = [],
   methods = [],
   implOrigin = OriginModule m,
+  implIfaceLoc = None,
 }
 
 -- the concrete-bucket key module [m]'s own `impl Same Blob` is indexed under.
@@ -7342,6 +7343,7 @@ ieOtherImplIn m = DImpl {
   reqs = [],
   methods = [],
   implOrigin = OriginModule m,
+  implIfaceLoc = None,
 }
 
 -- a fully-general `impl Gen a`: `univReceiverTag` answers `None` for a `TyVar` head,
@@ -7354,6 +7356,7 @@ ieGenImplIn m = DImpl {
   reqs = [],
   methods = [],
   implOrigin = OriginModule m,
+  implIfaceLoc = None,
 }
 
 -- `impl Loose Blob` with an IDENTITY-LESS interface: `oblIfaceKeys` mints ONE key for
@@ -7368,6 +7371,7 @@ ieLooseImplIn m = DImpl {
   reqs = [],
   methods = [],
   implOrigin = OriginUnresolved,
+  implIfaceLoc = None,
 }
 
 ieHeadProbeAmod : List Decl
@@ -45599,6 +45603,7 @@ methodReturnProbeImpl moduleId ifaceName = DImpl {
   reqs = [],
   methods = [ImplMethod "make" [] (ELit LUnit)],
   implOrigin = OriginModule moduleId,
+  implIfaceLoc = None,
 }
 
 methodReturnProbeScope : String -> ScopeId

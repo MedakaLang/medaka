@@ -3486,9 +3486,12 @@ parseImpl pub = defer
 -- removed; a lowercase head or a stray `of` now yields a clean parse error.)
 implHead : Bool -> Int -> Token -> Parser Decl
 implHead pub kw (TUpper u) = defer
+  s <- getPos
   advance
   n <- upperQualTail u
-  implRest pub kw n
+  q <- getPos
+  d <- implRest pub kw n
+  deferPure (setDeclNameLoc (locOfSpan s q) d)
 implHead _ _ (TIdent _) = failP namedImplRemovedMsg
 implHead _ _ _ = failP "expected impl head"
 
