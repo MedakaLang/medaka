@@ -667,6 +667,36 @@ cycleChainReported = match cycleScratch
 test "a two-module import cycle is reported as the whole chain" =
   cycleChainReported
 
+{- | The composed `medaka check` locates the same cycle at the `import` that
+   closes it, in the module holding that import (`b.mdk`, not the entry), with
+   the caret line under it (#2473). -}
+cycleSiteScratch : <Exec, FileWrite> Result String String
+cycleSiteScratch = match scratchDir
+  Err e => Err e
+  Ok root =>
+    let dir = "\{root}/cycle_site"
+    map (() => dir) (mkdirAll dir)
+
+cycleSiteRun : <Exec, FileWrite, IO> Expectation
+cycleSiteRun = match cycleSiteScratch
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok dir => match writeAll dir cycleModules
+    Err e => fail "could not write the cycle modules: \{e}"
+    Ok () =>
+      let result =
+        expectSpawnFailsAll
+          medakaBin
+          ["check", "\{dir}/a.mdk"]
+          [
+            "b.mdk:1:0: cyclic dependency: a → b → a",
+            "1 | import a.{foo}",
+          ]
+      let _ = runVerb "rm" ["-rf", dir]
+      result
+
+test "a two-module import cycle is located at the import that closes it" =
+  cycleSiteRun
+
 -- # A valid multi-module program: no false positives
 
 {- | `test/diff_compiler_check_test.mdk`'s corpus-leg ran

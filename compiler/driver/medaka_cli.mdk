@@ -120,6 +120,7 @@ import driver.loader.{
   stdlibOwnership,
   unknownModuleIdOf,
   findImportLoc,
+  loadCycleSite,
   availableModulesHint,
   availableModulesText,
 }
@@ -811,6 +812,14 @@ runCheckCmd argv =
 moduleLoadErrText : String -> String -> String -> LoadError -> <IO> String
 moduleLoadErrText _ _ _ (LoadParseFailed mpath msrc e) =
   ppParseError msrc mpath e
+moduleLoadErrText _ _ _ (LoadCycle lmsg cpath cmid) =
+  match loadCycleSite cpath cmid
+    None => lmsg
+    Some (csrc, loc) =>
+      ppDiagCliSrc
+        csrc
+        cpath
+        (Diag SevError "R-MODULE-LOAD" lmsg (Some loc) None None)
 moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
   match unknownModuleIdOf lmsg
     None => lmsg

@@ -89,6 +89,7 @@ import driver.loader.{
   stdlibOwnership,
   entrySearchRoots,
   findImportLoc,
+  loadCycleSite,
   unknownModuleIdOf,
   availableModulesText,
   availableModulesHint,
@@ -1431,6 +1432,19 @@ analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef r
       [],
       appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
     )
+    -- The cycle is reported at the `import` that closes it, in the module that
+    -- holds that import.
+    Err (LoadCycle e cpath mid) => match loadCycleSite cpath mid
+      Some (_, loc) => (
+        [],
+        appendStale staleRef [
+          (cpath, [mkDiag SevError "R-MODULE-LOAD" e (Some loc)]),
+        ],
+      )
+      None => (
+        [],
+        appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])],
+      )
     Ok mods =>
       let (full, results) =
         projectDiagsLoadedFull
@@ -2889,6 +2903,23 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
       -- the MODULE's file and rendered against the module's OWN source.
       Err (LoadParseFailed mpath msrc pe) =>
         (CjRendered (cjParseErrJson mpath msrc pe), True)
+      Err (LoadCycle cmsg cpath cmid) => match loadCycleSite cpath cmid
+        Some (csrc, cloc) => (
+          CjParts target [
+            (
+              cpath,
+              csrc,
+              [Diag SevError "R-MODULE-LOAD" cmsg (Some cloc) None None],
+            ),
+          ],
+          True,
+        )
+        None => (
+          CjParts target [
+            (target, src, [Diag SevError "R-MODULE-LOAD" cmsg None None None]),
+          ],
+          True,
+        )
       Err (LoadMsg lmsg) =>
         let mloc = match unknownModuleIdOf lmsg
           None => None

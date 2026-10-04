@@ -18,6 +18,7 @@ import frontend.ast.{
 import frontend.parser.{
   ParseError,
   parseResult,
+  parseLocated,
   parseLocatedResult,
   parseErrorLine,
   parseErrorCol,
@@ -461,6 +462,18 @@ findImportLoc mid ((DUse _ path loc) :: rest) =
 findImportLoc mid ((DAttrib _ d) :: rest) = findImportLoc mid (d :: rest)
 findImportLoc mid (_ :: rest) = findImportLoc mid rest
 
+-- Where a `LoadCycle` points: the `import` of `mid` inside the module at
+-- `path` that closes the cycle.  The loader's own decls may carry placeholder
+-- locs (`parseResult`), so the importer's source (as the loader parsed it) is
+-- re-parsed with `parseLocated`.  Returns that source with the span, or `None`
+-- when the importer is unknown (a self-cycle through the entry has `path` of the
+-- entry itself; an empty `path` never occurs for a cycle) or has no such import.
+export
+loadCycleSite : String -> String -> Option (String, Loc)
+loadCycleSite path mid = match loadedSourceOf path
+  None => None
+  Some src => map (loc => (src, loc)) (findImportLoc mid (parseLocated src))
+
 -- ── F: available-module hint enumeration ────────────────────────────────────
 -- List the importable stdlib module ids — used to build the "available
 -- modules: ..." hint on an `unknown module` error (see moduleLoadErrText /
@@ -568,6 +581,7 @@ findInRoots (r :: rs) modId =
 public export data LoadError =
   | LoadMsg String
   | LoadParseFailed String String ParseError
+  | LoadCycle String String String
 
 -- Flatten a LoadError to the free-text message the pre-#100 `Result String` API
 -- returned.  Keeps the ~15 callers that only report a string a one-line change,
@@ -576,6 +590,7 @@ public export data LoadError =
 export
 loadErrorMessage : LoadError -> String
 loadErrorMessage (LoadMsg m) = m
+loadErrorMessage (LoadCycle m _ _) = m
 loadErrorMessage (LoadParseFailed path _ e) =
   "\{path}:\{parseErrorLine e}:\{parseErrorCol e}: \{parseErrorMessage e}"
 
@@ -1267,17 +1282,20 @@ visitModF : (String -> Result ParseError (List Decl)) ->
   List String ->
   List (String, String, List Decl) ->
   String ->
+  String ->
   <IO> Result LoadError (List String, List (String, String, List Decl))
-visitModF parseFn read deps roots stack visited acc modId =
+visitModF parseFn read deps roots stack visited acc importer modId =
   if contains modId visited then
     Ok (visited, acc)
   else if contains modId stack then
     Err
-      (LoadMsg
+      (LoadCycle
         (stringConcat [
           "cyclic dependency: ",
           joinArrow (cycleChain modId stack),
-        ]))
+        ])
+        importer
+        modId)
   else match readModuleProgF parseFn read deps roots modId
     Err e => Err e
     Ok (owningRoot, path, prog) =>
@@ -1295,6 +1313,7 @@ visitModF parseFn read deps roots stack visited acc modId =
           (modId :: stack)
           visited
           acc
+          path
           (directImports prog2))
 
 visitModsF : (String -> Result ParseError (List Decl)) ->
@@ -1304,13 +1323,14 @@ visitModsF : (String -> Result ParseError (List Decl)) ->
   List String ->
   List String ->
   List (String, String, List Decl) ->
+  String ->
   List String ->
   <IO> Result LoadError (List String, List (String, String, List Decl))
-visitModsF _ _ _ _ _ visited acc [] = Ok (visited, acc)
-visitModsF parseFn read deps roots stack visited acc (d :: ds) =
-  match visitModF parseFn read deps roots stack visited acc d
+visitModsF _ _ _ _ _ visited acc _ [] = Ok (visited, acc)
+visitModsF parseFn read deps roots stack visited acc importer (d :: ds) =
+  match visitModF parseFn read deps roots stack visited acc importer d
     Err e => Err e
-    Ok (v2, a2) => visitModsF parseFn read deps roots stack v2 a2 ds
+    Ok (v2, a2) => visitModsF parseFn read deps roots stack v2 a2 importer ds
 
 -- Load a root file + transitive deps, dependency-first, with an unsaved-buffer
 -- override and FILE PATHS in the result, returning `(mod_id, file_path, prog)`
@@ -1334,6 +1354,7 @@ loadProgramFilesE read entry roots =
       []
       []
       []
+      ""
       (moduleIdOfPath roots entry))
 
 -- Like loadProgramFilesE but parses every module with `parseLocatedResult`, so the
@@ -1357,6 +1378,7 @@ loadProgramFilesLocatedE read entry roots =
       []
       []
       []
+      ""
       (moduleIdOfPath roots entry))
 
 -- ── LSP latency: source-keyed parse memoization (per-keystroke dep reuse) ────
@@ -1444,4 +1466,5 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
       []
       []
       []
+      ""
       (moduleIdOfPath roots entry))
