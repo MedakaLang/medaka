@@ -205,16 +205,33 @@ ratchet_name_live_in() {
   grep -wE "$1" "$2" | grep -qvE '^[[:space:]]*--'
 }
 # ratchet_producer_files PATTERN
-#   Prints the sorted, newline-separated list of tracked `.mdk` files that
-#   mention PATTERN outside a leading-comment line (empty output => no hits).
+#   Prints the sorted, newline-separated list of tracked-or-untracked
+#   (non-ignored) `.mdk` files that mention PATTERN outside a leading-comment
+#   line (empty output => no hits). `--untracked` is load-bearing: plain
+#   `git grep` sees tracked files only, so a new violating file passed (#1222).
 ratchet_producer_files() {
-  git -C "$ROOT" grep -lwE -- "$1" -- '*.mdk' 2>/dev/null \
+  git -C "$ROOT" grep --untracked -lwE -- "$1" -- '*.mdk' 2>/dev/null \
     | while IFS= read -r f; do
         if ratchet_name_live_in "$1" "$ROOT/$f"; then
           echo "$f"
         fi
       done | sort
 }
+
+# Self-check (#1222): the helper must see an UNTRACKED violating file. Runs against
+# a throwaway repo so the real tree is never written.
+(
+  ROOT="$(mktemp -d)"
+  trap 'rm -rf "$ROOT"' EXIT
+  git -C "$ROOT" init -q
+  printf 'x = OriginUnresolved\n' > "$ROOT/untracked_violator.mdk"
+  got=$(ratchet_producer_files 'OriginUnresolved')
+  if [ "$got" != "untracked_violator.mdk" ]; then
+    echo "FAIL: ratchet_producer_files missed an untracked violating .mdk (#1222); got: '$got'"
+    exit 1
+  fi
+) || exit 1
+echo "  ok: ratchet helper sees untracked files"
 
 # ── #1110 §8 I6.3 producer ratchet ─────────────────────────────────────────
 # `OriginUnresolved` (frontend/ast.mdk) is the "no identity was available"
@@ -325,10 +342,6 @@ declun_allowed="compiler/entries/fuzz_gen_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/parser.mdk
 compiler/tools/printer.mdk"
-# â ï¸ Inherits #1222: `git grep` sees only TRACKED files, so an UNTRACKED `.mdk`
-# calling one of these post-resolve passes this check. Character-for-character the
-# same construction as the two sibling ratchets, and fixed in the same place when
-# #1222 lands â not worked around here, so all three move together.
 declun_actual=$(ratchet_producer_files 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved')
 if [ "$declun_actual" != "$declun_allowed" ]; then
   echo "FAIL: the #1110 decl-layer unresolved-producer set changed."
@@ -378,8 +391,6 @@ occun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/desugar.mdk
 compiler/frontend/parser.mdk
 compiler/types/route_key.mdk"
-# ⚠️ Inherits #1222 exactly as the two ratchets above do: `git grep` sees only
-# TRACKED files. Same construction on purpose, so all three move together.
 occun_actual=$(ratchet_producer_files 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved')
 if [ "$occun_actual" != "$occun_allowed" ]; then
   echo "FAIL: the #1110 interface-occurrence unresolved-producer set changed."
