@@ -3587,3 +3587,136 @@ test "a supplied and an inherited body ground a body-local literal alike" =
       placedNumSuppliedValue,
       placedNumInheritedValue,
     )
+
+-- A local binder or parameter that shadows a top-level name is not a reference
+-- to it: the binding stays out of that name's recursive group and keeps its own
+-- generalized scheme, free of the constraint the top-level name's body adds, so
+-- `g` may use it at a type with no `Shout` impl.
+binderShadowSource : List String -> String
+binderShadowSource body =
+  joinNl
+    ([
+        "interface Shout a where",
+        "  shout : a -> Int",
+        "impl Shout Int where",
+        "  shout x = x",
+      ]
+      ++ body)
+
+binderShadowObserved : String -> List String -> (List String, Option String)
+binderShadowObserved name body =
+  let core = desugar (parse arithmeticPreludeSource)
+  let program = desugar (parseLocated (binderShadowSource body))
+  let (errors, _) = checkOneDiags [] core ("binder_shadow", program)
+  let (_, schemes) = checkOneSchemeFullK None [] core ("binder_shadow", program)
+  (map tcMsg errors, map ppScheme (lookupAssoc name schemes))
+
+test "a let binder shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "a -> a")
+    (binderShadowObserved "f" [
+      "f x = let main = x + 1 in main * 2",
+      "main = shout (f 3)",
+      "g = f 1.5",
+    ])
+
+test "a where binder shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "a -> a")
+    (binderShadowObserved "f" [
+      "f x = main * 2",
+      "  where",
+      "    main = x + 1",
+      "main = shout (f 3)",
+      "g = f 1.5",
+    ])
+
+test "a let binder named like any top-level binding keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "a -> a")
+    (binderShadowObserved "f" [
+      "f x = let h = x + 1 in h * 2",
+      "h = shout (f 3)",
+      "g = f 1.5",
+      "main = h",
+    ])
+
+test "a parameter shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "a -> a")
+    (binderShadowObserved "f" [
+      "f h = h * 2",
+      "h = shout (f 3)",
+      "g = f 1.5",
+      "main = h",
+    ])
+
+test "a match-arm pattern shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "(a, b) -> a")
+    (binderShadowObserved "f" [
+      "f x = match x",
+      "  (h, _) => h * 2",
+      "h = shout (f (3, 0))",
+      "g = f (1.5, 0)",
+      "main = h",
+    ])
+
+test "a pattern-guard binder shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "Opt a -> a")
+    (binderShadowObserved "f" [
+      "data Opt a = No | Yes a",
+      "f x = match x",
+      "  y if (Yes h) <- y => h * 2",
+      "  _ => 0",
+      "h = shout (f (Yes 3))",
+      "g = f (Yes 1.5)",
+      "main = h",
+    ])
+
+test "a lambda parameter shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "a -> a")
+    (binderShadowObserved "f" [
+      "f x = (h => h * 2) x",
+      "h = shout (f 3)",
+      "g = f 1.5",
+      "main = h",
+    ])
+
+test "a block-statement let shadowing a top-level name keeps the enclosing scheme its own" =
+  expectEqual
+    ([], Some "a -> a")
+    (binderShadowObserved "f" [
+      "f x =",
+      "  let h = x + 1",
+      "  h * 2",
+      "h = shout (f 3)",
+      "g = f 1.5",
+      "main = h",
+    ])
+
+test "a let binder shadowing a where sibling keeps the sibling's group apart" =
+  expectEqual
+    ([], Some "Float -> Float")
+    (binderShadowObserved "k" [
+      "k : Float -> Float",
+      "k z = p z + p 1.5",
+      "  where",
+      "    p x = let q = x + 1 in q * 2",
+      "    q = p (3 : Int)",
+    ])
+
+test "mutually recursive top-level and where bindings still form one group" =
+  expectEqual
+    [([], Some "a -> Int"), ([], Some "a -> Int")]
+    [
+      binderShadowObserved "ping" ["ping x = pong x + 1", "pong y = ping y"],
+      binderShadowObserved "outer" [
+        "outer z = ev z",
+        "  where",
+        "    ev n = od n + 1",
+        "    od n = ev n",
+      ],
+    ]

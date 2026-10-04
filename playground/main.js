@@ -205,16 +205,38 @@ function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Console appends are buffered and flushed once per animation frame as a
+// single fragment, with one scroll per flush: a per-call append plus scrollTop
+// write forces a synchronous layout for every printed line.
+let consoleQueue = [];
+let consoleFlushScheduled = false;
+
+function flushConsole() {
+  consoleFlushScheduled = false;
+  if (consoleQueue.length === 0) return;
+  const frag = document.createDocumentFragment();
+  for (const [cls, text] of consoleQueue) {
+    const span = document.createElement('span');
+    span.className = cls;
+    span.textContent = text;
+    frag.appendChild(span);
+  }
+  consoleQueue = [];
+  consolePane.appendChild(frag);
+  consolePane.scrollTop = consolePane.scrollHeight;
+}
+
 function clearConsole() {
+  consoleQueue = [];
   consolePane.innerHTML = '';
 }
 
 function appendConsole(cls, text) {
-  const span = document.createElement('span');
-  span.className = cls;
-  span.textContent = text;
-  consolePane.appendChild(span);
-  consolePane.scrollTop = consolePane.scrollHeight;
+  consoleQueue.push([cls, text]);
+  if (!consoleFlushScheduled) {
+    consoleFlushScheduled = true;
+    requestAnimationFrame(flushConsole);
+  }
 }
 
 function setStatus(msg, cls) {
