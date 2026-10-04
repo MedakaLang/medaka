@@ -138,6 +138,33 @@ check_dotted 'run/dotted-abs' "$MEDAKA" run "$TMP/dotted/probe.perm.mdk"
 DOTTED_EXPECT='0 errors'
 check_dotted 'check/dotted' "$MEDAKA" check probe.perm.mdk
 
+# 8. #1159: a dotted entry next to a REAL nested module of the same id: the file
+#    the user typed wins; an `import probe.perm` still means probe/perm.mdk.
+mkdir -p "$TMP/coll/probe"
+cat > "$TMP/coll/probe.perm.mdk" <<'EOF'
+main = println "dotted-FILE"
+EOF
+cat > "$TMP/coll/probe/perm.mdk" <<'EOF'
+main = println realdirUnbound
+EOF
+cd "$TMP/coll"
+DOTTED_EXPECT='dotted-FILE'
+check_dotted 'run/dotted-vs-dir' "$MEDAKA" run probe.perm.mdk
+DOTTED_EXPECT='probe.perm.mdk: ok'
+check_dotted 'check/dotted-vs-dir' "$MEDAKA" check probe.perm.mdk
+mkdir -p "$TMP/imp/probe"
+cat > "$TMP/imp/probe/perm.mdk" <<'EOF'
+export x : Int
+x = 42
+EOF
+cat > "$TMP/imp/main.mdk" <<'EOF'
+import probe.perm.{x}
+main = println x
+EOF
+cd "$TMP/imp"
+DOTTED_EXPECT='42'
+check_dotted 'run/import-dotted-is-dir' "$MEDAKA" run main.mdk
+
 cd "$START"
 printf '%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 [ "$fail" -eq 0 ]
