@@ -1882,6 +1882,14 @@ test "an interpolated binder is read through the prelude's display only" =
             (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n"))),
     ]
 
+test "two sites with identical authority-pattern text each report" =
+  expectEqual
+    ["T-AUTHORITY-PATTERN", "T-AUTHORITY-PATTERN"]
+    (codes
+      (handleP
+        ++ "bad1 : H \"cfg/app\"\nbad1 = H \"cfg/app\"\n"
+        ++ "bad2 : H \"cfg/app\"\nbad2 = H \"cfg/app\"\n"))
+
 test "a pattern slot refuses what is not a pattern" = expectAll
   [
     -- a written exact element

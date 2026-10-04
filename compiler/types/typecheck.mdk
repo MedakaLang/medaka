@@ -2045,7 +2045,7 @@ checkAliasPatternSlots params rhs =
     (_ pk => match pk
       (p, Some (KindAuthority l _ False loc)) =>
         if contains p slots then
-          pushTypeErrorOnceAt
+          pushTypeErrorOncePerSite
             "T-AUTHORITY-PATTERN"
             loc
             (ordinaryInPatternSlotMsg p l)
@@ -2073,7 +2073,7 @@ checkAuthorityKindLabel (KindAuthority l o pat loc) =
       pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (authorityAtomicLabelMsg l)
     top =>
       if pat && not (domainHasPatterns top) then
-        pushTypeErrorOnceAt
+        pushTypeErrorOncePerSite
           "T-AUTHORITY-PATTERN"
           loc
           (patternDomainMsg ("Authority " ++ l ++ "*") l)
@@ -10198,7 +10198,10 @@ recordTypeError raw =
     (driverState.value.currentModuleRef.value, d) :: typeErrorsStickyDiags.value
   let _ = noteTypeErrorDetected ()
   perRun.value.typeErrorMsgSetRef :=
-    omInsert (tcMsg d) () perRun.value.typeErrorMsgSetRef.value
+    omInsert
+      (msgAtKey (tcMsg d) (tcLoc d))
+      ()
+      (omInsert (tcMsg d) () perRun.value.typeErrorMsgSetRef.value)
   wPush perRun.value.typeErrors d
 
 -- issue 1146 PR2 — the counter's ONLY incrementing statement, so "an error was
@@ -10295,6 +10298,17 @@ pushTypeErrorOnce code msg =
   else
     pushTypeError code msg
 
+-- Membership key for "this message at this span".  A located diagnostic is a
+-- duplicate only of the same text at the same span, so two sites with identical
+-- text each report; an unlocated one folds on text alone.
+msgAtKey : String -> Option Loc -> String
+msgAtKey msg at = "\{msg}\t@@\t\{locKey at}"
+
+alreadyReportedAt : String -> Option Loc -> Bool
+alreadyReportedAt msg None = omHasKey msg perRun.value.typeErrorMsgSetRef.value
+alreadyReportedAt msg at =
+  omHasKey (msgAtKey msg at) perRun.value.typeErrorMsgSetRef.value
+
 -- B.10.2c: push a deduped type error attributing it to the supplied loc rather
 -- than the live `currentLoc` (which is stale during the post-HM obligation
 -- check — inference has long since left the offending ELoc).  The loc was
@@ -10308,6 +10322,20 @@ pushTypeErrorOnceAt code loc msg =
     noteTypeErrorDetected ()
   else
     recordTypeError (TcDiag code 1 (orElseLoc loc !currentLoc) msg None None)
+
+-- Like `pushTypeErrorOnceAt`, but the duplicate test is per SITE: the same text at
+-- another span is a second diagnostic, the same text at the same span (a signature
+-- elaborated twice) still folds.  For messages that describe one site's own fault,
+-- where two sites with identical text must each be reported.  A message about a
+-- shared root cause (an ambiguous goal reached from two dispatch sites) belongs on
+-- `pushTypeErrorOnceAt`, which folds on text alone.
+pushTypeErrorOncePerSite : String -> Option Loc -> String -> Unit
+pushTypeErrorOncePerSite code loc msg =
+  let at = orElseLoc loc !currentLoc
+  if alreadyReportedAt msg at then
+    noteTypeErrorDetected ()
+  else
+    recordTypeError (TcDiag code 1 at msg None None)
 
 -- Push a deduped type error (same dedup rule as pushTypeErrorOnceAt) that also
 -- carries a human `help` string and an optional machine-applicable `fix`
@@ -14846,7 +14874,7 @@ authArgOf etbl tvs l pat (TyAuth ps loc) =
           if isPatternParam written then
             ()
           else
-            pushTypeErrorOnceAt
+            pushTypeErrorOncePerSite
               "T-AUTHORITY-PATTERN"
               loc
               (exactInPatternSlotMsg
@@ -14859,7 +14887,7 @@ authArgOf etbl tvs l pat (TyAuth ps loc) =
 authArgOf etbl _ l pat ty =
   let _ = match ordinaryBinderIn etbl pat ty
     Some n =>
-      pushTypeErrorOnceAt
+      pushTypeErrorOncePerSite
         "T-AUTHORITY-PATTERN"
         (firstTyLoc ty)
         (ordinaryInPatternSlotMsg n (effLabelName l))
