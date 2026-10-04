@@ -15,8 +15,11 @@
 -- import resolver as an argument, and these tests hand it a table.
 
 import test.{Expectation, expectEqual, expectTextContainsAll, expectTrue}
-import tools.gate_cmd.{ImportTarget(..), gradeViolations}
-import support.util.{listLen}
+import tools.gate_cmd.{
+  ImportTarget(..), gradeViolations, duplicateBaselineKeyViolations
+}
+import tools.gate_registry.{parseRegistry}
+import support.util.{listLen, joinNl}
 
 -- ── the fixture resolver ─────────────────────────────────────────────────────
 
@@ -329,3 +332,27 @@ okLaterArmTable = [
 
 test "a grading arm behind a non-grading one is still found" =
   expectEqual [] (violations okLaterArmTable gateOverOkIntSrc)
+
+-- baselineKey uniqueness (#3335)
+gateToml : String -> String -> String
+gateToml name run =
+  "[[gate]]\nname = \"\{name}\"\narea = \"a\"\nshard = \"s\"\nproject = \"p\"\ntiers = [\"pr\"]\ncost = \"cheap\"\nkind = \"shell\"\nmigration = \"none\"\nrun = \"\{run}\"\noracles = []\nsources = []\ncorpus = []\ntoolchain = []\n\n"
+
+keyViolationsOf : List (String, String) -> List String
+keyViolationsOf rows =
+  match parseRegistry (joinNl (map (r => gateToml (fst r) (snd r)) rows))
+    Ok gs => duplicateBaselineKeyViolations gs
+    Err e => [e]
+
+test "distinct run paths with distinct keys pass" =
+  expectEqual [] (keyViolationsOf [("a", "test/a.sh"), ("b", "test/b.sh")])
+
+test "a native replacement and its shell original collide on one key" =
+  expectEqual
+    [
+      "a: entries a_native, a_shell derive the same baselineKey — their cost histories would be spliced together",
+    ]
+    (keyViolationsOf [
+      ("a_native", "test/a_test.mdk"),
+      ("a_shell", "test/a.sh"),
+    ])

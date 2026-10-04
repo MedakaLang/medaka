@@ -71,6 +71,7 @@ import tools.gate_registry.{
   renderNames,
   joinSpace,
 }
+import tools.gate_cost.{baselineKey}
 import tools.gate_pack.{
   balNewText,
   budgetOutput,
@@ -1358,6 +1359,35 @@ dupNameFrom gates (n :: ns) =
 duplicateNameViolations : List Gate -> List String
 duplicateNameViolations gates = dupNameFrom gates (sortUniqS (gateNames gates))
 
+-- Check 6b (#3335): derived `baselineKey`s are UNIQUE across entries.  The key
+-- is deliberately non-injective (an `X_test.mdk` inherits `X.sh`'s cost
+-- history), so two entries whose `run` paths differ can still derive the same
+-- key and silently share one cost-history row.  Entries are named in the
+-- message so the collision is attributable.
+namesWithKey : String -> List Gate -> List String
+namesWithKey _ [] = []
+namesWithKey k (g :: gs) =
+  if baselineKey g.run == k then
+    g.name :: namesWithKey k gs
+  else
+    namesWithKey k gs
+
+dupKeyFrom : List Gate -> List String -> List String
+dupKeyFrom _ [] = []
+dupKeyFrom gates (k :: ks) =
+  let owners = namesWithKey k gates
+  let rest = dupKeyFrom gates ks
+  if listLen owners > 1 then
+    "\{k}: entries \{joinWith ", " owners} derive the same baselineKey — their cost histories would be spliced together"
+      :: rest
+  else
+    rest
+
+export
+duplicateBaselineKeyViolations : List Gate -> List String
+duplicateBaselineKeyViolations gates =
+  dupKeyFrom gates (sortUniqS (map (g => baselineKey g.run) gates))
+
 -- Check 7 (#2204): every `name` — a gate's and a `[[shard]]` row's — is inside
 -- a CONSERVATIVE CHARSET.
 --
@@ -2431,6 +2461,7 @@ verifyClasses root gates shs = match gateCandidates root
       ("missing corpus targets", corpusTargetViolations root gates),
       ("unreachable entries", reachabilityViolations gates gates),
       ("duplicate entry names", duplicateNameViolations gates),
+      ("duplicate baselineKeys", duplicateBaselineKeyViolations gates),
       ("unsafe entry names", unsafeNameViolations gates shs),
       ("invalid cost class", invalidCostViolations gates),
       ("invalid tiers", invalidTiersViolations gates),
