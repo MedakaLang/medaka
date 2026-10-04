@@ -3754,6 +3754,94 @@ table = [
     pinned = "",
     codes = [Present "T-AMBIGUOUS-INSTANCE"],
   },
+  Row {
+    entry = "determine-vector-ambiguous-headless.mdk",
+    label =
+      "§3 the call window`s vector verdict: `Ix Int Bool` and the headless `Ix a Bool` both unify with `Ix ?a Bool`, and `?a` is `main`s, so the `useIx` call is ambiguous (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-vector-ambiguous-two-instances.mdk",
+    label =
+      "§3 the call window`s vector verdict: `Ix Int Bool` and `Ix Char Bool` both unify with `Ix ?a Bool`, so the `useIx` call is ambiguous (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-vector-ambiguous-method-body.mdk",
+    label =
+      "§3 the call window`s vector verdict at an impl body`s close: `useIx []` in `report` poses `Ix ?a Bool`, which two instances unify with and whose `?a` is the body`s (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-vector-ambiguous-signature-call.mdk",
+    label =
+      "§3 the call window`s vector verdict with the first position closed: `useMk 3 []` leaves `Mk Int ?b`, which `Mk Int Bool` and `Mk Int String` both unify with (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-quiescence-truncated-let.mdk",
+    label =
+      "§3 determination against truncated siblings: the one-position `Mk ?` and `Pr ?` beside the joint goals are projections, so they do not refute `Mk Int Float`. Hand-derived: 4.0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-quiescence-truncated-let-chain.mdk",
+    label =
+      "§3 determination against truncated siblings, two local `let`s. Hand-derived: 4.0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-variable-head-ambiguous.mdk",
+    label =
+      "§3 a variable-headed instance is a candidate: `Conv a Bool` and `Conv Int String` both unify with `conv 1`s goal, so nothing is committed and `Display ?b` is ambiguous (span in section 6). Pins the code, not which interface the message names",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-variable-head-char.mdk",
+    label =
+      "§3 the variable-headed control: only `Conv a Bool` unifies with `Conv Char ?b`, so it fixes `?b = Bool`. Hand-derived: True",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -3765,7 +3853,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 329
+tableRows = 337
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4010,7 +4098,7 @@ schemeTable = [
   SchemeRow {
     entry = "s4-joint-residual-rdict-native.mdk",
     label =
-      "#1560 TYPED SHAPE: reducing the conditional impl leaves exactly one joint two-argument predicate in `f`s principal context. Re-pinned from `Conv c d`, whose context variables occur nowhere in the type: that line was the module-end head-tycon grounding rebinding `f`s quantified cells after generalization, and with the grounding deleted the hand-derived `Conv a b` prints",
+      "#1560 TYPED SHAPE: reducing the conditional impl leaves exactly one joint two-argument predicate in `f`s principal context, the hand-derived `Conv a b`. A context variable must occur in the type",
     want = "f : Conv a b => a -> b -> String",
   },
   SchemeRow {
@@ -4396,7 +4484,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 14
+spanRows = 19
 
 spanTable : List SpanRow
 spanTable = [
@@ -4481,6 +4569,34 @@ spanTable = [
     label =
       "§3 candidate count: with two `Conv` candidates nothing is committed, and the undetermined `Display ?b` is reported at the `println` call that poses it",
     want = "18:7",
+  },
+  SpanRow {
+    entry = "determine-vector-ambiguous-headless.mdk",
+    label =
+      "§3 the call window`s vector verdict lands on the `useIx` call that posed `Ix ?a Bool`",
+    want = "18:16",
+  },
+  SpanRow {
+    entry = "determine-vector-ambiguous-two-instances.mdk",
+    label = "§3 the same span guarantee with two concrete instances",
+    want = "18:16",
+  },
+  SpanRow {
+    entry = "determine-vector-ambiguous-method-body.mdk",
+    label =
+      "§3 at an impl body the verdict lands on the `useIx` call inside `report`",
+    want = "22:20",
+  },
+  SpanRow {
+    entry = "determine-vector-ambiguous-signature-call.mdk",
+    label = "§3 the verdict lands on the `useMk` call that posed `Mk ?n ?b`",
+    want = "18:16",
+  },
+  SpanRow {
+    entry = "determine-variable-head-ambiguous.mdk",
+    label =
+      "§3 the undetermined `Display ?b` is reported at the `println` call that poses it",
+    want = "14:7",
   },
 ]
 

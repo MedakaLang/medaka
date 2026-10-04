@@ -1,11 +1,11 @@
--- An impl head that repeats a variable matches only a goal that binds it
--- consistently: `impl Get (Box a) a` never matches `Get (Box Float) Int`.
--- Neither use here poses that goal.  `dbl` generalizes to
--- `(Get c e, Num e) => c -> e`: `e` is in its type and `Get c e` connects it
--- to the argument `c` (DICT-SEMANTICS §6.3 D3), so the use at `Box Float`
--- fixes `e := Float`.  The `where`-bound `twice` takes `Float` from the one
--- instance whose head unifies at `Array Float`, `Index (Array a) Int a`.
--- Both are accepted.
+-- Kept on purpose as an accept fixture beside the rejecting fixtures in this
+-- directory.  An impl head that repeats a variable matches only a goal that
+-- binds it consistently: `impl Get (Box a) a` never matches `Get (Box Float) Int`,
+-- and neither use here poses that goal.  `dbl` generalizes to
+-- `(Get a b, Num b) => a -> b`: `b` is in its type and `Get a b` connects it to
+-- the argument `a` (DICT-SEMANTICS §6.3 D3), so the use at `Box Float` fixes
+-- `b := Float`.  The `where`-bound `twice` takes `Float` from the one instance
+-- whose head unifies at `Array Float`, `Index (Array a) Int a`.
 data Box a = Box a
 
 interface Get c e where

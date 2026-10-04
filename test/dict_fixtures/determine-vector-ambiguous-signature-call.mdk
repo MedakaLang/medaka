@@ -1,0 +1,18 @@
+-- §3 the verdict on an open vector goal of the call window, its first position
+-- closed: `useMk 3 []` poses `Mk ?n ?b`, defaulting closes `?n` at `Int`, and
+-- both `impl Mk Int Bool` and `impl Mk Int String` unify with `Mk Int ?b`.
+-- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE at the `useMk`
+-- call.
+interface Mk a b where
+  mk : a -> List b -> Int
+
+impl Mk Int Bool where
+  mk _ _ = 1
+
+impl Mk Int String where
+  mk _ _ = 2
+
+useMk : Mk a b => a -> List b -> Int
+useMk x ys = mk x ys + 100
+
+main = println (useMk 3 [])

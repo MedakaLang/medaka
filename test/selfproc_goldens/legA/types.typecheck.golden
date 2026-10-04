@@ -281,7 +281,6 @@ binopRouteSplit : Route -> (Route, List Route)
 binopSpanLoc : Expr -> Expr -> Option Loc
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
-bodyExtraNumObls : Int -> Int -> List UObligation
 bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
 borrowedEffectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
@@ -325,6 +324,7 @@ callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
 callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono, Option Loc)
 callUOblsWindow : Int -> List UObligation
 calleeArrow : Mono -> (Mono, EffRow, Mono)
+calleeNumObls : Int -> Int -> List UObligation
 calleeTakesGrants : GrantCallee -> Bool
 candsOneIface : List KeyEntry -> Option String
 captureScope : Unit -> ScopeId
@@ -1351,6 +1351,7 @@ hasFileBoundValue : Mono -> Bool
 hasImportDefiner : String -> Bool
 hasMethodLevelConstraint : List String -> Ty -> Bool
 hasPredicateSlots : String -> List (String, List PredicateSlot) -> Bool
+hasVectorArgs : UObligation -> Bool
 headAnnotTy : Ty -> Mono
 headAtomsOr : List (List Atom) -> List Atom
 headBucketKey : Option HeadKey -> RegKey
@@ -1940,6 +1941,7 @@ memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
 memberRole : Bool -> Bool -> BindingRole
 memberSchemeOblEntry : String -> List ((String, String), List VecObl) -> UseMember -> List (String, List VecObl)
 memberSuffix : String -> String
+memberTiedSurvivors : Mono -> List UObligation -> Int -> Map String Unit
 mentionsEscaped : Authority -> Bool
 mentionsOpened : Authority -> Bool
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
@@ -2640,7 +2642,7 @@ registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List (Option
 registersElementDict : String -> List String -> Bool
 rejectAdmittedValueOccurrence : String -> Unit
 rejectCyclicAliases : Unit -> Unit
-rejectUndeterminedVectors : Map String Unit -> List UObligation -> Unit
+rejectUndeterminedVectors : Map String Unit -> List UObligation -> List UObligation -> Unit
 removeAllS : List String -> List String -> List String
 renameAliasedMethods : List Decl -> List (String, List Decl) -> List (String, List Decl)
 renameAliasedMethodsIn : List (String, List String) -> (String, List Decl) -> (String, List Decl)
@@ -3089,7 +3091,7 @@ undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 undeterminedNoImplMsg : String -> List Mono -> String
 undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
 undeterminedRoute : ScopeId -> Undetermined -> Route
-undeterminedVectorVerdict : Map String Unit -> UObligation -> Unit
+undeterminedVectorVerdict : Map String Unit -> Option GoalWindow -> UObligation -> Unit
 unify : Mono -> Mono -> Unit
 unifyAll : Mono -> List Mono -> Unit
 unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> String -> Expr -> Unit

@@ -1,0 +1,24 @@
+-- §3 determination's joint consistency against truncated siblings: `main`s
+-- window holds the one-position goals `Mk ?` and `Pr ?` beside the joint
+-- `Mk ?n ?e` and `Pr ?e ?r`.  A truncated goal is the projection of a wider one,
+-- so no row refutes it: `Mk Int Float` stays the one candidate, fixing
+-- `?e = Float`, and then `Pr Float Float` fixes `?r`.  Hand-derived:
+-- 1.5 * 2.0 + 1 = 4.0, on all three verbs.
+interface Mk a b where
+  mk : a -> b
+
+impl Mk Int Float where
+  mk _ = 1.5
+
+interface Pr a b where
+  pr : a -> b
+
+impl Pr Float Float where
+  pr x = x * 2.0
+
+impl Pr Int Int where
+  pr x = x * 3
+
+main =
+  let e = mk 0
+  println (pr e + 1)
