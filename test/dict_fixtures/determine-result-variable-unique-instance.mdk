@@ -1,0 +1,18 @@
+-- §3 determination at an inferred binding's result variable.  `mk () = conv
+-- (Wrap 1)` poses `Conv (Wrap ?n) ?t` with `Num ?n`; `?t` is in result
+-- position and `?n` is body-local, so `mk`'s group owns both.  The one
+-- instance `Conv (Wrap Int) Bool` unifies with the goal, so `?n = Int` and
+-- `?t = Bool`: `mk : Unit -> Bool` (scheme asserted in section 2).
+-- Hand-derived: `conv (Wrap 1)` is 1 > 0, so `debug` prints True on all
+-- three verbs.
+data Wrap a = Wrap a
+
+interface Conv s t where
+  conv : s -> t
+
+impl Conv (Wrap Int) Bool where
+  conv (Wrap n) = n > 0
+
+mk () = conv (Wrap 1)
+
+main = println (debug (mk ()))

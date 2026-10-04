@@ -1110,7 +1110,7 @@ require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
 require_typecheck_arm liveNumVarGo takeFirst 'OpNumLit occ => match findTvarInMono occ id'
 require_typecheck_arm noteNumericObligationChecked checkOneCallObligation '(_, OpNumLit _) =>'
-require_typecheck_arm groundMultiParamObligations groundOneObligation 'OpNumLit _ => ()'
+require_typecheck_arm determineByUniqueInstanceGo determineGoal 'uOblArgs o'
 require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpNumLit _ =>'
 require_typecheck_arm oblPredOf vecOblOfPred 'OpNumLit _ => match o.pred.args'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpNumLit occ => match normalize occ'
@@ -1201,7 +1201,6 @@ require_typecheck_arm numObligIds finalizeNumBoundary 'monoUnboundIds request.mr
 require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpExactReturn request =>'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'request.mrrScope'
 require_typecheck_arm liveNumVarGo takeFirst 'findTvarInMono request.mrrOccurrence id'
-require_typecheck_arm groundMultiParamObligations groundOneObligation 'request.mrrOccurrence'
 require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpExactReturn request =>'
 require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match methodReturnArgs request'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpExactReturn request => match normalize request.mrrOccurrence'
@@ -1311,7 +1310,8 @@ printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
 done || exit 1
 
 numeric_boundary_expected="$(printf '%s\n' "$numeric_boundaries" | wc -l | tr -d ' ')"
-numeric_boundary_actual="$(grep -Fc 'let _ = finalizeNumBoundary' "$predicate_slot_src")"
+# A group and a method body keep the candidates D3 clause 3 withheld for their verdict.
+numeric_boundary_actual="$(grep -Ec 'let (_|withheld) = finalizeNumBoundary' "$predicate_slot_src")"
 if [ "$numeric_boundary_actual" -ne "$numeric_boundary_expected" ]; then
   echo "FAIL: numeric boundary descriptor census changed: $numeric_boundary_actual calls, $numeric_boundary_expected checked boundaries"
   exit 1

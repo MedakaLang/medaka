@@ -1,0 +1,14 @@
+-- §3 a variable-headed instance is a candidate: `conv 1` poses `Conv ?n ?b`, and
+-- both `impl Conv a Bool` and `impl Conv Int String` unify with it, so nothing is
+-- committed and `?b` stays open under `println`'s `Display ?b`.  Hand-derived:
+-- REJECT on all three verbs, T-AMBIGUOUS-INSTANCE.
+interface Conv a b where
+  conv : a -> b
+
+impl Conv a Bool where
+  conv _ = True
+
+impl Conv Int String where
+  conv _ = "s"
+
+main = println (conv 1)

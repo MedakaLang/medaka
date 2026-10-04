@@ -1,0 +1,13 @@
+-- §6.3 D3 clause 3's control at a top-level group: an argument-position variable
+-- is not rigid for satisfiability (the caller chooses it), so `k := Int` keeps
+-- `Index c Int e` satisfiable and `k` grounds; `e` is connected to the argument
+-- (clause 2) and generalizes.  Scheme `sumTwo : (Index a Int b, Num b) => a -> b`
+-- (section 2).  Hand-derived: 3.75, then 7.
+impl Index (Array a) Float a where
+  index xs _ = xs[1]
+
+sumTwo v = v[0] + v[1]
+
+main =
+  println (debug (sumTwo [|1.5, 2.25|]))
+  println (debug (sumTwo [|3, 4|]))

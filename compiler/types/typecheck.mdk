@@ -398,7 +398,7 @@ import support.ordmap.{
   omSize,
   omDelete,
 }
-import list.{replicate, drop, take, elemIndex}
+import list.{replicate, drop, take, elemIndex, indexed}
 import support.util.{
   splitOnChar,
   u64HalvesHex,
@@ -9297,8 +9297,8 @@ data Provenance =
 -- instantiated monos).  The impl channel CANNOT: `recordImplObligation` records a
 -- method OCCURRENCE mono against the method's DECLARED type, and the projection
 -- `dispatchMonosOf typarams mty occ` is only meaningful once inference has grounded
--- the shared cells — `groundMultiParamObligations` runs over this very channel
--- immediately before the check and unifies through them.  Projecting at record time
+-- the shared cells — improvement, determination and defaulting at each group's close
+-- unify through them after the occurrence is recorded.  Projecting at record time
 -- would therefore read a vector that is empty or under-determined.
 --
 -- 🚨 THIS IS THE FACT #991'S BODY DID NOT HAVE.  It predicted "byte-identical target:
@@ -11818,7 +11818,7 @@ data PerRun = PerRun {
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
-  declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which `matchEqPairs` and `groundOneObligation` hold rigid; a local's, an interface method's and an expression annotation's variables are not here (#3796, #3797, #3799)
+  declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which `matchEqPairs` holds rigid; a local's, an interface method's and an expression annotation's variables are not here (#3796, #3797, #3799)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
   numlitVarLocs : Ref (List (Mono, Loc)),
   patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
@@ -18097,9 +18097,10 @@ blockRecLet env x xloc e =
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t1],
-    nbSurvivingIds = omEmpty,
+    nbSurvivingIds = memberTiedSurvivors t1 addedObls callN0,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
+    nbGuard = localNumGuard addedObls callN0,
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x xloc t1  -- LSP hover (block rec-let bypasses inferPat)
   let sch = genBindingRestricted Tip (residualsOf 0 residuals) True pureRow t1  -- #866
@@ -18124,9 +18125,10 @@ blockLet env (PVar x xloc) e =
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t],
-    nbSurvivingIds = omEmpty,
+    nbSurvivingIds = memberTiedSurvivors t addedObls callN0,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
+    nbGuard = localNumGuard addedObls callN0,
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x (Some xloc) t  -- LSP hover (block let bypasses inferPat)
   let sch =
@@ -23769,9 +23771,10 @@ inferRecLet env x xloc e1 e2 =
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t1],
-    nbSurvivingIds = omEmpty,
+    nbSurvivingIds = memberTiedSurvivors t1 addedObls callN0,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
+    nbGuard = localNumGuard addedObls callN0,
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x xloc t1  -- LSP hover (recursive PVar let bypasses inferPat)
   let sch = genBindingRestricted Tip (residualsOf 0 residuals) True pureRow t1  -- #866
@@ -23868,9 +23871,10 @@ inferLetSimple env pat e1 e2 =
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t1],
-    nbSurvivingIds = omEmpty,
+    nbSurvivingIds = memberTiedSurvivors t1 addedObls callN0,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
+    nbGuard = localNumGuard addedObls callN0,
   }
   inferLetBody env pat t1 residuals e1 e2 oblN0 callN0 dictN0 lscope
 
@@ -25924,6 +25928,7 @@ processLetGroup env binds =
     nbSurvivingIds = omEmpty,
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
+    nbGuard = localNumGuard addedObls callN0,
   }  -- RETPOS soundness
   let genv = generalizeGroup env residuals 0 (zipL binds placeholders)
   -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
@@ -26094,11 +26099,84 @@ data NumBoundary = NumBoundary {
   nbSurvivingIds : OrdMap Unit,
   nbDefaultObls : List UObligation,
   nbAmbiguityObls : List UObligation,
+  nbGuard : NumGuard,
 }
 
--- D1: one operation performs defaulting first, then ambiguity registration.
-finalizeNumBoundary : NumBoundary -> Unit
+-- What D3 clause 3 reads at one boundary: the goals it tests, the variables the
+-- boundary holds for every instantiation, and, at a member or group, the level
+-- below which a goal variable is an enclosing binder's and is held too.
+data NumGuard = NumGuard {
+  ngGoals : List UObligation,
+  ngRigidIds : OrdMap Unit,
+  ngOuterBelow : Option Int,
+}
+
+-- D3 clause 3 at work over one boundary.  Its goals are taken once, before the
+-- first candidate is grounded, so the outcome does not depend on candidate order.
+data ArmedGuard = ArmedGuard {
+  agWindow : GoalWindow,
+  agRigidIds : OrdMap Unit,
+  agOuterBelow : Option Int,
+  agWithheld : Ref (List Mono),
+}
+
+armNumGuard : NumGuard -> ArmedGuard
+armNumGuard guard = ArmedGuard {
+  agWindow = goalWindowOf (filterList guardsDefaulting guard.ngGoals),
+  agRigidIds = guard.ngRigidIds,
+  agOuterBelow = guard.ngOuterBelow,
+  agWithheld = Ref [],
+}
+
+-- In D3 clause 3's scope: arity two or more, and two or more distinct variables.
+guardsDefaulting : UObligation -> Bool
+guardsDefaulting o =
+  hasVectorArgs o && listLen (dedupI (flatMap monoUnboundIds (uOblArgs o))) > 1
+
+-- Grounding [id] to Int leaves satisfiable every in-scope goal on it that is
+-- satisfiable now.
+defaultKeepsGoalsSatisfiable : ArmedGuard -> Int -> Bool
+defaultKeepsGoalsSatisfiable guard id =
+  allList
+    (i => match IdMap.get i guard.agWindow.gwByIndex
+      Some o => goalSatisfiableAfterDefault guard id o
+      None => True)
+    (goalsOnVar guard.agWindow id)
+
+-- A goal unsatisfiable with [id] open is unsatisfiable at every type, so
+-- withholding [id] could not help it.
+goalSatisfiableAfterDefault : ArmedGuard -> Int -> UObligation -> Bool
+goalSatisfiableAfterDefault guard id o =
+  let args = map normalize (uOblArgs o)
+  if not (containsI id (flatMap monoUnboundIds args)) then
+    True
+  else
+    let after = map (cohApply (Ref [(id, tconBuiltin "Int")])) args
+    let rigidIds = outerRigidIds guard.agOuterBelow args guard.agRigidIds
+    goalSatisfiable rigidIds o after || not (goalSatisfiable rigidIds o args)
+
+-- Some instance head unifies with [args], [rigidIds] held rigid and the
+-- instance's variables fresh, or a given covers them.
+goalSatisfiable : OrdMap Unit -> UObligation -> List Mono -> Bool
+goalSatisfiable rigidIds o args =
+  isNonEmptyL (unifyingRows rigidIds o.pred.iface args)
+    || goalGivenAt o.pred.iface args o.uoScope
+
+-- [base] plus each variable of [args] whose level is below [level].
+outerRigidIds : Option Int -> List Mono -> OrdMap Unit -> OrdMap Unit
+outerRigidIds None _ base = base
+outerRigidIds (Some level) args base =
+  omFromNames
+    (map
+      (p => intToString (fst p))
+      (filterList (p => snd p < level) (flatMap monoUnboundVarLevels args)))
+    base
+
+-- D1: one operation performs defaulting first, then ambiguity registration.  It
+-- returns the candidates D3 clause 3 withheld, for the boundary's verdict.
+finalizeNumBoundary : NumBoundary -> List Mono
 finalizeNumBoundary boundary =
+  let guard = armNumGuard boundary.nbGuard
   let defaultOwnerPolicy = match boundary.nbDisposition
     NumBoundaryOwnedMember owner => Some owner
     NumBoundaryOwnedGroup owner => Some owner
@@ -26114,6 +26192,7 @@ finalizeNumBoundary boundary =
       [member] =>
         defaultAmbiguousNumWith
           defaultOwnerPolicy
+          guard
           boundary.nbSurvivingIds
           boundary.nbDefaultObls
           member
@@ -26121,6 +26200,7 @@ finalizeNumBoundary boundary =
     NumBoundaryOwnedGroup _ =>
       defaultAbsentNumWith
         defaultOwnerPolicy
+        guard
         boundary.nbSurvivingIds
         boundary.nbDefaultObls
         boundary.nbMembers
@@ -26128,11 +26208,13 @@ finalizeNumBoundary boundary =
       let _ =
         defaultGroupNumWith
           defaultOwnerPolicy
+          guard
           boundary.nbSurvivingIds
           boundary.nbDefaultObls
           boundary.nbMembers
       defaultEachMemberWith
         defaultOwnerPolicy
+        guard
         boundary.nbSurvivingIds
         boundary.nbDefaultObls
         boundary.nbMembers
@@ -26140,28 +26222,32 @@ finalizeNumBoundary boundary =
       [_] =>
         defaultBodyLocalNumWith
           defaultOwnerPolicy
+          guard
           boundary.nbSurvivingIds
           boundary.nbDefaultObls
       _ => panic "NumBoundaryOwnedMethodBody must carry exactly one member"
-  match ambiguityOwner
+  let _ = match ambiguityOwner
     Some owner =>
       registerAmbiguousConstraintsOwnedBy
         owner
         boundary.nbAmbiguityObls
         boundary.nbMembers
     None => ()
+  !guard.agWithheld
 
 defaultAmbiguousNumWith : Option Int ->
+  ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   Mono ->
   Unit
-defaultAmbiguousNumWith ownerPolicy protectedIds obls t =
+defaultAmbiguousNumWith ownerPolicy guard protectedIds obls t =
   let argIds = monoArgUnboundIds t
   let inT = monoUnboundIds t
   let candidates = unprotectedNumCandidates protectedIds obls
   groundNumVarsWith
     ownerPolicy
+    guard
     obls
     (filterList
       (id => containsI id inT && not (containsI id argIds))
@@ -26175,15 +26261,17 @@ defaultAmbiguousNumWith ownerPolicy protectedIds obls t =
 -- body surfaces in no type but must still ground — `let n = tag [1,2,3]`).  Mirrors
 -- process_letrec_group's group_arg_ids over added_obligs/added_methods.
 defaultGroupNumWith : Option Int ->
+  ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   List Mono ->
   Unit
-defaultGroupNumWith ownerPolicy protectedIds obls monos =
+defaultGroupNumWith ownerPolicy guard protectedIds obls monos =
   let argIds = flatMap monoArgUnboundIds monos
   let candidates = unprotectedNumCandidates protectedIds obls
   groundNumVarsWith
     ownerPolicy
+    guard
     obls
     (filterList (id => not (containsI id argIds)) candidates)
 
@@ -26191,15 +26279,17 @@ defaultGroupNumWith ownerPolicy protectedIds obls monos =
 -- member's type mentions (a var consumed inside a body, `n = length [1, 2]`).
 -- A var a member's type mentions generalizes with its constraint instead.
 defaultAbsentNumWith : Option Int ->
+  ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   List Mono ->
   Unit
-defaultAbsentNumWith ownerPolicy protectedIds obls monos =
+defaultAbsentNumWith ownerPolicy guard protectedIds obls monos =
   let inTypes = flatMap monoUnboundIds monos
   let candidates = unprotectedNumCandidates protectedIds obls
   groundNumVarsWith
     ownerPolicy
+    guard
     obls
     (filterList (id => not (containsI id inTypes)) candidates)
 
@@ -26224,6 +26314,76 @@ numChannelRootSet obls channels =
       (name => omHasKey name channelIds)
       (map intToString (dedupI (numConstrainedIds obls))))
     omEmpty
+
+-- D3 clause 2, the argument channel closed under connection: [base] plus the
+-- variables of [members]' types, outside an argument position, that a
+-- multi-variable goal of [obls] connects, transitively, to an argument-position
+-- variable.  A caller fixes them through those goals, so they are not defaulting
+-- candidates.  Only defaulting reads this set: improvement and determination keep
+-- the declared-signature and unowned sets, since holding a connected variable rigid
+-- there would stop the unique instance from fixing it.
+tiedSurvivors : List Mono -> List UObligation -> OrdMap Unit -> OrdMap Unit
+tiedSurvivors members obls base =
+  omFromNames (map intToString (connectedTiedIds members obls)) base
+
+-- A local binding's surviving set: its one member's, over its goals on both
+-- windows.
+memberTiedSurvivors : Mono -> List UObligation -> Int -> OrdMap Unit
+memberTiedSurvivors member addedObls callN0 =
+  tiedSurvivors [member] (addedObls ++ callUOblsWindow callN0) omEmpty
+
+-- A local binding's or `where` component's D3 clause 3 inputs: its goals on both
+-- windows, with the variables of an enclosing binder held rigid.  Called right
+-- after the boundary's level is exited.
+localNumGuard : List UObligation -> Int -> NumGuard
+localNumGuard addedObls callN0 = NumGuard {
+  ngGoals = addedObls ++ callUOblsWindow callN0,
+  ngRigidIds = omEmpty,
+  ngOuterBelow = Some (perRun.value.currentLevel.value + 1),
+}
+
+connectedTiedIds : List Mono -> List UObligation -> List Int
+connectedTiedIds members obls = match flatMap monoArgUnboundIds members
+  [] => []
+  argList =>
+    let argIds = idSetOf argList Tip
+    let reached = connectedIds argIds obls
+    filterList
+      (id => IdMap.has id reached && not (IdMap.has id argIds))
+      (dedupI (flatMap monoUnboundIds members))
+
+-- [seeds] grown by the variables of every goal of [obls] that meets them.
+connectedIds : Map Int Unit -> List UObligation -> Map Int Unit
+connectedIds seeds obls =
+  connectClosure
+    seeds
+    (filterList
+      (ids => listLen ids > 1)
+      (map (o => dedupI (flatMap monoUnboundIds (uOblArgs o))) obls))
+
+-- Each pass absorbs every vector that meets [reached] and keeps the rest for the
+-- next pass, so a vector is absorbed at most once.
+connectClosure : Map Int Unit -> List (List Int) -> Map Int Unit
+connectClosure reached vectors = match absorbMeeting reached vectors [] False
+  (grown, rest, True) => connectClosure grown rest
+  (grown, _, False) => grown
+
+absorbMeeting : Map Int Unit ->
+  List (List Int) ->
+  List (List Int) ->
+  Bool ->
+  (Map Int Unit, List (List Int), Bool)
+absorbMeeting reached [] rest grew = (reached, rest, grew)
+absorbMeeting reached (v :: vs) rest grew =
+  if anyList (i => IdMap.has i reached) v then
+    absorbMeeting (idSetOf v reached) vs rest True
+  else
+    absorbMeeting reached vs (v :: rest) grew
+
+-- Not `IdMap.fromList`: it allocates a pair per id and needs a union with [acc].
+idSetOf : List Int -> Map Int Unit -> Map Int Unit
+idSetOf [] acc = acc
+idSetOf (i :: more) acc = idSetOf more (IdMap.set i () acc)
 
 -- #518/#563: BODY-LOCAL defaulting — ground only Num-constrained roots absent from
 -- [protectedIds], the boundary's explicit set of still-live determination channels.
@@ -26253,43 +26413,26 @@ numChannelRootSet obls channels =
 -- `t _ = s [1, 2]` is consumed entirely inside the body and surfaces nowhere in
 -- `t : Option2 Int -> Int`, so nothing outside the body can ever determine it.  That
 -- var, and only that var, is what this grounds.
--- A method body's Num variables that reach it only through a constrained
--- callee's instantiation (a where helper generalized as `Num r => a -> r`,
--- used as `debug (two ())`): their Num obligation is on the call and
--- dictionary-application windows, not the body's own, exactly as at a
--- top-level group (#23).  The body-local boundary grounds them like any other
--- body-local root, except one a multi-parameter obligation of the body still
--- mentions (`e` of `Index (Array a) Int e`): another parameter may fix it, and
--- in an impl body that parameter is the impl's own head variable, still free
--- here, so grounding it to Int would pass a head match it contradicts (#3521).
-bodyExtraNumObls : List UObligation -> Int -> Int -> List UObligation
-bodyExtraNumObls bodyObls callN0 dictN0 =
-  let calls = callUOblsWindow callN0
-  let tied = flatMap multiParamIds (bodyObls ++ calls)
-  filterList
-    (o => not (anyList (id => containsI id tied) (numObligIds o)))
-    (numCallObls calls ++ numDictObls (dictAppsSince dictN0))
-
-multiParamIds : UObligation -> List Int
-multiParamIds o = match uOblArgs o
-  args@(_ :: _ :: _) => flatMap monoUnboundIds args
-  _ => []
-
-defaultBodyLocalNumWith : Option Int -> OrdMap Unit -> List UObligation -> Unit
-defaultBodyLocalNumWith ownerPolicy protectedIds obls =
+defaultBodyLocalNumWith : Option Int ->
+  ArmedGuard ->
+  OrdMap Unit ->
+  List UObligation ->
+  Unit
+defaultBodyLocalNumWith ownerPolicy guard protectedIds obls =
   let candidates = unprotectedNumCandidates protectedIds obls
-  groundNumVarsWith ownerPolicy obls candidates
+  groundNumVarsWith ownerPolicy guard obls candidates
 
 -- per-binding defaulting: run the member rule on each placeholder mono
 defaultEachMemberWith : Option Int ->
+  ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   List Mono ->
   Unit
-defaultEachMemberWith _ _ _ [] = ()
-defaultEachMemberWith ownerPolicy protectedIds obls (m :: rest) =
-  let _ = defaultAmbiguousNumWith ownerPolicy protectedIds obls m
-  defaultEachMemberWith ownerPolicy protectedIds obls rest
+defaultEachMemberWith _ _ _ _ [] = ()
+defaultEachMemberWith ownerPolicy guard protectedIds obls (m :: rest) =
+  let _ = defaultAmbiguousNumWith ownerPolicy guard protectedIds obls m
+  defaultEachMemberWith ownerPolicy guard protectedIds obls rest
 
 -- RETPOS soundness — ambiguous interface constraint (run≠build hole).
 -- A method obligation recorded inside a binding whose discriminating tyvar is
@@ -26345,7 +26488,7 @@ oblDispatchMonosGo iface typarams mty occ
   -- interface typaram.  A return-only typaram (`v` in `Get c v where get1 : c -> v`)
   -- is determined by the impl AFTER the receiver picks it, so it must never be
   -- registered as an independent impl-selection obligation — else the still-unbound
-  -- `v`, grounded later by groundMultiParamObligations, is re-checked as a single-mono
+  -- `v`, which the selected instance determines later, is re-checked as a single-mono
   -- obligation with no matching impl (`No impl of Get for Int`).  dispatchTyparams
   -- = [first typaram], the same receiver classification argDispatchOfMethod uses.
   | otherwise = dispatchMonosOf (dispatchTyparams typarams) mty occ
@@ -26490,18 +26633,30 @@ numDefaultOwnerAllows (Some level) m = match normalize m
 -- True
 
 -- Ground each id to Int by unifying the live var carrying it (found among [obls]'
--- Num operand monos — refs alias post-unify, grounding any grounds all).
-groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
-groundNumVarsWith _ _ [] = ()
-groundNumVarsWith ownerPolicy obls (id :: rest)
+-- Num operand monos — refs alias post-unify, grounding any grounds all), unless
+-- D3 clause 3 withholds it.
+groundNumVarsWith : Option Int ->
+  ArmedGuard ->
+  List UObligation ->
+  List Int ->
+  Unit
+groundNumVarsWith _ _ _ [] = ()
+groundNumVarsWith ownerPolicy guard obls (id :: rest)
   | omHasKey (intToString id) graphRun.value.localAbs.lasQuantified.value =
-    groundNumVarsWith ownerPolicy obls rest
-groundNumVarsWith ownerPolicy obls (id :: rest) =
+    groundNumVarsWith ownerPolicy guard obls rest
+groundNumVarsWith ownerPolicy guard obls (id :: rest) =
   let _ = match liveNumVarGo id obls
     Some m =>
-      if numDefaultOwnerAllows ownerPolicy m then unify m (tconBuiltin "Int")
+      if numDefaultOwnerAllows ownerPolicy m then groundOrWithhold guard id m
     None => ()
-  groundNumVarsWith ownerPolicy obls rest
+  groundNumVarsWith ownerPolicy guard obls rest
+
+groundOrWithhold : ArmedGuard -> Int -> Mono -> Unit
+groundOrWithhold guard id m =
+  if defaultKeepsGoalsSatisfiable guard id then
+    unify m (tconBuiltin "Int")
+  else
+    guard.agWithheld := m :: !guard.agWithheld
 
 liveNumVarGo : Int -> List UObligation -> Option Mono
 liveNumVarGo _ [] = None
@@ -31546,7 +31701,8 @@ pickMostSpecificEntry goals (e :: rest) =
 --     COMMITS to the head of the candidate list at exit 0, so declaration order
 --     decides its value (it prints `1`; swap the two `impl` blocks and it prints
 --     `2`), under a warning rather than in silence.  §6.2 T4's actual answer is to
---     DEFER such a goal to quiescence, which this compiler has no pass for; the
+--     DEFER such a goal to quiescence.  The graph-end pass (`drainStampQueue`)
+--     replays route stamping only; it re-runs no selection, so the
 --     residue is pinned as a KNOWN-BAD row in
 --     `test/diff_compiler_dict_semantics_permute.sh` and tracked at #1183.
 --
@@ -32218,8 +32374,8 @@ selectedRowReqMatch goals (ImplRow _ _ _ itys reqs _) =
 -- already keys.  But `headTyconNameTy` also had two readers that decide
 -- **ACCEPTANCE** rather than routing — `implHeadTagForIface` (the impl-head
 -- census `routeUndeterminedTop` counts: one head → stamp it, two or more →
--- `T-AMBIGUOUS-INSTANCE`) and `implTysIfMatch` (`groundOneObligation`'s
--- candidate set, which gives up on more than one match).  Feeding the new arms
+-- `T-AMBIGUOUS-INSTANCE`) and a candidate count that gives up on more than one
+-- match.  Feeding the new arms
 -- to THOSE turns an ACCEPT into a REJECT on programs that never dispatch to an
 -- arrow or an effect head at all: `impl C Int` beside `impl C (Int -> Int)` or
 -- `impl C (<Stdout> Bool)` went from a stamped route to *"Ambiguous instance"*,
@@ -32336,17 +32492,10 @@ headTyconTy t = match headTyNode t
 -- candidate when the goal is still undetermined?"* — where an extra `Some`
 -- turns a stamped route into `T-AMBIGUOUS-INSTANCE`, i.e. rejects a program.
 --
--- Its two readers:
---   * `implHeadTagForIface` → `implHeadTagsForIface` → `routeUndeterminedTop`
---   * `implTysIfMatch` → `uniqueImplTysFor` → `groundOneObligation`
---
--- ⚠️ The second one is also UNREACHABLE at `__fun__` by construction, which is
--- the independent corroboration that this split is coherent rather than merely
--- conservative: its `tag` argument comes from `headTyconNameMono`, and that
--- residual deliberately did NOT gain a `TFun` arm (see its own 🚨), so no goal
--- can ever ask this census for `__fun__`.  Answering `Some funHeadTag` here
--- could therefore only ever ENLARGE a match set nothing queries — pure
--- narrowing, no routing gain.
+-- Its reader: `implHeadTagForIface` → `implHeadTagsForIface` → `routeUndeterminedTop`.
+-- Determination's candidate count (`rowCountsInCensus`) does not read it: there an
+-- arrow-headed instance that unifies with the goal is a second candidate, and only a
+-- head the matcher reaches by peeling a qualifier is not counted.
 --
 -- Whoever flips this to the narrowing owns F-3c (#1155)'s flip list, an owner
 -- ruling, and fixtures for the programs it stops accepting.  Do not fold it back
@@ -35169,8 +35318,6 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- registerAllData universe (#154 PR-A): the Module path no longer builds `accData ++ prog0`
   -- here — prior modules' public data lives in the persistent DATA-universe accumulators
   -- (universeCtorPop/universeRecordPop), loaded+overlaid at the `dataEnv` binding below.
-  -- groundMultiParamObligations universe: Flat grounds over prog; Module over implDecls.
-  let groundUniverse = implDecls
   -- (#6, #1457) superDeclsRef: unified body OWNS it — Flat = coreProg ++ userProg, Module =
   -- `prog ++ implDecls`.  [implDecls] is core + every EARLIER module ONLY (foldModules never
   -- folds a module into its own universe), so binding it alone EXCLUDED this module's own
@@ -35740,8 +35887,6 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
             perRun.value.schemeObligationsRef.value
           ++ crossRun.value.crossModuleSchemeOblsQualRef.value)
     ()
-  let _ =
-    groundMultiParamObligations groundUniverse perRun.value.implObls.items.value
   -- P0-17: impl missing a required method.  #1557 A-3.5a: ONE call, both modes — the
   -- arm split is gone because `classEnvHere` above already carries the mode's `CE` and
   -- its reading ordinal (Flat: a single-module `CE` over `prog`, which IS `fullUniverse`
@@ -35763,10 +35908,6 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- why re-deriving it here would be a second whole-prefix rebuild for a value that
   -- cannot have changed).  The three `obUniv*` accumulators this used to read are
   -- deleted from `CrossRun`.
-  --
-  -- Site #8 (`groundMultiParamObligations groundUniverse`) is still on the list path
-  -- above, unchanged: `groundUniverse = implDecls` EXCLUDES this module's `prog0`,
-  -- which this projection (like the accumulator before it) includes.
 
   let _ =
     let obUniv = moduleImplUniv
@@ -36727,8 +36868,9 @@ univHasAnyImpl (ImplUniverse _ _ _ anyImpl) iface =
 -- `UObligation` directly.  The projection it performed still happens at CHECK time and
 -- in the same place: `uOblArgs`, via the `OpMethodOcc` arm (NOT `oblDispatchMonos`,
 -- which special-cases Num → [] and would drop a numeric literal's operand).
--- `groundMultiParamObligations` runs BEFORE the gate on both arms and grounds the shared
--- mono cells, so the projected args are already ground for multi-param obligations.
+-- Improvement, determination and defaulting at each group's close run BEFORE the gate
+-- and ground the shared mono cells, so a determined multi-param goal's projected args
+-- are already ground here.
 
 -- #11 soundness (native obligation hole): check each constrained-fn CALL site's
 -- instantiated obligation.  When `f : C a => …` is applied (`g = f "hello"`),
@@ -37336,11 +37478,17 @@ bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
 bucketAnyLonger [] _ = False
 bucketAnyLonger ((tys, _) :: rest) n = listLen tys > n || bucketAnyLonger rest n
 
--- an undetermined-var check per argument of the predicate (at arity 1 this is exactly
--- the old single call).  A goal that a given visible from its scope answers as a whole
--- predicate is determined by that given, whichever kind of binder carries it — a
--- default body's receiver has no tyvar-keyed registration for the per-argument rule
--- to find.
+-- the undetermined-var check of a one-position predicate.  A goal of two or more
+-- positions is decided as a vector at its boundary: `determineByUniqueInstance`
+-- commits it to its one candidate, and `rejectUndeterminedVectors` gives what
+-- stays open and is the boundary's its verdict.  Such a goal no instance head
+-- unifies with is `T-NO-IMPL`; one a constrained call posed that two or more
+-- candidates unify with is `T-AMBIGUOUS-INSTANCE`; one an interface method's own
+-- occurrence posed that two or more candidates unify with gets no verdict.  Asking
+-- per argument would accept a vector no instance matches.  A goal that a given visible
+-- from its scope answers as a whole predicate is determined by that given, whichever
+-- kind of binder carries it — a default body's receiver has no tyvar-keyed
+-- registration for the per-argument rule to find.
 checkUndeterminedObligations : ImplUniverse ->
   IfaceRef ->
   List Mono ->
@@ -37350,6 +37498,8 @@ checkUndeterminedObligations : ImplUniverse ->
 checkUndeterminedObligations univ iface args loc scope =
   let request = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
   if isSome (activeFunDictPredOf request scope) then
+    ()
+  else if listLen args >= 2 then
     ()
   else
     checkUndeterminedArgs univ iface args loc scope
@@ -37495,83 +37645,6 @@ setNumlitFloatsGo ((var, fref, n, dref) :: rest) =
     _ => ()
   setNumlitFloatsGo rest
 
--- ── Multi-param-interface element grounding (Shape A / gap #44) ─────────────
--- A container LITERAL (`Set { 3,1,2 }` / `Map { 1 => "a" }`) desugars to a
--- return-position `fromEntries [..] :~ Set _a`.  The head-pin fixes the RESULT to
--- `Set _a`, and the list arg grounds the interface's ELEMENT param `e` (= Int),
--- but nothing ties the result's element var `_a` to `e` — HM does not propagate the
--- impl's `FromEntries (Set a) a` variable-sharing.  So `_a` stays free, and BOTH the
--- return-position `requires Ord a` route AND the enclosing `display`/`debug`'s
--- arg-position element dict drop their dictionaries (null dict → SIGSEGV on the build
--- path; eval recovers via runtime arg-tag fallback, which is why `medaka run` worked).
--- Fix: for each multi-param-interface method occurrence whose dispatch type heads a
--- UNIQUE impl, instantiate that impl's method type (interface typarams ↦ the impl's
--- own type args, freshened) and unify it with the occurrence mono.  This grounds `_a`
--- := Int THROUGH THE SHARED CELL, so every downstream site reading that cell (the
--- `display` arg-stamp) and the return-position route both see `Set Int`.  Runs after
--- inference, before the resolve* passes read the cells.  Single-param interfaces and
--- already-ground occurrences are no-ops.  Mirrors the intent of the oracle's
--- impl_head_subst keying off the FULL concrete_args (the interface's param_vars).
-groundMultiParamObligations : List Decl -> List UObligation -> Unit
-groundMultiParamObligations _ [] = ()
-groundMultiParamObligations prog (o :: rest) =
-  let _ = match o.oblProj
-    OpMethodOcc typarams mty occ =>
-      groundOneObligation prog o.pred.iface.irName typarams mty occ
-    OpExactReturn request =>
-      groundOneObligation
-        prog
-        request.mrrIface.irName
-        request.mrrTyparams
-        request.mrrType
-        request.mrrOccurrence
-    OpProjected => ()
-    OpNumLit _ => ()
-  groundMultiParamObligations prog rest
-
-groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
-groundOneObligation prog iface typarams mty occ
-  | listLen typarams <= 1 = ()
-  | otherwise = match dispatchMonosOf typarams mty occ
-    [] => ()
-    dispMono :: _ => match headTyconNameMono dispMono
-      None => ()
-      Some tag => match uniqueImplTysFor prog iface tag
-        None => ()
-        Some implTys =>
-          let baseMap = zipL typarams implTys
-          let implMethodTy = substTyVars baseMap mty
-          let inst = fst (astTypeFreshTbl implMethodTy)
-          if sigVarsStayFree perRun.value.declaredSigVarIds.value occ inst then
-            unify occ inst
--- build impl method type: interface typaram ↦ impl ty, then freshen the
--- impl's own vars, then unify with the occurrence.
-
--- the type args of the UNIQUE impl of [iface] whose head tycon is [tag]; None when
--- absent or ambiguous (more than one), so an over-determined case is left untouched.
-uniqueImplTysFor : List Decl -> String -> String -> Option (List Ty)
-uniqueImplTysFor prog iface tag = match filterImplTysFor prog iface tag
-  [tys] => Some tys
-  _ => None
-
-filterImplTysFor : List Decl -> String -> String -> List (List Ty)
-filterImplTysFor prog iface tag = flatMap (implTysIfMatch iface tag) prog
-
-implTysIfMatch : String -> String -> Decl -> List (List Ty)
-implTysIfMatch iface tag (DAttrib _ d) = implTysIfMatch iface tag d
--- ⚠️ `censusHeadNameTy`, NOT `headTyconNameTy`: `uniqueImplTysFor` gives up on
--- more than one match, so an extra `Some` here is an ACCEPTANCE narrowing (a
--- multi-param obligation stops being ground, and the cascade is a downstream
--- `T-AMBIGUOUS-INSTANCE`).  The derivation is at `headTyNode`.
-implTysIfMatch iface tag (DImpl { iface = ifn, tys, ... })
-  | ifn == iface = match tys
-    headTy :: _ => match censusHeadNameTy headTy
-      Some t => if t == tag then [tys] else []
-      None => []
-    [] => []
-  | otherwise = []
-implTysIfMatch _ _ _ = []
-
 -- Impl-based improvement (DICT-SEMANTICS §3 "Improvement by the one matching
 -- instance"): when the head matcher (`implHeadSubst`) accepts a goal by binding
 -- the goal's own free variables through a repeated head variable, and that
@@ -37582,13 +37655,14 @@ implTysIfMatch _ _ _ = []
 -- including one a later binding of a goal variable would make match) or none
 -- leaves the goal as it is.
 --
--- It runs at a top-level binding group's close (`processSCC`), before that group's
--- Num defaulting and generalization, and not inside `groundMultiParamObligations`:
--- that pass runs at module end, after both, and it commits on the one impl whose
--- first head tycon is the goal's, ignoring impls headed by a variable, so it does
--- not answer "exactly one instance can match this goal".
+-- It runs at a top-level binding group's close (`processSCC`) and at a method
+-- body's (`inferMethodBody`), before that boundary's Num defaulting and once more
+-- after it, each time ahead of
+-- `determineByUniqueInstance`, which commits a goal to its one unifying instance
+-- even where no repeated head variable ties the goal to itself.
 --
--- [sigIds] are the group's declared-signature variables still free at its close.
+-- [sigIds] are the group's declared-signature variables still free at its close
+-- (at a method body, its instance head's and declared signature's variables).
 -- The commit never binds one: they take part as constants, and a goal that would
 -- need one bound is left as it is, for `checkSigsTooGeneral` has already run.
 improveByUniqueImpl : OrdMap Unit -> List UObligation -> Unit
@@ -37596,6 +37670,346 @@ improveByUniqueImpl _ [] = ()
 improveByUniqueImpl sigIds (o :: rest) =
   let _ = improveGoal sigIds o.pred.iface (map normalize (uOblArgs o))
   improveByUniqueImpl sigIds rest
+
+-- Determination by the unique unifying instance (DICT-SEMANTICS §3, the settle
+-- sequence's second step).  A goal of arity two or more that is not closed is
+-- unified with a fresh instance of the one instance head that unifies with it,
+-- every variable in [rigidIds] held rigid.  [rigidIds] are the variables the
+-- boundary does not own: at a group, the declared signatures' variables and the
+-- variables in an argument position of a member's type; at a method body, the
+-- instance head's and declared signature's.  Any other variable of the goal is the
+-- boundary's, and the unique instance is the only type the program can have there.
+--
+-- A candidate counts unless its first head unifies only by peeling a qualifier
+-- (`rowCountsInCensus`), and only if its commit leaves every sibling goal on a
+-- variable it binds satisfiable: a sibling the commit closes must have an instance
+-- in the table.
+--
+-- Sweeps repeat until one commits nothing, so a goal that another goal's commit
+-- makes unique is determined in the same pass whatever order the window lists
+-- them in.  What stays open gets its verdict from `rejectUndeterminedVectors`.
+determineByUniqueInstance : OrdMap Unit -> List UObligation -> Unit
+determineByUniqueInstance rigidIds obls =
+  if anyList hasVectorArgs obls then
+    determineSweeps rigidIds (goalWindowOf obls) (listLen obls + 1)
+
+-- The fuel only bounds the loop: every sweep but the last changes some goal's
+-- shape.
+determineSweeps : OrdMap Unit -> GoalWindow -> Int -> Unit
+determineSweeps rigidIds window fuel =
+  if fuel > 0
+    && determineByUniqueInstanceGo rigidIds window False window.gwGoals then
+    determineSweeps rigidIds window (fuel - 1)
+
+-- One sweep over the window; True when some goal took its instance's shape.
+determineByUniqueInstanceGo : OrdMap Unit ->
+  GoalWindow ->
+  Bool ->
+  List (Int, UObligation) ->
+  Bool
+determineByUniqueInstanceGo _ _ changed [] = changed
+determineByUniqueInstanceGo rigidIds window changed ((_, o) :: rest) =
+  let args = map normalize (uOblArgs o)
+  let now = determineGoal rigidIds window o args
+  determineByUniqueInstanceGo rigidIds window (now || changed) rest
+
+-- True when the commit changed the goal's shape.  A commit that only renames the
+-- goal's variables to the instance's fresh ones leaves the goal's size and its
+-- count of distinct variables as they were; the window is re-filed either way,
+-- since the goal's variables are no longer the ones it was filed under.
+determineGoal : OrdMap Unit -> GoalWindow -> UObligation -> List Mono -> Bool
+determineGoal rigidIds window o args
+  | listLen args <= 1 || monoVectorClosed args = False
+  | otherwise =
+    let unifying = unifyingRows rigidIds o.pred.iface args
+    match determinationCandidates window unifying
+      [(row, _)] =>
+        let oldIds = dedupI (flatMap monoUnboundIds args)
+        let sizeBefore = monoSizes args
+        -- Minted inside the boundary's level: a goal variable unified with one
+        -- of these keeps its level and still generalizes.
+        let _ = enterLevel ()
+        let heads = freshRowHeads row
+        let _ = exitLevel ()
+        let _ = commitImprovement rigidIds (zipL args heads)
+        let _ = refileGoals window oldIds
+        monoSizes args /= sizeBefore
+          || listLen (dedupI (flatMap monoUnboundIds args)) /= listLen oldIds
+      _ => False
+
+-- The instances of [iface] whose heads unify with [args], [rigidIds] held rigid,
+-- each with the substitution that unifies it.
+unifyingRows : OrdMap Unit ->
+  IfaceRef ->
+  List Mono ->
+  List (ImplRow, List (Int, Mono))
+unifyingRows rigidIds iface args =
+  flatMap
+    (row => match rowHeadSubstRigid rigidIds args row
+      Some subst => [(row, subst)]
+      None => [])
+    (filterList (ieRowOfIface iface) (improvementPool args))
+
+determinationCandidates : GoalWindow ->
+  List (ImplRow, List (Int, Mono)) ->
+  List (ImplRow, List (Int, Mono))
+determinationCandidates window unifying =
+  filterList
+    (cand =>
+      rowCountsInCensus (fst cand) && siblingsStaySatisfiable window (snd cand))
+    unifying
+
+-- The verdict on a goal of arity two or more that determination left open
+-- (DICT-SEMANTICS §3, §4.2 OD3).  A goal generalization abstracts is the caller's:
+-- every free variable in it is quantified by a scheme, the test residual
+-- selection admits a predicate into a scheme by (`declaredOblArgOk`).  So is a
+-- goal with a variable the boundary does not own.  A goal a given answers, or one
+-- whose variable a primary mismatch already explained, gets no verdict either.
+-- Any other such goal that no instance head unifies with is `T-NO-IMPL`: no
+-- later boundary can satisfy it.  One of the call window [callObls] that two or
+-- more candidates unify with is `T-AMBIGUOUS-INSTANCE`: the constrained call that
+-- posed it has no type to choose its dictionary by.  The same goal posed by an
+-- interface method's own occurrence ([implObls]) gets no verdict here.  At a
+-- group it runs once the group's schemes are registered.
+rejectUndeterminedVectors : OrdMap Unit ->
+  List UObligation ->
+  List UObligation ->
+  Unit
+rejectUndeterminedVectors rigidIds implObls callObls =
+  let _ = fold (_ o => undeterminedVectorVerdict rigidIds None o) () implObls
+  if anyList hasVectorArgs callObls then
+    let window = Some (goalWindowOf (implObls ++ callObls))
+    fold (_ o => undeterminedVectorVerdict rigidIds window o) () callObls
+  else
+    fold (_ o => undeterminedVectorVerdict rigidIds None o) () callObls
+
+-- [callWindow] is the boundary's window when [o] is on the call window.
+undeterminedVectorVerdict : OrdMap Unit ->
+  Option GoalWindow ->
+  UObligation ->
+  Unit
+undeterminedVectorVerdict rigidIds callWindow o =
+  let args = map normalize (uOblArgs o)
+  let iface = o.pred.iface
+  if listLen args <= 1
+    || monoVectorClosed args
+    || isNonEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args))
+    || anyIn (flatMap monoUnboundIds args) perRun.value.poisonedVars.value
+    || goalGivenAt iface args o.uoScope
+    || allList (declaredOblArgOk perRun.value.deferrableVarIds.value) args then
+    ()
+  else match (unifyingRows rigidIds iface args, callWindow)
+    ([], _) =>
+      pushTypeErrorOnceAt
+        "T-NO-IMPL"
+        o.loc
+        (undeterminedNoImplMsg iface.irName args)
+    (unifying, Some window) =>
+      if listLen (determinationCandidates window unifying) >= 2 then
+        pushTypeErrorOnceAt
+          "T-AMBIGUOUS-INSTANCE"
+          o.loc
+          (ambiguousImplMsg iface.irName)
+    _ => ()
+
+-- The verdict on the goals on a variable D3 clause 3 withheld, once the second
+-- determination has run.  The boundary owns that variable and nothing after it
+-- can choose it, so a goal on it that two or more candidates still unify with is
+-- `T-AMBIGUOUS-INSTANCE`, even when it also mentions a rigid variable: the
+-- candidates are counted with [rigidIds] held rigid, and an instantiation of a
+-- rigid variable can only add candidates, never remove one.  Zero candidates is
+-- left to `rejectUndeterminedVectors`, whose `T-NO-IMPL` keeps the rigid
+-- exemption.
+rejectWithheldAmbiguity : OrdMap Unit -> List Mono -> List UObligation -> Unit
+rejectWithheldAmbiguity _ [] _ = ()
+rejectWithheldAmbiguity rigidIds withheld obls =
+  match withheldGoals withheld obls
+    [] => ()
+    held =>
+      let window = goalWindowOf obls
+      fold (_ o => withheldVectorVerdict rigidIds window o) () held
+
+-- The goals of [obls] that mention a still-open variable of [withheld].
+withheldGoals : List Mono -> List UObligation -> List UObligation
+withheldGoals withheld obls =
+  let heldIds = idSetOf (flatMap monoUnboundIds withheld) Tip
+  filterList
+    (o =>
+      anyList (i => IdMap.has i heldIds) (flatMap monoUnboundIds (uOblArgs o)))
+    obls
+
+withheldVectorVerdict : OrdMap Unit -> GoalWindow -> UObligation -> Unit
+withheldVectorVerdict rigidIds window o =
+  let args = map normalize (uOblArgs o)
+  let iface = o.pred.iface
+  if listLen args <= 1
+    || monoVectorClosed args
+    || anyIn (flatMap monoUnboundIds args) perRun.value.poisonedVars.value
+    || goalGivenAt iface args o.uoScope
+    || allList (declaredOblArgOk perRun.value.deferrableVarIds.value) args then
+    ()
+  else if listLen
+      (determinationCandidates window (unifyingRows rigidIds iface args))
+    >= 2 then
+    pushTypeErrorOnceAt
+      "T-AMBIGUOUS-INSTANCE"
+      o.loc
+      (ambiguousImplMsg iface.irName)
+
+hasVectorArgs : UObligation -> Bool
+hasVectorArgs o = listLen (uOblArgs o) >= 2
+
+-- A boundary's goals by position in the window, and the positions of the goals on
+-- each free variable, so a commit is tested against the siblings that share a
+-- variable it binds rather than against the whole window.  An entry may be stale
+-- after a commit re-files a goal; a stale entry costs one test and nothing else.
+data GoalWindow = GoalWindow {
+  gwGoals : List (Int, UObligation),
+  gwByIndex : Map Int UObligation,
+  gwByVar : Ref (Map Int (List Int)),
+}
+
+goalWindowOf : List UObligation -> GoalWindow
+goalWindowOf obls =
+  let goals = indexed obls
+  GoalWindow {
+    gwGoals = goals,
+    gwByIndex = fold (m (i, o) => IdMap.set i o m) Tip goals,
+    gwByVar = Ref (fold (m (i, o) => fileGoal i o m) Tip goals),
+  }
+
+fileGoal : Int -> UObligation -> Map Int (List Int) -> Map Int (List Int)
+fileGoal i o byVar =
+  fold
+    (m id => IdMap.set id (i :: optionOr [] (IdMap.get id m)) m)
+    byVar
+    (dedupI (flatMap monoUnboundIds (uOblArgs o)))
+
+goalsOnVar : GoalWindow -> Int -> List Int
+goalsOnVar window id = optionOr [] (IdMap.get id window.gwByVar.value)
+
+-- A commit binds only variables of the committed goal and of the instance's fresh
+-- head, so the goals whose variables it can change are the ones filed under the
+-- committed goal's variables.
+refileGoals : GoalWindow -> List Int -> Unit
+refileGoals window oldIds =
+  window.gwByVar :=
+    fold
+      (acc i => match IdMap.get i window.gwByIndex
+        Some g => fileGoal i g acc
+        None => acc)
+      window.gwByVar.value
+      (dedupI (flatMap (goalsOnVar window) oldIds))
+
+-- [row]'s head, freshened, unified with [args] in a scratch substitution with
+-- every variable in [rigidIds] held rigid; the substitution, or None.
+rowHeadSubstRigid : OrdMap Unit ->
+  List Mono ->
+  ImplRow ->
+  Option (List (Int, Mono))
+rowHeadSubstRigid rigidIds args row =
+  let heads = freshRowHeads row
+  let scratch = Ref []
+  if listLen heads == listLen args
+    && cohOverlapGo scratch (rigidSigPairs rigidIds (zipL args heads)) then
+    Some !scratch
+  else
+    None
+
+-- A candidate does not count when its first head unifies with the goal only by
+-- peeling a qualifier: `<Stdout> Int` elaborates to `Int`, and the head matcher
+-- reads through a constraint or authority qualifier the same way, so such an
+-- instance is not a second type the goal could have
+-- (`test/engine_fixtures/fun_head_impl_bystander.mdk`).  An arrow-, tuple- or
+-- variable-headed instance unifies by its structure and counts.
+rowCountsInCensus : ImplRow -> Bool
+rowCountsInCensus row = match ieRowTys row
+  headTy :: _ => not (tyIsQualified (headTySpineNode headTy))
+  [] => False
+
+tyIsQualified : Ty -> Bool
+tyIsQualified (TyEffect _ _ _) = True
+tyIsQualified (TyConstrained _ _) = True
+tyIsQualified (TyQual _ _ _) = True
+tyIsQualified _ = False
+
+siblingsStaySatisfiable : GoalWindow -> List (Int, Mono) -> Bool
+siblingsStaySatisfiable window subst =
+  let bound = map fst subst
+  let scratch = Ref subst
+  allList
+    (i => match IdMap.get i window.gwByIndex
+      Some s => siblingStaysSatisfiable scratch bound s
+      None => True)
+    (dedupI (flatMap (goalsOnVar window) bound))
+
+-- A sibling the commit leaves open stays satisfiable, and a closed one needs an
+-- instance whose head matches it.  A sibling with fewer arguments than some
+-- instance of its interface has heads is a truncation, the projection of a wider
+-- goal onto its first positions (a per-slot goal `recordCallObligations` shatters
+-- a predicate into), so matching rows cannot refute it and it stays satisfiable.
+siblingStaysSatisfiable : Ref (List (Int, Mono)) ->
+  List Int ->
+  UObligation ->
+  Bool
+siblingStaysSatisfiable scratch bound s =
+  let args = map normalize (uOblArgs s)
+  if not (anyIn (flatMap monoUnboundIds args) bound) then
+    True
+  else
+    let after = map (cohApply scratch) args
+    not (monoVectorClosed after)
+      || anyList
+        (row =>
+          listLen (ieRowTys row) > listLen after || rowHeadMatches after row)
+        (filterList (ieRowOfIface s.pred.iface) (improvementPool after))
+
+-- [m] with every variable the scratch substitution binds replaced, deeply.
+cohApply : Ref (List (Int, Mono)) -> Mono -> Mono
+cohApply subst m = match cohResolve subst m
+  TApp a b => TApp (cohApply subst a) (cohApply subst b)
+  TFun a eff b => TFun (cohApply subst a) eff (cohApply subst b)
+  TQual a q => TQual (cohApply subst a) q
+  other => other
+
+freshRowHeads : ImplRow -> List Mono
+freshRowHeads row =
+  let tys = ieRowTys row
+  let tvs = freshTvMap (dedup (flatMap tyVarNames tys))
+  map (fromAstType tvs) tys
+
+-- DIAGNOSTIC-CODES-DESIGN `T-NO-IMPL`, undetermined vector: each variable renders
+-- as `_`, since a letter would read as a name the program wrote.
+undeterminedNoImplMsg : String -> List Mono -> String
+undeterminedNoImplMsg iface args =
+  let holes = map (c => (tyvarId c, TRigid "_")) (flatMap monoVarCells args)
+  let shown = map (substMono holes [] []) args
+  let positions = indexed args
+  let fixed = filterList (p => monoClosed (snd p)) positions
+  let open = filterList (p => not (monoClosed (snd p))) positions
+  let head = "No impl of \{iface} for \{ppPredArgsShared shown}"
+  if isNonEmptyL fixed && allList (p => isBareTyvarMono (snd p)) open then
+    let has =
+      joinWith
+        " and "
+        (map
+          (p =>
+            "`\{ppMonosShared [snd p]}` in its \{ordinalWord (fst p)} position")
+          fixed)
+    let free = joinWith " and " (map (p => ordinalWord (fst p)) open)
+    let noun = if listLen open == 1 then "position" else "positions"
+    "\{head}: no instance of `\{iface}` has \{has}, so no type for the \{free} \{noun} can satisfy it."
+  else
+    "\{head}: no instance of `\{iface}` has that shape, so no choice of types for the `_` can satisfy it."
+
+-- The ordinal of the zero-based position [i].
+ordinalWord : Int -> String
+ordinalWord 0 = "first"
+ordinalWord 1 = "second"
+ordinalWord 2 = "third"
+ordinalWord 3 = "fourth"
+ordinalWord 4 = "fifth"
+ordinalWord i = "\{intToString (i + 1)}th"
 
 improveGoal : OrdMap Unit -> IfaceRef -> List Mono -> Unit
 improveGoal sigIds iface args
@@ -37653,19 +38067,6 @@ rigidSigPairs sigIds pairs =
         (p =>
           (substMono toRigid [] [] (fst p), substMono toRigid [] [] (snd p)))
         pairs
-
--- Can [a] and [b] be made equal without binding a signature variable?  Grounding
--- unifies through shared cells, so it must not run when the only way to make the
--- occurrence fit the instance is to fix a type the caller chooses.  With no
--- signature variable among them the answer is yes: grounding's own `unify` then
--- decides, and a mismatch it reports is the goal's real error.
-sigVarsStayFree : OrdMap Unit -> Mono -> Mono -> Bool
-sigVarsStayFree sigIds a b =
-  match sigRigidBindings sigIds (monoVarCells a ++ monoVarCells b)
-    [] => True
-    toRigid => cohOverlapGo (Ref []) [
-      (substMono toRigid [] [] a, substMono toRigid [] [] b),
-    ]
 
 -- DICT-SEMANTICS §3: a top-level signature's variable is rigid in every matcher.  A
 -- goal that an instance head accepts only by binding one needs it to be a specific
@@ -38693,6 +39094,19 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- the survivor check never read, and `check` stayed green on a program whose
   -- built binary printed garbage.
   let addedCallObls = callOblsWindow callN0
+  -- The settle sequence at the method-body boundary (DICT-SEMANTICS §3).  The body
+  -- owns neither the instance head's variables nor its declared signature's: a
+  -- construction site instantiates both, so both are held rigid, and every other
+  -- variable of a goal is the body's.  An impl body's head monos and method type
+  -- carry them; a default body has no head, and its method type carries the
+  -- receiver's variables too.  It runs before the rigidity and head-prerequisite
+  -- checks so that a predicate determination moves onto a head variable is read
+  -- by them, and before the surviving roots are snapshotted.
+  let bodyRigidIds =
+    monoRootIdSet (headMonos ++ [inst.mbiExpected] ++ map snd inst.mbiNamedVars)
+  let bodyObls = addedObls ++ callUOblsWindow callN0
+  let _ = improveByUniqueImpl bodyRigidIds bodyObls
+  let _ = determineByUniqueInstance bodyRigidIds bodyObls
   let _ =
     checkMethodRigidityCore
       subject
@@ -38773,14 +39187,30 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- The just-exited method-body level owns both body-local defaulting and the
   -- ambiguity registration that follows it. Roots carried by the impl head or
   -- declared method dictionaries survive through [survivingNumIds]/[mbiExpected];
-  -- deeper generalized locals remain outside this boundary by level.
-  let _ = finalizeNumBoundary NumBoundary {
-    nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
-    nbMembers = [inst.mbiExpected],
-    nbSurvivingIds = survivingNumIds,
-    nbDefaultObls = addedObls ++ bodyExtraNumObls addedObls callN0 dictN0,
-    nbAmbiguityObls = addedObls,
-  }
+  -- deeper generalized locals remain outside this boundary by level.  A variable a
+  -- multi-parameter goal ties to the head (`e` of `Index (Array a) k e`) is not in
+  -- that set: D3 clause 3 withholds it when grounding it would leave the goal no
+  -- instance, and the second determination below settles it.
+  let withheld = finalizeNumBoundary
+    NumBoundary {
+      nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
+      nbMembers = [inst.mbiExpected],
+      nbSurvivingIds = survivingNumIds,
+      nbDefaultObls = addedObls ++ calleeNumObls callN0 dictN0,
+      nbAmbiguityObls = addedObls,
+      nbGuard = NumGuard {
+        ngGoals = bodyObls,
+        ngRigidIds = bodyRigidIds,
+        ngOuterBelow = None,
+      },
+    }
+  -- Defaulting is a substitution like any other, so the goals it changed are
+  -- improved and determined once more.
+  let _ = improveByUniqueImpl bodyRigidIds bodyObls
+  let _ = determineByUniqueInstance bodyRigidIds bodyObls
+  let _ =
+    rejectUndeterminedVectors bodyRigidIds addedObls (callUOblsWindow callN0)
+  let _ = rejectWithheldAmbiguity bodyRigidIds withheld bodyObls
   let _ = registerMethodBodyGivens iface kind params mty inst bodyScope
   let _ = match kind
     ImplBody _ => perRun.value.currentImplBody := False
@@ -42806,6 +43236,15 @@ processSCCs env sigs grouped (scc :: rest) =
   let (restSchemes, grouped3) = processSCCs env2 sigs grouped2 rest
   (schemes ++ restSchemes, grouped3)
 
+-- The Num obligations of variables that reach a boundary only through a
+-- constrained callee's instantiation (a where helper generalized as
+-- `Num r => a -> r`, used as `debug (two ())`).  They are on the call and
+-- dictionary-application windows, not the boundary's own (#23); a top-level
+-- group and a method body default them like any other candidate.
+calleeNumObls : Int -> Int -> List UObligation
+calleeNumObls callN0 dictN0 =
+  numCallObls (callUOblsWindow callN0) ++ numDictObls (dictAppsSince dictN0)
+
 -- #23 support: synthesize impl-obligation-shaped Num entries from a group's
 -- pendingCallObligations / pendingDictApps deltas.  The Num constraint of an
 -- ambiguous var reaching a group ONLY through a constrained-callee instantiation
@@ -43025,28 +43464,42 @@ processSCC env sigs grouped0 members =
   -- group's already-generalized var is never touched.
   let protectedSigIds = sccProtectedSignatureIds sigTvMaps
   let addedObls = wWindow perRun.value.implObls oblN0
+  let groupObls = addedObls ++ callUOblsWindow callN0
+  -- Determination holds rigid exactly the variables this group does not own: the
+  -- declared ones and those in an argument position of a member's type, which the
+  -- caller supplies.  A result-position or body-local variable is the group's.
+  let unownedIds =
+    omFromNames
+      (map intToString (flatMap monoArgUnboundIds (map snd placeholders)))
+      protectedSigIds
   let _ = improveByUniqueImpl protectedSigIds addedObls
   let _ = improveByUniqueImpl protectedSigIds (callUOblsWindow callN0)
+  let _ = determineByUniqueInstance unownedIds groupObls
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
   -- not pendingImplObligations).  See numCallObls/numDictObls.  The synthetic entries
   -- feed ONLY the Num-defaulting search; addedObls alone still drives the
   -- ambiguous-constraint/scheme-obligation registration below.
-  let extraNumObls =
-    numCallObls (callUOblsWindow callN0) ++ numDictObls (dictAppsSince dictN0)
-  let defaultObls = addedObls ++ extraNumObls
-  let _ = finalizeNumBoundary NumBoundary {
-    nbDisposition = NumBoundaryOwnedScc (perRun.value.currentLevel.value + 1),
-    nbMembers = map snd placeholders,
-    nbSurvivingIds = protectedSigIds,
-    nbDefaultObls = defaultObls,
-    nbAmbiguityObls = addedObls,
-  }  -- RETPOS soundness
-  let _ =
-    checkSigVarGoals
-      protectedSigIds
-      sigTvMaps
-      (addedObls ++ callUOblsWindow callN0)
+  let defaultObls = addedObls ++ calleeNumObls callN0 dictN0
+  let withheld = finalizeNumBoundary
+    NumBoundary {
+      nbDisposition = NumBoundaryOwnedScc (perRun.value.currentLevel.value + 1),
+      nbMembers = map snd placeholders,
+      nbSurvivingIds =
+        tiedSurvivors (map snd placeholders) groupObls protectedSigIds,
+      nbDefaultObls = defaultObls,
+      nbAmbiguityObls = addedObls,
+      nbGuard = NumGuard {
+        ngGoals = groupObls,
+        ngRigidIds = protectedSigIds,
+        ngOuterBelow = None,
+      },
+    }  -- RETPOS soundness
+  -- Defaulting is a substitution like any other, so the goals it changed are
+  -- improved and determined once more.
+  let _ = improveByUniqueImpl protectedSigIds groupObls
+  let _ = determineByUniqueInstance unownedIds groupObls
+  let _ = checkSigVarGoals protectedSigIds sigTvMaps groupObls
   let schemes =
     sccSchemes
       env2
@@ -43077,6 +43530,9 @@ processSCC env sigs grouped0 members =
       callOblsDelta
       addedObls
       schemes
+  let _ =
+    rejectUndeterminedVectors unownedIds addedObls (callUOblsWindow callN0)
+  let _ = rejectWithheldAmbiguity unownedIds withheld groupObls
   -- SIGNATURE CONSTRAINT SOUNDNESS: a signed member whose body induces an
   -- interface constraint on one of its own quantified vars that its declared `=>`
   -- context (superclass-closed) does NOT cover severs the constraint for callers
@@ -51220,17 +51676,14 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- The impl universe is `accAll ++ prog`, NOT bare `accAll` — it includes THIS module.
 -- `foldModules` never folds a module into its own
 -- `accAll` (see `checkModuleFullImpl`'s E5 note: "a caller that needs this module's own
--- decls too must fold [prog] in itself"), and `checkBodyImpl`'s `groundUniverse` binding
--- reads `implDecls` RAW on the Module arm — so bare `accAll` makes
--- `groundMultiParamObligations` ground a multi-param obligation against a universe with
--- NONE of the module's own impls in it.  MEASURED, `medaka check` / `medaka build` on
--- `test/engine_fixtures/return_only_param_dispatch.mdk` (a 1-module file: `interface
--- Get c v` + `impl Get (Box a) a` + `main = println (get1 (Box 42))`): with bare
--- `accAll` the return-only `v` never grounds, so the enclosing `Display v` rejects with
--- `Ambiguous instance for `Display``; with `accAll ++ prog` it grounds to `Int` and the
--- program checks, builds and prints `42`, as it does on a one-module graph. The 2+-module
--- promotion of the same shape — the grounding impl in the ENTRY module of a graph — is
--- `test/run_check_agreement_fixtures/accept_own_module_impl_return_only_dispatch.mdk`.
+-- decls too must fold [prog] in itself"), so the readers of `checkBodyImpl`'s
+-- `implDecls` on this arm — `visibleMethodRows`, `inferUserImplBodies`' field-type
+-- universe, `superDecls` and the `importerShadows` emptiness test — see this
+-- module's own declarations only through this fold.  Return-only dispatch on an
+-- own-module impl (`test/engine_fixtures/return_only_param_dispatch.mdk`, and
+-- `test/run_check_agreement_fixtures/accept_own_module_impl_return_only_dispatch.mdk`
+-- for the entry module of a graph) does not depend on it: determination reads the
+-- whole-graph `IE` through `improvementPool`.
 -- Cost: the accumulator grows on the RIGHT, so O(|prog|) per module; this is not the
 -- perf-gated `checkModules` path, which is `cmCheckWorker`'s.
 --

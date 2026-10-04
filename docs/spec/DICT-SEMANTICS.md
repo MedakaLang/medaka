@@ -604,11 +604,15 @@ bindings unified jointly (the #3521 matcher), then that unifier is applied to
   binding of a goal variable would make match, such as a numeric literal not yet
   defaulted. Committing there would decide the overlap by the order the
   variables happen to be solved in, so the goal is left undetermined.
-- `U = {I}`, but `I`'s head does not match `π`, because `I` has a type
-  constructor where `π` has a variable. Committing there would be unification
-  against the instance head, not improvement: the only instance
-  `impl Show (List Int)` never fixes `Show (List t)` to `t = Int`. Only a
-  repeated head variable commits anything.
+- `U = {I}`, but `I`'s head has a type constructor where `π` has a variable
+  that this boundary does not own — a signature's, an impl head's, an
+  argument's, an enclosing binder's. Committing would decide a type the caller
+  or the enclosing scope has the right to choose: the only instance
+  `impl Show (List Int)` never fixes `Show (List t)` to `t = Int` when `t` is
+  the caller's. For a variable the boundary owns, the commit is
+  **determination** (below): the one instance whose head unifies with the goal
+  is the one type the program can have at that position, and it is taken
+  before numeric defaulting. A 1-ary goal is not determined; see §4.2 OD3.
 - The commit would bind a variable of the group's own declared signature. A
   signature variable is rigid, and the check that a body is not less general
   than its signature has already run, so such a goal is left as it is. A fresh
@@ -626,8 +630,9 @@ against `impl Get (Box a) a`) is rejected at its site in the definition with
 variables are held the same way in its bodies, for a residual over head
 variables alone (W3-inst above). No other declared variable is held rigid yet,
 and a matcher can still bind it: a goal abstracted by a generalized local inside
-a signed function (#3796), an interface method signature's own variable (#3797),
-and a variable written in an expression annotation (#3799). An impl-body
+a signed function (#3796), an interface method signature's own variable (#3797;
+improvement and determination at the body's close hold it rigid, the matcher
+that accepts the goal does not), and a variable written in an expression annotation (#3799). An impl-body
 residual that mixes a head variable with another variable is not rejected
 (#3798).
 
@@ -640,7 +645,9 @@ both instances match. Pinned by
 
 **When.** At a top-level binding group's close, over the obligations the group
 recorded, **before** §6.3's numeric defaulting and before the group
-generalizes (`improveByUniqueImpl`, called from `processSCC`). Before
+generalizes (`improveByUniqueImpl`, called from `processSCC`), and once more
+after defaulting, since defaulting is a substitution like any other. Each time,
+improvement runs before determination (below). Before
 defaulting, so that `Get (Box Float) e` against the only instance
 `Get (Box a) a` fixes `e = Float` before a literal at `e` could default it to
 `Int` (`test/dict_fixtures/impl-improvement-before-num-default.mdk`). Before
@@ -651,18 +658,90 @@ rather than having a quantified variable bound after the fact
 defaults at its own boundary first. Its obligations still reach the enclosing
 group's close, but a variable already defaulted there is no longer free.
 
-⚠️ **Not yet applied inside a method body.** An `impl` body is inferred outside
-every binding group, so its obligations never reach a group's close. The same
-`pick [] [3, 7]` inside an `impl` method still leaves `t` open, and `build` has
-no instance to emit. Improving there needs the impl head's own variables held
-rigid, as a signature's are here.
+**Inside a method body.** An `impl` body, and an interface's default method
+body, is inferred outside every binding group, so its obligations never reach a
+group's close. The body's own close runs the same steps over the obligations
+the body recorded (`inferMethodBody`): improvement and then determination
+(below) before the body's rigidity and head-prerequisite checks, and once more
+after its numeric defaulting. The body does not own the instance head's
+variables or the method's declared signature's variables, since a construction
+site instantiates both, so both are held rigid; every other variable of a goal
+is the body's. An `impl` body's head and method type carry the rigid
+variables. A default body has no head, and its method type carries the
+receiver's variables as well. `pick [] [3, 7]` inside `impl Q Int`, at the
+declared result `List Int`, fixes `t = Int` as it does at top level
+(`test/dict_fixtures/body-settle-pick-improved.mdk`). `v[0] + v[1]` inside
+`impl Report (Array a)` determines `Index (Array a) k e` to `k = Int`, `e = a`
+against the head's rigid `a`, so the dictionary that runs is the impl's own
+`requires Num a` (`test/dict_fixtures/body-settle-index-element.mdk`).
 
-This is a separate step from the older head-tycon grounding
-(`groundMultiParamObligations`, gap #44). That step runs at module end and
-commits on the one instance whose first head constructor is the goal's,
-ignoring instances headed by a variable. It never binds a declared signature
-variable: where the instance fits the occurrence only by doing so, it commits
-nothing.
+### Determination by the one unifying instance
+
+**Rule.** At the same group close, after improvement, let `π = C τ̄` be a goal
+of arity two or more that is not closed. The group's **unowned** variables are
+its declared signatures' variables and the variables in an argument position of
+a member's type; every other variable of `π` (a result-position or body-local
+one) the group owns. Let `U` be the instances of `C` whose heads unify with `π`,
+the unowned variables held rigid and the instance's variables fresh. Every
+instance in `U` is a candidate except one whose first head unifies with `π` only
+by peeling a qualifier: an effect- or constraint-qualified head (`<Stdout> Int`)
+elaborates to the type under the qualifier, and is not a second type `π` could
+have. An arrow-, tuple- or variable-headed instance unifies by its structure and
+counts. A candidate is kept only if its commit leaves every sibling goal on a
+variable it binds satisfiable: a sibling goal the commit closes must have an
+instance in `IE` (joint consistency). If exactly one candidate remains, `π` is
+unified with a fresh instance of its head, the fresh variables minted at the
+group's own level so that a goal variable unified with one still generalizes.
+Otherwise nothing is committed. Each pass sweeps the group's goals until a sweep
+commits nothing, so a goal that another goal's commit makes unique is determined
+in the same pass, whatever order the goals were recorded in
+(`determineByUniqueInstance`, called from `processSCC` before defaulting and
+again after it; `test/dict_fixtures/determine-quiescence-apply-order.mdk`).
+
+The commit is a function of `IE`, `π` and the goals that share `π`'s variables:
+with one candidate no order of solving can produce a different answer, because
+every other instance of `C` either fails to unify with `π` or reaches it only
+through a peeled qualifier. `Index Bytes Int ?v` against the one instance `Index Bytes Int U8` fixes
+`?v = U8`, so `b[i] == 13` compares two `U8`s
+(`test/dict_fixtures/determine-bytes-index-literal-compare.mdk`); the only
+`Ix Float Char` makes the literal in `ix 5 'z'` a `Float`
+(`test/dict_fixtures/determine-unique-instance-sets-literal-type.mdk`). Joint
+consistency is what keeps `useIx 5` at `Ix a Bool =>`, with instances
+`Ix Int Char` and `Ix Bool Bool`, from committing `?a = Bool` against the
+literal's `Num ?a`; the variable then defaults and the closed goal is rejected
+as `No impl of Ix for Int Bool`
+(`test/dict_fixtures/s-nary-truncated-goal-joint-rejects/main.mdk`).
+
+**Reject.** A goal that generalization abstracts belongs to the caller: when
+every free variable of it is quantified by a member's scheme (a result-position
+variable of the member's type), the goal enters that scheme and each caller
+discharges it at its own type. `mk () = conv (Wrap 1)` with no instance of
+`Conv` publishes `mk : Conv (Wrap Int) a => Unit -> a`, and an importer that
+never calls `mk` owes nothing for it
+(`test/dict_fixtures/determine-scheme-variable-exempt.mdk`,
+`test/dict_fixtures/determine-scheme-variable-library/main.mdk`). After
+defaulting, a goal that is still open, that no instance head unifies with, whose
+variables the group all owns, and that generalization does not abstract has no
+type that can satisfy it, because a variable in no member's type has no later
+boundary. It is rejected at its site with `T-NO-IMPL`, the vector's variables
+rendered `_` (`No impl of Ix for _ Bool`), unless a given answers it or a
+primary mismatch already explained one of its variables
+(`test/dict_fixtures/determine-no-unifying-instance-rejected.mdk`). The check
+runs once the group's schemes are registered, and at a method body after its
+last determination. Before defaulting the same goal may still close, and a
+closed goal is reported by the obligation gate under its own types. The
+undetermined-goal check asks per argument only for a 1-ary goal.
+Such a goal that a call to a constrained binding posed and that two or more
+candidates unify with has no type to choose its evidence by and is rejected at
+the call with `T-AMBIGUOUS-INSTANCE`
+(`test/dict_fixtures/determine-vector-ambiguous-two-instances.mdk`). So is such
+a goal on a variable that defaulting withheld (§6.3 D3 clause 3), wherever it was
+posed: the boundary owns the variable and nothing after it can choose
+(`test/dict_fixtures/default-guard-withheld-ambiguous-method-body.mdk`). Its
+candidates are counted with the boundary's rigid variables held rigid, so a rigid
+variable in it does not exempt it: an instantiation of a rigid variable can only
+add candidates. Any other such goal posed by an interface method's own
+occurrence gets no verdict there.
 
 ---
 
@@ -1046,6 +1125,12 @@ across a module boundary exactly as it does within one — see OD6(a).
 **OD3 — a non-ground predicate with no quantifying binder is ambiguous.** If no
 enclosing binding generalizes `π`'s free variables, `π` has no discharge point at all
 and MUST be rejected as ambiguous, save where OD4 applies.
+
+  A goal of arity two or more reaches OD3 only after determination (§3) has had its
+  say at the group's close: one unifying instance commits it, and none, with every
+  variable owned, is `T-NO-IMPL` on the whole vector. A 1-ary goal with exactly one
+  impl is still accepted without being bound (the sole-impl default of the
+  undetermined-goal check), which is not determination.
 
 **OD4 — the impl-channel exemption from OD3 is load-bearing, and is not a mode fork.**
 Predicates arising from **interface-method occurrences** are recorded on a separate
@@ -1731,7 +1816,9 @@ an implementation matter.
   goal `inst` sees is the goal the program means. A goal still not closed at
   quiescence is genuinely undetermined: nothing in the program fixes it, and it is
   **rejected as ambiguous** — never committed to a default instance, and never left
-  to an engine to pick.
+  to an engine to pick. A *default instance* here means one of several: a goal of
+  arity two or more with exactly one unifying instance is determined, not defaulted
+  (§3, "Determination by the one unifying instance").
 
   Note what quiescence is *not* waiting for. `IE` and `CE` are assembled once, before
   any body is elaborated, and do not grow during elaboration (C4, §8 I2/I5) — so the
@@ -1814,8 +1901,23 @@ Rejecting every such program is unusable, so the language **defaults** the varia
 Defaulting is a *solving* step, not an inference step, and it owes three statements:
 where it sits, which variables it may touch, and what it is not allowed to do.
 
-- **D1 — Placement.** Defaulting is the **last determination step** at the boundary it
-  runs at, and therefore runs:
+- **D1 — Placement.** Defaulting is the **third step of the settle sequence** at the
+  boundary it runs at. At a top-level group's close (§3 "When") the group's goals are
+  improved and determined first, so a goal whose one instance fixes a variable leaves
+  nothing to default there; then the candidates D3 admits are defaulted; then
+  improvement and determination run once more over the goals defaulting changed. A
+  method body's close (§3 "Inside a method body") runs the same sequence over the
+  body's goals, the instance head's and the declared signature's variables held
+  rigid: improvement and determination, then body-local defaulting of the `Num`
+  roots that neither the head nor a declared method dictionary carries, then
+  improvement and determination once more. A candidate D3 clause 3 withholds is
+  left to that last improvement and determination. A
+  local `let` defaults at its own close, before its goals reach the enclosing group's
+  sequence. Which variables each boundary may touch is D3's: at a top-level group and
+  a local `let`, a variable of a member's type that a goal connects to an argument is
+  withheld (D3 clause 2); a `where` component already withholds every variable any
+  member's type mentions, which includes every variable that connection reaches.
+  Defaulting therefore runs:
   * **after** the boundary's bodies are inferred — nothing later can constrain the
     variable *through the body*;
   * **before** generalization at that boundary — a defaulted variable must not be
@@ -1855,12 +1957,32 @@ where it sits, which variables it may touch, and what it is not allowed to do.
 
   Clause 2 is the substantive half, and it must be stated **by channel**, not by
   syntactic position, because the available channels differ by binder kind. The
-  channels are: an **argument** the caller supplies; the binding's own **result**,
-  when the binding's type is a *declared* scheme somebody else instantiates; and a
+  channels are: an **argument** the caller supplies, closed under connection (below);
+  the binding's own **result**, when the binding's type is a *declared* scheme
+  somebody else instantiates; and a
   **dictionary** — an abstracted `d̄` (§4 `gen`), the method dictionary of an
   `impl`-method body, or the matcher `φ` of the instance head that body is checked at
   (§3 `inst`) — each of which lets a caller or a construction goal choose the
   variable.
+
+  **The argument channel is closed under connection.** It reaches every variable in an
+  argument position of a member's type, and every variable of a member's type that the
+  boundary's goals connect to one, where two variables are connected when one goal
+  mentions both, transitively. `dbl b = get b + get b` poses `Get b e` and `Num e`; `e`
+  is in `dbl`'s type and `Get b e` connects it to the argument `b`, so the caller's `b`
+  determines it and it is not a candidate: `dbl : (Get a b, Num b) => a -> b`, and
+  `dbl (Box 1.5)` fixes `e := Float` through the one instance `Get (Box a) a`
+  (`test/dict_fixtures/connect-result-top-level.mdk`; the block-`let`, `let … in` and
+  `where` spellings are `test/dict_fixtures/connect-result-block-let.mdk`,
+  `test/dict_fixtures/connect-result-let-in.mdk` and
+  `test/dict_fixtures/connect-result-where.mdk`). A variable in no member's type has
+  no channel even when a goal connects it to an argument, and is a candidate:
+  `f x = ix x 0` poses `Ix a k` and `Num k`, and `k` defaults
+  (`test/dict_fixtures/connect-outside-type-defaults.mdk`,
+  `test/dict_fixtures/connect-outside-type-rejected.mdk`). Connection excludes a
+  variable from defaulting only. Improvement and determination (§3) still treat it as
+  the boundary's own, so the one instance whose head unifies with a goal may bind it
+  there (`wrap y = pick [y] []` still generalizes to `a -> List a`).
 
   🚨 **Clause 2's dictionary channel is evaluated as the channels stand BEFORE
   generalization, and that is a resolution of a circularity, not a refinement.** At a
@@ -1916,6 +2038,34 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   intersection remain body-local and default normally. This is the numeric case of
   §3 W3-inst, which states the rule for every predicate on a head variable and for
   pinning one.
+
+  **Clause 3 — joint consistency at defaulting.** A candidate `v` is grounded to its
+  default only if every goal `g` of the boundary's window that is in scope passes.
+  `g` is in scope when its arity is two or more, it mentions `v`, and it mentioned
+  at least two distinct variables when the boundary began defaulting; that set is
+  taken once per boundary, so the outcome does not depend on the order candidates
+  are visited in. `g` passes when, after `v := Int`, some instance head unifies with
+  it or a given covers it, the boundary's rigid set held rigid and the instance's
+  variables fresh; or when it was already unsatisfiable before the substitution,
+  since withholding `v` could not help it. The rigid set is only what the boundary
+  must hold for every instantiation: a top-level group's declared signature
+  variables (an argument-position variable is the caller's to choose, so for
+  satisfiability it is not held); an impl or default method body's head and
+  declared-signature variables; and, at a local `let` or `where` component, every
+  goal variable of an enclosing binder. A candidate clause 3 withholds stays open
+  for the improvement and determination that follow (D1); it is never tried at
+  another default type, since that would turn an ambiguity into a value chosen by
+  the order of defaults. In `report v = debug (v[0] + v[1])` at
+  `impl Report (Array a)`, beside a second instance `Index (Array a) Float a`, the
+  key defaults to `Int`, and grounding the element `e` would leave
+  `Index (Array a) Int Int`, which no head unifies with while `a` is held; so `e`
+  is withheld, and the second determination fixes `e = a`
+  (`test/dict_fixtures/body-settle-3809-float-key.mdk`). A goal on a withheld
+  variable that determination still leaves open is rejected (§3 "Reject"). The
+  clause runs at the four boundaries that default — a top-level group, a `where`
+  component, a local `let`, and a method body. A closed `test` or property body
+  defaults without it, since it has no determination and no verdict after
+  defaulting.
 
 - **D4 — Scope, and the level discipline.** Defaulting, and the ambiguity check that
   follows it, are scoped to the variables the boundary **owns**. A variable belonging

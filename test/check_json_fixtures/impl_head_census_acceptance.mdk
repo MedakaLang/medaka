@@ -14,7 +14,7 @@
 --     SET. `Bool` is the only head that set may contain: an arrow head and an
 --     effect-carrying head are not head type constructors, exactly as the
 --     headless impls they used to be filed beside. Count 1, no error.
---   * `conv 1` needs `groundOneObligation` to find the UNIQUE `Conv` impl at
+--   * `conv 1` needs determination to find the UNIQUE `Conv` impl at
 --     head tag `Int`. The effect-headed sibling must not be a second match, or
 --     `b` stays undetermined and a `Display` cascade rejects at `println`.
 --

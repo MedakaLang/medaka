@@ -1,0 +1,18 @@
+-- §3 the call window's vector verdict when the callee never reads its
+-- dictionary: `useMk 3` poses `Mk ?n ?b`, defaulting closes `?n` at `Int`, and
+-- both `impl Mk Int Bool` and `impl Mk Int String` unify with `Mk Int ?b`.  The
+-- verdict depends on the goal alone.  Hand-derived: REJECT on all three verbs,
+-- T-AMBIGUOUS-INSTANCE at the `useMk` call.
+interface Mk a b where
+  mk : a -> b -> Int
+
+impl Mk Int Bool where
+  mk _ _ = 1
+
+impl Mk Int String where
+  mk _ _ = 2
+
+useMk : Mk a b => a -> Int
+useMk x = 7
+
+main = println (useMk 3)

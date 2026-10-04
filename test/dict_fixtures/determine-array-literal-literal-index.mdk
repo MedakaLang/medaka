@@ -1,0 +1,9 @@
+-- §3 determination on the plainest multi-parameter literal: an array literal
+-- indexed by a literal poses `Index (Array ?n) ?k ?e` with `Num ?n` and
+-- `Num ?k`, every variable owned by `main`.  `Index (Array a) Int a` is the
+-- one instance that unifies with it (`Index (List a) Int a` and the others
+-- have other heads), so `?k = Int` and `?e = ?n`; defaulting then grounds
+-- `?n` to Int.
+-- Hand-derived: element 0 of [|3, 4|] is 3, printed by `debug` on all three
+-- verbs.
+main = println (debug [|3, 4|][0])

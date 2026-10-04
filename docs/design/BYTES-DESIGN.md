@@ -304,9 +304,10 @@ carried it out. What it changed here:
   inverse. `fromArray`/`toArray` stay on `Array Int`: it is the FFI's
   sequence type, and data from outside arrives as `Int` and needs the
   refusing door.
-- **Not settled here:** the comparison `b[i] == 13` does not type-check yet,
-  because the literal defaults to `Int` before `Index` fixes the element type
-  (#3437); code writes `u8.toInt b[i] == 13` until that is fixed.
+- **Settled by determination (`docs/design/D3-DEFAULTING-DESIGN.md`):** `b[i] == 13`
+  type-checks, because `Index Bytes Int U8` is the one instance that fits the goal
+  and it is taken before the literal defaults. `u8.toInt b[i] == 13` keeps working
+  and is no longer needed.
 
 `adoptByteBlockUnsafe`, `lendByteBlockUnsafe`, and `fromByteBlockPrefix` are
 the only exports naming `ByteBlock` directly (`stdlib/bytes.mdk`'s

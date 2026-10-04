@@ -1,0 +1,28 @@
+-- §3 determination to quiescence, the spelling whose window lists `Pr ?e ?r`
+-- before `Mk ?n ?e`: the first sweep finds two instances for `Pr` and commits
+-- `Mk`, and only the sweep after it sees `Pr Float ?r`.  One sweep before
+-- defaulting left `?r` to default to Int, refused as `No impl of Pr for Float Int`.
+-- `mk 0` poses `Mk ?n ?e` with `Num ?n`; its one instance `Mk Int Float` fixes
+-- `?n = Int` and `?e = Float`.  `pr e` poses `Pr ?e ?r`; at `?e = Float` its one
+-- instance is `Pr Float Float`, so `?r = Float` and the literal `1` is a Float:
+-- 1.5 * 2.0 + 1 = 4.0.
+-- Hand-derived: ACCEPT on all three verbs, prints 4.0.
+interface Mk a b where
+  mk : a -> b
+
+impl Mk Int Float where
+  mk _ = 1.5
+
+interface Pr a b where
+  pr : a -> b
+
+impl Pr Float Float where
+  pr x = x * 2.0
+
+impl Pr Int Int where
+  pr x = x * 3
+
+apply : a -> (a -> b) -> b
+apply x f = f x
+
+main = println (apply (mk 0) (e => pr e + 1))

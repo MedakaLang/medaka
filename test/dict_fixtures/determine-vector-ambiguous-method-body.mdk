@@ -1,0 +1,24 @@
+-- §3 the same verdict at an impl body's close: in `report`, `useIx []` poses
+-- `Ix ?a Bool`, and both `impl Ix Int Bool` and the headless `impl Ix a Bool`
+-- unify with it.  `?a` is neither the head's nor the signature's, so the goal
+-- is the body's.  Hand-derived: REJECT on all three verbs,
+-- T-AMBIGUOUS-INSTANCE at the `useIx` call.
+interface Ix a b where
+  ix : List a -> b -> Int
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+impl Ix a Bool where
+  ix _ _ = 222
+
+useIx : Ix a Bool => List a -> Int
+useIx xs = ix xs True
+
+interface Report t where
+  report : t -> String
+
+impl Report Int where
+  report _ = debug (useIx [])
+
+main = println (report 1)

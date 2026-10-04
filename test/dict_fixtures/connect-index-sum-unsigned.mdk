@@ -1,0 +1,11 @@
+-- DICT-SEMANTICS §6.3 D3 clause 2, connection through two goals: `sumAt`
+-- poses `Index a b d`, `Index a c d` and `Num d`.  `d` is the result, and
+-- both goals connect it to the arguments, so it generalizes:
+-- sumAt : (Index a b d, Index a c d, Num d) => a -> b -> c -> d.  Each call
+-- fixes `d` through the array's one `Index` instance: 1.5 + 2.25 = 3.75 at
+-- `Array Float`, then 3 + 4 = 7 at `Array Int`.
+sumAt v i j = v[i] + v[j]
+
+main =
+  println (debug (sumAt [|1.5, 2.25|] 0 1))
+  println (debug (sumAt [|3, 4|] 0 1))

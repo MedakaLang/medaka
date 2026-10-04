@@ -1,0 +1,17 @@
+-- §3 determination's reject half and §4.2 OD3: a goal generalization abstracts
+-- belongs to the caller.  `mk () = conv (Wrap 1)` poses `Conv (Wrap ?n) ?t`;
+-- `?n` defaults to Int, and no instance of `Conv` exists, so no instance head
+-- unifies with `Conv (Wrap Int) ?t`.  But `?t` is `mk`'s result variable, which
+-- `mk`'s scheme quantifies, so the goal enters the scheme instead of being
+-- rejected here: a caller that never uses `mk` owes nothing, and one that does
+-- discharges `Conv (Wrap Int) t` at its own type.
+-- Hand-derived: ACCEPT on all three verbs, prints 1;
+-- scheme `mk : Conv (Wrap Int) a => Unit -> a`.
+data Wrap a = Wrap a
+
+interface Conv s t where
+  conv : s -> t
+
+mk () = conv (Wrap 1)
+
+main = println (debug 1)

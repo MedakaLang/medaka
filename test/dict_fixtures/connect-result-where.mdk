@@ -1,0 +1,19 @@
+-- DICT-SEMANTICS §6.3 D3 clause 2 at a `where` component (the `where`
+-- spelling of the block-`let` row).  A `where` component already withholds
+-- every variable a member's type mentions, so `dbl` generalizes with
+-- `Get c e`; at `Box Float` the one instance fixes `e := Float`; 3.0 is not
+-- > 4: "small".
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+classify : Box Float -> String
+classify b = if dbl b > 4 then "big" else "small"
+  where
+    dbl c = get c + get c
+
+main = println (classify (Box 1.5))

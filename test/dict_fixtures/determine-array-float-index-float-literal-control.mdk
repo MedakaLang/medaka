@@ -1,0 +1,9 @@
+-- Control for `determine-array-float-index-literal-compare.mdk` (the drained
+-- pin's own control): the literal is written `1.0`, so the element is Float
+-- without determination's help.  A red row here means array indexing or
+-- Float comparison broke, not determination.
+-- Hand-derived: element 0 of [|1.0|] is 1.0, so True on all three verbs.
+f : Array Float -> Bool
+f a = a[0] == 1.0
+
+main = println (f [|1.0|])

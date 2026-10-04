@@ -164,7 +164,14 @@ position of a member's type — is **unowned** and rigid for every step below.
 > member's type **and every variable of a member's type that the boundary's goals
 > connect to one**, where two variables are connected when one goal mentions both. A
 > variable in no member's type has no channel and is a candidate. A candidate is
-> grounded to `Int`.
+> grounded to `Int` only if (iv) **joint consistency at defaulting** holds: every goal
+> of arity ≥ 2 that mentions it, and that mentioned two or more variables when the
+> boundary began defaulting, is still satisfiable after the substitution (an instance
+> head unifies or a given covers it, the boundary's rigid set held), unless it was
+> unsatisfiable before. A candidate (iv) withholds is left to S4, never tried at
+> another default type, and a goal on it S4 leaves open with two or more candidates is
+> `T-AMBIGUOUS-INSTANCE` (DICT §6.3 D3 clause 3; closed test and property bodies are
+> not guarded).
 >
 > **S4 — Improve and determine again** over the goals S3 changed.
 >
@@ -336,6 +343,14 @@ discipline cannot host the ambiguity check", one step over: it cannot host
 determination either. The acceptance rows are the two scheme lines
 `s4-joint-residual-rdict-native` and `s4-gen-residual-mixed-no-requires-control` and
 the span row for `s4-gen-residual-mixed-vector-rejected`, all already in the table.
+
+Measured result of the implementation (S-determine): determination runs at the group
+boundary only, before and after defaulting, with no quiescence call. A call at module
+end is inert when its rigid set holds every published scheme's and impl head's
+variables, and binds impl-head variables when it does not. `Conv c d` was the deleted
+module-end grounding rebinding `f`'s quantified cells after generalization; without it
+the scheme line prints the hand-derived `f : Conv a b => a -> b -> String`, and H1's
+failure still prints `f : a -> b -> String`.
 
 ---
 
