@@ -1,0 +1,15 @@
+issue: 3606
+what: `import map as M` before `import set.{Set(..), has}` rebinds the bare shared
+what: constructor `Tip` to map's in eval and native, while typecheck binds set's: `check`
+what: accepts with `empty : Set Int`, then `run` dies with E-PANIC ("no matching impl for
+what: dispatch") and prints nothing. The native binary dies with E-NONEXHAUSTIVE-MATCH.
+cmd: run main.mdk
+exit: 1
+stdout-bytes:
+control: run control.mdk
+why-verb: `run`, because the engines disagree with the typechecker's binding. The fix makes
+why-verb: `run` print `no` at exit 0, which drains this row.
+why-stdout: empty stdout at exit 1 is the crash; the E-PANIC text goes to stderr, which this
+why-stdout: harness does not grade.
+why-control: control.mdk is the same program without `import map as M`; it must print `no`
+why-control: at exit 0. A red control means set's `Tip` or `has` broke on their own.

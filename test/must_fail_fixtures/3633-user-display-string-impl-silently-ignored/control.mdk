@@ -1,0 +1,6 @@
+data Path = Path String
+
+impl Display Path where
+  display (Path s) = "../" ++ s
+
+main = println "\{Path "x"}"

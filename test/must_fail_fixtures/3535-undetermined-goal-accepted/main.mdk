@@ -1,0 +1,18 @@
+interface Conv a b where
+  conv : a -> b
+  convL : List a -> List b
+  convL xs = map conv xs
+interface Conv2 a b requires Conv a b where
+  back : b -> a
+  round : a -> b -> a
+  round x _ = back (conv x)
+data W = W Int
+impl Conv Int String where
+  conv n = "s" ++ intToString n
+impl Conv Int W where
+  conv n = W (n * 2)
+impl Conv2 Int W where
+  back (W n) = n + 1
+impl Conv2 Int String where
+  back s = stringLength s
+main = println (debug (round (5 : Int) (W 0)))
