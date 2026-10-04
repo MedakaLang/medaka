@@ -2855,6 +2855,50 @@ table = [
     codes = [],
   },
   Row {
+    entry = "sig-var-rigid-free-var-goal.mdk",
+    label =
+      "§3 a declared signature variable is rigid in every matcher: `weird : b -> b` with body goal `Get (Box (List t)) b` matches `impl Get (Box a) a` only if `b` is `List t`, so it is refused at the definition. Drained from the must-fail pin 3526-free-var-goal-escapes-signature, where module-end grounding bound `b := List t`, `check` printed `weird : List a -> List a`, and the binary printed a garbage Int",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "sig-var-rigid-free-var-goal-control.mdk",
+    label =
+      "control for the free-variable row: `same x = get (Box x)` poses `Get (Box b) b`, which the impl matches at the rigid `b`. Hand-derived: 41 + 1 = 42",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
+  },
+  Row {
+    entry = "sig-var-rigid-repeated-head-var.mdk",
+    label =
+      "§3 `f : a -> List Int` with goal `Pick (List a) (List Int) (List Int)`: `impl Pick a a a` matches only if the signature's `a` is Int, so `f` is refused at the definition (#3550). Was accepted by `check`, printed [1] under `run`, and the build found no instance",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "sig-var-rigid-improved-control.mdk",
+    label =
+      "control for the repeated-head-variable row, DICT §3's own example `g : a -> List a; g y = pick [y] []`: improvement fixes the empty list's element to the signature's `a`, and `Pick (List a) (List a) (List a)` matches with `a` rigid. Hand-derived: `pick` returns its second argument, []",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[]\n",
+    codes = [],
+  },
+  Row {
     entry = "impl-heads-cycle-no-overlap.mdk",
     label =
       "§4 coherence: `Tri a (List a) a` and `Tri b b b` share an instance only if `a = List a`, so they do not overlap; the check terminates (it looped on main). Hand-derived: `tri 1 [1] 1` is the first impl, `one`; `tri True True True` the second, `two`",
@@ -3236,7 +3280,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 281
+tableRows = 285
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -3527,8 +3571,8 @@ schemeTable = [
   SchemeRow {
     entry = "s-structured-carry-declared-context-kept.mdk",
     label =
-      "#1937 the STRUCTURED declared context SURVIVES into the scheme -- THE ONLY OBSERVABLE THAT SEES THIS FIX ON AN ACCEPTING PROGRAM (base printed `f : Wrap Int -> Bool -> String`, the context gone, at exit 0 with the right value). ⚠️ The type is still MONOMORPHISED to `Wrap Int -> Bool` by single-impl improvement, a separate mechanism #1937 does not touch and this slice deliberately did not widen -- do NOT re-pin this to a polymorphic scheme. ⚠️ The predicate renders WITHOUT PARENTHESES (`Conv Wrap Int Bool` for `Conv (Wrap Int) Bool`), which reads as four arguments to a two-parameter interface and does not round-trip through the parser: a printer defect (#1952, `S2: misleading`) that is newly REACHABLE rather than newly broken, because until this fix the context was erased and never printed at all. 🚨 #1952 HAS NOW LANDED (sprint/nary-predicate-slots slice 2, as its permitted rider) and this row is re-pinned to the PARENTHESISED form exactly as the previous sentence instructed: `renderConstraintCtx` renders a predicate argument at ARGUMENT precedence (3), not 2, so a structured argument keeps the parens that make the context round-trip through the parser. Bare-tyvar and nullary-`TCon` arguments are atoms at either precedence, so no other scheme row moves",
-    want = "f : Conv (Wrap Int) Bool => Wrap Int -> Bool -> String",
+      "#1937 the STRUCTURED declared context SURVIVES into the scheme -- THE ONLY OBSERVABLE THAT SEES THIS FIX ON AN ACCEPTING PROGRAM (base printed `f : Wrap Int -> Bool -> String`, the context gone, at exit 0 with the right value). The type is the DECLARED `Wrap a -> b`: module-end head-tycon grounding used to bind the signature's `a := Int, b := Bool` through the one `Conv (Wrap Int) Bool` impl and print `Wrap Int -> Bool`, the #3526 narrowing, and a signature variable is now rigid in that matcher too (DICT §3, \"Signature variables in every matcher\"). ⚠️ The predicate renders WITHOUT PARENTHESES (`Conv Wrap Int Bool` for `Conv (Wrap Int) Bool`), which reads as four arguments to a two-parameter interface and does not round-trip through the parser: a printer defect (#1952, `S2: misleading`) that is newly REACHABLE rather than newly broken, because until this fix the context was erased and never printed at all. 🚨 #1952 HAS NOW LANDED (sprint/nary-predicate-slots slice 2, as its permitted rider) and this row is re-pinned to the PARENTHESISED form exactly as the previous sentence instructed: `renderConstraintCtx` renders a predicate argument at ARGUMENT precedence (3), not 2, so a structured argument keeps the parens that make the context round-trip through the parser. Bare-tyvar and nullary-`TCon` arguments are atoms at either precedence, so no other scheme row moves",
+    want = "f : Conv (Wrap a) b => Wrap a -> b -> String",
   },
   SchemeRow {
     entry = "s6-drain-quiescence-inferred-scheme.mdk",

@@ -11774,6 +11774,7 @@ data PerRun = PerRun {
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
+  declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which every instance-head matcher holds rigid (`matchEqPairs`, `groundOneObligation`)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
   numlitVarLocs : Ref (List (Mono, Loc)),
   patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
@@ -11882,6 +11883,7 @@ freshPerRun _ = PerRun {
   implObls = wNew (),
   poisonedVars = Ref [],
   deferrableVarIds = Ref [],
+  declaredSigVarIds = Ref omEmpty,
   tupleCallCandidates = Ref [],
   numlitVarLocs = Ref [],
   numlitRanges = Ref [],
@@ -32433,8 +32435,13 @@ implHeadSubst pats concretes
       else
         None
 
+-- A declared signature variable of a closed group is a constant here, not one of
+-- the goal's free variables: a repeated head variable never equates it with
+-- another type (DICT-SEMANTICS §3).
 matchEqPairs : List (Mono, Mono) -> Bool
-matchEqPairs pairs =
+matchEqPairs [] = True
+matchEqPairs pairs0 =
+  let pairs = rigidSigPairs perRun.value.declaredSigVarIds.value pairs0
   let subst = Ref []
   cohOverlapGo subst pairs
     && allList (p => matchEqMono subst (fst p) (snd p)) pairs
@@ -37490,7 +37497,8 @@ groundOneObligation prog iface typarams mty occ
           let baseMap = zipL typarams implTys
           let implMethodTy = substTyVars baseMap mty
           let inst = fst (astTypeFreshTbl implMethodTy)
-          unify occ inst
+          if sigVarsStayFree perRun.value.declaredSigVarIds.value occ inst then
+            unify occ inst
 -- build impl method type: interface typaram ↦ impl ty, then freshen the
 -- impl's own vars, then unify with the occurrence.
 
@@ -37564,15 +37572,10 @@ improveGoal sigIds iface args
 commitImprovement : OrdMap Unit -> List (Mono, Mono) -> Unit
 commitImprovement sigIds pairs =
   let cells = flatMap (p => monoVarCells (fst p) ++ monoVarCells (snd p)) pairs
-  let sigCells =
-    filterList (c => isSome (omLookup (intToString (tyvarId c)) sigIds)) cells
-  let toRigid = map (c => (tyvarId c, TRigid (sigStandIn c))) sigCells
+  let sigCells = sigCellsOf sigIds cells
   let fromRigid = map (c => (sigStandIn c, TVar c)) sigCells
   let scratch = Ref []
-  let rigidPairs =
-    map
-      (p => (substMono toRigid [] [] (fst p), substMono toRigid [] [] (snd p)))
-      pairs
+  let rigidPairs = rigidSigPairs sigIds pairs
   let cellsById = map (c => (tyvarId c, c)) cells
   if cohOverlapGo scratch rigidPairs then
     fold
@@ -37585,6 +37588,106 @@ commitImprovement sigIds pairs =
 -- A name no type or type variable can spell, standing in for a signature variable.
 sigStandIn : Ref Tyvar -> String
 sigStandIn cell = "%sig\{intToString (tyvarId cell)}"
+
+sigCellsOf : OrdMap Unit -> List (Ref Tyvar) -> List (Ref Tyvar)
+sigCellsOf sigIds cells =
+  filterList (c => omHasKey (intToString (tyvarId c)) sigIds) cells
+
+-- Each signature variable among [cells], bound to its rigid stand-in.
+sigRigidBindings : OrdMap Unit -> List (Ref Tyvar) -> List (Int, Mono)
+sigRigidBindings sigIds cells =
+  map (c => (tyvarId c, TRigid (sigStandIn c))) (sigCellsOf sigIds cells)
+
+-- [pairs] with every signature variable replaced by its rigid stand-in.
+rigidSigPairs : OrdMap Unit -> List (Mono, Mono) -> List (Mono, Mono)
+rigidSigPairs sigIds pairs =
+  let cells = flatMap (p => monoVarCells (fst p) ++ monoVarCells (snd p)) pairs
+  match sigRigidBindings sigIds cells
+    [] => pairs
+    toRigid =>
+      map
+        (p =>
+          (substMono toRigid [] [] (fst p), substMono toRigid [] [] (snd p)))
+        pairs
+
+-- Can [a] and [b] be made equal without binding a signature variable?  Grounding
+-- unifies through shared cells, so it must not run when the only way to make the
+-- occurrence fit the instance is to fix a type the caller chooses.
+sigVarsStayFree : OrdMap Unit -> Mono -> Mono -> Bool
+sigVarsStayFree sigIds a b = match rigidSigPairs sigIds [(a, b)]
+  [(ra, rb)] => cohOverlapGo (Ref []) [(ra, rb)]
+  _ => True
+
+-- DICT-SEMANTICS §3: a declared signature variable is rigid in every matcher.  A
+-- goal that an instance head accepts only by binding one needs it to be a specific
+-- type, which the caller chooses, so the goal is rejected at its site in the
+-- definition unless the declared context gives it.  The head matcher with the
+-- group's signature variables free (`rowHeadMatches` on [args]) and the same
+-- matcher with them rigid disagree on exactly such a goal.  It runs at the group's
+-- close, after improvement and defaulting, while the variables are still free
+-- cells; [sigIds] are the group's declared variables (`sccProtectedSignatureIds`).
+checkSigVarGoals : OrdMap Unit ->
+  List (String, Ty, List (String, Mono)) ->
+  List UObligation ->
+  Unit
+checkSigVarGoals sigIds sigTvMaps obls
+  | omSize sigIds == 0 = ()
+  | otherwise = fold (_ o => checkSigVarGoal sigIds sigTvMaps o) () obls
+
+checkSigVarGoal : OrdMap Unit ->
+  List (String, Ty, List (String, Mono)) ->
+  UObligation ->
+  Unit
+checkSigVarGoal sigIds sigTvMaps o =
+  let args = map normalize (uOblArgs o)
+  match sigRigidBindings sigIds (flatMap monoVarCells args)
+    [] => ()
+    toRigid =>
+      let iface = o.pred.iface
+      let rows = filterList (ieRowOfIface iface) (improvementPool args)
+      let rigidArgs = map (substMono toRigid [] []) args
+      if anyList (rowHeadMatches args) rows
+        && not (anyList (rowHeadMatches rigidArgs) rows)
+        && not (goalGivenAt iface args o.uoScope) then
+        pushTypeErrorOnceAt
+          "T-MISSING-CONSTRAINT"
+          o.loc
+          (sigVarGoalMsg sigTvMaps (map fst toRigid) iface args)
+
+goalGivenAt : IfaceRef -> List Mono -> ScopeId -> Bool
+goalGivenAt iface args scope =
+  isSome
+      (activeFunDictPredOf
+        PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
+        scope)
+    || goalMatchesGiven scope iface args
+
+-- The goal is rendered with each signature variable under its declared name; the
+-- renderer names every other variable with a letter those names leave free.
+sigVarGoalMsg : List (String, Ty, List (String, Mono)) ->
+  List Int ->
+  IfaceRef ->
+  List Mono ->
+  String
+sigVarGoalMsg sigTvMaps sigVarIds iface args =
+  let owners = flatMap (sigVarOwner sigTvMaps) (dedupI sigVarIds)
+  let member = match owners
+    (m, _) :: _ => m
+    [] => ""
+  let named = map snd owners
+  let pred =
+    "\{iface.irName} \{joinWith " " (ppEach (Ref named) (Ref 0) 3 args)}"
+  let vars = joinWith " and " (map (owner => "'\{snd (snd owner)}'") owners)
+  "Could not deduce '\{pred}' from the signature of '\{member}'. Its body requires it, and an instance matches it only if \{vars} is a specific type, but the caller chooses \{vars}. Write that type in the signature, or add '\{pred} =>' to the declared type"
+
+-- (member, (id, declared name)) for the signature in [sigTvMaps] that declares [id].
+sigVarOwner : List (String, Ty, List (String, Mono)) ->
+  Int ->
+  List (String, (Int, String))
+sigVarOwner [] _ = []
+sigVarOwner ((m, _, tvs) :: rest) id = match findTvName id tvs
+  Some n => [(m, (id, n))]
+  None => sigVarOwner rest id
 
 unrigidSig : List (String, Mono) -> Mono -> Mono
 unrigidSig back t = match normalize t
@@ -42507,6 +42610,11 @@ processSCC env sigs grouped0 members =
     nbDefaultObls = defaultObls,
     nbAmbiguityObls = addedObls,
   }  -- RETPOS soundness
+  let _ =
+    checkSigVarGoals
+      protectedSigIds
+      sigTvMaps
+      (addedObls ++ callUOblsWindow callN0)
   let schemes =
     sccSchemes
       env2
@@ -42551,6 +42659,11 @@ processSCC env sigs grouped0 members =
       addedObls
       schemes
   let _ = registerInferredConstraints sigs callOblsDelta addedObls scopedSchemes
+  -- From here on every instance-head matcher holds this group's declared variables
+  -- rigid; the group's own generalization above still reads them as it always has,
+  -- so a goal `checkSigVarGoals` rejected is not reported a second time.
+  perRun.value.declaredSigVarIds :=
+    omFromNames (omKeys protectedSigIds) perRun.value.declaredSigVarIds.value
   -- The group's own occurrences of the members it just promoted (see
   -- `markRecursiveOccurrences`); Flat marks nothing here.
   let groupedOut = match marking

@@ -18,11 +18,11 @@
 -- value printed with the constraint silently dropped from the type -- and the
 -- scheme is the only observable that separates them.
 --
--- ⚠️ The scheme is still MONOMORPHISED (`Wrap Int -> Bool`, not `Wrap a -> b`)
--- because the single impl in scope improves `a := Int, b := Bool` by a separate
--- single-impl mechanism that this fixture does not test and #1937 does not touch.
--- Do NOT "fix" this pin to a polymorphic scheme; that would be pinning a
--- different change.
+-- The scheme is the declared `Wrap a -> b`.  Module-end head-tycon grounding
+-- used to bind the signature's `a := Int, b := Bool` through the one impl in
+-- scope and print `Wrap Int -> Bool` (the #3526 narrowing); a signature
+-- variable is rigid in that matcher too (DICT-SEMANTICS §3, "Signature
+-- variables in every matcher").
 --
 -- ⚠️ The pinned scheme text renders the predicate WITHOUT parentheses --
 -- `Conv Wrap Int Bool` for `Conv (Wrap Int) Bool`, which reads as four arguments

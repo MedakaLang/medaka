@@ -572,6 +572,15 @@ bindings unified jointly (the #3521 matcher), then that unifier is applied to
   variable may still be bound *to* a signature variable: `g : a -> List a` with
   `g y = pick [y] []` fixes `pick`'s `t = a`.
 
+**Signature variables in every matcher.** A declared signature's variables are
+rigid in every matcher that accepts a goal or commits a binding against an
+instance head, not only in improvement: a goal that an instance matches only by
+binding one (`weird : b -> b` posing `Get (Box (List t)) b` against
+`impl Get (Box a) a`) is rejected at its site in the definition with
+`T-MISSING-CONSTRAINT`, unless the declared context gives it
+(`test/dict_fixtures/sig-var-rigid-free-var-goal.mdk`,
+`test/dict_fixtures/sig-var-rigid-repeated-head-var.mdk`).
+
 Uniqueness is counted over unifying heads, not matching ones, because a
 one-sided match undercounts. At `Pick (List t) (List n) (List Int)`, with `n` a
 literal's variable, `impl Pick a (List Int) a` does not match yet but will once
@@ -601,7 +610,9 @@ rigid, as a signature's are here.
 This is a separate step from the older head-tycon grounding
 (`groundMultiParamObligations`, gap #44). That step runs at module end and
 commits on the one instance whose first head constructor is the goal's,
-ignoring instances headed by a variable. It is unchanged.
+ignoring instances headed by a variable. It never binds a declared signature
+variable: where the instance fits the occurrence only by doing so, it commits
+nothing.
 
 ---
 
