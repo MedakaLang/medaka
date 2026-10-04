@@ -10185,8 +10185,9 @@ hadTypeErrors _ = !typeErrorsSticky
 -- hand-placed bump at "the five helpers" would have left that one silent, and the
 -- counter would then have UNDER-counted exactly on the `do`-requires-a-monad path.
 -- ⚠️ #2068: it is also the sole writer of `typeErrorMsgSetRef`, the membership
--- INDEX the three `pushTypeErrorOnce*` helpers test instead of re-scanning the
--- channel.  Keeping the insert HERE — inside the one funnel — is what makes the
+-- INDEX the `pushTypeErrorOnce*` helpers and `alreadyReportedAt` test instead of
+-- re-scanning the channel (it holds the rendered message and a message-at-site
+-- key).  Keeping the insert HERE — inside the one funnel — is what makes the
 -- index unable to disagree with the channel: there is no second push site to
 -- forget.  A rollback of the channel owes the index the same pairing the counter
 -- states above; today there is none within a `perRun` lifetime (see there).
@@ -11845,7 +11846,7 @@ data PerRun = PerRun {
   fieldOwnerModulesRef : Ref (OrdMap (List String)),  -- #1597: field-owner KEY → declaring module ids, graph-global — see fieldOwnerReachable
   fieldOwnerReachRef : Ref (OrdMap Unit),  -- #1597: the module ids THIS module can reach through DUse — see declEnvSeedDataUniverse
   typeErrors : Windowed TcDiag,  -- issue 1146: the diagnostic OUTPUT channel, on the Windowed discipline
-  typeErrorMsgSetRef : Ref (OrdMap Unit),  -- #2068: membership INDEX over typeErrors' rendered messages — see recordTypeError
+  typeErrorMsgSetRef : Ref (OrdMap Unit),  -- #2068: membership INDEX over typeErrors' rendered messages and message-at-site keys — see recordTypeError
   errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
   occursCheckFailed : Ref Bool,
   currentLevel : Ref Int,
@@ -37965,7 +37966,8 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppPredArgsShared args}"
 -- hit) does "add deriving" / "write an impl" read as concrete, applicable
 -- advice — a builtin (String/Int/Bool/…) can't take `deriving`, and a function
 -- type is structurally un-implementable, so both stay hint-free (unchanged
--- message) rather than print misleading advice.
+-- message) rather than print misleading advice.  A stdlib-owned type is
+-- hint-free too for the derivable interfaces (`headIsStdlibOwned`).
 -- ⚠️ #1111 A-2.3: the ONE `dataParamKindsRef` consumer that stays a BARE-NAME
 -- question, and it is a membership test rather than a lookup.  A-2.2 has since
 -- landed, so the identity IS reachable here (`headTyconMono` now answers a
