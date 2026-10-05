@@ -1,6 +1,6 @@
 # Async on the WasmGC target
 
-**Status:** WA-1 to WA-4 are implemented by sprint the-browser-can-wait
+**Status:** PARTIAL — WA-1 to WA-4 are implemented by sprint the-browser-can-wait
 (#3851); WA-5 remains open. Ruling 2's mechanism was reversed on 2026-10-05
 (§10 item 2). Written 2026-10-05 for the
 HN-readiness epic #3700 (item 8) against `main` at `b5fbcfbe`. Every claim

@@ -104,7 +104,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
 | [`REGEX-DESIGN.md`](design/REGEX-DESIGN.md) | Regular expressions in the stdlib | — |
 | [`TARGETS-DESIGN.md`](design/TARGETS-DESIGN.md) | Targets and host profiles | OPEN |
-| [`WASM-ASYNC-DESIGN.md`](design/WASM-ASYNC-DESIGN.md) | Async on the WasmGC target | OPEN |
+| [`WASM-ASYNC-DESIGN.md`](design/WASM-ASYNC-DESIGN.md) | Async on the WasmGC target | PARTIAL |
 
 ### ops — release, testing, distribution
 
