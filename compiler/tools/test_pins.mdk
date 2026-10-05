@@ -1,0 +1,384 @@
+-- compiler/tools/test_pins.mdk -- the typed known-red ledger shared by test
+-- runners. Each project may carry medaka-test-pins.toml; a pin records one
+-- expected failing selector and the issue that owns draining it. Parsing
+-- rejects every shape it cannot explain, so a typo cannot turn a real failure
+-- into a green run.
+
+import toml.{
+  Toml(..), parse, getString, getInt, getArray, tableCount, tableEntry
+}
+import support.util.{contains, joinNl}
+import string.{
+  contains as stringContains, endsWith, split, startsWith, trim, lines
+}
+import list.{reverse}
+
+public export data PinKind = PropPin | TestPin deriving (Eq, Debug)
+
+public export data TestPin = Pin {
+  pinFile : String,
+  pinKind : PinKind,
+  pinName : String,
+  pinEngine : String,
+  pinIssue : Int,
+  pinSeed : Option Int,
+  pinCases : Option Int,
+  pinDetail : Option String,
+}
+  deriving (Eq, Debug)
+
+public export data PinObservation =
+  | PinPassed
+  | PinLawFailure
+  | PinAssertionFailure String
+  | PinRuntimeError String
+  deriving (Eq, Debug)
+
+public export data PinVerdict =
+  | PinHeld Int
+  | PinDrained Int
+  | PinChanged Int String
+  deriving (Eq, Debug)
+
+-- ── Source shape and TOML schema ───────────────────────────────────────────
+
+pinOrigin : String
+pinOrigin = "medaka-test-pins.toml"
+
+allowedRootKey : String -> Bool
+allowedRootKey "version" = True
+allowedRootKey _ = False
+
+-- The TOML reader deliberately returns keys rather than headers. Inspecting
+-- headers here keeps an empty `[[pin]]` and an empty unknown table loud too.
+-- TOML itself still does the authoritative syntax validation afterward.
+headerOk : String -> Bool
+headerOk line =
+  let t = trim line
+  if startsWith "[" t then startsWith "[[pin]]" t else True
+
+headersOk : List String -> Bool
+headersOk [] = True
+headersOk (line :: rest) = headerOk line && headersOk rest
+
+pinHeaderCount : List String -> Int
+pinHeaderCount [] = 0
+pinHeaderCount (line :: rest) =
+  let t = trim line
+  (if startsWith "[[pin]]" t then 1 else 0) + pinHeaderCount rest
+
+sourceHeadersBad : String -> Bool
+sourceHeadersBad src = not (headersOk (lines src))
+
+rootKeysOk : List (String, a) -> Bool
+rootKeysOk [] = True
+rootKeysOk ((key, _) :: rest) =
+  (allowedRootKey key || startsWith "pin." key) && rootKeysOk rest
+
+rootVersionCount : List (String, a) -> Int
+rootVersionCount [] = 0
+rootVersionCount ((key, _) :: rest) =
+  (if key == "version" then 1 else 0) + rootVersionCount rest
+
+fieldNames : Toml -> List String
+fieldNames (Toml fields) = map fst fields
+
+hasDuplicate : List String -> Bool
+hasDuplicate [] = False
+hasDuplicate (x :: xs) = contains x xs || hasDuplicate xs
+
+hasOnly : List String -> List String -> Bool
+hasOnly [] _ = True
+hasOnly (field :: rest) allowed = contains field allowed && hasOnly rest allowed
+
+requiredString : Int -> String -> Toml -> Result String String
+requiredString i field entry = match getString field entry
+  Some value => Ok value
+  None =>
+    Err
+      "\{pinOrigin}: [[pin]] #\{intToString i}: missing string field '\{field}'"
+
+requiredInt : Int -> String -> Toml -> Result String Int
+requiredInt i field entry = match getInt field entry
+  Some value => Ok value
+  None =>
+    Err
+      "\{pinOrigin}: [[pin]] #\{intToString i}: missing integer field '\{field}'"
+
+requiredLines : Int -> Toml -> Result String (List String)
+requiredLines i entry = match getArray "detail_lines" entry
+  Some value => Ok value
+  None =>
+    Err
+      "\{pinOrigin}: [[pin]] #\{intToString i}: missing string-array field 'detail_lines'"
+
+validPathPart : String -> Bool
+validPathPart part = part /= "" && part /= "." && part /= ".."
+
+validPathParts : List String -> Bool
+validPathParts [] = True
+validPathParts (part :: rest) = validPathPart part && validPathParts rest
+
+validPinFile : String -> Bool
+validPinFile file =
+  file /= ""
+    && not (startsWith "/" file)
+    && not (stringContains "\\" file)
+    && endsWith ".mdk" file
+    && validPathParts (split "/" file)
+
+validKind : String -> Bool
+validKind kind = kind == "prop" || kind == "test"
+
+validEngine : String -> Bool
+validEngine engine = engine == "eval" || engine == "native"
+
+baseFields : List String
+baseFields = ["file", "kind", "name", "engine", "issue"]
+
+propFields : List String
+propFields = baseFields ++ ["seed", "cases", "failure"]
+
+testFields : List String
+testFields = baseFields ++ ["detail_lines"]
+
+rowPrefix : Int -> String
+rowPrefix i = "\{pinOrigin}: [[pin]] #\{intToString i}"
+
+validateFields : Int -> String -> Toml -> Result String Unit
+validateFields i kind entry =
+  let fields = fieldNames entry
+  if hasDuplicate fields then
+    Err "\{rowPrefix i}: duplicate field"
+  else if not
+    (hasOnly fields (if kind == "prop" then propFields else testFields)) then
+    Err "\{rowPrefix i}: unknown or disallowed field"
+  else
+    Ok ()
+
+validateBase : Int -> String -> String -> String -> Int -> Result String Unit
+validateBase i file name engine issue =
+  if not (validPinFile file) then
+    Err "\{rowPrefix i}: invalid project-relative .mdk file '\{file}'"
+  else if name == "" then
+    Err "\{rowPrefix i}: name must not be empty"
+  else if not (validEngine engine) then
+    Err "\{rowPrefix i}: engine must be 'eval' or 'native'"
+  else if issue <= 0 then
+    Err "\{rowPrefix i}: issue must be positive"
+  else
+    Ok ()
+
+readPropPin : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Toml ->
+  Result String TestPin
+readPropPin i file name engine issue entry = do
+  seed <- requiredInt i "seed" entry
+  cases <- requiredInt i "cases" entry
+  failure <- requiredString i "failure" entry
+  if cases <= 0 then
+    Err "\{rowPrefix i}: cases must be positive"
+  else if failure /= "false" then
+    Err "\{rowPrefix i}: failure must be the string \"false\""
+  else
+    Ok Pin {
+      pinFile = file,
+      pinKind = PropPin,
+      pinName = name,
+      pinEngine = engine,
+      pinIssue = issue,
+      pinSeed = Some seed,
+      pinCases = Some cases,
+      pinDetail = None,
+    }
+
+readTestPin : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Toml ->
+  Result String TestPin
+readTestPin i file name engine issue entry = do
+  detailLines <- requiredLines i entry
+  Ok Pin {
+    pinFile = file,
+    pinKind = TestPin,
+    pinName = name,
+    pinEngine = engine,
+    pinIssue = issue,
+    pinSeed = None,
+    pinCases = None,
+    pinDetail = Some (joinNl detailLines),
+  }
+
+readPin : Toml -> Int -> Result String TestPin
+readPin doc i = match tableEntry "pin" i doc
+  None => Err "\{rowPrefix i}: no such row"
+  Some entry => do
+    kind <- requiredString i "kind" entry
+    if not (validKind kind) then
+      Err "\{rowPrefix i}: kind must be 'prop' or 'test'"
+    else match validateFields i kind entry
+      Err err => Err err
+      Ok _ => do
+        file <- requiredString i "file" entry
+        name <- requiredString i "name" entry
+        engine <- requiredString i "engine" entry
+        issue <- requiredInt i "issue" entry
+        match validateBase i file name engine issue
+          Err err => Err err
+          Ok _ =>
+            if kind == "prop" then
+              readPropPin i file name engine issue entry
+            else
+              readTestPin i file name engine issue entry
+
+sameSelector : TestPin -> TestPin -> Bool
+sameSelector a b =
+  a.pinFile == b.pinFile
+    && a.pinKind == b.pinKind
+    && a.pinName == b.pinName
+    && a.pinEngine == b.pinEngine
+
+hasSelector : List TestPin -> TestPin -> Bool
+hasSelector [] _ = False
+hasSelector (seen :: rest) pin = sameSelector seen pin || hasSelector rest pin
+
+readPinsGo : Toml -> Int -> Int -> List TestPin -> Result String (List TestPin)
+readPinsGo doc i n acc
+  | i >= n = Ok (reverse acc)
+  | otherwise = do
+    pin <- readPin doc i
+    if hasSelector acc pin then
+      Err "\{rowPrefix i}: duplicate selector"
+    else
+      readPinsGo doc (i + 1) n (pin :: acc)
+
+{- | Parse the repository's known-red ledger. A ledger with no `[[pin]]` rows
+   is valid only when it says `version = 1`; it is the explicit empty state,
+   not a missing or guessed configuration. -}
+export
+parsePins : String -> Result String (List TestPin)
+parsePins src = parsePinsHeaders (sourceHeadersBad src) src
+
+parsePinsHeaders : Bool -> String -> Result String (List TestPin)
+parsePinsHeaders True _ = Err "\{pinOrigin}: only [[pin]] tables are allowed"
+parsePinsHeaders False src = match parse src
+  Err err => Err "\{pinOrigin}: not valid TOML: \{err}"
+  Ok doc => parsePinsDoc src doc
+
+parsePinsDoc : String -> Toml -> Result String (List TestPin)
+parsePinsDoc src (Toml fields) =
+  let doc = Toml fields
+  if not (rootKeysOk fields) then
+    Err "\{pinOrigin}: unknown top-level key or table"
+  else if rootVersionCount fields /= 1 then
+    Err "\{pinOrigin}: exactly one integer version field is required"
+  else match getInt "version" doc
+    Some 1 =>
+      let n = tableCount "pin" doc
+      if n /= pinHeaderCount (lines src) then
+        Err "\{pinOrigin}: every [[pin]] table needs fields"
+      else
+        readPinsGo doc 0 n []
+    Some _ => Err "\{pinOrigin}: version must be 1"
+    None => Err "\{pinOrigin}: exactly one integer version field is required"
+
+-- ── Selecting and validating declared tests ────────────────────────────────
+
+export
+pinFor : List TestPin -> String -> PinKind -> String -> String -> Option TestPin
+pinFor [] _ _ _ _ = None
+pinFor (pin :: rest) file kind name engine =
+  if pin.pinFile == file
+    && pin.pinKind == kind
+    && pin.pinName == name
+    && pin.pinEngine == engine then
+    Some pin
+  else
+    pinFor rest file kind name engine
+
+pinNamePresent : TestPin -> List String -> List String -> Bool
+pinNamePresent pin propNames testNames = match pin.pinKind
+  PropPin => contains pin.pinName propNames
+  TestPin => contains pin.pinName testNames
+
+validatePinNamesGo : List TestPin ->
+  String ->
+  List String ->
+  List String ->
+  Result String Unit
+validatePinNamesGo [] _ _ _ = Ok ()
+validatePinNamesGo (pin :: rest) file propNames testNames =
+  if pin.pinFile /= file || pinNamePresent pin propNames testNames then
+    validatePinNamesGo rest file propNames testNames
+  else
+    Err
+      "\{pinOrigin}: issue #\{intToString pin.pinIssue} pins missing \{pinKindName pin.pinKind} '\{pin.pinName}' in \{file}"
+
+pinKindName : PinKind -> String
+pinKindName PropPin = "property"
+pinKindName TestPin = "test"
+
+{- | Refuse a selected file whose ledger row no longer names a declaration.
+   The caller decides which files filters select; this helper never treats a
+   filtered-out row as drained or silently stale. -}
+export
+validatePinNames : List TestPin ->
+  String ->
+  List String ->
+  List String ->
+  Result String Unit
+validatePinNames pins file propNames testNames =
+  validatePinNamesGo pins file propNames testNames
+
+-- ── Observations and reporting ─────────────────────────────────────────────
+
+export
+classifyPin : TestPin -> PinObservation -> PinVerdict
+classifyPin pin PinPassed = PinDrained pin.pinIssue
+classifyPin pin PinLawFailure = classifyLawPin pin
+classifyPin pin (PinAssertionFailure detail) = classifyAssertionPin pin detail
+classifyPin pin (PinRuntimeError detail) =
+  PinChanged pin.pinIssue "runtime error: \{detail}"
+
+classifyLawPin : TestPin -> PinVerdict
+classifyLawPin pin = match pin.pinKind
+  PropPin => PinHeld pin.pinIssue
+  TestPin =>
+    PinChanged
+      pin.pinIssue
+      "expected an assertion failure, got a property-law failure"
+
+classifyAssertionPin : TestPin -> String -> PinVerdict
+classifyAssertionPin pin detail = match pin.pinKind
+  PropPin =>
+    PinChanged
+      pin.pinIssue
+      "expected a property-law failure, got an assertion failure"
+  TestPin => match pin.pinDetail
+    Some expected =>
+      if detail == expected then
+        PinHeld pin.pinIssue
+      else
+        PinChanged pin.pinIssue "assertion failure detail changed"
+    None => PinChanged pin.pinIssue "test pin has no expected assertion detail"
+
+export
+pinVerdictPassed : PinVerdict -> Bool
+pinVerdictPassed (PinHeld _) = True
+pinVerdictPassed _ = False
+
+export
+pinVerdictDetail : PinVerdict -> String
+pinVerdictDetail (PinHeld issue) =
+  "known-red issue #\{intToString issue} still holds"
+pinVerdictDetail (PinDrained issue) =
+  "known-red issue #\{intToString issue} no longer fails; remove its pin"
+pinVerdictDetail (PinChanged issue detail) =
+  "known-red issue #\{intToString issue} changed: \{detail}"
