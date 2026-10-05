@@ -19,10 +19,11 @@
 
 import io.{readLines}
 import list.{lookup}
-import string.{stripSuffix}
 import test.{Expectation(..)}
 import test_process.{
   disagreeingFloorBlocks,
+  expectFloor,
+  mdkModuleStem,
   missingTestFiles,
   missingUnits,
   testAssertionCount,
@@ -135,11 +136,6 @@ libExempt = [
 libExemptNames : List String
 libExemptNames = map fst libExempt
 
--- | The module name a `sqlite/lib/` directory entry names, or `None` when
--- the entry is not a Medaka module.
-libModuleStem : String -> Option String
-libModuleStem name = stripSuffix ".mdk" name
-
 -- Runs one `sqlite/lib/` module under the eval engine and returns its
 -- executed-assertion count, or an error naming the file and what went wrong.
 runLibSuite : String -> <Exec, IO> Result String Int
@@ -158,16 +154,7 @@ libResults = map ((name, floor) => (name, (floor, runLibSuite name))) libSuites
 libFloorExpectation : String -> <Exec, IO> Expectation
 libFloorExpectation name = match lookup name libResults
   None => Fail "sqlite/lib/\{name}.mdk has no `libResults` entry" "" ""
-  Some (floor, Err e) =>
-    Fail e "\{intToString floor} assertions" "spawn/parse error"
-  Some (floor, Ok ran) =>
-    if ran >= floor then
-      Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
-    else
-      Fail
-        "sqlite/lib/\{name}.mdk — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
-        "\{intToString floor} assertions"
-        "\{intToString ran} assertions"
+  Some (floor, counted) => expectFloor "sqlite/lib/\{name}.mdk" floor counted
 
 test "sqlite/lib/btree.mdk executed >= 1 assertions" =
   libFloorExpectation "btree"
@@ -218,7 +205,7 @@ libUnrosteredFiles : <FileRead, IO> Result String (List String)
 libUnrosteredFiles = match listDir (underRoot "sqlite/lib")
   Err e => Err "could not list sqlite/lib: \{e}"
   Ok names =>
-    Ok (unrosteredUnits libModuleStem (libRosterNames ++ libExemptNames) names)
+    Ok (unrosteredUnits mdkModuleStem (libRosterNames ++ libExemptNames) names)
 
 test "every sqlite/lib/*.mdk module has a `libSuites` or `libExempt` row" =
   match libUnrosteredFiles
@@ -233,7 +220,7 @@ test "every sqlite/lib/*.mdk module has a `libSuites` or `libExempt` row" =
 libPhantomExemptions : <FileRead, IO> Result String (List String)
 libPhantomExemptions = match listDir (underRoot "sqlite/lib")
   Err e => Err "could not list sqlite/lib: \{e}"
-  Ok names => Ok (missingUnits libModuleStem libExemptNames names)
+  Ok names => Ok (missingUnits mdkModuleStem libExemptNames names)
 
 test "every `libExempt` row names a module that exists" =
   match libPhantomExemptions
@@ -266,16 +253,7 @@ results = map ((name, floor) => (name, (floor, runSuite name))) suites
 floorExpectation : String -> <Exec, IO> Expectation
 floorExpectation name = match lookup name results
   None => Fail "sqlite/test/\{name}.mdk has no `results` entry" "" ""
-  Some (floor, Err e) =>
-    Fail e "\{intToString floor} assertions" "spawn/parse error"
-  Some (floor, Ok ran) =>
-    if ran >= floor then
-      Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
-    else
-      Fail
-        "sqlite/test/\{name}.mdk — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
-        "\{intToString floor} assertions"
-        "\{intToString ran} assertions"
+  Some (floor, counted) => expectFloor "sqlite/test/\{name}.mdk" floor counted
 
 test "sqlite/test/expr_test.mdk executed >= 19 assertions" =
   floorExpectation "expr_test"
