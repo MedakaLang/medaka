@@ -101,13 +101,15 @@ search for.
   located at that call. The whole domain and exact
   paths build, and so does a wrapper such as `io.readLines` or `fs.*`, which
   only passes on the grant its caller writes.
+  [#3590](https://github.com/MedakaLang/medaka/issues/3590)
 - **An opened existential or an instance head's index grants the whole
   domain.** Neither has a caller to supply an authority. The declaration that
   reaches one is held to its declared row, which is the bound, rather than the
-  value's index.
+  value's index. [#3591](https://github.com/MedakaLang/medaka/issues/3591)
 - **`Net` authority is a string.** A `Net` bound confines the strings a program
   passes. A host part such as `a.com/../x`, a percent-encoded byte, or a `.`
   segment is not normalized, and the socket externs receive no grant.
+  [#3592](https://github.com/MedakaLang/medaka/issues/3592)
 
 - **There is no written syntax for a relation.** A binding whose inferred type
   carries a context such as `(a <= d) =>` (the relation the compiler kept, see
