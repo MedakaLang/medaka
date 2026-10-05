@@ -59,8 +59,10 @@ import fs.{fixtureDirs}
 import list.{sort}
 import path.{basename}
 import string.{contains, endsWith, padRight, replaceAll, stripSuffix, unlines}
-import test.{Expectation, fail, pass}
-import test_process.{medakaRoot, scratchDir, unrosteredUnits}
+import test.{Expectation, expectAll, expectLineContainsAll, fail, pass}
+import test_process.{
+  expectSpawnFailsAll, medakaBin, medakaRoot, scratchDir, unrosteredUnits
+}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
@@ -231,6 +233,65 @@ table = [
     expBuild = "ACCEPT",
     mode = AllExact,
     pinned = "True\nFalse\nFalse\nTrue\n",
+  },
+  Row {
+    entry = "i4b_importer_option_default/main.mdk",
+    label =
+      "S2: inherited Foldable.length at Option, including an annotated receiver and the no-impl Bytes fallback",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n1\n0\n6\n",
+  },
+  Row {
+    entry = "i4c_importer_result_default/main.mdk",
+    label = "S2: inherited Foldable.length at Result String",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n0\n",
+  },
+  Row {
+    entry = "i4d_importer_selective_default/main.mdk",
+    label =
+      "S2-IMPORT-DIFFER: selective bytes.length warns and still dispatches to the inherited method",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+  },
+  Row {
+    entry = "i4e_importer_dict_bound/main.mdk",
+    label =
+      "S5 and S1-RESIDUAL-B: a written Foldable constraint supplies dispatch at the receiver constructor variable",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n0\n1\n3\n",
+  },
+  Row {
+    entry = "i4f_importer_value_position_reject/main.mdk",
+    label =
+      "S4: value-position bytes.length remains the standalone, rejecting List elements at a source location",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i4g_importer_map_option_default/main.mdk",
+    label =
+      "S2: imported map.isEmpty dispatches to the inherited Foldable method at Option",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "False\nTrue\n",
   },
   Row {
     entry = "d10_definer_constrained.mdk",
@@ -1178,6 +1239,11 @@ data WarnCheck = WarnCheck { entry : String, mustFire : Bool, needle : String }
 warnChecks : List WarnCheck
 warnChecks = [
   WarnCheck {
+    entry = "i4d_importer_selective_default/main.mdk",
+    mustFire = True,
+    needle = "is shadowed in module",
+  },
+  WarnCheck {
     entry = "i28_importer_two_admitted_agree/main.mdk",
     mustFire = True,
     needle = "by interface method 'IA.mth : a -> Int -> Int'",
@@ -1444,3 +1510,28 @@ test "every warnChecks entry names a row in the table" =
 
 test "check, run and build agree with every cell's pinned verdict and value" =
   sweep
+
+test "S4 imported length rejects at the user source line on every verb" =
+  match scratchDir
+    Err e => fail e
+    Ok scratch =>
+      match (checkRunBuild
+        "\{corpus}/i4f_importer_value_position_reject/main.mdk"
+        "\{scratch}/value-position.bin")
+        Err e => fail e
+        Ok a => expectAll [
+          expectSpawnFailsAll
+            medakaBin
+            [
+              "check",
+              "--json",
+              "\{corpus}/i4f_importer_value_position_reject/main.mdk",
+            ]
+            ["T-TYPE-MISMATCH", "Type mismatch: Bytes vs List", "\"line\":1"],
+          expectLineContainsAll
+            ["main.mdk:2:", "Type mismatch: Bytes vs List"]
+            a.runErr,
+          expectLineContainsAll
+            ["main.mdk:2:", "Type mismatch: Bytes vs List"]
+            a.buildLog,
+        ]

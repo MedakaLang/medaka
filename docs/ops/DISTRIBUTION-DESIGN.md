@@ -123,11 +123,11 @@ no-ops on macOS):**
 **Bottom line: native build for Linux is CONFIRMED VIABLE for 0.1.0.** No
 structural surprise; the remaining work (§5 D1–D4) is mechanical + the bounded
 runtime-stack provisioning. Reusable harness committed at
-[`dist/linux-spike/`](../../dist/linux-spike/) (`sh dist/linux-spike/run.sh spike`).
+[`archive/linux-spike/`](../../archive/linux-spike/) (`sh archive/linux-spike/run.sh spike`).
 
 ### 3a. Backtrace — the overflow is 100% the lexer (a TMC-able shape)
 
-A gdb backtrace at the 8MB segfault (build `-O0 -g`, `dist/linux-spike/bt.sh`)
+A gdb backtrace at the 8MB segfault (build `-O0 -g`, `archive/linux-spike/bt.sh`)
 is unambiguous: **the entire deep recursion is the lexer**, 37,000+ frames of the
 cycle
 

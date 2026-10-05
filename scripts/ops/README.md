@@ -1,4 +1,4 @@
-# ops/ — provisioning a Medaka build box
+# scripts/ops/ — provisioning a Medaka build box
 
 **Status:** LIVE. Describes the provisioning scripts beside it.
 
@@ -43,7 +43,7 @@ The AI-datacenter buildout is squeezing both cloud capacity and RAM/SSD prices
 2. From your laptop:
 
 ```sh
-scp ops/provision.sh root@<ip>:      # one file; it clones the rest
+scp scripts/ops/provision.sh root@<ip>:      # one file; it clones the rest
 ssh -A root@<ip>                      # -A forwards your ssh-agent for the private clone
 ssh-add -l                            # (confirm your GitHub key is loaded first)
 ./provision.sh                        # deps -> make medaka (cold seed) -> hook -> gates -> PASS/FAIL
@@ -59,8 +59,8 @@ laptop SSH public key and note its name.
 ```sh
 export HCLOUD_TOKEN=xxxxxxxx
 export HCLOUD_SSH_KEY="my-laptop"     # name of the key in the project
-python3 ops/snipe_hetzner.py --dry-run                          # report availability, create nothing
-python3 ops/snipe_hetzner.py --cloud-init ops/cloud-init.yaml   # arm it; leave running (tmux/nohup)
+python3 scripts/ops/snipe_hetzner.py --dry-run                          # report availability, create nothing
+python3 scripts/ops/snipe_hetzner.py --cloud-init scripts/ops/cloud-init.yaml   # arm it; leave running (tmux/nohup)
 # on fire: ssh -A root@<ip> 'cloud-init status --wait'; ssh -A root@<ip>; ./bootstrap.sh
 ```
 

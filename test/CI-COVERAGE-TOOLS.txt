@@ -326,12 +326,12 @@ playground/deploy_cloudflare     publishes playground/site/ to Cloudflare Pages 
                                  only touched playground/README.md.
 
 # ── one-off spikes / dev-environment setup (not part of any suite) ──
-dist/linux-spike/spike         D0 Linux native-build spike (Docker). A historical experiment.
-dist/linux-spike/experiment    characterizes the Linux emitter stack overflow. An experiment.
-dist/linux-spike/bt            backtrace helper for the spike above.
-dist/linux-spike/run           driver for the three spike scripts above.
+archive/linux-spike/spike         D0 Linux native-build spike (Docker). A historical experiment.
+archive/linux-spike/experiment    characterizes the Linux emitter stack overflow. An experiment.
+archive/linux-spike/bt            backtrace helper for the spike above.
+archive/linux-spike/run           driver for the three spike scripts above.
 editors/install-vscode         installs the VS Code extension. A dev-setup action.
-ops/provision                  provisions a build box. A dev-setup action.
+scripts/ops/provision                  provisions a build box. A dev-setup action.
 scripts/ci_shard_cost          derives ci.yml's per-job wall-clock table from recent green
                                merge_group runs via `gh` (S-ci-derive-cost, #1935) — a dev
                                tool run by hand and by nightly.yml's ci-shard-cost-drift job.

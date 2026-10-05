@@ -74,7 +74,7 @@ inputs:
     default: 'medaka-binaries'
   wasm-tools-version:
     description: >-
-      wasm-tools release to install when `wasm` is true. NB: `ops/provision.sh`
+      wasm-tools release to install when `wasm` is true. NB: `scripts/ops/provision.sh`
       has its own SEPARATE `WT_VER` pin for the same tool, for provisioning a
       dev box rather than CI — bump both together or they will silently drift.
     required: false

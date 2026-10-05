@@ -22463,8 +22463,9 @@ definerReceiverDispatches name xt
 -- flat single-file path `prog` is core ++ user, so a user `eq : Int -> Int -> Int`
 -- made core's `neq : Eq a => a -> a -> Bool` (`neq x y = not (eq x y)`) infer `eq x y :
 -- Int` and reject with `Type mismatch: Bool vs Int` at the top of the user's file.
+-- A higher-kinded receiver `t a` reads the written constraint on `t`.
 definerReceiverIsDictVar : String -> Mono -> Bool
-definerReceiverIsDictVar name xt = match normalize xt
+definerReceiverIsDictVar name xt = match headMonoNode xt
   TVar cell => match methodEntryHere name
     Some (mIface, _, _, _) =>
       dictVarSatisfiesIface
@@ -27895,8 +27896,8 @@ shadowIfaceLabel ir = match ir.irOrigin
 -- to disagree on ORIGIN per provenance.  `univReceiverTag tys` is the same head
 -- projection `ieFileRowByHead` files each row under, so the two sides of `headTabIs`
 -- are the partition, exactly as `ieCountHeadByIfaceGo` owes it.
--- The method table is `ImplRow`'s last field — payload, never a key component (§9.3) —
--- which is the same `methods` list `KeyEntry` carried and `keyEntryOfRow` copies out.
+-- The last field lists supplied methods only. An admitted interface's defaults
+-- answer too, through the same predicate used by instance selection.
 --
 -- #1351/#1664 Leg 3: the row's 3rd field, `IfaceRef`, was ALREADY THERE and was
 -- discarded by this pattern (`ImplRow _ _ _ tys _ ms`).  Nothing about `ImplRow`
@@ -27907,10 +27908,10 @@ ieImplExistsForHeadGo : List ImplRow ->
   Option (List IfaceRef) ->
   Bool
 ieImplExistsForHeadGo [] _ _ _ = False
-ieImplExistsForHeadGo ((ImplRow _ _ ir tys _ ms) :: rest) name goal admitted
+ieImplExistsForHeadGo ((r@(ImplRow _ _ ir tys _ ms)) :: rest) name goal admitted
   | headTabIs (univReceiverTag tys) goal
-    && contains name ms
-    && ieRowAdmittedBy ir admitted = True
+    && ieRowAdmittedBy ir admitted
+    && ieRowAnswersMethod r ms name admitted = True
   | otherwise = ieImplExistsForHeadGo rest name goal admitted
 
 -- Does this row's interface match the declaration the querying module admits?
