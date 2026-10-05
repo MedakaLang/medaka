@@ -114,12 +114,18 @@ import tools.prop_runner.{
   hasProps,
   runAllPropsResults,
   PropResult,
+  PropStatus(..),
+  PropFailureKind(..),
   filterProps,
   filterPropsByName,
   propResultName,
   propResultPassed,
   propResultDetail,
   propResultEngine,
+  propResultStatus,
+  propResultSeed,
+  propResultCases,
+  propResultFailureKind,
 }
 import tools.test_runner.{
   collectTests, exprLine, runOneTest, hasTests, uncapableExterns
@@ -2230,9 +2236,29 @@ cliPropJson : PropResult -> Json
 cliPropJson p = jObject [
   ("engine", JString (propResultEngine p)),
   ("name", JString (propResultName p)),
-  ("status", JString (if propResultPassed p then "pass" else "fail")),
+  ("status", JString (propStatusText (propResultStatus p))),
   ("detail", JString (propResultDetail p)),
+  ("failureKind", propFailureKindJson (propResultFailureKind p)),
+  ("seed", JInt (propResultSeed p)),
+  ("cases", JInt (propResultCases p)),
 ]
+
+propStatusText : PropStatus -> String
+propStatusText PropPassedResult = "pass"
+propStatusText PropFailedResult = "fail"
+propStatusText PropErroredResult = "error"
+
+propFailureKindJson : Option PropFailureKind -> Json
+propFailureKindJson None = JNull
+propFailureKindJson (Some kind) = JString (propFailureKindText kind)
+
+propFailureKindText : PropFailureKind -> String
+propFailureKindText PropLawFalse = "law-false"
+propFailureKindText PropCapabilityError = "capability"
+propFailureKindText PropBuildError = "build"
+propFailureKindText PropRuntimeError = "runtime"
+propFailureKindText PropProtocolError = "protocol"
+propFailureKindText PropTypeError = "type"
 
 -- #2588: every `test "…"` result names the engine that produced it. Under
 -- `--engines eval,native` the same test appears twice, once per engine, and the

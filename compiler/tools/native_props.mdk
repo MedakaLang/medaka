@@ -17,13 +17,17 @@ import support.path.{joinPath, baseOf, dirOf}
 import support.util.{
   joinNl, joinWith, splitNl, filterList, lookupAssoc, listLen, zipL
 }
+import string.{toInt}
 import tools.probe_transcript.{
   Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, lookupChunk,
   mintNonce, noncedPrefix, renameUserMain, sentinelLine, tagsInOrder,
   valuePrintExpr
 }
 import tools.printer.{exprToString, ppTy}
-import tools.prop_runner.{PropResult(..), filterProps, filterPropsByName}
+import tools.prop_runner.{
+  PropResult(..), PropStatus(..), PropFailureKind(..), filterProps,
+  filterPropsByName, propSeedValue
+}
 
 sentinelBase : String
 sentinelBase = "@@__mdk_native_prop__@@"
@@ -43,10 +47,13 @@ boolTag i = "\{intToString i}.bool"
 detailTag : Int -> String
 detailTag i = "\{intToString i}.detail"
 
+seedTag : Int -> String
+seedTag i = "\{intToString i}.seed"
+
 expectedTags : Int -> List Decl -> List String
 expectedTags _ [] = [endTag]
 expectedTags i (_ :: rest) =
-  [startTag i, boolTag i, detailTag i] ++ expectedTags (i + 1) rest
+  [startTag i, seedTag i, boolTag i, detailTag i] ++ expectedTags (i + 1) rest
 
 -- One native result for every selected property, preserving source order.
 export
@@ -60,29 +67,39 @@ runNativeProps target tsrc modules cases filterOpt =
   let props = filterPropsByName filterOpt (filterProps (desugarProps tsrc))
   match props
     [] => []
-    _ => match nativeRendered target tsrc modules props cases
-      Err e => map (nativeError e) props
+    _ => match nativeRendered target tsrc modules props cases (propSeedValue ())
+      Err e => map (nativeError cases (propSeedValue ()) e) props
       Ok rows => rows
 
 desugarProps : String -> List Decl
 desugarProps src = desugar (parse src)
 
-nativeError : String -> Decl -> PropResult
-nativeError e (DProp _ name _ _) = PropResult "native" name False e
-nativeError e _ = PropResult "native" "<invalid prop>" False e
+nativeError : Int -> Int -> String -> Decl -> PropResult
+nativeError cases seed e (DProp _ name _ _) =
+  PropResult "native" name PropErroredResult (Some PropBuildError) e seed cases
+nativeError cases seed e _ =
+  PropResult
+    "native"
+    "<invalid prop>"
+    PropErroredResult
+    (Some PropBuildError)
+    e
+    seed
+    cases
 
 nativeRendered : String ->
   String ->
   List (String, List Decl) ->
   List Decl ->
   Int ->
+  Int ->
   <IO> Result String (List PropResult)
-nativeRendered target tsrc modules props cases = match makeTempDir ()
+nativeRendered target tsrc modules props cases seed = match makeTempDir ()
   Err e =>
     Err "native property runner: could not create a scratch directory: \{e}"
   Ok tmp =>
     let nonce = mintNonce ()
-    let rendered = runInTmp target tsrc modules props cases tmp nonce
+    let rendered = runInTmp target tsrc modules props cases seed tmp nonce
     let _ = cleanupTempDir tmp
     rendered
 
@@ -94,29 +111,31 @@ runInTmp : String ->
   List (String, List Decl) ->
   List Decl ->
   Int ->
+  Int ->
   String ->
   String ->
   <IO> Result String (List PropResult)
-runInTmp target tsrc modules props cases tmp nonce =
+runInTmp target tsrc modules props cases seed tmp nonce =
   let entry = joinPath tmp (scratchEntryName target)
   let out = joinPath tmp "prop_probe"
   let _ =
     writeFile
       (joinPath tmp "medaka.toml")
       (scratchProjectManifest "medaka_native_props" target)
-  match writeFile entry (probeSource nonce tsrc modules props cases)
+  match writeFile entry (probeSource nonce target tsrc modules props cases seed)
     Err e =>
       Err "native property runner: could not write the probe source: \{e}"
-    Ok _ => buildAndRun target entry out tmp props nonce
+    Ok _ => buildAndRun target entry out tmp props cases nonce
 
 buildAndRun : String ->
   String ->
   String ->
   String ->
   List Decl ->
+  Int ->
   String ->
   <IO> Result String (List PropResult)
-buildAndRun target entry out tmp props nonce =
+buildAndRun target entry out tmp props cases nonce =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let medaka = envOr "MEDAKA" "medaka"
   let cc = envOr "CC" "clang"
@@ -141,7 +160,7 @@ buildAndRun target entry out tmp props nonce =
       Ok (code, stdout, stderr) =>
         let chunks = chunksOf (sentinelPrefix nonce) (splitNl stdout)
         if tagsInOrder (expectedTags 0 props) chunks then
-          Ok (renderAll chunks (abortNote code stderr) 0 props)
+          Ok (renderAll chunks (abortNote code stderr) cases 0 props)
         else
           Err
             "native property runner: the probe printed a forged or malformed transcript; no property result was trusted"
@@ -156,42 +175,71 @@ complete tag chunks = match lookupChunk tag chunks
   Some (Chunk _ ls True) => decodeValue ls
   _ => None
 
-renderAll : List Chunk -> String -> Int -> List Decl -> List PropResult
-renderAll _ _ _ [] = []
-renderAll chunks note i ((DProp _ name _ _) :: rest) =
-  renderOne chunks note i name :: renderAll chunks note (i + 1) rest
-renderAll chunks note i (_ :: rest) = renderAll chunks note (i + 1) rest
+seedFor : List Chunk -> Int -> Int
+seedFor chunks i = match complete (seedTag i) chunks
+  Some text => match toInt text
+    Some seed => seed
+    None => 0
+  None => 0
 
-renderOne : List Chunk -> String -> Int -> String -> PropResult
-renderOne chunks note i name = match (
+renderAll : List Chunk -> String -> Int -> Int -> List Decl -> List PropResult
+renderAll _ _ _ _ [] = []
+renderAll chunks note cases i ((DProp _ name _ _) :: rest) =
+  renderOne chunks note cases i name :: renderAll chunks note cases (i + 1) rest
+renderAll chunks note cases i (_ :: rest) =
+  renderAll chunks note cases (i + 1) rest
+
+renderOne : List Chunk -> String -> Int -> Int -> String -> PropResult
+renderOne chunks note cases i name = match (
   complete (boolTag i) chunks,
   complete (detailTag i) chunks,
 )
-  (Some "True", Some detail) => PropResult "native" name True detail
-  (Some "False", Some detail) => PropResult "native" name False detail
+  (Some "True", Some detail) =>
+    PropResult
+      "native"
+      name
+      PropPassedResult
+      None
+      detail
+      (seedFor chunks i)
+      cases
+  (Some "False", Some detail) =>
+    PropResult
+      "native"
+      name
+      PropFailedResult
+      (Some PropLawFalse)
+      detail
+      (seedFor chunks i)
+      cases
   _ =>
     PropResult
       "native"
       name
-      False
+      PropErroredResult
+      (Some PropRuntimeError)
       "\{note}; this property was not fully reported"
+      (seedFor chunks i)
+      cases
 
 -- Probe source ---------------------------------------------------------------
 
 probeSource : String ->
   String ->
+  String ->
   List (String, List Decl) ->
   List Decl ->
   Int ->
+  Int ->
   String
-probeSource nonce tsrc modules props cases =
+probeSource nonce target tsrc modules props cases seed =
   joinNl
     (nativeImports modules props
       ++ [
-        renameUserMain tsrc,
+        probeTargetSource target tsrc,
         "",
         "__np_state : Ref Int",
-        "__np_state = Ref 123456789",
+        "__np_state = Ref \{intToString seed}",
         "",
         "__np_next _ =",
         "  let s = (!__np_state * 1103515245 + 12345) % 2147483648",
@@ -208,6 +256,13 @@ probeSource nonce tsrc modules props cases =
       ++ ["main ="]
       ++ mainLines nonce props cases 0
       ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
+
+-- `core.mdk` is the auto-prelude, so splicing its declarations into a scratch
+-- entry duplicates every prelude binding.  Its property bodies can instead be
+-- compiled in an ordinary entry where core is already the auto-prelude.
+probeTargetSource : String -> String -> String
+probeTargetSource target src =
+  if baseOf target == "core.mdk" then "" else renameUserMain src
 
 -- Imported ADT constructors are not necessarily in the target's explicit use
 -- list (`import trees.{Tree, mirror}` is intentionally abstract).  Add a
@@ -325,9 +380,9 @@ genExpr modules (TyApp (TyCon { tyConName = "Array" }) t) depth =
   else
     "if __np_bool () then [||] else [|\{genExpr modules t (depth + 1)}|]"
 genExpr modules (TyApp (TyCon { tyConName = "Option" }) t) depth =
-  "if __np_bool () then None else Some \{genExpr modules t (depth + 1)}"
+  "if __np_bool () then None else Some (\{genExpr modules t (depth + 1)})"
 genExpr modules (TyApp (TyApp (TyCon { tyConName = "Result" }) a) b) depth =
-  "if __np_bool () then Ok \{genExpr modules a (depth + 1)} else Err \{genExpr modules b (depth + 1)}"
+  "if __np_bool () then Ok (\{genExpr modules b (depth + 1)}) else Err (\{genExpr modules a (depth + 1)})"
 genExpr modules (TyTuple ts) depth =
   "(\{joinWith ", " (map (t => genExpr modules t (depth + 1)) ts)})"
 genExpr modules ty depth = userGen modules ty depth
@@ -380,9 +435,12 @@ variantChoices modules ps args (v :: rest) depth i =
 firstTerminal : List Variant -> Variant
 firstTerminal [] = panic "native property runner: data type has no constructors"
 firstTerminal ((v@(Variant _ (ConPos []))) :: _) = v
-firstTerminal (v :: rest) = match rest
-  [] => v
-  _ => firstTerminal rest
+firstTerminal (v :: rest) = firstTerminalOr v rest
+
+firstTerminalOr : Variant -> List Variant -> Variant
+firstTerminalOr fallback [] = fallback
+firstTerminalOr _ ((v@(Variant _ (ConPos []))) :: _) = v
+firstTerminalOr fallback (_ :: rest) = firstTerminalOr fallback rest
 
 variantExpr : List (String, List Decl) ->
   List String ->
@@ -415,7 +473,9 @@ posFieldsExpr modules ps args fields depth =
   " "
     ++ joinWith
       " "
-      (map (f => genExpr modules (substTy (zipL ps args) f) depth) fields)
+      (map
+        (f => "(\{genExpr modules (substTy (zipL ps args) f) depth})")
+        fields)
 
 substTy : List (String, Ty) -> Ty -> Ty
 substTy sub (TyVar n) = match lookupAssoc n sub
@@ -456,7 +516,7 @@ failLines modules i [p@(PropParam n _ ty)] =
       "    if ok then \{runName i} (n - 1) else (False, \"\{n} = \" ++ debug \{n})",
     ]
 failLines _ i ps = [
-  "    if ok then \{runName i} (n - 1) else (False, debug \"\{joinWith ", " (map paramName ps)})",
+  "    if ok then \{runName i} (n - 1) else (False, \"counterexample has multiple parameters\")",
 ]
 
 hasArbitrary : List (String, List Decl) -> Ty -> Bool
@@ -485,6 +545,9 @@ mainLines _ [] _ _ = []
 mainLines nonce ((DProp _ _ _ _) :: rest) cases i =
   [
       "  let _ = putStrLn \"\{sentinelFor nonce (startTag i)}\"",
+      "  let seed = !__np_state",
+      "  let _ = putStrLn \"\{sentinelFor nonce (seedTag i)}\"",
+      "  let _ = \{valuePrintExpr "intToString seed"}",
       "  let (ok, detail) = \{runName i} \{intToString cases}",
       "  let _ = putStrLn \"\{sentinelFor nonce (boolTag i)}\"",
       "  let _ = \{valuePrintExpr "debug ok"}",

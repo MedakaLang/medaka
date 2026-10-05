@@ -62,13 +62,23 @@ substringMatch needle haystack = isSome (stringIndexOf needle haystack)
 propRngStateRef : Ref Int
 propRngStateRef = Ref 123456789
 
+propSeedRef : Ref Int
+propSeedRef = Ref 123456789
+
 -- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
 -- `rngStateRef`.  The seed is reduced into the state's range, `0 .. 2^31 - 1`,
 -- so any `Int` seeds it and `rngNextLocal`'s multiply cannot overflow; a seed
 -- already in that range is used as given.
 export
 seedPropRng : Int -> Unit
-seedPropRng n = propRngStateRef := (n % 2147483648 + 2147483648) % 2147483648
+seedPropRng n =
+  let normalized = (n % 2147483648 + 2147483648) % 2147483648
+  propRngStateRef := normalized
+  propSeedRef := normalized
+
+export
+propSeedValue : Unit -> Int
+propSeedValue _ = !propSeedRef
 
 rngNextLocal : Unit -> Int
 -- Odd multiplier and odd increment make bit `i` of consecutive `s` values
@@ -1176,24 +1186,69 @@ countTrue (False :: rest) = countTrue rest
 -- The engine is data rather than an ambient CLI label: the JSON/MCP consumers
 -- must not silently present an interpreter result as a native result when a
 -- caller asks for both engines.
-public export data PropResult = PropResult String String Bool String
+public export data PropStatus =
+  | PropPassedResult
+  | PropFailedResult
+  | PropErroredResult
+
+public export data PropFailureKind =
+  | PropLawFalse
+  | PropCapabilityError
+  | PropBuildError
+  | PropRuntimeError
+  | PropProtocolError
+  | PropTypeError
+
+public export data PropRequest = PropRequest String Int Int
+
+export
+propRequestName : PropRequest -> String
+propRequestName (PropRequest name _ _) = name
+
+export
+propRequestSeed : PropRequest -> Int
+propRequestSeed (PropRequest _ seed _) = seed
+
+export
+propRequestCases : PropRequest -> Int
+propRequestCases (PropRequest _ _ cases) = cases
+
+public export data PropResult =
+  | PropResult String String PropStatus (Option PropFailureKind) String Int Int
 --                                          name   ok   detail
 
 export
 propResultName : PropResult -> String
-propResultName (PropResult _ n _ _) = n
+propResultName (PropResult _ n _ _ _ _ _) = n
 
 export
 propResultEngine : PropResult -> String
-propResultEngine (PropResult e _ _ _) = e
+propResultEngine (PropResult e _ _ _ _ _ _) = e
 
 export
 propResultPassed : PropResult -> Bool
-propResultPassed (PropResult _ _ p _) = p
+propResultPassed (PropResult _ _ PropPassedResult _ _ _ _) = True
+propResultPassed _ = False
 
 export
 propResultDetail : PropResult -> String
-propResultDetail (PropResult _ _ _ d) = d
+propResultDetail (PropResult _ _ _ _ d _ _) = d
+
+export
+propResultStatus : PropResult -> PropStatus
+propResultStatus (PropResult _ _ s _ _ _ _) = s
+
+export
+propResultFailureKind : PropResult -> Option PropFailureKind
+propResultFailureKind (PropResult _ _ _ kind _ _ _) = kind
+
+export
+propResultSeed : PropResult -> Int
+propResultSeed (PropResult _ _ _ _ _ seed _) = seed
+
+export
+propResultCases : PropResult -> Int
+propResultCases (PropResult _ _ _ _ _ _ cases) = cases
 
 -- Run every prop and return one PropResult each, in source order.  No output.
 -- Same `cases`/`filterOpt` knobs as `runAllProps` (F-3: both hardcoded-100
@@ -1227,8 +1282,10 @@ runEachResult : Int ->
   <e> List PropResult
 runEachResult _ _ _ _ [] = []
 runEachResult cases propLines genEnv evalEnv ((DProp _ name params body) :: rest) =
+  let seedAtStart = !propRngStateRef
   propResultOf
       cases
+      seedAtStart
       (lineOfPropName name propLines)
       name
       (findFailure genEnv evalEnv params body cases 1)
@@ -1236,14 +1293,27 @@ runEachResult cases propLines genEnv evalEnv ((DProp _ name params body) :: rest
 runEachResult cases propLines genEnv evalEnv (_ :: rest) =
   runEachResult cases propLines genEnv evalEnv rest
 
-propResultOf : Int -> Int -> String -> PropOutcome (Value e) -> PropResult
-propResultOf cases _line name PropPassed =
-  PropResult "eval" name True "\{intToString cases} tests passed"
-propResultOf _cases line name (PropFailed run shrunk fuelExhausted) =
+propResultOf : Int ->
+  Int ->
+  Int ->
+  String ->
+  PropOutcome (Value e) ->
+  PropResult
+propResultOf cases seed _line name PropPassed =
   PropResult
     "eval"
     name
-    False
+    PropPassedResult
+    None
+    "\{intToString cases} tests passed"
+    seed
+    cases
+propResultOf cases seed line name (PropFailed run shrunk fuelExhausted) =
+  PropResult
+    "eval"
+    name
+    PropFailedResult
+    (Some PropLawFalse)
     (stringConcat [
       lineDetailPrefix line,
       "failed after ",
@@ -1258,6 +1328,8 @@ propResultOf _cases line name (PropFailed run shrunk fuelExhausted) =
       else
         "",
     ])
+    seed
+    cases
 
 lineDetailPrefix : Int -> String
 lineDetailPrefix 0 = ""
