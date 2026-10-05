@@ -1,0 +1,4 @@
+-- A Unit main through a user function with an unannotated body (#3792).
+helper x = println x
+
+main = helper 1
