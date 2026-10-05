@@ -1,5 +1,5 @@
 # META
-source_lines=1256
+source_lines=1270
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -39,6 +39,7 @@ import eval.eval.{
 import support.util.{
   listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL, contains, anyList
 }
+import tools.prop_plan.{deleteEach, replaceEach, prepend, prependBefore}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `test_cmd.mdk`'s copy — not shared via
@@ -722,10 +723,13 @@ nthList [] _ = panic "nthList: index out of range"
 -- ── shrinking (native) ──────────────────────────────────────────────────────
 -- The runner's own shrink strategy, keyed on shape — unrelated to the
 -- `Arbitrary` interface's `shrink` method (stdlib/core.mdk), which the
--- runner never calls for any type. A tag with no arm here (a user ADT,
--- `VCon` in the wildcard) gets no shrinking at all; that user's own `shrink`
--- impl, if any, is not consulted.
+-- runner never calls for any type.  This is the policy the native runner
+-- renders too: extending it here must extend that renderer rather than adding
+-- an engine-local notion of a smaller counterexample.  User ADTs get their
+-- structural arm from the shared prop plan; a value whose shape is still
+-- unknown here has no shrink candidates.
 
+export
 shrinkValue : Ty -> Value e -> List (Value e)
 shrinkValue ty v = match (ty, v)
   (TyCon { tyConName = "Int" }, VInt n) => shrinkInt n
@@ -735,11 +739,21 @@ shrinkValue ty v = match (ty, v)
     if x == 0.0 then [] else [VFloat 0.0, VFloat (x / 2.0)]
   (TyCon { tyConName = "String" }, VString s) =>
     if s == "" then [] else [VString (stringSlice 0 (stringLength s / 2) s)]
-  (TyApp (TyCon { tyConName = "List" }) _, VList []) => []
-  (TyApp (TyCon { tyConName = "List" }) _, VList (_ :: rest)) => [VList rest]
+  (TyApp (TyCon { tyConName = "List" }) t, VList xs) =>
+    map VList (deleteEach xs) ++ map VList (replaceEach (shrinkValue t) xs)
+  (TyTuple tys, VTuple vs) => map VTuple (shrinkTuple tys vs)
   (TyApp (TyCon { tyConName = "Option" }) _, VCon "None" []) => []
   (TyApp (TyCon { tyConName = "Option" }) _, VCon "Some" _) => [VCon "None" []]
   _ => []
+
+-- Tuples are product values: shrink each component under its corresponding
+-- declared type, retaining every other component unchanged.
+shrinkTuple : List Ty -> List (Value e) -> List (List (Value e))
+shrinkTuple [] _ = []
+shrinkTuple _ [] = []
+shrinkTuple (t :: ts) (v :: vs) =
+  map (prependBefore vs) (shrinkValue t v)
+    ++ map (prepend v) (shrinkTuple ts vs)
 
 shrinkInt : Int -> List (Value e)
 shrinkInt 0 = []
@@ -1264,6 +1278,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasKey" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false) (mem "anyList" false))))
+(DUse false (UseGroup ("tools" "prop_plan") ((mem "deleteEach" false) (mem "replaceEach" false) (mem "prepend" false) (mem "prependBefore" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
@@ -1442,8 +1457,12 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "nthList" ((PCons (PVar "x") PWild) (PLit (LInt 0))) (EVar "x"))
 (DFunDef false "nthList" ((PCons PWild (PVar "xs")) (PVar "n")) (EApp (EApp (EVar "nthList") (EVar "xs")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
 (DFunDef false "nthList" ((PList) PWild) (EApp (EVar "panic") (ELit (LString "nthList: index out of range"))))
-(DTypeSig false "shrinkValue" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "shrinkValue" ((PVar "ty") (PVar "v")) (EMatch (ETuple (EVar "ty") (EVar "v")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Int")))) false) (PCon "VInt" (PVar "n"))) () (EApp (EVar "shrinkInt") (EVar "n"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Bool")))) false) (PCon "VBool" (PCon "True"))) () (EListLit (EApp (EVar "VBool") (EVar "False")))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Bool")))) false) (PCon "VBool" (PCon "False"))) () (EListLit)) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Float")))) false) (PCon "VFloat" (PVar "x"))) () (EIf (EBinOp "==" (EVar "x") (ELit (LFloat 0.0))) (EListLit) (EListLit (EApp (EVar "VFloat") (ELit (LFloat 0.0))) (EApp (EVar "VFloat") (EBinOp "/" (EVar "x") (ELit (LFloat 2.0))))))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "String")))) false) (PCon "VString" (PVar "s"))) () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "VString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))) (EVar "s")))))) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "List")))) false) PWild) (PCon "VList" (PList))) () (EListLit)) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "List")))) false) PWild) (PCon "VList" (PCons PWild (PVar "rest")))) () (EListLit (EApp (EVar "VList") (EVar "rest")))) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option")))) false) PWild) (PCon "VCon" (PLit (LString "None")) (PList))) () (EListLit)) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option")))) false) PWild) (PCon "VCon" (PLit (LString "Some")) PWild)) () (EListLit (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)))) (arm PWild () (EListLit))))
+(DTypeSig true "shrinkValue" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "shrinkValue" ((PVar "ty") (PVar "v")) (EMatch (ETuple (EVar "ty") (EVar "v")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Int")))) false) (PCon "VInt" (PVar "n"))) () (EApp (EVar "shrinkInt") (EVar "n"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Bool")))) false) (PCon "VBool" (PCon "True"))) () (EListLit (EApp (EVar "VBool") (EVar "False")))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Bool")))) false) (PCon "VBool" (PCon "False"))) () (EListLit)) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Float")))) false) (PCon "VFloat" (PVar "x"))) () (EIf (EBinOp "==" (EVar "x") (ELit (LFloat 0.0))) (EListLit) (EListLit (EApp (EVar "VFloat") (ELit (LFloat 0.0))) (EApp (EVar "VFloat") (EBinOp "/" (EVar "x") (ELit (LFloat 2.0))))))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "String")))) false) (PCon "VString" (PVar "s"))) () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "VString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))) (EVar "s")))))) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "List")))) false) (PVar "t")) (PCon "VList" (PVar "xs"))) () (EBinOp "++" (EApp (EApp (EVar "map") (EVar "VList")) (EApp (EVar "deleteEach") (EVar "xs"))) (EApp (EApp (EVar "map") (EVar "VList")) (EApp (EApp (EVar "replaceEach") (EApp (EVar "shrinkValue") (EVar "t"))) (EVar "xs"))))) (arm (PTuple (PCon "TyTuple" (PVar "tys")) (PCon "VTuple" (PVar "vs"))) () (EApp (EApp (EVar "map") (EVar "VTuple")) (EApp (EApp (EVar "shrinkTuple") (EVar "tys")) (EVar "vs")))) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option")))) false) PWild) (PCon "VCon" (PLit (LString "None")) (PList))) () (EListLit)) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option")))) false) PWild) (PCon "VCon" (PLit (LString "Some")) PWild)) () (EListLit (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)))) (arm PWild () (EListLit))))
+(DTypeSig false "shrinkTuple" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "shrinkTuple" ((PList) PWild) (EListLit))
+(DFunDef false "shrinkTuple" (PWild (PList)) (EListLit))
+(DFunDef false "shrinkTuple" ((PCons (PVar "t") (PVar "ts")) (PCons (PVar "v") (PVar "vs"))) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "prependBefore") (EVar "vs"))) (EApp (EApp (EVar "shrinkValue") (EVar "t")) (EVar "v"))) (EApp (EApp (EVar "map") (EApp (EVar "prepend") (EVar "v"))) (EApp (EApp (EVar "shrinkTuple") (EVar "ts")) (EVar "vs")))))
 (DTypeSig false "shrinkInt" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "shrinkInt" ((PLit (LInt 0))) (EListLit))
 (DFunDef false "shrinkInt" ((PVar "n")) (EBlock (DoLet false false (PVar "cands") (EListLit (ELit (LInt 0)) (EBinOp "/" (EVar "n") (ELit (LInt 2))) (EBinOp "+" (EVar "n") (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1))) (ELit (LInt 1)))))) (DoExpr (EApp (EApp (EVar "map") (EVar "VInt")) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "n")))) (EVar "cands"))))))
@@ -1571,6 +1590,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasKey" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false) (mem "anyList" false))))
+(DUse false (UseGroup ("tools" "prop_plan") ((mem "deleteEach" false) (mem "replaceEach" false) (mem "prepend" false) (mem "prependBefore" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
@@ -1749,8 +1769,12 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "nthList" ((PCons (PVar "x") PWild) (PLit (LInt 0))) (EVar "x"))
 (DFunDef false "nthList" ((PCons PWild (PVar "xs")) (PVar "n")) (EApp (EApp (EVar "nthList") (EVar "xs")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
 (DFunDef false "nthList" ((PList) PWild) (EApp (EVar "panic") (ELit (LString "nthList: index out of range"))))
-(DTypeSig false "shrinkValue" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "shrinkValue" ((PVar "ty") (PVar "v")) (EMatch (ETuple (EVar "ty") (EVar "v")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Int")))) false) (PCon "VInt" (PVar "n"))) () (EApp (EVar "shrinkInt") (EVar "n"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Bool")))) false) (PCon "VBool" (PCon "True"))) () (EListLit (EApp (EVar "VBool") (EVar "False")))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Bool")))) false) (PCon "VBool" (PCon "False"))) () (EListLit)) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Float")))) false) (PCon "VFloat" (PVar "x"))) () (EIf (EBinOp "==" (EVar "x") (ELit (LFloat 0.0))) (EListLit) (EListLit (EApp (EVar "VFloat") (ELit (LFloat 0.0))) (EApp (EVar "VFloat") (EBinOp "/" (EVar "x") (ELit (LFloat 2.0))))))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "String")))) false) (PCon "VString" (PVar "s"))) () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "VString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))) (EVar "s")))))) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "List")))) false) PWild) (PCon "VList" (PList))) () (EListLit)) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "List")))) false) PWild) (PCon "VList" (PCons PWild (PVar "rest")))) () (EListLit (EApp (EVar "VList") (EVar "rest")))) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option")))) false) PWild) (PCon "VCon" (PLit (LString "None")) (PList))) () (EListLit)) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option")))) false) PWild) (PCon "VCon" (PLit (LString "Some")) PWild)) () (EListLit (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)))) (arm PWild () (EListLit))))
+(DTypeSig true "shrinkValue" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "shrinkValue" ((PVar "ty") (PVar "v")) (EMatch (ETuple (EVar "ty") (EVar "v")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Int")))) false) (PCon "VInt" (PVar "n"))) () (EApp (EVar "shrinkInt") (EVar "n"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Bool")))) false) (PCon "VBool" (PCon "True"))) () (EListLit (EApp (EVar "VBool") (EVar "False")))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Bool")))) false) (PCon "VBool" (PCon "False"))) () (EListLit)) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Float")))) false) (PCon "VFloat" (PVar "x"))) () (EIf (EBinOp "==" (EVar "x") (ELit (LFloat 0.0))) (EListLit) (EListLit (EApp (EVar "VFloat") (ELit (LFloat 0.0))) (EApp (EVar "VFloat") (EBinOp "/" (EVar "x") (ELit (LFloat 2.0))))))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "String")))) false) (PCon "VString" (PVar "s"))) () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "VString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))) (EVar "s")))))) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "List")))) false) (PVar "t")) (PCon "VList" (PVar "xs"))) () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "VList")) (EApp (EVar "deleteEach") (EVar "xs"))) (EApp (EApp (EMethodRef "map") (EVar "VList")) (EApp (EApp (EVar "replaceEach") (EApp (EVar "shrinkValue") (EVar "t"))) (EVar "xs"))))) (arm (PTuple (PCon "TyTuple" (PVar "tys")) (PCon "VTuple" (PVar "vs"))) () (EApp (EApp (EMethodRef "map") (EVar "VTuple")) (EApp (EApp (EVar "shrinkTuple") (EVar "tys")) (EVar "vs")))) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option")))) false) PWild) (PCon "VCon" (PLit (LString "None")) (PList))) () (EListLit)) (arm (PTuple (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option")))) false) PWild) (PCon "VCon" (PLit (LString "Some")) PWild)) () (EListLit (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)))) (arm PWild () (EListLit))))
+(DTypeSig false "shrinkTuple" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "shrinkTuple" ((PList) PWild) (EListLit))
+(DFunDef false "shrinkTuple" (PWild (PList)) (EListLit))
+(DFunDef false "shrinkTuple" ((PCons (PVar "t") (PVar "ts")) (PCons (PVar "v") (PVar "vs"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "prependBefore") (EVar "vs"))) (EApp (EApp (EVar "shrinkValue") (EVar "t")) (EVar "v"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "prepend") (EVar "v"))) (EApp (EApp (EVar "shrinkTuple") (EVar "ts")) (EVar "vs")))))
 (DTypeSig false "shrinkInt" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "shrinkInt" ((PLit (LInt 0))) (EListLit))
 (DFunDef false "shrinkInt" ((PVar "n")) (EBlock (DoLet false false (PVar "cands") (EListLit (ELit (LInt 0)) (EBinOp "/" (EVar "n") (ELit (LInt 2))) (EBinOp "+" (EVar "n") (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1))) (ELit (LInt 1)))))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "VInt")) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "n")))) (EVar "cands"))))))
