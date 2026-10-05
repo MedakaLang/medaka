@@ -1,0 +1,2 @@
+import bytes.*
+main = println (debug (map length [[1], [2, 3]]))

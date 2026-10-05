@@ -1,0 +1,5 @@
+import map.*
+-- S2 reaches Foldable's default: Some is nonempty, None is empty.
+main =
+  let _ = println (debug (isEmpty (Some 7)))
+  println (debug (isEmpty (None : Option Int)))
