@@ -111,7 +111,7 @@ import string.{
   toInt, toLower, trim, unlines
 }
 import test_process.{
-  boundedVerb, boundedVerbSeconds, medakaRoot, scratchDir, underRoot
+  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
 }
 
 -- | The stdlib modules `diff_compiler_lex_files` lexed, in its own order.
@@ -1465,6 +1465,52 @@ twoModuleCollisionFailure (entry, want) =
     ["Testing \{debug want} ... OK (100 tests)", "1 passed, 0 failed"]
     []
 
+{- | Directory testing runs each file in a fresh child process. An explicit
+   prop seed must follow that boundary: otherwise the parent accepts `--seed`
+   but every child silently reverts to the default stream, so the failure's
+   advertised replay command does not replay the directory run. Compare each
+   direct-file and directory report, then confirm two requested seeds produce
+   distinct reports without pinning an RNG draw or a shrink result. -}
+seedDirectoryReport : Int -> String -> String -> <Exec, IO> Result String String
+seedDirectoryReport seed file dir =
+  let args target = ["test", "--seed", intToString seed, target]
+  match (
+    boundedVerbSeconds testReportSeconds medakaBin (args file),
+    boundedVerbSeconds testReportSeconds medakaBin (args dir),
+  )
+    (Ok (directCode, directOut, directErr), Ok (dirCode, dirOut, dirErr)) =>
+      let directText = testRelative "\{directOut}\n\{directErr}"
+      if directCode == 0 || dirCode == 0 then
+        Err
+          "seed directory replay: the deliberately failing property unexpectedly exited 0"
+      else if directOut /= dirOut then
+        Err
+          "seed directory replay: direct and directory reports differ: \{diffNote directOut dirOut}"
+      else if not (contains "Testing \"seed directory replay\"" directText)
+        || not (contains "FAILED" directText)
+        || not (contains "Seed: \{intToString seed}" directText) then
+        Err "seed directory replay: missing the requested seeded failure report"
+      else
+        Ok directOut
+    (Err e, _) =>
+      Err "seed directory replay: direct invocation failed to start: \{e}"
+    (_, Err e) =>
+      Err "seed directory replay: directory invocation failed to start: \{e}"
+
+seedDirectoryReplayFailure : <Exec, IO> Option String
+seedDirectoryReplayFailure =
+  let dir = underRoot "test/compiler_test_fixtures/seed_directory_replay"
+  let file = "\{dir}/case.mdk"
+  match (seedDirectoryReport 1 file dir, seedDirectoryReport 2 file dir)
+    (Ok seed1, Ok seed2) =>
+      if seed1 == seed2 then
+        Some
+          "seed directory replay: --seed 1 and --seed 2 produced the same report"
+      else
+        None
+    (Err e, _) => Some e
+    (_, Err e) => Some e
+
 {- | The regression battery the retired script ran UNCONDITIONALLY beside its
    corpus loop: fixtures whose claim is an exit code, a whole hand-derived
    report, or the presence and ABSENCE of a specific message, none of which a
@@ -1522,6 +1568,7 @@ testBatteryFailures =
       False
       ["w = Wrap 500", "0 passed, 1 failed"]
       ["w = Wrap 0"],
+    seedDirectoryReplayFailure,
     testContentFailure
       "parse_error.mdk (#892)"
       "\{fix}/parse_error.mdk"
@@ -1530,7 +1577,7 @@ testBatteryFailures =
       ["test/compiler_test_fixtures/parse_error.mdk:1:0:"]
       ["E-PANIC"],
   ]
-  countFloor "test-battery cases" 11 battery
+  countFloor "test-battery cases" 12 battery
     ++ countFloor "two-module collision entries" 4 twoModuleCollisionEntries
     ++ somes battery
     ++ somes (map twoModuleCollisionFailure twoModuleCollisionEntries)
