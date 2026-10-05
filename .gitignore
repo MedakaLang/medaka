@@ -49,7 +49,7 @@
 # it can hold account metadata — never commit it.
 /.wrangler/
 
-# `make dist` / scripts/make_dist.sh output tarball. Regenerable; dist/linux-spike/
+# `make dist` / scripts/make_dist.sh output tarball. Regenerable; archive/linux-spike/
 # is separate, tracked, historical source and is unaffected by this pattern.
 /dist/*.tar.gz
 

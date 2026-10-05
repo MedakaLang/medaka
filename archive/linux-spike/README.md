@@ -1,4 +1,4 @@
-# dist/linux-spike — Linux native-build harness
+# archive/linux-spike — Linux native-build harness
 
 **Status:** CLOSED RECORD. Dated distribution-workstream spike harness; kept for provenance, not current guidance.
 
@@ -9,9 +9,9 @@ target from a macOS host. Built and validated during the D0 spike (2026-07-04).
 ## Quick start
 
 ```sh
-sh dist/linux-spike/run.sh spike        # full end-to-end viability check (D0)
-sh dist/linux-spike/run.sh experiment   # stack-size threshold sweep
-sh dist/linux-spike/run.sh bt           # gdb backtrace at the overflow
+sh archive/linux-spike/run.sh spike        # full end-to-end viability check (D0)
+sh archive/linux-spike/run.sh experiment   # stack-size threshold sweep
+sh archive/linux-spike/run.sh bt           # gdb backtrace at the overflow
 ```
 
 `run.sh` snapshots the **current working tree** (uncommitted edits included) into

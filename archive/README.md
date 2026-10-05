@@ -18,6 +18,8 @@ provenance. Open work is tracked in [`PLAN.md`](../PLAN.md) (see its
   files below.
 - **`findings/`** — point-in-time QA/investigation sweeps, e.g.
   [`findings/qa-beta-2026-07-07/`](findings/qa-beta-2026-07-07/FINDINGS.md).
+- **`linux-spike/`** — the historical D0 Linux native-build Docker spike
+  (scripts and Dockerfile); not maintained.
 - **`PLAN-ARCHIVE.md`** — the completed-Phase archive (moved from the repo
   root). Like the flat files below, it narrates the compiler tree as it
   existed at each phase and is deliberately NOT rewritten.

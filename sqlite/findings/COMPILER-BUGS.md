@@ -339,7 +339,7 @@ were **deleted** (their bug class no longer exists), and issue **#61 was closed 
 
 ---
 
-## Environment (fixed here, in `ops/provision.sh`)
+## Environment (fixed here, in `scripts/ops/provision.sh`)
 
 Two toolchain deps were missing from the box provisioning, and **both failed in a way that reads as
 success**:
