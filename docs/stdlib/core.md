@@ -651,6 +651,21 @@ Runs an action for each element in order, discarding the results.
 Some ()
 ```
 
+### `each`
+
+```
+each : (a -> <e> Unit) -> List a -> <e> Unit
+each f _
+```
+
+Calls a function on each element in order, for its effect.
+
+```medaka
+> each println ["a", "b"]
+a
+b
+```
+
 ### `runEach`
 
 ```
