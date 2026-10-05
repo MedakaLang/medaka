@@ -3,8 +3,9 @@
 -- of every path comparison, and refuses rows whose file no longer exists.
 
 import driver.loader.{findProjectRoot}
+import fs.{isFile}
 import support.path.{dirOf, joinPath}
-import support.util.{filterList}
+import support.util.{contains, filterList}
 import tools.test_pins.{TestPin, parsePins}
 import string.{drop, startsWith}
 
@@ -34,18 +35,37 @@ loadAtRoot : String -> String -> <IO> Result String PinContext
 loadAtRoot root target = do
   file <- relativeToRoot root target
   let ledger = joinPath root ledgerName
-  if fileExists ledger then match readFile ledger
-    Err err => Err "\{ledger}: cannot read known-red ledger: \{err}"
-    Ok src => do
-      pins <- parsePins src
-      () <- validatePinFiles root pins
-      Ok PinContext {
-        contextRoot = root,
-        contextFile = file,
-        contextPins = filterList (pin => pin.pinFile == file) pins,
-      }
-  else
-    Ok PinContext { contextRoot = root, contextFile = file, contextPins = [] }
+  match ledgerPresent root ledger
+    Err err => Err err
+    Ok False =>
+      Ok PinContext { contextRoot = root, contextFile = file, contextPins = [] }
+    Ok True => do
+      _ <- relativeToRoot root (canonicalizePath ledger)
+      match readFile ledger
+        Err err => Err "\{ledger}: cannot read known-red ledger: \{err}"
+        Ok src => do
+          pins <- parsePins src
+          _ <- validatePinFiles root pins
+          Ok PinContext {
+            contextRoot = root,
+            contextFile = file,
+            contextPins = filterList (pin => pin.pinFile == file) pins,
+          }
+
+-- `fileExists` follows a symlink, so a dangling ledger link reads False. The
+-- parent directory still contains its name: distinguish that broken ledger from
+-- a genuinely absent optional ledger and fail loudly for the former.
+ledgerPresent : String -> String -> <FileRead> Result String Bool
+ledgerPresent root ledger =
+  if fileExists ledger then
+    Ok True
+  else match listDir root
+    Err err => Err "\{root}: cannot inspect known-red ledger: \{err}"
+    Ok names =>
+      if contains ledgerName names then
+        Err "\{ledger}: cannot read known-red ledger"
+      else
+        Ok False
 
 -- Paths are only compared after canonicalizePath. The slash in the prefix is
 -- load-bearing: /tmp/app2 must never count as being under /tmp/app.
@@ -67,8 +87,15 @@ validatePinFiles _ [] = Ok ()
 validatePinFiles root (pin :: rest) = do
   let raw = joinPath root pin.pinFile
   let resolved = canonicalizePath raw
-  _ <- relativeToRoot root resolved
-  if not (fileExists resolved) then
-    Err "medaka-test-pins.toml: referenced file '\{pin.pinFile}' does not exist"
-  else
-    validatePinFiles root rest
+  canonicalFile <- relativeToRoot root resolved
+  if canonicalFile /= pin.pinFile then
+    Err
+      "medaka-test-pins.toml: referenced file '\{pin.pinFile}' is not its canonical project-relative path ('\{canonicalFile}')"
+  else match isFile resolved
+    Err _ =>
+      Err
+        "medaka-test-pins.toml: referenced file '\{pin.pinFile}' does not exist"
+    Ok False =>
+      Err
+        "medaka-test-pins.toml: referenced file '\{pin.pinFile}' is not a regular file"
+    Ok True => validatePinFiles root rest

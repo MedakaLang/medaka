@@ -20,8 +20,8 @@ writeTree : String -> List (String, String) -> <FileWrite> Result String Unit
 writeTree _ [] = Ok ()
 writeTree root ((rel, text) :: rest) = do
   let path = joinPath root rel
-  () <- mkdirAll (dirOf path)
-  () <- writeFile path text
+  _ <- mkdirAll (dirOf path)
+  _ <- writeFile path text
   writeTree root rest
 
 propLedger : String -> Int -> String
@@ -94,6 +94,35 @@ badLedgerExpectation = match fixtureRoot "bad"
       Err _ => True
       Ok _ => False)
 
+test "a ledger symlink outside the selected project is refused" =
+  ledgerEscapeExpectation
+
+ledgerEscapeExpectation : <Exec, FileRead, FileWrite, IO> Expectation
+ledgerEscapeExpectation = match fixtureRoot "ledger_escape"
+  Err err => fail err
+  Ok root =>
+    let outside = joinPath root "outside"
+    let project = joinPath root "project"
+    match writeTree root [
+      ("outside/medaka-test-pins.toml", propLedger "selected.mdk" 9),
+      ("project/medaka.toml", "[package]\nname = \"p\"\n"),
+      ("project/selected.mdk", "main = 1\n"),
+    ]
+      Err err => fail err
+      Ok () => match runVerb "ln" [
+        "-s",
+        joinPath outside "medaka-test-pins.toml",
+        joinPath project "medaka-test-pins.toml",
+      ]
+        Err err => fail err
+        Ok (code, _, err) =>
+          if code /= 0 then
+            fail "could not make symlink: \{err}"
+          else
+            expectTrue (match loadPinContext (joinPath project "selected.mdk")
+              Err _ => True
+              Ok _ => False)
+
 test "an unreadable existing ledger is loud" = unreadableLedgerExpectation
 
 unreadableLedgerExpectation : <Exec, FileRead, FileWrite, IO> Expectation
@@ -106,6 +135,31 @@ unreadableLedgerExpectation = match fixtureRoot "unreadable"
       Ok () => expectTrue (match loadPinContext (joinPath root "main.mdk")
         Err _ => True
         Ok _ => False)
+
+test "a dangling ledger symlink is loud rather than absent" =
+  brokenLedgerExpectation
+
+brokenLedgerExpectation : <Exec, FileRead, FileWrite, IO> Expectation
+brokenLedgerExpectation = match fixtureRoot "broken_ledger"
+  Err err => fail err
+  Ok root => match writeTree root [
+    ("medaka.toml", "[package]\nname = \"p\"\n"),
+    ("main.mdk", "main = 1\n"),
+  ]
+    Err err => fail err
+    Ok () => match runVerb "ln" [
+      "-s",
+      "gone.toml",
+      joinPath root "medaka-test-pins.toml",
+    ]
+      Err err => fail err
+      Ok (code, _, err) =>
+        if code /= 0 then
+          fail "could not make symlink: \{err}"
+        else
+          expectTrue (match loadPinContext (joinPath root "main.mdk")
+            Err _ => True
+            Ok _ => False)
 
 test "a project-relative selector handles nested targets and normalized paths" =
   multiDirectoryExpectation
@@ -142,7 +196,24 @@ stalePathExpectation = match fixtureRoot "stale"
       Err _ => True
       Ok _ => False)
 
-test "a symlinked ledger file outside the selected project is refused" =
+test "a referenced .mdk directory is refused" = referencedDirectoryExpectation
+
+referencedDirectoryExpectation : <Exec, FileRead, FileWrite, IO> Expectation
+referencedDirectoryExpectation = match fixtureRoot "directory"
+  Err err => fail err
+  Ok root => match writeTree root [
+    ("medaka.toml", "[package]\nname = \"p\"\n"),
+    ("medaka-test-pins.toml", propLedger "not_a_file.mdk" 6),
+    ("main.mdk", "main = 1\n"),
+  ]
+    Err err => fail err
+    Ok () => match mkdirAll (joinPath root "not_a_file.mdk")
+      Err err => fail err
+      Ok () => expectTrue (match loadPinContext (joinPath root "main.mdk")
+        Err _ => True
+        Ok _ => False)
+
+test "a referenced source path whose symlink escapes the project is refused" =
   escapedAliasExpectation
 
 escapedAliasExpectation : <Exec, FileRead, FileWrite, IO> Expectation
@@ -154,7 +225,7 @@ escapedAliasExpectation = match fixtureRoot "alias"
     match writeTree root [
       ("outside/main.mdk", "main = 1\n"),
       ("project/medaka.toml", "[package]\nname = \"p\"\n"),
-      ("project/medaka-test-pins.toml", propLedger "linked/main.mdk" 6),
+      ("project/medaka-test-pins.toml", propLedger "linked/main.mdk" 7),
       ("project/selected.mdk", "main = 1\n"),
     ]
       Err err => fail err
@@ -167,3 +238,26 @@ escapedAliasExpectation = match fixtureRoot "alias"
             expectTrue (match loadPinContext (joinPath project "selected.mdk")
               Err _ => True
               Ok _ => False)
+
+test "a referenced source symlink inside the project is refused as an alias" =
+  internalAliasExpectation
+
+internalAliasExpectation : <Exec, FileRead, FileWrite, IO> Expectation
+internalAliasExpectation = match fixtureRoot "internal_alias"
+  Err err => fail err
+  Ok root => match writeTree root [
+    ("medaka.toml", "[package]\nname = \"p\"\n"),
+    ("medaka-test-pins.toml", propLedger "alias.mdk" 8),
+    ("actual.mdk", "main = 1\n"),
+    ("selected.mdk", "main = 1\n"),
+  ]
+    Err err => fail err
+    Ok () => match runVerb "ln" ["-s", "actual.mdk", joinPath root "alias.mdk"]
+      Err err => fail err
+      Ok (code, _, err) =>
+        if code /= 0 then
+          fail "could not make symlink: \{err}"
+        else
+          expectTrue (match loadPinContext (joinPath root "selected.mdk")
+            Err _ => True
+            Ok _ => False)
