@@ -1,0 +1,6 @@
+-- #3285: `import test.*` already binds every verb, so the rewrite applies and
+-- the import is left as written.
+
+import test.*
+
+eqCase a = expectTrue (a == 1)

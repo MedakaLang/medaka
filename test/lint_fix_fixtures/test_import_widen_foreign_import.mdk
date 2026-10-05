@@ -1,0 +1,6 @@
+-- #3285: an `expectEqual` imported from a module other than `test` is not the
+-- `test` verb, so the rewrite is not applied.
+
+import other.{expectEqual}
+
+eqCase a = expectEqual True (a == 1)

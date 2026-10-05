@@ -1,0 +1,6 @@
+-- #3285: a verb name inside a string literal is not an introduced verb, so only
+-- the verb the rewrite really calls joins the import list.
+
+import test.{expectTrue}
+
+eqCase a = expectTrue (a == "expectNotEqual")

@@ -1,5 +1,5 @@
 # META
-source_lines=6954
+source_lines=7129
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -46,11 +46,13 @@ import frontend.ast.{
   Pat(..),
   UsePath(..),
   UseMember(..),
+  useMemberLocal,
   qualifiedLocal,
   RecPatField(..),
   Guard(..),
   Arm(..),
   ImplMethod(..),
+  IfaceMethod(..),
   DoStmt(..),
   Section(..),
   InterpPart(..),
@@ -127,6 +129,7 @@ import regex.{
   escape,
 }
 import ir.sexp.{exprSexp, patSexp}
+import frontend.marker.{declRefs, localBoundNames}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorSiblings}
 import frontend.lexer.{
   Comment,
@@ -1020,10 +1023,173 @@ applyFixes : List String ->
 applyFixes only disable src prog pos =
   let rules = filterList (ruleActiveFixable only disable) allRules
   let orc = buildOracle prog
-  let cmtLines = map commentLine (collectComments src)
-  let splices =
-    collectSplices cmtLines orc rules (zipDeclPos prog (positionsDecls pos))
-  (applySplices src splices, listLen splices)
+  let cmts = collectComments src
+  let cmtLines = map commentLine cmts
+  let declPos = zipDeclPos prog (positionsDecls pos)
+  let scope = testVerbScope prog declPos
+  let tagged = collectSplices scope cmtLines orc rules declPos
+  let (kept, widen) = reconcileTestImport cmts declPos tagged
+  (applySplices src (withWiden widen kept), listLen kept)
+
+withWiden : Option (Int, Int, String) ->
+  List (Int, Int, String) ->
+  List (Int, Int, String)
+withWiden None splices = splices
+withWiden (Some sp) splices = insertSpliceAsc sp splices
+
+-- The `stdlib/test.mdk` verbs a fixer can introduce.  Every other name a fixer
+-- emits is prelude-global.
+testVerbNames : List String
+testVerbNames = ["expectEqual", "expectNotEqual", "expectTrue", "expectFalse"]
+
+-- The test verbs a decl list calls, read off the AST (never the rendered text,
+-- where a string literal could name a verb).
+testVerbsIn : List Decl -> List String
+testVerbsIn ds =
+  let refs = flatMap declRefs ds
+  filterList (v => contains v refs) testVerbNames
+
+-- Which test verb names mean the `test` module's verb in this file.
+--   blocked  names bound by something other than the `test` import: a top-level
+--            definition (function, extern, let-group binding, interface
+--            method), a member of another module's selective import, or a local
+--            binder anywhere in the file.  The local check is file-wide rather
+--            than per-scope: it over-skips a fix next to an unrelated binder of
+--            the same name and never under-skips.  A name arriving through
+--            another module's `import m.*` is not visible from the AST alone,
+--            so it is not blocked.
+--   resolved names the file imports from `test` itself: a member of an
+--            `import test.{…}` group under its own name, or every verb when
+--            `import test.*` is present.
+testVerbScope : List Decl -> List (Decl, DeclPos) -> (List String, List String)
+testVerbScope prog declPos =
+  let bound =
+    flatMap topLevelBinders prog
+      ++ flatMap foreignImportNames prog
+      ++ localBoundNames prog
+  let blocked = filterList (v => contains v bound) testVerbNames
+  let wild = anyList isTestWild prog
+  let listed = flatMap (g => map useMemberLocal (fst g)) (testGroups declPos)
+  let resolved =
+    if wild then
+      testVerbNames
+    else
+      filterList (v => contains v listed) testVerbNames
+  (blocked, resolved)
+
+topLevelBinders : Decl -> List String
+topLevelBinders (DFunDef _ n _ _) = [n]
+topLevelBinders (DExtern _ n _) = [n]
+topLevelBinders (DLetGroup _ binds) = map letBindName binds
+topLevelBinders (DInterface { methods, ... }) = map ifaceMethodNameOf methods
+topLevelBinders (DAttrib _ d) = topLevelBinders d
+topLevelBinders _ = []
+
+letBindName : LetBind -> String
+letBindName (LetBind n _) = n
+
+ifaceMethodNameOf : IfaceMethod -> String
+ifaceMethodNameOf (IfaceMethod n _ _ _) = n
+
+-- Local names an `import m.{…}` group brings in, for every module but `test`.
+foreignImportNames : Decl -> List String
+foreignImportNames (DUse _ (UseGroup path members) _)
+  | path == ["test"] = []
+  | otherwise = map useMemberLocal members
+foreignImportNames _ = []
+
+-- A fix whose rewrite touches a `test` verb is applied only when every verb it
+-- matched or introduces is not blocked and every verb it matched is the `test`
+-- module's own (`resolved`).  Matching `expectEqual` by name alone would
+-- otherwise rewrite a file's own `expectEqual` into a call to a verb that file
+-- never imported, and introducing a name the file already binds would silently
+-- call that binding instead.
+testFixAllowed : (List String, List String) ->
+  List String ->
+  List String ->
+  Bool
+testFixAllowed (blocked, resolved) matched introduced =
+  isEmptyL introduced
+    || not (anyList (v => contains v blocked) (matched ++ introduced))
+      && allList (v => contains v resolved) matched
+
+-- A fix that introduces a call to a `test` verb must leave the file's
+-- `import test.{…}` list naming it, or the next `check` fails with an unbound
+-- variable.  Returns the splices to apply plus the (zero or one) splice that
+-- widens the import.  A fix whose verb is missing from every `import test.{…}`
+-- group is kept only when some group can be widened without losing a comment:
+-- otherwise it is dropped and stays a finding.  `import test.*` already binds
+-- the verbs, so that file is untouched here.  A bare or aliased `import test`,
+-- or no import at all, never bound the matched verb, so `testFixAllowed` has
+-- already dropped every fix in such a file.
+reconcileTestImport : List Comment ->
+  List (Decl, DeclPos) ->
+  List ((Int, Int, String), List String) ->
+  (List (Int, Int, String), Option (Int, Int, String))
+reconcileTestImport cmts declPos tagged =
+  let groups = testGroups declPos
+  let listed = flatMap (g => map useMemberLocal (fst g)) groups
+  let wild = anyList isTestWild (map fst declPos)
+  if isEmptyL groups || wild then
+    (map fst tagged, None)
+  else
+    let missingOf = verbs => filterList (v => not (contains v listed)) verbs
+    let target = findWidenable cmts groups
+    let kept =
+      filterList (t => isEmptyL (missingOf (snd t)) || isSome target) tagged
+    let missing = dedup (flatMap (t => missingOf (snd t)) kept)
+    match target
+      Some (pub, path, members, loc, dp, trailing) =>
+        if isEmptyL missing then
+          (map fst kept, None)
+        else
+          let widened =
+            UseGroup
+              path
+              (members ++ map (v => UseMember v False loc None) missing)
+          let txt = declToString (DUse pub widened loc) ++ trailing
+          (map fst kept, Some (declPosLine dp, declPosEndLine dp, txt))
+      None => (map fst kept, None)
+
+isTestWild : Decl -> Bool
+isTestWild (DUse _ (UseWild path) _) = path == ["test"]
+isTestWild _ = False
+
+testGroups : List (Decl, DeclPos) ->
+  List (List UseMember, (Bool, List String, Loc, DeclPos))
+testGroups [] = []
+testGroups ((DUse pub (UseGroup path members) loc, dp) :: rest)
+  | path == ["test"] = (members, (pub, path, loc, dp)) :: testGroups rest
+testGroups (_ :: rest) = testGroups rest
+
+-- The first `import test.{…}` group whose span holds no comment, or only a
+-- `--` comment on its last line, which the rewritten import re-appends.
+findWidenable : List Comment ->
+  List (List UseMember, (Bool, List String, Loc, DeclPos)) ->
+  Option (Bool, List String, List UseMember, Loc, DeclPos, String)
+findWidenable _ [] = None
+findWidenable cmts ((members, (pub, path, loc, dp)) :: rest) =
+  match spanComments cmts (declPosLine dp) (declPosEndLine dp)
+    [] => Some (pub, path, members, loc, dp, "")
+    [c] =>
+      if commentLine c == declPosEndLine dp
+        && startsWith "--" (commentText c) then
+        Some (pub, path, members, loc, dp, " " ++ commentText c)
+      else
+        findWidenable cmts rest
+    _ => findWidenable cmts rest
+
+spanComments : List Comment -> Int -> Int -> List Comment
+spanComments cmts s e =
+  filterList (c => s <= commentLine c && commentLine c <= e) cmts
+
+insertSpliceAsc : (Int, Int, String) ->
+  List (Int, Int, String) ->
+  List (Int, Int, String)
+insertSpliceAsc sp [] = [sp]
+insertSpliceAsc (s, e, t) ((s2, e2, t2) :: rest)
+  | s < s2 = (s, e, t) :: (s2, e2, t2) :: rest
+  | otherwise = (s2, e2, t2) :: insertSpliceAsc (s, e, t) rest
 
 -- a rule participates in `--fix` iff it is enabled, passes the --only/--disable
 -- filters, AND carries a fixer.
@@ -1053,20 +1219,29 @@ zipDeclPos (d :: ds) (p :: ps) = (d, p) :: zipDeclPos ds ps
 -- interior comment line we SKIP the fix (the rule still WARNS; the source is
 -- left untouched).  A leading doc-comment ABOVE the decl is on a line
 -- `< declPosLine` → outside the span → the fix is still allowed (no over-bail).
-collectSplices : List Int ->
+collectSplices : (List String, List String) ->
+  List Int ->
   Oracle ->
   List Rule ->
   List (Decl, DeclPos) ->
-  List (Int, Int, String)
-collectSplices _ _ _ [] = []
-collectSplices cmtLines orc rules ((d, dp) :: rest) = match firstFix orc rules d
-  Some newDecls =>
-    if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp) then
-      collectSplices cmtLines orc rules rest
-    else
-      (declPosLine dp, declPosEndLine dp, renderDecls newDecls)
-        :: collectSplices cmtLines orc rules rest
-  None => collectSplices cmtLines orc rules rest
+  List ((Int, Int, String), List String)
+collectSplices _ _ _ _ [] = []
+collectSplices scope cmtLines orc rules ((d, dp) :: rest) =
+  match firstFix orc rules d
+    Some newDecls =>
+      let matched = testVerbsIn [d]
+      let introduced =
+        filterList (v => not (contains v matched)) (testVerbsIn newDecls)
+      if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp)
+        || not (testFixAllowed scope matched introduced) then
+        collectSplices scope cmtLines orc rules rest
+      else
+        (
+            (declPosLine dp, declPosEndLine dp, renderDecls newDecls),
+            introduced,
+          )
+          :: collectSplices scope cmtLines orc rules rest
+    None => collectSplices scope cmtLines orc rules rest
 
 -- True iff some comment line falls within the inclusive span `[startLine, endLine]`.
 spanHasComment : List Int -> Int -> Int -> Bool
@@ -6957,7 +7132,7 @@ preludeShadowFinding name loc = Finding {
   loc = loc,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
@@ -6970,6 +7145,7 @@ preludeShadowFinding name loc = Finding {
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "RegexError" true) (mem "Match" false) (mem "compile" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
+(DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "oGetCtorSiblings" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
 (DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
@@ -7172,7 +7348,49 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "exportedSigPair" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "exportedSigPair") (EVar "d")))
 (DFunDef false "exportedSigPair" (PWild) (EListLit))
 (DTypeSig true "applyFixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "applyFixes" ((PVar "only") (PVar "disable") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleActiveFixable") (EVar "only")) (EVar "disable"))) (EVar "allRules"))) (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoLet false false (PVar "cmtLines") (EApp (EApp (EVar "map") (EVar "commentLine")) (EApp (EVar "collectComments") (EVar "src")))) (DoLet false false (PVar "splices") (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos"))))) (DoExpr (ETuple (EApp (EApp (EVar "applySplices") (EVar "src")) (EVar "splices")) (EApp (EVar "listLen") (EVar "splices"))))))
+(DFunDef false "applyFixes" ((PVar "only") (PVar "disable") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleActiveFixable") (EVar "only")) (EVar "disable"))) (EVar "allRules"))) (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoLet false false (PVar "cmts") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "cmtLines") (EApp (EApp (EVar "map") (EVar "commentLine")) (EVar "cmts"))) (DoLet false false (PVar "declPos") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "scope") (EApp (EApp (EVar "testVerbScope") (EVar "prog")) (EVar "declPos"))) (DoLet false false (PVar "tagged") (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "scope")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "declPos"))) (DoLet false false (PTuple (PVar "kept") (PVar "widen")) (EApp (EApp (EApp (EVar "reconcileTestImport") (EVar "cmts")) (EVar "declPos")) (EVar "tagged"))) (DoExpr (ETuple (EApp (EApp (EVar "applySplices") (EVar "src")) (EApp (EApp (EVar "withWiden") (EVar "widen")) (EVar "kept"))) (EApp (EVar "listLen") (EVar "kept"))))))
+(DTypeSig false "withWiden" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "withWiden" ((PCon "None") (PVar "splices")) (EVar "splices"))
+(DFunDef false "withWiden" ((PCon "Some" (PVar "sp")) (PVar "splices")) (EApp (EApp (EVar "insertSpliceAsc") (EVar "sp")) (EVar "splices")))
+(DTypeSig false "testVerbNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "testVerbNames" () (EListLit (ELit (LString "expectEqual")) (ELit (LString "expectNotEqual")) (ELit (LString "expectTrue")) (ELit (LString "expectFalse"))))
+(DTypeSig false "testVerbsIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "testVerbsIn" ((PVar "ds")) (EBlock (DoLet false false (PVar "refs") (EApp (EApp (EVar "flatMap") (EVar "declRefs")) (EVar "ds"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "refs")))) (EVar "testVerbNames")))))
+(DTypeSig false "testVerbScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "testVerbScope" ((PVar "prog") (PVar "declPos")) (EBlock (DoLet false false (PVar "bound") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "topLevelBinders")) (EVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "foreignImportNames")) (EVar "prog"))) (EApp (EVar "localBoundNames") (EVar "prog")))) (DoLet false false (PVar "blocked") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "bound")))) (EVar "testVerbNames"))) (DoLet false false (PVar "wild") (EApp (EApp (EVar "anyList") (EVar "isTestWild")) (EVar "prog"))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "map") (EVar "useMemberLocal")) (EApp (EVar "fst") (EVar "g"))))) (EApp (EVar "testGroups") (EVar "declPos")))) (DoLet false false (PVar "resolved") (EIf (EVar "wild") (EVar "testVerbNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "listed")))) (EVar "testVerbNames")))) (DoExpr (ETuple (EVar "blocked") (EVar "resolved")))))
+(DTypeSig false "topLevelBinders" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "topLevelBinders" ((PCon "DFunDef" PWild (PVar "n") PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "topLevelBinders" ((PCon "DExtern" PWild (PVar "n") PWild)) (EListLit (EVar "n")))
+(DFunDef false "topLevelBinders" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")))
+(DFunDef false "topLevelBinders" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (EVar "ifaceMethodNameOf")) (EVar "methods")))
+(DFunDef false "topLevelBinders" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topLevelBinders") (EVar "d")))
+(DFunDef false "topLevelBinders" (PWild) (EListLit))
+(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
+(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig false "ifaceMethodNameOf" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
+(DFunDef false "ifaceMethodNameOf" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig false "foreignImportNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "foreignImportNames" ((PCon "DUse" PWild (PCon "UseGroup" (PVar "path") (PVar "members")) PWild)) (EIf (EBinOp "==" (EVar "path") (EListLit (ELit (LString "test")))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (EVar "useMemberLocal")) (EVar "members")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "foreignImportNames" (PWild) (EListLit))
+(DTypeSig false "testFixAllowed" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
+(DFunDef false "testFixAllowed" ((PTuple (PVar "blocked") (PVar "resolved")) (PVar "matched") (PVar "introduced")) (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "introduced")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "blocked")))) (EBinOp "++" (EVar "matched") (EVar "introduced")))) (EApp (EApp (EVar "allList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "resolved")))) (EVar "matched")))))
+(DTypeSig false "reconcileTestImport" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))))
+(DFunDef false "reconcileTestImport" ((PVar "cmts") (PVar "declPos") (PVar "tagged")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "testGroups") (EVar "declPos"))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "map") (EVar "useMemberLocal")) (EApp (EVar "fst") (EVar "g"))))) (EVar "groups"))) (DoLet false false (PVar "wild") (EApp (EApp (EVar "anyList") (EVar "isTestWild")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "declPos")))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "groups")) (EVar "wild")) (ETuple (EApp (EApp (EVar "map") (EVar "fst")) (EVar "tagged")) (EVar "None")) (EBlock (DoLet false false (PVar "missingOf") (ELam ((PVar "verbs")) (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "listed"))))) (EVar "verbs")))) (DoLet false false (PVar "target") (EApp (EApp (EVar "findWidenable") (EVar "cmts")) (EVar "groups"))) (DoLet false false (PVar "kept") (EApp (EApp (EVar "filterList") (ELam ((PVar "t")) (EBinOp "||" (EApp (EVar "isEmptyL") (EApp (EVar "missingOf") (EApp (EVar "snd") (EVar "t")))) (EApp (EVar "isSome") (EVar "target"))))) (EVar "tagged"))) (DoLet false false (PVar "missing") (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (ELam ((PVar "t")) (EApp (EVar "missingOf") (EApp (EVar "snd") (EVar "t"))))) (EVar "kept")))) (DoExpr (EMatch (EVar "target") (arm (PCon "Some" (PTuple (PVar "pub") (PVar "path") (PVar "members") (PVar "loc") (PVar "dp") (PVar "trailing"))) () (EIf (EApp (EVar "isEmptyL") (EVar "missing")) (ETuple (EApp (EApp (EVar "map") (EVar "fst")) (EVar "kept")) (EVar "None")) (EBlock (DoLet false false (PVar "widened") (EApp (EApp (EVar "UseGroup") (EVar "path")) (EBinOp "++" (EVar "members") (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "v")) (EVar "False")) (EVar "loc")) (EVar "None")))) (EVar "missing"))))) (DoLet false false (PVar "txt") (EBinOp "++" (EApp (EVar "declToString") (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EVar "widened")) (EVar "loc"))) (EVar "trailing"))) (DoExpr (ETuple (EApp (EApp (EVar "map") (EVar "fst")) (EVar "kept")) (EApp (EVar "Some") (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")) (EVar "txt")))))))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "map") (EVar "fst")) (EVar "kept")) (EVar "None"))))))))))
+(DTypeSig false "isTestWild" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "isTestWild" ((PCon "DUse" PWild (PCon "UseWild" (PVar "path")) PWild)) (EBinOp "==" (EVar "path") (EListLit (ELit (LString "test")))))
+(DFunDef false "isTestWild" (PWild) (EVar "False"))
+(DTypeSig false "testGroups" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "UseMember")) (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc") (TyCon "DeclPos"))))))
+(DFunDef false "testGroups" ((PList)) (EListLit))
+(DFunDef false "testGroups" ((PCons (PTuple (PCon "DUse" (PVar "pub") (PCon "UseGroup" (PVar "path") (PVar "members")) (PVar "loc")) (PVar "dp")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "path") (EListLit (ELit (LString "test")))) (EBinOp "::" (ETuple (EVar "members") (ETuple (EVar "pub") (EVar "path") (EVar "loc") (EVar "dp"))) (EApp (EVar "testGroups") (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "testGroups" ((PCons PWild (PVar "rest"))) (EApp (EVar "testGroups") (EVar "rest")))
+(DTypeSig false "findWidenable" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "UseMember")) (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc") (TyCon "DeclPos")))) (TyApp (TyCon "Option") (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "UseMember")) (TyCon "Loc") (TyCon "DeclPos") (TyCon "String"))))))
+(DFunDef false "findWidenable" (PWild (PList)) (EVar "None"))
+(DFunDef false "findWidenable" ((PVar "cmts") (PCons (PTuple (PVar "members") (PTuple (PVar "pub") (PVar "path") (PVar "loc") (PVar "dp"))) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "spanComments") (EVar "cmts")) (EApp (EVar "declPosLine") (EVar "dp"))) (EApp (EVar "declPosEndLine") (EVar "dp"))) (arm (PList) () (EApp (EVar "Some") (ETuple (EVar "pub") (EVar "path") (EVar "members") (EVar "loc") (EVar "dp") (ELit (LString ""))))) (arm (PList (PVar "c")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "commentLine") (EVar "c")) (EApp (EVar "declPosEndLine") (EVar "dp"))) (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EApp (EVar "commentText") (EVar "c")))) (EApp (EVar "Some") (ETuple (EVar "pub") (EVar "path") (EVar "members") (EVar "loc") (EVar "dp") (EBinOp "++" (ELit (LString " ")) (EApp (EVar "commentText") (EVar "c"))))) (EApp (EApp (EVar "findWidenable") (EVar "cmts")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "findWidenable") (EVar "cmts")) (EVar "rest")))))
+(DTypeSig false "spanComments" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Comment"))))))
+(DFunDef false "spanComments" ((PVar "cmts") (PVar "s") (PVar "e")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "&&" (EBinOp "<=" (EVar "s") (EApp (EVar "commentLine") (EVar "c"))) (EBinOp "<=" (EApp (EVar "commentLine") (EVar "c")) (EVar "e"))))) (EVar "cmts")))
+(DTypeSig false "insertSpliceAsc" (TyFun (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "insertSpliceAsc" ((PVar "sp") (PList)) (EListLit (EVar "sp")))
+(DFunDef false "insertSpliceAsc" ((PTuple (PVar "s") (PVar "e") (PVar "t")) (PCons (PTuple (PVar "s2") (PVar "e2") (PVar "t2")) (PVar "rest"))) (EIf (EBinOp "<" (EVar "s") (EVar "s2")) (EBinOp "::" (ETuple (EVar "s") (EVar "e") (EVar "t")) (EBinOp "::" (ETuple (EVar "s2") (EVar "e2") (EVar "t2")) (EVar "rest"))) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "s2") (EVar "e2") (EVar "t2")) (EApp (EApp (EVar "insertSpliceAsc") (ETuple (EVar "s") (EVar "e") (EVar "t"))) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ruleActiveFixable" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
 (DFunDef false "ruleActiveFixable" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))) (EApp (EVar "ruleHasFixer") (EVar "r"))))
 (DTypeSig false "ruleHasFixer" (TyFun (TyCon "Rule") (TyCon "Bool")))
@@ -7181,9 +7399,9 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "zipDeclPos" ((PList) PWild) (EListLit))
 (DFunDef false "zipDeclPos" (PWild (PList)) (EListLit))
 (DFunDef false "zipDeclPos" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBinOp "::" (ETuple (EVar "d") (EVar "p")) (EApp (EApp (EVar "zipDeclPos") (EVar "ds")) (EVar "ps"))))
-(DTypeSig false "collectSplices" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))))
-(DFunDef false "collectSplices" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "collectSplices" ((PVar "cmtLines") (PVar "orc") (PVar "rules") (PCons (PTuple (PVar "d") (PVar "dp")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "firstFix") (EVar "orc")) (EVar "rules")) (EVar "d")) (arm (PCon "Some" (PVar "newDecls")) () (EIf (EApp (EApp (EApp (EVar "spanHasComment") (EVar "cmtLines")) (EApp (EVar "declPosLine") (EVar "dp"))) (EApp (EVar "declPosEndLine") (EVar "dp"))) (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")) (EBinOp "::" (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")) (EApp (EVar "renderDecls") (EVar "newDecls"))) (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")))))
+(DTypeSig false "collectSplices" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
+(DFunDef false "collectSplices" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "collectSplices" ((PVar "scope") (PVar "cmtLines") (PVar "orc") (PVar "rules") (PCons (PTuple (PVar "d") (PVar "dp")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "firstFix") (EVar "orc")) (EVar "rules")) (EVar "d")) (arm (PCon "Some" (PVar "newDecls")) () (EBlock (DoLet false false (PVar "matched") (EApp (EVar "testVerbsIn") (EListLit (EVar "d")))) (DoLet false false (PVar "introduced") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "matched"))))) (EApp (EVar "testVerbsIn") (EVar "newDecls")))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "spanHasComment") (EVar "cmtLines")) (EApp (EVar "declPosLine") (EVar "dp"))) (EApp (EVar "declPosEndLine") (EVar "dp"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testFixAllowed") (EVar "scope")) (EVar "matched")) (EVar "introduced")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "scope")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")) (EBinOp "::" (ETuple (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")) (EApp (EVar "renderDecls") (EVar "newDecls"))) (EVar "introduced")) (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "scope")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "scope")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")))))
 (DTypeSig false "spanHasComment" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "spanHasComment" ((PVar "cmtLines") (PVar "startLine") (PVar "endLine")) (EApp (EApp (EVar "anyList") (ELam ((PVar "l")) (EBinOp "&&" (EBinOp "<=" (EVar "startLine") (EVar "l")) (EBinOp "<=" (EVar "l") (EVar "endLine"))))) (EVar "cmtLines")))
 (DTypeSig false "firstFix" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
@@ -8973,7 +9191,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "preludeShadowFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
 (DFunDef false "preludeShadowFinding" ((PVar "name") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestPreludeShadow")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
@@ -8986,6 +9204,7 @@ preludeShadowFinding name loc = Finding {
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "RegexError" true) (mem "Match" false) (mem "compile" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
+(DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "oGetCtorSiblings" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
 (DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
@@ -9188,7 +9407,49 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "exportedSigPair" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "exportedSigPair") (EVar "d")))
 (DFunDef false "exportedSigPair" (PWild) (EListLit))
 (DTypeSig true "applyFixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "applyFixes" ((PVar "only") (PVar "disable") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleActiveFixable") (EVar "only")) (EVar "disable"))) (EVar "allRules"))) (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoLet false false (PVar "cmtLines") (EApp (EApp (EMethodRef "map") (EVar "commentLine")) (EApp (EVar "collectComments") (EVar "src")))) (DoLet false false (PVar "splices") (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos"))))) (DoExpr (ETuple (EApp (EApp (EVar "applySplices") (EVar "src")) (EVar "splices")) (EApp (EVar "listLen") (EVar "splices"))))))
+(DFunDef false "applyFixes" ((PVar "only") (PVar "disable") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleActiveFixable") (EVar "only")) (EVar "disable"))) (EVar "allRules"))) (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoLet false false (PVar "cmts") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "cmtLines") (EApp (EApp (EMethodRef "map") (EVar "commentLine")) (EVar "cmts"))) (DoLet false false (PVar "declPos") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "scope") (EApp (EApp (EVar "testVerbScope") (EVar "prog")) (EVar "declPos"))) (DoLet false false (PVar "tagged") (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "scope")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "declPos"))) (DoLet false false (PTuple (PVar "kept") (PVar "widen")) (EApp (EApp (EApp (EVar "reconcileTestImport") (EVar "cmts")) (EVar "declPos")) (EVar "tagged"))) (DoExpr (ETuple (EApp (EApp (EVar "applySplices") (EVar "src")) (EApp (EApp (EVar "withWiden") (EVar "widen")) (EVar "kept"))) (EApp (EVar "listLen") (EVar "kept"))))))
+(DTypeSig false "withWiden" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "withWiden" ((PCon "None") (PVar "splices")) (EVar "splices"))
+(DFunDef false "withWiden" ((PCon "Some" (PVar "sp")) (PVar "splices")) (EApp (EApp (EVar "insertSpliceAsc") (EVar "sp")) (EVar "splices")))
+(DTypeSig false "testVerbNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "testVerbNames" () (EListLit (ELit (LString "expectEqual")) (ELit (LString "expectNotEqual")) (ELit (LString "expectTrue")) (ELit (LString "expectFalse"))))
+(DTypeSig false "testVerbsIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "testVerbsIn" ((PVar "ds")) (EBlock (DoLet false false (PVar "refs") (EApp (EApp (EDictApp "flatMap") (EVar "declRefs")) (EVar "ds"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "refs")))) (EVar "testVerbNames")))))
+(DTypeSig false "testVerbScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "testVerbScope" ((PVar "prog") (PVar "declPos")) (EBlock (DoLet false false (PVar "bound") (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "topLevelBinders")) (EVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "foreignImportNames")) (EVar "prog"))) (EApp (EVar "localBoundNames") (EVar "prog")))) (DoLet false false (PVar "blocked") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "bound")))) (EVar "testVerbNames"))) (DoLet false false (PVar "wild") (EApp (EApp (EVar "anyList") (EVar "isTestWild")) (EVar "prog"))) (DoLet false false (PVar "listed") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EMethodRef "map") (EVar "useMemberLocal")) (EApp (EVar "fst") (EVar "g"))))) (EApp (EVar "testGroups") (EVar "declPos")))) (DoLet false false (PVar "resolved") (EIf (EVar "wild") (EVar "testVerbNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "listed")))) (EVar "testVerbNames")))) (DoExpr (ETuple (EVar "blocked") (EVar "resolved")))))
+(DTypeSig false "topLevelBinders" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "topLevelBinders" ((PCon "DFunDef" PWild (PVar "n") PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "topLevelBinders" ((PCon "DExtern" PWild (PVar "n") PWild)) (EListLit (EVar "n")))
+(DFunDef false "topLevelBinders" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")))
+(DFunDef false "topLevelBinders" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNameOf")) (EVar "methods")))
+(DFunDef false "topLevelBinders" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topLevelBinders") (EVar "d")))
+(DFunDef false "topLevelBinders" (PWild) (EListLit))
+(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
+(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig false "ifaceMethodNameOf" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
+(DFunDef false "ifaceMethodNameOf" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig false "foreignImportNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "foreignImportNames" ((PCon "DUse" PWild (PCon "UseGroup" (PVar "path") (PVar "members")) PWild)) (EIf (EBinOp "==" (EVar "path") (EListLit (ELit (LString "test")))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (EVar "useMemberLocal")) (EVar "members")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "foreignImportNames" (PWild) (EListLit))
+(DTypeSig false "testFixAllowed" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
+(DFunDef false "testFixAllowed" ((PTuple (PVar "blocked") (PVar "resolved")) (PVar "matched") (PVar "introduced")) (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "introduced")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "blocked")))) (EBinOp "++" (EVar "matched") (EVar "introduced")))) (EApp (EApp (EVar "allList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "resolved")))) (EVar "matched")))))
+(DTypeSig false "reconcileTestImport" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))))
+(DFunDef false "reconcileTestImport" ((PVar "cmts") (PVar "declPos") (PVar "tagged")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "testGroups") (EVar "declPos"))) (DoLet false false (PVar "listed") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EMethodRef "map") (EVar "useMemberLocal")) (EApp (EVar "fst") (EVar "g"))))) (EVar "groups"))) (DoLet false false (PVar "wild") (EApp (EApp (EVar "anyList") (EVar "isTestWild")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "declPos")))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "groups")) (EVar "wild")) (ETuple (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "tagged")) (EVar "None")) (EBlock (DoLet false false (PVar "missingOf") (ELam ((PVar "verbs")) (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "listed"))))) (EVar "verbs")))) (DoLet false false (PVar "target") (EApp (EApp (EVar "findWidenable") (EVar "cmts")) (EVar "groups"))) (DoLet false false (PVar "kept") (EApp (EApp (EVar "filterList") (ELam ((PVar "t")) (EBinOp "||" (EApp (EVar "isEmptyL") (EApp (EVar "missingOf") (EApp (EVar "snd") (EVar "t")))) (EApp (EVar "isSome") (EVar "target"))))) (EVar "tagged"))) (DoLet false false (PVar "missing") (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "t")) (EApp (EVar "missingOf") (EApp (EVar "snd") (EVar "t"))))) (EVar "kept")))) (DoExpr (EMatch (EVar "target") (arm (PCon "Some" (PTuple (PVar "pub") (PVar "path") (PVar "members") (PVar "loc") (PVar "dp") (PVar "trailing"))) () (EIf (EApp (EVar "isEmptyL") (EVar "missing")) (ETuple (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "kept")) (EVar "None")) (EBlock (DoLet false false (PVar "widened") (EApp (EApp (EVar "UseGroup") (EVar "path")) (EBinOp "++" (EVar "members") (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "v")) (EVar "False")) (EVar "loc")) (EVar "None")))) (EVar "missing"))))) (DoLet false false (PVar "txt") (EBinOp "++" (EApp (EVar "declToString") (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EVar "widened")) (EVar "loc"))) (EVar "trailing"))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "kept")) (EApp (EVar "Some") (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")) (EVar "txt")))))))) (arm (PCon "None") () (ETuple (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "kept")) (EVar "None"))))))))))
+(DTypeSig false "isTestWild" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "isTestWild" ((PCon "DUse" PWild (PCon "UseWild" (PVar "path")) PWild)) (EBinOp "==" (EVar "path") (EListLit (ELit (LString "test")))))
+(DFunDef false "isTestWild" (PWild) (EVar "False"))
+(DTypeSig false "testGroups" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "UseMember")) (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc") (TyCon "DeclPos"))))))
+(DFunDef false "testGroups" ((PList)) (EListLit))
+(DFunDef false "testGroups" ((PCons (PTuple (PCon "DUse" (PVar "pub") (PCon "UseGroup" (PVar "path") (PVar "members")) (PVar "loc")) (PVar "dp")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "path") (EListLit (ELit (LString "test")))) (EBinOp "::" (ETuple (EVar "members") (ETuple (EVar "pub") (EVar "path") (EVar "loc") (EVar "dp"))) (EApp (EVar "testGroups") (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "testGroups" ((PCons PWild (PVar "rest"))) (EApp (EVar "testGroups") (EVar "rest")))
+(DTypeSig false "findWidenable" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "UseMember")) (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc") (TyCon "DeclPos")))) (TyApp (TyCon "Option") (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "UseMember")) (TyCon "Loc") (TyCon "DeclPos") (TyCon "String"))))))
+(DFunDef false "findWidenable" (PWild (PList)) (EVar "None"))
+(DFunDef false "findWidenable" ((PVar "cmts") (PCons (PTuple (PVar "members") (PTuple (PVar "pub") (PVar "path") (PVar "loc") (PVar "dp"))) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "spanComments") (EVar "cmts")) (EApp (EVar "declPosLine") (EVar "dp"))) (EApp (EVar "declPosEndLine") (EVar "dp"))) (arm (PList) () (EApp (EVar "Some") (ETuple (EVar "pub") (EVar "path") (EVar "members") (EVar "loc") (EVar "dp") (ELit (LString ""))))) (arm (PList (PVar "c")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "commentLine") (EVar "c")) (EApp (EVar "declPosEndLine") (EVar "dp"))) (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EApp (EVar "commentText") (EVar "c")))) (EApp (EVar "Some") (ETuple (EVar "pub") (EVar "path") (EVar "members") (EVar "loc") (EVar "dp") (EBinOp "++" (ELit (LString " ")) (EApp (EVar "commentText") (EVar "c"))))) (EApp (EApp (EVar "findWidenable") (EVar "cmts")) (EVar "rest")))) (arm PWild () (EApp (EApp (EVar "findWidenable") (EVar "cmts")) (EVar "rest")))))
+(DTypeSig false "spanComments" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Comment"))))))
+(DFunDef false "spanComments" ((PVar "cmts") (PVar "s") (PVar "e")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "&&" (EBinOp "<=" (EVar "s") (EApp (EVar "commentLine") (EVar "c"))) (EBinOp "<=" (EApp (EVar "commentLine") (EVar "c")) (EVar "e"))))) (EVar "cmts")))
+(DTypeSig false "insertSpliceAsc" (TyFun (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "insertSpliceAsc" ((PVar "sp") (PList)) (EListLit (EVar "sp")))
+(DFunDef false "insertSpliceAsc" ((PTuple (PVar "s") (PVar "e") (PVar "t")) (PCons (PTuple (PVar "s2") (PVar "e2") (PVar "t2")) (PVar "rest"))) (EIf (EBinOp "<" (EVar "s") (EVar "s2")) (EBinOp "::" (ETuple (EVar "s") (EVar "e") (EVar "t")) (EBinOp "::" (ETuple (EVar "s2") (EVar "e2") (EVar "t2")) (EVar "rest"))) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "s2") (EVar "e2") (EVar "t2")) (EApp (EApp (EVar "insertSpliceAsc") (ETuple (EVar "s") (EVar "e") (EVar "t"))) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ruleActiveFixable" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
 (DFunDef false "ruleActiveFixable" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))) (EApp (EVar "ruleHasFixer") (EVar "r"))))
 (DTypeSig false "ruleHasFixer" (TyFun (TyCon "Rule") (TyCon "Bool")))
@@ -9197,9 +9458,9 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "zipDeclPos" ((PList) PWild) (EListLit))
 (DFunDef false "zipDeclPos" (PWild (PList)) (EListLit))
 (DFunDef false "zipDeclPos" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBinOp "::" (ETuple (EVar "d") (EVar "p")) (EApp (EApp (EVar "zipDeclPos") (EVar "ds")) (EVar "ps"))))
-(DTypeSig false "collectSplices" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))))))))
-(DFunDef false "collectSplices" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "collectSplices" ((PVar "cmtLines") (PVar "orc") (PVar "rules") (PCons (PTuple (PVar "d") (PVar "dp")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "firstFix") (EVar "orc")) (EVar "rules")) (EVar "d")) (arm (PCon "Some" (PVar "newDecls")) () (EIf (EApp (EApp (EApp (EVar "spanHasComment") (EVar "cmtLines")) (EApp (EVar "declPosLine") (EVar "dp"))) (EApp (EVar "declPosEndLine") (EVar "dp"))) (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")) (EBinOp "::" (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")) (EApp (EVar "renderDecls") (EVar "newDecls"))) (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")))))
+(DTypeSig false "collectSplices" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))
+(DFunDef false "collectSplices" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "collectSplices" ((PVar "scope") (PVar "cmtLines") (PVar "orc") (PVar "rules") (PCons (PTuple (PVar "d") (PVar "dp")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "firstFix") (EVar "orc")) (EVar "rules")) (EVar "d")) (arm (PCon "Some" (PVar "newDecls")) () (EBlock (DoLet false false (PVar "matched") (EApp (EVar "testVerbsIn") (EListLit (EVar "d")))) (DoLet false false (PVar "introduced") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "matched"))))) (EApp (EVar "testVerbsIn") (EVar "newDecls")))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EApp (EVar "spanHasComment") (EVar "cmtLines")) (EApp (EVar "declPosLine") (EVar "dp"))) (EApp (EVar "declPosEndLine") (EVar "dp"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testFixAllowed") (EVar "scope")) (EVar "matched")) (EVar "introduced")))) (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "scope")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")) (EBinOp "::" (ETuple (ETuple (EApp (EVar "declPosLine") (EVar "dp")) (EApp (EVar "declPosEndLine") (EVar "dp")) (EApp (EVar "renderDecls") (EVar "newDecls"))) (EVar "introduced")) (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "scope")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest"))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "collectSplices") (EVar "scope")) (EVar "cmtLines")) (EVar "orc")) (EVar "rules")) (EVar "rest")))))
 (DTypeSig false "spanHasComment" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "spanHasComment" ((PVar "cmtLines") (PVar "startLine") (PVar "endLine")) (EApp (EApp (EVar "anyList") (ELam ((PVar "l")) (EBinOp "&&" (EBinOp "<=" (EVar "startLine") (EVar "l")) (EBinOp "<=" (EVar "l") (EVar "endLine"))))) (EVar "cmtLines")))
 (DTypeSig false "firstFix" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))

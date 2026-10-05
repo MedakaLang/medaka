@@ -1,0 +1,9 @@
+-- #3285: a rewrite that would introduce a name the file already defines at top
+-- level is not applied, since the call would silently reach that definition.
+
+import test.{expectEqual}
+
+expectTrue : Bool -> Int
+expectTrue b = if b then 1 else 0
+
+eqCase a = expectEqual True (a == 1)

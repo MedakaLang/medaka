@@ -1,0 +1,9 @@
+-- #3285: a comment inside the import group blocks widening, so the fix that
+-- would need the widened verb is skipped and the file is left untouched.
+
+import test.{
+  -- keep
+  expectTrue,
+}
+
+eqCase a = expectTrue (a == 1)
