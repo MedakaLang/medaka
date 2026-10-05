@@ -1,0 +1,10 @@
+g : String -> String -> Option Int
+g _ _ = None
+
+f : Int -> Int
+f x = match x
+  0 => match g "a"
+        "b"
+      None => 1
+      Some _ => 2
+  _ => 3
