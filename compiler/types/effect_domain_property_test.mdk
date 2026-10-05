@@ -8,7 +8,7 @@
 -- intentionally outside this model: their meanings depend on filesystem
 -- interpretation and deferred constraints, respectively.
 
-import test.{expectTrue}
+import test.{expectTrue, expectAll, expectFalse}
 import support.util.{allList, anyList, contains, sortUniqS}
 import types.effect_domain.{Param(..), dantichain, djoin, dsub}
 import types.effect_authority.{Authority(..), authConsts, authJoinAll, authSub}
@@ -158,13 +158,18 @@ setAntichainLaw ps =
 setJoinLaw : Param -> Param -> Bool
 setJoinLaw left right =
   let joined = djoin left right
-  setWithin left joined
+  isSetElement joined
+    && setWithin left joined
     && setWithin right joined
     && allList
       (upper =>
         not (setWithin left upper && setWithin right upper)
           || setWithin joined upper)
       setPool
+
+isSetElement : Param -> Bool
+isSetElement (PSet _) = True
+isSetElement _ = False
 
 setAuthorityOrder : List Param -> List Param -> Bool
 setAuthorityOrder [] _ = True
@@ -323,6 +328,18 @@ test "finite Prefix domain realizes its inclusion and join laws" =
 
 test "finite Set domain realizes its inclusion and join laws" =
   expectTrue (setPairsLaw setPool)
+
+test "a present empty Set parameter remains distinct from an absent authority" =
+  let bottom = PSet (Some [])
+  let retained = match dantichain [bottom]
+    [PSet (Some [])] => True
+    _ => False
+  expectAll [
+    expectTrue retained,
+    expectTrue (dsub bottom (PSet None)),
+    expectFalse (authSub (AConst bottom) (AJoin [])),
+    expectTrue (authSub (AJoin []) (AConst bottom)),
+  ]
 
 test "finite Product domain realizes its inclusion law" =
   expectTrue (productOrderPairsLaw productPool)

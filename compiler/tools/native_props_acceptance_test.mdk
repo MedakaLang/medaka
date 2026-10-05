@@ -1,7 +1,10 @@
 import driver.build_cmd.{makeTempDir, cleanupTempDir}
 import test_process.{medakaBin, medakaRoot, boundedVerbSeconds}
-import test.{Expectation, expectAll, expectEqual, expectTrue, fail}
-import json.{Json, parse, get, asArray, asString}
+import test.{
+  Expectation, expectAll, expectEqual, expectTrue, expectNotEqual,
+  expectTextContainsAll, fail
+}
+import json.{Json, parse, get, asArray, asString, asInt}
 import string.{contains}
 
 writeFixtures : String -> List (String, String) -> <IO> Result String Unit
@@ -24,8 +27,10 @@ withFixtures files inspect = match makeTempDir ()
     let _ = cleanupTempDir dir
     result
 
-runReport : List String -> String -> <Exec, IO> Result String (Int, Json)
-runReport options target =
+runInvocation : List String ->
+  String ->
+  <Exec, IO> Result String (Int, String, String)
+runInvocation options target =
   let args =
     [
         "MEDAKA_NATIVE_PROP_PROOF=compiled", medakaBin, "test", "--json",
@@ -33,13 +38,16 @@ runReport options target =
       ]
       ++ options
       ++ [target]
-  match boundedVerbSeconds 120 "env" args
-    Err message => Err message
-    Ok (code, out, err) =>
-      if err /= "" then
-        Err "unexpected runner stderr: \{err}"
-      else
-        map (report => (code, report)) (parse out)
+  boundedVerbSeconds 120 "env" args
+
+runReport : List String -> String -> <Exec, IO> Result String (Int, Json)
+runReport options target = match runInvocation options target
+  Err message => Err message
+  Ok (code, out, err) =>
+    if err /= "" then
+      Err "unexpected runner stderr: \{err}"
+    else
+      map (report => (code, report)) (parse out)
 
 propertyReports : Json -> List Json
 propertyReports report = match flatMap asArray (get "properties" report)
@@ -91,7 +99,7 @@ test "combined engines retain a property result from each engine" =
     [
       (
         "main.mdk",
-        "prop \"both bodies\" (xs : List (Int, Bool)) = reverse (reverse xs) == xs\n",
+        "import list.{reverse}\nprop \"both bodies\" (xs : List (Int, Bool)) = reverse (reverse xs) == xs\n",
       ),
     ]
     (target =>
@@ -168,3 +176,90 @@ test "native property execution works for the core auto-prelude itself" =
     (runReport
       ["--native", "--filter", "neq is the negation of eq"]
       "\{medakaRoot}/stdlib/core.mdk")
+
+pinEntry : String -> String
+pinEntry engine =
+  "[[pin]]\nfile = \"main.mdk\"\nkind = \"prop\"\nname = \"known false\"\nengine = \"\{engine}\"\nissue = 1\nseed = 1\ncases = 100\nfailure = \"false\"\n"
+
+pinLedger : String
+pinLedger = "version = 1\n\{pinEntry "eval"}\{pinEntry "native"}"
+
+knownRedCount : Json -> Option Int
+knownRedCount report =
+  flatMap
+    (summary => flatMap asInt (get "knownRed" summary))
+    (get "summary" report)
+
+test "known-red property pins execute fixed witnesses and report separate counts" =
+  withFixtures
+    [
+      ("main.mdk", "prop \"known false\" (n : Int) = False\n"),
+      ("medaka-test-pins.toml", pinLedger),
+    ]
+    (target =>
+      let result = runReport ["--engines", "eval,native"] target
+      let metadata = match result
+        Err _ => False
+        Ok (_, report) =>
+          knownRedCount report == Some 2
+            && all
+              (row =>
+                flatMap asInt (get "issue" row) == Some 1
+                  && flatMap asInt (get "seed" row) == Some 1
+                  && flatMap asInt (get "cases" row) == Some 100)
+              (propertyReports report)
+      expectAll [
+        gradeReport
+          0
+          [
+            ("eval", "known false", "known-red"),
+            ("native", "known false", "known-red"),
+          ]
+          result,
+        expectTrue metadata,
+      ])
+
+test "a known-red property unexpectedly passing makes the run fail" =
+  withFixtures
+    [
+      ("main.mdk", "prop \"known false\" (n : Int) = True\n"),
+      ("medaka-test-pins.toml", pinLedger),
+    ]
+    (target =>
+      gradeFailedInvocation
+        ["known false", "1", "unexpected"]
+        (runInvocation ["--engines", "eval,native"] target))
+
+test "a runtime error cannot satisfy a known-red law-failure pin" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "prop \"known false\" (n : Int) = panic \"different failure\"\n",
+      ),
+      ("medaka-test-pins.toml", pinLedger),
+    ]
+    (target =>
+      gradeFailedInvocation
+        ["known false", "different failure"]
+        (runInvocation ["--native"] target))
+
+test "a deleted pinned declaration stays loud despite a name filter" =
+  withFixtures
+    [
+      ("main.mdk", "prop \"other law\" (n : Int) = True\n"),
+      ("medaka-test-pins.toml", pinLedger),
+    ]
+    (target =>
+      gradeFailedInvocation
+        ["known false", "pin"]
+        (runInvocation ["--native", "--filter", "other law"] target))
+
+gradeFailedInvocation : List String ->
+  Result String (Int, String, String) ->
+  Expectation
+gradeFailedInvocation _ (Err message) = fail message
+gradeFailedInvocation needles (Ok (code, out, err)) = expectAll [
+  expectNotEqual 0 code,
+  expectTextContainsAll needles (out ++ err),
+]
