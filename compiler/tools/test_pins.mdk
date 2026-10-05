@@ -4,12 +4,12 @@
 -- rejects every shape it cannot explain, so a typo cannot turn a real failure
 -- into a green run.
 
-import toml.{
-  Toml(..), parse, getString, getInt, getArray, tableCount, tableEntry
-}
-import support.util.{contains, joinNl}
+import toml.{Toml(..), TomlValue, parse, getString, getInt, getArray}
+import support.ordmap.{OrdMap, omEmpty, omFromNames, omInsert, omLookup}
+import support.util.{contains, joinNl, lenKey}
 import string.{
-  contains as stringContains, endsWith, split, startsWith, trim, lines
+  contains as stringContains, drop, endsWith, indexOf, split, startsWith, toInt,
+  trim, lines
 }
 import list.{reverse}
 
@@ -26,6 +26,8 @@ public export data TestPin = Pin {
   pinDetail : Option String,
 }
   deriving (Eq, Debug)
+
+export type PinIndex = OrdMap TestPin
 
 public export data PinObservation =
   | PinPassed
@@ -217,47 +219,71 @@ readTestPin i file name engine issue entry = do
   }
 
 readPin : Toml -> Int -> Result String TestPin
-readPin doc i = match tableEntry "pin" i doc
-  None => Err "\{rowPrefix i}: no such row"
-  Some entry => do
-    kind <- requiredString i "kind" entry
-    if not (validKind kind) then
-      Err "\{rowPrefix i}: kind must be 'prop' or 'test'"
-    else match validateFields i kind entry
-      Err err => Err err
-      Ok _ => do
-        file <- requiredString i "file" entry
-        name <- requiredString i "name" entry
-        engine <- requiredString i "engine" entry
-        issue <- requiredInt i "issue" entry
-        match validateBase i file name engine issue
-          Err err => Err err
-          Ok _ =>
-            if kind == "prop" then
-              readPropPin i file name engine issue entry
-            else
-              readTestPin i file name engine issue entry
+readPin entry i = do
+  kind <- requiredString i "kind" entry
+  if not (validKind kind) then
+    Err "\{rowPrefix i}: kind must be 'prop' or 'test'"
+  else match validateFields i kind entry
+    Err err => Err err
+    Ok _ => do
+      file <- requiredString i "file" entry
+      name <- requiredString i "name" entry
+      engine <- requiredString i "engine" entry
+      issue <- requiredInt i "issue" entry
+      match validateBase i file name engine issue
+        Err err => Err err
+        Ok _ =>
+          if kind == "prop" then
+            readPropPin i file name engine issue entry
+          else
+            readTestPin i file name engine issue entry
 
-sameSelector : TestPin -> TestPin -> Bool
-sameSelector a b =
-  a.pinFile == b.pinFile
-    && a.pinKind == b.pinKind
-    && a.pinName == b.pinName
-    && a.pinEngine == b.pinEngine
+-- TOML stores array tables as flat qualified keys. Build this index once so
+-- reading N pin rows does not scan the whole document N times.
+pinRows : List (String, a) -> OrdMap (List (String, a))
+pinRows fields = pinRowsGo fields omEmpty
 
-hasSelector : List TestPin -> TestPin -> Bool
-hasSelector [] _ = False
-hasSelector (seen :: rest) pin = sameSelector seen pin || hasSelector rest pin
+pinRowsGo : List (String, a) ->
+  OrdMap (List (String, a)) ->
+  OrdMap (List (String, a))
+pinRowsGo [] rows = rows
+pinRowsGo ((key, value) :: rest) rows = match pinFieldKey key
+  None => pinRowsGo rest rows
+  Some (row, field) =>
+    let prior = match omLookup row rows
+      Some found => found
+      None => []
+    pinRowsGo rest (omInsert row ((field, value) :: prior) rows)
 
-readPinsGo : Toml -> Int -> Int -> List TestPin -> Result String (List TestPin)
-readPinsGo doc i n acc
+pinFieldKey : String -> Option (String, String)
+pinFieldKey key =
+  if not (startsWith "pin." key) then
+    None
+  else
+    let tail = drop 4 key
+    match indexOf "." tail
+      None => None
+      Some dot =>
+        let row = stringSlice 0 dot tail
+        let field = drop (dot + 1) tail
+        match toInt row
+          Some _ => if field == "" then None else Some (row, field)
+          None => None
+
+readPinsGo : OrdMap (List (String, TomlValue)) ->
+  Int ->
+  Int ->
+  List TestPin ->
+  Result String (List TestPin)
+readPinsGo rows i n acc
   | i >= n = Ok (reverse acc)
-  | otherwise = do
-    pin <- readPin doc i
-    if hasSelector acc pin then
-      Err "\{rowPrefix i}: duplicate selector"
-    else
-      readPinsGo doc (i + 1) n (pin :: acc)
+  | otherwise =
+    let row = intToString i
+    match omLookup row rows
+      None => Err "\{rowPrefix i}: no such row"
+      Some fields => do
+        pin <- readPin (Toml fields) i
+        readPinsGo rows (i + 1) n (pin :: acc)
 
 {- | Parse the repository's known-red ledger. A ledger with no `[[pin]]` rows
    is valid only when it says `version = 1`; it is the explicit empty state,
@@ -281,37 +307,70 @@ parsePinsDoc src (Toml fields) =
     Err "\{pinOrigin}: exactly one integer version field is required"
   else match getInt "version" doc
     Some 1 =>
-      let n = tableCount "pin" doc
-      if n /= pinHeaderCount (lines src) then
-        Err "\{pinOrigin}: every [[pin]] table needs fields"
-      else
-        readPinsGo doc 0 n []
+      let n = pinHeaderCount (lines src)
+      match readPinsGo (pinRows fields) 0 n []
+        Err err => Err err
+        Ok pins => map (_ => pins) (buildPinIndex pins)
     Some _ => Err "\{pinOrigin}: version must be 1"
     None => Err "\{pinOrigin}: exactly one integer version field is required"
 
 -- ── Selecting and validating declared tests ────────────────────────────────
 
+selectorKey : String -> PinKind -> String -> String -> String
+selectorKey file kind name engine =
+  lenKey file ++ lenKey (pinKindKey kind) ++ lenKey name ++ lenKey engine
+
+pinKindKey : PinKind -> String
+pinKindKey PropPin = "prop"
+pinKindKey TestPin = "test"
+
+pinSelectorKey : TestPin -> String
+pinSelectorKey pin =
+  selectorKey pin.pinFile pin.pinKind pin.pinName pin.pinEngine
+
+export
+buildPinIndex : List TestPin -> Result String PinIndex
+buildPinIndex pins = buildPinIndexGo pins omEmpty
+
+buildPinIndexGo : List TestPin -> PinIndex -> Result String PinIndex
+buildPinIndexGo [] index = Ok index
+buildPinIndexGo (pin :: rest) index =
+  let key = pinSelectorKey pin
+  match omLookup key index
+    Some _ =>
+      Err
+        "\{pinOrigin}: duplicate selector for '\{pin.pinFile}' / \{pinKindKey pin.pinKind} '\{pin.pinName}' / \{pin.pinEngine}"
+    None => buildPinIndexGo rest (omInsert key pin index)
+
+export
+pinFromIndex : PinIndex ->
+  String ->
+  PinKind ->
+  String ->
+  String ->
+  Option TestPin
+pinFromIndex index file kind name engine =
+  omLookup (selectorKey file kind name engine) index
+
 export
 pinFor : List TestPin -> String -> PinKind -> String -> String -> Option TestPin
-pinFor [] _ _ _ _ = None
-pinFor (pin :: rest) file kind name engine =
-  if pin.pinFile == file
-    && pin.pinKind == kind
-    && pin.pinName == name
-    && pin.pinEngine == engine then
-    Some pin
-  else
-    pinFor rest file kind name engine
+pinFor pins file kind name engine = match buildPinIndex pins
+  Err _ => None
+  Ok index => pinFromIndex index file kind name engine
 
-pinNamePresent : TestPin -> List String -> List String -> Bool
+pinNamePresent : TestPin -> OrdMap Unit -> OrdMap Unit -> Bool
 pinNamePresent pin propNames testNames = match pin.pinKind
-  PropPin => contains pin.pinName propNames
-  TestPin => contains pin.pinName testNames
+  PropPin => match omLookup pin.pinName propNames
+    Some _ => True
+    None => False
+  TestPin => match omLookup pin.pinName testNames
+    Some _ => True
+    None => False
 
 validatePinNamesGo : List TestPin ->
   String ->
-  List String ->
-  List String ->
+  OrdMap Unit ->
+  OrdMap Unit ->
   Result String Unit
 validatePinNamesGo [] _ _ _ = Ok ()
 validatePinNamesGo (pin :: rest) file propNames testNames =
@@ -335,7 +394,11 @@ validatePinNames : List TestPin ->
   List String ->
   Result String Unit
 validatePinNames pins file propNames testNames =
-  validatePinNamesGo pins file propNames testNames
+  validatePinNamesGo
+    pins
+    file
+    (omFromNames propNames omEmpty)
+    (omFromNames testNames omEmpty)
 
 -- ── Observations and reporting ─────────────────────────────────────────────
 
