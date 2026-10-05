@@ -177,6 +177,43 @@ test "native property execution works for the core auto-prelude itself" =
       ["--native", "--filter", "neq is the negation of eq"]
       "\{medakaRoot}/stdlib/core.mdk")
 
+test "native generators explore containers, characters and independent Boolean draws" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "prop \"nonempty strings are reachable\" (s : String) = stringLength s == 0\nprop \"characters vary\" (c : Char) = charCode c == 97\nprop \"longer lists are reachable\" (xs : List Int) = length xs <= 1\nprop \"equal Boolean pairs are reachable\" (x : Bool) (y : Bool) = x /= y\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        1
+        [
+          ("native", "nonempty strings are reachable", "fail"),
+          ("native", "characters vary", "fail"),
+          ("native", "longer lists are reachable", "fail"),
+          ("native", "equal Boolean pairs are reachable", "fail"),
+        ]
+        (runReport ["--native"] target))
+
+test "native recursive ADT generation reaches a recursive constructor" =
+  withFixtures
+    [
+      (
+        "trees.mdk",
+        "public export data Tree a = Leaf a | Fork (Tree a) (Tree a) deriving (Eq, Debug)\n",
+      ),
+      (
+        "main.mdk",
+        "import trees.{Tree(..)}\nprop \"recursive constructors are reachable\" (tree : Tree Int) = match tree\n  Leaf _ => True\n  Fork _ _ => False\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        1
+        [("native", "recursive constructors are reachable", "fail")]
+        (runReport ["--native"] target))
+
 pinEntry : String -> String
 pinEntry engine =
   "[[pin]]\nfile = \"main.mdk\"\nkind = \"prop\"\nname = \"known false\"\nengine = \"\{engine}\"\nissue = 1\nseed = 1\ncases = 100\nfailure = \"false\"\n"
