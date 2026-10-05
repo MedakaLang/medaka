@@ -1,5 +1,5 @@
 # META
-source_lines=487
+source_lines=535
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -14,7 +14,9 @@ stages=DESUGAR,MARK
    A test that grades a directory of `medaka test` suites reads their
    assertion counts with `testAssertionCount` and checks its roster against
    the directory with `testFileStem`, `unrosteredTestFiles` and
-   `missingTestFiles`.
+   `missingTestFiles`. `expectFloor` grades one count against its committed
+   floor, and `mdkModuleStem` names the modules of a directory that is not
+   limited to test files.
 
    These assertions spawn a subprocess, which the interpreter does not
    support, so a file using them runs under `medaka test --native`. -}
@@ -269,6 +271,52 @@ testFileStem : String -> Option String
 testFileStem name =
   if endsWith "_test.mdk" name then stripSuffix ".mdk" name else None
 
+{- | The module name of a `.mdk` file name, or `None` when `name` is not one.
+
+   Unlike `testFileStem` it accepts every Medaka module, so a `*_test.mdk`
+   sibling is named by its full stem.
+
+   > mdkModuleStem "set.mdk"
+   Some "set"
+   > mdkModuleStem "set_test.mdk"
+   Some "set_test"
+   > mdkModuleStem "set.lextok.golden"
+   None -}
+export
+mdkModuleStem : String -> Option String
+mdkModuleStem name = stripSuffix ".mdk" name
+
+{- | Passes when `counted`, the result of `testAssertionCount` for the suite
+   `label`, is `Ok` of at least `floor`.
+
+   A count below `floor` fails naming `label` and both numbers, so a suite
+   that silently stopped discovering its tests is not read as green. An `Err`
+   fails with its own text, so a suite that failed to spawn, exited nonzero or
+   reported unparseable output is never mistaken for a count that merely fell
+   short.
+
+   > expectFloor "s/a.mdk" 3 (Ok 5)
+   Pass ">= 3 assertions" "5 assertions"
+   > expectFloor "s/a.mdk" 3 (Err "boom")
+   Fail "boom" ">= 3 assertions" "spawn/run/parse error"
+   > expectFloor "s/a.mdk" 3 (Ok 2)
+   Fail "s/a.mdk — only 2 assertions ran, expected >= 3 (vacuous-green guard: discovery may have silently stopped finding tests)" ">= 3 assertions" "2 assertions" -}
+export
+expectFloor : String -> Int -> Result String Int -> Expectation
+expectFloor label floor counted =
+  let want = ">= \{intToString floor} assertions"
+  match counted
+    Err e => Fail e want "spawn/run/parse error"
+    Ok ran =>
+      let got = "\{intToString ran} assertions"
+      if ran >= floor then
+        Pass want got
+      else
+        Fail
+          "\{label} — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
+          want
+          got
+
 -- How much of a failed spawn's captured output a failure message carries,
 -- in characters. A failing `medaka test --json` run can emit tens of
 -- kilobytes; the tail is kept because that is where a runner prints what
@@ -519,6 +567,10 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DFunDef false "expectSpawnOkLine" ((PVar "cmd") (PVar "args") (PVar "wantLine")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "unwords") (EBinOp "::" (EVar "cmd") (EVar "args")))) (DoLet false false (PVar "want") (EBinOp "++" (EBinOp "++" (ELit (LString "exit 0, output with a line ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "wantLine")))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "runVerb") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not run `")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (EVar "want")) (ELit (LString "no spawn")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PVar "text") (EBinOp "++" (EVar "out") (EVar "err"))) (DoLet false false (PVar "got") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "exit ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ", output "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "text")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "` exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ", expected 0: "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "text")))) (ELit (LString "")))) (EVar "want")) (EVar "got")) (EIf (EApp (EApp (EVar "elem") (EVar "wantLine")) (EApp (EVar "lines") (EVar "text"))) (EApp (EApp (EVar "Pass") (EVar "want")) (EVar "got")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "` exited 0 but no output line equals "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "wantLine")))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "text")))) (ELit (LString "")))) (EVar "want")) (EVar "got")))))))))))
 (DTypeSig true "testFileStem" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "testFileStem" ((PVar "name")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "name")) (EApp (EApp (EVar "stripSuffix") (ELit (LString ".mdk"))) (EVar "name")) (EVar "None")))
+(DTypeSig true "mdkModuleStem" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "mdkModuleStem" ((PVar "name")) (EApp (EApp (EVar "stripSuffix") (ELit (LString ".mdk"))) (EVar "name")))
+(DTypeSig true "expectFloor" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")) (TyCon "Expectation")))))
+(DFunDef false "expectFloor" ((PVar "label") (PVar "floor") (PVar "counted")) (EBlock (DoLet false false (PVar "want") (EBinOp "++" (EBinOp "++" (ELit (LString ">= ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "floor")))) (ELit (LString " assertions")))) (DoExpr (EMatch (EVar "counted") (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EVar "e")) (EVar "want")) (ELit (LString "spawn/run/parse error")))) (arm (PCon "Ok" (PVar "ran")) () (EBlock (DoLet false false (PVar "got") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ran")))) (ELit (LString " assertions")))) (DoExpr (EIf (EBinOp ">=" (EVar "ran") (EVar "floor")) (EApp (EApp (EVar "Pass") (EVar "want")) (EVar "got")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " — only "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ran")))) (ELit (LString " assertions ran, expected >= "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "floor")))) (ELit (LString " (vacuous-green guard: discovery may have silently stopped finding tests)")))) (EVar "want")) (EVar "got"))))))))))
 (DTypeSig false "failureOutputTailChars" (TyCon "Int"))
 (DFunDef false "failureOutputTailChars" () (ELit (LInt 2000)))
 (DTypeSig false "outputTailOf" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
@@ -589,6 +641,10 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DFunDef false "expectSpawnOkLine" ((PVar "cmd") (PVar "args") (PVar "wantLine")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "unwords") (EBinOp "::" (EVar "cmd") (EVar "args")))) (DoLet false false (PVar "want") (EBinOp "++" (EBinOp "++" (ELit (LString "exit 0, output with a line ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "wantLine")))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "runVerb") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not run `")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (EVar "want")) (ELit (LString "no spawn")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PVar "text") (EBinOp "++" (EVar "out") (EVar "err"))) (DoLet false false (PVar "got") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "exit ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ", output "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "text")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "` exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ", expected 0: "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "text")))) (ELit (LString "")))) (EVar "want")) (EVar "got")) (EIf (EApp (EApp (EDictApp "elem") (EVar "wantLine")) (EApp (EVar "lines") (EVar "text"))) (EApp (EApp (EVar "Pass") (EVar "want")) (EVar "got")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "` exited 0 but no output line equals "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "wantLine")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "text")))) (ELit (LString "")))) (EVar "want")) (EVar "got")))))))))))
 (DTypeSig true "testFileStem" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "testFileStem" ((PVar "name")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "name")) (EApp (EApp (EVar "stripSuffix") (ELit (LString ".mdk"))) (EVar "name")) (EVar "None")))
+(DTypeSig true "mdkModuleStem" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "mdkModuleStem" ((PVar "name")) (EApp (EApp (EVar "stripSuffix") (ELit (LString ".mdk"))) (EVar "name")))
+(DTypeSig true "expectFloor" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")) (TyCon "Expectation")))))
+(DFunDef false "expectFloor" ((PVar "label") (PVar "floor") (PVar "counted")) (EBlock (DoLet false false (PVar "want") (EBinOp "++" (EBinOp "++" (ELit (LString ">= ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "floor")))) (ELit (LString " assertions")))) (DoExpr (EMatch (EVar "counted") (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EVar "e")) (EVar "want")) (ELit (LString "spawn/run/parse error")))) (arm (PCon "Ok" (PVar "ran")) () (EBlock (DoLet false false (PVar "got") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ran")))) (ELit (LString " assertions")))) (DoExpr (EIf (EBinOp ">=" (EVar "ran") (EVar "floor")) (EApp (EApp (EVar "Pass") (EVar "want")) (EVar "got")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " — only "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ran")))) (ELit (LString " assertions ran, expected >= "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "floor")))) (ELit (LString " (vacuous-green guard: discovery may have silently stopped finding tests)")))) (EVar "want")) (EVar "got"))))))))))
 (DTypeSig false "failureOutputTailChars" (TyCon "Int"))
 (DFunDef false "failureOutputTailChars" () (ELit (LInt 2000)))
 (DTypeSig false "outputTailOf" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))

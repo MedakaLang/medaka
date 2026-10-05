@@ -12,7 +12,9 @@ a directory to write in.
 A test that grades a directory of `medaka test` suites reads their
 assertion counts with `testAssertionCount` and checks its roster against
 the directory with `testFileStem`, `unrosteredTestFiles` and
-`missingTestFiles`.
+`missingTestFiles`. `expectFloor` grades one count against its committed
+floor, and `mdkModuleStem` names the modules of a directory that is not
+limited to test files.
 
 These assertions spawn a subprocess, which the interpreter does not
 support, so a file using them runs under `medaka test --native`.
@@ -224,6 +226,52 @@ The stem of a `*_test.mdk` file name, or `None` when `name` is not one.
 Some "expr_test"
 > testFileStem "expr.mdk"
 None
+```
+
+### `mdkModuleStem`
+
+```
+mdkModuleStem : String -> Option String
+mdkModuleStem name
+```
+
+The module name of a `.mdk` file name, or `None` when `name` is not one.
+
+Unlike `testFileStem` it accepts every Medaka module, so a `*_test.mdk`
+sibling is named by its full stem.
+
+```medaka
+> mdkModuleStem "set.mdk"
+Some "set"
+> mdkModuleStem "set_test.mdk"
+Some "set_test"
+> mdkModuleStem "set.lextok.golden"
+None
+```
+
+### `expectFloor`
+
+```
+expectFloor : String -> Int -> Result String Int -> Expectation
+expectFloor label floor counted
+```
+
+Passes when `counted`, the result of `testAssertionCount` for the suite
+`label`, is `Ok` of at least `floor`.
+
+A count below `floor` fails naming `label` and both numbers, so a suite
+that silently stopped discovering its tests is not read as green. An `Err`
+fails with its own text, so a suite that failed to spawn, exited nonzero or
+reported unparseable output is never mistaken for a count that merely fell
+short.
+
+```medaka
+> expectFloor "s/a.mdk" 3 (Ok 5)
+Pass ">= 3 assertions" "5 assertions"
+> expectFloor "s/a.mdk" 3 (Err "boom")
+Fail "boom" ">= 3 assertions" "spawn/run/parse error"
+> expectFloor "s/a.mdk" 3 (Ok 2)
+Fail "s/a.mdk — only 2 assertions ran, expected >= 3 (vacuous-green guard: discovery may have silently stopped finding tests)" ">= 3 assertions" "2 assertions"
 ```
 
 ### `testAssertionCount`
