@@ -1677,7 +1677,7 @@ migration = "done"
 run = "test/diff_compiler_eval_json_test.mdk"
 oracles = []
 sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/driver/*", "test/compiler_cli_test_support.mdk"]
-corpus = ["test/error_quality_fixtures"]
+corpus = ["test/error_quality_fixtures", "test/trap_site_fixtures"]
 toolchain = []
 
 [[gate]]

@@ -114,7 +114,7 @@ evalIndexInt : Value a -> Int -> Value a
 evalLet : EvalEnv (Value a) -> Pat -> Expr -> Expr -> <a> Value a
 evalLetGroup : EvalEnv (Value a) -> List LetBind -> Expr -> <a> Value a
 evalMain : List Decl -> String
-evalMatch : EvalEnv (Value a) -> Value a -> List Arm -> <a> Value a
+evalMatch : Loc -> EvalEnv (Value a) -> Value a -> List Arm -> <a> Value a
 evalMethodAt : EvalEnv (Value a) -> String -> String -> Route -> List Route -> List Route -> <a> Value a
 evalMethodAtEv : EvalEnv (Value a) -> String -> (String, Int, Route, List Route, List Route) -> <a> Value a
 evalModules : List Decl -> List (String, List Decl) -> <a> List (String, Value a)
@@ -138,6 +138,7 @@ evalSliceInt : Value a -> Int -> Int -> Bool -> Value a
 evalUnop : String -> Value a -> Value a
 evalValueField : Value a -> Value a
 evalVariantUpdate : String -> Value a -> List (String, Value a) -> Value a
+exprStartLoc : Expr -> Loc
 extendAbsent : String -> List String -> <FileRead | a> Option String
 extendEnv : EvalEnv (Value a) -> List (String, Value a) -> EvalEnv (Value a)
 externBindings : Unit -> List (String, Value a)
@@ -215,6 +216,7 @@ ioHostExterns : Unit -> List (String, Value <IO>)
 isDispatching : Value a -> Bool
 isInheritedEntry : String -> String -> Bool
 isMethodBinding : Value a -> Bool
+isNoLoc : Loc -> Bool
 isNullary : List Pat -> Bool
 isPartial : Value a -> Bool
 joinComponents : Bool -> List String -> String
@@ -243,6 +245,7 @@ lowByte : Int -> Int
 makeCtor : String -> Int -> Value a
 makeCtorGo : String -> Int -> List (Value a) -> Value a
 mapResultOk : (a -> b) -> Result String a -> Result String b
+markTrapSite : Expr -> Unit
 matchAs : String -> Pat -> Value a -> Option (List (String, Value a))
 matchCons : Pat -> Pat -> Value a -> List (Value a) -> Option (List (String, Value a))
 matchPat : Pat -> Value a -> Option (List (String, Value a))
@@ -274,6 +277,7 @@ narrowToIface : String -> Value a -> Value a
 narrowedWord : EvalEnv (Value a) -> Route -> Value a -> <a> String
 negFloatIEEE : Float -> Float
 noMainMsg : String
+noTrapLoc : Loc
 oneOrMulti : List (Value a) -> Value a
 oneOrMultiV : List (Value a) -> List (Value a) -> Value a
 optionToValue : Option (Value a) -> Value a
@@ -481,6 +485,7 @@ signExtend32 : Int -> Int
 sliceArray : Array (Value a) -> Int -> Int -> Value a
 sortByScore : List (Int, Value a) -> List (Int, Value a)
 sortGo : List (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
+startOrNext : Loc -> Expr -> Loc
 startsWithAt : String -> Bool
 statTuple : (Int, Bool, Bool, Float) -> Value a
 storeMemo : Ref (Option (Value a)) -> Value a -> <a> Value a

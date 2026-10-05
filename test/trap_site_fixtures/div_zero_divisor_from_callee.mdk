@@ -1,0 +1,3 @@
+k : Int -> Int
+k x = 0
+main = println (100 / k 5)

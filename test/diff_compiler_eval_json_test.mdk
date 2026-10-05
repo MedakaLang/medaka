@@ -28,15 +28,22 @@
    relative, so this only fires when `MEDAKA_ROOT` is exported absolute (as
    `medaka gate run` does).
 
+   `test/trap_site_fixtures` pins WHERE the text channel says a runtime error
+   happened: the start of the trapping expression (`a op b`, `xs[i]`, the
+   `panic` application, the `match` keyword), never the last atom the
+   interpreter entered. Every fixture puts an operand on another line or
+   inside a callee, the shape where the two answers differ. These rows are
+   the oracle the native and wasm backends' located runtime errors match.
+
    Runs under `medaka test --native`: it spawns subprocesses and reads
    source files and goldens, none of which the interpreter binds. -}
 
 import compiler_cli_test_support.{chompNewlines, fixtureStems}
 import fs.{expectUnitCount}
-import list.{somes}
+import list.{somes, sort}
 import string.{contains, lines, replaceAll, split, startsWith, trim, unlines}
-import test.{fail, pass}
-import test_process.{boundedVerb, medakaBin, medakaRoot}
+import test.{Expectation, expectEach, expectEqual, fail, pass}
+import test_process.{boundedVerb, expectSpawnFails, medakaBin, medakaRoot}
 
 corpus : <IO> String
 corpus = "\{medakaRoot}/test/error_quality_fixtures/eval"
@@ -123,3 +130,50 @@ test "eval_json: `medaka run --json` agrees with the committed goldens, byte for
         _ =>
           fail
             "\{intToString (length failures)} of \{intToString (length names)} fixtures under \{corpus} disagreed with their committed golden:\n\{unlines failures}"
+
+trapSites : <IO> String
+trapSites = "\{medakaRoot}/test/trap_site_fixtures"
+
+-- (fixture stem, `line:col` of the trapping expression's start, the rest of
+-- the runtime-error line). Columns are 0-based.
+trapSiteRows : List (String, String, String)
+trapSiteRows = [
+  (
+    "overflow_operand_on_another_line",
+    "5:16",
+    "[E-INT-OVERFLOW]: 4611686018427387903 + 1 overflows Int",
+  ),
+  (
+    "overflow_inner_operand_of_a_sum",
+    "4:6",
+    "[E-INT-OVERFLOW]: 3 * 4611686018427387903 overflows Int",
+  ),
+  ("div_zero_divisor_from_callee", "3:16", "[E-DIV-ZERO]: division by zero"),
+  ("mod_zero_divisor_from_callee", "3:16", "[E-MOD-ZERO]: modulo by zero"),
+  ("panic_message_from_another_line", "4:6", "[E-PANIC]: boom"),
+  ("index_inside_callee", "2:7", "[E-INDEX-OOB]: index 9 out of bounds"),
+  (
+    "match_falls_through_arms",
+    "3:9",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+]
+
+trapSiteRow : (String, String, String) -> <Exec, IO> (String, Expectation)
+trapSiteRow (name, site, rest) =
+  let entry = "\{trapSites}/\{name}.mdk"
+  (
+    name,
+    expectSpawnFails
+      medakaBin
+      ["run", entry]
+      "\{entry}:\{site}: runtime error \{rest}",
+  )
+
+test "trap_site: every fixture on disk has a row" = match fixtureStems trapSites
+  Err e => fail "\{trapSites}: \{e}"
+  Ok names =>
+    expectEqual (sort (map ((n, _, _) => n) trapSiteRows)) (sort names)
+
+test "trap_site: `medaka run` names the start of the trapping expression" =
+  expectEach (map trapSiteRow trapSiteRows)

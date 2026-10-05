@@ -1,0 +1,6 @@
+data C = R | G | B
+name : C -> Int
+name c = match c
+  R => 1
+  G => 2
+main = println (name B)
