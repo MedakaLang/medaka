@@ -661,9 +661,8 @@ each f _
 Calls a function on each element in order, for its effect.
 
 ```medaka
-> each println ["a", "b"]
-a
-b
+> each (x => ()) [1, 2, 3]
+()
 ```
 
 ### `runEach`
