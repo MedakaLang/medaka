@@ -2642,3 +2642,15 @@ were invisible locally.
 - **`--bless`/`--new` are not symmetric.** `--new` is **suite-wide**, never overwrites, and reports
   *"0 compared, 201 skipped: NOTHING COMPARED (this is not a pass)"*. The **re-check afterwards** is
   what makes it a pass.
+
+## the-answer-it-should-get (HN-readiness sprint 5, 2026-10-04/05)
+
+Five slices, four fix rounds, 5 issues closed, 4 filed. What the end review and the CI run caught that no slice report did:
+
+- **A contract "settled fact" can be stale by the time it is dispatched.** §4 said w1 (#3788) printed 42 once the `monoSameGiven` arm landed; the spike was measured before ca6511fa9 (W3-inst) added a second, masked rejection (#3826). The implementer's refusal, plus a first-hand re-run of its 4-line repro on a binary without the change, is what established it. Before dispatching a slice whose acceptance rests on a spike, list commits to the touched code since the spike (`git log --since=<spike date> -- <file>`).
+- **A caller audit must follow the fall-through arms.** Slice 2's audit said `fieldTypeSame` compares rows itself; true only above its `(a, b) => monoSameGiven a b` fall-through, where the new erase arm leaked effects (S0, caught by the reviewer, fixed by FIX2). An audit that names a caller must name which arm reaches the changed function.
+- **"N passed" in a report can be the wrong summary line.** Slice 5 reported `medaka test stdlib/core.mdk: 30 passed, 0 failed`; the default native engine skips core.mdk (0/105, errors) and "30" was the property line. The real doctest failure only showed with the eval engine. Ask for the engine and the file's own summary line.
+- **A new export that collides with an interface method is not a stdlib-only change.** `string.length` passed the contract's probe (`length [1, 2, 3]`) and broke `length (Some 7)`, a generic `Foldable` use and `map length` for every importer (#3828). Collision probes must include a polymorphic use and a non-List receiver.
+- **Coalescing output without a drain loses the last lines before a hang.** Slice 4's 50 ms batching dropped the lines a learner needs most; the review's first-hand headless-Chrome probe found it, and the fix is a burst budget (post immediately while quiet).
+- **Shell classifier in an isolated worktree:** refuses compound commands, heredocs whose text names git, and any command with the word `eval` in an argument (`--engines eval`). Write a script file to the scratchpad and run it.
+- **A battery harness can time out on identical consecutive output** (#3841); read a TIMEOUT row alone before concluding anything.
