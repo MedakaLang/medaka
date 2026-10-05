@@ -994,6 +994,7 @@ Operations on `String` and `Char`.
 - [`fromChars`](string.md#fromchars)
 - [`toUtf8`](string.md#toutf8)
 - [`fromUtf8`](string.md#fromutf8)
+- [`length`](string.md#length)
 - [`byteLength`](string.md#bytelength)
 - [`utf8ByteLength`](string.md#utf8bytelength)
 - [`toInt`](string.md#toint)
