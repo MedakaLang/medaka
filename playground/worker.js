@@ -133,11 +133,15 @@ let stderrAll = [];
 
 // The guest runs synchronously, so a timer can never fire inside it. Per-line
 // posts from a print loop would flood the main thread's queue and starve its kill
-// timer; instead lines coalesce into one post per POST_EVERY_MS (leading edge
-// posts at once), and `force` drains what is left at exit.
+// timer. Each POST_EVERY_MS window therefore allows BURST_POSTS immediate posts, so a
+// quiet program never holds a line back (a kill during a later hang still shows all
+// of it); past that, lines coalesce until the window rolls over. `force` drains what
+// is left at exit.
 const POST_EVERY_MS = 50;
+const BURST_POSTS = 200;
 const pending = [];   // [{ type, text }] in print order, adjacent same-type runs merged
-let lastPost = -Infinity;
+let windowStart = -Infinity;
+let windowPosts = 0;
 
 function queueText(type, text) {
   if (!text) return;
@@ -148,8 +152,9 @@ function queueText(type, text) {
 
 function postPending(force) {
   const now = performance.now();
-  if (!force && now - lastPost < POST_EVERY_MS) return;
-  lastPost = now;
+  if (now - windowStart >= POST_EVERY_MS) { windowStart = now; windowPosts = 0; }
+  if (!force && windowPosts >= BURST_POSTS) return;
+  windowPosts++;
   for (const m of pending) self.postMessage(m);
   pending.length = 0;
 }
