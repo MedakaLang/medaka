@@ -146,10 +146,38 @@ buildPlanEnvModules ((PlanModule _ raw runtime) :: rest) =
     (buildPlanEnvGo runtime (buildPlanEnvModules rest))
 
 pairModuleDecls : List Decl -> List Decl -> PlanEnv -> PlanEnv
-pairModuleDecls [] _ env = env
-pairModuleDecls _ [] env = env
-pairModuleDecls (raw :: raws) (runtime :: runtimes) env =
-  pairModuleDecls raws runtimes (pairPlanDecl raw runtime env)
+pairModuleDecls raw runtime env =
+  pairRuntimeDecls (rawNominalMap raw omEmpty) runtime env
+
+-- Elaboration may insert derives and other declarations, so the two streams
+-- cannot be zipped. Index only raw nominal declarations by source type name,
+-- then join each resolved nominal inside its module. Variant positions are
+-- paired only after that declaration identity has matched.
+rawNominalMap : List Decl -> OrdMap Decl -> OrdMap Decl
+rawNominalMap [] acc = acc
+rawNominalMap ((DAttrib _ d) :: rest) acc = rawNominalMap (d :: rest) acc
+rawNominalMap ((d@(DData { dataName = name })) :: rest) acc =
+  rawNominalMap rest (omInsert name d acc)
+rawNominalMap ((d@(DNewtype { newtypeName = name })) :: rest) acc =
+  rawNominalMap rest (omInsert name d acc)
+rawNominalMap (_ :: rest) acc = rawNominalMap rest acc
+
+pairRuntimeDecls : OrdMap Decl -> List Decl -> PlanEnv -> PlanEnv
+pairRuntimeDecls _ [] env = env
+pairRuntimeDecls rawMap (runtime :: rest) env =
+  pairRuntimeDecls rawMap rest (pairRuntimeDecl rawMap runtime env)
+
+pairRuntimeDecl : OrdMap Decl -> Decl -> PlanEnv -> PlanEnv
+pairRuntimeDecl rawMap (DAttrib _ d) env = pairRuntimeDecl rawMap d env
+pairRuntimeDecl rawMap (runtime@(DData { dataName = name })) env =
+  match omLookup name rawMap
+    Some raw => pairPlanDecl raw runtime env
+    None => env
+pairRuntimeDecl rawMap (runtime@(DNewtype { newtypeName = name })) env =
+  match omLookup name rawMap
+    Some raw => pairPlanDecl raw runtime env
+    None => env
+pairRuntimeDecl _ _ env = env
 
 pairPlanDecl : Decl -> Decl -> PlanEnv -> PlanEnv
 pairPlanDecl (DAttrib _ raw) (DAttrib _ runtime) env =
@@ -459,6 +487,7 @@ substTyRaw subst (TyQual t qs loc) = TyQual (substTyRaw subst t) qs loc
 substTyRaw subst (TyConstrained cs t) = TyConstrained cs (substTyRaw subst t)
 substTyRaw _ t = t
 
+export
 planTy : GenPlan -> Ty
 planTy GInt = builtinTy "Int"
 planTy GBool = builtinTy "Bool"
