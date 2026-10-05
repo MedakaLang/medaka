@@ -24,3 +24,7 @@ pick _ = "many"
 bare = pick 1
 
 main = println (pick 0)
+
+-- Pinned: a signature with no binding indexes as a lone definition site.
+orph : Int
+export orphOut : Int
