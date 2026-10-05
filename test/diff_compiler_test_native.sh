@@ -115,7 +115,7 @@ note() { printf '%s\n' "$*"; }
 bad() { printf 'FAIL: %s\n' "$*"; fail=1; }
 
 # ── module set (see header: NAMED, SMALL) ────────────────────────────────────────
-# module path : expected doctest count, measured clean per AGENTS.md.
+# module path : expected doctest count.
 MODULES="stdlib/string.mdk:77 stdlib/list.mdk:143 stdlib/map.mdk:54"
 
 for entry in $MODULES; do
