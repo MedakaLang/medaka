@@ -121,7 +121,8 @@ markDecl methods constrained (DAttrib attrs inner) =
 markDecl methods constrained d = mapDecl (markNode methods constrained) d
 
 markLetBind : (Expr -> Expr) -> LetBind -> LetBind
-markLetBind f (LetBind n clauses) = LetBind n (map (markFunClause f) clauses)
+markLetBind f (LetBind n clauses site) =
+  LetBind n (map (markFunClause f) clauses) site
 
 markFunClause : (Expr -> Expr) -> FunClause -> FunClause
 markFunClause f (FunClause pats body) = FunClause pats (mapExpr f body)
@@ -146,7 +147,7 @@ shadowRenames preludeMethods prog =
 
 userValueNames : List Decl -> List String
 userValueNames [] = []
-userValueNames ((DFunDef _ n _ _) :: rest) = n :: userValueNames rest
+userValueNames ((DFunDef _ n _ _ _) :: rest) = n :: userValueNames rest
 userValueNames (_ :: rest) = userValueNames rest
 
 keepIn : List String -> List String -> List String
@@ -160,8 +161,8 @@ applyRenames [] prog = prog
 applyRenames renames prog = map (renameDecl renames) prog
 
 renameDecl : List String -> Decl -> Decl
-renameDecl renames (DFunDef pub n ps body) =
-  DFunDef pub (subName renames n) ps (mapExpr (renameVar renames) body)
+renameDecl renames (DFunDef pub n ps body site) =
+  DFunDef pub (subName renames n) ps (mapExpr (renameVar renames) body) site
 renameDecl renames (DTypeSig pub n t) = DTypeSig pub (subName renames n) t
 renameDecl renames d = mapDecl (renameVar renames) d
 
@@ -191,7 +192,7 @@ preludePlainFnNames prelude =
 
 allFunDefNames : List Decl -> List String
 allFunDefNames [] = []
-allFunDefNames ((DFunDef _ n _ _) :: rest) = n :: allFunDefNames rest
+allFunDefNames ((DFunDef _ n _ _ _) :: rest) = n :: allFunDefNames rest
 allFunDefNames (_ :: rest) = allFunDefNames rest
 
 -- keep the names in the second list that are NOT in the first
@@ -273,7 +274,7 @@ declExternalRefs : Decl -> List String
 declExternalRefs d = keepNotIn (declDefines d) (declRefs d)
 
 declDefines : Decl -> List String
-declDefines (DFunDef _ n _ _) = [n]
+declDefines (DFunDef _ n _ _ _) = [n]
 declDefines (DImpl { methods, ... }) = map implMethodNameOf methods
 declDefines (DInterface { methods, ... }) = map ifaceMethodName methods
 declDefines _ = []
@@ -287,7 +288,7 @@ declRefs d = flatMap collectVars (declBodies d)
 
 export
 declBodies : Decl -> List Expr
-declBodies (DFunDef _ _ _ body) = [body]
+declBodies (DFunDef _ _ _ body _) = [body]
 declBodies (DImpl { methods, ... }) = map implMethodBody methods
 declBodies (DInterface { methods, ... }) = flatMap ifaceMethodBodies methods
 declBodies (DProp _ _ _ body) = [body]
@@ -303,7 +304,7 @@ declBodies (DLetGroup _ binds) = flatMap letBindBodies binds
 declBodies _ = []
 
 letBindBodies : LetBind -> List Expr
-letBindBodies (LetBind _ clauses) = map funClauseBody clauses
+letBindBodies (LetBind _ clauses _) = map funClauseBody clauses
 
 funClauseBody : FunClause -> Expr
 funClauseBody (FunClause _ body) = body
@@ -396,7 +397,7 @@ seedExtraRefs "" = []
 seedExtraRefs s = [s]
 
 letBindVars : LetBind -> List String
-letBindVars (LetBind _ clauses) = flatMap funClauseVars clauses
+letBindVars (LetBind _ clauses _) = flatMap funClauseVars clauses
 
 funClauseVars : FunClause -> List String
 funClauseVars (FunClause _ body) = collectVars body
@@ -417,7 +418,7 @@ fieldAssignVars (FieldAssign _ e) = collectVars e
 doStmtVars : DoStmt -> List String
 doStmtVars (DoExpr e) = collectVars e
 doStmtVars (DoBind _ e) = collectVars e
-doStmtVars (DoLet _ _ _ e) = collectVars e
+doStmtVars (DoLet _ _ _ e _) = collectVars e
 doStmtVars (DoAssign _ e) = collectVars e
 doStmtVars (DoFieldAssign _ _ e) = collectVars e
 
@@ -494,7 +495,7 @@ localBoundExpr (EDoOrigin _ e) = localBoundExpr e
 localBoundExpr _ = []
 
 letBindBound : LetBind -> List String
-letBindBound (LetBind _ clauses) = flatMap funClauseBound clauses
+letBindBound (LetBind _ clauses _) = flatMap funClauseBound clauses
 
 funClauseBound : FunClause -> List String
 funClauseBound (FunClause ps body) =
@@ -517,7 +518,7 @@ fieldAssignBound (FieldAssign _ e) = localBoundExpr e
 doStmtBound : DoStmt -> List String
 doStmtBound (DoExpr e) = localBoundExpr e
 doStmtBound (DoBind p e) = patBindings p ++ localBoundExpr e
-doStmtBound (DoLet _ _ p e) = patBindings p ++ localBoundExpr e
+doStmtBound (DoLet _ _ p e _) = patBindings p ++ localBoundExpr e
 doStmtBound (DoAssign _ e) = localBoundExpr e
 doStmtBound (DoFieldAssign _ _ e) = localBoundExpr e
 
@@ -532,7 +533,7 @@ mapLitPairBound (k, v) = localBoundExpr k ++ localBoundExpr v
 -- (DFunDef/DImpl method/DInterface default/DLetGroup clauses) plus every binder
 -- in its body expressions.
 declLocalBound : Decl -> List String
-declLocalBound (DFunDef _ _ ps body) =
+declLocalBound (DFunDef _ _ ps body _) =
   flatMap patBindings ps ++ localBoundExpr body
 declLocalBound (DAttrib _ d) = declLocalBound d
 declLocalBound (DLetGroup _ binds) = flatMap letBindBound binds

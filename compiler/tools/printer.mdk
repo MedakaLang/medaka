@@ -611,7 +611,7 @@ fieldAssignSpan : FieldAssign -> (Int, Int, Int, Int)
 fieldAssignSpan (FieldAssign _ v) = exprSpan v
 
 letBindSpan : LetBind -> (Int, Int, Int, Int)
-letBindSpan (LetBind _ clauses) = spansOf clauseSpan clauses
+letBindSpan (LetBind _ clauses _) = spansOf clauseSpan clauses
 
 clauseSpan : FunClause -> (Int, Int, Int, Int)
 clauseSpan (FunClause pats body) =
@@ -647,7 +647,7 @@ guardArmSpan (GuardArm gs body) =
 stmtSpan : DoStmt -> (Int, Int, Int, Int)
 stmtSpan (DoExpr e) = exprSpan e
 stmtSpan (DoBind p e) = mergeSpan (patSpan p) (exprSpan e)
-stmtSpan (DoLet _ _ p e) = mergeSpan (patSpan p) (exprSpan e)
+stmtSpan (DoLet _ _ p e _) = mergeSpan (patSpan p) (exprSpan e)
 stmtSpan (DoAssign _ e) = exprSpan e
 stmtSpan (DoFieldAssign _ _ e) = exprSpan e
 
@@ -1561,13 +1561,13 @@ printDoStmt : DoStmt -> Doc
 printDoStmt (DoBind pat e) =
   Cat (printPat pat) (Cat (text " <- ") (printExprBody e))
 printDoStmt (DoExpr e) = printExprBody e
-printDoStmt (DoLet isMut False pat e) =
+printDoStmt (DoLet isMut False pat e _) =
   Cat
     (text "let ")
     (Cat
       (if isMut then text "mut " else Nil)
       (Cat (printLetBinderPat pat) (sepBody " =" e)))
-printDoStmt (DoLet isMut True pat e) = printDoLetRec isMut pat e
+printDoStmt (DoLet isMut True pat e _) = printDoLetRec isMut pat e
 printDoStmt (DoAssign x e) = Cat (text x) (sepBody " =" e)
 printDoStmt (DoFieldAssign x fields e) =
   Cat
@@ -1660,7 +1660,7 @@ unwrapLams acc body = (acc, body)
 -- nested `let rec … in` forms.
 letRecInDoc : List LetBind -> Expr -> Doc
 letRecInDoc [] body = printExprBody body
-letRecInDoc ((LetBind name clauses) :: rest) body =
+letRecInDoc ((LetBind name clauses _) :: rest) body =
   let inner = letRecInDoc rest body
   match clauses
     [FunClause pats rhs] =>
@@ -2115,7 +2115,7 @@ letGroupClauses bindings =
 
 clausePieces : List LetBind -> List Piece
 clausePieces [] = []
-clausePieces ((LetBind name clauses) :: rest) =
+clausePieces ((LetBind name clauses _) :: rest) =
   map (c => clausePiece name c) clauses ++ clausePieces rest
 
 clausePiece : String -> FunClause -> Piece
@@ -2402,7 +2402,7 @@ printDecl (DExtern pub n t) =
   Cat
     (valueExportPrefix pub)
     (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (sigTypeDoc t))))
-printDecl (DFunDef pub n pats body) =
+printDecl (DFunDef pub n pats body _) =
   Cat
     (if pub then text "export " else Nil)
     (Cat (defHeader n pats) (printDefRhs body))
@@ -2510,7 +2510,7 @@ letGroupDecl bindings =
 
 letGroupDeclGo : Bool -> List LetBind -> List Doc
 letGroupDeclGo _ [] = []
-letGroupDeclGo first ((LetBind name clauses) :: rest) =
+letGroupDeclGo first ((LetBind name clauses _) :: rest) =
   let r = letGroupBindClauses first name clauses
   match r
     (docs, nextFirst) => docs ++ letGroupDeclGo nextFirst rest

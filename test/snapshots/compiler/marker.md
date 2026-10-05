@@ -1,5 +1,5 @@
 # META
-source_lines=584
+source_lines=585
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted method_marker stage.
@@ -125,7 +125,8 @@ markDecl methods constrained (DAttrib attrs inner) =
 markDecl methods constrained d = mapDecl (markNode methods constrained) d
 
 markLetBind : (Expr -> Expr) -> LetBind -> LetBind
-markLetBind f (LetBind n clauses) = LetBind n (map (markFunClause f) clauses)
+markLetBind f (LetBind n clauses site) =
+  LetBind n (map (markFunClause f) clauses) site
 
 markFunClause : (Expr -> Expr) -> FunClause -> FunClause
 markFunClause f (FunClause pats body) = FunClause pats (mapExpr f body)
@@ -150,7 +151,7 @@ shadowRenames preludeMethods prog =
 
 userValueNames : List Decl -> List String
 userValueNames [] = []
-userValueNames ((DFunDef _ n _ _) :: rest) = n :: userValueNames rest
+userValueNames ((DFunDef _ n _ _ _) :: rest) = n :: userValueNames rest
 userValueNames (_ :: rest) = userValueNames rest
 
 keepIn : List String -> List String -> List String
@@ -164,8 +165,8 @@ applyRenames [] prog = prog
 applyRenames renames prog = map (renameDecl renames) prog
 
 renameDecl : List String -> Decl -> Decl
-renameDecl renames (DFunDef pub n ps body) =
-  DFunDef pub (subName renames n) ps (mapExpr (renameVar renames) body)
+renameDecl renames (DFunDef pub n ps body site) =
+  DFunDef pub (subName renames n) ps (mapExpr (renameVar renames) body) site
 renameDecl renames (DTypeSig pub n t) = DTypeSig pub (subName renames n) t
 renameDecl renames d = mapDecl (renameVar renames) d
 
@@ -195,7 +196,7 @@ preludePlainFnNames prelude =
 
 allFunDefNames : List Decl -> List String
 allFunDefNames [] = []
-allFunDefNames ((DFunDef _ n _ _) :: rest) = n :: allFunDefNames rest
+allFunDefNames ((DFunDef _ n _ _ _) :: rest) = n :: allFunDefNames rest
 allFunDefNames (_ :: rest) = allFunDefNames rest
 
 -- keep the names in the second list that are NOT in the first
@@ -277,7 +278,7 @@ declExternalRefs : Decl -> List String
 declExternalRefs d = keepNotIn (declDefines d) (declRefs d)
 
 declDefines : Decl -> List String
-declDefines (DFunDef _ n _ _) = [n]
+declDefines (DFunDef _ n _ _ _) = [n]
 declDefines (DImpl { methods, ... }) = map implMethodNameOf methods
 declDefines (DInterface { methods, ... }) = map ifaceMethodName methods
 declDefines _ = []
@@ -291,7 +292,7 @@ declRefs d = flatMap collectVars (declBodies d)
 
 export
 declBodies : Decl -> List Expr
-declBodies (DFunDef _ _ _ body) = [body]
+declBodies (DFunDef _ _ _ body _) = [body]
 declBodies (DImpl { methods, ... }) = map implMethodBody methods
 declBodies (DInterface { methods, ... }) = flatMap ifaceMethodBodies methods
 declBodies (DProp _ _ _ body) = [body]
@@ -307,7 +308,7 @@ declBodies (DLetGroup _ binds) = flatMap letBindBodies binds
 declBodies _ = []
 
 letBindBodies : LetBind -> List Expr
-letBindBodies (LetBind _ clauses) = map funClauseBody clauses
+letBindBodies (LetBind _ clauses _) = map funClauseBody clauses
 
 funClauseBody : FunClause -> Expr
 funClauseBody (FunClause _ body) = body
@@ -400,7 +401,7 @@ seedExtraRefs "" = []
 seedExtraRefs s = [s]
 
 letBindVars : LetBind -> List String
-letBindVars (LetBind _ clauses) = flatMap funClauseVars clauses
+letBindVars (LetBind _ clauses _) = flatMap funClauseVars clauses
 
 funClauseVars : FunClause -> List String
 funClauseVars (FunClause _ body) = collectVars body
@@ -421,7 +422,7 @@ fieldAssignVars (FieldAssign _ e) = collectVars e
 doStmtVars : DoStmt -> List String
 doStmtVars (DoExpr e) = collectVars e
 doStmtVars (DoBind _ e) = collectVars e
-doStmtVars (DoLet _ _ _ e) = collectVars e
+doStmtVars (DoLet _ _ _ e _) = collectVars e
 doStmtVars (DoAssign _ e) = collectVars e
 doStmtVars (DoFieldAssign _ _ e) = collectVars e
 
@@ -498,7 +499,7 @@ localBoundExpr (EDoOrigin _ e) = localBoundExpr e
 localBoundExpr _ = []
 
 letBindBound : LetBind -> List String
-letBindBound (LetBind _ clauses) = flatMap funClauseBound clauses
+letBindBound (LetBind _ clauses _) = flatMap funClauseBound clauses
 
 funClauseBound : FunClause -> List String
 funClauseBound (FunClause ps body) =
@@ -521,7 +522,7 @@ fieldAssignBound (FieldAssign _ e) = localBoundExpr e
 doStmtBound : DoStmt -> List String
 doStmtBound (DoExpr e) = localBoundExpr e
 doStmtBound (DoBind p e) = patBindings p ++ localBoundExpr e
-doStmtBound (DoLet _ _ p e) = patBindings p ++ localBoundExpr e
+doStmtBound (DoLet _ _ p e _) = patBindings p ++ localBoundExpr e
 doStmtBound (DoAssign _ e) = localBoundExpr e
 doStmtBound (DoFieldAssign _ _ e) = localBoundExpr e
 
@@ -536,7 +537,7 @@ mapLitPairBound (k, v) = localBoundExpr k ++ localBoundExpr v
 -- (DFunDef/DImpl method/DInterface default/DLetGroup clauses) plus every binder
 -- in its body expressions.
 declLocalBound : Decl -> List String
-declLocalBound (DFunDef _ _ ps body) =
+declLocalBound (DFunDef _ _ ps body _) =
   flatMap patBindings ps ++ localBoundExpr body
 declLocalBound (DAttrib _ d) = declLocalBound d
 declLocalBound (DLetGroup _ binds) = flatMap letBindBound binds
@@ -619,7 +620,7 @@ markerFor preludeProg =
 (DFunDef false "markDecl" ((PVar "methods") (PVar "constrained") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "markDecl") (EVar "methods")) (EVar "constrained")) (EVar "inner"))))
 (DFunDef false "markDecl" ((PVar "methods") (PVar "constrained") (PVar "d")) (EApp (EApp (EVar "mapDecl") (EApp (EApp (EVar "markNode") (EVar "methods")) (EVar "constrained"))) (EVar "d")))
 (DTypeSig false "markLetBind" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
-(DFunDef false "markLetBind" ((PVar "f") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "markFunClause") (EVar "f"))) (EVar "clauses"))))
+(DFunDef false "markLetBind" ((PVar "f") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site"))) (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "markFunClause") (EVar "f"))) (EVar "clauses"))) (EVar "site")))
 (DTypeSig false "markFunClause" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "FunClause") (TyCon "FunClause"))))
 (DFunDef false "markFunClause" ((PVar "f") (PCon "FunClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EVar "pats")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "body"))))
 (DTypeSig false "shadowRename" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -628,7 +629,7 @@ markerFor preludeProg =
 (DFunDef false "shadowRenames" ((PVar "preludeMethods") (PVar "prog")) (EApp (EApp (EVar "keepNotIn") (EApp (EVar "localBoundNames") (EVar "prog"))) (EApp (EApp (EVar "keepIn") (EVar "preludeMethods")) (EApp (EVar "userValueNames") (EVar "prog")))))
 (DTypeSig false "userValueNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "userValueNames" ((PList)) (EListLit))
-(DFunDef false "userValueNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
+(DFunDef false "userValueNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "userValueNames") (EVar "rest")))
 (DTypeSig false "keepIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "keepIn" (PWild (PList)) (EListLit))
@@ -637,7 +638,7 @@ markerFor preludeProg =
 (DFunDef false "applyRenames" ((PList) (PVar "prog")) (EVar "prog"))
 (DFunDef false "applyRenames" ((PVar "renames") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "renameDecl") (EVar "renames"))) (EVar "prog")))
 (DTypeSig false "renameDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "renameDecl" ((PVar "renames") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "ps")) (EApp (EApp (EVar "mapExpr") (EApp (EVar "renameVar") (EVar "renames"))) (EVar "body"))))
+(DFunDef false "renameDecl" ((PVar "renames") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "ps")) (EApp (EApp (EVar "mapExpr") (EApp (EVar "renameVar") (EVar "renames"))) (EVar "body"))) (EVar "site")))
 (DFunDef false "renameDecl" ((PVar "renames") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "t")))
 (DFunDef false "renameDecl" ((PVar "renames") (PVar "d")) (EApp (EApp (EVar "mapDecl") (EApp (EVar "renameVar") (EVar "renames"))) (EVar "d")))
 (DTypeSig false "renameVar" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -651,7 +652,7 @@ markerFor preludeProg =
 (DFunDef false "preludePlainFnNames" ((PVar "prelude")) (EApp (EApp (EVar "keepNotIn") (EApp (EVar "interfaceMethodNames") (EVar "prelude"))) (EApp (EVar "allFunDefNames") (EVar "prelude"))))
 (DTypeSig false "allFunDefNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "allFunDefNames" ((PList)) (EListLit))
-(DFunDef false "allFunDefNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "allFunDefNames") (EVar "rest"))))
+(DFunDef false "allFunDefNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "allFunDefNames") (EVar "rest"))))
 (DFunDef false "allFunDefNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "allFunDefNames") (EVar "rest")))
 (DTypeSig false "keepNotIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "keepNotIn" (PWild (PList)) (EListLit))
@@ -675,7 +676,7 @@ markerFor preludeProg =
 (DTypeSig false "declExternalRefs" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declExternalRefs" ((PVar "d")) (EApp (EApp (EVar "keepNotIn") (EApp (EVar "declDefines") (EVar "d"))) (EApp (EVar "declRefs") (EVar "d"))))
 (DTypeSig false "declDefines" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "declDefines" ((PCon "DFunDef" PWild (PVar "n") PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "declDefines" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild)) (EListLit (EVar "n")))
 (DFunDef false "declDefines" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (EVar "implMethodNameOf")) (EVar "methods")))
 (DFunDef false "declDefines" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (EVar "ifaceMethodName")) (EVar "methods")))
 (DFunDef false "declDefines" (PWild) (EListLit))
@@ -684,7 +685,7 @@ markerFor preludeProg =
 (DTypeSig true "declRefs" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declRefs" ((PVar "d")) (EApp (EApp (EVar "flatMap") (EVar "collectVars")) (EApp (EVar "declBodies") (EVar "d"))))
 (DTypeSig true "declBodies" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "declBodies" ((PCon "DFunDef" PWild PWild PWild (PVar "body"))) (EListLit (EVar "body")))
+(DFunDef false "declBodies" ((PCon "DFunDef" PWild PWild PWild (PVar "body") PWild)) (EListLit (EVar "body")))
 (DFunDef false "declBodies" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (EVar "implMethodBody")) (EVar "methods")))
 (DFunDef false "declBodies" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EVar "ifaceMethodBodies")) (EVar "methods")))
 (DFunDef false "declBodies" ((PCon "DProp" PWild PWild PWild (PVar "body"))) (EListLit (EVar "body")))
@@ -693,7 +694,7 @@ markerFor preludeProg =
 (DFunDef false "declBodies" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "flatMap") (EVar "letBindBodies")) (EVar "binds")))
 (DFunDef false "declBodies" (PWild) (EListLit))
 (DTypeSig false "letBindBodies" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "letBindBodies" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "map") (EVar "funClauseBody")) (EVar "clauses")))
+(DFunDef false "letBindBodies" ((PCon "LetBind" PWild (PVar "clauses") PWild)) (EApp (EApp (EVar "map") (EVar "funClauseBody")) (EVar "clauses")))
 (DTypeSig false "funClauseBody" (TyFun (TyCon "FunClause") (TyCon "Expr")))
 (DFunDef false "funClauseBody" ((PCon "FunClause" PWild (PVar "body"))) (EVar "body"))
 (DTypeSig false "implMethodBody" (TyFun (TyCon "ImplMethod") (TyCon "Expr")))
@@ -746,7 +747,7 @@ markerFor preludeProg =
 (DFunDef false "seedExtraRefs" ((PLit (LString ""))) (EListLit))
 (DFunDef false "seedExtraRefs" ((PVar "s")) (EListLit (EVar "s")))
 (DTypeSig false "letBindVars" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "letBindVars" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "flatMap") (EVar "funClauseVars")) (EVar "clauses")))
+(DFunDef false "letBindVars" ((PCon "LetBind" PWild (PVar "clauses") PWild)) (EApp (EApp (EVar "flatMap") (EVar "funClauseVars")) (EVar "clauses")))
 (DTypeSig false "funClauseVars" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "funClauseVars" ((PCon "FunClause" PWild (PVar "body"))) (EApp (EVar "collectVars") (EVar "body")))
 (DTypeSig false "armVars" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "String"))))
@@ -761,7 +762,7 @@ markerFor preludeProg =
 (DTypeSig false "doStmtVars" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doStmtVars" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DFunDef false "doStmtVars" ((PCon "DoBind" PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
-(DFunDef false "doStmtVars" ((PCon "DoLet" PWild PWild PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
+(DFunDef false "doStmtVars" ((PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EVar "collectVars") (EVar "e")))
 (DFunDef false "doStmtVars" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DFunDef false "doStmtVars" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DTypeSig false "interpVars" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "String"))))
@@ -817,7 +818,7 @@ markerFor preludeProg =
 (DFunDef false "localBoundExpr" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "localBoundExpr") (EVar "e")))
 (DFunDef false "localBoundExpr" (PWild) (EListLit))
 (DTypeSig false "letBindBound" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "letBindBound" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "flatMap") (EVar "funClauseBound")) (EVar "clauses")))
+(DFunDef false "letBindBound" ((PCon "LetBind" PWild (PVar "clauses") PWild)) (EApp (EApp (EVar "flatMap") (EVar "funClauseBound")) (EVar "clauses")))
 (DTypeSig false "funClauseBound" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "funClauseBound" ((PCon "FunClause" (PVar "ps") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")) (EApp (EVar "localBoundExpr") (EVar "body"))))
 (DTypeSig false "armBound" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "String"))))
@@ -832,7 +833,7 @@ markerFor preludeProg =
 (DTypeSig false "doStmtBound" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doStmtBound" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "localBoundExpr") (EVar "e")))
 (DFunDef false "doStmtBound" ((PCon "DoBind" (PVar "p") (PVar "e"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "p")) (EApp (EVar "localBoundExpr") (EVar "e"))))
-(DFunDef false "doStmtBound" ((PCon "DoLet" PWild PWild (PVar "p") (PVar "e"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "p")) (EApp (EVar "localBoundExpr") (EVar "e"))))
+(DFunDef false "doStmtBound" ((PCon "DoLet" PWild PWild (PVar "p") (PVar "e") PWild)) (EBinOp "++" (EApp (EVar "patBindings") (EVar "p")) (EApp (EVar "localBoundExpr") (EVar "e"))))
 (DFunDef false "doStmtBound" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "localBoundExpr") (EVar "e")))
 (DFunDef false "doStmtBound" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "localBoundExpr") (EVar "e")))
 (DTypeSig false "interpBound" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "String"))))
@@ -841,7 +842,7 @@ markerFor preludeProg =
 (DTypeSig false "mapLitPairBound" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "mapLitPairBound" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EApp (EVar "localBoundExpr") (EVar "k")) (EApp (EVar "localBoundExpr") (EVar "v"))))
 (DTypeSig false "declLocalBound" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "declLocalBound" ((PCon "DFunDef" PWild PWild (PVar "ps") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")) (EApp (EVar "localBoundExpr") (EVar "body"))))
+(DFunDef false "declLocalBound" ((PCon "DFunDef" PWild PWild (PVar "ps") (PVar "body") PWild)) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")) (EApp (EVar "localBoundExpr") (EVar "body"))))
 (DFunDef false "declLocalBound" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declLocalBound") (EVar "d")))
 (DFunDef false "declLocalBound" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "flatMap") (EVar "letBindBound")) (EVar "binds")))
 (DFunDef false "declLocalBound" ((PVar "d")) (EApp (EApp (EVar "flatMap") (EVar "localBoundExpr")) (EApp (EVar "declBodies") (EVar "d"))))
@@ -886,7 +887,7 @@ markerFor preludeProg =
 (DFunDef false "markDecl" ((PVar "methods") (PVar "constrained") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "markDecl") (EVar "methods")) (EVar "constrained")) (EVar "inner"))))
 (DFunDef false "markDecl" ((PVar "methods") (PVar "constrained") (PVar "d")) (EApp (EApp (EVar "mapDecl") (EApp (EApp (EVar "markNode") (EVar "methods")) (EVar "constrained"))) (EVar "d")))
 (DTypeSig false "markLetBind" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
-(DFunDef false "markLetBind" ((PVar "f") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "markFunClause") (EVar "f"))) (EVar "clauses"))))
+(DFunDef false "markLetBind" ((PVar "f") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site"))) (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "markFunClause") (EVar "f"))) (EVar "clauses"))) (EVar "site")))
 (DTypeSig false "markFunClause" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "FunClause") (TyCon "FunClause"))))
 (DFunDef false "markFunClause" ((PVar "f") (PCon "FunClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EVar "pats")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "body"))))
 (DTypeSig false "shadowRename" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -895,7 +896,7 @@ markerFor preludeProg =
 (DFunDef false "shadowRenames" ((PVar "preludeMethods") (PVar "prog")) (EApp (EApp (EVar "keepNotIn") (EApp (EVar "localBoundNames") (EVar "prog"))) (EApp (EApp (EVar "keepIn") (EVar "preludeMethods")) (EApp (EVar "userValueNames") (EVar "prog")))))
 (DTypeSig false "userValueNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "userValueNames" ((PList)) (EListLit))
-(DFunDef false "userValueNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
+(DFunDef false "userValueNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "userValueNames") (EVar "rest")))
 (DTypeSig false "keepIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "keepIn" (PWild (PList)) (EListLit))
@@ -904,7 +905,7 @@ markerFor preludeProg =
 (DFunDef false "applyRenames" ((PList) (PVar "prog")) (EVar "prog"))
 (DFunDef false "applyRenames" ((PVar "renames") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "renameDecl") (EVar "renames"))) (EVar "prog")))
 (DTypeSig false "renameDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "renameDecl" ((PVar "renames") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "ps")) (EApp (EApp (EVar "mapExpr") (EApp (EVar "renameVar") (EVar "renames"))) (EVar "body"))))
+(DFunDef false "renameDecl" ((PVar "renames") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "ps")) (EApp (EApp (EVar "mapExpr") (EApp (EVar "renameVar") (EVar "renames"))) (EVar "body"))) (EVar "site")))
 (DFunDef false "renameDecl" ((PVar "renames") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "t")))
 (DFunDef false "renameDecl" ((PVar "renames") (PVar "d")) (EApp (EApp (EVar "mapDecl") (EApp (EVar "renameVar") (EVar "renames"))) (EVar "d")))
 (DTypeSig false "renameVar" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -918,7 +919,7 @@ markerFor preludeProg =
 (DFunDef false "preludePlainFnNames" ((PVar "prelude")) (EApp (EApp (EVar "keepNotIn") (EApp (EVar "interfaceMethodNames") (EVar "prelude"))) (EApp (EVar "allFunDefNames") (EVar "prelude"))))
 (DTypeSig false "allFunDefNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "allFunDefNames" ((PList)) (EListLit))
-(DFunDef false "allFunDefNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "allFunDefNames") (EVar "rest"))))
+(DFunDef false "allFunDefNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "allFunDefNames") (EVar "rest"))))
 (DFunDef false "allFunDefNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "allFunDefNames") (EVar "rest")))
 (DTypeSig false "keepNotIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "keepNotIn" (PWild (PList)) (EListLit))
@@ -942,7 +943,7 @@ markerFor preludeProg =
 (DTypeSig false "declExternalRefs" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declExternalRefs" ((PVar "d")) (EApp (EApp (EVar "keepNotIn") (EApp (EVar "declDefines") (EVar "d"))) (EApp (EVar "declRefs") (EVar "d"))))
 (DTypeSig false "declDefines" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "declDefines" ((PCon "DFunDef" PWild (PVar "n") PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "declDefines" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild)) (EListLit (EVar "n")))
 (DFunDef false "declDefines" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EVar "implMethodNameOf")) (EVar "methods")))
 (DFunDef false "declDefines" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodName")) (EVar "methods")))
 (DFunDef false "declDefines" (PWild) (EListLit))
@@ -951,7 +952,7 @@ markerFor preludeProg =
 (DTypeSig true "declRefs" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declRefs" ((PVar "d")) (EApp (EApp (EDictApp "flatMap") (EVar "collectVars")) (EApp (EVar "declBodies") (EVar "d"))))
 (DTypeSig true "declBodies" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "declBodies" ((PCon "DFunDef" PWild PWild PWild (PVar "body"))) (EListLit (EVar "body")))
+(DFunDef false "declBodies" ((PCon "DFunDef" PWild PWild PWild (PVar "body") PWild)) (EListLit (EVar "body")))
 (DFunDef false "declBodies" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EVar "implMethodBody")) (EVar "methods")))
 (DFunDef false "declBodies" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceMethodBodies")) (EVar "methods")))
 (DFunDef false "declBodies" ((PCon "DProp" PWild PWild PWild (PVar "body"))) (EListLit (EVar "body")))
@@ -960,7 +961,7 @@ markerFor preludeProg =
 (DFunDef false "declBodies" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EDictApp "flatMap") (EVar "letBindBodies")) (EVar "binds")))
 (DFunDef false "declBodies" (PWild) (EListLit))
 (DTypeSig false "letBindBodies" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "letBindBodies" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EMethodRef "map") (EVar "funClauseBody")) (EVar "clauses")))
+(DFunDef false "letBindBodies" ((PCon "LetBind" PWild (PVar "clauses") PWild)) (EApp (EApp (EMethodRef "map") (EVar "funClauseBody")) (EVar "clauses")))
 (DTypeSig false "funClauseBody" (TyFun (TyCon "FunClause") (TyCon "Expr")))
 (DFunDef false "funClauseBody" ((PCon "FunClause" PWild (PVar "body"))) (EVar "body"))
 (DTypeSig false "implMethodBody" (TyFun (TyCon "ImplMethod") (TyCon "Expr")))
@@ -1013,7 +1014,7 @@ markerFor preludeProg =
 (DFunDef false "seedExtraRefs" ((PLit (LString ""))) (EListLit))
 (DFunDef false "seedExtraRefs" ((PVar "s")) (EListLit (EVar "s")))
 (DTypeSig false "letBindVars" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "letBindVars" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseVars")) (EVar "clauses")))
+(DFunDef false "letBindVars" ((PCon "LetBind" PWild (PVar "clauses") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseVars")) (EVar "clauses")))
 (DTypeSig false "funClauseVars" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "funClauseVars" ((PCon "FunClause" PWild (PVar "body"))) (EApp (EVar "collectVars") (EVar "body")))
 (DTypeSig false "armVars" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1028,7 +1029,7 @@ markerFor preludeProg =
 (DTypeSig false "doStmtVars" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doStmtVars" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DFunDef false "doStmtVars" ((PCon "DoBind" PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
-(DFunDef false "doStmtVars" ((PCon "DoLet" PWild PWild PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
+(DFunDef false "doStmtVars" ((PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EVar "collectVars") (EVar "e")))
 (DFunDef false "doStmtVars" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DFunDef false "doStmtVars" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DTypeSig false "interpVars" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1084,7 +1085,7 @@ markerFor preludeProg =
 (DFunDef false "localBoundExpr" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "localBoundExpr") (EVar "e")))
 (DFunDef false "localBoundExpr" (PWild) (EListLit))
 (DTypeSig false "letBindBound" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "letBindBound" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseBound")) (EVar "clauses")))
+(DFunDef false "letBindBound" ((PCon "LetBind" PWild (PVar "clauses") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseBound")) (EVar "clauses")))
 (DTypeSig false "funClauseBound" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "funClauseBound" ((PCon "FunClause" (PVar "ps") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")) (EApp (EVar "localBoundExpr") (EVar "body"))))
 (DTypeSig false "armBound" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1099,7 +1100,7 @@ markerFor preludeProg =
 (DTypeSig false "doStmtBound" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doStmtBound" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "localBoundExpr") (EVar "e")))
 (DFunDef false "doStmtBound" ((PCon "DoBind" (PVar "p") (PVar "e"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "p")) (EApp (EVar "localBoundExpr") (EVar "e"))))
-(DFunDef false "doStmtBound" ((PCon "DoLet" PWild PWild (PVar "p") (PVar "e"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "p")) (EApp (EVar "localBoundExpr") (EVar "e"))))
+(DFunDef false "doStmtBound" ((PCon "DoLet" PWild PWild (PVar "p") (PVar "e") PWild)) (EBinOp "++" (EApp (EVar "patBindings") (EVar "p")) (EApp (EVar "localBoundExpr") (EVar "e"))))
 (DFunDef false "doStmtBound" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "localBoundExpr") (EVar "e")))
 (DFunDef false "doStmtBound" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "localBoundExpr") (EVar "e")))
 (DTypeSig false "interpBound" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1108,7 +1109,7 @@ markerFor preludeProg =
 (DTypeSig false "mapLitPairBound" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "mapLitPairBound" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EApp (EVar "localBoundExpr") (EVar "k")) (EApp (EVar "localBoundExpr") (EVar "v"))))
 (DTypeSig false "declLocalBound" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "declLocalBound" ((PCon "DFunDef" PWild PWild (PVar "ps") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")) (EApp (EVar "localBoundExpr") (EVar "body"))))
+(DFunDef false "declLocalBound" ((PCon "DFunDef" PWild PWild (PVar "ps") (PVar "body") PWild)) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")) (EApp (EVar "localBoundExpr") (EVar "body"))))
 (DFunDef false "declLocalBound" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declLocalBound") (EVar "d")))
 (DFunDef false "declLocalBound" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EDictApp "flatMap") (EVar "letBindBound")) (EVar "binds")))
 (DFunDef false "declLocalBound" ((PVar "d")) (EApp (EApp (EDictApp "flatMap") (EVar "localBoundExpr")) (EApp (EVar "declBodies") (EVar "d"))))

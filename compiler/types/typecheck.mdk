@@ -110,6 +110,7 @@ import frontend.ast.{
   LetBind(..),
   Expr(..),
   Loc(..),
+  noDeclLoc,
   orElseLoc,
   ConPayload(..),
   Field(..),
@@ -5756,12 +5757,14 @@ deNameIdxModB = declEnvModule 1 "modB" [deNameIdxBeta, deNameIdxSharedB]
 -- No data declaration anywhere in these two — a plain value binding, the
 -- "unrelated code" T-GLOBAL-TABLE asks for.
 deNameIdxModC : DeclEnvModule
-deNameIdxModC =
-  declEnvModule 2 "modC" [DFunDef True "modCHelper" [] (ELit (LInt 1))]
+deNameIdxModC = declEnvModule 2 "modC" [
+  DFunDef True "modCHelper" [] (ELit (LInt 1)) noDeclLoc,
+]
 
 deNameIdxModD : DeclEnvModule
-deNameIdxModD =
-  declEnvModule 3 "modD" [DFunDef True "modDHelper" [] (ELit (LInt 2))]
+deNameIdxModD = declEnvModule 3 "modD" [
+  DFunDef True "modDHelper" [] (ELit (LInt 2)) noDeclLoc,
+]
 
 deNameIdxChain : OrdMap (OrdMap Unit)
 deNameIdxChain =
@@ -16706,18 +16709,18 @@ rewriteLocalDictExpr (EBlock stmts) = EBlock (map rewriteLocalDoStmt stmts)
 rewriteLocalDictExpr e = e
 
 rewriteLocalLetBind : LetBind -> LetBind
-rewriteLocalLetBind (LetBind n clauses) = match localAbsFor n
-  Some la => LetBind n (map (prependLocalDictClause la.laParams) clauses)
-  None => LetBind n clauses
+rewriteLocalLetBind (LetBind n clauses site) = match localAbsFor n
+  Some la => LetBind n (map (prependLocalDictClause la.laParams) clauses) site
+  None => LetBind n clauses site
 
 prependLocalDictClause : List String -> FunClause -> FunClause
 prependLocalDictClause params (FunClause pats body) =
   FunClause (map localDictPat params ++ pats) body
 
 rewriteLocalDoStmt : DoStmt -> DoStmt
-rewriteLocalDoStmt (DoLet m r (PVar x xloc) e) = match localAbsFor x
-  Some la => DoLet m r (PVar x xloc) (prependLocalDicts la.laParams e)
-  None => DoLet m r (PVar x xloc) e
+rewriteLocalDoStmt (DoLet m r (PVar x xloc) e site) = match localAbsFor x
+  Some la => DoLet m r (PVar x xloc) (prependLocalDicts la.laParams e) site
+  None => DoLet m r (PVar x xloc) e site
 rewriteLocalDoStmt stmt = stmt
 
 prependLocalDicts : List String -> Expr -> Expr
@@ -16913,19 +16916,20 @@ wholeDomainExpr e = mapChildren wholeDomainExpr e
 -- Apply [f] once to the root of every expression a declaration holds.
 export
 mapDeclBodies : (Expr -> Expr) -> Decl -> Decl
-mapDeclBodies f (DFunDef pub n ps e) = DFunDef pub n ps (f e)
+mapDeclBodies f (DFunDef pub n ps e site) = DFunDef pub n ps (f e) site
 mapDeclBodies f (DLetGroup pub binds) =
   DLetGroup
     pub
     (map
       (b => match b
-        LetBind n clauses =>
+        LetBind n clauses site =>
           LetBind
             n
             (map
               (c => match c
                 FunClause ps e => FunClause ps (f e))
-              clauses))
+              clauses)
+            site)
       binds)
 mapDeclBodies f (d@(DInterface { methods, ... })) = DInterface { d |
   methods =
@@ -17960,8 +17964,8 @@ inferStmt env (DoExpr e) =
 -- in blockLet — so a pin note built from `exprLoc` of the curried lambda (which carries
 -- no ELoc wrapper) had no location and the diagnostic silently never fired for the most
 -- ordinary spelling of a local helper.  The binder pattern always has a real Loc.
-inferStmt env (DoLet _ True (PVar x xloc) e) = blockRecLet env x (Some xloc) e
-inferStmt env (DoLet _ _ pat e) = blockLet env pat e
+inferStmt env (DoLet _ True (PVar x xloc) e _) = blockRecLet env x (Some xloc) e
+inferStmt env (DoLet _ _ pat e _) = blockLet env pat e
 inferStmt env (DoAssign x e) = extendLocalVar env x (monoScheme (infer env e))
 -- A `<-` bind (DoBind) reaching a bare block is a user error: `<-` is
 -- monadic-`do`-only, and a monadic `do` lowers to EDo (desugared before
@@ -24623,7 +24627,7 @@ letGroupComponents binds =
   else
     let grouped =
       fold
-        (m (LetBind n clauses) => omInsert n (map funClausePair clauses) m)
+        (m (LetBind n clauses _) => omInsert n (map funClausePair clauses) m)
         omEmpty
         binds
     map
@@ -25642,7 +25646,7 @@ funDefs : List Decl -> List (String, (List Pat, Expr))
 -- eval stays runnable without the typechecker.
 -- lint-disable-next-line rule-duplicate-body
 funDefs [] = []
-funDefs ((DFunDef _ n pats body) :: rest) = (n, (pats, body)) :: funDefs rest
+funDefs ((DFunDef _ n pats body _) :: rest) = (n, (pats, body)) :: funDefs rest
 -- Top-level `let rec … with …` (DLetGroup): flatten each binding's clauses to
 -- (name, (pats, body)) entries, exactly like a multi-clause DFunDef, so the SCC
 -- builder groups the mutually-recursive members and assigns them schemes, feeding
@@ -25653,7 +25657,7 @@ funDefs (_ :: rest) = funDefs rest
 
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 letGroupDefs [] = []
-letGroupDefs ((LetBind n clauses) :: rest) =
+letGroupDefs ((LetBind n clauses _) :: rest) =
   map (tcClauseDef n) clauses ++ letGroupDefs rest
 
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
@@ -25683,7 +25687,7 @@ checkLetRecDecls (_ :: rest) = checkLetRecDecls rest
 
 checkLetBinds : List LetBind -> Unit
 checkLetBinds [] = ()
-checkLetBinds ((LetBind name clauses) :: rest) =
+checkLetBinds ((LetBind name clauses _) :: rest) =
   let _ = checkLetBind name clauses
   checkLetBinds rest
 
@@ -25764,11 +25768,11 @@ checkLetGroupBindsLocated : List LetBind -> Unit
 checkLetGroupBindsLocated = checkLetGroupBindsGo
 
 letBindName : LetBind -> String
-letBindName (LetBind name _) = name
+letBindName (LetBind name _ _) = name
 
 checkLetGroupBindsGo : List LetBind -> Unit
 checkLetGroupBindsGo [] = ()
-checkLetGroupBindsGo ((LetBind name clauses) :: rest) =
+checkLetGroupBindsGo ((LetBind name clauses _) :: rest) =
   let selfAndForward = name :: map letBindName rest
   let _ = checkClausesNonFunctionLocated selfAndForward name clauses
   checkLetGroupBindsGo rest
@@ -25851,7 +25855,7 @@ eagerRefs (EDoOrigin _ e) = eagerRefs e
 eagerRefs _ = []
 
 eagerRefsLetBind : LetBind -> List String
-eagerRefsLetBind (LetBind _ clauses) = flatMap eagerRefsClauseAllPats clauses
+eagerRefsLetBind (LetBind _ clauses _) = flatMap eagerRefsClauseAllPats clauses
 
 -- Unlike the group-membership test above (which only examines zero-param
 -- clauses), a NESTED ELetGroup's own function-form members are legitimately
@@ -25879,7 +25883,7 @@ eagerRefsFieldAssign (FieldAssign _ e) = eagerRefs e
 eagerRefsDoStmt : DoStmt -> List String
 eagerRefsDoStmt (DoExpr e) = eagerRefs e
 eagerRefsDoStmt (DoBind _ e) = eagerRefs e
-eagerRefsDoStmt (DoLet _ _ _ e) = eagerRefs e
+eagerRefsDoStmt (DoLet _ _ _ e _) = eagerRefs e
 eagerRefsDoStmt _ = []
 
 eagerRefsInterp : InterpPart -> List String
@@ -25968,7 +25972,7 @@ processLetGroup env binds =
 letBindGeneralizes : TcEnv ->
   (LetBind, (String, BindingSummary)) ->
   (Bool, Mono)
-letBindGeneralizes env (LetBind _ clauses, (_, summary)) =
+letBindGeneralizes env (LetBind _ clauses _, (_, summary)) =
   (clausesAreValue env clauses, summary.bsValue)
 
 registerLocalGroupAbs : TcEnv ->
@@ -25977,7 +25981,7 @@ registerLocalGroupAbs : TcEnv ->
   List (LetBind, Option ScopeId) ->
   Unit
 registerLocalGroupAbs _ _ _ [] = ()
-registerLocalGroupAbs genv oblN0 callN0 ((bind@(LetBind name _), lscope) :: rest) =
+registerLocalGroupAbs genv oblN0 callN0 ((bind@(LetBind name _ _), lscope) :: rest) =
   let _ = match lookupVar genv name
     Some sch => registerLocalAbsIf name lscope sch oblN0 callN0
     None => ()
@@ -25986,12 +25990,12 @@ registerLocalGroupAbs genv oblN0 callN0 ((bind@(LetBind name _), lscope) :: rest
 -- the generalized (name, scheme) pairs of a just-closed local group
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
 groupSchemesOf _ [] = []
-groupSchemesOf genv ((LetBind name _) :: rest) = match lookupVar genv name
+groupSchemesOf genv ((LetBind name _ _) :: rest) = match lookupVar genv name
   Some sch => (name, sch) :: groupSchemesOf genv rest
   None => groupSchemesOf genv rest
 
 localBindingSummary : LetBind -> (String, BindingSummary)
-localBindingSummary (LetBind name clauses) =
+localBindingSummary (LetBind name clauses _) =
   let arity = match map funClausePair clauses
     (pats, _) :: _ => listLen pats
     [] => 0
@@ -26001,7 +26005,7 @@ inferLetBinds : TcEnv ->
   List (LetBind, (String, BindingSummary)) ->
   List (Option ScopeId)
 inferLetBinds _ [] = []
-inferLetBinds env ((bind@(LetBind name clauses), (_, owned)) :: rest) =
+inferLetBinds env ((bind@(LetBind name clauses _), (_, owned)) :: rest) =
   let pairs = map funClausePair clauses
   let lscope = if isLocalAbsName name then Some (openLocalScope name) else None
   let _ = inferMemberClauses env None owned pairs
@@ -26704,7 +26708,7 @@ generalizeGroup : TcEnv ->
   List (LetBind, (String, Scheme)) ->
   TcEnv
 generalizeGroup env _ _ [] = env
-generalizeGroup env residuals index ((LetBind name clauses, (_, sch)) :: rest) =
+generalizeGroup env residuals index ((LetBind name clauses _, (_, sch)) :: rest) =
   let mono = schemeMono sch
   let isVal = clausesAreValue env clauses
   -- WS-2: α scope-seed — single-clause zero-param bindings only (mirror α's
@@ -26842,7 +26846,7 @@ declBodyVars : String -> List Decl -> List String
 declBodyVars n decls = flatMap (declBodyVarsOf n) decls
 
 declBodyVarsOf : String -> Decl -> List String
-declBodyVarsOf n (DFunDef _ m _ body)
+declBodyVarsOf n (DFunDef _ m _ body _)
   | n == m = allEVars body
   | otherwise = []
 declBodyVarsOf _ _ = []
@@ -26959,8 +26963,8 @@ data ArgRw =
 -- so with the emit path off this would degenerate to the same node set mapProg
 -- visits.
 prePassDeclScoped : ArgRw -> Decl -> Decl
-prePassDeclScoped rw (DFunDef pub n ps e) =
-  DFunDef pub n ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
+prePassDeclScoped rw (DFunDef pub n ps e site) =
+  DFunDef pub n ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e) site
 prePassDeclScoped rw (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (prePassIfaceMethodScoped rw) methods }
 prePassDeclScoped rw (d@(DImpl { methods, ... })) =
@@ -26984,8 +26988,8 @@ prePassDeclScoped rw (DLetGroup pub binds) =
 prePassDeclScoped _ d = d
 
 prePassLetBindScoped : ArgRw -> LetBind -> LetBind
-prePassLetBindScoped rw (LetBind n clauses) =
-  LetBind n (map (prePassFunClauseScoped rw) clauses)
+prePassLetBindScoped rw (LetBind n clauses site) =
+  LetBind n (map (prePassFunClauseScoped rw) clauses) site
 
 prePassFunClauseScoped : ArgRw -> FunClause -> FunClause
 prePassFunClauseScoped rw (FunClause ps e) =
@@ -27061,7 +27065,7 @@ localAbsCtorSpine (EVarId name _) = ctorHeadShaped name
 localAbsCtorSpine _ = False
 
 localAbsCandidateBind : LetBind -> Bool
-localAbsCandidateBind (LetBind _ clauses) =
+localAbsCandidateBind (LetBind _ clauses _) =
   anyList localAbsCandidateClause clauses
 
 localAbsCandidateClause : FunClause -> Bool
@@ -27082,7 +27086,7 @@ letPatRename p _ b = (p, boundInsert (patVarsTc p) b)
 
 bindsRename : List LetBind -> OrdMap String -> (List LetBind, OrdMap String)
 bindsRename [] b = ([], b)
-bindsRename ((bind@(LetBind n clauses)) :: rest) b =
+bindsRename ((bind@(LetBind n clauses site)) :: rest) b =
   let (n2, b1) =
     if localAbsCandidateBind bind && not (isLocalAbsName n) then
       let fresh = freshLocalAbsName n
@@ -27090,7 +27094,7 @@ bindsRename ((bind@(LetBind n clauses)) :: rest) b =
     else
       (n, boundInsert [n] b)
   let (rest2, b2) = bindsRename rest b1
-  (LetBind n2 clauses :: rest2, b2)
+  (LetBind n2 clauses site :: rest2, b2)
 
 boundOfList : List String -> OrdMap String
 boundOfList ns = boundInsert ns omEmpty
@@ -27234,8 +27238,8 @@ rewriteArgInterp rw bound (InterpExpr e) =
   InterpExpr (rewriteArgScoped rw bound e)
 
 rewriteArgLetBind : ArgRw -> OrdMap String -> LetBind -> LetBind
-rewriteArgLetBind rw bound (LetBind n clauses) =
-  LetBind n (map (rewriteArgFunClause rw bound) clauses)
+rewriteArgLetBind rw bound (LetBind n clauses site) =
+  LetBind n (map (rewriteArgFunClause rw bound) clauses) site
 
 rewriteArgFunClause : ArgRw -> OrdMap String -> FunClause -> FunClause
 rewriteArgFunClause rw bound (FunClause ps body) =
@@ -27277,10 +27281,10 @@ rewriteArgStmts rw bound ((DoExpr e) :: rest) =
 rewriteArgStmts rw bound ((DoBind p e) :: rest) =
   DoBind p (rewriteArgScoped rw bound e)
     :: rewriteArgStmts rw (boundInsert (patVarsTc p) bound) rest
-rewriteArgStmts rw bound ((DoLet m r p e) :: rest) =
+rewriteArgStmts rw bound ((DoLet m r p e site) :: rest) =
   let (p2, after) = letPatRename p e bound
   let b1 = if r then after else bound
-  DoLet m r p2 (rewriteArgScoped rw b1 e) :: rewriteArgStmts rw after rest
+  DoLet m r p2 (rewriteArgScoped rw b1 e) site :: rewriteArgStmts rw after rest
 rewriteArgStmts rw bound ((DoAssign x e) :: rest) =
   DoAssign x (rewriteArgScoped rw bound e) :: rewriteArgStmts rw bound rest
 rewriteArgStmts rw bound ((DoFieldAssign x fs e) :: rest) =
@@ -27288,7 +27292,7 @@ rewriteArgStmts rw bound ((DoFieldAssign x fs e) :: rest) =
     :: rewriteArgStmts rw bound rest
 
 letBindNameTc : LetBind -> String
-letBindNameTc (LetBind n _) = n
+letBindNameTc (LetBind n _ _) = n
 
 -- the variables a pattern binds (local copy; llvm_emit's patVars isn't importable
 -- here, and this one also covers PRec field/pun binders).
@@ -33929,17 +33933,22 @@ grantPass mid prog =
   result
 
 grantDecl : String -> Decl -> Decl
-grantDecl mid (DFunDef pub n pats body) =
-  DFunDef pub n (grantParamPats (topGrantIds mid n) n ++ pats) (grantBody body)
+grantDecl mid (DFunDef pub n pats body site) =
+  DFunDef
+    pub
+    n
+    (grantParamPats (topGrantIds mid n) n ++ pats)
+    (grantBody body)
+    site
 grantDecl mid (DLetGroup pub binds) =
   DLetGroup
     pub
     (map
       (b => match b
-        LetBind n clauses =>
+        LetBind n clauses site =>
           grantLetBind
             (grantParamPats (topGrantIds mid n) n)
-            (LetBind n clauses))
+            (LetBind n clauses site))
       binds)
 grantDecl _ (d@(DInterface { name, ifaceOrigin, methods, ... })) = DInterface { d |
   methods = map (grantIfaceMethod (ifaceWordOf ifaceOrigin name)) methods,
@@ -34026,13 +34035,14 @@ grantArrows g t
       (grantArrows (g - 1) t)
 
 grantLetBind : List Pat -> LetBind -> LetBind
-grantLetBind params (LetBind n clauses) =
+grantLetBind params (LetBind n clauses site) =
   LetBind
     n
     (map
       (c => match c
         FunClause ps body => FunClause (params ++ ps) (grantBody body))
       clauses)
+    site
 
 topGrantIds : String -> String -> List Int
 topGrantIds mid n =
@@ -34096,8 +34106,10 @@ grantExprInner (ELetGroup binds body) =
   ELetGroup
     (map
       (b => match b
-        LetBind x clauses =>
-          grantLetBind (grantParamPats (localGrantIds x) x) (LetBind x clauses))
+        LetBind x clauses site =>
+          grantLetBind
+            (grantParamPats (localGrantIds x) x)
+            (LetBind x clauses site))
       binds)
     (grantExpr body)
 grantExprInner (EBlock stmts) = EBlock (map grantStmt stmts)
@@ -34105,11 +34117,11 @@ grantExprInner (EBlock stmts) = EBlock (map grantStmt stmts)
 grantExprInner e = mapChildren grantExpr e
 
 grantStmt : DoStmt -> DoStmt
-grantStmt (DoLet m r (PVar x xloc) e) =
-  DoLet m r (PVar x xloc) (grantLocalRhs x (grantExpr e))
+grantStmt (DoLet m r (PVar x xloc) e site) =
+  DoLet m r (PVar x xloc) (grantLocalRhs x (grantExpr e)) site
 grantStmt (DoExpr e) = DoExpr (grantExpr e)
 grantStmt (DoBind p e) = DoBind p (grantExpr e)
-grantStmt (DoLet m r p e) = DoLet m r p (grantExpr e)
+grantStmt (DoLet m r p e site) = DoLet m r p (grantExpr e) site
 grantStmt (DoAssign x e) = DoAssign x (grantExpr e)
 grantStmt (DoFieldAssign x fs e) = DoFieldAssign x fs (grantExpr e)
 
@@ -34764,9 +34776,10 @@ unopMethodApp op e routeRef =
     e
 
 dictPassDecl : OrdMap Unit -> List String -> Decl -> Decl
-dictPassDecl names _ (DFunDef pub n pats body)
-  | omHasKey n names = DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body
-  | otherwise = DFunDef pub n pats body
+dictPassDecl names _ (DFunDef pub n pats body site)
+  | omHasKey n names =
+    DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body site
+  | otherwise = DFunDef pub n pats body site
 -- Top-level `let rec … with …` (DLetGroup): each binding is dict-passed exactly
 -- like a DFunDef — a constrained member gets `dictParams n (dictArityOf n)`
 -- prepended to every clause's params, so the dict-passed call sites (which DO get
@@ -34800,10 +34813,10 @@ dictPassDecl _ _ d = d
 -- oracle's `if k = 0 then (n, clauses)` guard.  Gated on `names` (the constrained
 -- set) so an unconstrained member with a coincidental arity entry is untouched.
 dictPassLetBind : OrdMap Unit -> LetBind -> LetBind
-dictPassLetBind names (LetBind n clauses)
+dictPassLetBind names (LetBind n clauses site)
   | omHasKey n names =
-    LetBind n (map (prependDictClause n (dictArityOf n)) clauses)
-  | otherwise = LetBind n clauses
+    LetBind n (map (prependDictClause n (dictArityOf n)) clauses) site
+  | otherwise = LetBind n clauses site
 
 prependDictClause : String -> Int -> FunClause -> FunClause
 prependDictClause n k (FunClause pats body) =
@@ -34988,7 +35001,7 @@ collectMethodSites (EVariantUpdate _ e fs) =
 collectMethodSites _ = []
 
 letBindSites : LetBind -> List (Ref Route)
-letBindSites (LetBind _ clauses) = flatMap funClauseSites clauses
+letBindSites (LetBind _ clauses _) = flatMap funClauseSites clauses
 
 funClauseSites : FunClause -> List (Ref Route)
 funClauseSites (FunClause _ body) = collectMethodSites body
@@ -35003,7 +35016,7 @@ guardSites (GBind _ e) = collectMethodSites e
 
 doStmtSites : DoStmt -> List (Ref Route)
 doStmtSites (DoExpr e) = collectMethodSites e
-doStmtSites (DoLet _ _ _ e) = collectMethodSites e
+doStmtSites (DoLet _ _ _ e _) = collectMethodSites e
 doStmtSites (DoBind _ e) = collectMethodSites e
 doStmtSites (DoAssign _ e) = collectMethodSites e
 doStmtSites (DoFieldAssign _ _ e) = collectMethodSites e
@@ -35060,7 +35073,7 @@ collectDictSites (EVariantUpdate _ e fs) =
 collectDictSites _ = []
 
 letBindDictSites : LetBind -> List (List Route)
-letBindDictSites (LetBind _ clauses) = flatMap funClauseDictSites clauses
+letBindDictSites (LetBind _ clauses _) = flatMap funClauseDictSites clauses
 
 funClauseDictSites : FunClause -> List (List Route)
 funClauseDictSites (FunClause _ body) = collectDictSites body
@@ -35075,7 +35088,7 @@ guardDictSites (GBind _ e) = collectDictSites e
 
 doStmtDictSites : DoStmt -> List (List Route)
 doStmtDictSites (DoExpr e) = collectDictSites e
-doStmtDictSites (DoLet _ _ _ e) = collectDictSites e
+doStmtDictSites (DoLet _ _ _ e _) = collectDictSites e
 doStmtDictSites (DoBind _ e) = collectDictSites e
 doStmtDictSites (DoAssign _ e) = collectDictSites e
 doStmtDictSites (DoFieldAssign _ _ e) = collectDictSites e
@@ -42650,7 +42663,7 @@ sectionEVars (SecRight op e) = op :: allEVars e
 sectionEVars (SecLeft e op) = op :: allEVars e
 
 letBindEVars : LetBind -> List String
-letBindEVars (LetBind _ clauses) = flatMap funClauseEVars clauses
+letBindEVars (LetBind _ clauses _) = flatMap funClauseEVars clauses
 
 funClauseEVars : FunClause -> List String
 funClauseEVars (FunClause _ body) = allEVars body
@@ -42664,7 +42677,7 @@ guardEVars (GBind _ e) = allEVars e
 
 doStmtEVars : DoStmt -> List String
 doStmtEVars (DoExpr e) = allEVars e
-doStmtEVars (DoLet _ _ _ e) = allEVars e
+doStmtEVars (DoLet _ _ _ e _) = allEVars e
 doStmtEVars (DoBind _ e) = allEVars e
 doStmtEVars (DoAssign _ e) = allEVars e
 doStmtEVars (DoFieldAssign _ _ e) = allEVars e
@@ -42757,7 +42770,7 @@ freeFieldEVars : OrdMap Unit -> FieldAssign -> List String
 freeFieldEVars bound (FieldAssign _ e) = freeEVars bound e
 
 freeLetBindEVars : OrdMap Unit -> LetBind -> List String
-freeLetBindEVars bound (LetBind _ clauses) =
+freeLetBindEVars bound (LetBind _ clauses _) =
   flatMap (c => clauseRefsUnder bound (funClausePair c)) clauses
 
 clauseRefsUnder : OrdMap Unit -> (List Pat, Expr) -> List String
@@ -42786,7 +42799,7 @@ freeStmtsEVars : OrdMap Unit -> List DoStmt -> List String
 freeStmtsEVars _ [] = []
 freeStmtsEVars bound ((DoExpr e) :: rest) =
   freeEVars bound e ++ freeStmtsEVars bound rest
-freeStmtsEVars bound ((DoLet _ r p e) :: rest) =
+freeStmtsEVars bound ((DoLet _ r p e _) :: rest) =
   let after = namesToSet (patVarsTc p) bound
   freeEVars (if r then after else bound) e ++ freeStmtsEVars after rest
 freeStmtsEVars bound ((DoBind p e) :: rest) =
@@ -47466,7 +47479,7 @@ publicValNames : List Decl -> List String
 publicValNames [] = []
 publicValNames ((DAttrib _ d) :: rest) =
   publicValNames [d] ++ publicValNames rest
-publicValNames ((DFunDef True n _ _) :: rest) = n :: publicValNames rest
+publicValNames ((DFunDef True n _ _ _) :: rest) = n :: publicValNames rest
 publicValNames ((DTypeSig True n _) :: rest) = n :: publicValNames rest
 publicValNames ((DExtern True n _) :: rest) = n :: publicValNames rest
 publicValNames ((DInterface { pub = True, methods, ... }) :: rest) =
@@ -48030,7 +48043,7 @@ declaresStandalone : String -> List Decl -> Bool
 declaresStandalone _ [] = False
 declaresStandalone n ((DAttrib _ d) :: rest) =
   declaresStandalone n [d] || declaresStandalone n rest
-declaresStandalone n ((DFunDef _ m _ _) :: rest) =
+declaresStandalone n ((DFunDef _ m _ _ _) :: rest) =
   m == n || declaresStandalone n rest
 declaresStandalone n (_ :: rest) = declaresStandalone n rest
 
@@ -49820,7 +49833,7 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 
 declRefNames : Decl -> List String
 declRefNames (DAttrib _ d) = declRefNames d
-declRefNames (DFunDef _ _ _ body) = allEVars body
+declRefNames (DFunDef _ _ _ body _) = allEVars body
 declRefNames (DProp _ _ _ body) = allEVars body
 declRefNames (DTest _ _ body) = allEVars body
 declRefNames (DLetGroup _ binds) = flatMap letBindEVars binds
@@ -50809,7 +50822,7 @@ publicStandaloneNames : List Decl -> List String
 publicStandaloneNames [] = []
 publicStandaloneNames ((DAttrib _ d) :: rest) =
   publicStandaloneNames [d] ++ publicStandaloneNames rest
-publicStandaloneNames ((DFunDef True n _ _) :: rest) =
+publicStandaloneNames ((DFunDef True n _ _ _) :: rest) =
   n :: publicStandaloneNames rest
 publicStandaloneNames ((DTypeSig True n _) :: rest) =
   n :: publicStandaloneNames rest
@@ -53620,7 +53633,7 @@ markTailDecls mc dn granted decls =
   map (markTailDecl (argRwOf mc dn noDictHook granted)) decls
 
 markTailDecl : ArgRw -> Decl -> Decl
-markTailDecl _ (d@(DFunDef _ _ _ _)) = d
+markTailDecl _ (d@(DFunDef _ _ _ _ _)) = d
 markTailDecl _ (d@(DLetGroup _ _)) = d
 markTailDecl rw (DAttrib attrs d) = DAttrib attrs (markTailDecl rw d)
 markTailDecl rw d = prePassDeclScoped rw d
@@ -54562,7 +54575,7 @@ stampTailDecls : OrdMap Int -> List Decl -> List Decl
 stampTailDecls top decls = map (stampTailDecl top) decls
 
 stampTailDecl : OrdMap Int -> Decl -> Decl
-stampTailDecl _ (d@(DFunDef _ _ _ _)) = d
+stampTailDecl _ (d@(DFunDef _ _ _ _ _)) = d
 stampTailDecl _ (d@(DLetGroup _ _)) = d
 stampTailDecl top (DAttrib attrs d) = DAttrib attrs (stampTailDecl top d)
 stampTailDecl top d = stampDeclWith top d
@@ -54583,10 +54596,10 @@ rebuildGroupDeclsGo : OrdMap (List (List Pat, Expr)) ->
   List Decl ->
   (List Decl, OrdMap (List (List Pat, Expr)))
 rebuildGroupDeclsGo _ pending [] = ([], pending)
-rebuildGroupDeclsGo grouped pending ((DFunDef pub n _ _) :: rest) =
+rebuildGroupDeclsGo grouped pending ((DFunDef pub n _ _ site) :: rest) =
   let ((ps, e), pending2) = popMarkedClause grouped pending n
   let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
-  (DFunDef pub n ps e :: ds, pending3)
+  (DFunDef pub n ps e site :: ds, pending3)
 rebuildGroupDeclsGo grouped pending ((DLetGroup pub binds) :: rest) =
   let (binds2, pending2) = rebuildLetBinds grouped pending binds
   let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
@@ -54604,10 +54617,10 @@ rebuildLetBinds : OrdMap (List (List Pat, Expr)) ->
   List LetBind ->
   (List LetBind, OrdMap (List (List Pat, Expr)))
 rebuildLetBinds _ pending [] = ([], pending)
-rebuildLetBinds grouped pending ((LetBind n clauses) :: rest) =
+rebuildLetBinds grouped pending ((LetBind n clauses site) :: rest) =
   let (clauses2, pending2) = rebuildFunClauses grouped pending n clauses
   let (binds, pending3) = rebuildLetBinds grouped pending2 rest
-  (LetBind n clauses2 :: binds, pending3)
+  (LetBind n clauses2 site :: binds, pending3)
 
 rebuildFunClauses : OrdMap (List (List Pat, Expr)) ->
   OrdMap (List (List Pat, Expr)) ->

@@ -1,3 +1,4 @@
+atDeclSite : Loc -> Expr -> Expr
 authTermNames : List EffParamTy -> List String
 authTermSurface : (String -> String) -> EffParamTy -> String
 authTermsSurface : (String -> String) -> List EffParamTy -> String
@@ -72,6 +73,7 @@ mapVariantB : (Ty -> (Ty, Bool)) -> Variant -> (Variant, Bool)
 mapVariantsB : (Ty -> (Ty, Bool)) -> List Variant -> (List Variant, Bool)
 mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 negateLiteral : Int -> Int
+noDeclLoc : Loc
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 patBoundNames : Pat -> List String
 patternMark : Bool -> String

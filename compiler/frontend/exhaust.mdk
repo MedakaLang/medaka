@@ -1021,7 +1021,7 @@ letGroupWarnings oracle body =
   flatMap (checkLetBind oracle) (collectLetBinds body)
 
 checkLetBind : Oracle -> LetBind -> List (String, Option Loc)
-checkLetBind oracle (LetBind name funclauses) =
+checkLetBind oracle (LetBind name funclauses _) =
   checkGroup oracle name (map funClauseToClause funclauses)
 
 funClauseToClause : FunClause -> (List Pat, Expr)
@@ -1068,7 +1068,7 @@ collectLetBinds (EDoOrigin _ e) = collectLetBinds e
 collectLetBinds _ = []
 
 collectLetBindInner : LetBind -> List LetBind
-collectLetBindInner (LetBind _ funclauses) = flatMap funClauseBinds funclauses
+collectLetBindInner (LetBind _ funclauses _) = flatMap funClauseBinds funclauses
 
 funClauseBinds : FunClause -> List LetBind
 funClauseBinds (FunClause _ body) = collectLetBinds body
@@ -1089,7 +1089,7 @@ fieldAssignBinds (FieldAssign _ e) = collectLetBinds e
 doStmtBinds : DoStmt -> List LetBind
 doStmtBinds (DoExpr e) = collectLetBinds e
 doStmtBinds (DoBind _ e) = collectLetBinds e
-doStmtBinds (DoLet _ _ _ e) = collectLetBinds e
+doStmtBinds (DoLet _ _ _ e _) = collectLetBinds e
 doStmtBinds (DoAssign _ e) = collectLetBinds e
 doStmtBinds (DoFieldAssign _ _ e) = collectLetBinds e
 
@@ -1138,12 +1138,12 @@ checkGuardExhaustiveness prog = map fst (checkGuardExhaustivenessWith prog prog)
 
 topFunDefClauses : List Decl -> List (String, (List Pat, Expr))
 topFunDefClauses [] = []
-topFunDefClauses ((DFunDef _ n pats body) :: rest) =
+topFunDefClauses ((DFunDef _ n pats body _) :: rest) =
   (n, (pats, body)) :: topFunDefClauses rest
 topFunDefClauses (_ :: rest) = topFunDefClauses rest
 
 declBodyWarnings : Oracle -> Decl -> List (String, Option Loc)
-declBodyWarnings oracle (DFunDef _ _ _ body) = letGroupWarnings oracle body
+declBodyWarnings oracle (DFunDef _ _ _ body _) = letGroupWarnings oracle body
 declBodyWarnings oracle (DImpl { methods, ... }) =
   flatMap (checkNamedGroup oracle) (groupByName (implClauses methods))
     ++ flatMap (implMethodBodyWarnings oracle) methods

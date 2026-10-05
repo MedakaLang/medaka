@@ -1,0 +1,5 @@
+g : Int -> Int -> Int
+g 0 y = y
+g 1 y
+  | y > 0 = y
+main = println (g 1 (0 - 1))

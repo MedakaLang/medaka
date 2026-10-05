@@ -44,7 +44,7 @@ stages=DESUGAR,MARK
 -- never dropped, never counted as passing.  "This didn't run" must never look
 -- like "this passed".
 
-import frontend.ast.{Decl(..), Expr, Pat(..)}
+import frontend.ast.{Decl(..), Expr, Pat(..), noDeclLoc}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,
@@ -276,7 +276,7 @@ valueName i = "__tsv_\{intToString i}__"
 testBindings : String -> Int -> List (String, Int, Expr) -> List String
 testBindings _ _ [] = []
 testBindings nonce i ((_, _, body) :: rest) =
-  [declToString (DFunDef False (bindingName i) [PWild] body), ""]
+  [declToString (DFunDef False (bindingName i) [PWild] body noDeclLoc), ""]
     ++ printerDecl nonce i
     ++ testBindings nonce (i + 1) rest
 
@@ -395,7 +395,7 @@ fromFields note _ _ _ _ =
   Errored
     "native test runner: the probe's output for this test was incomplete (\{note})"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Pat" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Pat" true) (mem "noDeclLoc" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProjectManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
@@ -440,7 +440,7 @@ fromFields note _ _ _ _ =
 (DFunDef false "valueName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tsv_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
 (DTypeSig false "testBindings" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "testBindings" (PWild PWild (PList)) (EListLit))
-(DFunDef false "testBindings" ((PVar "nonce") (PVar "i") (PCons (PTuple PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "declToString") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EApp (EVar "bindingName") (EVar "i"))) (EListLit (EVar "PWild"))) (EVar "body"))) (ELit (LString ""))) (EApp (EApp (EVar "printerDecl") (EVar "nonce")) (EVar "i"))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "testBindings" ((PVar "nonce") (PVar "i") (PCons (PTuple PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "declToString") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EApp (EVar "bindingName") (EVar "i"))) (EListLit (EVar "PWild"))) (EVar "body")) (EVar "noDeclLoc"))) (ELit (LString ""))) (EApp (EApp (EVar "printerDecl") (EVar "nonce")) (EVar "i"))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "printerDecl" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "printerDecl" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "printerName") (EVar "i")))) (ELit (LString " _ ="))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let ")) (EApp (EVar "display") (EApp (EVar "valueName") (EVar "i")))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "bindingName") (EVar "i")))) (ELit (LString " ()")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "tag"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationTag"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "msg"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationMessage"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "exp"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationExpected"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "lastEmit") (EVar "nonce")) (EVar "i")) (ELit (LString "act"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationActual"))) (EVar "i")))) (EListLit (ELit (LString "")))))
 (DTypeSig false "accessor" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
@@ -474,7 +474,7 @@ fromFields note _ _ _ _ =
 (DFunDef false "fromFields" (PWild (PCon "Some" (PLit (LString "Fail"))) (PCon "Some" (PVar "msg")) (PCon "Some" (PVar "expected")) (PVar "actual")) (EApp (EApp (EApp (EVar "Fail") (EVar "msg")) (EVar "expected")) (EVar "actual")))
 (DFunDef false "fromFields" ((PVar "note") PWild PWild PWild PWild) (EApp (EVar "Errored") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: the probe's output for this test was incomplete (")) (EApp (EVar "display") (EVar "note"))) (ELit (LString ")")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Pat" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Pat" true) (mem "noDeclLoc" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProjectManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
@@ -519,7 +519,7 @@ fromFields note _ _ _ _ =
 (DFunDef false "valueName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tsv_")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
 (DTypeSig false "testBindings" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "testBindings" (PWild PWild (PList)) (EListLit))
-(DFunDef false "testBindings" ((PVar "nonce") (PVar "i") (PCons (PTuple PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "declToString") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EApp (EVar "bindingName") (EVar "i"))) (EListLit (EVar "PWild"))) (EVar "body"))) (ELit (LString ""))) (EApp (EApp (EVar "printerDecl") (EVar "nonce")) (EVar "i"))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "testBindings" ((PVar "nonce") (PVar "i") (PCons (PTuple PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "declToString") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EApp (EVar "bindingName") (EVar "i"))) (EListLit (EVar "PWild"))) (EVar "body")) (EVar "noDeclLoc"))) (ELit (LString ""))) (EApp (EApp (EVar "printerDecl") (EVar "nonce")) (EVar "i"))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "printerDecl" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "printerDecl" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "printerName") (EVar "i")))) (ELit (LString " _ ="))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let ")) (EApp (EMethodRef "display") (EApp (EVar "valueName") (EVar "i")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "bindingName") (EVar "i")))) (ELit (LString " ()")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "tag"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationTag"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "msg"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationMessage"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "exp"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationExpected"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "lastEmit") (EVar "nonce")) (EVar "i")) (ELit (LString "act"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationActual"))) (EVar "i")))) (EListLit (ELit (LString "")))))
 (DTypeSig false "accessor" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))

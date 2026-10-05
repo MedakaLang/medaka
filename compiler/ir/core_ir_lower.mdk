@@ -651,14 +651,14 @@ lowerField : FieldAssign -> CField
 lowerField (FieldAssign k e) = CField k (lower e)
 
 lowerBind : LetBind -> CBind
-lowerBind (LetBind name clauses) = CBind name (map lowerClause clauses)
+lowerBind (LetBind name clauses _) = CBind name (map lowerClause clauses)
 
 lowerClause : FunClause -> CClause
 lowerClause (FunClause pats body) = CClause pats (lower body)
 
 lowerStmt : DoStmt -> CStmt
 lowerStmt (DoExpr e) = CSExpr (lower e)
-lowerStmt (DoLet _ recFlag pat e) = CSLet recFlag pat (lower e)
+lowerStmt (DoLet _ recFlag pat e _) = CSLet recFlag pat (lower e)
 lowerStmt (DoAssign x e) = CSAssign x (lower e)
 lowerStmt _ = panic "core_ir lower: unsupported block statement"
 
@@ -2627,7 +2627,7 @@ tyIsFunReturningSelf _ _ = False
 
 funClausesOf : List Decl -> List (String, CClause)
 funClausesOf [] = []
-funClausesOf ((DFunDef _ n pats body) :: rest) =
+funClausesOf ((DFunDef _ n pats body _) :: rest) =
   (n, CClause pats (lower body)) :: funClausesOf rest
 -- Top-level `let rec … with …` (DLetGroup): flatten each binding's clauses
 -- into (name, CClause) entries, mirroring eval.mdk's funDefs/letGroupDefs.
@@ -2638,7 +2638,7 @@ funClausesOf (_ :: rest) = funClausesOf rest
 
 letGroupClausesOf : List LetBind -> List (String, CClause)
 letGroupClausesOf [] = []
-letGroupClausesOf ((LetBind n clauses) :: rest) =
+letGroupClausesOf ((LetBind n clauses _) :: rest) =
   map (lowerLetBind n) clauses ++ letGroupClausesOf rest
 
 lowerLetBind : String -> FunClause -> (String, CClause)

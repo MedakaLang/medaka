@@ -47,8 +47,8 @@ dceFilter decls = filterReachable (reachableNames decls) decls
 -- `reach` is a HashMap-as-set, so `has` is O(1) average and this is O(#decls).
 filterReachable : HashMap String Unit -> List Decl -> List Decl
 filterReachable _ [] = []
-filterReachable reach ((DFunDef pub n ps body) :: rest)
-  | has n reach = DFunDef pub n ps body :: filterReachable reach rest
+filterReachable reach ((DFunDef pub n ps body site) :: rest)
+  | has n reach = DFunDef pub n ps body site :: filterReachable reach rest
   | otherwise = filterReachable reach rest
 filterReachable reach (d :: rest) = d :: filterReachable reach rest
 
@@ -95,7 +95,7 @@ definedFnNamesInto [] _ = ()
 -- SIGNATURE instead and it wraps the DSig, leaving the DFunDef bare — which is why
 -- this only reproduces on the no-signature form.)
 definedFnNamesInto ((DAttrib _ d) :: rest) s = definedFnNamesInto (d :: rest) s
-definedFnNamesInto ((DFunDef _ n _ _) :: rest) s =
+definedFnNamesInto ((DFunDef _ n _ _ _) :: rest) s =
   let _ = setInPlace n () s
   definedFnNamesInto rest s
 definedFnNamesInto (_ :: rest) s = definedFnNamesInto rest s
@@ -133,11 +133,11 @@ funGraphInto _ [] _ = ()
 -- its call-graph edges.
 funGraphInto defined ((DAttrib _ d) :: rest) g =
   funGraphInto defined (d :: rest) g
-funGraphInto defined ((DFunDef _ n ps body) :: rest) g =
+funGraphInto defined ((DFunDef _ n ps body site) :: rest) g =
   let _ =
     setInPlace
       n
-      (map (canonRef defined) (declRefs (DFunDef False n ps body))
+      (map (canonRef defined) (declRefs (DFunDef False n ps body site))
         ++ findWithDefault [] n g)
       g
   funGraphInto defined rest g

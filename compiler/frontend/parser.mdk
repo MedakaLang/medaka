@@ -42,6 +42,8 @@ import frontend.ast.{
   LetBind(..),
   Expr(..),
   Loc(..),
+  noDeclLoc,
+  atDeclSite,
   UseMember(..),
   UsePath(..),
   useMemberOrigin,
@@ -1607,13 +1609,14 @@ letRecExpr = defer
   e2 <- parseExpr
   deferPure (ELetGroup (coalesceClauses [clause]) e2)
 
-letRecInlineClause : Parser (String, List Pat, Expr)
+letRecInlineClause : Parser (String, List Pat, Expr, Loc)
 letRecInlineClause = defer
+  s <- getPos
   name <- identNameP
   pats <- many parseParamPat
   expectTok TEqual
   body <- parseExpr
-  deferPure (name, pats, body)
+  deferPure (name, pats, body, locOfSpan s (s + 1))
 
 parseMatch : Parser Expr
 parseMatch = defer
@@ -2792,7 +2795,9 @@ afterPublicFor pubPos _ =
 
 parseFunOrSig : Bool -> Parser Decl
 parseFunOrSig pub = defer
+  s <- getPos
   name <- identNameP
+  let site = locOfSpan s (s + 1)
   params <- many parseParamPat
   t <- peekP
   match t
@@ -2805,18 +2810,18 @@ parseFunOrSig pub = defer
       advance
       body <- parseBody
       skipNewlines
-      deferPure (DFunDef pub name params body)
+      deferPure (DFunDef pub name params body site)
     TIndent => defer
       advance
       arms <- parseGuardArms
       body <- guardArmsWhereOpt arms
       expectTok TDedent
       skipNewlines
-      deferPure (DFunDef pub name params body)
+      deferPure (DFunDef pub name params body site)
     TPipe => defer
       arm <- parseGuardArm
       skipNewlines
-      deferPure (DFunDef pub name params (EGuards [arm]))
+      deferPure (DFunDef pub name params (EGuards [arm]) site)
     _ => failP "expected : or = in definition"
 
 -- ── extern + import declarations ─────────────────────────────────────────
@@ -2925,13 +2930,14 @@ parseLetGroupDecl pub = defer
   skipNewlines
   deferPure (DLetGroup pub (coalesceClauses [c]))
 
-letRecDeclClause : Parser (String, List Pat, Expr)
+letRecDeclClause : Parser (String, List Pat, Expr, Loc)
 letRecDeclClause = defer
+  s <- getPos
   name <- identNameP
   pats <- many parseParamPat
   expectTok TEqual
   body <- parseBody
-  deferPure (name, pats, body)
+  deferPure (name, pats, body, locOfSpan s (s + 1))
 
 -- declaration attribute `@deprecated "msg"` / `@inline` / `@must_use` wrapping
 -- the following decl.
@@ -4135,22 +4141,22 @@ whereTail e = defer
   expectTok TDedent
   deferPure (ELetGroup (coalesceClauses binds) e)
 
-parseWhereBindings : Parser (List (String, List Pat, Expr))
+parseWhereBindings : Parser (List (String, List Pat, Expr, Loc))
 parseWhereBindings = defer
   skipNewlines
   whereBindingsLoop
 
-whereBindingsLoop : Parser (List (String, List Pat, Expr))
+whereBindingsLoop : Parser (List (String, List Pat, Expr, Loc))
 whereBindingsLoop = orElse whereBindingsCons (deferPure [])
 
-whereBindingsCons : Parser (List (String, List Pat, Expr))
+whereBindingsCons : Parser (List (String, List Pat, Expr, Loc))
 whereBindingsCons = defer
   b <- parseWhereBinding
   skipNewlines
   rest <- whereBindingsLoop
   deferPure (b :: rest)
 
-parseWhereBinding : Parser (String, List Pat, Expr)
+parseWhereBinding : Parser (String, List Pat, Expr, Loc)
 parseWhereBinding = defer
   p <- getPos
   name <- identNameP
@@ -4158,7 +4164,10 @@ parseWhereBinding = defer
   t <- peekP
   b <- whereBindRest name pats t
   recordUnitStart 3 p
-  deferPure b
+  deferPure (withBindSite (locOfSpan p (p + 1)) b)
+
+withBindSite : Loc -> (String, List Pat, Expr) -> (String, List Pat, Expr, Loc)
+withBindSite site (name, pats, body) = (name, pats, body, site)
 
 whereBindRest : String -> List Pat -> Token -> Parser (String, List Pat, Expr)
 -- annotated binding `go : ty = body` (no params only, mirrors let-in / block-let)
@@ -4183,29 +4192,35 @@ whereBindRest name pats TPipe = defer
 whereBindRest _ _ _ = failP "expected where binding body"
 
 -- group CONSECUTIVE same-name bindings into one LetBind (mirrors the reference
--- `coalesce_clauses`), so `go … = …` over several lines becomes one entry
-coalesceClauses : List (String, List Pat, Expr) -> List LetBind
+-- `coalesce_clauses`), so `go … = …` over several lines becomes one entry,
+-- sited at its first clause
+coalesceClauses : List (String, List Pat, Expr, Loc) -> List LetBind
 coalesceClauses [] = []
-coalesceClauses ((name, ps, b) :: rest) = coalesceGo name [FunClause ps b] rest
+coalesceClauses ((name, ps, b, site) :: rest) =
+  coalesceGo name site [FunClause ps b] rest
 
 coalesceGo : String ->
+  Loc ->
   List FunClause ->
-  List (String, List Pat, Expr) ->
+  List (String, List Pat, Expr, Loc) ->
   List LetBind
-coalesceGo name acc [] = [LetBind name (reverseL acc)]
-coalesceGo name acc ((n, ps, b) :: rest) = coalesceStep name acc n ps b rest
+coalesceGo name site acc [] = [LetBind name (reverseL acc) site]
+coalesceGo name site acc ((n, ps, b, nsite) :: rest) =
+  coalesceStep name site acc n ps b nsite rest
 
 coalesceStep : String ->
+  Loc ->
   List FunClause ->
   String ->
   List Pat ->
   Expr ->
-  List (String, List Pat, Expr) ->
+  Loc ->
+  List (String, List Pat, Expr, Loc) ->
   List LetBind
-coalesceStep name acc n ps b rest
-  | n == name = coalesceGo name (FunClause ps b :: acc) rest
+coalesceStep name site acc n ps b nsite rest
+  | n == name = coalesceGo name site (FunClause ps b :: acc) rest
   | otherwise =
-    LetBind name (reverseL acc) :: coalesceGo n [FunClause ps b] rest
+    LetBind name (reverseL acc) site :: coalesceGo n nsite [FunClause ps b] rest
 
 -- Same offside-block production as `parseBracketBlock` (#602: the two must not
 -- fork into independently-maintained byte-identical copies — one backing decl
@@ -4261,7 +4276,7 @@ doStmtsCons = defer
 -- has nothing to yield; reported at that statement.
 doBlockResult : Token -> Int -> List DoStmt -> Parser Expr
 doBlockResult herald lastStart stmts = match last stmts
-  Some (DoLet _ _ _ _) => fatalAtP (doEndsInBindingMsg herald) lastStart
+  Some (DoLet _ _ _ _ _) => fatalAtP (doEndsInBindingMsg herald) lastStart
   Some (DoBind _ _) => fatalAtP (doEndsInBindingMsg herald) lastStart
   _ => deferPure (EDo (herald == TDefer) stmts)
 
@@ -4320,9 +4335,19 @@ stmtFor _ = parseExprStmt
 -- `let p = e`, let-in (→ DoExpr), or let-else `let p = e else alt`
 parseLetStmt : Parser DoStmt
 parseLetStmt = defer
+  s <- getPos
   expectTok TLet
   t <- peekP
-  letKind t
+  stmt <- letKind t
+  deferPure (letStmtAt (locOfSpan s (s + 1)) stmt)
+
+-- `letKind`'s productions build a statement `DoLet` with `noDeclLoc`, or a
+-- `let … in` statement with no location; the site of either is the `let`
+-- keyword, which only `parseLetStmt` has seen.
+letStmtAt : Loc -> DoStmt -> DoStmt
+letStmtAt site (DoLet m r p e _) = DoLet m r p e site
+letStmtAt site (DoExpr (e@(ELet _ _ _ _ _))) = DoExpr (atDeclSite site e)
+letStmtAt _ stmt = stmt
 
 letKind : Token -> Parser DoStmt
 -- beta mutability model: `let mut` has been removed — rejected at the parser
@@ -4388,7 +4413,7 @@ letFunTailFor name nameLoc pats e1 TIn = defer
   e2 <- parseExpr
   deferPure (DoExpr (ELet False True (PVar name nameLoc) (curryLam pats e1) e2))
 letFunTailFor name nameLoc pats e1 _ =
-  deferPure (DoLet False True (PVar name nameLoc) (curryLam pats e1))
+  deferPure (DoLet False True (PVar name nameLoc) (curryLam pats e1) noDeclLoc)
 
 -- non-IDENT-led pattern: `let (a, b) = e`, `let Some v = e`, …
 letPat : Parser DoStmt
@@ -4404,7 +4429,7 @@ letTailFor pat e1 TIn = defer
   advance
   e2 <- parseExpr
   deferPure (DoExpr (ELet False False pat e1 e2))
-letTailFor pat e1 _ = deferPure (DoLet False False pat e1)
+letTailFor pat e1 _ = deferPure (DoLet False False pat e1 noDeclLoc)
 
 -- mirror the reference `curry_lam`: one single-arg ELam per param
 curryLam : List Pat -> Expr -> Expr
@@ -4445,7 +4470,7 @@ bindAnnot : Expr -> Ty -> Expr -> List DoStmt
 bindAnnot inner ty rhs = match stripLoc inner
   EVar x => [
     DoBind (PVar x (Loc "" 0 0 0 0)) rhs,
-    DoLet False False (PVar x (Loc "" 0 0 0 0)) (EAnnot (EVar x) ty),
+    DoLet False False (PVar x (Loc "" 0 0 0 0)) (EAnnot (EVar x) ty) noDeclLoc,
   ]
   other => [DoBind (exprToPat other) rhs]
 
@@ -4770,7 +4795,7 @@ declNameTokIdxAt toks (DAttrib _ inner) i =
       i2
   declNameTokIdx toks inner i3
 declNameTokIdxAt toks (DTypeSig _ _ _) i = tokIdxOrNone toks i
-declNameTokIdxAt toks (DFunDef _ _ _ _) i = tokIdxOrNone toks i
+declNameTokIdxAt toks (DFunDef _ _ _ _ _) i = tokIdxOrNone toks i
 declNameTokIdxAt toks (DExtern _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
@@ -5145,7 +5170,7 @@ chainOpTokEq _ _ = False
 -- outermost EBinOp is the lowest-precedence / top operator the parser built).
 declChainTopOp : Decl -> Option String
 declChainTopOp (DAttrib _ inner) = declChainTopOp inner
-declChainTopOp (DFunDef _ _ _ body) = bodyChainTopOp body
+declChainTopOp (DFunDef _ _ _ body _) = bodyChainTopOp body
 declChainTopOp _ = None
 
 bodyChainTopOp : Expr -> Option String
@@ -5218,7 +5243,7 @@ chainOpLinesAt toks lines op i e depth t
 
 declBlockRhs : Decl -> Bool
 declBlockRhs (DAttrib _ inner) = declBlockRhs inner
-declBlockRhs (DFunDef _ _ _ body) = bodyIsBlock body
+declBlockRhs (DFunDef _ _ _ body _) = bodyIsBlock body
 declBlockRhs _ = False
 
 bodyIsBlock : Expr -> Bool

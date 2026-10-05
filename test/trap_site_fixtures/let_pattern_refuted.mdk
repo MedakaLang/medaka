@@ -1,0 +1,5 @@
+pick : List Int -> Int
+pick xs =
+  let [a, b] = xs
+  a + b
+main = println (pick [1])

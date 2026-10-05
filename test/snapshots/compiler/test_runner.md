@@ -1,5 +1,5 @@
 # META
-source_lines=195
+source_lines=197
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted `test "…" = <expr>` runner (Phase 127 restored 2026-07-11).
@@ -17,7 +17,7 @@ stages=DESUGAR,MARK
 -- prop_runner, results are printed AS each test is evaluated, so a body that
 -- aborts the run does not mask the tests that already passed.
 
-import frontend.ast.{Decl(..), Expr(..), Loc(..)}
+import frontend.ast.{Decl(..), Expr(..), Loc(..), noDeclLoc}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.resolve.{firstExprLoc}
 import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
@@ -116,7 +116,9 @@ uncapableExterns corpus env tests =
         closureOver
           (refGraph corpus)
           seen
-          (flatMap (t => freeRefsOf (DFunDef False "" [] (thd3 t))) tests)
+          (flatMap
+            (t => freeRefsOf (DFunDef False "" [] (thd3 t) noDeclLoc))
+            tests)
       filterList (n => has n seen) unbound
 
 thd3 : (a, b, c) -> c
@@ -174,11 +176,11 @@ refGraph decls =
 refGraphInto : List Decl -> HashMap String (List String) -> Unit
 refGraphInto [] _ = ()
 refGraphInto ((DAttrib _ d) :: rest) g = refGraphInto (d :: rest) g
-refGraphInto ((DFunDef _ n ps body) :: rest) g =
+refGraphInto ((DFunDef _ n ps body site) :: rest) g =
   let _ =
     setInPlace
       n
-      (freeRefsOf (DFunDef False n ps body) ++ findWithDefault [] n g)
+      (freeRefsOf (DFunDef False n ps body site) ++ findWithDefault [] n g)
       g
   refGraphInto rest g
 -- A non-function body (impl method, interface default, let group) has no single
@@ -198,7 +200,7 @@ closureOver graph seen (w :: work)
     let _ = setInPlace w () seen
     closureOver graph seen (findWithDefault [] w graph ++ work)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))
@@ -220,7 +222,7 @@ closureOver graph seen (w :: work)
 (DTypeSig true "runOneTest" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
 (DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EVar "evalEnv"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList (PVar "e") (PVar "a"))) () (EApp (EApp (EVar "Pass") (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "m") (PVar "e") (PVar "a"))) () (EApp (EApp (EApp (EVar "Fail") (EApp (EVar "operandText") (EVar "m"))) (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
 (DTypeSig true "uncapableExterns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "uncapableExterns" ((PVar "corpus") (PVar "env") (PVar "tests")) (EBlock (DoLet false false (PVar "unbound") (EApp (EApp (EVar "unboundExternNames") (EVar "corpus")) (EApp (EVar "boundNameSet") (EVar "env")))) (DoExpr (EMatch (EVar "unbound") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closureOver") (EApp (EVar "refGraph") (EVar "corpus"))) (EVar "seen")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "t")) (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (ELit (LString ""))) (EListLit)) (EApp (EVar "thd3") (EVar "t")))))) (EVar "tests")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")))) (EVar "unbound")))))))))
+(DFunDef false "uncapableExterns" ((PVar "corpus") (PVar "env") (PVar "tests")) (EBlock (DoLet false false (PVar "unbound") (EApp (EApp (EVar "unboundExternNames") (EVar "corpus")) (EApp (EVar "boundNameSet") (EVar "env")))) (DoExpr (EMatch (EVar "unbound") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closureOver") (EApp (EVar "refGraph") (EVar "corpus"))) (EVar "seen")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "t")) (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (ELit (LString ""))) (EListLit)) (EApp (EVar "thd3") (EVar "t"))) (EVar "noDeclLoc"))))) (EVar "tests")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")))) (EVar "unbound")))))))))
 (DTypeSig false "thd3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "c")))
 (DFunDef false "thd3" ((PTuple PWild PWild (PVar "c"))) (EVar "c"))
 (DTypeSig false "boundNameSet" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
@@ -242,13 +244,13 @@ closureOver graph seen (w :: work)
 (DTypeSig false "refGraphInto" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "refGraphInto" ((PList) PWild) (ELit LUnit))
 (DFunDef false "refGraphInto" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "g")) (EApp (EApp (EVar "refGraphInto") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "g")))
-(DFunDef false "refGraphInto" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body")) (PVar "rest")) (PVar "g")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body"))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EVar "refGraphInto") (EVar "rest")) (EVar "g")))))
+(DFunDef false "refGraphInto" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site")) (PVar "rest")) (PVar "g")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")) (EVar "site"))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EVar "refGraphInto") (EVar "rest")) (EVar "g")))))
 (DFunDef false "refGraphInto" ((PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EVar "refGraphInto") (EVar "rest")) (EVar "g")))
 (DTypeSig false "closureOver" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "closureOver" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "closureOver" ((PVar "graph") (PVar "seen") (PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closureOver") (EVar "graph")) (EVar "seen")) (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closureOver") (EVar "graph")) (EVar "seen")) (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))
@@ -270,7 +272,7 @@ closureOver graph seen (w :: work)
 (DTypeSig true "runOneTest" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
 (DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EVar "evalEnv"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList (PVar "e") (PVar "a"))) () (EApp (EApp (EVar "Pass") (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "m") (PVar "e") (PVar "a"))) () (EApp (EApp (EApp (EVar "Fail") (EApp (EVar "operandText") (EVar "m"))) (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
 (DTypeSig true "uncapableExterns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "uncapableExterns" ((PVar "corpus") (PVar "env") (PVar "tests")) (EBlock (DoLet false false (PVar "unbound") (EApp (EApp (EVar "unboundExternNames") (EVar "corpus")) (EApp (EVar "boundNameSet") (EVar "env")))) (DoExpr (EMatch (EVar "unbound") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closureOver") (EApp (EVar "refGraph") (EVar "corpus"))) (EVar "seen")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "t")) (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (ELit (LString ""))) (EListLit)) (EApp (EVar "thd3") (EVar "t")))))) (EVar "tests")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")))) (EVar "unbound")))))))))
+(DFunDef false "uncapableExterns" ((PVar "corpus") (PVar "env") (PVar "tests")) (EBlock (DoLet false false (PVar "unbound") (EApp (EApp (EVar "unboundExternNames") (EVar "corpus")) (EApp (EVar "boundNameSet") (EVar "env")))) (DoExpr (EMatch (EVar "unbound") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closureOver") (EApp (EVar "refGraph") (EVar "corpus"))) (EVar "seen")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "t")) (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (ELit (LString ""))) (EListLit)) (EApp (EVar "thd3") (EVar "t"))) (EVar "noDeclLoc"))))) (EVar "tests")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")))) (EVar "unbound")))))))))
 (DTypeSig false "thd3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "c")))
 (DFunDef false "thd3" ((PTuple PWild PWild (PVar "c"))) (EVar "c"))
 (DTypeSig false "boundNameSet" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
@@ -292,7 +294,7 @@ closureOver graph seen (w :: work)
 (DTypeSig false "refGraphInto" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "refGraphInto" ((PList) PWild) (ELit LUnit))
 (DFunDef false "refGraphInto" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "g")) (EApp (EApp (EVar "refGraphInto") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "g")))
-(DFunDef false "refGraphInto" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body")) (PVar "rest")) (PVar "g")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body"))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EVar "refGraphInto") (EVar "rest")) (EVar "g")))))
+(DFunDef false "refGraphInto" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site")) (PVar "rest")) (PVar "g")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")) (EVar "site"))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EVar "refGraphInto") (EVar "rest")) (EVar "g")))))
 (DFunDef false "refGraphInto" ((PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EVar "refGraphInto") (EVar "rest")) (EVar "g")))
 (DTypeSig false "closureOver" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "closureOver" (PWild PWild (PList)) (ELit LUnit))

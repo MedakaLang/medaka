@@ -1,0 +1,5 @@
+pick : List Int -> Option Int
+pick xs = do
+  let [a, b] = xs
+  pure (a + b)
+main = println (pick [1])

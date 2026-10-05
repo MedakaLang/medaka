@@ -1493,7 +1493,7 @@ methodEvInExpr _ _ = None
 
 methodEvInDecls : String -> List Decl -> Option EvId
 methodEvInDecls _ [] = None
-methodEvInDecls target ((DFunDef _ _ _ body) :: rest) =
+methodEvInDecls target ((DFunDef _ _ _ body _) :: rest) =
   match methodEvInExpr target body
     Some ev => Some ev
     None => methodEvInDecls target rest
