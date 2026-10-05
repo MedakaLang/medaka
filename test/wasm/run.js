@@ -128,6 +128,7 @@ function mdkHexFloat(ip, fp, pexp) {
 }
 // --- END SHARED SHIM mdkStrToFloat ---
 
+let waitCell = null;
 const imports = { env: {
   mdk_write_byte: (b) => { acc.push(b & 0xff); },
   // W8 stderr seam (ePutStr / ePutStrLn): the diff gate checks stdout plus exact
@@ -181,6 +182,18 @@ const imports = { env: {
   mdk_write_file_commit: () => {
     try { vfs.writeFile(takePath(), Buffer.from(writeBuf)); writeBuf = []; return 1; }
     catch (e) { resultBuf = Buffer.from(String(e.message || e), 'utf8'); writeBuf = []; return 0; }
+  },
+  // Clock host surface (design WA-1): reads in seconds, sleep in milliseconds.  A
+  // non-positive sleep returns at once, as medaka_rt.c's mdk_sleep_ms does.  The wait
+  // cell is made on first sleep so a page without SharedArrayBuffer still loads.
+  mdk_wall_time_sec: () => Date.now() / 1000,
+  mdk_monotonic_sec: () => performance.now() / 1000,
+  mdk_sleep_ms: (ms) => {
+    ms = Number(ms);
+    if (ms > 0) {
+      waitCell = waitCell || new Int32Array(new SharedArrayBuffer(4));
+      Atomics.wait(waitCell, 0, 0, ms);
+    }
   },
   mdk_exit: (code) => { process.stdout.write(Buffer.from(acc).toString('utf8')); process.exit(code | 0); },
 } };

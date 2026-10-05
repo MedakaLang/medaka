@@ -1,5 +1,5 @@
 # META
-source_lines=2278
+source_lines=2289
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
@@ -1717,6 +1717,17 @@ ioHostImportLines = [
   "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"
 ]
 
+-- The clock host surface (design WA-1): reads in seconds as f64, a sleep in
+-- milliseconds as i64.  A host binds a non-positive sleep to a no-op.
+export
+clockHostImportLines : List String
+clockHostImportLines = [
+  "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --",
+  "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))",
+  "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))",
+  "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"
+]
+
 -- readFile's Err suffix for contents that are not UTF-8, the text of
 -- medaka_rt.c mdk_read_file's, as the WAT that builds it as a $u8arr.  ASCII,
 -- so one element per character.
@@ -2415,6 +2426,8 @@ charFromCodeRuntimeLines = [
 (DFunDef false "randomFloatRuntimeLines" () (EListLit (ELit (LString "  ;; randomFloat : SplitMix64 -> f64 in [-1,1) (NOTE the -1 offset — see medaka_rt.c).")) (ELit (LString "  (func $mdk_random_float (result (ref $float))")) (ELit (LString "    (struct.new $float")) (ELit (LString "      (f64.sub")) (ELit (LString "        (f64.mul")) (ELit (LString "          (f64.mul (f64.convert_i64_u (i64.shr_u (call $mdk_next_u64) (i64.const 11)))")) (ELit (LString "                   (f64.const 1.1102230246251565e-16))")) (ELit (LString "          (f64.const 2.0))")) (ELit (LString "        (f64.const 1.0))))"))))
 (DTypeSig true "ioHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ioHostImportLines" () (EListLit (ELit (LString "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))")) (ELit (LString "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))")) (ELit (LString "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"))))
+(DTypeSig true "clockHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "clockHostImportLines" () (EListLit (ELit (LString "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --")) (ELit (LString "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"))))
 (DTypeSig false "notUtf8SuffixWat" (TyCon "String"))
 (DFunDef false "notUtf8SuffixWat" () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed $u8arr ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "arrayLength") (EVar "cs"))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "asciiConstsW") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))) (ELit (LString ")"))))))
 (DTypeSig false "asciiConstsW" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -2572,6 +2585,8 @@ charFromCodeRuntimeLines = [
 (DFunDef false "randomFloatRuntimeLines" () (EListLit (ELit (LString "  ;; randomFloat : SplitMix64 -> f64 in [-1,1) (NOTE the -1 offset — see medaka_rt.c).")) (ELit (LString "  (func $mdk_random_float (result (ref $float))")) (ELit (LString "    (struct.new $float")) (ELit (LString "      (f64.sub")) (ELit (LString "        (f64.mul")) (ELit (LString "          (f64.mul (f64.convert_i64_u (i64.shr_u (call $mdk_next_u64) (i64.const 11)))")) (ELit (LString "                   (f64.const 1.1102230246251565e-16))")) (ELit (LString "          (f64.const 2.0))")) (ELit (LString "        (f64.const 1.0))))"))))
 (DTypeSig true "ioHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ioHostImportLines" () (EListLit (ELit (LString "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))")) (ELit (LString "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))")) (ELit (LString "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"))))
+(DTypeSig true "clockHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "clockHostImportLines" () (EListLit (ELit (LString "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --")) (ELit (LString "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"))))
 (DTypeSig false "notUtf8SuffixWat" (TyCon "String"))
 (DFunDef false "notUtf8SuffixWat" () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed $u8arr ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "arrayLength") (EVar "cs"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "asciiConstsW") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))) (ELit (LString ")"))))))
 (DTypeSig false "asciiConstsW" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
