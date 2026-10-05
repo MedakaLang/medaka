@@ -297,8 +297,9 @@ gen-ci: medaka
 ##           every backticked, symbol-shaped token in AGENTS.md,
 ##           .claude/skills/*/SKILL.md, .claude/workstreams/*.md,
 ##           .claude/ORCHESTRATING.md (BROAD tier — every inline claim) and
-##           docs/spec/*.md (SCOPED tier — only a claim whose line also cites
-##           a compiler/stdlib/runtime path; see the script header for why)
+##           docs/spec/*.md, docs/stdlib/*.md and test/*.sh (SCOPED tier —
+##           only a claim whose line also cites a compiler/stdlib/runtime
+##           path; see the script header for why)
 ##           against compiler/*.mdk, stdlib/*.mdk, and runtime/*.c. Ratcheted
 ##           by test/AGENT-DOC-SYMBOL-EXCEPTIONS.txt — see that file and
 ##           test/check_agent_doc_symbols.sh's header for the SYM/FILE format.

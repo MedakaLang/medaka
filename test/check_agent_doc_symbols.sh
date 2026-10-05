@@ -194,7 +194,10 @@ git ls-files 'AGENTS.md' '.claude/skills/*/SKILL.md' '.claude/workstreams/*.md' 
 # triaged. SCOPED counts a symbol only when the SAME LINE also cites a
 # compiler/stdlib/runtime source path, so it does NOT catch: a path on the
 # next or previous line, a backticked symbol with no path on its line, an
-# unbackticked symbol, or a backticked glob such as `obUniv*`. Those are the
+# unbackticked symbol, a backticked glob such as `obUniv*`, a short or
+# single-case name (under 3 characters, or lacking either an uppercase or a
+# lowercase letter), or a `name:LINE` citation (the colon fails the
+# bare-identifier shape, so the name is never extracted). Those are the
 # shapes #1574's own two motivating instances took, so #1574 stays open.
 # Not scanned at all: test/*.txt ledgers, test/gates.toml prose, test/*.mdk.
 # Grep the tree for every symbol a gate comment names.
