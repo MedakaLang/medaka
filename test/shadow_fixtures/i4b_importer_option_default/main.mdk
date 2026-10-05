@@ -1,0 +1,10 @@
+import bytes.*
+-- S2 reaches Foldable's default: Some folds once, None zero times.
+-- Bytes has no Foldable impl, so its standalone counts six UTF-8 bytes.
+o : Option Int
+o = Some 7
+main =
+  let _ = println (length (Some 7))
+  let _ = println (length o)
+  let _ = println (length (None : Option Int))
+  println (length (encodeUtf8 "héllo"))

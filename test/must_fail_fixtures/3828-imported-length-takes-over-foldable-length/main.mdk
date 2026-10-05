@@ -1,2 +1,0 @@
-import bytes.*
-main = println (length (Some 7))
