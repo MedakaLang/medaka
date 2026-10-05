@@ -43,6 +43,7 @@ import tools.prop_plan.{
   substTyRaw,
   PlanEnv,
   PlanError,
+  PlanModule,
   TypeKey(..),
   GenPlan(..),
   CustomPlan(..),
@@ -54,6 +55,7 @@ import tools.prop_plan.{
   instantiateCtor,
   planTy,
   buildPlanEnv,
+  buildPlanEnvModules,
   listLengthBound,
   ctorWeights,
   intMin,
@@ -224,6 +226,15 @@ buildGenEnv rootDecls allDecls =
     (unusableArbsOf allDecls)
     (aliasNamesOf allDecls)
     (buildPlanEnv allDecls)
+
+buildGenEnvWithPlan : List Decl -> PlanEnv -> GenEnv
+buildGenEnvWithPlan allDecls planEnv =
+  GenEnv
+    (buildTyDefs allDecls)
+    (arbImplsOf allDecls)
+    (unusableArbsOf allDecls)
+    (aliasNamesOf allDecls)
+    planEnv
 
 arbImplsOf : List Decl -> List ArbImpl
 arbImplsOf decls = arbImplsGo decls [] (filterMap arbCandidateWord decls)
@@ -1664,6 +1675,32 @@ runAllPropRequestsResults requests propLines evalEnv program allDecls =
     (buildGenEnv program allDecls)
     evalEnv
     (filterProps program)
+
+-- The command path supplies the paired raw/elaborated graph retained by its
+-- loader.  Keep the historical entry above for direct callers, while making
+-- identity/visibility decisions from the graph rather than a spelling scan.
+export
+runAllPlannedPropRequestsResults : String ->
+  List PlanModule ->
+  List PropRequest ->
+  List (String, Int) ->
+  List (String, Value e) ->
+  List Decl ->
+  <e> List PropResult
+runAllPlannedPropRequestsResults root modules requests propLines evalEnv program =
+  match buildPlanEnvModules root modules
+    Ok planEnv =>
+      runPropRequests
+        requests
+        propLines
+        (buildGenEnvWithPlan program planEnv)
+        evalEnv
+        (filterProps program)
+    Err err => map (requestPlanError err) requests
+
+requestPlanError : PlanError -> PropRequest -> PropResult
+requestPlanError err (PropRequest name seed cases) =
+  capabilityResult name seed cases err
 
 runPropRequests : List PropRequest ->
   List (String, Int) ->
