@@ -4,8 +4,8 @@
 -- (Exported so rule-dead-code stays quiet; signed so rule-missing-signature does.)
 
 -- FIRES: the #266 shape — an extern re-export written under the same name.
-export stringLength : String -> Int
-stringLength s = stringLength s
+export textWidth : String -> Int
+textWidth s = textWidth s
 
 -- FIRES: a self-referential value (`x = x`).
 export loopVal : Int

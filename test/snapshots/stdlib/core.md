@@ -1,5 +1,5 @@
 # META
-source_lines=2243
+source_lines=2242
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1159,9 +1159,8 @@ forEach f (x :: xs) = andThen (f x) (_ => forEach f xs)
 
 {- | Calls a function on each element in order, for its effect.
 
-   > each println ["a", "b"]
-   a
-   b -}
+   > each (x => ()) [1, 2, 3]
+   () -}
 export
 each : (a -> <e> Unit) -> List a -> <e> Unit
 each _ [] = ()
