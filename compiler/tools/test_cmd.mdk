@@ -2322,10 +2322,15 @@ stripRootPrefix root p =
 
 -- Reconstructs the argv for a per-file CHILD `medaka test` invocation
 -- (containment, below) from the already-resolved engine list/case
--- count/filter — the same three knobs `runTestCmd` read from its OWN argv,
+-- count/filter/seed — the same four knobs `runTestCmd` read from its OWN argv,
 -- round-tripped rather than re-parsed by the child.
-testChildArgs : List Engine -> Int -> Option String -> String -> List String
-testChildArgs engines cases filterOpt f =
+testChildArgs : List Engine ->
+  Int ->
+  Option String ->
+  Option Int ->
+  String ->
+  List String
+testChildArgs engines cases filterOpt seedOpt f =
   [
       "test",
       f,
@@ -2336,6 +2341,9 @@ testChildArgs engines cases filterOpt f =
     ]
     ++ (match filterOpt
       Some s => ["--filter", s]
+      None => [])
+    ++ (match seedOpt
+      Some s => ["--seed", intToString s]
       None => [])
 
 -- Fold over an expanded file list, aggregating whether ANY file failed
@@ -2356,13 +2364,14 @@ testFilesGo : List Engine ->
   String ->
   Int ->
   Option String ->
+  Option Int ->
   List String ->
   Bool ->
   <IO> Bool
-testFilesGo _ _ _ _ _ _ [] acc = acc
-testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
+testFilesGo _ _ _ _ _ _ _ [] acc = acc
+testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest) acc =
   let medaka = envOr "MEDAKA" (executablePath ())
-  let args = testChildArgs engines cases filterOpt f
+  let args = testChildArgs engines cases filterOpt seedOpt f
   let ok = match runCommand medaka args
     Err e =>
       let _ = ePutStrLn "medaka test: \{f}: failed to start test runner: \{e}"
@@ -2391,5 +2400,6 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
     stdlibDir
     cases
     filterOpt
+    seedOpt
     rest
     (acc || not ok)

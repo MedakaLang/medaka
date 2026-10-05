@@ -1,0 +1,1 @@
+prop "seed directory replay" (x : Int) = x % 13 /= 0
