@@ -179,20 +179,31 @@ buildWasmFile entry out =
       Err
         "`medaka build --target wasm \{entry}` exited \{intToString code}: \{o ++ err}"
 
--- Executes a built wasm module under the Node host.
-runWasmFile : String -> <Exec, IO> Result String (Int, String, String)
-runWasmFile wasmPath =
-  boundedVerbSeconds 30 "node" ["\{medakaRoot}/test/wasm/run.js", wasmPath]
+-- Executes a built wasm module under the Node host; an exit other than `want`
+-- is an error carrying the code and stderr, so a crash is never a result.
+runWasmFile : String -> Int -> <Exec, IO> Result String (Int, String, String)
+runWasmFile wasmPath want = match boundedVerbSeconds 30 "node" [
+  "\{medakaRoot}/test/wasm/run.js",
+  wasmPath,
+]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= want then
+      Err
+        "node exited \{intToString code}, want \{intToString want}: stdout=\{debug out} stderr=\{debug err}"
+    else
+      Ok (code, out, err)
 
--- Builds fixture `name` for wasm and runs it.
+-- Builds fixture `name` for wasm and runs it, requiring exit `want`.
 buildAndRunWasm : String ->
   String ->
+  Int ->
   <Exec, IO> Result String (Int, String, String)
-buildAndRunWasm scratch name =
+buildAndRunWasm scratch name want =
   let wasmPath = "\{scratch}/\{name}.wasm"
   match buildWasmFile "\{corpus}/\{name}.mdk" wasmPath
     Err e => Err "\{name}: \{e}"
-    Ok _ => runWasmFile wasmPath
+    Ok _ => runWasmFile wasmPath want
 
 -- A new empty directory per call. `test_process.scratchDir` is one value
 -- shared by every test in the file, so a test that removes its own scratch
@@ -234,7 +245,7 @@ gradeFixture scratch name = match wantOutput name
 gradeWasmFixture : String -> String -> <Exec, FileRead, IO> Option String
 gradeWasmFixture scratch name = match wantOutput name
   Err e => Some "  \{name}: \{e}"
-  Ok want => gradeRun "wasm" name want (buildAndRunWasm scratch name)
+  Ok want => gradeRun "wasm" name want (buildAndRunWasm scratch name 0)
 
 -- Runs `grade` over `names` in a fresh scratch directory and passes when
 -- every row grades clean.
@@ -305,14 +316,18 @@ measureWasm wasmPath =
   let t0 = monotonic ()
   let ran = boundedVerbSeconds 60 "sh" [
     "-c",
-    "node \{medakaRoot}/test/wasm/run.js \{wasmPath} >/dev/null; times",
+    "node \{medakaRoot}/test/wasm/run.js \{wasmPath} >/dev/null; rc=$?; times; exit $rc",
   ]
   let t1 = monotonic ()
   match ran
     Err e => Err "could not run the wasm module: \{e}"
-    Ok (_, out, _) => match childCpuMs out
-      None => Err "could not parse `times` output: \{debug out}"
-      Some cpu => Ok ((t1 - t0) * 1000.0, cpu)
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err
+          "the wasm module exited \{intToString code}: stdout=\{debug out} stderr=\{debug err}"
+      else match childCpuMs out
+        None => Err "could not parse `times` output: \{debug out}"
+        Some cpu => Ok ((t1 - t0) * 1000.0, cpu)
 
 -- Grades the two bounds on (wall ms, CPU ms beyond the baseline).
 gradeDetector : Float -> Float -> Expectation
@@ -390,7 +405,9 @@ gradeDeadlock : String ->
 gradeDeadlock = gradeCoded deadlockLine deadlockFixture
 
 test "diff_async: async_deadlock under `medaka run` exits 1 with the coded line" =
-  gradeDeadlock
+  gradeCoded
+    deadlockLine
+    deadlockFixture
     "run"
     (boundedVerbSeconds 30 medakaBin [
       "run",
@@ -410,7 +427,7 @@ test "diff_async: async_deadlock built for wasm exits 1 with the coded line" =
     Err e => fail "could not make a scratch directory: \{e}"
     Ok scratch =>
       let verdict =
-        gradeDeadlock "wasm" (buildAndRunWasm scratch deadlockFixture)
+        gradeDeadlock "wasm" (buildAndRunWasm scratch deadlockFixture 1)
       let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
       verdict
 
@@ -430,7 +447,7 @@ gradeIoPollTrap name = match freshDir ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok scratch =>
     let verdict =
-      gradeCoded ioPollLine name "wasm" (buildAndRunWasm scratch name)
+      gradeCoded ioPollLine name "wasm" (buildAndRunWasm scratch name 1)
     let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
     verdict
 

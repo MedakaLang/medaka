@@ -9,6 +9,7 @@
 //     "compiled & ran" footer.
 // (b) a 15 s sleep hits the 10 s limit; the pre-sleep output survives and the page
 //     stays responsive while the worker is blocked in Atomics.wait.
+// (b2) 300 lines printed before a 15 s sleep all show after the stop.
 // (c) without isolation the first sleep is a named CapabilityError, not a hang.
 import { chromium } from 'playwright';
 
@@ -29,6 +30,22 @@ main : Async <Clock, Stdout> Unit
 main = defer
   liftIO (u => putStrLn "before")
   _ <- concurrent [${sleeps.map(() => `sleep (millis ${ms})`).join(', ')}]
+  liftIO (u => putStrLn "after")
+`;
+
+const burstProg = (n, ms) => `import async.{Async, liftIO, sleep}
+import time.{millis}
+
+burst : Int -> <Stdout> Unit
+burst n =
+  if n > ${n} then () else
+    putStrLn ("L" ++ debug n)
+    burst (n + 1)
+
+main : Async <Clock, Stdout> Unit
+main = defer
+  liftIO (u => burst 1)
+  _ <- sleep (millis ${ms})
   liftIO (u => putStrLn "after")
 `;
 
@@ -91,6 +108,21 @@ async function main() {
     check('page answered every probe while the worker slept', probes.length > 0 && probes.every((p) => p === 'ok'), probes.join(','));
     check('stop message shown with "before" intact', b.includes(STOP_MSG) && b.includes('before\n'), JSON.stringify(b.slice(0, 200)));
     check('Run is re-enabled', await page.evaluate(() => !document.querySelector('#run-btn').disabled));
+
+    console.log('Test: 300 lines printed before a 15 s sleep all survive the stop');
+    await startRun(page, burstProg(300, 15000));
+    const t1 = Date.now();
+    let d = '';
+    while (Date.now() - t1 < 25000) {
+      d = await consoleText(page).catch(() => '');
+      if (d.includes(STOP_MSG)) break;
+      await sleep(1500);
+    }
+    const lines = d.match(/^L\d+$/gm) || [];
+    check('stop message shown', d.includes(STOP_MSG), JSON.stringify(d.slice(-200)));
+    check('lines 1 to 300 intact',
+      lines.length === 300 && lines[0] === 'L1' && lines[299] === 'L300' && lines.every((l, i) => l === `L${i + 1}`),
+      `count=${lines.length} first=${lines[0]} last=${lines[lines.length - 1]}`);
 
     if (NOISO_URL) {
       console.log('Test: without isolation the first sleep is a named error');
