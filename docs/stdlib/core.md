@@ -1412,8 +1412,8 @@ interface Arbitrary a
 Types that can generate random values for property tests.
 
 `arbitrary` draws a value in the `<Rand>` effect. `shrink` lists smaller
-candidates, tried in order, for code that shrinks a failing example by
-hand; it defaults to none.
+candidates, tried in order when shrinking a failing example; it defaults
+to none.
 
 `medaka test` draws each `prop` parameter from its declared type. A
 user-defined type with no type arguments is drawn through its `Arbitrary`
@@ -1425,9 +1425,9 @@ or stands at an applied head, is reported rather than ignored. `Int`,
 `Result`, tuples, and any applied type are built by the runner itself, so
 an instance at one of those is not consulted.
 
-The runner shrinks a failing counterexample with its own strategy and
-never calls `shrink`, so an instance's `shrink` has no effect on what
-`medaka test` reports.
+Both property engines call an eligible instance's `shrink`. Custom
+random draws use the requested property seed and preserve the program's
+random stream. Structural types use the runner's shared shrinking plan.
 
 ### `arbitraryString`
 

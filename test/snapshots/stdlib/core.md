@@ -1951,8 +1951,8 @@ apply f a = f a
 {- | Types that can generate random values for property tests.
 
    `arbitrary` draws a value in the `<Rand>` effect. `shrink` lists smaller
-   candidates, tried in order, for code that shrinks a failing example by
-   hand; it defaults to none.
+   candidates, tried in order when shrinking a failing example; it defaults
+   to none.
 
    `medaka test` draws each `prop` parameter from its declared type. A
    user-defined type with no type arguments is drawn through its `Arbitrary`
@@ -1964,9 +1964,9 @@ apply f a = f a
    `Result`, tuples, and any applied type are built by the runner itself, so
    an instance at one of those is not consulted.
 
-   The runner shrinks a failing counterexample with its own strategy and
-   never calls `shrink`, so an instance's `shrink` has no effect on what
-   `medaka test` reports. -}
+   Both property engines call an eligible instance's `shrink`. Custom
+   random draws use the requested property seed and preserve the program's
+   random stream. Structural types use the runner's shared shrinking plan. -}
 export interface Arbitrary a where
   arbitrary : Unit -> <Rand> a
   shrink : a -> List a
@@ -2145,9 +2145,9 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) =
    1. `medaka test`'s property runner consults a user `Arbitrary` instance for
       a `prop` parameter's own type and for that type reached as a field of
       another, but deliberately never for `Int`/`Bool`/`Float`/`Char`/`String`
-      (honoring those would route generation onto the program-under-test's
-      `randomInt`/`randomBool` externs, making `--seed` inert for those
-      params).  Since the types below have no such instance in scope here
+      or built-in container heads. These use the runner's structural plan.
+      This keeps these instance laws independent of parameter generation.
+      Since the types below have no eligible instance route in scope here
       anyway, every law calls `arbitrary` / `shrink` explicitly rather than
       relying on a `prop` parameter to draw them.
    2. Inside this module the `==` OPERATOR does not resolve to `Eq` for a

@@ -195,20 +195,30 @@ measured, per-corpus decisions, not defaults.
   True`, `trustedMods = []` — *"`medaka test` is not the internal-extern
   enforcement surface (`check`/`--json` is)"*). So a check that passes under
   `medaka test` can still be rejected by `medaka check`; run both.
-- **No custom prop generators.** `compiler/tools/prop_runner.mdk` generates
-  structurally from the parameter's type; there is no `Arbitrary` deriver
-  (`prop_runner.mdk:194`) and recursive-ADT generation depth is capped.
-- **A failed prop's shrunk counterexample is RNG-dependent and diverges
-  across engines** (`prop_runner.mdk`, see its own header comment) — never
-  bake a specific counterexample into a golden as though it were
-  reproducible.
-- **`medaka test` defaults to the native backend, one engine only.** Doctests
-  and `test "…"` decls compile to a real binary; `prop`s always run in the
-  interpreter. `--engines eval` selects the interpreter instead and
+- **Custom prop generators have a restricted domain.** The runner consults
+  an in-scope `Arbitrary` instance for an argument-free nominal type. Built-in
+  types and applied heads use structural draws; constrained instances and
+  aliases cannot supply a draw. There is no automatic `Arbitrary` deriver,
+  recursive structural generation is depth-capped. Eligible custom
+  generators and shrinkers run in both engines. Custom random draws use
+  the requested seed while preserving the program's random stream. See
+  `compiler/tools/prop_plan.mdk` for the shared generation policy.
+- **Replay a failure with its seed, budget, engine and source revision.**
+  Decide the correct answer independently before recording a regression.
+  Compare replay reports rather than blessing an arbitrary generated draw.
+- **`medaka test` defaults to the native backend, one engine only.** Doctests,
+  `test "…"` declarations and properties compile to a real binary.
+  `--engines eval` selects the interpreter and
   `--engines eval,native` runs both with the exit code the AND. A bare
   `medaka test` report says nothing about eval or wasm (wasm stays deferred).
   If a claim is about agreement between engines, ask for it:
   `--engines eval,native`.
+- **Keep known-red assertions intact.** Use the issue-linked project ledger
+  `medaka-test-pins.toml`; pinned property rows include the witnessing seed
+  and case budget. A pass, changed failure or stale name fails the run.
+  Runtime errors require an explicit native unit error pin; they never hold
+  assertion or False-law pins. Remove the pin when the same law passes after its fix. See
+  [the compiler property guide](../../../docs/ops/COMPILER-PROPERTY-TESTING.md).
 - **A module with `test "…"` decls and no doctests is NOT typechecked by
   `medaka test`** (#1229) — it prints a loud `note: typechecking was skipped`
   first. A sibling under a project's `test/` dir does get typechecked
@@ -219,7 +229,7 @@ measured, per-corpus decisions, not defaults.
 ## Verify
 
 ```sh
-./medaka test <file_or_sibling>.mdk     # doctests + test blocks native, props in eval
+./medaka test <file_or_sibling>.mdk     # doctests, test blocks and props native
 ./medaka test --engines eval,native <file>.mdk   # both engines; exit is the AND
 ./medaka check <file_or_sibling>.mdk    # typechecks cleanly (medaka test may skip it, #1229)
 ./medaka fmt --check <file>.mdk && ./medaka lint <file>.mdk

@@ -5,7 +5,7 @@ import test.{
   expectTextContainsAll, fail
 }
 import json.{Json, parse, get, asArray, asString, asInt}
-import string.{contains}
+import string.{contains, lines}
 
 writeFixtures : String -> List (String, String) -> <IO> Result String Unit
 writeFixtures _ [] = Ok ()
@@ -303,7 +303,7 @@ gradeFailedInvocation needles (Ok (code, out, err)) = expectAll [
 
 unitPinEntry : String -> String
 unitPinEntry engine =
-  "[[pin]]\nfile = \"main.mdk\"\nkind = \"test\"\nname = \"known assertion\"\nengine = \"\{engine}\"\nissue = 1\ndetail_lines = [\"expected True but got False\"]\n"
+  "[[pin]]\nfile = \"main.mdk\"\nkind = \"test\"\nname = \"known assertion\"\nengine = \"\{engine}\"\nissue = 1\nfailure = \"assertion\"\ndetail_lines = [\"expected True but got False\"]\n"
 
 unitPinLedger : String
 unitPinLedger = "version = 1\n\{unitPinEntry "eval"}\{unitPinEntry "native"}"
@@ -376,3 +376,321 @@ test "property bodies must typecheck as Bool" =
       gradeFailedInvocation
         ["Bool", "Int"]
         (boundedVerbSeconds 120 medakaBin ["check", target]))
+
+test "same-spelled imported ADTs retain their declaring identities" =
+  withFixtures
+    [
+      (
+        "numbers.mdk",
+        "public export data Box = Box Int deriving (Eq, Debug)\n",
+      ),
+      ("flags.mdk", "public export data Box = Box Bool deriving (Eq, Debug)\n"),
+      (
+        "main.mdk",
+        "import numbers as N\nimport flags as F\nprop \"nominal boxes\" (number : N.Box) (flag : F.Box) = match number\n  N.Box n => match flag\n    F.Box b => n == n && b == b\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [("eval", "nominal boxes", "pass"), ("native", "nominal boxes", "pass")]
+        (runReport ["--engines", "eval,native"] target))
+
+test "same-spelled imported types select their own custom generators" =
+  withFixtures
+    [
+      (
+        "numbers.mdk",
+        "public export data Box = Box Int deriving (Eq, Debug)\nexport impl Arbitrary Box where\n  arbitrary () = Box 500\n  shrink _ = []\n",
+      ),
+      (
+        "flags.mdk",
+        "public export data Box = Box Int deriving (Eq, Debug)\nexport impl Arbitrary Box where\n  arbitrary () = Box 900\n  shrink _ = []\n",
+      ),
+      (
+        "main.mdk",
+        "import numbers as N\nimport flags as F\nprop \"custom nominal boxes\" (number : N.Box) (flag : F.Box) = match number\n  N.Box n => match flag\n    F.Box f => n == 500 && f == 900\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "custom nominal boxes", "pass"),
+          ("native", "custom nominal boxes", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
+
+test "both generators support named constructor fields without a Debug instance" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Sample = Sample { sampleCount : Int, sampleFlag : Bool }\nprop \"named fields\" (sample : Sample) = sample.sampleCount == sample.sampleCount && sample.sampleFlag == sample.sampleFlag\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [("eval", "named fields", "pass"), ("native", "named fields", "pass")]
+        (runReport ["--engines", "eval,native"] target))
+
+test "unsupported property parameters produce a named capability error" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "prop \"function generation is unsupported\" (f : Int -> Int) = True\nprop \"supported neighbor still runs\" (n : Int) = n == n\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        expectNotEqual 0 code,
+        expectEqual
+          [
+            (
+              Some "eval",
+              Some "function generation is unsupported",
+              Some "error",
+              Some "capability",
+            ),
+            (
+              Some "eval",
+              Some "supported neighbor still runs",
+              Some "pass",
+              None,
+            ),
+            (
+              Some "native",
+              Some "function generation is unsupported",
+              Some "error",
+              Some "capability",
+            ),
+            (
+              Some "native",
+              Some "supported neighbor still runs",
+              Some "pass",
+              None,
+            ),
+          ]
+          (map
+            (row => (
+              field "engine" row,
+              field "name" row,
+              field "status" row,
+              field "failureKind" row,
+            ))
+            (propertyReports report)),
+      ])
+
+runSeededReport : Int -> String -> <Exec, IO> Result String (Int, Json)
+runSeededReport seed target = match boundedVerbSeconds 120 medakaBin [
+  "test",
+  "--json",
+  "--engines",
+  "eval,native",
+  "--cases",
+  "20",
+  "--seed",
+  intToString seed,
+  target,
+]
+  Err message => Err message
+  Ok (code, out, err) =>
+    if err /= "" then
+      Err "unexpected runner stderr: \{err}"
+    else
+      map (report => (code, report)) (parse out)
+
+drawCounterexamples : Result String (Int, Json) -> List (List String)
+drawCounterexamples (Err _) = []
+drawCounterexamples (Ok (_, report)) =
+  map
+    (row =>
+      let detail = match field "detail" row
+        Some text => text
+        None => ""
+      filter (contains "x = Draw") (lines detail))
+    (propertyReports report)
+
+randomArbitrarySource : String
+randomArbitrarySource =
+  "data Draw = Draw Int deriving (Eq, Debug)\nimpl Arbitrary Draw where\n  arbitrary () = Draw (randomInt (-1000000) 1000000)\n  shrink _ = []\n"
+
+test "custom Arbitrary random draws replay the requested seed" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        randomArbitrarySource
+          ++ "prop \"random draw replay\" (x : Draw) = False\n",
+      ),
+    ]
+    (target =>
+      let first = runSeededReport 1 target
+      let repeated = runSeededReport 1 target
+      let changed = runSeededReport 2 target
+      let expectedRows = [
+        ("eval", "random draw replay", "fail"),
+        ("native", "random draw replay", "fail"),
+      ]
+      expectAll [
+        gradeReport 1 expectedRows first,
+        gradeReport 1 expectedRows repeated,
+        gradeReport 1 expectedRows changed,
+        expectEqual (drawCounterexamples first) (drawCounterexamples repeated),
+        expectNotEqual
+          (drawCounterexamples first)
+          (drawCounterexamples changed),
+        expectTrue (all (rows => length rows == 1) (drawCounterexamples first)),
+      ])
+
+test "custom Arbitrary draws leave the program random stream intact" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        randomArbitrarySource
+          ++ "prop \"isolated custom stream\" (x : Draw) = randomState () == (0 : U64)\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "isolated custom stream", "pass"),
+          ("native", "isolated custom stream", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
+
+test "custom Arbitrary takes priority over structural construction" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Wrap = Wrap Int deriving (Eq, Debug)\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 500\n  shrink (Wrap _) = [Wrap 0]\nprop \"custom generator priority\" (w : Wrap) = match w\n  Wrap n => n == 500\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "custom generator priority", "pass"),
+          ("native", "custom generator priority", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
+
+test "both engines shrink later candidates and every parameter repeatedly" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Wrap = Wrap Int deriving (Eq, Debug)\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 100\n  shrink (Wrap 100) = [Wrap 0, Wrap 50]\n  shrink (Wrap 50) = [Wrap 0, Wrap 25]\n  shrink (Wrap 25) = [Wrap 0, Wrap 5]\n  shrink (Wrap _) = [Wrap 0, Wrap 1]\nprop \"two shrinking parameters\" (left : Wrap) (right : Wrap) = match (left, right)\n  (Wrap a, Wrap b) => a < 5 || b < 5\n",
+      ),
+    ]
+    (target =>
+      let result = runReport ["--engines", "eval,native"] target
+      let minimal = match result
+        Err _ => False
+        Ok (_, report) =>
+          all
+            (row => match field "detail" row
+              Some detail =>
+                contains "left = Wrap 5" detail
+                  && contains "right = Wrap 5" detail
+              None => False)
+            (propertyReports report)
+      expectAll [
+        gradeReport
+          1
+          [
+            ("eval", "two shrinking parameters", "fail"),
+            ("native", "two shrinking parameters", "fail"),
+          ]
+          result,
+        expectTrue minimal,
+      ])
+
+test "a failing eval law still executes and labels native in a human report" =
+  withFixtures
+    [("main.mdk", "prop \"both failures\" (n : Int) = False\n")]
+    (target =>
+      gradeFailedInvocation
+        ["both failures", "[eval]", "[native]"]
+        (boundedVerbSeconds 120 medakaBin [
+          "test",
+          "--engines",
+          "eval,native",
+          "--cases",
+          "3",
+          "--seed",
+          "1",
+          target,
+        ]))
+
+gradeCapabilityNeighbor : String -> Result String (Int, Json) -> Expectation
+gradeCapabilityNeighbor _ (Err message) = fail message
+gradeCapabilityNeighbor name (Ok (code, report)) = expectAll [
+  expectNotEqual 0 code,
+  expectEqual
+    [
+      (Some "eval", Some name, Some "error", Some "capability"),
+      (Some "eval", Some "neighbor", Some "pass", None),
+      (Some "native", Some name, Some "error", Some "capability"),
+      (Some "native", Some "neighbor", Some "pass", None),
+    ]
+    (map
+      (row => (
+        field "engine" row,
+        field "name" row,
+        field "status" row,
+        field "failureKind" row,
+      ))
+      (propertyReports report)),
+]
+
+test "recursive types with no finite value fail planning without blocking a neighbor" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Loop = Again Loop\nprop \"no finite value\" (x : Loop) = True\nprop \"neighbor\" (n : Int) = n == n\n",
+      ),
+    ]
+    (target =>
+      gradeCapabilityNeighbor
+        "no finite value"
+        (runReport ["--engines", "eval,native"] target))
+
+test "imported abstract constructors cannot leak through structural generation" =
+  withFixtures
+    [
+      ("hidden.mdk", "export data Hidden = Hidden Int\n"),
+      (
+        "main.mdk",
+        "import hidden.{Hidden}\nprop \"hidden constructors\" (x : Hidden) = True\nprop \"neighbor\" (n : Int) = n == n\n",
+      ),
+    ]
+    (target =>
+      gradeCapabilityNeighbor
+        "hidden constructors"
+        (runReport ["--engines", "eval,native"] target))
+
+test "exported newtype constructors remain structurally generatable" =
+  withFixtures
+    [
+      ("wrapped.mdk", "export newtype Wrapped = Wrapped Int\n"),
+      (
+        "main.mdk",
+        "import wrapped.{Wrapped}\nprop \"exported newtype\" (x : Wrapped) = True\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "exported newtype", "pass"),
+          ("native", "exported newtype", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))

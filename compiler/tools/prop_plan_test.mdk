@@ -1,0 +1,105 @@
+import frontend.ast.{
+  Decl(..), Ty(..), TyConOrigin(..), Variant(..), ConPayload(..), mapTyInDecl
+}
+import frontend.parser.{parse}
+import tools.prop_plan.{
+  PlanEnv,
+  PlanModule(..),
+  TypeKey(..),
+  PlanDef(..),
+  PlanCtor(..),
+  GenPlan(..),
+  buildPlanEnvModules,
+  planDef,
+  planFor,
+  instantiateCtor,
+  planErrorText,
+}
+import test.{expectAll, expectEqual}
+
+builtinTypes : Ty -> (Ty, Bool)
+builtinTypes (t@(TyCon { tyConName = n }))
+  | n == "Int" || n == "Bool" =
+    (TyCon { t | tyConOrigin = OriginBuiltin }, True)
+builtinTypes t = (t, False)
+
+runtimeDecl : String -> Decl -> Decl
+runtimeDecl owner (DAttrib a d) = DAttrib a (runtimeDecl owner d)
+runtimeDecl owner (d@(DData { dataCtors })) =
+  let (typed, _) = mapTyInDecl builtinTypes d
+  match typed
+    typedData@(DData {  }) => DData { typedData |
+      dataOrigin = OriginModule owner,
+      dataCtors = map (renameCtor owner) dataCtors,
+    }
+    _ => typed
+runtimeDecl _ d = d
+
+renameCtor : String -> Variant -> Variant
+renameCtor owner (Variant name payload) =
+  let fields = match payload
+    ConPos ts => ConPos (map (t => fst (builtinTypes t)) ts)
+    named => named
+  Variant "\{owner}_runtime_\{name}" fields
+
+rawNumbers : List Decl
+rawNumbers =
+  parse
+    "public export data Box = Box Int\npublic export data Tail = Tail Bool\n"
+
+rawFlags : List Decl
+rawFlags = parse "public export data Box = Box Bool\n"
+
+planned : PlanEnv
+planned = buildPlanEnvModules [
+  PlanModule
+    "numbers"
+    rawNumbers
+    (parse "inserted = 0\n" ++ map (runtimeDecl "numbers") rawNumbers),
+  PlanModule "flags" rawFlags (map (runtimeDecl "flags") rawFlags),
+]
+
+planName : GenPlan -> String
+planName GInt = "Int"
+planName GBool = "Bool"
+planName _ = "unexpected plan"
+
+summary : String -> String -> Result String (String, String, List String)
+summary owner name =
+  let key = TypeKey name (OriginModule owner)
+  match (
+    planFor planned "value" TyCon {
+      tyConName = name,
+      tyConOrigin = OriginModule owner,
+      tyConLoc = None,
+    },
+    planDef planned key,
+  )
+    (Ok generation, Ok (PlanDef _ _ _ _ [ctor@(PlanCtor source runtime _)])) =>
+      match instantiateCtor planned generation ctor
+        Ok fields =>
+          Ok (source, runtime, map (field => planName (snd field)) fields)
+        Err e => Err (planErrorText e)
+    (Err e, _) => Err (planErrorText e)
+    (_, Err e) => Err (planErrorText e)
+    _ => Err "expected exactly one constructor"
+
+test "paired nominal plans preserve source names when elaboration inserts declarations" = expectAll
+  [
+    expectEqual
+      (Ok ("Box", "numbers_runtime_Box", ["Int"]))
+      (summary "numbers" "Box"),
+    expectEqual
+      (Ok ("Tail", "numbers_runtime_Tail", ["Bool"]))
+      (summary "numbers" "Tail"),
+  ]
+
+test "same-spelled nominal plans retain different origins and field types" = expectAll
+  [
+    expectEqual
+      (Ok ("Box", "numbers_runtime_Box", ["Int"]))
+      (summary "numbers" "Box"),
+    expectEqual
+      (Ok ("Box", "flags_runtime_Box", ["Bool"]))
+      (summary "flags" "Box"),
+  ]
