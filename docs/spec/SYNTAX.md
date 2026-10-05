@@ -614,8 +614,7 @@ let rec isEven n = if n == 0 then True else isOdd (n - 1)
 ```
 
 Inside a bare (non-`do`) indented block, statements may be `let`,
-expression statements, field assignment `x.f = e`, nested field assignment
-`a.b.c = e`, and `let else`. **`<-` is forbidden in a bare block** — use `do`.
+expression statements, and `let else`. **`<-` is forbidden in a bare block** — use `do`.
 
 **Bindings are immutable.** `=` (with `let`, or a top-level definition) is
 *declaration only*; there is no mutable binding. A bare reassignment `x = e` of
@@ -1310,6 +1309,7 @@ just choke, it names the removal and points at a replacement. Tree-wide gate:
 | named impls, `impl Name of Iface Ty where` | a plain `impl Iface Ty where` — overlap resolves to the most-specific instance automatically |
 | `default impl Iface Ty where` | a plain `impl Iface Ty where` |
 | `@Name` impl-hint at a call site (`combine @Additive`) | n/a — named instances are gone, so there is nothing left to hint at |
+| block field assignment, `v.x = e` and `a.b.c = e` | record update: `{ v \| x = e }`, nested `{ a \| b = { a.b \| c = e } }` — bindings are immutable, and the assignment never typechecked (#3744) |
 | `bench "name" = expr` | `test/bench.sh` — no runner ever consumed the declaration, so it typechecked and then did nothing (#2291). The *word* `bench` stays reserved so the removal is diagnosed rather than mis-parsed |
 
 ---

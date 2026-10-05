@@ -1,0 +1,9 @@
+-- #3744: nested block field assignment `a.b.c = e` is removed like `v.x = 9`.
+data B = B { c : Int }
+data A = A { b : B }
+
+main : <IO> Unit
+main =
+  let a = A { b = B { c = 1 } }
+  a.b.c = 5
+  println a.b.c
