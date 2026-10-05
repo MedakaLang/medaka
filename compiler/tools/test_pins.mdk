@@ -5,7 +5,9 @@
 -- into a green run.
 
 import toml.{Toml(..), TomlValue, parse, getString, getInt, getArray}
-import support.ordmap.{OrdMap, omEmpty, omFromNames, omInsert, omLookup}
+import support.ordmap.{
+  OrdMap, omEmpty, omFromNames, omHasKey, omInsert, omLookup
+}
 import support.util.{contains, joinNl, lenKey}
 import string.{
   contains as stringContains, drop, endsWith, indexOf, split, startsWith, toInt,
@@ -14,6 +16,14 @@ import string.{
 import list.{reverse}
 
 public export data PinKind = PropPin | TestPin deriving (Eq, Debug)
+
+-- The two expected failure forms make native error pins unrepresentable for
+-- assertion-only rows; Result cannot express that ledger invariant.
+-- lint-disable-next-line rule-clone-type
+public export data TestExpectedFailure =
+  | ExpectAssertion String
+  | ExpectError String
+  deriving (Eq, Debug)
 
 public export data TestPin = Pin {
   pinFile : String,
@@ -24,6 +34,7 @@ public export data TestPin = Pin {
   pinSeed : Option Int,
   pinCases : Option Int,
   pinDetail : Option String,
+  pinExpected : Option TestExpectedFailure,
 }
   deriving (Eq, Debug)
 
@@ -142,7 +153,7 @@ propFields : List String
 propFields = baseFields ++ ["seed", "cases", "failure"]
 
 testFields : List String
-testFields = baseFields ++ ["detail_lines"]
+testFields = baseFields ++ ["detail_lines", "failure"]
 
 rowPrefix : Int -> String
 rowPrefix i = "\{pinOrigin}: [[pin]] #\{intToString i}"
@@ -196,6 +207,7 @@ readPropPin i file name engine issue entry = do
       pinSeed = Some seed,
       pinCases = Some cases,
       pinDetail = None,
+      pinExpected = None,
     }
 
 readTestPin : Int ->
@@ -207,6 +219,8 @@ readTestPin : Int ->
   Result String TestPin
 readTestPin i file name engine issue entry = do
   detailLines <- requiredLines i entry
+  failure <- requiredString i "failure" entry
+  expected <- testExpectedFailure i engine failure (joinNl detailLines)
   Ok Pin {
     pinFile = file,
     pinKind = TestPin,
@@ -216,7 +230,21 @@ readTestPin i file name engine issue entry = do
     pinSeed = None,
     pinCases = None,
     pinDetail = Some (joinNl detailLines),
+    pinExpected = Some expected,
   }
+
+testExpectedFailure : Int ->
+  String ->
+  String ->
+  String ->
+  Result String TestExpectedFailure
+testExpectedFailure i engine failure detail
+  | failure == "assertion" = Ok (ExpectAssertion detail)
+  | failure == "error" && engine == "native" = Ok (ExpectError detail)
+  | failure == "error" =
+    Err "\{rowPrefix i}: failure \"error\" is only valid for native test pins"
+  | otherwise =
+    Err "\{rowPrefix i}: test failure must be \"assertion\" or \"error\""
 
 readPin : Toml -> Int -> Result String TestPin
 readPin entry i = do
@@ -393,12 +421,44 @@ validatePinNames : List TestPin ->
   List String ->
   List String ->
   Result String Unit
-validatePinNames pins file propNames testNames =
-  validatePinNamesGo
-    pins
-    file
-    (omFromNames propNames omEmpty)
-    (omFromNames testNames omEmpty)
+validatePinNames pins file propNames testNames = do
+  propIndex <- declarationIndex pins file PropPin "property" propNames
+  testIndex <- declarationIndex pins file TestPin "test" testNames
+  validatePinNamesGo pins file propIndex testIndex
+
+declarationIndex : List TestPin ->
+  String ->
+  PinKind ->
+  String ->
+  List String ->
+  Result String (OrdMap Unit)
+declarationIndex pins file kind label names =
+  if hasSelectedPin pins file kind then
+    uniqueDeclaredNames file label names omEmpty
+  else
+    Ok (omFromNames names omEmpty)
+
+hasSelectedPin : List TestPin -> String -> PinKind -> Bool
+hasSelectedPin [] _ _ = False
+hasSelectedPin (pin :: rest) file kind =
+  pin.pinFile == file && pin.pinKind == kind || hasSelectedPin rest file kind
+
+-- A ledger selector identifies one result by kind/name/engine. Duplicate
+-- declarations of one kind would make that identity ambiguous, so reject
+-- before filtering or execution rather than silently pinning whichever runner
+-- happens to visit first.
+uniqueDeclaredNames : String ->
+  String ->
+  List String ->
+  OrdMap Unit ->
+  Result String (OrdMap Unit)
+uniqueDeclaredNames _ _ [] seen = Ok seen
+uniqueDeclaredNames file kind (name :: rest) seen =
+  if omHasKey name seen then
+    Err
+      "\{pinOrigin}: ambiguous duplicate \{kind} declaration '\{name}' in \{file}"
+  else
+    uniqueDeclaredNames file kind rest (omInsert name () seen)
 
 -- ── Observations and reporting ─────────────────────────────────────────────
 
@@ -407,8 +467,7 @@ classifyPin : TestPin -> PinObservation -> PinVerdict
 classifyPin pin PinPassed = PinDrained pin.pinIssue
 classifyPin pin PinLawFailure = classifyLawPin pin
 classifyPin pin (PinAssertionFailure detail) = classifyAssertionPin pin detail
-classifyPin pin (PinRuntimeError detail) =
-  PinChanged pin.pinIssue "runtime error: \{detail}"
+classifyPin pin (PinRuntimeError detail) = classifyRuntimePin pin detail
 
 classifyLawPin : TestPin -> PinVerdict
 classifyLawPin pin = match pin.pinKind
@@ -424,13 +483,30 @@ classifyAssertionPin pin detail = match pin.pinKind
     PinChanged
       pin.pinIssue
       "expected a property-law failure, got an assertion failure"
-  TestPin => match pin.pinDetail
-    Some expected =>
+  TestPin => match pin.pinExpected
+    Some (ExpectAssertion expected) =>
       if detail == expected then
         PinHeld pin.pinIssue
       else
         PinChanged pin.pinIssue "assertion failure detail changed"
-    None => PinChanged pin.pinIssue "test pin has no expected assertion detail"
+    Some (ExpectError _) =>
+      PinChanged
+        pin.pinIssue
+        "expected a runtime error, got an assertion failure"
+    None => PinChanged pin.pinIssue "test pin has no typed expected failure"
+
+classifyRuntimePin : TestPin -> String -> PinVerdict
+classifyRuntimePin pin detail = match pin.pinKind
+  PropPin => PinChanged pin.pinIssue "runtime error: \{detail}"
+  TestPin => match pin.pinExpected
+    Some (ExpectError expected) =>
+      if detail == expected then
+        PinHeld pin.pinIssue
+      else
+        PinChanged pin.pinIssue "runtime error detail changed"
+    Some (ExpectAssertion _) =>
+      PinChanged pin.pinIssue "runtime error: \{detail}"
+    None => PinChanged pin.pinIssue "test pin has no typed expected failure"
 
 export
 pinVerdictPassed : PinVerdict -> Bool
@@ -442,6 +518,6 @@ pinVerdictDetail : PinVerdict -> String
 pinVerdictDetail (PinHeld issue) =
   "known-red issue #\{intToString issue} still holds"
 pinVerdictDetail (PinDrained issue) =
-  "known-red issue #\{intToString issue} no longer fails; remove its pin"
+  "known-red issue #\{intToString issue} unexpected pass; remove its pin"
 pinVerdictDetail (PinChanged issue detail) =
   "known-red issue #\{intToString issue} changed: \{detail}"
