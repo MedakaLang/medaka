@@ -9,7 +9,8 @@ only: a non-ASCII character is never a letter, digit, or space to these
 functions, and passes through `toUpper` and `toLower` unchanged.
 
 `length` and `isEmpty` are not defined here, to leave the `Foldable`
-methods of those names unshadowed. Use `stringLength s` and `s == ""`.
+methods of those names unshadowed. Use `stringLength s`, the codepoint
+count, and `s == ""`; `byteLength` counts UTF-8 bytes.
 `intToString` renders an integer.
 
 ## Characters
@@ -200,6 +201,21 @@ a `bytes.Bytes`.
 ```medaka
 > fromUtf8 (toUtf8 "héllo→")
 "héllo→"
+```
+
+### `byteLength`
+
+```
+byteLength : String -> Int
+byteLength s
+```
+
+The number of bytes in the string's UTF-8 encoding, an alias of
+`utf8ByteLength`.
+
+```medaka
+> byteLength "héllo"
+6
 ```
 
 ### `utf8ByteLength`

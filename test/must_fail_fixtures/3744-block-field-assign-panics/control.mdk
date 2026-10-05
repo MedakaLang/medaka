@@ -1,7 +1,0 @@
-data P = P { x : Int, y : Int }
-
-main : <IO> Unit
-main =
-  let v = P { x = 1, y = 2 }
-  let w = { v | x = 9 }
-  println w.x

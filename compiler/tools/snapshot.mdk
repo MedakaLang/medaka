@@ -662,6 +662,7 @@ wasmOf runtimeDecls allDecls cp =
       (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       (ctorFieldTypeNames allDecls)
       False
+      (mainTypeIsUnit ())
       (declaredRecordFieldOrders allDecls)
       []
   let (text, gaps) = wasmRecord input cp

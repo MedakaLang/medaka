@@ -277,7 +277,7 @@ result = do
 
 **Bare blocks vs `do` blocks.** Medaka distinguishes two kinds of indented blocks:
 
-- **Bare sequential blocks** (function bodies, `if`/`else` branches, match-arm bodies, any indented multi-statement block without a `do` keyword): purely sequential evaluation. Allowed statements: `let` (immutable declaration), expression statements (including `Ref` writes `x := e`), field assignment (`x.f = e`), `let else`. **`<-` is forbidden.** Bindings are immutable — a bare reassignment `x = e` is an error, and `let mut` is not a construct (use a `Ref`).
+- **Bare sequential blocks** (function bodies, `if`/`else` branches, match-arm bodies, any indented multi-statement block without a `do` keyword): purely sequential evaluation. Allowed statements: `let` (immutable declaration), expression statements (including `Ref` writes `x := e`), `let else`. Block field assignment (`x.f = e`) is removed: use a record update, `{ x | f = e }`. **`<-` is forbidden.** Bindings are immutable — a bare reassignment `x = e` is an error, and `let mut` is not a construct (use a `Ref`).
 - **Monadic `do` blocks** (introduced by the explicit `do` keyword): every statement is sequenced through monadic bind. Allowed statements: `let`, `<-` bind, expression statements (each must unify to `m a`), `let else`. **Reassignment and field assignment are forbidden** — monads are for computational composition, not in-place mutation.
 
 If you write `<-` inside a bare block, the typechecker emits a clear error pointing you at the `do` keyword.
@@ -821,7 +821,7 @@ count := !count + 1                    -- `:=` writes the cell; `!` reads it
 println !count                         -- => 1
 
 let p = Person { name = "Alice", age = 30 }     -- immutable record
-p.age = 31                             -- field assignment (in-place record mutation)
+let p2 = { p | age = 31 }               -- record update (field assignment `p.age = 31` is removed)
 ```
 
 `Ref` is the single mutation primitive:
@@ -990,7 +990,7 @@ The key distinction:
 - `let mut x` — the *binding* can be repointed to a different value
 - `Ref` — the *binding* is stable but the *contents* are mutable
 
-**`let mut`, reassignment (`x = e`), and field assignment (`x.f = e`) are only allowed inside bare sequential blocks**, not inside a `do` block. Monads are for composing computational patterns, not for in-place mutation — mixing the two would muddle both. If you need mutation inside a function that also uses `do`, keep the `do` block scoped to the monadic piece and do the mutation in the surrounding bare block.
+**`let mut`, reassignment (`x = e`), and block field assignment (`x.f = e`) are removed from the language (see `docs/spec/SYNTAX.md` "Removed"); the design discussion below is history.** Mutation is `Ref` with `:=`, and records are updated with `{ x | f = e }`. The original design allowed them only inside bare sequential blocks, not inside a `do` block. Monads are for composing computational patterns, not for in-place mutation — mixing the two would muddle both. If you need mutation inside a function that also uses `do`, keep the `do` block scoped to the monadic piece and do the mutation in the surrounding bare block.
 
 You can combine them:
 ```

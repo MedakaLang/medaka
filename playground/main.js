@@ -226,7 +226,33 @@ function flushConsole() {
   consolePane.scrollTop = consolePane.scrollHeight;
 }
 
+// A runaway program can print far faster than the console can render, so the
+// pane keeps only the first CONSOLE_CAP_CHARS characters of stdout/stderr
+// streamed by the program and says so once, at the first dropped character. The
+// kill message, meta lines and the final runtime-error message are not part of
+// that stream and are always shown (see the 'error' handler).
+const CONSOLE_CAP_CHARS = 1000000;
+let consoleOutChars = 0;
+let consoleCapNoticed = false;
+
+function appendProgramOutput(cls, text) {
+  const room = CONSOLE_CAP_CHARS - consoleOutChars;
+  if (text.length <= room) {
+    consoleOutChars += text.length;
+    appendConsole(cls, text);
+    return;
+  }
+  if (room > 0) appendConsole(cls, text.slice(0, room));
+  consoleOutChars = CONSOLE_CAP_CHARS;
+  if (!consoleCapNoticed) {
+    consoleCapNoticed = true;
+    appendConsole('con-meta', `\n[output truncated: the console keeps the first ${CONSOLE_CAP_CHARS.toLocaleString('en-US')} characters]\n`);
+  }
+}
+
 function clearConsole() {
+  consoleOutChars = 0;
+  consoleCapNoticed = false;
   consoleQueue = [];
   consolePane.innerHTML = '';
 }
@@ -478,10 +504,12 @@ async function runProgram() {
 
   runner.onmessage = (e) => {
     const { type, text, message, shown } = e.data;
-    if (type === 'stdout') appendConsole('con-stdout', text);
-    else if (type === 'stderr') appendConsole('con-stderr', text);
+    if (type === 'stdout') appendProgramOutput('con-stdout', text);
+    else if (type === 'stderr') appendProgramOutput('con-stderr', text);
     else if (type === 'error') {
-      if (!shown) appendConsole('con-stderr', '\n' + message + '\n');
+      // `shown` means the message already streamed as stderr; past the cap that
+      // stream was dropped, so print it here.
+      if (!shown || consoleCapNoticed) appendConsole('con-stderr', '\n' + message + '\n');
       clearTimeout(killTimer); killTimer = null;
       activeRunner = null;
       runBtn.disabled = false;

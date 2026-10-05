@@ -1,0 +1,9 @@
+-- §3 an empty matching set at an effect-indexed head, with no `do`: #3689's
+-- defect is the effect row in the wanted predicate, not the desugaring.
+-- `pure ()` asks for `Applicative (Async <>)`, and stdlib/async.mdk
+-- implements only `DeferredApplicative` for `Async`.
+-- Hand-derived: REJECT on all three verbs, `T-NO-IMPL` at `pure`.  Before
+-- effect rows were erased in given matching this panicked, unlocated.
+import async.{runAsyncMain}
+
+main = runAsyncMain (pure ())

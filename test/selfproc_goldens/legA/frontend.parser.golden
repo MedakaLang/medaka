@@ -29,7 +29,7 @@ arrayAfterComma : Expr -> Token -> ParserE <> Expr
 arrayFor : Token -> ParserE <> Expr
 arrayRangeAfter : Expr -> Bool -> ParserE <> Expr
 arrayRest : Expr -> Token -> ParserE <> Expr
-assignFromLhs : Expr -> Expr -> ParserE <> DoStmt
+assignFromLhs : Int -> Expr -> Expr -> ParserE <> DoStmt
 assignTail : Expr -> ParserE <> Expr
 assignTailRaw : Expr -> ParserE <> Expr
 attrArg : String -> Token -> ParserE <> Attr
@@ -155,7 +155,7 @@ expectGo : Token -> Token -> ParserE <> Unit
 expectMinus : ParserE <> Unit
 expectMinusGo : Token -> ParserE <> Unit
 expectTok : Token -> ParserE <> Unit
-exprStmtFor : Expr -> Token -> ParserE <> (List DoStmt)
+exprStmtFor : Int -> Expr -> Token -> ParserE <> (List DoStmt)
 exprToParams : Expr -> List Pat
 exprToPat : Expr -> Pat
 externDataEnd : Bool -> String -> List (String, Option KindAnn) -> Token -> ParserE <> Decl
@@ -166,6 +166,7 @@ failIfAliasedMember : List UseMember -> ParserE <> Unit
 failP : String -> ParserE <> a
 fatalAtP : String -> Int -> ParserE <> a
 fatalP : String -> ParserE <> a
+fieldAssignRemovedMsg : String -> List String -> String
 fieldNameGo : Array Token -> Int -> Int -> Int -> Bool -> List Int
 fieldNameIdxsIn : Array Token -> Int -> Int -> List Int
 fieldNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List Int
@@ -560,6 +561,7 @@ recordPatFieldsRest : RecPatField -> Token -> ParserE <> (List RecPatField, Bool
 recordRemovedMsg : String
 recordTrailingComma : Int -> ParserE <> Unit
 recordUnitStart : Int -> Int -> ParserE <> Unit
+recordUpdateText : String -> List String -> String
 reservedIdentKeyword : Token -> Option String
 reservedKeywordMsg : String -> String
 reservedOrPatFail : Token -> ParserE <> Pat

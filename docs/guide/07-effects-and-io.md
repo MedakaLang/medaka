@@ -175,7 +175,7 @@ sumTo : Int -> Int
 sumTo n =
   let total = Ref 0
   let step = i => total := !total + i
-  let _ = map step [1..=n]
+  each step [1..=n]
   !total
 
 main = println (sumTo 10)
@@ -186,10 +186,10 @@ main = println (sumTo 10)
 ```
 
 `sumTo` has no row and needs none. A `Ref` created inside a function and never
-handed out is invisible from outside: same input, same output. (The `let _ =` is
-there because `map step …` produces a `List Unit`, and a statement is not allowed
-to discard a non-`Unit` value silently. Binding it to `_` says the discard is
-intended.) The row tracks the
+handed out is invisible from outside: same input, same output. (`each step xs`
+calls `step` on every element for its effect and returns `Unit`, which is why it
+fits as a statement where `map step xs` would not: that produces a `List Unit`,
+and a statement is not allowed to discard a non-`Unit` value silently.) The row tracks the
 observable boundary, meaning the console, the filesystem, the clock, and the
 network, not every assignment.
 

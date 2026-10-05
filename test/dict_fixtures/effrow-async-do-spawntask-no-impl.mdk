@@ -1,0 +1,15 @@
+-- §3 an empty matching set at an effect-indexed head, #3689's own repro.
+-- `do` desugars to `Thenable` and `pure 1` asks for `Applicative`, both at
+-- `Async <Stdout>`.  stdlib/async.mdk implements only the `Deferred*` family
+-- for `Async`, so `match(IE, Thenable (Async <Stdout>))` and
+-- `match(IE, Applicative (Async <Stdout>))` are empty.
+-- Hand-derived: REJECT on all three verbs, `T-NO-IMPL`.  The wanted predicate
+-- carries an effect row, which given matching (`monoSameGiven`) erases as
+-- coherence does; before that the row never equalled itself and the
+-- method-return validator panicked, unlocated, before any diagnostic.
+import async.{runAsyncMain, liftIO, spawnTask, await}
+
+main = runAsyncMain (do
+  t <- spawnTask (pure 1)
+  x <- await t
+  liftIO (_ => println x))

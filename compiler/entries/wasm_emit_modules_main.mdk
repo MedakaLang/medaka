@@ -35,6 +35,7 @@ import types.typecheck.{
   preludeReturnPosDictNames,
   preludeArgPosDictNames,
   mainTypeIsFloat,
+  mainTypeIsUnit,
   checkedFfiExternTypeNamesModules,
 }
 import driver.diagnostics.{emitDiagExitCode, renderTcDiags}
@@ -96,6 +97,7 @@ emitTail mods runtimeDecls coreD modules2 =
       (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       (ctorFieldTypeNames allDecls)
       (mainTypeIsFloat ())
+      (mainTypeIsUnit ())
       (declaredRecordFieldOrders allDecls)
       (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
   let lowered = lowerProgramEmit TargetWasm allDecls
