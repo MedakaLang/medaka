@@ -120,7 +120,7 @@ const capabilityStub = (name) => () => {
   );
 };
 
-// A wasm stack overflow during the run (start function) is the guest's recursion depth,
+// A wasm stack overflow during the run (mdk_main or a value init) is the guest's recursion depth,
 // worded like the interpreter's E-STACK-OVERFLOW.
 const STACK_OVERFLOW_MSG =
   'stack overflow: recursion too deep for the browser; the native compiler has a larger stack';
@@ -253,9 +253,11 @@ self.onmessage = function(e) {
     mdk_exit: capabilityStub('exit'),
   } };
 
-  // (start $__init) runs main during instantiate — no entry to call after.
+  // (start $__init) runs only the value inits; the program is the mdk_main export.
+  // Calling it inside this chain keeps its exit/trap on the .catch path below.
   WebAssembly.instantiate(wasm, imports)
-    .then(() => {
+    .then(({ instance }) => {
+      instance.exports.mdk_main();
       flushStdout();
       flushStderr();
       // Final flush with stream:false to emit any incomplete multi-byte sequence.

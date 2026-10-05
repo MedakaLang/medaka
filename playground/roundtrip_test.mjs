@@ -42,7 +42,7 @@ function runWat(wat) {
     mdk_args_count: () => 0, mdk_arg_len: () => 0, mdk_arg_byte: () => 0,
     mdk_result_len: () => 0, mdk_result_byte: () => 0,
     mdk_exit: (c) => { out = Buffer.from(acc).toString('utf8'); throw { __exit: c }; },
-  } }).then(() => Buffer.from(acc).toString('utf8'))
+  } }).then(({ instance }) => { instance.exports.mdk_main(); return Buffer.from(acc).toString('utf8'); })
      .catch((e) => { if (e && '__exit' in e) return out || Buffer.from(acc).toString('utf8'); throw e; });
 }
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // WasmGC runner — instantiate a module, supply the host IO imports, capture what
-// the module writes. `(start $__init)` runs the value-binding prologue + `main`
-// during instantiation.
+// the module writes. `(start $__init)` runs the value-binding prologue during
+// instantiation; the program itself runs when this host calls the `mdk_main`
+// export.  The hand-written test/wasm/w1_add.wat predates that entry and runs
+// in its start function, so a module without the export is only instantiated.
 //
 // Host-import ABI (WASMGC-DESIGN §6 / §10 fork e — byte-level custom shim, W6):
 //   * env.mdk_write_byte (i32) — write ONE byte (0..255) to stdout.
@@ -198,7 +200,8 @@ const imports = { env: {
   mdk_exit: (code) => { process.stdout.write(Buffer.from(acc).toString('utf8')); process.exit(code | 0); },
 } };
 WebAssembly.instantiate(bytes, imports)
-  .then(() => {
+  .then(({ instance }) => {
+    if (typeof instance.exports.mdk_main === 'function') instance.exports.mdk_main();
     process.stdout.write(Buffer.from(acc).toString('utf8'));
     if (eacc.length) process.stderr.write(Buffer.from(eacc).toString('utf8'));
   })

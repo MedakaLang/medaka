@@ -177,9 +177,9 @@ function shippedModulesArg(stdlib) {
 }
 
 // ── persistent guest session ─────────────────────────────────────────────────
-// The guest module's `(start $__init)` runs the eager top-level initializers and
-// then `main`, and ALSO exports that `main` as `mdk_main` (compiler/backend/
-// wasm_emit.mdk, emitRefInit) so a host can call it again on the SAME instance.
+// The guest module's `(start $__init)` runs only the eager top-level
+// initializers; `main` is the `mdk_main` export (compiler/backend/
+// wasm_emit.mdk, emitRefInit), called once per run on the SAME instance.
 // Re-entering keeps every top-level `Ref` the compiler uses as a process-wide
 // memo alive across calls — above all the content-keyed prelude parse/desugar
 // caches (frontend/parse_cache.mdk, frontend/desugar_cache.mdk).  A fresh
@@ -279,8 +279,8 @@ export function resetGuestSession() { _session = null; }
 
 // Run the compiler guest once over an in-memory vfs.  `vfsMap` = Map<path, Uint8Array>.
 // `argv` = string[].  Returns { out, err, exit } (out/err as strings).
-// First call: instantiate (the module's start function runs `main`).  Later
-// calls: re-enter the SAME instance through its `mdk_main` export (see above).
+// First call: instantiate, then call `mdk_main`.  Later calls: re-enter the
+// SAME instance through `mdk_main` (see above).
 function runGuest(wasmModuleOrBytes, vfsMap, argv) {
   return new Promise((resolve, reject) => {
     if (_session) {
@@ -301,16 +301,13 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
     compiledModuleFor(wasmModuleOrBytes)
       .then((module) => WebAssembly.instantiate(module, host.imports))
       .then((instance) => {
-        // A module without the export (an older emitter) simply never persists.
-        if (instance && typeof instance.exports.mdk_main === 'function') {
-          _session = { instance, host };
-        }
+        _session = { instance, host };
+        instance.exports.mdk_main();
         host.finish(0);
       })
       .catch((e) => {
-        // A guest that ended through mdk_exit inside `start` never yields its
-        // instance, so it cannot be cached either — the next call instantiates.
         if (e instanceof ExitSignal || host.exited) { host.finish(0); return; }
+        _session = null;
         reject(withGuestStderr(e, host));
       });
   });
