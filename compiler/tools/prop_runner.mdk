@@ -95,6 +95,9 @@ customRngStateRef = Ref (0, 0)
 customRngReadyRef : Ref Bool
 customRngReadyRef = Ref False
 
+customSeedRef : Ref Int
+customSeedRef = Ref 123456789
+
 -- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
 -- `rngStateRef`.  The seed is reduced into the state's range, `0 .. 2^31 - 1`,
 -- so any `Int` seeds it and `rngNextLocal`'s multiply cannot overflow; a seed
@@ -105,6 +108,12 @@ seedPropRng n =
   let normalized = (n % 2147483648 + 2147483648) % 2147483648
   propRngStateRef := normalized
   propSeedRef := normalized
+  customSeedRef := normalized
+  customRngReadyRef := False
+
+beginCustomPropStream : Int -> Unit
+beginCustomPropStream seed =
+  customSeedRef := seed
   customRngReadyRef := False
 
 export
@@ -842,6 +851,7 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
   -- value via `--seed` reproduces this prop's draws byte-for-byte regardless
   -- of what ran before it, so it is the number to print on failure.
   let seedAtStart = !propRngStateRef
+  let _ = beginCustomPropStream seedAtStart
   match findFailure genEnv evalEnv params body maxTests 1
     PropPassed =>
       let _ = putStrLn ("OK (" ++ intToString maxTests ++ " tests)")
@@ -995,7 +1005,7 @@ ensureCustomRandomState env =
     ()
   else
     let programState = readRandomState env
-    let _ = callRandomSetSeed env (propSeedValue ())
+    let _ = callRandomSetSeed env !customSeedRef
     let seeded = readRandomState env
     customRngStateRef := u64Pair seeded
     let _ = restoreRandomStateValue env programState
@@ -1557,6 +1567,7 @@ runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv 
     let _ = seedPropRng seed
     match matches
       [DProp _ _ params body] =>
+        let _ = beginCustomPropStream seed
         propResultOf
           cases
           seed
@@ -1603,6 +1614,7 @@ runEachResult : Int ->
 runEachResult _ _ _ _ [] = []
 runEachResult cases propLines genEnv evalEnv ((DProp _ name params body) :: rest) =
   let seedAtStart = !propRngStateRef
+  let _ = beginCustomPropStream seedAtStart
   propResultOf
       cases
       seedAtStart
