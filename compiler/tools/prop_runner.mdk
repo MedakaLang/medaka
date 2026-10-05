@@ -42,6 +42,8 @@ import tools.prop_plan.{
   prependBefore,
   substTyRaw,
   PlanEnv,
+  PlanError,
+  TypeKey(..),
   GenPlan(..),
   CustomPlan(..),
   PlanDef(..),
@@ -56,6 +58,8 @@ import tools.prop_plan.{
   ctorWeights,
   intMin,
   intMax,
+  shrinkActions,
+  ShrinkAction(..),
 }
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
@@ -264,13 +268,15 @@ isArbitraryMethod (ImplMethod n _ _) = n == "arbitrary"
 -- dictionary belongs (see `userArbitrary`).
 arbImplOf : Decl -> Option (String, TyConOrigin)
 arbImplOf (DAttrib _ d) = arbImplOf d
-arbImplOf (DImpl { iface = ifaceName, tys = tys, reqs = reqs }) = match (
-  ifaceName,
-  tys,
-  reqs,
-)
-  ("Arbitrary", [TyCon { tyConName = n, tyConOrigin = to }], []) => Some (n, to)
-  _ => None
+arbImplOf (DImpl { iface = ifaceName, implOrigin = (OriginModule "core"), tys = tys, reqs = reqs }) =
+  match (
+    ifaceName,
+    tys,
+    reqs,
+  )
+    ("Arbitrary", [TyCon { tyConName = n, tyConOrigin = to }], []) =>
+      Some (n, to)
+    _ => None
 arbImplOf _ = None
 
 -- The identities `arbImplOf` turned away: an `Arbitrary` instance that is
@@ -283,14 +289,15 @@ unusableArbsOf decls = filterMap unusableArbOf decls
 
 unusableArbOf : Decl -> Option (String, TyConOrigin)
 unusableArbOf (DAttrib _ d) = unusableArbOf d
-unusableArbOf (DImpl { iface = ifaceName, tys = tys, reqs = reqs }) = match (
-  ifaceName,
-  tys,
-  reqs,
-)
-  ("Arbitrary", [TyCon { tyConName = _ }], []) => None
-  ("Arbitrary", [t], _) => tyHeadIdentity t
-  _ => None
+unusableArbOf (DImpl { iface = ifaceName, implOrigin = (OriginModule "core"), tys = tys, reqs = reqs }) =
+  match (
+    ifaceName,
+    tys,
+    reqs,
+  )
+    ("Arbitrary", [TyCon { tyConName = _ }], []) => None
+    ("Arbitrary", [t], _) => tyHeadIdentity t
+    _ => None
 unusableArbOf _ = None
 
 tyHeadIdentity : Ty -> Option (String, TyConOrigin)
@@ -918,7 +925,7 @@ genInputs genEnv evalEnv ((PropParam x _ ty) :: rest) =
 
 genParam : GenEnv -> List (String, Value e) -> Ty -> <e> Value e
 genParam (ge@(GenEnv _ _ _ _ planEnv)) evalEnv ty =
-  match planFor planEnv "property parameter" ty
+  match planFor planEnv "" "property parameter" ty
     Ok plan => genFromPlan ge evalEnv 0 plan
     Err e => panic (planErrorText e)
 
@@ -926,10 +933,7 @@ genParam (ge@(GenEnv _ _ _ _ planEnv)) evalEnv ty =
 -- imported nominal is resolved through PlanEnv by TypeKey, never through the
 -- spelling-only legacy TyDef list.
 genFromPlan : GenEnv -> List (String, Value e) -> Int -> GenPlan -> <e> Value e
--- Keep the established scalar interpreter as the adapter for the plan's Int
--- node. The plan chooses the node and its public bounds; this call preserves
--- the already-calibrated private stream implementation.
-genFromPlan ge env depth GInt = genForType ge env [] depth (planTy GInt)
+genFromPlan _ _ _ GInt = VInt (randIntRange intMin intMax)
 genFromPlan _ _ _ GBool = VBool (randBoolL ())
 genFromPlan _ _ _ GFloat = genFloat ()
 genFromPlan _ _ _ GChar = VChar (genCharStr ())
@@ -1210,28 +1214,154 @@ shrinkForParam : GenEnv ->
   Value e ->
   <e> List (Value e)
 shrinkForParam ge env ty value =
-  match planFor (genEnvPlan ge) "property parameter" ty
-    Ok (GCustom (CustomPlan _ True)) => match userShrink ge env ty value
-      Some smaller => smaller
-      None =>
-        panic
-          "property runner: planned custom shrink was not available in the evaluator environment"
-    Ok _ => shrinkValue ty value
+  match planFor (genEnvPlan ge) "" "property parameter" ty
+    Ok (GCustom (CustomPlan (TypeKey n o) True)) =>
+      match userShrinkAt ge env n o value
+        Some smaller => smaller
+        None =>
+          panic
+            "property runner: planned custom shrink was not available in the evaluator environment"
+    Ok plan => structuralShrink ge plan value
     Err e => panic (planErrorText e)
 
-userShrink : GenEnv ->
+userShrinkAt : GenEnv ->
   List (String, Value e) ->
-  Ty ->
+  String ->
+  TyConOrigin ->
   Value e ->
   <e> Option (List (Value e))
-userShrink _ env _ value = match lookupAssoc "shrink" env
-  -- Normal evaluator dispatch sees the generated runtime constructor tag. It
-  -- therefore makes exactly the source-level choice for colliding type names,
-  -- including a default method which has no explicit candidate row.
-  Some methods => match force (apply (force methods) value)
-    VList smaller => Some smaller
-    _ => panic "property runner: custom shrink returned a non-List value"
-  None => None
+userShrinkAt (GenEnv _ arbs _ _ _) env n o value = match (
+  arbImplKeyFor arbs n o,
+  lookupAssoc "shrink" env,
+)
+  (Some route, Some methods) => shrinkAt route (force methods) value
+  _ => None
+
+shrinkAt : ArbRoute -> Value e -> Value e -> <e> Option (List (Value e))
+shrinkAt (ArbRoute key i total) (VMulti vs) value =
+  shrinkCandidate i total (filterList (hasKey key) vs) value
+shrinkAt (ArbRoute key i total) v value =
+  shrinkCandidate i total (filterList (hasKey key) [v]) value
+
+shrinkCandidate : Int ->
+  Int ->
+  List (Value e) ->
+  Value e ->
+  <e> Option (List (Value e))
+shrinkCandidate i total cands value
+  | listLen cands /= total = None
+  | otherwise = match candAt i cands
+    Some method => match force (apply method value)
+      VList smaller => Some smaller
+      _ => panic "property runner: custom shrink returned a non-List value"
+    None => None
+
+-- Interpret the planner's structural order for evaluator values.  The action
+-- algebra supplies deletion/child ordering; constructor replacement is kept
+-- ahead of fields, so native and eval take the same greedy path.
+structuralShrink : GenEnv -> GenPlan -> Value e -> List (Value e)
+structuralShrink _ GInt (VInt n) = shrinkInt n
+structuralShrink _ GBool (VBool True) = [VBool False]
+structuralShrink _ GBool _ = []
+structuralShrink _ GFloat (VFloat x) =
+  if x == 0.0 then [] else [VFloat 0.0, VFloat (x / 2.0)]
+structuralShrink _ GString (VString s) =
+  if s == "" then [] else [VString (stringSlice 0 (stringLength s / 2) s)]
+structuralShrink _ GChar (VChar _) = []
+structuralShrink _ GUnit _ = []
+structuralShrink ge (GList plan) (VList values) =
+  map VList (deleteEach values)
+    ++ map VList (replaceEach (structuralShrink ge plan) values)
+structuralShrink ge (GArray plan) (VArray values) =
+  let xs = toList values
+  map (xs2 => VArray (arrayFromList xs2)) (deleteEach xs)
+    ++ map
+      (xs2 => VArray (arrayFromList xs2))
+      (replaceEach (structuralShrink ge plan) xs)
+structuralShrink ge (GOption plan) (VCon "Some" [value]) =
+  VCon "None" [] :: map (v => VCon "Some" [v]) (structuralShrink ge plan value)
+structuralShrink _ (GOption _) _ = []
+structuralShrink ge (GResult err _) (VCon "Err" [value]) =
+  map (v => VCon "Err" [v]) (structuralShrink ge err value)
+structuralShrink ge (GResult _ ok) (VCon "Ok" [value]) =
+  map (v => VCon "Ok" [v]) (structuralShrink ge ok value)
+structuralShrink _ (GResult _ _) _ = []
+structuralShrink ge (GTuple plans) (VTuple values) =
+  map VTuple (shrinkPlanValues ge plans values)
+structuralShrink ge (nominal@(GNominal key _)) value =
+  shrinkNominal ge nominal key value
+structuralShrink _ (GCustom _) _ = []
+structuralShrink _ _ _ = []
+
+shrinkPlanValues : GenEnv ->
+  List GenPlan ->
+  List (Value e) ->
+  List (List (Value e))
+shrinkPlanValues _ [] _ = []
+shrinkPlanValues _ _ [] = []
+shrinkPlanValues ge (plan :: plans) (value :: values) =
+  map (prependBefore values) (structuralShrink ge plan value)
+    ++ map (prepend value) (shrinkPlanValues ge plans values)
+
+shrinkNominal : GenEnv -> GenPlan -> TypeKey -> Value e -> List (Value e)
+shrinkNominal ge nominal key value = match planDef (genEnvPlan ge) key
+  Ok (PlanDef _ _ _ _ ctors) =>
+    nullaryCtorValues ctors ++ shrinkNominalFields ge nominal ctors value
+  Err _ => []
+
+nullaryCtorValues : List PlanCtor -> List (Value e)
+nullaryCtorValues [] = []
+nullaryCtorValues ((PlanCtor _ runtime []) :: rest) =
+  VCon runtime [] :: nullaryCtorValues rest
+nullaryCtorValues (_ :: rest) = nullaryCtorValues rest
+
+shrinkNominalFields : GenEnv ->
+  GenPlan ->
+  List PlanCtor ->
+  Value e ->
+  List (Value e)
+shrinkNominalFields ge nominal ctors (VCon runtime values) =
+  match planCtorRuntime runtime ctors
+    Some ctor => match instantiateCtor (genEnvPlan ge) nominal ctor
+      Ok fields =>
+        map
+          (vs => VCon runtime vs)
+          (shrinkPlanValues ge (fieldPlans fields) values)
+      Err _ => []
+    None => []
+shrinkNominalFields ge nominal ctors (VRecord runtime fields) =
+  match planCtorRuntime runtime ctors
+    Some ctor => match instantiateCtor (genEnvPlan ge) nominal ctor
+      Ok plans =>
+        map
+          (vs => VRecord runtime (zipNames (fieldNames fields) vs))
+          (shrinkPlanValues ge (fieldPlans plans) (fieldValues fields))
+      Err _ => []
+    None => []
+shrinkNominalFields _ _ _ _ = []
+
+planCtorRuntime : String -> List PlanCtor -> Option PlanCtor
+planCtorRuntime _ [] = None
+planCtorRuntime runtime ((ctor@(PlanCtor _ actual _)) :: rest) =
+  if runtime == actual then Some ctor else planCtorRuntime runtime rest
+
+fieldPlans : List (Option String, GenPlan) -> List GenPlan
+fieldPlans [] = []
+fieldPlans ((_, plan) :: rest) = plan :: fieldPlans rest
+
+fieldNames : List (String, Value e) -> List String
+fieldNames [] = []
+fieldNames ((name, _) :: rest) = name :: fieldNames rest
+
+fieldValues : List (String, Value e) -> List (Value e)
+fieldValues [] = []
+fieldValues ((_, value) :: rest) = value :: fieldValues rest
+
+zipNames : List String -> List (Value e) -> List (String, Value e)
+zipNames [] _ = []
+zipNames _ [] = []
+zipNames (name :: names) (value :: values) =
+  (name, value) :: zipNames names values
 
 -- The [i]th element; the stdlib has no `nth` (`take`/`drop`/`indexed`/
 -- `elemIndex` are its nearest neighbors).
@@ -1567,13 +1697,16 @@ runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv 
     let _ = seedPropRng seed
     match matches
       [DProp _ _ params body] =>
-        let _ = beginCustomPropStream seed
-        propResultOf
-          cases
-          seed
-          (lineOfPropName name propLines)
-          name
-          (findFailure genEnv evalEnv params body cases 1)
+        match planPropParams (genEnvPlan genEnv) name params
+          Err e => capabilityResult name seed cases e
+          Ok _ =>
+            let _ = beginCustomPropStream seed
+            propResultOf
+              cases
+              seed
+              (lineOfPropName name propLines)
+              name
+              (findFailure genEnv evalEnv params body cases 1)
       _ => missingRequest request
   else if listLen matches == 0 then
     missingRequest request
@@ -1614,17 +1747,43 @@ runEachResult : Int ->
 runEachResult _ _ _ _ [] = []
 runEachResult cases propLines genEnv evalEnv ((DProp _ name params body) :: rest) =
   let seedAtStart = !propRngStateRef
-  let _ = beginCustomPropStream seedAtStart
-  propResultOf
-      cases
-      seedAtStart
-      (lineOfPropName name propLines)
-      name
-      (findFailure genEnv evalEnv params body cases 1)
+  (match planPropParams (genEnvPlan genEnv) name params
+      Err e => capabilityResult name seedAtStart cases e
+      Ok _ =>
+        let _ = beginCustomPropStream seedAtStart
+        propResultOf
+          cases
+          seedAtStart
+          (lineOfPropName name propLines)
+          name
+          (findFailure genEnv evalEnv params body cases 1))
     :: runEachResult cases propLines genEnv evalEnv rest
 runEachResult cases propLines genEnv evalEnv (_ :: rest) =
   runEachResult cases propLines genEnv evalEnv rest
 
+planPropParams : PlanEnv ->
+  String ->
+  List PropParam ->
+  Result PlanError (List GenPlan)
+planPropParams _ _ [] = Ok []
+planPropParams planEnv propName ((PropParam param _ ty) :: rest) = match (
+  planFor planEnv propName param ty,
+  planPropParams planEnv propName rest,
+)
+  (Ok plan, Ok plans) => Ok (plan :: plans)
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+capabilityResult : String -> Int -> Int -> PlanError -> PropResult
+capabilityResult name seed cases err =
+  PropResult
+    "eval"
+    name
+    PropErroredResult
+    (Some PropCapabilityError)
+    (planErrorText err)
+    seed
+    cases
 propResultOf : Int ->
   Int ->
   Int ->
