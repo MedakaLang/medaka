@@ -528,7 +528,8 @@ Already present and reused: `charToStr` (= `fromChar`), `showStringLit`,
 
 ### Inspection
 
-- ⛔ `length`/`isEmpty` — **intentionally not provided**: would clash with the `Foldable` methods of the same name. Use the global `stringLength`, or `s == ""`. A `Sized`/`HasLength` interface is the right lever if this is ever revisited, but is out of scope for now
+- ✅ `length : String -> Int` — Unicode codepoint count, the same as `stringLength`
+- ⛔ `isEmpty` — **intentionally not provided**: use `s == ""`
 - ✅ `startsWith : String -> String -> Bool` — `startsWith prefix s` — true when `s` begins with `prefix`
 - ✅ `endsWith : String -> String -> Bool` — `endsWith suffix s` — true when `s` ends with `suffix`
 - ✅ `contains : String -> String -> Bool` — `contains needle haystack`
