@@ -329,13 +329,14 @@ test "known-red unit pins retain the exact assertion in both engines" =
         expectEqual (Some 2) (knownRedCount report),
         expectEqual
           [
-            (Some "eval", Some "known-red", Some 1),
-            (Some "native", Some "known-red", Some 1),
+            (Some "eval", Some "known-red", Some "fail", Some 1),
+            (Some "native", Some "known-red", Some "fail", Some 1),
           ]
           (map
             (row => (
               field "engine" row,
               field "status" row,
+              field "rawStatus" row,
               flatMap asInt (get "issue" row),
             ))
             (unitReportRows report)),
@@ -693,4 +694,56 @@ test "exported newtype constructors remain structurally generatable" =
           ("eval", "exported newtype", "pass"),
           ("native", "exported newtype", "pass"),
         ]
+        (runReport ["--engines", "eval,native"] target))
+
+gradeMinimized : String ->
+  List String ->
+  Result String (Int, Json) ->
+  Expectation
+gradeMinimized _ _ (Err message) = fail message
+gradeMinimized name fragments (result@(Ok (_, report))) = expectAll [
+  gradeReport 1 [("eval", name, "fail"), ("native", name, "fail")] result,
+  expectAll
+    (map
+      (row => match field "detail" row
+        None => fail "missing counterexample detail"
+        Some detail => expectTextContainsAll fragments detail)
+      (propertyReports report)),
+]
+
+test "both structural list shrinkers retain only the minimal failing length" =
+  withFixtures
+    [("main.mdk", "prop \"minimum list\" (xs : List Int) = length xs < 2\n")]
+    (target =>
+      gradeMinimized
+        "minimum list"
+        ["xs = [0, 0]"]
+        (runReport ["--engines", "eval,native"] target))
+
+test "both structural tuple shrinkers reduce each component" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "prop \"minimum tuple\" (pair : (Int, Bool)) = fst pair < 5 || snd pair\n",
+      ),
+    ]
+    (target =>
+      gradeMinimized
+        "minimum tuple"
+        ["pair = (5, False)"]
+        (runReport ["--engines", "eval,native"] target))
+
+test "named nominal fields shrink and display without a Debug instance" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Sample = Sample { sampleCount : Int, sampleFlag : Bool }\nprop \"minimum record\" (sample : Sample) = sample.sampleCount < 5 || sample.sampleFlag\n",
+      ),
+    ]
+    (target =>
+      gradeMinimized
+        "minimum record"
+        ["sampleCount = 5", "sampleFlag = False"]
         (runReport ["--engines", "eval,native"] target))

@@ -4,6 +4,7 @@ import frontend.ast.{
 import frontend.parser.{parse}
 import tools.prop_plan.{
   PlanEnv,
+  PlanError,
   PlanModule(..),
   TypeKey(..),
   PlanDef(..),
@@ -15,7 +16,7 @@ import tools.prop_plan.{
   instantiateCtor,
   planErrorText,
 }
-import test.{expectAll, expectEqual}
+import test.{expectAll, expectEqual, expectNotEqual}
 
 builtinTypes : Ty -> (Ty, Bool)
 builtinTypes (t@(TyCon { tyConName = n }))
@@ -50,8 +51,8 @@ rawNumbers =
 rawFlags : List Decl
 rawFlags = parse "public export data Box = Box Bool\n"
 
-planned : PlanEnv
-planned = buildPlanEnvModules [
+planned : Result PlanError PlanEnv
+planned = buildPlanEnvModules "numbers" [
   PlanModule
     "numbers"
     rawNumbers
@@ -65,18 +66,26 @@ planName GBool = "Bool"
 planName _ = "unexpected plan"
 
 summary : String -> String -> Result String (String, String, List String)
-summary owner name =
+summary owner name = match planned
+  Err e => Err (planErrorText e)
+  Ok env => summarize env owner name
+
+summarize : PlanEnv ->
+  String ->
+  String ->
+  Result String (String, String, List String)
+summarize env owner name =
   let key = TypeKey name (OriginModule owner)
   match (
-    planFor planned "value" TyCon {
+    planFor env "nominal plan" "value" TyCon {
       tyConName = name,
       tyConOrigin = OriginModule owner,
       tyConLoc = None,
     },
-    planDef planned key,
+    planDef env key,
   )
     (Ok generation, Ok (PlanDef _ _ _ _ [ctor@(PlanCtor source runtime _)])) =>
-      match instantiateCtor planned generation ctor
+      match instantiateCtor env generation ctor
         Ok fields =>
           Ok (source, runtime, map (field => planName (snd field)) fields)
         Err e => Err (planErrorText e)
@@ -102,4 +111,38 @@ test "same-spelled nominal plans retain different origins and field types" = exp
     expectEqual
       (Ok ("Box", "flags_runtime_Box", ["Bool"]))
       (summary "flags" "Box"),
+  ]
+
+pairingError : List Decl -> List Decl -> Option String
+pairingError raw runtime =
+  match buildPlanEnvModules "numbers" [PlanModule "numbers" raw runtime]
+    Ok _ => None
+    Err e => Some (planErrorText e)
+
+test "nominal pairing rejects missing declarations in either stream" = expectAll
+  [
+    expectNotEqual
+      None
+      (pairingError rawNumbers (map (runtimeDecl "numbers") rawFlags)),
+    expectNotEqual
+      None
+      (pairingError rawFlags (map (runtimeDecl "numbers") rawNumbers)),
+  ]
+
+test "nominal pairing rejects constructor count and field identity changes" = expectAll
+  [
+    expectNotEqual
+      None
+      (pairingError
+        (parse "public export data Box = One Int | Two Bool\n")
+        (map
+          (runtimeDecl "numbers")
+          (parse "public export data Box = One Int\n"))),
+    expectNotEqual
+      None
+      (pairingError
+        (parse "public export data Box = Box { left : Int }\n")
+        (map
+          (runtimeDecl "numbers")
+          (parse "public export data Box = Box { right : Int }\n"))),
   ]

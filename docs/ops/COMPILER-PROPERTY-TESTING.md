@@ -133,6 +133,11 @@ error pin preserves the raw error and names its issue. Assertion pins and
 False-law pins still reject every runtime error; a changed error or unexpected
 pass drains an error pin loudly.
 
+The compiler's [ledger](../../compiler/medaka-test-pins.toml) retains the native
+assertion-grading regression for [#3857](https://github.com/MedakaLang/medaka/issues/3857).
+Its test still asserts the correct grading behavior; the pin records the
+constructor-identity abort that currently prevents native execution.
+
 Fixing a defect means removing its pin and passing the same law. Small,
 clear compiler fixes may accompany their regressions; larger or uncertain
 compiler defects get an issue and a pin. Defects in the property infrastructure
