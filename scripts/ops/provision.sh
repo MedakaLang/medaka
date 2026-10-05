@@ -10,7 +10,7 @@
 # control panel, then `ssh -A root@<ip>` and run this). Works on any
 # Debian/Ubuntu box (Hetzner CX, a local Ryzen box, etc.) unchanged.
 #
-#   scp ops/provision.sh root@<ip>:                 # from your laptop
+#   scp scripts/ops/provision.sh root@<ip>:                 # from your laptop
 #   ssh -A root@<ip>                                # -A forwards your agent (private clone)
 #   ./provision.sh                                  # ~a few min: deps + build + gates
 #

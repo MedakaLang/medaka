@@ -19,7 +19,7 @@ which="${1:-spike}"
 echo "==> snapshot working tree -> repo.tar"
 tar --exclude='./.git' --exclude='*.o' --exclude='./medaka' --exclude='./medaka_emitter' \
     --exclude='./seed_emitter' --exclude='./playground/dist' --exclude='./playground/vendor' \
-    --exclude='./dist/linux-spike/repo.tar' \
+    --exclude='./archive/linux-spike/repo.tar' \
     -cf "$here/repo.tar" -C "$root" .
 
 echo "==> docker build medaka-linux-spike"
