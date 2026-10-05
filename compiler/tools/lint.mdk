@@ -1075,7 +1075,7 @@ testVerbScope prog declPos =
   (blocked, resolved)
 
 topLevelBinders : Decl -> List String
-topLevelBinders (DFunDef _ n _ _) = [n]
+topLevelBinders (DFunDef _ n _ _ _) = [n]
 topLevelBinders (DExtern _ n _) = [n]
 topLevelBinders (DLetGroup _ binds) = map letBindName binds
 topLevelBinders (DInterface { methods, ... }) = map ifaceMethodNameOf methods
@@ -1083,7 +1083,7 @@ topLevelBinders (DAttrib _ d) = topLevelBinders d
 topLevelBinders _ = []
 
 letBindName : LetBind -> String
-letBindName (LetBind n _) = n
+letBindName (LetBind n _ _) = n
 
 ifaceMethodNameOf : IfaceMethod -> String
 ifaceMethodNameOf (IfaceMethod n _ _ _) = n
