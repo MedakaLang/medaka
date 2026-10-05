@@ -1153,6 +1153,18 @@ forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
 forEach _ [] = pure ()
 forEach f (x :: xs) = andThen (f x) (_ => forEach f xs)
 
+{- | Calls a function on each element in order, for its effect.
+
+   > each println ["a", "b"]
+   a
+   b -}
+export
+each : (a -> <e> Unit) -> List a -> <e> Unit
+each _ [] = ()
+each f (x :: xs) =
+  f x
+  each f xs
+
 {- | Runs each action in the list in order, discarding the results.
 
    > runEach [Some 1, Some 2]

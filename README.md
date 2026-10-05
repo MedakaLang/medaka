@@ -109,6 +109,9 @@ printf 'main = println "Hello world!"\n' > hello.mdk
 medaka run hello.mdk
 ```
 
+`medaka run` is the interpreter: it starts at once but runs slowly. For speed, use
+`medaka build`, the fast native path.
+
 The first build bootstraps the compiler from the checked-in seed
 (`compiler/seed/emitter.ll.gz`); later rebuilds are faster. Leave the binary in
 the checkout: it finds the standard library relative to its own location, so put

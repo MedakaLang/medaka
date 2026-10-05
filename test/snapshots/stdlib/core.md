@@ -1,5 +1,5 @@
 # META
-source_lines=2231
+source_lines=2243
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1156,6 +1156,18 @@ export
 forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
 forEach _ [] = pure ()
 forEach f (x :: xs) = andThen (f x) (_ => forEach f xs)
+
+{- | Calls a function on each element in order, for its effect.
+
+   > each println ["a", "b"]
+   a
+   b -}
+export
+each : (a -> <e> Unit) -> List a -> <e> Unit
+each _ [] = ()
+each f (x :: xs) =
+  f x
+  each f xs
 
 {- | Runs each action in the list in order, discarding the results.
 
@@ -2433,6 +2445,9 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DTypeSig true "forEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))))))
 (DFunDef false "forEach" (PWild (PList)) (EApp (EVar "pure") (ELit LUnit)))
 (DFunDef false "forEach" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "andThen") (EApp (EVar "f") (EVar "x"))) (ELam (PWild) (EApp (EApp (EVar "forEach") (EVar "f")) (EVar "xs")))))
+(DTypeSig true "each" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Unit")))))
+(DFunDef false "each" (PWild (PList)) (ELit LUnit))
+(DFunDef false "each" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBlock (DoExpr (EApp (EVar "f") (EVar "x"))) (DoExpr (EApp (EApp (EVar "each") (EVar "f")) (EVar "xs")))))
 (DTypeSig true "runEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyCon "List") (TyApp (TyVar "m") (TyVar "a"))) (TyApp (TyVar "m") (TyCon "Unit")))))
 (DFunDef false "runEach" ((PList)) (EApp (EVar "pure") (ELit LUnit)))
 (DFunDef false "runEach" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "andThen") (EVar "x")) (ELam (PWild) (EApp (EVar "runEach") (EVar "xs")))))
@@ -2839,6 +2854,9 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DTypeSig true "forEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))))))
 (DFunDef false "forEach" (PWild (PList)) (EApp (EMethodRef "pure") (ELit LUnit)))
 (DFunDef false "forEach" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "f") (EVar "x"))) (ELam (PWild) (EApp (EApp (EDictApp "forEach") (EVar "f")) (EVar "xs")))))
+(DTypeSig true "each" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Unit")))))
+(DFunDef false "each" (PWild (PList)) (ELit LUnit))
+(DFunDef false "each" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBlock (DoExpr (EApp (EVar "f") (EVar "x"))) (DoExpr (EApp (EApp (EVar "each") (EVar "f")) (EVar "xs")))))
 (DTypeSig true "runEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyCon "List") (TyApp (TyVar "m") (TyVar "a"))) (TyApp (TyVar "m") (TyCon "Unit")))))
 (DFunDef false "runEach" ((PList)) (EApp (EMethodRef "pure") (ELit LUnit)))
 (DFunDef false "runEach" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "andThen") (EVar "x")) (ELam (PWild) (EApp (EDictApp "runEach") (EVar "xs")))))
