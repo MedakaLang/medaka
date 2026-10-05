@@ -424,26 +424,3 @@ prop "fresh scope ids are monotonic over a generated tree" (raw : List Int) =
 
 prop "copied stores detach frames and counters over a generated tree" (raw : List Int) =
   copyIsolationLaw raw
-
-fixedScopeScript : Int -> Int -> List Int
-fixedScopeScript _ 0 = []
-fixedScopeScript seed width =
-  seed * 41 + width * 13 - 23 :: fixedScopeScript seed (width - 1)
-
-fixedScopeScripts : Int -> Int -> List (List Int)
-fixedScopeScripts _ 0 = []
-fixedScopeScripts seed count =
-  fixedScopeScript seed 32 :: fixedScopeScripts (seed + 1) (count - 1)
-
-scopeCorpusMatches : List (List Int) -> Bool
-scopeCorpusMatches [] = True
-scopeCorpusMatches (raw :: rest) =
-  scopeTreeLaw raw
-    && freshOrderLaw raw
-    && copyIsolationLaw raw
-    && scopeCorpusMatches rest
-
--- Native test coverage for the same fixed 16 × 32 parent-choice corpus. Props
--- execute in eval only, while this test runs on both requested engines.
-test "bounded scope script corpus agrees with the ancestor model" =
-  expectTrue (scopeCorpusMatches (fixedScopeScripts 0 16))

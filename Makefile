@@ -126,6 +126,10 @@ test: medaka
 	##     typecheck_compiler_source.sh, but neither RUNS doctests, and `DataEnv`'s
 	##     deFieldOwnerIdents identity-collision case lives in one.
 	./medaka test compiler/types
+	## Support property siblings have no production entry and require explicit discovery.
+	./medaka test compiler/support/ordmap_test.mdk
+	./medaka test compiler/support/scc_test.mdk
+	./medaka test compiler/support/util_test.mdk
 	./medaka test compiler/eval/eval_test.mdk
 	## The shared free-variable walker in trmc_analysis.mdk drives TRMC safety and
 	## LLVM closure capture. Its sibling is outside the test roster

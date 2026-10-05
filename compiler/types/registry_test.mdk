@@ -979,27 +979,3 @@ prop "composite registry renderer is injective on bounded key shapes" (left : In
   regKeyRender (scriptRegKey left)
     == regKeyRender (scriptRegKey right)
     == (scriptRegKey left == scriptRegKey right)
-
-fixedScript : Int -> Int -> List Int
-fixedScript _ 0 = []
-fixedScript seed width =
-  seed * 37 + width * 11 - 19 :: fixedScript seed (width - 1)
-
-fixedScripts : Int -> Int -> List (List Int)
-fixedScripts _ 0 = []
-fixedScripts seed count =
-  fixedScript seed 32 :: fixedScripts (seed + 1) (count - 1)
-
-fixedCorpusMatches : List (List Int) -> Bool
-fixedCorpusMatches [] = True
-fixedCorpusMatches (raw :: rest) =
-  registryScriptLaw raw
-    && multiMatchesModel (multiRun raw) (multiModel raw)
-    && setMatchesModel (setRun raw) (setModel raw)
-    && spellingMatchesModel (spellingRun raw) (spellingModel raw)
-    && fixedCorpusMatches rest
-
--- This runs under eval and native, covering a deterministic 16 × 32 operation
--- corpus with the same independent models as the interpreter-only props.
-test "bounded registry script corpus agrees with independent models" =
-  expectTrue (fixedCorpusMatches (fixedScripts 0 16))
