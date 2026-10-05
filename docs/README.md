@@ -91,7 +91,9 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`BYTES-DESIGN.md`](design/BYTES-DESIGN.md) | Bytes — a packed byte string for Medaka | B1, B2 and B3 have all shipped |
 | [`CAPABILITY-EFFECTS.md`](design/CAPABILITY-EFFECTS.md) | Capability-safe effects — Medaka's headline direction | PARTIAL |
 | [`CAPABILITY-PLATFORM.md`](design/CAPABILITY-PLATFORM.md) | The capability platform — runtime/product architecture | OPEN |
+| [`D3-DEFAULTING-DESIGN.md`](design/D3-DEFAULTING-DESIGN.md) | Numeric defaulting at a multi-parameter goal — the D3 rule, determination, and the settle sequence | design pass, 2026-10-03/04 |
 | [`EFFECTS-CONFORMANCE-ROADMAP.md`](design/EFFECTS-CONFORMANCE-ROADMAP.md) | Effect-and-Capability Conformance Roadmap | PARTIAL |
+| [`EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md`](design/EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md) | Effects issues against the architecture | REVIEWED |
 | [`GAP3-SLICE7-DESIGN.md`](design/GAP3-SLICE7-DESIGN.md) | Gap 3 — slice-7 arg-tag dispatch on a generic prelude free function | OPEN |
 | [`GZIP-DESIGN.md`](design/GZIP-DESIGN.md) | DEFLATE / gzip — a compression codec in pure Medaka | PARTIAL |
 | [`INTEGER-TYPES-DESIGN.md`](design/INTEGER-TYPES-DESIGN.md) | The integer stack | — |
@@ -101,6 +103,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`LANGUAGE-SURFACE-AUDIT.md`](design/LANGUAGE-SURFACE-AUDIT.md) | LANGUAGE-SURFACE-AUDIT.md | OPEN |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
 | [`REGEX-DESIGN.md`](design/REGEX-DESIGN.md) | Regular expressions in the stdlib | — |
+| [`TARGETS-DESIGN.md`](design/TARGETS-DESIGN.md) | Targets and host profiles | OPEN |
 
 ### ops — release, testing, distribution
 
@@ -117,7 +120,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`PDS-B14-ATTACK-LIST.md`](ops/PDS-B14-ATTACK-LIST.md) | PDS B14 running-instance attack list | — |
 | [`PDS-CONFORMANCE-WALKTHROUGH.md`](ops/PDS-CONFORMANCE-WALKTHROUGH.md) | PDS-CONFORMANCE-WALKTHROUGH.md — criterion A8, run by hand from the official app | written ahead of the first G-QUIET deploy |
 | [`PDS-CRYPTO-CLAIMS.md`](ops/PDS-CRYPTO-CLAIMS.md) | PDS-CRYPTO-CLAIMS.md — what the PDS cryptography claims, and what it does not | written for G-ANNOUNCE |
-| [`PDS-DEPLOY.md`](ops/PDS-DEPLOY.md) | PDS-DEPLOY.md — deploying `pds serve` behind Caddy under systemd | IMPLEMENTED, not yet DEPLOYED |
+| [`PDS-DEPLOY.md`](ops/PDS-DEPLOY.md) | PDS-DEPLOY.md — deploying `pds serve` behind Caddy under systemd | IMPLEMENTED and DEPLOYED |
 | [`PDS-LAUNCH-PLAN.md`](ops/PDS-LAUNCH-PLAN.md) | PDS-LAUNCH-PLAN.md — the road to "this account runs on a PDS written in Medaka" | OPEN |
 | [`PDS-ORACLE.md`](ops/PDS-ORACLE.md) | PDS-ORACLE.md — running the official Bluesky PDS locally as the Phase 0/1 oracle | IMPLEMENTED |
 | [`PDS-RUNBOOK.md`](ops/PDS-RUNBOOK.md) | PDS-RUNBOOK.md — the release ritual for a PDS deploy | written ahead of the first G-QUIET deploy |
@@ -126,6 +129,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`TESTING-ARCHITECTURE.md`](ops/TESTING-ARCHITECTURE.md) | TESTING-ARCHITECTURE.md — the target testing architecture, and the migration to it | PROPOSED 2026-09-03, from a two-round survey at `5397afc9c` |
 | [`TESTING-DESIGN.md`](ops/TESTING-DESIGN.md) | TESTING-DESIGN.md — a coherent testing architecture for Medaka | SUPERSEDED as a plan, 2026-09-03 |
 | [`TESTING-INVENTORY.md`](ops/TESTING-INVENTORY.md) | TESTING-INVENTORY.md — which gates can be native today, and what blocks the rest | — |
+| [`TOOLING-REFERENCE.md`](ops/TOOLING-REFERENCE.md) | TOOLING-REFERENCE.md — build cache, lint cache, editors, and the source layout | REFERENCE |
 
 ### stdlib — library plan
 
@@ -190,7 +194,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`ARCH-REVIEW.md`](../compiler/ARCH-REVIEW.md) | Medaka Architecture Review | PARTIAL |
 | [`ARGSTAMP-UNIFY-PLAN.md`](../compiler/ARGSTAMP-UNIFY-PLAN.md) | ARGSTAMP-UNIFY-PLAN.md — retire the `emitArgStampPasses` eval-vs-emit dispatch fork | IMPLEMENTED |
 | [`BOOTSTRAP.md`](../compiler/BOOTSTRAP.md) | BOOTSTRAP.md — Native self-compile slices | IMPLEMENTED |
-| [`COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`](../compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md) | Composite-`main` Auto-Print — Design (Option A: uniform auto-print) | PARTIAL |
+| [`COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`](../compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md) | Composite-`main` Auto-Print — Design (Option A: uniform auto-print) | IMPLEMENTED on every verb |
 | [`CONSTRUCT-COVERAGE.md`](../compiler/CONSTRUCT-COVERAGE.md) | CONSTRUCT-COVERAGE.md — `medaka build` native coverage matrix | PARTIAL |
 | [`DIAGNOSTIC-CODES-DESIGN.md`](../compiler/DIAGNOSTIC-CODES-DESIGN.md) | DIAGNOSTIC-CODES-DESIGN.md | IMPLEMENTED |
 | [`DIAGNOSTICS-SURFACING-PLAN.md`](../compiler/DIAGNOSTICS-SURFACING-PLAN.md) | DIAGNOSTICS-SURFACING-PLAN.md — native `check` error positions + messages (WS-4 / F6) | IMPLEMENTED |
@@ -198,7 +202,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`DISPATCH-INVENTORY.md`](../compiler/DISPATCH-INVENTORY.md) | DISPATCH-INVENTORY.md | PARTIAL |
 | [`DRIVER-COLLAPSE-PLAN.md`](../compiler/DRIVER-COLLAPSE-PLAN.md) | DRIVER-COLLAPSE-PLAN.md — collapse the dual single-file / multi-module drivers | PARTIALLY IMPLEMENTED |
 | [`EAGER-INIT-DESIGN.md`](../compiler/EAGER-INIT-DESIGN.md) | EAGER-INIT-DESIGN — closing the shared eager-global init-order hole (#553, S0) | COMPLETE |
-| [`EFFECTS-ARCHITECTURE.md`](../compiler/EFFECTS-ARCHITECTURE.md) | Effects within the typechecker | DELIVERED THROUGH ITEM 6 |
+| [`EFFECTS-ARCHITECTURE.md`](../compiler/EFFECTS-ARCHITECTURE.md) | Effects within the typechecker | PARTIAL |
 | [`EMITTER-ARCH-BUG-FIT.md`](../compiler/EMITTER-ARCH-BUG-FIT.md) | Emitter target architecture - per-bug fit ledger | RE-DERIVED 2026-09-03 |
 | [`EMITTER-ARCHITECTURE.md`](../compiler/EMITTER-ARCHITECTURE.md) | Emitter Architecture - the derived current map | CURRENT - source-derived LLVM/WasmGC emitter map, re-derived 2026-09-03 at `7132909b7` |
 | [`EMITTER-GAPS.md`](../compiler/EMITTER-GAPS.md) | EMITTER-GAPS.md | PARTIAL |

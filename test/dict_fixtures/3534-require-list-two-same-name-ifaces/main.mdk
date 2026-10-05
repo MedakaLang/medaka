@@ -1,0 +1,3 @@
+import mc.{both, W(..)}
+
+main = println (both (W (7 : Int)))

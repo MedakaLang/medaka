@@ -1,0 +1,13 @@
+import string.{toUpper, reverse, contains, replace, split, join, trim, toChars}
+
+main =
+  let s = "Hello, Medaka"
+  println (toUpper s)
+  println (reverse s)
+  println (contains "Med" s)
+  println (replace "Medaka" "World" s)
+  println (split ", " s)
+  println (join "-" ["a", "b", "c"])
+  println (trim "  padded  ")
+  println (length (toChars s))
+  println (s ++ "!")

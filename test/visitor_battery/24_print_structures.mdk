@@ -1,0 +1,8 @@
+data Color = Red | Green | Blue
+
+main =
+  println [1, 2, 3]
+  println (Some 1)
+  println (1, "a", True)
+  println (Ok (-3) : Result String Int)
+  println [Some 1, None]

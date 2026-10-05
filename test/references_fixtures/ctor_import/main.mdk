@@ -1,0 +1,6 @@
+-- entry
+import plain
+import all
+
+main : Int
+main = 0

@@ -1,0 +1,31 @@
+-- #2435 shadow: same names and types as stdlib list's lookup/reverse/sortOn,
+-- but sortOn sorts DESCENDING.
+export
+reverse : List a -> List a
+reverse xs = revGo xs []
+
+revGo : List a -> List a -> List a
+revGo xs acc = match xs
+  [] => acc
+  (y :: ys) => revGo ys (y :: acc)
+
+export
+lookup : Eq k => k -> List (k, v) -> Option v
+lookup k xs = match xs
+  [] => None
+  ((k2, v) :: rest) => if k == k2 then Some v else lookup k rest
+
+export
+sortOn : Ord b => (a -> <e> b) -> List a -> <e> List a
+sortOn f xs = match xs
+  [] => []
+  (y :: ys) => insertDesc f y (sortOn f ys)
+
+insertDesc : Ord b => (a -> <e> b) -> a -> List a -> <e> List a
+insertDesc f x ys = match ys
+  [] => [x]
+  (z :: zs) => if f x >= f z then x :: ys else z :: insertDesc f x zs
+
+export
+mine : Int
+mine = 7

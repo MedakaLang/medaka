@@ -1,0 +1,4 @@
+public export data Col = Red Int | Green
+
+export mk : Col
+mk = Red 5

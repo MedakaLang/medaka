@@ -6,26 +6,33 @@
 // server.  This dogfoods compile.mjs: it does no host-ABI/vfs work itself.
 //
 // Usage:
-//   node dev_compile_node.mjs <playground.wasm> <runtime.mdk> <core.mdk> <user.mdk>
+//   node dev_compile_node.mjs <playground.wasm> <runtime.mdk> <core.mdk> <user.mdk> [extra.mdk ...]
+// Each extra.mdk is registered as stdlib module <basename>, as the browser
+// registers the modules it ships.
 //
 // Output:
 //   clean program  → the emitted WAT on stdout (exit 0);
 //   broken program → the check --json diagnostics on stdout (exit 1).
 import fs from 'node:fs';
+import path from 'node:path';
 import { loadCompiler, compile } from './compile.mjs';
 
 const argv = process.argv.slice(2);
 if (argv.length < 4) {
-  console.error('usage: dev_compile_node.mjs <playground.wasm> <runtime.mdk> <core.mdk> <user.mdk>');
+  console.error('usage: dev_compile_node.mjs <playground.wasm> <runtime.mdk> <core.mdk> <user.mdk> [extra.mdk ...]');
   process.exit(2);
 }
-const [wasmPath, runtimePath, corePath, userPath] = argv;
+const [wasmPath, runtimePath, corePath, userPath, ...extraPaths] = argv;
 
 const wasm = await loadCompiler(wasmPath);
 const stdlib = {
   runtime: fs.readFileSync(runtimePath, 'utf8'),
   core: fs.readFileSync(corePath, 'utf8'),
 };
+if (extraPaths.length) {
+  stdlib.extra = {};
+  for (const p of extraPaths) stdlib.extra[path.basename(p, '.mdk')] = fs.readFileSync(p, 'utf8');
+}
 const source = fs.readFileSync(userPath, 'utf8');
 
 const r = await compile(source, { wasm, stdlib });

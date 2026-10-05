@@ -1,0 +1,8 @@
+-- Two value declarations, `f` and `g`, of one module.
+export
+f : Int -> Int
+f x = x + 1
+
+export
+g : Int -> Int
+g x = x + 1000

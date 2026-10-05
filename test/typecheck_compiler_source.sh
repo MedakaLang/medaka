@@ -205,16 +205,33 @@ ratchet_name_live_in() {
   grep -wE "$1" "$2" | grep -qvE '^[[:space:]]*--'
 }
 # ratchet_producer_files PATTERN
-#   Prints the sorted, newline-separated list of tracked `.mdk` files that
-#   mention PATTERN outside a leading-comment line (empty output => no hits).
+#   Prints the sorted, newline-separated list of tracked-or-untracked
+#   (non-ignored) `.mdk` files that mention PATTERN outside a leading-comment
+#   line (empty output => no hits). `--untracked` is load-bearing: plain
+#   `git grep` sees tracked files only, so a new violating file passed (#1222).
 ratchet_producer_files() {
-  git -C "$ROOT" grep -lwE -- "$1" -- '*.mdk' 2>/dev/null \
+  git -C "$ROOT" grep --untracked -lwE -- "$1" -- '*.mdk' 2>/dev/null \
     | while IFS= read -r f; do
         if ratchet_name_live_in "$1" "$ROOT/$f"; then
           echo "$f"
         fi
       done | sort
 }
+
+# Self-check (#1222): the helper must see an UNTRACKED violating file. Runs against
+# a throwaway repo so the real tree is never written.
+(
+  ROOT="$(mktemp -d)"
+  trap 'rm -rf "$ROOT"' EXIT
+  git -C "$ROOT" init -q
+  printf 'x = OriginUnresolved\n' > "$ROOT/untracked_violator.mdk"
+  got=$(ratchet_producer_files 'OriginUnresolved')
+  if [ "$got" != "untracked_violator.mdk" ]; then
+    echo "FAIL: ratchet_producer_files missed an untracked violating .mdk (#1222); got: '$got'"
+    exit 1
+  fi
+) || exit 1
+echo "  ok: ratchet helper sees untracked files"
 
 # ── #1110 §8 I6.3 producer ratchet ─────────────────────────────────────────
 # `OriginUnresolved` (frontend/ast.mdk) is the "no identity was available"
@@ -325,10 +342,6 @@ declun_allowed="compiler/entries/fuzz_gen_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/parser.mdk
 compiler/tools/printer.mdk"
-# â ï¸ Inherits #1222: `git grep` sees only TRACKED files, so an UNTRACKED `.mdk`
-# calling one of these post-resolve passes this check. Character-for-character the
-# same construction as the two sibling ratchets, and fixed in the same place when
-# #1222 lands â not worked around here, so all three move together.
 declun_actual=$(ratchet_producer_files 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved')
 if [ "$declun_actual" != "$declun_allowed" ]; then
   echo "FAIL: the #1110 decl-layer unresolved-producer set changed."
@@ -359,7 +372,7 @@ echo "  ok: $(printf '%s\n' "$declun_actual" | grep -c .) decl-layer producer fi
 # gets lost.
 # ⚠️ `compiler/types/route_key.mdk` IS ON THIS LIST FOR ITS DOCTEST FIXTURES ALONE,
 # and it has been RED SINCE `B-2.2-a` LANDED THAT FILE (2026-08-13) — this ratchet
-# is a `git grep` over TRACKED files, not over an import closure, so the module was
+# is a `git grep` over tracked and untracked files, not over an import closure, so the module was
 # never invisible to it; `a` simply ran no gate beyond build/check-self/snapshot and
 # nobody looked. Recorded rather than quietly fixed, because "a call-site-free module
 # is in no gate" is true of the COMPILER's gates and false of this one.
@@ -378,8 +391,6 @@ occun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/desugar.mdk
 compiler/frontend/parser.mdk
 compiler/types/route_key.mdk"
-# ⚠️ Inherits #1222 exactly as the two ratchets above do: `git grep` sees only
-# TRACKED files. Same construction on purpose, so all three move together.
 occun_actual=$(ratchet_producer_files 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved')
 if [ "$occun_actual" != "$occun_allowed" ]; then
   echo "FAIL: the #1110 interface-occurrence unresolved-producer set changed."
@@ -726,6 +737,8 @@ echo "checking #1110 Mono.TCon mint set ..."
 #     absent-origin rule. In source order: `unifyN`, `cohGoR`, `cohStep` (two
 #     lines: the general-side match and its `TCon`/`TCon` inner arm), `cohEqR`,
 #     `matchStep`, `monoSameGiven` (two lines, same reason as `cohStep`).
+#   `matchEqR` — checks the full type of repeated impl-head bindings, while
+#     keeping the same origin-sensitive constructor identity rule.
 #   `(TCon n1 o1, TCon n2 o2) =>`  — `tconIdConflict` (read by `firstIdConflict` and `headIdConflict`), #1111 A-2.10: the DIAGNOSTIC
 #     side of the same rule. It finds the head whose two identities conflict so the
 #     otherwise-unreadable `Type mismatch: T vs T` can name the two modules. It is a
@@ -749,6 +762,7 @@ cohGoR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
 TCon a oa => match s
 TCon b ob => if sameTyConHead a oa b ob then MOk else MFail
 cohEqR (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+matchEqR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
 TCon n2 o2 => if sameTyConHead n o n2 o2 then MOk else MFail
 TCon x ox => match peelQual b
 TCon y oy => sameTyConHead x ox y oy
@@ -1096,7 +1110,7 @@ require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
 require_typecheck_arm liveNumVarGo takeFirst 'OpNumLit occ => match findTvarInMono occ id'
 require_typecheck_arm noteNumericObligationChecked checkOneCallObligation '(_, OpNumLit _) =>'
-require_typecheck_arm groundMultiParamObligations groundOneObligation 'OpNumLit _ => ()'
+require_typecheck_arm determineByUniqueInstanceGo determineGoal 'uOblArgs o'
 require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpNumLit _ =>'
 require_typecheck_arm oblPredOf vecOblOfPred 'OpNumLit _ => match o.pred.args'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpNumLit occ => match normalize occ'
@@ -1187,7 +1201,6 @@ require_typecheck_arm numObligIds finalizeNumBoundary 'monoUnboundIds request.mr
 require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpExactReturn request =>'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'request.mrrScope'
 require_typecheck_arm liveNumVarGo takeFirst 'findTvarInMono request.mrrOccurrence id'
-require_typecheck_arm groundMultiParamObligations groundOneObligation 'request.mrrOccurrence'
 require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpExactReturn request =>'
 require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match methodReturnArgs request'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpExactReturn request => match normalize request.mrrOccurrence'
@@ -1297,7 +1310,8 @@ printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
 done || exit 1
 
 numeric_boundary_expected="$(printf '%s\n' "$numeric_boundaries" | wc -l | tr -d ' ')"
-numeric_boundary_actual="$(grep -Fc 'let _ = finalizeNumBoundary' "$predicate_slot_src")"
+# A group and a method body keep the candidates D3 clause 3 withheld for their verdict.
+numeric_boundary_actual="$(grep -Ec 'let (_|withheld) = finalizeNumBoundary' "$predicate_slot_src")"
 if [ "$numeric_boundary_actual" -ne "$numeric_boundary_expected" ]; then
   echo "FAIL: numeric boundary descriptor census changed: $numeric_boundary_actual calls, $numeric_boundary_expected checked boundaries"
   exit 1

@@ -59,6 +59,7 @@ import lib.sync_event.{
   syncCommitFrame,
 }
 import lib.tid.{Tid, tidParse}
+import lib.sign.{Sign}
 
 data Op = Op {
   action : String,
@@ -334,7 +335,7 @@ countMatches (op :: ops) (observed :: rest) =
   (if sameOptionCid op.prevCid observed then 1 else 0) + countMatches ops rest
 countMatches _ _ = panic "commit_event: op/observation length mismatch"
 
-gradeStep : String -> Step -> Cid -> Repo -> <IO> (Grade, Repo)
+gradeStep : String -> Step -> Cid -> Repo -> <IO, Sign "commit"> (Grade, Repo)
 gradeStep did step priorData repo =
   let before = repoTree repo
   let observed = observedPrevs step.ops repo
@@ -383,7 +384,12 @@ gradeWord : Bool -> String
 gradeWord True = "PASS"
 gradeWord False = "FAIL"
 
-runSteps : String -> List Step -> Cid -> Repo -> List Grade -> <IO> List Grade
+runSteps : String ->
+  List Step ->
+  Cid ->
+  Repo ->
+  List Grade ->
+  <IO, Sign "commit"> List Grade
 runSteps _ [] _ _ grades = reverse grades
 runSteps did (step :: rest) priorData repo grades =
   let (grade, next) = gradeStep did step priorData repo
@@ -439,7 +445,7 @@ sumBy pick grades = sum (map pick grades)
 flag : (Grade -> Bool) -> Grade -> Int
 flag pick grade = if pick grade then 1 else 0
 
-main : <IO, Env, FileRead> Unit
+main : <Env, FileRead, IO, Sign "commit"> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message => panic "commit_event: cannot read corpus: \{message}"

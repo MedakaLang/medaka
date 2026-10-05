@@ -1,6 +1,6 @@
 ---
 name: add-lsp-capability
-description: Add or extend a Language Server Protocol feature in compiler/tools/lsp.mdk — advertise the capability, implement the request handler, and wire it into dispatch. Use when adding editor features like hover, completion, code actions, references, rename, or extending existing LSP behavior.
+description: Add or extend an LSP feature in compiler/tools/lsp.mdk (hover, completion, code actions, references, rename, …).
 ---
 
 # Add an LSP capability

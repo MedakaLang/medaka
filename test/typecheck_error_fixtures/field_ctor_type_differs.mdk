@@ -1,0 +1,10 @@
+-- #3726 — `.x` on a receiver of type `T`, whose two constructors both declare `x`
+-- at the SAME position but with different types.  The slot agrees, so the
+-- position test alone accepted it; the access is typed by the selected
+-- constructor's declaration with no tag test, and the built binary printed a
+-- `String`'s heap address as an `Int` for a `B` value at exit 0.  A field must
+-- have one type across every constructor that holds it; this one must reject.
+data T = A { x : Int } | B { x : String }
+
+getX : T -> Int
+getX v = v.x

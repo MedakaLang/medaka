@@ -1,0 +1,22 @@
+issue: 2251
+what: string interpolation desugars `"\{e}"` to a call of `display` by bare name
+what: (`interpPartToExpr`, compiler/frontend/desugar.mdk), so a user interface method
+what: that happens to be called `display` captures it. main.mdk declares
+what: `interface Ifc c where display : c -> String` with `impl Ifc Int` returning
+what: "HIJACKED"; `println "\{7}"` then prints `HIJACKED` instead of `7` on `check`,
+what: `run` and the built binary, all at exit 0 with no diagnostic. With
+what: `display : c -> Int` the same program is falsely rejected ("Type mismatch:
+what: String vs Int"). The prelude shadow census cannot see this name class (#2253).
+cmd: run main.mdk
+exit: 0
+stdout: HIJACKED
+control: run control.mdk
+why-verb: `run`, because the defect is a silent wrong value at exit 0. The fix makes
+why-verb: interpolation reach the prelude's `display`, so `run` prints `7` and this row
+why-verb: drains. A fix that instead rejected the program would also drain it (exit 1).
+why-stdout: `HIJACKED` is the user method's literal body, so it can only appear if the
+why-stdout: interpolation called that method; nothing else in the program produces it.
+why-control: control.mdk is the same program with the method renamed to `render`. It
+why-control: must print `7` at exit 0: interpolation of an Int beside an unrelated
+why-control: same-shaped interface works. A red control means interpolation itself broke,
+why-control: never that #2251 drained.

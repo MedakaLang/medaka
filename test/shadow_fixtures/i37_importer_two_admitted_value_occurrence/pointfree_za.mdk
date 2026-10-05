@@ -1,0 +1,16 @@
+-- I37 (#3678) S2-DECL (d): a point-free top-level binding (`g = mth`) of an
+-- imported standalone `mth` while two interfaces declaring `mth` are admitted (each
+-- named in its own import clause), with `zmodI` before `amodI`.  A value occurrence
+-- applies no argument, so neither declaration's receiver can be evaluated there and the
+-- two have not been shown to agree: the located `T-AMBIGUOUS-SHADOW-DECL` at the
+-- occurrence, on every verb and in both import orders.  `impl IA String` (55) and
+-- `impl IZ String` (7) make the two declarations disagree at a `String` receiver, so
+-- binding the standalone (99) is a wrong answer, not a harmless pick.
+import fmodI.{mth}
+import zmodI.{IZ, zf}
+import amodI.{IA, af}
+
+g : String -> Int -> Int
+g = mth
+
+main = println (g "abc" 5 + af 0 + zf 0)

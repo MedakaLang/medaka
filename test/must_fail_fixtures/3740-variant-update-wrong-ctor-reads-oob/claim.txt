@@ -1,0 +1,17 @@
+issue: 3740
+what: a variant update `A { mkB | x = 5 }` on a value built by a different constructor
+what: (`mkB = B { x = 1 }`) passes `check`. `run` panics (`evalVariantUpdate: expected A
+what: got B`), but the native binary copies B's one field into an A and reads `y` past the
+what: end of the object, printing `A 5 0` at exit 0: a silent, memory-unsafe wrong answer.
+cmd: build-run main.mdk
+exit: 0
+stdout: A 5 0
+control: build-run control.mdk
+why-verb: `build-run`, because the S0 half is the native binary. `run` already fails loudly,
+why-verb: so it cannot pin this. A runtime tag check makes the binary exit nonzero, and a
+why-verb: check-time reject makes `build` fail (reported here as a build-run MALFORMED row):
+why-verb: either way this row stops reproducing, so read a MALFORMED here as a drain.
+why-stdout: `0` is whatever word follows B's single field; it was stable across five runs.
+why-stdout: If it ever varies without a fix, re-derive before reading a red row as a drain.
+why-control: control.mdk builds `mkB` with constructor A, so the update is well-formed; it
+why-control: must print `A 5 2` at exit 0. A red control means variant update broke.

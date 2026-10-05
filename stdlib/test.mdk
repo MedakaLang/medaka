@@ -233,7 +233,9 @@ expectErrContains needle r =
    > expectOkThen (n => expectEqual 1 n) (Ok 1 : Result String Int)
    Pass "1" "1"
    > expectOkThen (n => expectEqual 1 n) (Err "boom" : Result String Int)
-   Fail "expected Ok but got Err boom" "Ok _" "Err \"boom\"" -}
+   Fail "expected Ok but got Err boom" "Ok _" "Err \"boom\""
+   > expectOkThen (n => expectEqual 1 n) (Err (Some 7) : Result (Option Int) Int)
+   Fail "expected Ok but got Err (Some 7)" "Ok _" "Err (Some 7)" -}
 export
 expectOkThen : (Debug e, Display e) =>
   (a -> Expectation) ->
@@ -241,7 +243,10 @@ expectOkThen : (Debug e, Display e) =>
   Expectation
 expectOkThen k (Ok v) = k v
 expectOkThen _ (Err e) =
-  Fail "expected Ok but got Err \{display e}" "Ok _" "Err \{debug e}"
+  Fail
+    "expected Ok but got Err \{derivedShowWrap (display e)}"
+    "Ok _"
+    "Err \{derivedShowWrap (debug e)}"
 
 {- | Passes when the option is `Some`.
 
@@ -429,7 +434,7 @@ expectEqualLines expected actual =
   else
     Fail (diffLineMsg 1 (lines expected) (lines actual)) expected actual
 
--- Helper for expectAll: accumulate the first Fail, or stay Pass.  An
+-- expectEach's accumulator: keep the first Fail, or stay Pass.  An
 -- aggregate pass has no single pair of operands to report, so it collapses
 -- to `pass` rather than keeping some arbitrary member's.
 expectAllStep : Expectation -> Expectation -> Expectation
@@ -439,15 +444,24 @@ expectAllStep (Pass _ _) (Pass _ _) = pass
 
 {- | Passes when every expectation in the list passes.
 
-   The result is the first `Fail`, when there is one.
+   The result is the first `Fail`, with its message prefixed by the member's
+   position and the list's length, so a long list locates the failing fact.
+   The `Fail`'s operands are that member's own.
 
    > expectAll [pass, pass, pass]
    Pass "" ""
    > expectAll [pass, fail "oops", pass]
-   Fail "oops" "" "" -}
+   Fail "member 2 of 3: oops" "" ""
+   > expectAll [expectEqual 1 1, expectEqual 2 3, expectEqual 4 5]
+   Fail "member 2 of 3: expected 2 but got 3" "2" "3" -}
 export
 expectAll : List Expectation -> Expectation
-expectAll es = fold expectAllStep pass es
+expectAll es = expectAllAt 1 (length es) es
+
+expectAllAt : Int -> Int -> List Expectation -> Expectation
+expectAllAt _ _ [] = pass
+expectAllAt k n ((Pass _ _) :: rest) = expectAllAt (k + 1) n rest
+expectAllAt k n ((Fail msg e a) :: _) = Fail "member \{k} of \{n}: \{msg}" e a
 
 {- | The expectation with `label` prefixed onto its message when it is a
    `Fail`, and unchanged when it is a `Pass`.
@@ -476,7 +490,8 @@ labelFail label (Fail m e a) = Fail "\{label}: \{m}" e a
    Fail "b: oops" "" "" -}
 export
 expectEach : List (String, Expectation) -> Expectation
-expectEach rows = expectAll (map ((label, e) => labelFail label e) rows)
+expectEach rows =
+  fold expectAllStep pass (map ((label, e) => labelFail label e) rows)
 
 -- # Grading a check's findings
 

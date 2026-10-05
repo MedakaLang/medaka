@@ -1,0 +1,5 @@
+deep : Int -> Int
+deep 0 = 0
+deep n = 1 + deep (n - 1)
+
+prop "deep recursion past the wall" (n : Int) = eq (deep 100000) 100000

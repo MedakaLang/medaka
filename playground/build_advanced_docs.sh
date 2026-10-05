@@ -40,7 +40,11 @@ exec node "$SCRIPT_DIR/render_docs.mjs" \
   --repo-root "$REPO_ROOT" \
   --nav-link "Guide=../guide/index.html" \
   --nav-link "Stdlib=../stdlib/index.html" \
+  --nav-link "Blog=../blog/index.html" \
   --nav-link "GitHub=https://github.com/MedakaLang/medaka" \
+  --site-url "https://medaka-lang.dev/advanced" \
+  --og-image "https://medaka-lang.dev/og-card.png" \
+  --og-image-alt "Medaka, a practical functional language." \
   --sibling "guide=../guide" \
   --sibling-exclude "guide=OUTLINE.md" \
   --sibling "stdlib=../stdlib" \

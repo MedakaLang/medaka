@@ -1,0 +1,13 @@
+-- §3 determination, #3437's Bytes face with the comparison inside a local
+-- `let`.  The goal `Index Bytes Int ?v` is the same as in
+-- `determine-bytes-index-literal-compare.mdk`, and the one unifying instance
+-- `Index Bytes Int U8` fixes `?v = U8` before the literal defaults.
+-- Hand-derived: byte 0 of [13, 10] is 13, so `hit` is True on all three verbs.
+import bytes.{Bytes, fromArrayAssumeByteDomain}
+
+isCr : Bytes -> Int -> Bool
+isCr input pos =
+  let hit = input[pos] == 13
+  hit
+
+main = println (isCr (fromArrayAssumeByteDomain [|13, 10|]) 0)

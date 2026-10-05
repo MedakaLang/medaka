@@ -1,0 +1,2 @@
+export f : a -> String
+f _ = "q"

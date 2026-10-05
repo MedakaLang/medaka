@@ -645,7 +645,7 @@ table = [
   Row {
     entry = "i22_importer_member_alias_not_nameable/main.mdk",
     label =
-      "I22 the method arrives under a MEMBER ALIAS. 🚨 PINS A KNOWN-WRONG ANSWER and does NOT claim 7 is correct: under S1-NS (a)(ii) the VALUE arm admits a method the import path makes CALLABLE, and the only name this module can write for it is `sz` -- it cannot write `size` for the method at all -- so `size` denotes fmod standalone and 99 is correct. MECHANISM: selectIfaceRows narrows by member ORIGIN (map fst bs), so {size as sz} admits `size` rather than `sz`. 🚨 THE FIX SHAPE IS NOT KNOWN AND THE OBVIOUS ONE IS INERT -- this row used to say the fix was one token, key the VALUE arm on snd. It cannot move this row, derivably: elaborateModules calls renameAliasedMethods (its only call site) BEFORE it writes graphIfaceMethodsRef and before the mark pass, and that rewrites {size as sz} to {size}, so snd == fst by the time selectIfaceRows runs. A reviewer implemented the one-token change, rebuilt, and measured main.mdk still at 7. Any real fix spans both functions and is a design question. NOT A REGRESSION -- base prints 7 too, so the member-alias arm is exactly where this unit changes nothing -- and re-keying is a behaviour change on an axis no ruling covers, so it is PINNED to self-drain rather than fixed here. An earlier source comment called this deviation unobservable because aliased method imports were broken; both halves are false (`sz \"ab\"` prints 7, and this pair reaches the difference)",
+      "I22 the method arrives under a MEMBER ALIAS. PINS A KNOWN-WRONG ANSWER and does NOT claim 7 is correct: under S1-NS (a)(ii) the VALUE arm admits a method the import path makes CALLABLE, and the only name this module can write for it is `sz` -- it cannot write `size` for the method at all -- so `size` denotes fmod standalone and 99 is correct. MECHANISM: selectIfaceRows narrows by member ORIGIN (map fst bs), so {size as sz} admits `size` rather than `sz`. THE FIX SHAPE IS NOT KNOWN AND THE OBVIOUS ONE IS INERT -- this row used to say the fix was one token, key the VALUE arm on snd. It cannot move this row, derivably: elaborateModules calls renameAliasedMethods (its only call site) BEFORE graphPreamble writes declEnvsRef (whose deMethods the method scope reads) and before the mark pass, and that rewrites {size as sz} to {size}, so snd == fst by the time selectIfaceRows runs. A reviewer implemented the one-token change, rebuilt, and measured main.mdk still at 7. Any real fix spans both functions and is a design question. NOT A REGRESSION -- base prints 7 too, so the member-alias arm is exactly where this unit changes nothing -- and re-keying is a behaviour change on an axis no ruling covers, so it is PINNED to self-drain rather than fixed here. An earlier source comment called this deviation unobservable because aliased method imports were broken; both halves are false (`sz \"ab\"` prints 7, and this pair reaches the difference)",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -765,11 +765,11 @@ table = [
   Row {
     entry = "x7_composite_main_autoprint_no_shadow.mdk",
     label =
-      "X7 (#2155) the CONTROL for x6 and the half a one-directional fix breaks: no interface, no shadow, a bare non-Unit VALUE main -- the cell the auto-print wrap exists FOR (COMPOSITE-MAIN-AUTOPRINT-DESIGN section 10). x6 stops the wrap firing on a Unit main; narrowing that gate one step further -- disabling the wrap on the check path, or reading main`s type from a ref still empty -- turns this row`s `(1, abc)` into an EMPTY stdout at exit 0, which no ACCEPT/REJECT column can see. Hence the value pin. `run` REJECTs BY DESIGN, not by defect (#1681: `medaka run` exits 1 whenever the W-MAIN-SHAPE warning fires, because run never applies or prints a non-Unit main and exit 0 there was indistinguishable from a clean run), so the mode is BUILD_EXACT",
+      "X7 (#2155) the CONTROL for x6 and the half a one-directional fix breaks: no interface, no shadow, a bare non-Unit VALUE main -- the cell the auto-print wrap exists FOR (COMPOSITE-MAIN-AUTOPRINT-DESIGN section 10). x6 stops the wrap firing on a Unit main; narrowing that gate one step further -- disabling the wrap on the check path, or reading main`s type from a ref still empty -- turns this row`s `(1, abc)` into an EMPTY stdout at exit 0, which no ACCEPT/REJECT column can see. Hence the value pin. `run` prints a non-Unit value main through the same wrap (#2413), so the mode is ALL_EXACT",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "(1, abc)\n",
   },
   Row {
@@ -873,6 +873,86 @@ table = [
     pinned = "20\n",
   },
   Row {
+    entry = "i37_importer_two_admitted_value_occurrence/main.mdk",
+    label =
+      "I37 (#3678) S2-DECL (d), the VALUE-OCCURRENCE limit of under-application: `ap2 mth \"abc\" 5`, the occurrence an argument to a higher-order function, where `mth` is an imported standalone and BOTH `IA` and `IZ` are admitted (each named in its own import clause; amodI before zmodI). A value occurrence applies no argument, so neither declaration`s receiver can be evaluated and the two have not been shown to agree -- the located T-AMBIGUOUS-SHADOW-DECL at the occurrence, on all three verbs, RULED 2026-10-01 (SHADOW-SEMANTICS.md S2-DECL (d) bullet 2). `impl IA String` (55) and `impl IZ String` (7) make the declarations disagree, so the pre-fix answer, the standalone`s 99 at exit 0, was a wrong value with no diagnostic. VERDICT DERIVED FROM THE CLAUSE, not captured",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/value_za.mdk",
+    label =
+      "I37 (#3678) `ap2 mth \"abc\" 5`, the occurrence an argument to a higher-order function; zmodI before amodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/pointfree_az.mdk",
+    label =
+      "I37 (#3678) `g = mth`, a point-free top-level binding; amodI before zmodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/pointfree_za.mdk",
+    label =
+      "I37 (#3678) `g = mth`, a point-free top-level binding; zmodI before amodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/let_az.mdk",
+    label =
+      "I37 (#3678) `let h = mth`, a point-free local binding; amodI before zmodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/let_za.mdk",
+    label =
+      "I37 (#3678) `let h = mth`, a point-free local binding; zmodI before amodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/flip_az.mdk",
+    label =
+      "I37 (#3678) `flip mth 5 \"abc\"`, the occurrence an argument to `flip`; amodI before zmodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "i37_importer_two_admitted_value_occurrence/flip_za.mdk",
+    label =
+      "I37 (#3678) `flip mth 5 \"abc\"`, the occurrence an argument to `flip`; zmodI before amodI. Same graph and same clause as the I37 main.mdk row: the located T-AMBIGUOUS-SHADOW-DECL on all three verbs, in both import orders (S2-DECL (e)). Pre-fix: 99 at exit 0",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
     entry = "x9_prelude_numlit_iface_method_own_impl.mdk",
     label =
       "X9 (#2157, S0) THE NUMERIC-LITERAL CELL of the prelude-method collision, and the corpus had none: x1-x8 all collide with a prelude name written as an IDENTIFIER, so every one of them grades what a bare occurrence denotes -- and a numeric literal mentions no identifier at all, which is precisely why no row could see this. `fromInt` is the PRELUDE `Num`s own method; declaring a user interface method of that name put a second row under the bare key `\"fromInt\"` in `methodIfaceParamsRef`, and `recordImplObligation`s `omLookup` (bare NAME, no interface identity, last-write-wins) then recorded EVERY numeric literals impl obligation against the USERs interface. #259 had already fixed the literals TYPE by identity (`seedNumLitFromIntScheme`); the OBLIGATION half still went through the spelling. MEASURED ON THE BASE BINARY (d5d71833, cold-built in this worktree, MEDAKA_STRICT=1): `medaka check` exit 1, `No impl of Buildable for Int` pointed at the literal `1000` -- three lines under an `impl Buildable Tag` that plainly exists. Both denotations are pinned by value so a fix that over-corrects is visible too: the ANNOTATED `fromInt 5` must still take `Buildable` (1005 = Tag (5 + 1000) unwrapped) while the bare literals take `Num` (3 = 1 + 2). Values hand-derived from the sources, not captured",
@@ -905,47 +985,47 @@ table = [
   Row {
     entry = "x12_autoprint_wrap_prelude_pin.mdk",
     label =
-      "X12 (#2185, S0) the COMPILER`S OWN synthesized `println` occurrence (the auto-print wrap), not a user-written one -- x6/x8 grade a user-written bare `println`, this grades the wrap`s synthetic one under the identical shadow (`impl Ifc Int where println n = n + 1000`, bare VALUE `main = 7`). MEASURED ON THE BASE BINARY (93a40382): check/build ACCEPT, built binary prints 1007 -- the wrap silently dispatched through the module`s own impl (S0: right-looking wrong number, no diagnostic). FIXED (this slice): the wrap no longer spells `println` at all, so it is not capturable -- built binary must print 7. `run` REJECTs BY DESIGN regardless (#1681, mirrors x7/x11: a non-Unit VALUE main), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`, not captured",
+      "X12 (#2185, S0) the COMPILER`S OWN synthesized `println` occurrence (the auto-print wrap), not a user-written one -- x6/x8 grade a user-written bare `println`, this grades the wrap`s synthetic one under the identical shadow (`impl Ifc Int where println n = n + 1000`, bare VALUE `main = 7`). MEASURED ON THE BASE BINARY (93a40382): check/build ACCEPT, built binary prints 1007 -- the wrap silently dispatched through the module`s own impl (S0: right-looking wrong number, no diagnostic). FIXED (this slice): the wrap no longer spells `println` at all, so it is not capturable -- built binary must print 7. `run` prints a non-Unit VALUE main through the same wrap (#2413, mirrors x7), graded ALL_EXACT. Value hand-derived from the literal `main = 7`, not captured",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "7\n",
   },
   Row {
     entry = "x13_autoprint_wrap_prelude_pin_noimpl.mdk",
     label =
-      "X13 (#2185, S0, packet §4b LICENSED FLIP) x12`s NO-IMPL sibling: `Ifc` declares a method literally named `println` but NO impl exists anywhere -- the unimplemented interface is otherwise wholly irrelevant (nothing calls it), the same \"declared and never called costs nothing\" shape x6 pins for a user occurrence. MEASURED ON THE BASE BINARY (93a40382): check/run/build ALL REJECT, `No impl of Ifc for Int`, order-invariant -- the wrap`s synthesized `println` was marked as a dispatch against this module`s `Ifc` and found no impl. FIXED (this slice, Val-licensed 2026-08-30 to flip reject -> accept): the wrap no longer spells `println`, so it cannot route through `Ifc` -- check/build must ACCEPT and the built binary must print 1. `run` REJECTs BY DESIGN regardless (#1681, mirrors x7/x11/x12: a non-Unit VALUE main) -- NOT a regression from the packet`s \"run exits 0\" expectation, which contradicts `run`s pre-existing, deliberate, unconditional non-Unit-main refusal (measured identically on the totally unrelated x7/x11 controls) -- graded BUILD_EXACT. Value hand-derived from the literal `main = 1`, not captured",
+      "X13 (#2185, S0, packet §4b LICENSED FLIP) x12`s NO-IMPL sibling: `Ifc` declares a method literally named `println` but NO impl exists anywhere -- the unimplemented interface is otherwise wholly irrelevant (nothing calls it), the same \"declared and never called costs nothing\" shape x6 pins for a user occurrence. MEASURED ON THE BASE BINARY (93a40382): check/run/build ALL REJECT, `No impl of Ifc for Int`, order-invariant -- the wrap`s synthesized `println` was marked as a dispatch against this module`s `Ifc` and found no impl. FIXED (this slice, Val-licensed 2026-08-30 to flip reject -> accept): the wrap no longer spells `println`, so it cannot route through `Ifc` -- check/build must ACCEPT and the built binary must print 1. `run` prints a non-Unit VALUE main through the same wrap (#2413, mirrors x7/x12), graded ALL_EXACT. Value hand-derived from the literal `main = 1`, not captured",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "1\n",
   },
   Row {
     entry = "x14_autoprint_wrap_display_pin.mdk",
     label =
-      "X14 (#2185`s defect class RE-OPENED as fix-round F1, S0) the `display` twin of x12: slice 1 paid for x12/x13 by RESPELLING the wrap `println` -> `putStrLn (display <e>)`, which merely MOVED the capture onto `display` -- a name users declare constantly for Pretty-style interfaces. MEASURED ON SPRINT HEAD a17281e6: check/build ACCEPT and the built binary prints `HIJACKED`, dispatching the wrap`s synthesized `display` through this module`s own `impl Ifc Int` (S0: wrong ANSWER, exit 0, no diagnostic, on source that never writes `display` at a call site). FIXED: the wrap resolves NO name in user scope -- it calls the prelude`s own `println` declaration re-bound under an unspellable name (autoPrintPinCore), so its `display` is prelude-scoped -- built binary must print 7. `run` REJECTs BY DESIGN (#1681, a non-Unit VALUE main), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`",
+      "X14 (#2185`s defect class RE-OPENED as fix-round F1, S0) the `display` twin of x12: slice 1 paid for x12/x13 by RESPELLING the wrap `println` -> `putStrLn (display <e>)`, which merely MOVED the capture onto `display` -- a name users declare constantly for Pretty-style interfaces. MEASURED ON SPRINT HEAD a17281e6: check/build ACCEPT and the built binary prints `HIJACKED`, dispatching the wrap`s synthesized `display` through this module`s own `impl Ifc Int` (S0: wrong ANSWER, exit 0, no diagnostic, on source that never writes `display` at a call site). FIXED: the wrap resolves NO name in user scope -- it calls the prelude`s own `println` declaration re-bound under an unspellable name (autoPrintPinCore), so its `display` is prelude-scoped -- built binary must print 7. `run` prints a non-Unit VALUE main through the same wrap (#2413), graded ALL_EXACT. Value hand-derived from the literal `main = 7`",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "7\n",
   },
   Row {
     entry = "x15_autoprint_wrap_display_pin_noimpl.mdk",
     label =
-      "X15 (fix-round F2, S1) x14`s NO-IMPL sibling and x13`s `display` twin: `Ifc` declares a method named `display`, no impl exists anywhere, nothing calls it. MEASURED ON SPRINT HEAD a17281e6: check/build REJECT `No impl of Ifc for Int` -- slice 1`s respelled wrap synthesized a `display` occurrence into this module, where the user declaration outranks the prelude`s Display, so the compiler demanded an impl of an interface the program never uses. A FALSE REJECT of a program that builds clean at b6d029cd. FIXED: `Ifc` is never consulted -- check/build ACCEPT, built binary prints 7. `run` REJECTs BY DESIGN (#1681), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`",
+      "X15 (fix-round F2, S1) x14`s NO-IMPL sibling and x13`s `display` twin: `Ifc` declares a method named `display`, no impl exists anywhere, nothing calls it. MEASURED ON SPRINT HEAD a17281e6: check/build REJECT `No impl of Ifc for Int` -- slice 1`s respelled wrap synthesized a `display` occurrence into this module, where the user declaration outranks the prelude`s Display, so the compiler demanded an impl of an interface the program never uses. A FALSE REJECT of a program that builds clean at b6d029cd. FIXED: `Ifc` is never consulted -- check/build ACCEPT, built binary prints 7. `run` prints a non-Unit VALUE main through the same wrap (#2413), graded ALL_EXACT. Value hand-derived from the literal `main = 7`",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "7\n",
   },
   Row {
     entry = "x16_autoprint_wrap_putstrln_pin.mdk",
     label =
-      "X16 (fix-round F1, packet §6.5) the `putStrLn` twin -- and the row recording WHY `putStrLn` is NOT fixed by pinning the wrap. The wrap half IS fixed (no `putStrLn` reference is synthesized in user scope any more). What remains is a DIFFERENT, PRE-EXISTING defect the wrap fix does not reach: `markVar`s `methods` set is PROGRAM-GLOBAL, so a user interface method named `putStrLn` also captures the PRELUDE`S OWN body `println x = putStrLn (display x)` -- and unlike `display`, the prelude declares no interface method of that name, so there is no prelude declaration for the method table to prefer. MEASURED with the wrap taken out entirely (UNIT main + a user-written `println 7`, so shouldAutoPrintMain is False): build exited 1, `E-PANIC: no impl of method putStrLn for type Unit`. DRAINED 2026-09-10 and RE-GRADED to BUILD_EXACT against 7, exactly as the row above it instructed: the prelude body stopped being capturable when `moduleMarkCtx`s CORE arm began applying S1`s nameable-in-M filter to its rp/arg sets. It could not before -- core`s own references were mangled `core__putStrLn` by the time the mark pass saw them, so no bare method name could match one, and that premise died when #2809 moved mangling after elaboration. Same rule, same commit, that returns four `prelude_shadow_census` ledger rows (identity, otherwise, arbitraryList, arbitraryString) from FAIL_BUILD to PASS. `run` still REJECTs: a non-Unit `main` is refused by `run` on its own account, which is a different rule and is not what drained",
+      "X16 (fix-round F1, packet §6.5) the `putStrLn` twin -- and the row recording WHY `putStrLn` is NOT fixed by pinning the wrap. The wrap half IS fixed (no `putStrLn` reference is synthesized in user scope any more). What remains is a DIFFERENT, PRE-EXISTING defect the wrap fix does not reach: `markVar`s `methods` set is PROGRAM-GLOBAL, so a user interface method named `putStrLn` also captures the PRELUDE`S OWN body `println x = putStrLn (display x)` -- and unlike `display`, the prelude declares no interface method of that name, so there is no prelude declaration for the method table to prefer. MEASURED with the wrap taken out entirely (UNIT main + a user-written `println 7`, so shouldAutoPrintMain is False): build exited 1, `E-PANIC: no impl of method putStrLn for type Unit`. DRAINED 2026-09-10 and RE-GRADED to BUILD_EXACT against 7, exactly as the row above it instructed: the prelude body stopped being capturable when `moduleMarkCtx`s CORE arm began applying S1`s nameable-in-M filter to its rp/arg sets. It could not before -- core`s own references were mangled `core__putStrLn` by the time the mark pass saw them, so no bare method name could match one, and that premise died when #2809 moved mangling after elaboration. Same rule, same commit, that returns four `prelude_shadow_census` ledger rows (identity, otherwise, arbitraryList, arbitraryString) from FAIL_BUILD to PASS. `run` REJECTs on the interpreter's own copy of the same capture: since #2413 `run` applies the wrap too, and the prelude's `println` body still routes `putStrLn` to the user method there, dying with an unlocated `E-PANIC: unknown op '+'`. A user-written `main = println 7` beside the same interface dies identically under `run` and prints 7 under `build`, so the wrap is not involved; graded BUILD_EXACT until the interpreter's prelude body stops being capturable",
     expCheck = "ACCEPT",
     expRun = "REJECT",
     expBuild = "ACCEPT",
@@ -955,11 +1035,11 @@ table = [
   Row {
     entry = "x17_autoprint_wrap_display_pin_xmod/main.mdk",
     label =
-      "X17 (fix-round F1, CROSS-MODULE) x14 with the colliding `display` interface AND its impl moved into an IMPORTED module -- the entry declares nothing and sees the name only through `import ifcx.{Ifc, display}`. The axis a single-file row cannot see: own-declaration and imported are DIFFERENT rungs of the entry`s method table (ownMethodIdent vs methodCandImported), so a fix that only stops an OWN declaration capturing the wrap passes x14 and still ships the S0 here. MEASURED ON SPRINT HEAD a17281e6: build ACCEPTs, built binary prints `HIJACKED`. FIXED: built binary must print 7. `run` REJECTs BY DESIGN (#1681), graded BUILD_EXACT. Value hand-derived from the literal `main = 7`",
+      "X17 (fix-round F1, CROSS-MODULE) x14 with the colliding `display` interface AND its impl moved into an IMPORTED module -- the entry declares nothing and sees the name only through `import ifcx.{Ifc, display}`. The axis a single-file row cannot see: own-declaration and imported are DIFFERENT rungs of the entry`s method table (ownMethodIdent vs methodCandImported), so a fix that only stops an OWN declaration capturing the wrap passes x14 and still ships the S0 here. MEASURED ON SPRINT HEAD a17281e6: build ACCEPTs, built binary prints `HIJACKED`. FIXED: built binary must print 7. `run` prints a non-Unit VALUE main through the same wrap (#2413), graded ALL_EXACT. Value hand-derived from the literal `main = 7`",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
+    expRun = "ACCEPT",
     expBuild = "ACCEPT",
-    mode = BuildExact,
+    mode = AllExact,
     pinned = "7\n",
   },
   Row {
@@ -975,7 +1055,7 @@ table = [
   Row {
     entry = "x19_prelude_module_alias_escapes_shadow.mdk",
     label =
-      "X19 (S1-PRELUDE (b), the recovery table) THE ESCAPE HATCH ITSELF, and the corpus had no cell for it: S1-PRELUDE (a) hands the colliding bare name to the module`s own declaration, and every x-cell above grades that displacement -- none grades whether the displaced prelude binding can still be NAMED. `import core as C` is the recovery spelling the table prescribes, and the pinned `(False, True)` is the whole of its content: the first component is the module`s own `eq`, the second is the prelude`s `Eq` method reached past it. `(False, False)` is the failure this cell exists to catch, and it is not hypothetical -- it is exactly what the RENAME spelling does at x20, so the two cells are numerically distinguishable in one component only. Mechanism: a module alias survives inference as a dotted occurrence (renameAliasedMethods de-aliases a member rename and deliberately leaves `A.name` alone; resolveAliasMethodSpellings restores the origin name only after inference). VALUES HAND-DERIVED FROM S1-PRELUDE (b), NOT CAPTURED -- at base the spelling did not resolve at all (`Unbound variable: C.eq` on all three verbs), so no arm could serve as an oracle",
+      "X19 (S1-PRELUDE (b), the recovery table) THE ESCAPE HATCH ITSELF, and the corpus had no cell for it: S1-PRELUDE (a) hands the colliding bare name to the module`s own declaration, and every x-cell above grades that displacement -- none grades whether the displaced prelude binding can still be NAMED. `import core as C` is the recovery spelling the table prescribes, and the pinned `(False, True)` is the whole of its content: the first component is the module`s own `eq`, the second is the prelude`s `Eq` method reached past it. `(False, False)` is the failure this cell exists to catch, and it is not hypothetical -- it is what the RENAME spelling did at x20 before #3708, when the two cells were distinguishable in one component only. Mechanism: a module alias survives inference as a dotted occurrence, and a member rename survives as its local spelling (resolveAliasMethodSpellings restores the origin name only after inference). VALUES HAND-DERIVED FROM S1-PRELUDE (b), NOT CAPTURED -- at base the spelling did not resolve at all (`Unbound variable: C.eq` on all three verbs), so no arm could serve as an oracle",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -985,12 +1065,12 @@ table = [
   Row {
     entry = "x20_prelude_member_rename_lands_on_shadow.mdk",
     label =
-      "X20 (S1-PRELUDE (b)) x19`s member-RENAME twin, and the OPPOSITE value from the same topology: `(False, False)`, both components the module`s own `eq`. The two recovery spellings are not interchangeable and this pair is what says so -- a reader who transcribes x19`s value here destroys the distinction. WHY: a method is global-by-name, one dispatch cell per name, so an alias of a method is a second SPELLING and not a second binding; renameAliasedMethods rewrites `eqM` back to `eq` before resolution, and `eq` is then whatever this module`s scope holds, which is the standalone. GENERAL, not prelude-specific -- the same rewrite governs a rename of any module`s method, which is why `docs/spec/SYNTAX.md`s alias table states it as a consequence rather than this corpus pinning it as a prelude quirk. Not a defect to be drained: not de-aliasing leaves the renamed reference bound to nothing, which is why the rewrite has two halves that must agree. VALUES HAND-DERIVED, NOT CAPTURED -- at base the rename did not bind (`Unbound variable: eqM. Did you mean 'eq'`)",
+      "X20 (S1-PRELUDE (b)) x19`s member-RENAME twin, and since #3708 the SAME value as x19: `(False, True)`. An import member `x as y` binds `y` and nothing else (F6 ruling, Val 2026-10-02), so `eqM` is the prelude`s `Eq` method and bare `eq` stays the module`s own standalone. The member alias keeps a distinct spelling through inference and is restored to its origin name afterwards (resolveAliasMethodSpellings), as a module alias is. Pinned `(False, False)` before #3708, when the rename was rewritten back to the bare name before resolution. VALUES HAND-DERIVED FROM THE RULE, NOT CAPTURED",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
     mode = AllExact,
-    pinned = "(False, False)\n",
+    pinned = "(False, True)\n",
   },
   Row {
     entry = "x21_prelude_alias_private_helper_reject.mdk",
@@ -1055,7 +1135,7 @@ table = [
   Row {
     entry = "i31_importer_standalone_via_reexport_hop/main.mdk",
     label =
-      "I31 (#2738, fix round) I29 with ONE variable changed: the displaced standalone reaches this module through an `export import` HOP rather than being declared in the module the import names. S2-IMPORT-DIFFER does not scope \"reaches `M` through a selective import\" to a direct declaration, and S1`s own right operand is folded over re-export chains of any depth (`graphIfaceMethods`, S1-CHAIN #1380, and S1-NS (a) rules the re-export arm SYMMETRIC with the import arm) -- so the warning is owed here exactly as in I29. Until this cell nothing in the corpus could see it: every other importer row imports from the DECLARING module, so a detector reading only the directly imported module`s own top-level functions passes all of them and is silent here, which is #2738`s original S0 with one extra file. MEASURED SILENT at sprint base 49ea4a542 (`run` printed `peek=7` at exit 0 with no diagnostic on any verb). Resolution is I29`s and unchanged -- `Peekable` is nameable by its type name, `Box` carries a live impl, so the occurrence dispatches: `peek=7`. VALUE AND WARN COLUMN DERIVED FROM THE CLAUSE BEFORE THE BINARY WAS CONSULTED",
+      "I31 (#2738, fix round) I29 with ONE variable changed: the displaced standalone reaches this module through an `export import` HOP rather than being declared in the module the import names. S2-IMPORT-DIFFER does not scope \"reaches `M` through a selective import\" to a direct declaration, and S1`s own right operand is folded over re-export chains of any depth (`meExports`, S1-CHAIN #1380, and S1-NS (a) rules the re-export arm SYMMETRIC with the import arm) -- so the warning is owed here exactly as in I29. Until this cell nothing in the corpus could see it: every other importer row imports from the DECLARING module, so a detector reading only the directly imported module`s own top-level functions passes all of them and is silent here, which is #2738`s original S0 with one extra file. MEASURED SILENT at sprint base 49ea4a542 (`run` printed `peek=7` at exit 0 with no diagnostic on any verb). Resolution is I29`s and unchanged -- `Peekable` is nameable by its type name, `Box` carries a live impl, so the occurrence dispatches: `peek=7`. VALUE AND WARN COLUMN DERIVED FROM THE CLAUSE BEFORE THE BINARY WAS CONSULTED",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -1097,6 +1177,16 @@ data WarnCheck = WarnCheck { entry : String, mustFire : Bool, needle : String }
 
 warnChecks : List WarnCheck
 warnChecks = [
+  WarnCheck {
+    entry = "i28_importer_two_admitted_agree/main.mdk",
+    mustFire = True,
+    needle = "by interface method 'IA.mth : a -> Int -> Int'",
+  },
+  WarnCheck {
+    entry = "i28_importer_two_admitted_agree/order-swapped.mdk",
+    mustFire = True,
+    needle = "by interface method 'IA.mth : a -> Int -> Int'",
+  },
   WarnCheck {
     entry = "i29_importer_selective_import_displaced/main.mdk",
     mustFire = True,

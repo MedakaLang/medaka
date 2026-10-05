@@ -1,0 +1,4 @@
+import mb.*
+
+export fb : Int
+fb = mth 20

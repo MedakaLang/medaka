@@ -1,6 +1,6 @@
 ---
 name: sprint-packet
-description: The one-page packet contract for Medaka sprint slices — the handoff format the orchestrator writes and the implementer executes, the refusal license, and the short report format every dispatched agent returns. Load when writing a packet, executing one, or reading a report.
+description: The one-page sprint slice packet and report format. Load when writing or executing a packet, or reading a report.
 ---
 
 # The packet contract (v8)
@@ -92,8 +92,9 @@ how a hand-rolled `expectTrue (a == b)` lands.
 **§6 Acceptance — 3 to 5 checks, with expected output.** The minimal set that
 shows the slice does what it's supposed to and broke nothing major: build
 green, the primary-claim probe(s) with `MEDAKA_STRICT=1` and expected values
-written down, the one targeted gate or snapshot bless the diff obviously
-moves. §6 is a CEILING as well as a floor — every gate, oracle, or suite it
+written down, the one targeted test (a `test` case in `<module>_test.mdk` or a
+`kind = "native"` gate-test row, chosen with the `write-tests` skill) or
+snapshot bless the diff obviously moves. §6 is a CEILING as well as a floor — every gate, oracle, or suite it
 does not name is the end-of-sprint review's and CI's job. Name any golden the
 slice is licensed to bless, BY PATH; an unlisted golden move is a report
 finding, never a bless. Decide expected values from semantics before
@@ -195,9 +196,11 @@ that pass would otherwise raise a day later.
    any comment that narrates this PR rather than the code — and delete it
    before answering. (`[T-COMMENT-REGISTER]` in `AGENTS.md`.)
 5. **Which test vehicle carries the new behaviour, by name?** The gate script,
-   fixture path, doctest, property, or must-fail pin. If none, say what would
-   fail if this change were reverted — and if the honest answer is "nothing",
-   say that; it is a finding, not a failure to confess.
+   fixture path, doctest, property, or must-fail pin. Paste the output of
+   `medaka gate explain <path>` for the main path you changed, so the nearest
+   existing gate is on record before the vehicle is defended. If none, say
+   what would fail if this change were reverted — and if the honest answer is
+   "nothing", say that; it is a finding, not a failure to confess.
 
 The report is graded mechanically for shape (not for content) by
 `sh scripts/sprint-report-check.sh <report>`: it checks that the first line is

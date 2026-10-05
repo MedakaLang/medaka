@@ -53,7 +53,14 @@ import io.{readLines}
 import json.{Json(..), jObject, get, parse}
 import string.{contains, join, split, startsWith, toLower, trim}
 import lib.handlers.{pdsServer, serverLinksEmpty}
-import lib.jwt.{ServiceAuthRequest, mintToken, serverSecretBytes}
+import lib.jwt.{
+  Mint,
+  ServiceAuthRequest,
+  SessionKey,
+  mintAccessToken,
+  serverSecretBytes,
+  sessionKeyFromBytes,
+}
 import lib.proxy.{
   AppviewRoute,
   appviewRouteFor,
@@ -90,6 +97,7 @@ import test.request_support.{pathRequest}
 import test.response_support.{
   bodyText, hasContentType, headText, jsonBody, textOrHex
 }
+import lib.sign.{Sign}
 
 accountDidText : String
 accountDidText = "did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9"
@@ -110,7 +118,7 @@ mustAccount =
     "read_routes: account setup failed"
     (makeAccount accountDidText accountHandleText accountHostText)
 
-mustServer : Server
+mustServer : Server <Mint {"access", "refresh"}, Sign "commit">
 mustServer =
   resultOrPanic
     "read_routes: server setup failed"
@@ -207,7 +215,11 @@ check label ok detail =
     let () = println "CELL \{label} FAIL \{detail}"
     0
 
-okCell : String -> Bytes -> String -> String -> <IO> Int
+okCell : String ->
+  Bytes ->
+  String ->
+  String ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Int
 okCell label request contentType expectedBody =
   let (next, response) = handleBytes mustServer testContext storeEmpty request
   let status = statusText response
@@ -221,7 +233,11 @@ okCell label request contentType expectedBody =
     ok
     "status=\{status} media=\{contentType} body=\{bodyText response} state=unchanged"
 
-failCell : String -> Bytes -> String -> String -> <IO> Int
+failCell : String ->
+  Bytes ->
+  String ->
+  String ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Int
 failCell label request expectedStatus expectedCode =
   let (next, response) = handleBytes mustServer testContext storeEmpty request
   let status = statusText response
@@ -232,7 +248,10 @@ failCell label request expectedStatus expectedCode =
 -- | A CORS preflight against any path: 204, no other route ever reached, and
 -- exactly the five headers `lib.cors`'s defaults produce, the request's own
 -- `Access-Control-Request-Headers` reflected back verbatim.
-preflightCell : String -> String -> String -> <IO> Int
+preflightCell : String ->
+  String ->
+  String ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Int
 preflightCell label target requestedHeaders =
   let (next, response) =
     handleBytes
@@ -265,7 +284,9 @@ preflightCell label target requestedHeaders =
    asserted TERMINATED, so a response that echoed `a<TAB>b` back cannot
    satisfy it by prefix — and the drop is pure, so all three engines owe the
    same answer. -}
-preflightDroppedCell : String -> String -> <IO> Int
+preflightDroppedCell : String ->
+  String ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Int
 preflightDroppedCell label target =
   let (next, response) =
     handleBytes mustServer testContext storeEmpty (optionsRequest target "a\tb")
@@ -287,7 +308,9 @@ preflightDroppedCell label target =
    same reason `lib.proxy`'s `soleField` drops a repeated relayed field. Both
    values are asserted ABSENT, so first-wins and last-wins each fail this
    cell rather than only one of them. -}
-preflightRepeatedCell : String -> String -> <IO> Int
+preflightRepeatedCell : String ->
+  String ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Int
 preflightRepeatedCell label target =
   let (next, response) =
     handleBytes
@@ -311,7 +334,10 @@ preflightRepeatedCell label target =
 -- | Any non-preflight response: the allow-origin header this server puts on
 -- everything, and NONE of the preflight-only headers or the credentialed
 -- form it must never send.
-originOnlyCell : String -> Bytes -> String -> <IO> Int
+originOnlyCell : String ->
+  Bytes ->
+  String ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Int
 originOnlyCell label request expectedStatus =
   let (next, response) = handleBytes mustServer testContext storeEmpty request
   let status = statusText response
@@ -398,10 +424,16 @@ proxySessionSecret : Bytes
 proxySessionSecret =
   fromU8Array (arrayMakeWith serverSecretBytes (i => U8.truncate (i * 13 + 7)))
 
+proxySessionKey : SessionKey
+proxySessionKey =
+  resultOrPanic
+    "read_routes_all_engines_main: session key"
+    (sessionKeyFromBytes proxySessionSecret)
+
 proxyAccessToken : String
 proxyAccessToken =
-  mintToken
-    proxySessionSecret
+  mintAccessToken
+    proxySessionKey
     accountDidText
     (accessAudience mustAccount)
     "read-routes-proxy-cells"
@@ -409,15 +441,13 @@ proxyAccessToken =
     1700003600
 
 proxySessionStore : Store
-proxySessionStore = match storeWithServerSecret proxySessionSecret storeEmpty
-  Err message =>
-    panic "read_routes: proxy session store setup failed: \{message}"
-  Ok store =>
-    storeSessionOpen
-      (sessionFingerprint proxyAccessToken)
-      (sessionFingerprint "read-routes-proxy-refresh")
-      1700090000
-      store
+proxySessionStore =
+  let store = storeWithServerSecret proxySessionKey storeEmpty
+  storeSessionOpen
+    (sessionFingerprint proxyAccessToken)
+    (sessionFingerprint "read-routes-proxy-refresh")
+    1700090000
+    store
 
 {- | The `Authorization` field every proxied request below carries, built once
    so that the ONE cell that presents no credential
@@ -430,7 +460,7 @@ proxyAuthField = "Authorization: Bearer \{proxyAccessToken}\r\n"
 noPolicy : Option AppviewTable
 noPolicy = None
 
-proxyRequest : String -> String -> String -> Bytes
+proxyRequest : String -> String -> String -> <Mint "access"> Bytes
 proxyRequest verb header target =
   encodeUtf8
     "\{verb} \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{header}\r\n\r\n"
@@ -442,7 +472,7 @@ proxyRequest verb header target =
    copy test: the relayed list is printed in full by `proxyOutcome`, so a seam
    that carried `x-medaka-not-relayed` along would fail here even though every
    field the client asked to be relayed did arrive. -}
-proxyPostRequest : String -> String -> Bytes
+proxyPostRequest : String -> String -> <Mint "access"> Bytes
 proxyPostRequest target body =
   encodeUtf8
     "POST \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{configuredAppviewDid}\r\naccept-language: en-GB\r\nx-medaka-not-relayed: 1\r\ncontent-type: application/json\r\ncontent-length: \{intToString (stringLength body)}\r\n\r\n\{body}"
@@ -453,7 +483,7 @@ proxyPostRequest target body =
    where to, so the header-absent arm needs the same credential the header-
    bearing one does; this is `proxyRequest` with the `atproto-proxy` field and
    nothing else removed. -}
-proxyRequestNoHeader : String -> Bytes
+proxyRequestNoHeader : String -> <Mint "access"> Bytes
 proxyRequestNoHeader target =
   encodeUtf8
     "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}\r\n"
@@ -469,7 +499,7 @@ proxyRequestUnauthenticated target =
 
 -- Field names are case-insensitive on the wire, so the seam must find the
 -- header under the spelling a client chose rather than the one it expects.
-proxyMixedCaseRequest : String -> Bytes
+proxyMixedCaseRequest : String -> <Mint "access"> Bytes
 proxyMixedCaseRequest target =
   encodeUtf8
     "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}Atproto-Proxy: \{configuredAppviewDid}\r\n\r\n"
@@ -477,7 +507,7 @@ proxyMixedCaseRequest target =
 -- Two fields, the first naming the configured appview and the second naming
 -- somewhere else. A seam that took the first would be proxying a request whose
 -- audience the client left ambiguous.
-proxyRepeatedRequest : String -> Bytes
+proxyRepeatedRequest : String -> <Mint "access"> Bytes
 proxyRepeatedRequest target =
   encodeUtf8
     "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{configuredAppviewDid}\r\natproto-proxy: \{foreignServiceDid}\r\n\r\n"
@@ -537,7 +567,11 @@ proxyOutcome _ (ProxyRefused response) =
 proxyOutcome table (ProxyAdmitted admission) =
   "decision=admitted verb=\{admission.verb} target=\{admission.target} audience=\{admission.audience} \{claimText admission.serviceAuth} relayed=[\{relayedText admission.headers}] body=\{textOrHex admission.body} port=\{routeText table admission.audience}"
 
-proxyCell : String -> Option AppviewTable -> Bytes -> String -> <IO> Int
+proxyCell : String ->
+  Option AppviewTable ->
+  Bytes ->
+  String ->
+  <IO, Mint "access"> Int
 proxyCell label policy bytes expected =
   let decision =
     classifyProxy
@@ -647,7 +681,7 @@ mixedCaseNsidTarget = xrpc "App.Bsky.Feed.getTimeline?limit=2"
    repository-free — `classifyProxy` reads the registry and the account, never
    the store — so all three engines can run it for the price of the cells
    themselves. -}
-runProxyCells : <IO> Int
+runProxyCells : <IO, Mint "access"> Int
 runProxyCells =
   let profileTarget = xrpc "app.bsky.actor.getProfile?actor=\{accountDidText}"
   let authorFeedTarget =
@@ -947,7 +981,11 @@ serviceAuthOutcome (ServiceAuthRefused response) =
 serviceAuthOutcome (ServiceAuthMinted claims) =
   "decision=minted \{serviceClaimText claims}"
 
-serviceAuthCell : String -> Option AppviewTable -> Bytes -> String -> <IO> Int
+serviceAuthCell : String ->
+  Option AppviewTable ->
+  Bytes ->
+  String ->
+  <IO, Mint "access"> Int
 serviceAuthCell label policy bytes expected =
   let decision =
     classifyServiceAuth
@@ -1018,7 +1056,7 @@ protectedMethodsCell rows =
    and no repository, so all three engines can grade it for the price of the
    cells. The socket half, where a real client spends a real token on the chat
    stub, is `pds/test/serve_e2e.sh`'s. -}
-runServiceAuthCells : List String -> <IO> Int
+runServiceAuthCells : List String -> <IO, Mint "access"> Int
 runServiceAuthCells corpus =
   let mintedWithLxm =
     serviceAuthCell
@@ -1101,7 +1139,7 @@ runServiceAuthCells corpus =
     + farExpiry
     + protectedMethodsCell corpus
 
-runCells : List String -> <IO> Unit
+runCells : List String -> <IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 runCells corpus =
   let didJson =
     okCell
@@ -1337,7 +1375,7 @@ runCells corpus =
     let () = println "TOTAL: FAIL"
     exit 1
 
-main : <IO, Env, FileRead> Unit
+main : <Env, FileRead, IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message =>

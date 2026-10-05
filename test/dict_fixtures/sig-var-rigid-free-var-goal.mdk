@@ -1,0 +1,15 @@
+-- §3 a declared signature variable is rigid in every matcher: the body's goal
+-- `Get (Box (List t)) b` matches `impl Get (Box a) a` only if `b` is `List t`,
+-- and the caller chooses `b`, so `weird` is rejected at the `get` occurrence.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+weird : b -> b
+weird _ = get (Box [])
+
+main = println (weird 41 + 1)

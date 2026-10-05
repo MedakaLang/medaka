@@ -24,3 +24,9 @@ between the two, and these two cases together are what demonstrate that it does.
 
 This row is a live guard, not decoration: it FAILS if the reject itself ever becomes
 order-dependent, or if the two orderings stop rejecting under the same code set.
+
+The case declares the one code it must produce, which the gate grades in every
+ordering, so a stale import cannot turn this control into some other rejection
+(it once produced `R-PRIVATE-NAME`).
+
+codes: R-AMBIGUOUS-CTOR

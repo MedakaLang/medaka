@@ -1,5 +1,88 @@
 # pds/
 
+A Bluesky PDS (Personal Data Server) written entirely in Medaka, from the HTTP
+framing and the cryptographic primitives up. It implements the AT Protocol
+server a Bluesky account lives on: signed repository commits, the record, blob,
+sync, identity, and session endpoints, and the well-known paths.
+
+It is **live at `pds.medaka-lang.dev`**, hosting the language's own Bluesky
+account. It serves one account, loopback-only behind a reverse proxy, and it is
+experimental: read the two caveat lists below before relying on any of it. The
+write-up of how it was built is [docs/blog/pds.md](../docs/blog/pds.md).
+
+## Build and run it locally
+
+Build the compiler first (see the [README](../README.md#install)), then:
+
+```sh
+./medaka build pds/serve.mdk -o pdsd
+./pdsd --version
+```
+
+Serving needs a data directory, secrets, and the account's DID and handle;
+`docs/ops/PDS-DEPLOY.md` walks through generating the secrets with `pdsd keygen`
+and every `serve` flag, and is the operator's document. `serve` binds loopback
+only, with no flag to change that, and terminates no TLS: a reverse proxy on the
+same machine does that.
+
+The in-language test suites run with `medaka test`, for example
+`./medaka test pds/test/vector_provenance_test.mdk`. The "Running the gate
+locally" section under Contributor notes has the native and all-engines forms.
+
+## What has and has not been checked
+
+Nobody should rely on this code for anything that matters yet. These are the
+blog post's two honest-caveat lists, carried over with one sentence scoped to
+its section.
+
+### Crypto: the current blind spots
+
+Hand-rolled cryptography, checked against outside answer keys (NIST, Wycheproof,
+libsecp256k1, Bluesky's own code) and a Valgrind Memcheck constant-time probe.
+If anyone wants to use these in something that actually matters, they have been
+warned. _Caveat emptor_.
+
+- **No cryptographer has reviewed this.** Everything in this section is just testing. Nobody with real crypto expertise has read
+  through the code, and that's a major shortcoming of the current state of the project.
+- **Memcheck only sees branches and memory lookups.** It can't see instructions whose running time depends on
+  their inputs, like division or some multiplications on certain CPUs. Hardware-level attacks like speculative
+  execution and physical ones like power analysis are out of scope too, as they are for nearly all software checks.
+- **The garbage collector is switched off during the check.** Medaka's garbage collector scans memory and makes
+  decisions based on what each value looks like, so a number derived from the key sitting in memory could in
+  principle influence it. That's a known gap that hasn't been measured yet.
+- **The Memcheck check only covers the signing key.** The session-token secret and the password check use a
+  constant-time comparison function, but it isn't under the same Memcheck test.
+- **Only the native build is covered.** The constant-time claim is for the compiled native binary, which is what
+  actually runs the PDS. The interpreter and the WebAssembly build make no such promise.
+- **It's a sample.** Memcheck runs three test keys on one machine architecture, in a test binary that's linked
+  slightly differently from the deployed one. Constant-time code should take the same path for every key, so
+  this matters less than it sounds, but it's still a sample.
+
+The blog's own estimate: the primitives likely have a number of smaller
+undiscovered security bugs, and the author is fairly confident they have no
+major holes. Each cryptographic claim, the gate that checks it, and what is not
+claimed are listed in [docs/ops/PDS-CRYPTO-CLAIMS.md](../docs/ops/PDS-CRYPTO-CLAIMS.md).
+
+### Effects: the caveats
+
+The server's type says what it may touch, and `medaka manifest` prints that as a
+checked-in capability manifest that a test compares with the systemd unit.
+
+- **These are upper bounds.** A manifest says what the server could do, not what it will do on any given request.
+- **`Net` only knows about addresses.** `"127.0.0.1"` limits which addresses the code passes around, not which
+  ports, and host names aren't normalized.
+- **A custom effect is only as trustworthy as the module that defines it.** `Sign` means something because
+  `SecretKey` is opaque and only one module can open it. The built-in effects are enforced by the compiler
+  and standard library, but for custom effects you need to trust that the implementer didn't leave any holes
+  or bugs that let you execute an effect without the corresponding effect type.
+
+Security findings go through [SECURITY.md](../SECURITY.md).
+
+## Contributor notes
+
+Everything below is the contributor-facing ledger: what each module is, which
+gate holds each claim up, and how to run it.
+
 The self-hosted atproto PDS (Personal Data Server) written in Medaka. The pure
 core covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
 atproto MST, verified CAR/block storage, signed repository transitions, strict
@@ -8,7 +91,7 @@ the nine atproto record/sync/identity endpoints, `applyWrites` as one signed
 commit, the blob routes (`uploadBlob`/`getBlob`/`listBlobs`) with on-disk
 persistence, the four session endpoints
 (`com.atproto.server.{createSession, refreshSession, deleteSession,
-getSession}`), plus the two well-known paths. What is not here is deployment.
+getSession}`), plus the two well-known paths.
 
 `pds/serve.mdk` serves that core over a TCP listener: it admits a configuration,
 rehydrates or initializes the account repository, and hands
@@ -19,12 +102,11 @@ driven over the socket, a malformed request, an over-cap body, the
 idle-connection timeout, and restart-and-resume across a process boundary), and
 `pds/test/lib_boundary_test.mdk` proves the `pds/lib` ⇄ `pds/shell` boundary holds (no
 `pds/lib` import of `pds/shell`, every `pds/lib` export explicitly signed, and no
-such signature effect-bearing — the signature check is what stops an unannotated
-export from carrying an inferred effect row past the effect check). The bind
-address is `--bind`, defaulting to `127.0.0.1`; a non-loopback value is refused
-unless `--trusted-proxy` also asserts that a reverse proxy terminates TLS in
-front of this process (`requireTrustedBind`), because nothing here terminates TLS
-itself.
+such signature naming a host effect — the signature check is what stops an
+unannotated export from carrying an inferred effect row past the effect check). The server
+listens on loopback, `127.0.0.1`, and nowhere else: the address is
+`shell.server`'s `listenAddress`, not a flag, and a reverse proxy on the same
+box terminates TLS in front of it, because nothing here terminates TLS itself.
 
 Authentication gates the writes, `updateHandle`, and the three session routes that need it — the
 five record/blob writes, `updateHandle` and `getSession` require a valid access token,
@@ -36,7 +118,7 @@ See `docs/ops/PDS-DEPLOY.md` for what exposing this server past localhost
 requires, `docs/design/ATPROTO-PDS-DESIGN.md` for the full design, and
 `pds/HISTORY.md` for how the tree got here.
 
-## Architecture overview
+### Architecture overview
 
 A stranger arriving fresh gets the most out of these in this order:
 
@@ -63,11 +145,17 @@ owns the socket, the filesystem, and the signing key — so the entire protocol
 and crypto surface is doctestable and runs on all three engines, while only
 the shell is native-bound.
 
-## Layout
+### Layout
 
 - `pds/medaka.toml` — project root marker (`[package]` only; no `entry` — see
   below).
-- `pds/lib/` — pure library modules. Production modules under this directory
+- `pds/lib/` — pure library modules. Pure means no host effect: an exported
+  signature's row may name only the three labels the core declares for
+  spending its secrets, `Sign` (`pds/lib/sign.mdk`, the repo key, indexed by
+  `"commit"` or `"service-auth"`), `Mint` (`pds/lib/jwt.mdk`, the session key,
+  indexed by `"access"` or `"refresh"`) and `Kdf` (`pds/lib/pbkdf2.mdk`, every
+  PBKDF2 iteration), plus row variables; `lib_boundary_test.mdk` check 2
+  enforces it. Production modules under this directory
   may not import exported identifiers
   ending in `ForTest`, selectively or through `.*`, nor alias a module that
   exports any such identifier; `opaque_field_scalar_test.mdk` derives and enforces
@@ -87,13 +175,17 @@ the shell is native-bound.
   eight read/sync/identity queries (`getRecord`/`listRecords`/`describeRepo`/
   `sync.getRepo`/`sync.getLatestCommit`/`sync.getBlob`/`sync.listBlobs`/
   `identity.resolveHandle`), and the two non-XRPC well-known paths.
-- `pds/shell/` — native-only effectful adapters. `pds/shell/blockfile.mdk`
+- `pds/shell/` — native-only effectful adapters. `pds/shell/datadir.mdk` is
+  the data directory, fixed at `data/` under the working directory: every
+  shell function that reaches the disk takes its `DataDir`, so their rows
+  name the `data/*` subtree rather than the bare file labels.
+  `pds/shell/blockfile.mdk`
   stores blocks as flat sharded CID-to-bytes files (design row P7),
   `pds/shell/persist.mdk` persists and reloads the account repository's head
   commit, `pds/shell/blobfile.mdk` does the same for the blob half under a
   `blobs/` directory SIBLING to `blocks/` (a blob is not part of the signed
   block graph), `pds/shell/dirlock.mdk` is the single-writer lock that keeps
-  two processes off one `--data` directory, and `pds/shell/server.mdk` is the
+  two processes off one data directory, and `pds/shell/server.mdk` is the
   accept loop and the
   per-connection HTTP/1.1 lifecycle. The dependency runs one way only: a shell
   module may import `pds/lib/`, and no `pds/lib/` module may ever import
@@ -107,12 +199,17 @@ the shell is native-bound.
 - `pds/serve.mdk` — the entry point. It admits every configuration value before
   binding anything, rehydrates the repository from disk under the configured
   signing key, and hands `pds/shell/server.mdk` a listener and the one
-  `Ref Store` all connection tasks share. Its `main` is an `Async` value, so
-  `medaka build pds/serve.mdk` produces a program the async scheduler drives.
-  The bind address comes from `--bind` (`bindAddressOf`, default `127.0.0.1`)
-  and is handed to `shell.server`'s `bindAddress`; `requireTrustedBind` refuses
-  a non-loopback value that `--trusted-proxy` has not vouched for, before any
-  secret is read or generated.
+  `Ref Store` all connection tasks share. Its `main` dispatches to `keygen`,
+  `--version` or `serve`; `serve` runs `configure` in one synchronous step and
+  then hands the serving loop to the async scheduler (`runAsyncMain`), so
+  `medaka build pds/serve.mdk` produces a program the scheduler drives. There is no `--data` flag: the server serves
+  `data/` under its working directory, which must already exist.
+  The listener is bound by `shell.server`'s `bindAddress` at the fixed
+  loopback address, so its type is `Listener "127.0.0.1"` and every
+  connection it accepts is charged `Net "127.0.0.1"`; there is no bind flag.
+- `pds/capabilities/` — the checked-in capability manifests: `main.toml` is
+  `medaka manifest pds/serve.mdk`, and `serve.toml` is the same with
+  `--fn serve`. See "What the server is allowed to do".
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). Every gate must be placed explicitly in
   exactly one `ci.yml` shard by measured cost; directory location alone does
@@ -124,7 +221,87 @@ the project root so `pds/test/*.mdk` and `pds/serve.mdk` can
 `import lib.<mod>`. `pds/serve.mdk` is therefore named by path, not by the
 manifest, and is not called `pds/main.mdk` for that reason.
 
-## Running the gate locally
+### What the server is allowed to do
+
+`pds.service` runs `pdsd` with no subcommand, which is `serve` in
+`pds/serve.mdk`. Its row is everything the running server may do:
+
+```text
+serve : List String ->
+  <Clock, FileRead "data/*", FileRead "secrets/key.hex", FileRead "secrets/password", FileRead "secrets/token.hex", FileWrite "data/*", Kdf, Mint {"access", "refresh"}, Net "127.0.0.1", Rand, Sign "commit", Sign "service-auth", Signal, Stderr, Stdout> Unit
+```
+
+`medaka manifest pds/serve.mdk --fn serve` prints that row as
+`pds/capabilities/serve.toml`:
+
+```toml
+[package.capabilities]
+Clock = true
+FileRead = ["data/*", "secrets/key.hex", "secrets/password", "secrets/token.hex"]
+FileWrite = "data/*"
+Kdf = true
+Mint = ["access", "refresh"]
+Net = "127.0.0.1"
+Rand = true
+Sign = ["commit", "service-auth"]
+Signal = true
+Stderr = true
+Stdout = true
+```
+
+The unit's sandbox confines the writes and the dials from the operating
+system's side:
+
+```ini
+WorkingDirectory=/opt/pds
+ProtectSystem=strict
+ReadWritePaths=/opt/pds/data
+ReadOnlyPaths=/opt/pds/secrets
+IPAddressDeny=any
+IPAddressAllow=localhost
+```
+
+For writes and dials the two sides agree. `ReadWritePaths` is the only place
+the process may write, which covers the `data/*` writes, and `IPAddressAllow`
+is `Net "127.0.0.1"`. `serve` writes nothing under `secrets/`. Only `keygen`
+does, and the unit never runs it, so `main`'s manifest
+(`pds/capabilities/main.toml`) is wider than the unit allows and `serve`'s is
+not.
+
+For reads they do not agree, and the manifest is the narrower of the two.
+`ProtectSystem=strict` leaves most of the filesystem readable (`ProtectHome`
+hides `/home` and `/root`, and `/tmp` and `/dev` are private), so the sandbox
+lets the process read `/usr`, `/etc` and the rest of `/opt`. `ReadOnlyPaths`
+grants no read that was not already allowed; it records that the `secrets/`
+reads are intended. What bounds `serve`'s reads is its row: everything it
+reads is beneath one of the two directories the unit names, `data/` and
+`secrets/`.
+
+The remaining labels are the clock, randomness, output, signal handling and
+the three secret-spending labels, which systemd does not govern.
+
+`pds/test/sandbox_agreement_test.mdk` checks both claims. It compares both
+checked-in manifests with a fresh `medaka manifest` run byte for byte, derives
+a `check-policy --allow` list from `pds/pds.service` (`FileWrite` and `Net`
+from the lines that confine them, `FileRead` from the directories the unit
+names), and requires `medaka check-policy pds/serve.mdk --fn serve` to answer
+`accepted.` under it. Two mutation controls narrow the unit (`ReadWritePaths`
+to `data/blocks`, `IPAddressAllow` to `10.0.0.1`) and each must turn the
+verdict to `rejected.`. A third control checks `runKeygen`, which writes under
+`secrets/`, with every read allowed: it must be `rejected.` for its writes
+alone.
+
+`pds/test/authority_pins_test.mdk` pins the signatures that row rests on. Each
+program under `pds/test/authority_pins/` imports the real modules and must be
+refused with a named error code, beside an accepted twin: an `egressCall`
+caller whose row names `Net "10.0.0.1"`, pure callers of `signCommitDigest`,
+`signServiceAuthDigest`, `mintAccessToken` and `pbkdf2HmacSha256`, a `DataDir`
+rooted at `secrets/` passed to `blockFileWrite` under a `data/*` row, and a
+`Server <>` built from `pdsHandler`. A pure caller is what pins a label to its
+primitive: every production row above the primitive still declares the label,
+and a row that declares more than it needs is accepted.
+
+### Running the gate locally
 
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA="$MEDAKA_ROOT/medaka" \
@@ -141,7 +318,7 @@ emitter, Node, and `wasm-tools` and refuses to degrade to two engines:
 ./medaka test --native pds/test/protocol_all_engines_test.mdk
 ```
 
-## Data model
+### Data model
 
 The four data-model vector gates grade external answer corpora on all production
 engines. DAG-CBOR/CID, MST, and CAR run the same full checks on eval, native,
@@ -151,7 +328,7 @@ and CAR bytes—and all semantic boundary controls; native and Wasm grade the
 complete five-operation official-reference transcript. The dedicated `pds` CI
 row requires its Wasm prerequisites, so a missing third engine is a failure.
 
-## The protocol core
+### The protocol core
 
 `stdlib/http.mdk` accepts one complete buffered HTTP/1.1 request with strict
 duplicate-aware framing and exposes typed malformed versus resource-excess
@@ -184,9 +361,9 @@ corpora. (`pds/lib/repo.mdk` still carries its own older, divergent
 does not go through it.) The account is configuration on the `Server`, not an
 argument on the `handle`/`handleBytes` composition seam.
 
-## Endpoints
+### Endpoints
 
-### Record writes
+#### Record writes
 
 `pds/lib/handlers.mdk` implements `com.atproto.repo.createRecord`,
 `com.atproto.repo.putRecord`, `com.atproto.repo.deleteRecord`, and
@@ -219,7 +396,7 @@ end to end and compares every `uri`, record `cid`, `commit.cid`, and
 `commit.rev` against the corpus's pinned values. It runs as a row of
 `pds/test/repo_vectors_test.mdk`.
 
-### Reads, sync, and identity
+#### Reads, sync, and identity
 
 `pds/lib/handlers.mdk` also implements the six read routes. None of them can
 transition the `Store`: `readHandled` returns a bare `Response`, so the read
@@ -247,7 +424,7 @@ once — response bytes == `repoExportCar`'s bytes == the pinned corpus `CAR` ro
 equality alone could be satisfied by a wrong pair. It runs as a row of
 `pds/test/repo_vectors_test.mdk`, beside the write-side replay.
 
-### The well-known route class
+#### The well-known route class
 
 `/.well-known/did.json` and `/.well-known/atproto-did` are not XRPC methods and
 have no NSID, so `pds/lib/xrpc.mdk` routes them as their own explicitly-typed
@@ -281,7 +458,7 @@ secret-bearing" for the 600s measurement). The `did:web` arm of
 where a repository exists: `pds/test/read_handlers_main.mdk`, under
 `pds/test/repo_vectors_test.mdk`.
 
-### Blob routes
+#### Blob routes
 
 `pds/lib/handlers.mdk` implements the blob half:
 `com.atproto.repo.uploadBlob` (a write — it joins `recordHandled` rather than
@@ -314,17 +491,19 @@ behavior — the refusals, the MIME-shape rejection, and cursor pagination —
 where an expected CID is our own `blobCid`'s and proves plumbing, not content
 addressing.
 
-### Consequences shipped, deliberately
+#### Consequences shipped, deliberately
 
 - **Auth is enforced in the pure core, not the shell.** `handleBytes` resolves
   the caller's credential and refuses an `AuthenticatedRoute`/`RefreshRoute`
   call via `refusalFor` before the handler ever runs — there is no unguarded
-  path from `handleBytes` to a repository write. What is NOT enforced is
-  everything downstream of an authenticated caller: no per-client rate
-  limiting (#2612), no bound on read-path cost relative to repo size (#2478),
-  and framing itself is O(n²) under one trickling client (#2571) — those, not
-  a missing auth check, are what keep this core unsafe to expose on a network
-  as it stands.
+  path from `handleBytes` to a repository write. Three exposure gaps are closed:
+  per-client rate limiting (#2612, see "Rate
+  limiting and `--trusted-proxy`"), the read-path cost bound (#2478), and the
+  quadratic framing rescan (#2571). What is not claimed is a hardened
+  multi-tenant service: this is a single-account server run by one operator
+  behind a same-box reverse proxy, and the two caveat lists in the introduction
+  are the honest limits of what has been checked. The remaining launch criteria
+  are tracked in `docs/ops/PDS-LAUNCH-PLAN.md`.
 - **Lexicon validation covers the reference's twenty collections.** With
   `validate` absent or `true`, a record in one of the twenty collections the
   pinned reference PDS knows is graded by `pds/lib/lexicon.mdk`: `"valid"` if
@@ -353,9 +532,9 @@ addressing.
   question when a narrower one was asked would return something plausible and
   wrong.
 
-## Storage and state
+### Storage and state
 
-### The Store is secret-bearing
+#### The Store is secret-bearing
 
 `pds/lib/store.mdk`'s `Store` has two halves: the verified blob
 `BlockStore` (`storeGet`/`storePut`/`storeSize`, and `storeSize`
@@ -377,7 +556,7 @@ seconds-long merge-queue gate into the >10-minute band that #2208 removed from
 this project. A record write against an unconfigured store is refused with
 `RepoNotFound`, never silently accepted.
 
-### Where the revision comes from
+#### Where the revision comes from
 
 `repoCreate`/`repoUpdate`/`repoDelete` each require an explicit, strictly
 monotonic `Tid`, and the pinned lexicon input has no `rev` or `tid` field for a
@@ -422,7 +601,7 @@ CIDs, `rev`s, and commit CIDs byte for byte.
 thirteen-character TID spelling as the record key, which is what a real PDS
 does with its clock.
 
-### Blob persistence on disk
+#### Blob persistence on disk
 
 Persistence is `pds/shell/blobfile.mdk`, mirroring `blockfile.mdk`'s
 stage-then-rename discipline: one file per blob under `<data>/blobs`, sharded
@@ -447,14 +626,21 @@ tampered blob file is rejected at load; an oversize blob is refused with zero
 files written to disk; and each of the four kinds of residue above is skipped
 by a server that starts and still serves every undamaged blob.
 
-## Rate limiting and `--trusted-proxy`
+### Rate limiting and `--trusted-proxy`
 
 `pds/shell/server.mdk` refuses a request with `429 Too Many Requests` once
 its caller's identity exceeds one of six independent per-window allowances
 (`pds/lib/resource_limits.mdk`: `maxConnectionsPerWindow`,
 `maxRequestsPerWindow`, `maxWritesPerWindow`, `maxCreateSessionPerWindow`,
-`maxRepoExportsPerWindow`, `maxProxiedCallsPerWindow`, all placeholders
-pending real traffic data, refilled every `rateLimitWindowSeconds`).
+`maxRepoExportsPerWindow`, `maxProxiedCallsPerWindow`, refilled every
+`rateLimitWindowSeconds`; all placeholders pending real traffic data except
+`maxProxiedCallsPerWindow`, which is sized from the official app's measured
+traffic), and
+refuses a `com.atproto.identity.updateHandle` call that authenticated and
+passed handle syntax once its account's DID has made 10 such calls in 5
+minutes or 50 in a day, as the reference does (`stepHandleUpdate`). Every
+one of these counters is held in memory only, so a restart starts them all
+again at zero.
 `maxRepoExportsPerWindow` covers
 `com.atproto.sync.getRepo` alone: its response is a whole-repository CAR
 bounded only by `maxCarBytes`, so the request count that bounds every other
@@ -507,7 +693,7 @@ requires its peer address, which this runtime cannot obtain. Treat
 `--trusted-proxy` as part of exposing the server, not as a later tuning
 step.
 
-### What the shipped Caddyfile does about the header
+#### What the shipped Caddyfile does about the header
 
 Both of `pds/Caddyfile`'s `reverse_proxy` blocks — the streaming half that
 carries the firehose upgrade and the request half behind it — carry one line
@@ -524,7 +710,7 @@ readable, because this server takes the *last* hop, but it means a client
 chooses the entire prefix. Setting it removes the ambiguity at the one place
 that can: the hop nearest this process.
 
-### Ceilings on the header itself
+#### Ceilings on the header itself
 
 `X-Forwarded-For` arrives from outside, so it has two ceilings of its own
 (`pds/lib/resource_limits.mdk`):
@@ -546,7 +732,7 @@ channel with no ceiling.
 A real proxy chain is a handful of short hops, so neither ceiling is
 reachable by one.
 
-## Cryptographic primitives
+### Cryptographic primitives
 
 Every module in this section is pure `pds/lib/` code graded against an answer
 key nobody here wrote — see "Vector provenance" for the rule that makes that
@@ -554,7 +740,7 @@ non-negotiable. Each cryptographic claim, the gate that checks it, and what is
 not claimed are listed in
 [docs/ops/PDS-CRYPTO-CLAIMS.md](../docs/ops/PDS-CRYPTO-CLAIMS.md).
 
-### Encodings
+#### Encodings
 
 `pds/lib/base58.mdk` (base58btc encode/decode) and `pds/lib/multiformats.mdk`
 (unsigned-varint / LEB128, multicodec prefix constants, multibase `z`
@@ -599,7 +785,7 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/e
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
-### secp256k1 field arithmetic
+#### secp256k1 field arithmetic
 
 `pds/lib/field.mdk` is arithmetic modulo `p = 2^256 - 2^32 - 977` on **5
 limbs in base 2^52** (limbs 0..3 hold 52 bits, limb 4 holds 48). That layout
@@ -645,7 +831,7 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/f
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
-### secp256k1 scalar arithmetic
+#### secp256k1 scalar arithmetic
 
 `pds/lib/scalar.mdk` is arithmetic modulo the secp256k1 **group order**
 `n = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141`
@@ -713,7 +899,7 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/s
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
-### secp256k1 points
+#### secp256k1 points
 
 `pds/lib/secp256k1.mdk` carries opaque affine and Jacobian point carriers,
 the SEC 2 generator, canonical infinity `(0, 1, 0)`, and the contract's
@@ -725,7 +911,7 @@ asserting that every infinity result uses the canonical coordinates.
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
-### secp256k1 public keys
+#### secp256k1 public keys
 
 `pds/lib/sign.mdk` is the only consumer-facing key boundary. It exports
 opaque `SecretKey` and `PublicKey` values plus
@@ -748,20 +934,23 @@ natively because the generic interpreter roster would put four complete
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/secp256k1_public_key_test.mdk
 ```
 
-### secp256k1 signatures
+#### secp256k1 signatures
 
-`pds/lib/sign.mdk` completes that eight-function consumer boundary with an
-opaque `Signature`, exact 64-byte P1363 compact parsing/serialization, fixed
-two-candidate RFC 6979 signing, and public verification. `signDigest` accepts
-only a 32-byte SHA-256 digest whose elements are in `0..255`; compact parsing
-rejects zero, out-of-range, and high-S components.
+`pds/lib/sign.mdk` completes that consumer boundary, nine functions in all,
+with an opaque `Signature`, exact 64-byte P1363 compact parsing/serialization, fixed
+two-candidate RFC 6979 signing, and public verification. The signer is
+private: a key signs through `signCommitDigest` (`<Sign "commit">`) or
+`signServiceAuthDigest` (`<Sign "service-auth">`), each of which accepts
+only a 32-byte SHA-256 digest; compact parsing rejects zero, out-of-range,
+and high-S components.
 
 Production receives only the fixed signer's aggregate validity bit and opaque
 selected signature. Nonce and intermediate scalar observations remain on the
 internal corpus-test routes in `lib.secp256k1`.
 
-`constant_time_signing_public_main.mdk` imports only `lib.sign`, exercises all
-eight public APIs, and roots the native P15 audit at `signDigest` and
+`constant_time_signing_public_main.mdk` imports only `lib.sign`, exercises
+eight of the nine public functions (all but `signServiceAuthDigest`, which
+calls the same private signer as `signCommitDigest`), and roots the native P15 audit at `signCommitDigest` and
 `publicKeyForSecret`. The separate internal carrier remains only for injected
 candidate-1/exhaustion and raw negative evidence.
 
@@ -771,7 +960,7 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/o
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/constant_time_signing.sh
 ```
 
-### secp256k1 did:key
+#### secp256k1 did:key
 
 `pds/lib/did_key.mdk` exposes only the public signing boundary's opaque
 `PublicKey`. Encoding prepends the minimal `secp256k1-pub` multicodec bytes
@@ -791,7 +980,7 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" \
   ./medaka test --native pds/test/did_key_all_engines_test.mdk
 ```
 
-## Vector provenance
+### Vector provenance
 
 `pds/test/VECTOR-PROVENANCE.txt` is the mechanism for G5 (see
 `docs/design/ATPROTO-PDS-DESIGN.md` §5): **no golden is ever captured from our
@@ -842,7 +1031,7 @@ are invisible to this enumeration by construction).
 The gate builds natively, so it needs a built `medaka`; at run time it only
 enumerates files, hashes them, and parses text.
 
-## Oracle
+### Oracle
 
 Two reproducible **library** routes answer for the data model. The committed
 lockfile under
@@ -860,7 +1049,7 @@ true live-service repo transcript is therefore not claimed. The full
 manual procedure and limitation live in `docs/ops/PDS-ORACLE.md`; no CI job
 provisions it.
 
-### Proxy answer key
+#### Proxy answer key
 
 `pds/test/vectors/pds_route_registration_corpus.txt`,
 `pds/test/vectors/pds_service_auth_shape_corpus.txt` and
@@ -888,7 +1077,7 @@ The extractor refuses if the image's `@atproto/pds`, `@atproto/xrpc-server`, or
 `@atproto/crypto` version differs from the one its rows were derived at, so a
 newer image cannot silently answer a different question.
 
-### Service-auth interop
+#### Service-auth interop
 
 `pds/lib/jwt.mdk`'s `mintServiceToken` is the other half of that answer key: it
 mints the credential whose shape the corpus records. The corpus can only grade
@@ -932,7 +1121,7 @@ because the CI coverage census enumerates `.sh` files and this is a `.mjs` —
 wrapping it in a shell driver would put it in scope and would then need a
 `test/CI-COVERAGE-TOOLS.txt` row.
 
-## CI classification policy
+### CI classification policy
 
 **The policy itself is not restated here.** It lives in `AGENTS.md`
 [W-PROJECT-BY-MANIFEST] (a `medaka.toml` outside `compiler/`/`test/` makes a
@@ -985,7 +1174,7 @@ Three things are specific to `pds/` and are NOT in the general policy:
   non-neutral `env:` keys are what `test/diff_compiler_tier_drift.sh` reads
   back as the registry's `nightly/<VAR>=<value>` token.
 
-## Project history
+### Project history
 
 `pds/HISTORY.md` is the build log: what each phase and slice delivered, under
 which issue, and which claims this file used to make that have since been

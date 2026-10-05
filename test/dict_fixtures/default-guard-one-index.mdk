@@ -1,0 +1,14 @@
+-- §6.3 D3 clause 3, one indexing with no arithmetic on the element.  `k := Int`
+-- leaves `Index (Array a) Int ?e`, which `Index (Array a) Int a` still unifies
+-- with, so `k` grounds, and the second determination fixes `e = a`.
+-- Hand-derived: 1.5.
+impl Index (Array a) Float a where
+  index xs _ = xs[1]
+
+interface Report t where
+  report : t -> String
+
+impl Report (Array a) requires Debug a where
+  report v = debug v[0]
+
+main = println (report [|1.5, 2.25|])

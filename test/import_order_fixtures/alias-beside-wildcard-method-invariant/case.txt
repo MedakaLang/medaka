@@ -1,0 +1,9 @@
+entry: main.mdk
+what: an alias import beside a wildcard import of a module declaring a same-spelled
+      method does not make the bare occurrence depend on import order
+
+`import ma as A` + `import mb.*`, both modules declaring `interface Sh` with `sh`.
+The alias binds no bare name, so bare `sh` is `mb.sh` alone. Spec answer: `check`
+clean; `run` and the built binary print `2007` in every ordering. The value is
+graded by the matching row of `test/diff_compiler_dict_semantics_test.mdk`; this
+case grades its invariance.

@@ -120,8 +120,8 @@ it needs two more:
 
 1. **does the block define a top-level `main`?** Five blocks do not
    (`02-expressions#7/#8/#14`, `04-data-modeling#1`, `09-modules-and-projects#12`).
-   They are fragments; native panics *"no 'main' binding found"* and the browser
-   answers `W-MAIN-MISSING`.
+   They are fragments; native `build`/`run` refuse them with one located error
+   (`W-MAIN-MISSING`) and the browser answers the same code.
 2. **does it import a module the page SHIPS?** `10-tooling-and-workflow#5` does
    `import test`, and `test` is deliberately excluded from `EXTRA_MODULES`
    (native-only externs). The current rule only inspects stubbed *calls*, never

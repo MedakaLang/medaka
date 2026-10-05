@@ -219,6 +219,7 @@ import support.ordmap.{
   omFromPairs,
   omMapValues,
   omEmpty,
+  omDelete,
 }
 import support.util.{
   joinNl,
@@ -2224,6 +2225,15 @@ confinedGrantW prog name p (CList (elems@(_ :: _))) = match stringLitsW elems []
   None => []
 confinedGrantW _ _ _ _ = []
 
+confinedFileBoundW : Prog -> String -> CExpr -> List String
+confinedFileBoundW prog name bound =
+  let label =
+    if name == "$withFileReadBound" then
+      "declared FileRead bound"
+    else
+      "declared FileWrite bound"
+  confinedGrantW prog label (CVar "$fileBoundPath" AGlobal) bound
+
 stringLitsW : List CExpr -> List String -> Option (List String)
 stringLitsW [] acc = Some (reverseL acc)
 stringLitsW ((CLit (LString s)) :: rest) acc = stringLitsW rest (s :: acc)
@@ -3586,7 +3596,8 @@ emitBlockI32 emit fnNames valNames env ((CSAssign x ex) :: rest) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env ex
   let (i2, ty) = emitBlockI32 emit fnNames valNames env rest
   (i1 ++ ["local.set $" ++ gname x] ++ i2, ty)
-emitBlockI32 emit _ _ _ [] = gapLTy emit "scalar-mode: empty block"
+-- A block whose last statement is a `let` yields Unit, as in eval and LLVM.
+emitBlockI32 _ _ _ _ [] = (["i64.const 0"], WUnit)
 emitBlockI32 emit _ _ _ _ =
   gapLTy emit "scalar-mode: unsupported block statement"
 
@@ -4328,7 +4339,8 @@ emitRefMain prog groups = match findMain (progEmit prog) groups
     -- then-branch, and a driver whose first arm is `panic …` was printed as an
     -- Int (#2424's second face, the pds engine drivers).
     let k =
-      if mainBodyIsUnit prog body || declRetTypeOf prog "main" == "Unit" then
+      if mainBodyIsUnit prog (cafBodies groups) body
+        || declRetTypeOf prog "main" == "Unit" then
         WUnit
       else if inputMainIsFloat (progInput prog) then
         WFloat
@@ -4346,18 +4358,27 @@ emitRefMain prog groups = match findMain (progEmit prog) groups
 -- NOT auto-print its result — the structural `refMainKind` can't see through the
 -- wrapper, so it would route the Unit result to the Int printer (a trailing `0`).
 -- Reads the installed declared-return-type table; empty ⇒ "" ⇒ False (unchanged).
-mainBodyIsUnit : Prog -> CExpr -> Bool
-mainBodyIsUnit prog (CApp f _) = match appHead f
+-- `cafs` maps each top-level nullary value binding still in scope to its body: a
+-- reference to an unannotated CAF (`go = println "x"; main = go`) is Unit iff that
+-- body is.  Following a CAF removes it from the map, so a cyclic chain ends False.
+mainBodyIsUnit : Prog -> OrdMap CExpr -> CExpr -> Bool
+mainBodyIsUnit prog _ (CApp f _) = match appHead f
   CVar fn _ => declRetTypeOf prog fn == "Unit"
   -- `println`/`print` are `Display a =>` constrained → the dict-pass rewrites the
   -- head to a CDict (or CMethod) carrying the routes; recover the bare name.
   CDict fn _ => declRetTypeOf prog fn == "Unit"
   CMethod fn _ _ _ _ _ => declRetTypeOf prog fn == "Unit"
   _ => False
-mainBodyIsUnit prog (CVar fn _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog (CDict fn _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog (CMethod fn _ _ _ _ _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog (CLet _ _ _ b) = mainBodyIsUnit prog b
+mainBodyIsUnit prog cafs (CVar fn _) =
+  if declRetTypeOf prog fn == "Unit" then
+    True
+  else match omLookup fn cafs
+    Some body => mainBodyIsUnit prog (omDelete fn cafs) body
+    None => False
+mainBodyIsUnit prog _ (CDict fn _) = declRetTypeOf prog fn == "Unit"
+mainBodyIsUnit prog _ (CMethod fn _ _ _ _ _) = declRetTypeOf prog fn == "Unit"
+mainBodyIsUnit prog cafs (CLet _ pat _ b) =
+  mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) b
 -- the native branch-(2) equivalent: an UNANNOTATED `main = match … { … }` whose
 -- Unit-ness is only knowable from its inferred body type (e.g. check_main's
 -- `match args () { [r,c,f] => withFiles … ; _ => ePutStrLn … }`).  Type-erased here,
@@ -4365,26 +4386,46 @@ mainBodyIsUnit prog (CLet _ _ _ b) = mainBodyIsUnit prog b
 -- (an IO-extern returning Unit, a fn whose declared ret is Unit, or another all-Unit
 -- match).  Conservative — a single non-Unit leaf ⇒ False, so a value main is never
 -- suppressed.  Block/Let tails recurse to their final expr.
-mainBodyIsUnit prog (CDecision _ arms _) = allArmsUnit prog arms
-mainBodyIsUnit prog (CMatch _ arms) = allArmsUnit prog arms
-mainBodyIsUnit prog (CBlock stmts) = blockTailIsUnit prog stmts
-mainBodyIsUnit prog _ = False
+mainBodyIsUnit prog cafs (CDecision _ arms _) = allArmsUnit prog cafs arms
+mainBodyIsUnit prog cafs (CMatch _ arms) = allArmsUnit prog cafs arms
+mainBodyIsUnit prog cafs (CBlock stmts) = blockTailIsUnit prog cafs stmts
+mainBodyIsUnit _ _ _ = False
 
 -- True iff every match/decision arm body is itself a Unit main body.  Empty ⇒ False
 -- (no leaves to prove Unit ⇒ don't suppress).
-allArmsUnit : Prog -> List CArm -> Bool
-allArmsUnit _ [] = False
-allArmsUnit prog arms = allArmsUnitGo prog arms
+allArmsUnit : Prog -> OrdMap CExpr -> List CArm -> Bool
+allArmsUnit _ _ [] = False
+allArmsUnit prog cafs arms = allArmsUnitGo prog cafs arms
 
-allArmsUnitGo : Prog -> List CArm -> Bool
-allArmsUnitGo _ [] = True
-allArmsUnitGo prog ((CArm _ _ body) :: rest) =
-  if mainBodyIsUnit prog body then allArmsUnitGo prog rest else False
+allArmsUnitGo : Prog -> OrdMap CExpr -> List CArm -> Bool
+allArmsUnitGo _ _ [] = True
+allArmsUnitGo prog cafs ((CArm pat _ body) :: rest) =
+  if mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) body then
+    allArmsUnitGo prog cafs rest
+  else
+    False
 
-blockTailIsUnit : Prog -> List CStmt -> Bool
-blockTailIsUnit _ [] = False
-blockTailIsUnit prog [CSExpr e] = mainBodyIsUnit prog e
-blockTailIsUnit prog (_ :: rest) = blockTailIsUnit prog rest
+blockTailIsUnit : Prog -> OrdMap CExpr -> List CStmt -> Bool
+blockTailIsUnit _ _ [] = False
+blockTailIsUnit prog cafs [CSExpr e] = mainBodyIsUnit prog cafs e
+blockTailIsUnit prog cafs ((CSLet _ pat _) :: rest) =
+  blockTailIsUnit prog (shadowCafs (patVars pat) cafs) rest
+blockTailIsUnit prog cafs (_ :: rest) = blockTailIsUnit prog cafs rest
+
+-- The top-level nullary value bindings, name -> body (`isValBind`: never `main`).
+cafBodies : List CBind -> OrdMap CExpr
+cafBodies groups = omFromPairs (cafBodyRows groups) omEmpty
+
+cafBodyRows : List CBind -> List (String, CExpr)
+cafBodyRows [] = []
+cafBodyRows ((CBind name [CClause [] body]) :: rest) =
+  if name == "main" then cafBodyRows rest else (name, body) :: cafBodyRows rest
+cafBodyRows (_ :: rest) = cafBodyRows rest
+
+-- A local binder of the same name hides a top-level CAF below it.
+shadowCafs : List String -> OrdMap CExpr -> OrdMap CExpr
+shadowCafs [] cafs = cafs
+shadowCafs (x :: xs) cafs = shadowCafs xs (omDelete x cafs)
 
 -- the printable static kind of a ref-mode main body: an Int (decimal) or a Bool
 -- (true/false).  Determined structurally — arithmetic/Int-lit → Int; a comparison
@@ -5666,8 +5707,13 @@ routeWitness prog env _ (RDictFwd dpar) =
     ["local.get $" ++ gname dpar]
   else
     gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
-routeWitness prog _ _ RNone =
-  gapLP prog "wasm W5: RNone route as a dict witness"
+-- RNone as a witness is the dictionary for an unconstrained type variable under a
+-- `requires` (the element of `None : Option a`, the error of `Ok 1 : Result e Int`).
+-- There is no value of that type for a method to take, so no value-position
+-- dispatch goes through it: the constructor-only and Display/Eq/Ord shapes never
+-- call it.  It is the no-op i31 (dict tag 0), mirroring llvm_emit's
+-- `dictWordOfRoute _ _ RNone = "0"`.
+routeWitness _ _ _ RNone = ["i32.const 0", "ref.i31"]
 -- S-1: RLocal's own dicts are the call's leading dict ARGS (pushed by emitMethodRef's
 -- RLocal arm via emitDictRef), not a dict WITNESS for this route — so as a witness it
 -- stays the no-op i31 (dict tag 0), mirroring llvm_emit's
@@ -7534,7 +7580,7 @@ emitBlockRef prog env d ((CSAssign x ex) :: rest) =
   emitRefExpr prog env d ex
     ++ ["local.set $" ++ gname x]
     ++ emitBlockRef prog env d rest
-emitBlockRef prog _ _ [] = gapLP prog "ref-mode: empty block"
+emitBlockRef prog env d [] = emitRefExpr prog env d (CLit LUnit)
 emitBlockRef prog _ _ _ = gapLP prog "ref-mode: unsupported block statement"
 
 -- application: a saturated top-level-fn call, or a saturated CONSTRUCTOR application
@@ -7553,7 +7599,12 @@ emitAppRef prog env d app =
       -- the desugared `__fallthrough__ ()` / `__ft__<label> ()` form: ignore the (unit)
       -- arg, lower the sentinel (br to the clause label, or trap stub).  The bare-CVar
       -- form is handled by emitVarRef; this catches the applied form guard chains make.
-      if isFtSentinel f0 then
+      if f0 == "$withFileReadBound"
+        || f0 == "$withFileWriteBound" then match args
+        [bound, CLam [PWild] body] =>
+          confinedFileBoundW prog f0 bound ++ emitRefExpr prog env d body
+        _ => gapLP prog "wasm: a file bound requires a grant and a thunk"
+      else if isFtSentinel f0 then
         ftSentinelInstrs f0
       else if contains f0 env then
         -- E24 (wasm peer): a LOCALLY-BOUND name (param / let-binding) SHADOWS any same-named
@@ -9387,8 +9438,9 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
 --       saturated call to ANY group member (the overflow site), or
 --   (3) a saturated tail-call to another group member (a dispatcher OR a
 --       non-spine self-accumulator like the string-interp `acc++` loops).
--- We then emit `R` as a RESET wrapper that zeroes three module-level dest globals
--- ($g_tmc_head / $g_tmc_dest / $g_tmc_first) and `return_call`s an inner `R__loop`,
+-- We then emit `R` as a RESET wrapper that saves and zeroes three module-level dest
+-- globals ($g_tmc_head / $g_tmc_dest / $g_tmc_first), calls an inner `R__loop`, and
+-- restores them,
 -- and we emit every group member with its SPINE cons leaves rewritten to: build each
 -- `Cons` cell with a placeholder tail, link it into $g_tmc_dest (or seed $g_tmc_head
 -- on the first cell), advance the dest, then `return_call` the bottom callee (`$R__loop`
@@ -9399,9 +9451,11 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
 -- and they never touch the dest globals, which thread through transparently).
 --
 -- This needs NO param-slot recompute loop (unlike Stage-1): the engine's `return_call`
--- IS the loop.  Soundness rests on: the group is entered only as a top-level call (no
--- nesting of one scan inside another), so the shared globals carry exactly one in-flight
--- spine; the reset wrapper re-zeroes them per outer call.
+-- IS the loop.  Soundness rests on the root wrapper being the group's only external
+-- entry (dispValidate v4): every entry, including a re-entry from inside an in-flight
+-- spine, passes through the wrapper, which saves the dest globals, runs its own spine
+-- from zeroed ones, and restores them before returning, so the outer spine resumes
+-- linking where it left off.
 
 -- (`WDispCtx` and the per-emission `WasmEmit.wDispCtx` / `WasmEmit.wDispGroups`
 -- cells that carry this context live with the rest of the emission state, above.)
@@ -9410,8 +9464,10 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
 -- triple, so one group's spine build cannot clobber another's — a member's helper
 -- (mid-spine, non-tail) may freely call ANOTHER group's root (e.g. a lexer helper
 -- reaching `join` → `intersperse`): that root resets and threads ITS OWN globals
--- and returns a closed spine, leaving the in-flight group's dest untouched.  Only
--- SAME-group re-entry is unsafe, and wDispValidate v3 rejects exactly that.
+-- and returns a closed spine, leaving the in-flight group's dest untouched.
+-- SAME-group re-entry is not excluded by validation: v3 sees only named call heads,
+-- so a member calling back into its own root through a function-typed argument
+-- passes it.  The root wrapper's save/restore of the triple is what makes that safe.
 wDispHeadL : String -> String
 wDispHeadL root = "$g_tmc_head_" ++ gname root
 wDispDestL : String -> String
@@ -9502,8 +9558,8 @@ wTmcMarker sym mode =
   let name = if startsWith "mdk_" sym then dropPrefix sym "mdk_" else sym
   "  ;; tmc: \{name} \{mode}"
 
--- emit a group ROOT: the reset wrapper `$root` (zero the dest globals, return_call the
--- inner loop) + the inner `$root__disploop` (the real body, leaves redirected).
+-- emit a group ROOT: the reset wrapper `$root` (save and zero the dest globals, call the
+-- inner loop, restore them) + the inner `$root__disploop` (the real body, leaves redirected).
 emitWDispRoot : Prog -> DispGroup -> Int -> List CClause -> List String
 emitWDispRoot prog grp arity clauses =
   let name = dispRootOf grp
@@ -9514,14 +9570,31 @@ emitWDispRoot prog grp arity clauses =
   wTmcMarker name "group-root" :: resetWrapper ++ inner
 
 -- the reset wrapper: (func $root (param …) (result (ref eq))
+--   save $g_tmc_head / $g_tmc_dest / $g_tmc_first into locals
 --   i32.const 1  global.set $g_tmc_first
 --   ref.null eq  global.set $g_tmc_head
 --   ref.null eq  global.set $g_tmc_dest
---   local.get $a0 … return_call $root__disploop)
+--   local.get $a0 … call $root__disploop
+--   restore the saved triple, return the result)
+-- A plain `call`, not `return_call`: the restore must run after the spine closes.
 wDispResetWrapper : String -> String -> List String -> Int -> List String
 wDispResetWrapper name loopName params arity =
   let sig =
     "  (func $\{gname name}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
+  let locals = [
+    "(local $__disp_sh (ref null eq))",
+    "(local $__disp_sd (ref null eq))",
+    "(local $__disp_sf i32)",
+    "(local $__disp_r (ref eq))",
+  ]
+  let save = [
+    "global.get " ++ wDispHeadL name,
+    "local.set $__disp_sh",
+    "global.get " ++ wDispDestL name,
+    "local.set $__disp_sd",
+    "global.get " ++ wDispFirstL name,
+    "local.set $__disp_sf",
+  ]
   let reset = [
     "i32.const 1",
     "global.set " ++ wDispFirstL name,
@@ -9532,8 +9605,17 @@ wDispResetWrapper name loopName params arity =
   ]
   let forward =
     flatMap (p => ["local.get $" ++ gname p]) params
-      ++ ["return_call $" ++ gname loopName]
-  [sig] ++ indent (reset ++ forward) ++ ["  )"]
+      ++ ["call $" ++ gname loopName, "local.set $__disp_r"]
+  let restore = [
+    "local.get $__disp_sh",
+    "global.set " ++ wDispHeadL name,
+    "local.get $__disp_sd",
+    "global.set " ++ wDispDestL name,
+    "local.get $__disp_sf",
+    "global.set " ++ wDispFirstL name,
+    "local.get $__disp_r",
+  ]
+  [sig] ++ indent (locals ++ save ++ reset ++ forward ++ restore) ++ ["  )"]
 
 -- emit a non-root group MEMBER (or the root's inner loop): the ordinary clause machinery,
 -- but with the dispatch context LIVE so spine cons leaves + the root's base redirect.
@@ -9715,7 +9797,12 @@ emitAppTail prog env arity app =
       let f = canonFn prog f0
       -- tail-position `__fallthrough__ ()` / `__ft__<label> ()`: lower the sentinel
       -- (a `br`, NOT a `return` — control leaves the clause, not the function).
-      if isFtSentinel f0 then
+      if f0 == "$withFileReadBound"
+        || f0 == "$withFileWriteBound" then match args
+        [bound, CLam [PWild] body] =>
+          confinedFileBoundW prog f0 bound ++ emitRefTail prog env arity body
+        _ => gapLP prog "wasm: a file bound requires a grant and a thunk"
+      else if isFtSentinel f0 then
         ftSentinelInstrs f0
       else if contains f0 env then
         -- E24 (wasm peer): a LOCALLY-BOUND name shadows any same-named ctor / known top-level
@@ -9849,7 +9936,7 @@ emitBlockTail prog env arity ((CSAssign x ex) :: rest) =
   emitRefExpr prog env 0 ex
     ++ ["local.set $" ++ gname x]
     ++ emitBlockTail prog env arity rest
-emitBlockTail prog _ _ [] = gapLP prog "ref-mode: empty block in tail position"
+emitBlockTail prog env arity [] = emitRefTail prog env arity (CLit LUnit)
 emitBlockTail prog _ _ _ =
   gapLP prog "ref-mode: unsupported block statement in tail position"
 

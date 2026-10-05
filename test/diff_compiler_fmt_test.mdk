@@ -43,7 +43,7 @@
      first of which is diffed against a golden.
    - `diff_compiler_references_correctness` dumps a whole 1-4-module
      project per fixture via `refindex_main --dump`, not a per-file corpus
-     loop, over eight fixture directories.
+     loop, over eleven fixture directories.
    - `diff_compiler_effect_hole` / `diff_compiler_effect_param` spawn BOTH
      the native CLI (`./medaka check`) and `test/bin/check_main` over
      inline-heredoc fixtures, asserting on type-scheme substrings and
@@ -100,7 +100,7 @@ import compiler_cli_test_support.{chompNewlines, stripUnitAutoPrint}
 import fs.{fixtureDirs, fixtureFiles}
 import io.{runVerb}
 import json.{Json, asArray, asInt, asString, get, parse}
-import list.{dropWhile, lookup, partitionResults, somes, sort, span}
+import list.{dropWhile, lookup, partitionResults, somes, sort, span, take}
 import path.{basename, dirname, stem}
 import probe_runner.{
   Row, countFloor, diffNote, errorPathFailures, gradeProbeRows, processFailure,
@@ -165,7 +165,7 @@ rows = [
     goldenSuffix = ".fmt.golden",
     sorted = False,
     stripUnit = True,
-    fixtures = 88,
+    fixtures = 89,
   },
   Row {
     gate = "diff_compiler_lex_files",
@@ -498,19 +498,22 @@ draftSemanticIsolation name bin rt core entry dir baseline =
 
 -- # `diff_compiler_references_correctness`
 
--- | The eight project fixtures the retired script dumped, in its own
+-- | The project fixtures the retired script dumped, in its own
 -- order. `test/references_fixtures/query` is a DIFFERENT gate's corpus
 -- (JSONL query goldens, not `expected.golden`) and stays out.
 referencesFixtures : List String
 referencesFixtures = [
   "binder_loc",
   "correctness",
+  "ctor_import",
   "dup_field_def",
   "iface_collide",
   "iface_method_loc",
   "iface_ty_collide",
+  "iface_use",
   "impl_method",
   "multiclause",
+  "self_rec_local",
 ]
 
 {- | Everything wrong with one `references_fixtures/<name>/` project: a
@@ -761,7 +764,7 @@ typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
    rules out an EMPTY scan — a corpus that lost fifty fixtures still reports
    nothing. -}
 typecheckErrorFixtureCount : Int
-typecheckErrorFixtureCount = 144
+typecheckErrorFixtureCount = 153
 
 {- | Fixtures whose documented error depends on the prelude (#11: an integer
    literal desugars to `fromInt`, so the no-prelude driver structurally
@@ -1025,9 +1028,8 @@ oracleBucket entry = match map asString (get "file" entry)
   _ => Err "a \"files\" entry has no string \"file\""
 
 {- | One diagnostic object of the oracle. A `range` that is PRESENT with the
-   value `null` means the same as an absent one: `MethodNotInInterface`
-   (`compiler/frontend/resolve.mdk`) always builds with a literal `None`
-   location, so its JSON `range` is `null` rather than missing (#1269). -}
+   value `null` means the same as an absent one: an unlocated diagnostic
+   serializes its JSON `range` as `null` rather than leaving it out. -}
 oracleDiag : Json -> Result String ProjectDiag
 oracleDiag d = match (
   map asInt (get "severity" d),
@@ -1540,10 +1542,61 @@ test "draft-semantic transport survives every current emitter input" = report
       countFloor draftSemanticFixturesDir 1 dirs
         ++ somes (map draftSemanticFixtureFailure (sort dirs)))
 
+{- | The words of the shell statement in `capture_goldens.sh` that starts at
+   the first line containing `marker` and runs through its backslash
+   continuations, with quotes, `;` and continuation backslashes dropped. -}
+shStatementWords : List String -> String -> List String
+shStatementWords ls marker =
+  let from = dropWhile (l => not (contains marker l)) ls
+  let (cont, rest) = span (endsWith "\\") from
+  let stmt = join " " (cont ++ take 1 rest)
+  filter
+    (/= "")
+    (split
+      " "
+      (replaceAll "\\" " " (replaceAll ";" " " (replaceAll "\"" "" stmt))))
+
+{- | Disagreement between a corpus list in this module and the list the
+   matching `capture_goldens.sh --frozen` arm iterates: the golden the arm
+   writes and the golden the gate grades must describe the same corpus. -}
+corpusAgreement : String -> List String -> List String -> List String
+corpusAgreement what here script =
+  map
+      (n => "\{what}: \{n} is in capture_goldens.sh but not in this module")
+      (filter (n => not (elem n here)) script)
+    ++ map
+      (n => "\{what}: \{n} is in this module but not in capture_goldens.sh")
+      (filter (n => not (elem n script)) here)
+
+captureCorpusFailures : List String
+captureCorpusFailures = match readFile (underRoot "test/capture_goldens.sh")
+  Err e => ["test/capture_goldens.sh: \{e}"]
+  Ok raw =>
+    let ls = lines raw
+    let rootPaths =
+      marker => somes (map (stripPrefix "$ROOT/") (shStatementWords ls marker))
+    corpusAgreement
+        "lextok arm vs lexCorpus"
+        lexCorpus
+        (rootPaths "regen_frozen lex_main lextok.golden")
+      ++ corpusAgreement
+        "test arm vs testReportCorpus"
+        testReportCorpus
+        (rootPaths "for f in \"$ROOT\"/stdlib/core.mdk")
+      ++ corpusAgreement
+        "references_correctness arm vs referencesFixtures"
+        referencesFixtures
+        (filter
+          (w => not (elem w ["for", "name", "in", "do"]))
+          (shStatementWords ls "for name in binder_loc"))
+
+test "capture_goldens.sh iterates the same corpora this module grades" =
+  report "capture-corpus" captureCorpusFailures
+
 test "reference-index dumps match binders, not strings" =
   report
     "references-correctness"
-    (countFloor "references_fixtures" 8 referencesFixtures
+    (countFloor "references_fixtures" 11 referencesFixtures
       ++ somes (map referencesFixtureFailure referencesFixtures))
 
 test "the parameterized effect surface typechecks through the real front-end" =
@@ -1563,7 +1616,7 @@ test "project-wide diagnostics bucket per file the way the oracle does" = report
   (match fixtureDirs (underRoot analyzeProjectFixturesDir)
     Err e => ["\{analyzeProjectFixturesDir}: \{e}"]
     Ok dirs =>
-      countFloor analyzeProjectFixturesDir 32 dirs
+      countFloor analyzeProjectFixturesDir 39 dirs
         ++ fold
           (acc d => acc ++ analyzeProjectFixtureFailures d)
           []

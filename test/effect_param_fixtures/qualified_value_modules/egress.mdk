@@ -1,0 +1,8 @@
+-- The exporting side of the cross-module qualified-value fixtures.
+export
+egressAddress : String @"127.0.0.1"
+egressAddress = "127.0.0.1"
+
+export
+configFile : String @"cfg/*"
+configFile = "cfg/app.toml"

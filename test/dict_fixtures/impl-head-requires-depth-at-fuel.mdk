@@ -1,0 +1,21 @@
+-- §3 W3-inst at the requires fuel: the body of `impl Tag (Q a)` poses
+-- `Tag (W^32 a)` with no `requires Tag a`.  32 reductions reach the residual
+-- `Tag a`, which no given answers, so the impl is refused naming the `requires`
+-- to add (one deeper: impl-head-requires-depth-past-fuel.mdk).
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Int where
+  tag n = n
+
+data W a = W a
+
+impl Tag (W a) requires Tag a where
+  tag (W x) = tag x + 1
+
+data Q a = Q a
+
+impl Tag (Q a) where
+  tag (Q x) = tag (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (x)))))))))))))))))))))))))))))))))
+
+main = println (tag (Q (1 : Int)))

@@ -11,11 +11,17 @@ sets, #3465 prelude type shadowing. Handoff first recorded 2026-09-24.
 
 ## Resume here
 
-The effects rearchitecture is on `main`. Start the next piece of work from
-`main` on a topic branch. Read this handoff's § "Close-out session" first: its
-last list is the open work, as proposals awaiting ratification, and nothing in
-it is to be implemented before Val rules on it. Then the architecture, the
-semantics and the typechecker contracts; the reading order below still applies.
+**2026-09-29 correction:** this is a chronological handoff, not a live backlog.
+The later residual-scheme and invocation-summary checkpoints supersede the
+close-out session's pending proposals. PR #3584 subsequently added hidden
+authority grants and file confinement; earlier statements below about complete
+erasure and no runtime arguments describe the pre-confinement design.
+Start from the current [effects architecture](../../compiler/EFFECTS-ARCHITECTURE.md),
+[semantics](../spec/EFFECTS-SEMANTICS.md) and
+[dated issue review](../design/EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md), then verify
+remaining issue status in GitHub. Historical pending lists are not new approval
+requirements for work already ratified and delivered. Start implementation from
+`main` on a topic branch.
 
 Read, in order:
 
@@ -874,6 +880,8 @@ compared when the signature has more than one.
   measurement, and this branch adds about 6.5M, so the merge takes N4's block.
 - `pdsSignalStart`/`pdsSignalRequested` keep `<Net>`, documented in §7 and
   the catalog as a deliberate over-charge until signals have a label.
+  Superseded 2026-09-29: they now perform the `Signal` label, a member of
+  `IO`, and the over-charge is gone (`docs/spec/EFFECTS-SEMANTICS.md` §7).
 - `Socket`/`ListenSocket` keep their names; the fix is general: a program's
   own type may shadow a prelude type. Its own issue and PR.
 - A redeclaration may not widen an argument-bound index to `*`; the rule

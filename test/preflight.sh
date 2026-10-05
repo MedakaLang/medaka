@@ -417,8 +417,8 @@ $_g"
 # tests, not projects to CI).
 #
 # This used to be three hand-written case arms — sqlite, gzip, pds — each pasted
-# from the last. mq, parsec and byteparser arrived with manifests and gates and
-# no arm, so every change to one of them derived ZERO gates and ONE UNMAPPED
+# from the last. a project that arrives with a manifest and gates but
+# no arm leaves every change to it derived ZERO gates and ONE UNMAPPED
 # path, which ci.yml then widened to the FULL suite: the most expensive possible
 # answer, arrived at by a map gap rather than by blast radius.
 #
@@ -446,8 +446,8 @@ _projects="$(git -C "$ROOT" ls-files '*medaka.toml' 2>/dev/null \
 #   project must also run the gate — not just a change under its `test/`.
 #
 # Manifests and `test/gates.toml` only, per the FS-derived rule this file
-# already uses for `$_projects` — NOT an import-name grep (`stdlib/byteparser.mdk`
-# collides with project `byteparser/` and would fabricate phantom edges).
+# already uses for `$_projects` — NOT an import-name grep (an import name can
+# coincide with a stdlib module's name and would fabricate phantom edges).
 # `./medaka gate reach --json -- <path>` (compiler/tools/gate_cmd.mdk) is the
 # reference implementation these two derivations must agree with; read the
 # manifests/registry directly, as it does, rather than reverse-engineering its
@@ -701,7 +701,7 @@ while IFS= read -r f; do
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # #2551: the catch-all clause ratchet reads typecheck.mdk's clause heads directly.
       add 'diff_compiler_catch_all_census'
-      # #1319 unit 0: typecheck.mdk owns universeDataEnv, universeRecordByName and
+      # #1319 unit 0: typecheck.mdk owns universeCtorPop, universeRecordPop and
       # the A-2.6 import-scoped overlay — the tables whose keying decides which
       # declaration an import clause's constructor name lands on.
       add 'diff_compiler_import_order'
@@ -1093,6 +1093,14 @@ while IFS= read -r f; do
     # correctly invisible as a gate would otherwise be UNMAPPED as a SOURCE.
     test/snapshot_bless.sh)        add 'diff_compiler_snapshot*' ;;
 
+    # ── the first-visitor program corpus (#3699) ─────────────────────────────
+    # Not read by any differential gate yet; its driver is a TOOL (ledgered in
+    # test/CI-COVERAGE-TOOLS.txt). Two tree-wide scans do read every tracked
+    # .mdk, these included, so they are what a change here can red. Without this
+    # arm every edit to the corpus is UNMAPPED and widens the PR run to the full
+    # suite ([W-THIRD-CONSUMER]).
+    test/visitor_battery/*)        add 'check_removed_constructs' 'diff_compiler_source_bytes' ;;
+
     # ── the LSP suite's two shell halves ─────────────────────────────────────
     # Neither is a gate — `test/lsp_bless.sh` only writes goldens (ledgered in
     # test/CI-COVERAGE-TOOLS.txt) and `test/lsp_warm_session.sh` is the live
@@ -1225,6 +1233,11 @@ while IFS= read -r f; do
     # does nightly run, and how". That question is now `tiers` in the registry,
     # and this is the gate that checks it.
     .github/workflows/nightly.yml) add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_tier_drift' ;;
+    # #2533: the macOS smoke. Its steps are a composite action nightly.yml uses,
+    # so they move `tiers` exactly as a nightly.yml edit does, and both files are
+    # read by the CI-reachability gate. Nothing else on Linux can exercise them.
+    .github/workflows/macos.yml|.github/actions/macos-smoke/*)
+                                   add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_tier_drift' ;;
     # Two gates, two different questions, and the guide needs both answered.
     # `check_syntax_examples` proves the chapters' code EXECUTES (native `medaka
     # run`); it says nothing about whether the chapter RENDERS. Since #2386 the
@@ -1439,8 +1452,7 @@ while IFS= read -r f; do
 
     # ── ONE generic arm for every MANIFEST-BEARING PROJECT ────────────────────
     #
-    # sqlite, gzip and pds used to have three hand-pasted arms here; mq, parsec and
-    # byteparser had none and were UNMAPPED. All six are now derived from
+    # Every manifest-bearing project is derived from
     # `$_projects` (see its definition above) — the same `git ls-files '*medaka.toml'`
     # rule ci.yml and diff_compiler_project_enrolment.sh use, so the three consumers
     # of "what is a project" cannot drift apart silently.
@@ -1572,9 +1584,9 @@ done < "$CHANGED_PATHS"
 # gate's `playground/vendor/` exclusion line, by accident rather than by rule).
 #
 # So before this block, a change to demo/ or to any manifest-derived project
-# (mq, parsec, byteparser, sqlite, gzip, pds) derived that gate NEVER. That was a
+# (parsec, sqlite, gzip, pds) derived that gate NEVER. That was a
 # real regression against the old UNMAPPED→FULL fallback, which ran it incidentally.
-# A CR or a NUL pasted into mq/main.mdk would have reached the merge queue with the
+# A CR or a NUL pasted into parsec/main.mdk would have reached the merge queue with the
 # local loop green.
 #
 # Unconditional by design, and cheap by construction: the gate re-scans the whole
@@ -1625,8 +1637,16 @@ fi
 # against a preflight that spends ~1m41s building ./medaka before it runs anything. It
 # adds ZERO gates — it is a separate step, like need_fixpoint — so the `would run N
 # gate(s)` count is unchanged by design.
-inlang_files=$(awk '/^test: medaka$/{f=1;next} f&&/^\t/{print} f&&!/^\t/{exit}' "$ROOT/Makefile" \
+# Each entry is the recipe line after `./medaka test`: optional flags (`--native`), then
+# the target as the LAST word. The flags must reach the run, or a roster the Makefile
+# grades natively runs under the interpreter here (#3302).
+inlang_lines=$(awk '/^test: medaka$/{f=1;next} f&&/^\t/{print} f&&!/^\t/{exit}' "$ROOT/Makefile" \
   | sed -n 's|^	\./medaka test ||p')
+inlang_files=$(printf '%s\n' "$inlang_lines" | awk 'NF{print $NF}')
+# Prints the flags the Makefile passes for target $1 (empty when none).
+_inlang_flags() {
+  printf '%s\n' "$inlang_lines" | awk -v t="$1" 'NF && $NF == t { $NF = ""; sub(/[ \t]+$/, ""); print; exit }'
+}
 inlang_run=""
 while IFS= read -r f; do
   for _if in $inlang_files; do
@@ -1791,7 +1811,10 @@ if [ -n "${PREFLIGHT_DRY:-}" ]; then
     # resulting short gate list misleading. Do not repeat that here: a step the real
     # run will perform must appear in the dry-run's account of the real run.
     printf '── would also run the IN-LANGUAGE suite (`make test`; the `inlang` check) ─────\n'
-    for _if in $inlang_run; do printf '  INLANG    ./medaka test %s\n' "$_if"; done
+    for _if in $inlang_run; do
+      _ifl="$(_inlang_flags "$_if")"
+      printf '  INLANG    ./medaka test %s%s\n' "${_ifl:+$_ifl }" "$_if"
+    done
   fi
   if [ -n "$unmapped" ]; then
     printf '── %s path(s) the change→gate map has NO OPINION about ─────\n' \
@@ -2043,7 +2066,8 @@ if [ -n "$inlang_run" ]; then
   echo
   echo "── in-language suite (\`make test\` names these; the \`inlang\` required check) ──"
   for _if in $inlang_run; do
-    "$ROOT/medaka" test "$ROOT/$_if" || rc=1
+    # shellcheck disable=SC2046 # flags are plain words, split on purpose
+    "$ROOT/medaka" test $(_inlang_flags "$_if") "$ROOT/$_if" || rc=1
   done
 fi
 

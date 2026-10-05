@@ -1,0 +1,18 @@
+-- `g`'s declared context gives `Tag a`, which ends the chain `Tag (W^40 a)` after
+-- 40 `requires` steps.  Correct: accepted, printing 41.  The reduction stops at
+-- 32 steps and rejects with T-REQUIRES-DEPTH before it reaches the given.
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Int where
+  tag n = n
+
+data W a = W a
+
+impl Tag (W a) requires Tag a where
+  tag (W x) = tag x + 1
+
+g : Tag a => a -> Int
+g x = tag (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (x)))))))))))))))))))))))))))))))))))))))))
+
+main = println (g (1 : Int))

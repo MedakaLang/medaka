@@ -1,6 +1,6 @@
 ---
 name: sprint-retro
-description: Lightweight end-of-sprint retro — half a page on how the workflow itself performed, with a standing bias toward DELETING rules rather than adding them. Dispatch once at wrap-up with the sprint dir (STATUS.md, NOTES.md, reports/) and the PR/CI history. It proposes; it changes nothing — workflow changes are Val's to approve.
+description: End-of-sprint workflow retro, biased toward deleting rules. Proposes only; changes nothing.
 model: sonnet
 ---
 

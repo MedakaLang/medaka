@@ -1,0 +1,11 @@
+effect Log
+
+log : String -> <Log, IO> Unit
+log msg = println "[log] \{msg}"
+
+work : Int -> <Log, IO> Int
+work n =
+  log "working on \{n}"
+  n + 1
+
+main = println (work 41)

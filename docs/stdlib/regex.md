@@ -120,7 +120,7 @@ The pattern compiled, or an `Err` naming what is wrong and where.
 > map source (compile "a+b")
 Ok "a+b"
 > compile "a("
-Err RegexError { message = "pattern is missing a closing )", position = 2 }
+Err (RegexError { message = "pattern is missing a closing )", position = 2 })
 ```
 
 ### `mustCompile`
@@ -223,7 +223,7 @@ The leftmost match, or `None` when the pattern does not match.
 
 ```medaka
 > find (mustCompile "\\d+") "ab123cd"
-Some Match { start = 2, end = 5, text = "123", groups = [] }
+Some (Match { start = 2, end = 5, text = "123", groups = [] })
 > find (mustCompile "z") "ab"
 None
 ```

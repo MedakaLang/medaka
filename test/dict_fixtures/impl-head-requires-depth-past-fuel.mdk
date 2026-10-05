@@ -1,0 +1,21 @@
+-- §3 W3-inst past the requires fuel: the body of `impl Tag (Q a)` poses
+-- `Tag (W^33 a)` with no `requires Tag a`.  The reduction runs out of fuel one
+-- step before reaching `Tag a`, which is a located T-REQUIRES-DEPTH, never a
+-- silent accept (depth 32 reaches `Tag a`: impl-head-requires-depth-at-fuel.mdk).
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Int where
+  tag n = n
+
+data W a = W a
+
+impl Tag (W a) requires Tag a where
+  tag (W x) = tag x + 1
+
+data Q a = Q a
+
+impl Tag (Q a) where
+  tag (Q x) = tag (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (x))))))))))))))))))))))))))))))))))
+
+main = println (tag (Q (1 : Int)))

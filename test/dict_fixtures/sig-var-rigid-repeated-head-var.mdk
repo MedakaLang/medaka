@@ -1,0 +1,13 @@
+-- §3 `impl Pick a a a` against `Pick (List a) (List Int) (List Int)`: the
+-- repeated head variable matches only if the signature's `a` is `Int`, so `f`
+-- is rejected at the `pick` occurrence.
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+f : a -> List Int
+f y = pick [y] [1]
+
+main = println (debug (f (5 : Int)))

@@ -45,6 +45,12 @@ RECORDS=${LOAD_RECORDS:-5000}
 BLOBS=${LOAD_BLOBS:-200}
 CLIENTS=${LOAD_CLIENTS:-8}
 WRITE_CLIENTS=${LOAD_WRITE_CLIENTS:-1}
+# The pause each writer takes after an acknowledged write, never below the
+# gap the write rate limit needs. The server keeps every committed block in
+# memory, so over a long soak the writer's pace sets how much RSS grows by
+# design; a soak graded for leaks spaces its writes to keep that growth well
+# under its bound. 0 writes as fast as the rate limit allows.
+WRITE_INTERVAL_MS=${LOAD_WRITE_INTERVAL_MS:-0}
 SUBSCRIBER=${LOAD_SUBSCRIBER:-1}
 # The generators run well past the sampler on purpose; the overlap check
 # below is what enforces that they actually did, and names this knob when
@@ -62,6 +68,12 @@ RESOURCE_SAMPLE_SECONDS=${LOAD_RESOURCE_SAMPLE_SECONDS:-60}
 FULL_SOAK=${LOAD_FULL_SOAK:-0}
 MAX_RSS_GROWTH_PCT=${LOAD_MAX_RSS_GROWTH_PCT:-}
 MAX_DISK_GROWTH_KIB=${LOAD_MAX_DISK_GROWTH_KIB:-}
+# Where the RSS bound's baseline is taken: the first resource sample at least
+# this many seconds into the load phase. The heap grows to its working size
+# early in a run, and a bound measured from the first sample grades that
+# warm-up rather than drift. 0 keeps the first sample as the baseline. The disk
+# bound always grades from the first sample.
+RSS_BASELINE_AFTER_S=${LOAD_RSS_BASELINE_AFTER_S:-0}
 # The scenario vocabulary lives in `pds/test/load_client_main.mdk`: a scenario
 # names a cycle of route labels, and each label has one path builder there.
 # `read-load` is the default load; `repo-export` (#2955) and `blob-burst`
@@ -128,6 +140,12 @@ case "$RESOURCE_SAMPLE_SECONDS" in
   ''|*[!0-9]*) fail 'LOAD_RESOURCE_SAMPLE_SECONDS must be a positive integer' ;;
 esac
 [ "$RESOURCE_SAMPLE_SECONDS" -gt 0 ] || fail 'LOAD_RESOURCE_SAMPLE_SECONDS must be a positive integer'
+case "$RSS_BASELINE_AFTER_S" in
+  ''|*[!0-9]*) fail 'LOAD_RSS_BASELINE_AFTER_S must be a non-negative integer' ;;
+esac
+case "$WRITE_INTERVAL_MS" in
+  ''|*[!0-9]*) fail 'LOAD_WRITE_INTERVAL_MS must be a non-negative integer' ;;
+esac
 [ "$SUBSCRIBER" = 1 ] || fail 'LOAD_SUBSCRIBER must be 1; a soak requires one live consumer'
 [ "$WRITE_CLIENTS" -gt 0 ] || fail 'LOAD_WRITE_CLIENTS must be positive'
 
@@ -172,8 +190,10 @@ prepare_workload() {
     fail 'corpus build failed'
   }
   cat "$WORK/corpus.out"
-  cp -R "$WORK/corpus" "$WORK/data-loaded"
-  cp -R "$WORK/corpus" "$WORK/data-control"
+  # Each server serves `data/` under its own working directory.
+  mkdir -p "$WORK/root-loaded" "$WORK/root-control"
+  cp -R "$WORK/corpus" "$WORK/root-loaded/data"
+  cp -R "$WORK/corpus" "$WORK/root-control/data"
   printf 'phase corpus seconds=%s\n' "$(($(now_seconds) - CORPUS_START))"
 
   printf '%s\n' "$SECRET_HEX" > "$WORK/key.hex"
@@ -182,6 +202,14 @@ prepare_workload() {
   # The server refuses a group- or world-readable signing key, session-token
   # secret or password file before it binds.
   chmod 600 "$WORK/key.hex" "$WORK/token.hex" "$WORK/password"
+  # The server reads its secrets from fixed paths under its working
+  # directory; `cp -p` keeps the modes it grades.
+  for root in "$WORK/root-loaded" "$WORK/root-control"; do
+    mkdir -p "$root/secrets"
+    cp -p "$WORK/key.hex" "$root/secrets/key.hex"
+    cp -p "$WORK/token.hex" "$root/secrets/token.hex"
+    cp -p "$WORK/password" "$root/secrets/password"
+  done
 }
 
 # ── the two servers ─────────────────────────────────────────────────────────
@@ -192,16 +220,14 @@ prepare_workload() {
 # repository — a rate-limited run measures the limiter instead of the read
 # path. It is also how this server is deployed (`pds/Caddyfile`).
 #
-# `--password-file` and no `--init`: the data directory already holds the
-# repository the corpus builder wrote, and it holds no credential yet.
+# `secrets/password` present and no `--init`: the data directory already
+# holds the repository the corpus builder wrote, and it holds no credential
+# yet, so this start derives one. Each data directory is started exactly once.
 start_server() {
   tag=$1
-  datadir=$2
-  "$WORK/pdsd" \
+  (cd "$WORK/root-$tag" && exec "$WORK/pdsd" \
     --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
-    --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-    --password-file "$WORK/password" \
-    --data "$datadir" --port 0 --trusted-proxy \
+    --port 0 --trusted-proxy) \
     > "$WORK/$tag.out" 2> "$WORK/$tag.err" &
   echo $! > "$WORK/$tag.pid"
   SERVER_PIDS="$SERVER_PIDS $!"
@@ -248,12 +274,13 @@ record_resource_sample() {
   case "$rss" in
     ''|*[!0-9]*) fail "could not sample RSS for loaded server PID $LOADED_PID" ;;
   esac
-  disk=$(du -sk "$WORK/data-loaded" | awk '{print $1}')
+  disk=$(du -sk "$WORK/root-loaded/data" | awk '{print $1}')
   case "$disk" in
     ''|*[!0-9]*) fail 'could not sample loaded data-directory size' ;;
   esac
-  printf 'soak-sample timestamp=%s server_pid=%s rss_kib=%s data_kib=%s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LOADED_PID" "$rss" "$disk" \
+  printf 'soak-sample timestamp=%s elapsed_s=%s server_pid=%s rss_kib=%s data_kib=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(($(now_seconds) - LOAD_START))" \
+    "$LOADED_PID" "$rss" "$disk" \
     >> "$RESOURCE_LOG"
 }
 
@@ -269,24 +296,28 @@ monitor_resources() {
 check_resource_evidence() {
   samples=$(grep -c '^soak-sample ' "$RESOURCE_LOG" || true)
   [ "$samples" -ge 2 ] || fail "expected initial and final server resource samples, got $samples"
-  set -- $(awk '
-    NR == 1 {
-      for (i = 1; i <= NF; i++) {
-        split($i, pair, "=")
-        if (pair[1] == "rss_kib") first_rss = pair[2]
-        if (pair[1] == "data_kib") first_disk = pair[2]
-      }
-    }
+  # A sample with no elapsed_s field counts as elapsed 0, so a log written
+  # before the field existed grades as it always did.
+  set -- $(awk -v after="$RSS_BASELINE_AFTER_S" '
     {
+      rss = ""; disk = ""; elapsed = 0
       for (i = 1; i <= NF; i++) {
         split($i, pair, "=")
-        if (pair[1] == "rss_kib") last_rss = pair[2]
-        if (pair[1] == "data_kib") last_disk = pair[2]
+        if (pair[1] == "rss_kib") rss = pair[2] + 0
+        if (pair[1] == "data_kib") disk = pair[2] + 0
+        if (pair[1] == "elapsed_s") elapsed = pair[2] + 0
       }
-      if (last_rss > peak_rss) peak_rss = last_rss
-      if (last_disk > peak_disk) peak_disk = last_disk
+      if (NR == 1) { first_rss = rss; first_disk = disk }
+      last_rss = rss; last_disk = disk
+      if (rss > peak_rss) peak_rss = rss
+      if (disk > peak_disk) peak_disk = disk
+      if (!have_base && elapsed >= after + 0) { have_base = 1; base_rss = rss; base_elapsed = elapsed }
+      if (have_base && rss > post_peak_rss) post_peak_rss = rss
     }
-    END { print first_rss, first_disk, last_rss, last_disk, peak_rss, peak_disk }
+    END {
+      if (!have_base) { base_rss = 0; base_elapsed = -1; post_peak_rss = 0 }
+      print first_rss, first_disk, last_rss, last_disk, peak_rss, peak_disk, base_rss, base_elapsed, post_peak_rss
+    }
   ' "$RESOURCE_LOG")
   rss_start=$1
   disk_start=$2
@@ -294,25 +325,32 @@ check_resource_evidence() {
   disk_end=$4
   rss_peak=$5
   disk_peak=$6
+  rss_base=$7
+  rss_base_elapsed=$8
+  rss_base_peak=$9
   [ "$rss_start" -gt 0 ] || fail 'initial server RSS sample was zero'
+  [ "$rss_base_elapsed" -ge 0 ] \
+    || fail "no resource sample at or after LOAD_RSS_BASELINE_AFTER_S=${RSS_BASELINE_AFTER_S}s to take the RSS baseline from"
+  [ "$rss_base" -gt 0 ] || fail 'baseline server RSS sample was zero'
   rss_delta=$((rss_end - rss_start))
   disk_delta=$((disk_end - disk_start))
-  rss_peak_delta=$((rss_peak - rss_start))
+  rss_peak_delta=$((rss_base_peak - rss_base))
   disk_peak_delta=$((disk_peak - disk_start))
-  rss_pct=$(awk -v a="$rss_start" -v b="$rss_peak" \
+  rss_pct=$(awk -v a="$rss_base" -v b="$rss_base_peak" \
     'BEGIN { printf "%.3f", ((b - a) / a) * 100 }')
-  printf 'soak-delta server_pid=%s rss_initial_kib=%s rss_peak_kib=%s rss_peak_delta_kib=%s rss_peak_growth_pct=%s rss_final_kib=%s rss_final_delta_kib=%s data_initial_kib=%s data_peak_kib=%s data_peak_delta_kib=%s data_final_kib=%s data_final_delta_kib=%s samples=%s\n' \
-    "$LOADED_PID" "$rss_start" "$rss_peak" "$rss_peak_delta" "$rss_pct" "$rss_end" "$rss_delta" \
+  printf 'soak-delta server_pid=%s rss_initial_kib=%s rss_peak_kib=%s rss_baseline_kib=%s rss_baseline_elapsed_s=%s rss_peak_since_baseline_kib=%s rss_peak_delta_kib=%s rss_peak_growth_pct=%s rss_final_kib=%s rss_final_delta_kib=%s data_initial_kib=%s data_peak_kib=%s data_peak_delta_kib=%s data_final_kib=%s data_final_delta_kib=%s samples=%s\n' \
+    "$LOADED_PID" "$rss_start" "$rss_peak" "$rss_base" "$rss_base_elapsed" "$rss_base_peak" \
+    "$rss_peak_delta" "$rss_pct" "$rss_end" "$rss_delta" \
     "$disk_start" "$disk_peak" "$disk_peak_delta" "$disk_end" "$disk_delta" "$samples"
   awk -v pid="$LOADED_PID" '
     { found = 0; for (i = 1; i <= NF; i++) { split($i, pair, "="); if (pair[1] == "server_pid") { found = 1; if (pair[2] != pid) exit 1 } } if (!found) exit 1 }
   ' "$RESOURCE_LOG" || fail 'loaded server PID changed or was absent in resource samples'
   printf 'server-continuity pid=%s samples=%s PASS\n' "$LOADED_PID" "$samples"
   if [ -n "$MAX_RSS_GROWTH_PCT" ]; then
-    awk -v start="$rss_start" -v peak="$rss_peak" -v limit="$MAX_RSS_GROWTH_PCT" \
+    awk -v start="$rss_base" -v peak="$rss_base_peak" -v limit="$MAX_RSS_GROWTH_PCT" \
       'BEGIN { exit !((peak - start) * 100 <= start * limit) }' \
-      || fail "peak RSS growth $rss_pct% exceeded configured limit ${MAX_RSS_GROWTH_PCT}%"
-    printf 'rss-bound limit_pct=%s PASS\n' "$MAX_RSS_GROWTH_PCT"
+      || fail "peak RSS growth $rss_pct% exceeded configured limit ${MAX_RSS_GROWTH_PCT}% (baseline at ${rss_base_elapsed}s)"
+    printf 'rss-bound limit_pct=%s baseline_after_s=%s PASS\n' "$MAX_RSS_GROWTH_PCT" "$RSS_BASELINE_AFTER_S"
   else
     printf 'rss-bound not-configured (shakeout only; no limit inferred)\n'
   fi
@@ -374,6 +412,32 @@ if [ "${LOAD_EVIDENCE_SELFTEST:-0}" = 1 ]; then
   (MAX_RSS_GROWTH_PCT=20 MAX_DISK_GROWTH_KIB=20; check_resource_evidence) \
     > "$WORK/within.out" 2>&1 || fail 'within-limit resource samples were rejected'
   printf 'resource-within-limit control PASS\n'
+  # Warm-up then a flat heap: 1000 -> 1500 by 600s, then 1500..1600. From the
+  # first sample that is 60% growth; from the sample at 600s it is 6.7%.
+  printf 'soak-sample elapsed_s=0 server_pid=4242 rss_kib=1000 data_kib=100\nsoak-sample elapsed_s=300 server_pid=4242 rss_kib=1400 data_kib=100\nsoak-sample elapsed_s=600 server_pid=4242 rss_kib=1500 data_kib=100\nsoak-sample elapsed_s=900 server_pid=4242 rss_kib=1600 data_kib=100\nsoak-sample elapsed_s=1200 server_pid=4242 rss_kib=1550 data_kib=100\n' > "$RESOURCE_LOG"
+  (MAX_RSS_GROWTH_PCT=20 MAX_DISK_GROWTH_KIB=; RSS_BASELINE_AFTER_S=600; check_resource_evidence) \
+    > "$WORK/warm.out" 2>&1 || { cat "$WORK/warm.out" >&2; fail 'post-warm-up baseline rejected a flat heap'; }
+  grep -q 'rss_baseline_kib=1500 rss_baseline_elapsed_s=600 ' "$WORK/warm.out" \
+    || fail 'post-warm-up baseline was not the first sample at or after 600s'
+  printf 'rss-baseline after warm-up PASS\n'
+  if (MAX_RSS_GROWTH_PCT=20 MAX_DISK_GROWTH_KIB=; RSS_BASELINE_AFTER_S=0; check_resource_evidence) > "$WORK/warm.out" 2>&1; then
+    fail 'first-sample baseline accepted 60% warm-up growth'
+  fi
+  printf 'rss-baseline first-sample control rejects warm-up PASS\n'
+  # Growth after the baseline is still graded: 1500 -> 1900 is 26.7%.
+  printf 'soak-sample elapsed_s=0 server_pid=4242 rss_kib=1000 data_kib=100\nsoak-sample elapsed_s=600 server_pid=4242 rss_kib=1500 data_kib=100\nsoak-sample elapsed_s=1200 server_pid=4242 rss_kib=1900 data_kib=100\nsoak-sample elapsed_s=1800 server_pid=4242 rss_kib=1600 data_kib=100\n' > "$RESOURCE_LOG"
+  if (MAX_RSS_GROWTH_PCT=20 MAX_DISK_GROWTH_KIB=; RSS_BASELINE_AFTER_S=600; check_resource_evidence) > "$WORK/warm.out" 2>&1; then
+    fail 'post-warm-up baseline accepted growth after the baseline'
+  fi
+  grep -q 'FAIL: peak RSS growth 26.667% exceeded' "$WORK/warm.out" \
+    || { cat "$WORK/warm.out" >&2; fail 'post-baseline growth rejected for the wrong reason'; }
+  printf 'rss-baseline post-baseline growth rejection PASS\n'
+  if (MAX_RSS_GROWTH_PCT=20 MAX_DISK_GROWTH_KIB=; RSS_BASELINE_AFTER_S=5000; check_resource_evidence) > "$WORK/warm.out" 2>&1; then
+    fail 'a baseline past the last sample was accepted'
+  fi
+  grep -q 'FAIL: no resource sample at or after LOAD_RSS_BASELINE_AFTER_S=5000s' "$WORK/warm.out" \
+    || { cat "$WORK/warm.out" >&2; fail 'missing baseline rejected for the wrong reason'; }
+  printf 'rss-baseline missing-sample rejection PASS\n'
   printf 'write-path bulk.synth.record/soak-129-0\nwrite-path bulk.synth.record/soak-129-1\n' > "$WORK/selftest.writer"
   printf 'relay-path bulk.synth.record/soak-129-1\nrelay-path bulk.synth.record/soak-129-0\n' > "$WORK/selftest.subscriber"
   grade_relay_evidence "$WORK/selftest.writer" "$WORK/selftest.subscriber" 2 2
@@ -390,8 +454,8 @@ fi
 
 prepare_workload
 SERVER_START=$(now_seconds)
-start_server loaded "$WORK/data-loaded"
-start_server control "$WORK/data-control"
+start_server loaded
+start_server control
 LOADED_PORT=$(wait_for_port loaded) || {
   cat "$WORK/loaded.err" >&2
   fail 'loaded server did not report readiness'
@@ -544,7 +608,8 @@ i=1
 while [ "$i" -le "$WRITE_CLIENTS" ]; do
   writer_id=$((128 + i))
   "$WORK/client" write "$LOADED_PORT" "$COLLECTION" "$writer_id" \
-    "$DURATION_MS" "$DID" "$WORK/password" > "$WORK/write$i.out" 2>&1 &
+    "$DURATION_MS" "$DID" "$WORK/password" "$WRITE_INTERVAL_MS" \
+    > "$WORK/write$i.out" 2>&1 &
   LOAD_PIDS="$LOAD_PIDS $!"
   i=$((i + 1))
 done

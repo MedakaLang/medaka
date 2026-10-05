@@ -1,0 +1,10 @@
+interface Same a b where
+  same : a -> b
+
+impl Same a a where
+  same x = x
+
+retarget : Socket h -> Socket k
+retarget s = same s
+
+main = println 1

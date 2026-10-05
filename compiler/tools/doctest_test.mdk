@@ -1,0 +1,35 @@
+import test.{expectAll, expectEqual}
+import frontend.lexer.{collectComments}
+import tools.doctest.{extractExamples, exampleInput, exampleExpected}
+
+-- (input, expected) of every example extracted from a source text.
+extracted : String -> List (String, Option String)
+extracted src =
+  map
+    (e => (exampleInput e, exampleExpected e))
+    (extractExamples (collectComments src))
+
+test "a -- comment after a doc block does not join its last expected output" = expectAll
+  [
+    expectEqual
+      [("inc2 1", Some "3")]
+      (extracted
+        "{- | Adds one.\n\n   > inc2 1\n   3 -}\n-- ordinary note\ninc2 x = x + 2\n"),
+    expectEqual
+      [("1 + 1", Some "2")]
+      (extracted
+        "{- | E.\n\n   > 1 + 1\n   2 -}\n-- one\n-- two\nexport\naddOne n = n + 1\n"),
+  ]
+
+test "a -- comment before a doc block does not join its first lines" = expectAll
+  [
+    expectEqual
+      [("g 0", Some "0"), ("f 1", Some "1")]
+      (extracted "-- > g 0\n-- 0\n{- | F.\n\n   > f 1\n   1 -}\nf x = x\n"),
+  ]
+
+test "line-comment doctests still collect their expected output" = expectAll [
+  expectEqual
+    [("f 1", Some "1\n2")]
+    (extracted "-- > f 1\n-- 1\n-- 2\nf x = x\n"),
+]

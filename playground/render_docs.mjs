@@ -47,6 +47,22 @@
 //                      there is classified not-runnable (conjunct 4 below);
 //                      omitted, that one conjunct is skipped and everything else
 //                      is unchanged.
+//   --no-run-links     emit no "open in playground" footer under Medaka blocks
+//                      (a doc set of prose whose code is illustration, not lessons).
+//   --site-url <url>   the ABSOLUTE url this doc set is served at (e.g.
+//                      https://medaka-lang.dev/guide). Given, every page gets
+//                      link-preview tags (og:*, twitter:card) so a shared link
+//                      renders a card; scrapers do not resolve relative urls.
+//   --og-image <url>   absolute url of the 1200x630 card image; needs --site-url.
+//   --og-image-alt <text>  alt text for that image.
+//   --no-pager         omit the previous/next links at the foot of each page
+//                      (a doc set whose pages are not read in order, like a blog).
+//   --no-toc           omit the "On this page" box above each page's article.
+//
+// A page's og:description is the `<!-- description: … -->` comment in its source
+// when there is one, else its first prose paragraph; `<!-- og-image: <file> -->`
+// gives that page its own card image, relative to --site-url, and
+// `<!-- og-image-alt: … -->` its alt text.
 //
 // Besides one page per source `.md`, the renderer emits a doc-set INDEX page at
 // `index.html`: a static host serves nothing at a bare directory URL without
@@ -109,8 +125,8 @@ const escapeHtml = (s) =>
 //      loads fine — it throws a `CapabilityError` at run time instead of
 //      producing the documented output, which is worse than no link.
 //   3. it defines a top-level `main`. A block without one is not a program:
-//      natively `medaka build` panics ("no 'main' binding found"), and the
-//      browser answers W-MAIN-MISSING. The ▶ button would open a guaranteed
+//      natively `medaka run`/`build` refuse it with one located error
+//      (W-MAIN-MISSING), and the browser answers the same code. The ▶ button would open a guaranteed
 //      failure, so there must not be one.
 //   4. every module it imports is one the page SHIPS. A `import test` resolves
 //      natively and 404s in the browser, which fetches each import from
@@ -286,6 +302,16 @@ function parseArgs(argv) {
     // --playground-url. The renderer knows nothing about sibling doc sets, so
     // the caller that lays them out beside each other supplies the links.
     navLinks: [],
+    // false = no "open in playground" footer under any Medaka block (--no-run-links).
+    runLinks: true,
+    // Absolute base url + card image for link-preview tags; null = no tags.
+    siteUrl: null,
+    ogImage: null,
+    ogImageAlt: '',
+    // false = no previous/next links at the foot of a page (--no-pager).
+    pager: true,
+    // false = no "On this page" box (--no-toc).
+    toc: true,
     // Sibling doc sets, {name, href, exclude}: see --sibling above. Empty = every
     // out-of-set link goes to the repository, exactly as before.
     siblings: [],
@@ -339,6 +365,12 @@ function parseArgs(argv) {
         break;
       }
       case '--dist': opts.distDir = resolve(next()); break;
+      case '--no-run-links': opts.runLinks = false; break;
+      case '--site-url': opts.siteUrl = next().replace(/\/+$/, ''); break;
+      case '--og-image': opts.ogImage = next(); break;
+      case '--og-image-alt': opts.ogImageAlt = next(); break;
+      case '--no-pager': opts.pager = false; break;
+      case '--no-toc': opts.toc = false; break;
       default: throw new Error(`unknown argument: ${a}`);
     }
   }
@@ -348,6 +380,10 @@ function parseArgs(argv) {
   }
   // A --dist that is not there is a hard error, never a silent skip: the caller
   // asked for the check, so failing to perform it must be loud.
+  for (const [flag, v] of [['--site-url', opts.siteUrl], ['--og-image', opts.ogImage]]) {
+    if (v !== null && !/^https?:\/\//.test(v)) throw new Error(`${flag} must be an absolute url, got: ${v}`);
+  }
+  if (opts.ogImage && !opts.siteUrl) throw new Error('--og-image needs --site-url');
   if (opts.distDir && !existsSync(opts.distDir)) {
     throw new Error(`--dist does not exist: ${opts.distDir}`);
   }
@@ -357,7 +393,8 @@ function parseArgs(argv) {
 // ── the renderer ────────────────────────────────────────────────────────────
 export function renderDocSet(opts) {
   const { src, out, exclude, repoUrl, repoRoot, playgroundUrl = '../index.html',
-          cssName = 'guide.css', navLinks = [], siblings = [], distDir = null } = opts;
+          cssName = 'guide.css', navLinks = [], siblings = [], distDir = null, runLinks = true, siteUrl = null, ogImage = null, ogImageAlt = '', pager = true, toc: showToc = true } = opts;
+  const og = siteUrl ? { siteUrl, ogImage, ogImageAlt } : null;
   if (!existsSync(src)) throw new Error(`--src does not exist: ${src}`);
 
   // A sibling doc set's SOURCE directory sits beside this one (docs/guide next
@@ -388,7 +425,7 @@ export function renderDocSet(opts) {
   const titles = new Map(pages.map((file) => [file, pageTitleOf(readFileSync(join(src, file), 'utf8'), file)]));
 
   const rendered = pages.map((file) =>
-    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs }));
+    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs, runLinks, og, pager, showToc }));
 
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -408,7 +445,7 @@ export function renderDocSet(opts) {
   // basenames, and the renderer must not clobber generated content.
   if (!inSet.has('index.md')) {
     writeFileSync(join(out, 'index.html'),
-      indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks, cssName }));
+      indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks, cssName, og }));
   }
   writeFileSync(join(out, cssName), STYLESHEET);
 
@@ -422,7 +459,7 @@ function pageTitleOf(markdown, file) {
   return (markdown.match(/^#\s+(.+)$/m)?.[1] ?? basename(file, '.md')).replace(/`/g, '').trim();
 }
 
-function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs = [] }) {
+function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped, siblingDirs = [], runLinks = true, og = null, pager = true, showToc = true }) {
   const markdown = readFileSync(join(src, file), 'utf8');
   const slug = slugger();
   const toc = [];
@@ -457,14 +494,14 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titl
             `silently render as unhighlighted prose.`);
         }
         const kind = KNOWN_FENCES[label] ?? 'unknown';
-        const footer = kind === 'medaka' && !isDoctest
+        const footer = kind === 'medaka' && !isDoctest && runLinks
           ? runnableFooter(classifyRunnable(label, text, shipped), text, playgroundUrl)
           : '';
         return `<div class="codeblock kind-${kind}"`
           + ` data-lang="${escapeHtml(label || 'plain')}"`
           + ` data-fence="${escapeHtml(info)}"`
           + ` data-source="${escapeHtml(text)}">`
-          + `<pre><code class="language-${escapeHtml(label || 'plain')}">`
+          + `<pre tabindex="0"><code class="language-${escapeHtml(label || 'plain')}">`
           // Only real Medaka source is highlighted. `kind === 'medaka'` covers
           // `medaka`/`medaka-project`/`medaka-nocheck` (KNOWN_FENCES above);
           // `medaka-expect` is documented stdout, not source, and `toml`/`plain`
@@ -495,8 +532,36 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titl
     outFile,
     title: pageTitle,
     toc,
-    html: pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, playgroundUrl, navLinks, cssName }),
+    html: pageShell({ pageTitle, docTitle, body, toc: showToc ? toc : [], outFile, pages, titles, playgroundUrl, navLinks, cssName,
+                      og: pageOg(og, markdown), description: pageDescription(markdown), pager }),
   };
+}
+
+// A page's own card image, `<!-- og-image: <file> -->`, resolved against the doc
+// set's --site-url, replaces the doc set's --og-image for that page alone.
+function pageOg(og, markdown) {
+  const own = markdown.match(/<!--\s*og-image:\s*(\S+)\s*-->/);
+  if (!og || !own) return og;
+  const url = /^https?:\/\//.test(own[1]) ? own[1] : `${og.siteUrl}/${own[1]}`;
+  const alt = markdown.match(/<!--\s*og-image-alt:\s*([\s\S]*?)-->/);
+  return { ...og, ogImage: url, ogImageAlt: alt ? alt[1].trim() : og.ogImageAlt };
+}
+
+// A page's link-preview description: its `<!-- description: … -->` comment, else
+// the first prose paragraph with the Markdown syntax stripped, cut at a word
+// boundary near 200 characters.
+export function pageDescription(markdown) {
+  const explicit = markdown.match(/<!--\s*description:\s*([\s\S]*?)-->/);
+  const paragraph = explicit ? explicit[1]
+    : (markdown.split(/\n\s*\n/).map((b) => b.trim())
+        .find((b) => b !== '' && !/^(#|```|<|>|-|\*|\||\d+\.)/.test(b)) ?? '');
+  const plain = paragraph
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[`*_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (plain.length <= 200) return plain;
+  return plain.slice(0, 200).replace(/\s+\S*$/, '') + '…';
 }
 
 // Rewrite one href.
@@ -558,14 +623,47 @@ function rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors, siblin
 }
 
 // ── page shell ──────────────────────────────────────────────────────────────
-function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, playgroundUrl, navLinks = [], cssName = 'guide.css' }) {
-  const navHtml = navLinks.length === 0 ? '' :
-    `<nav class="site-nav-links" aria-label="Site">\n`
-    + navLinks.map(({ label, href }) => {
-      const ext = /^https?:\/\//.test(href) ? ' target="_blank" rel="noopener"' : '';
-      return `<a href="${escapeHtml(href)}"${ext}>${escapeHtml(label)}</a>`;
-    }).join('\n')
+function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, playgroundUrl, navLinks = [], cssName = 'guide.css',
+                    og = null, description = '', pager = false }) {
+  // Previous/next follow the sidebar's chapter order; an authored index.md is
+  // the doc set's landing page, not a chapter, so it is not in the sequence.
+  const sequence = pages.filter((p) => p !== 'index.md');
+  const at = sequence.findIndex((p) => p.replace(/\.md$/, '.html') === outFile);
+  const step = (p, cls, label) => !p ? '' :
+    `<a class="${cls}" href="${escapeHtml(p.replace(/\.md$/, '.html'))}">`
+    + `<span class="pager-label">${label}</span>${escapeHtml(titles.get(p))}</a>`;
+  const pagerHtml = !pager || at < 0 || sequence.length < 2 ? '' :
+    `<nav class="pager" aria-label="Chapter">\n`
+    + step(sequence[at - 1], 'pager-prev', '&larr; Previous')
+    + step(sequence[at + 1], 'pager-next', 'Next &rarr;')
     + `\n</nav>\n`;
+  const fullTitle = pageTitle === docTitle ? pageTitle : `${pageTitle} — ${docTitle}`;
+  const ogHtml = !og ? '' : [
+    `<meta name="description" content="${escapeHtml(description)}">`,
+    `<meta property="og:type" content="article">`,
+    `<meta property="og:url" content="${escapeHtml(`${og.siteUrl}/${outFile.replace(/(?:^|\/)index\.html$|\.html$/, "")}`)}">`,
+    `<meta property="og:title" content="${escapeHtml(pageTitle)}">`,
+    `<meta property="og:description" content="${escapeHtml(description)}">`,
+    ...(og.ogImage ? [
+      `<meta property="og:image" content="${escapeHtml(og.ogImage)}">`,
+      `<meta property="og:image:width" content="1200">`,
+      `<meta property="og:image:height" content="630">`,
+      `<meta property="og:image:alt" content="${escapeHtml(og.ogImageAlt)}">`,
+      `<meta name="twitter:card" content="summary_large_image">`,
+    ] : []),
+  ].join('\n') + '\n';
+  // The link list is emitted twice: a row for wide viewports and, for phones, the
+  // same links inside a <details> menu behind a hamburger. CSS shows exactly one
+  // of the two at any width; a closed <details> cannot be forced open from CSS,
+  // which is why the row is not simply restyled.
+  const linksHtml = navLinks.map(({ label, href }) => {
+    const ext = /^https?:\/\//.test(href) ? ' target="_blank" rel="noopener"' : '';
+    return `<a href="${escapeHtml(href)}"${ext}>${escapeHtml(label)}</a>`;
+  }).join('\n');
+  const navHtml = navLinks.length === 0 ? '' :
+    `<nav class="site-nav-links" aria-label="Site">\n${linksHtml}\n</nav>\n`
+    + `<details class="site-nav-menu">\n<summary aria-label="Site menu">\u2630</summary>\n`
+    + `<nav class="site-nav-menu-links" aria-label="Site">\n${linksHtml}\n</nav>\n</details>\n`;
   const tocHtml = toc.length === 0 ? '' :
     `<nav class="toc" aria-label="On this page">\n<h2>On this page</h2>\n<ul>\n`
     + toc.map((h) => `<li class="toc-h${h.depth}"><a href="#${h.id}">${h.text}</a></li>`).join('\n')
@@ -582,10 +680,11 @@ function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, pla
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(pageTitle === docTitle ? pageTitle : `${pageTitle} — ${docTitle}`)}</title>
-<link rel="stylesheet" href="${escapeHtml(cssName)}">
+<title>${escapeHtml(fullTitle)}</title>
+${ogHtml}<link rel="stylesheet" href="${escapeHtml(cssName)}">
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="site-nav">
 <a class="site-nav-back" href="${escapeHtml(playgroundUrl)}">&larr; Playground</a>
 <a class="site-nav-title" href="index.html">${escapeHtml(docTitle)}</a>
@@ -597,10 +696,10 @@ ${navHtml}</header>
 ${chapters}
 </ul>
 </nav>
-<main>
+<main id="main">
 ${tocHtml}<article>
 ${body}</article>
-</main>
+${pagerHtml}</main>
 </div>
 </body>
 </html>
@@ -613,7 +712,7 @@ ${body}</article>
 // that derives from `docs/guide/*.md` honest. It is written ONLY for a doc set
 // with no `index.md` of its own (see the guard in `renderDocSet`): where a set
 // authors one, that page is the index and this function is never called.
-function indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks, cssName }) {
+function indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks, cssName, og = null }) {
   const items = rendered.map((p) =>
     `<li><a href="${escapeHtml(p.outFile)}">${escapeHtml(p.title)}</a></li>`).join('\n');
   const body = `<h1>${escapeHtml(docTitle)}</h1>\n`
@@ -621,7 +720,8 @@ function indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks,
     + `<ol class="chapter-index">\n${items}\n</ol>\n`;
   return pageShell({
     pageTitle: docTitle, docTitle, body, toc: [],
-    outFile: 'index.html', pages, titles, playgroundUrl, navLinks, cssName,
+    outFile: 'index.html', pages, titles, playgroundUrl, navLinks, cssName, og,
+    description: `${docTitle}: ${rendered.length} pages.`,
   });
 }
 
@@ -636,7 +736,7 @@ const STYLESHEET = `/* Generated by playground/render_docs.mjs — do not edit b
   --line: #2b3550;
   --ink: #e4e9f2;
   --muted: #9ba6ba;
-  --faint: #6a7590;
+  --faint: #8590a6;
   --accent: #5fd38f;
   --accent-bright: #8ee8b3;
   --accent-deep: #2fae68;
@@ -654,7 +754,7 @@ const STYLESHEET = `/* Generated by playground/render_docs.mjs — do not edit b
      deliberate continuity with the site chrome, not a duplicate to collapse:
      the two are free to diverge, and this block's job is to track the editor. */
   --tok-keyword: #5fd38f;
-  --tok-comment: #6e7781;
+  --tok-comment: #8a94a6;
   --tok-string: #f0c674;
   --tok-character: #f0c674;
   --tok-interpolation: #ffb86c;
@@ -666,32 +766,66 @@ const STYLESHEET = `/* Generated by playground/render_docs.mjs — do not edit b
   --tok-variableName: #d6dde8;
   --tok-operator: #a9b1ba;
   --tok-punctuation: #8b949e;
+  --tok-typeVar: #6fc7d9;
+  --tok-effectLabel: #f58fb0;
+  --tok-effectVar: #b8c97a;
 }
 *, *::before, *::after { box-sizing: border-box; }
-html { background: #0c1019; }
+html { background: #0c1019; scroll-padding-top: 4.5rem; } /* clear the sticky .site-nav on #anchor jumps */
 body { margin:0; color:var(--ink); background:var(--bg); font:16px/1.65 var(--ui); }
 a { color:var(--accent); text-decoration:none; }
 a:hover { color:var(--accent-bright); text-decoration:underline; }
+/* Prose links are underlined so they are distinguishable without colour. */
+article a:not(.pg-run):not(.anchor) { text-decoration:underline; text-decoration-thickness:1px;
+       text-underline-offset:.18em; }
+.skip-link { position:absolute; left:-999px; top:.5rem; z-index:30; padding:.5rem .75rem;
+       background:var(--panel); color:var(--ink); border:1px solid var(--accent); border-radius:6px; }
+.skip-link:focus { left:.75rem; }
 
 .site-nav { display:flex; align-items:center; gap:1rem; padding:.85rem 1.25rem;
        background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0;
        z-index:10; }
 .site-nav-links { margin-left:auto; display:flex; gap:1rem; font-size:.8rem; }
-.site-nav-links a { color:var(--muted); }
+.site-nav-links a { color:var(--muted); padding:.3rem 0; }
 .site-nav-links a:hover { color:var(--accent); text-decoration:none; }
-.site-nav-back { color:var(--muted); font:500 .85rem var(--ui); white-space:nowrap; }
+.site-nav-back { color:var(--muted); font:500 .85rem var(--ui); white-space:nowrap; padding:.3rem 0; }
 .site-nav-back:hover { color:var(--ink); }
 .site-nav-title:hover { color:var(--ink); text-decoration:none; }
 .site-nav-title { color:var(--faint); font-size:.8rem; text-transform:uppercase;
-       letter-spacing:.06em; }
+       letter-spacing:.06em; padding:.3rem 0; }
+.site-nav-menu { display:none; margin-left:auto; position:relative; }
+.site-nav-menu summary { list-style:none; cursor:pointer; color:var(--muted); font-size:1.15rem;
+       line-height:1; padding:.3rem .5rem; border:1px solid var(--line); border-radius:6px; }
+.site-nav-menu summary::-webkit-details-marker { display:none; }
+.site-nav-menu[open] summary { color:var(--ink); }
+.site-nav-menu-links { position:absolute; right:0; top:calc(100% + .5rem); display:flex;
+       flex-direction:column; gap:.7rem; min-width:11rem; padding:.8rem 1rem; font-size:.95rem;
+       background:var(--panel); border:1px solid var(--line); border-radius:8px;
+       box-shadow:0 8px 24px rgba(0,0,0,.35); z-index:20; }
+.site-nav-menu-links a { color:var(--muted); padding:.25rem 0; }
+.site-nav-menu-links a:hover { color:var(--accent); text-decoration:none; }
+@media (max-width:700px) {
+  /* One row, always: back link, the set title truncated, a hamburger. The full
+     link row would overflow the viewport and make the whole page scroll sideways. */
+  .site-nav { gap:.75rem; padding:.7rem 1rem; }
+  .site-nav-links { display:none; }
+  .site-nav-menu { display:block; }
+  .site-nav-title { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+}
+.pager { display:flex; gap:1rem; margin-top:3rem; padding-top:1.25rem; border-top:1px solid var(--line); }
+.pager a { flex:1; display:flex; flex-direction:column; gap:.2rem; padding:.75rem 1rem;
+       border:1px solid var(--line); border-radius:8px; color:var(--ink); }
+.pager a:hover { border-color:var(--accent); text-decoration:none; }
+.pager-next { text-align:right; margin-left:auto; }
+.pager-label { font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
 
 .layout { display:flex; gap:2.5rem; max-width:1180px; margin:0 auto; padding:2rem 1.25rem; }
 .chapters { flex:0 0 15rem; font-size:.88rem; }
 .chapters h2, .toc h2 { font-size:.75rem; text-transform:uppercase; letter-spacing:.06em;
        color:var(--faint); margin:0 0 .6rem; }
 .chapters ul, .toc ul { list-style:none; margin:0; padding:0; }
-.chapters li { margin:.35rem 0; }
-.chapters a { color:var(--muted); }
+.chapters li { margin:.1rem 0; }
+.chapters a { color:var(--muted); display:inline-block; padding:.25rem 0; }
 .chapters a:hover { color:var(--ink); }
 .chapters a.here { color:var(--accent); font-weight:600; }
 main { flex:1 1 auto; min-width:0; max-width:42rem; }
@@ -707,8 +841,8 @@ p, li { color:var(--ink); }
 
 .toc { border:1px solid var(--line); background:var(--panel); border-radius:8px;
        padding:.85rem 1.1rem; margin-bottom:2rem; font-size:.88rem; }
-.toc li { margin:.25rem 0; }
-.toc a { color:var(--muted); }
+.toc li { margin:0; }
+.toc a { color:var(--muted); display:inline-block; padding:.25rem 0; }
 .toc a:hover { color:var(--accent); }
 .toc .toc-h3 { padding-left:1rem; }
 
@@ -736,13 +870,16 @@ p, li { color:var(--ink); }
 .codeblock .tok-variableName  { color:var(--tok-variableName); }
 .codeblock .tok-operator      { color:var(--tok-operator); }
 .codeblock .tok-punctuation   { color:var(--tok-punctuation); }
+.codeblock .tok-typeVar     { color:var(--tok-typeVar); }
+.codeblock .tok-effectLabel { color:var(--tok-effectLabel); }
+.codeblock .tok-effectVar   { color:var(--tok-effectVar); }
 code, pre { font-family:var(--mono); font-size:.88em; }
 :not(pre) > code { background:var(--panel-2); color:var(--ink); padding:.15em .4em;
        border-radius:4px; }
 
 .codeblock-actions { border-top:1px solid var(--line); background:var(--panel);
        padding:.5rem .9rem; font:500 .8rem var(--ui); }
-.pg-run { color:var(--accent); }
+.pg-run { color:var(--accent); display:inline-block; padding:.3rem 0; }
 .pg-run:hover { color:var(--accent-bright); }
 .pg-not-runnable { color:var(--faint); font-style:italic; }
 

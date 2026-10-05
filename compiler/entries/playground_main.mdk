@@ -76,6 +76,7 @@
 import frontend.ast.{Decl(..), Loc(..), Pat, Expr(..)}
 import frontend.parser.{
   parseResult,
+  parseLocatedResult,
   parseLocated,
   ParseError,
   parseErrorLine,
@@ -93,6 +94,8 @@ import driver.loader.{
 import driver.diagnostics.{
   analyzeProject,
   analyzeLocated,
+  exportsAmong,
+  sourcesMentioning,
   Diag(..),
   Severity(..),
   cjPosition,
@@ -105,6 +108,7 @@ import driver.diagnostics.{
   parseErrCode,
   codeKind,
   diagOfTypeError,
+  missingMainDiag,
 }
 import driver.main_autoprint.{
   shouldAutoPrintMain,
@@ -124,10 +128,10 @@ import json.{
 import support.path.{dirOf}
 import support.char.{isIdentChar, isDigit}
 import entries.entry_support.{rootsOrDefault, desugarPair}
-import support.util.{startsWith}
+import support.util.{startsWith, lookupAssoc, splitOnChar, filterList}
 import types.repr.{Scheme}
 import types.typecheck.{
-  elaborateModules, constrainedSigNames, preludeReturnPosDictNames,
+  TcDiag, elaborateModules, constrainedSigNames, preludeReturnPosDictNames,
   preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
   checkedFfiExternTypeNamesModules, ppSchemeNamedFull, checkOneSchemeFullK
 }
@@ -143,11 +147,15 @@ import ir.core_ir_lower.{
 import backend.private_mangle.{mangleUnitsEv}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
+import backend.wasm_file_grants.{prepareWasmFileGrants}
 import backend.wasm_reach.{wasmReachFilter}
 
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
 --   compile  <runtime> <core> <entry> [root ...]      → analyze→emit (today's behavior)
 --   analyze  <runtime> <core> <entry> [root ...]      → analyze ONLY, no wasm codegen
+-- compile/analyze also take `--stdlib-modules=<id>,<id>,…` among the roots: the
+-- stdlib modules the host placed in the vfs under the first root (the shipped
+-- set), the only ones an unbound name's import hint may name.
 --   hover    <runtime> <core> <entry> <line> <col>     → __MEDAKA_HOVER__ + Hover JSON
 --   complete <runtime> <core> <entry> <line> <col>     → __MEDAKA_COMPLETE__ + CompletionItem[]
 -- line/col are 0-based (LSP position convention).  hover/complete run a fresh
@@ -167,10 +175,10 @@ import backend.wasm_reach.{wasmReachFilter}
 -- what diagnostics they report.
 main : <IO> Unit
 main = match args ()
-  "compile" :: runtimeP :: coreP :: entry :: roots =>
-    run True runtimeP coreP entry (rootsOrDefault entry roots)
-  "analyze" :: runtimeP :: coreP :: entry :: roots =>
-    run False runtimeP coreP entry (rootsOrDefault entry roots)
+  "compile" :: runtimeP :: coreP :: entry :: rest =>
+    runWithShipped True runtimeP coreP entry rest
+  "analyze" :: runtimeP :: coreP :: entry :: rest =>
+    runWithShipped False runtimeP coreP entry rest
   "hover" :: runtimeP :: coreP :: entry :: rest =>
     runQuery True runtimeP coreP entry rest
   "complete" :: runtimeP :: coreP :: entry :: rest =>
@@ -180,6 +188,35 @@ main = match args ()
       "usage: playground_main <compile|analyze|hover|complete> <runtime.mdk> <core.mdk> <entry.mdk> [root ... | line col]"
 
 -- ── driver ────────────────────────────────────────────────────────────────
+
+-- Split the `--stdlib-modules=` argument off the roots and hand `run` the
+-- import hint's reader over those modules.
+runWithShipped : Bool -> String -> String -> String -> List String -> <IO> Unit
+runWithShipped emit runtimeP coreP entry rest =
+  let roots = rootsOrDefault entry (filterList (a => not (isShippedArg a)) rest)
+  let shipped = flatMap shippedIds rest
+  let hintRoot = match roots
+    r :: _ => r
+    [] => "."
+  run emit runtimeP coreP entry roots (names =>
+    exportsAmong names (sourcesMentioning hintRoot shipped names))
+
+shippedArgPrefix : String
+shippedArgPrefix = "--stdlib-modules="
+
+isShippedArg : String -> Bool
+isShippedArg a = startsWith shippedArgPrefix a
+
+shippedIds : String -> List String
+shippedIds a =
+  if isShippedArg a then
+    filterList
+      (/= "")
+      (splitOnChar
+        ','
+        (stringSlice (stringLength shippedArgPrefix) (stringLength a) a))
+  else
+    []
 -- Read runtime + core, then run the front end ONCE.  Parse the user entry with
 -- the non-panicking parseResult FIRST (so a parse-broken file becomes a clean
 -- JSON diagnostic instead of a loader panic / wasm trap — the key playground
@@ -191,8 +228,14 @@ main = match args ()
 -- If analysis is clean, fall through to emit.
 -- `emit` False (mode `analyze`) takes the SAME route through every diagnostic
 -- above and below; it only changes what happens after the last one has passed.
-run : Bool -> String -> String -> String -> List String -> <IO> Unit
-run emit runtimeP coreP entry roots = match readFile runtimeP
+run : Bool ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  (List String -> <IO> List (String, List String)) ->
+  <IO> Unit
+run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
   Err e => emitLoadFail entry e
   Ok rsrc => match readFile coreP
     Err e => emitLoadFail entry e
@@ -209,6 +252,18 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
             -- #100: a parse/lex error in an IMPORTED module squiggles THAT module,
             -- exactly as an entry-file parse error squiggles the entry.
             Err (LoadParseFailed mpath _ pe) => emitParseError mpath pe
+            Err (LoadCycle cmsg cpath csite) =>
+              let (cfile, csrc, cloc) = match csite
+                Some (s, l) => (cpath, s, Some l)
+                None => (entry, tsrc, None)
+              emitDiagnostics
+                (cjAllToJson [
+                  (
+                    cfile,
+                    csrc,
+                    [Diag SevError "R-MODULE-LOAD" cmsg cloc None None],
+                  ),
+                ])
             Err (LoadMsg lmsg) =>
               -- Recover the failing import's own span so the squiggle lands on the
               -- bad `import` line, not line 1 (mirrors medaka_cli's F3 Chunk B
@@ -229,7 +284,16 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
               let mods = map dropPath triples
               match mods
                 [_] =>
-                  analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods
+                  analyzeSingle
+                    emit
+                    rsrc
+                    csrc
+                    tsrc
+                    entry
+                    runtimeP
+                    coreP
+                    triples
+                    exportsFor
                 _ =>
                   analyzeMulti
                     emit
@@ -240,7 +304,8 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
                     runtimeP
                     coreP
                     roots
-                    mods
+                    triples
+                    exportsFor
 
 dropPath : (String, String, List Decl) -> (String, List Decl)
 dropPath (mid, _, decls) = (mid, decls)
@@ -265,13 +330,16 @@ analyzeSingle : Bool ->
   String ->
   String ->
   String ->
-  List (String, List Decl) ->
+  List (String, String, List Decl) ->
+  (List String -> <IO> List (String, List String)) ->
   <IO> Unit
-analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods =
-  let diags = analyzeLocated rsrc csrc tsrc
+analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP loaded exportsFor =
+  let mods = map dropPath loaded
+  let paths = map ((mid, path, _) => (mid, path)) loaded
+  let diags = analyzeLocated exportsFor rsrc csrc tsrc
   match any isDiagError diags
     True => emitDiagnostics (cjAllToJson [(entry, tsrc, diags)])
-    False => guardedEmit emit rsrc csrc tsrc entry mods [
+    False => guardedEmit emit rsrc csrc tsrc entry paths mods [
       (entry, tsrc, filterWarnings diags),
     ]
 
@@ -287,12 +355,16 @@ analyzeMulti : Bool ->
   String ->
   String ->
   List String ->
-  List (String, List Decl) ->
+  List (String, String, List Decl) ->
+  (List String -> <IO> List (String, List String)) ->
   <IO> Unit
-analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods =
+analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots loaded exportsFor =
+  let mods = map dropPath loaded
+  let paths = map ((mid, path, _) => (mid, path)) loaded
   let cacheRef = Ref []
   let results =
     analyzeProject
+      exportsFor
       True
       []
       cacheRef
@@ -305,7 +377,8 @@ analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods =
   let triples = map readDiagSrc results
   match any cjHasErr results
     True => emitDiagnostics (cjAllToJson triples)
-    False => guardedEmit emit rsrc csrc tsrc entry mods (map warnTriple triples)
+    False =>
+      guardedEmit emit rsrc csrc tsrc entry paths mods (map warnTriple triples)
 
 -- Keep only non-error (i.e. warning) diagnostics for a single file's list.
 filterWarnings : List Diag -> List Diag
@@ -323,10 +396,12 @@ warnTriple (p, s, ds) = (p, s, filterWarnings ds)
 -- W-MAIN-SHAPE) or entirely unchecked (no `main` at all) — so both a function-
 -- shaped `main` and a program with no `main` fall through to `doEmit`, which
 -- has no valid nullary main to force and hits a bare wasm `unreachable` trap
--- with zero diagnostic. Re-parse the user's RAW entry decls here and block on
--- either shape with a located ERROR before ever reaching the emitter. (Mirrors
--- medaka_cli.mdk's findMainFunDef/mainBodyLoc/mainArityMsg; duplicated per this
--- entry's F5 self-contained convention rather than importing the CLI entry.)
+-- with zero diagnostic. Re-parse the user's RAW entry decls here (located, so
+-- the parser's position state is this source's and an import-member loc points
+-- into this file) and block on either shape with a located ERROR before ever
+-- reaching the emitter, as `run` and `build` do. (Mirrors driver/diagnostics.mdk's `mainEntryError`; the
+-- function-shape half is duplicated per this entry's F5 self-contained
+-- convention, the missing-`main` half is the driver's `missingMainDiag`.)
 -- `warnTriples` carries the (already error-filtered) warning diags per source
 -- file, so a clean-but-warning program can still surface them once we reach
 -- `doEmit` below.  The main-shape guard runs FIRST and unconditionally blocks
@@ -338,14 +413,16 @@ guardedEmit : Bool ->
   String ->
   String ->
   String ->
+  List (String, String) ->
   List (String, List Decl) ->
   List (String, String, List Diag) ->
   <IO> Unit
-guardedEmit emit rsrc csrc tsrc entry mods warnTriples = match parseResult tsrc
-  Err pe => emitParseError entry pe
-  Ok decls => match mainShapeError decls
-    Some d => emitDiagnostics (cjAllToJson [(entry, tsrc, [d])])
-    None => doEmit emit rsrc csrc tsrc entry mods warnTriples
+guardedEmit emit rsrc csrc tsrc entry paths mods warnTriples =
+  match parseLocatedResult tsrc
+    Err pe => emitParseError entry pe
+    Ok decls => match mainShapeError decls
+      Some d => emitDiagnostics (cjAllToJson [(entry, tsrc, [d])])
+      None => doEmit emit rsrc csrc tsrc entry paths mods warnTriples
 
 -- Find a top-level `main` DFunDef among a module's raw decls (skipping @attr
 -- wrappers).  Returns its param list + body so callers can inspect arity and
@@ -372,11 +449,7 @@ mainHeadLoc body =
 
 mainArityMsg : String
 mainArityMsg =
-  "'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)"
-
-mainMissingMsg : String
-mainMissingMsg =
-  "no 'main' found. Add a top-level 'main = …' (e.g. 'main = println \"hi\"')"
+  "'main' must be a value, not a function. Write 'main = …', not 'main () = …' or 'main x = …': a program starts by evaluating 'main', and nothing ever calls it"
 
 -- Some d ⇒ block emit with a located ERROR; None ⇒ a valid nullary main (or
 -- any other shape typecheck already accepts), safe to fall through to emit.
@@ -386,7 +459,7 @@ mainShapeError decls = match findMainFunDef decls
     Some
       (Diag SevError "W-MAIN-SHAPE" mainArityMsg (mainHeadLoc body) None None)
   Some ([], _) => None
-  None => Some (Diag SevError "W-MAIN-MISSING" mainMissingMsg None None None)
+  None => Some (missingMainDiag decls)
 
 -- ── emit (clean path) ───────────────────────────────────────────────────────
 -- Identical to wasm_emit_modules_main.runEmit, prefixed by the WAT marker.  A clean
@@ -437,10 +510,11 @@ doEmit : Bool ->
   String ->
   String ->
   String ->
+  List (String, String) ->
   List (String, List Decl) ->
   List (String, String, List Diag) ->
   <IO> Unit
-doEmit emit rsrc csrc tsrc entry mods warnTriples =
+doEmit emit rsrc csrc tsrc entry paths mods warnTriples =
   let rt = desugaredPrelude rsrc
   let core = desugaredPrelude csrc
   let modules = map desugarPair mods
@@ -449,7 +523,7 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
     let coreW = autoPrintPinCore core
     let modulesW = autoPrintWrapModules modules
     match underivedMainDiags rt coreW modulesW
-      [] => finishClean emit warnTriples rt coreW modulesW
+      [] => finishClean emit paths warnTriples rt coreW modulesW
       errs =>
         emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
   else match asyncMainShapeError modules
@@ -470,12 +544,12 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
         -- Re-check the rewritten program, as the auto-print branch does.
         let modulesW = asyncWrapModules "runAsyncMain" modules
         match underivedMainDiags rt core modulesW
-          [] => finishClean emit warnTriples rt core modulesW
+          [] => finishClean emit paths warnTriples rt core modulesW
           errs =>
             emitDiagnostics
               (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
       else
-        finishClean emit warnTriples rt core modules
+        finishClean emit paths warnTriples rt core modules
 
 -- ACCEPTED TRADEOFF (Val, 2026-09-01, #2442 review round F1): because `analyze`
 -- deliberately never reaches `runEmit` below, it CANNOT detect a codegen-only
@@ -494,22 +568,22 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
 -- bug to fix here.
 --
 -- The ONE divergence point between `compile` and `analyze`.  Every diagnostic
--- either mode can produce has already been produced by the time control reaches
--- here, so `compile` prints the WAT marker and the WAT while `analyze` prints its
+-- from the frontend has already been produced here. Compile additionally checks
+-- the target file-capability prerequisites before printing WAT; analyze prints its
 -- own marker and the same warnings JSON — no lowerProgramEmit, no wasmReachFilter,
 -- no emitProgram, and no `elaborateModules` at all (`runEmit`'s is now the only one
 -- on either path — see doEmit's obituary for the discarded one that preceded
 -- it, which is why `analyze` reaches here having elaborated the user's program once).
 finishClean : Bool ->
+  List (String, String) ->
   List (String, String, List Diag) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-finishClean emit warnTriples runtimeDecls coreDecls modules =
+finishClean emit paths warnTriples runtimeDecls coreDecls modules =
   if emit then
-    let _ = emitWatMarker warnTriples
-    runEmit runtimeDecls coreDecls modules
+    runEmit paths warnTriples runtimeDecls coreDecls modules
   else
     emitAnalyzeMarker warnTriples
 
@@ -542,33 +616,50 @@ nonEmptyDiags : List Diag -> Bool
 nonEmptyDiags [] = False
 nonEmptyDiags _ = True
 
-runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
-runEmit runtimeDecls coreDecls modules =
+runEmit : List (String, String) ->
+  List (String, String, List Diag) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+runEmit paths warnTriples runtimeDecls coreDecls modules =
   -- #2809: elaborate the program as written, then mangle its elaborated trees.
   let (coreE, modulesE, _, _, _, _) =
     elaborateModules runtimeDecls coreDecls modules
   let (coreD, modules2) = mangleUnitsEv coreE modulesE
   let allDecls0 = coreD ++ flatMap snd modules2
-  let allDecls = dceFilter allDecls0
-  let _ =
-    preludeReturnPosDictNames coreD allDecls
-      ++ preludeArgPosDictNames coreD allDecls
-      ++ constrainedSigNames allDecls
-  let input =
-    makeWasmEmitInputFull
-      (methodIfaceTable allDecls)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-      (ctorFieldTypeNames allDecls)
-      (mainTypeIsFloat ())
-      (declaredRecordFieldOrders allDecls)
-      (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-  -- #2359 (F1): mirror wasm_emit_modules_main.emitTail — bind the lowered
-  -- program, then drop the impl bodies (and the plain bindings only they
-  -- reached) that no dispatchable method name in this program can reach.  Without
-  -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
-  let lowered = lowerProgramEmit TargetWasm allDecls
-  let filtered = wasmReachFilter lowered
-  putStr (emitProgram input filtered)
+  match prepareWasmFileGrants runtimeDecls (dceFilter allDecls0) modules2
+    Err diags =>
+      emitDiagnostics (cjAllToJson (map (wasmGrantDiagTriple paths) diags))
+    Ok allDecls =>
+      let _ =
+        preludeReturnPosDictNames coreD allDecls
+          ++ preludeArgPosDictNames coreD allDecls
+          ++ constrainedSigNames allDecls
+      let input =
+        makeWasmEmitInputFull
+          (methodIfaceTable allDecls)
+          (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+          (ctorFieldTypeNames allDecls)
+          (mainTypeIsFloat ())
+          (declaredRecordFieldOrders allDecls)
+          (validateFfiExternTypeNames
+            (checkedFfiExternTypeNamesModules modules2))
+      -- #2359 (F1): mirror wasm_emit_modules_main.emitTail — bind the lowered
+      -- program, then drop the impl bodies (and the plain bindings only they
+      -- reached) that no dispatchable method name in this program can reach.  Without
+      -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
+      let lowered = lowerProgramEmit TargetWasm allDecls
+      let filtered = wasmReachFilter lowered
+      let _ = emitWatMarker warnTriples
+      putStr (emitProgram input filtered)
+
+wasmGrantDiagTriple : List (String, String) ->
+  (String, TcDiag) ->
+  <IO> (String, String, List Diag)
+wasmGrantDiagTriple paths (mid, diag) =
+  let file = optionOr mid (lookupAssoc mid paths)
+  readDiagSrc (file, [diagOfTypeError diag])
 
 -- ── diagnostics emit helpers ──────────────────────────────────────────────────
 -- Print the marker then the one-line JSON, then exit 0 (NO trap).

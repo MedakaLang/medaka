@@ -1,0 +1,2 @@
+-- `Pub` ctors: attributed only to importers that write `Pub(..)`.
+public export data Pub = PA | PB Int

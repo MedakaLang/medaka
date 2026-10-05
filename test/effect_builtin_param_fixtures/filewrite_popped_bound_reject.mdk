@@ -1,0 +1,15 @@
+-- #3636: the runtime resolves a call's own grant, `a/../data/*` here, with
+-- the file system, so when `a` is a symlink the write lands wherever it
+-- points. A `..` that pops a named component, outside the bound's directory
+-- or inside it, lies under no narrower bound, and `data/*` refuses both.
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+store : String -> <FileWrite "data/*"> Result String Unit
+store leaf = writeFile ("a/../data/" ++ leaf) "x"
+
+storeInside : String -> <FileWrite "data/*"> Result String Unit
+storeInside leaf = writeFile ("data/sub/../" ++ leaf) "x"
+
+main = println (said (store "escaped.txt"))

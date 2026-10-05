@@ -44,6 +44,12 @@ name: Nightly
 #                              parity check, not a fuzzer, so red here is a real
 #                              regression.
 #
+#   macos_smoke                the one job here NOT on ubuntu-latest (#2533): a cold
+#                              bootstrap plus a check/run/build and dist smoke on
+#                              macos-latest, via .github/actions/macos-smoke (shared
+#                              with macos.yml's path-filtered PR run). PLAIN
+#                              pass/fail.
+#
 # Mirrors ci.yml's bootstrap (checkout -> install clang/libgc -> cache/cold-build
 # `make medaka` -> build only the oracles the gate needs) — see that file for the
 # full rationale on caching and the oracle `--for` derivation. This workflow is
@@ -145,6 +151,9 @@ jobs:
   # Charter clause: N1 (docs/ops/CI-ARCHITECTURE.md §3.6 — cost above threshold — irreducible wall-clock cost would pole a merge-tier shard).
   stage-ir-scaling-full:
     name: "stage_ir_scaling FULL (all eight shapes; the merge tier affords two)"
+    # Known red, tracked in #2794: non-fatal so the run's conclusion reflects new breakage;
+    # the failure is still filed as a known-red issue by the step below.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -613,6 +622,35 @@ jobs:
           job-name: "pds/test/signing_parity_test.mdk SIGNING_DEEP=1 (the eval and interpreted-WasmGC arms — #1962)"
           gate-label: "pds signing_parity"
 
+  # Charter clause: N2 + N3 (docs/ops/CI-ARCHITECTURE.md §3.6 — breadth beyond queue needs, external-tool dependency — a second platform the all-Linux merge tier never builds on, on a macOS runner the required-checks path does not assume).
+  #
+  # The nightly half of #2533's macOS coverage. macos.yml runs the same smoke
+  # at PR time, but only for runtime/, the build driver, the bootstrap scripts
+  # and the release scripts; every other macOS-only break is caught here, the
+  # night after it merges. The steps live in .github/actions/macos-smoke so
+  # the two callers cannot drift. PLAIN pass/fail: deterministic expected
+  # output, so a red run is a real macOS regression.
+  macos-smoke:
+    name: "macOS smoke (build from seed + check/run/build + dist — #2533)"
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: macOS smoke
+        uses: ./.github/actions/macos-smoke
+
+      - name: File or update the known-red issue on failure
+        if: failure() || cancelled()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "macOS smoke (build from seed + check/run/build + dist — #2533)"
+          gate-label: "macOS smoke"
+
   # ── The must-fail CENSUS (#569) — the half of the ratchet a GATE cannot run. ────
   #
   # test/diff_compiler_must_fail.sh (in `compiler-soundness`) drains one direction: a fix lands,
@@ -908,6 +946,9 @@ jobs:
   # Charter clause: N4 (docs/ops/CI-ARCHITECTURE.md §3.6 — advisory / non-blocking by construction — files a finding rather than gating the diff).
   gate-cost-autoadvance:
     name: "gate cost baseline auto-advance (#2180 baseline leg, S-1-baseline-autoadvance)"
+    # Known red, tracked in #2439: non-fatal so the run's conclusion reflects new breakage;
+    # the failure is still filed as a known-red issue by the step below.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

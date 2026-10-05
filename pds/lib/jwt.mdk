@@ -5,7 +5,7 @@
    repo key.
 
    Pure functions: no I/O, no clock, no entropy read in this module. Every
-   key is caller-supplied — the session secret as 32 `Bytes`, the
+   key is caller-supplied — the session secret as a `SessionKey`, the
    service-auth key as a `lib.sign.SecretKey` — and so is the current instant,
    an `Int` of seconds since the Unix epoch, and every `jti`. `verifyToken`
    never reads a clock, so a test can place itself at any instant and the
@@ -33,6 +33,18 @@
    one is an off-box peer resolving the issuer's key from the network, so a
    verifier on this side would only grade this module against itself.
 
+   Minting is charged to `Mint`, indexed by the token class: an access token
+   performs `<Mint "access">` and a refresh token `<Mint "refresh">`. The
+   session key is abstract and has no accessor, so the only functions that
+   can sign with a `SessionKey` are the two whose rows say which class they
+   mint, and `verifyToken`, which mints nothing. The type system enforces
+   that much. `hs256Signature` signs raw bytes with no label; it is exported
+   for the RFC 7520 test, and `pds/test/lib_boundary_test.mdk` (check 6)
+   refuses an import of it anywhere else outside this module. `pds/serve.mdk`
+   turns the secret's bytes into a `SessionKey` in the function that reads
+   or generates them. Service auth spends the repo key, and is charged to
+   `lib.sign`'s `Sign "service-auth"` instead.
+
    `HS256` is pinned by the verifier, not read from the token. A token's own
    `alg` header is attacker-controlled input; selecting the verification
    algorithm from it is the classic algorithm-confusion forgery, of which
@@ -55,7 +67,7 @@ import crypto.sha256.{sha256}
 import string.{split, stripSuffix}
 import lib.atsyntax.{stripDidFragment}
 import lib.hmac_sha256.{hmacSha256FixedKey}
-import lib.sign.{SecretKey, signDigest, signatureCompact}
+import lib.sign.{SecretKey, signServiceAuthDigest, signatureCompact}
 
 {- | The claim set this server mints and accepts. `iat`, `nbf`, and `exp` are
      seconds since the Unix epoch (RFC 7519 §2 "NumericDate").
@@ -89,13 +101,33 @@ public export data JwtError =
   | JwtWrongAudience
   deriving (Eq, Debug)
 
-{- | How many bytes a server session-token secret is. Exported because
-     `lib.store` admits the secret it carries against this length, so a
-     misconfigured secret is refused where it is installed rather than
-     reaching `hs256Signature`'s panic on a request path. -}
+{- | What a session token is minted as: the label `mintAccessToken` and
+     `mintRefreshToken` carry, parameterized by the set of token classes. -}
+export effect Mint Set
+
+{- | How many bytes a server session-token secret is. Exported so the shell
+     can generate a secret of exactly this length; `sessionKeyFromBytes`
+     admits against it. -}
 export
 serverSecretBytes : Int
 serverSecretBytes = 32
+
+{- | The server's HS256 session-token secret. Its constructor is private and
+     nothing here returns or renders its bytes: a `SessionKey` is spent only
+     by minting or verifying a session token. -}
+export data SessionKey = SessionKey Bytes
+
+{- | Admit a session-token secret of exactly `serverSecretBytes` bytes, so a
+     misconfigured secret is refused where it is installed rather than
+     reaching `hs256Signature`'s panic on a request path. -}
+export
+sessionKeyFromBytes : Bytes -> Result String SessionKey
+sessionKeyFromBytes bytes =
+  if B.length bytes /= serverSecretBytes then
+    Err
+      "jwt: a session-token secret must be \{intToString serverSecretBytes} bytes"
+  else
+    Ok (SessionKey bytes)
 
 -- RFC 7515 §2 requires base64url with the trailing `=` omitted, while
 -- `base64.encodeUrlSafe`/`decodeUrlSafe` are RFC 4648 §5 and keep the
@@ -126,7 +158,10 @@ b64uDecode s = match stringLength s % 4
 
      Exported so the RFC 7520 §4.4 worked example can grade this module
      against a published signing input and signature directly, independently
-     of the header and claim shapes `mintToken` chooses. -}
+     of the header and claim shapes `mintAccessToken` chooses. It takes raw
+     bytes, and no `SessionKey` yields its bytes, so this cannot spend a
+     `SessionKey`. Only `pds/test/jwt_test.mdk` imports it
+     (`pds/test/lib_boundary_test.mdk`, check 6). -}
 export
 hs256Signature : Bytes -> String -> String
 hs256Signature secret signingInput =
@@ -151,12 +186,12 @@ claimsJson c = jObject [
 b64uEncodeText : String -> String
 b64uEncodeText s = b64uEncode (encodeUtf8 s)
 
-{- | A signed token for `sub` and `aud` identified by `jti`, valid from
-     `issuedAt` until `expiresAt` (both seconds since the Unix epoch). `nbf`
-     is `issuedAt`: this server mints no post-dated token. -}
-export
-mintToken : Bytes -> String -> String -> String -> Int -> Int -> String
-mintToken secret sub aud jti issuedAt expiresAt =
+-- A signed token for `sub` and `aud` identified by `jti`, valid from
+-- `issuedAt` until `expiresAt` (both seconds since the Unix epoch). `nbf` is
+-- `issuedAt`: this server mints no post-dated token. Private: callers reach
+-- it through the two class-named minters below.
+mintToken : SessionKey -> String -> String -> String -> Int -> Int -> String
+mintToken (SessionKey secret) sub aud jti issuedAt expiresAt =
   let claims = Claims {
     sub = sub,
     aud = aud,
@@ -169,6 +204,32 @@ mintToken secret sub aud jti issuedAt expiresAt =
   let claimsSeg = b64uEncodeText (stringify (claimsJson claims))
   let signingInput = "\{headerSeg}.\{claimsSeg}"
   "\{signingInput}.\{hs256Signature secret signingInput}"
+
+{- | An access token for `sub` and `aud` identified by `jti`, valid from
+     `issuedAt` until `expiresAt` (both seconds since the Unix epoch). -}
+export
+mintAccessToken : SessionKey ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  <Mint "access"> String
+mintAccessToken key sub aud jti issuedAt expiresAt =
+  mintToken key sub aud jti issuedAt expiresAt
+
+{- | A refresh token for `sub` and `aud` identified by `jti`, valid from
+     `issuedAt` until `expiresAt` (both seconds since the Unix epoch). -}
+export
+mintRefreshToken : SessionKey ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  <Mint "refresh"> String
+mintRefreshToken key sub aud jti issuedAt expiresAt =
+  mintToken key sub aud jti issuedAt expiresAt
 
 decodeSegmentJson : String -> Result String Json
 decodeSegmentJson segment = match b64uDecode segment
@@ -229,7 +290,7 @@ checkAudience expectedSub expectedAud c =
   else
     Ok c
 
-verifySegments : Bytes ->
+verifySegments : SessionKey ->
   String ->
   String ->
   Int ->
@@ -237,7 +298,7 @@ verifySegments : Bytes ->
   String ->
   String ->
   Result JwtError Claims
-verifySegments secret expectedSub expectedAud now headerSeg claimsSeg sigSeg =
+verifySegments (SessionKey secret) expectedSub expectedAud now headerSeg claimsSeg sigSeg =
   let expected = hs256Signature secret "\{headerSeg}.\{claimsSeg}"
   if not (ctEq (encodeUtf8 expected) (encodeUtf8 sigSeg)) then
     Err JwtBadSignature
@@ -256,7 +317,7 @@ verifySegments secret expectedSub expectedAud now headerSeg claimsSeg sigSeg =
      token is parsed as JSON, and HS256 is pinned by this verifier rather
      than read from the token's own header. -}
 export
-verifyToken : Bytes ->
+verifyToken : SessionKey ->
   String ->
   String ->
   Int ->
@@ -353,20 +414,24 @@ serviceClaimsJson request =
      signature independently of the header and claim shapes
      `mintServiceToken` chooses. -}
 export
-es256kSignature : SecretKey -> String -> Result String String
+es256kSignature : SecretKey ->
+  String ->
+  <Sign "service-auth"> Result String String
 es256kSignature key signingInput =
   map
     (signature => b64uEncode (signatureCompact signature))
-    (signDigest key (sha256 (encodeUtf8 signingInput)))
+    (signServiceAuthDigest key (sha256 (encodeUtf8 signingInput)))
 
 {- | A service-auth token for `request`, signed with the issuing account's own
      repo key.
 
-     `Err` carries `lib.sign.signDigest`'s message, and is reachable only when
+     `Err` carries `lib.sign.signServiceAuthDigest`'s message, and is reachable only when
      the RFC 6979 nonce schedule exhausts its retry bound — which no input
      chooses and no caller can provoke. -}
 export
-mintServiceToken : SecretKey -> ServiceAuthRequest -> Result String String
+mintServiceToken : SecretKey ->
+  ServiceAuthRequest ->
+  <Sign "service-auth"> Result String String
 mintServiceToken key request =
   let headerSeg = b64uEncodeText (stringify serviceHeaderJson)
   let claimsSeg = b64uEncodeText (stringify (serviceClaimsJson request))

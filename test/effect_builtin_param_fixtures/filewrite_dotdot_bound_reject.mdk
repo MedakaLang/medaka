@@ -1,0 +1,11 @@
+-- #3636: a `..` after a written directory pops it, and a symlink can make that
+-- any directory, so `"data/../" ++ leaf` lies under no bound but its own
+-- spelling and the whole domain, and a `data/*` bound refuses it.
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+
+store : String -> <FileWrite "data/*"> Result String Unit
+store leaf = writeFile ("data/../" ++ leaf) "x"
+
+main = println (said (store "escaped.txt"))

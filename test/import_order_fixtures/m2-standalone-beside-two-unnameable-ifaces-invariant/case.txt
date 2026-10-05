@@ -1,0 +1,13 @@
+entry: main.mdk
+what: a module that can name NEITHER of two same-spelled interface methods keeps its
+      own standalone, and no declaration is chosen for it by processing order
+
+`ma` declares `interface IA` and `mb` declares `interface IB`, each with a method
+spelled `mth`. The entry reaches them only through `ga.fa` and `gb.fb`, so both
+declarations are visible in the graph but neither is nameable in the entry, and its
+own top-level `mth` is not a shadow (SHADOW-SEMANTICS.md S1-NS).
+
+Spec answer, hand-derived: `check` is clean; `run` and the built binary print `3131`
+(`mth 1` = 101 from the standalone, `fa` = 1010 from `IA Int`, `fb` = 2020 from
+`IB Int`) in every ordering. The value is graded by the matching row of
+`test/diff_compiler_dict_semantics_test.mdk`; this case grades its invariance.

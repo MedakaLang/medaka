@@ -21,21 +21,20 @@
    block writes it was ordered after, and the head would name a graph that is
    not there. Every file this module writes (the head, the credential, the
    preference set and the session set) is replaced that one way, through
-   `stdlib/fs`'s `replaceDurably`: staged at mode 0600 from the moment the
-   bytes land, `fsync`ed, `rename`d onto the real path, then the containing
-   directory `fsync`ed.
+   `shell.datadir`'s `replaceDurablyIn`: staged at mode 0600 from the moment
+   the bytes land, `fsync`ed, `rename`d onto the real path, then the
+   containing directory `fsync`ed.
 
-   `dir` is the store's root. `blocks/` (`shell.blockfile`) and `blobs/`
+   The store's root is the data directory (`shell.datadir`), which must
+   already exist: `pds/serve.mdk` refuses to start without it, and nothing
+   here creates it, since its own entry lives in a directory the server has
+   no authority over. `blocks/` (`shell.blockfile`) and `blobs/`
    (`shell.blobfile`) create themselves there, and each creation barriers its
-   own dentry into `dir` as it is made, so no directory's durability waits on
-   a later call. `dir`'s OWN dentry is
-   written into a directory this store does not own, so a creation of `dir`
-   barriers the directory above it — and only a creation, which keeps an
-   operator's directory off the cost of every commit. -}
+   own dentry into the root as it is made, so no directory's durability waits
+   on a later call. -}
 
 import array
 import bytes.{Bytes}
-import fs.{mkdirAllDurably, replaceDurably}
 import hex.{decode, encode}
 import json.{Json, asArray, jArray, parse, stringify}
 import string.{join, lines, split, toInt, trim}
@@ -48,26 +47,20 @@ import lib.credential.{
 }
 import lib.store.{SessionRow(..)}
 import shell.blockfile.{blockFileRead, blockFileSweepStaging, blockFileWrite}
+import shell.datadir.{DataDir(..), replaceDurablyIn}
 
-blocksDir : String -> String
-blocksDir dir = "\{dir}/blocks"
-
--- The store root, created if it is not there, with the dentry that created
--- barriered into the directory above. See the header's last paragraph.
-ensureRoot : String -> <FileRead, FileWrite> Result String Unit
-ensureRoot dir = mkdirAllDurably dir
-
-{- | Remove every block file staged beneath `<dir>/blocks/.staging` and never
+{- | Remove every block file staged beneath `blocks/.staging` and never
    promoted or cleaned up — see `blockFileSweepStaging`'s doc comment for what
    this is and the one window it is safe to call in. -}
 export
-persistSweepStagedBlocks : String -> <FileRead, FileWrite> Result String Unit
-persistSweepStagedBlocks dir = blockFileSweepStaging (blocksDir dir)
+persistSweepStagedBlocks : DataDir d ->
+  <FileRead d, FileWrite d> Result String Unit
+persistSweepStagedBlocks datadir = blockFileSweepStaging datadir
 
--- | Where the account's password credential is kept beneath `dir`.
+-- | Where the account's password credential is kept in the data directory.
 export
-credentialPath : String -> String
-credentialPath dir = "\{dir}/credential"
+credentialPath : DataDir d -> String @d
+credentialPath (DataDir root) = "\{root}credential"
 
 -- The stored credential: iteration count, salt, and derived key, one per line.
 -- The password is not among them and was never held here.
@@ -75,7 +68,7 @@ credentialText : CredentialRecord -> String
 credentialText record =
   "\{intToString (credentialIterations record)}\n\{encode (credentialSalt record)}\n\{encode (credentialDigest record)}\n"
 
-{- | Write the account's password credential beneath `dir`, at mode 0600.
+{- | Write the account's password credential, at mode 0600.
 
    Both the first-run bootstrap (`pds/serve.mdk`) and the rehash a login
    performs when the stored record predates today's iteration count
@@ -83,87 +76,95 @@ credentialText record =
    credential file's layout and one place its mode is decided. The mode is not
    advisory: `pds/serve.mdk` refuses to read a secret file any wider back. -}
 export
-persistCredential : String -> CredentialRecord -> <FileWrite> Result String Unit
-persistCredential dir record =
-  let staged = "\{credentialPath dir}.tmp"
-  match replaceDurably staged (credentialPath dir) (credentialText record)
-    Err message => Err "unwritable credential \{credentialPath dir}: \{message}"
+persistCredential : DataDir d ->
+  CredentialRecord ->
+  <FileWrite d> Result String Unit
+persistCredential (datadir@(DataDir root)) record =
+  let target = credentialPath datadir
+  match (replaceDurablyIn
+    root
+    "\{root}credential.tmp"
+    target
+    (credentialText record))
+    Err message => Err "unwritable credential \{target}: \{message}"
     Ok () => Ok ()
 
-headPath : String -> String
-headPath dir = "\{dir}/head"
+headPath : DataDir d -> String @d
+headPath (DataDir root) = "\{root}head"
 
-{- | Whether `dir` already holds a persisted head pointer.
+{- | Whether the data directory already holds a persisted head pointer.
 
    This is presence alone, deliberately: a head that is present but does not
    load or verify under some particular signing key is still a head, and a
-   caller deciding whether it may write a genesis repository over `dir` must
-   ask this rather than asking whether `persistLoad` succeeded. -}
+   caller deciding whether it may write a genesis repository there must ask
+   this rather than asking whether `persistLoad` succeeded. -}
 export
-persistHasHead : String -> <FileRead> Bool
-persistHasHead dir = fileExists (headPath dir)
+persistHasHead : DataDir d -> <FileRead d> Bool
+persistHasHead datadir = fileExists (headPath datadir)
 
-{- | Persist a repository's head commit CID and its complete block graph beneath
-   `dir`. The blocks are written first: the head is the last thing to move, so it
-   never names a graph that is not yet on disk.
+{- | Persist a repository's head commit CID, with every block of the graph
+   that head reaches which the data directory does not already hold. `blocks` may
+   be the whole graph, or only what it adds to a graph already persisted here:
+   a block's name is its content and nothing removes one, so a block on disk
+   is already the block the head needs. The blocks are written first: the head
+   is the last thing to move, so it never names a graph that is not yet on
+   disk.
 
-   The head's closing barrier on `dir` publishes only its own `rename`: a
-   `blocks/` that `blockFileWrite` had to create was barriered into `dir` when
-   it was made. -}
+   The head's closing barrier on the root publishes only its own `rename`: a
+   `blocks/` that `blockFileWrite` had to create was barriered into the root
+   when it was made. -}
 export
-persistSave : String ->
+persistSave : DataDir d ->
   Cid ->
   List (Cid, Bytes) ->
-  <FileRead, FileWrite> Result String Unit
-persistSave dir head blocks = do
-  () <- ensureRoot dir
-  () <- blockFileWrite (blocksDir dir) blocks
-  let staged = "\{headPath dir}.tmp"
-  replaceDurably staged (headPath dir) (cidToString head)
+  <FileRead d, FileWrite d> Result String Unit
+persistSave (datadir@(DataDir root)) head blocks = do
+  () <- blockFileWrite datadir blocks
+  replaceDurablyIn root "\{root}head.tmp" (headPath datadir) (cidToString head)
 
 {- | Read back the persisted head commit CID and every persisted block row.
 
    The rows are unverified disk bytes; `repoFromBlocks` is what verifies them, so
    a caller must never treat this result as trusted state on its own. -}
 export
-persistLoad : String -> <FileRead> Result String (Cid, List (Cid, Bytes))
-persistLoad dir = do
+persistLoad : DataDir d -> <FileRead d> Result String (Cid, List (Cid, Bytes))
+persistLoad datadir = do
   text <- mapErr
     (message => "persist: unreadable head file: \{message}")
-    (readFile (headPath dir))
+    (readFile (headPath datadir))
   head <- mapErr
     (message => "persist: head file is not a CID: \{message}")
     (cidFromString text)
-  blocks <- blockFileRead (blocksDir dir)
+  blocks <- blockFileRead datadir
   Ok (head, blocks)
 
-preferencesPath : String -> String
-preferencesPath dir = "\{dir}/preferences"
+preferencesPath : DataDir d -> String @d
+preferencesPath (DataDir root) = "\{root}preferences"
 
-{- | Persist the account's whole `app.bsky` preference set beneath `dir`,
+{- | Persist the account's whole `app.bsky` preference set,
    staged then `rename`d exactly like the head file: a process that dies
    mid-write leaves the previous preference set readable, never a torn one. -}
 export
-persistPreferences : String ->
-  List Json ->
-  <FileRead, FileWrite> Result String Unit
-persistPreferences dir prefs = do
-  () <- ensureRoot dir
-  let staged = "\{preferencesPath dir}.tmp"
-  replaceDurably staged (preferencesPath dir) (stringify (jArray prefs))
+persistPreferences : DataDir d -> List Json -> <FileWrite d> Result String Unit
+persistPreferences (datadir@(DataDir root)) prefs =
+  replaceDurablyIn
+    root
+    "\{root}preferences.tmp"
+    (preferencesPath datadir)
+    (stringify (jArray prefs))
 
-{- | Read back the persisted preference set, or the empty list when `dir` has
-   never had one written — a fresh account, or one that has never called
+{- | Read back the persisted preference set, or the empty list when none has
+   ever been written — a fresh account, or one that has never called
    `putPreferences`. -}
 export
-persistLoadPreferences : String -> <FileRead> Result String (List Json)
-persistLoadPreferences dir =
-  if not (fileExists (preferencesPath dir)) then
+persistLoadPreferences : DataDir d -> <FileRead d> Result String (List Json)
+persistLoadPreferences datadir =
+  if not (fileExists (preferencesPath datadir)) then
     Ok []
   else do
     text <- mapErr
       (message => "persist: unreadable preferences file: \{message}")
-      (readFile (preferencesPath dir))
+      (readFile (preferencesPath datadir))
     value <- mapErr
       (message => "persist: preferences file is not JSON: \{message}")
       (parse text)
@@ -171,11 +172,11 @@ persistLoadPreferences dir =
       None => Err "persist: preferences file is not a JSON array"
       Some items => Ok (toList items)
 
--- | Where the open session set is kept beneath `dir`. Exported because
--- `pds/serve.mdk` admits this file's mode before reading it back.
+-- | Where the open session set is kept in the data directory. Exported
+-- because `pds/serve.mdk` admits this file's mode before reading it back.
 export
-sessionsPath : String -> String
-sessionsPath dir = "\{dir}/sessions"
+sessionsPath : DataDir d -> String @d
+sessionsPath (DataDir root) = "\{root}sessions"
 
 {- One row per line, space-separated, every fingerprint in hex. An open
    session is its access fingerprint, refresh fingerprint, expiry, and family;
@@ -272,29 +273,28 @@ parseSessionRows (line :: rest) =
    Writing this is what lets a restart readmit the sessions it had open, so a
    backup window or a version bump does not log every client out. -}
 export
-persistSessions : String ->
+persistSessions : DataDir d ->
   List SessionRow ->
-  <FileRead, FileWrite> Result String Unit
-persistSessions dir rows = do
-  () <- ensureRoot dir
-  let staged = "\{sessionsPath dir}.tmp"
-  match replaceDurably staged (sessionsPath dir) (sessionsText rows)
-    Err message => Err "unwritable sessions \{sessionsPath dir}: \{message}"
+  <FileWrite d> Result String Unit
+persistSessions (datadir@(DataDir root)) rows =
+  let target = sessionsPath datadir
+  match replaceDurablyIn root "\{root}sessions.tmp" target (sessionsText rows)
+    Err message => Err "unwritable sessions \{target}: \{message}"
     Ok () => Ok ()
 
-{- | Read back the persisted session set, or the empty list when `dir` has
-   never had one written.
+{- | Read back the persisted session set, or the empty list when none has
+   ever been written.
 
    The rows are unverified disk bytes and are not live sessions on their own:
    an expired row is returned as readily as a current one, and the caller
    prunes against the instant it is starting at. -}
 export
-persistLoadSessions : String -> <FileRead> Result String (List SessionRow)
-persistLoadSessions dir =
-  if not (fileExists (sessionsPath dir)) then
+persistLoadSessions : DataDir d -> <FileRead d> Result String (List SessionRow)
+persistLoadSessions datadir =
+  if not (fileExists (sessionsPath datadir)) then
     Ok []
   else do
     text <- mapErr
       (message => "persist: unreadable sessions file: \{message}")
-      (readFile (sessionsPath dir))
+      (readFile (sessionsPath datadir))
     parseSessionRows (lines text)

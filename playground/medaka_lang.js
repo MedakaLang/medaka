@@ -26,6 +26,9 @@ const tokenTable = {
   bool: tags.bool,
   escape: tags.escape,
   interpolation: tags.special(tags.string),
+  typeVar: tags.local(tags.typeName),
+  effectLabel: tags.namespace,
+  effectVar: tags.atom,
 };
 
 const medakaStream = StreamLanguage.define({
@@ -43,7 +46,7 @@ const medakaStream = StreamLanguage.define({
 // Dark highlight style — cohesive with the two named UI accents.
 export const medakaHighlightStyle = HighlightStyle.define([
   { tag: tags.keyword, color: '#5fd38f' },
-  { tag: tags.comment, color: '#6e7781', fontStyle: 'italic' },
+  { tag: tags.comment, color: '#8a94a6', fontStyle: 'italic' },
   { tag: tags.string, color: '#f0c674' },
   { tag: tags.character, color: '#f0c674' },
   { tag: tags.special(tags.string), color: '#ffb86c' },
@@ -55,6 +58,9 @@ export const medakaHighlightStyle = HighlightStyle.define([
   { tag: tags.variableName, color: '#d6dde8' },
   { tag: tags.operator, color: '#a9b1ba' },
   { tag: tags.punctuation, color: '#8b949e' },
+  { tag: tags.local(tags.typeName), color: '#6fc7d9' },
+  { tag: tags.namespace, color: '#f58fb0' },
+  { tag: tags.atom, color: '#b8c97a' },
 ]);
 
 export function medaka() {

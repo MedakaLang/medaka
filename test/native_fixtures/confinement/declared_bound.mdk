@@ -1,0 +1,64 @@
+-- A declared row confines the physical target even when the call's constant
+-- prefix names a symlink. run.sh installs cfg/link -> ../outdir/sub.
+write : String -> <FileWrite "cfg/*"> Result String Unit
+write leaf = writeFile ("cfg/link/" ++ leaf) "w"
+
+helper leaf = writeFile ("cfg/link/" ++ leaf) "w"
+
+throughHelper : String -> <FileWrite "cfg/*"> Result String Unit
+throughHelper leaf = helper leaf
+
+alias : String -> <FileWrite "cfg/*"> Result String Unit
+alias = helper
+
+read : String -> <FileRead "cfg/*"> Result String String
+read leaf = readFile ("cfg/link/" ++ leaf)
+
+inside : String -> <FileWrite "cfg/*"> Result String Unit
+inside leaf = writeFile ("cfg/sub/" ++ leaf) "w"
+
+delay : String -> Unit -> <FileWrite "cfg/*"> Result String Unit
+delay leaf = _ => writeFile ("cfg/link/" ++ leaf) "w"
+
+delayAlias : Unit -> String -> <FileWrite "cfg/*"> Result String Unit
+delayAlias _ = helper
+
+interface Writer a where
+  writeThrough : a -> String -> <FileWrite "cfg/*"> Result String Unit
+
+impl Writer Int where
+  writeThrough _ leaf = helper leaf
+
+unionRead : String ->
+  <FileRead "cfg/*", FileRead "outdir/*"> Result String String
+unionRead leaf = readFile ("cfg/link/" ++ leaf)
+
+explicitLink : String -> <FileWrite "cfg/link/*"> Result String Unit
+explicitLink leaf = helper leaf
+
+packed : Option (String -> <FileWrite "cfg/*"> Result String Unit)
+packed = Some alias
+
+widePacked : Option (String -> <FileWrite> Result String Unit)
+widePacked = packed
+
+report tag result = match result
+  Ok _ => println (tag ++ ": Ok")
+  Err message => println (tag ++ ": Err " ++ message)
+
+main =
+  report "direct" (write "stolen.txt")
+  report "dotdot" (write "../stolen.txt")
+  report "helper" (throughHelper "stolen.txt")
+  report "alias" (alias "stolen.txt")
+  report "read" (read "a.txt")
+  report "inside" (inside "allowed.txt")
+  report "delay" (delay "stolen.txt" ())
+  report "delay alias" (delayAlias () "stolen.txt")
+  let _ = match widePacked
+    Some f => report "packed" (f "stolen.txt")
+    None => println "unexpected empty container"
+  report "method" (writeThrough 0 "stolen.txt")
+  report "union" (unionRead "a.txt")
+  report "explicit link" (explicitLink "allowed.txt")
+  report "restored" (helper "allowed2.txt")

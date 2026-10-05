@@ -1,0 +1,6 @@
+public export data RB = Cfg { beta : Int, alpha : Int }
+
+export
+rbv : Int
+rbv = match Cfg { beta = 1, alpha = 2 }
+  Cfg { beta, alpha } => beta + alpha

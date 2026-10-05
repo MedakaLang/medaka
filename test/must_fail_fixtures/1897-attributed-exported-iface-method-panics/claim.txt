@@ -1,0 +1,25 @@
+issue: 1897
+what: an `@deprecated` attribute on an EXPORTED interface makes the interface's method
+what: unusable from an importing module: iface.mdk declares `Speak` under the attribute,
+what: main.mdk imports `{Speak(..), speak}`, writes `impl Speak Dog`, and calls `speak Dog`.
+what: `check`, `run` and `build` all abort with `runtime error [E-PANIC]: unbound method:
+what: speak` on stderr at exit 1 -- an internal panic, not a diagnostic, and nothing on
+what: stdout. The same two files without the attribute line check clean and print `woof`.
+what: Same family as #1079 (an attributed interface is dropped single-file) and #2004 (an
+what: attributed `public export data` is dropped cross-module).
+cmd: check-json main.mdk
+exit: 1
+stdout-bytes:
+control: check control.mdk
+why-verb: `check-json` because the defect is that a well-formed program produces NO
+why-verb: diagnostic envelope at all: the panic happens before the JSON is written. Empty
+why-verb: stdout at exit 1 is that observation. A located diagnostic of any kind (a correct
+why-verb: rejection) would print a JSON envelope and drain this row, and so would the fix
+why-verb: (exit 0 with an empty diagnostics list).
+why-stdout: `stdout-bytes:` with an empty value asserts stdout is exactly empty; the panic
+why-stdout: text is on stderr, which this harness does not grade.
+why-control: control.mdk imports the SAME interface, method and impl from plain.mdk, which
+why-control: is iface.mdk without the attribute line. It must check at exit 0. A red
+why-control: control means cross-module interface import broke, never that #1897 drained.
+why-note: when this drains, add the attributed cross-module case to a permanent gate and
+why-note: check #1079 and #2004, which likely share the fix.

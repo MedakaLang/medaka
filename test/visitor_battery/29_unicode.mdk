@@ -1,0 +1,9 @@
+import string.{reverse, toUpper, toChars}
+
+main =
+  let s = "héllo 👋 wörld"
+  println (length (toChars s))
+  println (reverse s)
+  println (toUpper s)
+  println (length (toChars "👋"))
+  println "日本語"

@@ -31,9 +31,10 @@ import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import json.{Json(..), get, jObject, parse, stringify}
 import lib.blob.{blobCid}
 import lib.cid.{cidToString}
+import lib.resource_limits.{maxWritesPerWindow, rateLimitWindowSeconds}
 import io.{eprintln}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
-import string.{lines, padLeft, split, startsWith, toInt, trim}
+import string.{join, lines, padLeft, split, startsWith, toInt, trim}
 import time.{Duration, elapsedSince, millis, monotonic, seconds, sleep}
 import test.response_support.{findHeaderEnd}
 
@@ -361,6 +362,25 @@ recordWriteBody did collection rkey =
       ),
     ])
 
+{- | The pause the writer takes after each acknowledged write.
+
+   The writer is one account holder, so every write it makes is charged to
+   one rate-limit identity, which `maxWritesPerWindow` allows so many writes
+   per `rateLimitWindowSeconds`. Writing back to back would reach that limit
+   within seconds and end the run on a 429 the harness grades as a refused
+   writer. This spaces writes a fifth wider than the allowance, so the writer
+   stays under it wherever its writes fall relative to a window. -}
+writeGap : Duration
+writeGap = millis (rateLimitWindowSeconds * 1000 * 6 / (maxWritesPerWindow * 5))
+
+{- | The pause a writer asked for `intervalMs` takes, never below `writeGap`.
+
+   The server keeps every block it has ever committed in memory, so a long
+   soak's writer pace decides how much its RSS grows by design. A soak graded
+   for leaks paces its writer to keep that growth well under its bound. -}
+writePause : Int -> Duration
+writePause intervalMs = max writeGap (millis intervalMs)
+
 responseRoundTrip : Connection * ->
   Bytes ->
   Bytes ->
@@ -369,52 +389,132 @@ responseRoundTrip conn pending request = match sendAll conn request
   Err message => Err message
   Ok () => readOneResponse conn pending
 
-writeLoop : Connection * ->
+-- | One writer's settings, fixed for its whole run.
+data WriteRun = WriteRun {
+  port : Int,
+  did : String,
+  password : String,
+  collection : String,
+  clientId : Int,
+  t0 : Float,
+  budget : Float,
+  pause : Duration,
+  paced : Bool,
+}
+
+-- | What a writer did. `requests` counts write requests only; `logins` counts
+-- every createSession, the first included.
+data WriteTally = WriteTally {
+  requests : Int,
+  writes : Int,
+  non200 : Int,
+  errors : Int,
+  logins : Int,
+}
+
+-- | Log in as the synthetic account on `conn`: the access token, and the
+-- bytes buffered past the response.
+login : WriteRun -> Connection * -> Bytes -> <Net> (String, Bytes)
+login run conn pending =
+  let request =
+    postJsonRequest
+      (identityFor identityBlockSize run.clientId 0)
+      ""
+      "com.atproto.server.createSession"
+      (loginBody run.did run.password)
+  let (status, body, rest) =
+    resultOrPanic
+      "load_client: createSession transport failed"
+      (responseRoundTrip conn pending request)
+  if status /= 200 then
+    panic "load_client: createSession answered \{intToString status}"
+  let token = accessTokenFrom body
+  (token, rest)
+
+createRecord : WriteRun ->
+  Connection * ->
   Bytes ->
   String ->
   String ->
+  Int ->
+  <Net> Result String (Int, Bytes, Bytes)
+createRecord run conn pending token rkey i =
+  responseRoundTrip
+    conn
+    pending
+    (postJsonRequest
+      (identityFor identityBlockSize run.clientId i)
+      "Authorization: Bearer \{token}\r\n"
+      "com.atproto.repo.createRecord"
+      (recordWriteBody run.did run.collection rkey))
+
+{- | Writes until the run's budget is spent.
+
+   A paced writer opens a fresh connection for each write. The server closes a
+   kept-alive connection that sends nothing within its header timeout, a few
+   seconds, so a longer pause would find its connection gone.
+
+   An access token expires sooner than a long soak ends, so a write answered
+   401 logs in again and retries that record once, as a real client would.
+   Any other refusal, and any transport error, ends the writer: a writer that
+   quietly retried would hide what the harness grades it on. -}
+writeLoop : WriteRun ->
+  Connection * ->
+  Bytes ->
   String ->
   Int ->
-  Float ->
-  Float ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  <Clock, IO, Net> (Bytes, Int, Int, Int, Int, Int)
-writeLoop conn pending did collection token clientId t0 budget i requests writes non200 errors =
-  if elapsedSince t0 >= budget then
-    (pending, requests, writes, non200, errors, i)
+  WriteTally ->
+  <Clock, IO, Net> WriteTally
+writeLoop run conn pending token i tally =
+  if elapsedSince run.t0 >= run.budget then
+    let () = ignoreResult (close conn)
+    tally
   else
-    let rkey = "soak-\{intToString clientId}-\{intToString i}"
-    let body = recordWriteBody did collection rkey
-    let xff = identityFor identityBlockSize clientId i
-    let request =
-      postJsonRequest
-        xff
-        "Authorization: Bearer \{token}\r\n"
-        "com.atproto.repo.createRecord"
-        body
-    match responseRoundTrip conn pending request
-      Err _ => (pending, requests + 1, writes, non200, errors + 1, i)
-      Ok (200, _, rest) =>
-        let () = println "write-path \{collection}/\{rkey}"
-        writeLoop
-          conn
-          rest
-          did
-          collection
-          token
-          clientId
-          t0
-          budget
-          (i + 1)
-          (requests + 1)
-          (writes + 1)
-          non200
-          errors
-      Ok (_, _, rest) => (rest, requests + 1, writes, non200 + 1, errors, i)
+    let rkey = "soak-\{intToString run.clientId}-\{intToString i}"
+    match createRecord run conn pending token rkey i
+      Ok (401, _, rest) =>
+        let (fresh, afterLogin) = login run conn rest
+        let relogged = { tally |
+          requests = tally.requests + 2,
+          logins = tally.logins + 1,
+        }
+        match createRecord run conn afterLogin fresh rkey i
+          Ok (200, _, retried) =>
+            nextWrite run conn retried fresh rkey i relogged
+          answer => stopWriting conn answer relogged
+      Ok (200, _, rest) => nextWrite run conn rest token rkey i { tally |
+        requests = tally.requests + 1,
+      }
+      answer =>
+        stopWriting conn answer { tally | requests = tally.requests + 1 }
+
+nextWrite : WriteRun ->
+  Connection * ->
+  Bytes ->
+  String ->
+  String ->
+  Int ->
+  WriteTally ->
+  <Clock, IO, Net> WriteTally
+nextWrite run conn rest token rkey i tally =
+  let () = println "write-path \{run.collection}/\{rkey}"
+  let () = sleep run.pause
+  let written = { tally | writes = tally.writes + 1 }
+  if run.paced then
+    let () = ignoreResult (close conn)
+    writeLoop run (mustConnect run.port) empty token (i + 1) written
+  else
+    writeLoop run conn rest token (i + 1) written
+
+stopWriting : Connection * ->
+  Result String (Int, Bytes, Bytes) ->
+  WriteTally ->
+  <Net> WriteTally
+stopWriting conn answer tally =
+  let () = ignoreResult (close conn)
+  match answer
+    Err _ => { tally | errors = tally.errors + 1 }
+    Ok _ => { tally | non200 = tally.non200 + 1 }
 
 runWrite : Int ->
   String ->
@@ -422,45 +522,49 @@ runWrite : Int ->
   Int ->
   String ->
   String ->
+  Int ->
   <Clock, Env, IO, Net, FileRead> Unit
-runWrite port collection clientId durationMs did passwordPath =
+runWrite port collection clientId durationMs did passwordPath intervalMs =
   let password = match readFile passwordPath
     Err message =>
       panic "load_client: cannot read synthetic password file: \{message}"
     Ok text => trim text
   let conn = mustConnect port
-  let loginXff = identityFor identityBlockSize clientId 0
-  let loginRequest =
-    postJsonRequest
-      loginXff
-      ""
-      "com.atproto.server.createSession"
-      (loginBody did password)
-  let (loginStatus, loginBodyBytes, pending) =
-    resultOrPanic
-      "load_client: createSession transport failed"
-      (responseRoundTrip conn empty loginRequest)
-  if loginStatus /= 200 then
-    panic "load_client: createSession answered \{intToString loginStatus}"
-  let token = accessTokenFrom loginBodyBytes
-  let t0 = monotonic ()
-  let budget = intToFloat durationMs / 1000.0
-  let (_, requests, writes, non200, errors, _) =
-    writeLoop conn pending did collection token clientId t0 budget 0 0 0 0 0
-  let elapsed = elapsedSince t0
-  let () = ignoreResult (close conn)
+  let unstarted = WriteRun {
+    port = port,
+    did = did,
+    password = password,
+    collection = collection,
+    clientId = clientId,
+    t0 = 0.0,
+    budget = intToFloat durationMs / 1000.0,
+    pause = writePause intervalMs,
+    paced = intervalMs > 0,
+  }
+  let (token, pending) = login unstarted conn empty
+  let run = { unstarted | t0 = monotonic () }
+  let tally = writeLoop run conn pending token 0 WriteTally {
+    requests = 0,
+    writes = 0,
+    non200 = 0,
+    errors = 0,
+    logins = 1,
+  }
+  let elapsed = elapsedSince run.t0
   println
-    "write client=\{intToString clientId} requests=\{intToString requests} writes=\{intToString writes} non200=\{intToString non200} errors=\{intToString errors} seconds=\{floatToString elapsed}"
+    "write client=\{intToString clientId} requests=\{intToString tally.requests} writes=\{intToString tally.writes} non200=\{intToString tally.non200} errors=\{intToString tally.errors} logins=\{intToString tally.logins} seconds=\{floatToString elapsed}"
 
 -- # Percentiles
 
--- One measured request. `status` is 0 when the request never answered.
-data Sample = Sample String String Int Int
+{- | One measured request. `status` is 0 when the request never answered, and
+   `failure` then names the step that failed (`failureKinds`); it is "" for
+   a request that answered. -}
+data Sample = Sample String String Int Int String
 
 -- The microseconds of every answered sample for one target and route.
 microsFor : String -> String -> List Sample -> List Int -> List Int
 microsFor _ _ [] acc = acc
-microsFor target route ((Sample t r micros status) :: rest) acc =
+microsFor target route ((Sample t r micros status _) :: rest) acc =
   if t == target && r == route && status == 200 then
     microsFor target route rest (micros :: acc)
   else
@@ -468,11 +572,39 @@ microsFor target route ((Sample t r micros status) :: rest) acc =
 
 errorsFor : String -> String -> List Sample -> Int -> Int
 errorsFor _ _ [] acc = acc
-errorsFor target route ((Sample t r _ status) :: rest) acc =
+errorsFor target route ((Sample t r _ status _) :: rest) acc =
   if t == target && r == route && status /= 200 then
     errorsFor target route rest (acc + 1)
   else
     errorsFor target route rest acc
+
+{- | What an error sample can have failed at: opening the connection, sending
+   the request, reading the response, the server closing the connection
+   before the response was whole, or an answer other than 200. -}
+failureKinds : List String
+failureKinds = ["connect", "send", "recv", "eof", "non200"]
+
+failuresOf : String -> String -> List Sample -> List String -> List String
+failuresOf _ _ [] acc = acc
+failuresOf target route ((Sample t r _ status failure) :: rest) acc =
+  if t == target && r == route && status /= 200 then
+    failuresOf
+      target
+      route
+      rest
+      ((if status == 0 then failure else "non200") :: acc)
+  else
+    failuresOf target route rest acc
+
+-- Each failure kind one target and route saw, with its count, or `none`.
+failuresFor : String -> String -> List Sample -> String
+failuresFor target route samples =
+  let failed = failuresOf target route samples []
+  let counted =
+    map
+      (kind => "\{kind}:\{intToString (length (filter (== kind) failed))}")
+      (filter (kind => elem kind failed) failureKinds)
+  if counted == [] then "none" else join "," counted
 
 {- | The nearest-rank percentile: the smallest sample at or above `p` percent
    of the sorted run. `p = 100` is the maximum. -}
@@ -499,7 +631,7 @@ reportRoute target route samples =
   let n = arrayLength sorted
   let errors = errorsFor target route samples 0
   println
-    "sample target=\{target} route=\{route} n=\{intToString n} errors=\{intToString errors} p50_ms=\{msText (percentileAt sorted 50)} p90_ms=\{msText (percentileAt sorted 90)} p99_ms=\{msText (percentileAt sorted 99)} max_ms=\{msText (percentileAt sorted 100)}"
+    "sample target=\{target} route=\{route} n=\{intToString n} errors=\{intToString errors} p50_ms=\{msText (percentileAt sorted 50)} p90_ms=\{msText (percentileAt sorted 90)} p99_ms=\{msText (percentileAt sorted 99)} max_ms=\{msText (percentileAt sorted 100)} err_kinds=\{failuresFor target route samples}"
 
 reportRoutes : String -> Array String -> Int -> List Sample -> <IO> Unit
 reportRoutes target routes i samples =
@@ -563,28 +695,67 @@ runLoad port plan clientId durationMs =
 
 -- # `sample`
 
-{- | One request against one target, recorded.
+-- A read that failed because the server closed the connection, as
+-- `recvAtLeast` and `readOneResponse` word it, against any other read error.
+readFailure : String -> String
+readFailure message =
+  if startsWith "load_client: connection closed" message then "eof" else "recv"
+
+{- | One request on an open connection, recorded. A transport error closes
+   the connection and answers `None`, so the next request to this target opens
+   a new one. -}
+sampleOn : Connection * ->
+  Bytes ->
+  String ->
+  String ->
+  Bytes ->
+  List Sample ->
+  <Clock, Net> (Option (Connection *), Bytes, List Sample)
+sampleOn conn pending target route request acc =
+  let t0 = monotonic ()
+  let outcome = match sendAll conn request
+    Err _ => Err "send"
+    Ok () => mapErr readFailure (readOneResponse conn pending)
+  match outcome
+    Err kind =>
+      let () = ignoreResult (close conn)
+      (None, empty, Sample target route 0 0 kind :: acc)
+    Ok (status, _, rest) =>
+      (Some conn, rest, Sample target route (microsSince t0) status "" :: acc)
+
+{- | One request against one target, recorded, over `held` or, when the last
+   request to this target failed, a connection opened for it now.
 
    The loaded target and the idle control target are read from this one
    process microseconds apart, so any delay this process itself suffers —
    scheduler pressure from the load generators sharing the box, GC in this
    client, anything that is not the server — lands on both. A rise the loaded
    target shows and the control does not is therefore the loaded server's own
-   queuing. -}
-sampleOne : Connection * ->
+   queuing.
+
+   The two connections do not share their idle time, though. The control
+   connection sits unused for as long as the loaded target takes to answer,
+   so a loaded server slow enough can hold it idle past the control server's
+   header timeout, and the control server then closes it, as it should. That
+   costs the control one error, not the rest of the run, because a failed
+   request drops its connection and the next one reconnects. -}
+sampleOne : Int ->
+  Option (Connection *) ->
   Bytes ->
   String ->
   Plan ->
   Int ->
   List Sample ->
-  <Clock, Net> (Bytes, List Sample)
-sampleOne conn pending target plan i acc =
+  <Clock, Net> (Option (Connection *), Bytes, List Sample)
+sampleOne port held pending target plan i acc =
   let (route, request) = planRequest plan samplerClientId i
-  let result = timedRequest conn pending request
-  match result
-    Err _ => (empty, Sample target route 0 0 :: acc)
-    Ok (status, rest, micros) =>
-      (rest, Sample target route micros status :: acc)
+  match held
+    Some conn => sampleOn conn pending target route request acc
+    None => match connect "127.0.0.1" port
+      Err _ => (None, empty, Sample target route 0 0 "connect" :: acc)
+      Ok conn =>
+        let _ = setTimeout conn requestCeiling
+        sampleOn conn empty target route request acc
 
 {- | Sample both targets for one tick, alternating which one goes first.
 
@@ -593,38 +764,48 @@ sampleOne conn pending target plan i acc =
    a warm/hot scheduler. Always sampling the loaded target first would tilt
    every comparison against it regardless of any real effect. Flipping the
    order by `i`'s parity spreads that wake-latency bias evenly across both
-   targets over a run. -}
-sampleTick : Connection * ->
+   targets over a run.
+
+   A `controlPort` of 0 means there is no control target. Each target's
+   connection is `None` after a request to it failed, and is reopened by the
+   next one. -}
+sampleTick : Int ->
+  Int ->
+  Option (Connection *) ->
   Option (Connection *) ->
   Bytes ->
   Bytes ->
   Plan ->
   Int ->
   List Sample ->
-  <Clock, IO, Net> (Bytes, Bytes, List Sample)
-sampleTick loaded control loadedPending controlPending plan i acc =
-  if isEven i then
+  <Clock, IO, Net> (Option (Connection *), Option (Connection *), Bytes, Bytes, List Sample)
+sampleTick port controlPort loaded control loadedPending controlPending plan i acc =
+  if controlPort == 0 then
+    let (loadedNext, loadedRest, afterLoaded) =
+      sampleOne port loaded loadedPending "loaded" plan i acc
+    (loadedNext, None, loadedRest, empty, afterLoaded)
+  else if isEven i then
     let () = eprintln "tick i=\{intToString i} first=loaded"
-    let (loadedRest, afterLoaded) =
-      sampleOne loaded loadedPending "loaded" plan i acc
-    let (controlRest, afterControl) = match control
-      None => (empty, afterLoaded)
-      Some conn => sampleOne conn controlPending "control" plan i afterLoaded
-    (loadedRest, controlRest, afterControl)
-  else match control
-    None =>
-      let (loadedRest, afterLoaded) =
-        sampleOne loaded loadedPending "loaded" plan i acc
-      (loadedRest, empty, afterLoaded)
-    Some conn =>
-      let () = eprintln "tick i=\{intToString i} first=control"
-      let (controlRest, afterControl) =
-        sampleOne conn controlPending "control" plan i acc
-      let (loadedRest, afterLoaded) =
-        sampleOne loaded loadedPending "loaded" plan i afterControl
-      (loadedRest, controlRest, afterLoaded)
+    let (loadedNext, loadedRest, afterLoaded) =
+      sampleOne port loaded loadedPending "loaded" plan i acc
+    let (controlNext, controlRest, afterControl) =
+      sampleOne controlPort control controlPending "control" plan i afterLoaded
+    (loadedNext, controlNext, loadedRest, controlRest, afterControl)
+  else
+    let () = eprintln "tick i=\{intToString i} first=control"
+    let (controlNext, controlRest, afterControl) =
+      sampleOne controlPort control controlPending "control" plan i acc
+    let (loadedNext, loadedRest, afterLoaded) =
+      sampleOne port loaded loadedPending "loaded" plan i afterControl
+    (loadedNext, controlNext, loadedRest, controlRest, afterLoaded)
 
-sampleLoop : Connection * ->
+closeHeld : Option (Connection *) -> <Net> Unit
+closeHeld None = ()
+closeHeld (Some conn) = ignoreResult (close conn)
+
+sampleLoop : Int ->
+  Int ->
+  Option (Connection *) ->
   Option (Connection *) ->
   Bytes ->
   Bytes ->
@@ -634,16 +815,29 @@ sampleLoop : Connection * ->
   Int ->
   List Sample ->
   <Clock, IO, Net> List Sample
-sampleLoop loaded control loadedPending controlPending plan i remaining intervalMs acc =
+sampleLoop port controlPort loaded control loadedPending controlPending plan i remaining intervalMs acc =
   if remaining < 1 then
+    let () = closeHeld loaded
+    let () = closeHeld control
     acc
   else
-    let (loadedRest, controlRest, afterBoth) =
-      sampleTick loaded control loadedPending controlPending plan i acc
+    let (loadedNext, controlNext, loadedRest, controlRest, afterBoth) =
+      sampleTick
+        port
+        controlPort
+        loaded
+        control
+        loadedPending
+        controlPending
+        plan
+        i
+        acc
     let () = sleep (millis intervalMs)
     sampleLoop
-      loaded
-      control
+      port
+      controlPort
+      loadedNext
+      controlNext
       loadedRest
       controlRest
       plan
@@ -659,17 +853,23 @@ runSample port controlPort plan requests intervalMs =
     if controlPort == 0 then None else Some (mustConnect controlPort)
   let t0 = monotonic ()
   let samples =
-    sampleLoop loaded control empty empty plan 0 requests intervalMs []
+    sampleLoop
+      port
+      controlPort
+      (Some loaded)
+      control
+      empty
+      empty
+      plan
+      0
+      requests
+      intervalMs
+      []
   let elapsed = elapsedSince t0
-  let () = ignoreResult (close loaded)
-  let () = match control
-    None => ()
-    Some conn => ignoreResult (close conn)
   let routes = planRoutes plan
   let () = reportRoutes "loaded" routes 0 samples
-  let () = match control
-    None => ()
-    Some _ => reportRoutes "control" routes 0 samples
+  let () =
+    if controlPort == 0 then () else reportRoutes "control" routes 0 samples
   println
     "sampler ticks=\{intToString requests} interval_ms=\{intToString intervalMs} seconds=\{floatToString elapsed}"
 
@@ -681,7 +881,7 @@ mustInt text =
 
 usage : String
 usage =
-  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <blobCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <blobCount> <requests> <intervalMs>\n       load_client_main write <port> <collection> <clientId> <durationMs> <did> <passwordFile>"
+  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <blobCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <blobCount> <requests> <intervalMs>\n       load_client_main write <port> <collection> <clientId> <durationMs> <did> <passwordFile> <writeIntervalMs>"
 
 main : <Clock, Env, IO, Net, FileRead> Unit
 main = match args ()
@@ -698,7 +898,7 @@ main = match args ()
       (Plan scenario collection (mustInt recordCount) (mustInt blobCount))
       (mustInt requests)
       (mustInt intervalMs)
-  ["write", port, collection, clientId, durationMs, did, passwordPath] =>
+  ["write", port, collection, clientId, durationMs, did, passwordPath, intervalMs] =>
     runWrite
       (mustInt port)
       collection
@@ -706,4 +906,5 @@ main = match args ()
       (mustInt durationMs)
       did
       passwordPath
+      (mustInt intervalMs)
   _ => panic usage

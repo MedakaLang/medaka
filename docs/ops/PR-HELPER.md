@@ -59,6 +59,13 @@ the PATCH's exit code. Anything containing backticks, `$()`, quotes, a leading
 `@`, blank lines, or non-ASCII round-trips byte-identical. Pass `--issue` to
 target `issues/N` instead of `pulls/N`.
 
+For a PR body, `body` first warns on stderr about any closing keyword
+(`close`/`fix`/`resolve` and their forms) followed by an issue reference that
+is not at the start of its line. GitHub closes such an issue on merge even when
+the sentence says the opposite ("this does not fix #508"), which has wrongly
+closed issues before (#583). The warning is advisory: the body is still written
+and the exit status is unchanged. Put each intended close on its own line.
+
 ### 2. `watch` — concise check watching
 
 Polls check-runs for the PR's head commit and prints **one line per state

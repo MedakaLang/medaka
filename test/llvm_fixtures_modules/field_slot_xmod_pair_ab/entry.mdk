@@ -1,0 +1,22 @@
+-- ACCEPT control for the field-position and record-update guards (#3726, #3727),
+-- import order `ma` then `mb`; `field_slot_xmod_pair_ba/` is the same program with the
+-- imports swapped.  The read and the update both act on `mb`'s single-constructor `T`
+-- and must be accepted in both orders, while `ma`'s same-spelled `T` (constructors
+-- disagreeing about `x`) sits unused beside it.
+--
+-- Expected output, derived by hand: `MB.mk = Cfg { y = 30, x = 40 }`, so `v.x` is 40;
+-- `{ v | x = 41 }` keeps `y = 30`, so `w=30,41`.
+import ma as MA
+import mb as MB
+
+main : <IO> Unit
+main =
+  let v = MB.mk
+  let w = { v | x = 41 }
+  putStrLn
+    ("x="
+      ++ intToString v.x
+      ++ " w="
+      ++ intToString w.y
+      ++ ","
+      ++ intToString w.x)

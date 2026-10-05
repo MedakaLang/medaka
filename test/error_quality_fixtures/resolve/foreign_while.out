@@ -1,0 +1,7 @@
+cmd: medaka check
+exit: 1
+---
+error: test/error_quality_fixtures/resolve/foreign_while.mdk:2:2: Unbound variable: while. Medaka has no `while`; write a recursive function
+  |
+2 |   while 1 < 3
+  |   ^

@@ -1,0 +1,29 @@
+-- #1383 face 2: `zwrap`'s named-field variant `Cfg` (type `Wrap`) and `acfg`'s
+-- record `Cfg` share registry key `Cfg` with their two fields at opposite
+-- indices.  The entry holds a value of each and names neither type.  `mkW`'s head
+-- is `Wrap`, not the key, so its projections are answered by the field-owner
+-- path, which selects the receiver's own declaration from the identity companion;
+-- the stamp names that declaration's module, so the built binary applies `Wrap`'s
+-- layout to `mkW` and `Cfg`'s to `mkZ`.
+--
+-- Hand-derived correct answer: `11,22,44,33`.  `mkW` is built `a = 11, b = 22`;
+-- `mkZ` is built `b = 33, a = 44`.  A wrong layout on the built binary shows as a
+-- transposed pair, which `medaka run` cannot show because the interpreter selects
+-- fields by name.
+--
+-- This import order was refused at base (`Type mismatch: Wrap vs Cfg` twice); the
+-- other order printed the right value.  Both orders are graded by
+-- `test/import_order_fixtures/1383-variant-ctor-vs-xmod-record-field-order-invariant/`.
+import zwrap.{mkW}
+import acfg.{mkZ}
+
+main : <IO> Unit
+main =
+  putStrLn
+    (intToString mkW.a
+      ++ ","
+      ++ intToString mkW.b
+      ++ ","
+      ++ intToString mkZ.a
+      ++ ","
+      ++ intToString mkZ.b)

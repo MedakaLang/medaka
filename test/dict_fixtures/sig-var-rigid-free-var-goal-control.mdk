@@ -1,0 +1,13 @@
+-- Control: `Get (Box b) b` matches `impl Get (Box a) a` at the rigid `b` itself.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+same : b -> b
+same x = get (Box x)
+
+main = println (same 41 + 1)

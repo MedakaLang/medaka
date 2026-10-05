@@ -1,0 +1,58 @@
+{- | Named effect rows for the socket shell.
+
+   Every alias here is an exact row, not a ceiling: a function that needs less
+   than one of them spells its own narrower row rather than borrowing a wider
+   one, because the row a function declares is what `medaka manifest` and the
+   typechecker hold it to.
+
+   `Wire`, `Streaming` and `Serve` nest because the code they describe does.
+   The serving loop hands an upgraded connection to the subscription loop, so
+   whatever the subscription loop may do the serving loop may do too; and both
+   move bytes over a socket.
+
+   Every `Net` atom here is indexed. The listener's authority is the
+   parameter `h`; the one outbound authority, `"127.0.0.1"`, is written as a
+   literal because it is what `egressAddress` (`pds/shell/egress.mdk`) is
+   declared to be, and every outbound call is charged at it.
+
+   Every file atom is indexed too, by the data directory `d`
+   (`pds/shell/datadir.mdk`): the event log the subscription loop reads and
+   everything the serving loop persists live beneath it, so `FileRead d` and
+   `FileWrite d` say which subtree, not merely that there is a file.
+
+   `Serve` also names the two secret-spending labels the serving loop
+   performs itself: `Kdf`, for the login derivations it pays for a slice at
+   a time, and `Sign "service-auth"`, for the credentials the egress proxy
+   and `getServiceAuth` mint. What the request handler performs is not
+   here; it is the server's own row, which a caller passes as `e`. -}
+
+import async.{Async, Wait}
+import lib.pbkdf2.{Kdf}
+import lib.sign.{Sign}
+
+-- | A computation that moves bytes over a socket at authority `h`, and may
+-- wait on the clock while it does.
+export type Wire (h : Authority Net) (e : Effect) a = Async <Clock, Net h | e> a
+
+-- | A deadline a `Wire h e` computation checks. It restates `Wire`'s row
+-- because a `Wait` is indexed by the row itself and a row cannot be named on
+-- its own; naming it through this alias also binds `h` in a signature whose
+-- first mention of the authority is the deadline.
+export type WireDeadline (h : Authority Net) (e : Effect) = Wait <Clock, Net h | e>
+
+-- | The subscription loop's row (`pds/shell/subscribe.mdk`) over a connection
+-- accepted at `h`: the wire, plus reading the event log it replays and tails
+-- beneath the data directory `d`, and polling the shutdown signal that ends
+-- the tail.
+export type Streaming (h : Authority Net) (d : Authority FileWrite*) (e : Effect) a = Wire h <FileRead d, Signal | e> a
+
+-- | The serving loop's row (`pds/shell/server.mdk`, `pds/serve.mdk`) over a
+-- listener at `h` and the data directory `d`: the subscription loop's, plus
+-- the outbound calls a request may forward and the service credentials they
+-- carry, the login derivations, persisting what a request changed beneath
+-- `d`, drawing nonces, and the access and diagnostic logs.
+export type Serve (h : Authority Net) (d : Authority FileWrite*) (e : Effect) a = Streaming h d <FileWrite d, Kdf, Net "127.0.0.1", Rand, Sign "service-auth", Stderr, Stdout | e> a
+
+-- | A deadline a `Serve h d e` computation checks, for the reason
+-- `WireDeadline` restates `Wire`: its row is `Serve`'s, written out.
+export type ServeDeadline (h : Authority Net) (d : Authority FileWrite*) (e : Effect) = WireDeadline h <FileRead d, FileWrite d, Kdf, Net "127.0.0.1", Rand, Sign "service-auth", Signal, Stderr, Stdout | e>

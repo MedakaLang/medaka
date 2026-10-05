@@ -1,0 +1,7 @@
+-- A second, unrelated declaration of each name `p` declares.
+public export data T = Mk String
+
+export unU : T -> String
+unU (Mk s) = s
+
+public export data R = { rx : String }

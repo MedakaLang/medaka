@@ -45,6 +45,26 @@ FIXDIR="$ROOT/test/wasm/fixtures_modules"
 RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
 
+# Dictionary/instance-resolution `gap` messages of wasm_emit.mdk (layer-15 "no impl of
+# method", F10 dispatch-arm arity, W5 dict param / forwarded dict / RNone witness /
+# CDict over unknown function, E23 CDict value over unknown function).  Derived from
+# every gap call site, not guessed; documented MVP feature gaps (unsupported node/op/
+# extern, native-only FFI, out-of-slice RNone/RScalar routes) are NOT in this set.
+is_dict_resolution_failure() {
+  grep -qE "no impl of method '|dispatch arm for '|dict param '.*' not in scope|forwarded dict '.*' not in scope|RNone route as a dict witness|CDict (value )?over unknown function" "$1"
+}
+
+# A tolerated GAP is a `gap`-helper panic that is not a resolution failure.
+is_tolerated_gap() {
+  grep -q 'wasm_emit gap — ' "$1" && ! is_dict_resolution_failure "$1"
+}
+
+# Classifier probe: `--classify <emit.err>` prints GAP or FAIL for a seeded emit error.
+if [ "${1:-}" = "--classify" ]; then
+  if is_tolerated_gap "$2"; then echo GAP; else echo FAIL; fi
+  exit 0
+fi
+
 # ── Per-fixture worker (parallel fan-out target) ───────────────────────────────
 # Re-invoked as `bash "$0" --one <name> <entry> <root>` under an xargs -P pool.
 # Writes an outcome code to $RESULTDIR/<name>.status: 0=ok, 1=FAIL (real
@@ -59,10 +79,13 @@ if [ "${1:-}" = "--one" ]; then
   elif ! "$EMITBIN" "$RUNTIME" "$CORE" "$entry" "$root" "$STDLIB" > "$wat" 2>"$WORKDIR/$name.emit.err"; then
     # Only a message produced by wasm_emit.mdk's own `gap` helper (the literal
     # substring "wasm_emit gap — ", emitted by every documented known-gap panic)
-    # is a tolerated GAP. Any other emit-time panic (e.g. a hard closure-check
-    # panic, S4) is a real FAIL — classifying it as GAP would silently hide the
-    # exact regression class this gate exists to catch loudly.
-    if grep -q 'wasm_emit gap — ' "$WORKDIR/$name.emit.err"; then
+    # is a tolerated GAP, and not even every such message: a dictionary/instance
+    # RESOLUTION failure (see is_dict_resolution_failure) reports a dispatch the
+    # emitter should have resolved, not a missing MVP feature, so it is a FAIL.
+    # Any other emit-time panic (e.g. a hard closure-check panic, S4) is a real
+    # FAIL too — classifying it as GAP would silently hide the exact regression
+    # class this gate exists to catch loudly.
+    if is_tolerated_gap "$WORKDIR/$name.emit.err"; then
       msg="$(printf 'GAP  %s (emit) %s' "$name" "$(head -1 "$WORKDIR/$name.emit.err" | sed 's/.*gap — //')")"; st=2
     else
       msg="$(printf 'FAIL %s (emit)\n%s' "$name" "$(cat "$WORKDIR/$name.emit.err")")"; st=1

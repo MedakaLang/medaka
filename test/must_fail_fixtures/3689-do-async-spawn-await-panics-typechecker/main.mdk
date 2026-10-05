@@ -1,0 +1,6 @@
+import async.{runAsyncMain, liftIO, spawnTask, await}
+
+main = runAsyncMain (do
+  t <- spawnTask (pure 1)
+  x <- await t
+  liftIO (_ => println x))

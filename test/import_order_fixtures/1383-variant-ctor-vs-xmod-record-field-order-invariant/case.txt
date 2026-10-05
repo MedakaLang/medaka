@@ -1,0 +1,14 @@
+entry: main.mdk
+what: a named-field variant and another module's record sharing one registry key, fields at opposite indices, answer the same in EVERY import-clause order, on the built binary too
+
+`zwrap` declares `data Wrap = | Cfg { a : Int, b : Int }`; `acfg` declares
+`data Cfg = { b : Int, a : Int }`. Both are filed under registry key `Cfg`. `main` holds a
+value of each (value-only imports) and projects both fields of both. Correct answer:
+`11,22,44,33`, in both orderings, on `run` and on the executed binary.
+
+This is #1383's second face, owed as a permutation case since #1690. At base the
+`zwrap`-first ordering was refused (`Type mismatch: Wrap vs Cfg` twice) and the other ordering
+printed the right value; on 2026-08-09 the accepted ordering's built binary printed
+`22,11,44,33`. The `build=` axis of this gate is what sees a layout transposition, since the
+interpreter selects fields by name. The value is pinned by
+`test/llvm_fixtures_modules/record_variant_ctor_vs_xmod_record_field_order/`.

@@ -221,6 +221,8 @@ if [ "${1:-}" = "--bless" ]; then
       *) p="$(cd "$(dirname "$p")" 2>/dev/null && pwd)/$(basename "$p")" ;;
     esac
     [ -e "$p" ] || { echo "no such path: $p" >&2; rc=1; continue; }
+    # A trailing slash would make the directory filter below look for `dir//*`.
+    while [ "$p" != "/" ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
     case "$p" in
       "$ROOT"/compiler/*_test.mdk)
         echo "not part of the snapshot corpus: $p" >&2
@@ -230,20 +232,38 @@ if [ "${1:-}" = "--bless" ]; then
     owners=""
     for row in $(snapshot_families | tr ' ' '|'); do
       sub="${row%%|*}"; spec="${row##*|}"
-      spec_owns "$spec" "$p" && owners="$owners $sub"
+      spec_owns "$spec" "$p" && owners="$owners $row"
     done
     if [ -z "$owners" ]; then
       echo "not part of the snapshot corpus: $p" >&2
       echo "  (corpus: $(corpus_blurb))" >&2
       rc=1; continue
     fi
-    for sub in $owners; do
+    for row in $owners; do
+      sub="${row%%|*}"; spec="${row##*|}"
+      # A DIRECTORY argument is narrowed to the OWNING family's own corpus
+      # under it: `stdlib` reaches `prelude` (corpus: the one file
+      # `stdlib/core.mdk`), and passing the directory through would render
+      # every `stdlib/*.mdk` against the prelude's single golden.
+      if [ -d "$p" ]; then
+        targets=""
+        for f in $(family_files "$spec"); do
+          case "$f" in "$p"/*) targets="$targets $f" ;; esac
+        done
+      else
+        targets="$p"
+      fi
+      if [ -z "$targets" ]; then
+        echo "$sub: no corpus files under $p" >&2
+        rc=1; continue
+      fi
       # `--stages` is deliberately NOT passed: an existing snapshot names its
       # own stage set in `# META`, and a bless re-cuts the stages the file
       # already has — never widens them behind the author's back. That is also
       # what keeps a two-family path honest, since the two files disagree about
       # their stages by construction.
-      "$MEDAKA" snapshot --bless --root "$ROOT" --out "$SNAPDIR/$sub" "$p" || rc=1
+      # shellcheck disable=SC2086  # word-splitting is how the file list is passed
+      "$MEDAKA" snapshot --bless --root "$ROOT" --out "$SNAPDIR/$sub" $targets || rc=1
     done
   done
   exit "$rc"

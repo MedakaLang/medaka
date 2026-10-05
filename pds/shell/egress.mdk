@@ -46,7 +46,7 @@
    nothing is closed on the first, and one that dribbles a byte per budget is
    closed only by the second. -}
 
-import async.{Async, Wait, deadlineAfter, expired}
+import async.{deadlineAfter, expired}
 import bytebuilder.{Builder, buildBytes, builderParts, emitBytes, newBuilder}
 import bytes as B
 import bytes.{Bytes}
@@ -75,14 +75,17 @@ import lib.resource_limits.{maxHttpClientWireBytes}
 import lib.sign.{SecretKey}
 import net.{Connection}
 import net_async as A
+import shell.rows.{Wire, WireDeadline}
 import time.{Duration, seconds}
 
 {- | The loopback address every outbound call this shell makes is reached at.
    See the module header for why this is a constant and not a flag — it holds
    just as much for `pds/shell/crawl.mdk`'s relay announce as it does for a
-   proxied read: this process dials no address but its own box. -}
+   proxied read: this process dials no address but its own box. The declared
+   qualifier is what charges every outbound call `Net "127.0.0.1"`, in this
+   module and in every module that dials it. -}
 export
-egressAddress : String
+egressAddress : String @"127.0.0.1"
 egressAddress = "127.0.0.1"
 
 {- | How long one outbound read may find nothing before the call is abandoned.
@@ -172,7 +175,9 @@ egressSigningKey (Egress _ signingKey) = signingKey
    nonce schedule exhausts its retry bound — which no input chooses and no
    caller can provoke. -}
 export
-egressMintToken : Egress -> ServiceAuthRequest -> Result String String
+egressMintToken : Egress ->
+  ServiceAuthRequest ->
+  <Sign "service-auth"> Result String String
 egressMintToken egress claims =
   mintServiceToken (egressSigningKey egress) claims
 
@@ -270,11 +275,11 @@ decodeUpstream buffer = match parseResponse buffer
    call with nothing more read. Whether a total is affordable is not this
    module's question: it depends on what every other call in the process
    holds, which only the caller can see. -}
-collectUpstream : Wait <Clock, Net | e> ->
-  (Int -> Async <Clock, Net | e> Bool) ->
-  Connection * ->
+collectUpstream : WireDeadline h e ->
+  (Int -> Wire h e Bool) ->
+  Connection h ->
   Builder ->
-  Async <Clock, Net | e> (Result String UpstreamAnswer)
+  Wire h e (Result String UpstreamAnswer)
 collectUpstream deadline mayHold conn acc = defer
   late <- expired deadline
   if late then
@@ -283,12 +288,12 @@ collectUpstream deadline mayHold conn acc = defer
     received <- A.recvWithin upstreamSilenceTimeout conn upstreamChunkBytes
     collectStep deadline mayHold conn acc received
 
-collectStep : Wait <Clock, Net | e> ->
-  (Int -> Async <Clock, Net | e> Bool) ->
-  Connection * ->
+collectStep : WireDeadline h e ->
+  (Int -> Wire h e Bool) ->
+  Connection h ->
   Builder ->
   Result String Bytes ->
-  Async <Clock, Net | e> (Result String UpstreamAnswer)
+  Wire h e (Result String UpstreamAnswer)
 collectStep _ _ _ _ (Err message) =
   deferPure (Err "egress: upstream read failed: \{message}")
 collectStep deadline mayHold conn acc (Ok bytes) =
@@ -302,12 +307,12 @@ collectStep deadline mayHold conn acc (Ok bytes) =
     else
       keepChunk deadline mayHold conn acc bytes
 
-keepChunk : Wait <Clock, Net | e> ->
-  (Int -> Async <Clock, Net | e> Bool) ->
-  Connection * ->
+keepChunk : WireDeadline h e ->
+  (Int -> Wire h e Bool) ->
+  Connection h ->
   Builder ->
   Bytes ->
-  Async <Clock, Net | e> (Result String UpstreamAnswer)
+  Wire h e (Result String UpstreamAnswer)
 keepChunk deadline mayHold conn acc bytes =
   let () = emitBytes bytes acc
   let (wire, collected) = builderParts acc
@@ -319,10 +324,10 @@ keepChunk deadline mayHold conn acc bytes =
     Some _ => deferPure (decodeUpstream (buildBytes acc))
     None => collectUpstream deadline mayHold conn acc
 
-exchange : (Int -> Async <Clock, Net | e> Bool) ->
-  Connection * ->
+exchange : (Int -> Wire h e Bool) ->
+  Connection h ->
   Bytes ->
-  Async <Clock, Net | e> (Result String UpstreamAnswer)
+  Wire h e (Result String UpstreamAnswer)
 exchange mayHold conn bytes = defer
   deadline <- deadlineAfter upstreamCallTimeout
   sent <- A.sendAllWithin upstreamWriteTimeout conn bytes
@@ -334,10 +339,10 @@ exchange mayHold conn bytes = defer
 -- The connection is closed on every path out, success and failure alike, which
 -- is why the exchange's outcome is held and returned after the close rather
 -- than returned from inside it.
-opened : (Int -> Async <Clock, Net | e> Bool) ->
-  Connection * ->
+opened : (Int -> Wire h e Bool) ->
+  Connection h ->
   Bytes ->
-  Async <Clock, Net | e> (Result String UpstreamAnswer)
+  Wire h e (Result String UpstreamAnswer)
 opened mayHold conn bytes = defer
   outcome <- exchange mayHold conn bytes
   _ <- A.close conn
@@ -359,20 +364,20 @@ opened mayHold conn bytes = defer
    is one call, made once at startup, so no number of callers can multiply
    what it holds. -}
 export
-egressConnect : String ->
+egressConnect : (host : String) ->
   Int ->
   Bytes ->
-  Async <Clock, Net | e> (Result String UpstreamAnswer)
+  Wire host e (Result String UpstreamAnswer)
 egressConnect host port bytes =
   egressConnectHolding host port (_ => deferPure True) bytes
 
 -- `egressConnect`, asking `mayHold` before each chunk of the answer is kept
 -- (`collectUpstream`).
-egressConnectHolding : String ->
+egressConnectHolding : (host : String) ->
   Int ->
-  (Int -> Async <Clock, Net | e> Bool) ->
+  (Int -> Wire host e Bool) ->
   Bytes ->
-  Async <Clock, Net | e> (Result String UpstreamAnswer)
+  Wire host e (Result String UpstreamAnswer)
 egressConnectHolding host port mayHold bytes = defer
   connected <- A.connectWithin upstreamConnectTimeout host port
   match connected
@@ -410,9 +415,9 @@ egressConnectHolding host port mayHold bytes = defer
    which of the rest happened is this server's business and not the client's. -}
 export
 egressCall : Egress ->
-  (Int -> Async <Clock, Net | e> Bool) ->
+  (Int -> Wire "127.0.0.1" e Bool) ->
   ProxyAdmission ->
-  Async <Clock, Net | e> (Result String UpstreamAnswer)
+  <Sign "service-auth"> Wire "127.0.0.1" e (Result String UpstreamAnswer)
 egressCall egress mayHold admission =
   match appviewRouteFor (egressAppviews egress) admission.audience
     None =>

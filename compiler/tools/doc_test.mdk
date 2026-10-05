@@ -1,0 +1,72 @@
+-- Sibling test module for `compiler/tools/doc.mdk`.
+--
+-- Covers heading-anchor disambiguation (#3402): a type and a function whose
+-- names slugify identically get GitHub's `-1` suffix on the later heading, and
+-- every link (index, Instances line) names the anchor of the heading it means.
+
+import test.{Expectation, expectEqual, expectTextContainsAll}
+import tools.doc.{
+  docParseError, DocEntry(..), DocKind(..), ModuleDoc(..), renderIndex,
+  renderModulePage
+}
+
+-- `data HmacKey` at line 3, `hmacKey` at line 9: same slug `hmackey`.
+collidingPage : ModuleDoc
+collidingPage =
+  ModuleDoc
+    "m"
+    "A module."
+    [
+      DocEntry "HmacKey" "data HmacKey = HmacKey" "" "The type." KTypeDecl 3,
+      DocEntry
+        "hmacKey"
+        "hmacKey : Int -> HmacKey"
+        "hmacKey n"
+        "The fn."
+        KPlain
+        9,
+    ]
+    ["HmacKey"]
+
+test "index links the type and the function to distinct anchors" =
+  expectTextContainsAll
+    ["[`HmacKey`](m.md#hmackey)", "[`hmacKey`](m.md#hmackey-1)"]
+    (renderIndex [collidingPage])
+
+-- A function named like its module collides with the page title heading.
+titlePage : ModuleDoc
+titlePage = ModuleDoc "m" "" [DocEntry "m" "m : Int" "" "A value." KPlain 2] []
+
+test "an entry named like the page title skips the title's anchor" =
+  expectTextContainsAll ["[`m`](m.md#m-1)"] (renderIndex [titlePage])
+
+test "page headings are unchanged by the disambiguation" =
+  expectTextContainsAll
+    ["## `HmacKey`", "## `hmacKey`"]
+    (renderModulePage collidingPage)
+
+-- A section titled like a documented impl heading takes the plain slug, so the
+-- Instances link to the impl must carry the `-1` suffix.
+instancePage : ModuleDoc
+instancePage =
+  ModuleDoc
+    "m"
+    ""
+    [
+      DocEntry "Debug Foo" "" "" "" KSection 1,
+      DocEntry "Foo" "data Foo = Foo" "" "T." KTypeDecl 3,
+      DocEntry "Debug Foo" "impl Debug Foo" "" "Shows." (KImplOn (Some "Foo")) 7,
+    ]
+    ["Foo"]
+
+test "an instance link skips the anchor of a same-named section" =
+  expectTextContainsAll ["(#debug-foo-1)"] (renderModulePage instancePage)
+
+-- Library mode names the file whose source does not parse (#2420).
+test "a parse failure is reported with the file path" =
+  match docParseError "pkg/bad.mdk" "x = (\n"
+    Some msg => expectTextContainsAll ["pkg/bad.mdk:"] msg
+    None => expectEqual "a parse error" "no error"
+
+test "a parsing source reports no error" =
+  expectEqual None (docParseError "pkg/ok.mdk" "x = 1\n")

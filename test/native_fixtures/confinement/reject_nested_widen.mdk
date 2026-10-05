@@ -1,0 +1,11 @@
+helper _ = writeFile "cfg/link/widened.txt" "x"
+
+boxed : Unit -> Option (Unit -> <FileWrite "cfg/*"> Result String Unit)
+boxed _ = Some helper
+
+wide : Unit -> <FileWrite> Result String Unit
+wide = match boxed ()
+  Some f => f
+  None => _ => Err "none"
+
+main = println (wide ())

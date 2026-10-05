@@ -80,7 +80,7 @@ does not have as units. The amended set is eight:
 |---|---|---|
 | **K** — declaration analysis | whole-graph CE/IE/DataEnv **and the per-module seed layer it has not absorbed** | R folded in; the "assembled once" clause corrected (SA-2) |
 | **I** — inference | the `infer` recursion, kept structurally intact | unchanged |
-| **Sh** — shadow resolution | definer/importer shadow dispatch, value-position pinning, standalone dict computation | **NEW.** 1,043 code lines, larger than ENTAIL (556) and COHERENCE (265) combined, today split four ways: I (the six-arm `inferAppExpr` ladder), K (shadow sets from `universeIfaceMethodsRef`), E (per-module `prePassModulePairArg` filtering), S (`resolveRLocalSites`). L1 already names "the shadow resolution function" as a spec judgment and SHADOW-SEMANTICS §3 already has its table; §2 gave it no home |
+| **Sh** — shadow resolution | definer/importer shadow dispatch, value-position pinning, standalone dict computation | **NEW.** 1,043 code lines, larger than ENTAIL (556) and COHERENCE (265) combined, today split four ways: I (the six-arm `inferAppExpr` ladder), K (shadow sets from `deMethods`, read through `methodNameDeclaredAt`), E (per-module `prePassModulePairArg` filtering), S (`resolveRLocalSites`). L1 already names "the shadow resolution function" as a spec judgment and SHADOW-SEMANTICS §3 already has its table; §2 gave it no home |
 | **S** — solving | ONE entailment engine **and the stamper schedule as one owned contract** | the schedule is inside S's contract, not adjacent to it: `moduleStampOrder` is the sole graph-level sequence, including `resolveRLocalSites`, so L15's override rule has one enforceable order |
 | **E** — elaboration / driver | one driver, one mode, marking on the schedule | unchanged in intent; re-sequenced (SA-4) |
 | **G** — global checks | coherence, escape/launder, kinds, exhaustiveness bridge | unchanged |
@@ -770,8 +770,9 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    never raised and `run` executed a dot-access on an abstractly exported record that
    `check`/`build` reject — live on main for the import-bearing arm since (13c).  Seeded
    at both driver entries now; three `run_check_agreement` fixtures pin it.  The lesson
-   for the next driver consolidation: the check preamble's writer set (`graphMethodExports`,
-   `graphIfaceMethods`, `graphCtorExports`, `mangledFunDefsPresent`, `declEnvs`,
+   for the next driver consolidation: the check preamble's writer set
+   (`mangledFunDefsPresent`, `declEnvs` — which carries the method-export indices since #2563,
+   and the constructor export index `deData.deCtorExports` since it left `DriverState` —
    `effectDomains`, `abstractRecordTypes`) is the contract every Module-mode entry must
    carry, and `registry_keying_ratchet`'s check 6 (#2796) is that place.
 15. **`check` typechecks once, and the analyze path stops re-resolving its unchanged prefix,
@@ -1040,15 +1041,10 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    renames a constructor before elaboration, `mangleCtorCollisions`, cannot be observed
    through this cell — its drivers (`eval`, `core_ir_eval`, `test`) all discard the
    record-name field.
-   **What did NOT retire.** `lookupRecordByMangledHead` / `mangledHeadCandidates` answer a
-   different question — which `RecordInfo` a receiver SELECTS when the registry key is
-   mangled and the receiver's type reference is not — which this change does not touch.
-   Its reach moved, though, and the reorder is what moved it: the emit path no longer
-   elaborates mangled keys, so the arm that fires is now the pre-elaboration ctor rename
-   (`mangleCtorCollisions`, which renames a colliding record's constructor and leaves its
-   type name alone) on `eval` / `core_ir_eval` / `test`. Its own comment's stub measurement
-   — self-compile typechecks clean and then miscompiles itself into a segfault — was taken
-   on the old order and has not been re-run on the new one.
+   **Retired afterwards.** The mangled-head record lookup (a suffix-match over mangled registry keys) answered a
+   different question (which `RecordInfo` a receiver selects when the registry key is mangled and the
+   receiver's type reference is not) and were deleted after instrumentation measured zero candidates on
+   every emit and run path once the emit path elaborated unmangled.
 
 20. **The emitter child elaborates the program the user wrote, 2026-09-10** (#2809, branch
    `typecheck-rearch-4`). `entry_support.runEmitWith` / `emitModulesWith` — and the other
@@ -1135,7 +1131,7 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    (5) `standaloneShadowsFromSet`'s `mangled` arm (#411);
    (6) `maybeStandaloneValueMonoEmit` (#410/#669);
    (7) `mangledCtorShaped`;
-   (8) `lookupRecordByMangledHead` / `mangledHeadCandidates`;
+   (8) the mangled-head record lookup (deleted, dead since #2809);
    (9) `graphCarriesMangledFunDefs` / `mangledFunDefsPresentRef` / `importerShadowOnEmitPath`;
    (10) `isMangledFor` / `isMangledExportOfAny`;
    (11) `private_mangle`'s `unclaimPreludeForLocalMethods`;
@@ -1569,7 +1565,7 @@ accumulators; #1512 and #1557 retired four more `universe*` rows). It will rot
 again; run the commands:
 `grep -rn '^\s*universe[A-Za-z0-9_]* *:' compiler/ stdlib/ | grep -v '\.md:'`
 plus `grep -rn '^\s*obUniv[A-Za-z0-9_]* *:' compiler/ --include=*.mdk`
-(`loadDataUniverse`/`storeDataUniverse`/
+(`loadDataUniverse`/`appendDataUniverse`/
 `appendUniverseAccums`) — and the approximation is exactly where #1072 lives:
 a site's module sees only its own slice of `IE`, concludes there is no
 collision at a head, and stamps a bare-head key that the emitter then ORs into
@@ -3518,7 +3514,7 @@ reach. Run the three commands rather than trusting this table's membership.
 | `implCompletenessMsgsOf` / `implCompletenessMsgsOfMap` | per-decl scans; the Flat arm scanned a decl list by BARE NAME (`ifaceRequiredMethods`), the Map arm read `universeIfaceRequiredRef` | ✅ **LANDED at A-3.5a (#1557).** The two checkers are now ONE (`checkImplCompletenessMap`, kept under its historical `Map` name to avoid stranding this citation and three others), reading `CE` at the reading module's ordinal via `ceRequiredAt` → `ceLookupAt`. Retires `universeIfaceRequiredRef` + its writer `insertIfaceRequired`; `cross_allowed` **24 → 23**, derived on this unit's own base — do not quote that pair elsewhere without re-deriving (`sh test/registry_keying_ratchet.sh` prints it). ⚠️ **NOT byte-identical, and the delta is confined to the FLAT arm**: the Module arm's key does not move (`regKeyOfTab (ifaceTabKey implOrigin iface)` on both sides, and `classEnvRowsOf` mints `CeRow`'s key from the same `ifaceTabKey ifaceOrigin name`), so that arm is a population/lifetime move; the Flat arm's bare first-match scan → identity lookup **is** the re-key, per the owner ruling on #1557 OWED 1. **The bare-name key this replaced was the exact defect #1258 reproduced**: interface names are not globally unique across modules (only within one), so two unrelated modules each declaring `Same` shared one bare-name registry key, and whichever module registered last supplied the required-method list checked against BOTH — an impl that completely implemented its own `Same` was rejected as missing the other module's method (`'impl Same ET' is missing method 'bar'`, exit 1, on a program whose only `Same` in scope declares `foo`). #1111 A-2.4 fixed the key to a `RegKey` carrying the interface's identity (`ifaceTabKey`, write side from `DInterface.ifaceOrigin`, read side from the naming `DImpl`'s `implOrigin`) before A-3.5a moved the lookup's source onto `CE` |
 | `superImplMsgsOf` / `implMatchesSuper` (`:14193-14251`) | scan of `allDecls` for a super's impl | **DEFERRED → A-3.5** |
 | `checkInterfaceCycles` / `ifaceDfsCycle*` · `checkPhantomMethods` · `checkGradedImplHeads` / `checkGradedImplTys` | bare-name decl scans (cycles) · per-decl scan (phantom) · `ifaceParamKindsRef` lookup (kinds) | ✅ **LANDED at A-3.5c (#1557).** All three read `CE` at the reading module's ordinal — `ceRowsVisibleAt` (cycles, with super edges now followed by IDENTITY), `ceRowsOwnedBy` (phantom), `ceSlotKindsAt` (kinds). Retires `universeIfaceParamKinds` + `ifaceParamKindsRef`; `cross_allowed` **27 → 26** — this row said `28 → 27`, which is the PRIOR unit's transition (#1588, A-3.2b residual 1); re-derived 2026-08-12 by counting the `cross_allowed` allowlist at each merge commit (#1588 `257d7e79` 28→27, #1592 `6775679a` 27→26, #1590 `dc3e8bd5` 26→24; live value 24). NOT byte-identical, by owner ruling — see §9.9 |
-| `implTysIfMatch` · `implHeadTagForIface` · `implHeadGround` · `implHeadParametric` · `declMethodNamesOf` · `argImplRequiresRoutesRecD`'s decl walk | per-call decl-list scans, no ref — invisible to every prefix grep | **DEFERRED**: they become `IE` readers where the read is authoritative (A-3.5/3.6), not here |
+| `implHeadTagForIface` · `implHeadGround` · `implHeadParametric` · `declMethodNamesOf` · `argImplRequiresRoutesRecD`'s decl walk | per-call decl-list scans, no ref — invisible to every prefix grep | **DEFERRED**: they become `IE` readers where the read is authoritative (A-3.5/3.6), not here |
 | `superDeclsRef`, `argDispatchIdxRef`, `methodDispatchIdxRef` | `DriverState`, interface/method-side | **NOT `IE`** — CE-side or RLocal-site channels (#1351); A-3.3 excludes the latter two deliberately |
 | `EmitInput.methodIfaces` / `methodIfaceIndex` / `methodIfaceIdIndex` (`compiler/backend/llvm_emit.mdk:781-783`), read via `methodIfaceOfInput`/`methodArityOfInput`/`methodArityOfIface` (`:480-513`) by both backends | emit-side method→(iface, arity) table | **NOT `IE`** — #1112 §1 row 7. B-2 (#1113) is CLOSED and is no longer this row's routing. ⚠️ This row named `methodIfaceTableRef`/`methodIfaceIndexRef` in `compiler/backend/emit_support.mdk:449-464` until 2026-08-26; **neither symbol has existed since the `EmitInput` boundary landed** (`grep -rn 'methodIfaceTableRef' compiler/` → no hits), and `emit_support.mdk:449-464` holds `lazyGlobalNames`/`isDictParamName`, unrelated. This row's question was resolved by the **`emit-dispatch-identity`** sprint (#1810 / #1852, both CLOSED) — verified: `EmitInput` now carries both `methodIfaceIndex` (bare-name) AND `methodIfaceIdIndex` (an `OrdMap Int`, identity-keyed by iface id — `llvm_emit.mdk:783`, `:513`), the identity-keyed table this row was asking for |
 | `ifaceImplHeadsRef` / `ifaceIdsAtTag` / `defaultOwnedBy` / `narrowDefaults` / `CImplDefault` (`compiler/ir/core_ir_lower.mdk`, both emitters), `defaultCellName` cells (`compiler/eval/eval.mdk`) | HISTORICAL row name — the default-arm registry and its selector, as they existed when this row was written | **#1265 FIXED, s4-identity-keyed-defaults (`3580cf589`), superseding this row.** `ifaceIdsAtTag`/`defaultOwnedBy`/`narrowDefaults` are deleted; the default-arm registry is now `compiler/types/disposition.mdk`'s `DispositionTable`, published beside `IE`/`CE` and read by every engine, keyed by `(ifaceId, method, instance)` — not by this row's bare `(method, tag)` selector. `CImplDefault` and `defaultCellName` survive as the payload/cell-naming halves; they no longer select |
@@ -3821,9 +3817,11 @@ comparing `irName`, and each would change behaviour if re-keyed:
 
 - every **display** surface (`ppSchemeCon` / `renderConstraintCtx`) — otherwise every
   rendered `Num a =>` moves;
-- the **dedup/coverage** currency (`vecOblKey`, `containsVecObl`, `pairsOfVecObls`,
-  `cslotKey`, `censusSuperSlotsOf`) — `cslotKey` decides how many dict slots a constrained
-  fn has, so an identity key would move emitted dict **arity**;
+- the **dedup/coverage** currency (`vecOblKey`, `containsVecObl`, `pairsOfVecObls`).
+  `cslotKey`, which decides how many dict slots a constrained fn has, left this list with
+  #3680: it keys on the declaration (`oblIfaceKey`), so `(A.Sh a, B.Sh a) =>` owns two
+  slots, and the dict arity of every signature without two same-spelled interfaces is
+  unchanged;
 - the **routing** goal (`pushDictApp`'s iface component, `resolveDictApps`) — a route word
   against the spelling-keyed `KeyBuckets`, kept that way by #1317 T1 / the closed S0 #1277;
 - `groupConstraintMonosRef`, whose only reader compares interface names.
@@ -3966,6 +3964,13 @@ whether the leg is dead weight.
 ### 10.7 U1c — the method-occurrence goal, Step 0's ruling, and the drain condition's real state
 
 Landed by the PR that implements **#1507**, sequenced after U1b (§10).
+
+> **Historical names.** This section records the code as U1c found it. The method-scope
+> functions it names (`scopedMethodEntry`, `importedMethodEntry`, `overrideScopedMethods`
+> and its floor entry) are gone; `methodScopeAt` (`compiler/types/typecheck.mdk`) replaced
+> them, and its ladder has no floor: two or more admitted declarations answer `MsMany`, and
+> every single-winner reader then sees no declaration. Read the paragraphs below as the
+> state at U1c, not as the current code.
 
 **Step 0 — the decl-layer / occurrence-layer ruling.** Ratified by the repo owner on
 #1507: [issuecomment-5248859630](https://github.com/MedakaLang/medaka/issues/1507#issuecomment-5248859630)

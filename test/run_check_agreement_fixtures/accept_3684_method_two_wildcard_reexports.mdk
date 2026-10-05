@@ -1,0 +1,8 @@
+-- #3684: the method `mth` reaches this module through two wildcard
+-- re-exports of one declaration. That is one candidate, so `mth 21` uses the
+-- `IA Int` impl: 42. The reversed import order is
+-- accept_3684_method_two_wildcard_reexports_ba.mdk.
+import lib.od3684_ma.*
+import lib.od3684_mb.*
+
+main = println (mth 21)

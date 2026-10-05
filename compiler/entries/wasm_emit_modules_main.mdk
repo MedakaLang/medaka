@@ -29,40 +29,17 @@
 -- to lowerProgramEmit (loader, mangle, elaborateModules, dceFilter) is identical to
 -- the LLVM modules driver.
 
-import frontend.ast.{
-  Arm(..),
-  Decl(..),
-  DoStmt(..),
-  Expr(..),
-  FunClause(..),
-  IfaceMethod(..),
-  ImplMethod(..),
-  LetBind(..),
-  Lit(..),
-  Loc,
-  MethodDefault(..),
-  Pat(..),
-}
-import frontend.desugar.{mapChildren}
+import frontend.ast.{Decl(..)}
 import types.typecheck.{
-  TcDiag(..),
   constrainedSigNames,
   preludeReturnPosDictNames,
   preludeArgPosDictNames,
   mainTypeIsFloat,
   checkedFfiExternTypeNamesModules,
-  mapDeclBodies,
 }
 import driver.diagnostics.{emitDiagExitCode, renderTcDiags}
 import driver.loader.{modIdToPath}
-import support.ordmap.{
-  OrdMap,
-  omEmpty,
-  omFromNames,
-  omHasKey,
-  omInsert,
-  omLookup,
-}
+import backend.wasm_file_grants.{prepareWasmFileGrants}
 import ir.core_ir.{CProgram(..)}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
@@ -77,17 +54,11 @@ import ir.dce.{dceFilter}
 import backend.wasm_emit.{
   emitProgram,
   makeWasmEmitInputFull,
-  wasmFileGrantArity,
-  wasmFileGrantExterns,
-  wasmGrantConfined,
-  wasmFileGrantMsg,
 }
 import backend.wasm_reach.{wasmReachFilter}
 import entries.entry_support.{driveModulesLocated, runEmitWith}
 import support.timer.{statsEnabled, emitStats}
-import support.util.{listLen, reverseL, filterList}
-import list.{findMap}
-import string.{indexOf, lastIndexOf}
+import support.util.{listLen}
 
 main : <IO> Unit
 -- WasmGC has no clock host-imports yet (`sleepMs`/`monotonicSec` are WASM-GAP
@@ -113,8 +84,8 @@ emitTail : List (String, String, List Decl) ->
   <IO> Unit
 emitTail mods runtimeDecls coreD modules2 =
   let allDecls0 = coreD ++ flatMap snd modules2
-  let allDecls = dceFilter allDecls0
-  let _ = refuseNarrowFileGrants mods allDecls modules2
+  let kept = dceFilter allDecls0
+  let allDecls = refuseNarrowFileGrants mods runtimeDecls kept modules2
   let _ =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
@@ -155,286 +126,15 @@ emitTail mods runtimeDecls coreD modules2 =
 programUnitCount : CProgram -> Int
 programUnitCount (CProgram groups _ _ impls) = listLen groups + listLen impls
 
--- The wasm host cannot confine a file operation to a grant, so the build refuses
--- every grant the program writes whose elements need a runtime check
--- (`wasmGrantConfined`), with one located error per call that writes one.
---
--- A grant reaches a file extern either as a term the grant pass wrote at a call
--- (the whole domain `[]`, a list of the authority's elements, or a join of those
--- with parameters) or as a grant parameter of the enclosing binding, forwarded
--- unchanged or joined.  A parameter holds only what its callers pass, so every
--- grant value a file extern receives is built from terms written at some call
--- site, and refusing each unconfinable written term refuses every unconfinable
--- grant.  A library wrapper that forwards its parameter (`io.readLines`,
--- `fs.isFile`) therefore builds, and the refusal lands where the program wrote
--- the narrow grant.  Only the declarations that survive DCE are read, so an
--- unreached library function does not refuse the program, and a grant written
--- for a callee that can reach no file extern (`fileReach`) is not a file grant
--- at all: a `Handle` constructor's authority, or a user effect's.
 refuseNarrowFileGrants : List (String, String, List Decl) ->
   List Decl ->
+  List Decl ->
   List (String, List Decl) ->
-  <IO> Unit
-refuseNarrowFileGrants mods kept modules =
-  let live = omFromNames (keptFunNames kept []) omEmpty
-  let reach = fileReach kept
-  match flatMap (m => moduleGrantDiags reach live m) modules
-    [] => ()
-    diags =>
+  <IO> List Decl
+refuseNarrowFileGrants mods runtimeDecls kept modules =
+  match prepareWasmFileGrants runtimeDecls kept modules
+    Ok decls => decls
+    Err diags =>
       let _ = map ePutStrLn (renderTcDiags (map modIdToPath mods) diags)
-      exit emitDiagExitCode
-
-keptFunNames : List Decl -> List String -> List String
-keptFunNames [] acc = acc
-keptFunNames ((DFunDef _ n _ _) :: rest) acc = keptFunNames rest (n :: acc)
-keptFunNames ((DAttrib _ d) :: rest) acc = keptFunNames (d :: rest) acc
-keptFunNames (_ :: rest) acc = keptFunNames rest acc
-
--- DCE drops only plain functions, so every other declaration is read.
-isLiveDecl : OrdMap Unit -> Decl -> Bool
-isLiveDecl live (DFunDef _ n _ _) = omHasKey n live
-isLiveDecl live (DAttrib _ d) = isLiveDecl live d
-isLiveDecl _ _ = True
-
-moduleGrantDiags : Reach ->
-  OrdMap Unit ->
-  (String, List Decl) ->
-  List (String, TcDiag)
-moduleGrantDiags reach live (mid, decls) =
-  let sites = Ref []
-  let _ =
-    map
-      (d =>
-        if isLiveDecl live d then
-          mapDeclBodies (scanGrantSites reach sites None) d
-        else
-          d)
-      decls
-  map
-    (site => match site
-      (loc, name, es) => (
-        mid,
-        TcDiag "T-WASM-FILE-GRANT" 1 loc (wasmFileGrantMsg name es) None None,
-      ))
-    (reverseL sites.value)
-
--- Records each application argument that is a written grant needing a runtime
--- check, at the first location among the call's other arguments, else the
--- innermost one around the call.  A spine is read once, at its outermost
--- application, so a leading grant is not seen again from an inner one.
-scanGrantSites : Reach ->
-  Ref (List (Option Loc, String, List String)) ->
-  Option Loc ->
-  Expr ->
-  Expr
-scanGrantSites reach sites _ (ELoc l e) =
-  ELoc l (scanGrantSites reach sites (Some l) e)
-scanGrantSites reach sites around (e@(EApp _ _)) =
-  let (head, args) = appSpine e []
-  let _ =
-    if mayReachFile reach head then
-      let path = leafPath head args
-      let values = filterList (a => isNone (grantElems a)) args
-      let at = orElse (findMap leftLoc values) around
-      map
-        (a => match grantElems a
-          Some es =>
-            if wasmGrantConfined path es then
-              ()
-            else
-              sites := (at, calleeName head, es) :: sites.value
-          None => ())
-        args
-    else
+      let _ = exit emitDiagExitCode
       []
-  let _ = scanGrantSites reach sites around head
-  let _ = map (scanGrantSites reach sites around) args
-  e
--- A partial use is saturated under `let`s binding the arguments it was given, so
--- the call inside reads as fresh names: locate it at the first bound argument.
-scanGrantSites reach sites around (e@(ELet _ _ _ rhs body)) =
-  let _ = scanGrantSites reach sites around rhs
-  let _ = scanGrantSites reach sites (orElse (leftLoc rhs) around) body
-  e
-scanGrantSites reach sites around e =
-  mapChildren (scanGrantSites reach sites around) e
-
--- ── which callees can reach a file extern ────────────────────────────────────
--- The bindings the program defines (top-level, local, and interface methods by
--- name, every impl and default of a method counted together) and those among
--- them whose bodies reference, directly or through other bindings, a file
--- extern wasm ports.  Names are compared as the program spells them
--- (`unmangled`), so two bindings sharing a spelling, or a method and the
--- standalone binding its name shadows, count as one: that over-approximates
--- what can reach a file, which only ever checks more.
-data Reach = Reach (OrdMap Unit) (OrdMap Unit)
-
--- A written grant needs checking at a file extern, at a binding that can reach
--- one, and at any head this analysis does not know.
-mayReachFile : Reach -> Expr -> Bool
-mayReachFile (Reach defined reaching) head = match headName head
-  Some n => omHasKey n reaching || not (omHasKey n defined)
-  None => True
-
-headName : Expr -> Option String
-headName (EVar n) = Some (unmangled n)
-headName (EDictAt n _) = Some (unmangled n)
-headName (EMethodAt n _ _) = Some (unmangled n)
-headName (EVarAt n _) = Some (unmangled n)
-headName (EVarId n _) = Some (unmangled n)
-headName _ = None
-
-fileReach : List Decl -> Reach
-fileReach decls =
-  let users = Ref omEmpty
-  let defined = Ref omEmpty
-  let _ = map (d => declBindings users defined d) decls
-  let seeds = map fst wasmFileGrantExterns
-  let reaching = spread users.value seeds (omFromNames seeds omEmpty)
-  Reach defined.value reaching
-
--- Breadth-first over "is referenced by": every binding whose body names a
--- reaching one reaches too.
-spread : OrdMap (List String) -> List String -> OrdMap Unit -> OrdMap Unit
-spread _ [] seen = seen
-spread users (n :: rest) seen =
-  let fresh =
-    filterList (u => not (omHasKey u seen)) (optionOr [] (omLookup n users))
-  spread users (fresh ++ rest) (omFromNames fresh seen)
-
-declBindings : Ref (OrdMap (List String)) -> Ref (OrdMap Unit) -> Decl -> Unit
-declBindings users defined (DFunDef _ n _ body) =
-  bindingRefs users defined n body
-declBindings users defined (DLetGroup _ binds) =
-  let _ = map (b => letBindRefs users defined b) binds
-  ()
-declBindings users defined (DImpl { methods, ... }) =
-  let _ =
-    map
-      (m => match m
-        ImplMethod n _ body => bindingRefs users defined n body)
-      methods
-  ()
-declBindings users defined (DInterface { methods, ... }) =
-  let _ =
-    map
-      (m => match m
-        IfaceMethod n _ (Some (MethodDefault _ body)) _ =>
-          bindingRefs users defined n body
-        IfaceMethod _ _ None _ => ())
-      methods
-  ()
-declBindings users defined (DAttrib _ d) = declBindings users defined d
-declBindings _ _ _ = ()
-
-letBindRefs : Ref (OrdMap (List String)) -> Ref (OrdMap Unit) -> LetBind -> Unit
-letBindRefs users defined (LetBind n clauses) =
-  let _ =
-    map
-      (c => match c
-        FunClause _ body => bindingRefs users defined n body)
-      clauses
-  ()
-
--- Record binding [b]'s body: [b] uses every name the body references, and every
--- local the body binds is a binding of its own.
-bindingRefs : Ref (OrdMap (List String)) ->
-  Ref (OrdMap Unit) ->
-  String ->
-  Expr ->
-  Unit
-bindingRefs users defined b body =
-  let name = unmangled b
-  let refs = Ref []
-  let _ = collectRefs users defined refs body
-  defined := omInsert name () defined.value
-  users :=
-    fold
-      (m r => omInsert r (name :: optionOr [] (omLookup r m)) m)
-      users.value
-      refs.value
-
-collectRefs : Ref (OrdMap (List String)) ->
-  Ref (OrdMap Unit) ->
-  Ref (List String) ->
-  Expr ->
-  Expr
-collectRefs users defined refs e = match headName e
-  Some n =>
-    refs := n :: refs.value
-    e
-  None =>
-    let _ = match e
-      ELet _ _ (PVar x _) rhs _ => bindingRefs users defined x rhs
-      ELetGroup binds _ =>
-        let _ = map (b => letBindRefs users defined b) binds
-        ()
-      EBlock stmts =>
-        let _ =
-          map
-            (s => match s
-              DoLet _ _ (PVar x _) rhs => bindingRefs users defined x rhs
-              _ => ())
-            stmts
-        ()
-      _ => ()
-    mapChildren (collectRefs users defined refs) e
-
-appSpine : Expr -> List Expr -> (Expr, List Expr)
-appSpine (EApp f x) args = appSpine f (x :: args)
-appSpine (ELoc _ f) args = appSpine f args
-appSpine h args = (h, args)
-
--- The elements a written grant term names: a list the grant pass built, whose
--- elements are bare string literals (a list in source carries a location on
--- each element), or a join of such lists with grant parameters, possibly under
--- the match that lets a whole-domain parameter absorb the join.  None for any
--- other term, a grant parameter alone included.
-grantElems : Expr -> Option (List String)
-grantElems (EListLit (es@(_ :: _))) = bareStrings es []
-grantElems (EBinOp "++" a b _) = match (grantElems a, grantElems b)
-  (None, None) => None
-  (x, y) => Some (optionOr [] x ++ optionOr [] y)
-grantElems (EMatch (EVar _) [_, Arm PWild [] j]) = grantElems j
-grantElems _ = None
-
-bareStrings : List Expr -> List String -> Option (List String)
-bareStrings [] acc = Some (reverseL acc)
-bareStrings ((ELit (LString s)) :: rest) acc = bareStrings rest (s :: acc)
-bareStrings _ _ = None
-
--- A file extern's literal path, when the spine is a saturated file extern call.
-leafPath : Expr -> List Expr -> Option String
-leafPath (EVar n) (p :: rest) = match wasmFileGrantArity n
-  Some arity => if listLen rest == arity then pathLit p else None
-  None => None
-leafPath _ _ = None
-
-pathLit : Expr -> Option String
-pathLit (ELoc _ e) = pathLit e
-pathLit (ELit (LString s)) = Some s
-pathLit _ = None
-
--- The callee as the program spells it, without the module prefix mangling adds
--- or the `$` suffix a renamed local carries.
-calleeName : Expr -> String
-calleeName (EVar n) = unmangled n
-calleeName (EDictAt n _) = unmangled n
-calleeName (EMethodAt n _ _) = unmangled n
-calleeName _ = "this call"
-
-unmangled : String -> String
-unmangled n =
-  let bare = match lastIndexOf "__" n
-    Some i => stringSlice (i + 2) (stringLength n) n
-    None => n
-  match indexOf "$" bare
-    Some i => if i > 0 then stringSlice 0 i bare else bare
-    None => bare
-
--- The leftmost location inside an expression, which is where its source text starts.
-leftLoc : Expr -> Option Loc
-leftLoc (ELoc l _) = Some l
-leftLoc (EApp f _) = leftLoc f
-leftLoc (EBinOp _ a _ _) = leftLoc a
-leftLoc _ = None

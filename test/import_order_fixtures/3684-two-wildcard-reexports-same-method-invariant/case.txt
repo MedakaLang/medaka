@@ -1,0 +1,10 @@
+entry: main.mdk
+what: #3684 one interface method reached through two wildcard re-exports is one
+      method, in either import order
+
+`ia` declares `IA` with `mth` and `impl IA Int`; `ma` and `mb` are each
+`export import ia.*`. One declaration of `mth`, so the bare occurrence is not
+ambiguous. Spec answer, hand-derived: `check` clean; `run` and the built binary
+print `42` in every ordering. The resolve verdict is graded by
+`test/import_form_fixtures/reexport_value_one_declaration/`; this case grades its
+invariance.

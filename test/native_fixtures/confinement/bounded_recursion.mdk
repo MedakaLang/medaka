@@ -1,0 +1,5 @@
+-- Re-entering one declared bound must preserve native tail recursion.
+loop : Int -> <FileRead "cfg/*"> Bool
+loop n = if n == 0 then fileExists "cfg/a.txt" else loop (n - 1)
+
+main = println (loop 100000)

@@ -1,0 +1,8 @@
+-- A binder of a Product label is an element of its primary axis, and a
+-- literal in its qualifier and in the returned expression lifts there.
+effect Http Product (Host : Prefix, Method : Set)
+
+hostOr : Bool -> (h : String @Http) -> String @(h | "api.example.com/*")
+hostOr c h = if c then h else "api.example.com/v1"
+
+main = println (hostOr False "api.example.com/x")

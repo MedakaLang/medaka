@@ -1,0 +1,13 @@
+effect FileRead Prefix
+effect FileWrite Prefix
+
+read : Unit -> <FileRead "user/*", IO> Result String String
+read _ = readFile "cfg/a.txt"
+
+write : Unit -> <FileWrite "user/*", IO> Result String Unit
+write _ = writeFile "outdir/allowed.txt" "allowed"
+
+main : <FileRead "user/*", FileWrite "user/*", IO> Unit
+main =
+  println (read ())
+  println (write ())

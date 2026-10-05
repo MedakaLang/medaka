@@ -1,0 +1,24 @@
+-- §3 the caller decides what determination left open.  `f : Conv a b => a
+-- -> b -> String` (see `determine-conditional-instance-scheme.mdk`) is
+-- called at `Int Bool` and at `Char Int`; each call's residual `Conv a b`
+-- selects its own instance.
+-- Hand-derived: "w:int-bool" then "w:char-int" on all three verbs.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv Int Bool where
+  conv _ _ = "int-bool"
+
+impl Conv Char Int where
+  conv _ _ = "char-int"
+
+impl Conv (Wrap a) b requires Conv a b where
+  conv (Wrap x) y = "w:\{conv x y}"
+
+f x y = conv (Wrap x) y
+
+main =
+  println (f 5 True)
+  println (f 'c' 7)

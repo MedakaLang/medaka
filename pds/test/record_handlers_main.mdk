@@ -35,7 +35,6 @@ import lib.repo.{
   repoLatestCommit,
   repoRootCid,
 }
-import lib.jwt.{mintToken}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -57,11 +56,14 @@ import test.fixture_support.{
   fieldText,
   meaningful,
   storeFingerprint,
+  testKey,
   testNonce,
   testSecret,
 }
 import test.request_support.{createBody, deleteBody, procedureRequest}
 import test.response_support.{bodyText}
+import lib.sign.{Sign}
+import lib.jwt.{mintAccessToken}
 
 accountHandleText : String
 accountHandleText = "medaka.example"
@@ -89,11 +91,11 @@ mustAccount did =
     "record_handlers: account setup failed"
     (makeAccount did accountHandleText accountHostText)
 
-mustServer : Account -> Server
+mustServer : Account -> Server <Sign "commit">
 mustServer account =
   resultOrPanic "record_handlers: server setup failed" (recordServer account)
 
-mustRepo : String -> String -> Tid -> Repo
+mustRepo : String -> String -> Tid -> <Sign "commit"> Repo
 mustRepo did secretHex rev =
   match repoInitFromKeyBytes did (mustHex secretHex) rev
     Ok repo => repo
@@ -117,23 +119,21 @@ testContext =
    The session's refresh half is the fingerprint of a string that is not a
    token at all: no route this file drives is a `RefreshRoute`, so nothing can
    present it. -}
-authorizedStore : String -> Store -> Store
-authorizedStore did store = match storeWithServerSecret testSecret store
-  Ok next =>
-    storeSessionOpen
-      (sessionFingerprint (testToken did))
-      (sessionFingerprint "record_handlers: no refresh token in this fixture")
-      (testInstant + 3600)
-      next
-  Err message =>
-    panic "record_handlers: session secret setup failed: \{message}"
+authorizedStore : String -> Store -> <Mint "access"> Store
+authorizedStore did store =
+  let next = storeWithServerSecret testKey store
+  storeSessionOpen
+    (sessionFingerprint (testToken did))
+    (sessionFingerprint "record_handlers: no refresh token in this fixture")
+    (testInstant + 3600)
+    next
 
 -- The audience is this PDS's own hostname and the subject the account
 -- DID, which is exactly what the seam verifies against.
-testToken : String -> String
+testToken : String -> <Mint "access"> String
 testToken did =
-  mintToken
-    testSecret
+  mintAccessToken
+    testKey
     did
     accountHostText
     "record_handlers-fixture-token"
@@ -163,7 +163,12 @@ splitPath text = match split "/" text
   [collection, rkey] => (collection, rkey)
   _ => panic "record_handlers: malformed corpus path"
 
-runStep : String -> Server -> Store -> String -> String -> <IO> Store
+runStep : String ->
+  Server e ->
+  Store ->
+  String ->
+  String ->
+  <IO, Mint "access" | e> Store
 runStep did server store opLine commitLine = match (
   split "\t" opLine,
   split "\t" commitLine,
@@ -220,10 +225,10 @@ runStep did server store opLine commitLine = match (
 acceptValidateCell : String ->
   String ->
   String ->
-  Server ->
+  Server e ->
   Store ->
   String ->
-  <IO> Int
+  <IO, Mint "access" | e> Int
 acceptValidateCell label did nsid server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
@@ -256,10 +261,10 @@ rejectCell : String ->
   String ->
   String ->
   String ->
-  Server ->
+  Server e ->
   Store ->
   String ->
-  <IO> Int
+  <IO, Mint "access" | e> Int
 rejectCell label expectedCode did nsid server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
@@ -316,7 +321,7 @@ unknownCollectionBody did rkey record =
       ("record", record),
     ])
 
-runCells : String -> Server -> Store -> Json -> <IO> Unit
+runCells : String -> Server e -> Store -> Json -> <IO, Mint "access" | e> Unit
 runCells did server store record =
   let create = "com.atproto.repo.createRecord"
   let swap =
@@ -381,7 +386,7 @@ runTranscript : List String ->
   String ->
   String ->
   String ->
-  <IO> Unit
+  <IO, Mint "access", Sign "commit"> Unit
 runTranscript ["META", did, secretHex] t0 op1 c1 op2 c2 op3 c3 op4 c4 =
   let account = mustAccount did
   let server = mustServer account
@@ -403,18 +408,18 @@ recordJsonFrom line = match split "\t" line
   ["OP", _, _, recordHex, _, _] => mustRecordJson recordHex
   _ => panic "record_handlers: malformed operation row"
 
-runRows : List String -> <IO> Unit
+runRows : List String -> <IO, Mint "access", Sign "commit"> Unit
 runRows [meta, t0, _, _, _, _, _, op1, c1, _, _, op2, c2, op3, c3, op4, c4, _, _, "END"] =
   runTranscript (split "\t" meta) t0 op1 c1 op2 c2 op3 c3 op4 c4
 runRows _ = panic "record_handlers: unexpected corpus shape"
 
-runRead : Result String (List String) -> <IO> Unit
+runRead : Result String (List String) -> <IO, Mint "access", Sign "commit"> Unit
 runRead (Err message) = panic "record_handlers: cannot read corpus: \{message}"
 runRead (Ok raw) = runRows (filter meaningful raw)
 
-runMain : List String -> <IO, Env, FileRead> Unit
+runMain : List String -> <Env, FileRead, IO, Mint "access", Sign "commit"> Unit
 runMain [corpusPath] = runRead (readLines corpusPath)
 runMain _ = panic "usage: record_handlers_main <ledger-owned-corpus>"
 
-main : <IO, Env, FileRead> Unit
+main : <Env, FileRead, IO, Mint "access", Sign "commit"> Unit
 main = runMain (args ())

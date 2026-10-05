@@ -1,0 +1,12 @@
+-- §3 determination, #3437's Bytes face at a top-level group's close.
+-- `input[pos] == 13` poses `Index Bytes Int ?v` with `Num ?v` and `Eq ?v`.
+-- `Index Bytes Int U8` is the only instance whose head unifies with the goal,
+-- and `U8` has `Num` and `Eq`, so the goal is determined before the literal
+-- defaults: `?v = U8`, and `13` is a `U8` literal.
+-- Hand-derived: byte 0 of [13, 10] is 13, so `isCr` is True on all three verbs.
+import bytes.{Bytes, fromArrayAssumeByteDomain}
+
+isCr : Bytes -> Int -> Bool
+isCr input pos = input[pos] == 13
+
+main = println (isCr (fromArrayAssumeByteDomain [|13, 10|]) 0)

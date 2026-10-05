@@ -15,7 +15,6 @@ compiler/entries/profile_main.mdk : checkOneToLinesWithRuntime
 compiler/entries/selfproc_tc_probe.mdk : checkOneToLines
 compiler/entries/typecheck_main.mdk : checkOneToLines,checkOneToLinesWithRuntime
 compiler/tools/check.mdk : checkOneErrorsWithRuntime,checkOneToLinesWithRuntime
-compiler/tools/check_policy.mdk : checkOneSchemeFull
 compiler/tools/lsp.mdk : checkOneSchemeFullK
 compiler/tools/repl.mdk : checkOneDiags,checkOneScheme
 compiler/tools/snapshot.mdk : checkOneToLinesWithRuntime

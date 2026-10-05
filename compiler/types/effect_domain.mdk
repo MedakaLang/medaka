@@ -4,7 +4,7 @@
 
 import support.util.{
   listLen, filterList, joinWith, sortUniqS, startsWith, contains, allList,
-  anyList, reverseL, lenKey
+  anyList, reverseL, lenKey, escStr, splitOnChar, splitLast
 }
 
 -- A Product element lists every axis of its label's declared schema, in
@@ -12,9 +12,17 @@ import support.util.{
 -- its domain: its first axis is the one a bare string lifts into, and two
 -- Products are elements of one domain only when their schemas agree
 -- (`domainKey`).
+--
+-- `PPath` is a Prefix element of a path label, a built-in label whose runtime
+-- resolves a path with the file system (`FileRead`, `FileWrite`): its order
+-- compares lexically normalized paths (`pathKey`), where `PPrefix`'s compares
+-- text. Both
+-- are one domain (`domainKey`); where they meet, the covering side's order
+-- decides.
 public export data Param =
   | PUnit
   | PPrefix (Option String)
+  | PPath (Option String)
   | PSet (Option (List String))
   | PProduct (List (String, Param))
 
@@ -22,11 +30,14 @@ public export data Param =
 -- top: `""` is a prefix of every path, so its join with any prefix is top and
 -- top must cover it. One representation keeps join, coverage, rendering and a
 -- solver's covered-atom skip in agreement; a producer that abstracts a value
--- to `""` builds the top parameter through this function.
+-- to `""` builds the top parameter through this function. A path element
+-- keeps its spelling, which the runtime resolves; it is compared, joined and
+-- rendered in its append form (`pathSpelling`).
 export
 canonParam : Param -> Param
 canonParam (PPrefix (Some s)) =
   if s == "" then PPrefix None else PPrefix (Some s)
+canonParam (PPath (Some s)) = if s == "" then PPath None else PPath (Some s)
 canonParam (PProduct ax) = productNorm ax
 canonParam p = p
 
@@ -34,6 +45,7 @@ canonParam p = p
 export
 subTopOf : Param -> Param
 subTopOf (PPrefix _) = PPrefix None
+subTopOf (PPath _) = PPath None
 subTopOf (PSet _) = PSet None
 subTopOf (PProduct ax) = PProduct (map (a => (fst a, subTopOf (snd a))) ax)
 subTopOf _ = PUnit
@@ -73,6 +85,11 @@ extendParam : Param -> Param
 extendParam p = match canonParam p
   PPrefix (Some s) =>
     if isPrefixPattern s then PPrefix (Some s) else PPrefix (Some (s ++ "*"))
+  PPath (Some s) =>
+    if isPrefixPattern s then
+      PPath (Some s)
+    else
+      canonParam (PPath (Some (s ++ "*")))
   PProduct ((name, v) :: rest) => productNorm ((name, extendParam v) :: rest)
   q => subTopOf q
 
@@ -87,6 +104,11 @@ appendParam suffix p = match canonParam p
       PPrefix (Some s)
     else
       canonParam (PPrefix (Some (s ++ suffix)))
+  PPath (Some s) =>
+    if isPrefixPattern s then
+      PPath (Some s)
+    else
+      canonParam (PPath (Some (s ++ suffix)))
   PProduct ((name, v) :: rest) =>
     productNorm ((name, appendParam suffix v) :: rest)
   q => subTopOf q
@@ -121,6 +143,11 @@ djoinN (PPrefix (Some a)) (PPrefix (Some b)) =
     let cb = prefixConcrete b
     let k = commonPrefixLen ca cb 0
     if k == 0 then PPrefix None else PPrefix (Some (stringSlice 0 k ca ++ "*"))
+djoinN (PPath None) _ = PPath None
+djoinN _ (PPath None) = PPath None
+djoinN (PPath (Some a)) (PPath (Some b)) = pathJoin a b
+djoinN (PPath (Some a)) (PPrefix (Some b)) = pathJoin a b
+djoinN (PPrefix (Some a)) (PPath (Some b)) = pathJoin a b
 djoinN (PSet None) _ = PSet None
 djoinN _ (PSet None) = PSet None
 djoinN (PSet (Some a)) (PSet (Some b)) =
@@ -166,7 +193,12 @@ dantichain ps =
     [subTopOf (headParam cs)]
   else match cs
     (PSet _) :: _ => [PSet (Some (sortUniqS (flatMap setMembers cs)))]
-    (PPrefix _) :: _ => sortParams (maximalPrefixes cs)
+    (PPrefix _) :: _ =>
+      if anyList isPathParam cs then
+        sortParams (maximalPaths cs)
+      else
+        sortParams (maximalPrefixes cs)
+    (PPath _) :: _ => sortParams (maximalPaths cs)
     (PProduct _) :: _ => sortParams (canonProducts cs)
     [] => []
     _ => sortParams (maximalOf cs)
@@ -317,6 +349,7 @@ export
 domainKey : Param -> String
 domainKey PUnit = "u"
 domainKey (PPrefix _) = "p"
+domainKey (PPath _) = "p"
 domainKey (PSet _) = "s"
 domainKey (PProduct ax) =
   "x("
@@ -374,6 +407,8 @@ axesKey ax = joinWith ";" (map (a => "\{fst a}=\{paramKey (snd a)}") ax)
 paramKey : Param -> String
 paramKey (PPrefix (Some s)) = "p" ++ lenKey s
 paramKey (PPrefix None) = "P"
+paramKey (PPath (Some s)) = "f" ++ lenKey s
+paramKey (PPath None) = "F"
 paramKey (PSet (Some xs)) = "s" ++ joinWith "" (map lenKey xs)
 paramKey (PSet None) = "S"
 paramKey (PProduct ax) = "x(" ++ axesKey ax ++ ")"
@@ -467,6 +502,7 @@ productNorm axes = PProduct (map (a => (fst a, canonParam (snd a))) axes)
 export
 isSubTop : Param -> Bool
 isSubTop (PPrefix None) = True
+isSubTop (PPath None) = True
 isSubTop (PSet None) = True
 isSubTop (PProduct ax) = allList (a => isSubTop (snd a)) ax
 isSubTop PUnit = True
@@ -494,7 +530,9 @@ export
 drenderN : Param -> String
 drenderN PUnit = ""
 drenderN (PPrefix None) = ""
-drenderN (PPrefix (Some s)) = " \"" ++ s ++ "\""
+drenderN (PPrefix (Some s)) = " " ++ quoteStr s
+drenderN (PPath None) = ""
+drenderN (PPath (Some s)) = " " ++ quoteStr (pathSpelling s)
 drenderN (PSet None) = ""
 drenderN (PSet (Some xs)) = " {" ++ joinWith ", " (map quoteStr xs) ++ "}"
 drenderN (PProduct ax) = match renderProductLit ax
@@ -503,7 +541,7 @@ drenderN (PProduct ax) = match renderProductLit ax
 
 export
 quoteStr : String -> String
-quoteStr s = "\"" ++ s ++ "\""
+quoteStr s = escStr s
 
 -- A Product's axes as written: a top axis is spelled by leaving it out.
 export
@@ -517,7 +555,7 @@ renderAxis (name, p) = "\{name}=\{renderAxisVal p}"
 
 export
 renderAxisVal : Param -> String
-renderAxisVal (PPrefix (Some s)) = "\"" ++ s ++ "\""
+renderAxisVal (PPrefix (Some s)) = quoteStr s
 renderAxisVal (PSet (Some xs)) = "{" ++ joinWith ", " (map quoteStr xs) ++ "}"
 renderAxisVal _ = ""
 
@@ -541,6 +579,11 @@ dsubN (PPrefix (Some a)) (PPrefix (Some b)) =
   else
     a == b
 dsubN (PPrefix None) (PPrefix (Some _)) = False
+dsubN _ (PPath None) = True
+dsubN (PPath (Some a)) (PPath (Some b)) = pathSub (pathKey a) (pathKey b)
+dsubN (PPrefix (Some a)) (PPath (Some b)) = pathSub (pathKey a) (pathKey b)
+dsubN (PPath (Some a)) (PPrefix (Some b)) =
+  dsubN (PPrefix (Some a)) (PPrefix (Some b))
 dsubN _ (PSet None) = True
 dsubN (PSet (Some a)) (PSet (Some b)) = subsetStr a b
 dsubN (PSet None) (PSet (Some _)) = False
@@ -572,3 +615,273 @@ export
 subsetStr : List String -> List String -> Bool
 subsetStr [] _ = True
 subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
+
+-- ── Path elements ──────────────────────────────────────────────────────────
+-- A path label's runtime confines each call's path against that call's own
+-- grant, resolving both with the file system (EFFECTS-SEMANTICS §8); it never
+-- re-checks the declared bound. The order here is lexical: empty and `.`
+-- components are dropped, a `..` at the root of an absolute path stays at the
+-- root, and a relative path keeps a `..` that climbs above the working
+-- directory as a leading component, which no path inside the working
+-- directory has. A pattern's text after its last `/` is read as written, as
+-- the runtime reads it, and `*` alone admits every path.
+--
+-- A `..` that follows a named component is not resolved: a symlink can make
+-- `x/..` any directory at all, so an element that pops a named component lies
+-- only within itself and the whole domain, and only its own spelling lies
+-- within it.
+--
+-- An element keeps the spelling it was written or derived with, which a
+-- grant passes to the runtime to resolve, and is rendered and told apart by
+-- its append form: every component before the last `/` normalized, the last
+-- as written. A suffix appended later extends the last component (`"data/"`
+-- and `"data"` are one path, and not one prefix), so two spellings with one
+-- append form have the same extensions, and only the order reads the
+-- normalized form (`pathKey`). A pattern's append form is its normalized form.
+data PathKey =
+  | KAll
+  | KExact Bool (List String)
+  | KPattern Bool (List String) String
+  | KPopped String
+
+-- The append form of a path element's spelling.
+export
+pathSpelling : String -> String
+pathSpelling s =
+  if isPrefixPattern s then
+    let c = prefixConcrete s
+    if c == "" then s else appendForm c ++ "*"
+  else
+    appendForm s
+
+appendForm : String -> String
+appendForm c = match splitLast (splitOnChar '/' c)
+  Some ([], last) => last
+  Some (dir, last) =>
+    let abs = startsWith "/" c
+    dirSpelling abs (lexicalPath abs dir) last ++ last
+  None => c
+
+dirSpelling : Bool -> List String -> String -> String
+dirSpelling True [] _ = "/"
+dirSpelling True d _ = "/" ++ joinWith "/" d ++ "/"
+dirSpelling False [] last = if last == "" then "./" else ""
+dirSpelling False d _ = joinWith "/" d ++ "/"
+
+-- The normalized form of a path element's spelling. A popping element is
+-- told apart only by its spelling, pattern or exact.
+pathKey : String -> PathKey
+pathKey s =
+  if isPrefixPattern s then
+    let c = prefixConcrete s
+    let abs = startsWith "/" c
+    if c == "" then
+      KAll
+    else match splitLast (splitOnChar '/' c)
+      Some (dir, stem) =>
+        let d = lexicalPath abs dir
+        if popsNamed False d then
+          KPopped ("p" ++ pathSpelling s)
+        else
+          KPattern abs d stem
+      None => KAll
+  else
+    let abs = startsWith "/" s
+    let xs = lexicalPath abs (splitOnChar '/' s)
+    if popsNamed False xs then
+      KPopped "e\{rootSlash abs}\{joinWith "/" xs}"
+    else
+      KExact abs xs
+
+rootSlash : Bool -> String
+rootSlash abs = if abs then "/" else ""
+
+lexicalPath : Bool -> List String -> List String
+lexicalPath abs parts = reverseL (fold (lexicalStep abs) [] parts)
+
+lexicalStep : Bool -> List String -> String -> List String
+lexicalStep abs acc c
+  | c == "" || c == "." = acc
+  | c == ".." && abs && isEmptyList acc = acc
+  | otherwise = c :: acc
+
+isEmptyList : List a -> Bool
+isEmptyList [] = True
+isEmptyList _ = False
+
+-- Whether normalized components hold a `..` after a named component.
+popsNamed : Bool -> List String -> Bool
+popsNamed _ [] = False
+popsNamed named (c :: cs) =
+  if c == ".." then named || popsNamed named cs else popsNamed True cs
+
+-- Coverage of normalized forms: an exact path admits itself; a pattern admits
+-- its directory when its stem is empty, and every path under the directory
+-- whose next component begins with the stem, never a `..` that climbs out of
+-- it. A relative path is never compared with an absolute one: which one the
+-- working directory makes it is a runtime fact.
+pathSub : PathKey -> PathKey -> Bool
+pathSub _ KAll = True
+pathSub KAll _ = False
+pathSub (KPopped a) (KPopped b) = a == b
+pathSub (KPopped _) _ = False
+pathSub _ (KPopped _) = False
+pathSub (KExact a xs) (KExact b ys) = a == b && xs == ys
+pathSub (KExact a xs) (KPattern b dir stem) =
+  a == b && (xs == dir && stem == "" || underDir dir stem xs)
+pathSub (KPattern _ _ _) (KExact _ _) = False
+pathSub (KPattern a d1 s1) (KPattern b d2 s2) =
+  a == b && (d1 == d2 && startsWith s2 s1 || underDir d2 s2 d1)
+
+underDir : List String -> String -> List String -> Bool
+underDir dir stem xs = match dropListPrefix dir xs
+  Some (next :: _) => next /= ".." && startsWith stem next
+  _ => False
+
+dropListPrefix : List String -> List String -> Option (List String)
+dropListPrefix [] xs = Some xs
+dropListPrefix (d :: ds) (x :: xs) =
+  if d == x then dropListPrefix ds xs else None
+dropListPrefix _ [] = None
+
+-- The join of two path elements: the pattern their common text begins, when
+-- it covers both, else the domain's top. Only a value's abstraction past
+-- `setCardCap` folds elements by the join (`authWidenValue`), and a later
+-- suffix extends the pattern, so it is formed from the text both begin with.
+pathJoin : String -> String -> Param
+pathJoin a b =
+  let ca = prefixConcrete (pathSpelling a)
+  let cb = prefixConcrete (pathSpelling b)
+  let k = commonPrefixLen ca cb 0
+  if pathSpelling a == pathSpelling b then
+    PPath (Some a)
+  else if k == 0 then
+    PPath None
+  else
+    let joined = pathSpelling (stringSlice 0 k ca ++ "*")
+    let jk = pathKey joined
+    if pathSub (pathKey a) jk && pathSub (pathKey b) jk then
+      PPath (Some joined)
+    else
+      PPath None
+
+isPathParam : Param -> Bool
+isPathParam (PPath _) = True
+isPathParam _ = False
+
+-- The maximal elements of a join that holds a path element. Two spellings of
+-- one exact path are both kept unless they are one append form, since a
+-- suffix appended later extends each differently (`pathSpelling`). Path
+-- elements alone are swept in order of key text (`pathKeyText`); a join that
+-- also holds a text element compares every pair, since there each pair takes
+-- its covering side's order.
+maximalPaths : List Param -> List Param
+maximalPaths ps =
+  if allList isPathParam ps then
+    pathSweep (sortByKey pathEntryOrder (map pathEntry ps)) [] None []
+  else
+    fold (acc p => keepMaximalPath p acc) [] ps
+
+keepMaximalPath : Param -> List Param -> List Param
+keepMaximalPath p acc =
+  if anyList (q => pathCovers q p) acc then
+    acc
+  else
+    p :: filterList (q => not (pathCovers p q)) acc
+
+pathCovers : Param -> Param -> Bool
+pathCovers q p =
+  dsubN p q && (paramSpelling p == paramSpelling q || not (dsubN q p))
+
+paramSpelling : Param -> String
+paramSpelling (PPrefix (Some s)) = s
+paramSpelling (PPath (Some s)) = pathSpelling s
+paramSpelling _ = ""
+
+-- A path element for the sweep: its key's text, whether it can cover another
+-- element, its key, its append form, and the element.
+data PathEntry = PathEntry String Bool PathKey String Param
+
+pathEntry : Param -> PathEntry
+pathEntry (p@(PPath (Some s))) =
+  let k = pathKey s
+  PathEntry (pathKeyText k) (keyCoversOthers k) k (pathSpelling s) p
+pathEntry p = PathEntry "" True KAll "*" p
+
+-- A key's text begins with the text of every key that covers it (`pathSub`),
+-- so the elements a key covers follow it consecutively in text order.
+-- Components never hold `/`, which separates them.
+pathKeyText : PathKey -> String
+pathKeyText KAll = ""
+pathKeyText (KExact abs xs) = "\{rootTag abs}\{componentsText xs}/"
+pathKeyText (KPattern abs dir stem) =
+  "\{rootTag abs}\{componentsText dir}/\{stem}"
+pathKeyText (KPopped t) = "x" ++ t
+
+rootTag : Bool -> String
+rootTag abs = if abs then "a" else "r"
+
+componentsText : List String -> String
+componentsText xs = joinWith "" (map ("/" ++ _) xs)
+
+keyCoversOthers : PathKey -> Bool
+keyCoversOthers KAll = True
+keyCoversOthers (KPattern _ _ _) = True
+keyCoversOthers _ = False
+
+-- By key text; of one text, an element that can cover before one that
+-- cannot, then by append form, so repeats are adjacent.
+pathEntryOrder : PathEntry -> PathEntry -> Bool
+pathEntryOrder (PathEntry a ca _ sa _) (PathEntry b cb _ sb _) =
+  match stringCompare a b
+    Lt => True
+    Gt => False
+    Eq => if ca == cb then stringCompare sa sb /= Gt else ca
+
+-- One pass in key-text order. The open covering elements form a chain, each
+-- one's text beginning the next's; an element is dropped when one of them
+-- covers it, or when it repeats the last kept non-covering element's key text
+-- and append form.
+pathSweep : List PathEntry ->
+  List PathEntry ->
+  Option (String, String) ->
+  List Param ->
+  List Param
+pathSweep [] _ _ kept = kept
+pathSweep ((e@(PathEntry t covers _ sp p)) :: rest) open last kept =
+  let still = dropOpenNotPrefix t open
+  if anyList (entryCovers e) still || last == Some (t, sp) then
+    pathSweep rest still last kept
+  else if covers then
+    pathSweep rest (e :: still) last (p :: kept)
+  else
+    pathSweep rest still (Some (t, sp)) (p :: kept)
+
+dropOpenNotPrefix : String -> List PathEntry -> List PathEntry
+dropOpenNotPrefix _ [] = []
+dropOpenNotPrefix t ((o@(PathEntry ot _ _ _ _)) :: os) =
+  if startsWith ot t then o :: os else dropOpenNotPrefix t os
+
+-- Whether the open element [q] covers [e]: it contains it, and not only as
+-- another spelling of one path.
+entryCovers : PathEntry -> PathEntry -> Bool
+entryCovers (PathEntry _ _ k sp _) (PathEntry _ _ qk qsp _) =
+  pathSub k qk && (sp == qsp || not (pathSub qk k))
+
+-- Whether a path element's normalized form lies above the working directory:
+-- a relative path that begins by climbing out of it.
+export
+pathClimbs : Param -> Bool
+pathClimbs (PPath (Some s)) = match pathKey s
+  KExact False (".." :: _) => True
+  KPattern False (".." :: _) _ => True
+  _ => False
+pathClimbs _ = False
+
+-- A Prefix term read at a label of [top]'s domain takes that label's order: a
+-- constant written without a label (a qualifier's literal) becomes a path
+-- element at a path label.
+export
+retagParam : Param -> Param -> Param
+retagParam (PPath _) (PPrefix (Some s)) = canonParam (PPath (Some s))
+retagParam _ p = p

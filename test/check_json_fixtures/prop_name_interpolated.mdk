@@ -1,0 +1,7 @@
+-- #2574: an interpolated `prop` name is rejected with a message about the name.
+x = 3
+
+prop "name \{intToString x}" =
+  1 == 1
+
+main = println 1

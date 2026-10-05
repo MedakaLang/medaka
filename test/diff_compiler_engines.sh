@@ -77,13 +77,11 @@
 # ── The auto-print contract (why there is an `eval_autoprint_main` probe) ──────
 # Nearly every fixture in both corpora is a bare VALUE main (`main = 1 + 2`).
 # `medaka build` rewrites that to `main = println <e>` (driver/main_autoprint.mdk)
-# and the WasmGC emitter mirrors the same auto-print — but `medaka run` REFUSES a
-# value main by design ("'main' must be a value of type Unit").  That is a CLI/UX
-# decision, not a semantic difference, so using `medaka run` verbatim would report
-# every fixture as a spurious three-way disagreement.  The interpreter arm is
-# therefore compiler/entries/eval_autoprint_main.mdk = `medaka run`'s exact
-# load→elaborate→evalModules path PLUS the same auto-print wrap.  Nothing else about
-# the eval path differs from `medaka run`'s.
+# and the WasmGC emitter mirrors the same auto-print, as `medaka run` does since
+# #2413.  The interpreter arm is compiler/entries/eval_autoprint_main.mdk =
+# `medaka run`'s load→elaborate→evalModules path PLUS the same auto-print wrap,
+# without the CLI's check gate.  Nothing else about the eval path differs from
+# `medaka run`'s.
 #
 # ── Arms ──────────────────────────────────────────────────────────────────────
 #   eval    test/bin/eval_autoprint_main <runtime> <core> <f> <dir(f)> <stdlib>
@@ -143,6 +141,7 @@
 #         JOBS=8 bash test/diff_compiler_engines.sh
 #         VERBOSE=1 bash test/diff_compiler_engines.sh    # every fixture's signature
 #         CAPTURE=1 bash test/diff_compiler_engines.sh    # rewrite the ledger (review the diff!)
+#                                                          # (refused under ONLY/CORPUS_GLOB)
 #         ONLY='llvmM/*' bash test/diff_compiler_engines.sh   # scope to a SUBSET by corpus key
 #                                                              # (CORPUS_GLOB= is an alias) —
 #                                                              # runs the real ledger/pin
@@ -156,6 +155,15 @@
 # substitution" and exit 2 — which run_gates would (correctly) call a phantom skip.
 [ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -u
+
+# CAPTURE rewrites the whole shared ledger from the fixtures compared in THIS run, so
+# under a scope (ONLY / CORPUS_GLOB) it would drop every ledger row outside the scope.
+# Refuse before any work; exit 1 so run_gates.sh cannot reclassify it as a phantom skip.
+if [ -n "${CAPTURE:-}" ] && [ -n "${ONLY:-${CORPUS_GLOB:-}}" ]; then
+  echo "REFUSED: CAPTURE=1 with ONLY/CORPUS_GLOB would truncate test/engine_divergence.txt to the scoped rows (#1524)." >&2
+  echo "         Run CAPTURE=1 over the full corpus (unset ONLY/CORPUS_GLOB), or hand-append the one new row." >&2
+  exit 1
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"

@@ -28,11 +28,12 @@ import shell.dirlock.{
   acquireDataLock,
   holdDataLock,
 }
+import shell.datadir.{dataDirAt}
 import string.{toInt}
 import time.{millis, sleep}
 
 -- Beat until the deadline, and report whether the lock survived to it.
-beatUntil : DataLock -> Int -> <Clock, FileRead, FileWrite> LockBeat
+beatUntil : DataLock d -> Int -> <Clock, FileRead d, FileWrite d> LockBeat
 beatUntil lock remaining =
   if remaining <= 0 then
     LockHeld
@@ -46,7 +47,7 @@ beatMillis : Int
 beatMillis = 100
 
 run : String -> Bool -> Int -> <IO, Clock, FileRead, FileWrite> Unit
-run dir force holdMillis = match acquireDataLock force dir
+run dir force holdMillis = match acquireDataLock force (dataDirAt dir)
   Err message => println "REFUSED \{message}"
   Ok (lock, _) =>
     let () = println "HELD"

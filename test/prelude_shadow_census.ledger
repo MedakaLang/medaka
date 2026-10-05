@@ -68,6 +68,11 @@
 # which is exactly why the split was 22/34 (`marker.droppablePreludeFns`' own
 # `clamp` yes / `count`,`find` no split).  Fix: `typecheck.coreShadowMapFor`.
 # Current measured split: 56 PASS / 1 SPECIAL_RUN_REJECT (`println`, slice 3's).
+#
+# RE-PINNED by #2413: `println` flipped SPECIAL_RUN_REJECT -> PASS, ON PURPOSE.
+# `run` now prints a non-Unit value `main` through the same auto-print wrap
+# `build` uses, so the row's `run` arm accepts and prints `1` like the binary.
+# Current measured split: 57 PASS.
 all|PASS
 and|PASS
 any|PASS
@@ -122,7 +127,7 @@ on|PASS
 or|PASS
 otherwise|PASS
 pipe|PASS
-println|SPECIAL_RUN_REJECT
+println|PASS
 print|PASS
 product|PASS
 repeatThen|PASS

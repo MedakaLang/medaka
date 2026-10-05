@@ -1,0 +1,8 @@
+-- #3726 — a function field whose constructors agree on its shape but not its
+-- effect row.  Read at `A`'s pure type, a `B` value's `<IO>` function runs inside
+-- a binding that declares no effect; the effect row is part of the field's type,
+-- so this must reject like any other type disagreement.
+data T = A { f : Unit -> Unit } | B { f : Unit -> <IO> Unit }
+
+call : T -> Unit
+call v = v.f ()

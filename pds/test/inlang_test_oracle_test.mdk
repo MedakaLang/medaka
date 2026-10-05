@@ -122,6 +122,9 @@ suites = [
   ("lexicon_corpus_test", (4, NativeCapability)),
   ("lexicon_schemas_test", (3, NativeCapability)),
   ("lexicon_write_test", (14, NativeCapability)),
+  -- these two spawn `medaka`, and the interpreter binds no subprocess extern
+  ("authority_pins_test", (14, NativeCapability)),
+  ("sandbox_agreement_test", (7, NativeCapability)),
 ]
 
 {- | Exclusion ledger: file stem paired with the reason it is not run today,
@@ -330,11 +333,13 @@ libExempt = [
   ("xrpc", "0 assertions"),
   ("blockfile", "0 assertions"),
   ("crawl", "0 assertions"),
+  ("datadir", "0 assertions"),
   ("dirlock", "0 assertions"),
   ("egress", "0 assertions"),
   ("eventlog", "0 assertions"),
   ("keygen", "0 assertions"),
   ("persist", "0 assertions"),
+  ("rows", "0 assertions"),
   ("server", "0 assertions"),
   ("subscribe", "0 assertions"),
 ]
@@ -615,6 +620,12 @@ test "pds/test/lexicon_schemas_test.mdk executed >= 3 assertions" =
 
 test "pds/test/lexicon_write_test.mdk executed >= 14 assertions" =
   floorExpectation "lexicon_write_test"
+
+test "pds/test/authority_pins_test.mdk executed >= 14 assertions" =
+  floorExpectation "authority_pins_test"
+
+test "pds/test/sandbox_agreement_test.mdk executed >= 7 assertions" =
+  floorExpectation "sandbox_agreement_test"
 
 -- # Non-vacuity
 

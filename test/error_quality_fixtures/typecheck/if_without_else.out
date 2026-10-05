@@ -1,0 +1,11 @@
+cmd: medaka check
+exit: 1
+---
+error: test/error_quality_fixtures/typecheck/if_without_else.mdk:1:23: Type mismatch: String vs Unit — an `if` without `else` has type Unit, so its `then` branch must be Unit too; add an `else` branch
+  |
+1 | sign n = if n > 0 then "pos"
+  |                        ^
+error: test/error_quality_fixtures/typecheck/if_without_else.mdk:3:24: Type mismatch: Int literal vs Unit — an `if` without `else` has type Unit, so its `then` branch must be Unit too; add an `else` branch
+  |
+3 | count n = if n > 0 then 1
+  |                         ^

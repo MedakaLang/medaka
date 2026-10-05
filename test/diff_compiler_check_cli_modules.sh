@@ -677,6 +677,14 @@ case "$amb_out" in
                   else fail=$((fail+1)); printf 'FAIL 674a/ambiguous-ctor (flagged but exit %d)\n' "$amb_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL 674a/ambiguous-ctor (no R-AMBIGUOUS-CTOR: [%s])\n' "$amb_out" ;;
 esac
+# 12a'. NO CASCADE (#733 item 3): the ambiguity is the program's ONLY diagnostic,
+#      in every file — no type mismatch from `Node` resolving to one module's type,
+#      and no missing case from an oracle answering `Node` with the other's.
+amb_codes="$(printf '%s' "$amb_out" | grep -o '"code":"[A-Z-]*"' | tr '\n' ' ')"
+case "$amb_codes" in
+  '"code":"R-AMBIGUOUS-CTOR" ') pass=$((pass+1)); printf 'ok   674a/no-cascade (R-AMBIGUOUS-CTOR is the only diagnostic)\n' ;;
+  *) fail=$((fail+1)); printf 'FAIL 674a/no-cascade (codes beside the ambiguity: [%s])\n' "$amb_codes" ;;
+esac
 # 12b. build AGREEMENT: the ambiguous program must NOT build a (crashing) binary —
 #      check and build agree that it is rejected, so the S0 miscompile is gone.
 MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x674_amb.mdk" -o "$TMP/x674_amb.bin" >/dev/null 2>&1
@@ -2039,6 +2047,63 @@ else
   fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-az-build-run (native build failed)\n'
 fi
 
+# The "za" cell (#1852): same modules, entry imports reversed. Spec answer is the
+# same as az (`viaA 5` = 105, `viaZ 5 3` = 10): each wrapper reaches the interface
+# it was declared against, whatever order the entry imports them in.
+cat > "$TMP/x1852za_main.mdk" <<'EOF'
+import x1852_zmod.{viaZ}
+import x1852_amod.{viaA}
+
+main =
+  let _ = println (viaA 5)
+  println (viaZ 5 3)
+EOF
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1852za_main.mdk" -o "$TMP/x1852za.bin" >/dev/null 2>&1 && [ -x "$TMP/x1852za.bin" ]; then
+  x1852_bld_za="$("$TMP/x1852za.bin" 2>/dev/null | tr '\n' ',')"
+  if [ "$x1852_bld_za" = "105,10," ]; then pass=$((pass+1)); printf 'ok   1852-xmod-samehead-arity-za-build-run (right interface by identity: 105,10)\n'
+  else fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-za-build-run (got [%s], want [105,10,])\n' "$x1852_bld_za"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-za-build-run (native build failed)\n'
+fi
+
+# #1852 variant: arities 3 vs 1 and a partially applied wrapper. `viaZ 5` = 6 and
+# `viaA 1 2 3` = 1 + 2 + 3 + 1000 = 1006, with zmod imported first.
+cat > "$TMP/x1852b_amod.mdk" <<'EOF'
+export interface IA a where
+  f3 : a -> Int -> Int -> Int
+
+impl IA Int where
+  f3 n x y = n + x + y + 1000
+
+export viaA : IA a => a -> Int -> Int -> Int
+viaA x = f3 x
+EOF
+cat > "$TMP/x1852b_zmod.mdk" <<'EOF'
+export interface IZ b where
+  f3 : b -> Int
+
+impl IZ Int where
+  f3 s = s + 1
+
+export viaZ : IZ b => b -> Int
+viaZ x = f3 x
+EOF
+cat > "$TMP/x1852b_main.mdk" <<'EOF'
+import x1852b_zmod.{viaZ}
+import x1852b_amod.{viaA}
+
+main =
+  let g = viaA 1
+  println (viaZ 5, g 2 3)
+EOF
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1852b_main.mdk" -o "$TMP/x1852b.bin" >/dev/null 2>&1 && [ -x "$TMP/x1852b.bin" ]; then
+  x1852_bld_b="$("$TMP/x1852b.bin" 2>/dev/null | tr '\n' ',')"
+  if [ "$x1852_bld_b" = "(6, 1006)," ]; then pass=$((pass+1)); printf 'ok   1852-xmod-samehead-arity-3v1-partial-build-run (right interface by identity: (6, 1006))\n'
+  else fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-3v1-partial-build-run (got [%s], want [(6, 1006),])\n' "$x1852_bld_b"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-3v1-partial-build-run (native build failed)\n'
+fi
+
 # ── #1280: EXTERN SIGNATURES CARRY IDENTITY (the SUPPLY half of Stage A-2) ────
 #
 # `externSchemes` (compiler/types/typecheck.mdk) used to turn each `DExtern`'s
@@ -3278,6 +3343,123 @@ case "$resid_build" in
   *"error: "*.mdk:[0-9]*:[0-9]*:*"Type mismatch"*) if [ "$resid_build_code" -ne 0 ] && [ ! -x "$TMP/resid/bin" ]; then pass=$((pass+1)); printf 'ok   elab-located/build (located elaboration diagnostic, no binary)\n'
     else fail=$((fail+1)); printf 'FAIL elab-located/build (located but exit %d, binary present=%s)\n' "$resid_build_code" "$([ -x "$TMP/resid/bin" ] && echo yes || echo no)"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL elab-located/build (want a located `<file>.mdk:L:C: Type mismatch` line, got: [%s])\n' "$resid_build" ;;
+esac
+
+# 11. resolve-rejected, no typecheck cascade (#1288, #2563): a module resolve rejected
+#     gets resolve's diagnostics and nothing from typecheck, on the multi-module
+#     `check --json` path exactly as on the single-file one.  The code list is graded
+#     EXACTLY, in emission order: a cascade code beside the resolve one is the defect.
+#     `Same` is declared by two unrelated modules, so naming it is
+#     R-AMBIGUOUS-INTERFACE whichever order the imports (or a re-export) bring the two
+#     in, and `pmth`'s membership is judged against neither.  The unknown-interface
+#     row shows the gate is not specific to ambiguity.
+mkdir -p "$TMP/m0"
+cat > "$TMP/m0/p.mdk" <<'EOF'
+export interface Same f where
+  pmth : f a -> Int
+EOF
+cat > "$TMP/m0/g.mdk" <<'EOF'
+export interface Same f where
+  gandThen : f a -> Int
+EOF
+printf 'export import p.*\nexport import g.*\n' > "$TMP/m0/midpg.mdk"
+printf 'export import g.*\nexport import p.*\n' > "$TMP/m0/midgp.mdk"
+cat > "$TMP/m0/dmod.mdk" <<'EOF'
+export dd : Int -> Int
+dd n = n
+EOF
+m0_impl='
+data P a = MkP a
+
+impl Same P where
+  pmth p = 1
+
+main = println (pmth (MkP 1))'
+printf 'import p.{Same, pmth}\nimport g.{Same}\n%s\n' "$m0_impl" > "$TMP/m0/direct_pg.mdk"
+printf 'import g.{Same}\nimport p.{Same, pmth}\n%s\n' "$m0_impl" > "$TMP/m0/direct_gp.mdk"
+printf 'import midpg.{Same, pmth}\n%s\n' "$m0_impl" > "$TMP/m0/reexport_pg.mdk"
+printf 'import midgp.{Same, pmth}\n%s\n' "$m0_impl" > "$TMP/m0/reexport_gp.mdk"
+cat > "$TMP/m0/unknown_iface.mdk" <<'EOF'
+import dmod.{dd}
+
+interface Sz a where
+  sz : a -> Int
+
+impl Szz Int where
+  sz x = 1
+
+main = println (sz (dd 1))
+EOF
+# A bare method name whose interface is imported WITHOUT the method is
+# R-UNBOUND alone: typecheck never runs on a resolve-rejected module.
+cat > "$TMP/m0/ma.mdk" <<'EOF'
+export interface IA a where
+  mth : a -> Int
+
+export impl IA Int where
+  mth n = n + 1000
+EOF
+cat > "$TMP/m0/mb.mdk" <<'EOF'
+export interface IB a where
+  mth : a -> Int
+
+export impl IB Int where
+  mth n = n + 2000
+EOF
+cat > "$TMP/m0/zz.mdk" <<'EOF'
+export interface Zork a where
+  zork : a -> Int
+
+export impl Zork Int where
+  zork n = n
+EOF
+printf 'import ma.{IA}\nimport mb.{IB}\n\nmain = println (mth 1)\n' > "$TMP/m0/ifaceonly_ab.mdk"
+printf 'import mb.{IB}\nimport ma.{IA}\n\nmain = println (mth 1)\n' > "$TMP/m0/ifaceonly_ba.mdk"
+printf 'import ma.{IA}\n\nmain = println (mth 1)\n' > "$TMP/m0/ifaceonly_single.mdk"
+printf 'import zz.{Zork}\n\nmain = println (zork 1)\n' > "$TMP/m0/ifaceonly_zork.mdk"
+# A rejection withholds typecheck from the rejected module and its importers only:
+# an independent module's type error is still reported beside it (rejdep_indep),
+# while one importing the rejected module is not typechecked (rejdep_importer).
+printf 'export h : Int -> Int\nh x = zz x\n' > "$TMP/m0/rjx.mdk"
+printf 'export y : Int\ny = "str"\n' > "$TMP/m0/tbx.mdk"
+printf 'import rjx.{h}\n\nexport w : Int\nw = h "str"\n' > "$TMP/m0/tcx.mdk"
+printf 'import rjx.{h}\nimport tbx.{y}\n\nmain = println (h y)\n' > "$TMP/m0/rejdep_indep.mdk"
+printf 'import tcx.{w}\n\nmain = println w\n' > "$TMP/m0/rejdep_importer.mdk"
+m0_codes() { printf '%s\n' "$1" | grep -o '"code":"[^"]*"' | sed 's/"code":"//; s/"$//' | tr '\n' ' '; }
+for m0_case in direct_pg:R-AMBIGUOUS-INTERFACE direct_gp:R-AMBIGUOUS-INTERFACE \
+    reexport_pg:R-AMBIGUOUS-INTERFACE reexport_gp:R-AMBIGUOUS-INTERFACE \
+    unknown_iface:R-UNKNOWN-INTERFACE ifaceonly_ab:R-UNBOUND ifaceonly_ba:R-UNBOUND \
+    ifaceonly_single:R-UNBOUND ifaceonly_zork:R-UNBOUND \
+    rejdep_indep:R-UNBOUND+T-TYPE-MISMATCH rejdep_importer:R-UNBOUND; do
+  m0_name="${m0_case%%:*}"
+  m0_want="$(printf '%s' "${m0_case#*:}" | tr '+' ' ') "
+  m0_json="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/m0/$m0_name.mdk" 2>/dev/null)"
+  m0_code=$?
+  m0_got="$(m0_codes "$m0_json")"
+  if [ "$m0_code" -eq 1 ] && [ "$m0_got" = "$m0_want" ]; then
+    pass=$((pass+1)); printf 'ok   resolve-rejected/%s (exactly %s, exit 1)\n' "$m0_name" "$m0_want"
+  else
+    fail=$((fail+1)); printf 'FAIL resolve-rejected/%s (want exactly [%s] at exit 1, got [%s] at exit %d)\n' "$m0_name" "$m0_want" "$m0_got" "$m0_code"
+  fi
+done
+# A method its interface does not declare is reported at that method's clause.
+cat > "$TMP/m0/not_member.mdk" <<'EOF'
+import dmod.{dd}
+
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz x = dd x
+  extra x = 2
+
+main = println (sz 1)
+EOF
+m0_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/m0/not_member.mdk" 2>&1; echo "exit:$?")"
+case "$m0_run" in
+  *"<unknown location>"*) fail=$((fail+1)); printf 'FAIL not-member/located (unlocated: [%s])\n' "$m0_run" ;;
+  *"not_member.mdk:8:12: Method 'extra' is not part of interface 'Sz'"*"exit:1") pass=$((pass+1)); printf 'ok   not-member/located (reported at the method, exit 1)\n' ;;
+  *) fail=$((fail+1)); printf 'FAIL not-member/located (want not_member.mdk:8:12 and exit 1, got: [%s])\n' "$m0_run" ;;
 esac
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"

@@ -1,0 +1,5 @@
+callE : E a -> Int -> <a> Int
+getP : P String -> String
+getPU : P a -> a
+getX : T -> Int
+getXU : T -> Int

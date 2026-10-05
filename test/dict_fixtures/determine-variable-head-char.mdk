@@ -1,0 +1,13 @@
+-- §3 the control for the variable-headed instance: `conv 'c'` poses
+-- `Conv Char ?b`, and only `impl Conv a Bool` unifies with it, so it fixes
+-- `?b = Bool`.  Hand-derived: True, on all three verbs.
+interface Conv a b where
+  conv : a -> b
+
+impl Conv a Bool where
+  conv _ = True
+
+impl Conv Int String where
+  conv _ = "s"
+
+main = println (conv 'c')

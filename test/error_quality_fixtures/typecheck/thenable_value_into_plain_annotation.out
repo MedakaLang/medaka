@@ -1,0 +1,11 @@
+cmd: medaka check
+exit: 1
+---
+error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_annotation.mdk:2:12: Type mismatch: a Unit vs Unit — `a Unit` is a value of a type that implements Thenable (`a` stands for that type), and a plain Unit is not one
+  |
+2 | n = forEach (x => println x) [1]
+  |             ^
+error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_annotation.mdk:2:29: Type mismatch: Int vs a Unit — `a Unit` is a value of a type that implements Thenable (`a` stands for that type), and a plain Int is not one
+  |
+2 | n = forEach (x => println x) [1]
+  |                              ^

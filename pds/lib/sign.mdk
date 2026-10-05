@@ -3,7 +3,23 @@
    A `SecretKey` stores the admitted scalar's canonical 32 big-endian bytes
    in a `Bytes` block, never the caller-owned byte array. `PublicKey` stores
    the internal affine point; consumers use only the compressed SEC 1
-   representation. -}
+   representation.
+
+   Every signature a `SecretKey` makes is charged to `Sign`, indexed by what
+   the signature is for: `signCommitDigest` performs `<Sign "commit">` and
+   `signServiceAuthDigest` performs `<Sign "service-auth">`. `signDigest`,
+   the unlabelled signer behind both, is private, and a `SecretKey` exposes
+   no bytes, so code holding a `SecretKey` can sign only through a function
+   whose row names its purpose. The type system enforces that much.
+
+   The key's BYTES are kept away from the unlabelled signers by a source
+   scan, not by the types: `lib.secp256k1`'s `ecdsaSignDigest` signs with a
+   bare scalar and `lib.scalar`'s `scFromBytes` makes one from bytes.
+   `pds/test/lib_boundary_test.mdk` (check 6) refuses an import of either
+   outside this module and `lib.secp256k1`, except in the test and vector
+   files its ledger names. `pds/serve.mdk` admits `secrets/key.hex` as a
+   `SecretKey` in the function that reads it (`readSigningKey`), so no
+   binding in the server holds the bytes after that read. -}
 
 import bytes as B
 import lib.scalar.{Sc, scFromFixedBytesReduce, scSecretCandidate, scToBytes}
@@ -18,6 +34,10 @@ import lib.secp256k1.{
   pointCompressed,
   publicPointForSecret,
 }
+
+-- | What a repo key signs: the label every signing row carries, parameterized
+--   by the set of purposes the key is spent on.
+export effect Sign Set
 
 -- | An admitted secp256k1 secret scalar. Its constructor stays module-private.
 --   The bytes live in a pointer-free (atomic) block, so the collector never
@@ -79,12 +99,12 @@ export
 signatureCompact : Signature -> B.Bytes
 signatureCompact (Signature signature) = ecdsaSignatureCompact signature
 
--- | Sign exactly one public 32-byte SHA-256 digest. A public length error is
---   rejected before the fixed two-candidate producer begins; only its
---   final aggregate validity bit is declassified here. A produced signature
---   is verified against the signer's own public key before it is returned;
---   that check reads only public values (key, digest, signature).
-export
+-- Sign exactly one public 32-byte SHA-256 digest. A public length error is
+-- rejected before the fixed two-candidate producer begins; only its final
+-- aggregate validity bit is declassified here. A produced signature is
+-- verified against the signer's own public key before it is returned; that
+-- check reads only public values (key, digest, signature). Private: callers
+-- reach it through the two purpose-named signers below.
 signDigest : SecretKey -> B.Bytes -> Result String Signature
 signDigest key digest =
   if B.length digest /= 32 then
@@ -100,6 +120,22 @@ signDigest key digest =
         Err "sign.signDigest: internal signature self-check failed"
     else
       Err "RFC 6979 retry bound exhausted"
+
+-- | Sign the 32-byte SHA-256 digest of an unsigned repository commit. A
+--   digest of any other length is an `Err`.
+export
+signCommitDigest : SecretKey ->
+  B.Bytes ->
+  <Sign "commit"> Result String Signature
+signCommitDigest key digest = signDigest key digest
+
+-- | Sign the 32-byte SHA-256 digest of a service-auth JWS signing input. A
+--   digest of any other length is an `Err`.
+export
+signServiceAuthDigest : SecretKey ->
+  B.Bytes ->
+  <Sign "service-auth"> Result String Signature
+signServiceAuthDigest key digest = signDigest key digest
 
 -- | Verify one canonical signature against a public key and 32-byte digest.
 --   A digest of any other length returns `False`.

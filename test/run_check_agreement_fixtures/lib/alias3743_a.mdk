@@ -1,0 +1,3 @@
+public export data R = { v : Px }
+
+type Px = Int

@@ -1,0 +1,10 @@
+-- #1465 / #3726 — `.alpha` on a receiver of type `Wrap`, whose two constructors BOTH
+-- declare `alpha`, at different positions (field 1 of `Cfg`, field 2 of `Dfg`).  No
+-- constructor withholds the field, so #1468's guard alone was silent; both emitters
+-- read `alpha` at the selected constructor's index with no tag test, and the built
+-- binary printed `beta` for a `Dfg` value at exit 0.  Every constructor declaring a
+-- field at ONE position keeps the access legal; this one must reject.
+data Wrap = Cfg { alpha : Int, beta : Int } | Dfg { beta : Int, alpha : Int }
+
+getAlpha : Wrap -> Int
+getAlpha w = w.alpha

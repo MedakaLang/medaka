@@ -1,14 +1,15 @@
--- An `<IO>` function stored in a field typed with the ten labels, then applied
--- under a nine-label bound: the field's row still carries `Net`, so the
--- application is refused.
-data Box = Box (String ->
-  <Clock, Env, Exec, FileRead, FileWrite, Net, Rand, Stderr, Stdin, Stdout> Unit)
+-- An `<IO>` function stored in a field typed with the eleven labels, then
+-- applied under a ten-label bound: the field's row still carries `Net`, so
+-- the application is refused.
+data Box =
+  | Box (String -> <Clock, Env, Exec, FileRead, FileWrite, Net, Rand, Signal, Stderr, Stdin, Stdout> Unit)
 
 ioSay : String -> <IO> Unit
 ioSay s = println s
 
-run : Box -> String ->
-  <Clock, Env, Exec, FileRead, FileWrite, Rand, Stderr, Stdin, Stdout> Unit
+run : Box ->
+  String ->
+  <Clock, Env, Exec, FileRead, FileWrite, Rand, Signal, Stderr, Stdin, Stdout> Unit
 run (Box f) s = f s
 
 main : <IO> Unit

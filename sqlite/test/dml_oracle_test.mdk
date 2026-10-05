@@ -947,6 +947,7 @@ checkSchemaRefusal : String ->
 checkSchemaRefusal label cli db insertSql = do
   (code, out, err) <- spawnRaw queryTimeoutSeconds cli [db, insertSql]
   let combined = trim (out ++ err)
+  -- Exit 0 on an `error:` line is the CLI's documented contract (sqlite/main.mdk § Errors).
   Ok (if startsWith "error:" combined && code == 0 then
     Pass "a clean error" "a clean error"
   else

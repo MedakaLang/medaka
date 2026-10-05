@@ -136,6 +136,45 @@ else
   pass=$((pass + 1))
 fi
 
+# A closing keyword in prose warns (#583) but still writes; a dedicated
+# closing line, a bulleted one, and an issue body do not warn.
+cat >"$WORK/body-kw.md" <<'EOF'
+Fixes #12
+- Closes: MedakaLang/medaka#13
+
+This does not fix #508 yet; the prefix #9 and suffix #9 are not keywords.
+Resolves #4, and also closes #77.
+EOF
+MOCK_READBACK_FILE="$WORK/body-kw.md" run_contains \
+  "body warns on prose closing keyword" 0 "line 4:" \
+  body --number 7 --file "$WORK/body-kw.md" --repo MedakaLang/medaka
+if grep -qF 'line 5:' "$WORK/err"; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1)); echo "FAIL: body missed a second keyword on a closing line" >&2
+fi
+for n in 'line 1:' 'line 2:'; do
+  if grep -qF "$n" "$WORK/err"; then
+    fail=$((fail + 1)); echo "FAIL: body warned on dedicated closing line ($n)" >&2
+  else
+    pass=$((pass + 1))
+  fi
+done
+MOCK_READBACK_FILE="$WORK/body-kw.md" run_expect "body issue does not warn" 0 \
+  body --number 13 --issue --file "$WORK/body-kw.md" --repo MedakaLang/medaka
+if grep -q 'closing keyword' "$WORK/err"; then
+  fail=$((fail + 1)); echo "FAIL: body --issue warned about closing keywords" >&2
+else
+  pass=$((pass + 1))
+fi
+MOCK_READBACK_FILE="$WORK/body.md" run_expect "body without keywords" 0 \
+  body --number 7 --file "$WORK/body.md" --repo MedakaLang/medaka
+if grep -q 'closing keyword' "$WORK/err"; then
+  fail=$((fail + 1)); echo "FAIL: body warned with no closing keyword present" >&2
+else
+  pass=$((pass + 1))
+fi
+
 # ---------------------------------------------------------------------------
 # enqueue
 # ---------------------------------------------------------------------------

@@ -1,0 +1,19 @@
+-- §3 W3-inst: the head variable `a` is rigid in the instance matcher. The body's
+-- goal `Pick a Int Int` matches `impl Pick x x x` only if `a` is Int, so it is a
+-- prerequisite the impl does not declare. `get (Box "s")` would otherwise use the
+-- `Pick` instance at `String Int Int`, which does not exist.
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+interface Get x where
+  get : x -> Int
+
+data Box a = Box a
+
+impl Get (Box a) where
+  get (Box v) = pick v (5 : Int)
+
+main = println (get (Box "s"))

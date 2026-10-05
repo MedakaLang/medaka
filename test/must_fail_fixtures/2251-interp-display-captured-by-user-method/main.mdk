@@ -1,0 +1,5 @@
+interface Ifc c where
+  display : c -> String
+impl Ifc Int where
+  display n = "HIJACKED"
+main = println "\{7}"

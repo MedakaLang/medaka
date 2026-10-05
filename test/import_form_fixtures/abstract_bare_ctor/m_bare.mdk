@@ -1,0 +1,3 @@
+-- #3752: a selective member list naming a constructor of an abstractly
+-- exported type is refused as withheld, not as a name that does not exist.
+import decl.{Open}

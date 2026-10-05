@@ -69,6 +69,11 @@ rejectedWith code (Rejected c _) = c == code
 rejectedWith _ (Decoded _ _) = False
 rejectedWith _ NeedMore = False
 
+-- The message half of a close-payload failure, for the tests that read only it.
+closeMessage : Result (Int, String) a -> Result String a
+closeMessage (Err (_, message)) = Err message
+closeMessage (Ok value) = Ok value
+
 isNeedMore : DecodeResult -> Bool
 isNeedMore NeedMore = True
 isNeedMore (Decoded _ _) = False
@@ -467,6 +472,41 @@ test "a new data frame while a fragmented message is open is refused (§5.4)" =
   let (_, event) = assembleFrame afterFirst (Frame True Text hello)
   expectTrue (eventRejectedWith 1002 event)
 
+test "a Text message with invalid UTF-8 is refused with 1007 (§8.1)" =
+  let (_, event) = assembleFrame None (Frame True Text (fromU8Array [|0xff|]))
+  expectTrue (eventRejectedWith 1007 event)
+
+test "a multi-byte character split across Text fragments is accepted (§5.4)" =
+  let (afterFirst, _) =
+    assembleFrame None (Frame False Text (fromU8Array [|0xc3|]))
+  let (_, event) =
+    assembleFrame afterFirst (Frame True Continuation (fromU8Array [|0xa9|]))
+  match event
+    EventMessage Text payload => expectEqual (encodeUtf8 "é") payload
+    _ => fail "expected the reassembled é to be delivered"
+
+test "a character split across fragments and left invalid is refused with 1007" =
+  let (afterFirst, _) =
+    assembleFrame None (Frame False Text (fromU8Array [|0xc3|]))
+  let (_, event) =
+    assembleFrame afterFirst (Frame True Continuation (fromU8Array [|0x41|]))
+  expectTrue (eventRejectedWith 1007 event)
+
+test "a close reason that is not UTF-8 fails with 1007 (§7.4.1)" =
+  match parseClosePayload (fromU8Array [|0x03, 0xe8, 0xff|])
+    Err (code, _) => expectEqual 1007 code
+    Ok _ => fail "expected the invalid close reason to be refused"
+
+test "a negative offset is a rejection, not a panic" =
+  expectTrue
+    (rejectedWith
+      1002
+      (decodeFrame
+        FromClient
+        1000
+        (fromU8Array [|0x82, 0x82, 1, 2, 3, 4, 10, 20|])
+        (-1)))
+
 -- # Adversarial input
 
 test "an unmasked client frame is REFUSED, not read anyway (§5.1)" =
@@ -584,12 +624,14 @@ test "an empty close payload is no status, not a zero status (§5.5.1)" =
   expectOkThen expectNone (parseClosePayload (encodeUtf8 ""))
 
 test "a one-byte close payload is a violation, not half a code (§5.5.1)" =
-  expectErrContains "1 byte" (parseClosePayload (fromU8Array [|0x03|]))
+  expectErrContains
+    "1 byte"
+    (closeMessage (parseClosePayload (fromU8Array [|0x03|])))
 
 test "close code 1005 may not appear on the wire (§7.4.1)" =
   expectErrContains
     "may not appear on the wire"
-    (parseClosePayload (fromU8Array [|0x03, 0xed|]))
+    (closeMessage (parseClosePayload (fromU8Array [|0x03, 0xed|])))
 
 test "a private-range close code 4000 is accepted (§7.4.2)" =
   expectOkThen

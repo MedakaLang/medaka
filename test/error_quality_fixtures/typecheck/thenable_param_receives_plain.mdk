@@ -1,0 +1,7 @@
+g : (Unit -> Int) -> Int
+g k = k ()
+
+discard : Thenable m => m Unit -> Int
+discard _ = 0
+
+main = println (g discard)

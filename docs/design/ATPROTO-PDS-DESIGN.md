@@ -5,17 +5,16 @@ Phase 4 (#1697) has landed record CRUD, `applyWrites` as one signed commit,
 session authentication, and the blob half (`uploadBlob`/`getBlob`/`listBlobs`
 with on-disk persistence across restarts) — the Async v2 runtime arc (#500)
 and the graded-interface work (#823/#824) that Phase 3 depended on are both
-landed, so nothing in Phase 4 remains gated on them either. The bind is now
-configuration (`--bind`, default `127.0.0.1`) rather than a literal, a
-non-loopback bind is refused unless `--trusted-proxy` is also set (`#2757`,
-accepted-risk plus this refusal — a peer-address extern was proposed and
-declined), and `pds/Caddyfile` + `pds/pds.service` + `docs/ops/PDS-DEPLOY.md`
+landed, so nothing in Phase 4 remains gated on them either. The server
+listens on loopback only (`listenAddress`, `pds/shell/server.mdk`; there is no
+`--bind` flag, and `#2757` closed as accepted-risk — a peer-address extern was
+proposed and declined), and `pds/Caddyfile` + `pds/pds.service` + `docs/ops/PDS-DEPLOY.md`
 carry the deploy procedure — but no live deploy has happened: pointing a real
 domain at a real key is a manual, deliberate act still to be taken. Backup and
 restore are now rehearsed rather than merely described (`#2613`): §3.1 below
 states the procedure's consistency rule and `docs/ops/PDS-DEPLOY.md`
 § "Backup and restore" carries the steps, with case 33 of
-`pds/test/serve_e2e.sh` restoring a backup into a separate `--data` directory
+`pds/test/serve_e2e.sh` restoring a backup into a separate data directory
 and grading the server that starts on it. Still open, tracked separately rather
 than blocking that act: `#2572` (the block store never collects unreferenced
 blocks, and a stray non-directory file under the store directory hard-fails
@@ -146,7 +145,7 @@ explicit successor `Store`.
 
 ### 3.1 Backup, restore, and the torn-copy hazard
 
-**A file-level backup of `--data` must be taken with the server stopped (or from
+**A file-level backup of `data/` must be taken with the server stopped (or from
 an atomic filesystem or volume snapshot); the online alternative is to snapshot
 the repository through the server's own request path
 (`com.atproto.sync.getRepo`), which is serialized with writes and therefore
@@ -157,13 +156,13 @@ cannot observe a torn state** — because `applyRequest`'s indivisibility
 
 The repository's CAR export is portable and consistent, and it is also *not a
 complete backup*: blobs live beside the signed block graph rather than inside
-it, and the three secrets (`--key`, `--token-secret`, `<data>/credential`) are
+it, and the three secrets (`secrets/key.hex`, `secrets/token.hex`, `<data>/credential`) are
 not in it either. So the procedure `docs/ops/PDS-DEPLOY.md` § "Backup and
 restore" documents is the stopped-server file copy, with the CAR export as the
 consistent online snapshot of the repository half and as the format a restore
 into a different implementation would use. Case 33 of `pds/test/serve_e2e.sh`
 rehearses the documented procedure end to end: a backup, a restore into a
-SEPARATE `--data` directory, and a server started on the restored copy whose
+SEPARATE data directory, and a server started on the restored copy whose
 `getRepo` export byte-matches the original's, serves both blobs under their
 declared media types, and accepts a new signed write.
 
@@ -444,7 +443,7 @@ Passphrase encryption at rest is **deferred past 0.1.0**, deliberately. It needs
 and a symmetric cipher written in pure Medaka with no protocol-level answer key to
 grade either against — the opposite of the corpus discipline every other primitive
 here rests on (G5) — and it defends a threat model a single-operator server behind
-Caddy does not face: an attacker who can read `<data>/key.hex` as its owner is already
+Caddy does not face: an attacker who can read `secrets/key.hex` as its owner is already
 the operator, and one who cannot read it gains nothing from its being encrypted at
 rest by a passphrase that would have to live on the same box to start unattended.
 
@@ -452,27 +451,35 @@ rest by a passphrase that would have to live on the same box to start unattended
 identity change, not a maintenance operation — the DID document must be updated and
 every other implementation on the network re-resolves it. The procedure:
 
-1. `pds keygen --key <data>/key.hex.new` — writes a new scalar at `0600` and prints
-   the compressed public key and the `did:key` it will be known by.
+1. `mv secrets/key.hex secrets/key.hex.old`, then `pds keygen --key` — writes a new
+   scalar to `secrets/key.hex` at `0600` and prints the compressed public key and the
+   `did:key` it will be known by. The running server read its key at startup and is
+   unaffected.
 2. Update the account's DID document to name that `did:key`, and wait for it to
    propagate.
-3. Stop the server, `mv <data>/key.hex.new <data>/key.hex`, restart.
+3. Restart the server, which reads the new `secrets/key.hex`. Keep
+   `secrets/key.hex.old` until the new identity has propagated.
 
-`keygen` refuses to write over an existing file, so step 1 cannot destroy the running
-key by a typo.
+`keygen` refuses to write over an existing file, so it cannot destroy the running key
+by a typo; moving the old key aside is the operator saying the rotation is meant.
 
 *Rotating the session-token secret.* This is a maintenance operation and costs only
 the open sessions: every token this server has issued is verified against it, so
 replacing it logs everybody out and nothing else.
 
-1. `pds keygen --token-secret <data>/session-secret.new`.
-2. Stop the server, `mv <data>/session-secret.new <data>/session-secret`, restart.
+1. Move `secrets/token.hex` aside if there is one, then `pds keygen --token-secret`,
+   which writes a new `secrets/token.hex`. A server that has been running on a
+   generated `<data>/session-secret` switches to `secrets/token.hex` on its next
+   start, since the supplied secret takes precedence over the generated one.
+2. Restart the server.
 
-*Rotating the account password.* `serve` refuses `--password-file` against a data
-directory that already holds a credential rather than rotating in place: remove
-`<data>/credential` and start once with `--password-file`.
+*Rotating the account password.* `serve` refuses to start when `secrets/password` is
+present beside a data directory that already holds a credential, rather than rotating
+in place or leaving a plaintext copy of the password on disk: stop the server, remove
+`<data>/credential`, write the new password to `secrets/password`, start once, and
+delete `secrets/password`.
 
-*What is graded, and what is not.* A supplied `--token-secret` is refused when it
+*What is graded, and what is not.* A supplied `secrets/token.hex` is refused when it
 carries fewer than 8 distinct byte values across its 32 (`admitSessionSecret`,
 `pds/serve.mdk`) — 32 random bytes carry ~28, and fewer than 8 with probability far
 below 1 in 2^60, so this refuses a placeholder without ever refusing a real secret. It
@@ -616,18 +623,18 @@ the stored credential record through `fs.replaceDurably`, both over the same
 first byte is written — so the contents never exist at a wider mode, and neither the
 process umask nor a pre-existing file's own mode can widen them. In the other
 direction, `pds/serve.mdk` grades every hex secret file it
-READS (`--key` and `--token-secret`) with `fileMode` and refuses to start when any
+READS (`secrets/key.hex` and `secrets/token.hex`) with `fileMode` and refuses to start when any
 account but the owner can read one: a signing key the rest of the box can read has
 already been exposed, and serving anyway would hide that. The refusal names the path
 and the mode and never the contents. Encryption at rest is a separate question and is
 deferred past 0.1.0: these are plaintext files under restrictive permissions.
 
-**The password never appears in an argument.** `--password-file PATH` is the only way
+**The password never appears in an argument.** `secrets/password` is the only way
 one reaches the server: an argument value is visible in `ps` output to every user on
 the box. There is no interactive prompt, because no termios, tty, or echo-suppression
 primitive exists in the runtime or the stdlib and a prompt that echoed the password to
 the terminal would be worse than the file. A server with neither a stored credential
-nor `--password-file` refuses to start rather than starting and refusing every login,
+nor `secrets/password` refuses to start rather than starting and refusing every login,
 which would be indistinguishable from a working server until somebody tried to use it.
 
 **Every secret this server generates comes from `osEntropyBytes`** — the session
@@ -867,7 +874,7 @@ pipelined, and keep-alive requests; a chunked-transfer write; each of the nine X
 NSIDs and both well-knowns, every one driven over the socket rather than read off the
 registry; a malformed request and an over-cap body, both rejected rather than hung;
 the idle-connection timeout; and restart-and-resume across a process boundary against
-the same `--data` directory. `pds/test/lib_boundary_test.mdk` closes out #2481 itself:
+the same data directory. `pds/test/lib_boundary_test.mdk` closes out #2481 itself:
 `pds/lib/` never imports `pds/shell/`, every `pds/lib/*.mdk` export carries an
 explicit type signature, and none of those signatures declares an effect row, so the
 pure core stays reachable from every engine Phase 3 does not run on. The signature
@@ -875,7 +882,7 @@ half is load-bearing rather than stylistic: an export with no signature gets an
 inferred effect row, which a check that reads declared rows cannot see.
 
 **One writer per data directory, and the reuse that IS blessed is sequential.**
-The restart-and-resume case above — a second process over the same `--data`
+The restart-and-resume case above — a second process over the same `data/`
 directory once the first has exited — is supported and gated. CONCURRENT reuse
 is not, and the difference is destructive rather than merely racy: every start
 sweeps the three `.staging` directories, which is sound only because a file
@@ -884,7 +891,7 @@ other process is between a write and its `rename`. A second concurrent server
 turns the first one's in-flight promotion into residue and deletes it. Nothing
 in the on-disk layout made the window exclusive, so `pds/shell/dirlock.mdk`
 does: `configure` takes `<data>/.lock` after `requireDir` and before the first
-thing that reads or writes anything beneath `--data` — ahead of both `openRepo`
+thing that reads or writes anything beneath `data/` — ahead of both `openRepo`
 and the three sweeps — so a second process is refused before it can destroy
 what it was refused for (`#3059`). `<data>/.lock` itself is not the lock and
 owns nothing: any number of processes may create that directory, and its
@@ -934,12 +941,13 @@ operator's data. `pds/test/serve_e2e.sh` case 64 grades the legitimate case the
 order exists for — a lost pointer over a still-owed staged entry recovering
 into a clean start.
 
-**Loopback by default, and a non-loopback bind is a deliberate act.** `--bind`
-(`pds/serve.mdk`) defaults to `127.0.0.1`; a bind to anything else is refused
-before any secret is read or generated and before the listener binds, unless
-`--trusted-proxy` is also given (`requireTrustedBind`, `#2757`) — see the
-paragraph below for why that flag is the enforcement rather than a peer-address
-check this process could make instead. §4.2-4.4 below describe the auth seam
+**Loopback only.** The listener binds `127.0.0.1` and nothing else
+(`bindAddress`, `pds/shell/server.mdk`), and no flag changes the address, so
+the listener's type is `Listener "127.0.0.1"` and every connection it accepts
+is charged `Net "127.0.0.1"` — the only way in from off the box is the
+reverse proxy in front of it. See the rate-limiting paragraph below for why
+`--trusted-proxy` names the client identity rather than a peer-address check
+this process could make instead. §4.2-4.4 below describe the auth seam
 this server now has: the three record writes and `getSession` require a valid
 access token, `refreshSession`/`deleteSession` require a valid refresh token,
 `createSession` is the public login that issues both, and the six reads,
@@ -948,7 +956,7 @@ implemented here (P5) — Caddy terminates it and reverse-proxies to the
 loopback port, which is the deployment `docs/ops/PDS-DEPLOY.md` describes.
 
 **Phase 4 — a standalone PDS.** *Landed in the current tree (#1697), including
-the configurable bind, the refusal, and the deployment artifacts
+the loopback-only listener and the deployment artifacts
 (`pds/Caddyfile`, `pds/pds.service`, `docs/ops/PDS-DEPLOY.md`) — except the
 live deploy itself, which is a manual act still to be taken.*
 
@@ -1189,13 +1197,19 @@ needs its peer address, which this runtime cannot obtain — there is no
 Caddy on the same box a socket peer address reads `127.0.0.1` regardless of
 who is really asking, so the last `X-Forwarded-For` hop is already the
 better identity available. `#2757` closes as accepted-risk on that basis,
-plus the refusal `requireTrustedBind` (`pds/serve.mdk`) now enforces: **a
-direct, unproxied non-loopback bind is unsupported** — `configure` refuses to
-start one at all, so the "whole world sharing one bucket" state described
-above can only be reached by a deployment that has itself already asserted
-`--trusted-proxy` while lacking a real proxy, which the flag's own name
-argues against. `pds/README.md` documents the operator-facing half of this:
-when to pass the flag and what happens without it.
+and **a direct, unproxied bind is not possible at all**: the server listens on
+loopback only and has no flag to change that, so every caller from OFF the box
+arrives through a proxy on it, and the "whole world sharing one bucket" state
+described above can only be reached by a deployment that runs that proxy
+without `--trusted-proxy`. Loopback does not stop a caller ON the box: any
+local process can connect to `127.0.0.1:<port>` directly, and under
+`--trusted-proxy` it writes its own `X-Forwarded-For`, and with it chooses its
+own rate-limit identity. The limiter's per-identity accounting therefore
+assumes a single-operator box, where every local process is the operator's
+own. A box that runs other people's code needs the port closed to them by
+some other means, which this design does not provide. `pds/README.md` documents the
+operator-facing half of this: when to pass the flag and what happens without
+it.
 
 **Blob-storage policy (P14).** One blob per file under `<data>/blobs`, a
 sibling of (never inside) the repository's `<data>/blocks`, sharded on the

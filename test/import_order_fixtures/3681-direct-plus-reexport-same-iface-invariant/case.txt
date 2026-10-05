@@ -1,0 +1,10 @@
+entry: main.mdk
+what: #3681 one interface imported directly and through a re-export is one
+      interface, in either import order
+
+`p` declares `Same`; `mid` is `export import p.*`; `main` imports `Same` from both
+and writes `impl Same P`. There is one declaration of `Same`, so naming it is not
+ambiguous. Spec answer, hand-derived: `check` clean; `run` and the built binary
+print `2` (`pmth (MkP 1)` dispatches to `P`'s impl) in every ordering. The
+resolve verdict is graded by `test/import_form_fixtures/reexport_iface_one_declaration/`;
+this case grades its invariance.

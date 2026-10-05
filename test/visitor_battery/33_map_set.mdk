@@ -1,0 +1,13 @@
+import map.{Map, get, set, keys, size}
+import set.{Set, has}
+import set as S
+
+main =
+  let m = Map { "a" => 1, "b" => 2 }
+  let m2 = set "c" 3 m
+  println (get "c" m2)
+  println (get "z" m2)
+  println (keys m2)
+  println (size m2)
+  println (has 2 Set { 1, 2, 3 })
+  println (toList (S.union (Set { 1, 2 }) (Set { 2, 3 })))

@@ -1,0 +1,20 @@
+data Expr = Num Int | Add Expr Expr | Mul Expr Expr | Div Expr Expr
+
+eval : Expr -> Result String Int
+eval (Num n) = Ok n
+eval (Add a b) = do
+  x <- eval a
+  y <- eval b
+  pure (x + y)
+eval (Mul a b) = do
+  x <- eval a
+  y <- eval b
+  pure (x * y)
+eval (Div a b) = do
+  x <- eval a
+  y <- eval b
+  if y == 0 then Err "division by zero" else Ok (x / y)
+
+main =
+  println (eval (Add (Num 1) (Mul (Num 2) (Num 3))))
+  println (eval (Div (Num 1) (Num 0)))

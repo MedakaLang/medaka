@@ -56,6 +56,7 @@ import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import driver.loader.{
   loadProgramFilesLocatedE,
+  modIdToPath,
   loadErrorMessage,
   LoadError(..),
   entrySearchRoots,
@@ -74,6 +75,8 @@ import eval.eval.{
   Value,
   evalOneRootEnvWith,
   evalModulesRootEnvWith,
+  currentEvalFile,
+  modulePathMap,
   testCapableExterns,
   funNamesOf,
   dropShadowedExp,
@@ -123,6 +126,7 @@ import driver.diagnostics.{
   analyzeLocated,
   projectDiagsFromTc,
   projectDiagsLoaded,
+  noStdlibExports,
   chainKeyOf,
   desugaredModPairs,
   mkDiag,
@@ -447,7 +451,7 @@ exemptNotice True target userDecls =
 -- Returns Some <located error text> iff the module does NOT typecheck, else None.
 singleFileTypeErrors : String -> String -> String -> String -> Option String
 singleFileTypeErrors target tsrc rsrc csrc =
-  let errs = filter diagIsError (analyzeLocated rsrc csrc tsrc)
+  let errs = filter diagIsError (analyzeLocated noStdlibExports rsrc csrc tsrc)
   match errs
     [] => None
     _ => Some (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
@@ -471,7 +475,15 @@ gateOfPerModule : Bool ->
   <IO> Option String
 gateOfPerModule True _ _ _ _ = None
 gateOfPerModule False runtimeDecls coreDecls mods perModule =
-  renderGate (projectDiagsFromTc True [] runtimeDecls coreDecls mods perModule)
+  renderGate
+    (projectDiagsFromTc
+      noStdlibExports
+      True
+      []
+      runtimeDecls
+      coreDecls
+      mods
+      perModule)
 
 -- A load failure reaches the gate as the diagnostic `analyzeProject` attributes
 -- to it: a parse failure to the module that owns it, anything else (unknown
@@ -483,6 +495,9 @@ loadGate False target le = renderGate (loadErrorDiags target le)
 loadErrorDiags : String -> LoadError -> List (String, List Diag)
 loadErrorDiags _ (LoadParseFailed mpath _ pe) =
   [(mpath, [parseErrDiag mpath pe])]
+loadErrorDiags target (LoadCycle e cpath csite) = match csite
+  Some (_, loc) => [(cpath, [mkDiag SevError "R-MODULE-LOAD" e (Some loc)])]
+  None => [(target, [mkDiag SevError "R-MODULE-LOAD" e None])]
 loadErrorDiags target (LoadMsg e) =
   [(target, [mkDiag SevError "R-MODULE-LOAD" e None])]
 
@@ -631,6 +646,7 @@ prepareMulti rsrc csrc target roots exempt hasDoctests synthDecls =
       PreparedPair (TestPairErr (loadErrorMessage le)),
     )
     Ok mods =>
+      modulePathMap := map modIdToPath mods
       elaborateFor rsrc csrc target roots mods exempt hasDoctests synthDecls
 
 elaborateFor : String ->
@@ -683,6 +699,7 @@ gateOfCheck True _ _ _ _ _ = None
 gateOfCheck False rsrc csrc target roots mods =
   renderGate
     (projectDiagsLoaded
+      noStdlibExports
       True
       []
       (desugaredPrelude rsrc)
@@ -711,6 +728,7 @@ prepareSingle runtimeDecls coreDecls target roots userDecls =
     else
       dropShadowedExp (funNamesOf userDecls) coreDecls
   let rootId = singleRootId roots target
+  modulePathMap := [(rootId, target)]
   uncurryPair
     (elaborateModulesMangled runtimeDecls livePrelude [(rootId, userDecls)])
 
@@ -771,6 +789,7 @@ driveMulti : List Engine ->
   Bool ->
   <IO> Bool
 driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt userDecls exempt =
+  currentEvalFile := target
   let allExamples = extractExamples (collectComments tsrc)
   let examples = filterExamplesByName filterOpt allExamples
   let synthResults = buildSynthResults userDecls examples
@@ -823,6 +842,7 @@ driveSingle : List Engine ->
   List Decl ->
   <IO> Bool
 driveSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt userDecls =
+  currentEvalFile := target
   let examples =
     filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
   if filterMatchedNothing filterOpt tsrc userDecls then
@@ -978,6 +998,7 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
     else
       dropShadowedExp (funNamesOf allUser) coreDecls
   let rootId = singleRootId roots target
+  modulePathMap := [("__main__", target)]
   let elaborated = elaborateOne runtimeDecls livePrelude (rootId, allUser)
   let env =
     evalOneRootEnvWith (testCapableExterns ()) [] ("__main__", elaborated)
@@ -1531,9 +1552,10 @@ testFailSuffix failed errors
 -- doctests+props normally with `None` here, just without the CLI's stderr
 -- notice, since this path has no stderr channel of its own.
 --
--- ⚠️ Results are under the INTERPRETER (eval) — a native-only miscompile is
--- invisible here (see #81); the CALLER must present them as "passes under eval",
--- never an unqualified pass.
+-- Results are under the engine(s) the caller asks for.  An interpreter-only run
+-- cannot see a native-only miscompile (see #81), so a caller that asked for the
+-- interpreter must present its results as "passes under eval", never as an
+-- unqualified pass.
 --
 -- #2295 (d): the return tuple carries a 4th element, the `test "…"` phase's
 -- structured results (`testDeclsReport`, above) — §4 of this slice's packet

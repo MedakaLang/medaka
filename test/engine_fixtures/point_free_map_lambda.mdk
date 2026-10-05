@@ -1,0 +1,8 @@
+-- #2425: a point-free `map` over a lambda, bound at top level and in a block.
+squareAll : List Int -> List Int
+squareAll = map (n => n * n)
+
+main =
+  let local = map (n => n + 1)
+  println (squareAll [1, 2, 3])
+  println (local [1, 2, 3])

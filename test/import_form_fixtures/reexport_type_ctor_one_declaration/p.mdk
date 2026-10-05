@@ -1,0 +1,4 @@
+-- The one declaration of `T`, `Mk` and `R` that `mid` re-exports.
+public export data T = Mk Int
+
+public export data R = { rx : Int }

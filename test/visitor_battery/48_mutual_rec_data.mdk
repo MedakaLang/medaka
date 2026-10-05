@@ -1,0 +1,13 @@
+data Rose a = Rose a (List (Rose a))
+
+depth : Rose a -> Int
+depth (Rose _ []) = 1
+depth (Rose _ kids) = 1 + optionOr 0 (maximum (map depth kids))
+
+size : Rose a -> Int
+size (Rose _ kids) = 1 + sum (map size kids)
+
+main =
+  let t = Rose 1 [Rose 2 [Rose 4 []], Rose 3 []]
+  println (depth t)
+  println (size t)

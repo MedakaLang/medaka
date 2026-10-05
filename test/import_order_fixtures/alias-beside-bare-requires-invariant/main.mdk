@@ -1,0 +1,14 @@
+-- `import ma as A` binds no bare name, so the bare `Sh` in the `requires` head and
+-- the bare `shl` in the body are both `mb`'s.
+import ma as A
+import mb.{Sh, shl}
+
+interface Both a where
+  both : a -> String
+
+data W a = W a
+
+impl Both (W a) requires Sh a where
+  both (W v) = shl v
+
+main = println (both (W (7 : Int)))

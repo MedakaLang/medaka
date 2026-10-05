@@ -12,7 +12,7 @@ import types.repr.{Scheme(..), ppScheme}
 import frontend.ast.{Loc(..)}
 import types.effect_authority.{
   Authority(..), Authvar(..), authNorm, authSub, authJoin, renderAuthority,
-  authSplit, authExtend, authAppend, authIsTop
+  authSplit, authExtend, authAppend, authIsTop, authPatternClose, authIsPattern
 }
 import types.effect_domain.{Param(..)}
 import support.util.{contains, lookupAssoc, anyList, listLen}
@@ -240,8 +240,8 @@ test "the authority algebra" =
   let top = AConst (PPrefix None)
   let a = AConst (PPrefix (Some "a/*"))
   let ab = AConst (PPrefix (Some "a/b/*"))
-  let k = AVar (Ref (AUnbound 1 0 (PPrefix None) (Some "k")))
-  let j = AVar (Ref (AUnbound 2 0 (PPrefix None) None))
+  let k = AVar (Ref (AUnbound 1 0 (PPrefix None) False (Some "k")))
+  let j = AVar (Ref (AUnbound 2 0 (PPrefix None) False None))
   expectAll [
     expectTrue (authSub ab a),
     expectFalse (authSub a ab),
@@ -256,12 +256,33 @@ test "the authority algebra" =
     expectEqual "" (renderAuthority (authJoin top k)),
   ]
 
+-- A pattern-ranging variable extends to itself; any other extends to the
+-- top. The closure π takes a term to the least pattern above it.
+test "a pattern-ranging variable is a fixed point of extension" =
+  let k = AVar (Ref (AUnbound 1 0 (PPrefix None) True (Some "k")))
+  let j = AVar (Ref (AUnbound 2 0 (PPrefix None) False (Some "j")))
+  let exact = AConst (PPrefix (Some "data/app.db"))
+  expectAll [
+    expectEqual " k" (renderAuthority (authExtend k)),
+    expectEqual " k" (renderAuthority (authAppend "/x" k)),
+    expectTrue (authIsTop (authExtend j)),
+    expectEqual " \"data/app.db*\"" (renderAuthority (authPatternClose exact)),
+    expectEqual
+      " (\"data/app.db*\" | k)"
+      (renderAuthority (authPatternClose (authJoin exact k))),
+    expectTrue (authIsPattern k),
+    expectFalse (authIsPattern j),
+    expectFalse (authIsPattern exact),
+    expectTrue (authIsPattern (authPatternClose exact)),
+    expectTrue (authIsPattern (AConst (PPrefix None))),
+  ]
+
 -- A Product tuple whose axes are terms: each axis is compared on its own, a
 -- tuple of constants is a constant, and a cover is proven only by one element.
 test "the Product tuple algebra" =
-  let h = AVar (Ref (AUnbound 10 0 (PPrefix None) (Some "h")))
-  let m = AVar (Ref (AUnbound 11 0 (PSet None) (Some "m")))
-  let u = AVar (Ref (AUnbound 12 0 (PProduct []) (Some "u")))
+  let h = AVar (Ref (AUnbound 10 0 (PPrefix None) False (Some "h")))
+  let m = AVar (Ref (AUnbound 11 0 (PSet None) False (Some "m")))
+  let u = AVar (Ref (AUnbound 12 0 (PProduct []) False (Some "u")))
   let pre s = AConst (PPrefix (Some s))
   let set xs = AConst (PSet (Some xs))
   let tuple host method = AProduct [("Host", host), ("Method", method)]
@@ -1501,6 +1522,11 @@ test "an axis variable extends to its axis's top; a whole-domain binder is no ax
       (rejects
         (httpPrelude
           ++ "under : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nunder host method = request (host ++ \"/x\") method\n")),
+    -- unless the host ranges over patterns of the primary axis (#3620)
+    expectTrue
+      (accepts
+        (httpPrelude
+          ++ "under : (host : String @Http*) -> (method : String) -> <Http Host=host Method=method> Int\nunder host method = request (host ++ \"/v1\") method\n")),
     expectTrue
       (accepts
         (httpPrelude
@@ -1524,29 +1550,39 @@ test "an axis variable extends to its axis's top; a whole-domain binder is no ax
 -- which admits only itself, so appending to it reaches the whole domain. The
 -- signature's own variable is refused at the definition, and a flexible one
 -- still unbound when the arm is inferred is charged the whole domain.
-test "an extension of an authority variable is the whole domain" = expectAll [
-  expectEqual
-    ["T-AUTHORITY"]
-    (codes
-      "readUnder : (p : String) -> String -> <Store p> Int\nreadUnder p suffix = load (p ++ suffix)\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \".bak\"\n"),
-  expectTrue
-    (accepts
-      "readUnder : (p : String) -> String -> <Store p> Int\nreadUnder p _ = load p\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \".bak\"\n"),
-  expectEqual
-    ["T-AUTHORITY"]
-    (codes
-      (handle
-        ++ "readH : H d -> String -> <Store d> Int\nreadH (H p) x = load (p ++ x)\n")),
-  expectEqual
-    ["T-EFFECT-LEAK"]
-    (codes
-      (handle
-        ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load (p ++ x)\n")),
-  expectTrue
-    (accepts
-      (handle
-        ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load p\n")),
-]
+test "an extension of an authority variable is the whole domain" = expectAll
+  [
+    expectEqual
+      ["T-AUTHORITY"]
+      (codes
+        "readUnder : (p : String) -> String -> <Store p> Int\nreadUnder p suffix = load (p ++ suffix)\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \".bak\"\n"),
+    expectTrue
+      (accepts
+        "readUnder : (p : String) -> String -> <Store p> Int\nreadUnder p _ = load p\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \".bak\"\n"),
+    -- the pattern-ranging sibling (#3620): the extension stays within `p`, and
+    -- the caller is charged the pattern its exact element begins
+    expectTrue
+      (accepts
+        "readUnder : (p : String @Store*) -> String -> <Store p> Int\nreadUnder p suffix = load (p ++ suffix)\ncfg : Unit -> <Store \"cfg/*\"> Int\ncfg _ = readUnder \"cfg/\" \"app.toml\"\n"),
+    expectTrue
+      (accepts
+        (handleP
+          ++ "readH : H d -> String -> <Store d> Int\nreadH (H p) x = load (p ++ x)\n")),
+    expectEqual
+      ["T-AUTHORITY"]
+      (codes
+        (handle
+          ++ "readH : H d -> String -> <Store d> Int\nreadH (H p) x = load (p ++ x)\n")),
+    expectEqual
+      ["T-EFFECT-LEAK"]
+      (codes
+        (handle
+          ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load (p ++ x)\n")),
+    expectTrue
+      (accepts
+        (handle
+          ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load p\n")),
+  ]
 
 -- A named argument may write its domain, `(dir : String @Store)`, so a helper
 -- that performs nothing can return a value at the argument's authority. The
@@ -1581,6 +1617,17 @@ test "a binder's written domain gives a qualifier a domain and charges nothing" 
         "reaches the whole domain"
         (messagesOf
           "withSuffix : (dir : String @Store) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n")),
+    -- and the report points at the pattern-ranging spelling, on the
+    -- program's own label (#3574)
+    expectTrue
+      (anyMentions
+        "`(dir : String @Store*)`"
+        (messagesOf
+          "withSuffix : (dir : String @Store) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n")),
+    -- a pattern-ranging binder keeps its authority through the extension
+    expectTrue
+      (accepts
+        "withSuffix : (dir : String @Store*) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n"),
     -- with no domain written, the qualifier's report names the binder form first
     expectTrue
       (anyMentions
@@ -1628,3 +1675,413 @@ test "the formatter prints a binder's written domain back" =
   let source =
     "effect Store Prefix\n\nsame : (dir : String @Store) -> String @dir\nsame dir = dir\n"
   expectEqual source (formatSource source)
+
+-- An effect-indexed container sequenced the way a `defer` block sequences
+-- `Async` (`deferThen`), so its steps all share one index row, beside a
+-- handle carrying a Store authority index.
+jobPrelude : String
+jobPrelude =
+  "data Job (e : Effect) a =\n"
+    ++ "  | Done a\n"
+    ++ "  | Suspend (Unit -> <e> Job e a)\n"
+    ++ "thenJob : Job e a -> (a -> <e> Job e b) -> Job e b\n"
+    ++ "thenJob (Done a) k = Suspend (u => k a)\n"
+    ++ "thenJob (Suspend t) k = Suspend (u => thenJob (t u) k)\n"
+    ++ "data Key (k : Authority Store) = Key (String @k)\n"
+    ++ "step : (p : String) -> Job <Store p | e> Int\n"
+    ++ "step p = Suspend (u => Done (load p))\n"
+    ++ "readKey : Key k -> Job <Store k | e> Int\n"
+    ++ "readKey (Key p) = step p\n"
+    ++ "varStep : (n : String) -> Job <Var n | e> Int\n"
+    ++ "varStep n = Suspend (u => Done (lookup n))\n"
+
+jobCodes : String -> List String
+jobCodes source = codes (jobPrelude ++ source)
+
+test "an index row is a set of atoms: one label at two authorities is two atoms" = expectAll
+  [
+    -- a variable atom and a literal atom, both declared
+    expectEqual
+      []
+      (jobCodes
+        "pairA : Key k -> Job <Store k, Store \"cfg/*\" | e> Int\npairA key = thenJob (readKey key) (a => step \"cfg/app\")\n"),
+    -- a set-valued handle index and a step at one member
+    expectEqual
+      []
+      (jobCodes
+        "pairC : Key (\"cfg/*\" | \"data/*\") -> Job <Store \"cfg/*\", Store \"data/*\" | e> Int\npairC key = thenJob (readKey key) (a => step \"cfg/app\")\n"),
+    -- the same literal on both steps
+    expectEqual
+      []
+      (jobCodes
+        "pairB : Key \"cfg/*\" -> Job <Store \"cfg/*\" | e> Int\npairB key = thenJob (readKey key) (a => step \"cfg/app\")\n"),
+    -- two subtrees of a Prefix set, one step each
+    expectEqual
+      []
+      (jobCodes
+        "trees : Unit -> Job <Store \"cfg/*\", Store \"data/*\" | e> Int\ntrees _ = thenJob (step \"cfg/app\") (a => step \"data/x\")\n"),
+  ]
+
+test "a precise step under a bare label is covered by it" = expectAll [
+  expectEqual
+    []
+    (jobCodes "bare : Key k -> Job <Store | e> Int\nbare key = readKey key\n"),
+  expectEqual
+    []
+    (jobCodes
+      "both : Key k -> Job <Store, Store k | e> Int\nboth key = readKey key\n"),
+]
+
+test "sequencing does not solve an authority variable to a literal it meets" =
+  expectEqual
+    "Key k -> Job <Store \"cfg/app\", Store k | a> Int"
+    (schemeOf
+      (jobPrelude
+        ++ "inferred key = thenJob (readKey key) (a => step \"cfg/app\")\n")
+      "inferred")
+
+test "an index row still refuses an atom its declaration does not cover" = expectAll
+  [
+    -- a literal outside the declared literal
+    expectEqual
+      ["T-AUTHORITY-INDEX-MISMATCH"]
+      (jobCodes
+        "out : Unit -> Job <Store \"cfg/*\" | e> Int\nout _ = thenJob (step \"cfg/app\") (a => step \"data/x\")\n"),
+    -- a third subtree beside the two a Prefix set declares
+    expectEqual
+      ["T-AUTHORITY-INDEX-MISMATCH"]
+      (jobCodes
+        "third : Unit -> Job <Store \"cfg/*\", Store \"data/*\" | e> Int\nthird _ = thenJob (step \"cfg/app\") (a => thenJob (step \"data/x\") (b => step \"tmp/x\"))\n"),
+    -- a handle's authority the row does not declare
+    expectEqual
+      ["T-AUTHORITY-INDEX-MISMATCH"]
+      (jobCodes
+        "hide : Key k -> Job <Store \"cfg/*\" | e> Int\nhide key = thenJob (readKey key) (a => step \"cfg/app\")\n"),
+    -- a label a closed index does not name
+    expectEqual
+      ["T-EFFECT-LEAK"]
+      (jobCodes
+        "closed : Unit -> Job <Store \"cfg/*\"> Int\nclosed _ = thenJob (step \"cfg/app\") (a => varStep \"x\")\n"),
+    -- the report is coverage, not equality
+    expectTrue
+      (anyMentions
+        "is not covered by \"cfg/*\""
+        (messagesOf
+          (jobPrelude
+            ++ "out : Unit -> Job <Store \"cfg/*\" | e> Int\nout _ = thenJob (step \"cfg/app\") (a => step \"data/x\")\n"))),
+  ]
+
+test "two written index rows must still be equal" = expectAll [
+  expectEqual
+    ["T-EFFECT-INDEX-MISMATCH"]
+    (jobCodes "quiet : Job <Stdout> Int -> Job <> Int\nquiet j = j\n"),
+  expectEqual
+    ["T-AUTHORITY-INDEX-MISMATCH"]
+    (jobCodes
+      "narrow : Job <Store \"cfg/*\"> Int -> Job <Store \"data/*\"> Int\nnarrow j = j\n"),
+  expectTrue
+    (anyMentions
+      "must be EQUAL"
+      (messagesOf
+        (jobPrelude
+          ++ "narrow : Job <Store \"cfg/*\"> Int -> Job <Store \"data/*\"> Int\nnarrow j = j\n"))),
+  expectTrue
+    (contains
+      "T-EFFECT-INDEX-MISMATCH"
+      (jobCodes
+        "launder : Job <Store \"cfg/*\" | e> Int -> Job e Int\nlaunder j = j\n")),
+]
+
+-- #3620: pattern-ranging authority binders. A binder written `@L*` or a
+-- parameter of kind `Authority L*` ranges over the patterns of `L`'s domain
+-- only, so a value within it extended on the right stays within it.
+handleP : String
+handleP = "data H (d : Authority Store*) = H (String @d)\n"
+
+dir : String
+dir =
+  handleP
+    ++ "readD : H d -> String -> <Store d> Int\nreadD (H root) x = load (root ++ \"blocks/\" ++ x)\n"
+
+test "a pattern-ranging binder admits a right extension" = expectAll
+  [
+    expectTrue
+      (accepts
+        (dir
+          ++ "cfg : H \"cfg/*\"\ncfg = H \"cfg/\"\nuse : String -> <Store \"cfg/*\"> Int\nuse x = readD cfg x\n")),
+    -- a data index keeps its binder: `sub` returns the directory it was given
+    expectTrue
+      (accepts
+        (dir
+          ++ "sub : H d -> String -> H d\nsub (H root) n = H (root ++ n ++ \"/\")\n")),
+    expectEqual
+      "H d -> String -> H d"
+      (schemeOf (dir ++ "sub (H root) n = H (root ++ n)\n") "sub"),
+    -- a value-derived exact element closes to the pattern it begins
+    expectEqual "H \"cfg/*\"" (schemeOf (dir ++ "d1 = H \"cfg/\"\n") "d1"),
+    -- a runtime value is the whole domain, charged as the label bare
+    expectTrue
+      (accepts
+        (dir
+          ++ "mk : String -> H *\nmk s = H s\nuse : String -> <Store> Int\nuse s = readD (mk s) \"x\"\n")),
+    -- a join of patterns is a pattern
+    expectTrue
+      (accepts (handleP ++ "j : H (\"a/*\" | \"b/*\")\nj = H \"a/x\"\n")),
+    -- an opened pattern existential is charged the label bare
+    expectTrue
+      (accepts
+        (dir
+          ++ "data AnyH = AnyH (d : Authority Store*) (H d)\nuse : AnyH -> <Store> Int\nuse a = match a\n  AnyH h => readD h \"x\"\n")),
+    -- a pattern forwards into an ordinary binder
+    expectTrue
+      (accepts
+        (handleP
+          ++ "data O (p : Authority Store) = O (String @p)\ntoO : H d -> O d\ntoO (H r) = O r\n")),
+    -- an impl head's bare index inherits the slot's range
+    expectTrue
+      (accepts
+        (handleP
+          ++ "interface Named a where\n  nameOf : a -> String\nimpl Named (H d) where\n  nameOf (H r) = r\n")),
+    -- the written spellings print back
+    expectEqual
+      "effect Store Prefix\n\ndata H (d : Authority Store*) = H (String @d)\n\nsame : (dir : String @Store*) -> String @dir\nsame dir = dir\n"
+      (formatSource
+        "effect Store Prefix\n\ndata H (d : Authority Store*) = H (String @d)\n\nsame : (dir : String @Store*) -> String @dir\nsame dir = dir\n"),
+  ]
+
+-- #3629: an interpolated part is read as its operand only when `display` is
+-- the prelude's method, whose `String` impl is the identity. This harness
+-- declares no prelude, so a `Display` written here is a program's own, and
+-- its `String` impl may be anything: the part stays the whole domain. The
+-- accepting rows are the abstraction's own, in `effect_infer_test.mdk`, and
+-- `test/effect_builtin_param_fixtures/filewrite_interp_binder_manifest_accept.mdk`,
+-- which is checked against the real prelude.
+test "an interpolated binder is read through the prelude's display only" =
+  let ownDisplay =
+    "interface Display a where\n  display : a -> String\nimpl Display String where\n  display s = \"../\" ++ s\n"
+  let under = "under : (d : String @Store*) -> String -> <Store d> Int\n"
+  expectAll
+    [
+      expectEqual
+        []
+        (codes (ownDisplay ++ under ++ "under d x = load (d ++ \"/\" ++ x)\n")),
+      expectEqual
+        ["T-AUTHORITY"]
+        (codes (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
+      -- the report names the program's `display` as the cause, not the
+      -- appending the body already does
+      expectTrue
+        (anyMentions
+          "is this module's own"
+          (messagesOf
+            (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n"))),
+      expectFalse
+        (anyMentions
+          "appending to the named argument"
+          (messagesOf
+            (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n"))),
+    ]
+
+test "two sites with identical authority-pattern text each report" =
+  expectEqual
+    ["T-AUTHORITY-PATTERN", "T-AUTHORITY-PATTERN"]
+    (codes
+      (handleP
+        ++ "bad1 : H \"cfg/app\"\nbad1 = H \"cfg/app\"\n"
+        ++ "bad2 : H \"cfg/app\"\nbad2 = H \"cfg/app\"\n"))
+
+test "a pattern slot refuses what is not a pattern" = expectAll
+  [
+    -- a written exact element
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes (handleP ++ "bad : H \"cfg/app\"\nbad = H \"cfg/app\"\n")),
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes (handleP ++ "bad : H (\"a/*\" | \"b/x\")\nbad = H \"a/x\"\n")),
+    expectTrue
+      (contains
+        "T-AUTHORITY-PATTERN"
+        (codes
+          (handleP
+            ++ "type Exact = H \"cfg/app\"\nbad : Exact\nbad = H \"cfg/app\"\n"))),
+    -- a written ordinary binder: a named argument, a head parameter, an
+    -- existential, whether its domain is written or not
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes (handleP ++ "mk : (p : String @Store) -> H p\nmk p = H p\n")),
+    expectTrue
+      (anyMentions
+        "`(p : String @Store*)`"
+        (messagesOf
+          (handleP ++ "mk : (p : String @Store) -> H p\nmk p = H p\n"))),
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes (handleP ++ "mk : (p : String) -> H p\nmk p = H p\n")),
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes (handleP ++ "data W (p : Authority Store) = W (H p)\n")),
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes (handleP ++ "data AnyH = AnyH (p : Authority Store) (H p)\n")),
+    -- a rigid ordinary binder reaching a pattern slot at a use is the whole domain
+    expectEqual
+      ["T-AUTHORITY"]
+      (codes
+        (dir
+          ++ "g : (p : String @Store) -> <Store p> Int\ng p = readD (H p) \"x\"\n")),
+    -- a left extension is the whole domain
+    expectEqual
+      ["T-AUTHORITY"]
+      (codes
+        (handleP
+          ++ "bad : H d -> String -> <Store d> Int\nbad (H root) x = load (x ++ root)\n")),
+    -- a value outside the written pattern, and a runtime value laundered into a bound
+    expectEqual
+      ["T-AUTHORITY"]
+      (codes (handleP ++ "bad : H \"cfg/*\"\nbad = H \"cfg\"\n")),
+    expectFalse
+      (accepts
+        (dir
+          ++ "f : String -> <Store \"cfg/*\"> Int\nf x = readD (H x) \"a\"\n")),
+    expectFalse
+      (accepts
+        (dir ++ "f : H * -> <Store \"cfg/*\"> Int\nf h = readD h \"a\"\n")),
+    -- a caller's exact element is charged the pattern it begins
+    expectFalse
+      (accepts
+        "readUnder : (p : String @Store*) -> String -> <Store p> Int\nreadUnder p x = load (p ++ x)\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \"\"\n"),
+  ]
+
+test "a phantom pattern existential is constructed and matched like an ordinary one" = expectAll
+  [
+    expectEqual
+      []
+      (codes
+        "data AnyP = AnyP (d : Authority Store*) Int\nanyP : AnyP\nanyP = AnyP 1\nuseP : AnyP -> Int\nuseP a = match a\n  AnyP n => n\n"),
+    expectEqual
+      []
+      (codes
+        "data AnyI = AnyI (d : Authority Store) Int\nanyI : AnyI\nanyI = AnyI 1\n"),
+  ]
+
+test "an alias parameter of a pattern kind fills a pattern slot" = expectAll
+  [
+    expectEqual
+      []
+      (codes
+        (handleP
+          ++ "type D (p : Authority Store*) = H p\ncfgD : D \"cfg/*\"\ncfgD = H \"cfg/\"\n")),
+    expectEqual
+      []
+      (codes
+        (handleP
+          ++ "type D (p : Authority Store*) = H p\nreadU : D d -> String -> <Store d> Int\nreadU (H root) x = load (root ++ x)\n")),
+    -- the argument is still held to the parameter's range
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes
+        (handleP
+          ++ "type D (p : Authority Store*) = H p\nbad : D \"cfg/app\"\nbad = H \"cfg/app\"\n")),
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes
+        (handleP
+          ++ "type D (p : Authority Store*) = H p\nmk : (q : String @Store) -> D q\nmk q = H q\n")),
+    -- an ordinary-kinded parameter is refused at the declaration
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes (handleP ++ "type D (p : Authority Store) = H p\n")),
+    expectTrue
+      (anyMentions
+        "`(p : Authority Store*)`"
+        (messagesOf (handleP ++ "type D (p : Authority Store) = H p\n"))),
+  ]
+
+test "a malformed pattern-slot argument is reported by its most specific rule" = expectAll
+  [
+    -- an ordinary binder in a join of names
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes
+        (handleP
+          ++ "both : (p : String @Store*) -> (q : String) -> Bool -> H (p | q)\nboth p q b = if b then H p else H q\n")),
+    -- otherwise the kind error names the slot with its `*`
+    expectTrue
+      (anyMentions
+        "this argument slot is `Authority Store*`"
+        (messagesOf
+          (handleP
+            ++ "both : (p : String @Store*) -> (q : String @Store*) -> Bool -> H (p | q)\nboth p q b = if b then H p else H q\n"))),
+  ]
+
+test "the rule-A report offers the `*` only where it would help" = expectAll
+  [
+    -- no extension: nothing a pattern-ranging binder would admit
+    expectFalse
+      (anyMentions
+        "pattern-ranging"
+        (messagesOf
+          "sneaky : (dir : String) -> <Store dir> Int\nsneaky dir = load \"secrets/key\"\n")),
+    -- an extension in a Set domain, which has no patterns
+    expectFalse
+      (anyMentions
+        "pattern-ranging"
+        (messagesOf
+          "signAs : (p : String) -> <Var p> Int\nsignAs p = lookup (p ++ \"-v2\")\n")),
+    -- a refused Set-domain `*` leaves an ordinary binder behind
+    expectFalse
+      (anyMentions
+        "append to it on the right"
+        (messagesOf
+          "signAs : (p : String @Var*) -> <Var p> Int\nsignAs p = lookup (p ++ \"-v2\")\n")),
+  ]
+
+test "a pattern-ranging binder needs a domain with patterns" = expectAll
+  [
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes "data V (d : Authority Var*) = V (String @d)\n"),
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes "f : (x : String @Var*) -> String @x\nf x = x\n"),
+    expectEqual
+      ["T-AUTHORITY-PATTERN"]
+      (codes
+        "effect M Product (Method : Set, Host : Prefix)\ndata V (d : Authority M*) = V (String @d)\n"),
+    -- a Product whose primary axis is a Prefix has patterns
+    expectTrue
+      (accepts
+        "effect W Product (Host : Prefix, Method : Set)\ndata V (d : Authority W*) = V (String @d)\n"),
+  ]
+
+patternProvider : String
+patternProvider =
+  "export data H (d : Authority Store*) = H (String @d)\n"
+    ++ "export\ncfg : H \"cfg/*\"\ncfg = H \"cfg/\"\n"
+    ++ "export\nreadD : H d -> String -> <Store d> Int\nreadD (H root) x = load (root ++ x)\n"
+
+patternModuleCodes : String -> List String
+patternModuleCodes body =
+  flatMap
+    moduleCodes
+    (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+      ("provider", desugar (parseLocated patternProvider)),
+      (
+        "entry",
+        desugar (parseLocated ("import provider.{H, cfg, readD}\n" ++ body)),
+      ),
+    ])
+
+test "an abstract pattern-ranging head keeps its range across modules" = expectAll
+  [
+    expectEqual
+      []
+      (patternModuleCodes
+        "use : String -> <Store \"cfg/*\"> Int\nuse x = readD cfg x\n"),
+    expectTrue
+      (contains
+        "T-AUTHORITY-PATTERN"
+        (patternModuleCodes
+          "only : H \"cfg/app\" -> <Store \"cfg/app\"> Int\nonly h = readD h \"\"\n")),
+  ]

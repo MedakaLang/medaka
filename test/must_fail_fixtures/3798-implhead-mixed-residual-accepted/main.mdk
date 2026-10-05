@@ -1,0 +1,23 @@
+-- #3526 shape on an impl HEAD variable: body poses Get (Box (List t)) b where b is
+-- the head's variable; the instance matches only if b := List t.
+-- Expected: rejected (W3-inst), like `weird : b -> b`.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+data Wr b = Wr b
+
+interface Mk x where
+  mk : Int -> x
+
+impl Mk (Wr b) where
+  mk _ = Wr (get (Box []))
+
+unwr : Wr b -> b
+unwr (Wr v) = v
+
+main = println (unwr (mk 0 : Wr Int) + 1)

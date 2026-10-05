@@ -85,7 +85,12 @@
    corpora, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  batchSection, chompNewlines, stripUnitAutoPrint, summarizeSweep, sweepUnits
+  batchSection,
+  chompNewlines,
+  expectVerbExitStartsWithAndContains,
+  stripUnitAutoPrint,
+  summarizeSweep,
+  sweepUnits,
 }
 import fs.{fixtureDirs, fixtureFiles, mkdirAll}
 import io.{runVerb}
@@ -244,7 +249,7 @@ importFormsLeg = Leg {
   pairedWith = None,
   golden = InFixtureDir "expected",
   grade = SortedEqual,
-  fixtures = 11,
+  fixtures = 17,
 }
 
 rows : List Row
@@ -662,6 +667,136 @@ cycleChainReported = match cycleScratch
 test "a two-module import cycle is reported as the whole chain" =
   cycleChainReported
 
+{- | The composed `medaka check` locates the same cycle at the `import` that
+   closes it, in the module holding that import (`b.mdk`, not the entry), with
+   the caret line under it (#2473). -}
+cycleSiteScratch : <Exec, FileWrite> Result String String
+cycleSiteScratch = match scratchDir
+  Err e => Err e
+  Ok root =>
+    let dir = "\{root}/cycle_site"
+    map (() => dir) (mkdirAll dir)
+
+cycleSiteRun : <Exec, FileWrite, IO> Expectation
+cycleSiteRun = match cycleSiteScratch
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok dir => match writeAll dir cycleModules
+    Err e => fail "could not write the cycle modules: \{e}"
+    Ok () =>
+      let result =
+        expectSpawnFailsAll
+          medakaBin
+          ["check", "\{dir}/a.mdk"]
+          [
+            "b.mdk:1:0: cyclic dependency: a → b → a",
+            "1 | import a.{foo}",
+          ]
+      let _ = runVerb "rm" ["-rf", dir]
+      result
+
+test "a two-module import cycle is located at the import that closes it" =
+  cycleSiteRun
+
+{- | Write `files` (relative path, source) under a fresh directory named `tag`
+   in the scratch root, creating the parent directories, run `medaka` with
+   `args` (each `@` standing for that directory) and grade a non-zero exit
+   whose output holds every needle. -}
+writeTree : String ->
+  List (String, String) ->
+  <Exec, FileWrite> Result String Unit
+writeTree _ [] = Ok ()
+writeTree dir ((rel, src) :: rest) = match mkdirAll (dirname "\{dir}/\{rel}")
+  Err e => Err e
+  Ok () => match writeFile "\{dir}/\{rel}" src
+    Err e => Err "\{dir}/\{rel}: \{e}"
+    Ok () => writeTree dir rest
+
+cycleTreeRun : String ->
+  List (String, String) ->
+  List String ->
+  List String ->
+  <Exec, FileWrite, IO> Expectation
+cycleTreeRun tag files args needles = match scratchDir
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok root =>
+    let dir = "\{root}/\{tag}"
+    match writeTree dir files
+      Err e => fail "could not write the cycle tree: \{e}"
+      Ok () =>
+        let result =
+          expectSpawnFailsAll
+            medakaBin
+            (map
+              (a => if startsWith "@" a then "\{dir}/\{drop 1 a}" else a)
+              args)
+            needles
+        let _ = runVerb "rm" ["-rf", dir]
+        result
+
+test "a cycle located by check --json names the importer file with a range" =
+  cycleTreeRun
+    "cycle_json"
+    cycleModules
+    ["check", "--json", "@a.mdk"]
+    [
+      "b.mdk\",\"diagnostics\"",
+      "\"code\":\"R-MODULE-LOAD\"",
+      "\"message\":\"cyclic dependency: a → b → a\"",
+      "\"range\":{\"end\"",
+    ]
+
+test "a cycle through a src-prefixed project module is located" =
+  cycleTreeRun
+    "cycle_src"
+    [
+      ("medaka.toml", "[package]\nname = \"p\"\n"),
+      ("src/main.mdk", "import util.x.*\n\nmain = 1\n"),
+      ("src/util/x.mdk", "import util.y.*\n\nx = 1\n"),
+      ("src/util/y.mdk", "import util.x.*\n\ny = 1\n"),
+    ]
+    ["check", "@src/main.mdk"]
+    [
+      "util/y.mdk:1:0: cyclic dependency: src.util.x → src.util.y → src.util.x",
+      "1 | import util.x.*",
+    ]
+
+test "a cycle through a dep-prefixed module is located" =
+  cycleTreeRun
+    "cycle_dep"
+    [
+      (
+        "app/medaka.toml",
+        "[package]\nname = \"app\"\n\n[dependencies]\ndep = \"../dep\"\n",
+      ),
+      ("app/main.mdk", "import dep.lib.a.*\n\nmain = 1\n"),
+      ("dep/medaka.toml", "[package]\nname = \"dep\"\n"),
+      ("dep/lib/a.mdk", "import lib.b.*\n\na = 1\n"),
+      ("dep/lib/b.mdk", "import lib.a.*\n\nb = 1\n"),
+    ]
+    ["check", "@app/main.mdk"]
+    [
+      "lib/b.mdk:1:0: cyclic dependency: dep.lib.a → dep.lib.b → dep.lib.a",
+      "1 | import lib.a.*",
+    ]
+
+test "a module importing itself is located at that import" =
+  cycleTreeRun
+    "cycle_self"
+    [("m.mdk", "import m.*\n\nmain = 1\n")]
+    ["check", "@m.mdk"]
+    ["m.mdk:1:0: cyclic dependency: m → m", "1 | import m.*"]
+
+test "a cycle closed by a non-entry module is located in that module" =
+  cycleTreeRun
+    "cycle_nonentry"
+    [
+      ("main.mdk", "import a.*\n\nmain = 1\n"),
+      ("a.mdk", "import b.*\n\na = 1\n"),
+      ("b.mdk", "import a.*\n\nb = 1\n"),
+    ]
+    ["check", "@main.mdk"]
+    ["b.mdk:1:0: cyclic dependency: a → b → a", "1 | import a.*"]
+
 -- # A valid multi-module program: no false positives
 
 {- | `test/diff_compiler_check_test.mdk`'s corpus-leg ran
@@ -1045,3 +1180,105 @@ parseResultValidProgramRun = match parseResultValidProgramScratch
           Some m => fail m
 
 test "parseResult accepts a well-formed program" = parseResultValidProgramRun
+
+-- # `run` with a path that names no file
+
+{- | Run `medaka run <target>` with `dir` as the working directory (a bare
+   module name resolves against it) and return exit code, stdout and stderr. -}
+runInDir : String -> String -> <Exec, IO> Result String (Int, String, String)
+runInDir dir target = runVerb "sh" [
+  "-c",
+  "bin=$(cd \"$(dirname \"$0\")\" && pwd)/$(basename \"$0\"); cd \"$1\" && exec \"$bin\" run \"$2\"",
+  medakaBin,
+  dir,
+  target,
+]
+
+runScratch : String ->
+  List (String, String) ->
+  <Exec, FileWrite> Result String String
+runScratch name files = match scratchDir
+  Err e => Err e
+  Ok root => populate "\{root}/\{name}" files
+
+populate : String -> List (String, String) -> <FileWrite> Result String String
+populate dir files = match mkdirAll dir
+  Err e => Err e
+  Ok () => map (() => dir) (writeAll dir files)
+
+expectRunInDir : String ->
+  List (String, String) ->
+  String ->
+  Int ->
+  (String -> String -> Bool) ->
+  String ->
+  <Exec, FileWrite, IO> Expectation
+expectRunInDir name files target code ok why = match runScratch name files
+  Err e => fail "could not make the scratch project: \{e}"
+  Ok dir =>
+    let result = match runInDir dir target
+      Err e => fail "could not run `medaka run \{target}`: \{e}"
+      Ok (c, out, err) =>
+        if code == c && ok out err then
+          pass
+        else
+          fail
+            "run \{target}: expected \{why}, got exit \{intToString c}, stdout \{debug out}, stderr \{debug err}"
+    let _ = runVerb "rm" ["-rf", dir]
+    result
+
+okSrc : List (String, String)
+okSrc = [("ok.mdk", "main = 1 + 2\n")]
+
+test "run reports a missing relative .mdk path as a filesystem error" =
+  expectRunInDir
+    "run_missing_rel"
+    []
+    "missing.mdk"
+    1
+    (_ err => startsWith "error: no such file: missing.mdk" err)
+    "no such file"
+
+test "run reports a missing absolute path as a filesystem error" =
+  expectVerbExitStartsWithAndContains
+    "run"
+    ["/no/such/file.mdk"]
+    1
+    "error: no such file: /no/such/file.mdk"
+    []
+
+test "run names a missing path containing a space in full" =
+  expectRunInDir
+    "run_missing_space"
+    []
+    "sub dir/nope.mdk"
+    1
+    (_ err => startsWith "error: no such file: sub dir/nope.mdk" err)
+    "no such file"
+
+test "run still resolves a bare module name to the local file" =
+  expectRunInDir
+    "run_bare_ok"
+    okSrc
+    "ok"
+    0
+    (out _ => contains "3" out)
+    "the program to run"
+
+test "run resolves a bare name to a local file that shadows a stdlib module" =
+  expectRunInDir
+    "run_bare_map"
+    [("map.mdk", "main = 1 + 2\n")]
+    "map"
+    0
+    (out _ => contains "3" out)
+    "the local map.mdk to run"
+
+test "run keeps the unknown-module message for a bare name with no file" =
+  expectRunInDir
+    "run_bare_missing"
+    []
+    "nosuchmod"
+    1
+    (_ err => startsWith "unknown module: nosuchmod" err)
+    "unknown module"

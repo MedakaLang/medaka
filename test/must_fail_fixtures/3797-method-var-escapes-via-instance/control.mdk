@@ -1,0 +1,18 @@
+-- main.mdk with the body's goal at the method variable itself: `get (Box y)`
+-- poses `Get (Box b) b`, which `impl Get (Box a) a` matches with `b` rigid.
+-- Must print 42.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+interface W x where
+  w : x -> b -> b
+
+impl W Int where
+  w _ y = get (Box y)
+
+main = println (w (1 : Int) 41 + 1)

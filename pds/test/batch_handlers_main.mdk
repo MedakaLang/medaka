@@ -42,7 +42,6 @@ import lib.repo.{
   repoLatestCommit,
   repoRootCid,
 }
-import lib.jwt.{mintToken}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -67,9 +66,12 @@ import test.fixture_support.{
   lastHex,
   meaningful,
   storeFingerprint,
+  testKey,
   testNonce,
   testSecret,
 }
+import lib.sign.{Sign}
+import lib.jwt.{mintAccessToken}
 
 accountHandleText : String
 accountHandleText = "medaka.example"
@@ -115,11 +117,11 @@ mustAccount did =
     "batch_handlers: account setup failed"
     (makeAccount did accountHandleText accountHostText)
 
-mustServer : Account -> Server
+mustServer : Account -> Server <Sign "commit">
 mustServer account =
   resultOrPanic "batch_handlers: server setup failed" (recordServer account)
 
-mustRepo : String -> String -> Tid -> Repo
+mustRepo : String -> String -> Tid -> <Sign "commit"> Repo
 mustRepo did secretHex rev =
   match repoInitFromKeyBytes did (mustHex secretHex) rev
     Ok repo => repo
@@ -137,36 +139,35 @@ testContext : RequestContext
 testContext =
   RequestContext { nowSeconds = testInstant, nonce = testNonce, login = None }
 
-testToken : String -> String
+testToken : String -> <Mint "access"> String
 testToken did =
-  mintToken
-    testSecret
+  mintAccessToken
+    testKey
     did
     accountHostText
     "batch_handlers-fixture-token"
     (testInstant - 60)
     (testInstant + 3600)
 
-authorizedStore : String -> Store -> Store
-authorizedStore did store = match storeWithServerSecret testSecret store
-  Ok next =>
-    storeSessionOpen
-      (sessionFingerprint (testToken did))
-      (sessionFingerprint "batch_handlers: no refresh token in this fixture")
-      (testInstant + 3600)
-      next
-  Err message => panic "batch_handlers: session secret setup failed: \{message}"
+authorizedStore : String -> Store -> <Mint "access"> Store
+authorizedStore did store =
+  let next = storeWithServerSecret testKey store
+  storeSessionOpen
+    (sessionFingerprint (testToken did))
+    (sessionFingerprint "batch_handlers: no refresh token in this fixture")
+    (testInstant + 3600)
+    next
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
-procedureRequestTo : String -> String -> String -> Bytes
+procedureRequestTo : String -> String -> String -> <Mint "access"> Bytes
 procedureRequestTo nsid did body =
   let bytes = encodeUtf8 body
   encodeUtf8
       "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{testToken did}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (B.length bytes)}\r\n\r\n"
     ++ bytes
 
-procedureRequest : String -> String -> Bytes
+procedureRequest : String -> String -> <Mint "access"> Bytes
 procedureRequest did body = procedureRequestTo applyWritesNsid did body
 
 responseJson : Bytes -> Json
@@ -284,7 +285,13 @@ check label ok detail =
     let () = println "BATCH \{label} FAIL \{detail}"
     0
 
-rejectCell : String -> String -> String -> Server -> Store -> String -> <IO> Int
+rejectCell : String ->
+  String ->
+  String ->
+  Server e ->
+  Store ->
+  String ->
+  <IO, Mint "access" | e> Int
 rejectCell label expectedCode did server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
@@ -315,7 +322,7 @@ doomedElement value = jObject [
   ("value", value),
 ]
 
-runBatch : List String -> <IO> Unit
+runBatch : List String -> <IO, Mint "access", Sign "commit"> Unit
 runBatch lines =
   let meta = taggedOne "META" lines
   let did = field 0 meta
@@ -399,7 +406,11 @@ runBatch lines =
     let () = println "TOTAL: FAIL"
     exit 1
 
-emptyBatchCell : String -> Server -> Store -> String -> <IO> Int
+emptyBatchCell : String ->
+  Server e ->
+  Store ->
+  String ->
+  <IO, Mint "access" | e> Int
 emptyBatchCell did server store before =
   let (after, responseBytes) =
     handleBytes
@@ -449,7 +460,11 @@ createRecordBody did record =
    commit revision leaves the next `createRecord` proposing a key the batch
    already consumed -- refused as a duplicate create, and refused on every
    retry until the clock passes it. The commit revision has to clear them. -}
-autoRkeyCell : String -> Server -> Store -> Json -> <IO> Int
+autoRkeyCell : String ->
+  Server e ->
+  Store ->
+  Json ->
+  <IO, Mint "access" | e> Int
 autoRkeyCell did server store record =
   let (afterBatch, batchBytes) =
     handleBytes
@@ -480,7 +495,11 @@ autoRkeyCell did server store record =
    `deleteRecord` already promises for the single-record route: the repository
    is unchanged, no commit is signed, and the response carries the CURRENT
    commit. -}
-absentDeleteCell : String -> Server -> Store -> String -> <IO> Int
+absentDeleteCell : String ->
+  Server e ->
+  Store ->
+  String ->
+  <IO, Mint "access" | e> Int
 absentDeleteCell did server store before =
   let (after, responseBytes) =
     handleBytes
@@ -498,13 +517,13 @@ absentDeleteCell did server store before =
       && commitField "rev" value == tidToString (repoCommitTid current))
     "state=\{stateWord (storeFingerprint after == before)} error=\{fieldText "error" value} rev=\{commitField "rev" value}"
 
-runRead : Result String (List String) -> <IO> Unit
+runRead : Result String (List String) -> <IO, Mint "access", Sign "commit"> Unit
 runRead (Err message) = panic "batch_handlers: cannot read corpus: \{message}"
 runRead (Ok raw) = runBatch (filter meaningful raw)
 
-runMain : List String -> <IO, Env, FileRead> Unit
+runMain : List String -> <Env, FileRead, IO, Mint "access", Sign "commit"> Unit
 runMain [corpusPath] = runRead (readLines corpusPath)
 runMain _ = panic "usage: batch_handlers_main <ledger-owned-batch-corpus>"
 
-main : <IO, Env, FileRead> Unit
+main : <Env, FileRead, IO, Mint "access", Sign "commit"> Unit
 main = runMain (args ())

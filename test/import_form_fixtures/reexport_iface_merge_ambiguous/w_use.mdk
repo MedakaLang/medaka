@@ -1,0 +1,6 @@
+-- The merged name is diagnosed at the importer's USE of it, naming both
+-- declaring modules, exactly as two direct imports of the two would be.
+import mid.{Same}
+
+shout : Same a => a -> Int
+shout _ = 1

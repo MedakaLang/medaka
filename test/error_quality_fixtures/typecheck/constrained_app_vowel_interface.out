@@ -1,0 +1,7 @@
+cmd: medaka check
+exit: 1
+---
+error: test/error_quality_fixtures/typecheck/constrained_app_vowel_interface.mdk:7:20: Type mismatch: a Int vs Int — `a Int` is a value of a type that implements Eff (`a` stands for that type), and a plain Int is not one
+  |
+7 | main = println (use (x => x))
+  |                     ^

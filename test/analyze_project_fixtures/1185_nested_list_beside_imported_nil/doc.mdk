@@ -1,0 +1,2 @@
+-- A sum type with a constructor spelled `Nil`, imported abstractly by the entry.
+public export data Doc = Nil | Text String | Cat Doc Doc

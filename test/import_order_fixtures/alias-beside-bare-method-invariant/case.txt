@@ -1,0 +1,9 @@
+entry: main.mdk
+what: an alias import beside a bare import of a same-spelled method does not make
+      the bare occurrence depend on import order
+
+`ma` and `mb` each declare `interface Sh` with a method `sh`. `import ma as A` binds
+no bare name (SYNTAX.md "Import aliasing"), so bare `sh` is `mb.sh` alone. Spec
+answer: `check` clean; `run` and the built binary print `2007` in every ordering.
+The value is graded by the matching row of `test/diff_compiler_dict_semantics_test.mdk`;
+this case grades its invariance.

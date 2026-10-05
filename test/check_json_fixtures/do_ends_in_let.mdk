@@ -1,0 +1,13 @@
+-- A do block's value is its last expression: a trailing `let` is rejected at
+-- that statement. The legal do blocks around it must not be touched.
+ok : Option Int
+ok = do
+  x <- Some 1
+  pure (x + 1)
+
+bad : Option Int
+bad = do
+  x <- Some 1
+  let y = x + 1
+
+main = println ok

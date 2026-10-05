@@ -1,0 +1,6 @@
+entry: main.mdk
+what: #1288 one interface re-exported by `mid` through two paths is the SAME interface, not an ambiguous pair
+
+`p` declares `Same`; `ma` and `mb` each re-export it and `mid` re-exports both. There is one declaration, so naming `Same` through `mid` is unambiguous and `impl Same P` is checked against `p`'s one method.
+
+Spec answer, hand-derived: `check` is clean; `run` and the built binary print `2` (`pmth (MkP 1)` dispatches to `P`'s impl).

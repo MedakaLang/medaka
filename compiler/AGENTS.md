@@ -234,6 +234,17 @@ measured its own **2.2× win as a 2.5× SLOWDOWN** and nearly abandoned it.
 
 ---
 
+## Cached prelude ASTs are shared: read-only consumers only
+
+`desugaredPrelude` (`compiler/frontend/desugar_cache.mdk`) and the loader's `parseCacheRef`
+memo (`compiler/driver/loader.mdk`) return the **same** `List Decl` value to every caller that
+hits the cache, not a copy. Every current consumer only reads it. A new consumer that rewrites
+a `Decl` or stamps a `Loc` in place (anything shaped like the marker or annotate passes) would
+silently change what every later cache hit sees, and no gate would catch it. Before adding
+such a consumer, copy the decls it receives. (#2325)
+
+---
+
 ## Bookkeeping
 
 Open perf work: `gh issue list --label "ws:perf" --state open`.

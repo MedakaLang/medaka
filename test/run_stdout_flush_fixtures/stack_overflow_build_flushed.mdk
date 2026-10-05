@@ -1,0 +1,17 @@
+-- stack_overflow_build.mdk's crash, after an explicit flush. BUILD-only for
+-- the same reason: it reaches the fault handler's replay of the stdout the
+-- program wrote but libc had not yet flushed.
+--
+-- The bytes before `flushStdout` have already reached stdout, so the replay
+-- must hold only what came after them. A replay of everything the program
+-- ever printed repeats `SENTI`, and the same record, never emptied, is a
+-- long-running server's memory growing with every line it logs.
+main : <IO> Unit
+main =
+  putStr "SENTI"
+  flushStdout ()
+  println "NEL"
+  println "\{loop 0}"
+
+loop : Int -> Int
+loop n = 1 + loop (n + 1)

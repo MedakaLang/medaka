@@ -79,7 +79,7 @@ check_mcp_arg () {
       fi
       ;;
     reject)
-      if [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -qi "unknown argument"; then
+      if [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -qF "unrecognized flag '$argdesc' (known: none)"; then
         pass=$((pass+1)); printf 'ok   mcp-arg(%s)\n' "$argdesc"
       else
         fail=$((fail+1)); printf 'FAIL mcp-arg(%s): rc=%d err=%s\n' "$argdesc" "$rc" "$err"
@@ -92,6 +92,7 @@ if [ -x "$MEDAKA" ]; then
   check_mcp_arg "--help" usage --help
   check_mcp_arg "-h" usage -h
   check_mcp_arg "bogusarg" reject bogusarg
+  check_mcp_arg "--zzz" reject --zzz
 fi
 
 for req in "$FIXDIR"/*.jsonl; do
@@ -219,18 +220,20 @@ fi
 
 # ── mainSchemeRef across a module-chain memo HIT ─────────────────────────────
 #
-# W-MAIN-SHAPE is read out of `mainSchemeRef` (types/typecheck.mdk), which the
-# per-module diagnostics fold writes on the TERMINAL module only — it is the
-# whole producer for every multi-module route: `check`'s human arm, `check
-# --json`, and this tool.  A long-lived server analyses the same graph over and
-# over, so every analyse after the first resumes the module-chain memo's
-# snapshotted prefix, and that snapshot carries a copy of the driver state.  The
-# property this pins is that the terminal module's write still wins after such a
-# restore: two `medaka_check` calls on the SAME project in ONE process, and the
-# warning must fire on BOTH when `main` is non-Unit and on NEITHER when it is
-# Unit.  A restore that carried the ref back would silence the second call's
-# warning while leaving the first — the [W-QUIETER] direction, and invisible to
-# every one-shot `check` fixture, which never reaches a memo hit at all.
+# The auto-print Display obligation of a value `main` is gated on
+# `mainSchemeRef` (types/typecheck.mdk, read through `shouldAutoPrintMain`),
+# which the per-module diagnostics fold writes on the TERMINAL module only — it
+# is the whole producer for every multi-module route: `check`'s human arm,
+# `check --json`, and this tool.  A long-lived server analyses the same graph
+# over and over, so every analyse after the first resumes the module-chain
+# memo's snapshotted prefix, and that snapshot carries a copy of the driver
+# state.  The property this pins is that the terminal module's write still wins
+# after such a restore: two `medaka_check` calls on the SAME project in ONE
+# process, and the missing-`Display` error must fire on BOTH when `main` is a
+# value of a type with no `Display` impl and on NEITHER when it is Unit.  A
+# restore that carried a Unit ref back would silence the second call's error
+# while leaving the first — the [W-QUIETER] direction, and invisible to every
+# one-shot `check` fixture, which never reaches a memo hit at all.
 #
 # The two calls are byte-identical requests: the chain key and every step key
 # match, so the prefix (lib_a, lib_b) is replayed and only the entry is
@@ -251,16 +254,16 @@ memo_two_calls () {
 memo_case () {
   want="$1"
   label="$2"
-  got=$(memo_two_calls | grep -c 'W-MAIN-SHAPE')
+  got=$(memo_two_calls | grep -c 'No impl of Display for H')
   if [ "$got" = "$want" ]; then
-    pass=$((pass+1)); printf 'ok   memo-hit main-shape (%s: %s W-MAIN-SHAPE over two calls)\n' "$label" "$want"
+    pass=$((pass+1)); printf 'ok   memo-hit main-shape (%s: %s missing-Display errors over two calls)\n' "$label" "$want"
   else
-    fail=$((fail+1)); printf 'FAIL memo-hit main-shape (%s): want %s W-MAIN-SHAPE over two calls, got %s\n' "$label" "$want" "$got"
+    fail=$((fail+1)); printf 'FAIL memo-hit main-shape (%s): want %s missing-Display errors over two calls, got %s\n' "$label" "$want" "$got"
   fi
 }
 
-printf 'import lib_a.{double}\nimport lib_b.{quad}\n\nmain = quad (double 3)\n' > "$memoproj/main.mdk"
-memo_case 2 "non-Unit main"
+printf 'import lib_a.{double}\nimport lib_b.{quad}\n\ndata H = H Int\n\nmain = H (quad (double 3))\n' > "$memoproj/main.mdk"
+memo_case 2 "undisplayable value main"
 printf 'import lib_a.{double}\nimport lib_b.{quad}\n\nmain = println (quad (double 3))\n' > "$memoproj/main.mdk"
 memo_case 0 "Unit main"
 rm -rf "$memoproj"

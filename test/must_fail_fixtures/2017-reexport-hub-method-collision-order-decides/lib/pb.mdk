@@ -1,0 +1,5 @@
+export interface IB a where
+  mth : a -> Int
+
+impl IB Int where
+  mth n = n * 10

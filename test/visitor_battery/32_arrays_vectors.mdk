@@ -1,0 +1,15 @@
+import array as A
+import vector as V
+
+main =
+  let arr = A.fromList [3, 1, 2]
+  arr[0] := 99
+  println arr
+  println arr[1]
+  A.sortInPlace arr
+  println arr
+  let v = V.new ()
+  V.push "a" v
+  V.push "b" v
+  println (length v)
+  println (V.pop v)

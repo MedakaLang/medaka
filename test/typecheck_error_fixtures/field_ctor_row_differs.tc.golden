@@ -1,0 +1,1 @@
+TYPE ERROR: Field 'f' has different types in the constructors of 'T': it is 'Unit -> Unit' in 'A' but 'Unit -> <IO> Unit' in 'B'. A 'T' value carries no constructor tag, so '.f' cannot be typed; match on the constructor instead

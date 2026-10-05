@@ -1,0 +1,20 @@
+import b.{B}
+import one.{One}
+import a as A
+
+fe : A.A -> Int
+fe (A.Bin n) = n
+fe A.Leaf = 0
+
+ge : Option A.A -> Int
+ge o = match o
+  None => 0
+  Some (A.Bin n) => n
+  Some A.Leaf => 1
+
+gq : Option A.A -> Int
+gq o = match o
+  None => 0
+  Some (A.Bin n) => n
+
+main = println (fe (A.Bin 6) + ge (Some A.Leaf) + gq None)

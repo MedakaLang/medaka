@@ -1,0 +1,2 @@
+-- A zero-arg value `main` of a non-Unit type is printed by every engine (#2413).
+main = 42

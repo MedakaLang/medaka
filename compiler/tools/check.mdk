@@ -31,6 +31,7 @@ import frontend.resolve.{
   resolveToLines,
   singleFileImportErrors,
   ppResError,
+  importedCtorDecls,
 }
 import frontend.exhaust.{exhaustToLinesWith}
 import types.typecheck.{
@@ -162,19 +163,21 @@ runCheckModulesFromDiags rtD coreD mods perMod =
 -- analog of runCheck's `exhaustToLines raw`.  exhaustToLines runs on the desugared
 -- decls here (the loaded mods are already desugared); guard-coverage lowering does
 -- not erase the `match` shape exhaust inspects, so this surfaces the same warnings.
--- Oracle superset = runtime + core + EVERY loaded module's decls (so a
--- multi-clause function in the entry module over an IMPORTED ADT is not
--- false-flagged); only the entry module (last) is CHECKED.  `rtD`/`coreD`/`mods`
--- are the DESUGARED decls, which still carry the DData the oracle reads.
+-- The oracle is the entry's own decls, the decls declaring a constructor its
+-- imports bind, and runtime + core — the same scope `typecheckDiagsFold`
+-- (`driver/diagnostics.mdk`) gives every module.  `rtD`/`coreD`/`mods` are the
+-- DESUGARED decls, which still carry the DData the oracle reads.
 entryExhaust : List Decl -> List Decl -> List (String, List Decl) -> String
 entryExhaust rtD coreD mods =
-  let oracleDecls = rtD ++ coreD ++ flatMap declsOfMod mods
-  entryExhaustGo oracleDecls mods
+  entryExhaustGo (rtD ++ coreD) (importedCtorDecls coreD mods mods) mods
 
-declsOfMod : (String, List Decl) -> List Decl
-declsOfMod (_, prog) = prog
-
-entryExhaustGo : List Decl -> List (String, List Decl) -> String
-entryExhaustGo _ [] = ""
-entryExhaustGo oracleDecls [(_, prog)] = exhaustToLinesWith oracleDecls prog
-entryExhaustGo oracleDecls (_ :: rest) = entryExhaustGo oracleDecls rest
+entryExhaustGo : List Decl ->
+  List (String, List Decl) ->
+  List (String, List Decl) ->
+  String
+entryExhaustGo _ _ [] = ""
+entryExhaustGo preludeDecls [(_, imported)] [(_, prog)] =
+  exhaustToLinesWith (imported ++ preludeDecls) prog
+entryExhaustGo preludeDecls (_ :: scopes) (_ :: rest) =
+  entryExhaustGo preludeDecls scopes rest
+entryExhaustGo _ [] (_ :: _) = ""

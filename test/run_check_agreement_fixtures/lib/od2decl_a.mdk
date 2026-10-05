@@ -1,0 +1,9 @@
+-- Two value declarations of one type, so binding both to one local name is
+-- well typed whichever one a verb picked: only the ambiguity rejects.
+export
+f : Int -> Int
+f x = x + 1
+
+export
+g : Int -> Int
+g x = x + 1000

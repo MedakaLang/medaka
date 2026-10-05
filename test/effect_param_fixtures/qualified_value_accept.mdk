@@ -1,0 +1,18 @@
+-- A qualifier on a value signature is kept in the value's scheme, and a use
+-- carries the declared qualifier's authority, not the literal's.
+effect Store Prefix
+
+load : (path : String) -> <Store path> Int
+load _ = 1
+
+configFile : String @"cfg/*"
+configFile = "cfg/app.toml"
+
+exactFile : String @"cfg/app"
+exactFile = "cfg/app"
+
+useConfig () = load configFile
+
+useExact () = load exactFile
+
+main = println (useConfig () + useExact ())

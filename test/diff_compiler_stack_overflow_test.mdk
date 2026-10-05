@@ -30,7 +30,9 @@
 import compiler_cli_test_support.{
   EngineDeath(..), RuntimeOutcome(..), fatalOutcomeSweep, rosterAgreement
 }
-import test_process.{medakaRoot}
+import string.{contains, lines}
+import test.{Expectation, fail, pass}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
 corpus : <IO> String
 corpus = "\{medakaRoot}/test/stack_overflow_fixtures"
@@ -61,3 +63,28 @@ test "every fixture pins a runtime outcome" =
 
 test "run and build+exec agree with every fixture's pinned outcome" =
   fatalOutcomeSweep corpus declaredFixtureCount rows
+
+-- #3781: the interpreter arm of `medaka test` names the file in the
+-- diagnostic, as `medaka run` does, rather than printing a bare `:L:C:`.
+namesFile : String -> <Exec, IO> Expectation
+namesFile name =
+  let fixture = "\{medakaRoot}/test/stack_overflow_test_fixtures/\{name}.mdk"
+  match boundedVerbSeconds 60 medakaBin ["test", "--engines", "eval", fixture]
+    Err e => fail "medaka test: \{e}"
+    Ok (code, _, re) =>
+      if code == 0 then
+        fail "medaka test exited 0 despite a stack overflow"
+      else match filter (contains "[E-STACK-OVERFLOW]") (lines re)
+        [] => fail "no E-STACK-OVERFLOW line on stderr: \{debug re}"
+        ls =>
+          if all (contains "\{name}.mdk:") ls then
+            pass
+          else
+            fail "diagnostic does not name the file: \{debug ls}"
+
+test "medaka test under the interpreter names the file at a stack overflow" =
+  namesFile "deep_in_test_block"
+
+test "a doctest's stack overflow names the file" = namesFile "deep_in_doctest"
+
+test "a prop's stack overflow names the file" = namesFile "deep_in_prop"

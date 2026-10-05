@@ -1,0 +1,7 @@
+-- One of two declarations filed under the constructor spelling `Plain` that both
+-- declare `hx`.
+public export data Holder = Plain { hx : Int }
+
+export
+mkH : Holder
+mkH = Plain { hx = 100 }

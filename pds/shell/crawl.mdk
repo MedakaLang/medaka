@@ -18,11 +18,11 @@
    minting a service credential here would assert an identity no verifier
    this call reaches asks for. -}
 
-import async.{Async}
 import bytes.{Bytes, encodeUtf8}
 import json.{jObject, Json(..), stringify}
 import lib.httpclient.{makeRequestHeader, serializeRequest}
 import shell.egress.{egressAddress, egressConnect}
+import shell.rows.{Wire}
 
 -- | The loopback port of the reverse proxy fronting the real relay.
 export data RelayTarget = RelayTarget Int
@@ -56,9 +56,7 @@ requestCrawlBytes target hostname = do
    must block nothing else this server does (contract §7; the shape of #2906
    and #2659 item 4). -}
 export
-requestCrawl : RelayTarget ->
-  String ->
-  Async <Clock, Net | e> (Result String Unit)
+requestCrawl : RelayTarget -> String -> Wire "127.0.0.1" e (Result String Unit)
 requestCrawl target hostname = match requestCrawlBytes target hostname
   Err message =>
     deferPure (Err "crawl: outbound request is not serializable: \{message}")

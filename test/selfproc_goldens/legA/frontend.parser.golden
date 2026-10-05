@@ -50,6 +50,7 @@ blockOrExpr : List DoStmt -> Expr
 blockStmtAt : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> Token -> List Int
 blockStmtGo : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> List Int
 blockStmtLines : Array Token -> Array Int -> Int -> Int -> List Int
+blockWord : Token -> String
 bodyChainTopOp : Expr -> Option String
 bodyIsBlock : Expr -> Bool
 braceAfterEq : Array Token -> Int -> Int
@@ -121,6 +122,11 @@ derivedNameP : ParserE <> DeriveRef
 derivingClause : ParserE <> (List DeriveRef)
 derivingFor : Token -> ParserE <> (List DeriveRef)
 desugarDottedField : Expr -> (List String, Expr) -> FieldAssign
+doBlockResult : Token -> Int -> List DoStmt -> ParserE <> Expr
+doEndsInBindingMsg : Token -> String
+doStmtsCons : ParserE <> (Int, List DoStmt)
+doStmtsFrom : Int -> ParserE <> (Int, List DoStmt)
+doStmtsLoop : Int -> ParserE <> (Int, List DoStmt)
 dotFor : Expr -> Token -> ParserE <> Expr
 dotTail : Expr -> ParserE <> Expr
 dottedGo : Expr -> List String -> Expr -> Expr
@@ -174,6 +180,7 @@ firstBlockCommentIdx : Array Token -> Int -> Int
 firstBraceBlockIdx : Array Token -> Int -> Int
 firstContentAt : Array Token -> Int -> Int -> Int
 firstCtxKwDeclIdx : Array Token -> Int -> Int -> Bool -> Int
+firstForLoopIdx : Array Token -> Int -> Bool -> Int
 firstForeignKwIdx : Array Token -> Int -> Bool -> Int
 firstFunctionIdx : Array Token -> Int -> Int
 firstHsCaseOfIdx : Array Token -> Int -> Int
@@ -183,8 +190,11 @@ firstInlineLetMissingIn : Array Token -> Int -> Int
 firstLexError : Array Token -> Int -> Option (Int, String)
 firstMutIdx : Array Token -> Int -> Int
 firstRecordDeclIdx : Array Token -> Int -> Int -> Bool -> Int
-firstWithIdx : Array Token -> Int -> Int
+firstStarStarIdx : Array Token -> Array Int -> Int -> Int
+firstWithIdx : Array Token -> Int -> Bool -> Bool -> Int
 flattenFieldPath : Expr -> Option (String, List String)
+forLoopHeadTail : Array Token -> Int -> Bool -> Bool
+forLoopMsg : String
 foreignKwMsg : Token -> String
 functionRemovedMsg : String
 getPos : ParserE <> Int
@@ -253,6 +263,7 @@ interpOpenFor : Token -> ParserE <> String
 interpOpenStr : ParserE <> String
 interpRest : ParserE <> (List InterpPart)
 interpRestFor : Expr -> Token -> ParserE <> (List InterpPart)
+interpolatedNameMsg : String -> String
 isBinderTok : Token -> Bool
 isBracketCloseTok : Token -> Bool
 isBracketOpenTok : Token -> Bool
@@ -262,6 +273,7 @@ isContinuationOpStr : String -> Bool
 isCtorChars : Array Char -> Bool
 isCtorName : String -> Bool
 isDataDecl : Decl -> Bool
+isForPatTok : Token -> Bool
 isForeignKwTok : Token -> Bool
 isIntMinLit : Int -> Bool
 isLayoutTok : Token -> Bool
@@ -334,6 +346,7 @@ manyGo : ParserE <> a -> Array Token -> Int -> List a -> PR (List a)
 manyStep : ParserE <> a -> Array Token -> Int -> Int -> List a -> a -> PR (List a)
 mapPR : (a -> <b> c) -> PR a -> <b> PR c
 matchArmBarGuardMsg : String
+matchWithMsg : String
 maxNestDepth : Int
 memberAliasFor : Int -> String -> Bool -> Token -> ParserE <> UseMember
 memberAliasName : ParserE <> String
@@ -510,6 +523,8 @@ patAppFor : Token -> ParserE <> Pat
 patConsTail : Pat -> ParserE <> Pat
 patListFor : Token -> ParserE <> Pat
 patParenFor : Token -> ParserE <> Pat
+patternMarkFor : Token -> ParserE <> Bool
+patternMarkP : ParserE <> Bool
 payloadFor : Token -> ParserE <> ConPayload
 peek2P : ParserE <> Token
 peek3P : ParserE <> Token
@@ -530,6 +545,7 @@ productAxisVal : Bool -> ParserE <> EffParamTy
 productAxisValFor : Bool -> Token -> ParserE <> EffParamTy
 productParamP : Bool -> ParserE <> EffParamTy
 programWithSpans : ParserE <> (List (Decl, Int, Int))
+propNameFor : Int -> Token -> ParserE <> String
 propParam : ParserE <> PropParam
 rangeAfter : Expr -> Bool -> ParserE <> Expr
 recordFieldExpr : ParserE <> (List String, Expr)
@@ -572,6 +588,7 @@ spanDeclThenNoise : ParserE <> (Decl, Int, Int)
 spineHead : Expr -> Expr
 spineList : Expr -> List Expr
 spineOnto : Expr -> List Expr -> List Expr
+starStarMsg : String
 stmtFor : Token -> ParserE <> (List DoStmt)
 stmtsCons : ParserE <> (List DoStmt)
 stmtsLoop : ParserE <> (List DoStmt)

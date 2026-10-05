@@ -1,0 +1,5 @@
+-- reject_one_name_two_decls_one_member_list.mdk with the members reversed;
+-- the same located R-AMBIGUOUS-OCCURRENCE.
+import lib.od2decl_a.{f, g as f}
+
+main = println (f 1)

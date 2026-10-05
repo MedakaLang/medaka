@@ -1,0 +1,12 @@
+-- #3708: the module declares its own top-level `dsp` beside `display as dsp`.  The
+-- own declaration shadows the import of the same local name, exactly as it does for
+-- an un-aliased import or a non-method one, so `dsp 6` is the local (`local`) and the
+-- bare `display` is still the prelude's (`6`).
+import lib.disp3677.{display as dsp}
+
+dsp : Int -> String
+dsp n = "local"
+
+main =
+  println (dsp 6)
+  println (display (6 : Int))

@@ -1,0 +1,16 @@
+-- #3676 NEGATIVE CONTROL for OD3's zero arm. `Sz` has no impl anywhere, but
+-- every use of it is determined by an argument and forwarded through a
+-- declared `Sz a =>` context, so no undetermined goal ever reaches the zero
+-- arm. A declared-but-unimplemented interface is not by itself an error.
+-- `main` never calls either function and prints 5.
+interface Sz a where
+  szNew : Int -> a
+  szTag : a -> Int
+
+tagOf : Sz a => a -> Int
+tagOf x = szTag x + 1
+
+wrap : Sz a => a -> Int
+wrap x = tagOf x * 2
+
+main = println 5

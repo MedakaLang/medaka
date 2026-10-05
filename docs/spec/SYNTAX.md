@@ -229,7 +229,29 @@ pathOf dir = dir
 
 An extension of a named argument (`path ++ "/x"`) is the label's whole domain,
 since the caller may pass an exact element that admits only itself: forward the
-argument and build the longer path at the call site, as `config` does.
+argument and build the longer path at the call site, as `config` does, or
+declare the binder pattern-ranging with a `*` on its label.
+
+A binder written `(dir : String @Store*)`, or a parameter of kind
+`Authority Store*`, ranges over the domain's patterns only, so an extension
+on the right stays within it.  A caller's exact element closes to the pattern
+it begins (`"cfg/"` is charged `"cfg/*"`).  The label must be a `Prefix`
+domain or a `Product` whose first axis is `Prefix`.  A bare index variable
+(`d` in `Dir d`) takes its slot's range; a written binder without the `*`
+cannot fill a pattern slot, and neither can an exact literal
+(`Dir "cfg/app"`), both `T-AUTHORITY-PATTERN`.
+
+```medaka
+effect Store Prefix
+extern load : (path : String) -> <FFI, Store path> Int
+under : (dir : String @Store*) -> String -> <FFI, Store dir> Int
+under dir name = load (dir ++ name)  -- stays within `dir`
+data Dir (d : Authority Store*) = Dir (String @d)
+readIn : Dir d -> String -> <FFI, Store d> Int
+readIn (Dir root) name = load (root ++ "blocks/" ++ name)
+cfg : Dir "cfg/*"
+cfg = Dir "cfg/"
+```
 
 A qualified value type is written with a spaced `@`: `String @path` names the
 argument's authority on a value derived from it.  A joined qualifier names
@@ -301,7 +323,7 @@ spelling the formatter prints back.
 
 Effect-label declarations (Phase 146 gap 2 — builtins are
 `IO, Rand, Stdout, Stderr, Stdin, Clock, Env, Exec, Net,
-FileRead, FileWrite, FFI`; declare more):
+FileRead, FileWrite, Signal, FFI`; declare more):
 
 ```medaka
 effect KV  -- a user/platform effect label, usable as <KV> in rows
@@ -778,7 +800,8 @@ newtype Age = Age Int deriving (Eq)
 ## Declared parameter kinds (`(p : Kind)` on a head)
 
 A type parameter's kind is written on the declaration head; `Kind ::= Type | Effect
-| Authority Label | Kind -> Kind | ( Kind )`, arrow right-associative. `Type`, `Effect`
+| Authority Label | Authority Label* | Kind -> Kind | ( Kind )`, arrow
+right-associative; the `*` makes the parameter range over the label's patterns. `Type`, `Effect`
 and `Authority` are ordinary identifiers recognised only in kind position (not
 keywords). Partial annotation is the common case. An UNANNOTATED parameter is never
 `Effect`- or `Authority`-kinded — a parameter used as an effect row (an arrow's `<e>`
@@ -1012,17 +1035,21 @@ or not, is dispatch: importing a module in any form brings its `impl`s into scop
 same rule that makes a bare `import map` (binding no names at all) still change dispatch
 behavior (see stdlib import forms, above).
 
-**A member RENAME of a method does not out-scope a local binding of the origin name; a
-module ALIAS does.** `import m.{size as sz}` is
-rewritten to the origin name before resolution — it is a second spelling of one cell, not
-a second binding — so a module that also declares its own `size` gets *that* one when it
-writes `sz`. `import m as M` keeps the dotted spelling all the way through inference, so
-`M.size` reaches the method past the local declaration. This is not a prelude rule: the
-implicit prelude, aliasable as of #95, is just the case where it is easiest to hit,
-because its names are in scope everywhere without an import. Pinned at
-`test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk` (module alias, reaches
-the method) and `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk`
-(member rename, lands on the local binding).
+**A member RENAME of a method binds only its alias; so does a module ALIAS.**
+`import m.{size as sz}` binds the local name `sz` to `m`'s method and nothing else, so a
+module that also declares its own `size` keeps that one for the bare `size`, and `sz`
+reaches the method past it. `import m as M` does the same under the dotted spelling
+`M.size`. Both spellings survive inference and are restored to the origin name afterwards.
+This is not a prelude rule: the implicit prelude, aliasable as of #95, is just the case
+where it is easiest to hit, because its names are in scope everywhere without an import.
+Pinned at `test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk` (module alias)
+and `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk` (member rename);
+both print `(False, True)`. One case is not yet ruled: a member alias of an interface
+method whose interface the importer cannot name, beside an imported standalone of the
+origin name (`test/shadow_fixtures/i22_importer_member_alias_not_nameable/`), still
+resolves per SHADOW-SEMANTICS S2-DECL (d) and prints the impl's `7`, row 42's KNOWN-BAD cell.
+A module's own top-level binding named like the alias wins over the alias: with
+`import m.{size as sz}` and a top-level `sz`, `sz` is the module's own.
 
 Rules, each a real error rather than a silent no-op:
 

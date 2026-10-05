@@ -1,0 +1,5 @@
+main =
+  println (Some (-3))
+  println (debug (Some (-3)))
+  println (Ok (-3) : Result String Int)
+  println [Some (-1), None]

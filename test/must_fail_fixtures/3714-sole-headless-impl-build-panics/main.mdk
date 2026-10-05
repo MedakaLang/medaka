@@ -1,0 +1,10 @@
+interface Sz a where
+  szWrap : Int -> List a
+
+impl Sz a where
+  szWrap _ = []
+
+roundtrip : Sz a => Int -> Int
+roundtrip n = length (szWrap n) + n
+
+main = println (roundtrip 14)

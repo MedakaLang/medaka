@@ -8,8 +8,7 @@
 --   invocation without MEDAKA_ROOT set silently reports NOTHING (the stdlib
 --   reference index builds empty), it does not error.
 --
--- `medaka run compiler/entries/lint_main.mdk <source.mdk>` — the form `main`'s
--- own usage line below still prints — does not work.  This entry builds the stdlib
+-- `medaka run compiler/entries/lint_main.mdk <source.mdk>` does not work.  This entry builds the stdlib
 -- reference index (`tools.lint.buildStdlibIndex`, needed so the gate oracle and
 -- the `medaka lint` CLI feed their rules the SAME inputs), and lexing all 29
 -- stdlib files under the tree-walking interpreter exceeds its 25000-frame depth
@@ -27,7 +26,7 @@ import tools.lint.{lintToLines, buildStdlibIndex}
 
 main = match args ()
   [targetPath] => withTarget targetPath
-  _ => ePutStrLn "usage: medaka run compiler/entries/lint_main.mdk <file.mdk>"
+  _ => ePutStrLn "usage: MEDAKA_ROOT=<repo> test/bin/lint_main <file.mdk>"
 
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath

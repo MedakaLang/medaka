@@ -1,0 +1,14 @@
+issue: 3633
+what: a program's own `impl Display String` (`display s = "../" ++ s`) passes `check` at
+what: exit 0, then `run` and `build` both print the prelude's rendering `x` for
+what: `"\{"x"}"`. The program's impl is silently not the code that runs.
+cmd: run main.mdk
+exit: 0
+stdout: x
+control: run control.mdk
+why-verb: `run`, because the defect is a silent wrong answer at exit 0. Either resolution
+why-verb: drains this row: rejecting the impl as overlapping the prelude's makes `run` exit 1,
+why-verb: and letting it win prints `../x`.
+why-control: control.mdk gives a program-local type its own Display impl and interpolates it;
+why-control: it must print `../x` at exit 0. A red control means interpolation or user
+why-control: Display dispatch broke, never that #3633 drained.

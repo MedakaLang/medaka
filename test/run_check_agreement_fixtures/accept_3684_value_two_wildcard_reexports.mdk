@@ -1,0 +1,7 @@
+-- #3684, the plain value peer: `val` reaches this module through two
+-- wildcard re-exports of one declaration, which is one candidate: 42. The
+-- reversed import order is accept_3684_value_two_wildcard_reexports_ba.mdk.
+import lib.od3684_va.*
+import lib.od3684_vb.*
+
+main = println val

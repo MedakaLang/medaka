@@ -1,0 +1,24 @@
+issue: 2017
+what: a re-export hub that exports two same-named interface methods is accepted and
+what: answers by the order of its own lines. lib/pa.mdk and lib/pb.mdk each export an
+what: interface with method `mth` and an Int impl (`n + 1` and `n * 10`). lib/hub.mdk
+what: re-exports both (`export import lib.pa.{IA, mth}` then `lib.pb.{IB, mth}`), and
+what: main.mdk imports `{IA, IB, mth}` from the hub and prints `mth 1`. `check` accepts
+what: at exit 0 and `run` prints `2`; with the two hub lines swapped it prints `10`, still
+what: exit 0 with no diagnostic. Importing lib.pa and lib.pb directly is correctly
+what: rejected with R-AMBIGUOUS-OCCURRENCE. This is #1675's S0 shape (closed for
+what: top-level values) reached through a method name. `build` fails loudly in the
+what: emitter ("no impl of method 'mth' for instance 'Int'").
+cmd: run main.mdk
+exit: 0
+stdout: 2
+control: run control.mdk
+why-verb: `run`, because the defect is a silent wrong answer at exit 0, which only an
+why-verb: executing verb shows; `build` is already loud. The fix (rejecting the ambiguous
+why-verb: re-export) moves the exit to 1 and drains this row.
+why-stdout: `2` is the answer for the hub order in this fixture (pa first). A change that
+why-stdout: kept accepting but flipped the order would print `10` and also go red: that is
+why-stdout: still the bug, so read a red row's actual output before closing #2017.
+why-control: control.mdk imports `{IA, mth}` from lib/hubone.mdk, which re-exports only
+why-control: lib.pa. No collision, so it must print `2` at exit 0. A red control means
+why-control: re-export through a hub broke, never that #2017 drained.

@@ -11,7 +11,6 @@ import lib.car.{carDecode, carEncode}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidForRaw, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import lib.handlers.{pdsServer, serverLinksEmpty}
-import lib.jwt.{mintToken}
 import lib.mst.{
   Mst,
   mstEmpty,
@@ -53,7 +52,9 @@ import lib.resource_limits.{
 import lib.server_core.{
   Account, RequestContext(..), Server, handleBytes, makeAccount
 }
-import lib.sign.{SecretKey, secretKeyFromBytes, signDigest, signatureCompact}
+import lib.sign.{
+  SecretKey, secretKeyFromBytes, signCommitDigest, signatureCompact
+}
 import lib.store.{
   Store,
   sessionFingerprint,
@@ -65,8 +66,9 @@ import lib.tid.{Tid, tidParse, tidToString}
 import list.{reverse}
 import crypto.sha256.{sha256}
 import string.{contains, toInt}
-import test.fixture_support.{testNonce, testSecret}
+import test.fixture_support.{testKey, testNonce}
 import test.response_support.{firstLineText}
+import lib.jwt.{mintAccessToken}
 
 mustBytes : Result String Bytes -> Bytes
 mustBytes (Ok bytes) = bytes
@@ -184,11 +186,11 @@ perfUnsignedValue dataCid = DcMap [
   ("prev", DcNull),
 ]
 
-perfSignedCommit : Cid -> (Cid, Bytes)
+perfSignedCommit : Cid -> <Sign "commit"> (Cid, Bytes)
 perfSignedCommit dataCid =
   let unsigned = mustBytes (dagCborEncode (perfUnsignedValue dataCid))
   let digest = sha256 unsigned
-  let signature = match signDigest perfSecret digest
+  let signature = match signCommitDigest perfSecret digest
     Ok value => value
     Err message => panic "performance_resource: signing failed: \{message}"
   let signed =
@@ -231,10 +233,13 @@ insertAllGo n i tree =
 -- class before and after the fix and cannot discriminate them.
 runMstInsert : Int -> <IO> Unit
 runMstInsert n =
+  let a0 = allocBytes ()
   let tree = insertAllGo n 0 mstEmpty
-  println "MSTINSERT \{intToString n} \{intToString (length (mstEntries tree))}"
+  let a1 = allocBytes ()
+  println
+    "MSTINSERT \{intToString n} \{intToString (length (mstEntries tree))} allocBytes=\{intToString (floatToInt (a1 - a0))}"
 
-runExport : Int -> <IO> Unit
+runExport : Int -> <IO, Sign "commit"> Unit
 runExport n =
   let rows = perfRows n
   let tree = mustPerfTree (perfEntriesOf rows)
@@ -249,7 +254,7 @@ runExport n =
         println "EXPORT \{intToString n} \{intToString (length exported)}"
       Err message => panic "performance_resource: export failed: \{message}"
 
-runRehydrate : Int -> <IO> Unit
+runRehydrate : Int -> <IO, Sign "commit"> Unit
 runRehydrate n =
   let rows = perfRows n
   let tree = mustPerfTree (perfEntriesOf rows)
@@ -477,8 +482,8 @@ inboundHandle = "perfroute.example"
 
 inboundToken : String
 inboundToken =
-  mintToken
-    testSecret
+  mintAccessToken
+    testKey
     perfDid
     inboundHost
     "inbound-alloc-probe-token"
@@ -490,7 +495,7 @@ inboundToken =
 -- `stdlib/http.mdk`) — a JSON-bodied write cannot reach the 5 MiB ceiling
 -- #2951 names, and that ceiling is exactly `maxBlobBytes`
 -- (`pds/lib/resource_limits.mdk`), which only `uploadBlob` admits against.
-inboundRequest : Int -> Bytes
+inboundRequest : Int -> <Mint "access"> Bytes
 inboundRequest bodyBytes =
   -- A body of `bodyBytes` 'A's, built straight into a packed block: an
   -- `Array Int` of the same length would box a machine word per byte before
@@ -515,29 +520,24 @@ mustInboundAccount _ = match makeAccount perfDid inboundHandle inboundHost
   Err message =>
     panic "performance_resource: inbound account setup failed: \{message}"
 
-mustInboundStore : Unit -> Store
+mustInboundStore : Unit -> <Mint "access", Sign "commit"> Store
 mustInboundStore _ =
   let repo = match repoInit perfDid perfSecret perfRev
     Ok value => value
     Err message =>
       panic "performance_resource: inbound repo init failed: \{message}"
   let base = storeFromRepo repo
-  match storeWithServerSecret testSecret base
-    Ok next =>
-      storeSessionOpen
-        (sessionFingerprint inboundToken)
-        (sessionFingerprint
-          "performance_resource: no refresh token in this probe")
-        (inboundInstant + 3600)
-        next
-    Err message =>
-      panic
-        "performance_resource: inbound session secret setup failed: \{message}"
+  let next = storeWithServerSecret testKey base
+  storeSessionOpen
+    (sessionFingerprint inboundToken)
+    (sessionFingerprint "performance_resource: no refresh token in this probe")
+    (inboundInstant + 3600)
+    next
 
 -- Answers the SAME request `n` times against the SAME store, discarding the
 -- store a write returns each time (mirrors `cost_curve_main.mdk`'s
 -- `repeatRequest` — a repetition must not grow the state it measures).
-repeatInbound : Server -> Store -> Bytes -> Int -> Int -> Int
+repeatInbound : Server e -> Store -> Bytes -> Int -> Int -> <e> Int
 repeatInbound server store request n acc =
   if n <= 0 then
     acc
@@ -549,7 +549,9 @@ repeatInbound server store request n acc =
    read a steady-state figure cheaply (checked: no `gc`/`collect` entry in
    `stdlib/runtime.mdk`), so only the `allocBytes()` delta over `n` requests
    is reported. -}
-runInboundAlloc : Int -> Int -> <IO> Unit
+runInboundAlloc : Int ->
+  Int ->
+  <IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 runInboundAlloc n bodyBytes =
   let request = inboundRequest bodyBytes
   let account = mustInboundAccount ()
@@ -565,7 +567,7 @@ runInboundAlloc n bodyBytes =
   println
     "INBOUNDALLOC allocBytes=\{intToString (floatToInt (a1 - a0))} N=\{intToString n} bodyBytes=\{intToString bodyBytes} checksum=\{intToString checksum} status=\{firstLineText first}"
 
-main : <IO, Env> Unit
+main : <Env, IO, Mint {"access", "refresh"}, Sign "commit"> Unit
 main = match args ()
   ["car", nText] => match toInt nText
     Some n => runCar n

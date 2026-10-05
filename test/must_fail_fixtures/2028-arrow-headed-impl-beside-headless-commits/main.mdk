@@ -1,0 +1,16 @@
+interface Sz a where
+  szNew : Int -> a
+  szTag : a -> Int
+
+impl Sz (Int -> Int) where
+  szNew n = m => n + m
+  szTag _ = 5
+
+impl Sz a where
+  szNew _ = panic "general"
+  szTag _ = 7
+
+roundtrip : Sz a => Int -> Int
+roundtrip n = szTag (szNew n)
+
+main = println (roundtrip 14)

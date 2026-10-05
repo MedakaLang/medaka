@@ -62,7 +62,9 @@ import lib.repo.{
   repoTree,
   repoUpdate,
 }
-import lib.sign.{SecretKey, secretKeyFromBytes, signDigest, signatureCompact}
+import lib.sign.{
+  SecretKey, secretKeyFromBytes, signCommitDigest, signatureCompact
+}
 import lib.sync_event.{
   SyncCommitEvent(..),
   SyncRepoOp(..),
@@ -347,7 +349,7 @@ sampleSecret = must (secretKeyFromBytes (fromU8Array (arrayMake 32 1)))
    `repoFromBlocks`. No write path admits a key that is not UTF-8, and a
    rebuild does not re-validate keys, so this is the route such a key takes
    into a `Repo`. -}
-rebuiltRepo : Int -> List (Bytes, String) -> Repo
+rebuiltRepo : Int -> List (Bytes, String) -> <Sign "commit"> Repo
 rebuiltRepo revN rows =
   let records =
     map ((path, text) => (path, must (dagCborEncode (sampleRecord text)))) rows
@@ -364,7 +366,7 @@ rebuiltRepo revN rows =
     ("prev", DcNull),
   ]
   let unsigned = must (dagCborEncode (DcMap fields))
-  let signature = must (signDigest sampleSecret (sha256 unsigned))
+  let signature = must (signCommitDigest sampleSecret (sha256 unsigned))
   let signed =
     must
       (dagCborEncode
@@ -538,7 +540,7 @@ wholeTreeCreated before after =
    trees say each must be. -}
 blocksAgainstWholeTrees : Repo ->
   List RepoWrite ->
-  ((List String, List String), (List String, List String))
+  <Sign "commit"> ((List String, List String), (List String, List String))
 blocksAgainstWholeTrees before writes =
   let after =
     mustState (repoApplyWrites writes (mustTid (tidEncode 31 1)) before)

@@ -1,0 +1,2 @@
+export val : Int
+val = 42

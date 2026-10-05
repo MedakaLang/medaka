@@ -35,10 +35,12 @@ import lib.jwt.{
   JwtError(..),
   ServiceAuthRequest,
   ServiceAuthRequest(..),
+  SessionKey,
   es256kSignature,
   hs256Signature,
-  mintToken,
+  mintAccessToken,
   mintServiceToken,
+  sessionKeyFromBytes,
   verifyToken,
 }
 import lib.sign.{SecretKey, secretKeyFromBytes, signatureFromCompact}
@@ -55,6 +57,23 @@ rfcKey : Bytes
 rfcKey = match decodeUrlSafe "\{rfcKeyB64}="
   Ok bytes => bytes
   Err _ => empty
+
+-- The same key admitted as a session-token key, which is what minting and
+-- verification take.
+rfcSessionKey : SessionKey
+rfcSessionKey =
+  resultOrPanic "jwt_test: session key" (sessionKeyFromBytes rfcKey)
+
+test "a session-token key of any length but 32 bytes is refused" = expectEach [
+  (
+    "31 bytes",
+    expectTrue (isErr (sessionKeyFromBytes (fromU8Array (arrayMake 31 7)))),
+  ),
+  (
+    "33 bytes",
+    expectTrue (isErr (sessionKeyFromBytes (fromU8Array (arrayMake 33 7)))),
+  ),
+]
 
 -- RFC 7520 §4.4.2 Figure 32, unwrapped.
 rfcSigningInput : String
@@ -137,15 +156,16 @@ expectedClaims = Claims {
 }
 
 check : String -> Result JwtError Claims
-check token = verifyToken rfcKey subject audience 1500 token
+check token = verifyToken rfcSessionKey subject audience 1500 token
 
 goodToken : String
-goodToken = mintToken rfcKey subject audience tokenId issuedAt expiresAt
+goodToken =
+  mintAccessToken rfcSessionKey subject audience tokenId issuedAt expiresAt
 
 test "a freshly minted token verifies inside its window" =
   expectEqual (check goodToken) (Ok expectedClaims)
 
-test "the forge helper agrees with mintToken on the honest header" =
+test "the forge helper agrees with mintAccessToken on the honest header" =
   expectEqual
     (check (forge "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"))
     (Ok expectedClaims)
@@ -190,39 +210,43 @@ test "a tampered payload is rejected: the old MAC no longer covers it" =
     (Err JwtBadSignature)
 
 test "a token signed under a different secret is rejected" =
-  let otherSecret = fromU8Array (arrayMake 32 7)
+  let otherKey =
+    resultOrPanic
+      "jwt_test: session key"
+      (sessionKeyFromBytes (fromU8Array (arrayMake 32 7)))
   expectEqual
-    (check (mintToken otherSecret subject audience tokenId issuedAt expiresAt))
+    (check
+      (mintAccessToken otherKey subject audience tokenId issuedAt expiresAt))
     (Err JwtBadSignature)
 
 test "an expired token is rejected" =
   expectEqual
-    (verifyToken rfcKey subject audience expiresAt goodToken)
+    (verifyToken rfcSessionKey subject audience expiresAt goodToken)
     (Err JwtExpired)
 
 test "exp is exclusive: the last second before it still verifies" =
   expectEqual
-    (verifyToken rfcKey subject audience (expiresAt - 1) goodToken)
+    (verifyToken rfcSessionKey subject audience (expiresAt - 1) goodToken)
     (Ok expectedClaims)
 
 test "a not-yet-valid token is rejected" =
   expectEqual
-    (verifyToken rfcKey subject audience (issuedAt - 1) goodToken)
+    (verifyToken rfcSessionKey subject audience (issuedAt - 1) goodToken)
     (Err JwtNotYetValid)
 
 test "nbf is inclusive: the issuing second itself verifies" =
   expectEqual
-    (verifyToken rfcKey subject audience issuedAt goodToken)
+    (verifyToken rfcSessionKey subject audience issuedAt goodToken)
     (Ok expectedClaims)
 
 test "a token for another subject is rejected" =
   expectEqual
-    (verifyToken rfcKey "did:plc:somebody-else" audience 1500 goodToken)
+    (verifyToken rfcSessionKey "did:plc:somebody-else" audience 1500 goodToken)
     (Err JwtWrongSubject)
 
 test "a token for another audience is rejected" =
   expectEqual
-    (verifyToken rfcKey subject "did:web:other.example" 1500 goodToken)
+    (verifyToken rfcSessionKey subject "did:web:other.example" 1500 goodToken)
     (Err JwtWrongAudience)
 
 test "a two-segment token is rejected as malformed" =
@@ -278,13 +302,13 @@ test "a claims object missing jti is rejected" =
 
 test "two tokens minted a second apart differ only if their jti does" =
   expectNotEqual
-    (mintToken rfcKey subject audience "one" issuedAt expiresAt)
-    (mintToken rfcKey subject audience "two" issuedAt expiresAt)
+    (mintAccessToken rfcSessionKey subject audience "one" issuedAt expiresAt)
+    (mintAccessToken rfcSessionKey subject audience "two" issuedAt expiresAt)
 
 test "verification reads no clock: the same token verifies at any instant in its window" =
   expectEqual
-    (verifyToken rfcKey subject audience 1001 goodToken)
-    (verifyToken rfcKey subject audience 1999 goodToken)
+    (verifyToken rfcSessionKey subject audience 1001 goodToken)
+    (verifyToken rfcSessionKey subject audience 1999 goodToken)
 
 -- ── service auth (S-service-jwt, #2608) ─────────────────────────────────────
 --
@@ -339,7 +363,7 @@ serviceRequest aud lxm jti = ServiceAuthRequest {
   exp = None,
 }
 
-serviceToken : ServiceAuthRequest -> String
+serviceToken : ServiceAuthRequest -> <Sign "service-auth"> String
 serviceToken request =
   resultOrPanic "jwt_test" (mintServiceToken serviceKey request)
 

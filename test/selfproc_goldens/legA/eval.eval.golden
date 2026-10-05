@@ -34,6 +34,7 @@ buildCtorToType : List Decl -> List (String, String)
 buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildModInfos : List (String, Ref (Value a)) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildStampExterns : Unit -> List (String, Value a)
 buildWith : Value a -> Int -> Int -> <a> List (Value a)
 bytesBEGo : Array Int -> Int -> U64 -> U64
 bytesBEToU64 : Array Int -> U64
@@ -64,8 +65,10 @@ compareValueLists : List (Value a) -> List (Value a) -> Ordering
 composeBwd : Value a -> Value a -> Value a
 composeFwd : Value a -> Value a -> Value a
 concatList : List (List a) -> List a
+confineEnclosing : Bool -> Bool -> String -> List (Bool, List String) -> <FileRead | a> Option String
+confineFileBounds : Bool -> Bool -> List String -> String -> <FileRead | a> Option String
 confinePath : Bool -> List String -> String -> <FileRead | a> Option String
-confined : Confine -> Value <IO> -> Value <IO> -> (Unit -> <IO> Value <IO>) -> <IO> Value <IO>
+confined : Bool -> Confine -> Value <IO> -> Value <IO> -> (Unit -> <IO> Value <IO>) -> <IO> Value <IO>
 consVal : Value a -> Value a -> Value a
 containsInt : Int -> List Int -> Bool
 coreAliasCells : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
@@ -144,6 +147,7 @@ ffiExternNamesRef : Ref (List String)
 fieldListEq : List (String, Value a) -> List (String, Value a) -> Bool
 fieldName : Field -> String
 fieldOr : List (String, Value a) -> String -> Value a
+fileBounds : Ref (List (Bool, List String))
 filterByTag : List (Value a) -> Value a -> List (Value a)
 filterByTagT : List (Value a) -> Option String -> List (Value a)
 filterMentions : Int -> List Ty -> List String -> List Int
@@ -164,7 +168,7 @@ funGroupNames : List (String, (List Pat, Expr)) -> List String -> List String
 funNamesOf : List Decl -> List String
 getByte64 : Int -> Array (Value a) -> Int -> Int
 globalFramesWith : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> List (List (String, Ref (Value a)))
-granted1 : Confine -> (Value <IO> -> <IO> Value <IO>) -> Value <IO>
+granted1 : Bool -> Confine -> (Value <IO> -> <IO> Value <IO>) -> Value <IO>
 granted2 : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
 granted3 : (Value <IO> -> Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
 grantedPair : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
@@ -207,6 +211,7 @@ intOverflow : String -> Value a
 intSeq : Int -> Int -> List Int
 intSeqIncl : Int -> Int -> List Int
 ioExternBindings : Unit -> List (String, Value <IO>)
+ioHostExterns : Unit -> List (String, Value <IO>)
 isDispatching : Value a -> Bool
 isInheritedEntry : String -> String -> Bool
 isMethodBinding : Value a -> Bool
@@ -282,7 +287,7 @@ pAcos : Value a -> <a> Value a
 pAllocBytes : Value a -> <a> Value a
 pAllocBytesIO : Value a -> <IO | a> Value a
 pAppendFile : Value a -> Value a -> <FileWrite | a> Value a
-pArgs : Value a -> <Env | a> Value a
+pArgs : Value a -> Value a
 pArrayBlit : Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a
 pArrayCopy : Value a -> <a> Value a
 pArrayFill : Value a -> Value a -> <a> Value a
@@ -299,9 +304,9 @@ pBitAnd : Value a -> Value a -> <a> Value a
 pBitNot : Value a -> <a> Value a
 pBitOr : Value a -> Value a -> <a> Value a
 pBitXor : Value a -> Value a -> <a> Value a
-pBuildCommit : Value a -> <Env | a> Value a
-pBuildDate : Value a -> <Env | a> Value a
-pBuildFingerprint : Value a -> <Env | a> Value a
+pBuildCommit : Value a -> Value a
+pBuildDate : Value a -> Value a
+pBuildFingerprint : Value a -> Value a
 pByteBlockBlit : Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a
 pByteBlockCopyUnsafe : Value a -> Value a -> <a> Value a
 pByteBlockFromIntArray : Value a -> <a> Value a
@@ -466,6 +471,7 @@ runJsonMode : Ref Bool
 runMainForEffect : List (String, Value a) -> <a> Value a
 runtimePanic : String -> String -> a
 runtimeTypeTag : Value a -> Option String
+scopedFileBound : Bool -> Value a
 selectByName : String -> List (String, (Int, Value a)) -> List (Int, Value a)
 selfBind : String -> (String, String)
 seqV : Unit -> Value a -> Value a

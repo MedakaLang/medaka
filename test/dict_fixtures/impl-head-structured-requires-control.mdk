@@ -1,0 +1,19 @@
+-- Control: `requires Show2 (List a)` gives the body's goal `Show2 (List a)` as
+-- written, before any instance reduces it to `Show2 a` (§3 `assum` before `inst`).
+-- Hand-derived: `show2 [1]` shows the head element, "int 1".
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+impl Show2 (List b) requires Show2 b where
+  show2 [] = "nil"
+  show2 (y :: _) = show2 y
+
+impl Show2 (Pair a) requires Show2 (List a) where
+  show2 (Pair x _) = show2 [x]
+
+main = println (show2 (Pair (1 : Int) 2))

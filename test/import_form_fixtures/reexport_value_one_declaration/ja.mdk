@@ -1,0 +1,10 @@
+-- A second, distinct declaration of each name `ia` declares.
+export interface JA a where
+  mth : a -> Int
+
+export impl JA Int where
+  mth n = n
+
+export
+val : Int
+val = 7

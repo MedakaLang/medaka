@@ -99,7 +99,7 @@ const medakaTheme = EditorView.theme({
   '&.cm-focused .cm-cursor': { borderLeftColor: '#5fd38f' },
   '.cm-gutters': {
     backgroundColor: '#0e1320',
-    color: '#5a6580',
+    color: '#8591a8',
     border: 'none',
     borderRight: '1px solid #1e2638',
   },
@@ -156,6 +156,7 @@ export function createEditor(parent, doc, onDocChange, langService) {
   const state = EditorState.create({
     doc,
     extensions: [
+      EditorView.contentAttributes.of({ 'aria-label': 'Medaka source code' }),
       lineNumbers(),
       highlightActiveLineGutter(),
       highlightSpecialChars(),

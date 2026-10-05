@@ -1,0 +1,48 @@
+-- A declared qualified result is a bound on the returned expression's
+-- abstraction, as a qualified parameter is on an argument's (#3532): a
+-- literal, a `++` with a known left operand, a let-bound name and an if or
+-- match join are each read, and a use sees the declared qualifier.
+effect Store Prefix
+effect Var Set
+
+load : (path : String) -> <Store path> Int
+load _ = 1
+
+readVar : (name : String) -> <Var name> String
+readVar _ = "value"
+
+pick : Bool -> String @"x/*"
+pick c = if c then "x/a" else "x/b"
+
+matched : Int -> String @"cfg/*"
+matched n = match n
+  0 => "cfg/zero"
+  _ => "cfg/other"
+
+viaLet : Unit -> String @"cfg/*"
+viaLet () =
+  let p = "cfg/" ++ "app"
+  p
+
+extended : String -> String @"cfg/*"
+extended name = "cfg/" ++ name
+
+joined : Bool -> (p : String @Store) -> String @("a/*" | p)
+joined c p = if c then p else "a/x"
+
+setResult : Bool -> String @({"HOME", "PATH"})
+setResult c = if c then "HOME" else "PATH"
+
+lambda : Unit -> String @"cfg/*"
+lambda = _ => "cfg/lambda"
+
+annotated : String
+annotated = ("cfg/a" : String @"cfg/*")
+
+usePick : Unit -> <Store "x/*"> Int
+usePick () = load (pick True)
+
+useSet : Unit -> <Var {"HOME", "PATH"}> String
+useSet () = readVar (setResult True)
+
+main = println (usePick () + load (viaLet ()) + load (matched 0))

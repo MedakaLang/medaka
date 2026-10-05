@@ -1,0 +1,15 @@
+-- Accepted twin of `egress_wrong_host.mdk`: the row names 127.0.0.1.
+
+import async.{Async}
+import lib.proxy.{UpstreamAnswer}
+import lib.server_core.{ProxyAdmission}
+import lib.sign.{Sign}
+import shell.egress.{Egress, egressCall}
+import shell.rows.{Wire}
+
+export
+relay : Egress ->
+  (Int -> Wire "127.0.0.1" e Bool) ->
+  ProxyAdmission ->
+  <Sign "service-auth"> Async <Clock, Net "127.0.0.1" | e> (Result String UpstreamAnswer)
+relay egress mayHold admission = egressCall egress mayHold admission

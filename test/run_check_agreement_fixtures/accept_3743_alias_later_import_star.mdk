@@ -1,0 +1,3 @@
+import lib.alias3743_a.*
+
+main = println (R { v = 41 }.v + 1)

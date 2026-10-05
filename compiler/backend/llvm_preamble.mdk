@@ -147,6 +147,7 @@ preambleLines = [
   "declare i64 @mdk_args(i64)",
   "declare i64 @mdk_get_env(i64)",
   -- A file extern whose path is an authority takes the grant for each path last.
+  "declare i64 @mdk_with_file_bound(i64, i64, i64)",
   "declare i64 @mdk_read_file(i64, i64)",
   "declare i64 @mdk_read_file_bytes(i64, i64)",
   "declare i64 @mdk_write_file(i64, i64, i64)",

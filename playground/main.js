@@ -205,16 +205,38 @@ function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Console appends are buffered and flushed once per animation frame as a
+// single fragment, with one scroll per flush: a per-call append plus scrollTop
+// write forces a synchronous layout for every printed line.
+let consoleQueue = [];
+let consoleFlushScheduled = false;
+
+function flushConsole() {
+  consoleFlushScheduled = false;
+  if (consoleQueue.length === 0) return;
+  const frag = document.createDocumentFragment();
+  for (const [cls, text] of consoleQueue) {
+    const span = document.createElement('span');
+    span.className = cls;
+    span.textContent = text;
+    frag.appendChild(span);
+  }
+  consoleQueue = [];
+  consolePane.appendChild(frag);
+  consolePane.scrollTop = consolePane.scrollHeight;
+}
+
 function clearConsole() {
+  consoleQueue = [];
   consolePane.innerHTML = '';
 }
 
 function appendConsole(cls, text) {
-  const span = document.createElement('span');
-  span.className = cls;
-  span.textContent = text;
-  consolePane.appendChild(span);
-  consolePane.scrollTop = consolePane.scrollHeight;
+  consoleQueue.push([cls, text]);
+  if (!consoleFlushScheduled) {
+    consoleFlushScheduled = true;
+    requestAnimationFrame(flushConsole);
+  }
 }
 
 function setStatus(msg, cls) {
@@ -225,7 +247,7 @@ function setStatus(msg, cls) {
 function killRunner(reason) {
   if (activeRunner) { activeRunner.terminate(); activeRunner = null; }
   if (killTimer)    { clearTimeout(killTimer); killTimer = null; }
-  if (reason) appendConsole('con-stderr', '\n[' + reason + ']\n');
+  if (reason) appendConsole('con-stderr', '\n' + reason + '\n');
   runBtn.disabled = false;
   setStatus('killed', 'error');
 }
@@ -452,14 +474,14 @@ async function runProgram() {
   const runner = new Worker('worker.js');
   activeRunner = runner;
 
-  killTimer = setTimeout(() => killRunner('killed: time limit'), RUN_TIMEOUT_MS);
+  killTimer = setTimeout(() => killRunner(`stopped after ${RUN_TIMEOUT_MS / 1000} s (the playground's time limit)`), RUN_TIMEOUT_MS);
 
   runner.onmessage = (e) => {
-    const { type, text, message } = e.data;
+    const { type, text, message, shown } = e.data;
     if (type === 'stdout') appendConsole('con-stdout', text);
     else if (type === 'stderr') appendConsole('con-stderr', text);
     else if (type === 'error') {
-      appendConsole('con-stderr', '\n[' + message + ']\n');
+      if (!shown) appendConsole('con-stderr', '\n' + message + '\n');
       clearTimeout(killTimer); killTimer = null;
       activeRunner = null;
       runBtn.disabled = false;

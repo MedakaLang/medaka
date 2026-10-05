@@ -187,6 +187,7 @@ export data RefIndex = RefIndex {
 -- Mutable build state threaded through the whole walk.
 --   originOf : "<mid>\t<ns>\t<name>" -> originKey   (EXPORTED names, for imports)
 --   modExp   : mid -> List (ns, localName, originKey)  (for wildcard enumeration)
+--   tyCtors  : a type's origin key -> its constructor names (for `T(..)` imports)
 --   defSeen  : the def sites already recorded (see `pushDef`) — the O(1) dedup set
 --   opCnt    : total hash/push op count (the perf-gate signal)
 --   fresh    : monotonic local-binder id source
@@ -196,6 +197,7 @@ data Ctx = Ctx {
   occ : HashMap String (Ref (List (Loc, String))),
   originOf : HashMap String String,
   modExp : HashMap String (List (String, String, String)),
+  tyCtors : HashMap String (List String),
   defSeen : HashMap String Unit,
   opCnt : Ref Int,
   fresh : Ref Int,
@@ -645,9 +647,10 @@ walkStmts w scope curLoc ((DoBind p e) :: rest) =
   let _ = walkExpr w scope curLoc e
   let frame = mkNamedFrame w (patBinders curLoc p)
   walkStmts w (frame :: scope) curLoc rest
-walkStmts w scope curLoc ((DoLet _ _ p e) :: rest) =
-  let _ = walkExpr w scope curLoc e
+walkStmts w scope curLoc ((DoLet _ isRec p e) :: rest) =
   let frame = mkNamedFrame w (patBinders curLoc p)
+  let rhsScope = if isRec then frame :: scope else scope
+  let _ = walkExpr w rhsScope curLoc e
   walkStmts w (frame :: scope) curLoc rest
 walkStmts w scope curLoc ((DoAssign _ e) :: rest) =
   let _ = walkExpr w scope curLoc e
@@ -865,9 +868,11 @@ defsOfDecl ctx expSet mid uri (DLetGroup pub binds) loc _ =
 defsOfDecl ctx _ mid uri (DData { dataVis = vis, dataName = n, dataCtors = variants }) loc _ =
   let tyDef =
     emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc (dataIsPub vis))
+  let _ = hmSetC ctx ctx.tyCtors (mkKey mid nsTy n) (map variantName variants)
   tyDef :: flatMap (variantDefs ctx mid uri loc (ctorsPub vis)) variants
 defsOfDecl ctx _ mid uri (DNewtype { newtypePub = pub, newtypeName = n, newtypeCtor = con }) loc _ =
   let tyDef = emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)
+  let _ = hmSetC ctx ctx.tyCtors (mkKey mid nsTy n) [con]
   let conDef =
     emitDef ctx uri (DefEntry nsCtor con (mkKey mid nsCtor con) loc pub)
   [tyDef, conDef]
@@ -898,6 +903,9 @@ letGroupDef ctx expSet mid uri loc pub (LetBind n _) =
     ctx
     uri
     (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n))
+
+variantName : Variant -> String
+variantName (Variant cn _) = cn
 
 variantDefs : Ctx -> String -> String -> Loc -> Bool -> Variant -> List DefEntry
 variantDefs ctx mid uri loc pub (Variant cn payload) =
@@ -1051,6 +1059,26 @@ implHeadsGo w ifaceMid loc ((ImplMethod n _ _) :: rest) (c :: cs) =
   let _ = recordImplHead w ifaceMid n (childLocOr loc c)
   implHeadsGo w ifaceMid loc rest cs
 
+-- The `Sized` token of `impl Sized Box` is a USE of the interface (#1014).  The
+-- interface's one recorded binder lives in `nsTy` (see `nsIface`: no def is ever
+-- recorded under `nsIface`), so the use is filed under the `nsTy` twin of the key
+-- `resolveIface` found, which is the key `references` on the declaration reads.
+-- `None` for a compiler-generated impl (`deriving`), which has no token.
+recordImplIfaceUse : W -> String -> Option Loc -> Unit
+recordImplIfaceUse _ _ None = ()
+recordImplIfaceUse w iface (Some l) =
+  recordRef
+    (ctxOf w)
+    (ifaceTyKey (resolveIface w iface))
+    (uriOf w)
+    (locWithUriOf w l)
+
+-- `<mid>\tiface\t<name>` -> `<mid>\tty\t<name>`.
+ifaceTyKey : String -> String
+ifaceTyKey k = match splitOnChar '\t' k
+  mid :: _ :: name :: _ => mkKey mid nsTy name
+  _ => k
+
 childLocOr : Loc -> Option Loc -> Loc
 childLocOr fb None = fb
 childLocOr _ (Some l) = l
@@ -1072,7 +1100,8 @@ walkDeclBody w (DNewtype { newtypeFieldTy = fieldTy }) loc =
 walkDeclBody w (DTypeAlias { tyAliasRhs = rhs }) loc = walkTy w loc rhs
 walkDeclBody w (DInterface { methods, ... }) loc =
   walkIfaceMethods w loc methods
-walkDeclBody w (DImpl { tys, methods, ... }) loc =
+walkDeclBody w (DImpl { iface, implIfaceLoc, tys, methods, ... }) loc =
+  let _ = recordImplIfaceUse w iface implIfaceLoc
   let _ = walkTys w loc tys
   walkImplMethods w loc methods
 walkDeclBody w (DProp _ _ params body) loc =
@@ -1181,6 +1210,7 @@ reExportMembers : Ctx -> String -> String -> List UseMember -> Unit
 reExportMembers _ _ _ [] = ()
 reExportMembers ctx mid srcMod (m :: rest) =
   let _ = reExportOne ctx mid srcMod (useMemberOrigin m) (useMemberLocal m)
+  let _ = whenAll m (_ => reExportTyCtors ctx mid srcMod (useMemberOrigin m))
   reExportMembers ctx mid srcMod rest
 
 -- re-export the origin name `o` from `srcMod` under local `l` in `mid`, in every
@@ -1244,7 +1274,35 @@ importMembers : Ctx -> HashMap String String -> String -> List UseMember -> Unit
 importMembers _ _ _ [] = ()
 importMembers ctx useEnv srcMod (m :: rest) =
   let _ = importOne ctx useEnv srcMod (useMemberOrigin m) (useMemberLocal m)
+  let _ = whenAll m (_ => importTyCtors ctx useEnv srcMod (useMemberOrigin m))
   importMembers ctx useEnv srcMod rest
+
+whenAll : UseMember -> (Unit -> Unit) -> Unit
+whenAll (UseMember _ True _ _) f = f ()
+whenAll _ _ = ()
+
+-- `import m.{T(..)}`: the constructors of `T` that `srcMod` exports enter scope
+-- under their own names.
+tyCtorsOf : Ctx -> String -> String -> List String
+tyCtorsOf ctx srcMod o = match hmGetC ctx ctx.originOf (mkKey srcMod nsTy o)
+  Some tyKey => match hmGetC ctx ctx.tyCtors tyKey
+    Some cs => cs
+    None => []
+  None => []
+
+importTyCtors : Ctx -> HashMap String String -> String -> String -> Unit
+importTyCtors ctx useEnv srcMod o = forEachUnit (tyCtorsOf ctx srcMod o) (c =>
+  importNs ctx useEnv srcMod c c nsCtor)
+
+reExportTyCtors : Ctx -> String -> String -> String -> Unit
+reExportTyCtors ctx mid srcMod o = forEachUnit (tyCtorsOf ctx srcMod o) (c =>
+  reExportNs ctx mid srcMod c c nsCtor)
+
+forEachUnit : List a -> (a -> Unit) -> Unit
+forEachUnit [] _ = ()
+forEachUnit (x :: xs) f =
+  let _ = f x
+  forEachUnit xs f
 
 importOne : Ctx -> HashMap String String -> String -> String -> String -> Unit
 importOne ctx useEnv srcMod o l =
@@ -1412,6 +1470,7 @@ newCtx _ = Ctx {
   occ = hmNew (),
   originOf = hmNew (),
   modExp = hmNew (),
+  tyCtors = hmNew (),
   defSeen = hmNew (),
   opCnt = Ref 0,
   fresh = Ref 0,

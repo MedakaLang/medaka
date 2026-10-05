@@ -1,0 +1,2 @@
+-- `X` here belongs to `Z`, a different type with sibling `W`.
+public export data Z = X Int | W

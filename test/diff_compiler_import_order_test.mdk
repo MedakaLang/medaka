@@ -31,8 +31,7 @@
      Sorted because diagnostics are emitted in source order and permutation
      moves source lines. A multiset because one `T-TYPE-MISMATCH` and two
      are genuinely different observations: an exit-code-only criterion is
-     blind to the cascading second code one ordering of
-     `733-ambiguous-ctor-reject-cascade-order-dependent` emits, and a
+     blind to a cascading second code that only one ordering emits, and a
      set-not-multiset one is blind to a pair.
    - `schemes=` is plain `check`'s scheme dump for the user's own top-level
      bindings, selected by FORMAT (`<name> : <type>` anchored at column 0)
@@ -371,6 +370,7 @@ data Case = Case {
   emitSigs : List String,
   anyBuilt : Bool,
   anyEmitted : Bool,
+  wantCodes : String,
   broken : String,
 }
 
@@ -384,6 +384,7 @@ brokenCase unit why = Case {
   emitSigs = [],
   anyBuilt = False,
   anyEmitted = False,
+  wantCodes = "",
   broken = why,
 }
 
@@ -482,6 +483,7 @@ runCase scratch unit =
                   anyBuilt = any (t => t.madeBinary) trials,
                   anyEmitted =
                     any (t => contains "emit=0:ir" t.emitText) trials,
+                  wantCodes = specField "codes" spec,
                   broken = "",
                 }
 
@@ -577,6 +579,28 @@ gradeOrder rows c =
             c.unit
             "\{intToString c.orderingCount} ordering(s) produced \{intToString (length c.sigs)} DISTINCT signatures — the answer depends on import order. Either FIX it, or, if it is a known OPEN bug, add a row to test/IMPORT-ORDER-LEDGER.txt after reading that file's header:\{sigListing c.sigs}")
     Some row => gradeLedgered c row
+
+-- The `codes=` cell of a signature.
+codesCell : String -> String
+codesCell sig = match somes (map (stripPrefix "codes=") (split ";" sig))
+  v :: _ => v
+  [] => ""
+
+{- | A case whose `case.txt` declares `codes: <sorted, comma-joined>` must
+   produce exactly that diagnostic-code multiset in every ordering, so a
+   control cannot keep passing invariance while rejecting for a different
+   reason than the one it exists to exercise. -}
+gradeCodes : Case -> Option String
+gradeCodes c =
+  if c.broken /= "" || c.wantCodes == "" then
+    None
+  else match filter (s => codesCell s /= c.wantCodes) c.sigs
+    [] => None
+    bad =>
+      Some
+        (failLine
+          c.unit
+          "case.txt declares codes: \{c.wantCodes}, but an ordering produced other codes:\{sigListing (map codesCell bad)}")
 
 gradeLedgered : Case -> Row -> Option String
 gradeLedgered c row = match issueDigits row.tag
@@ -816,6 +840,9 @@ gradedCorpus = match corpusUnits
           (section
               "the answer depends on import-clause order"
               (somes (map (gradeOrder orderRows) cases))
+            ++ section
+              "a case's declared diagnostic codes are not what it produced"
+              (somes (map gradeCodes cases))
             ++ section
               "the emitter's verdict is not what the sidecar ledger pins"
               (somes (map (gradeEmit emitRows) cases))

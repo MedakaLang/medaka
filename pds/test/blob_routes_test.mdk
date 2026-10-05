@@ -21,7 +21,11 @@ import u8 as U8
 import lib.blob.{blobCid}
 import lib.cid.{cidToString}
 import lib.credential.{
-  CredentialRecord, LoginCheck, LoginVerdict, makeCredential
+  CredentialRecord,
+  LoginCheck,
+  LoginVerdict,
+  makeCredential,
+  passwordFromText,
 }
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.repo.{repoInitFromKeyBytes}
@@ -41,7 +45,12 @@ import lib.store.{
   storeWithServerSecret,
 }
 import lib.tid.{tidParse}
-import test.fixture_support.{altTestSecret, contextAt, storeFingerprint}
+import test.fixture_support.{
+  altTestKey,
+  altTestSecret,
+  contextAt,
+  storeFingerprint,
+}
 import test.request_support.{authOf, loginJson, postJson}
 import test.response_support.{
   hasContentType,
@@ -53,6 +62,9 @@ import test.response_support.{
   statusLine,
   stringField,
 }
+import lib.sign.{Sign}
+import lib.jwt.{Mint}
+import lib.pbkdf2.{Kdf}
 
 accountDidText : String
 accountDidText = "did:plc:s-blob-routes-test-account"
@@ -72,7 +84,7 @@ account =
     "blob_routes_test: account"
     (makeAccount accountDidText accountHandleText accountHostText)
 
-server : Server
+server : Server <Mint {"access", "refresh"}, Sign "commit">
 server =
   resultOrPanic
     "blob_routes_test: server"
@@ -87,7 +99,7 @@ credential =
     makeCredential
       (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 13 + 3))))
       4
-      password
+      (passwordFromText password)
   match derived
     Ok made => made
     Err message => panic "blob_routes_test: credential: \{message}"
@@ -95,9 +107,9 @@ credential =
 -- | A configured server's store: session secret and account credential, no
 -- repository. No blob route touches the repository.
 configuredStore : Store
-configuredStore = match storeWithServerSecret altTestSecret storeEmpty
-  Ok withSecret => storeWithCredential credential withSecret
-  Err message => panic "blob_routes_test: session secret: \{message}"
+configuredStore =
+  let withSecret = storeWithServerSecret altTestKey storeEmpty
+  storeWithCredential credential withSecret
 
 testInstant : Int
 testInstant = 1700000000
@@ -151,7 +163,10 @@ blobRefCidText bytes = match jsonBody bytes
 -- shell derives it (`settleLogin`, `pds/shell/server.mdk`), all at once here.
 -- The salt it offers is empty, which offers no upgrade: the shell's would
 -- re-derive the low-count `credential` at the shipped count on login.
-send : RequestContext -> Store -> Bytes -> (Store, Bytes)
+send : RequestContext ->
+  Store ->
+  Bytes ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 send context store bytes =
   handleBytes
     server
@@ -159,7 +174,7 @@ send context store bytes =
     store
     bytes
 
-verdictAgainst : Store -> Bytes -> Option LoginVerdict
+verdictAgainst : Store -> Bytes -> <Kdf> Option LoginVerdict
 verdictAgainst store packed = match parseRequestClassified packed
   Err _ => None
   Ok request => map settled (classifyLogin server empty store request)
@@ -176,7 +191,10 @@ getBlobNsid = "com.atproto.sync.getBlob"
 listBlobsNsid : String
 listBlobsNsid = "com.atproto.sync.listBlobs"
 
-login : Int -> Int -> Store -> (Store, Bytes)
+login : Int ->
+  Int ->
+  Store ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 login instant seed store =
   send
     (contextAt instant seed)
@@ -335,7 +353,9 @@ pagedBytes : Int -> Bytes
 pagedBytes n =
   fromU8Array (arrayMakeWith 12 (i => U8.truncate (n * 37 + i * 11 + 5)))
 
-uploadPaged : Int -> Store -> Store
+uploadPaged : Int ->
+  Store ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> Store
 uploadPaged n store =
   if n >= pagedCount then
     store
@@ -361,7 +381,9 @@ pagedQuery cursor = "?did=\{accountDidText}&limit=3&cursor=\{cursor}"
 {- | Every CID a client walking the `cursor` sees, in the order it sees them.
    `fuel` bounds the walk so a cursor that fails to advance fails this test
    instead of hanging it. -}
-walkPages : Int -> String -> List String
+walkPages : Int ->
+  String ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> List String
 walkPages fuel cursor =
   if fuel <= 0 then
     ["<cursor walk did not terminate>"]
@@ -409,9 +431,8 @@ repoStore =
     resultOrPanic
       "blob_routes_test: repository"
       (repoInitFromKeyBytes accountDidText secret rev)
-  match storeWithServerSecret altTestSecret (storeFromRepo repo)
-    Ok withSecret => storeWithCredential credential withSecret
-    Err message => panic "blob_routes_test: session secret: \{message}"
+  let withSecret = storeWithServerSecret altTestKey (storeFromRepo repo)
+  storeWithCredential credential withSecret
 
 repoLoggedIn : (Store, String)
 repoLoggedIn =
@@ -472,7 +493,9 @@ answer response = match stringField "message" response
   "" => outcome response
   message => "\{outcome response}: \{message}"
 
-writeTo : String -> List (String, Json) -> (Store, Bytes)
+writeTo : String ->
+  List (String, Json) ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 writeTo nsid fields =
   send
     (contextAt testInstant 302)
@@ -483,16 +506,20 @@ writeTo nsid fields =
       nsid
       (stringify (jObject ([("repo", JString accountDidText)] ++ fields))))
 
-createHolding : String -> Json -> List (String, Json) -> (Store, Bytes)
+createHolding : String ->
+  Json ->
+  List (String, Json) ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 createHolding collection record flags =
   writeTo
     "com.atproto.repo.createRecord"
     ([("collection", JString collection), ("record", record)] ++ flags)
 
-createOf : Json -> (Store, Bytes)
+createOf : Json ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 createOf record = createHolding holderCollection record []
 
-putOf : Json -> (Store, Bytes)
+putOf : Json -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 putOf record = writeTo "com.atproto.repo.putRecord" [
   ("collection", JString holderCollection),
   ("rkey", JString "self"),
@@ -507,14 +534,16 @@ createElement rkey record = jObject [
   ("value", record),
 ]
 
-batchOf : List Json -> (Store, Bytes)
+batchOf : List Json ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
 batchOf writes =
   writeTo "com.atproto.repo.applyWrites" [("writes", jArray writes)]
 
 -- | A refused write leaves the repository at the commit it started from. A
 -- sync event is emitted from a commit's before and after pair, so an
 -- unchanged commit also means nothing was emitted.
-committedNothing : (Store, Bytes) -> Bool
+committedNothing : (Store, Bytes) ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> Bool
 committedNothing (store, _) =
   storeFingerprint store == storeFingerprint heldStore
 

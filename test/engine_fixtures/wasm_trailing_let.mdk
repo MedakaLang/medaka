@@ -1,0 +1,9 @@
+-- A trailing binding yields Unit after evaluating its RHS. All three engines
+-- print x then 1 (#3656: Wasm used to panic emitting the empty continuation).
+-- Value-pinned in test/engine_value_pins/engine/wasm_trailing_let.pin.
+f : Int -> <IO> Unit
+f n =
+  println "x"
+  let _ = println n
+
+main = f 1

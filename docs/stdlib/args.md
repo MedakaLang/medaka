@@ -411,7 +411,7 @@ sentence ready to print. A caller that prints it exits with
 
 ```medaka
 > map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["-o", "x"])
-Ok Some "x"
+Ok (Some "x")
 > map (a => a.positionals) (parseArgs (spec "fmt" [switch ["--write"] "w"]) ["a.mdk", "--write", "b.mdk"])
 Ok ["a.mdk", "b.mdk"]
 > map (_ => "ok") (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--zzz"])
@@ -445,7 +445,7 @@ The value of the flag's first occurrence, or `None`.
 
 ```medaka
 > map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
-Ok Some "a"
+Ok (Some "a")
 ```
 
 ### `lastValue`
@@ -459,7 +459,7 @@ The value of the flag's last occurrence, or `None`.
 
 ```medaka
 > map (a => lastValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
-Ok Some "b"
+Ok (Some "b")
 ```
 
 ### `flagValues`

@@ -1,0 +1,9 @@
+import amod.{aval}
+import mid.*
+
+score : Col -> Int
+score c = match c
+  Red x => x
+  Green => 0
+
+main = println (score mk + aval)

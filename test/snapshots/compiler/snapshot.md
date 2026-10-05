@@ -1,5 +1,5 @@
 # META
-source_lines=1471
+source_lines=1482
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/snapshot.mdk — `medaka snapshot`, the in-process snapshot runner
@@ -396,7 +396,18 @@ normalizeText root text = blockOf (map (normalizeLine root) (contentLines text))
 
 normalizeLine : String -> String -> String
 normalizeLine root line =
-  trimRight (normDurations (normTmp (replaceAll root "<ROOT>" line)))
+  trimRight (normDurations (normTmp (normRoot root line)))
+
+-- Only an absolute root is a discriminating needle.  A relative one (`.`, `..`, `''` or
+-- `a/b`) is a substring of ordinary text, so as a replace-all pattern it would rewrite
+-- every period of a range or decimal; a relative root also cannot appear in a diagnostic
+-- as an absolute path, so there is nothing to normalize.  `/` alone has the same flaw.
+normRoot : String -> String -> String
+normRoot root line =
+  if startsWith "/" root && root /= "/" then
+    replaceAll root "<ROOT>" line
+  else
+    line
 
 -- `mktemp -d /tmp/medaka_build_XXXXXX` — the suffix is exactly 6 random chars, so the
 -- random run has a known length and needs no scanner.
@@ -1534,7 +1545,9 @@ mapUnit f (x :: rest) =
 (DTypeSig true "normalizeText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "normalizeText" ((PVar "root") (PVar "text")) (EApp (EVar "blockOf") (EApp (EApp (EVar "map") (EApp (EVar "normalizeLine") (EVar "root"))) (EApp (EVar "contentLines") (EVar "text")))))
 (DTypeSig false "normalizeLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "normalizeLine" ((PVar "root") (PVar "line")) (EApp (EVar "trimRight") (EApp (EVar "normDurations") (EApp (EVar "normTmp") (EApp (EApp (EApp (EVar "replaceAll") (EVar "root")) (ELit (LString "<ROOT>"))) (EVar "line"))))))
+(DFunDef false "normalizeLine" ((PVar "root") (PVar "line")) (EApp (EVar "trimRight") (EApp (EVar "normDurations") (EApp (EVar "normTmp") (EApp (EApp (EVar "normRoot") (EVar "root")) (EVar "line"))))))
+(DTypeSig false "normRoot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "normRoot" ((PVar "root") (PVar "line")) (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "root")) (EBinOp "/=" (EVar "root") (ELit (LString "/")))) (EApp (EApp (EApp (EVar "replaceAll") (EVar "root")) (ELit (LString "<ROOT>"))) (EVar "line")) (EVar "line")))
 (DTypeSig false "normTmp" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normTmp" ((PVar "line")) (EMatch (EApp (EApp (EVar "split") (EVar "tmpPrefix")) (EVar "line")) (arm (PList) () (EVar "line")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PCons (PVar "first") (PVar "rest")) () (EApp (EApp (EVar "joinWith") (ELit (LString "<TMP>"))) (EBinOp "::" (EVar "first") (EApp (EApp (EVar "map") (EApp (EVar "drop") (ELit (LInt 6)))) (EVar "rest")))))))
 (DTypeSig false "tmpPrefix" (TyCon "String"))
@@ -1859,7 +1872,9 @@ mapUnit f (x :: rest) =
 (DTypeSig true "normalizeText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "normalizeText" ((PVar "root") (PVar "text")) (EApp (EVar "blockOf") (EApp (EApp (EMethodRef "map") (EApp (EVar "normalizeLine") (EVar "root"))) (EApp (EVar "contentLines") (EVar "text")))))
 (DTypeSig false "normalizeLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "normalizeLine" ((PVar "root") (PVar "line")) (EApp (EVar "trimRight") (EApp (EVar "normDurations") (EApp (EVar "normTmp") (EApp (EApp (EApp (EVar "replaceAll") (EVar "root")) (ELit (LString "<ROOT>"))) (EVar "line"))))))
+(DFunDef false "normalizeLine" ((PVar "root") (PVar "line")) (EApp (EVar "trimRight") (EApp (EVar "normDurations") (EApp (EVar "normTmp") (EApp (EApp (EVar "normRoot") (EVar "root")) (EVar "line"))))))
+(DTypeSig false "normRoot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "normRoot" ((PVar "root") (PVar "line")) (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "root")) (EBinOp "/=" (EVar "root") (ELit (LString "/")))) (EApp (EApp (EApp (EVar "replaceAll") (EVar "root")) (ELit (LString "<ROOT>"))) (EVar "line")) (EVar "line")))
 (DTypeSig false "normTmp" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normTmp" ((PVar "line")) (EMatch (EApp (EApp (EVar "split") (EVar "tmpPrefix")) (EVar "line")) (arm (PList) () (EVar "line")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PCons (PVar "first") (PVar "rest")) () (EApp (EApp (EVar "joinWith") (ELit (LString "<TMP>"))) (EBinOp "::" (EVar "first") (EApp (EApp (EMethodRef "map") (EApp (EVar "drop") (ELit (LInt 6)))) (EVar "rest")))))))
 (DTypeSig false "tmpPrefix" (TyCon "String"))

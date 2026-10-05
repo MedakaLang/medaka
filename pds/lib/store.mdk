@@ -66,7 +66,7 @@ import lib.blockstore.{
 }
 import lib.cid.{Cid, cidToString}
 import lib.credential.{CredentialRecord}
-import lib.jwt.{serverSecretBytes}
+import lib.jwt.{SessionKey}
 import lib.repo.{Repo}
 import bytes as B
 import bytes.{Bytes, encodeUtf8}
@@ -124,7 +124,7 @@ data Sessions =
 
 -- The three secret-bearing parts of a `Store`, kept as one field so the blob
 -- and repository halves are not respelled every time one of them changes.
-data Auth = Auth (Option Bytes) (Option CredentialRecord) Sessions
+data Auth = Auth (Option SessionKey) (Option CredentialRecord) Sessions
 
 emptyAuth : Auth
 emptyAuth = Auth None None (Sessions [] [] [])
@@ -219,27 +219,23 @@ storeWithRepo : Repo -> Store -> Store
 storeWithRepo repo (Store blocks _ auth prefs) =
   Store blocks (Some repo) auth prefs
 
-{- | Successor store carrying the server's own session-token secret, admitted
-   against `lib.jwt`'s expected length so a misconfigured secret is refused
-   here rather than at the first request that would sign with it. The
-   repository and blob halves are untouched.
+{- | Successor store carrying the server's own session-token secret, already
+   admitted by `lib.jwt.sessionKeyFromBytes`. The repository and blob halves
+   are untouched.
 
    The secret is a SECOND secret in a `Store` that already carries the
    account's signing key, so the same "never log, serialize, or copy a
    `Store`" rule covers it. -}
 export
-storeWithServerSecret : Bytes -> Store -> Result String Store
+storeWithServerSecret : SessionKey -> Store -> Store
 storeWithServerSecret secret (Store blocks repo (Auth _ credential sessions) prefs) =
-  if B.length secret /= serverSecretBytes then
-    Err "store: server session secret must be 32 bytes"
-  else
-    Ok (Store blocks repo (Auth (Some secret) credential sessions) prefs)
+  Store blocks repo (Auth (Some secret) credential sessions) prefs
 
 {- | The server's session-token secret, or `None` when no session secret is
    configured — in which case no credential can be verified at all and every
    gated route refuses. -}
 export
-storeServerSecret : Store -> Option Bytes
+storeServerSecret : Store -> Option SessionKey
 storeServerSecret (Store _ _ (Auth secret _ _) _) = secret
 
 {- | Successor store carrying the account's password credential. It is a THIRD

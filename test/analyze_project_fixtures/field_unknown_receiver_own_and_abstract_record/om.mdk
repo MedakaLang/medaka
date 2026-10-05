@@ -1,0 +1,10 @@
+-- An abstractly exported record whose spelling the importer also declares.
+export data Cfg = { x : Int }
+
+export
+mk : Cfg
+mk = Cfg { x = 3 }
+
+export
+getx : Cfg -> Int
+getx c = c.x

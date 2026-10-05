@@ -1,6 +1,6 @@
 ---
 name: gates
-description: The Medaka differential gate suite — what each gate proves when one goes red, and how to author a new one (fixture, golden capture, and the dash-not-bash shell half). Use when a gate, shard, or CI job fails or goes unexpectedly green — preflight, soundness, must-fail, selfcompile fixpoint, engines, perf-scaling, capability-matrix, bootstrap, snapshot, oracle staleness — and when adding or changing a test/diff_compiler_*.sh gate, a fixture corpus, or a regression test, or before capturing or blessing any golden.
+description: What each differential gate proves and how to author one. Use when a gate, shard or CI job goes red (or unexpectedly green), and before adding a gate, fixture corpus, regression test, or capturing/blessing any golden.
 ---
 
 # The gate suite: triage a red one, author a new one

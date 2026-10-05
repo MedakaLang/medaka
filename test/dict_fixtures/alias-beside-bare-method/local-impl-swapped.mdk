@@ -1,0 +1,8 @@
+-- `import ma as A` binds no bare method name, so bare `sh` is `mb.sh` alone.
+import mb.{Sh, sh}
+import ma as A
+
+impl Sh Bool where
+  sh b = 5
+
+main = println (sh True + A.sh (1 : Int))

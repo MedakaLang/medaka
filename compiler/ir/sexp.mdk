@@ -7,6 +7,7 @@ import frontend.ast.{
   EffParamTy(..),
   DeriveRef(..),
   deriveRefName,
+  patternMark,
   Lit(..),
   Ty(..),
   Constraint(..),
@@ -100,8 +101,11 @@ tySexp (TyAuth ps _) = node "TyAuth" (map effParamSexp ps)
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 tySexp (TyNamed n t None) = node "TyNamed" [escStr n, tySexp t]
-tySexp (TyNamed n t (Some d)) =
-  node "TyNamed" [escStr n, tySexp t, escStr d.eatLabel]
+tySexp (TyNamed n t (Some d)) = node "TyNamed" [
+  escStr n,
+  tySexp t,
+  escStr (d.eatLabel ++ patternMark d.eatPattern),
+]
 tySexp (TyQual t ps _) = node "TyQual" (tySexp t :: map qualTermSexp ps)
 
 constraintSexp : Constraint -> String

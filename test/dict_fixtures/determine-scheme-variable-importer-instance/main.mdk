@@ -1,0 +1,14 @@
+-- §3 determination across a module boundary, the importer-instance twin of
+-- `determine-scheme-variable-library`.  This importer declares
+-- `impl Conv (Wrap Int) Bool`, the one instance whose head unifies with the
+-- library's `Conv (Wrap Int) ?t`, and uses `mk ()` at `Bool`: `Wrap 1` holds
+-- 1 > 0.
+-- Hand-derived: ACCEPT on all three verbs, prints True.
+import lib.mmconv.{Wrap(..), Conv, conv, mk}
+
+impl Conv (Wrap Int) Bool where
+  conv (Wrap n) = n > 0
+
+main =
+  let b : Bool = mk ()
+  println (debug b)

@@ -1,0 +1,5 @@
+loop : Int -> Int -> Int
+loop 0 acc = acc
+loop n acc = loop (n - 1) (acc + n)
+
+main = println (loop 1000000 0)

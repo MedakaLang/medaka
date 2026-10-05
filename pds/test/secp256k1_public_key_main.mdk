@@ -166,7 +166,7 @@ keygenGradesCorpora muls dids =
     && length dids == 16
     && all identity (zipWith keygenGradesRow muls dids)
 
--- A generated key is one this program would also accept back as `--key`, and
+-- A generated key is one serve would accept back as its signing key, and
 -- its printed public key is the one the ladder derives from the scalar it
 -- wrote. Nothing here renders the scalar.
 freshKeyRoundTrips : Bytes -> Bool

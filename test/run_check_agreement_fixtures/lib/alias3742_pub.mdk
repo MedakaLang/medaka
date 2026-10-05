@@ -1,0 +1,7 @@
+export type Px = Int
+
+public export data R = { v : Px }
+
+export
+mk : Int -> R
+mk n = R { v = n }

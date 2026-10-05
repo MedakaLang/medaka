@@ -1,10 +1,131 @@
 import test.{expectAll, expectEqual}
-import types.effect_infer.{captureEffects, recordEffect}
+import types.effect_infer.{captureEffects, recordEffect, alphaOf}
 import types.effect_rows.{
   EffRow(..), Effvar(..), effrowLabels, atomBuiltin, renderAtoms
 }
 import types.effect_domain.{Param(..)}
+import types.effect_authority.{Authority(..), authIsTop}
+import types.repr.{Mono(..), ppAuthority}
+import frontend.ast.{
+  Expr(..), Lit(..), Pat(..), DoStmt(..), Loc(..), TyConOrigin(..), Route(..)
+}
 import support.util.{listLen}
+
+-- α of [e] in the Prefix domain, with no names in scope.
+alphaPrefix : Expr -> String
+alphaPrefix e = alphaPrefixWith True (_ => None) e
+
+-- α of [e] in the Prefix domain, given whether `display` is the prelude
+-- method and the checked types of the names in scope.
+alphaPrefixWith : Bool -> (String -> Option Mono) -> Expr -> String
+alphaPrefixWith displayIsPrelude varType e =
+  let q =
+    alphaOf
+      (PPrefix None)
+      varType
+      displayIsPrelude
+      []
+      e
+      (TCon "String" OriginBuiltin)
+  if authIsTop q then "top" else ppAuthority (Ref []) (Ref 0) q
+
+-- `dir` is a `String` qualified by `data/*`; `n` is an `Int` qualified the same.
+qualifiedNames : String -> Option Mono
+qualifiedNames "dir" = Some (TQual (TCon "String" OriginBuiltin) dataDir)
+qualifiedNames "n" = Some (TQual (TCon "Int" OriginBuiltin) dataDir)
+qualifiedNames _ = None
+
+dataDir : Authority
+dataDir = AConst (PPrefix (Some "data/*"))
+
+-- The tree desugar builds for an interpolated string from its parts, the
+-- literal ones included even when empty: `"\{d}/x"` is
+-- `interp [str "", part d, str "/x"]`, which is `("" ++ display d) ++ "/x"`.
+interp : List Expr -> Expr
+interp [] = str ""
+interp (first :: rest) = fold cat first rest
+
+part : Expr -> Expr
+part e = EApp (EVar "display") e
+
+str : String -> Expr
+str s = ELit (LString s)
+
+cat : Expr -> Expr -> Expr
+cat a b = EBinOp "++" a b (Ref RNone)
+
+at : Loc
+at = Loc "t.mdk" 1 0 1 0
+
+test "a block is abstracted as its last expression in the scope its lets build" =
+  expectEqual
+    "\"cfg/app\""
+    (alphaPrefix
+      (EBlock [
+        DoLet False False (PVar "p" at) (ELit (LString "cfg/app")),
+        DoExpr (EVar "p"),
+      ]))
+
+test "a patterned let in a block hides the names it binds" =
+  expectEqual
+    "top"
+    (alphaPrefix
+      (EBlock [
+        DoLet False False (PVar "p" at) (ELit (LString "cfg/app")),
+        DoLet False False (PTuple [PVar "p" at, PWild]) (EVar "pair"),
+        DoExpr (EVar "p"),
+      ]))
+
+test "an interpolated part reads as its operand written directly" =
+  let dir = EVar "dir"
+  let leaf = EVar "leaf"
+  let known = alphaPrefixWith True qualifiedNames
+  expectAll [
+    expectEqual
+      (known (cat (cat dir (str "/")) leaf))
+      (known (interp [str "", part dir, str "/", part leaf, str ""])),
+    expectEqual "\"data/*\"" (known (interp [str "", part dir, str ""])),
+    expectEqual "\"data/*\"" (known dir),
+    expectEqual
+      "\"data/*\""
+      (alphaPrefix (interp [str "data/", part leaf, str ""])),
+    expectEqual
+      "\"data/x\""
+      (alphaPrefix (interp [str "", part (str "data/x"), str ""])),
+    expectEqual
+      "\"data/x\""
+      (alphaPrefix (interp [str "data/", part (str "x"), str ""])),
+    expectEqual "top" (known (interp [str "", part leaf, part dir, str ""])),
+  ]
+
+test "an interpolated part is top unless display is the prelude method" =
+  let dirPath = interp [str "", part (EVar "dir"), str "/x"]
+  expectAll [
+    expectEqual "top" (alphaPrefixWith False qualifiedNames dirPath),
+    expectEqual
+      "\"data/*\""
+      (alphaPrefixWith
+        False
+        (_ => None)
+        (interp [str "data/", part (str "x"), str ""])),
+    expectEqual
+      "top"
+      (alphaPrefixWith
+        True
+        qualifiedNames
+        (ELet False False (PVar "display" at) (EVar "f") dirPath)),
+  ]
+
+test "an interpolated part keeps a qualifier only on a String operand" = expectAll
+  [
+    expectEqual "\"data/*\"" (alphaPrefixWith True qualifiedNames (EVar "n")),
+    expectEqual
+      "top"
+      (alphaPrefixWith
+        True
+        qualifiedNames
+        (interp [str "", part (EVar "n"), str ""])),
+  ]
 
 test "nested capture restores the parent without charging a stored computation" =
   let ambient = Ref []

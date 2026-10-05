@@ -26,7 +26,7 @@
    read as separate streams for the same reason — merged, the diagnostic the
    abort path prints would stand in for the program's own output.
 
-   Three fixtures are graded on one engine only, and each has its reason in
+   Four fixtures are graded on one engine only, and each has its reason in
    its own file header. `stack_overflow_depth_guard` and
    `stack_overflow_build` are the same source: under `run` it trips the
    interpreter's synthetic depth guard, and built it exhausts a real stack
@@ -68,7 +68,7 @@ sentinel = "SENTINEL\n"
 -- | The size of the corpus, written down so that a corpus which silently
 -- shrank is red. Growing it is expected: add the row and raise this.
 declaredFixtureCount : Int
-declaredFixtureCount = 7
+declaredFixtureCount = 8
 
 -- Both engines reach the same coded abort and must both still show the
 -- sentinel.
@@ -90,6 +90,11 @@ rows = [
   ("raw_panic_site", Dies (Coded "E-PANIC") Unexercised sentinel),
   (
     "stack_overflow_build",
+    Dies Unexercised (Coded "E-STACK-OVERFLOW") sentinel,
+  ),
+  -- The replay after a flush holds only the bytes written since it.
+  (
+    "stack_overflow_build_flushed",
     Dies Unexercised (Coded "E-STACK-OVERFLOW") sentinel,
   ),
 ]

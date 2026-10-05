@@ -18,7 +18,7 @@ import lib.sign.{
   publicKeyForSecret,
   signatureFromCompact,
   signatureCompact,
-  signDigest,
+  signCommitDigest,
   verifyDigest,
 }
 import crypto.sha256.{sha256}
@@ -79,7 +79,11 @@ withLength input n =
   let kept = B.sliceClamped 0 n input
   B.concat [kept, B.fromU8Array (arrayMake (n - B.length kept) 0)]
 
-runPublicBoundaryProbes : Array Int -> String -> Bytes -> Bytes -> <IO> Unit
+runPublicBoundaryProbes : Array Int ->
+  String ->
+  Bytes ->
+  Bytes ->
+  <IO, Sign "commit"> Unit
 runPublicBoundaryProbes counts keyHex digest compact =
   let r = component compact 0
   let s = component compact 32
@@ -112,8 +116,8 @@ runPublicBoundaryProbes counts keyHex digest compact =
         let longDigest = withLength digest 33
         let publicKey = publicKeyForSecret secret
         let signOk =
-          isErr (signDigest secret shortDigest)
-            && isErr (signDigest secret longDigest)
+          isErr (signCommitDigest secret shortDigest)
+            && isErr (signCommitDigest secret longDigest)
         let verifyOk =
           not (verifyDigest publicKey shortDigest signature)
             && not (verifyDigest publicKey longDigest signature)
@@ -167,13 +171,13 @@ runPublicSigningRow : Array Int ->
   Bytes ->
   String ->
   String ->
-  <IO> Unit
+  <IO, Sign "commit"> Unit
 runPublicSigningRow counts keyHex digest publicHex expectedCompact =
   match secretKeyFromBytes (bytes keyHex)
     Err message =>
       let () = bump counts 1
       println "FAIL public signing secret ingress: \{message}"
-    Ok secret => match signDigest secret digest
+    Ok secret => match signCommitDigest secret digest
       Err message =>
         let () = bump counts 1
         println "FAIL public signing: \{message}"
@@ -194,7 +198,7 @@ runPublicSigningRow counts keyHex digest publicHex expectedCompact =
           let () = bump counts 1
           println "FAIL public signing self-verification"
 
-runSigningRow : Array Int -> Int -> String -> <IO> Unit
+runSigningRow : Array Int -> Int -> String -> <IO, Sign "commit"> Unit
 runSigningRow counts lineNo text = match split " " (trim text)
   ["sign", row, keyHex, digestHex, expectedPublic, expectedK, expectedR, expectedRawS, expectedLowS, expectedCompact, _] =>
     let key = scalar keyHex
@@ -225,7 +229,7 @@ runSigningRow counts lineNo text = match split " " (trim text)
     let () = bump counts 1
     println "FAIL signing line \{intToString lineNo}: malformed row"
 
-runSigningRows : Array Int -> List String -> Int -> <IO> Unit
+runSigningRows : Array Int -> List String -> Int -> <IO, Sign "commit"> Unit
 runSigningRows _ [] _ = ()
 runSigningRows counts (row :: rest) lineNo =
   let () = runSigningRow counts lineNo row
@@ -382,7 +386,7 @@ runVerificationRows counts seen maxId acceptIdx rejectIdx uniqueIdx publicIdx (r
     rest
     (lineNo + 1)
 
-main : <IO, Env, FileRead> Unit
+main : <Env, FileRead, IO, Sign "commit"> Unit
 main = match args ()
   [signingPath, wycheproofPath, bitcoinPath] => match readLines signingPath
     Err message => panic "ecdsa_vectors: cannot read signing corpus: \{message}"

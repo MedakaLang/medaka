@@ -244,7 +244,7 @@ multibaseBase58btc bytes = "z" ++ base58btcEncode bytes
    is missing, or when the remainder is not valid base58btc.
 
    > debug (multibaseBase58btcDecode "z")
-   "Ok Bytes \"\"" -}
+   "Ok (Bytes \"\")" -}
 export
 multibaseBase58btcDecode : String -> Result String Bytes
 multibaseBase58btcDecode s = match stripPrefix "z" s
@@ -267,7 +267,7 @@ multibaseBase32Lower bytes = "b" ++ base32Encode bytes
    is missing, or when the remainder is not canonical base32.
 
    > debug (multibaseBase32LowerDecode "b")
-   "Ok Bytes \"\"" -}
+   "Ok (Bytes \"\")" -}
 export
 multibaseBase32LowerDecode : String -> Result String Bytes
 multibaseBase32LowerDecode s = match stripPrefix "b" s

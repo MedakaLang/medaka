@@ -4,13 +4,15 @@
 #
 # ── WHAT THIS DOES AND DOES NOT CATCH ────────────────────────────────────────
 #
-# systemd runs `OnFailure=` when a unit enters the FAILED state. With
-# `Restart=on-failure` and `StartLimitBurst=5` on pds.service, that happens
-# when systemd gives up after the burst — NOT on each crash that restarts
-# successfully. So:
+# systemd runs `OnFailure=` on every failure of the unit, including one that
+# `Restart=on-failure` then restarts from: on systemd 257 a single crash or
+# OOM kill of pds.service triggers it, not only exhausting its
+# `StartLimitBurst=5`. With this unit's one-push limit, that means:
 #
-#   * a crash loop that exhausts the burst  -> alerts here, within seconds;
-#   * a single crash that restarts cleanly  -> NO alert, journal only;
+#   * the first failure after arming, even
+#     one that restarts cleanly             -> alerts here, within seconds;
+#   * every later failure until re-armed,
+#     a crash loop included                 -> NO alert, journal only;
 #   * a wedged-but-running process, a dead
 #     box, a severed network                -> NOTHING here can alert, because
 #                                              nothing on the box runs.
@@ -21,7 +23,9 @@
 #
 # A successful push stays active (exited), so subsequent OnFailure starts
 # are no-ops until the operator confirms recovery, stops this instance and
-# resets its start counter. The start limit also caps retries if curl fails.
+# resets its start counter. A single crash that restarted cleanly therefore
+# still needs that re-arm, or the next real crash loop is silent here. The
+# start limit also caps retries if curl fails.
 # Without RemainAfterExit the inactive unit can be garbage-collected, which
 # clears its rate counter and admits another push during the same crash loop.
 # Manager restart/reboot still clears this in-memory incident boundary;

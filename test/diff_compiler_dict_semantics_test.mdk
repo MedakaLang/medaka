@@ -50,12 +50,12 @@
    so both remain expressible unchanged.
 
    No row grades `run`'s stderr. The harness grades `check`'s diagnostic
-   code, every engine's stdout and `check`/`run`/`build`'s exit codes; the
-   compiled binary's own exit code and stderr (`binCode`/`binErr`) are
-   carried on `Agreement` but not graded here, same hole the retired shell
-   table had. It cannot assert a runtime panic's signature (#1130), so a row
-   whose pinned failure is a run-time panic pins the exit code and the
-   stdout reached, never the reason.
+   code, every engine's stdout and `check`/`run`/`build`'s exit codes, and
+   for an `AllExact` row the compiled binary's own exit code and the
+   presence of an `E-PANIC` marker on its stderr (`binaryRanClean`). It
+   cannot pin a runtime panic's reason (#1130), so a row whose pinned
+   failure is a run-time panic pins the exit code and the stdout reached,
+   never the reason.
 
    The per-row verdict table is rendered into the failure message rather
    than printed: `medaka test --native` runs a test body inside a probe
@@ -66,7 +66,8 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  Agreement(..), checkRunBuild, runMedaka, summarizeSweep, sweepUnits, verdictOf
+  Agreement(..), binaryRanClean, checkRunBuild, runMedaka, summarizeSweep,
+  sweepUnits, verdictOf
 }
 import fs.{expectUnitCount, fixtureDirs}
 import io.{runVerb}
@@ -1500,6 +1501,149 @@ table = [
     codes = [],
   },
   Row {
+    entry = "756-samename-verb-selective-agreement/main.mdk",
+    label =
+      "#756 (same-name verb), SELECTIVE spelling `import q.{f}` beside `import p`: `p.f : Display a => a -> String` vs `q.f : a -> String`, called at a type with no `Display`. The selected `q.f` needs no dict, so the program is well-typed and prints `q` on every verb. Regression row for a closed issue; value hand-derived from the declared signatures, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "q\n",
+    codes = [],
+  },
+  Row {
+    entry = "756-samename-verb-alias-agreement/main.mdk",
+    label =
+      "#756 (same-name verb), ALIAS spelling `import q as Q` (`Q.f Z`) beside `import p`; same pair as the selective row. Prints `q` on every verb. Regression row for a closed issue; value hand-derived from the declared signatures, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "q\n",
+    codes = [],
+  },
+  Row {
+    entry = "756b-samename-verb-selective-agreement/main.mdk",
+    label =
+      "#756 (same-name verb), the #1426 pair `ps.h : Display a => a -> String` / `qs.h : a -> a` with `qs` imported SELECTIVELY (`qs.{h}`); the wildcard spelling is the `1426-wildcard-samename-verb-agreement` row. `tag (h NoDisp)` needs no `Display`, `ph 5` does and has it: `ok / 5` on every verb. Regression row for a closed issue; value hand-derived from the declared signatures, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok / 5\n",
+    codes = [],
+  },
+  Row {
+    entry = "756b-samename-verb-alias-agreement/main.mdk",
+    label =
+      "#756 (same-name verb), the #1426 pair with `qs` imported by ALIAS (`import qs as Q`, `Q.h NoDisp`). `ok / 5` on every verb. Regression row for a closed issue; value hand-derived from the declared signatures, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok / 5\n",
+    codes = [],
+  },
+  Row {
+    entry = "2495-xmod-samehead-impl-no-false-trap/main.mdk",
+    label =
+      "#2495 (arg-tag false trap): two modules each declare an interface `Wrap` (method `wsize`) with an impl at the same head `Sole`; the entry imports only `ma.{wsize}` and bare `mb`. `go` is generic over `Wrap`, so the call resolves by identity to `ma`'s impl and prints `1` (not `9`) with no dispatch trap on `run` or the built binary. Regression row for a closed issue; value hand-derived from the declared signatures, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "3534-require-head-same-name-iface/main.mdk",
+    label =
+      "#3534 (requires resolved by spelling): `ma` and `mb` each declare an interface `Sh` with an `Int` impl; `mb`'s `impl Sh (Box a) requires Sh a` names `mb.Sh`, so `B.shl (Box 5)` is `B[` ++ `box` ++ mb's `sh 5` ++ `]` and the line is `A<a1>|B[boxb5]` on every verb. Before the fix the built binary resolved the requirement by the bare name `Sh` and trapped E-DISPATCH-NO-IMPL at exit 1 while `run` printed the value. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a1>|B[boxb5]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3534-require-list-two-same-name-ifaces/main.mdk",
+    label =
+      "#3534, two same-spelled interfaces in ONE requires list: `mc`'s `impl Both (W a) requires A.Sh a, B.Sh a` (`A`/`B` alias `ma`/`mb`, each declaring `Sh` with a default `shl`) has body `A.shl v ++ \"+\" ++ B.shl v`. Each slot is answered by its own interface's `Sh Int` impl, so `both (W 7)` prints `A<a7>+B[b7]`; a slot answered by the other interface shows its bracket style (`B[b7]` in the first half or `A<a7>` in the second). Before the fix the built binary trapped E-DISPATCH-NO-IMPL at exit 1. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3680-sig-two-same-spelled-constraints/main.mdk",
+    label =
+      "#3680, a signature naming two same-spelled interfaces: `ma` and `mb` each declare `Sh` with a default `shl` (`A<..>` vs `B[..]`) and an `Sh Int` impl. `f : (A.Sh a, B.Sh a) => a -> String` owes two dictionary slots, one per declaration, and `f v = A.shl v ++ \"+\" ++ B.shl v` reads each from its own, so `f 7` is `A<a7>+B[b7]`. Before the fix both constraints collapsed to one slot keyed by the spelling `Sh`: `run` died on `unbound identifier: $dict_f_1` and `build`'s emitter panicked. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3680-sig-same-spelled-constraint-bare-beside-alias/main.mdk",
+    label =
+      "#3680 with one constraint bare: `import mb.{Sh, shl}` beside `import ma as A`, so `f : (Sh a, A.Sh a) => a -> String` names `mb.Sh` and `ma.Sh`. `A.shl v` is `ma`'s default over `ma`'s `Sh Int` (`A<a7>`) and bare `shl v` is `mb`'s (`B[b7]`), so `f 7` is `A<a7>+B[b7]`. Before the fix the two constraints shared one slot: `run` died on an unbound dictionary and `build`'s emitter panicked. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3679-inferred-two-same-spelled-ifaces/main.mdk",
+    label =
+      "#3679, an inferred constraint over two same-spelled interfaces: unannotated `f v = A.shl v ++ \"+\" ++ B.shl v` generalizes over `ma.Sh` and `mb.Sh`, two slots, so `f 7` is `A<a7>+B[b7]`. Before the fix `run` printed the value (its dispatch recovered by name) while the built binary crashed at exit 139: the two inferred constraints shared one slot. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3679-inferred-two-same-spelled-ifaces-xmod/main.mdk",
+    label =
+      "#3679 across a module boundary and in the other order: `mc` exports unannotated `f2 v = B.shl v ++ \"+\" ++ A.shl v`, so `main`'s `f2 7` passes `mb.Sh Int` and `ma.Sh Int` into their own slots and prints `B[b7]+A<a7>`. Before the fix the built binary crashed at exit 139 while `run` printed the value. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "B[b7]+A<a7>\n",
+    codes = [],
+  },
+  Row {
+    entry = "3679-inferred-two-same-spelled-ifaces-local-lambda/main.mdk",
+    label =
+      "#3679 on a let-bound lambda: `let f = v => A.shl v ++ \"+\" ++ B.shl v` generalizes over both `Sh` declarations, so `f 7` is `A<a7>+B[b7]`. Before the fix the built binary crashed at exit 139 while `run` printed the value. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "3679-inferred-same-spelled-iface-through-requires/main.mdk",
+    label =
+      "#3679 through a conditional impl: `mb` adds `impl Sh (Box a) requires Sh a` (`sh (Box v) = \"box\" ++ sh v`), and unannotated `g v = B.shl (Box v) ++ A.shl v` reduces `mb.Sh (Box a)` to `mb.Sh a` beside `ma.Sh a`. `g 7` is `B[` ++ `box` ++ `b7` ++ `]` then `A<a7>`: `B[boxb7]A<a7>`. Before the fix the built binary trapped E-DISPATCH-NO-IMPL while `run` printed the value. Value hand-derived from the declared impls, not captured.",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "B[boxb7]A<a7>\n",
+    codes = [],
+  },
+  Row {
     entry = "s8-i1-samename-reexport-selective-through-wildcard/main.mdk",
     label =
       "§8 I1 ACROSS A SELECTIVE RE-EXPORT REACHED BY A WILDCARD IMPORT (RUN-XMOD-062, #1425 F1 third relocation). The two `-wildcard-` rows above grade a name a wildcard-imported module DECLARES; `rmod` here declares NOTHING and only `export import umod.{pick}`. The RUN-XMOD-054 repair`s supply walk enumerated declared exports, so this name got no row in `currentImportDefinersRef`, `declaredConstraintFor` fell to the source-blind bare-name table, and `cmod.pick``s CONSTRAINED row answered for the unconstrained `umod.pick`. Hand-derived from the two declared signatures, not captured: `C.pick (1 : Int)` = `sz 1 + 100` = 101, `pick 1 + 200` = 201; a re-export changes neither binding`s identity. MEASURED KNOWN-BAD at b313d767 in BOTH import orders: `run` 101 then `E-NOT-A-FUNCTION: applied non-function: <dict:>`, `check` exit 0, built binary CORRECT -- three verbs, two answers. ⚠️ Order-INVARIANT, so `import_order` reports it \"invariant\" and PASSES on the broken compiler",
@@ -1943,7 +2087,7 @@ table = [
   Row {
     entry = "1182-alias-dispatch-half-known-bad/main.mdk",
     label =
-      "The DISPATCH half of an alias-qualified method occurrence -- which impl body actually RUNS, as opposed to whether an obligation exists for it at all (the CHECKED half, the #1276/#1386 rows above). `Blob` implements BOTH `IA` and `IB`; `A.mth Blob` and `B.mth Blob` name TWO DIFFERENT interfaces. Hand-derived answer 1 then 2, each call dispatching to the impl its own alias names -- and that is now what check, run and build all produce. This was a KNOWN-BAD row (pinned 1,1, re-pinned 2,2 at `cdca5045`) while `renameAliasedMethods` erased `A.mth` to a bare `mth` before dispatch was decided: both occurrences then asked `admittedIfaceFor` under the SAME bare name, one last-write-wins row, and collapsed onto ONE impl. #1386 supply fix keeps the spelling through inference, so `admittedIfaceFor` answers per spelling and the row method-set membership is resolved under the ORIGIN name (`ieSelectRowByMethod`). NOT a closure of #1182/#1265, whose subject is a BARE occurrence with two admitted declarations and no spelling to tell them apart. A value change here is a regression in the alias-spelling channel, and a silent one -- the program is accepted on every verb whichever impl runs",
+      "The DISPATCH half of an alias-qualified method occurrence -- which impl body actually RUNS, as opposed to whether an obligation exists for it at all (the CHECKED half, the #1276/#1386 rows above). `Blob` implements BOTH `IA` and `IB`; `A.mth Blob` and `B.mth Blob` name TWO DIFFERENT interfaces. Hand-derived answer 1 then 2, each call dispatching to the impl its own alias names -- and that is now what check, run and build all produce. This was a KNOWN-BAD row (pinned 1,1, re-pinned 2,2 at `cdca5045`) while `renameAliasedMethods` erased `A.mth` to a bare `mth` before dispatch was decided: both occurrences then asked the method scope under the SAME bare name, one last-write-wins row, and collapsed onto ONE impl. #1386 supply fix keeps the spelling through inference, so `methodEntryHere` answers per spelling (an `A.mth` key from `aliasQualifiedMethodEntries`) and the row method-set membership is resolved under the ORIGIN name (`ieSelectRowByMethod`). NOT a closure of #1182/#1265, whose subject is a BARE occurrence with two admitted declarations and no spelling to tell them apart. A value change here is a regression in the alias-spelling channel, and a silent one -- the program is accepted on every verb whichever impl runs",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -2593,12 +2737,12 @@ table = [
   Row {
     entry = "impl-head-repeated-var-body-default.mdk",
     label =
-      "an impl body must not default a Num variable that `Index (Array a) Int e` ties to the impl's own, still free, `a`: grounding `e` to Int passed a head match it contradicts and ran an Int dictionary on Floats. Refused as ambiguous by run and build; `check` accepting it is #1641 (a constrained impl head suppresses the ambiguity), and this row reds when #1641 is fixed",
+      "an impl body must not default a Num variable that `Index (Array a) Int e` ties to the impl's own `a`: §3's settle sequence at the body's close holds `a` rigid and determines `e = a` by the one unifying instance before defaulting, so the impl's `requires Num a` dictionary runs. Hand-derived: 1.5 + 2.25 = 3.75, then 3 + 4 = 7. Was refused as ambiguous by run and build",
     expCheck = "ACCEPT",
-    expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "total=3.75\ntotal=7\n",
     codes = [],
   },
   Row {
@@ -2712,6 +2856,193 @@ table = [
     codes = [],
   },
   Row {
+    entry = "sig-var-rigid-free-var-goal.mdk",
+    label =
+      "§3 a declared signature variable is rigid in every matcher: `weird : b -> b` with body goal `Get (Box (List t)) b` matches `impl Get (Box a) a` only if `b` is `List t`, so it is refused at the definition. Drained from the must-fail pin 3526-free-var-goal-escapes-signature, where module-end grounding bound `b := List t`, `check` printed `weird : List a -> List a`, and the binary printed a garbage Int",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "sig-var-rigid-free-var-goal-control.mdk",
+    label =
+      "control for the free-variable row: `same x = get (Box x)` poses `Get (Box b) b`, which the impl matches at the rigid `b`. Hand-derived: 41 + 1 = 42",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
+  },
+  Row {
+    entry = "sig-var-rigid-repeated-head-var.mdk",
+    label =
+      "§3 `f : a -> List Int` with goal `Pick (List a) (List Int) (List Int)`: `impl Pick a a a` matches only if the signature's `a` is Int, so `f` is refused at the definition (#3550). Was accepted by `check`, printed [1] under `run`, and the build found no instance",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "sig-var-rigid-improved-control.mdk",
+    label =
+      "control for the repeated-head-variable row, DICT §3's own example `g : a -> List a; g y = pick [y] []`: improvement fixes the empty list's element to the signature's `a`, and `Pick (List a) (List a) (List a)` matches with `a` rigid. Hand-derived: `pick` returns its second argument, []",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[]\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-pinned-by-body.mdk",
+    label =
+      "§3 W3-inst: `impl Sizer (P c d)` whose body annotates the `c` field `String` holds only for `impl Sizer (P String d)`, so it is refused at the body naming that head (#819). Drained from the must-fail pin 819-impl-head-tyvar-pinned: `run` printed 5 and the built binary for `size (P 1 2)` died with SIGSEGV",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-TOO-SPECIFIC"],
+  },
+  Row {
+    entry = "impl-head-pinned-narrowed-control.mdk",
+    label =
+      "control for the pinned-head row: the head narrowed to `impl Sizer (P String d)` and called at `P \"a\" 2`. Hand-derived: \"a\" is not \"zzz\", 5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-missing-requires.mdk",
+    label =
+      "§3 W3-inst: `impl Show2 (Pair a)` whose body calls `show2 x` at the head's `a` with no `requires Show2 a` is refused at the call (#2721). Drained from the must-fail pin 2721-impl-body-dispatches-on-own-tyvar-no-requires: `check` accepted, and run and the binary died with E-NONEXHAUSTIVE-MATCH",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-missing-requires-via-helper.mdk",
+    label =
+      "§3 W3-inst on the call channel: the body reaches `Show2 a` through the constrained helper `helper : Show2 b => b -> String`, not a method occurrence, and is refused the same way. `check` used to accept it while `run` reported an unlocated ambiguity",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-requires-control.mdk",
+    label =
+      "control for the missing-requires rows: `requires Show2 a` declared and `impl Show2 Int` to discharge it. Hand-derived: the first field, \"int 1\"",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "int 1\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-super-requires-control.mdk",
+    label =
+      "§3 W3-inst entailment includes superinterfaces: `requires Ord a` supplies the body's `Eq a`. Hand-derived: 1 == 1 is True, 1 == 2 is False",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\nFalse\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-requires-other-predicate.mdk",
+    label =
+      "§3 W3-inst entailment is by predicate, not by mention: `requires Display a` names the head's `a` but does not entail the body's `Show2 a`, so the impl is refused at the call",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-structured-requires-control.mdk",
+    label =
+      "§3 `assum` before `inst` at an impl body: `requires Show2 (List a)` gives the body's goal `Show2 (List a)` as written, so it is not reduced to an undeclared `Show2 a`. Hand-derived: `show2 [1]` shows the head element, \"int 1\"",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "int 1\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-rigid-repeated-head-var.mdk",
+    label =
+      "§3 W3-inst: an impl head's variable is rigid in the instance matcher as a signature's is. The body's `Pick a Int Int` matches `impl Pick x x x` only if `a` is Int, so it is an undeclared prerequisite. Was accepted on every verb, answering `get (Box \"s\")` from a `Pick String Int Int` instance that does not exist",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-requires-depth-at-fuel.mdk",
+    label =
+      "§3 W3-inst at the requires fuel: the body's `Tag (W^32 a)` reduces in 32 steps to the residual `Tag a`, which no `requires` gives, so the impl is refused naming `requires Tag a`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-requires-depth-past-fuel.mdk",
+    label =
+      "§3 W3-inst one step past the requires fuel: `Tag (W^33 a)` exhausts the fuel before reaching `Tag a`, which is a located T-REQUIRES-DEPTH, as on the signature path. Running out of fuel used to return no residual, so `check` accepted the impl, `run` printed 34 and the built binary died with SIGSEGV",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-DEPTH"],
+  },
+  Row {
+    entry = "impl-head-deep-requires-control.mdk",
+    label =
+      "control for the requires-depth rows: the same chain at depth 10 with `requires Tag a` declared. Hand-derived: `tag` adds one per `W` to 1, so 11",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "11\n",
+    codes = [],
+  },
+  Row {
+    entry = "ground-no-sig-var-mismatch-rejected.mdk",
+    label =
+      "§3 the signature-variable guard on module-end grounding applies only when a signature variable occurs: `Conv (Wrap String) t`, with `t` free in `main`, has no instance (the one head-tycon candidate is `impl Conv (Wrap Int) Bool`), so it is rejected. With the guard applied to every goal, grounding skipped the failing unify and `check` accepted the program",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
     entry = "impl-heads-cycle-no-overlap.mdk",
     label =
       "§4 coherence: `Tri a (List a) a` and `Tri b b b` share an instance only if `a = List a`, so they do not overlap; the check terminates (it looped on main). Hand-derived: `tri 1 [1] 1` is the first impl, `one`; `tri True True True` the second, `two`",
@@ -2721,6 +3052,927 @@ table = [
     mode = AllExact,
     pinned = "one\ntwo\n",
     codes = [],
+  },
+  Row {
+    entry = "m2-standalone-beside-two-unnameable-ifaces/main.mdk",
+    label =
+      "the method scope never chooses a declaration by processing order: `ma.IA` and `mb.IB` both declare `mth`, this module reaches them only through `ga.fa`/`gb.fb`, so neither interface is nameable here and its own top-level `mth` is not a shadow (SHADOW-SEMANTICS.md S1-NS). `mth 1` is the standalone (101), `fa` is `IA Int`'s body (1010), `fb` is `IB Int`'s (2020). Value hand-derived from the declarations, not captured",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3131\n",
+    codes = [],
+  },
+  Row {
+    entry = "m2-standalone-beside-two-unnameable-ifaces/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 3131",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3131\n",
+    codes = [],
+  },
+  Row {
+    entry = "m2-two-wildcard-ifaces-bare-occurrence-rejected/main.mdk",
+    label =
+      "#1675: `import ma.*` + `import mb.*` reach two declarations of `mth`, and the bare occurrence names both with no discriminator. Resolve rejects it, and a module resolve rejected is not typechecked, so no typecheck code follows (no `T-TYPE-MISMATCH`, no `T-NO-IMPL`)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [
+      Present "R-AMBIGUOUS-OCCURRENCE",
+      Absent "T-TYPE-MISMATCH",
+      Absent "T-NO-IMPL",
+    ],
+  },
+  Row {
+    entry = "m2-two-wildcard-ifaces-bare-occurrence-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two wildcard imports swapped, the same reject and no typecheck code",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [
+      Present "R-AMBIGUOUS-OCCURRENCE",
+      Absent "T-TYPE-MISMATCH",
+      Absent "T-NO-IMPL",
+    ],
+  },
+  Row {
+    entry = "m2-alias-bound-to-two-ifaces-rejected/main.mdk",
+    label =
+      "one alias bound to two modules (`import ma as A`, `import mb as A`) that both declare `mth`: `A.mth` names two declarations and is rejected as `T-AMBIGUOUS-ALIAS-METHOD`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-ALIAS-METHOD"],
+  },
+  Row {
+    entry = "m2-alias-bound-to-two-ifaces-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two alias imports swapped, the same reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-ALIAS-METHOD"],
+  },
+  Row {
+    entry = "m2-under-applied-two-admitted-rejected/main.mdk",
+    label =
+      "S2-DECL (d) bullet 2, ruled 2026-10-01: an UNDER-APPLIED occurrence of a spelling with two admitted declarations is a located reject. The graph is i28's (`IA.mth` dispatches at argument 0, `IZ.mth` at argument 1, `fmodI.mth` the shadowed standalone); `g = mth \"abc\"` supplies IA's receiver but not IZ's, so IZ's own impl query cannot be asked and the two declarations are not shown to agree. `T-AMBIGUOUS-SHADOW-DECL`, never one declaration's scheme typing the occurrence (`T-TYPE-MISMATCH`, which one import order produced while the scope still answered with the last-registered declaration) and never a value (99 in the other order, or 7, `IZ String`'s body)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-SHADOW-DECL", Absent "T-TYPE-MISMATCH"],
+  },
+  Row {
+    entry = "m2-under-applied-two-admitted-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two interface imports swapped, the same located reject and no `T-TYPE-MISMATCH`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-SHADOW-DECL", Absent "T-TYPE-MISMATCH"],
+  },
+  Row {
+    entry = "alias-beside-bare-method/main.mdk",
+    label =
+      "SYNTAX.md \"Import aliasing\": `import ma as A` binds `ma`'s methods as `A.sh` only, so beside `import mb.{Sh, sh}` the bare `sh` is `mb.sh` alone (`mb`'s `Sh Int` adds 2000). 2007, hand-derived from the declarations; never `ma`'s 1007 by import order and never an emitter panic",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/wildcard.mdk",
+    label =
+      "the wildcard spelling of the row above: `import ma as A` beside `import mb.*`. The alias still binds no bare name, so `sh` is `mb.sh`: 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/wildcard-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/method-only.mdk",
+    label =
+      "the method-only spelling: `import mb.{sh}` without the interface, beside `import ma as A`. `sh` is `mb.sh`: 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/method-only-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/given.mdk",
+    label =
+      "the given-constraint reader: `f : Sh a => a -> Int; f v = sh v` beside `import ma as A`. `Sh` and `sh` are both `mb`'s, so `f 7` is `mb`'s `Sh Int`: 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/given-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/mono.mdk",
+    label =
+      "the monomorphic reader: `f : Int -> Int; f v = sh v` beside `import ma as A`. `sh` is `mb.sh`: 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/mono-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/both.mdk",
+    label =
+      "both spellings in one module: bare `sh` is `mb.sh` (2007 at 7) and `A.sh` is `ma.sh` (1007 at 7), so 3014. Never 2014 or 4014, one declaration read through both spellings",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3014\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/both-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 3014",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3014\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/reverse.mdk",
+    label =
+      "the mirror of the row above: `import mb as B` beside `import ma.{Sh, sh}`. Bare `sh` is `ma.sh` (1007) and `B.sh` is `mb.sh` (2007): 3014",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3014\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/reverse-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 3014",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3014\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/local-impl.mdk",
+    label =
+      "a local `impl Sh Bool` beside `import ma as A` + `import mb.{Sh, sh}`: the bare `Sh` is `mb`'s, so `sh True` is the local body (5), and `A.sh 1` is `ma`'s `Sh Int` (1001): 1006 on every engine, never an emitter panic",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1006\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-method/local-impl-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 1006",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1006\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-return-method/main.mdk",
+    label =
+      "a RETURN-position method (`mk : Int -> a`) beside an alias of the other declaring module: `v : Int; v = mk 7` is `mb`'s `Mk Int` (2007), since `import ma as A` binds no bare `mk`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-return-method/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the two import clauses swapped, the same 2007",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2007\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/main.mdk",
+    label =
+      "#3534's `requires` head beside an alias: `mc` writes `import ma as A` and `import mb.{Sh, shl}`, then `impl Both (W a) requires Sh a` whose body calls bare `shl`. Both bare names are `mb`'s, so `both (W 7)` is `mb`'s default `shl` over `mb`'s `Sh Int`: B[b7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: `mc`'s two import clauses swapped (`mcs`), the same B[b7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/both-heads.mdk",
+    label =
+      "two `requires` heads, bare and alias-qualified: `requires Sh a, A.Sh a` beside `import ma as A` + `import mb.{Sh, shl}`, body `A.shl v ++ \"+\" ++ shl v`. `A.shl` is `ma`'s (A<a7>) and bare `shl` is `mb`'s (B[b7])",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/both-heads-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: `mr`'s two import clauses swapped (`mrs`), the same A<a7>+B[b7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/reverse-heads.mdk",
+    label =
+      "the mirror: `import ma.{Sh, shl}` + `import mb as B`, `requires Sh a, B.Sh a`, body `shl v ++ \"+\" ++ B.shl v`. Bare `shl` is `ma`'s and `B.shl` is `mb`'s: A<a7>+B[b7], never B[b7]+B[b7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "alias-beside-bare-requires/reverse-heads-swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: `mq`'s two import clauses swapped (`mqs`), the same A<a7>+B[b7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A<a7>+B[b7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-bytes-index-literal-compare.mdk",
+    label =
+      "§3 determination, #3437 Bytes face: `Index Bytes Int U8` is the one instance unifying with `Index Bytes Int ?v`, so the literal is a U8 before defaulting (base: Type mismatch Int vs U8)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-bytes-index-literal-let.mdk",
+    label =
+      "§3 determination, #3437 Bytes face with the comparison inside a local `let` (base: rejected like the row above)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-bytes-literal-out-of-range-rejected.mdk",
+    label =
+      "§3 determination bounds the literal by the determined type: 300 against the determined U8 is refused at the literal (base: Type mismatch Int vs U8 plus the #3811 mislocated T-NO-IMPL)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "L-INT-OVERFLOW"],
+  },
+  Row {
+    entry = "determine-unique-instance-sets-literal-type.mdk",
+    label =
+      "§3 determination before defaulting (R4): the only `Ix Float Char` makes the literal a Float (base: No impl of Ix for Int Char)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-two-unifying-instances-default.mdk",
+    label =
+      "§3 determination control: two instances unify, nothing is committed, and defaulting to Int selects `Ix Int Char` exactly as at base",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-result-variable-unique-instance.mdk",
+    label =
+      "§3 determination at an inferred result variable: `Conv (Wrap Int) Bool` fixes `mk : Unit -> Bool` (scheme in section 2; base: Ambiguous instance for Debug)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-array-literal-literal-index.mdk",
+    label =
+      "§3 determination control: `[|3, 4|][0]` with every variable owned; `Index (Array a) Int a` determines the index, defaulting the element, 3 as at base",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-array-u64-index-compare-control.mdk",
+    label =
+      "§3 determination control: an element type the signature already fixes (U64) is left alone, False as at base",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "False\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-no-unifying-instance-rejected.mdk",
+    label =
+      "§3 determination reject half, #3808: no instance head unifies with `Ix ?a Bool` and every variable is owned, so T-NO-IMPL at the call (span in section 6). Base accepted at check by asking per argument and ran into the panic",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "determine-array-float-index-literal-compare.mdk",
+    label =
+      "§3 determination, #3437 Array Float face: the drained must-fail pin `3437-indexed-literal-compare-defaults-to-int`, re-pointed here; `Index (Array a) Int a` makes `1` a Float (base: Type mismatch Int vs Float)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-array-float-index-float-literal-control.mdk",
+    label =
+      "control for the row above, the drained pin`s own: the literal written `1.0`, True with or without determination",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-conditional-instance-scheme.mdk",
+    label =
+      "§3 determination holds argument-position variables rigid: `f`s goal reduces to the residual `Conv a b` (scheme in section 2), nothing is determined",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "no call\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-conditional-instance-two-calls.mdk",
+    label =
+      "§3 the caller decides what determination left open: each call of `f : Conv a b => ...` selects its own instance",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "w:int-bool\nw:char-int\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-result-top-level.mdk",
+    label =
+      "§6.3 D3 clause 2, #3521 top-level face: `e` of `Get b e` is in `dbl`s type and connected to the argument `b`, so it is not a defaulting candidate (scheme in section 2); the caller`s `Box Float` fixes it. Base defaulted `e` to Int and rejected `No impl of Get for (Box Float) Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "small\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-index-sum-unsigned.mdk",
+    label =
+      "§6.3 D3 clause 2, connection through two goals: the result `d` of `Index a b d` and `Index a c d` generalizes (scheme in section 2), and each call fixes it through the array`s one instance. Base rejected `No impl of Index for (Array Float) Int Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-outside-type-defaults.mdk",
+    label =
+      "§6.3 D3 clause 2 control: `k` of `Ix a k` is connected to the argument but in no type of `f`, so it still defaults, and `f 1` selects `Ix Int Int`: 9 as at base",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "9\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-outside-type-rejected.mdk",
+    label =
+      "§6.3 D3 clause 2 control, reject half: `e` of `Get c e` is in no type of `f`, so it defaults to Int and the call at `Box Float` is T-NO-IMPL (span in section 6), as at base",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "connect-result-block-let.mdk",
+    label =
+      "§6.3 D3 clause 2 at a block `let`: the local `dbl` generalizes with `e` connected to its argument, so the `let` does not default it; `small`. Base defaulted it at the `let` and rejected `No impl of Get for (Box Float) Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "small\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-result-let-in.mdk",
+    label =
+      "§6.3 D3 clause 2 at a `let … in`: the inline spelling of the row above, `small`. Base rejected as above",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "small\n",
+    codes = [],
+  },
+  Row {
+    entry = "connect-result-where.mdk",
+    label =
+      "§6.3 D3 clause 2 at a `where` component: the component already withholds every variable a member`s type mentions, so `small` as at base; the twin of the two `let` rows",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "small\n",
+    codes = [],
+  },
+  Row {
+    entry = "body-settle-index-element.mdk",
+    label =
+      "§3 settle sequence at an impl body (#3521's impl-body face): `Index (Array a) k e` with the head's `a` rigid has one unifying instance, so `k = Int` and `e = a` before defaulting. Hand-derived: 3.75, then 7. Base ran an Int dictionary on Floats",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "body-settle-pick-improved.mdk",
+    label =
+      "§3 improvement at an impl body (#3549): `pick [] [3, 7]` at `List Int` against the only `impl Pick a a a` fixes the element at the body's close, so the build has an instance to emit. Hand-derived: [3, 7]. Base failed to build",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[3, 7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "body-settle-two-index-instances.mdk",
+    label =
+      "§3 determination's joint consistency at an impl body (#3809): a second `Index (Array a) Rng (Array a)` would close the sibling `Num k` at `Rng`, so only the Int instance is a candidate. Hand-derived: 3.75, then 7. Base was refused by run and build as ambiguous dispatch",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-scheme-variable-exempt.mdk",
+    label =
+      "§3 / §4.2 OD3, Val 2026-10-04 \"exempt scheme variables\": `Conv (Wrap Int) ?t` has no unifying instance, but `?t` is `mk`s result variable, so the goal enters `mk`s scheme (scheme in section 2) instead of a T-NO-IMPL at the definition. Hand-derived: 1",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-scheme-variable-library/main.mdk",
+    label =
+      "§3 / §4.2 OD3 across modules: the library exports `mk () = conv (Wrap 1)` with no instance; an importer that takes only `Wrap` and never calls `mk` is not refused for it. Hand-derived: 1",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-scheme-variable-importer-instance/main.mdk",
+    label =
+      "§3 across modules, the importer-instance twin: the importer`s `impl Conv (Wrap Int) Bool` is the one instance, and `mk ()` at Bool holds 1 > 0. Hand-derived: True",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-quiescence-nested-call.mdk",
+    label =
+      "§3 determination to quiescence, nested-call spelling: `Mk Int Float` fixes `?e = Float`, then `Pr Float Float` fixes the literal. Hand-derived: 4.0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-quiescence-lambda.mdk",
+    label =
+      "§3 determination to quiescence, lambda-application spelling of the same program. Hand-derived: 4.0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-quiescence-top-level-value.mdk",
+    label =
+      "§3 determination to quiescence, top-level-value spelling (`e = mk 0`). Hand-derived: 4.0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-quiescence-apply-order.mdk",
+    label =
+      "§3 determination to quiescence: the window lists `Pr ?e ?r` before `Mk ?n ?e`, so `Pr` is determined only by the sweep after `Mk`s commit. Hand-derived: 4.0. One sweep refused it as `No impl of Pr for Float Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-arrow-instance-counts.mdk",
+    label =
+      "§3 determination`s candidate count: `Conv (Int -> Int) Bool` unifies with `Conv ?a ?b` structurally and counts beside `Conv Int String`, so nothing is committed and `Display ?b` is ambiguous at the `println` call (span in section 6). Counting census-named heads only committed `Conv Int String` and printed `int`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-vector-ambiguous-headless.mdk",
+    label =
+      "§3 the call window`s vector verdict: `Ix Int Bool` and the headless `Ix a Bool` both unify with `Ix ?a Bool`, and `?a` is `main`s, so the `useIx` call is ambiguous (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-vector-ambiguous-two-instances.mdk",
+    label =
+      "§3 the call window`s vector verdict: `Ix Int Bool` and `Ix Char Bool` both unify with `Ix ?a Bool`, so the `useIx` call is ambiguous (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-vector-ambiguous-method-body.mdk",
+    label =
+      "§3 the call window`s vector verdict at an impl body`s close: `useIx []` in `report` poses `Ix ?a Bool`, which two instances unify with and whose `?a` is the body`s (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-vector-ambiguous-signature-call.mdk",
+    label =
+      "§3 the call window`s vector verdict with the first position closed: `useMk 3 []` leaves `Mk Int ?b`, which `Mk Int Bool` and `Mk Int String` both unify with (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-quiescence-truncated-let.mdk",
+    label =
+      "§3 determination against truncated siblings: the one-position `Mk ?` and `Pr ?` beside the joint goals are projections, so they do not refute `Mk Int Float`. Hand-derived: 4.0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-quiescence-truncated-let-chain.mdk",
+    label =
+      "§3 determination against truncated siblings, two local `let`s. Hand-derived: 4.0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "determine-variable-head-ambiguous.mdk",
+    label =
+      "§3 a variable-headed instance is a candidate: `Conv a Bool` and `Conv Int String` both unify with `conv 1`s goal, so nothing is committed and `Display ?b` is ambiguous (span in section 6). Pins the code, not which interface the message names",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-variable-head-char.mdk",
+    label =
+      "§3 the variable-headed control: only `Conv a Bool` unifies with `Conv Char ?b`, so it fixes `?b = Bool`. Hand-derived: True",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+    codes = [],
+  },
+  Row {
+    entry = "body-settle-3809-float-key.mdk",
+    label =
+      "§6.3 D3 clause 3 at an impl body (#3809): both keys satisfy `Num`, so `k` defaults; grounding `e` would leave `Index (Array a) Int Int` with no instance while `a` is held, so `e` is withheld and the second determination fixes `e = a`. Hand-derived: 3.75, then 7. Base checked clean and failed at run and build as ambiguous dispatch",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-float-key-call.mdk",
+    label =
+      "§6.3 D3 clause 3 with the element's `Num` on the call window (a constrained callee): `e` is withheld and determined. Hand-derived: 3.0, then 6",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.0\n6\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-one-index.mdk",
+    label =
+      "§6.3 D3 clause 3 lets the key ground when `Index (Array a) Int ?e` still has an instance. Hand-derived: 1.5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1.5\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-let-keys-annotated.mdk",
+    label =
+      "§6.3 D3 clause 3 through a local `let` in an impl body, keys written `Int`: the `let` holds the body's `a` and withholds `e`; the body determines it. Hand-derived: 3.75, then 7. Base rejected with a missing `Index (Array a) Int Int` prerequisite",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-signature-given.mdk",
+    label =
+      "§6.3 D3 clause 3 consults givens: the declared `Index c Int e` covers the goal once the keys default. Hand-derived: 3.75, then 7",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-top-level-control.mdk",
+    label =
+      "§6.3 D3 clause 3's control: at a top-level group an argument-position variable is not held for satisfiability, so the keys ground and `e` generalizes (scheme in section 2). Hand-derived: 3.75, then 7",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-withheld-ambiguous-method-body.mdk",
+    label =
+      "§6.3 D3 clause 3 and §3 Reject at an impl body: `e` is withheld and both `Get (Box a) Int Float` and `Get (Box a) Int N` still unify, `a` held rigid, so the goal is ambiguous (span in section 6). Base rejected with `T-NO-IMPL` for the defaulted `Int`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "default-guard-withheld-ambiguous-group.mdk",
+    label =
+      "§6.3 D3 clause 3 and §3 Reject at a top-level group: `e` is withheld and two rows still unify (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "default-guard-withheld-ambiguous-let.mdk",
+    label =
+      "§6.3 D3 clause 3 and §3 Reject through a local `let`: the `let` and the enclosing group both withhold `e`, and two rows still unify (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "default-guard-withheld-ambiguous-key.mdk",
+    label =
+      "§6.3 D3 clause 3 withholds the key itself when `Int` has no row and `Float` and `U64` both do; no other default type is tried, so the goal is ambiguous (span in section 6)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-vector-ambiguous-unused-dictionary.mdk",
+    label =
+      "§3 the call window`s vector verdict depends on the goal alone: `useMk` never reads its dictionary, and `Mk Int ?b` is still ambiguous (span in section 6). Base printed 7",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "default-guard-let-in-body-ownership-gap.mdk",
+    label =
+      "#3809 through a local `let` with unannotated keys. Hand-derived: 3.75, then 7; blocked by an ownership gap (the key literals reach no defaulting boundary), so `Index (Array a) k e` keeps two candidates and D3 clause 3`s verdict rejects it. Pinned REJECT until the gap is fixed; base checked clean and failed at run and build",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
   },
 ]
 
@@ -2733,7 +3985,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 236
+tableRows = 349
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -2753,6 +4005,8 @@ gradeValue NoValue _ _ = "-"
 gradeValue AllExact pinned a =
   if a.runCode /= 0 || a.buildCode /= 0 then
     "n/a"
+  else if not (binaryRanClean a) then
+    "BINPANIC"
   else if a.runOut == a.binOut && a.runOut == pinned then
     "ok"
   else
@@ -2895,6 +4149,29 @@ corpusUnits = match fixtureDirs corpus
       (names => sort (map basename dirs ++ filter (endsWith ".mdk") names))
       (listDir corpus)
 
+-- An `AllExact` row whose stdout agrees everywhere must still go red when the
+-- built binary exited nonzero or panicked on stderr (#3334).
+test "an AllExact row grades the binary's exit code and panic signature" =
+  let agree = Agreement {
+    checkCode = 0,
+    checkErr = "",
+    runCode = 0,
+    runOut = "1\n",
+    runErr = "",
+    buildCode = 0,
+    buildLog = "",
+    binCode = 0,
+    binOut = "1\n",
+    binErr = "",
+  }
+  let clean = gradeValue AllExact "1\n" agree
+  let badCode = gradeValue AllExact "1\n" { agree | binCode = 1 }
+  let panicked = gradeValue AllExact "1\n" { agree | binErr = "E-PANIC: boom" }
+  if clean == "ok" && badCode == "BINPANIC" && panicked == "BINPANIC" then
+    pass
+  else
+    fail "want ok/BINPANIC/BINPANIC, got \{clean}/\{badCode}/\{panicked}"
+
 test "the table still holds every row it is supposed to" =
   match expectUnitCount tableRows table
     Err e => fail "the verdict table \{e}"
@@ -2940,7 +4217,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 17
+schemeRows = 23
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -2953,8 +4230,8 @@ schemeTable = [
   SchemeRow {
     entry = "s4-joint-residual-rdict-native.mdk",
     label =
-      "#1560 TYPED SHAPE: reducing the conditional impl leaves exactly one joint two-argument predicate in `f`s principal context",
-    want = "f : Conv c d => a -> b -> String",
+      "#1560 TYPED SHAPE: reducing the conditional impl leaves exactly one joint two-argument predicate in `f`s principal context, the hand-derived `Conv a b`. A context variable must occur in the type",
+    want = "f : Conv a b => a -> b -> String",
   },
   SchemeRow {
     entry = "s4-gen-sig-declared-context-kept.mdk",
@@ -3024,8 +4301,8 @@ schemeTable = [
   SchemeRow {
     entry = "s-structured-carry-declared-context-kept.mdk",
     label =
-      "#1937 the STRUCTURED declared context SURVIVES into the scheme -- THE ONLY OBSERVABLE THAT SEES THIS FIX ON AN ACCEPTING PROGRAM (base printed `f : Wrap Int -> Bool -> String`, the context gone, at exit 0 with the right value). ⚠️ The type is still MONOMORPHISED to `Wrap Int -> Bool` by single-impl improvement, a separate mechanism #1937 does not touch and this slice deliberately did not widen -- do NOT re-pin this to a polymorphic scheme. ⚠️ The predicate renders WITHOUT PARENTHESES (`Conv Wrap Int Bool` for `Conv (Wrap Int) Bool`), which reads as four arguments to a two-parameter interface and does not round-trip through the parser: a printer defect (#1952, `S2: misleading`) that is newly REACHABLE rather than newly broken, because until this fix the context was erased and never printed at all. 🚨 #1952 HAS NOW LANDED (sprint/nary-predicate-slots slice 2, as its permitted rider) and this row is re-pinned to the PARENTHESISED form exactly as the previous sentence instructed: `renderConstraintCtx` renders a predicate argument at ARGUMENT precedence (3), not 2, so a structured argument keeps the parens that make the context round-trip through the parser. Bare-tyvar and nullary-`TCon` arguments are atoms at either precedence, so no other scheme row moves",
-    want = "f : Conv (Wrap Int) Bool => Wrap Int -> Bool -> String",
+      "#1937 the STRUCTURED declared context SURVIVES into the scheme -- THE ONLY OBSERVABLE THAT SEES THIS FIX ON AN ACCEPTING PROGRAM (base printed `f : Wrap Int -> Bool -> String`, the context gone, at exit 0 with the right value). The type is the DECLARED `Wrap a -> b`: module-end head-tycon grounding used to bind the signature's `a := Int, b := Bool` through the one `Conv (Wrap Int) Bool` impl and print `Wrap Int -> Bool`, the #3526 narrowing, and a signature variable is now rigid in that matcher too (DICT §3, \"Signature variables in every matcher\"). ⚠️ The predicate renders WITHOUT PARENTHESES (`Conv Wrap Int Bool` for `Conv (Wrap Int) Bool`), which reads as four arguments to a two-parameter interface and does not round-trip through the parser: a printer defect (#1952, `S2: misleading`) that is newly REACHABLE rather than newly broken, because until this fix the context was erased and never printed at all. 🚨 #1952 HAS NOW LANDED (sprint/nary-predicate-slots slice 2, as its permitted rider) and this row is re-pinned to the PARENTHESISED form exactly as the previous sentence instructed: `renderConstraintCtx` renders a predicate argument at ARGUMENT precedence (3), not 2, so a structured argument keeps the parens that make the context round-trip through the parser. Bare-tyvar and nullary-`TCon` arguments are atoms at either precedence, so no other scheme row moves",
+    want = "f : Conv (Wrap a) b => Wrap a -> b -> String",
   },
   SchemeRow {
     entry = "s6-drain-quiescence-inferred-scheme.mdk",
@@ -3042,8 +4319,44 @@ schemeTable = [
   SchemeRow {
     entry = "s-nary-given-declared-vector-selects.mdk",
     label =
-      "#1952 on a genuinely POLYMORPHIC multi-argument context, which the row above cannot show because single-impl improvement monomorphises its `a`. Both the structured argument`s parens and the second, bare-tyvar argument are asserted here, so a \"fix\" that parenthesised every argument (`Conv (Wrap a) (b)`) or that dropped back to prec 2 (`Conv Wrap a b`) both go red. At the sprint base `e4587a04` this printed `f : Conv Wrap a b => Wrap a -> b -> String`",
+      "#1952 on a genuinely POLYMORPHIC multi-argument context with two impls in scope, so the declared `a` and `b` select per call site; the row above pins the same scheme with one impl. Both the structured argument`s parens and the second, bare-tyvar argument are asserted here, so a \"fix\" that parenthesised every argument (`Conv (Wrap a) (b)`) or that dropped back to prec 2 (`Conv Wrap a b`) both go red. At the sprint base `e4587a04` this printed `f : Conv Wrap a b => Wrap a -> b -> String`",
     want = "f : Conv (Wrap a) b => Wrap a -> b -> String",
+  },
+  SchemeRow {
+    entry = "determine-result-variable-unique-instance.mdk",
+    label =
+      "§3 determination binds an inferred binding`s result variable through the one unifying instance `Conv (Wrap Int) Bool`",
+    want = "mk : Unit -> Bool",
+  },
+  SchemeRow {
+    entry = "determine-conditional-instance-scheme.mdk",
+    label =
+      "§3 determination holds argument-position variables rigid, so the residual of the conditional instance stays in `f`s context over `f`s own variables",
+    want = "f : Conv a b => a -> b -> String",
+  },
+  SchemeRow {
+    entry = "connect-result-top-level.mdk",
+    label =
+      "§6.3 D3 clause 2: the result variable connected to the argument through `Get` generalizes with its `Num`, so the caller`s type fixes it",
+    want = "dbl : (Get a b, Num b) => a -> b",
+  },
+  SchemeRow {
+    entry = "connect-index-sum-unsigned.mdk",
+    label =
+      "§6.3 D3 clause 2: the result variable connected to the arguments through two `Index` goals generalizes with both goals and its `Num`",
+    want = "sumAt : (Index a b d, Index a c d, Num d) => a -> b -> c -> d",
+  },
+  SchemeRow {
+    entry = "determine-scheme-variable-exempt.mdk",
+    label =
+      "§4.2 OD3, scheme variables exempt: the goal with no unifying instance on `mk`s result variable stays in `mk`s context",
+    want = "mk : Conv (Wrap Int) a => Unit -> a",
+  },
+  SchemeRow {
+    entry = "default-guard-top-level-control.mdk",
+    label =
+      "§6.3 D3 clause 3 keeps the top-level control's scheme: the key grounds, the `Index` goal and the element's `Num` stay",
+    want = "sumTwo : (Index a Int b, Num b) => a -> b",
   },
 ]
 
@@ -3309,7 +4622,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 11
+spanRows = 24
 
 spanTable : List SpanRow
 spanTable = [
@@ -3376,6 +4689,81 @@ spanTable = [
     label =
       "issue 1560: the mixed-vector residual is discharged AT THE CALL SITE (`f NoConv True`), like its 1549 sibling -- not at `f`s definition, which is legal on its own",
     want = "45:16",
+  },
+  SpanRow {
+    entry = "determine-no-unifying-instance-rejected.mdk",
+    label =
+      "#3808: the undetermined-vector T-NO-IMPL lands on the `useIx` call that posed `Ix ?a Bool`, not on `main` or the definition",
+    want = "22:16",
+  },
+  SpanRow {
+    entry = "connect-outside-type-rejected.mdk",
+    label =
+      "§6.3 D3 clause 2 control: the defaulted `Get (Box Float) Int` is reported at the `f` call that posed it, not at `f`s definition",
+    want = "16:16",
+  },
+  SpanRow {
+    entry = "determine-arrow-instance-counts.mdk",
+    label =
+      "§3 candidate count: with two `Conv` candidates nothing is committed, and the undetermined `Display ?b` is reported at the `println` call that poses it",
+    want = "18:7",
+  },
+  SpanRow {
+    entry = "determine-vector-ambiguous-headless.mdk",
+    label =
+      "§3 the call window`s vector verdict lands on the `useIx` call that posed `Ix ?a Bool`",
+    want = "18:16",
+  },
+  SpanRow {
+    entry = "determine-vector-ambiguous-two-instances.mdk",
+    label = "§3 the same span guarantee with two concrete instances",
+    want = "18:16",
+  },
+  SpanRow {
+    entry = "determine-vector-ambiguous-method-body.mdk",
+    label =
+      "§3 at an impl body the verdict lands on the `useIx` call inside `report`",
+    want = "22:20",
+  },
+  SpanRow {
+    entry = "determine-vector-ambiguous-signature-call.mdk",
+    label = "§3 the verdict lands on the `useMk` call that posed `Mk ?n ?b`",
+    want = "18:16",
+  },
+  SpanRow {
+    entry = "determine-variable-head-ambiguous.mdk",
+    label =
+      "§3 the undetermined `Display ?b` is reported at the `println` call that poses it",
+    want = "14:7",
+  },
+  SpanRow {
+    entry = "default-guard-withheld-ambiguous-method-body.mdk",
+    label =
+      "§6.3 D3 clause 3`s verdict lands on the `get` occurrence inside `report`",
+    want = "41:24",
+  },
+  SpanRow {
+    entry = "default-guard-withheld-ambiguous-group.mdk",
+    label =
+      "§6.3 D3 clause 3`s verdict lands on the `get` occurrence inside `h`",
+    want = "36:17",
+  },
+  SpanRow {
+    entry = "default-guard-withheld-ambiguous-let.mdk",
+    label =
+      "§6.3 D3 clause 3`s verdict lands on the `get` occurrence in the local `let`",
+    want = "37:10",
+  },
+  SpanRow {
+    entry = "default-guard-withheld-ambiguous-key.mdk",
+    label =
+      "§6.3 D3 clause 3`s verdict lands on the `at` occurrence inside `report`",
+    want = "21:13",
+  },
+  SpanRow {
+    entry = "determine-vector-ambiguous-unused-dictionary.mdk",
+    label = "§3 the verdict lands on the `useMk 3` call",
+    want = "18:16",
   },
 ]
 

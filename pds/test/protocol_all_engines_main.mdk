@@ -90,7 +90,7 @@ registry =
         (procedureEndpoint "com.example.block.put" RawInput PublicRoute),
     ])
 
-handler : Handler
+handler : Handler <>
 handler _ _ store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
 handler _ _ store (QueryCall "Com.Example.query.caseFixed" _) =
@@ -148,7 +148,7 @@ testContext : RequestContext
 testContext =
   RequestContext { nowSeconds = 1700000000, nonce = testNonce, login = None }
 
-server : Server
+server : Server <>
 server = makeServer account registry handler
 
 seedBytes : Bytes

@@ -1,0 +1,7 @@
+main =
+  let add = x => y => x + y
+  let inc = add 1
+  println (inc 41)
+  let add2 = x y => x + y
+  println (add2 1 2)
+  println (map (add 10) [1, 2, 3])

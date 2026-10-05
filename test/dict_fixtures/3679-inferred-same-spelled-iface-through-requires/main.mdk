@@ -1,0 +1,7 @@
+import ma as A
+import mb as B
+import mb.{Box(..)}
+
+g v = B.shl (Box v) ++ A.shl v
+
+main = println (g (7 : Int))

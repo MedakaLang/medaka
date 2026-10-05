@@ -1,0 +1,6 @@
+entry: main.mdk
+what: #1288 a file that never names the merged interface is not charged for the merge
+
+`mid` re-exports two distinct `Same` interfaces, but `main` imports only the method `pmth` and the type `Q`; it never writes `Same`, so nothing in it is ambiguous.
+
+Spec answer, hand-derived: `check` is clean; `run` and the built binary print `1` (`Q`'s impl in `p`).

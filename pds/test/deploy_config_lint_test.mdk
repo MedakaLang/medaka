@@ -44,6 +44,7 @@ import string.{
   replace,
   replaceAll,
   startsWith,
+  stripPrefix,
   stripSuffix,
   trim,
   unlines,
@@ -110,6 +111,14 @@ serviceDirectives = [
   ("LimitCORE", "^LimitCORE=0$"),
   ("RequiresMountsFor", "^RequiresMountsFor="),
   ("OnFailure-alert", "^OnFailure=pds-alert@%n\\.service$"),
+  ("RestrictAddressFamilies-inet", "^RestrictAddressFamilies=AF_INET$"),
+  ("SystemCallFilter-system-service", "^SystemCallFilter=@system-service$"),
+  (
+    "SystemCallFilter-minus-privileged",
+    "^SystemCallFilter=~@privileged @resources$",
+  ),
+  ("SystemCallErrorNumber-EPERM", "^SystemCallErrorNumber=EPERM$"),
+  ("OOMPolicy-kill", "^OOMPolicy=kill$"),
 ]
 
 {- | The shared floor for the three observability/custody units (#2967
@@ -225,6 +234,29 @@ caddyDirectives = [
   ("log-to-journal", "^[ \t]*output stderr$"),
   ("X-Forwarded-For", "header_up X-Forwarded-For"),
 ]
+
+{- | The deploy shape #2816 accepted un-framed admission for (launch row
+   B13): Caddy's HTTP `reverse_proxy` in front of a loopback-bound `pdsd`.
+   That proxy only dials upstream once it holds a complete request, so a
+   caller stalling its own headers never reaches `pdsd`'s admission gate.
+
+   The catch-all request proxy must target the loopback upstream. A
+   Caddyfile without one leaves nothing in front of `pdsd`. -}
+caddyProxiedDirectives : List (String, String)
+caddyProxiedDirectives = [
+  (
+    "reverse-proxy-to-loopback",
+    "^[ \t]*reverse_proxy 127\\.0\\.0\\.1:[0-9]+[ \t]*\\{",
+  ),
+]
+
+{- | A TCP pass-through in front of `pdsd`. Caddy's `layer4` app forwards
+   bytes as they arrive, so it dials upstream on a stalled caller's first
+   byte: the "dials upstream before headers are complete" shape the B13
+   acceptance does not cover. Matched in directive position only, so a
+   comment naming it is not a finding. -}
+caddyForbidden : List (String, String)
+caddyForbidden = [("layer4-passthrough", "^[ \t]*layer4([ \t]|\\{|$)")]
 
 {- | The egress unit needs the same hardening class as pds.service (D1),
    plus the network-layer SSRF guard its header comment describes.
@@ -496,6 +528,41 @@ firehoseTimeoutsIn : Result String String ->
 firehoseTimeoutsIn (Err e) = Err e
 firehoseTimeoutsIn (Ok path) = firehoseTimeouts path
 
+{- | One violation line per `--bind` on the unit's command line, in both
+   spellings an argument parser takes (`--bind ADDR` and `--bind=ADDR`).
+
+   `pdsd` has no `--bind`: it listens on loopback only, the proxied shape
+   B13 was accepted for, and refuses the flag as unknown, so a unit that
+   passes one, whatever address it names, is a unit that does not start.
+   Comment lines are skipped, since the unit's header names the flag in
+   prose. -}
+bindFlags : String -> <FileRead> Result String (List String)
+bindFlags path = match readFile path
+  Err e => Err "could not read \{path}: \{e}"
+  Ok content =>
+    let tokens = flatMap words (filter (l => not (isComment l)) (lines content))
+    Ok (map (boundTo path) (bindValues tokens))
+
+isComment : String -> Bool
+isComment line = startsWith "#" (trim line)
+
+bindValues : List String -> List String
+bindValues [] = []
+bindValues ("--bind" :: addr :: rest) = addr :: bindValues rest
+bindValues (token :: rest) = match stripPrefix "--bind=" token
+  Some addr => addr :: bindValues rest
+  None => bindValues rest
+
+boundTo : String -> String -> String
+boundTo path addr =
+  "\{path}: ExecStart passes --bind \{addr}, a flag pdsd refuses: it listens on loopback only"
+
+-- | `bindFlags` over a mutant, with the mutant's own failure reported as the
+-- check's.
+bindFlagsIn : Result String String -> <FileRead> Result String (List String)
+bindFlagsIn (Err e) = Err e
+bindFlagsIn (Ok path) = bindFlags path
+
 -- # The real tree
 
 test "pds.service carries every required hardening directive" =
@@ -533,6 +600,21 @@ test "Caddyfile keeps the request timeouts out of the firehose block" =
   expectNoFindings
     "pds/Caddyfile bounds a firehose subscription with a request timeout"
     (firehoseTimeouts caddyfile)
+
+test "Caddyfile proxies requests over HTTP to the loopback upstream" =
+  expectNoFindings
+    "pds/Caddyfile has no HTTP reverse_proxy to the loopback upstream"
+    (missingDirectives caddyfile caddyProxiedDirectives)
+
+test "Caddyfile has no TCP pass-through in front of pdsd" =
+  expectNoFindings
+    "pds/Caddyfile carries a layer4 pass-through"
+    (presentForbidden caddyfile caddyForbidden)
+
+test "pds.service passes no --bind" =
+  expectNoFindings
+    "pds/pds.service passes a --bind flag pdsd refuses"
+    (bindFlags service)
 
 test "pds-egress.service carries every required hardening directive" =
   expectNoFindings
@@ -730,6 +812,75 @@ test "mutation control: a stripped OnFailure= on pds.service is caught" =
         (without (startsWith "OnFailure=")))
       serviceDirectives)
 
+test "mutation control: a stripped RestrictAddressFamilies on pds.service is caught" =
+  expectFindings
+    "a stripped RestrictAddressFamilies=AF_INET"
+    (missingIn
+      (mutantOf
+        service
+        "pds.service.no-address-families"
+        (without (startsWith "RestrictAddressFamilies=")))
+      serviceDirectives)
+
+test "mutation control: a stripped SystemCallFilter on pds.service is caught" =
+  expectFindings
+    "a stripped SystemCallFilter"
+    (missingIn
+      (mutantOf
+        service
+        "pds.service.no-syscall-filter"
+        (without (startsWith "SystemCallFilter=")))
+      serviceDirectives)
+
+test "mutation control: a stripped SystemCallErrorNumber on pds.service is caught" =
+  expectFindings
+    "a stripped SystemCallErrorNumber=EPERM"
+    (missingIn
+      (mutantOf
+        service
+        "pds.service.no-syscall-errno"
+        (without (startsWith "SystemCallErrorNumber=")))
+      serviceDirectives)
+
+test "mutation control: a stripped OOMPolicy on pds.service is caught" =
+  expectFindings
+    "a stripped OOMPolicy=kill"
+    (missingIn
+      (mutantOf
+        service
+        "pds.service.no-oom-policy"
+        (without (startsWith "OOMPolicy=")))
+      serviceDirectives)
+
+-- Both spellings, each graded on its own, and loopback as well as a wider
+-- address: the flag itself is what `pdsd` refuses.
+test "mutation control: a pds.service bound to the wildcard address is caught" =
+  expectFindings
+    "a --bind 0.0.0.0 on pds.service"
+    (bindFlagsIn
+      (mutantOf
+        service
+        "pds.service.bind-wildcard"
+        (substituting "--port 8080" "--bind 0.0.0.0 --port 8080")))
+
+test "mutation control: a pds.service bound with --bind= to a public address is caught" =
+  expectFindings
+    "a --bind=203.0.113.7 on pds.service"
+    (bindFlagsIn
+      (mutantOf
+        service
+        "pds.service.bind-equals"
+        (substituting "--port 8080" "--bind=203.0.113.7 --port 8080")))
+
+test "mutation control: an explicit loopback --bind is caught too" =
+  expectFindings
+    "an explicit --bind 127.0.0.1 on pds.service"
+    (bindFlagsIn
+      (mutantOf
+        service
+        "pds.service.bind-loopback"
+        (substituting "--port 8080" "--bind 127.0.0.1 --port 8080")))
+
 test "mutation control: an alert unit that forgets its successful incident is caught" =
   expectFindings
     "a stripped RemainAfterExit=yes"
@@ -885,6 +1036,50 @@ test "mutation control: a Caddyfile with no firehose block at all is caught" =
         caddyfile
         "Caddyfile.no-firehose"
         (without (contains "reverse_proxy @firehose"))))
+
+test "mutation control: a Caddyfile with no reverse_proxy in front of pdsd is caught" =
+  expectFindings
+    "a Caddyfile that proxies nothing to the loopback upstream"
+    (missingIn
+      (mutantOf
+        caddyfile
+        "Caddyfile.no-proxy"
+        (without (contains "reverse_proxy")))
+      caddyProxiedDirectives)
+
+{- | A `layer4` TCP pass-through on the public port, forwarding to `pdsd`
+   ahead of the HTTP site block.
+
+   The HTTP `reverse_proxy` is still present in this copy, so the proxied
+   roster still passes, which is why the forbidden-direction check exists.
+   Both halves are asserted. -}
+layer4InFront : <Exec, FileRead, FileWrite, IO> Result String String
+layer4InFront = mutantOf caddyfile "Caddyfile.layer4" withLayer4Passthrough
+
+withLayer4Passthrough : List String -> List String
+withLayer4Passthrough ls =
+  [
+      "{",
+      "\tlayer4 {",
+      "\t\t:443 {",
+      "\t\t\troute {",
+      "\t\t\t\tproxy 127.0.0.1:8080",
+      "\t\t\t}",
+      "\t\t}",
+      "\t}",
+      "}",
+    ]
+    ++ ls
+
+test "mutation control: a layer4 pass-through in front of pdsd is caught" =
+  expectFindings
+    "a layer4 TCP pass-through in front of pdsd"
+    (presentIn layer4InFront caddyForbidden)
+
+test "mutation control: the layer4 copy still passes the proxied roster" =
+  expectNoFindings
+    "the layer4 copy was expected to pass the proxied roster"
+    (missingIn layer4InFront caddyProxiedDirectives)
 
 test "mutation control: a dropped egress IPAddressDeny range is caught" =
   expectFindings
@@ -1042,6 +1237,8 @@ gradedPatterns : Int
 gradedPatterns =
   length serviceDirectives
     + length caddyDirectives
+    + length caddyProxiedDirectives
+    + length caddyForbidden
     + length egressServiceDirectives
     + length egressServiceForbidden
     + length egressCaddyDirectives
@@ -1058,9 +1255,9 @@ gradedPatterns =
     + length alertServiceForbidden
 
 patternFloor : Int
-patternFloor = 106
+patternFloor = 114
 
-test "deploy_config_lint grades at least PATTERN_FLOOR=106 patterns" =
+test "deploy_config_lint grades at least PATTERN_FLOOR=114 patterns" =
   if gradedPatterns >= patternFloor then
     Pass
       ">= \{intToString patternFloor} patterns"
@@ -1087,9 +1284,9 @@ declaredAssertions =
     (readFile (underRoot "pds/test/deploy_config_lint_test.mdk"))
 
 assertionFloor : Int
-assertionFloor = 56
+assertionFloor = 69
 
-test "deploy_config_lint declares at least ASSERTION_FLOOR=56 `test` blocks" =
+test "deploy_config_lint declares at least ASSERTION_FLOOR=69 `test` blocks" =
   let want = ">= \{intToString assertionFloor} `test` blocks"
   match declaredAssertions
     Err e =>

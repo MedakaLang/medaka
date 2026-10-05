@@ -1,0 +1,12 @@
+interface Sz a where
+  szNew : Int -> a
+  szTag : a -> Int
+
+impl Sz (Int -> Int) where
+  szNew n = m => n + m
+  szTag _ = 5
+
+roundtrip : Int -> Int
+roundtrip n = szTag ((szNew n) : Int -> Int)
+
+main = println (roundtrip 14)

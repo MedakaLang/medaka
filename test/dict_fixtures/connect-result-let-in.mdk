@@ -1,0 +1,16 @@
+-- DICT-SEMANTICS §6.3 D3 clause 2 at a `let … in` (the inline spelling of
+-- the block-`let` row).  `dbl` generalizes with `e` connected to its argument
+-- through `Get c e`, so `e` is not defaulted at the `let`; at `Box Float`
+-- the one instance fixes `e := Float`; 3.0 is not > 4: "small".
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+classify : Box Float -> String
+classify b = let dbl c = get c + get c in if dbl b > 4 then "big" else "small"
+
+main = println (classify (Box 1.5))

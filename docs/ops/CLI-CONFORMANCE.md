@@ -96,6 +96,11 @@ one C1 generalises.
 rule-not-eq`/`--deny=rule-not-eq`, `build -o=<path>`, and `snapshot --check --stages=parse` all
 now parse the flag on either spelling instead of misreading it as a filename or dropping it.
 
+**A value flag's value is consumed once, even when it is flag-shaped.** `medaka test --filter
+--json f.mdk` takes `--json` as the filter substring and leaves JSON mode off: one token is
+never both a value and a mode switch. Pinned by `test/diff_native_cli.sh`
+(`test/filter-value-is-not-a-mode`).
+
 ---
 
 ## 2. Convention C2 — unknown-flag disposition
@@ -340,7 +345,7 @@ the pre-sprint baseline captured when it was first written; every cell below is 
 | `gate` | `medaka gate: unknown subcommand '--zzz…' (expected: list, run, verify, explain, reach, ci, balance, budget)` | 1 | stderr | ✅ | 1 | ✅ |
 | `repl` | `medaka repl: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ | 0 (starts a session) | — |
 | `lsp` | `medaka lsp: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ | 0 (starts the server) | — |
-| `mcp` | `medaka mcp: unknown argument '--zzz…' (mcp takes no arguments; try 'medaka mcp --help')` | 1 | stderr | ✅ | 0 (starts the server) | — |
+| `mcp` | `medaka mcp: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ (an empty `ArgSpec`, the same shape as `lsp` and `repl`) | 0 (starts the server) | — |
 | bare / `help` / `--help` / `-h` | prints usage | 0 | stdout | — | — | ✅ |
 | `--version` / `-v` / `version` | `medaka 0.1.0-preview` | 0 | stdout | — | — | ✅ |
 
@@ -366,7 +371,7 @@ baseline.**
 | `lint` | `medaka lint: no .mdk files found` | stderr | 1 | ✅ |
 | `codemod` | `medaka codemod: missing codemod name — 'empty' is a path, and a codemod name must come first` | stderr | 1 | ✅ (no longer reads the directory as a codemod NAME) |
 | `check` / `doc` / `check-policy` / `manifest` | `Is a directory` | stderr | 1 | ⚠️ raw `errno` text, no verb prefix, no path (residual — see below) |
-| `run` | `unknown module: empty — available modules: array, async, …` | stderr | 1 | ⚠️ a missing/wrong path is reported as a missing MODULE (residual — see below) |
+| `run` | `unknown module: empty — available modules: array, async, …` | stderr | 1 | ⚠️ a directory target is reported as a missing MODULE (residual); a missing file path is reported as `error: no such file: <path>` |
 | `snapshot` | usage line | stderr | 1 | ✅ |
 
 ### 5c. `--json` availability and channel (C4) — probe `medaka <verb> --json bad.mdk`
@@ -467,11 +472,16 @@ silently checks nine verbs of sixteen while reading as complete is worse than th
   through `unknownFlagMessage`, which renders `(known: none)` for a genuinely flagless spec —
   that IS a roster (an empty one), so `cli_known_flags_of` now distinguishes it (via
   `cli_had_roster`) from a verb with no roster at all, and these four are listed `(roster
-  present, zero flags)` and counted as covered, not `NO ROSTER (uncovered)`. Only `codemod`
-  (its own "unknown codemod 'X'" wording, no `(known: …)` substring) and `mcp` (its own
-  "unknown argument 'X'" wording) remain genuinely `NO ROSTER (uncovered)` — neither goes
-  through `unknownFlagMessage` at all, so there is nothing in the message to derive a roster
-  from without inventing one (residual filing candidate).
+  present, zero flags)` and counted as covered, not `NO ROSTER (uncovered)`. `mcp` joined
+  them with an empty `mcpArgSpec` of its own.
+
+  **`codemod` is the one documented exemption.** Its flag vocabulary is a runtime table, not
+  an `ArgSpec`: each registered codemod's own `mk` (`compiler/tools/codemod.mdk`) decides
+  which `--flag value` pairs it accepts, so there is no static set for a `(known: …)` roster
+  to name, and its rejection keeps its own "unknown codemod 'X'" wording. The exemption is
+  the `CLI_ROSTER_EXEMPT` list in `test/cli_conformance_lib.sh`, and the gate reports it as
+  `C EXEMPT`. Any other verb that prints no roster now FAILS property C instead of being
+  listed as uncovered.
 * **Positional arity is not a flag.** `medaka doc [file.mdk]` vs `<file.mdk>` — the §5f row
   above — is a claim about a POSITIONAL, and no property can reach it.
 * **Under-documentation in the top-level `usage` block is not a lie**, only an omission, and
@@ -561,6 +571,14 @@ exiting 0 is about an **unrecognized flag**, which is a usage error and is squar
 compiler/driver/medaka_cli.mdk` is empty: `bench` is a dead *declaration keyword*
 (parser/typecheck/fmt/LSP surface), not a verb. Wrong subsystem, wrong gates. It stays open on
 its own leg.
+
+**A bare `--` is an unrecognized flag, not an end-of-flags separator (#2371).** Every verb
+that validates flags rejects `--` in a flag position with the same named message as any other
+unknown flag (`unrecognized flag '--' (known: …)`), so `medaka check -- -weird.mdk` is a usage
+error. Two places differ on purpose: under `medaka run <file>`, `--` after the file is passed
+through to the program as an ordinary argument (§2), and `medaka gate reach` treats it as a
+separator. A dash-leading filename is passed with a path prefix (`./-weird.mdk`). Revisit only
+if a real caller needs `--` as a separator.
 
 **Splitting `medaka_cli.mdk` (line count: `make arch-census`) — out of scope.** That is
 #2282. This document makes it more tempting, not less; note findings there rather than

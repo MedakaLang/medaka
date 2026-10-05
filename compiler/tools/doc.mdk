@@ -22,6 +22,10 @@
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.parser.{
   parseWithPositions,
+  parseResult,
+  parseErrorLine,
+  parseErrorCol,
+  parseErrorMessage,
   Positions,
   DeclPos,
   positionsDecls,
@@ -81,7 +85,7 @@ import regex.{
 -- parsing `de_sig` back — the sig is a rendering, not a data structure) /
 -- de_line (the declaration's source line, which is what places a `-- # Title`
 -- section heading relative to the entries around it).
-data DocEntry = DocEntry String String String String DocKind Int
+public export data DocEntry = DocEntry String String String String DocKind Int
 
 -- What kind of declaration produced an entry, for the library-mode impl
 -- rebucketing pass (`rebucketLibraryImpls`).  `KTypeDecl` marks a `data`/
@@ -92,7 +96,11 @@ data DocEntry = DocEntry String String String String DocKind Int
 -- has no owner by construction.  `KSection` is not a declaration at all: a
 -- `-- # Title` comment between declarations, rendered as a page section and
 -- excluded from the index and the inventory.  Everything else is `KPlain`.
-data DocKind = KPlain | KTypeDecl | KImplOn (Option String) | KSection
+public export data DocKind =
+  | KPlain
+  | KTypeDecl
+  | KImplOn (Option String)
+  | KSection
 
 -- One row of the comment table: (source line, text, block).  `block` is the
 -- start line of the `{- -}` comment the row came from, or 0 for a line
@@ -1143,12 +1151,13 @@ renderMarkdown moduleName header entries =
   let headerBlock = if headerProse == "" then "" else headerProse ++ "\n\n"
   let sectioned = anyDoc isSection entries
   let main = filterDoc (e => not (isListedImpl e)) entries
+  let tbl = pageAnchors moduleName entries
   stringConcat
     (titleBlock
       :: primitiveLayerBanner moduleName
       :: headerBlock
-      :: map (renderEntry sectioned entries) main
-        ++ [renderInstancesSection entries])
+      :: map (renderEntry sectioned tbl entries) main
+        ++ [renderInstancesSection tbl entries])
 
 -- The prelude-only page publishes host externs whose `<type><Op>` names sit
 -- beside the library layer's (`stringToUpper` / `string.toUpper`); the page
@@ -1200,15 +1209,15 @@ instanceKey : DocEntry -> String
 instanceKey (DocEntry _ _ _ _ (KImplOn (Some hd)) _) = hd
 instanceKey (DocEntry name _ _ _ _ _) = instanceHead name
 
-renderEntry : Bool -> List DocEntry -> DocEntry -> String
-renderEntry _ _ (DocEntry title _ _ _ KSection _) = "## " ++ title ++ "\n\n"
-renderEntry sectioned entries (DocEntry name sig head doc kind _) =
+renderEntry : Bool -> AnchorTable -> List DocEntry -> DocEntry -> String
+renderEntry _ _ _ (DocEntry title _ _ _ KSection _) = "## " ++ title ++ "\n\n"
+renderEntry sectioned tbl entries (DocEntry name sig head doc kind _) =
   let level = if sectioned then "### " else "## "
   let header = "\{level}`\{name}`\n\n"
   let headLine = if head == "" then "" else "\n" ++ head
   let sigBlock = "```\n\{sig}\{headLine}\n```\n"
   let instances = match kind
-    KTypeDecl => instanceLine (instancesOf name entries)
+    KTypeDecl => instanceLine tbl (instancesOf name entries)
     _ => ""
   let rendered = renderDocProse doc
   let docBlock = if rendered == "" then "" else "\n" ++ rendered ++ "\n"
@@ -1224,41 +1233,42 @@ implHeadIs _ _ = False
 
 -- `Instances: \`Eq\`, \`Ord\`, [\`Debug\`](#debug-list-a)` — a documented
 -- impl links to its own heading, an undocumented one is just named.
-instanceLine : List DocEntry -> String
-instanceLine [] = ""
-instanceLine impls =
-  "\nInstances: " ++ joinWith ", " (map instanceRef impls) ++ "\n"
+instanceLine : AnchorTable -> List DocEntry -> String
+instanceLine _ [] = ""
+instanceLine tbl impls =
+  "\nInstances: " ++ joinWith ", " (map (instanceRef tbl) impls) ++ "\n"
 
-instanceRef : DocEntry -> String
-instanceRef (DocEntry name _ _ doc _ _) =
-  let iface = "`" ++ instanceIface name ++ "`"
-  if doc == "" then iface else "[\{iface}](#\{slugifyAnchor name})"
+instanceRef : AnchorTable -> DocEntry -> String
+instanceRef tbl e = match e
+  DocEntry name _ _ doc _ _ =>
+    let iface = "`" ++ instanceIface name ++ "`"
+    if doc == "" then iface else "[\{iface}](#\{anchorOf tbl e})"
 
 -- The closing section: one list line per type the page does not declare
 -- (`Eq Int` on `core`, `Debug (a, b)`), in first-seen order, followed by the
 -- documented impls as entries.  Empty when the page lists no impl at all.
-renderInstancesSection : List DocEntry -> String
-renderInstancesSection entries =
+renderInstancesSection : AnchorTable -> List DocEntry -> String
+renderInstancesSection tbl entries =
   let listed = filterDoc isListedImpl entries
   let orphans = filterDoc (e => not (hasTypeEntry entries e)) listed
   let keys = uniqueDoc (map instanceKey orphans)
   let bullets = match keys
     [] => ""
-    _ => "\{joinWith "\n" (map (orphanLine orphans) keys)}\n\n"
+    _ => "\{joinWith "\n" (map (orphanLine tbl orphans) keys)}\n\n"
   let documented =
     stringConcat
       (map
-        (renderEntry True entries)
+        (renderEntry True tbl entries)
         (filterDoc (e => entryDoc e /= "") listed))
   if bullets == "" && documented == "" then
     ""
   else
     "## Instances\n\n\{bullets}\{documented}"
 
-orphanLine : List DocEntry -> String -> String
-orphanLine orphans key =
+orphanLine : AnchorTable -> List DocEntry -> String -> String
+orphanLine tbl orphans key =
   let mine = filterDoc (e => instanceKey e == key) orphans
-  "- `\{key}`: \{joinWith ", " (map instanceRef mine)}"
+  "- `\{key}`: \{joinWith ", " (map (instanceRef tbl) mine)}"
 
 hasTypeEntry : List DocEntry -> DocEntry -> Bool
 hasTypeEntry entries (DocEntry _ _ _ _ (KImplOn (Some hd)) _) =
@@ -1298,10 +1308,11 @@ runDoc runtimeSrc coreSrc src filename roots =
 -- type names the module DECLARES — public or private, straight off the raw
 -- decls, which is the ownership evidence `rebucketLibraryImpls` reads (S2-1;
 -- the entries alone cannot answer it, see `declaredTypeNames`).
--- Abstract export: `medaka_cli.mdk`'s library-mode driver reads it only
--- through `mdName` + `renderModulePage`/`renderIndex`/`libraryInventoryJson`
--- below, never by constructing/pattern-matching it itself.
-export data ModuleDoc = ModuleDoc String String (List DocEntry) (List String)
+-- Constructors are public (with `DocEntry`/`DocKind`) so `doc_test.mdk` can
+-- build pages; `medaka_cli.mdk`'s library-mode driver still reads it only
+-- through `mdName` + `renderModulePage`/`renderIndex`/`libraryInventoryJson`.
+public export data ModuleDoc =
+  | ModuleDoc String String (List DocEntry) (List String)
 
 export
 mdName : ModuleDoc -> String
@@ -1372,6 +1383,17 @@ docModuleName roots filename = match reverseL roots
     else
       chopExt (baseOf filename)
   [] => chopExt (baseOf filename)
+
+-- Library mode documents a batch of files; a file that does not parse must be
+-- reported by path (`path:line:col: message`), since `computeModuleDoc` would
+-- otherwise panic with a bare "parse error" that names no file.
+export
+docParseError : String -> String -> Option String
+docParseError path src = match parseResult src
+  Ok _ => None
+  Err e =>
+    Some
+      "\{path}:\{parseErrorLine e}:\{parseErrorCol e}: \{parseErrorMessage e}"
 
 export
 computeModuleDoc : String ->
@@ -1620,6 +1642,67 @@ slugifyAnchor : String -> String
 slugifyAnchor name =
   stringTrimDashes (replaceAll nonSlugRunRe "-" (toLower name))
 
+-- One resolved anchor per heading a page renders: (heading text, source line,
+-- entry tag, anchor).  The tag tells a section / impl / ordinary entry apart,
+-- so a type and a function that share a name keep distinct rows.
+type AnchorTable = List (String, Int, String, String)
+
+entryTag : DocEntry -> String
+entryTag e
+  | isSection e = "s"
+  | isImpl e = "i"
+  | otherwise = "p"
+
+-- GitHub gives the n-th heading whose slug repeats the suffix `-(n-1)`, so a
+-- link to the later heading must carry that suffix too.  Headings are taken in
+-- the order `renderMarkdown` emits them: the page title, the main entries, the
+-- closing "Instances" heading, then the documented impls under it.
+pageAnchors : String -> List DocEntry -> AnchorTable
+pageAnchors moduleName entries =
+  let listed = filterDoc isListedImpl entries
+  let orphans = filterDoc (e => not (hasTypeEntry entries e)) listed
+  let documented = filterDoc (e => entryDoc e /= "") listed
+  let main = filterDoc (e => not (isListedImpl e)) entries
+  let hasInstances = not (isNilDoc orphans) || not (isNilDoc documented)
+  let instHead = if hasInstances then [("Instances", 0 - 1, "h")] else []
+  let rows =
+    [(moduleName, 0 - 1, "h")]
+      ++ map entryRow main
+      ++ instHead
+      ++ map entryRow documented
+  assignAnchors [] rows
+
+isNilDoc : List a -> Bool
+isNilDoc [] = True
+isNilDoc _ = False
+
+entryRow : DocEntry -> (String, Int, String)
+entryRow e = match e
+  DocEntry name _ _ _ _ line => (name, line, entryTag e)
+
+assignAnchors : List String -> List (String, Int, String) -> AnchorTable
+assignAnchors _ [] = []
+assignAnchors used ((name, line, tag) :: rest) =
+  let a = freshAnchor used (slugifyAnchor name) 0
+  (name, line, tag, a) :: assignAnchors (a :: used) rest
+
+freshAnchor : List String -> String -> Int -> String
+freshAnchor used base n =
+  let cand = if n == 0 then base else "\{base}-\{n}"
+  if anyDoc (== cand) used then freshAnchor used base (n + 1) else cand
+
+anchorOf : AnchorTable -> DocEntry -> String
+anchorOf tbl e = match e
+  DocEntry name _ _ _ _ line => lookupAnchor tbl name line (entryTag e)
+
+lookupAnchor : AnchorTable -> String -> Int -> String -> String
+lookupAnchor [] name _ _ = slugifyAnchor name
+lookupAnchor ((n, l, t, a) :: rest) name line tag =
+  if n == name && l == line && t == tag then
+    a
+  else
+    lookupAnchor rest name line tag
+
 stringTrimDashes : String -> String
 stringTrimDashes s = stringTrimDashEnd (stringTrimDashStart s)
 
@@ -1670,12 +1753,13 @@ renderIndexModule (ModuleDoc name header entries _) =
   let summary = firstSentence (renderDocProse header)
   let summaryBlock = if summary == "" then "" else summary ++ "\n\n"
   let listed = filterDoc (e => not (isImpl e) && not (isSection e)) entries
-  let links = joinWith "\n" (map (renderIndexLink name) listed)
+  let tbl = pageAnchors name entries
+  let links = joinWith "\n" (map (renderIndexLink name tbl) listed)
   "\{head}\{summaryBlock}\{links}\n\n"
 
-renderIndexLink : String -> DocEntry -> String
-renderIndexLink moduleName (DocEntry name _ _ _ _ _) =
-  "- [`\{name}`](\{moduleName}.md#\{slugifyAnchor name})"
+renderIndexLink : String -> AnchorTable -> DocEntry -> String
+renderIndexLink moduleName tbl e = match e
+  DocEntry name _ _ _ _ _ => "- [`\{name}`](\{moduleName}.md#\{anchorOf tbl e})"
 
 -- The first sentence of a prose block: up to and including the first `.`
 -- that ends a word, or the first line when there is none.  Newlines inside

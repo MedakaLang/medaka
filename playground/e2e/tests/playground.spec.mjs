@@ -17,6 +17,7 @@
 // replaces the old three-pane stdout/stderr/problems layout — stdout renders
 // plain, stderr/problems render inline in that same pane (see main.js).
 import { chromium } from 'playwright';
+import fs from 'node:fs';
 
 const [, , BASE_URL, SCREENSHOT_DIR] = process.argv;
 if (!BASE_URL || !SCREENSHOT_DIR) {
@@ -38,11 +39,54 @@ function check(name, cond, detail) {
   }
 }
 
+// Phone-width header: the page must not scroll sideways, the link row must be
+// replaced by a hamburger, and opening it must reveal the links. `menu` is the
+// <details> selector for that header (.b-menu on the apex, .site-nav-menu on a
+// rendered doc page); `row` is the wide-viewport link row it replaces.
+async function checkPhoneHeader(browser, url, label, { menu, row }) {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const p = await ctx.newPage();
+  try {
+    await p.goto(url, { waitUntil: 'domcontentloaded' });
+    await p.waitForSelector(menu + ' summary', { timeout: 15000 });
+    const scrollW = await p.evaluate(() => document.documentElement.scrollWidth);
+    check(`${label}: no horizontal overflow at 390px (scrollWidth ${scrollW})`, scrollW <= 390);
+    const rowHidden = await p.$eval(row, (el) => getComputedStyle(el).display === 'none');
+    check(`${label}: wide link row hidden at 390px`, rowHidden);
+    const summaryShown = await p.$eval(menu + ' summary', (el) => el.getBoundingClientRect().width > 0);
+    check(`${label}: hamburger visible at 390px`, summaryShown);
+    await p.click(menu + ' summary');
+    const linkCount = await p.$$eval(menu + ' nav a', (as) => as.filter((a) => a.getBoundingClientRect().height > 0).length);
+    check(`${label}: opening the menu reveals the links (got ${linkCount})`, linkCount >= 4);
+    const scrollWOpen = await p.evaluate(() => document.documentElement.scrollWidth);
+    check(`${label}: open menu does not overflow either (scrollWidth ${scrollWOpen})`, scrollWOpen <= 390);
+  } finally {
+    await ctx.close();
+  }
+}
+
 function setSource(page, src) {
   return page.evaluate((s) => {
     const v = window.__mdkView;
     v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: s } });
   }, src);
+}
+
+// Battery program sources are read from test/visitor_battery/, never copied.
+const batterySource = (name) =>
+  fs.readFileSync(new URL(`../../../test/visitor_battery/${name}.mdk`, import.meta.url), 'utf8');
+
+// Runs `name` through the page and returns the console text once Run re-enables.
+async function runBattery(page, name, timeout = 30000) {
+  await setSource(page, batterySource(name));
+  await page.waitForSelector('#run-btn:not([disabled])', { timeout: 15000 });
+  await page.click('#run-btn');
+  await page.waitForFunction(
+    () => !document.querySelector('#run-btn').disabled
+      && /runtime error|stack overflow|not available|native-only|stopped after|error\]|\n/.test(document.querySelector('#console').textContent),
+    null, { timeout });
+  await page.waitForTimeout(300);
+  return (await page.$eval('#console', (el) => el.textContent)).trim();
 }
 
 async function main() {
@@ -74,6 +118,10 @@ async function main() {
     await page.waitForSelector('.cm-editor .cm-content', { timeout: 15000 });
     const funnelStillHidden = await page.$eval('#funnel-strip', (el) => getComputedStyle(el).display === 'none');
     check('funnel strip stays hidden across reload (localStorage)', funnelStillHidden);
+
+    // ── Test 1c: phone-width header (apex) ──────────────────────────────────
+    console.log('Test: phone-width header on the apex');
+    await checkPhoneHeader(browser, BASE_URL, 'apex', { menu: '.b-menu', row: '.b-head .links' });
 
     // ── Test 2: syntax highlighting active ─────────────────────────────────
     console.log('Test: syntax highlighting');
@@ -272,6 +320,9 @@ async function main() {
       // the same shape: an apex link, a landing page, a bare route, and a
       // cross-link INTO the guide that must resolve on this origin (the
       // renderer's --sibling rewrite) rather than leaving for GitHub.
+      // The `.links` header exists only on the apex page; the guide chapter the
+      // previous check left us on has the doc-set nav instead, so go back first.
+      await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
       const advHref = await page.evaluate(() => document.querySelector('.links a[href*="advanced/"]')?.getAttribute('href') ?? null);
       check('apex header links into the advanced topics', !!advHref, String(advHref));
       const advStatus = (await page.goto(base + '/advanced/00-about.html', { waitUntil: 'domcontentloaded' })).status();
@@ -297,6 +348,12 @@ async function main() {
       const backStatus = await page.evaluate(async (h) => (await fetch(h)).status, backHref);
       check(`guide "← Playground" back link resolves (${backHref} -> ${backStatus})`, backStatus === 200);
       await page.screenshot({ path: `${SCREENSHOT_DIR}/09_guide_chapter.png` });
+
+      // The rendered doc pages carry the other header (render_docs.mjs .site-nav);
+      // same phone-width contract as the apex.
+      console.log('Test: phone-width header on a guide page');
+      await checkPhoneHeader(browser, base + '/guide/03-functions.html', 'guide page',
+        { menu: '.site-nav-menu', row: '.site-nav-links' });
 
       // "Open in Playground" must land the EXACT block source in the editor.
       console.log('Test: guide "Open in Playground" round-trip');
@@ -450,6 +507,60 @@ async function main() {
         check(`stdlib "← Playground" back link resolves (${backHref} -> ${backStatus})`, backStatus === 200);
         await page.screenshot({ path: `${SCREENSHOT_DIR}/13_stdlib_module.png` });
       }
+    }
+
+    // Console truthfulness (#3691): each message appears once, names the real cause.
+    {
+      console.log('Test: console tells the truth');
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('.cm-editor .cm-content', { timeout: 15000 });
+      const div = await runBattery(page, '13_int_div_zero');
+      check('13 div-by-zero: runtime error shown exactly once, unbracketed',
+        div.split('division by zero').length === 2 && !div.includes('[runtime error'), JSON.stringify(div));
+      const rec = await runBattery(page, '14_deep_recursion');
+      check('14 deep recursion: names the browser stack limit',
+        rec.includes('stack overflow: recursion too deep for the browser; the native compiler has a larger stack')
+          && !rec.includes('instantiate failed'), JSON.stringify(rec));
+      const stdin = await runBattery(page, '34_stdin');
+      check('34 readLine: names the extern as unavailable in the browser',
+        stdin.includes('readLine is not available in the browser playground')
+          && !stdin.includes('compiler trap'), JSON.stringify(stdin));
+      const asy = await runBattery(page, '49_async');
+      check('49 import async: says the module is native-only',
+        asy.includes('native-only and not available in the browser playground')
+          && !asy.includes('unknown module'), JSON.stringify(asy));
+      const inf = await runBattery(page, '51_infinite_loop', 40000);
+      check('51 infinite loop: states the time limit',
+        inf.includes("stopped after 10 s (the playground's time limit)")
+          && !inf.includes('killed: time limit'), JSON.stringify(inf));
+    }
+
+    // Console keeps up with output (#3719): 5,000 printed lines render promptly,
+    // in order, with the pane scrolled to the last line. Measured ~1.4 s on the
+    // batched console vs ~20.8 s when every line forced a layout.
+    {
+      console.log('Test: console keeps up with 5,000 lines');
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('.cm-editor .cm-content', { timeout: 15000 });
+      await setSource(page, batterySource('43_large_output'));
+      await page.waitForSelector('#run-btn:not([disabled])', { timeout: 15000 });
+      const t0 = Date.now();
+      await page.click('#run-btn');
+      await page.waitForFunction(
+        () => document.querySelector('#console').textContent.includes('compiled & ran'),
+        null, { timeout: 60000 });
+      const ms = Date.now() - t0;
+      check(`5,000 lines rendered in ${ms} ms (ceiling 8000 ms)`, ms < 8000);
+      const big = await page.$eval('#console', (el) => {
+        const lines = el.textContent.split('\n').filter((l) => /^\d+$/.test(l));
+        const inOrder = lines.length === 5000 && lines.every((l, i) => Number(l) === i + 1);
+        return { inOrder, atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 4 };
+      });
+      check('5,000 lines appear complete and in order', big.inOrder, JSON.stringify(big));
+      check('console is scrolled to the last line', big.atBottom, JSON.stringify(big));
+      await runBattery(page, '13_int_div_zero');
+      const stderrCount = await page.$$eval('#console .con-stderr', (els) => els.length);
+      check('stderr output keeps its con-stderr class', stderrCount > 0, String(stderrCount));
     }
 
     if (pageErrors.length) {

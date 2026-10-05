@@ -1,0 +1,17 @@
+-- lint-disable-file rule-duplicate-body
+-- Accepted twin of `server_pure.mdk`: the server's row names what the
+-- handler spends. The two bodies are identical: only the signatures differ.
+
+import lib.handlers.{ServerLinks, pdsHandler}
+import lib.jwt.{Mint}
+import lib.server_core.{Account, Server, makeServer}
+import lib.sign.{Sign}
+import lib.xrpc.{Registry}
+
+export
+serverOf : Account ->
+  Registry ->
+  ServerLinks ->
+  Server <Mint {"access", "refresh"}, Sign "commit">
+serverOf account registry links =
+  makeServer account registry (pdsHandler account links "0.0.0")

@@ -12,7 +12,7 @@ import lib.sign.{
   secretKeyFromBytes,
   signatureFromCompact,
   signatureCompact,
-  signDigest,
+  signCommitDigest,
 }
 
 bytes : String -> Bytes
@@ -73,7 +73,7 @@ setAt i value bs =
 decLast : Bytes -> Bytes
 decLast bs = setAt 31 (U8.toInt bs[31] - 1) bs
 
-incLast : Bytes -> Bytes
+incLast : Bytes -> <Sign "commit"> Bytes
 incLast bs = setAt 31 (U8.toInt bs[31] + 1) bs
 
 test "secret key accepts one and n - 1" = expectEach [
@@ -160,15 +160,15 @@ test "public compact parsing rejects zero range and high-S components" = expectE
   ]
 
 test "public signing rejects malformed digests before production" =
-  expectOkThen
-    (secret => expectEach [
-      (
-        "rejects a too-short digest",
-        expectTrue (isErr (signDigest secret (zeros 31))),
-      ),
-      (
-        "rejects a too-long digest",
-        expectTrue (isErr (signDigest secret (zeros 33))),
-      ),
-    ])
-    (secretKeyFromBytes oneBytes)
+  let secret =
+    resultOrPanic "sign_key_test: key setup" (secretKeyFromBytes oneBytes)
+  expectEach [
+    (
+      "rejects a too-short digest",
+      expectTrue (isErr (signCommitDigest secret (zeros 31))),
+    ),
+    (
+      "rejects a too-long digest",
+      expectTrue (isErr (signCommitDigest secret (zeros 33))),
+    ),
+  ]

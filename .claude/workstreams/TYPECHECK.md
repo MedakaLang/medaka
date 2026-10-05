@@ -92,9 +92,10 @@ removing it:
   only while the mangler still ran first. "On the emit path the qualification is the identity
   function, so the emitted IR is byte-identical" — the emit path now elaborates an UNMANGLED
   tree, so the key is bare and this qualification is the whole of what distinguishes two
-  same-named records at the emitter. And "`lookupRecordByMangledHead` still selects the
-  `RecordInfo` on the emit path" — it no longer can, because no key reaching elaboration is
-  mangled there; the arm that fires is now the pre-elaboration ctor rename
+  same-named records at the emitter. And "the mangled-head record lookup still selects the
+  `RecordInfo` on the emit path" — it could not after #2809, because no key reaching
+  elaboration is mangled there, and that lookup was dead from then on and has since been
+  deleted; the arm that fires is now the pre-elaboration ctor rename
   (`mangleCtorCollisions`) on `eval` / `core_ir_eval` / `test`. The stamp is also now applied
   EXACTLY ONCE: the mangler's `renameScoped` no longer renames the cell, and the stamp's
   idempotence prefix-guard is gone with it — a record whose source name already carried its own
@@ -190,7 +191,7 @@ documents, in gate-verified steps.
 | Module fold loops ×4 | ✅ LANDED (#151, completed #2705/S5): unified into one `foldModules` (worker + isLast-aware collector), then into ONE graph driver `driveGraphK` with an output selection — one `graphPreamble`, one `graphModuleWorker`, one `graphCollect`, one graph-end drain. `elaborateModules`, `checkModulesDiagsChain`'s unkeyed arm and `checkModulesEntryFullSplitK` are projections of it; the entry report is `checkModulesEntryFromDiags` over the same per-module list. Only `cmCheckWorker` (the schemes-only `checkModules` fast path) remains a separate worker |
 | Impl resolution ×6 | `resolveSite`, `resolveOpSite` (the #145-unified binop/unop resolver), `routeOf` (already unifies what were three separate routeOfMono/routeOfMonoTop/routeOfMonoEncl arms), `selectReqImpl`, arg-position mirrors (#156) |
 | Structural matchers ×4 | `cohOverlap`'s unifier, `cohSubsumes`, `tySubsumesV`, `matchTyMono` (#156 stage 1) |
-| Operator seams ×4 | LANDED #146 → collapsed to `recordIfaceObligation`/ifaceRegistered (the 12 clones `record{Num,Eq,Ord,Semigroup}Obligation` + `*IfaceRegistered` guards + `*Entry` predicates are retired). LANDED #147 → `methodIfaceParamsRef` is now an `OrdMap` keyed by method name + a cached registeredIfacesRef iface-name set; ifaceRegistered is `omHasKey` (the old ifaceEntryMatches full-scan predicate is retired). LANDED #1539 → the seam's gate is `builtinClassPresent`, a projection of the prelude-seeded `BuiltinClasses` record (DICT §8 I7 qual. 4), so no user-writable table decides whether an operator's obligation is synthesized; ifaceRegistered had no callers left and was deleted, leaving registeredIfacesRef write-only. LANDED #1569 → registeredIfacesRef / universeRegisteredIfacesRef and the ifaceRegistered tombstone ledger are removed entirely; the accumulator pair `insertMethodIfaceParams`/`insertIfaceMethodsAcc` fed collapses to a single map |
+| Operator seams ×4 | LANDED #146 → collapsed to `recordIfaceObligation`/ifaceRegistered (the 12 clones `record{Num,Eq,Ord,Semigroup}Obligation` + `*IfaceRegistered` guards + `*Entry` predicates are retired). LANDED #147 → the method-interface table became an `OrdMap` keyed by method name + a cached registeredIfacesRef iface-name set; ifaceRegistered is `omHasKey` (the old ifaceEntryMatches full-scan predicate is retired). LANDED #1539 → the seam's gate is `builtinClassPresent`, a projection of the prelude-seeded `BuiltinClasses` record (DICT §8 I7 qual. 4), so no user-writable table decides whether an operator's obligation is synthesized; ifaceRegistered had no callers left and was deleted, leaving registeredIfacesRef write-only. LANDED #1569 → registeredIfacesRef / universeRegisteredIfacesRef and the ifaceRegistered tombstone ledger are removed entirely; the accumulator pair that fed it collapses to a single map. #2563 then retired that map: the method namespace is stage K's `deMethods`, read through `methodEntryHere` |
 | Binop/unop twins ×4 pairs | ✅ LANDED (#145): collapsed into one `isBinop`-flagged set — `resolveOpSites`/`resolveOpSite`/`opDictVarOf`/`stampOpRouteVal` (a later extraction pulled the pure Route-returning core out of the original stampOpRoute into stampOpRouteVal) |
 
 ---
@@ -243,10 +244,15 @@ not exist yet, so don't grep for them), where survive-vs-clear becomes type stru
 `typeErrorsSticky` stays OUTSIDE any bundle, permanently — it is sound *because* it lives outside
 resets (ARCH-REVIEW hazard #1).
 
-### 8. Effect rows are transparent in matching ON PURPOSE
-Coherence, subsumption, and dispatch matching all ignore/strip `TEff` rows. That is the
-single-meaning law (`docs/spec/EFFECTS-SEMANTICS.md` §8 — effects erase; they never participate in
-dispatch), not an oversight. Do not "fix" it while unifying the matchers in #156.
+### 8. Dispatch shape and typing proof are different judgments
+Coherence/ranking and runtime dispatch do not select instances by effect rows or
+authority indices (`docs/spec/EFFECTS-SEMANTICS.md` §6.9). This does not license
+erasing them while proving that a goal satisfies an instance: repeated head
+variables must agree at the full type, including rows, qualifiers and invariant
+indices. #3523 demonstrates why using dispatch-shape equality for that proof
+launders effects. Preserve effect-independent ranking and discharge the selected
+instance's full typing obligations; do not rank a different instance by whether
+its effect constraints happen to pass.
 
 ### 9. Measurement discipline for the perf items
 The scans this workstream removes are **pure traversals — they allocate nothing**, so the

@@ -111,8 +111,8 @@ const KIND_MEDAKA_LABELS = new Set(['medaka', 'medaka-project', 'medaka-nocheck'
 // that reaches the runnable partition anyway; with the rules agreed it reports 0,
 // and anything it does report is real drift.)
 //
-// (3) A block with no top-level `main` is not a program. `medaka build` panics
-//     ("no 'main' binding found"); the browser answers W-MAIN-MISSING.
+// (3) A block with no top-level `main` is not a program. `medaka run`/`build` refuse it
+//     with one located error (W-MAIN-MISSING); the browser answers the same code.
 const definesMain = (source) => /^main\b/m.test(source);
 
 // (4) A block importing a stdlib module the page does not SHIP cannot resolve in

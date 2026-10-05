@@ -1,0 +1,13 @@
+-- #3681: `Same` is imported through a module that re-exports it and again
+-- directly from its declaring module. One declaration reached by two paths is
+-- one candidate, so the impl below is of that `Same` and `pmth (MkP 1)`
+-- dispatches to it: 2, never the `Q` impl's 1. The reversed import order is
+-- accept_3681_iface_reexport_plus_direct.mdk.
+import lib.od3681_mid.{Same}
+import lib.od3681_p.{Same, pmth}
+data P a = MkP a
+
+impl Same P where
+  pmth p = 2
+
+main = println (pmth (MkP 1))

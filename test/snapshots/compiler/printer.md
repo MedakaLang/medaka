@@ -1,5 +1,5 @@
 # META
-source_lines=2664
+source_lines=2671
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -1693,7 +1693,7 @@ printIf c t els = group (ifLadder c t els)
 
 ifLadder : Expr -> Expr -> Expr -> Doc
 ifLadder c t els =
-  let condD = noClaimDoc (_ => printExpr precTop c)
+  let condD = noClaimDoc (_ => condExprDoc c)
   let thenD = withBound (spanStart (exprSpan els)) (_ => ifBranch "then" t)
   let elseD = ifElsePart els
   Cat (text "if ") (Cat condD (Cat (text " ") (Cat thenD elseD)))
@@ -1835,9 +1835,16 @@ matchGuardsDoc guards =
   Cat (text " if ") (sepBy (text ", ") (map guardDoc guards))
 
 guardDoc : Guard -> Doc
-guardDoc (GBool g) = printExpr precTop g
-guardDoc (GBind gp g) =
-  Cat (printPat gp) (Cat (text " <- ") (printExpr precTop g))
+guardDoc (GBool g) = condExprDoc g
+guardDoc (GBind gp g) = Cat (printPat gp) (Cat (text " <- ") (condExprDoc g))
+
+-- A condition (`if c then`, a guard) is followed by more text on its last line,
+-- so a `match` there must keep its parentheses: its arms block would
+-- otherwise swallow what follows.
+condExprDoc : Expr -> Doc
+condExprDoc c = match stripLocE c
+  EMatch _ _ => Cat (text "(") (Cat (printExpr precTop c) (text ")"))
+  _ => printExpr precTop c
 
 -- Function/where guard arms: indented block of `| guards = body`.
 guardArmPiece : GuardArm -> Piece
@@ -3326,7 +3333,7 @@ effAxesDoc axes =
 (DTypeSig false "printIf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc")))))
 (DFunDef false "printIf" ((PVar "c") (PVar "t") (PVar "els")) (EApp (EVar "group") (EApp (EApp (EApp (EVar "ifLadder") (EVar "c")) (EVar "t")) (EVar "els"))))
 (DTypeSig false "ifLadder" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc")))))
-(DFunDef false "ifLadder" ((PVar "c") (PVar "t") (PVar "els")) (EBlock (DoLet false false (PVar "condD") (EApp (EVar "noClaimDoc") (ELam (PWild) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "c"))))) (DoLet false false (PVar "thenD") (EApp (EApp (EVar "withBound") (EApp (EVar "spanStart") (EApp (EVar "exprSpan") (EVar "els")))) (ELam (PWild) (EApp (EApp (EVar "ifBranch") (ELit (LString "then"))) (EVar "t"))))) (DoLet false false (PVar "elseD") (EApp (EVar "ifElsePart") (EVar "els"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "if ")))) (EApp (EApp (EVar "Cat") (EVar "condD")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "Cat") (EVar "thenD")) (EVar "elseD"))))))))
+(DFunDef false "ifLadder" ((PVar "c") (PVar "t") (PVar "els")) (EBlock (DoLet false false (PVar "condD") (EApp (EVar "noClaimDoc") (ELam (PWild) (EApp (EVar "condExprDoc") (EVar "c"))))) (DoLet false false (PVar "thenD") (EApp (EApp (EVar "withBound") (EApp (EVar "spanStart") (EApp (EVar "exprSpan") (EVar "els")))) (ELam (PWild) (EApp (EApp (EVar "ifBranch") (ELit (LString "then"))) (EVar "t"))))) (DoLet false false (PVar "elseD") (EApp (EVar "ifElsePart") (EVar "els"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "if ")))) (EApp (EApp (EVar "Cat") (EVar "condD")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "Cat") (EVar "thenD")) (EVar "elseD"))))))))
 (DTypeSig false "ifElsePart" (TyFun (TyCon "Expr") (TyCon "Doc")))
 (DFunDef false "ifElsePart" ((PVar "els")) (EIf (EApp (EVar "isUnitLit") (EVar "els")) (EVar "Nil") (EIf (EVar "otherwise") (EMatch (EApp (EVar "stripLocE") (EVar "els")) (arm (PCon "EIf" (PVar "c2") (PVar "t2") (PVar "e2")) () (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "else ")))) (EApp (EApp (EApp (EVar "ifLadder") (EVar "c2")) (EVar "t2")) (EVar "e2"))))) (arm PWild () (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "ifBranch") (ELit (LString "else"))) (EVar "els"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ifBranch" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Doc"))))
@@ -3370,8 +3377,10 @@ effAxesDoc axes =
 (DFunDef false "matchGuardsDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "matchGuardsDoc" ((PVar "guards")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " if ")))) (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EVar "map") (EVar "guardDoc")) (EVar "guards")))))
 (DTypeSig false "guardDoc" (TyFun (TyCon "Guard") (TyCon "Doc")))
-(DFunDef false "guardDoc" ((PCon "GBool" (PVar "g"))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "g")))
-(DFunDef false "guardDoc" ((PCon "GBind" (PVar "gp") (PVar "g"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "gp"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " <- ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "g")))))
+(DFunDef false "guardDoc" ((PCon "GBool" (PVar "g"))) (EApp (EVar "condExprDoc") (EVar "g")))
+(DFunDef false "guardDoc" ((PCon "GBind" (PVar "gp") (PVar "g"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "gp"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " <- ")))) (EApp (EVar "condExprDoc") (EVar "g")))))
+(DTypeSig false "condExprDoc" (TyFun (TyCon "Expr") (TyCon "Doc")))
+(DFunDef false "condExprDoc" ((PVar "c")) (EMatch (EApp (EVar "stripLocE") (EVar "c")) (arm (PCon "EMatch" PWild PWild) () (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "c"))) (EApp (EVar "text") (ELit (LString ")")))))) (arm PWild () (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "c")))))
 (DTypeSig false "guardArmPiece" (TyFun (TyCon "GuardArm") (TyCon "Piece")))
 (DFunDef false "guardArmPiece" ((PVar "arm")) (EMatch (EApp (EVar "guardArmSpan") (EVar "arm")) (arm (PTuple (PVar "s") (PVar "sc") (PVar "en") (PVar "ec")) () (EApp (EApp (EApp (EApp (EApp (EVar "Piece") (EVar "s")) (EVar "sc")) (EVar "en")) (EVar "ec")) (ELam (PWild) (EApp (EVar "guardArmDoc") (EVar "arm")))))))
 (DTypeSig false "printGuardArms" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyCon "Doc")))
@@ -4273,7 +4282,7 @@ effAxesDoc axes =
 (DTypeSig false "printIf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc")))))
 (DFunDef false "printIf" ((PVar "c") (PVar "t") (PVar "els")) (EApp (EVar "group") (EApp (EApp (EApp (EVar "ifLadder") (EVar "c")) (EVar "t")) (EVar "els"))))
 (DTypeSig false "ifLadder" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc")))))
-(DFunDef false "ifLadder" ((PVar "c") (PVar "t") (PVar "els")) (EBlock (DoLet false false (PVar "condD") (EApp (EVar "noClaimDoc") (ELam (PWild) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "c"))))) (DoLet false false (PVar "thenD") (EApp (EApp (EVar "withBound") (EApp (EVar "spanStart") (EApp (EVar "exprSpan") (EVar "els")))) (ELam (PWild) (EApp (EApp (EVar "ifBranch") (ELit (LString "then"))) (EVar "t"))))) (DoLet false false (PVar "elseD") (EApp (EVar "ifElsePart") (EVar "els"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "if ")))) (EApp (EApp (EVar "Cat") (EVar "condD")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "Cat") (EVar "thenD")) (EVar "elseD"))))))))
+(DFunDef false "ifLadder" ((PVar "c") (PVar "t") (PVar "els")) (EBlock (DoLet false false (PVar "condD") (EApp (EVar "noClaimDoc") (ELam (PWild) (EApp (EVar "condExprDoc") (EVar "c"))))) (DoLet false false (PVar "thenD") (EApp (EApp (EVar "withBound") (EApp (EVar "spanStart") (EApp (EVar "exprSpan") (EVar "els")))) (ELam (PWild) (EApp (EApp (EVar "ifBranch") (ELit (LString "then"))) (EVar "t"))))) (DoLet false false (PVar "elseD") (EApp (EVar "ifElsePart") (EVar "els"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "if ")))) (EApp (EApp (EVar "Cat") (EVar "condD")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "Cat") (EVar "thenD")) (EVar "elseD"))))))))
 (DTypeSig false "ifElsePart" (TyFun (TyCon "Expr") (TyCon "Doc")))
 (DFunDef false "ifElsePart" ((PVar "els")) (EIf (EApp (EVar "isUnitLit") (EVar "els")) (EVar "Nil") (EIf (EVar "otherwise") (EMatch (EApp (EVar "stripLocE") (EVar "els")) (arm (PCon "EIf" (PVar "c2") (PVar "t2") (PVar "e2")) () (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "else ")))) (EApp (EApp (EApp (EVar "ifLadder") (EVar "c2")) (EVar "t2")) (EVar "e2"))))) (arm PWild () (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "ifBranch") (ELit (LString "else"))) (EVar "els"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ifBranch" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Doc"))))
@@ -4317,8 +4326,10 @@ effAxesDoc axes =
 (DFunDef false "matchGuardsDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "matchGuardsDoc" ((PVar "guards")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " if ")))) (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EMethodRef "map") (EVar "guardDoc")) (EVar "guards")))))
 (DTypeSig false "guardDoc" (TyFun (TyCon "Guard") (TyCon "Doc")))
-(DFunDef false "guardDoc" ((PCon "GBool" (PVar "g"))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "g")))
-(DFunDef false "guardDoc" ((PCon "GBind" (PVar "gp") (PVar "g"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "gp"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " <- ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "g")))))
+(DFunDef false "guardDoc" ((PCon "GBool" (PVar "g"))) (EApp (EVar "condExprDoc") (EVar "g")))
+(DFunDef false "guardDoc" ((PCon "GBind" (PVar "gp") (PVar "g"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "gp"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " <- ")))) (EApp (EVar "condExprDoc") (EVar "g")))))
+(DTypeSig false "condExprDoc" (TyFun (TyCon "Expr") (TyCon "Doc")))
+(DFunDef false "condExprDoc" ((PVar "c")) (EMatch (EApp (EVar "stripLocE") (EVar "c")) (arm (PCon "EMatch" PWild PWild) () (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "c"))) (EApp (EVar "text") (ELit (LString ")")))))) (arm PWild () (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "c")))))
 (DTypeSig false "guardArmPiece" (TyFun (TyCon "GuardArm") (TyCon "Piece")))
 (DFunDef false "guardArmPiece" ((PVar "arm")) (EMatch (EApp (EVar "guardArmSpan") (EVar "arm")) (arm (PTuple (PVar "s") (PVar "sc") (PVar "en") (PVar "ec")) () (EApp (EApp (EApp (EApp (EApp (EVar "Piece") (EVar "s")) (EVar "sc")) (EVar "en")) (EVar "ec")) (ELam (PWild) (EApp (EVar "guardArmDoc") (EVar "arm")))))))
 (DTypeSig false "printGuardArms" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyCon "Doc")))

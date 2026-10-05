@@ -239,7 +239,7 @@ public export data AuthResidual = AuthResidual {
 --
 -- `irOrigin` is the `TyConOrigin` of the DECLARATION this occurrence denotes, read
 -- off whichever carrier the site already has (`Constraint.constraintOrigin`,
--- `Require.requireOrigin`, `DInterface.ifaceOrigin` via `methodIfaceParamsRef`,
+-- `Require.requireOrigin`, `DInterface.ifaceOrigin` via `methodEntryHere`,
 -- `DImpl.implOrigin`).  `irName` is kept ALONGSIDE it, not derived from it: every
 -- diagnostic in this channel prints the spelling, and `concreteReqMatchByIface`
 -- still asks the SPELLING-keyed `KeyBuckets` registry a route-word question that

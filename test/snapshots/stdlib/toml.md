@@ -323,9 +323,9 @@ parseLinesAcc (l :: ls) section counts acc =
    ignored.
 
    > parse "[package]\nname = \"hello\"\nversion = \"0.1.0\""
-   Ok Toml [("package.name", TString "hello"), ("package.version", TString "0.1.0")]
+   Ok (Toml [("package.name", TString "hello"), ("package.version", TString "0.1.0")])
    > parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
-   Ok Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")] -}
+   Ok (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]) -}
 export
 parse : String -> Result String Toml
 parse s = map Toml (parseLinesAcc (lines s) "" [] [])
@@ -364,7 +364,7 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
    regression):
 
    > parse "name = \"abc\""
-   Ok Toml [("name", TString "abc")]
+   Ok (Toml [("name", TString "abc")])
 
    Trailing garbage after a closed array value is rejected loudly:
 
@@ -381,7 +381,7 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
    regression):
 
    > parse "oracles = [\"x\", \"y\"]"
-   Ok Toml [("oracles", TArray ["x", "y"])]
+   Ok (Toml [("oracles", TArray ["x", "y"])])
 
    A triple-quoted (multiline) string is rejected loudly rather than
    mis-parsing to a wrong value; this is the same "line fully consumed" check
@@ -399,7 +399,7 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
    regression):
 
    > parse "[foo]\nbar = \"zzz\""
-   Ok Toml [("foo.bar", TString "zzz")] -}
+   Ok (Toml [("foo.bar", TString "zzz")]) -}
 
 -- # Accessors
 

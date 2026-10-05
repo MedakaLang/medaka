@@ -1,0 +1,7 @@
+public export data T = Mk Int
+
+export unT : T -> Int
+unT (Mk n) = n
+
+export mkT : Int -> T
+mkT n = Mk n

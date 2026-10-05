@@ -1,0 +1,20 @@
+-- DICT-SEMANTICS §6.3 D3 clause 2, the argument channel closed under
+-- connection (#3521's top-level face).  `dbl` poses `Get b e` and `Num e`.
+-- `e` is in `dbl`'s type and the goal `Get b e` connects it to the argument
+-- `b`, so a caller determines it and it is not a defaulting candidate:
+-- dbl : (Get a b, Num b) => a -> b.  At `Box Float` the one instance
+-- `Get (Box a) a` fixes `e := Float`; 1.5 + 1.5 = 3.0 is not > 4: "small".
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+dbl b = get b + get b
+
+classify : Box Float -> String
+classify b = if dbl b > 4 then "big" else "small"
+
+main = println (classify (Box 1.5))

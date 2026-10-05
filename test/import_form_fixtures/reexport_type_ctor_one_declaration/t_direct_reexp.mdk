@@ -1,0 +1,6 @@
+-- `p`'s one type `T`, reached directly and through `mid`'s re-export.
+import p.{T}
+import mid.*
+
+f : T -> T
+f t = t

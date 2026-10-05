@@ -88,7 +88,19 @@ if [ "${1:-}" = "--build-one" ]; then
   # Reported by two separate agents who each lost time to it.
   mkdir -p "$BINDIR"
   printf 'building    %s ...\n' "$e"
-  if ! ( cd "$ROOT" && MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" MEDAKA_CLANG_OPT="${ORACLE_OPT:--O0}" "$MEDAKA" build --allow-internal "$src" -o "$out" ) >"$BINDIR/$e.buildlog" 2>&1; then
+  # The two profilers are read by test/diff_compiler_stage_ir_scaling.sh through
+  # Callgrind's per-symbol attribution, so valgrind must be able to read their symbol
+  # tables. valgrind 3.22 (CI's Ubuntu) reads none from some lld ThinLTO layouts and
+  # reports every function as a bare address, and whether a build lands on such a
+  # layout moves with unrelated code size. `medaka build` picks ThinLTO whenever clang
+  # can find ld.lld, so these two are linked plain on every box. The shared
+  # MEDAKA_RT_OBJ / MEDAKA_PRELUDE_OBJ were compiled for the detected link mode (bitcode
+  # under ThinLTO), so these builds compile their own instead.
+  case "$e" in
+    profile_main | profile_modules_main) set -- MEDAKA_NO_LTO=1 MEDAKA_RT_OBJ= MEDAKA_PRELUDE_OBJ= ;;
+    *) set -- ;;
+  esac
+  if ! ( cd "$ROOT" && env "$@" MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" MEDAKA_CLANG_OPT="${ORACLE_OPT:--O0}" "$MEDAKA" build --allow-internal "$src" -o "$out" ) >"$BINDIR/$e.buildlog" 2>&1; then
     echo "FAIL: could not native-compile $e:" >&2; tail -8 "$BINDIR/$e.buildlog" >&2; exit 1
   fi
   [ -x "$out" ] || { echo "FAIL: $e build produced no binary" >&2; tail -8 "$BINDIR/$e.buildlog" >&2; exit 1; }

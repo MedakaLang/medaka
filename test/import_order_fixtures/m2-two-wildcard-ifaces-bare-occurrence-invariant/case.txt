@@ -1,0 +1,8 @@
+entry: main.mdk
+what: a bare occurrence naming two interface methods through two wildcard imports is
+      rejected by resolve, with the same code set in every ordering
+
+`ma.IA.mth` and `mb.IB.mth` both reach the entry through `import ma.*` and
+`import mb.*`. Spec answer, hand-derived from #1675: `R-AMBIGUOUS-OCCURRENCE` alone,
+exit 1, in every ordering; no typecheck code follows it, because a module resolve
+rejected is not typechecked. Neither ordering may pick a declaration (S2-DECL (e)).

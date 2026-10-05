@@ -128,18 +128,17 @@ const enc = (s) => new TextEncoder().encode(s);
 const dec = (a) => new TextDecoder('utf8').decode(new Uint8Array(a));
 
 // Compile the wasm bytes to a WebAssembly.Module ONCE and reuse it across every
-// guest run.  This is load-bearing for the deep-recursion paths (a full
-// typecheck of core.mdk recurses thousands of frames in the lexer's layout pass):
-// passing raw BYTES to instantiate recompiles with V8's baseline (Liftoff) tier
-// on every call, whose stack frames are large enough to overflow a Web Worker's
-// small stack.  Reusing one Module lets V8 tier it up to TurboFan (much smaller
-// frames), which fits.  Keyed on the caller's stable wasm object reference (the
+// guest run.  Passing raw BYTES to instantiate recompiles with V8's baseline
+// (Liftoff) tier on every call.  Reusing one Module lets V8 tier it up to
+// TurboFan, whose smaller frames let a deep recursion go about 2.6x deeper
+// before a Web Worker's small stack overflows (measured for #3688).  Keyed on
+// the caller's stable wasm object reference (the
 // language worker holds one Uint8Array for its lifetime).
 // A single global slot: the playground only ever runs ONE wasm (playground.wasm),
 // so cache the first compiled Module and reuse it for every call — even when the
 // caller hands us a fresh Uint8Array/ArrayBuffer each time (the run compiler
 // worker clones the bytes per message).  Reusing one Module is what lets V8 keep
-// tiering it up (Liftoff→TurboFan) across calls so the deep-recursion paths fit.
+// tiering it up (Liftoff→TurboFan) across calls.
 let _compiledModule = null;
 let _compiledLen = 0;
 function compiledModuleFor(wasmModuleOrBytes) {
@@ -168,6 +167,13 @@ function buildVfs(source, stdlib) {
     vfsMap.set(USER_ROOT + '/' + id + '.mdk', enc(text));
   }
   return vfsMap;
+}
+
+// The extra modules buildVfs registered, named to the guest so an unbound
+// name's "did you forget to import" hint can name only modules that are here.
+function shippedModulesArg(stdlib) {
+  const ids = stdlib.extra ? Object.keys(stdlib.extra) : [];
+  return ids.length ? ['--stdlib-modules=' + ids.join(',')] : [];
 }
 
 // ── persistent guest session ─────────────────────────────────────────────────
@@ -308,17 +314,61 @@ function withGuestStderr(e, host) {
   return e;
 }
 
+// Externs and modules that exist only in the native build.  A program reaching one
+// gets a message naming it, in place of the compiler trap or `unknown module` the
+// toolchain would otherwise surface.  Families follow stdlib/runtime.mdk.
+const NATIVE_ONLY_EXTERNS = new Set([
+  'readLine', 'readLineOpt', 'readAll', 'readExactly',
+  'readFile', 'readFileBytes', 'writeFile', 'writeFileBytes', 'writeFileMode', 'appendFile',
+  'fileExists', 'fileMode', 'canonicalizePath', 'listDir', 'makeDir', 'removeFile',
+  'rename', 'fsync', 'removeDir', 'statFile',
+  'args', 'getEnv', 'executablePath', 'runCommand',
+  'wallTimeSec', 'monotonicSec', 'sleepMs',
+  'netResolve', 'netTcpConnect', 'netTcpListen', 'netListenPort', 'netTcpAccept',
+  'netSend', 'netSendFrom', 'netRecv', 'netShutdown', 'netClose', 'netCloseListener',
+  'netSetTimeout', 'netSetNonblock', 'netTryAccept', 'netTryRecv', 'netTrySend',
+]);
+const NATIVE_ONLY_MODULES = new Set(['time', 'fs', 'net', 'io', 'math']);
+
+function nativeOnlyMessage(text) {
+  const ext = /unbound variable '([A-Za-z0-9_]+)'/.exec(text);
+  if (ext && NATIVE_ONLY_EXTERNS.has(ext[1]))
+    return ext[1] + ' is not available in the browser playground';
+  return null;
+}
+
+// Rewrites an `unknown module: X` diagnostic for a native-only module X.
+function nativeOnlyModuleMessage(message) {
+  const m = /^unknown module: ([A-Za-z0-9_.]+)$/.exec(message);
+  if (m && NATIVE_ONLY_MODULES.has(m[1]))
+    return 'module `' + m[1] + '` is native-only and not available in the browser playground'
+      + (m[1] === 'time' ? ' (the `async` module depends on it)' : '');
+  return null;
+}
+
+function friendlyDiagnostics(diag) {
+  if (diag && Array.isArray(diag.files))
+    for (const f of diag.files)
+      for (const d of f.diagnostics || []) {
+        const msg = nativeOnlyModuleMessage(d.message);
+        if (msg) d.message = msg;
+      }
+  return diag;
+}
+
 function trapDiagnostic(e) {
-  const msg = 'compiler trap: ' + (e && e.message || e);
   const err = e && e.guestStderr ? String(e.guestStderr).trim() : '';
+  const named = nativeOnlyMessage(err);
+  if (named) return synthErr(named);
+  const msg = 'compiler trap: ' + (e && e.message || e);
   return synthErr(err ? msg + '\n' + err : msg);
 }
 
-// True for a stack-overflow thrown out of the guest.  The compiler's front end
-// recurses deeply (the lexer's layout pass is ~one frame per token, thousands
-// deep on core.mdk).  On the FIRST run V8 executes the module with its baseline
-// (Liftoff) tier, whose large frames can overflow; a retry re-runs against the
-// now-tiered-up (TurboFan, small-frame) module and fits.  See runGuestRetry.
+// True for a stack-overflow thrown out of the guest.  On the FIRST run V8
+// executes the module with its baseline (Liftoff) tier, whose larger frames
+// overflow sooner; a retry re-runs against the tiered-up (TurboFan) module,
+// which reaches about 2.6x deeper.  A retry cannot rescue unbounded recursion,
+// which overflows the same way on every attempt.  See runGuestRetry.
 function isStackOverflow(e) {
   const m = (e && (e.message || String(e))) || '';
   return /call stack|Maximum call stack|stack (?:size|overflow)/i.test(m);
@@ -373,7 +423,7 @@ export async function compile(source, opts = {}) {
   // argv = <mode> <runtime.mdk> <core.mdk> <entry.mdk> <root>.  Mode 'compile'
   // = today's analyze→emit behavior.  The loader resolves the entry's module id
   // "main" against root "." → "./main.mdk" (a registered key).
-  const argv = ['compile', RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT];
+  const argv = ['compile', RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT, ...shippedModulesArg(stdlib)];
 
   let res;
   try {
@@ -407,7 +457,7 @@ export async function compile(source, opts = {}) {
   }
   if (marker === '__MEDAKA_DIAGNOSTICS__') {
     try {
-      return { ok: false, diagnostics: JSON.parse(payload.trim()) };
+      return { ok: false, diagnostics: friendlyDiagnostics(JSON.parse(payload.trim())) };
     } catch (e) {
       return { ok: false, diagnostics: synthErr('bad diagnostics JSON: ' + payload.slice(0, 200)) };
     }
@@ -435,7 +485,7 @@ export async function analyze(source, opts = {}) {
     throw new Error('analyze: opts.stdlib { runtime, core } required');
 
   const vfsMap = buildVfs(source, stdlib);
-  const argv = ['analyze', RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT];
+  const argv = ['analyze', RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT, ...shippedModulesArg(stdlib)];
 
   let res;
   try {
@@ -451,7 +501,7 @@ export async function analyze(source, opts = {}) {
 
   if (marker === '__MEDAKA_ANALYZE__' || marker === '__MEDAKA_DIAGNOSTICS__') {
     try {
-      return { ok: marker === '__MEDAKA_ANALYZE__', diagnostics: JSON.parse(payload.trim()) };
+      return { ok: marker === '__MEDAKA_ANALYZE__', diagnostics: friendlyDiagnostics(JSON.parse(payload.trim())) };
     } catch (e) {
       return { ok: false, diagnostics: synthErr('bad diagnostics JSON: ' + payload.slice(0, 200)) };
     }

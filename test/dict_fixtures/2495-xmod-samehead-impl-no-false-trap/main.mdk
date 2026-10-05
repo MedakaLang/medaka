@@ -1,0 +1,7 @@
+import md.{Sole(..)}
+import ma.{wsize}
+import mb
+
+go xs = wsize xs
+
+main = println (go (Sole True))

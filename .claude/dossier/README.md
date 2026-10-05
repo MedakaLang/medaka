@@ -2,7 +2,9 @@
 
 `AGENTS.md` is loaded into **every** agent session in this repo (via `CLAUDE.md`). That made its
 size a per-session tax, so on 2026-08-17 it was compressed from ~102KB of teaching prose into a
-router of ~25KB: trigger → rule → remedy command, one line or two per item.
+router of ~25KB: trigger → rule → remedy command, one line or two per item. It regrew to ~70KB by
+2026-10-03 and was slimmed back to ~24KB the same way: each long item's full text was moved
+verbatim into the file below under a `— full rule text` heading.
 
 **The prose was not deleted. It moved here.** Every item in `AGENTS.md` that had a story behind it
 carries a bracketed ID and a link into one of the files below.
@@ -15,6 +17,7 @@ carries a bracketed ID and a link into one of the files below.
 | `gates.md` | `make preflight`, the gate suite, oracle staleness, golden capture, the must-fail tracker |
 | `tooling.md` | The pre-commit hook, `fmt`/`lint`/snapshot blessing, and every `.mdk` debugging probe |
 | `traps.md` | The Traps section, dogfooding, writing tests, the shell-gate traps, and the skill table |
+| `website.md` | The playground deploy: `--branch`, the explicit file list, stale `dist/`, `og:image`, playground scripts as gates |
 | `ci.md` | `ci.yml` incident narrative: shard-cost derivation, build-once/fan-out, and the per-shard job-guard mechanisms |
 
 ## Why here and not `docs/ops/`
@@ -35,4 +38,5 @@ way it is: what went wrong, how it was measured, and which previously-confident 
 to be false.
 
 If you find yourself needing a **command** from here that `AGENTS.md` did not give you, that is a
-bug in the compression — fix `AGENTS.md`.
+bug in the compression — fix `AGENTS.md`. The converse also holds: when adding to `AGENTS.md`,
+add the rule and the command there and the story here.

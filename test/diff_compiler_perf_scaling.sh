@@ -1489,10 +1489,16 @@ gen_starimports() {
 # now (quadratic-aware ceiling), NOT op — see the resolve-shapes block and the reexports
 # note by KNOWN_ACEIL_reexports_resolve. Resolves 0-DIAGNOSTIC (proven with `medaka
 # check`): `export import m.*` re-exports, and the entry's `import m.*` binds.
+#
+# m0 also declares `data D0 = D0`, a type and a constructor sharing one spelling, which
+# every hop re-exports by wildcard. A hop that re-exports that name once per export list
+# it appears in doubles its copies at every hop, so resolve goes exponential in N on this
+# chain, and the non-empty type namespaces mean a per-name list scan over a type,
+# constructor or interface export list lifts the op assertion off 0.
 gen_reexports() {
   n=$1; dir=$2
   rm -rf "$dir"; mkdir -p "$dir"
-  printf 'export v0 : Int\nv0 = 0\n' > "$dir/m0.mdk"
+  printf 'public export data D0 = D0\n\nexport v0 : Int\nv0 = 0\n' > "$dir/m0.mdk"
   i=1
   while [ "$i" -lt "$n" ]; do
     prev=$((i - 1))
@@ -2205,7 +2211,13 @@ KNOWN_TCEIL_xref_emit="5.6";          KNOWN_TFIXED_xref_emit="2.60"
 # manydefs:lint carries against the same floor - so a quiet runner cannot false-PROMOTE.
 # Promotes out when the lint per-file cost on a wide cross-reference shape is linear;
 # that is the same underlying cost manydefs:lint (#956) ledgers on a different shape.
-KNOWN_TCEIL_xref_lint="5.6";          KNOWN_TFIXED_xref_lint="2.60"
+# ⚠️ TFIXED IS 2.20, NOT 2.60 (band re-measured on CI, QUICK xref @ 2000->4000->8000,
+# min-of-5, heap pinned): three consecutive runs of the same tree read r2 2.45-2.48, under
+# the 2.60 line, so the row PROMOTED on every run while nothing in `lint` had changed. The
+# 3.37-3.92 band above no longer describes the CI runner. Like `modules:typecheck`, TFIXED
+# is set against the observed floor with ~10% margin, so this arm still catches WORSENING
+# (the ceiling) and only drains on a genuinely linear stage (AT OR UNDER ~2.0).
+KNOWN_TCEIL_xref_lint="5.6";          KNOWN_TFIXED_xref_lint="2.20"
 # modules:typecheck (TIME) — see the block above KNOWN_SLOW_TIME for the sample band.
 # Ceiling 4.2 clears its top (3.21) by ~31%.
 #
@@ -2596,8 +2608,8 @@ KNOWN_SLOW_OPS="
 #
 # ── alloc self-draining ledger (the alloc analogue of KNOWN_OCEIL/OFIXED) ──
 # ACEIL 4.0: the resolve-STAGE alloc ratio at the FIXED band N=100->200->400 is a
-# deterministic r2=3.10 (intrinsic-quadratic, converging to 4.0 from below as N grows; at
-# this fixed finite band it is 3.10, ~29% under 4.0). A cubic-ALLOC regression reads r2=4.41
+# deterministic r2=3.26 (intrinsic-quadratic, converging to 4.0 from below as N grows; at
+# this fixed finite band it is 3.26, ~18% under 4.0). A cubic-ALLOC regression reads r2=4.41
 # at this same band (MEASURED by reverting the provenance-map fix), 10% over — caught. AFIXED
 # 2.30: if the export representation is ever made sub-quadratic (e.g. shared/lazy exports) the
 # ratio drops under 2.30 and this row PROMOTES (retire the quadratic allowance). Deterministic

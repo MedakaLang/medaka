@@ -22,8 +22,11 @@ laterEntry : String -> Later <FileRead "l/*"> String
 laterEntry _ = Now "done"
 
 -- A function inside a returned tuple: charged.
+tupleReader : Unit -> <FileRead "t/*"> Result String String
+tupleReader _ = readFile "t/x"
+
 tupledEntry : String -> (Unit -> <FileRead "t/*"> Result String String, Int)
-tupledEntry _ = (_ => readFile "t/x", 1)
+tupledEntry _ = (tupleReader, 1)
 
 -- A function inside a monomorphic constructor field: charged.
 apiEntry : String -> Api
@@ -40,13 +43,15 @@ passBack : String ->
 passBack _ k = k (_ => readFile "d/x")
 
 -- Control: a callback the host supplies directly is the host's own.
-hostCallback : String -> (Unit -> <FileRead "h/*"> Result String String) -> String
+hostCallback : String ->
+  (Unit -> <FileRead "h/*"> Result String String) ->
+  String
 hostCallback _ _ = "ok"
 
 -- A closure the entry writes into a host-supplied cell: charged.
 refArg : Ref (Unit -> <FileRead "c/*"> Result String String) -> String
 refArg r =
-  let _ = r := (_ => readFile "c/x")
+  let _ = r := _ => readFile "c/x"
   "ok"
 
 -- An effect index is invariant: a cell of index-row callbacks the host
@@ -55,11 +60,12 @@ data Cell (e : Effect) = Cell (Ref (Unit -> <e> Result String String))
 
 rowCellEntry : Cell <FileRead "e/*"> -> String
 rowCellEntry (Cell r) =
-  let _ = r := (_ => readFile "e/x")
+  let _ = r := _ => readFile "e/x"
   "ok"
 
 -- An opened field reads under the head's own authority argument.
-data Rd (p : Authority FileRead) = Rd (Unit -> <FileRead p> Result String String)
+data Rd (p : Authority FileRead) =
+  | Rd (Unit -> <FileRead p> Result String String)
 
 rdEntry : String -> Rd "i/*"
 rdEntry _ = Rd (_ => readFile "i/x")

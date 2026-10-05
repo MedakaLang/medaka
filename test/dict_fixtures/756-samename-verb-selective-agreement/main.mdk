@@ -1,0 +1,6 @@
+import p
+import q.{f}
+
+data Z = Z
+
+main = println (f Z)

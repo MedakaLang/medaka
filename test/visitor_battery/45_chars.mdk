@@ -1,0 +1,12 @@
+import string.{toChars, fromChars}
+import list.{reverse}
+
+main =
+  let c = 'a'
+  println c
+  println (c == 'a')
+  println (toChars "abc")
+  println (fromChars (reverse (toChars "abc")))
+  println (match 'q'
+    'a'..='m' => "first half"
+    _ => "second half")

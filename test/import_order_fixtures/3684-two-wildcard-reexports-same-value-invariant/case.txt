@@ -1,0 +1,7 @@
+entry: main.mdk
+what: #3684 one plain value reached through two wildcard re-exports is one value,
+      in either import order
+
+`iv` declares `val`; `ma` and `mb` are each `export import iv.*`. Spec answer,
+hand-derived: `check` clean; `run` and the built binary print `42` in every
+ordering.

@@ -1,0 +1,9 @@
+-- Refused: a pure row cannot spend `Sign "service-auth"`. Twin:
+-- `service_auth_labelled.mdk`.
+
+import bytes.{Bytes}
+import lib.sign.{SecretKey, Sign, Signature, signServiceAuthDigest}
+
+export
+signIt : SecretKey -> Bytes -> Result String Signature
+signIt key digest = signServiceAuthDigest key digest

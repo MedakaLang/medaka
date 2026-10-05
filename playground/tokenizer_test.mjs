@@ -52,7 +52,7 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
 
 // 1. keywords vs TUpper ctor vs TIdent
 {
-  const t = tokenize('let match data impl foo Bar baz');
+  const t = tokenize('let match foo baz data impl Bar');
   check('keyword: let', has(t, 'let', 'keyword'));
   check('keyword: match', has(t, 'match', 'keyword'));
   check('keyword: data', has(t, 'data', 'keyword'));
@@ -172,6 +172,127 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
   check('impl body is expression position', typeOf(t, 'Circle') === 'constructor', 'got ' + typeOf(t, 'Circle'));
   check('module alias stays neutral', t.filter((x) => x.text === 'M').every((x) => x.type === 'typeName'),
         'got ' + t.filter((x) => x.text === 'M').map((x) => x.type));
+}
+
+// P. rows read the same everywhere (#3705 part 1)
+{
+  const t = tokenize('signCommitDigest : SecretKey ->\n  Bytes ->\n  <Sign "commit"> Result String Signature');
+  for (const n of ['SecretKey', 'Bytes', 'Sign', 'Result', 'String', 'Signature']) {
+    check('wrapped signature: ' + n + ' is typeName', typeOf(t, n) === (n === 'Sign' ? 'effectLabel' : 'typeName'), 'got ' + typeOf(t, n));
+  }
+}
+{
+  const t = tokenize('export effect Sign Set   -- spends the key\neffect Audit');
+  check('effect decl: label is effectLabel', typeOf(t, 'Sign') === 'effectLabel', 'got ' + typeOf(t, 'Sign'));
+  check('effect decl: domain kind is typeName', typeOf(t, 'Set') === 'typeName', 'got ' + typeOf(t, 'Set'));
+  check('effect decl: bare label is effectLabel', typeOf(t, 'Audit') === 'effectLabel', 'got ' + typeOf(t, 'Audit'));
+}
+{
+  const t = tokenize('f : Int ->\n  Result String (Server <Mint {"access", "refresh"}, Sign "commit">)');
+  for (const n of ['Result', 'String', 'Server', 'Mint', 'Sign']) {
+    check('wrapped effect row: ' + n + ' class', typeOf(t, n) === (n === 'Mint' || n === 'Sign' ? 'effectLabel' : 'typeName'), 'got ' + typeOf(t, n));
+  }
+  const u = tokenize('g : Int ->\n  Server <Mint {"a",\n    "b"},\n   Sign "c"> Int');
+  check('row split after `,` keeps Sign effectLabel', typeOf(u, 'Sign') === 'effectLabel', 'got ' + typeOf(u, 'Sign'));
+}
+{
+  const src = 'xs = [\n  Some 1,\n  None,\n  Some 2]\nshapes = foo (\n  Circle 1.0,\n  Rect 2.0 3.0\n  )\nr = { a = Some 1,\n  b = Circle 2.0 }\nh = bar {\n  Some 3 }';
+  const t = tokenize(src);
+  const all = t.filter((x) => /^(Some|None|Circle|Rect)$/.test(x.text));
+  check('expression continuation lines keep constructors',
+        all.length === 8 && all.every((x) => x.type === 'constructor'), JSON.stringify(all));
+}
+
+// Q. effect labels, type variables, effect variables (#3705 part 2)
+{
+  const t = tokenize('signCommitDigest : SecretKey ->\n  Bytes ->\n  <Sign "commit"> Result String Signature\nopen : <FileRead path> Int');
+  check('row label is effectLabel', typeOf(t, 'Sign') === 'effectLabel', 'got ' + typeOf(t, 'Sign'));
+  check('row with domain: label is effectLabel', typeOf(t, 'FileRead') === 'effectLabel', 'got ' + typeOf(t, 'FileRead'));
+  check('row domain variable is effectVar', typeOf(t, 'path') === 'effectVar', 'got ' + typeOf(t, 'path'));
+  check('wrapped signature types stay typeName', typeOf(t, 'Bytes') === 'typeName' && typeOf(t, 'Result') === 'typeName');
+}
+{
+  const t = tokenize('effect Audit\nexport effect Sign Set');
+  check('effect decl: name is effectLabel', t.filter((x) => x.text === 'Audit' || x.text === 'Sign').every((x) => x.type === 'effectLabel'));
+  check('effect decl: domain kind stays typeName', typeOf(t, 'Set') === 'typeName', 'got ' + typeOf(t, 'Set'));
+}
+{
+  const t = tokenize('handle : Server e -> Request -> <e> Response\nf : Int -> <Clock | e> Int');
+  const es = t.filter((x) => x.text === 'e').map((x) => x.type);
+  check('type variable vs effect variable', es.join() === 'typeVar,effectVar,effectVar', 'got ' + es);
+}
+{
+  const t = tokenize('data Box a = Box a\nimport map.{Map, get}');
+  check('data type parameter is typeVar', t.filter((x) => x.text === 'a').every((x) => x.type === 'typeVar'),
+        'got ' + t.filter((x) => x.text === 'a').map((x) => x.type));
+  check('import names are not typeVar', typeOf(t, 'get') === 'variableName' && typeOf(t, 'map') === 'variableName',
+        'got ' + typeOf(t, 'get') + ',' + typeOf(t, 'map'));
+}
+{
+  const t = tokenize('g = if a < b then xs -> y else foo > bar\nh = Some a');
+  const lower = t.filter((x) => /^[a-z]/.test(x.text) && !['if', 'then', 'else', 'g', 'h'].includes(x.text));
+  check('expression line: lowercase identifiers stay variableName', lower.every((x) => x.type === 'variableName'), JSON.stringify(lower));
+  check('expression line: < > -> stay operators', t.filter((x) => ['<', '>', '->'].includes(x.text)).every((x) => x.type === 'operator'));
+  check('expression line: constructor unchanged', typeOf(t, 'Some') === 'constructor');
+}
+
+// R. type position ends where the type does (F8)
+{
+  const t = tokenize('data Post = Post { author : String, text : String }\ndata Box a = Box { items : List a, n : Int }');
+  check('record field names stay variableName',
+        ['author', 'text', 'items', 'n'].every((n) => typeOf(t, n) === 'variableName'),
+        ['author', 'text', 'items', 'n'].map((n) => typeOf(t, n)).join());
+  check('record field type variable stays typeVar', t.filter((x) => x.text === 'a').every((x) => x.type === 'typeVar'));
+}
+{
+  const t = tokenize('list = let nums = [1, 2, 3] : List Int in if True then nums else []');
+  check('ascription ends at `in`: later nums is variableName', t.filter((x) => x.text === 'nums').every((x) => x.type === 'variableName'));
+  const u = tokenize('z = println (length (xs : List Int) + count)');
+  check('ascription ends at closing paren', typeOf(u, 'count') === 'variableName', 'got ' + typeOf(u, 'count'));
+  check('ascribed type is still typeName', typeOf(u, 'List') === 'typeName' && typeOf(u, 'Int') === 'typeName');
+  const v = tokenize('w = (a : List Int, b)');
+  check('ascription ends at `,`', typeOf(v, 'b') === 'variableName', 'got ' + typeOf(v, 'b'));
+}
+{
+  const t = tokenize('import support.util.{\n  lookupAssoc,\n  contains,\n}\nmain = 1');
+  check('multi-line import members stay variableName', typeOf(t, 'lookupAssoc') === 'variableName' && typeOf(t, 'contains') === 'variableName',
+        typeOf(t, 'lookupAssoc') + ',' + typeOf(t, 'contains'));
+}
+{
+  const t = tokenize('f = (x : Int) => x + y');
+  check('annotated lambda body is variableName', t.filter((x) => x.text === 'y' || (x.text === 'x' && x.type !== 'variableName')).every((x) => x.type === 'variableName'));
+  const u = tokenize('g = (n : Int) < m');
+  check('comparison after ascription is not an effect row', typeOf(u, 'm') === 'variableName', 'got ' + typeOf(u, 'm'));
+  const w = tokenize('f : Int -> <Clock, Sign> a\ng : (Int, a) -> a');
+  check('signature type variables and rows unchanged', typeOf(w, 'a') === 'typeVar' || has(w, 'a', 'typeVar'));
+}
+
+// S. a wrapped signature highlights like an unwrapped one (#3718)
+{
+  const t = tokenize('h : Int ->\n  <Store "a/*">\n  Result String Int');
+  check('row ending a line: later lines stay type position',
+        ['Result', 'String', 'Int'].every((n) => typeOf(t, n) === 'typeName'), ['Result', 'String', 'Int'].map((n) => typeOf(t, n)).join());
+  const u = tokenize('f : <Http Host=host Method=method> Int');
+  check('row `Label=domain` binding keeps type position', typeOf(u, 'Int') === 'typeName', 'got ' + typeOf(u, 'Int'));
+  const v = tokenize('g :\n  Int -> String');
+  check('signature wrapped after `:`', typeOf(v, 'Int') === 'typeName' && typeOf(v, 'String') === 'typeName', 'got ' + typeOf(v, 'Int') + ',' + typeOf(v, 'String'));
+  const w = tokenize('g : Int\n  -> String');
+  check('signature wrapped before `->`', typeOf(w, 'String') === 'typeName', 'got ' + typeOf(w, 'String'));
+  const x = tokenize('x = (n : Int < m)');
+  check('`<` comparison inside an ascription is not a row', typeOf(x, 'm') === 'variableName', 'got ' + typeOf(x, 'm'));
+  const y = tokenize('data Box a = { items : List a }');
+  check('record body straight after `=`: field type is typeName', typeOf(y, 'List') === 'typeName', 'got ' + typeOf(y, 'List'));
+}
+
+// T. a Python-style line ending in `:` does not open type position (#3718)
+{
+  for (const head of ['for x in [1,2,3]:', 'if x > 0:', 'elif x > 0:', 'class Foo:', 'try:', 'except:', 'finally:']) {
+    const t = tokenize(head + '\n  println x');
+    const xs = t.filter((k) => k.text === 'x').map((k) => k.type);
+    check('python-style `' + head + '`: next line x is not typeVar', xs[xs.length - 1] === 'variableName', 'got ' + xs);
+  }
+  const e = tokenize('export g :\n  Int -> String');
+  check('modifier-led signature wrapped after `:`', typeOf(e, 'Int') === 'typeName' && typeOf(e, 'String') === 'typeName');
 }
 
 console.log('\n=== ' + pass + ' pass / ' + fail + ' fail ===\n');
