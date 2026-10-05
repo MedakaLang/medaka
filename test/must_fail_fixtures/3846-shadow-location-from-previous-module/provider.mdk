@@ -1,0 +1,6 @@
+export
+length : Int -> Int
+length x = x
+export
+last : Int
+last = 7

@@ -1,0 +1,14 @@
+issue: 3846
+what: the legitimate importer-shadow type mismatch in a four-line file is located
+what: at the previous module's final expression, outside the user file.
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-TYPE-MISMATCH 5:7-5:8
+control: check-json control.mdk
+why-verb: check-json exposes the erroneous range independently of diagnostic prose.
+why-diag-code: the range belongs to provider.mdk's last literal, on human line 6.
+why-diag-code: main.mdk has only four lines. A real location on its length application
+why-diag-code: changes this range and drains the pin. The tiny provider owns the stale
+why-diag-code: expression, so unrelated stdlib edits cannot move the pinned range.
+why-control: the same import and written Mappable constraint accept when the body
+why-control: returns an integer directly. The wildcard import emits no warning.
