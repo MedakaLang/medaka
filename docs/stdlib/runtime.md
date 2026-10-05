@@ -663,6 +663,23 @@ setSeed : Int -> <Rand> Unit
 Seeds the random number generator, making the following draws
 repeatable.
 
+### `randomState`
+
+```
+randomState : Unit -> <Rand> U64
+```
+
+The complete deterministic RNG state, for replay or an isolated stream.
+Capturing it does not draw a value. OS entropy is a separate source.
+
+### `restoreRandomState`
+
+```
+restoreRandomState : U64 -> <Rand> Unit
+```
+
+Restores a state captured by `randomState`, including all 64 bits.
+
 ### `osEntropyBytes`
 
 ```

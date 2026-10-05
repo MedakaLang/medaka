@@ -202,6 +202,7 @@ suites = [
   ("net", (3, EvalAndNative)),
   ("nonempty", (15, EvalAndNative)),
   ("path", (34, EvalAndNative)),
+  ("random_state_test", (3, EvalAndNative)),
   ("regex", (94, EvalAndNative)),
   ("set", (64, EvalAndNative)),
   -- The assertion library every `*_test.mdk` in the tree imports, whose own

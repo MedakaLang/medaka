@@ -1,5 +1,5 @@
 # META
-source_lines=938
+source_lines=945
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -458,6 +458,13 @@ extern randomChar : Unit -> <Rand> Char
 -- | Seeds the random number generator, making the following draws
 -- repeatable.
 extern setSeed : Int -> <Rand> Unit
+
+-- | The complete deterministic RNG state, for replay or an isolated stream.
+-- Capturing it does not draw a value. OS entropy is a separate source.
+extern randomState : Unit -> <Rand> U64
+
+-- | Restores a state captured by `randomState`, including all 64 bits.
+extern restoreRandomState : U64 -> <Rand> Unit
 
 -- | Exactly the given number of bytes from the operating system's entropy
 -- source.
@@ -1021,6 +1028,8 @@ extern stringToLower : String -> String
 (DExtern false "randomFloat" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Float"))))
 (DExtern false "randomChar" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Char"))))
 (DExtern false "setSeed" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyCon "Unit"))))
+(DExtern false "randomState" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "U64"))))
+(DExtern false "restoreRandomState" (TyFun (TyCon "U64") (TyEffect ("Rand") None (TyCon "Unit"))))
 (DExtern false "osEntropyBytes" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyApp (TyCon "Array") (TyCon "Int")))))
 (DExtern false "hashInt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DExtern false "hashFloat" (TyFun (TyCon "Float") (TyCon "Int")))
@@ -1218,6 +1227,8 @@ extern stringToLower : String -> String
 (DExtern false "randomFloat" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Float"))))
 (DExtern false "randomChar" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Char"))))
 (DExtern false "setSeed" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyCon "Unit"))))
+(DExtern false "randomState" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "U64"))))
+(DExtern false "restoreRandomState" (TyFun (TyCon "U64") (TyEffect ("Rand") None (TyCon "Unit"))))
 (DExtern false "osEntropyBytes" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyApp (TyCon "Array") (TyCon "Int")))))
 (DExtern false "hashInt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DExtern false "hashFloat" (TyFun (TyCon "Float") (TyCon "Int")))

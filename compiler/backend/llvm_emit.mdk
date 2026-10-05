@@ -3519,6 +3519,8 @@ isRngExtern name = contains name [
   "randomFloat",
   "randomChar",
   "setSeed",
+  "randomState",
+  "restoreRandomState",
   "osEntropyBytes",
 ]
 
@@ -3556,6 +3558,17 @@ emitRngExtern e env "setSeed" args = match emitArgs e env args
     let _ = emit e ("  call void @mdk_set_seed(i64 " ++ n ++ ")")
     ("1", LTUnit)
   _ => panic "llvm: setSeed takes one argument"
+emitRngExtern e env "randomState" args = match emitArgs e env args
+  [u] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_random_state(i64 \{u})"
+    (r, LTU64)
+  _ => panic "llvm: randomState takes one (Unit) argument"
+emitRngExtern e env "restoreRandomState" args = match emitArgs e env args
+  [state] =>
+    let _ = emit e "  call void @mdk_restore_random_state(i64 \{state})"
+    ("1", LTUnit)
+  _ => panic "llvm: restoreRandomState takes one argument"
 emitRngExtern e env "osEntropyBytes" args = match emitArgs e env args
   [n] =>
     let r = freshReg e

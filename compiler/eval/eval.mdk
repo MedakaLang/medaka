@@ -3264,6 +3264,19 @@ pSetSeed (VInt seed) =
   VUnit
 pSetSeed _ = panic "setSeed: expected Int"
 
+pRandomState : Value e -> <e> Value e
+pRandomState _ =
+  let state = !rngU64Ref
+  VU64
+    (U64.toIntTruncating (U64.shiftRight state 32))
+    (U64.toIntTruncating (U64.bitAnd state 0xFFFFFFFF))
+
+pRestoreRandomState : Value e -> <e> Value e
+pRestoreRandomState (VU64 hi lo) =
+  rngU64Ref := U64.bitOr (U64.shiftLeft (U64.truncate hi) 32) (U64.truncate lo)
+  VUnit
+pRestoreRandomState _ = panic "restoreRandomState: expected U64"
+
 -- ORACLE-ONLY frozen constants for the clock/GC externs.  These are the
 -- DIFFERENTIAL-ORACLE bindings: the oracle drivers diff captured stdout, so a
 -- real clock would make every golden nondeterministic.  They live in the pure
@@ -3309,6 +3322,8 @@ externBindings _ = [
   ("randomFloat", prim1M pRandomFloat),
   ("randomChar", prim1M pRandomChar),
   ("setSeed", prim1M pSetSeed),
+  ("randomState", prim1M pRandomState),
+  ("restoreRandomState", prim1M pRestoreRandomState),
   ("wallTimeSec", prim1M pWallTimeSec),
   ("monotonicSec", prim1M pMonotonicSec),
   ("sleepMs", prim1M pSleepMs),

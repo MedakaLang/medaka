@@ -875,6 +875,8 @@ The host primitives.
 - [`randomFloat`](runtime.md#randomfloat)
 - [`randomChar`](runtime.md#randomchar)
 - [`setSeed`](runtime.md#setseed)
+- [`randomState`](runtime.md#randomstate)
+- [`restoreRandomState`](runtime.md#restorerandomstate)
 - [`osEntropyBytes`](runtime.md#osentropybytes)
 - [`hashInt`](runtime.md#hashint)
 - [`hashFloat`](runtime.md#hashfloat)

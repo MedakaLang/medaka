@@ -455,6 +455,13 @@ extern randomChar : Unit -> <Rand> Char
 -- repeatable.
 extern setSeed : Int -> <Rand> Unit
 
+-- | The complete deterministic RNG state, for replay or an isolated stream.
+-- Capturing it does not draw a value. OS entropy is a separate source.
+extern randomState : Unit -> <Rand> U64
+
+-- | Restores a state captured by `randomState`, including all 64 bits.
+extern restoreRandomState : U64 -> <Rand> Unit
+
 -- | Exactly the given number of bytes from the operating system's entropy
 -- source.
 -- Independent of `setSeed`. Panics for a negative length or when the source

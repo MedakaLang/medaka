@@ -379,6 +379,7 @@ pRandomBool : Value a -> <a> Value a
 pRandomChar : Value a -> <a> Value a
 pRandomFloat : Value a -> <a> Value a
 pRandomInt : Value a -> Value a -> <a> Value a
+pRandomState : Value a -> <a> Value a
 pReadAll : Value a -> <Stdin | a> Value a
 pReadExactly : Value a -> <Stdin | a> Value a
 pReadFile : Value a -> <FileRead | a> Value a
@@ -389,6 +390,7 @@ pRef : Value a -> <a> Value a
 pRemoveDir : Value a -> <FileWrite | a> Value a
 pRemoveFile : Value a -> <FileWrite | a> Value a
 pRename : Value a -> Value a -> <FileWrite | a> Value a
+pRestoreRandomState : Value a -> <a> Value a
 pRound : Value a -> <a> Value a
 pSetRef : Value a -> Value a -> <a> Value a
 pSetSeed : Value a -> <a> Value a
