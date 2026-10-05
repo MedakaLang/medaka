@@ -39918,35 +39918,63 @@ requireArgsAreRoot _ _ _ = False
 -- W3-inst (DICT-SEMANTICS §3): an impl head's type variables are the instance's
 -- quantifiers, and its bodies are checked against them as a signature's body is
 -- against its own.  Each head variable's union-find root while it is still a
--- variable; a variable already fixed to a constructed type is absent.
-implHeadVarRoots : List (String, Mono) -> List (String, Int)
+-- variable; a variable already fixed to a constructed type is absent.  A head
+-- variable in an `Effect`-kinded slot is related to a row by the first body
+-- that builds or matches the type, and it is still a variable while that row
+-- has no atoms and an unbound tail.  The two sorts count their ids separately,
+-- so a root carries its sort.
+-- lint-disable-next-line rule-clone-type
+data HeadVarRoot = TypeVarRoot Int | RowVarRoot Int deriving (Eq)
+
+implHeadVarRoots : List (String, Mono) -> List (String, HeadVarRoot)
 implHeadVarRoots implTvMap =
   flatMap
-    (p => match normalize (snd p)
-      TVar cell => [(fst p, tyvarId cell)]
-      _ => [])
+    (p => match headVarRootOf (snd p)
+      Some root => [(fst p, root)]
+      None => [])
     implTvMap
 
+headVarRootOf : Mono -> Option HeadVarRoot
+headVarRootOf m = match normalize m
+  TVar cell => Some (TypeVarRoot (tyvarId cell))
+  TEff row => match effrowNorm row
+    EffRow [] (Some cell) => match !cell
+      EUnbound id _ => Some (RowVarRoot id)
+      _ => None
+    _ => None
+  _ => None
+
+-- The head variables that are still type variables, by tyvar root.
+implHeadTypeVarRoots : List (String, Mono) -> List (String, Int)
+implHeadTypeVarRoots implTvMap =
+  flatMap
+    (p => match snd p
+      TypeVarRoot id => [(fst p, id)]
+      RowVarRoot _ => [])
+    (implHeadVarRoots implTvMap)
+
 -- The head variables this body narrowed: each one that was a variable before the
--- body and is now fixed to a constructed type, or now shares its root with another
+-- body and is now fixed to a constructed type or a row with atoms or a closed
+-- tail, or now shares its root with another
 -- head variable that was distinct before.  A variable an earlier sibling body
 -- narrowed is not in [before], so it is reported once, by that body.
-headVarsNarrowedBy : List (String, Int) -> List (String, Mono) -> List String
+headVarsNarrowedBy : List (String, HeadVarRoot) ->
+  List (String, Mono) ->
+  List String
 headVarsNarrowedBy before implTvMap =
   let after = implHeadVarRoots implTvMap
   map fst (filterList (headVarNarrowed before after) before)
 
-headVarNarrowed : List (String, Int) ->
-  List (String, Int) ->
-  (String, Int) ->
+headVarNarrowed : List (String, HeadVarRoot) ->
+  List (String, HeadVarRoot) ->
+  (String, HeadVarRoot) ->
   Bool
-headVarNarrowed before after (name, id0) = match lookupAssoc name after
+headVarNarrowed before after (name, root0) = match lookupAssoc name after
   None => True
-  Some id =>
+  Some root =>
     anyList
       (other =>
-        snd other /= id0
-          && optionOr (0 - 1) (lookupAssoc (fst other) after) == id)
+        snd other /= root0 && lookupAssoc (fst other) after == Some root)
       before
 
 -- A body that fixes a head variable holds only for the narrower head it implies,
@@ -39955,7 +39983,7 @@ headVarNarrowed before after (name, id0) = match lookupAssoc name after
 checkImplHeadRigidity : String ->
   String ->
   ImplBodySite ->
-  List (String, Int) ->
+  List (String, HeadVarRoot) ->
   Option Loc ->
   Unit
 checkImplHeadRigidity subject iface site before loc =
@@ -39971,7 +39999,7 @@ checkImplHeadRigidity subject iface site before loc =
 -- written name.
 narrowedImplHead : String -> ImplBodySite -> String
 narrowedImplHead iface site =
-  let named = map (p => (snd p, fst p)) (implHeadVarRoots site.ibImplTvMap)
+  let named = map (p => (snd p, fst p)) (implHeadTypeVarRoots site.ibImplTvMap)
   joinWith
     " "
     ("impl" :: iface :: ppEach (Ref named) (Ref 0) 3 site.ibHeadMonos)
@@ -39998,7 +40026,7 @@ checkImplHeadPrerequisites : String ->
   List (IfaceRef, List Mono, Option Loc) ->
   Unit
 checkImplHeadPrerequisites subject iface site methodTvs mty addedObls addedCallObls =
-  match implHeadVarRoots site.ibImplTvMap
+  match implHeadTypeVarRoots site.ibImplTvMap
     [] => ()
     roots =>
       let givens = implBodyGivens iface site methodTvs mty

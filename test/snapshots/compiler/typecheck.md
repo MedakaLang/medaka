@@ -1,5 +1,5 @@
 # META
-source_lines=54611
+source_lines=54639
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -39922,35 +39922,63 @@ requireArgsAreRoot _ _ _ = False
 -- W3-inst (DICT-SEMANTICS §3): an impl head's type variables are the instance's
 -- quantifiers, and its bodies are checked against them as a signature's body is
 -- against its own.  Each head variable's union-find root while it is still a
--- variable; a variable already fixed to a constructed type is absent.
-implHeadVarRoots : List (String, Mono) -> List (String, Int)
+-- variable; a variable already fixed to a constructed type is absent.  A head
+-- variable in an `Effect`-kinded slot is related to a row by the first body
+-- that builds or matches the type, and it is still a variable while that row
+-- has no atoms and an unbound tail.  The two sorts count their ids separately,
+-- so a root carries its sort.
+-- lint-disable-next-line rule-clone-type
+data HeadVarRoot = TypeVarRoot Int | RowVarRoot Int deriving (Eq)
+
+implHeadVarRoots : List (String, Mono) -> List (String, HeadVarRoot)
 implHeadVarRoots implTvMap =
   flatMap
-    (p => match normalize (snd p)
-      TVar cell => [(fst p, tyvarId cell)]
-      _ => [])
+    (p => match headVarRootOf (snd p)
+      Some root => [(fst p, root)]
+      None => [])
     implTvMap
 
+headVarRootOf : Mono -> Option HeadVarRoot
+headVarRootOf m = match normalize m
+  TVar cell => Some (TypeVarRoot (tyvarId cell))
+  TEff row => match effrowNorm row
+    EffRow [] (Some cell) => match !cell
+      EUnbound id _ => Some (RowVarRoot id)
+      _ => None
+    _ => None
+  _ => None
+
+-- The head variables that are still type variables, by tyvar root.
+implHeadTypeVarRoots : List (String, Mono) -> List (String, Int)
+implHeadTypeVarRoots implTvMap =
+  flatMap
+    (p => match snd p
+      TypeVarRoot id => [(fst p, id)]
+      RowVarRoot _ => [])
+    (implHeadVarRoots implTvMap)
+
 -- The head variables this body narrowed: each one that was a variable before the
--- body and is now fixed to a constructed type, or now shares its root with another
+-- body and is now fixed to a constructed type or a row with atoms or a closed
+-- tail, or now shares its root with another
 -- head variable that was distinct before.  A variable an earlier sibling body
 -- narrowed is not in [before], so it is reported once, by that body.
-headVarsNarrowedBy : List (String, Int) -> List (String, Mono) -> List String
+headVarsNarrowedBy : List (String, HeadVarRoot) ->
+  List (String, Mono) ->
+  List String
 headVarsNarrowedBy before implTvMap =
   let after = implHeadVarRoots implTvMap
   map fst (filterList (headVarNarrowed before after) before)
 
-headVarNarrowed : List (String, Int) ->
-  List (String, Int) ->
-  (String, Int) ->
+headVarNarrowed : List (String, HeadVarRoot) ->
+  List (String, HeadVarRoot) ->
+  (String, HeadVarRoot) ->
   Bool
-headVarNarrowed before after (name, id0) = match lookupAssoc name after
+headVarNarrowed before after (name, root0) = match lookupAssoc name after
   None => True
-  Some id =>
+  Some root =>
     anyList
       (other =>
-        snd other /= id0
-          && optionOr (0 - 1) (lookupAssoc (fst other) after) == id)
+        snd other /= root0 && lookupAssoc (fst other) after == Some root)
       before
 
 -- A body that fixes a head variable holds only for the narrower head it implies,
@@ -39959,7 +39987,7 @@ headVarNarrowed before after (name, id0) = match lookupAssoc name after
 checkImplHeadRigidity : String ->
   String ->
   ImplBodySite ->
-  List (String, Int) ->
+  List (String, HeadVarRoot) ->
   Option Loc ->
   Unit
 checkImplHeadRigidity subject iface site before loc =
@@ -39975,7 +40003,7 @@ checkImplHeadRigidity subject iface site before loc =
 -- written name.
 narrowedImplHead : String -> ImplBodySite -> String
 narrowedImplHead iface site =
-  let named = map (p => (snd p, fst p)) (implHeadVarRoots site.ibImplTvMap)
+  let named = map (p => (snd p, fst p)) (implHeadTypeVarRoots site.ibImplTvMap)
   joinWith
     " "
     ("impl" :: iface :: ppEach (Ref named) (Ref 0) 3 site.ibHeadMonos)
@@ -40002,7 +40030,7 @@ checkImplHeadPrerequisites : String ->
   List (IfaceRef, List Mono, Option Loc) ->
   Unit
 checkImplHeadPrerequisites subject iface site methodTvs mty addedObls addedCallObls =
-  match implHeadVarRoots site.ibImplTvMap
+  match implHeadTypeVarRoots site.ibImplTvMap
     [] => ()
     roots =>
       let givens = implBodyGivens iface site methodTvs mty
@@ -61398,20 +61426,26 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "requireArgsAreRoot" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool")))))
 (DFunDef false "requireArgsAreRoot" ((PVar "id") (PVar "implTvMap") (PList (PCon "TyVar" (PVar "name")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "implTvMap")) (arm (PCon "Some" (PVar "m")) () (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id"))) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DFunDef false "requireArgsAreRoot" (PWild PWild PWild) (EVar "False"))
-(DTypeSig false "implHeadVarRoots" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "implHeadVarRoots" ((PVar "implTvMap")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EMatch (EApp (EVar "normalize") (EApp (EVar "snd") (EVar "p"))) (arm (PCon "TVar" (PVar "cell")) () (EListLit (ETuple (EApp (EVar "fst") (EVar "p")) (EApp (EVar "tyvarId") (EVar "cell"))))) (arm PWild () (EListLit))))) (EVar "implTvMap")))
-(DTypeSig false "headVarsNarrowedBy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DData Private "HeadVarRoot" () ((variant "TypeVarRoot" (ConPos (TyCon "Int"))) (variant "RowVarRoot" (ConPos (TyCon "Int")))) ())
+(DImpl true "Eq" ((TyCon "HeadVarRoot")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TypeVarRoot" (PVar "__a0")) (PCon "TypeVarRoot" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RowVarRoot" (PVar "__a0")) (PCon "RowVarRoot" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DTypeSig false "implHeadVarRoots" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "HeadVarRoot")))))
+(DFunDef false "implHeadVarRoots" ((PVar "implTvMap")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EMatch (EApp (EVar "headVarRootOf") (EApp (EVar "snd") (EVar "p"))) (arm (PCon "Some" (PVar "root")) () (EListLit (ETuple (EApp (EVar "fst") (EVar "p")) (EVar "root")))) (arm (PCon "None") () (EListLit))))) (EVar "implTvMap")))
+(DTypeSig false "headVarRootOf" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "HeadVarRoot"))))
+(DFunDef false "headVarRootOf" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EVar "Some") (EApp (EVar "TypeVarRoot") (EApp (EVar "tyvarId") (EVar "cell"))))) (arm (PCon "TEff" (PVar "row")) () (EMatch (EApp (EVar "effrowNorm") (EVar "row")) (arm (PCon "EffRow" (PList) (PCon "Some" (PVar "cell"))) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") PWild) () (EApp (EVar "Some") (EApp (EVar "RowVarRoot") (EVar "id")))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DTypeSig false "implHeadTypeVarRoots" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
+(DFunDef false "implHeadTypeVarRoots" ((PVar "implTvMap")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "TypeVarRoot" (PVar "id")) () (EListLit (ETuple (EApp (EVar "fst") (EVar "p")) (EVar "id")))) (arm (PCon "RowVarRoot" PWild) () (EListLit))))) (EApp (EVar "implHeadVarRoots") (EVar "implTvMap"))))
+(DTypeSig false "headVarsNarrowedBy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "HeadVarRoot"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "headVarsNarrowedBy" ((PVar "before") (PVar "implTvMap")) (EBlock (DoLet false false (PVar "after") (EApp (EVar "implHeadVarRoots") (EVar "implTvMap"))) (DoExpr (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "headVarNarrowed") (EVar "before")) (EVar "after"))) (EVar "before"))))))
-(DTypeSig false "headVarNarrowed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "Bool")))))
-(DFunDef false "headVarNarrowed" ((PVar "before") (PVar "after") (PTuple (PVar "name") (PVar "id0"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "after")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "id")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "other")) (EBinOp "&&" (EBinOp "/=" (EApp (EVar "snd") (EVar "other")) (EVar "id0")) (EBinOp "==" (EApp (EApp (EVar "optionOr") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "fst") (EVar "other"))) (EVar "after"))) (EVar "id"))))) (EVar "before")))))
-(DTypeSig false "checkImplHeadRigidity" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ImplBodySite") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
+(DTypeSig false "headVarNarrowed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "HeadVarRoot"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "HeadVarRoot"))) (TyFun (TyTuple (TyCon "String") (TyCon "HeadVarRoot")) (TyCon "Bool")))))
+(DFunDef false "headVarNarrowed" ((PVar "before") (PVar "after") (PTuple (PVar "name") (PVar "root0"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "after")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "root")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "other")) (EBinOp "&&" (EBinOp "/=" (EApp (EVar "snd") (EVar "other")) (EVar "root0")) (EBinOp "==" (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "fst") (EVar "other"))) (EVar "after")) (EApp (EVar "Some") (EVar "root")))))) (EVar "before")))))
+(DTypeSig false "checkImplHeadRigidity" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ImplBodySite") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "HeadVarRoot"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
 (DFunDef false "checkImplHeadRigidity" ((PVar "subject") (PVar "iface") (PVar "site") (PVar "before") (PVar "loc")) (EMatch (EApp (EApp (EVar "headVarsNarrowedBy") (EVar "before")) (EFieldAccess (EVar "site") "ibImplTvMap")) (arm (PList) () (ELit LUnit)) (arm (PVar "narrowed") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-IMPL-TOO-SPECIFIC"))) (EVar "loc")) (EApp (EApp (EApp (EVar "narrowsImplHeadMsg") (EVar "subject")) (EVar "narrowed")) (EApp (EApp (EVar "narrowedImplHead") (EVar "iface")) (EVar "site")))))))
 (DTypeSig false "narrowedImplHead" (TyFun (TyCon "String") (TyFun (TyCon "ImplBodySite") (TyCon "String"))))
-(DFunDef false "narrowedImplHead" ((PVar "iface") (PVar "site")) (EBlock (DoLet false false (PVar "named") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EApp (EVar "implHeadVarRoots") (EFieldAccess (EVar "site") "ibImplTvMap")))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (ELit (LString "impl")) (EBinOp "::" (EVar "iface") (EApp (EApp (EApp (EApp (EVar "ppEach") (EApp (EVar "Ref") (EVar "named"))) (EApp (EVar "Ref") (ELit (LInt 0)))) (ELit (LInt 3))) (EFieldAccess (EVar "site") "ibHeadMonos"))))))))
+(DFunDef false "narrowedImplHead" ((PVar "iface") (PVar "site")) (EBlock (DoLet false false (PVar "named") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EApp (EVar "implHeadTypeVarRoots") (EFieldAccess (EVar "site") "ibImplTvMap")))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (ELit (LString "impl")) (EBinOp "::" (EVar "iface") (EApp (EApp (EApp (EApp (EVar "ppEach") (EApp (EVar "Ref") (EVar "named"))) (EApp (EVar "Ref") (ELit (LInt 0)))) (ELit (LInt 3))) (EFieldAccess (EVar "site") "ibHeadMonos"))))))))
 (DTypeSig false "narrowsImplHeadMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "narrowsImplHeadMsg" ((PVar "subject") (PVar "narrowed") (PVar "head")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString " fixes the instance-head type variable(s) "))) (EApp (EVar "display") (EApp (EVar "quotedNames") (EVar "narrowed")))) (ELit (LString ", but the impl is declared for every type in their place, so a receiver of another type would reach this body with a value of the wrong type. Narrow the head to `"))) (EApp (EVar "display") (EVar "head"))) (ELit (LString "`, or make the body parametric in "))) (EApp (EVar "display") (EApp (EVar "quotedNames") (EVar "narrowed")))) (ELit (LString "."))))
 (DTypeSig false "checkImplHeadPrerequisites" (TyFun (TyCon "String") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "ImplBodySite") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit")))))))))
-(DFunDef false "checkImplHeadPrerequisites" ((PVar "subject") (PVar "iface") (PVar "site") (PVar "methodTvs") (PVar "mty") (PVar "addedObls") (PVar "addedCallObls")) (EMatch (EApp (EVar "implHeadVarRoots") (EFieldAccess (EVar "site") "ibImplTvMap")) (arm (PList) () (ELit LUnit)) (arm (PVar "roots") () (EBlock (DoLet false false (PVar "givens") (EApp (EApp (EApp (EApp (EVar "implBodyGivens") (EVar "iface")) (EVar "site")) (EVar "methodTvs")) (EVar "mty"))) (DoLet false false (PVar "goals") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "oblPredOf")) (EVar "addedObls")) (EApp (EApp (EVar "flatMap") (EVar "callPredOf")) (EVar "addedCallObls")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "g")) (EApp (EApp (EApp (EApp (EVar "checkImplHeadGoal") (EVar "subject")) (EVar "roots")) (EVar "givens")) (EVar "g")))) (ELit LUnit)) (EVar "goals")))))))
+(DFunDef false "checkImplHeadPrerequisites" ((PVar "subject") (PVar "iface") (PVar "site") (PVar "methodTvs") (PVar "mty") (PVar "addedObls") (PVar "addedCallObls")) (EMatch (EApp (EVar "implHeadTypeVarRoots") (EFieldAccess (EVar "site") "ibImplTvMap")) (arm (PList) () (ELit LUnit)) (arm (PVar "roots") () (EBlock (DoLet false false (PVar "givens") (EApp (EApp (EApp (EApp (EVar "implBodyGivens") (EVar "iface")) (EVar "site")) (EVar "methodTvs")) (EVar "mty"))) (DoLet false false (PVar "goals") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "oblPredOf")) (EVar "addedObls")) (EApp (EApp (EVar "flatMap") (EVar "callPredOf")) (EVar "addedCallObls")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "g")) (EApp (EApp (EApp (EApp (EVar "checkImplHeadGoal") (EVar "subject")) (EVar "roots")) (EVar "givens")) (EVar "g")))) (ELit LUnit)) (EVar "goals")))))))
 (DTypeSig false "checkImplHeadGoal" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Unit"))))))
 (DFunDef false "checkImplHeadGoal" ((PVar "subject") (PVar "roots") (PVar "givens") (PTuple (PVar "iface") (PVar "ds") (PVar "loc"))) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "anyIn") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "roots"))) (EBlock (DoLet false false (PVar "headIds") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "r"))))) (EVar "roots"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "goalSiteLoc")) (EVar "loc"))) (DoLet false false (PVar "leaves") (EApp (EApp (EApp (EApp (EApp (EVar "implGoalResiduals") (EVar "residualReduceFuel")) (EVar "headIds")) (EVar "givens")) (EVar "iface")) (EVar "args"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "goalSiteLoc")) (EVar "None"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "leaf")) (EApp (EApp (EApp (EApp (EVar "reportImplHeadResidual") (EVar "subject")) (EVar "roots")) (EVar "loc")) (EVar "leaf")))) (ELit LUnit)) (EVar "leaves")))) (ELit LUnit)))))
 (DTypeSig false "implGoalResiduals" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))))))))))
@@ -70426,20 +70460,26 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "requireArgsAreRoot" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool")))))
 (DFunDef false "requireArgsAreRoot" ((PVar "id") (PVar "implTvMap") (PList (PCon "TyVar" (PVar "name")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "implTvMap")) (arm (PCon "Some" (PVar "m")) () (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id"))) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DFunDef false "requireArgsAreRoot" (PWild PWild PWild) (EVar "False"))
-(DTypeSig false "implHeadVarRoots" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "implHeadVarRoots" ((PVar "implTvMap")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EMatch (EApp (EVar "normalize") (EApp (EVar "snd") (EVar "p"))) (arm (PCon "TVar" (PVar "cell")) () (EListLit (ETuple (EApp (EVar "fst") (EVar "p")) (EApp (EVar "tyvarId") (EVar "cell"))))) (arm PWild () (EListLit))))) (EVar "implTvMap")))
-(DTypeSig false "headVarsNarrowedBy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DData Private "HeadVarRoot" () ((variant "TypeVarRoot" (ConPos (TyCon "Int"))) (variant "RowVarRoot" (ConPos (TyCon "Int")))) ())
+(DImpl true "Eq" ((TyCon "HeadVarRoot")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TypeVarRoot" (PVar "__a0")) (PCon "TypeVarRoot" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RowVarRoot" (PVar "__a0")) (PCon "RowVarRoot" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DTypeSig false "implHeadVarRoots" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "HeadVarRoot")))))
+(DFunDef false "implHeadVarRoots" ((PVar "implTvMap")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EMatch (EApp (EVar "headVarRootOf") (EApp (EVar "snd") (EVar "p"))) (arm (PCon "Some" (PVar "root")) () (EListLit (ETuple (EApp (EVar "fst") (EVar "p")) (EVar "root")))) (arm (PCon "None") () (EListLit))))) (EVar "implTvMap")))
+(DTypeSig false "headVarRootOf" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "HeadVarRoot"))))
+(DFunDef false "headVarRootOf" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EVar "Some") (EApp (EVar "TypeVarRoot") (EApp (EVar "tyvarId") (EVar "cell"))))) (arm (PCon "TEff" (PVar "row")) () (EMatch (EApp (EVar "effrowNorm") (EVar "row")) (arm (PCon "EffRow" (PList) (PCon "Some" (PVar "cell"))) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") PWild) () (EApp (EVar "Some") (EApp (EVar "RowVarRoot") (EVar "id")))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DTypeSig false "implHeadTypeVarRoots" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
+(DFunDef false "implHeadTypeVarRoots" ((PVar "implTvMap")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EMatch (EApp (EVar "snd") (EVar "p")) (arm (PCon "TypeVarRoot" (PVar "id")) () (EListLit (ETuple (EApp (EVar "fst") (EVar "p")) (EVar "id")))) (arm (PCon "RowVarRoot" PWild) () (EListLit))))) (EApp (EVar "implHeadVarRoots") (EVar "implTvMap"))))
+(DTypeSig false "headVarsNarrowedBy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "HeadVarRoot"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "headVarsNarrowedBy" ((PVar "before") (PVar "implTvMap")) (EBlock (DoLet false false (PVar "after") (EApp (EVar "implHeadVarRoots") (EVar "implTvMap"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "headVarNarrowed") (EVar "before")) (EVar "after"))) (EVar "before"))))))
-(DTypeSig false "headVarNarrowed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "Bool")))))
-(DFunDef false "headVarNarrowed" ((PVar "before") (PVar "after") (PTuple (PVar "name") (PVar "id0"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "after")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "id")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "other")) (EBinOp "&&" (EBinOp "/=" (EApp (EVar "snd") (EVar "other")) (EVar "id0")) (EBinOp "==" (EApp (EApp (EVar "optionOr") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "fst") (EVar "other"))) (EVar "after"))) (EVar "id"))))) (EVar "before")))))
-(DTypeSig false "checkImplHeadRigidity" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ImplBodySite") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
+(DTypeSig false "headVarNarrowed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "HeadVarRoot"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "HeadVarRoot"))) (TyFun (TyTuple (TyCon "String") (TyCon "HeadVarRoot")) (TyCon "Bool")))))
+(DFunDef false "headVarNarrowed" ((PVar "before") (PVar "after") (PTuple (PVar "name") (PVar "root0"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "after")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "root")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "other")) (EBinOp "&&" (EBinOp "/=" (EApp (EVar "snd") (EVar "other")) (EVar "root0")) (EBinOp "==" (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "fst") (EVar "other"))) (EVar "after")) (EApp (EVar "Some") (EVar "root")))))) (EVar "before")))))
+(DTypeSig false "checkImplHeadRigidity" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ImplBodySite") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "HeadVarRoot"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
 (DFunDef false "checkImplHeadRigidity" ((PVar "subject") (PVar "iface") (PVar "site") (PVar "before") (PVar "loc")) (EMatch (EApp (EApp (EVar "headVarsNarrowedBy") (EVar "before")) (EFieldAccess (EVar "site") "ibImplTvMap")) (arm (PList) () (ELit LUnit)) (arm (PVar "narrowed") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-IMPL-TOO-SPECIFIC"))) (EVar "loc")) (EApp (EApp (EApp (EVar "narrowsImplHeadMsg") (EVar "subject")) (EVar "narrowed")) (EApp (EApp (EVar "narrowedImplHead") (EVar "iface")) (EVar "site")))))))
 (DTypeSig false "narrowedImplHead" (TyFun (TyCon "String") (TyFun (TyCon "ImplBodySite") (TyCon "String"))))
-(DFunDef false "narrowedImplHead" ((PVar "iface") (PVar "site")) (EBlock (DoLet false false (PVar "named") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EApp (EVar "implHeadVarRoots") (EFieldAccess (EVar "site") "ibImplTvMap")))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (ELit (LString "impl")) (EBinOp "::" (EVar "iface") (EApp (EApp (EApp (EApp (EVar "ppEach") (EApp (EVar "Ref") (EVar "named"))) (EApp (EVar "Ref") (ELit (LInt 0)))) (ELit (LInt 3))) (EFieldAccess (EVar "site") "ibHeadMonos"))))))))
+(DFunDef false "narrowedImplHead" ((PVar "iface") (PVar "site")) (EBlock (DoLet false false (PVar "named") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EApp (EVar "implHeadTypeVarRoots") (EFieldAccess (EVar "site") "ibImplTvMap")))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (ELit (LString "impl")) (EBinOp "::" (EVar "iface") (EApp (EApp (EApp (EApp (EVar "ppEach") (EApp (EVar "Ref") (EVar "named"))) (EApp (EVar "Ref") (ELit (LInt 0)))) (ELit (LInt 3))) (EFieldAccess (EVar "site") "ibHeadMonos"))))))))
 (DTypeSig false "narrowsImplHeadMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "narrowsImplHeadMsg" ((PVar "subject") (PVar "narrowed") (PVar "head")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString " fixes the instance-head type variable(s) "))) (EApp (EMethodRef "display") (EApp (EVar "quotedNames") (EVar "narrowed")))) (ELit (LString ", but the impl is declared for every type in their place, so a receiver of another type would reach this body with a value of the wrong type. Narrow the head to `"))) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString "`, or make the body parametric in "))) (EApp (EMethodRef "display") (EApp (EVar "quotedNames") (EVar "narrowed")))) (ELit (LString "."))))
 (DTypeSig false "checkImplHeadPrerequisites" (TyFun (TyCon "String") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "ImplBodySite") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit")))))))))
-(DFunDef false "checkImplHeadPrerequisites" ((PVar "subject") (PVar "iface") (PVar "site") (PVar "methodTvs") (PVar "mty") (PVar "addedObls") (PVar "addedCallObls")) (EMatch (EApp (EVar "implHeadVarRoots") (EFieldAccess (EVar "site") "ibImplTvMap")) (arm (PList) () (ELit LUnit)) (arm (PVar "roots") () (EBlock (DoLet false false (PVar "givens") (EApp (EApp (EApp (EApp (EVar "implBodyGivens") (EVar "iface")) (EVar "site")) (EVar "methodTvs")) (EVar "mty"))) (DoLet false false (PVar "goals") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "oblPredOf")) (EVar "addedObls")) (EApp (EApp (EDictApp "flatMap") (EVar "callPredOf")) (EVar "addedCallObls")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "g")) (EApp (EApp (EApp (EApp (EVar "checkImplHeadGoal") (EVar "subject")) (EVar "roots")) (EVar "givens")) (EVar "g")))) (ELit LUnit)) (EVar "goals")))))))
+(DFunDef false "checkImplHeadPrerequisites" ((PVar "subject") (PVar "iface") (PVar "site") (PVar "methodTvs") (PVar "mty") (PVar "addedObls") (PVar "addedCallObls")) (EMatch (EApp (EVar "implHeadTypeVarRoots") (EFieldAccess (EVar "site") "ibImplTvMap")) (arm (PList) () (ELit LUnit)) (arm (PVar "roots") () (EBlock (DoLet false false (PVar "givens") (EApp (EApp (EApp (EApp (EVar "implBodyGivens") (EVar "iface")) (EVar "site")) (EVar "methodTvs")) (EVar "mty"))) (DoLet false false (PVar "goals") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "oblPredOf")) (EVar "addedObls")) (EApp (EApp (EDictApp "flatMap") (EVar "callPredOf")) (EVar "addedCallObls")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "g")) (EApp (EApp (EApp (EApp (EVar "checkImplHeadGoal") (EVar "subject")) (EVar "roots")) (EVar "givens")) (EVar "g")))) (ELit LUnit)) (EVar "goals")))))))
 (DTypeSig false "checkImplHeadGoal" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Unit"))))))
 (DFunDef false "checkImplHeadGoal" ((PVar "subject") (PVar "roots") (PVar "givens") (PTuple (PVar "iface") (PVar "ds") (PVar "loc"))) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "anyIn") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "roots"))) (EBlock (DoLet false false (PVar "headIds") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "r"))))) (EVar "roots"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "goalSiteLoc")) (EVar "loc"))) (DoLet false false (PVar "leaves") (EApp (EApp (EApp (EApp (EApp (EVar "implGoalResiduals") (EVar "residualReduceFuel")) (EVar "headIds")) (EVar "givens")) (EVar "iface")) (EVar "args"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "goalSiteLoc")) (EVar "None"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "leaf")) (EApp (EApp (EApp (EApp (EVar "reportImplHeadResidual") (EVar "subject")) (EVar "roots")) (EVar "loc")) (EVar "leaf")))) (ELit LUnit)) (EVar "leaves")))) (ELit LUnit)))))
 (DTypeSig false "implGoalResiduals" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))))))))))

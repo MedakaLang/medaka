@@ -1,0 +1,21 @@
+-- §3 W3-inst over an `Effect`-kinded head variable: `impl Mappable (Box e)` and
+-- `impl Applicative (Box e)` build a `Box` in their bodies, which relates `e` to
+-- a row, but leave that row a variable, so both hold for every `e` and are
+-- accepted. Hand-derived: `pure 41` at `Box <Stdout> Int` is `Box 41`, unboxed
+-- and incremented, 42.
+data Box (e : Effect) a = Box a
+
+impl Mappable (Box e) where
+  map f (Box a) = Box (f a)
+
+impl Applicative (Box e) where
+  pure a = Box a
+  ap (Box f) (Box a) = Box (f a)
+
+unbox : Box e a -> a
+unbox (Box a) = a
+
+b : Box <Stdout> Int
+b = pure 41
+
+main = println (unbox b + 1)
