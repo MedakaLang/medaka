@@ -1,0 +1,47 @@
+import frontend.desugar.{desugar}
+import frontend.parser.{parseLocated}
+import types.typecheck.{checkOneDiags, checkModulesDiagsChain, tcCode}
+import test.{expectAll, expectEqual}
+
+invalidProperties : String
+invalidProperties =
+  "prop \"integer body\" (n : Int) = n\n"
+    ++ "prop \"string body\" (s : String) = s\n"
+
+validProperties : String
+validProperties =
+  "identity : Bool -> Bool\nidentity b = b\n"
+    ++ "prop \"literal body\" (n : Int) = True\n"
+    ++ "prop \"parameter body\" (b : Bool) = identity b\n"
+
+flatCodes : String -> List String
+flatCodes source =
+  let (errors, _) =
+    checkOneDiags [] [] ("prop_contract", desugar (parseLocated source))
+  map tcCode errors
+
+moduleCodes : String -> List String
+moduleCodes source =
+  let results = checkModulesDiagsChain None "" [] [] [] [
+    (
+      "dependency",
+      desugar (parseLocated "export identity : Bool -> Bool\nidentity b = b\n"),
+    ),
+    ("prop_contract", desugar (parseLocated source)),
+  ]
+  flatMap ((_, (_, errors, _)) => map tcCode errors) results
+
+test "property result types are constrained in flat checking" =
+  expectEqual
+    ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"]
+    (flatCodes invalidProperties)
+
+test "property result errors accumulate in module checking" =
+  expectEqual
+    ["T-TYPE-MISMATCH", "T-TYPE-MISMATCH"]
+    (moduleCodes invalidProperties)
+
+test "Bool properties retain both checker routes" = expectAll [
+  expectEqual [] (flatCodes validProperties),
+  expectEqual [] (moduleCodes validProperties),
+]
