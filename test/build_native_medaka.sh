@@ -364,13 +364,22 @@ CLI_STAMP_APPLIES=0
 [ "$OUT" = "$ROOT/medaka" ] && CLI_STAMP_APPLIES=1
 
 # sha256 where available (Linux coreutils / macOS `shasum`); `cksum` is the POSIX
-# floor. This is a staleness check, not a signature — a weak hash only risks a
-# missed rebuild, which FORCE_EMITTER_REBUILD=1 always overrides.
+# floor. The digest is both the staleness fingerprint and the build-cache key and
+# entry checksum, so a 32-bit CRC collision on the cache path would serve a wrong
+# binary. The cksum floor is therefore cache-ineligible (CACHE_DIR is emptied below);
+# the staleness fingerprints still use it, where a weak hash only risks a missed
+# rebuild, which FORCE_EMITTER_REBUILD=1 always overrides.
+# HASH_KIND is decided once here; hash_stream and the cache gate both read it.
+if command -v sha256sum >/dev/null 2>&1; then HASH_KIND=sha256sum
+elif command -v shasum >/dev/null 2>&1; then HASH_KIND=shasum
+else HASH_KIND=cksum
+fi
 hash_stream() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum
-  elif command -v shasum >/dev/null 2>&1; then shasum -a 256
-  else cksum
-  fi
+  case "$HASH_KIND" in
+    sha256sum) sha256sum ;;
+    shasum) shasum -a 256 ;;
+    *) cksum ;;
+  esac
 }
 
 # Names AND contents, REPO-RELATIVE, so an add/rename/delete registers as loudly as
@@ -552,6 +561,10 @@ BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
 # Set MEDAKA_BUILD_CACHE_DIR= (empty) to disable reads and writes entirely.
 MEDAKA_SCRATCH="${MEDAKA_SCRATCH:-/var/tmp/medaka-scratch}"
 CACHE_DIR="${MEDAKA_BUILD_CACHE_DIR-$MEDAKA_SCRATCH/medaka-build-cache}"
+if [ "$HASH_KIND" = cksum ] && [ -n "$CACHE_DIR" ]; then
+  echo "build cache: disabled (no sha256sum or shasum; the cksum floor is too weak to key cached binaries)."
+  CACHE_DIR=
+fi
 # Entry count, not total bytes: every entry is one compiler binary of roughly the same
 # size (measured on this box: emitter entries ~3 MB, CLI entries ~6.6 MB), so a count
 # is a size proxy that needs no per-file `stat` (whose flags differ between Linux and
