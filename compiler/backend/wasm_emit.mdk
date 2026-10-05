@@ -3212,15 +3212,19 @@ emitScalarInit emit fnNames valNames groups =
   let mainLocals = match findMain emit groups
     Some body => collectExprLocals body
     None => []
-  let locals = dedupKeep (valLocals ++ mainLocals)
-  let localDecls = map (l => "  " ++ localDeclI32 l) locals
+  let declsOf = ls => map (l => "  " ++ localDeclI32 l) (dedupKeep ls)
   -- B5: scalar divisor-guard scratch (a `/`/`%` in a value-binding or `main` body).
   let dv = if !emit.useDivGuard then ["    (local $__sdivr i64)"] else []
-  ["  (func $__init"]
+  -- Same entry shape as ref mode (emitRefInit): `start` runs the value inits,
+  -- the host calls the exported `mdk_main`.
+  ["  (func $__main"]
     ++ dv
-    ++ localDecls
-    ++ valInit
+    ++ declsOf mainLocals
     ++ mainLines
+    ++ ["  )", "  (export \"mdk_main\" (func $__main))", "  (func $__init"]
+    ++ dv
+    ++ declsOf valLocals
+    ++ valInit
     ++ ["  )", "  (start $__init)"]
 
 emitScalarValInit : WasmEmit ->
@@ -4246,12 +4250,12 @@ emitRefInit prog groups =
   let w7DeclsAt = d => map ("  " ++ _) (w7LocalDecls (progEmit prog) d)
   let initW7Decls = w7DeclsAt valDepth
   let mainW7Decls = w7DeclsAt mainDepth
-  -- `main` lives in its own function, exported as `mdk_main`, so a host can
-  -- re-enter it on the same instance after `start` has run the eager
-  -- initializers once (playground/compile.mjs keeps one compiler instance
-  -- alive across analyze calls; the top-level memo Refs then persist).
-  -- `$__init` = eager value inits, then one call of $__main — the same order
-  -- and the same single run of `main` at instantiation as before.
+  -- `start` runs only the eager value inits; `main` is the exported
+  -- `mdk_main`, which every host calls after instantiation.  A module
+  -- instantiated without that call runs no program code.  A suspending
+  -- import (JSPI) cannot be reached from `start`, and a host may re-enter
+  -- `mdk_main` on one instance (playground/compile.mjs keeps the compiler's
+  -- top-level memo Refs alive across analyze calls that way).
   ["  (func $__main"]
     ++ mainLocalDecls
     ++ mainW7Decls
@@ -4260,7 +4264,7 @@ emitRefInit prog groups =
     ++ initLocalDecls
     ++ initW7Decls
     ++ valInit
-    ++ ["    call $__main", "  )", "  (start $__init)"]
+    ++ ["  )", "  (start $__init)"]
 
 bindBodies : CBind -> List CExpr
 bindBodies (CBind _ clauses) = flatMap clauseBody clauses

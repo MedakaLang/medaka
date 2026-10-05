@@ -41,6 +41,7 @@ Browser
 │                      │                                             │
 │                      └─► worker.js (runner Worker)                 │
 │                            WebAssembly.instantiate(bytes, glue)   │
+│                            then exports.mdk_main() runs main      │
 │                            mdk_write_byte → console (#console)    │
 │                            10 s wall-clock kill-timer             │
 └──────────────────────────────────────────────────────────────────┘

@@ -244,4 +244,42 @@ if [ "$fail" -eq 0 ]; then
   fi
 fi
 
-[ "$fail" -eq 0 ] && [ "$tco_fail" -eq 0 ] && [ "$disp_fail" -eq 0 ] && [ "$strip_fail" -eq 0 ]
+# ── Entry assertion: `start` runs only the value inits; the program is `mdk_main` ──
+# Instantiate an emitted module WITHOUT calling the export: no stdout, no stderr, no
+# exit.  Then call `mdk_main` on the same instance: stdout must equal the oracle's.
+# One scalar-mode fixture (value globals, so `start` does real work) and one
+# ref-mode fixture.  Imports beyond the two write channels throw, so a module that
+# reached any other host import before `mdk_main` fails loudly here.
+entry_fail=0
+if [ "$fail" -eq 0 ]; then
+  for fix in global_chain.mdk str_putstrln.mdk; do
+    got="$WORK/$fix.entry.out"
+    if "$NODE" -e '
+      const fs = require("fs");
+      const mod = new WebAssembly.Module(fs.readFileSync(process.argv[1]));
+      const out = [], err = [];
+      const env = {};
+      for (const i of WebAssembly.Module.imports(mod))
+        env[i.name] = () => { throw new Error("host import " + i.name + " reached"); };
+      env.mdk_write_byte = (b) => { out.push(b & 0xff); };
+      env.mdk_write_err_byte = (b) => { err.push(b & 0xff); };
+      const inst = new WebAssembly.Instance(mod, { env });
+      if (out.length || err.length) {
+        console.error("instantiated without mdk_main wrote " + out.length + " stdout / " + err.length + " stderr bytes");
+        process.exit(1);
+      }
+      inst.exports.mdk_main();
+      fs.writeFileSync(process.argv[2], Buffer.from(out));
+    ' "$WORK/$fix.wasm" "$got" 2>"$WORK/$fix.entry.err"; then
+      if cmp -s "$WORK/$fix.native.out" "$got"; then
+        echo "ENTRY-ASSERT ok   $fix: instantiated without mdk_main prints nothing; mdk_main prints the oracle's $(wc -c <"$got" | tr -d ' ') bytes"
+      else
+        echo "ENTRY-ASSERT FAIL $fix: mdk_main output differs from the oracle"; entry_fail=1
+      fi
+    else
+      echo "ENTRY-ASSERT FAIL $fix: $(cat "$WORK/$fix.entry.err")"; entry_fail=1
+    fi
+  done
+fi
+
+[ "$fail" -eq 0 ] && [ "$tco_fail" -eq 0 ] && [ "$disp_fail" -eq 0 ] && [ "$strip_fail" -eq 0 ] && [ "$entry_fail" -eq 0 ]
