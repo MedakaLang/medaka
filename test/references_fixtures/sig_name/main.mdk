@@ -1,7 +1,7 @@
--- #1025 regression fixture: a value signature's name token is a DEF site of the
--- binding it types, under the binding's own key. Without it, renaming `half`
--- rewrites the binding and its uses but leaves `export half : Float` orphaned,
--- so `1 / 2` silently re-defaults to Int and the program prints 0 instead of 0.5.
+-- A value signature's name token is a DEF site of the binding it types, under
+-- the binding's own key. An edit set that omits it leaves `export half : Float`
+-- orphaned, which drops the declared type and the export without any
+-- diagnostic, so the signature must appear in the binding's reference set.
 --
 -- Read expected.golden as the assertion: each `main|val|<name>` line lists the
 -- signature's name token (line:col of the name, after any `export `) alongside
