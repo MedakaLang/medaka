@@ -55,9 +55,11 @@
 #                        DIFFERENTIAL-ORACLE drivers install that table alone, and
 #                        their determinism is required (the goldens diff stdout).
 #                        `medaka run` overrides them (last-write-wins on the
-#                        duplicate name).  So the category currently has no
+#                        duplicate name).  So the category has no interp
 #                        members; keep it for the next time an extern is bound to
-#                        a lie.
+#                        a lie.  Its one wasm row (ioPoll) is a trap, not a lie:
+#                        it is filed here because the gate accepts no other
+#                        category for a name it counts as implemented.
 #
 # Every row was hand-verified against source on 2026-07-13 (see the citations
 # in the reason text and in diff_compiler_capability_matrix.sh's header).
@@ -234,6 +236,18 @@ netTrySendBytesFrom	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wa
 # hardcoded assumption, so if this ever regresses back to a real trap the
 # gate will report a SILENT OMISSION and this comment is your cue to look —
 # no row to re-add, since the gate re-derives the verdict every run.
+
+# --- ioPoll (1) — bound, lowered to a coded runtime trap. ioPoll sits in
+#     wasm_emit.mdk's isLeafExternW, so the gate counts it implemented and
+#     accepts no row but FROZEN-CONSTANT (a TRAP-STUB row reds as an ACCIDENTAL
+#     FIX; that category is derived only for the int bounds above). The lowering
+#     evaluates the three arguments left to right, then stops with
+#     `runtime error [E-WASM-NO-BINDING]`: no wasm host binds descriptor
+#     readiness. It is a run-time trap, not a build-time gap, because the async
+#     scheduler (`systemPoller`) names ioPoll and a clock-only async program must
+#     still build. Pinned by test/diff_async_test.mdk (wasm_poll_order,
+#     wasm_poll_stdin). ---
+ioPoll	wasm	FROZEN-CONSTANT	bound to a coded runtime trap, not a value: E-WASM-NO-BINDING after evaluating its arguments; the Net/Stdin readiness bindings are #3666
 
 # --- assertSnapshot (1) — TODO, same as the llvm row. ---
 assertSnapshot	wasm	TODO	unimplemented in all 3 engines, no stdlib caller — forward-declared snapshot-testing primitive, not an asymmetric regression

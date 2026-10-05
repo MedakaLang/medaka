@@ -299,7 +299,14 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
     const host = makeHost();
     host.reset(vfsMap, argv, resolve);
     compiledModuleFor(wasmModuleOrBytes)
-      .then((module) => WebAssembly.instantiate(module, host.imports))
+      .then((module) => {
+        // A compiler module with mdk_main but no mdk_entry_split marker runs main in
+        // its start function, so calling mdk_main would run it twice.
+        const names = WebAssembly.Module.exports(module).map((e) => e.name);
+        if (names.includes('mdk_main') && !names.includes('mdk_entry_split'))
+          throw new Error('playground.wasm was built by an older compiler: its start function runs main itself; rebuild it / reload the page');
+        return WebAssembly.instantiate(module, host.imports);
+      })
       .then((instance) => {
         _session = { instance, host };
         instance.exports.mdk_main();

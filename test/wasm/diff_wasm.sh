@@ -280,6 +280,26 @@ if [ "$fail" -eq 0 ]; then
       echo "ENTRY-ASSERT FAIL $fix: $(cat "$WORK/$fix.entry.err")"; entry_fail=1
     fi
   done
+  # A module from before the split calls `main` from `start` and lacks the
+  # `mdk_entry_split` marker.  Rebuild that shape from an emitted module and
+  # require run.js to refuse it before instantiation: exit 1, the named error on
+  # stderr, and no program output (calling `mdk_main` would run `main` twice).
+  fix=str_putstrln.mdk
+  old="$WORK/$fix.oldshape"
+  awk '/entry_split/ { next }
+       $0 == "  (start $__init)" { print "    call $__main"; print prev; print; held = 0; next }
+       { if (held) print prev; prev = $0; held = 1 }
+       END { if (held) print prev }' "$WORK/$fix.wat" > "$old.wat"
+  if ! grep -q '^    call \$__main$' "$old.wat" || ! wasm-tools parse "$old.wat" -o "$old.wasm" 2>"$old.parse.err"; then
+    echo "ENTRY-ASSERT FAIL $fix: could not build the old-shape module: $(cat "$old.parse.err" 2>/dev/null)"; entry_fail=1
+  else
+    "$NODE" "$RUNJS" "$old.wasm" >"$old.out" 2>"$old.err"; orc=$?
+    if [ "$orc" -eq 1 ] && [ ! -s "$old.out" ] && grep -q 'built by an older compiler' "$old.err"; then
+      echo "ENTRY-ASSERT ok   $fix: an old-shape module (main in start, no marker) is refused with exit 1 and no output"
+    else
+      echo "ENTRY-ASSERT FAIL $fix: old-shape module not refused: exit $orc, stdout $(wc -c <"$old.out" | tr -d ' ') bytes, stderr: $(cat "$old.err")"; entry_fail=1
+    fi
+  fi
 fi
 
 [ "$fail" -eq 0 ] && [ "$tco_fail" -eq 0 ] && [ "$disp_fail" -eq 0 ] && [ "$strip_fail" -eq 0 ] && [ "$entry_fail" -eq 0 ]

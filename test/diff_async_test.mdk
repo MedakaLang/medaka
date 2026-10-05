@@ -17,6 +17,12 @@
    `.expected`. `async_deadlock` is compute-only and is graded on `run`,
    native and wasm, for its exit status and coded stderr line.
 
+   The WasmGC backend lowers `ioPoll` to a coded runtime error, after
+   evaluating its arguments left to right. `wasm_poll_order` (a direct call)
+   and `wasm_poll_stdin` (the scheduler waiting on descriptor 0 with no `Net`)
+   pin that on their wasm arm; natively their output depends on which
+   descriptors the harness left open, so they have no native arm.
+
    For each fixture under `test/async_fixtures/` that is meant to finish,
    `medaka check` must accept it, `medaka build` + exec must succeed, and its
    stdout must match the committed `<name>.expected` exactly (mod trailing
@@ -70,7 +76,7 @@ corpus = "\{medakaRoot}/test/async_fixtures"
 -- | The size of the corpus, written down so that a corpus which silently
 -- shrank is red. Growing it is expected: add the row and raise this.
 declaredFixtureCount : Int
-declaredFixtureCount = 4
+declaredFixtureCount = 6
 
 -- | Fixtures that use `Net`, which no wasm host binds: native arm only.
 nativeOnlyRoster : List String
@@ -85,6 +91,11 @@ wasmRoster = ["overlap_sleeps"]
 deadlockFixture : String
 deadlockFixture = "async_deadlock"
 
+-- | Wasm-only fixtures that must print their `.expected` stdout and then stop
+-- at an `ioPoll` with `ioPollLine`.
+ioPollTrapRoster : List String
+ioPollTrapRoster = ["wasm_poll_order", "wasm_poll_stdin"]
+
 -- | Fixtures that are built and must exit 0 with their `.expected` stdout.
 exitZeroRoster : List String
 exitZeroRoster = nativeOnlyRoster ++ wasmRoster
@@ -93,9 +104,9 @@ exitZeroRoster = nativeOnlyRoster ++ wasmRoster
 -- ways below: a fixture with no row here is graded by nothing, and a row
 -- with no fixture would otherwise surface later as an unreadable path.
 roster : List String
-roster = exitZeroRoster ++ [deadlockFixture]
+roster = exitZeroRoster ++ [deadlockFixture] ++ ioPollTrapRoster
 
-test "diff_async: exactly 4 fixtures on disk, matching the roster" =
+test "diff_async: exactly 6 fixtures on disk, matching the roster" =
   match fixtureStems corpus
     Err e => fail "\{corpus}: \{e}"
     Ok found => match expectUnitCount declaredFixtureCount found
@@ -114,7 +125,7 @@ netUser name = match readFile "\{corpus}/\{name}.mdk"
     if contains "Net" src || contains "import net" src then Some name else None
 
 test "diff_async: no wasm-roster fixture uses Net" =
-  let bad = somes (map netUser wasmRoster)
+  let bad = somes (map netUser (wasmRoster ++ ioPollTrapRoster))
   match bad
     [] => pass
     _ =>
@@ -351,24 +362,32 @@ deadlockLine : String
 deadlockLine =
   "runtime error [E-PANIC]: async: every remaining task is waiting on a task that can never finish (deadlock)"
 
--- Grades `(exit, stdout, stderr)`: exit 1, the `.expected` stdout, and the
--- coded panic line contained in stderr (`run` prefixes a `file:line:col`).
-gradeDeadlock : String ->
+-- Grades fixture `name`'s `(exit, stdout, stderr)`: exit 1, the `.expected`
+-- stdout, and `line` contained in stderr (`run` prefixes a `file:line:col`).
+gradeCoded : String ->
+  String ->
+  String ->
   Result String (Int, String, String) ->
   <FileRead, IO> Expectation
-gradeDeadlock arm result = match (result, wantOutput deadlockFixture)
-  (Err e, _) => fail "\{arm}: \{e}"
-  (_, Err e) => fail "\{arm}: \{e}"
+gradeCoded line name arm result = match (result, wantOutput name)
+  (Err e, _) => fail "\{arm} \{name}: \{e}"
+  (_, Err e) => fail "\{arm} \{name}: \{e}"
   (Ok (code, out, err), Ok want) =>
     if code /= 1 then
       fail
-        "\{arm}: exited \{intToString code}, want 1: stdout=\{debug out} stderr=\{debug err}"
+        "\{arm} \{name}: exited \{intToString code}, want 1: stdout=\{debug out} stderr=\{debug err}"
     else if chompNewlines out /= want then
-      fail "\{arm}: stdout \{debug (chompNewlines out)}, want \{debug want}"
-    else if contains deadlockLine err then
+      fail
+        "\{arm} \{name}: stdout \{debug (chompNewlines out)}, want \{debug want}"
+    else if contains line err then
       pass
     else
-      fail "\{arm}: stderr lacks the coded deadlock line: \{debug err}"
+      fail "\{arm} \{name}: stderr lacks \{debug line}: \{debug err}"
+
+gradeDeadlock : String ->
+  Result String (Int, String, String) ->
+  <FileRead, IO> Expectation
+gradeDeadlock = gradeCoded deadlockLine deadlockFixture
 
 test "diff_async: async_deadlock under `medaka run` exits 1 with the coded line" =
   gradeDeadlock
@@ -394,6 +413,32 @@ test "diff_async: async_deadlock built for wasm exits 1 with the coded line" =
         gradeDeadlock "wasm" (buildAndRunWasm scratch deadlockFixture)
       let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
       verdict
+
+-- # ioPoll on wasm
+--
+-- Each fixture prints its `.expected` stdout, then stops at an `ioPoll` with
+-- this line on stderr and exit 1.  For `wasm_poll_order` the stdout is the
+-- three arguments' effects in left-to-right order.
+
+ioPollLine : String
+ioPollLine =
+  "runtime error [E-WASM-NO-BINDING]: ioPoll: descriptor readiness has no wasm binding"
+
+-- Builds `name` for wasm, runs it and grades it against `ioPollLine`.
+gradeIoPollTrap : String -> <Exec, FileRead, IO> Expectation
+gradeIoPollTrap name = match freshDir ()
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok scratch =>
+    let verdict =
+      gradeCoded ioPollLine name "wasm" (buildAndRunWasm scratch name)
+    let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
+    verdict
+
+test "diff_async: wasm_poll_order evaluates ioPoll's arguments left to right on wasm, then exits 1 with the coded line" =
+  gradeIoPollTrap "wasm_poll_order"
+
+test "diff_async: wasm_poll_stdin's wait on descriptor 0 exits 1 with the coded line on wasm" =
+  gradeIoPollTrap "wasm_poll_stdin"
 
 -- The readiness externs the async runtime is built on — those
 -- `echo_overlap` and `no_starvation` exercise, and the rest of the family,

@@ -1,0 +1,13 @@
+-- Waits on descriptor 0 with only `<Clock, Stdout>`: `waitRead` takes a raw
+-- descriptor, so the scheduler reaches `ioPoll` with no socket.  Built for wasm
+-- it must stop with the coded line rather than report the descriptor ready.
+-- Wasm arm only: natively the answer depends on what stdin is.
+import async.{Async, liftIO, awaitAny, waitRead, deadlineAfter, expired}
+import time.{millis}
+
+main : Async <Clock, Stdout> Unit
+main = defer
+  d <- deadlineAfter (millis 200)
+  _ <- awaitAny [waitRead 0, d]
+  e <- expired d
+  liftIO (u => putStrLn (if e then "timed out" else "stdin ready"))

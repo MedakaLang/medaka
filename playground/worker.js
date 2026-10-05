@@ -114,6 +114,8 @@ function mdkHexFloat(ip, fp, pexp) {
 // Thrown by the IO-capability stubs below. Caught in the instantiate .catch handler
 // and surfaced verbatim (no "instantiate failed:" prefix, no generic panic wording).
 class CapabilityError extends Error {}
+// Thrown for a module built before the start/mdk_main split; surfaced verbatim too.
+class OldEntryShape extends Error {}
 const capabilityStub = (name) => () => {
   throw new CapabilityError(
     `${name} is not available in the online playground — use \`medaka build\` locally for file/IO access.`
@@ -254,9 +256,19 @@ self.onmessage = function(e) {
   } };
 
   // (start $__init) runs only the value inits; the program is the mdk_main export.
-  // Calling it inside this chain keeps its exit/trap on the .catch path below.
-  WebAssembly.instantiate(wasm, imports)
-    .then(({ instance }) => {
+  // Calling it inside this chain keeps its exit/trap on the .catch path below.  A
+  // module with mdk_main but no mdk_entry_split marker runs main in its start
+  // function, so calling mdk_main would run it twice: it is refused before it is
+  // instantiated.
+  WebAssembly.compile(wasm)
+    .then((module) => {
+      const names = WebAssembly.Module.exports(module).map((e) => e.name);
+      if (names.includes('mdk_main') && !names.includes('mdk_entry_split'))
+        throw new OldEntryShape(
+          'this program was built by an older compiler: its start function runs main itself; reload the page');
+      return WebAssembly.instantiate(module, imports);
+    })
+    .then((instance) => {
       instance.exports.mdk_main();
       flushStdout();
       flushStderr();
@@ -281,10 +293,11 @@ self.onmessage = function(e) {
       // A coded trap already reached the console through the stderr stream above, so
       // the error message is withheld (shown: true) instead of printing it twice.
       const overflow = /call stack|stack overflow/i.test(engineMsg);
-      const message = err instanceof CapabilityError ? engineMsg
+      const named = err instanceof CapabilityError || err instanceof OldEntryShape;
+      const message = named ? engineMsg
         : overflow ? STACK_OVERFLOW_MSG
         : coded ? coded
         : (isPanic ? 'program panicked' : 'instantiate failed: ' + engineMsg);
-      self.postMessage({ type: 'error', message, shown: !!coded && !overflow && !(err instanceof CapabilityError) });
+      self.postMessage({ type: 'error', message, shown: !!coded && !overflow && !named });
     });
 };
