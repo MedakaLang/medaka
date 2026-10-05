@@ -1,6 +1,8 @@
 # Async on the WasmGC target
 
-**Status:** OPEN — design only, nothing built. Written 2026-10-05 for the
+**Status:** WA-1 to WA-4 are implemented by sprint the-browser-can-wait
+(#3851); WA-5 remains open. Ruling 2's mechanism was reversed on 2026-10-05
+(§10 item 2). Written 2026-10-05 for the
 HN-readiness epic #3700 (item 8) against `main` at `b5fbcfbe`. Every claim
 below is marked **measured** (with the command, on a binary built from that
 commit in this worktree) or **read** (with the file). Companion to
@@ -286,14 +288,28 @@ blocking read and stays one on every target.
 **`ioPoll`.** The catalog row is `extern ioPoll : Array Int -> Array Int -> Int
 -> <Clock> Result String (Array Int)` (**read**, `stdlib/runtime.mdk`: "a wait
 reaches no endpoint … charged as the clock", the #3320/#3323 ruling), while its
-wasm disposition is `PERMANENT` under the net family (**read**,
+wasm disposition at `b5fbcfbe` was `PERMANENT` under the net family (**read**,
 `test/CAPABILITY-EXCEPTIONS.txt`; `isNetExternW` in
 `compiler/backend/wasm_emit.mdk`). Under label grain, a backend claiming
-`<Clock>` implements `ioPoll`. This is §10 decision 2: the honest binding
-exists (a host import that reports every descriptor as invalid, which is what
-`poll(2)` reports for a closed descriptor: `POLLNVAL`, readiness word 3 in
-`runtime/medaka_rt.c` `mdk_io_poll`), and it is unreachable without a socket,
-which needs `<Net>`.
+`<Clock>` implements `ioPoll`. This is §10 decision 2. Its first mechanism (every
+descriptor reported invalid, readiness word 3, the `POLLNVAL` meaning
+`runtime/medaka_rt.c` `mdk_io_poll` gives a closed descriptor) rested on the
+premise that `ioPoll` is unreachable without a socket, which needs `<Net>`. The
+premise is false: `async.waitRead : Int -> Wait <Clock | e>` takes a raw
+descriptor, so a `<Clock, Stdout>` program reaches `ioPoll` through the
+scheduler. The sprint review measured it: waiting on descriptor 0 with stdin an
+idle pipe printed `stdin ready` on wasm and `timed out` natively.
+
+Val reversed the mechanism on 2026-10-05, after the sprint review; the
+`<Clock>` label decision stands. The wasm lowering of `ioPoll` is inline in
+`compiler/backend/wasm_emit.mdk` (`emitLeafExternRef`), with no host import. It
+evaluates its three arguments left to right, as native does, and then stops
+with the coded runtime error `E-WASM-NO-BINDING` ("descriptor readiness has no
+wasm binding"; the `Net` and `Stdin` bindings are #3666). It is a run-time trap,
+not a build-time gap, because the scheduler's `systemPoller` names `ioPoll`:
+a clock-only async program must still build, and it never calls `ioPoll`
+without a descriptor wait. The ledger row is the wasm `ioPoll` row of
+`test/CAPABILITY-EXCEPTIONS.txt`.
 
 ## 5. Semantics stay identical
 
@@ -560,13 +576,20 @@ and the recommendation as put to her.
    `ioPoll` as the clock (the #3323 ruling) and the ledger withholds it from
    wasm as `PERMANENT` under the net family. Ruling 1 makes those
    inconsistent the moment wasm claims `<Clock>`. Recommend: wasm binds
-   `ioPoll` to a host import that reports every descriptor invalid (readiness
-   word 3, the `POLLNVAL` meaning `mdk_io_poll` already gives a closed
-   descriptor), and the `PERMANENT` row moves to a `Clock` disposition
-   `EnvImport`. It is unreachable without `<Net>`, so no program observes it,
-   and the label claim is honest. Alternative: re-row `ioPoll` as
+   `ioPoll` so that it reports every descriptor invalid (readiness word 3, the
+   `POLLNVAL` meaning `mdk_io_poll` already gives a closed descriptor), and the
+   `PERMANENT` row goes. It is unreachable without `<Net>`, so no program
+   observes it, and the label claim is honest. Alternative: re-row `ioPoll` as
    `<Clock, Net _>`, which reopens #3320's "a wait reaches no endpoint" and
    widens every `waitRead` caller's manifest. Not recommended.
+
+   **Reversed 2026-10-05 by Val, after the sprint review (mechanism only; the
+   `<Clock>` label decision stands).** The premise was refuted: `waitRead`
+   takes a raw descriptor, so a `<Clock, Stdout>` program reaches `ioPoll`, and
+   the review's probe printed `stdin ready` on wasm against `timed out`
+   natively. The built lowering was inline, never a host import. Wasm now
+   evaluates the arguments left to right and stops at run time with
+   `E-WASM-NO-BINDING` (§4).
 
 3. **Cross-origin isolation on the playground route.** Recommend yes, scoped
    to `/` and `worker.js` in `playground/_headers`, with the

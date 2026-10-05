@@ -2686,8 +2686,6 @@ noteW8Extern emit name =
   let _ =
     if contains name ["wallTimeSec", "monotonicSec"] then
       setRef emit.useFloat True
-  -- ioPoll builds the all-invalid readiness array, an `$arr`.
-  let _ = if name == "ioPoll" then setRef emit.useArray True
   if contains name ["ePutStr", "ePutStrLn"] then setRef emit.useEPut True
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
 -- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
@@ -3221,7 +3219,9 @@ emitScalarInit emit fnNames valNames groups =
     ++ dv
     ++ declsOf mainLocals
     ++ mainLines
-    ++ ["  )", "  (export \"mdk_main\" (func $__main))", "  (func $__init"]
+    ++ ["  )"]
+    ++ entryExports
+    ++ ["  (func $__init"]
     ++ dv
     ++ declsOf valLocals
     ++ valInit
@@ -4216,6 +4216,17 @@ topoValVisitDeps rm bm (d :: rest) done acc visiting = match omLookup d bm
 oneGlobalState : String -> String
 oneGlobalState n = "  (global $gs_" ++ gname n ++ " (mut i32) (i32.const 0))"
 
+-- The program entry, shared by both init shapes.  `mdk_entry_split` marks a
+-- module whose `start` does not run `main`: a host that finds `mdk_main` without
+-- it holds a module whose `start` already runs `main`, and calling `mdk_main`
+-- would run the program twice, so the hosts refuse such a module.
+entryExports : List String
+entryExports = [
+  "  (export \"mdk_main\" (func $__main))",
+  "  (func $__entry_split)",
+  "  (export \"mdk_entry_split\" (func $__entry_split))",
+]
+
 emitRefInit : Prog -> List CBind -> List String
 emitRefInit prog groups =
   -- #561 PR-B: only SAFE (statically-orderable) value globals are eager-initialised in
@@ -4260,7 +4271,9 @@ emitRefInit prog groups =
     ++ mainLocalDecls
     ++ mainW7Decls
     ++ mainLines
-    ++ ["  )", "  (export \"mdk_main\" (func $__main))", "  (func $__init"]
+    ++ ["  )"]
+    ++ entryExports
+    ++ ["  (func $__init"]
     ++ initLocalDecls
     ++ initW7Decls
     ++ valInit
@@ -8084,19 +8097,22 @@ emitLeafExternRef prog env d "sleepMs" [n] =
     ++ ["call $mdk_unbox_int", "call $mdk_sleep_ms", "i32.const 0", "ref.i31"]
 emitLeafExternRef prog env d "sleepMs" _ =
   gapLP prog "wasm: sleepMs takes exactly one argument"
--- ioPoll: a wasm module owns no descriptor, so every one is invalid and polls
--- ready with word 3, the POLLNVAL meaning mdk_io_poll gives a closed descriptor.
--- The wait returns at once, as poll(2) does when a descriptor is invalid.
+-- ioPoll: no wasm host binds descriptor readiness, so a call stops with a coded
+-- runtime error.  It traps at run time, not at build time, because the async
+-- scheduler (`systemPoller`) names ioPoll and calls it only when a task waits on
+-- a descriptor; a clock-only async program must still build.  The arguments are
+-- evaluated left to right first, as native evaluates them.
 emitLeafExternRef prog env d "ioPoll" [fds, interests, timeout] =
-  ["i32.const 0"]
+  emitRefExpr prog env d fds
+    ++ ["drop"]
     ++ emitRefExpr prog env d interests
     ++ ["drop"]
     ++ emitRefExpr prog env d timeout
-    ++ ["drop", "i32.const 3", "ref.i31"]
-    ++ emitRefExpr prog env d fds
-    ++ [
-      "ref.cast (ref $arr)", "array.len", "array.new $arr", "struct.new $C_Ok"
-    ]
+    ++ ["drop"]
+    ++ wasmTrap
+      (progEmit prog)
+      "E-WASM-NO-BINDING"
+      "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target"
 emitLeafExternRef prog env d "ioPoll" _ =
   gapLP prog "wasm: ioPoll takes exactly three arguments"
 -- stage-D: byte-clean file I/O.  readFileBytes returns a Result String (Array Int);
