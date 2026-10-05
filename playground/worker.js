@@ -131,18 +131,43 @@ const stderrBuf = [];
 // the `unreachable`; the catch handler surfaces THAT instead of a generic message.
 let stderrAll = [];
 
+// The guest runs synchronously, so a timer can never fire inside it. Per-line
+// posts from a print loop would flood the main thread's queue and starve its kill
+// timer; instead lines coalesce into one post per POST_EVERY_MS (leading edge
+// posts at once), and `force` drains what is left at exit.
+const POST_EVERY_MS = 50;
+const pending = [];   // [{ type, text }] in print order, adjacent same-type runs merged
+let lastPost = -Infinity;
+
+function queueText(type, text) {
+  if (!text) return;
+  const last = pending[pending.length - 1];
+  if (last && last.type === type) last.text += text;
+  else pending.push({ type, text });
+}
+
+function postPending(force) {
+  const now = performance.now();
+  if (!force && now - lastPost < POST_EVERY_MS) return;
+  lastPost = now;
+  for (const m of pending) self.postMessage(m);
+  pending.length = 0;
+}
+
 function flushStdout() {
-  if (stdoutBuf.length === 0) return;
-  const text = stdoutDecoder.decode(new Uint8Array(stdoutBuf), { stream: true });
-  stdoutBuf.length = 0;
-  if (text) self.postMessage({ type: 'stdout', text });
+  if (stdoutBuf.length > 0) {
+    queueText('stdout', stdoutDecoder.decode(new Uint8Array(stdoutBuf), { stream: true }));
+    stdoutBuf.length = 0;
+  }
+  postPending(false);
 }
 
 function flushStderr() {
-  if (stderrBuf.length === 0) return;
-  const text = stderrDecoder.decode(new Uint8Array(stderrBuf), { stream: true });
-  stderrBuf.length = 0;
-  if (text) self.postMessage({ type: 'stderr', text });
+  if (stderrBuf.length > 0) {
+    queueText('stderr', stderrDecoder.decode(new Uint8Array(stderrBuf), { stream: true }));
+    stderrBuf.length = 0;
+  }
+  postPending(false);
 }
 
 self.onmessage = function(e) {
@@ -209,13 +234,14 @@ self.onmessage = function(e) {
       flushStdout();
       flushStderr();
       // Final flush with stream:false to emit any incomplete multi-byte sequence.
-      const tail = stdoutDecoder.decode(new Uint8Array(0), { stream: false });
-      if (tail) self.postMessage({ type: 'stdout', text: tail });
+      queueText('stdout', stdoutDecoder.decode(new Uint8Array(0), { stream: false }));
+      postPending(true);
       self.postMessage({ type: 'done' });
     })
     .catch((err) => {
       flushStdout();
       flushStderr();
+      postPending(true);
       // B5: a Medaka runtime trap (div-zero / non-exhaustive / OOB / panic) streams a
       // coded `runtime error [E-CODE]: <message>` line to stderr BEFORE the `unreachable`.
       // Surface that captured text — not a generic "program panicked" — so the user sees
