@@ -16,8 +16,7 @@ try {
   server = await startServer(PORT, SERVE_ROOT || PLAYGROUND_ROOT);
   console.log(`Static server up at ${server.url} (serving ${server.root})`);
 
-  const testFile = join(HERE, '..', 'tests', 'playground.spec.mjs');
-  const status = await new Promise((resolve) => {
+  const runSpec = (testFile) => new Promise((resolve) => {
     // The spec's CLI contract stays `<base-url> <screenshots-dir>` so the same
     // spec still verifies a LIVE origin (README: `node tests/playground.spec.mjs
     // https://medaka-lang.dev /tmp/shots`). Whether the guide MUST be there is an
@@ -29,6 +28,8 @@ try {
     });
     child.on('exit', (code) => resolve(code ?? 1));
   });
+  const status = (await runSpec(join(HERE, '..', 'tests', 'playground.spec.mjs')))
+    || (await runSpec(join(HERE, '..', 'runaway.spec.mjs')));
   process.exitCode = status;
 } finally {
   if (server) {
