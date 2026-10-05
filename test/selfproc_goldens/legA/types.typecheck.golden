@@ -442,7 +442,7 @@ checkImplHeadIndices : Ty -> Unit
 checkImplHeadNumIds : String -> List (String, Mono) -> List Require -> Map String Unit -> Option Loc -> List Int -> Unit
 checkImplHeadNumObligations : String -> List (String, Mono) -> List Require -> Map String Unit -> List UObligation -> Unit
 checkImplHeadPrerequisites : String -> IfaceRef -> ImplBodySite -> List (String, Mono) -> Ty -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Unit
-checkImplHeadRigidity : String -> String -> ImplBodySite -> List (String, Int) -> Option Loc -> Unit
+checkImplHeadRigidity : String -> String -> ImplBodySite -> List (String, HeadVarRoot) -> Option Loc -> Unit
 checkIndexOnlyEffVarsOpen : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkIndexOnlyGo : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkInterfaceCycles : ClassEnv -> Int -> Unit
@@ -1375,8 +1375,9 @@ headTySpineNode : Ty -> Ty
 headTyconMono : Mono -> Option HeadKey
 headTyconNameMono : Mono -> Option String
 headTyconTy : Ty -> Option HeadKey
-headVarNarrowed : List (String, Int) -> List (String, Int) -> (String, Int) -> Bool
-headVarsNarrowedBy : List (String, Int) -> List (String, Mono) -> List String
+headVarNarrowed : List (String, HeadVarRoot) -> List (String, HeadVarRoot) -> (String, HeadVarRoot) -> Bool
+headVarRootOf : Mono -> Option HeadVarRoot
+headVarsNarrowedBy : List (String, HeadVarRoot) -> List (String, Mono) -> List String
 headlessBucketKey : RegKey
 i64RangeText : String
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
@@ -1506,7 +1507,8 @@ implHeadParametric : Decl -> Bool
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
 implHeadTagForIface : String -> Decl -> List String
 implHeadTagsForIface : List Decl -> String -> List String
-implHeadVarRoots : List (String, Mono) -> List (String, Int)
+implHeadTypeVarRoots : List (String, Mono) -> List (String, Int)
+implHeadVarRoots : List (String, Mono) -> List (String, HeadVarRoot)
 implKeyTc : String -> List Ty -> String
 implKindMismatchFix : String -> String -> Int -> String
 implKindMismatchMsg : String -> String -> Int -> List Kind -> List Kind -> String

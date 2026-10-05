@@ -1,0 +1,12 @@
+-- §3 W3-inst over an `Effect`-kinded head variable: `impl Mappable (Box e)` is
+-- declared for every row `e`, but its body returns `mkS`'s `Box <Stdout> b`, so
+-- it holds only for `impl Mappable (Box <Stdout>)`. Rejected at the body.
+data Box (e : Effect) a = Box a
+
+mkS : a -> Box <Stdout> a
+mkS a = Box a
+
+impl Mappable (Box e) where
+  map f (Box a) = mkS (f a)
+
+main = println 42
