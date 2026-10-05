@@ -49,6 +49,7 @@ withTarget targetPath = match readFile targetPath
         (declSigTypeNames decls)
         (ctorFieldTypeNames decls)
         False
+        False
         (declaredRecordFieldOrders decls)
         []
     putStr (emitProgram input (lowerProgramEmit TargetWasm annotated))

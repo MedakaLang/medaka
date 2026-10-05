@@ -493,6 +493,7 @@ wasmStage on True runtimeDecls live cprog declsOp =
       (declSigTypeNames runtimeDecls ++ declSigTypeNames live)
       (ctorFieldTypeNames live)
       (mainTypeIsFloat ())
+      (mainTypeIsUnit ())
       (declaredRecordFieldOrders live)
       []
   let tWe0 = now ()

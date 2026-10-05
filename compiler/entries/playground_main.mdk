@@ -642,6 +642,7 @@ runEmit paths warnTriples runtimeDecls coreDecls modules =
           (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
           (ctorFieldTypeNames allDecls)
           (mainTypeIsFloat ())
+          (mainTypeIsUnit ())
           (declaredRecordFieldOrders allDecls)
           (validateFfiExternTypeNames
             (checkedFfiExternTypeNamesModules modules2))

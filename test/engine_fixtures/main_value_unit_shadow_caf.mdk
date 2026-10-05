@@ -1,0 +1,7 @@
+-- A local Unit variable shadows an Int CAF in a Unit main (#3792).
+go = 3
+
+main =
+  match Some (println "z")
+    Some go => go
+    None => println "q"
