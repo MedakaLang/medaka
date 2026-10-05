@@ -40,7 +40,7 @@
 -- never dropped, never counted as passing.  "This didn't run" must never look
 -- like "this passed".
 
-import frontend.ast.{Decl(..), Expr, Pat(..)}
+import frontend.ast.{Decl(..), Expr, Pat(..), noDeclLoc}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,
@@ -272,7 +272,7 @@ valueName i = "__tsv_\{intToString i}__"
 testBindings : String -> Int -> List (String, Int, Expr) -> List String
 testBindings _ _ [] = []
 testBindings nonce i ((_, _, body) :: rest) =
-  [declToString (DFunDef False (bindingName i) [PWild] body), ""]
+  [declToString (DFunDef False (bindingName i) [PWild] body noDeclLoc), ""]
     ++ printerDecl nonce i
     ++ testBindings nonce (i + 1) rest
 

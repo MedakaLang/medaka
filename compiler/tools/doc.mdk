@@ -434,12 +434,12 @@ ppIfaceMethod (IfaceMethod mname mty _ _) = "  \{mname} : \{ppTyDoc mty}"
 renderSig : Bool -> Decl -> List (String, Scheme) -> Option (String, String)
 renderSig _ (DTypeSig True name ty) schemes =
   Some (name, valueSig name schemes (Some ty))
-renderSig _ (DFunDef True name _ _) schemes =
+renderSig _ (DFunDef True name _ _ _) schemes =
   Some (name, valueSig name schemes None)
 renderSig bare (DExtern pub name ty) schemes
   | pub || bare = Some (name, valueSig name schemes (Some ty))
 renderSig _ (DLetGroup True bindings) schemes = match bindings
-  (LetBind name _) :: _ => Some (name, valueSig name schemes None)
+  (LetBind name _ _) :: _ => Some (name, valueSig name schemes None)
   [] => None
 renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = kinds, dataExtern = True }) _
   | not (dataVisPrivate vis) = Some (
@@ -507,7 +507,7 @@ clauseHeads decls = clauseHeadsGo decls []
 clauseHeadsGo : List Decl -> List (String, List String) -> List (String, String)
 clauseHeadsGo [] acc =
   map (p => (fst p, renderHead (fst p) (snd p))) (reverseL acc)
-clauseHeadsGo ((DFunDef _ name pats _) :: rest) acc =
+clauseHeadsGo ((DFunDef _ name pats _ _) :: rest) acc =
   let names = map headArgName pats
   clauseHeadsGo rest (mergeHead name names acc)
 clauseHeadsGo (_ :: rest) acc = clauseHeadsGo rest acc
@@ -619,7 +619,7 @@ letgroupEntriesGo : List LetBind ->
   Int ->
   List (String, DocEntry)
 letgroupEntriesGo [] _ _ _ = []
-letgroupEntriesGo ((LetBind name _) :: rest) schemes doc line =
+letgroupEntriesGo ((LetBind name _ _) :: rest) schemes doc line =
   let sigStr = valueSig name schemes None
   (name, DocEntry name sigStr "" doc KPlain line)
     :: letgroupEntriesGo rest schemes doc line

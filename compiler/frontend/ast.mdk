@@ -39,6 +39,23 @@ public export data Lit =
 -- and structural dumps are byte-identical to the un-wrapped tree.
 public export data Loc = Loc String Int Int Int Int
 
+-- The site a synthesized `DFunDef` or `DoLet` carries: the zero-width 1:0 span
+-- the unlocated `parse` path gives every token, which the evaluator's trap-site
+-- tracking reads as "no location".
+export
+noDeclLoc : Loc
+noDeclLoc = Loc "" 1 0 1 0
+
+-- [e] under an `ELoc` at [site], or [e] itself when [site] is that placeholder.
+-- A `let … in` built from a statement (a block's `let … in`, a lowered `do`
+-- `let`) keeps its `let` keyword's span this way, as the expression form's
+-- located atom does.
+export
+atDeclSite : Loc -> Expr -> Expr
+atDeclSite (site@(Loc _ sl sc el ec)) e
+  | sl == 1 && sc == 0 && el == 1 && ec == 0 = e
+  | otherwise = ELoc site e
+
 -- ── Type-constructor identity (#1110, A-1 carrier) ────────────────────────
 -- WHERE a type-constructor head was declared.  `DICT-SEMANTICS.md` §8 I4 says
 -- a declaration's identity is `(originModule, name)` and that a bare `String`
@@ -1371,8 +1388,10 @@ public export data DoStmt =
   -- is rejected at the parser (`letKind TMut = failP letMutRemovedMsg`, beta
   -- immutability model), so no `mut`-flag logic remains anywhere downstream.
   -- The field is retained (vs. dropped) only to avoid an ~87-site arity churn
-  -- across every pass + the s-expr round-trip.
-  | DoLet Bool Bool Pat Expr
+  -- across every pass + the s-expr round-trip.  The Loc is the `let` keyword's
+  -- span, where a pattern that fails to match is reported.  No printer or dump
+  -- renders it, and a synthesized statement carries `noDeclLoc`.
+  | DoLet Bool Bool Pat Expr Loc
   | DoAssign String Expr
   | DoFieldAssign String (List String) Expr
 
@@ -1395,8 +1414,11 @@ public export data Section =
 -- one clause of a `where`/let-group binding: parameter patterns + body
 public export data FunClause = FunClause (List Pat) Expr
 
--- a `where`/let-group binding: a name with one or more (coalesced) clauses
-public export data LetBind = LetBind String (List FunClause)
+-- a `where`/let-group binding: a name with one or more (coalesced) clauses.
+-- The Loc is the first clause's name token, where a call whose clauses and
+-- guards all fall through is reported.  Like `DFunDef`'s site it is never
+-- rendered, and a synthesized binding carries `noDeclLoc`.
+public export data LetBind = LetBind String (List FunClause) Loc
 
 public export data Expr =
   | ELit Lit
@@ -1737,7 +1759,12 @@ deriveRefName (DeriveRef n _) = n
 public export data Decl =
   | DTypeSig Bool String Ty
   | DExtern Bool String Ty
-  | DFunDef Bool String (List Pat) Expr
+  -- pub? name params body site.  One clause; a multi-clause function is a run
+  -- of same-named DFunDefs.  The site is the clause's name token, so a call
+  -- whose clauses and guards all fall through is reported at the function's
+  -- first clause.  No printer or dump renders it, it takes no part in clause
+  -- grouping, and a synthesized clause carries `noDeclLoc`.
+  | DFunDef Bool String (List Pat) Expr Loc
   -- ── the four TYPE-DECLARATION forms carry module identity (#1110) ────────
   -- `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each gained a `…Origin` field,
   -- stamped by resolve (`stampGraphTyOrigins`, `frontend/resolve.mdk`) with the
@@ -2187,9 +2214,9 @@ mapTyInDecl f (DTypeSig pub n t) =
 mapTyInDecl f (DExtern pub n t) =
   let (t2, c) = mapTyFull f t
   (DExtern pub n t2, c)
-mapTyInDecl f (DFunDef pub n ps e) =
+mapTyInDecl f (DFunDef pub n ps e site) =
   let (e2, c) = mapTyInExpr f e
-  (DFunDef pub n ps e2, c)
+  (DFunDef pub n ps e2 site, c)
 -- ⚠️ Record UPDATE, not re-construction: rebuilding from the projected fields
 -- would DROP an already-acquired `dataOrigin`, which is exactly the identity-
 -- destroying shape #1219 found in `substTyVars`.  Every rebuild arm below follows
@@ -2315,10 +2342,10 @@ mapImplMethodsB f ((ImplMethod n ps e) :: rest) =
 
 mapLetBindsB : (Ty -> (Ty, Bool)) -> List LetBind -> (List LetBind, Bool)
 mapLetBindsB _ [] = ([], False)
-mapLetBindsB f ((LetBind n clauses) :: rest) =
+mapLetBindsB f ((LetBind n clauses site) :: rest) =
   let (cs2, c1) = mapFunClausesB f clauses
   let (rest2, c2) = mapLetBindsB f rest
-  (LetBind n cs2 :: rest2, c1 || c2)
+  (LetBind n cs2 site :: rest2, c1 || c2)
 
 mapFunClausesB : (Ty -> (Ty, Bool)) -> List FunClause -> (List FunClause, Bool)
 mapFunClausesB _ [] = ([], False)
@@ -2519,9 +2546,9 @@ mapDoStmtB f (DoExpr e) =
 mapDoStmtB f (DoBind p e) =
   let (e2, c) = mapTyInExpr f e
   (DoBind p e2, c)
-mapDoStmtB f (DoLet m r p e) =
+mapDoStmtB f (DoLet m r p e site) =
   let (e2, c) = mapTyInExpr f e
-  (DoLet m r p e2, c)
+  (DoLet m r p e2 site, c)
 mapDoStmtB f (DoAssign x e) =
   let (e2, c) = mapTyInExpr f e
   (DoAssign x e2, c)

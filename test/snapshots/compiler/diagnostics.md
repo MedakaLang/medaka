@@ -2633,7 +2633,7 @@ findMainFunDef : List Decl -> Option (List Pat, Expr)
 -- lint-disable-next-line rule-duplicate-body
 findMainFunDef [] = None
 findMainFunDef ((DAttrib _ d) :: rest) = findMainFunDef (d :: rest)
-findMainFunDef ((DFunDef _ "main" ps body) :: _) = Some (ps, body)
+findMainFunDef ((DFunDef _ "main" ps body _) :: _) = Some (ps, body)
 findMainFunDef (_ :: rest) = findMainFunDef rest
 
 -- Best-effort location: the first ELoc span walking the outermost expr spine
@@ -3364,7 +3364,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "findMainFunDef" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
 (DFunDef false "findMainFunDef" ((PList)) (EVar "None"))
 (DFunDef false "findMainFunDef" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "findMainFunDef") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "findMainFunDef" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PVar "ps") (PVar "body")) PWild)) (EApp (EVar "Some") (ETuple (EVar "ps") (EVar "body"))))
+(DFunDef false "findMainFunDef" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PVar "ps") (PVar "body") PWild) PWild)) (EApp (EVar "Some") (ETuple (EVar "ps") (EVar "body"))))
 (DFunDef false "findMainFunDef" ((PCons PWild (PVar "rest"))) (EApp (EVar "findMainFunDef") (EVar "rest")))
 (DTypeSig true "mainBodyLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "mainBodyLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
@@ -3771,7 +3771,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "findMainFunDef" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
 (DFunDef false "findMainFunDef" ((PList)) (EVar "None"))
 (DFunDef false "findMainFunDef" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "findMainFunDef") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "findMainFunDef" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PVar "ps") (PVar "body")) PWild)) (EApp (EVar "Some") (ETuple (EVar "ps") (EVar "body"))))
+(DFunDef false "findMainFunDef" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PVar "ps") (PVar "body") PWild) PWild)) (EApp (EVar "Some") (ETuple (EVar "ps") (EVar "body"))))
 (DFunDef false "findMainFunDef" ((PCons PWild (PVar "rest"))) (EApp (EVar "findMainFunDef") (EVar "rest")))
 (DTypeSig true "mainBodyLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "mainBodyLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))

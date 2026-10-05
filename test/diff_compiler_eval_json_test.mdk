@@ -30,10 +30,14 @@
 
    `test/trap_site_fixtures` pins WHERE the text channel says a runtime error
    happened: the start of the trapping expression (`a op b`, `xs[i]`, the
-   `panic` application, the `match` keyword), never the last atom the
-   interpreter entered. Every fixture puts an operand on another line or
-   inside a callee, the shape where the two answers differ. These rows are
-   the oracle the native and wasm backends' located runtime errors match.
+   `panic` application, the `match` keyword, the `let` whose pattern did
+   not match, the first clause of a function whose clauses and guards all
+   fall through), never the last atom the interpreter entered. Every
+   fixture puts an operand on another line or inside a callee, the shape
+   where the two answers differ. `xmod_guard/` holds a module one fixture
+   imports, kept out of the roster the same way `xmod1542/` is. These rows
+   are the oracle the native and wasm backends' located runtime errors
+   match.
 
    Runs under `medaka test --native`: it spawns subprocesses and reads
    source files and goldens, none of which the interpreter binds. -}
@@ -157,23 +161,73 @@ trapSiteRows = [
     "3:9",
     "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
   ),
+  ("let_pattern_refuted", "3:2", "[E-LET-REFUTE]: let pattern match failed"),
+  ("let_in_pattern_refuted", "3:2", "[E-LET-REFUTE]: let pattern match failed"),
+  ("do_let_pattern_refuted", "3:2", "[E-LET-REFUTE]: let pattern match failed"),
+  (
+    "guard_falls_through",
+    "2:0",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+  (
+    "later_clause_guard_falls_through",
+    "2:0",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+  (
+    "clauses_fall_through",
+    "2:0",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+  (
+    "clauses_fall_through_on_second_argument",
+    "2:0",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+  (
+    "where_guard_falls_through",
+    "4:4",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+]
+
+-- Fixtures whose trap is raised inside a module they import: (fixture stem,
+-- the raising module's path under the corpus, `line:col`, the rest of the
+-- line). The line names the raising module, not the entry.
+trapSiteImportedRows : List (String, String, String, String)
+trapSiteImportedRows = [
+  (
+    "imported_guard_falls_through",
+    "xmod_guard/lib.mdk",
+    "3:0",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
 ]
 
 trapSiteRow : (String, String, String) -> <Exec, IO> (String, Expectation)
 trapSiteRow (name, site, rest) =
-  let entry = "\{trapSites}/\{name}.mdk"
-  (
-    name,
-    expectSpawnFails
-      medakaBin
-      ["run", entry]
-      "\{entry}:\{site}: runtime error \{rest}",
-  )
+  trapSiteImportedRow (name, "\{name}.mdk", site, rest)
+
+trapSiteImportedRow : (String, String, String, String) ->
+  <Exec, IO> (String, Expectation)
+trapSiteImportedRow (name, raiser, site, rest) = (
+  name,
+  expectSpawnFails
+    medakaBin
+    ["run", "\{trapSites}/\{name}.mdk"]
+    "\{trapSites}/\{raiser}:\{site}: runtime error \{rest}",
+)
 
 test "trap_site: every fixture on disk has a row" = match fixtureStems trapSites
   Err e => fail "\{trapSites}: \{e}"
   Ok names =>
-    expectEqual (sort (map ((n, _, _) => n) trapSiteRows)) (sort names)
+    expectEqual
+      (sort
+        (map ((n, _, _) => n) trapSiteRows
+          ++ map ((n, _, _, _) => n) trapSiteImportedRows))
+      (sort names)
 
 test "trap_site: `medaka run` names the start of the trapping expression" =
-  expectEach (map trapSiteRow trapSiteRows)
+  expectEach
+    (map trapSiteRow trapSiteRows
+      ++ map trapSiteImportedRow trapSiteImportedRows)

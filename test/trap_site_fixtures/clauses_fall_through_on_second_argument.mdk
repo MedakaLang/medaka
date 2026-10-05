@@ -1,0 +1,4 @@
+k : Int -> Int -> Int
+k 0 0 = 1
+k 0 1 = 2
+main = println (k 0 5)

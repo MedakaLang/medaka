@@ -62,7 +62,7 @@ entryPair (_ :: rest) = entryPair rest
 findMainParams : List Decl -> Option (List Pat)
 findMainParams [] = None
 findMainParams ((DAttrib _ d) :: rest) = findMainParams (d :: rest)
-findMainParams ((DFunDef _ "main" ps _) :: _) = Some ps
+findMainParams ((DFunDef _ "main" ps _ _) :: _) = Some ps
 findMainParams (_ :: rest) = findMainParams rest
 
 -- True iff a top-level `println` binding is in scope (defined by the prelude).
@@ -74,7 +74,7 @@ findMainParams (_ :: rest) = findMainParams rest
 definesPrintln : List Decl -> Bool
 definesPrintln [] = False
 definesPrintln ((DAttrib _ d) :: rest) = definesPrintln (d :: rest)
-definesPrintln ((DFunDef _ "println" _ _) :: _) = True
+definesPrintln ((DFunDef _ "println" _ _ _) :: _) = True
 definesPrintln (_ :: rest) = definesPrintln rest
 
 -- Auto-print fires iff main's inferred type is neither Unit-shaped (`Unit`, or
@@ -116,8 +116,8 @@ autoPrintWrapModules [(mid, decls)] =
 autoPrintWrapModules (p :: rest) = p :: autoPrintWrapModules rest
 
 wrapMainDecl : Decl -> Decl
-wrapMainDecl (DFunDef vis "main" [] body) =
-  DFunDef vis "main" [] (wrapPrintln body)
+wrapMainDecl (DFunDef vis "main" [] body site) =
+  DFunDef vis "main" [] (wrapPrintln body) site
 wrapMainDecl (DAttrib a d) = DAttrib a (wrapMainDecl d)
 wrapMainDecl d = d
 
@@ -193,9 +193,9 @@ pinnedCopies origin pin ((DTypeSig _ n ty) :: rest) =
     DTypeSig True pin ty :: pinnedCopies origin pin rest
   else
     pinnedCopies origin pin rest
-pinnedCopies origin pin ((DFunDef _ n ps body) :: rest) =
+pinnedCopies origin pin ((DFunDef _ n ps body site) :: rest) =
   if n == origin then
-    DFunDef True pin ps body :: pinnedCopies origin pin rest
+    DFunDef True pin ps body site :: pinnedCopies origin pin rest
   else
     pinnedCopies origin pin rest
 pinnedCopies origin pin (_ :: rest) = pinnedCopies origin pin rest
@@ -311,7 +311,7 @@ asyncMainShapeError modules =
 definesFun : String -> List Decl -> Bool
 definesFun _ [] = False
 definesFun n ((DAttrib _ d) :: rest) = definesFun n (d :: rest)
-definesFun n ((DFunDef _ m _ _) :: rest) =
+definesFun n ((DFunDef _ m _ _ _) :: rest) =
   if m == n then True else definesFun n rest
 definesFun n (_ :: rest) = definesFun n rest
 
@@ -355,7 +355,7 @@ asyncPinImport =
     synthLoc
 
 wrapAsyncMainDecl : Decl -> Decl
-wrapAsyncMainDecl (DFunDef vis "main" [] body) =
-  DFunDef vis "main" [] (wrapCall asyncMainPinName body)
+wrapAsyncMainDecl (DFunDef vis "main" [] body site) =
+  DFunDef vis "main" [] (wrapCall asyncMainPinName body) site
 wrapAsyncMainDecl (DAttrib a d) = DAttrib a (wrapAsyncMainDecl d)
 wrapAsyncMainDecl d = d

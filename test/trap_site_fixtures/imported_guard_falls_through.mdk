@@ -1,0 +1,3 @@
+import xmod_guard.lib.{sign}
+
+main = println (sign 0)

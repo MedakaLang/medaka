@@ -274,7 +274,7 @@ collectEVars (EDo _ stmts) = concatMapCP collectStmt stmts
 collectEVars _ = []
 
 collectBind : LetBind -> List String
-collectBind (LetBind _ clauses) = concatMapCP collectClause clauses
+collectBind (LetBind _ clauses _) = concatMapCP collectClause clauses
 
 collectClause : FunClause -> List String
 collectClause (FunClause _ body) = collectEVars body
@@ -293,7 +293,7 @@ collectFieldAssign (FieldAssign _ e) = collectEVars e
 collectStmt : DoStmt -> List String
 collectStmt (DoExpr e) = collectEVars e
 collectStmt (DoBind _ e) = collectEVars e
-collectStmt (DoLet _ _ _ e) = collectEVars e
+collectStmt (DoLet _ _ _ e _) = collectEVars e
 collectStmt (DoAssign _ e) = collectEVars e
 collectStmt (DoFieldAssign _ _ e) = collectEVars e
 
@@ -304,14 +304,14 @@ concatMapCP f (x :: xs) = f x ++ concatMapCP f xs
 -- A top-level name (DFunDef or DExtern), peeling DAttrib.  Mirror inner_decl +
 -- the DFunDef/DExtern match in the OCaml call-graph builder.
 topName : Decl -> Option String
-topName (DFunDef _ n _ _) = Some n
+topName (DFunDef _ n _ _ _) = Some n
 topName (DExtern _ n _) = Some n
 topName (DAttrib _ d) = topName d
 topName _ = None
 
 -- (name, body-EVars) for each top-level DFunDef (externs have no body).
 fnBody : Decl -> Option (String, List String)
-fnBody (DFunDef _ n _ body) = Some (n, collectEVars body)
+fnBody (DFunDef _ n _ body _) = Some (n, collectEVars body)
 fnBody (DAttrib _ d) = fnBody d
 fnBody _ = None
 
