@@ -1,0 +1,170 @@
+import driver.build_cmd.{makeTempDir, cleanupTempDir}
+import test_process.{medakaBin, medakaRoot, boundedVerbSeconds}
+import test.{Expectation, expectAll, expectEqual, expectTrue, fail}
+import json.{Json, parse, get, asArray, asString}
+import string.{contains}
+
+writeFixtures : String -> List (String, String) -> <IO> Result String Unit
+writeFixtures _ [] = Ok ()
+writeFixtures dir ((name, source) :: rest) = do
+  _ <- writeFile "\{dir}/\{name}" source
+  writeFixtures dir rest
+
+withFixtures : List (String, String) ->
+  (String -> <Exec, IO> Expectation) ->
+  <Exec, IO> Expectation
+withFixtures files inspect = match makeTempDir ()
+  Err message => fail message
+  Ok dir =>
+    let manifest =
+      ("medaka.toml", "[package]\nname = \"native_prop_acceptance\"\n")
+    let result = match writeFixtures dir (manifest :: files)
+      Err message => fail message
+      Ok _ => inspect "\{dir}/main.mdk"
+    let _ = cleanupTempDir dir
+    result
+
+runReport : List String -> String -> <Exec, IO> Result String (Int, Json)
+runReport options target =
+  let args =
+    [
+        "MEDAKA_NATIVE_PROP_PROOF=compiled", medakaBin, "test", "--json",
+        "--cases", "20", "--seed", "20261005"
+      ]
+      ++ options
+      ++ [target]
+  match boundedVerbSeconds 120 "env" args
+    Err message => Err message
+    Ok (code, out, err) =>
+      if err /= "" then
+        Err "unexpected runner stderr: \{err}"
+      else
+        map (report => (code, report)) (parse out)
+
+propertyReports : Json -> List Json
+propertyReports report = match flatMap asArray (get "properties" report)
+  None => []
+  Some rows => toList rows
+
+field : String -> Json -> Option String
+field name report = flatMap asString (get name report)
+
+gradeReport : Int ->
+  List (String, String, String) ->
+  Result String (Int, Json) ->
+  Expectation
+gradeReport _ _ (Err message) = fail message
+gradeReport expectedCode expected (Ok (code, report)) =
+  let actual =
+    map
+      (row => (field "engine" row, field "name" row, field "status" row))
+      (propertyReports report)
+  expectAll [
+    expectEqual expectedCode code,
+    expectEqual
+      (map
+        ((engine, name, status) => (Some engine, Some name, Some status))
+        expected)
+      actual,
+  ]
+
+nativeOnlySource : String
+nativeOnlySource =
+  "prop \"native body proof\" (n : Int) = getEnv \"MEDAKA_NATIVE_PROP_PROOF\" == Some \"compiled\" && n == n\n"
+
+test "default and explicit native properties execute compiled bodies" =
+  withFixtures
+    [("main.mdk", nativeOnlySource)]
+    (target => expectAll [
+      gradeReport
+        0
+        [("native", "native body proof", "pass")]
+        (runReport [] target),
+      gradeReport
+        0
+        [("native", "native body proof", "pass")]
+        (runReport ["--native"] target),
+    ])
+
+test "combined engines retain a property result from each engine" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "prop \"both bodies\" (xs : List (Int, Bool)) = reverse (reverse xs) == xs\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [("eval", "both bodies", "pass"), ("native", "both bodies", "pass")]
+        (runReport ["--engines", "eval,native"] target))
+
+test "native properties structurally generate an imported recursive applied ADT" =
+  withFixtures
+    [
+      (
+        "trees.mdk",
+        "public export data Tree a = Leaf a | Fork (Tree a) (Tree a) deriving (Eq, Debug)\nexport\nmirror : Tree a -> Tree a\nmirror (Leaf x) = Leaf x\nmirror (Fork left right) = Fork (mirror right) (mirror left)\n",
+      ),
+      (
+        "main.mdk",
+        "import trees.{Tree, mirror}\nprop \"imported tree\" (tree : Tree Int) = mirror (mirror tree) == tree\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [("native", "imported tree", "pass")]
+        (runReport ["--native"] target))
+
+test "custom shrinking runs on both property engines" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Wrap = Wrap Int deriving (Eq, Debug)\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 500\n  shrink (Wrap 0) = []\n  shrink (Wrap _) = [Wrap 0]\nprop \"custom shrink\" (w : Wrap) = False\n",
+      ),
+    ]
+    (target =>
+      let result = runReport ["--engines", "eval,native"] target
+      let shrunk = match result
+        Err _ => False
+        Ok (_, report) =>
+          all
+            (row => match field "detail" row
+              Some detail => contains "w = Wrap 0" detail
+              None => False)
+            (propertyReports report)
+      expectAll [
+        gradeReport
+          1
+          [
+            ("eval", "custom shrink", "fail"),
+            ("native", "custom shrink", "fail"),
+          ]
+          result,
+        expectTrue shrunk,
+      ])
+
+test "native property generation covers builtin containers and tuples" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "prop \"containers\" (xs : Array Int) (pair : (Int, Bool, String)) (optional : Option Int) (result : Result Int Bool) = xs == xs && pair == pair && optional == optional && result == result\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [("native", "containers", "pass")]
+        (runReport ["--native"] target))
+
+test "native property execution works for the core auto-prelude itself" =
+  gradeReport
+    0
+    [("native", "neq is the negation of eq", "pass")]
+    (runReport
+      ["--native", "--filter", "neq is the negation of eq"]
+      "\{medakaRoot}/stdlib/core.mdk")
