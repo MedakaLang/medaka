@@ -24,6 +24,7 @@ applyAll : Expr -> List Expr -> Expr
 armGuardFor : Token -> ParserE <> (List Guard)
 armGuardOpt : ParserE <> (List Guard)
 armsCons : ParserE <> (List Arm)
+armsLineAhead : Array Token -> Int -> Int -> Bool
 armsLoop : ParserE <> (List Arm)
 arrayAfterComma : Expr -> Token -> ParserE <> Expr
 arrayFor : Token -> ParserE <> Expr
@@ -85,6 +86,7 @@ consField : RecPatField -> (List RecPatField, Bool) -> (List RecPatField, Bool)
 consTail : Expr -> ParserE <> Expr
 constraintTail : Ty -> ParserE <> Ty
 contextualKwName : Token -> String
+continuationBlockShape : Array Token -> Int -> Int -> Int -> Bool
 ctorBinderColon : Token -> ParserE <> (String, KindAnn)
 ctorBinderFor : Token -> Token -> ParserE <> (String, KindAnn)
 ctorBinderKind : String -> KindAnn -> ParserE <> (String, KindAnn)
@@ -203,6 +205,8 @@ guardArmsLoop : ParserE <> (List GuardArm)
 guardArmsWhereFor : List GuardArm -> Token -> ParserE <> Expr
 guardArmsWhereOpt : List GuardArm -> ParserE <> Expr
 guardFor : Expr -> Token -> ParserE <> Guard
+guardOffsRef : Ref (Array Int)
+guardSrcRef : Ref String
 headIsNumeric : Expr -> Bool
 hsCaseOfMsg : String
 hsSigMsg : String
@@ -326,6 +330,9 @@ letRecStmt : ParserE <> DoStmt
 letRecWithRemovedMsg : String
 letTailFor : Pat -> Expr -> Token -> ParserE <> DoStmt
 lineAt : Array Int -> Int -> Int
+lineHasFatArrow : Array Token -> Int -> Bool
+lineIndentCol : Array Token -> Int -> Int
+lineIndentGo : Array Token -> Int -> Int -> Int -> Int
 lineIsRecordBody : Array Token -> Int -> Int -> Bool -> Bool
 lineTrailingColonNoEq : Array Token -> Int -> Int -> Bool -> Bool -> Bool
 listAfterComma : Expr -> Token -> ParserE <> Expr
@@ -346,6 +353,9 @@ manyGo : ParserE <> a -> Array Token -> Int -> List a -> PR (List a)
 manyStep : ParserE <> a -> Array Token -> Int -> Int -> List a -> a -> PR (List a)
 mapPR : (a -> <b> c) -> PR a -> <b> PR c
 matchArmBarGuardMsg : String
+matchArmsGuard : Int -> List Arm -> ParserE <> Unit
+matchContinuationAhead : Int -> ParserE <> Bool
+matchScrutContinuationMsg : String
 matchWithMsg : String
 maxNestDepth : Int
 memberAliasFor : Int -> String -> Bool -> Token -> ParserE <> UseMember
@@ -537,6 +547,7 @@ positionsDecls : Positions -> List DeclPos
 positionsLastContentLine : Positions -> Int
 positionsVariantLines : Positions -> List Int
 postfixTail : Expr -> ParserE <> Expr
+primeGuardPos : String -> Array Int -> Unit
 productAxes : Bool -> ParserE <> (List (String, EffParamTy))
 productAxesMore : Bool -> ParserE <> (List (String, EffParamTy))
 productAxesMoreFor : Bool -> Token -> Token -> ParserE <> (List (String, EffParamTy))
@@ -589,6 +600,7 @@ spineHead : Expr -> Expr
 spineList : Expr -> List Expr
 spineOnto : Expr -> List Expr -> List Expr
 starStarMsg : String
+startsExprAt : Array Token -> Int -> Bool
 stmtFor : Token -> ParserE <> (List DoStmt)
 stmtsCons : ParserE <> (List DoStmt)
 stmtsLoop : ParserE <> (List DoStmt)
@@ -596,9 +608,12 @@ stringLitFor : Token -> ParserE <> String
 stringLitP : ParserE <> String
 stripLoc : Expr -> Expr
 stripLoc1 : Expr -> Expr
+tokCol : Int -> Int
 tokEndOffsetAt : Int -> Int
 tokEndOffsetAtArr : Array (Int, Int) -> Int -> Int
 tokIdxOrNone : Array Token -> Int -> Option Int
+tokLine : Int -> Int
+tokLineCol : Int -> (Int, Int)
 tokOffsetAt : Int -> Int
 tokOffsetAtArr : Array (Int, Int) -> Int -> Int
 trailingArrowLeftoverMsg : Token -> String -> String
