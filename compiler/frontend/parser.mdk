@@ -4519,24 +4519,26 @@ curryLam [] body = body
 curryLam (p :: ps) body = ELam [p] (curryLam ps body)
 
 -- `pat <- e` is a DoBind (LHS parsed as an expr, reinterpreted); `lhs = e` is
--- an assignment (DoAssign / DoFieldAssign); else a bare DoExpr
+-- a `DoAssign`; a field-path assignment is rejected (`fieldAssignRemovedMsg`);
+-- else a bare DoExpr
 parseExprStmt : Parser (List DoStmt)
 parseExprStmt = defer
+  startPos <- getPos
   e <- parseExpr
   t <- peekP
-  exprStmtFor e t
+  exprStmtFor startPos e t
 
-exprStmtFor : Expr -> Token -> Parser (List DoStmt)
-exprStmtFor e TLArrow = defer
+exprStmtFor : Int -> Expr -> Token -> Parser (List DoStmt)
+exprStmtFor _ e TLArrow = defer
   advance
   rhs <- parseExpr
   deferPure (bindStmts e rhs)
-exprStmtFor e TEqual = defer
+exprStmtFor startPos e TEqual = defer
   advance
   rhs <- parseExpr
-  s <- assignFromLhs e rhs
+  s <- assignFromLhs startPos e rhs
   deferPure [s]
-exprStmtFor e _ = deferPure [DoExpr e]
+exprStmtFor _ e _ = deferPure [DoExpr e]
 
 -- `pat <- e` → one DoBind; an annotated var LHS `x : ty <- e` → the bind PLUS a
 -- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced
@@ -4554,12 +4556,28 @@ bindAnnot inner ty rhs = match stripLoc inner
   ]
   other => [DoBind (exprToPat other) rhs]
 
--- a `lhs = rhs` statement: bare var → DoAssign, field path → DoFieldAssign
-assignFromLhs : Expr -> Expr -> Parser DoStmt
-assignFromLhs lhs rhs = match flattenFieldPath lhs
+-- a `lhs = rhs` statement: bare var → DoAssign; a field path is rejected at the
+-- statement's start (`fatalAtP`, so the message survives `many` recovery)
+assignFromLhs : Int -> Expr -> Expr -> Parser DoStmt
+assignFromLhs startPos lhs rhs = match flattenFieldPath lhs
   Some (x, []) => deferPure (DoAssign x rhs)
-  Some (x, fs) => deferPure (DoFieldAssign x fs rhs)
+  Some (x, fs) => fatalAtP (fieldAssignRemovedMsg x fs) startPos
   None => failP "invalid assignment target in do-block"
+
+-- Block field assignment (`v.x = e`, `a.b.c = e`) is removed: bindings are
+-- immutable and it never typechecked.  The hint names the record-update form.
+fieldAssignRemovedMsg : String -> List String -> String
+fieldAssignRemovedMsg x fs =
+  let path = joinWith "." (x :: fs)
+  "field assignment `\{path} = e` has been removed — bindings are immutable. Build an updated record instead: `\{recordUpdateText x fs}` (for example `{ v | x = 9 }`)"
+
+-- `a`, [b, c] → `{ a | b = { a.b | c = e } }`
+recordUpdateText : String -> List String -> String
+recordUpdateText _ [] = "e"
+recordUpdateText base [f] = "{ \{base} | \{f} = e }"
+recordUpdateText base (f :: fs) =
+  let inner = recordUpdateText "\{base}.\{f}" fs
+  "{ \{base} | \{f} = \{inner} }"
 
 -- `a` → Some (a, []); `a.b.c` → Some (a, [b, c]); anything else → None.
 -- Strips ELoc wrappers (the base var and any sub-access are wrapped atoms).

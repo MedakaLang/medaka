@@ -74,6 +74,7 @@ runEmit runtimeDecls coreDecls modules =
       (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       []
       False
+      False
       (declaredRecordFieldOrders allDecls)
       []
   let gaps = emitProgramGaps input (lowerProgramEmit TargetWasm allDecls)

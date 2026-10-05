@@ -91,6 +91,7 @@ deferFlatMap|PASS
 deferUnless|PASS
 deferWhen|PASS
 discard|PASS
+each|PASS
 elem|PASS
 filterThen|PASS
 find|PASS

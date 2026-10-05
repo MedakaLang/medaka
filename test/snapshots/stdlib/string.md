@@ -1,5 +1,5 @@
 # META
-source_lines=827
+source_lines=837
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -11,7 +11,8 @@ stages=DESUGAR,MARK
    functions, and passes through `toUpper` and `toLower` unchanged.
 
    `length` and `isEmpty` are not defined here, to leave the `Foldable`
-   methods of those names unshadowed. Use `stringLength s` and `s == ""`.
+   methods of those names unshadowed. Use `stringLength s`, the codepoint
+   count, and `s == ""`; `byteLength` counts UTF-8 bytes.
    `intToString` renders an integer. -}
 
 -- Performance posture: under the hood this module favors what the machine
@@ -171,6 +172,15 @@ toUtf8 s = stringToUtf8Bytes s
 export
 fromUtf8 : Array Int -> String
 fromUtf8 bytes = stringFromUtf8Bytes bytes
+
+{- | The number of bytes in the string's UTF-8 encoding, an alias of
+   `utf8ByteLength`.
+
+   > byteLength "héllo"
+   6 -}
+export
+byteLength : String -> Int
+byteLength s = utf8ByteLength s
 
 {- | The number of bytes in the string's UTF-8 encoding.
 
@@ -861,6 +871,8 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DFunDef false "toUtf8" ((PVar "s")) (EApp (EVar "stringToUtf8Bytes") (EVar "s")))
 (DTypeSig true "fromUtf8" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
 (DFunDef false "fromUtf8" ((PVar "bytes")) (EApp (EVar "stringFromUtf8Bytes") (EVar "bytes")))
+(DTypeSig true "byteLength" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "byteLength" ((PVar "s")) (EApp (EVar "utf8ByteLength") (EVar "s")))
 (DTypeSig true "utf8ByteLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "utf8ByteLength" ((PVar "s")) (EApp (EVar "arrayLength") (EApp (EVar "toUtf8") (EVar "s"))))
 (DTypeSig true "toInt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
@@ -1023,6 +1035,8 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DFunDef false "toUtf8" ((PVar "s")) (EApp (EVar "stringToUtf8Bytes") (EVar "s")))
 (DTypeSig true "fromUtf8" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
 (DFunDef false "fromUtf8" ((PVar "bytes")) (EApp (EVar "stringFromUtf8Bytes") (EVar "bytes")))
+(DTypeSig true "byteLength" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "byteLength" ((PVar "s")) (EApp (EVar "utf8ByteLength") (EVar "s")))
 (DTypeSig true "utf8ByteLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "utf8ByteLength" ((PVar "s")) (EApp (EVar "arrayLength") (EApp (EVar "toUtf8") (EVar "s"))))
 (DTypeSig true "toInt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))

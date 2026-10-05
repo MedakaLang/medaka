@@ -1,0 +1,9 @@
+-- #3744: block field assignment `v.x = 9` never typechecked and panicked the
+-- typechecker. The construct is removed; this pins the located diagnostic.
+data P = P { x : Int, y : Int }
+
+main : <IO> Unit
+main =
+  let v = P { x = 1, y = 2 }
+  v.x = 9
+  println v.x

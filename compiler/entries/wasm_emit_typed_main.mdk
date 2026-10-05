@@ -113,6 +113,7 @@ typedInput runtimeDecls preludeDecls userDecls =
     (declSigTypeNames runtimeDecls ++ declSigTypeNames mangled)
     (ctorFieldTypeNames mangled)
     False
+    False
     (declaredRecordFieldOrders mangled)
     []
 
@@ -150,7 +151,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let pCtors = ctorFieldTypeNames pMangled
         let pRecords = declaredRecordFieldOrders pMangled
         let pInput =
-          makeWasmEmitInputFull pMethods pSigs pCtors False pRecords []
+          makeWasmEmitInputFull pMethods pSigs pCtors False False pRecords []
         let p1 = emitProgram pInput pProgram
         -- these four deliberately pair P's REAL program with a MISMATCHED
         -- (U-derived or dummy) table -- never a real compile combination, so
@@ -162,6 +163,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               pSigs
               pCtors
               False
+              False
               pRecords
               [])
             pProgram
@@ -171,6 +173,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               pMethods
               (declSigTypeNames runtimeDecls ++ declSigTypeNames uMangled)
               pCtors
+              False
               False
               pRecords
               [])
@@ -182,6 +185,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               pSigs
               (ctorFieldTypeNames uMangled)
               False
+              False
               pRecords
               [])
             pProgram
@@ -191,6 +195,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               pMethods
               pSigs
               pCtors
+              False
               False
               (declaredRecordFieldOrders uMangled)
               [])
@@ -211,6 +216,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               (declSigTypeNames runtimeDecls ++ declSigTypeNames mainMangled)
               (ctorFieldTypeNames mainMangled)
               True
+              False
               (declaredRecordFieldOrders mainMangled)
               [])
             mainProgram

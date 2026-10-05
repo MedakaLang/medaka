@@ -9,7 +9,7 @@ from source by following the [Install section of the README](../../README.md#ins
 medaka run hello.mdk
 ```
 
-That type-checks the program and runs it in one step.
+That type-checks the program and runs it in one step. `run` is the interpreter: it starts at once but runs slowly, so use `medaka build` for the fast native path.
 
 ## Hello, world
 

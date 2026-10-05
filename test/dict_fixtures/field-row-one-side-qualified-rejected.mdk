@@ -1,0 +1,18 @@
+-- A field whose declared type differs between constructors only in an effect
+-- row, with an authority qualifier on one side.  Reading `r.f` at `A`'s row
+-- would let the pure `runIt` perform `B`'s `Stdout`.
+-- Hand-derived: REJECT on all three verbs, `T-FIELD-TYPE-DIFFERS` at `r.f`;
+-- `EFFECT-LEAKED` must never print.
+data Act (e : Effect) = Act (Unit -> <e> Unit)
+
+data R (p : Authority FileRead) = A { f : Act <> @p } | B { f : Act <Stdout> }
+
+runIt : R p -> Unit
+runIt r = match r.f
+  Act g => g ()
+
+start : R p
+start = B { f = Act (_ => println "EFFECT-LEAKED") }
+
+main : Unit
+main = runIt start

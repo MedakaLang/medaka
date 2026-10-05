@@ -2752,6 +2752,8 @@ runHelpText = stringConcat [
   "                    There is no `build --release`; a native build is always\n",
   "                    optimized. Kept so a `--release` in a shared script does\n",
   "                    not make `medaka run` fail.\n", "\n",
+  "`run` is the interpreter: it starts at once but runs slowly. For speed, use\n",
+  "`medaka build`, the fast native path.\n", "\n",
   "Args after <file.mdk> are passed through to the program's own `args`.\n",
   "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n"
 ]

@@ -311,9 +311,10 @@ there is already an amount there, add to it instead of replacing it. `entries` o
 `values` give either half on its own, and because `Map` is `Foldable`, the `toList`
 of the previous section gives you the values.
 
-`printAll` is how you print a list one element per line: a two-clause recursive
-function. `map println xs` would build a `List Unit` and discard it, and the
-compiler refuses to let a statement throw away a non-`Unit` value silently.
+`printAll` is a two-clause recursive function, shown here as a recursion
+example. To print a list one element per line, use `each println xs`. `map println xs`
+would build a `List Unit` and discard it, and the compiler refuses to let a
+statement throw away a non-`Unit` value silently.
 
 ## How do I…
 

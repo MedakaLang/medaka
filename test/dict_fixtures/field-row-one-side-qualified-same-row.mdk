@@ -1,0 +1,18 @@
+-- The positive half: the same one-side qualifier with the SAME effect row in
+-- both constructors is one field type, so `r.f` types at `<Stdout>`.
+-- Hand-derived: ACCEPT on all three verbs, prints `CONTROL-OK`.
+data Act (e : Effect) = Act (Unit -> <e> Unit)
+
+data R (p : Authority FileRead) =
+  | A { f : Act <Stdout> @p }
+  | B { f : Act <Stdout> }
+
+runIt : R p -> <Stdout> Unit
+runIt r = match r.f
+  Act g => g ()
+
+start : R p
+start = B { f = Act (_ => println "CONTROL-OK") }
+
+main : <Stdout> Unit
+main = runIt start

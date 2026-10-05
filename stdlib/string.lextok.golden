@@ -339,6 +339,20 @@ IDENT "bytes"
 NEWLINE
 EXPORT
 NEWLINE
+IDENT "byteLength"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "byteLength"
+IDENT "s"
+EQUAL
+IDENT "utf8ByteLength"
+IDENT "s"
+NEWLINE
+EXPORT
+NEWLINE
 IDENT "utf8ByteLength"
 COLON
 UPPER "String"

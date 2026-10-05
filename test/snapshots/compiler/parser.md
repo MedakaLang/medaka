@@ -1,5 +1,5 @@
 # META
-source_lines=6351
+source_lines=6369
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -4523,24 +4523,26 @@ curryLam [] body = body
 curryLam (p :: ps) body = ELam [p] (curryLam ps body)
 
 -- `pat <- e` is a DoBind (LHS parsed as an expr, reinterpreted); `lhs = e` is
--- an assignment (DoAssign / DoFieldAssign); else a bare DoExpr
+-- a `DoAssign`; a field-path assignment is rejected (`fieldAssignRemovedMsg`);
+-- else a bare DoExpr
 parseExprStmt : Parser (List DoStmt)
 parseExprStmt = defer
+  startPos <- getPos
   e <- parseExpr
   t <- peekP
-  exprStmtFor e t
+  exprStmtFor startPos e t
 
-exprStmtFor : Expr -> Token -> Parser (List DoStmt)
-exprStmtFor e TLArrow = defer
+exprStmtFor : Int -> Expr -> Token -> Parser (List DoStmt)
+exprStmtFor _ e TLArrow = defer
   advance
   rhs <- parseExpr
   deferPure (bindStmts e rhs)
-exprStmtFor e TEqual = defer
+exprStmtFor startPos e TEqual = defer
   advance
   rhs <- parseExpr
-  s <- assignFromLhs e rhs
+  s <- assignFromLhs startPos e rhs
   deferPure [s]
-exprStmtFor e _ = deferPure [DoExpr e]
+exprStmtFor _ e _ = deferPure [DoExpr e]
 
 -- `pat <- e` → one DoBind; an annotated var LHS `x : ty <- e` → the bind PLUS a
 -- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced
@@ -4558,12 +4560,28 @@ bindAnnot inner ty rhs = match stripLoc inner
   ]
   other => [DoBind (exprToPat other) rhs]
 
--- a `lhs = rhs` statement: bare var → DoAssign, field path → DoFieldAssign
-assignFromLhs : Expr -> Expr -> Parser DoStmt
-assignFromLhs lhs rhs = match flattenFieldPath lhs
+-- a `lhs = rhs` statement: bare var → DoAssign; a field path is rejected at the
+-- statement's start (`fatalAtP`, so the message survives `many` recovery)
+assignFromLhs : Int -> Expr -> Expr -> Parser DoStmt
+assignFromLhs startPos lhs rhs = match flattenFieldPath lhs
   Some (x, []) => deferPure (DoAssign x rhs)
-  Some (x, fs) => deferPure (DoFieldAssign x fs rhs)
+  Some (x, fs) => fatalAtP (fieldAssignRemovedMsg x fs) startPos
   None => failP "invalid assignment target in do-block"
+
+-- Block field assignment (`v.x = e`, `a.b.c = e`) is removed: bindings are
+-- immutable and it never typechecked.  The hint names the record-update form.
+fieldAssignRemovedMsg : String -> List String -> String
+fieldAssignRemovedMsg x fs =
+  let path = joinWith "." (x :: fs)
+  "field assignment `\{path} = e` has been removed — bindings are immutable. Build an updated record instead: `\{recordUpdateText x fs}` (for example `{ v | x = 9 }`)"
+
+-- `a`, [b, c] → `{ a | b = { a.b | c = e } }`
+recordUpdateText : String -> List String -> String
+recordUpdateText _ [] = "e"
+recordUpdateText base [f] = "{ \{base} | \{f} = e }"
+recordUpdateText base (f :: fs) =
+  let inner = recordUpdateText "\{base}.\{f}" fs
+  "{ \{base} | \{f} = \{inner} }"
 
 -- `a` → Some (a, []); `a.b.c` → Some (a, [b, c]); anything else → None.
 -- Strips ELoc wrappers (the base var and any sub-access are wrapped atoms).
@@ -7730,17 +7748,23 @@ parseResultWith src tokList offList =
 (DFunDef false "curryLam" ((PList) (PVar "body")) (EVar "body"))
 (DFunDef false "curryLam" ((PCons (PVar "p") (PVar "ps")) (PVar "body")) (EApp (EApp (EVar "ELam") (EListLit (EVar "p"))) (EApp (EApp (EVar "curryLam") (EVar "ps")) (EVar "body"))))
 (DTypeSig false "parseExprStmt" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "DoStmt"))))
-(DFunDef false "parseExprStmt" () (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "e")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "exprStmtFor") (EVar "e")) (EVar "t")))))))
-(DTypeSig false "exprStmtFor" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
-(DFunDef false "exprStmtFor" ((PVar "e") (PCon "TLArrow")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "rhs")) (EApp (EVar "deferPure") (EApp (EApp (EVar "bindStmts") (EVar "e")) (EVar "rhs"))))))))
-(DFunDef false "exprStmtFor" ((PVar "e") (PCon "TEqual")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "rhs")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "assignFromLhs") (EVar "e")) (EVar "rhs"))) (ELam ((PVar "s")) (EApp (EVar "deferPure") (EListLit (EVar "s"))))))))))
-(DFunDef false "exprStmtFor" ((PVar "e") PWild) (EApp (EVar "deferPure") (EListLit (EApp (EVar "DoExpr") (EVar "e")))))
+(DFunDef false "parseExprStmt" () (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "startPos")) (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "e")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "exprStmtFor") (EVar "startPos")) (EVar "e")) (EVar "t")))))))))
+(DTypeSig false "exprStmtFor" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
+(DFunDef false "exprStmtFor" (PWild (PVar "e") (PCon "TLArrow")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "rhs")) (EApp (EVar "deferPure") (EApp (EApp (EVar "bindStmts") (EVar "e")) (EVar "rhs"))))))))
+(DFunDef false "exprStmtFor" ((PVar "startPos") (PVar "e") (PCon "TEqual")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "rhs")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EApp (EVar "assignFromLhs") (EVar "startPos")) (EVar "e")) (EVar "rhs"))) (ELam ((PVar "s")) (EApp (EVar "deferPure") (EListLit (EVar "s"))))))))))
+(DFunDef false "exprStmtFor" (PWild (PVar "e") PWild) (EApp (EVar "deferPure") (EListLit (EApp (EVar "DoExpr") (EVar "e")))))
 (DTypeSig false "bindStmts" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
 (DFunDef false "bindStmts" ((PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "lhs")) (arm (PCon "EAnnot" (PVar "inner") (PVar "ty")) () (EApp (EApp (EApp (EVar "bindAnnot") (EVar "inner")) (EVar "ty")) (EVar "rhs"))) (arm PWild () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "lhs"))) (EVar "rhs"))))))
 (DTypeSig false "bindAnnot" (TyFun (TyCon "Expr") (TyFun (TyCon "Ty") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "bindAnnot" ((PVar "inner") (PVar "ty") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "inner")) (arm (PCon "EVar" (PVar "x")) () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EVar "rhs")) (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "False")) (EVar "False")) (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "x"))) (EVar "ty"))))) (arm (PVar "other") () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "other"))) (EVar "rhs"))))))
-(DTypeSig false "assignFromLhs" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "DoStmt")))))
-(DFunDef false "assignFromLhs" ((PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "flattenFieldPath") (EVar "lhs")) (arm (PCon "Some" (PTuple (PVar "x") (PList))) () (EApp (EVar "deferPure") (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "rhs")))) (arm (PCon "Some" (PTuple (PVar "x") (PVar "fs"))) () (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EVar "rhs")))) (arm (PCon "None") () (EApp (EVar "failP") (ELit (LString "invalid assignment target in do-block"))))))
+(DTypeSig false "assignFromLhs" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "DoStmt"))))))
+(DFunDef false "assignFromLhs" ((PVar "startPos") (PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "flattenFieldPath") (EVar "lhs")) (arm (PCon "Some" (PTuple (PVar "x") (PList))) () (EApp (EVar "deferPure") (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "rhs")))) (arm (PCon "Some" (PTuple (PVar "x") (PVar "fs"))) () (EApp (EApp (EVar "fatalAtP") (EApp (EApp (EVar "fieldAssignRemovedMsg") (EVar "x")) (EVar "fs"))) (EVar "startPos"))) (arm (PCon "None") () (EApp (EVar "failP") (ELit (LString "invalid assignment target in do-block"))))))
+(DTypeSig false "fieldAssignRemovedMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "fieldAssignRemovedMsg" ((PVar "x") (PVar "fs")) (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EBinOp "::" (EVar "x") (EVar "fs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "field assignment `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString " = e` has been removed — bindings are immutable. Build an updated record instead: `"))) (EApp (EVar "display") (EApp (EApp (EVar "recordUpdateText") (EVar "x")) (EVar "fs")))) (ELit (LString "` (for example `{ v | x = 9 }`)"))))))
+(DTypeSig false "recordUpdateText" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "recordUpdateText" (PWild (PList)) (ELit (LString "e")))
+(DFunDef false "recordUpdateText" ((PVar "base") (PList (PVar "f"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EVar "display") (EVar "base"))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "f"))) (ELit (LString " = e }"))))
+(DFunDef false "recordUpdateText" ((PVar "base") (PCons (PVar "f") (PVar "fs"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "recordUpdateText") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "f"))) (ELit (LString "")))) (EVar "fs"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EVar "display") (EVar "base"))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "f"))) (ELit (LString " = "))) (EApp (EVar "display") (EVar "inner"))) (ELit (LString " }"))))))
 (DTypeSig false "flattenFieldPath" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "flattenFieldPath" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "flattenFieldPath") (EVar "e")))
 (DFunDef false "flattenFieldPath" ((PCon "EVar" (PVar "x"))) (EApp (EVar "Some") (ETuple (EVar "x") (EListLit))))
@@ -9531,17 +9555,23 @@ parseResultWith src tokList offList =
 (DFunDef false "curryLam" ((PList) (PVar "body")) (EVar "body"))
 (DFunDef false "curryLam" ((PCons (PVar "p") (PVar "ps")) (PVar "body")) (EApp (EApp (EVar "ELam") (EListLit (EVar "p"))) (EApp (EApp (EVar "curryLam") (EVar "ps")) (EVar "body"))))
 (DTypeSig false "parseExprStmt" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "DoStmt"))))
-(DFunDef false "parseExprStmt" () (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "e")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "exprStmtFor") (EVar "e")) (EVar "t")))))))
-(DTypeSig false "exprStmtFor" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
-(DFunDef false "exprStmtFor" ((PVar "e") (PCon "TLArrow")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "rhs")) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "bindStmts") (EVar "e")) (EVar "rhs"))))))))
-(DFunDef false "exprStmtFor" ((PVar "e") (PCon "TEqual")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "rhs")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "assignFromLhs") (EVar "e")) (EVar "rhs"))) (ELam ((PVar "s")) (EApp (EMethodRef "deferPure") (EListLit (EVar "s"))))))))))
-(DFunDef false "exprStmtFor" ((PVar "e") PWild) (EApp (EMethodRef "deferPure") (EListLit (EApp (EVar "DoExpr") (EVar "e")))))
+(DFunDef false "parseExprStmt" () (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "startPos")) (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "e")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "exprStmtFor") (EVar "startPos")) (EVar "e")) (EVar "t")))))))))
+(DTypeSig false "exprStmtFor" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
+(DFunDef false "exprStmtFor" (PWild (PVar "e") (PCon "TLArrow")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "rhs")) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "bindStmts") (EVar "e")) (EVar "rhs"))))))))
+(DFunDef false "exprStmtFor" ((PVar "startPos") (PVar "e") (PCon "TEqual")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "rhs")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EApp (EVar "assignFromLhs") (EVar "startPos")) (EVar "e")) (EVar "rhs"))) (ELam ((PVar "s")) (EApp (EMethodRef "deferPure") (EListLit (EVar "s"))))))))))
+(DFunDef false "exprStmtFor" (PWild (PVar "e") PWild) (EApp (EMethodRef "deferPure") (EListLit (EApp (EVar "DoExpr") (EVar "e")))))
 (DTypeSig false "bindStmts" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
 (DFunDef false "bindStmts" ((PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "lhs")) (arm (PCon "EAnnot" (PVar "inner") (PVar "ty")) () (EApp (EApp (EApp (EVar "bindAnnot") (EVar "inner")) (EVar "ty")) (EVar "rhs"))) (arm PWild () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "lhs"))) (EVar "rhs"))))))
 (DTypeSig false "bindAnnot" (TyFun (TyCon "Expr") (TyFun (TyCon "Ty") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "bindAnnot" ((PVar "inner") (PVar "ty") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "inner")) (arm (PCon "EVar" (PVar "x")) () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EVar "rhs")) (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "False")) (EVar "False")) (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "x"))) (EVar "ty"))))) (arm (PVar "other") () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "other"))) (EVar "rhs"))))))
-(DTypeSig false "assignFromLhs" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "DoStmt")))))
-(DFunDef false "assignFromLhs" ((PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "flattenFieldPath") (EVar "lhs")) (arm (PCon "Some" (PTuple (PVar "x") (PList))) () (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "rhs")))) (arm (PCon "Some" (PTuple (PVar "x") (PVar "fs"))) () (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EVar "rhs")))) (arm (PCon "None") () (EApp (EVar "failP") (ELit (LString "invalid assignment target in do-block"))))))
+(DTypeSig false "assignFromLhs" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "DoStmt"))))))
+(DFunDef false "assignFromLhs" ((PVar "startPos") (PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "flattenFieldPath") (EVar "lhs")) (arm (PCon "Some" (PTuple (PVar "x") (PList))) () (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "rhs")))) (arm (PCon "Some" (PTuple (PVar "x") (PVar "fs"))) () (EApp (EApp (EVar "fatalAtP") (EApp (EApp (EVar "fieldAssignRemovedMsg") (EVar "x")) (EVar "fs"))) (EVar "startPos"))) (arm (PCon "None") () (EApp (EVar "failP") (ELit (LString "invalid assignment target in do-block"))))))
+(DTypeSig false "fieldAssignRemovedMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "fieldAssignRemovedMsg" ((PVar "x") (PVar "fs")) (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EBinOp "::" (EVar "x") (EVar "fs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "field assignment `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString " = e` has been removed — bindings are immutable. Build an updated record instead: `"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "recordUpdateText") (EVar "x")) (EVar "fs")))) (ELit (LString "` (for example `{ v | x = 9 }`)"))))))
+(DTypeSig false "recordUpdateText" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "recordUpdateText" (PWild (PList)) (ELit (LString "e")))
+(DFunDef false "recordUpdateText" ((PVar "base") (PList (PVar "f"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString " = e }"))))
+(DFunDef false "recordUpdateText" ((PVar "base") (PCons (PVar "f") (PVar "fs"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "recordUpdateText") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString "")))) (EVar "fs"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EVar "inner"))) (ELit (LString " }"))))))
 (DTypeSig false "flattenFieldPath" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "flattenFieldPath" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "flattenFieldPath") (EVar "e")))
 (DFunDef false "flattenFieldPath" ((PCon "EVar" (PVar "x"))) (EApp (EVar "Some") (ETuple (EVar "x") (EListLit))))

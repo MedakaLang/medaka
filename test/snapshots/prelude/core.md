@@ -1,5 +1,5 @@
 # META
-source_lines=2231
+source_lines=2242
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -1157,6 +1157,17 @@ export
 forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
 forEach _ [] = pure ()
 forEach f (x :: xs) = andThen (f x) (_ => forEach f xs)
+
+{- | Calls a function on each element in order, for its effect.
+
+   > each (x => ()) [1, 2, 3]
+   () -}
+export
+each : (a -> <e> Unit) -> List a -> <e> Unit
+each _ [] = ()
+each f (x :: xs) =
+  f x
+  each f xs
 
 {- | Runs each action in the list in order, discarding the results.
 
@@ -2333,6 +2344,7 @@ foldThen : Thenable d => (a -> b -> <c> d a) -> a -> List b -> <c> d a
 repeatThen : Thenable a => Int -> a b -> a (List b)
 filterThen : Thenable c => (a -> <b> c Bool) -> List a -> <b> c (List a)
 forEach : Thenable c => (a -> <b> c Unit) -> List a -> <b> c Unit
+each : (a -> <b> Unit) -> List a -> <b> Unit
 runEach : Thenable a => List (a b) -> a Unit
 guard : Alternative a => Bool -> a Unit
 indexGo : List a -> Int -> Int -> a
