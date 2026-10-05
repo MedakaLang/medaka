@@ -26,7 +26,8 @@ import tools.probe_transcript.{
 import tools.printer.{exprToString, ppTy}
 import tools.prop_runner.{
   PropResult(..), PropStatus(..), PropFailureKind(..), filterProps,
-  filterPropsByName, propSeedValue
+  filterPropsByName, propSeedValue, PropRequest(..), propRequestName,
+  propRequestSeed, propRequestCases
 }
 
 sentinelBase : String
@@ -50,7 +51,7 @@ detailTag i = "\{intToString i}.detail"
 seedTag : Int -> String
 seedTag i = "\{intToString i}.seed"
 
-expectedTags : Int -> List Decl -> List String
+expectedTags : Int -> List (Decl, PropRequest) -> List String
 expectedTags _ [] = [endTag]
 expectedTags i (_ :: rest) =
   [startTag i, seedTag i, boolTag i, detailTag i] ++ expectedTags (i + 1) rest
@@ -65,41 +66,79 @@ runNativeProps : String ->
   <IO> List PropResult
 runNativeProps target tsrc modules cases filterOpt =
   let props = filterPropsByName filterOpt (filterProps (desugarProps tsrc))
-  match props
+  runNativePropRequests
+    target
+    tsrc
+    modules
+    (defaultRequests props cases (propSeedValue ()))
+
+defaultRequests : List Decl -> Int -> Int -> List PropRequest
+defaultRequests [] _ _ = []
+defaultRequests ((DProp _ name _ _) :: rest) cases seed =
+  PropRequest name seed cases :: defaultRequests rest cases seed
+defaultRequests (_ :: rest) cases seed = defaultRequests rest cases seed
+
+export
+runNativePropRequests : String ->
+  String ->
+  List (String, List Decl) ->
+  List PropRequest ->
+  <IO> List PropResult
+runNativePropRequests target tsrc modules requests =
+  let jobs = requestedProps (filterProps (desugarProps tsrc)) requests
+  match jobs
     [] => []
-    _ => match nativeRendered target tsrc modules props cases (propSeedValue ())
-      Err e => map (nativeError cases (propSeedValue ()) e) props
+    _ => match nativeRendered target tsrc modules jobs
+      Err e => map (nativeError e) jobs
       Ok rows => rows
+
+requestedProps : List Decl -> List PropRequest -> List (Decl, PropRequest)
+requestedProps [] _ = []
+requestedProps ((d@(DProp _ name _ _)) :: rest) requests =
+  match requestNamed name requests
+    Some r => (d, r) :: requestedProps rest requests
+    None => requestedProps rest requests
+requestedProps (_ :: rest) requests = requestedProps rest requests
+
+requestNamed : String -> List PropRequest -> Option PropRequest
+requestNamed _ [] = None
+requestNamed name (r :: rest) =
+  if name == propRequestName r then Some r else requestNamed name rest
 
 desugarProps : String -> List Decl
 desugarProps src = desugar (parse src)
 
-nativeError : Int -> Int -> String -> Decl -> PropResult
-nativeError cases seed e (DProp _ name _ _) =
-  PropResult "native" name PropErroredResult (Some PropBuildError) e seed cases
-nativeError cases seed e _ =
+nativeError : String -> (Decl, PropRequest) -> PropResult
+nativeError e (DProp _ name _ _, r) =
+  PropResult
+    "native"
+    name
+    PropErroredResult
+    (Some PropBuildError)
+    e
+    (propRequestSeed r)
+    (propRequestCases r)
+nativeError e (_, r) =
   PropResult
     "native"
     "<invalid prop>"
     PropErroredResult
     (Some PropBuildError)
     e
-    seed
-    cases
+    (propRequestSeed r)
+    (propRequestCases r)
 
 nativeRendered : String ->
   String ->
   List (String, List Decl) ->
-  List Decl ->
-  Int ->
-  Int ->
+  List (Decl, PropRequest) ->
   <IO> Result String (List PropResult)
-nativeRendered target tsrc modules props cases seed = match makeTempDir ()
+nativeRendered target tsrc modules props = match makeTempDir ()
   Err e =>
     Err "native property runner: could not create a scratch directory: \{e}"
   Ok tmp =>
     let nonce = mintNonce ()
-    let rendered = runInTmp target tsrc modules props cases seed tmp nonce
+    let rendered = runInTmp target tsrc modules props tmp nonce
     let _ = cleanupTempDir tmp
     rendered
 
@@ -109,33 +148,30 @@ scratchEntryName target = "prop_" ++ baseOf target
 runInTmp : String ->
   String ->
   List (String, List Decl) ->
-  List Decl ->
-  Int ->
-  Int ->
+  List (Decl, PropRequest) ->
   String ->
   String ->
   <IO> Result String (List PropResult)
-runInTmp target tsrc modules props cases seed tmp nonce =
+runInTmp target tsrc modules props tmp nonce =
   let entry = joinPath tmp (scratchEntryName target)
   let out = joinPath tmp "prop_probe"
   let _ =
     writeFile
       (joinPath tmp "medaka.toml")
       (scratchProjectManifest "medaka_native_props" target)
-  match writeFile entry (probeSource nonce target tsrc modules props cases seed)
+  match writeFile entry (probeSource nonce target tsrc modules props)
     Err e =>
       Err "native property runner: could not write the probe source: \{e}"
-    Ok _ => buildAndRun target entry out tmp props cases nonce
+    Ok _ => buildAndRun target entry out tmp props nonce
 
 buildAndRun : String ->
   String ->
   String ->
   String ->
-  List Decl ->
-  Int ->
+  List (Decl, PropRequest) ->
   String ->
   <IO> Result String (List PropResult)
-buildAndRun target entry out tmp props cases nonce =
+buildAndRun target entry out tmp props nonce =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let medaka = envOr "MEDAKA" "medaka"
   let cc = envOr "CC" "clang"
@@ -160,7 +196,7 @@ buildAndRun target entry out tmp props cases nonce =
       Ok (code, stdout, stderr) =>
         let chunks = chunksOf (sentinelPrefix nonce) (splitNl stdout)
         if tagsInOrder (expectedTags 0 props) chunks then
-          Ok (renderAll chunks (abortNote code stderr) cases 0 props)
+          Ok (renderAll chunks (abortNote code stderr) 0 props)
         else
           Err
             "native property runner: the probe printed a forged or malformed transcript; no property result was trusted"
@@ -182,12 +218,16 @@ seedFor chunks i = match complete (seedTag i) chunks
     None => 0
   None => 0
 
-renderAll : List Chunk -> String -> Int -> Int -> List Decl -> List PropResult
-renderAll _ _ _ _ [] = []
-renderAll chunks note cases i ((DProp _ name _ _) :: rest) =
-  renderOne chunks note cases i name :: renderAll chunks note cases (i + 1) rest
-renderAll chunks note cases i (_ :: rest) =
-  renderAll chunks note cases (i + 1) rest
+renderAll : List Chunk ->
+  String ->
+  Int ->
+  List (Decl, PropRequest) ->
+  List PropResult
+renderAll _ _ _ [] = []
+renderAll chunks note i ((DProp _ name _ _, r) :: rest) =
+  renderOne chunks note (propRequestCases r) i name
+    :: renderAll chunks note (i + 1) rest
+renderAll chunks note i (_ :: rest) = renderAll chunks note (i + 1) rest
 
 renderOne : List Chunk -> String -> Int -> Int -> String -> PropResult
 renderOne chunks note cases i name = match (
@@ -228,18 +268,16 @@ probeSource : String ->
   String ->
   String ->
   List (String, List Decl) ->
-  List Decl ->
-  Int ->
-  Int ->
+  List (Decl, PropRequest) ->
   String
-probeSource nonce target tsrc modules props cases seed =
+probeSource nonce target tsrc modules props =
   joinNl
-    (nativeImports modules props
+    (nativeImports modules (jobDecls props)
       ++ [
         probeTargetSource target tsrc,
         "",
         "__np_state : Ref Int",
-        "__np_state = Ref \{intToString seed}",
+        "__np_state = Ref 0",
         "",
         "__np_next _ =",
         "  let s = (!__np_state * 1103515245 + 12345) % 2147483648",
@@ -252,10 +290,14 @@ probeSource nonce target tsrc modules props cases seed =
         "__np_choose n = if n <= 1 then 0 else (__np_next () / 65536) % n",
         "",
       ]
-      ++ propLines modules props cases 0
+      ++ propLines modules props 0
       ++ ["main ="]
-      ++ mainLines nonce props cases 0
+      ++ mainLines nonce props 0
       ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
+
+jobDecls : List (Decl, PropRequest) -> List Decl
+jobDecls [] = []
+jobDecls ((d, _) :: rest) = d :: jobDecls rest
 
 -- `core.mdk` is the auto-prelude, so splicing its declarations into a scratch
 -- entry duplicates every prelude binding.  Its property bodies can instead be
@@ -320,14 +362,17 @@ nubStrings : List String -> List String
 nubStrings [] = []
 nubStrings (x :: xs) = x :: nubStrings (filterList (/= x) xs)
 
-propLines : List (String, List Decl) -> List Decl -> Int -> Int -> List String
-propLines _ [] _ _ = []
-propLines modules ((DProp _ _ params body) :: rest) cases i =
+propLines : List (String, List Decl) ->
+  List (Decl, PropRequest) ->
+  Int ->
+  List String
+propLines _ [] _ = []
+propLines modules ((DProp _ _ params body, r) :: rest) i =
   fnLines i params body
     ++ genLines modules i 0 params
-    ++ runLines modules i params cases
-    ++ propLines modules rest cases (i + 1)
-propLines modules (_ :: rest) cases i = propLines modules rest cases (i + 1)
+    ++ runLines modules i params (propRequestCases r)
+    ++ propLines modules rest (i + 1)
+propLines modules (_ :: rest) i = propLines modules rest (i + 1)
 
 fnName : Int -> String
 fnName i = "__np_prop_\{intToString i}"
@@ -540,19 +585,20 @@ runBindings _ [] _ = []
 runBindings i ((PropParam n _ _) :: rest) j =
   ["    let \{n} = \{genName i j} ()"] ++ runBindings i rest (j + 1)
 
-mainLines : String -> List Decl -> Int -> Int -> List String
-mainLines _ [] _ _ = []
-mainLines nonce ((DProp _ _ _ _) :: rest) cases i =
+mainLines : String -> List (Decl, PropRequest) -> Int -> List String
+mainLines _ [] _ = []
+mainLines nonce ((DProp _ _ _ _, r) :: rest) i =
   [
       "  let _ = putStrLn \"\{sentinelFor nonce (startTag i)}\"",
+      "  let _ = __np_state := \{intToString (propRequestSeed r)}",
       "  let seed = !__np_state",
       "  let _ = putStrLn \"\{sentinelFor nonce (seedTag i)}\"",
       "  let _ = \{valuePrintExpr "intToString seed"}",
-      "  let (ok, detail) = \{runName i} \{intToString cases}",
+      "  let (ok, detail) = \{runName i} \{intToString (propRequestCases r)}",
       "  let _ = putStrLn \"\{sentinelFor nonce (boolTag i)}\"",
       "  let _ = \{valuePrintExpr "debug ok"}",
       "  let _ = putStrLn \"\{sentinelFor nonce (detailTag i)}\"",
       "  let _ = \{valuePrintExpr "detail"}",
     ]
-    ++ mainLines nonce rest cases (i + 1)
-mainLines nonce (_ :: rest) cases i = mainLines nonce rest cases (i + 1)
+    ++ mainLines nonce rest (i + 1)
+mainLines nonce (_ :: rest) i = mainLines nonce rest (i + 1)
