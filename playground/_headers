@@ -10,3 +10,21 @@
 
 /dist/*.mdk
   Content-Type: text/plain; charset=utf-8
+
+# Cross-origin isolation for the playground page and its dedicated workers, so
+# `sleep` can block a worker on Atomics.wait (SharedArrayBuffer needs isolation).
+# Rules stack by URL pattern, so each path is listed exactly: no splat, so /blog/*
+# and /guide/* (which embed third-party content) never receive COEP. Every worker
+# the page spawns needs COEP itself under require-corp.
+/
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/index.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/worker.js
+  Cross-Origin-Embedder-Policy: require-corp
+/compiler-worker.js
+  Cross-Origin-Embedder-Policy: require-corp
+/language-worker.js
+  Cross-Origin-Embedder-Policy: require-corp

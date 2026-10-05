@@ -336,12 +336,11 @@ const NATIVE_ONLY_EXTERNS = new Set([
   'fileExists', 'fileMode', 'canonicalizePath', 'listDir', 'makeDir', 'removeFile',
   'rename', 'fsync', 'removeDir', 'statFile',
   'args', 'getEnv', 'executablePath', 'runCommand',
-  'wallTimeSec', 'monotonicSec', 'sleepMs',
   'netResolve', 'netTcpConnect', 'netTcpListen', 'netListenPort', 'netTcpAccept',
   'netSend', 'netSendFrom', 'netRecv', 'netShutdown', 'netClose', 'netCloseListener',
   'netSetTimeout', 'netSetNonblock', 'netTryAccept', 'netTryRecv', 'netTrySend',
 ]);
-const NATIVE_ONLY_MODULES = new Set(['time', 'fs', 'net', 'io', 'math']);
+const NATIVE_ONLY_MODULES = new Set(['fs', 'net', 'io']);
 
 function nativeOnlyMessage(text) {
   const ext = /unbound variable '([A-Za-z0-9_]+)'/.exec(text);
@@ -354,8 +353,7 @@ function nativeOnlyMessage(text) {
 function nativeOnlyModuleMessage(message) {
   const m = /^unknown module: ([A-Za-z0-9_.]+)$/.exec(message);
   if (m && NATIVE_ONLY_MODULES.has(m[1]))
-    return 'module `' + m[1] + '` is native-only and not available in the browser playground'
-      + (m[1] === 'time' ? ' (the `async` module depends on it)' : '');
+    return 'module `' + m[1] + '` is native-only and not available in the browser playground';
   return null;
 }
 
