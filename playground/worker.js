@@ -59,6 +59,7 @@ let floatFmtBuf = [];
 let pathBuf = [];
 const takePath = () => { const s = new TextDecoder('utf-8').decode(new Uint8Array(pathBuf)); pathBuf = []; return s; };
 let strToFloatOk = 0;   // #370: latched by mdk_str_to_float, read by mdk_str_to_float_ok
+let waitCell = null;    // Atomics.wait cell for mdk_sleep_ms, made on first sleep
 
 // --- BEGIN SHARED SHIM mdkStrToFloat --- (byte-identical in test/wasm/run.js,
 // playground/worker.js and playground/compile.mjs — WASM-SEMANTICS WH2/WH3; enforced
@@ -230,6 +231,18 @@ self.onmessage = function(e) {
     mdk_arg_byte: capabilityStub('args'),
     mdk_result_len: capabilityStub('readFile/getEnv result'),
     mdk_result_byte: capabilityStub('readFile/getEnv result'),
+    // Clock host surface (design WA-1): reads in seconds, sleep in milliseconds.  A
+    // non-positive sleep returns at once, as medaka_rt.c's mdk_sleep_ms does.  The wait
+    // cell is made on first sleep so a page without SharedArrayBuffer still loads.
+    mdk_wall_time_sec: () => Date.now() / 1000,
+    mdk_monotonic_sec: () => performance.now() / 1000,
+    mdk_sleep_ms: (ms) => {
+      ms = Number(ms);
+      if (ms > 0) {
+        waitCell = waitCell || new Int32Array(new SharedArrayBuffer(4));
+        Atomics.wait(waitCell, 0, 0, ms);
+      }
+    },
     mdk_exit: capabilityStub('exit'),
   } };
 

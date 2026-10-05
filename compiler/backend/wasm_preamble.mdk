@@ -1713,6 +1713,17 @@ ioHostImportLines = [
   "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"
 ]
 
+-- The clock host surface (design WA-1): reads in seconds as f64, a sleep in
+-- milliseconds as i64.  A host binds a non-positive sleep to a no-op.
+export
+clockHostImportLines : List String
+clockHostImportLines = [
+  "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --",
+  "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))",
+  "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))",
+  "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"
+]
+
 -- readFile's Err suffix for contents that are not UTF-8, the text of
 -- medaka_rt.c mdk_read_file's, as the WAT that builds it as a $u8arr.  ASCII,
 -- so one element per character.

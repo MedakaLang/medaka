@@ -205,6 +205,7 @@ function makeHost() {
     acc: [], eacc: [],
     floatFmtBuf: [], pathBuf: [], resultBuf: new Uint8Array(0),
     strToFloatOk: 0,   // #370: latched by mdk_str_to_float, read by mdk_str_to_float_ok
+    waitCell: null,    // Atomics.wait cell for mdk_sleep_ms, made on first sleep
     exited: false,
     resolve: null,
     imports: null,
@@ -256,6 +257,18 @@ function makeHost() {
     mdk_arg_byte: (i, j) => enc(host.argv[i])[j] & 0xff,
     mdk_result_len: () => host.resultBuf.length,
     mdk_result_byte: (i) => host.resultBuf[i] & 0xff,
+    // Clock host surface (design WA-1): reads in seconds, sleep in milliseconds.  A
+    // non-positive sleep returns at once, as medaka_rt.c's mdk_sleep_ms does.  The wait
+    // cell is made on first sleep so a page without SharedArrayBuffer still loads.
+    mdk_wall_time_sec: () => Date.now() / 1000,
+    mdk_monotonic_sec: () => performance.now() / 1000,
+    mdk_sleep_ms: (ms) => {
+      ms = Number(ms);
+      if (ms > 0) {
+        host.waitCell = host.waitCell || new Int32Array(new SharedArrayBuffer(4));
+        Atomics.wait(host.waitCell, 0, 0, ms);
+      }
+    },
     mdk_exit: (code) => { host.finish(code); throw new ExitSignal(); },
   } };
   return host;

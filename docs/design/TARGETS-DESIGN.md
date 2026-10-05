@@ -340,6 +340,12 @@ copied into `playground/render_docs.mjs` and `playground/guide_wasm_differential
 
 Issue: #3669 (derived parity).
 
+Amendment (2026-10-05, `docs/design/WASM-ASYNC-DESIGN.md` section 10 ruling 4):
+the playground vfs carries every stdlib module, and the refusal is T2's
+label diagnostic (`T-TARGET-CAPABILITY`, naming the label and the via-chain),
+the same one a native `--target` check gives. This amends the mechanism, not
+the ruling: the generated list feeds `build_site.sh`'s asset check only.
+
 ### 6.5 The host receives the grant
 
 Native and `medaka run` confine a file operation to the authority granted at the
@@ -432,7 +438,7 @@ Issue: #3673 (symmetric walls).
   a worker the host can block with `Atomics.wait`; on a main thread it cannot.
   JavaScript promise integration (JSPI) is the eventual path, and the Async v2
   effect index is where a native async binding would surface. Neither is
-  designed here.
+  designed here (the clock's wait is designed in `docs/design/WASM-ASYNC-DESIGN.md`).
 - **An opaque host-value type** (GHC's `JSVal`). The crossable set is bytes and
   scalars. If arrays of bytes prove too thin, an opaque handle type is the next
   step and does not change anything above.
@@ -478,6 +484,7 @@ Issue: #3674 (edge profile).
 A request handler on the edge is itself a promise. v1 runs a binding
 synchronously on a worker where the host allows `Atomics.wait` and documents the
 hosts where it does not; the async binding is §7.6's open item, not T5's.
+The waiting model is in `docs/design/WASM-ASYNC-DESIGN.md`.
 
 ### 8.4 The WASI seam
 

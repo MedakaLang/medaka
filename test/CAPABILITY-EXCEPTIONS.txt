@@ -214,7 +214,6 @@ netTcpConnect	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emi
 netTcpListen	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 pdsSignalStart	wasm	PERMANENT	POSIX SIGTERM self-pipe and fd readiness are native-only; wasm_emit rejects the net family
 pdsSignalRequested	wasm	PERMANENT	POSIX SIGTERM state is native-only; wasm_emit rejects the net family
-ioPoll	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netConnectCheck	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netConnectStart	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netSetNonblock	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
@@ -251,9 +250,6 @@ assertSnapshot	wasm	TODO	unimplemented in all 3 engines, no stdlib caller — fo
 # perf (4): llvm's isPerfExtern does real gettimeofday/clock_gettime/nanosleep/
 # GC-byte-counter FFI; wasm has none of it (no host-import wired for it).
 allocBytes	wasm	WASM-GAP	real GC-byte-counter FFI in llvm (isPerfExtern), no wasm host-import wired
-monotonicSec	wasm	WASM-GAP	real clock_gettime FFI in llvm (isPerfExtern), no wasm host-import wired
-sleepMs	wasm	WASM-GAP	real nanosleep FFI in llvm (isPerfExtern), no wasm host-import wired
-wallTimeSec	wasm	WASM-GAP	real gettimeofday FFI in llvm (isPerfExtern), no wasm host-import wired
 
 # file/stdin/env residual (14): wasm's isLeafExternW ports readFile/
 # fileExists/args/getEnv/canonicalizePath/readFileBytes/writeFileBytes but
