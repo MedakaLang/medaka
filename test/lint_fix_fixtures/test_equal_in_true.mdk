@@ -2,6 +2,8 @@
 -- The `trueLt` / `falseGe` / `trueConj` / `truePlain` rows are NEGATIVE:
 -- `--fix` must leave them byte-identical.
 
+import test.*
+
 trueEq a = expectTrue (a == 1)
 trueNe a = expectTrue (a /= 1)
 falseEq a = expectFalse (a == 1)

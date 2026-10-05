@@ -220,6 +220,7 @@ locLineStartsRef = Ref (arrayFromList [0])
 
 setLocState : String -> Array (Int, Int) -> Unit
 setLocState src offs =
+  guardOffsRef := arrayFromList []
   locSrcRef := src
   locLineStartsRef := lineStartsOf src
   locOffsRef := offs
@@ -1620,12 +1621,118 @@ letRecInlineClause = defer
 
 parseMatch : Parser Expr
 parseMatch = defer
+  matchPos <- getPos
   expectTok TMatch
   scrut <- parseExpr
   expectTok TIndent
   arms <- parseArms
+  matchArmsGuard matchPos arms
   expectTok TDedent
   deferPure (EMatch scrut arms)
+
+-- A match whose first arm failed to parse (`arms` is empty) while the indented
+-- block it opened is a CONTINUATION of the scrutinee (`match f a⏎      b⏎    Arm => …`):
+-- the layout algorithm treats the deeper line after a `match` header as an arms
+-- block (LAYOUT-SEMANTICS §4 I.b, §7.3), so the wrapped scrutinee line is what the
+-- parser trips on, not the `match`.  Reported at that line's first token.
+-- Evidence that the scrutinee wrapped, all required: the block starts an
+-- expression, holds no `=>` or `->` (so it is not a malformed arm), and the real
+-- arms follow after the block, indented deeper than the line holding `match`
+-- (a sibling arm or a later declaration at that indent or shallower means the
+-- block was itself the arms).
+matchArmsGuard : Int -> List Arm -> Parser Unit
+matchArmsGuard _ (_ :: _) = deferPure ()
+matchArmsGuard matchPos [] = defer
+  here <- getPos
+  wrapped <- matchContinuationAhead matchPos
+  if wrapped then fatalAtP matchScrutContinuationMsg here else deferPure ()
+
+matchScrutContinuationMsg : String
+matchScrutContinuationMsg =
+  "a `match` scrutinee cannot continue onto further indented lines — the first deeper line after `match` opens the arms block. Wrap the whole scrutinee in parentheses, or bind it with `let` first"
+
+matchContinuationAhead : Int -> Parser Bool
+matchContinuationAhead matchPos = ParserE (toks pos =>
+  POk
+    (startsExprAt toks pos
+      && continuationBlockShape toks pos 0 (lineIndentCol toks matchPos))
+    pos)
+
+startsExprAt : Array Token -> Int -> Bool
+startsExprAt toks pos = match runP parseAspat toks pos
+  POk _ _ => True
+  _ => False
+
+-- Column of the first real token on the source line holding token `i`.
+lineIndentCol : Array Token -> Int -> Int
+lineIndentCol toks i = tokCol i |> lineIndentGo toks i (tokLine i)
+
+lineIndentGo : Array Token -> Int -> Int -> Int -> Int
+lineIndentGo toks i line col
+  | i <= 0 = col
+  | isLayoutTok (peekTok toks (i - 1)) = lineIndentGo toks (i - 1) line col
+  | tokLine (i - 1) == line = lineIndentGo toks (i - 1) line (tokCol (i - 1))
+  | otherwise = col
+
+-- Source and per-token start offsets for the match-scrutinee guard's column
+-- arithmetic.  Primed only by `parseResultWith`; every other entry clears them,
+-- and an empty offset array makes `tokLineCol` report (0, 0), which keeps the guard
+-- silent.
+guardSrcRef : Ref String
+guardSrcRef = Ref ""
+
+guardOffsRef : Ref (Array Int)
+guardOffsRef = Ref (arrayFromList [])
+
+-- (line, column) of token `i`, or (0, 0) when no offsets are primed.
+tokLineCol : Int -> (Int, Int)
+tokLineCol i =
+  let offs = !guardOffsRef
+  if i >= 0 && i < arrayLength offs then
+    offsetToLineCol !guardSrcRef (arrayGetUnsafe i offs)
+  else
+    (0, 0)
+
+primeGuardPos : String -> Array Int -> Unit
+primeGuardPos src offs =
+  guardSrcRef := src
+  guardOffsRef := offs
+
+tokLine : Int -> Int
+tokLine i = fst (tokLineCol i)
+
+tokCol : Int -> Int
+tokCol i = snd (tokLineCol i)
+
+-- Tokens from `i` (just inside an INDENT) up to the matching DEDENT hold no
+-- `=>` or `->`, and the logical line right after that DEDENT does hold a `=>`
+-- and starts deeper than `matchCol`: the real arms follow the block.
+continuationBlockShape : Array Token -> Int -> Int -> Int -> Bool
+continuationBlockShape toks i depth matchCol = match peekTok toks i
+  TEof => False
+  TFatArrow => False
+  TArrow => False
+  TIndent => continuationBlockShape toks (i + 1) (depth + 1) matchCol
+  TDedent =>
+    if depth == 0 then
+      armsLineAhead toks (i + 1) matchCol
+    else
+      continuationBlockShape toks (i + 1) (depth - 1) matchCol
+  _ => continuationBlockShape toks (i + 1) depth matchCol
+
+armsLineAhead : Array Token -> Int -> Int -> Bool
+armsLineAhead toks i matchCol = match peekTok toks i
+  TNewline => armsLineAhead toks (i + 1) matchCol
+  _ => lineHasFatArrow toks i && tokCol i > matchCol
+
+lineHasFatArrow : Array Token -> Int -> Bool
+lineHasFatArrow toks i = match peekTok toks i
+  TFatArrow => True
+  TNewline => False
+  TDedent => False
+  TIndent => False
+  TEof => False
+  _ => lineHasFatArrow toks (i + 1)
 
 parseArms : Parser (List Arm)
 parseArms = defer
@@ -5412,7 +5519,9 @@ parse src =
   let toks = arrayFromList (tokenize src)
   match firstLexError toks 0
     Some (_, msg) => panic msg
-    None => resultDecls toks (runP parseProgram toks 0)
+    None =>
+      guardOffsRef := arrayFromList []
+      resultDecls toks (runP parseProgram toks 0)
 
 -- Position-populating parse entry for B.10.2b (LSP).  Sets the loc-state refs
 -- (src + token offsets) so the ELoc wrappers carry REAL line/col, then parses.
@@ -6281,4 +6390,5 @@ parseResultWith src tokList offList =
       else if forIdx >= 0 then
         Err (mkLocated src toks offs srcLen forLoopMsg forIdx)
       else
+        let _ = primeGuardPos src offs
         resultDeclsResult src toks offs srcLen (runP parseProgram toks 0)

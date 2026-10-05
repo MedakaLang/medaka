@@ -1,0 +1,6 @@
+-- #3285: a verb that any `import test.{…}` group already lists is not added again.
+
+import test.{expectTrue}
+import test.{expectEqual}
+
+eqCase a = expectEqual a 1

@@ -1,0 +1,7 @@
+-- #3285: a file's own top-level `expectEqual` is not the `test` verb, so the
+-- rewrite to `expectTrue` (a name the file never imported) is not applied.
+
+expectEqual : Bool -> Bool -> Bool
+expectEqual a b = a == b
+
+eqCase a = expectEqual True (a == 1)

@@ -43,11 +43,13 @@ import frontend.ast.{
   Pat(..),
   UsePath(..),
   UseMember(..),
+  useMemberLocal,
   qualifiedLocal,
   RecPatField(..),
   Guard(..),
   Arm(..),
   ImplMethod(..),
+  IfaceMethod(..),
   DoStmt(..),
   Section(..),
   InterpPart(..),
@@ -124,6 +126,7 @@ import regex.{
   escape,
 }
 import ir.sexp.{exprSexp, patSexp}
+import frontend.marker.{declRefs, localBoundNames}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorSiblings}
 import frontend.lexer.{
   Comment,
@@ -1017,10 +1020,173 @@ applyFixes : List String ->
 applyFixes only disable src prog pos =
   let rules = filterList (ruleActiveFixable only disable) allRules
   let orc = buildOracle prog
-  let cmtLines = map commentLine (collectComments src)
-  let splices =
-    collectSplices cmtLines orc rules (zipDeclPos prog (positionsDecls pos))
-  (applySplices src splices, listLen splices)
+  let cmts = collectComments src
+  let cmtLines = map commentLine cmts
+  let declPos = zipDeclPos prog (positionsDecls pos)
+  let scope = testVerbScope prog declPos
+  let tagged = collectSplices scope cmtLines orc rules declPos
+  let (kept, widen) = reconcileTestImport cmts declPos tagged
+  (applySplices src (withWiden widen kept), listLen kept)
+
+withWiden : Option (Int, Int, String) ->
+  List (Int, Int, String) ->
+  List (Int, Int, String)
+withWiden None splices = splices
+withWiden (Some sp) splices = insertSpliceAsc sp splices
+
+-- The `stdlib/test.mdk` verbs a fixer can introduce.  Every other name a fixer
+-- emits is prelude-global.
+testVerbNames : List String
+testVerbNames = ["expectEqual", "expectNotEqual", "expectTrue", "expectFalse"]
+
+-- The test verbs a decl list calls, read off the AST (never the rendered text,
+-- where a string literal could name a verb).
+testVerbsIn : List Decl -> List String
+testVerbsIn ds =
+  let refs = flatMap declRefs ds
+  filterList (v => contains v refs) testVerbNames
+
+-- Which test verb names mean the `test` module's verb in this file.
+--   blocked  names bound by something other than the `test` import: a top-level
+--            definition (function, extern, let-group binding, interface
+--            method), a member of another module's selective import, or a local
+--            binder anywhere in the file.  The local check is file-wide rather
+--            than per-scope: it over-skips a fix next to an unrelated binder of
+--            the same name and never under-skips.  A name arriving through
+--            another module's `import m.*` is not visible from the AST alone,
+--            so it is not blocked.
+--   resolved names the file imports from `test` itself: a member of an
+--            `import test.{…}` group under its own name, or every verb when
+--            `import test.*` is present.
+testVerbScope : List Decl -> List (Decl, DeclPos) -> (List String, List String)
+testVerbScope prog declPos =
+  let bound =
+    flatMap topLevelBinders prog
+      ++ flatMap foreignImportNames prog
+      ++ localBoundNames prog
+  let blocked = filterList (v => contains v bound) testVerbNames
+  let wild = anyList isTestWild prog
+  let listed = flatMap (g => map useMemberLocal (fst g)) (testGroups declPos)
+  let resolved =
+    if wild then
+      testVerbNames
+    else
+      filterList (v => contains v listed) testVerbNames
+  (blocked, resolved)
+
+topLevelBinders : Decl -> List String
+topLevelBinders (DFunDef _ n _ _) = [n]
+topLevelBinders (DExtern _ n _) = [n]
+topLevelBinders (DLetGroup _ binds) = map letBindName binds
+topLevelBinders (DInterface { methods, ... }) = map ifaceMethodNameOf methods
+topLevelBinders (DAttrib _ d) = topLevelBinders d
+topLevelBinders _ = []
+
+letBindName : LetBind -> String
+letBindName (LetBind n _) = n
+
+ifaceMethodNameOf : IfaceMethod -> String
+ifaceMethodNameOf (IfaceMethod n _ _ _) = n
+
+-- Local names an `import m.{…}` group brings in, for every module but `test`.
+foreignImportNames : Decl -> List String
+foreignImportNames (DUse _ (UseGroup path members) _)
+  | path == ["test"] = []
+  | otherwise = map useMemberLocal members
+foreignImportNames _ = []
+
+-- A fix whose rewrite touches a `test` verb is applied only when every verb it
+-- matched or introduces is not blocked and every verb it matched is the `test`
+-- module's own (`resolved`).  Matching `expectEqual` by name alone would
+-- otherwise rewrite a file's own `expectEqual` into a call to a verb that file
+-- never imported, and introducing a name the file already binds would silently
+-- call that binding instead.
+testFixAllowed : (List String, List String) ->
+  List String ->
+  List String ->
+  Bool
+testFixAllowed (blocked, resolved) matched introduced =
+  isEmptyL introduced
+    || not (anyList (v => contains v blocked) (matched ++ introduced))
+      && allList (v => contains v resolved) matched
+
+-- A fix that introduces a call to a `test` verb must leave the file's
+-- `import test.{…}` list naming it, or the next `check` fails with an unbound
+-- variable.  Returns the splices to apply plus the (zero or one) splice that
+-- widens the import.  A fix whose verb is missing from every `import test.{…}`
+-- group is kept only when some group can be widened without losing a comment:
+-- otherwise it is dropped and stays a finding.  `import test.*` already binds
+-- the verbs, so that file is untouched here.  A bare or aliased `import test`,
+-- or no import at all, never bound the matched verb, so `testFixAllowed` has
+-- already dropped every fix in such a file.
+reconcileTestImport : List Comment ->
+  List (Decl, DeclPos) ->
+  List ((Int, Int, String), List String) ->
+  (List (Int, Int, String), Option (Int, Int, String))
+reconcileTestImport cmts declPos tagged =
+  let groups = testGroups declPos
+  let listed = flatMap (g => map useMemberLocal (fst g)) groups
+  let wild = anyList isTestWild (map fst declPos)
+  if isEmptyL groups || wild then
+    (map fst tagged, None)
+  else
+    let missingOf = verbs => filterList (v => not (contains v listed)) verbs
+    let target = findWidenable cmts groups
+    let kept =
+      filterList (t => isEmptyL (missingOf (snd t)) || isSome target) tagged
+    let missing = dedup (flatMap (t => missingOf (snd t)) kept)
+    match target
+      Some (pub, path, members, loc, dp, trailing) =>
+        if isEmptyL missing then
+          (map fst kept, None)
+        else
+          let widened =
+            UseGroup
+              path
+              (members ++ map (v => UseMember v False loc None) missing)
+          let txt = declToString (DUse pub widened loc) ++ trailing
+          (map fst kept, Some (declPosLine dp, declPosEndLine dp, txt))
+      None => (map fst kept, None)
+
+isTestWild : Decl -> Bool
+isTestWild (DUse _ (UseWild path) _) = path == ["test"]
+isTestWild _ = False
+
+testGroups : List (Decl, DeclPos) ->
+  List (List UseMember, (Bool, List String, Loc, DeclPos))
+testGroups [] = []
+testGroups ((DUse pub (UseGroup path members) loc, dp) :: rest)
+  | path == ["test"] = (members, (pub, path, loc, dp)) :: testGroups rest
+testGroups (_ :: rest) = testGroups rest
+
+-- The first `import test.{…}` group whose span holds no comment, or only a
+-- `--` comment on its last line, which the rewritten import re-appends.
+findWidenable : List Comment ->
+  List (List UseMember, (Bool, List String, Loc, DeclPos)) ->
+  Option (Bool, List String, List UseMember, Loc, DeclPos, String)
+findWidenable _ [] = None
+findWidenable cmts ((members, (pub, path, loc, dp)) :: rest) =
+  match spanComments cmts (declPosLine dp) (declPosEndLine dp)
+    [] => Some (pub, path, members, loc, dp, "")
+    [c] =>
+      if commentLine c == declPosEndLine dp
+        && startsWith "--" (commentText c) then
+        Some (pub, path, members, loc, dp, " " ++ commentText c)
+      else
+        findWidenable cmts rest
+    _ => findWidenable cmts rest
+
+spanComments : List Comment -> Int -> Int -> List Comment
+spanComments cmts s e =
+  filterList (c => s <= commentLine c && commentLine c <= e) cmts
+
+insertSpliceAsc : (Int, Int, String) ->
+  List (Int, Int, String) ->
+  List (Int, Int, String)
+insertSpliceAsc sp [] = [sp]
+insertSpliceAsc (s, e, t) ((s2, e2, t2) :: rest)
+  | s < s2 = (s, e, t) :: (s2, e2, t2) :: rest
+  | otherwise = (s2, e2, t2) :: insertSpliceAsc (s, e, t) rest
 
 -- a rule participates in `--fix` iff it is enabled, passes the --only/--disable
 -- filters, AND carries a fixer.
@@ -1050,20 +1216,29 @@ zipDeclPos (d :: ds) (p :: ps) = (d, p) :: zipDeclPos ds ps
 -- interior comment line we SKIP the fix (the rule still WARNS; the source is
 -- left untouched).  A leading doc-comment ABOVE the decl is on a line
 -- `< declPosLine` → outside the span → the fix is still allowed (no over-bail).
-collectSplices : List Int ->
+collectSplices : (List String, List String) ->
+  List Int ->
   Oracle ->
   List Rule ->
   List (Decl, DeclPos) ->
-  List (Int, Int, String)
-collectSplices _ _ _ [] = []
-collectSplices cmtLines orc rules ((d, dp) :: rest) = match firstFix orc rules d
-  Some newDecls =>
-    if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp) then
-      collectSplices cmtLines orc rules rest
-    else
-      (declPosLine dp, declPosEndLine dp, renderDecls newDecls)
-        :: collectSplices cmtLines orc rules rest
-  None => collectSplices cmtLines orc rules rest
+  List ((Int, Int, String), List String)
+collectSplices _ _ _ _ [] = []
+collectSplices scope cmtLines orc rules ((d, dp) :: rest) =
+  match firstFix orc rules d
+    Some newDecls =>
+      let matched = testVerbsIn [d]
+      let introduced =
+        filterList (v => not (contains v matched)) (testVerbsIn newDecls)
+      if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp)
+        || not (testFixAllowed scope matched introduced) then
+        collectSplices scope cmtLines orc rules rest
+      else
+        (
+            (declPosLine dp, declPosEndLine dp, renderDecls newDecls),
+            introduced,
+          )
+          :: collectSplices scope cmtLines orc rules rest
+    None => collectSplices scope cmtLines orc rules rest
 
 -- True iff some comment line falls within the inclusive span `[startLine, endLine]`.
 spanHasComment : List Int -> Int -> Int -> Bool

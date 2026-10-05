@@ -2,6 +2,8 @@
 -- The `bothLits` / `plainEq` / `partialEq` / `notEqualVerb` rows are NEGATIVE:
 -- `--fix` must leave them byte-identical.
 
+import test.*
+
 eqTrueLeft a = expectEqual True (a == 1)
 eqFalseLeft a = expectEqual False (a == 1)
 eqTrueRight a = expectEqual (a == 1) True
