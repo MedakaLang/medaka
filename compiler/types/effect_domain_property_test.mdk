@@ -1,0 +1,349 @@
+-- Finite conformance properties for the concrete authority domains.
+--
+-- EFFECTS-SEMANTICS §2.1 requires a bounded join-semilattice: this file checks
+-- the reachable finite Prefix, Set, and Product fragments against explicit
+-- denotations, rather than another implementation of `dsub` or `djoin`.
+-- §2.2 requires same-label authorities to be antichains, and §2.4 lifts the
+-- domain order to an authority pointwise. Paths and symbolic authorities are
+-- intentionally outside this model: their meanings depend on filesystem
+-- interpretation and deferred constraints, respectively.
+
+import test.{expectTrue}
+import support.util.{allList, anyList, contains, sortUniqS}
+import types.effect_domain.{Param(..), dantichain, djoin, dsub}
+import types.effect_authority.{Authority(..), authConsts, authJoinAll, authSub}
+
+bounded : Int -> Int -> Int
+bounded n width = (n % width + width) % width
+
+-- ── Prefix: an explicit, small universe of concrete authorities ──────────
+
+prefixPoints : List String
+prefixPoints = [
+  "a",
+  "a/x",
+  "a/y",
+  "a/z",
+  "aa",
+  "ab",
+  "b",
+  "b/x",
+  "b/y",
+  "ba",
+  "c",
+]
+
+prefixPool : List Param
+prefixPool = [
+  PPrefix None,
+  PPrefix (Some "a"),
+  PPrefix (Some "a*"),
+  PPrefix (Some "a/x"),
+  PPrefix (Some "a/y"),
+  PPrefix (Some "a/*"),
+  PPrefix (Some "b"),
+  PPrefix (Some "b*"),
+  PPrefix (Some "b/x"),
+  PPrefix (Some "b/*"),
+]
+
+prefixFromRaw : Int -> Param
+prefixFromRaw raw = nthPrefix prefixPool (bounded raw (length prefixPool))
+
+nthPrefix : List Param -> Int -> Param
+nthPrefix (p :: _) 0 = p
+nthPrefix (_ :: rest) n = nthPrefix rest (n - 1)
+nthPrefix [] _ = PPrefix None
+
+prefixDenotation : Param -> List String
+prefixDenotation (PPrefix None) = prefixPoints
+prefixDenotation (PPrefix (Some "a")) = ["a"]
+prefixDenotation (PPrefix (Some "a*")) = ["a", "a/x", "a/y", "a/z", "aa", "ab"]
+prefixDenotation (PPrefix (Some "a/x")) = ["a/x"]
+prefixDenotation (PPrefix (Some "a/y")) = ["a/y"]
+prefixDenotation (PPrefix (Some "a/*")) = ["a/x", "a/y", "a/z"]
+prefixDenotation (PPrefix (Some "b")) = ["b"]
+prefixDenotation (PPrefix (Some "b*")) = ["b", "b/x", "b/y", "ba"]
+prefixDenotation (PPrefix (Some "b/x")) = ["b/x"]
+prefixDenotation (PPrefix (Some "b/*")) = ["b/x", "b/y"]
+prefixDenotation _ = []
+
+prefixAllows : Param -> String -> Bool
+prefixAllows p point = contains point (prefixDenotation p)
+
+prefixWithin : Param -> Param -> Bool
+prefixWithin left right =
+  allList
+    (point => not (prefixAllows left point) || prefixAllows right point)
+    prefixPoints
+
+prefixAuthorityAllows : List Param -> String -> Bool
+prefixAuthorityAllows ps point = anyList (p => prefixAllows p point) ps
+
+prefixAntichainLaw : List Param -> Bool
+prefixAntichainLaw ps =
+  let normed = dantichain ps
+  allList
+    (point =>
+      prefixAuthorityAllows ps point == prefixAuthorityAllows normed point)
+    prefixPoints
+
+prefixJoinLaw : Param -> Param -> Bool
+prefixJoinLaw left right =
+  let joined = djoin left right
+  prefixWithin left joined
+    && prefixWithin right joined
+    && allList
+      (upper =>
+        not (prefixWithin left upper && prefixWithin right upper)
+          || prefixWithin joined upper)
+      prefixPool
+
+prefixAuthorityOrder : List Param -> List Param -> Bool
+prefixAuthorityOrder left right =
+  allList (lower => anyList (upper => prefixWithin lower upper) right) left
+
+prefixAuthorityLaw : List Param -> List Param -> Bool
+prefixAuthorityLaw left right =
+  authSub (authJoinAll (map AConst left)) (authJoinAll (map AConst right))
+    == prefixAuthorityOrder left right
+
+-- ── Set: exact finite-member semantics ───────────────────────────────────
+
+setPoints : List String
+setPoints = ["GET", "POST", "PUT", "PATCH"]
+
+setPool : List Param
+setPool = [
+  PSet None,
+  PSet (Some []),
+  PSet (Some ["GET"]),
+  PSet (Some ["POST"]),
+  PSet (Some ["PUT"]),
+  PSet (Some ["GET", "POST"]),
+  PSet (Some ["GET", "PUT"]),
+  PSet (Some ["POST", "PUT"]),
+  PSet (Some ["GET", "POST", "PUT"]),
+]
+
+setFromRaw : Int -> Param
+setFromRaw raw = nthSet setPool (bounded raw (length setPool))
+
+nthSet : List Param -> Int -> Param
+nthSet (p :: _) 0 = p
+nthSet (_ :: rest) n = nthSet rest (n - 1)
+nthSet [] _ = PSet None
+
+setAllows : Param -> String -> Bool
+setAllows (PSet None) point = contains point setPoints
+setAllows (PSet (Some members)) point = contains point members
+setAllows _ _ = False
+
+setWithin : Param -> Param -> Bool
+setWithin left right =
+  allList
+    (point => not (setAllows left point) || setAllows right point)
+    setPoints
+
+setAuthorityAllows : List Param -> String -> Bool
+setAuthorityAllows ps point = anyList (p => setAllows p point) ps
+
+setAntichainLaw : List Param -> Bool
+setAntichainLaw ps =
+  let normed = dantichain ps
+  allList
+    (point => setAuthorityAllows ps point == setAuthorityAllows normed point)
+    setPoints
+
+setJoinLaw : Param -> Param -> Bool
+setJoinLaw left right =
+  let joined = djoin left right
+  setWithin left joined
+    && setWithin right joined
+    && allList
+      (upper =>
+        not (setWithin left upper && setWithin right upper)
+          || setWithin joined upper)
+      setPool
+
+setAuthorityOrder : List Param -> List Param -> Bool
+setAuthorityOrder [] _ = True
+setAuthorityOrder _ [] = False
+setAuthorityOrder left right =
+  setWithin (setAuthorityUnion left) (setAuthorityUnion right)
+
+-- §2.2's Set case is exact: same-label members become one set before the
+-- §2.4 pointwise comparison. The empty list stays a distinct absent atom;
+-- `PSet {}` is a present, bottom Set-domain element.
+setAuthorityUnion : List Param -> Param
+setAuthorityUnion ps =
+  if anyList isSetTop ps then
+    PSet None
+  else
+    PSet (Some (sortUniqS (flatMap setMembersModel ps)))
+
+isSetTop : Param -> Bool
+isSetTop (PSet None) = True
+isSetTop _ = False
+
+setMembersModel : Param -> List String
+setMembersModel (PSet (Some members)) = members
+setMembersModel _ = []
+
+setAuthorityLaw : List Param -> List Param -> Bool
+setAuthorityLaw left right =
+  authSub (authJoinAll (map AConst left)) (authJoinAll (map AConst right))
+    == setAuthorityOrder left right
+
+-- ── Product: Host(Prefix) × Method(Set), compared pointwise ──────────────
+
+productPrefixPool : List Param
+productPrefixPool = [
+  PPrefix None,
+  PPrefix (Some "a*"),
+  PPrefix (Some "a/x"),
+  PPrefix (Some "b*"),
+  PPrefix (Some "b/x"),
+]
+
+product : Param -> Param -> Param
+product host method = PProduct [("Host", host), ("Method", method)]
+
+productPool : List Param
+productPool =
+  flatMap
+    (host => map (method => product host method) setPool)
+    productPrefixPool
+
+productFromRaw : Int -> Param
+productFromRaw raw = nthProduct productPool (bounded raw (length productPool))
+
+nthProduct : List Param -> Int -> Param
+nthProduct (p :: _) 0 = p
+nthProduct (_ :: rest) n = nthProduct rest (n - 1)
+nthProduct [] _ = product (PPrefix None) (PSet None)
+
+productPoints : List (String, String)
+productPoints =
+  flatMap (host => map (method => (host, method)) setPoints) prefixPoints
+
+productAllows : Param -> (String, String) -> Bool
+productAllows (PProduct [("Host", host), ("Method", method)]) (hostPoint, methodPoint) =
+  prefixAllows host hostPoint && setAllows method methodPoint
+productAllows _ _ = False
+
+productWithin : Param -> Param -> Bool
+productWithin (PProduct [("Host", leftHost), ("Method", leftMethod)]) (PProduct [("Host", rightHost), ("Method", rightMethod)]) =
+  prefixWithin leftHost rightHost && setWithin leftMethod rightMethod
+productWithin _ _ = False
+
+productAuthorityAllows : List Param -> (String, String) -> Bool
+productAuthorityAllows ps point = anyList (p => productAllows p point) ps
+
+productAntichainLaw : List Param -> Bool
+productAntichainLaw ps =
+  let normed = dantichain ps
+  allList
+    (point =>
+      productAuthorityAllows ps point == productAuthorityAllows normed point)
+    productPoints
+
+productJoinLaw : Param -> Param -> Bool
+productJoinLaw left right =
+  let joined = djoin left right
+  productWithin left joined
+    && productWithin right joined
+    && allList
+      (upper =>
+        not (productWithin left upper && productWithin right upper)
+          || productWithin joined upper)
+      productPool
+
+productAuthorityOrder : List Param -> List Param -> Bool
+productAuthorityOrder left right =
+  allList (lower => productWithinAuthority lower right) left
+
+-- §2.4's Product exception: a tuple may be covered by several members when
+-- every singleton on its Set axis is covered. A Set-empty tuple has no
+-- singletons and is therefore the authority bottom in this lifted relation,
+-- while it remains a distinct Product-domain element under `productWithin`.
+productWithinAuthority : Param -> List Param -> Bool
+productWithinAuthority lower uppers =
+  anyList (productWithin lower) uppers
+    || allList
+      (singleton => anyList (productWithin singleton) uppers)
+      (productSingletons lower)
+
+productSingletons : Param -> List Param
+productSingletons (PProduct [("Host", host), ("Method", PSet (Some members))]) =
+  map (member => product host (PSet (Some [member]))) members
+productSingletons p = [p]
+
+productAuthorityLaw : List Param -> List Param -> Bool
+productAuthorityLaw left right =
+  authSub (authJoinAll (map AConst left)) (authJoinAll (map AConst right))
+    == productAuthorityOrder left right
+
+-- §2.1: `dsub` agrees with the finite denotation and `djoin` is its least
+-- finite upper bound. §2.2: `dantichain` preserves what the authority admits.
+-- §2.4: joining constant authorities obeys the lifted pointwise order.
+
+prefixPairsLaw : List Param -> Bool
+prefixPairsLaw [] = True
+prefixPairsLaw (left :: rest) =
+  allList
+      (right =>
+        dsub left right == prefixWithin left right && prefixJoinLaw left right)
+      prefixPool
+    && prefixPairsLaw rest
+
+setPairsLaw : List Param -> Bool
+setPairsLaw [] = True
+setPairsLaw (left :: rest) =
+  allList
+      (right =>
+        dsub left right == setWithin left right && setJoinLaw left right)
+      setPool
+    && setPairsLaw rest
+
+productOrderPairsLaw : List Param -> Bool
+productOrderPairsLaw [] = True
+productOrderPairsLaw (left :: rest) =
+  allList (right => dsub left right == productWithin left right) productPool
+    && productOrderPairsLaw rest
+
+productJoinPairsLaw : List Param -> Bool
+productJoinPairsLaw [] = True
+productJoinPairsLaw (left :: rest) =
+  allList (right => productJoinLaw left right) productPool
+    && productJoinPairsLaw rest
+
+test "finite Prefix domain realizes its inclusion and join laws" =
+  expectTrue (prefixPairsLaw prefixPool)
+
+test "finite Set domain realizes its inclusion and join laws" =
+  expectTrue (setPairsLaw setPool)
+
+test "finite Product domain realizes its inclusion law" =
+  expectTrue (productOrderPairsLaw productPool)
+
+test "finite Product domain realizes its join law" =
+  expectTrue (productJoinPairsLaw productPool)
+
+prop "Prefix antichains preserve their finite authority" (raw : List Int) =
+  prefixAntichainLaw (map prefixFromRaw raw)
+
+prop "Set antichains preserve their finite authority" (raw : List Int) =
+  setAntichainLaw (map setFromRaw raw)
+
+prop "Product antichains preserve their finite authority" (raw : List Int) =
+  productAntichainLaw (map productFromRaw raw)
+
+prop "Prefix authority joins obey the lifted row order" (left : List Int) (right : List Int) =
+  prefixAuthorityLaw (map prefixFromRaw left) (map prefixFromRaw right)
+
+prop "Set authority joins obey the lifted row order" (left : List Int) (right : List Int) =
+  setAuthorityLaw (map setFromRaw left) (map setFromRaw right)
+
+prop "Product authority joins obey the lifted row order" (left : List Int) (right : List Int) =
+  productAuthorityLaw (map productFromRaw left) (map productFromRaw right)
