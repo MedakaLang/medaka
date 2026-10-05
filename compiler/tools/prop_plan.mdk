@@ -236,10 +236,10 @@ pairPlanDecl mid (DAttrib _ raw) (DAttrib _ runtime) env =
 pairPlanDecl mid (DData { dataName = rawName, dataCtors = rawCtors }) (DData { dataName = runtimeName, dataParams = ps, dataCtors = runtimeCtors, dataVis = vis, dataOrigin = o }) env
   | rawName == runtimeName =
     let key = TypeKey runtimeName o
-    match pairCtors rawCtors runtimeCtors
-      Err e => Err e
-      Ok ctors =>
-        Ok (insertDef (PlanDef key (ownerOf o) ps (visibilityOf vis) ctors) env)
+    map
+      (ctors =>
+        insertDef (PlanDef key (ownerOf o) ps (visibilityOf vis) ctors) env)
+      (pairCtors rawCtors runtimeCtors)
 pairPlanDecl mid (DNewtype { newtypeName = rawName, newtypeCtor = rawCtor }) (DNewtype { newtypeName = runtimeName, newtypeParams = ps, newtypeCtor = runtimeCtor, newtypeFieldTy = fieldTy, newtypePub = pub, newtypeOrigin = o }) env
   | rawName == runtimeName =
     let key = TypeKey runtimeName o
@@ -273,9 +273,10 @@ pairNamedFields [] [] = Ok []
 pairNamedFields [] _ = Err (pairError "raw/runtime named field counts disagree")
 pairNamedFields _ [] = Err (pairError "raw/runtime named field counts disagree")
 pairNamedFields ((Field rawName _) :: raws) ((Field runtimeName runtimeTy) :: runtimes)
-  | rawName == runtimeName = match pairNamedFields raws runtimes
-    Ok rest => Ok (PlanField (Some rawName) runtimeTy :: rest)
-    Err e => Err e
+  | rawName == runtimeName =
+    map
+      (PlanField (Some rawName) runtimeTy :: _)
+      (pairNamedFields raws runtimes)
 pairNamedFields _ _ = Err (pairError "raw/runtime named field names disagree")
 
 listLength : List a -> Int
@@ -367,7 +368,19 @@ optionList (Some xs) = xs
 -- mutually recursive declarations finite in the plan itself.
 export
 planFor : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
-planFor env propName param ty = planForGo env propName param ty
+planFor env propName param ty = match planForGo env propName param ty
+  Ok plan =>
+    if planHasFiniteValue env plan then
+      Ok plan
+    else
+      Err
+        (PlanError
+          propName
+          param
+          ty
+          PENoFiniteValue
+          "no constructor path reaches finite values")
+  Err e => Err e
 
 planForGo : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
 planForGo _ propName param (ty@(TyVar _)) =
@@ -463,15 +476,6 @@ planNominal (PlanEnv root defs arbs bad aliases) propName param key args =
             (rebuildTy key args)
             PEInaccessibleConstructors
             "")
-      Some _ if not
-        (nominalHasFiniteValue (PlanEnv root defs arbs bad aliases) key []) =>
-        Err
-          (PlanError
-            propName
-            param
-            (rebuildTy key args)
-            PENoFiniteValue
-            "no constructor path reaches finite values")
       Some (PlanDef _ _ _ _ []) =>
         Err
           (PlanError
@@ -673,99 +677,167 @@ export
 maxGenDepth : Int
 maxGenDepth = 24
 
--- The adapters receive the same finite-depth decisions. At the bound, only a
--- constructor whose fields have a finite path remains eligible.
+-- The adapters receive these decisions as data.  A plan is already instantiated
+-- here, so generic arguments and mutually-recursive declarations cannot drift
+-- between the evaluator and native renderers.
 export
-ctorWeights : PlanEnv -> TypeKey -> Int -> List Int
-ctorWeights env key depth = match planDef env key
+ctorWeights : PlanEnv -> GenPlan -> Int -> List Int
+ctorWeights env (nominal@(GNominal _ _)) depth = match nominalCtors env nominal
   Ok (PlanDef _ _ _ _ ctors) =>
     if depth >= maxGenDepth then
-      map (finiteCtorWeight env) ctors
+      map (boundCtorWeight env nominal) ctors
     else
-      map (ctorWeight env key) ctors
+      map (softCtorWeight env nominal depth) ctors
   Err _ => []
+ctorWeights _ _ _ = []
 
-ctorWeight : PlanEnv -> TypeKey -> PlanCtor -> Int
-ctorWeight env key ctor = if ctorReferences env key ctor then recWeight0 else 1
+nominalCtors : PlanEnv -> GenPlan -> Result PlanError PlanDef
+nominalCtors env (GNominal key _) = planDef env key
+nominalCtors _ plan =
+  Err (PlanError "" "" (planTy plan) PEUnsupportedType "not a nominal plan")
 
-finiteCtorWeight : PlanEnv -> PlanCtor -> Int
-finiteCtorWeight env (PlanCtor _ _ fields) =
-  if allPlanFieldsFinite env fields [] then 1 else 0
+softCtorWeight : PlanEnv -> GenPlan -> Int -> PlanCtor -> Int
+softCtorWeight env nominal depth ctor =
+  if ctorCanDiverge env nominal ctor then
+    max 1 (recWeight0 - depth)
+  else
+    recWeight0
 
-nominalHasFiniteValue : PlanEnv -> TypeKey -> List TypeKey -> Bool
-nominalHasFiniteValue _ key seen
-  | keyIn key seen = False
-nominalHasFiniteValue env key seen = match planDef env key
-  Ok (PlanDef _ _ _ _ ctors) => anyFiniteCtor env (key :: seen) ctors
+ctorCanDiverge : PlanEnv -> GenPlan -> PlanCtor -> Bool
+ctorCanDiverge env nominal ctor = match instantiateCtor env nominal ctor
+  Ok fields => anyPlanDiverges env (fieldPlansOnly fields)
   Err _ => False
 
-anyFiniteCtor : PlanEnv -> List TypeKey -> List PlanCtor -> Bool
-anyFiniteCtor _ _ [] = False
-anyFiniteCtor env seen ((PlanCtor _ _ fields) :: rest) =
-  allPlanFieldsFinite env fields seen || anyFiniteCtor env seen rest
+-- At the bound every chosen nominal constructor must lower its finite-height
+-- witness. Container plans contribute their empty/none witness, and their own
+-- branch weights below prevent that witness from being bypassed at runtime.
+boundCtorWeight : PlanEnv -> GenPlan -> PlanCtor -> Int
+boundCtorWeight env nominal ctor =
+  if ctorLowersFiniteHeight env nominal ctor then 1 else 0
 
-allPlanFieldsFinite : PlanEnv -> List PlanField -> List TypeKey -> Bool
-allPlanFieldsFinite _ [] _ = True
-allPlanFieldsFinite env ((PlanField _ ty) :: rest) seen =
-  tyHasFiniteValue env ty seen && allPlanFieldsFinite env rest seen
+ctorLowersFiniteHeight : PlanEnv -> GenPlan -> PlanCtor -> Bool
+ctorLowersFiniteHeight env nominal ctor = match (
+  planFiniteHeight env nominal [],
+  instantiateCtor env nominal ctor,
+)
+  (Some height, Ok fields) => allPlansBelow env height (fieldPlansOnly fields)
+  _ => False
 
-tyHasFiniteValue : PlanEnv -> Ty -> List TypeKey -> Bool
-tyHasFiniteValue _ (TyVar _) _ = True
-tyHasFiniteValue _ (TyFun _ _) _ = False
-tyHasFiniteValue env (TyTuple ts) seen = allTysFinite env ts seen
-tyHasFiniteValue _ (TyCon { tyConOrigin = OriginBuiltin }) _ = True
-tyHasFiniteValue _ (TyCon { tyConName = "Int", tyConOrigin = (OriginModule "core") }) _ =
-  True
-tyHasFiniteValue _ (TyCon { tyConName = "Bool", tyConOrigin = (OriginModule "core") }) _ =
-  True
-tyHasFiniteValue _ (TyCon { tyConName = "Float", tyConOrigin = (OriginModule "core") }) _ =
-  True
-tyHasFiniteValue _ (TyCon { tyConName = "Char", tyConOrigin = (OriginModule "core") }) _ =
-  True
-tyHasFiniteValue _ (TyCon { tyConName = "String", tyConOrigin = (OriginModule "core") }) _ =
-  True
-tyHasFiniteValue _ (TyCon { tyConName = "Unit", tyConOrigin = (OriginModule "core") }) _ =
-  True
-tyHasFiniteValue _ (TyApp (TyCon { tyConName = "List" }) _) _ = True
-tyHasFiniteValue _ (TyApp (TyCon { tyConName = "Array" }) _) _ = True
-tyHasFiniteValue _ (TyApp (TyCon { tyConName = "Option" }) _) _ = True
-tyHasFiniteValue env (TyApp (TyApp (TyCon { tyConName = "Result" }) e) a) seen =
-  tyHasFiniteValue env e seen || tyHasFiniteValue env a seen
-tyHasFiniteValue env (TyNamed _ t _) seen = tyHasFiniteValue env t seen
-tyHasFiniteValue env (TyQual t _ _) seen = tyHasFiniteValue env t seen
-tyHasFiniteValue env (TyConstrained _ t) seen = tyHasFiniteValue env t seen
-tyHasFiniteValue env ty seen = match headKey ty
-  Some key => nominalHasFiniteValue env key seen
-  None => True
+planHasFiniteValue : PlanEnv -> GenPlan -> Bool
+planHasFiniteValue env plan = isSome (planFiniteHeight env plan [])
 
-allTysFinite : PlanEnv -> List Ty -> List TypeKey -> Bool
-allTysFinite _ [] _ = True
-allTysFinite env (t :: rest) seen =
-  tyHasFiniteValue env t seen && allTysFinite env rest seen
+planFiniteHeight : PlanEnv -> GenPlan -> List TypeKey -> Option Int
+planFiniteHeight _ GInt _ = Some 0
+planFiniteHeight _ GBool _ = Some 0
+planFiniteHeight _ GFloat _ = Some 0
+planFiniteHeight _ GChar _ = Some 0
+planFiniteHeight _ GString _ = Some 0
+planFiniteHeight _ GUnit _ = Some 0
+planFiniteHeight _ (GList _) _ = Some 0
+planFiniteHeight _ (GArray _) _ = Some 0
+planFiniteHeight _ (GOption _) _ = Some 0
+planFiniteHeight env (GResult err ok) seen = match planFiniteHeight env err seen
+  Some height => Some height
+  None => planFiniteHeight env ok seen
+planFiniteHeight env (GTuple plans) seen = plansFiniteHeight env plans seen
+planFiniteHeight _ (GCustom _) _ = Some 0
+planFiniteHeight env (nominal@(GNominal key _)) seen
+  | keyIn key seen = None
+planFiniteHeight env (nominal@(GNominal key _)) seen = match planDef env key
+  Ok (PlanDef _ _ _ _ ctors) =>
+    ctorsFiniteHeight env nominal ctors (key :: seen)
+  Err _ => None
+
+plansFiniteHeight : PlanEnv -> List GenPlan -> List TypeKey -> Option Int
+plansFiniteHeight _ [] _ = Some 0
+plansFiniteHeight env (plan :: rest) seen = match (
+  planFiniteHeight env plan seen,
+  plansFiniteHeight env rest seen,
+)
+  (Some h, Some restHeight) => Some (max h restHeight)
+  _ => None
+
+ctorsFiniteHeight : PlanEnv ->
+  GenPlan ->
+  List PlanCtor ->
+  List TypeKey ->
+  Option Int
+ctorsFiniteHeight _ _ [] _ = None
+ctorsFiniteHeight env nominal (ctor :: rest) seen =
+  match ctorFiniteHeight env nominal ctor seen
+    Some height => Some height
+    None => ctorsFiniteHeight env nominal rest seen
+
+ctorFiniteHeight : PlanEnv -> GenPlan -> PlanCtor -> List TypeKey -> Option Int
+ctorFiniteHeight env nominal ctor seen = match instantiateCtor env nominal ctor
+  Ok fields => map (+ 1) (plansFiniteHeight env (fieldPlansOnly fields) seen)
+  Err _ => None
+
+fieldPlansOnly : List (Option String, GenPlan) -> List GenPlan
+fieldPlansOnly [] = []
+fieldPlansOnly ((_, plan) :: rest) = plan :: fieldPlansOnly rest
+
+allPlansBelow : PlanEnv -> Int -> List GenPlan -> Bool
+allPlansBelow _ _ [] = True
+allPlansBelow env height (plan :: rest) = match planFiniteHeight env plan []
+  Some h => h < height && allPlansBelow env height rest
+  None => False
 
 keyIn : TypeKey -> List TypeKey -> Bool
 keyIn _ [] = False
 keyIn key (x :: xs) = sameTypeKey key x || keyIn key xs
 
-ctorReferences : PlanEnv -> TypeKey -> PlanCtor -> Bool
-ctorReferences env key (PlanCtor _ _ fields) = anyFieldReferences env key fields
-
-anyFieldReferences : PlanEnv -> TypeKey -> List PlanField -> Bool
-anyFieldReferences _ _ [] = False
-anyFieldReferences env key ((PlanField _ ty) :: rest) =
-  tyReferences env key ty [] || anyFieldReferences env key rest
-
-tyReferences : PlanEnv -> TypeKey -> Ty -> List TypeKey -> Bool
-tyReferences env target ty seen = match headKey ty
-  Some actual if sameTypeKey target actual => True
-  Some actual if keyIn actual seen => False
-  Some actual => nominalReferencesSelf env target actual (actual :: seen)
-  None => False
-
 export
 listLengthBound : PlanEnv -> Int -> GenPlan -> Int
 listLengthBound env depth plan =
   if depth >= maxGenDepth && planCanDiverge env plan then 0 else listLenMax
+
+-- The empty/none alternatives are part of the same depth policy. A container
+-- may still expose a non-recursive payload at the bound, but it cannot enter a
+-- recursive plan through its non-empty branch.
+export
+optionWeights : PlanEnv -> Int -> GenPlan -> List Int
+optionWeights env depth plan =
+  if depth >= maxGenDepth && planCanDiverge env plan then [1, 0] else [1, 1]
+
+export
+resultWeights : PlanEnv -> Int -> GenPlan -> GenPlan -> List Int
+resultWeights env depth err ok =
+  if depth >= maxGenDepth then
+    [boundPlanWeight env err, boundPlanWeight env ok]
+  else
+    [1, 1]
+
+boundPlanWeight : PlanEnv -> GenPlan -> Int
+boundPlanWeight env plan = if planCanFinishAtBound env plan then 1 else 0
+
+planCanFinishAtBound : PlanEnv -> GenPlan -> Bool
+planCanFinishAtBound _ GInt = True
+planCanFinishAtBound _ GBool = True
+planCanFinishAtBound _ GFloat = True
+planCanFinishAtBound _ GChar = True
+planCanFinishAtBound _ GString = True
+planCanFinishAtBound _ GUnit = True
+planCanFinishAtBound _ (GList _) = True
+planCanFinishAtBound _ (GArray _) = True
+planCanFinishAtBound _ (GOption _) = True
+planCanFinishAtBound env (GResult err ok) =
+  planCanFinishAtBound env err || planCanFinishAtBound env ok
+planCanFinishAtBound env (GTuple plans) = allPlansFinishAtBound env plans
+planCanFinishAtBound _ (GCustom _) = True
+planCanFinishAtBound env (nominal@(GNominal key _)) = match planDef env key
+  Ok (PlanDef _ _ _ _ ctors) => anyBoundCtor env nominal ctors
+  Err _ => False
+
+anyBoundCtor : PlanEnv -> GenPlan -> List PlanCtor -> Bool
+anyBoundCtor _ _ [] = False
+anyBoundCtor env nominal (ctor :: rest) =
+  ctorLowersFiniteHeight env nominal ctor || anyBoundCtor env nominal rest
+
+allPlansFinishAtBound : PlanEnv -> List GenPlan -> Bool
+allPlansFinishAtBound _ [] = True
+allPlansFinishAtBound env (plan :: rest) =
+  planCanFinishAtBound env plan && allPlansFinishAtBound env rest
 
 export
 planCanDiverge : PlanEnv -> GenPlan -> Bool
@@ -780,38 +852,60 @@ planCanDiverge env (GArray p) = planCanDiverge env p
 planCanDiverge env (GOption p) = planCanDiverge env p
 planCanDiverge env (GResult a b) = planCanDiverge env a || planCanDiverge env b
 planCanDiverge env (GTuple ps) = anyPlanDiverges env ps
-planCanDiverge env (GNominal key _) = nominalReferencesSelf env key key []
+planCanDiverge env (nominal@(GNominal _ _)) =
+  planCanDivergeNominal env nominal []
 planCanDiverge _ (GCustom _) = False
 
 anyPlanDiverges : PlanEnv -> List GenPlan -> Bool
 anyPlanDiverges _ [] = False
 anyPlanDiverges env (p :: ps) = planCanDiverge env p || anyPlanDiverges env ps
 
-nominalReferencesSelf : PlanEnv -> TypeKey -> TypeKey -> List TypeKey -> Bool
-nominalReferencesSelf _ _ current seen
-  | keyIn current seen = False
-nominalReferencesSelf env target current seen = match planDef env current
-  Ok (PlanDef _ _ _ _ ctors) =>
-    anyCtorReferences env target (current :: seen) ctors
+planCanDivergeNominal : PlanEnv -> GenPlan -> List TypeKey -> Bool
+planCanDivergeNominal _ (GNominal key _) seen
+  | keyIn key seen = True
+planCanDivergeNominal env (nominal@(GNominal key _)) seen =
+  match planDef env key
+    Ok (PlanDef _ _ _ _ ctors) =>
+      anyCtorPlanDiverges env nominal ctors (key :: seen)
+    Err _ => False
+planCanDivergeNominal _ _ _ = False
+
+anyCtorPlanDiverges : PlanEnv ->
+  GenPlan ->
+  List PlanCtor ->
+  List TypeKey ->
+  Bool
+anyCtorPlanDiverges _ _ [] _ = False
+anyCtorPlanDiverges env nominal (ctor :: rest) seen =
+  ctorPlanDiverges env nominal ctor seen
+    || anyCtorPlanDiverges env nominal rest seen
+
+ctorPlanDiverges : PlanEnv -> GenPlan -> PlanCtor -> List TypeKey -> Bool
+ctorPlanDiverges env nominal ctor seen = match instantiateCtor env nominal ctor
+  Ok fields => anyPlansDivergeSeen env (fieldPlansOnly fields) seen
   Err _ => False
 
-anyCtorReferences : PlanEnv -> TypeKey -> List TypeKey -> List PlanCtor -> Bool
-anyCtorReferences _ _ _ [] = False
-anyCtorReferences env target seen ((PlanCtor _ _ fields) :: rest) =
-  fieldsReferenceTarget env target seen fields
-    || anyCtorReferences env target seen rest
+anyPlansDivergeSeen : PlanEnv -> List GenPlan -> List TypeKey -> Bool
+anyPlansDivergeSeen _ [] _ = False
+anyPlansDivergeSeen env (plan :: rest) seen =
+  planDivergesSeen env plan seen || anyPlansDivergeSeen env rest seen
 
-fieldsReferenceTarget : PlanEnv ->
-  TypeKey ->
-  List TypeKey ->
-  List PlanField ->
-  Bool
-fieldsReferenceTarget _ _ _ [] = False
-fieldsReferenceTarget env target seen ((PlanField _ ty) :: rest) =
-  tyReferences env target ty seen || fieldsReferenceTarget env target seen rest
-
-tyReferencesTarget : PlanEnv -> TypeKey -> List TypeKey -> Ty -> Bool
-tyReferencesTarget env target seen ty = tyReferences env target ty seen
+planDivergesSeen : PlanEnv -> GenPlan -> List TypeKey -> Bool
+planDivergesSeen _ GInt _ = False
+planDivergesSeen _ GBool _ = False
+planDivergesSeen _ GFloat _ = False
+planDivergesSeen _ GChar _ = False
+planDivergesSeen _ GString _ = False
+planDivergesSeen _ GUnit _ = False
+planDivergesSeen env (GList plan) seen = planDivergesSeen env plan seen
+planDivergesSeen env (GArray plan) seen = planDivergesSeen env plan seen
+planDivergesSeen env (GOption plan) seen = planDivergesSeen env plan seen
+planDivergesSeen env (GResult err ok) seen =
+  planDivergesSeen env err seen || planDivergesSeen env ok seen
+planDivergesSeen env (GTuple plans) seen = anyPlansDivergeSeen env plans seen
+planDivergesSeen env (nominal@(GNominal key _)) seen =
+  if keyIn key seen then True else planCanDivergeNominal env nominal seen
+planDivergesSeen _ (GCustom _) _ = False
 
 -- Structural shrink action ordering is shared as data.  Adapters map these to
 -- their value representation and retain the same greedy first-failing choice.

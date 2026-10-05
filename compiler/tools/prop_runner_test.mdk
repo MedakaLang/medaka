@@ -12,11 +12,18 @@
 -- (`seedPropRng`/`randBoolL`), independent of any `prop`'s randomized-length
 -- `List Bool` generation.
 
-import test.{expectEach, expectEqual, expectTrue}
-import tools.prop_runner.{seedPropRng, randBoolL, shrinkValue}
+import test.{expectEach, expectEqual, expectNotEqual, expectTrue}
+import tools.prop_runner.{seedPropRng, randBoolL}
 import list.{nub}
-import frontend.ast.{Ty(..), tyConBuiltin}
-import eval.eval.{Value(..), ppValue}
+import frontend.ast.{Ty(..), TyConOrigin(..)}
+import frontend.parser.{parse}
+import tools.prop_plan.{
+  GenPlan(..),
+  PlanError,
+  buildPlanEnv,
+  ctorWeights,
+  planFor,
+}
 
 drawBools : Int -> List Bool
 drawBools 0 = []
@@ -69,31 +76,68 @@ test "8-tuples of raw draws reach far more than 62/256 distinct assignments" =
   let tuples = drawTuples 625  -- 625 * 8 = 5000 raw draws
   expectTrue (length (nub tuples) >= 200)
 
-intTy : Ty
-intTy = tyConBuiltin "Int" None
+namedTy : String -> Ty
+namedTy name =
+  TyCon { tyConName = name, tyConLoc = None, tyConOrigin = OriginUnresolved }
 
-listIntTy : Ty
-listIntTy = TyApp (tyConBuiltin "List" None) intTy
+planned : String -> Ty -> Result PlanError GenPlan
+planned source ty = planFor (buildPlanEnv (parse source)) "policy" "value" ty
 
-renderedShrinks : Ty -> Value <IO> -> List String
-renderedShrinks ty v = map ppValue (shrinkValue ty v)
+weightsAtBound : String -> Ty -> List Int
+weightsAtBound source ty =
+  let env = buildPlanEnv (parse source)
+  match planFor env "policy" "value" ty
+    Ok plan => ctorWeights env plan 24
+    Err _ => []
 
-containsText : String -> List String -> Bool
-containsText _ [] = False
-containsText wanted (s :: rest) = wanted == s || containsText wanted rest
-
-test "List shrinking deletes every position and shrinks elements" =
-  let got = renderedShrinks listIntTy (VList [VInt 1, VInt 2, VInt 3])
-  expectEach [
-    ("deletes the head", expectTrue (containsText "[2, 3]" got)),
-    ("deletes a middle element", expectTrue (containsText "[1, 3]" got)),
-    ("deletes the tail", expectTrue (containsText "[1, 2]" got)),
-    ("shrinks an element in place", expectTrue (containsText "[0, 2, 3]" got)),
+test "recursive plans retain Fork before the bound and select Leaf at it" = expectEach
+  [
+    (
+      "Tree is generatable",
+      expectTrue
+        (match planned "data Tree = Leaf | Fork Tree Tree\n" (namedTy "Tree")
+          Ok _ => True
+          Err _ => False),
+    ),
+    (
+      "Fork remains reachable below the bound",
+      expectNotEqual (weightsAtBound
+        "data Tree = Leaf | Fork Tree Tree\n"
+        (namedTy "Tree")) [
+        1, 0
+      ],
+    ),
+    (
+      "only Leaf is selected at the bound",
+      expectEqual (weightsAtBound
+        "data Tree = Leaf | Fork Tree Tree\n"
+        (namedTy "Tree")) [
+        1, 0
+      ],
+    ),
   ]
 
-test "tuple shrinking retains the other component" =
-  let got = renderedShrinks (TyTuple [intTy, intTy]) (VTuple [VInt 5, VInt 7])
-  expectEach [
-    ("shrinks the first component", expectTrue (containsText "(0, 7)" got)),
-    ("shrinks the second component", expectTrue (containsText "(5, 0)" got)),
+test "finite planning uses instantiated generic arguments and rejects empty recursive sums" = expectEach
+  [
+    (
+      "Leaf Int has a finite witness",
+      expectTrue (match (planned
+        "data Leaf a = Leaf a\n"
+        (TyApp (namedTy "Leaf") TyCon {
+          tyConName = "Int",
+          tyConLoc = None,
+          tyConOrigin = OriginBuiltin,
+        }))
+        Ok _ => True
+        Err _ => False),
+    ),
+    (
+      "Result Loop Loop has no generated finite value",
+      expectTrue
+        (match (planned
+          "data Loop = Loop Loop\ndata Bad = Bad (Result Loop Loop)\n"
+          (namedTy "Bad"))
+          Ok _ => False
+          Err _ => True),
+    ),
   ]
