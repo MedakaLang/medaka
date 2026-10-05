@@ -1,0 +1,13 @@
+-- §3 an empty matching set at an effect-indexed head, #3689's `spawn`
+-- variant.  As effrow-async-do-spawntask-no-impl.mdk: `Thenable` and
+-- `Applicative` at `Async <Stdout>` have no instance (stdlib/async.mdk
+-- implements only the `Deferred*` family).  `spawn` takes `Async e Unit`, so
+-- the literal `1` is also a type mismatch.
+-- Hand-derived: REJECT on all three verbs, `T-NO-IMPL` among the diagnostics.
+-- Before effect rows were erased in given matching this panicked, unlocated.
+import async.{runAsyncMain, liftIO, spawn, await}
+
+main = runAsyncMain (do
+  t <- spawn (pure 1)
+  x <- await t
+  liftIO (_ => println x))

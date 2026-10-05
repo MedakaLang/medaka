@@ -3974,6 +3974,39 @@ table = [
     pinned = "",
     codes = [Present "T-AMBIGUOUS-INSTANCE"],
   },
+  Row {
+    entry = "effrow-async-do-spawntask-no-impl.mdk",
+    label =
+      "§3 empty matching set at an effect-indexed head, #3689`s repro: `Thenable`/`Applicative (Async <Stdout>)` have no instance, so T-NO-IMPL. The code cell is the assertion: base panicked `ordinary return solver outcome failed validation` at exit 1 on every verb, because `monoSameGiven` had no `TEff` arm and the wanted never equalled itself (#3788); a panic carries no `check --json` code",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "effrow-async-do-spawn-no-impl.mdk",
+    label =
+      "§3 #3689`s `spawn` variant: T-NO-IMPL among several diagnostics (also a do-needs-Thenable error and `Int literal vs Unit`). Base panicked unlocated, as in the row above",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "effrow-async-pure-no-impl.mdk",
+    label =
+      "§3 #3689 without `do`: `pure ()` at `Async <>` has no `Applicative` instance, T-NO-IMPL. Shows the defect was the effect row in the wanted, not the desugaring. Base panicked unlocated",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -3985,7 +4018,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 349
+tableRows = 352
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
