@@ -1,0 +1,4 @@
+import provider.*
+count : Mappable t => t a -> Int
+count xs = length xs
+main = println (count (Some 1))
