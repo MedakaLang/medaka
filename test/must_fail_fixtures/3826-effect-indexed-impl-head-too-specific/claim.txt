@@ -1,0 +1,13 @@
+issue: 3826
+what: an impl for an Effect-indexed type (`data Box (e : Effect) a`, `impl Mappable (Box e)`)
+what: whose body constructs the type is rejected with a false `T-IMPL-TOO-SPECIFIC` on every
+what: verb, though the same program with `data Box e a` checks.
+cmd: check main.mdk
+exit: 1
+stdout-bytes:
+control: check control.mdk
+why-verb: `check`, because the program is well-typed and the fix accepts it at exit 0, which
+why-verb: drains this row.
+why-stdout: the error goes to stderr; check writes nothing to stdout either way.
+why-control: control.mdk is the same impl over an ordinary type parameter and must check at
+why-control: exit 0. A red control means impl-head rigidity checking broke for everyone.

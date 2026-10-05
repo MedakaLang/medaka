@@ -1,0 +1,4 @@
+data Box (e : Effect) a = Box a
+impl Mappable (Box e) where
+  map f (Box a) = Box (f a)
+main = println 42
