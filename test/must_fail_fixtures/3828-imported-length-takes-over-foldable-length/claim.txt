@@ -1,0 +1,14 @@
+issue: 3828
+what: an imported module-level `length` (here bytes.length via `import bytes.*`) takes over the
+what: Foldable `length` for the whole importing module, so `length (Some 7)` fails to type-check
+what: with a `Bytes vs Option a` mismatch instead of printing 1.
+cmd: run main.mdk
+exit: 1
+stdout-bytes:
+control: run control.mdk
+why-verb: `run`, because the program is well-typed under the Foldable method and the fix runs it
+why-verb: to completion at exit 0, which drains this row. (check prints the error on stdout, so
+why-verb: the empty-stdout claim below holds only for run.)
+why-stdout: run reports the type error on stderr and writes nothing to stdout.
+why-control: control.mdk is the same call without the import and must print 1 at exit 0. A red
+why-control: control means the prelude Foldable `length` itself broke.
