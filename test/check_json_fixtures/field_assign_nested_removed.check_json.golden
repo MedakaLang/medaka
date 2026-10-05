@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"P-PARSE","kind":"parse","message":"field assignment `a.b.c = e` has been removed — bindings are immutable. Build an updated record instead: `{ a | b = { a.b | c = e } }` (for example `{ v | x = 9 }`)","range":{"end":{"character":3,"line":7},"start":{"character":2,"line":7}},"severity":1,"source":"medaka"}]}]}

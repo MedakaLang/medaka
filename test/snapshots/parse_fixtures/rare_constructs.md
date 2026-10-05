@@ -1,5 +1,5 @@
 # META
-source_lines=64
+source_lines=60
 stages=PARSE,PRINTER,DESUGAR,MARK
 # SOURCE
 -- Rare/under-exercised grammar constructs, gathered so the self-hosted parser
@@ -10,7 +10,7 @@ stages=PARSE,PRINTER,DESUGAR,MARK
 -- Covered here: operator sections, unary not, a
 -- point-free one-arg match `x => match x { … }` (incl. an `if` arm guard), array
 -- ranges `[|lo..hi|]`, array slices/index `e.[lo..hi]` / `e.[i]`, range
--- patterns (int + char), `Ref` + `:=` write, field assignment,
+-- patterns (int + char), `Ref` + `:=` write,
 -- a do-block function-let, and record patterns `C { f = p, … }` / `C { .. }`.
 -- (Other rares already live in the corpus: inclusive/exclusive list ranges +
 -- array literals in where_ranges, bare/right +/* sections in sections_litpats,
@@ -53,10 +53,6 @@ counter =
   a := a.value + 1
   a.value
 
-setField r =
-  r.x = 1
-  r.pos.y = 2
-
 doFunLet =
   let twice = n => n + n
   twice 21
@@ -79,7 +75,6 @@ shape s = match s
 (DFunDef false "grade" ((PVar "n")) (EMatch (EVar "n") (arm (PRng (LInt 0) (LInt 59) false) () (ELit (LString "F"))) (arm (PRng (LInt 60) (LInt 100) true) () (ELit (LString "P")))))
 (DFunDef false "vowelKind" ((PVar "c")) (EMatch (EVar "c") (arm (PRng (LChar "a") (LChar "z") false) () (ELit (LString "lower"))) (arm PWild () (ELit (LString "other")))))
 (DFunDef false "counter" () (EBlock (DoLet false false (PVar "a") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EBinOp ":=" (EVar "a") (EBinOp "+" (EFieldAccess (EVar "a") "value") (ELit (LInt 1))))) (DoExpr (EFieldAccess (EVar "a") "value"))))
-(DFunDef false "setField" ((PVar "r")) (EBlock (DoFieldAssign "r" ("x") (ELit (LInt 1))) (DoFieldAssign "r" ("pos" "y") (ELit (LInt 2)))))
 (DFunDef false "doFunLet" () (EBlock (DoLet false false (PVar "twice") (ELam ((PVar "n")) (EBinOp "+" (EVar "n") (EVar "n")))) (DoExpr (EApp (EVar "twice") (ELit (LInt 21))))))
 (DFunDef false "shape" ((PVar "s")) (EMatch (EVar "s") (arm (PRec "Point" ((rf "x" (PVar "px")) (rf "y" (PVar "py"))) false) () (EBinOp "+" (EVar "px") (EVar "py"))) (arm (PRec "Circle" ((rf "radius" None)) false) () (EVar "radius")) (arm (PRec "Box" ((rf "w" None)) true) () (EVar "w")) (arm (PRec "Empty" () true) () (ELit (LInt 0)))))
 # PRINTER
@@ -106,9 +101,6 @@ counter =
   let a = Ref 0
   a := a.value + 1
   a.value
-setField r =
-  r.x = 1
-  r.pos.y = 2
 doFunLet =
   let twice = n => n + n
   twice 21
@@ -130,7 +122,6 @@ shape s = match s
 (DFunDef false "grade" ((PVar "n")) (EMatch (EVar "n") (arm (PRng (LInt 0) (LInt 59) false) () (ELit (LString "F"))) (arm (PRng (LInt 60) (LInt 100) true) () (ELit (LString "P")))))
 (DFunDef false "vowelKind" ((PVar "c")) (EMatch (EVar "c") (arm (PRng (LChar "a") (LChar "z") false) () (ELit (LString "lower"))) (arm PWild () (ELit (LString "other")))))
 (DFunDef false "counter" () (EBlock (DoLet false false (PVar "a") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "a")) (EBinOp "+" (EFieldAccess (EVar "a") "value") (ELit (LInt 1))))) (DoExpr (EFieldAccess (EVar "a") "value"))))
-(DFunDef false "setField" ((PVar "r")) (EBlock (DoFieldAssign "r" ("x") (ELit (LInt 1))) (DoFieldAssign "r" ("pos" "y") (ELit (LInt 2)))))
 (DFunDef false "doFunLet" () (EBlock (DoLet false false (PVar "twice") (ELam ((PVar "n")) (EBinOp "+" (EVar "n") (EVar "n")))) (DoExpr (EApp (EVar "twice") (ELit (LInt 21))))))
 (DFunDef false "shape" ((PVar "s")) (EMatch (EVar "s") (arm (PRec "Point" ((rf "x" (PVar "px")) (rf "y" (PVar "py"))) false) () (EBinOp "+" (EVar "px") (EVar "py"))) (arm (PRec "Circle" ((rf "radius" None)) false) () (EVar "radius")) (arm (PRec "Box" ((rf "w" None)) true) () (EVar "w")) (arm (PRec "Empty" () true) () (ELit (LInt 0)))))
 # MARK
@@ -146,6 +137,5 @@ shape s = match s
 (DFunDef false "grade" ((PVar "n")) (EMatch (EVar "n") (arm (PRng (LInt 0) (LInt 59) false) () (ELit (LString "F"))) (arm (PRng (LInt 60) (LInt 100) true) () (ELit (LString "P")))))
 (DFunDef false "vowelKind" ((PVar "c")) (EMatch (EVar "c") (arm (PRng (LChar "a") (LChar "z") false) () (ELit (LString "lower"))) (arm PWild () (ELit (LString "other")))))
 (DFunDef false "counter" () (EBlock (DoLet false false (PVar "a") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "a")) (EBinOp "+" (EFieldAccess (EVar "a") "value") (ELit (LInt 1))))) (DoExpr (EFieldAccess (EVar "a") "value"))))
-(DFunDef false "setField" ((PVar "r")) (EBlock (DoFieldAssign "r" ("x") (ELit (LInt 1))) (DoFieldAssign "r" ("pos" "y") (ELit (LInt 2)))))
 (DFunDef false "doFunLet" () (EBlock (DoLet false false (PVar "twice") (ELam ((PVar "n")) (EBinOp "+" (EVar "n") (EVar "n")))) (DoExpr (EApp (EVar "twice") (ELit (LInt 21))))))
 (DFunDef false "shape" ((PVar "s")) (EMatch (EVar "s") (arm (PRec "Point" ((rf "x" (PVar "px")) (rf "y" (PVar "py"))) false) () (EBinOp "+" (EVar "px") (EVar "py"))) (arm (PRec "Circle" ((rf "radius" None)) false) () (EVar "radius")) (arm (PRec "Box" ((rf "w" None)) true) () (EVar "w")) (arm (PRec "Empty" () true) () (ELit (LInt 0)))))
