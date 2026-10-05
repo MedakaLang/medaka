@@ -1,0 +1,5 @@
+msg : String
+msg = "bo" ++ "om"
+f : Int -> Int
+f x = panic msg
+main = println (f 1)

@@ -1583,12 +1583,19 @@ eval env (EMethodAt name _ ev) = evalMethodAtEv env name (evMethodRoutes ev)
 
 eval env (EDictAt name ev) =
   applyDicts env (lookupEnv env name) (evDictRoutes ev)
-eval env (EApp f x) = apply (eval env f) (eval env x)
+-- The application's own start is marked after its operands ran, so a trap raised
+-- by a primitive callee (`panic`, an index bound check reached through a prelude
+-- impl, whose locations are placeholders) names this call site.
+eval env (app@(EApp f x)) =
+  let fv = eval env f
+  let xv = eval env x
+  let _ = markTrapSite app
+  apply fv xv
 eval env (ELam pats body) = VClosure env pats body
 eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2
 eval env (ELet _ _ pat e1 e2) = evalLet env pat e1 e2
 eval env (ELetGroup binds body) = evalLetGroup env binds body
-eval env (EMatch scrut arms) = evalMatch env (eval env scrut) arms
+eval env (EMatch scrut arms) = evalMatch noTrapLoc env (eval env scrut) arms
 eval env (EIf c t e) = evalIf env (eval env c) t e
 eval env (EBinOp op l r _) = evalBinop env op l r
 eval env (EInfix op l r) =
@@ -1611,7 +1618,11 @@ eval env (EFieldAccess e field _) = evalField (eval env e) field
 -- a tagged fixed-width arithmetic operator: typecheck stamped the operand's head,
 -- and the `Int` result is reduced modulo 2^n (see `evalArithAt`).
 eval env (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag }))
-  | isTaggedFixedHead tag = evalArithAt tag op (eval env l) (eval env r)
+  | isTaggedFixedHead tag =
+    let lv = eval env l
+    let rv = eval env r
+    let _ = markTrapSite l
+    evalArithAt tag op lv rv
 eval env (EAnnot e _) = eval env e
 eval env (EHeadAnnot e _) = eval env e
 eval env (EBlock stmts) = evalBlock env stmts
@@ -1627,6 +1638,9 @@ eval env (ERangeArray lo hi incl) =
 -- currentEvalLoc so a runtime error carries file:L:C.  Purely a side channel
 -- for diagnostics: on a successful eval nothing reads it, so valid-program
 -- output is byte-identical.
+eval env (ELoc l (EMatch scrut arms)) =
+  let _ = updateEvalLoc l
+  evalMatch l env (eval env scrut) arms
 eval env (ELoc l e) =
   let _ = updateEvalLoc l
   eval env e
@@ -2007,13 +2021,18 @@ isNullary : List Pat -> Bool
 isNullary [] = True
 isNullary _ = False
 
-evalMatch : EvalEnv (Value e) -> Value e -> List Arm -> <e> Value e
-evalMatch _ _ [] = runtimePanic "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
-evalMatch env sv ((Arm pat guards body) :: rest) = match matchPat pat sv
-  None => evalMatch env sv rest
+-- [site] is the `match` keyword's span (`noTrapLoc` for an unlocated match); the
+-- arms' patterns and guards move the evaluator's location, so a fall-through
+-- re-points it before raising.
+evalMatch : Loc -> EvalEnv (Value e) -> Value e -> List Arm -> <e> Value e
+evalMatch site _ _ [] =
+  let _ = updateEvalLoc site
+  runtimePanic "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+evalMatch site env sv ((Arm pat guards body) :: rest) = match matchPat pat sv
+  None => evalMatch site env sv rest
   Some binds => match runGuards (extendEnv env binds) guards
     Some env2 => eval env2 body
-    None => evalMatch env sv rest
+    None => evalMatch site env sv rest
 
 runGuards : EvalEnv (Value e) -> List Guard -> <e> Option (EvalEnv (Value e))
 runGuards env [] = Some env
@@ -2067,7 +2086,11 @@ evalBinop env "&&" l r = evalAnd env (eval env l) r
 evalBinop env "||" l r = evalOr env (eval env l) r
 evalBinop env "::" l r = consVal (eval env l) (eval env r)
 evalBinop env "++" l r = appendVal (eval env l) (eval env r)
-evalBinop env op l r = evalArith op (eval env l) (eval env r)
+evalBinop env op l r =
+  let lv = eval env l
+  let rv = eval env r
+  let _ = markTrapSite l
+  evalArith op lv rv
 
 composeFwd : Value e -> Value e -> Value e
 composeFwd fv gv = VPrim (x => apply gv (apply fv x))
@@ -3038,9 +3061,37 @@ pendingRunDiags = Ref []
 -- otherwise clobber the real user-code span.  A real located atom always has a
 -- positive-width span, so this sentinel is unambiguous.
 updateEvalLoc : Loc -> Unit
-updateEvalLoc (Loc f sl sc el ec)
-  | sl == 1 && sc == 0 && el == 1 && ec == 0 = ()
-  | otherwise = currentEvalLoc := Loc f sl sc el ec
+updateEvalLoc l = if isNoLoc l then () else currentEvalLoc := l
+
+isNoLoc : Loc -> Bool
+isNoLoc (Loc _ sl sc el ec) = sl == 1 && sc == 0 && el == 1 && ec == 0
+
+-- The placeholder span `updateEvalLoc` ignores: "no location known".
+noTrapLoc : Loc
+noTrapLoc = Loc "" 1 0 1 0
+
+-- Point currentEvalLoc at the start of a trapping expression (convention: a
+-- runtime error names the expression that trapped, not the last atom entered).
+-- Called after the expression's operands are evaluated, immediately before the
+-- operation that may raise.
+markTrapSite : Expr -> Unit
+markTrapSite e = updateEvalLoc (exprStartLoc e)
+
+-- The first located node of an expression in source order.  The parser locates
+-- atoms and statement forms only, so a binary operator, an application or a
+-- desugared index call starts where its leftmost located operand starts.
+exprStartLoc : Expr -> Loc
+exprStartLoc (ELoc l _) = l
+exprStartLoc (EBinOp _ l _ _) = exprStartLoc l
+exprStartLoc (EApp f x) = startOrNext (exprStartLoc f) x
+exprStartLoc (EAnnot e _) = exprStartLoc e
+exprStartLoc (EHeadAnnot e _) = exprStartLoc e
+exprStartLoc _ = noTrapLoc
+
+-- [l] when it is a real location, else the start of [next] (an unlocated head,
+-- such as the `index` method a desugared `xs[i]` applies).
+startOrNext : Loc -> Expr -> Loc
+startOrNext l next = if isNoLoc l then exprStartLoc next else l
 
 -- Chokepoint for user-facing runtime errors.  `panic` is a noreturn C-abort
 -- that never returns to Medaka, so the located, coded diagnostic must be

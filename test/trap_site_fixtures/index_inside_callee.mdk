@@ -1,0 +1,3 @@
+at : Int -> Int
+at i = [|1, 2|][i]
+main = println (at 9)
