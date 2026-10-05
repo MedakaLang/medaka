@@ -249,6 +249,9 @@ self.onmessage = function(e) {
           throw new CapabilityError(
             '`sleep` needs cross-origin isolation, which this deployment does not provide');
         waitCell = waitCell || new Int32Array(new SharedArrayBuffer(4));
+        // Lines held back by the burst throttle would otherwise sit behind the wait, and a
+        // kill mid-sleep would lose them.
+        postPending(true);
         Atomics.wait(waitCell, 0, 0, ms);
       }
     },
