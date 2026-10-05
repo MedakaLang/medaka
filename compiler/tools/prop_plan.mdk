@@ -1,14 +1,26 @@
--- Engine-neutral property-test planning primitives.
+-- The engine-neutral property planning layer.
 --
--- A property runner may represent a candidate as an eval `Value`, while a
--- native probe renders it as typed Medaka source.  Candidate ORDER is still a
--- semantic part of shrinking: greedy shrinking takes the first smaller value
--- that keeps the law false.  Keep that order here so an engine cannot grow its
--- own near-duplicate shrink policy.
+-- This module deliberately contains no evaluator Value and no emitted source.
+-- It decides what a parameter type means, which declarations own its
+-- constructors, and the shared order of structural shrink candidates.
 
--- Every one-element deletion, left to right.  List shrinking tries these before
--- recursively shrinking elements, so a shorter counterexample wins when both
--- are failing.
+import frontend.ast.{
+  Decl(..),
+  Ty(..),
+  TyConOrigin(..),
+  DataVis(..),
+  Variant(..),
+  Field(..),
+  ConPayload(..),
+  ImplMethod(..),
+  sameTyConHead,
+}
+import types.route_key.{typeTagOf}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.util.{lookupAssoc, zipL}
+
+-- Container candidate order is policy, not an implementation detail of an
+-- engine: deletion left-to-right precedes recursive element shrinking.
 export
 deleteEach : List a -> List (List a)
 deleteEach [] = []
@@ -18,8 +30,6 @@ export
 prepend : a -> List a -> List a
 prepend x xs = x :: xs
 
--- Rebuilds candidates obtained by changing one element at a time, left to
--- right.  `smaller` is supplied by the type-specific plan interpreter.
 export
 replaceEach : (a -> List a) -> List a -> List (List a)
 replaceEach _ [] = []
@@ -29,3 +39,512 @@ replaceEach smaller (x :: xs) =
 export
 prependBefore : List a -> a -> List a
 prependBefore xs x = x :: xs
+
+-- A spelling is never an identity.  TypeKey is carried through plans and the
+-- registry is indexed by the canonical type word, so left.Box and right.Box
+-- cannot select each other's constructors or Arbitrary instance.
+public export data TypeKey = TypeKey String TyConOrigin
+
+export
+typeKeyWord : TypeKey -> String
+typeKeyWord (TypeKey n o) = typeTagOf o n
+
+sameTypeKey : TypeKey -> TypeKey -> Bool
+sameTypeKey (TypeKey n o) (TypeKey n2 o2) = sameTyConHead n o n2 o2
+
+public export data PlanVisibility = PlanLocal | PlanPublicCtors | PlanAbstract
+
+public export data PlanField = PlanField (Option String) Ty
+
+-- planCtorSource is what native source needs, while planCtorRuntime is the
+-- collision-mangled tag an evaluator value carries.  The current one-graph
+-- builder sets both equal; paired raw/elaborated callers can preserve both.
+public export data PlanCtor = PlanCtor String String (List PlanField)
+
+public export data PlanDef =
+  | PlanDef TypeKey String (List String) PlanVisibility (List PlanCtor)
+
+public export data CustomPlan = CustomPlan TypeKey Bool
+
+public export data GenPlan =
+  | GInt
+  | GBool
+  | GFloat
+  | GChar
+  | GString
+  | GUnit
+  | GList GenPlan
+  | GArray GenPlan
+  | GOption GenPlan
+  | GResult GenPlan GenPlan
+  | GTuple (List GenPlan)
+  | GNominal TypeKey (List GenPlan)
+  | GCustom CustomPlan
+
+public export data PlanErrorReason =
+  | PEUnboundTyVar
+  | PETypeAlias
+  | PEFunction
+  | PEUnsupportedType
+  | PEOpaqueNominal
+  | PEAmbiguousNominal
+  | PENoFiniteValue
+  | PEUnusableArbitrary
+  | PEInaccessibleConstructors
+
+public export data PlanError = PlanError String Ty PlanErrorReason String
+
+export
+planErrorText : PlanError -> String
+planErrorText (PlanError name _ reason detail) =
+  "property parameter '\{name}' cannot be generated: \{reasonText reason}\{if detail == "" then "" else " (" ++ detail ++ ")"}"
+
+reasonText : PlanErrorReason -> String
+reasonText PEUnboundTyVar = "unbound type variable"
+reasonText PETypeAlias = "unexpanded type alias"
+reasonText PEFunction = "function values have no built-in generator"
+reasonText PEUnsupportedType = "unsupported parameter type"
+reasonText PEOpaqueNominal = "opaque nominal type"
+reasonText PEAmbiguousNominal = "ambiguous unresolved nominal type"
+reasonText PENoFiniteValue = "recursive type has no finite constructor"
+reasonText PEUnusableArbitrary =
+  "Arbitrary instance requires a dictionary or an applied head"
+reasonText PEInaccessibleConstructors =
+  "constructors are not visible to this property"
+
+-- One row per nominal declaration and one per Arbitrary decision.  The maps are
+-- built once for the whole loaded graph, then queried by identity rather than
+-- rescanning declarations for every generated value.
+public export data ArbPlan = ArbPlan TypeKey Bool Bool
+public export data PlanEnv =
+  | PlanEnv (OrdMap PlanDef) (OrdMap ArbPlan) (OrdMap Unit)
+
+-- A source module is carried beside its elaborated/mangled counterpart.  The
+-- former supplies a constructor spelling which can be imported into a native
+-- probe; the latter supplies resolved TypeKey identities and the evaluator's
+-- runtime constructor tag.  Reversing a private mangle is unsound, so this
+-- pair is the only supported bridge.
+public export data PlanModule = PlanModule String (List Decl) (List Decl)
+
+emptyPlanEnv : PlanEnv
+emptyPlanEnv = PlanEnv omEmpty omEmpty omEmpty
+
+export
+buildPlanEnv : List Decl -> PlanEnv
+buildPlanEnv decls = buildPlanEnvGo decls emptyPlanEnv
+
+-- Preferred entry point for multi-module tests. It collects every resolved
+-- declaration (including Arbitrary instances), then replaces nominal rows
+-- with source/runtime constructor pairs.
+export
+buildPlanEnvModules : List PlanModule -> PlanEnv
+buildPlanEnvModules [] = emptyPlanEnv
+buildPlanEnvModules ((PlanModule _ raw runtime) :: rest) =
+  pairModuleDecls
+    raw
+    runtime
+    (buildPlanEnvGo runtime (buildPlanEnvModules rest))
+
+pairModuleDecls : List Decl -> List Decl -> PlanEnv -> PlanEnv
+pairModuleDecls [] _ env = env
+pairModuleDecls _ [] env = env
+pairModuleDecls (raw :: raws) (runtime :: runtimes) env =
+  pairModuleDecls raws runtimes (pairPlanDecl raw runtime env)
+
+pairPlanDecl : Decl -> Decl -> PlanEnv -> PlanEnv
+pairPlanDecl (DAttrib _ raw) (DAttrib _ runtime) env =
+  pairPlanDecl raw runtime env
+pairPlanDecl (DData { dataName = rawName, dataCtors = rawCtors }) (DData { dataName = runtimeName, dataParams = ps, dataCtors = runtimeCtors, dataVis = vis, dataOrigin = o }) (PlanEnv defs arbs aliases)
+  | rawName == runtimeName =
+    let key = TypeKey runtimeName o
+    let def =
+      PlanDef
+        key
+        (ownerOf o)
+        ps
+        (visibilityOf vis)
+        (pairCtors rawCtors runtimeCtors)
+    PlanEnv (omInsert (typeKeyWord key) def defs) arbs aliases
+pairPlanDecl (DNewtype { newtypeName = rawName, newtypeCtor = rawCtor }) (DNewtype { newtypeName = runtimeName, newtypeParams = ps, newtypeCtor = runtimeCtor, newtypeFieldTy = fieldTy, newtypeOrigin = o }) (PlanEnv defs arbs aliases)
+  | rawName == runtimeName =
+    let key = TypeKey runtimeName o
+    let def = PlanDef key (ownerOf o) ps PlanLocal [
+      PlanCtor rawCtor runtimeCtor [PlanField None fieldTy],
+    ]
+    PlanEnv (omInsert (typeKeyWord key) def defs) arbs aliases
+pairPlanDecl _ _ env = env
+
+pairCtors : List Variant -> List Variant -> List PlanCtor
+pairCtors [] _ = []
+pairCtors _ [] = []
+pairCtors ((Variant rawName rawPayload) :: raws) ((Variant runtimeName runtimePayload) :: runtimes) =
+  PlanCtor rawName runtimeName (pairFields rawPayload runtimePayload)
+    :: pairCtors raws runtimes
+
+pairFields : ConPayload -> ConPayload -> List PlanField
+pairFields (ConPos _) (ConPos runtimeTys) =
+  map (t => PlanField None t) runtimeTys
+pairFields (ConNamed rawFields _) (ConNamed runtimeFields _) =
+  pairNamedFields rawFields runtimeFields
+pairFields _ _ = []
+
+pairNamedFields : List Field -> List Field -> List PlanField
+pairNamedFields [] _ = []
+pairNamedFields _ [] = []
+pairNamedFields ((Field rawName _) :: raws) ((Field _ runtimeTy) :: runtimes) =
+  PlanField (Some rawName) runtimeTy :: pairNamedFields raws runtimes
+
+buildPlanEnvGo : List Decl -> PlanEnv -> PlanEnv
+buildPlanEnvGo [] env = env
+buildPlanEnvGo (d :: rest) env = buildPlanEnvGo rest (addPlanDecl d env)
+
+addPlanDecl : Decl -> PlanEnv -> PlanEnv
+addPlanDecl (DAttrib _ d) env = addPlanDecl d env
+addPlanDecl (DData { dataName = n, dataParams = ps, dataCtors = cs, dataVis = vis, dataOrigin = o }) (PlanEnv defs arbs aliases) =
+  let key = TypeKey n o
+  let def = PlanDef key (ownerOf o) ps (visibilityOf vis) (map ctorOfVariant cs)
+  PlanEnv (omInsert (typeKeyWord key) def defs) arbs aliases
+addPlanDecl (DNewtype { newtypeName = n, newtypeParams = ps, newtypeCtor = c, newtypeFieldTy = t, newtypeOrigin = o }) (PlanEnv defs arbs aliases) =
+  let key = TypeKey n o
+  let def =
+    PlanDef key (ownerOf o) ps PlanLocal [PlanCtor c c [PlanField None t]]
+  PlanEnv (omInsert (typeKeyWord key) def defs) arbs aliases
+addPlanDecl (DTypeAlias { tyAliasName = n, tyAliasOrigin = o }) (PlanEnv defs arbs aliases) =
+  PlanEnv defs arbs (omInsert (typeTagOf o n) () aliases)
+addPlanDecl d env = addArbitrary d env
+
+visibilityOf : DataVis -> PlanVisibility
+visibilityOf VisPrivate = PlanLocal
+visibilityOf VisPublic = PlanPublicCtors
+visibilityOf VisAbstract = PlanAbstract
+
+ownerOf : TyConOrigin -> String
+ownerOf (OriginModule m) = m
+ownerOf _ = ""
+
+ctorOfVariant : Variant -> PlanCtor
+ctorOfVariant (Variant c (ConPos ts)) =
+  PlanCtor c c (map (t => PlanField None t) ts)
+ctorOfVariant (Variant c (ConNamed fs _)) = PlanCtor c c (map namedField fs)
+
+namedField : Field -> PlanField
+namedField (Field n t) = PlanField (Some n) t
+
+addArbitrary : Decl -> PlanEnv -> PlanEnv
+addArbitrary (DAttrib _ d) env = addArbitrary d env
+addArbitrary (DImpl { iface = "Arbitrary", tys = [TyCon { tyConName = n, tyConOrigin = o }], reqs = reqs, methods }) (PlanEnv defs arbs aliases) =
+  let key = TypeKey n o
+  let row = ArbPlan key (emptyReqs reqs) (hasMethod "shrink" methods)
+  PlanEnv defs (omInsert (typeKeyWord key) row arbs) aliases
+addArbitrary (DImpl { iface = "Arbitrary", tys = [t] }) env = markUnusable t env
+addArbitrary _ env = env
+
+emptyReqs : List a -> Bool
+emptyReqs [] = True
+emptyReqs _ = False
+
+hasMethod : String -> List ImplMethod -> Bool
+hasMethod _ [] = False
+hasMethod wanted ((ImplMethod n _ _) :: rest) =
+  n == wanted || hasMethod wanted rest
+
+markUnusable : Ty -> PlanEnv -> PlanEnv
+markUnusable ty (PlanEnv defs arbs aliases) = match headKey ty
+  Some key => PlanEnv defs arbs (omInsert (typeKeyWord key) () aliases)
+  None => PlanEnv defs arbs aliases
+
+-- A type is built from references, never recursively expanded.  That keeps
+-- mutually recursive declarations finite in the plan itself.
+export
+planFor : PlanEnv -> String -> Ty -> Result PlanError GenPlan
+planFor env param ty = planForGo env param ty
+
+planForGo : PlanEnv -> String -> Ty -> Result PlanError GenPlan
+planForGo _ param (ty@(TyVar _)) = Err (PlanError param ty PEUnboundTyVar "")
+planForGo _ _ (TyCon { tyConName = "Int", tyConOrigin = OriginBuiltin }) =
+  Ok GInt
+planForGo _ _ (TyCon { tyConName = "Bool", tyConOrigin = OriginBuiltin }) =
+  Ok GBool
+planForGo _ _ (TyCon { tyConName = "Float", tyConOrigin = OriginBuiltin }) =
+  Ok GFloat
+planForGo _ _ (TyCon { tyConName = "Char", tyConOrigin = OriginBuiltin }) =
+  Ok GChar
+planForGo _ _ (TyCon { tyConName = "String", tyConOrigin = OriginBuiltin }) =
+  Ok GString
+planForGo _ _ (TyCon { tyConName = "Unit", tyConOrigin = OriginBuiltin }) =
+  Ok GUnit
+planForGo env param (TyApp (TyCon { tyConName = "List", tyConOrigin = o }) t)
+  | builtinOrigin o = map GList (planForGo env param t)
+planForGo env param (TyApp (TyCon { tyConName = "Array", tyConOrigin = o }) t)
+  | builtinOrigin o = map GArray (planForGo env param t)
+planForGo env param (TyApp (TyCon { tyConName = "Option", tyConOrigin = o }) t)
+  | builtinOrigin o = map GOption (planForGo env param t)
+planForGo env param (TyApp (TyApp (TyCon { tyConName = "Result", tyConOrigin = o }) e) a)
+  | builtinOrigin o =
+    map2 GResult (planForGo env param e) (planForGo env param a)
+planForGo env param (TyTuple ts) = map GTuple (planMany env param ts)
+planForGo _ param (ty@(TyFun _ _)) = Err (PlanError param ty PEFunction "")
+planForGo env param (TyNamed _ t _) = planForGo env param t
+planForGo env param (TyQual t _ _) = planForGo env param t
+planForGo env param (TyConstrained _ t) = planForGo env param t
+planForGo env param ty = match headKey ty
+  None => Err (PlanError param ty PEUnsupportedType "")
+  Some key => planNominal env param key (planArgs ty)
+
+builtinOrigin : TyConOrigin -> Bool
+builtinOrigin OriginBuiltin = True
+builtinOrigin (OriginModule "core") = True
+builtinOrigin _ = False
+
+headKey : Ty -> Option TypeKey
+headKey (TyCon { tyConName = n, tyConOrigin = o }) = Some (TypeKey n o)
+headKey (TyApp f _) = headKey f
+headKey _ = None
+
+planArgs : Ty -> List Ty
+planArgs t = planArgsGo [] t
+
+planArgsGo : List Ty -> Ty -> List Ty
+planArgsGo acc (TyApp f a) = planArgsGo (a :: acc) f
+planArgsGo acc _ = acc
+
+planNominal : PlanEnv ->
+  String ->
+  TypeKey ->
+  List Ty ->
+  Result PlanError GenPlan
+planNominal (PlanEnv defs arbs bad) param key args =
+  match omLookup (typeKeyWord key) arbs
+    Some (ArbPlan actual usable explicitShrink) if sameTypeKey key actual
+      && usable => Ok (GCustom (CustomPlan key explicitShrink))
+    Some (ArbPlan actual _ _) if sameTypeKey key actual =>
+      Err (PlanError param (rebuildTy key args) PEUnusableArbitrary "")
+    _ => match omLookup (typeKeyWord key) defs
+      Some (PlanDef actual _ _ vis _) if not (sameTypeKey key actual) =>
+        Err (PlanError param (rebuildTy key args) PEAmbiguousNominal "")
+      Some (PlanDef _ _ _ PlanAbstract _) =>
+        Err (PlanError param (rebuildTy key args) PEOpaqueNominal "")
+      Some (PlanDef _ _ _ _ []) =>
+        Err
+          (PlanError
+            param
+            (rebuildTy key args)
+            PENoFiniteValue
+            "no constructors")
+      Some (PlanDef _ _ _ _ _) =>
+        map (GNominal key) (planMany (PlanEnv defs arbs bad) param args)
+      None =>
+        if isSome (omLookup (typeKeyWord key) bad) then
+          Err (PlanError param (rebuildTy key args) PEUnusableArbitrary "")
+        else
+          Err
+            (PlanError
+              param
+              (rebuildTy key args)
+              PEOpaqueNominal
+              "no visible data declaration")
+
+rebuildTy : TypeKey -> List Ty -> Ty
+rebuildTy (TypeKey n o) args =
+  foldTy TyCon { tyConName = n, tyConLoc = None, tyConOrigin = o } args
+
+foldTy : Ty -> List Ty -> Ty
+foldTy t [] = t
+foldTy t (a :: rest) = foldTy (TyApp t a) rest
+
+planMany : PlanEnv -> String -> List Ty -> Result PlanError (List GenPlan)
+planMany _ _ [] = Ok []
+planMany env param (t :: rest) = match (
+  planForGo env param t,
+  planMany env param rest,
+)
+  (Ok p, Ok ps) => Ok (p :: ps)
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+export
+planDef : PlanEnv -> TypeKey -> Result PlanError PlanDef
+planDef (PlanEnv defs _ _) key = match omLookup (typeKeyWord key) defs
+  Some (d@(PlanDef actual _ _ _ _)) if sameTypeKey key actual => Ok d
+  Some _ => Err (PlanError "" (rebuildTy key []) PEAmbiguousNominal "")
+  None => Err (PlanError "" (rebuildTy key []) PEOpaqueNominal "")
+
+-- Instantiate a selected constructor's fields with a nominal plan's arguments.
+-- Field names remain attached, so record and positional constructors are not
+-- conflated by a renderer.
+export
+instantiateCtor : PlanEnv ->
+  GenPlan ->
+  PlanCtor ->
+  Result PlanError (List (Option String, GenPlan))
+instantiateCtor env (GNominal key args) (PlanCtor _ _ fields) =
+  match planDef env key
+    Ok (PlanDef _ _ params _ _) => instantiateFields env params args fields
+    Err e => Err e
+instantiateCtor _ p _ =
+  Err
+    (PlanError "" (TyVar "") PEUnsupportedType ("not nominal: " ++ planKind p))
+
+planKind : GenPlan -> String
+planKind GInt = "Int"
+planKind GBool = "Bool"
+planKind GFloat = "Float"
+planKind GChar = "Char"
+planKind GString = "String"
+planKind GUnit = "Unit"
+planKind _ = "compound"
+
+instantiateFields : PlanEnv ->
+  List String ->
+  List GenPlan ->
+  List PlanField ->
+  Result PlanError (List (Option String, GenPlan))
+instantiateFields _ _ _ [] = Ok []
+instantiateFields env params args ((PlanField name ty) :: rest) = match (
+  planTyWithPlans env "" (zipL params args) ty,
+  instantiateFields env params args rest,
+)
+  (Ok p, Ok ps) => Ok ((name, p) :: ps)
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+planTyWithPlans : PlanEnv ->
+  String ->
+  List (String, GenPlan) ->
+  Ty ->
+  Result PlanError GenPlan
+planTyWithPlans _ param subst (TyVar n) = match lookupAssoc n subst
+  Some p => Ok p
+  None => Err (PlanError param (TyVar n) PEUnboundTyVar "")
+planTyWithPlans env param subst (TyApp a b) =
+  planForGo env param (substTy subst (TyApp a b))
+planTyWithPlans env param subst (TyTuple ts) =
+  map GTuple (planManySubst env param subst ts)
+planTyWithPlans env param subst t = planForGo env param (substTy subst t)
+
+planManySubst : PlanEnv ->
+  String ->
+  List (String, GenPlan) ->
+  List Ty ->
+  Result PlanError (List GenPlan)
+planManySubst _ _ _ [] = Ok []
+planManySubst env param subst (t :: rest) = match (
+  planTyWithPlans env param subst t,
+  planManySubst env param subst rest,
+)
+  (Ok p, Ok ps) => Ok (p :: ps)
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+substTy : List (String, GenPlan) -> Ty -> Ty
+substTy subst t = substTyRaw (map planSubstPair subst) t
+
+planSubstPair : (String, GenPlan) -> (String, Ty)
+planSubstPair (n, p) = (n, planTy p)
+
+-- This is also the evaluator adapter's plain type substitution.  Keeping it
+-- here prevents a second, almost-identical recursive implementation from
+-- silently missing a new Ty constructor.
+export
+substTyRaw : List (String, Ty) -> Ty -> Ty
+substTyRaw subst (TyVar n) = match lookupAssoc n subst
+  Some t => t
+  None => TyVar n
+substTyRaw subst (TyApp a b) = TyApp (substTyRaw subst a) (substTyRaw subst b)
+substTyRaw subst (TyTuple ts) = TyTuple (map (substTyRaw subst) ts)
+substTyRaw subst (TyFun a b) = TyFun (substTyRaw subst a) (substTyRaw subst b)
+substTyRaw subst (TyEffect es tail t) = TyEffect es tail (substTyRaw subst t)
+substTyRaw subst (TyNamed n t dom) = TyNamed n (substTyRaw subst t) dom
+substTyRaw subst (TyQual t qs loc) = TyQual (substTyRaw subst t) qs loc
+substTyRaw subst (TyConstrained cs t) = TyConstrained cs (substTyRaw subst t)
+substTyRaw _ t = t
+
+planTy : GenPlan -> Ty
+planTy GInt = builtinTy "Int"
+planTy GBool = builtinTy "Bool"
+planTy GFloat = builtinTy "Float"
+planTy GChar = builtinTy "Char"
+planTy GString = builtinTy "String"
+planTy GUnit = builtinTy "Unit"
+planTy (GList p) = TyApp (builtinTy "List") (planTy p)
+planTy (GArray p) = TyApp (builtinTy "Array") (planTy p)
+planTy (GOption p) = TyApp (builtinTy "Option") (planTy p)
+planTy (GResult e a) = TyApp (TyApp (builtinTy "Result") (planTy e)) (planTy a)
+planTy (GTuple ps) = TyTuple (map planTy ps)
+planTy (GNominal (TypeKey n o) ps) =
+  foldTy
+    TyCon { tyConName = n, tyConLoc = None, tyConOrigin = o }
+    (map planTy ps)
+planTy (GCustom (CustomPlan key _)) = planTy (GNominal key [])
+
+builtinTy : String -> Ty
+builtinTy n =
+  TyCon { tyConName = n, tyConLoc = None, tyConOrigin = OriginBuiltin }
+
+-- Shared generation policy constants.  Renderers consume these values, not a
+-- private smaller domain.
+export
+intMin : Int
+intMin = -1000
+export
+intMax : Int
+intMax = 1000
+export
+charMin : Int
+charMin = 32
+export
+charMax : Int
+charMax = 126
+export
+stringMaxLength : Int
+stringMaxLength = 10
+export
+listLenMax : Int
+listLenMax = 7
+export
+recWeight0 : Int
+recWeight0 = 6
+export
+maxGenDepth : Int
+maxGenDepth = 24
+
+-- The adapters receive the same finite-depth decisions.  A nominal reference
+-- is not expanded by the planner, which is what makes mutual recursion safe.
+export
+ctorWeights : PlanEnv -> TypeKey -> Int -> List Int
+ctorWeights env key depth = match planDef env key
+  Ok (PlanDef _ _ _ _ ctors) =>
+    map (_ => if depth >= maxGenDepth then 1 else recWeight0) ctors
+  Err _ => []
+
+export
+listLengthBound : PlanEnv -> Int -> GenPlan -> Int
+listLengthBound _ depth _ = if depth >= maxGenDepth then 0 else listLenMax
+
+-- Structural shrink action ordering is shared as data.  Adapters map these to
+-- their value representation and retain the same greedy first-failing choice.
+public export data ShrinkAction =
+  | DeleteAt Int
+  | ShrinkChild Int
+  | ReplaceCtor Int
+
+export
+shrinkActions : GenPlan -> Int -> List ShrinkAction
+shrinkActions (GList _) n = sequenceDeletes n 0 ++ sequenceChildren n 0
+shrinkActions (GArray _) n = sequenceDeletes n 0 ++ sequenceChildren n 0
+shrinkActions (GTuple _) n = sequenceChildren n 0
+shrinkActions (GOption _) n =
+  if n == 0 then [] else ReplaceCtor 0 :: sequenceChildren n 0
+shrinkActions (GResult _ _) n = sequenceChildren n 0
+shrinkActions (GNominal _ _) n = sequenceChildren n 0
+shrinkActions _ _ = []
+
+sequenceDeletes : Int -> Int -> List ShrinkAction
+sequenceDeletes n i
+  | i >= n = []
+sequenceDeletes n i = DeleteAt i :: sequenceDeletes n (i + 1)
+
+sequenceChildren : Int -> Int -> List ShrinkAction
+sequenceChildren n i
+  | i >= n = []
+sequenceChildren n i = ShrinkChild i :: sequenceChildren n (i + 1)

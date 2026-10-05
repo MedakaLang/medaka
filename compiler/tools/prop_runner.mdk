@@ -35,7 +35,13 @@ import eval.eval.{
 import support.util.{
   listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL, contains, anyList
 }
-import tools.prop_plan.{deleteEach, replaceEach, prepend, prependBefore}
+import tools.prop_plan.{
+  deleteEach,
+  replaceEach,
+  prepend,
+  prependBefore,
+  substTyRaw,
+}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `test_cmd.mdk`'s copy — not shared via
@@ -265,17 +271,6 @@ aliasNameOf (DAttrib _ d) = aliasNameOf d
 aliasNameOf (DTypeAlias { tyAliasName = n }) = Some n
 aliasNameOf _ = None
 
--- ── type substitution + spine peeling ─────────────────────────────────────
-
-substTy : List (String, Ty) -> Ty -> Ty
-substTy subst (TyVar v) = match lookupAssoc v subst
-  Some t => t
-  None => TyVar v
-substTy subst (TyApp a b) = TyApp (substTy subst a) (substTy subst b)
-substTy subst (TyTuple ts) = TyTuple (map (substTy subst) ts)
-substTy subst (TyFun a b) = TyFun (substTy subst a) (substTy subst b)
-substTy _ t = t
-
 -- Peel a TyApp spine: `Pair a b` → Some ("Pair", [a, b]); `Int` → Some ("Int", []).
 tySpine : Ty -> Option (String, List Ty)
 tySpine t = tySpineGo [] t
@@ -444,7 +439,7 @@ genUser : GenEnv ->
   List Ty ->
   <e> Value e
 genUser ge env subst depth name tydef args =
-  let args2 = map (substTy subst) args
+  let args2 = map (substTyRaw subst) args
   match tydef
     TDData params variants =>
       let subst2 =
@@ -1273,6 +1268,96 @@ runAllPropsResults cases filterOpt propLines evalEnv program allDecls =
     []
   else
     runEachResult cases propLines (buildGenEnv program allDecls) evalEnv props
+
+-- Request-driven structured execution is the command layer's raw contract.  A
+-- pin may supply its own replay seed and case budget, so deriving these from a
+-- process-global default would make a known-red witness non-reproducible.  The
+-- request list is therefore authoritative and its order (including duplicates)
+-- is preserved.  A declaration name is NOT an identity: duplicate root names
+-- are a protocol error for every matching request, never "first one wins".
+export
+runAllPropRequestsResults : List PropRequest ->
+  List (String, Int) ->
+  List (String, Value e) ->
+  List Decl ->
+  List Decl ->
+  <e> List PropResult
+runAllPropRequestsResults requests propLines evalEnv program allDecls =
+  runPropRequests
+    requests
+    propLines
+    (buildGenEnv program allDecls)
+    evalEnv
+    (filterProps program)
+
+runPropRequests : List PropRequest ->
+  List (String, Int) ->
+  GenEnv ->
+  List (String, Value e) ->
+  List Decl ->
+  <e> List PropResult
+runPropRequests [] _ _ _ _ = []
+runPropRequests (request :: rest) propLines genEnv evalEnv props =
+  runPropRequest request propLines genEnv evalEnv props
+    :: runPropRequests rest propLines genEnv evalEnv props
+
+runPropRequest : PropRequest ->
+  List (String, Int) ->
+  GenEnv ->
+  List (String, Value e) ->
+  List Decl ->
+  <e> PropResult
+runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv props =
+  let matches = propsNamed name props
+  if cases <= 0 then
+    PropResult
+      "eval"
+      name
+      PropErroredResult
+      (Some PropProtocolError)
+      "property request has a non-positive case count"
+      seed
+      cases
+  else if listLen matches == 1 then
+    let _ = seedPropRng seed
+    match matches
+      [DProp _ _ params body] =>
+        propResultOf
+          cases
+          seed
+          (lineOfPropName name propLines)
+          name
+          (findFailure genEnv evalEnv params body cases 1)
+      _ => missingRequest request
+  else if listLen matches == 0 then
+    missingRequest request
+  else
+    PropResult
+      "eval"
+      name
+      PropErroredResult
+      (Some PropProtocolError)
+      "property request is ambiguous: the root module declares '\{name}' more than once"
+      seed
+      cases
+
+propsNamed : String -> List Decl -> List Decl
+propsNamed _ [] = []
+propsNamed wanted ((d@(DProp _ name _ _)) :: rest)
+  | wanted == name = d :: propsNamed wanted rest
+  | otherwise = propsNamed wanted rest
+propsNamed wanted (_ :: rest) = propsNamed wanted rest
+
+missingRequest : PropRequest -> PropResult
+missingRequest (PropRequest name seed cases) =
+  PropResult
+    "eval"
+    name
+    PropErroredResult
+    (Some PropProtocolError)
+    "property request names no root declaration '\{name}'"
+    seed
+    cases
 
 runEachResult : Int ->
   List (String, Int) ->
