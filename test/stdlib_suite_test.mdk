@@ -208,7 +208,7 @@ suites = [
   -- doctests and props importing it never runs. Neither of the two vehicles
   -- named in the header reaches this module either.
   ("test", (72, NativeCapability)),
-  ("test_process", (21, NativeCapability)),
+  ("test_process", (27, NativeCapability)),
   ("time", (36, EvalAndNative)),
   ("toml", (56, EvalAndNative)),
   -- The fixed-width types' wrapping, conversions and bit operations. Native
@@ -421,7 +421,7 @@ test "stdlib/set.mdk executed >= 64 assertions" = floorExpectation "set"
 
 test "stdlib/test.mdk executed >= 72 assertions" = floorExpectation "test"
 
-test "stdlib/test_process.mdk executed >= 21 assertions" =
+test "stdlib/test_process.mdk executed >= 27 assertions" =
   floorExpectation "test_process"
 
 test "stdlib/time.mdk executed >= 36 assertions" = floorExpectation "time"

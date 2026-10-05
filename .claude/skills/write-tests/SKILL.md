@@ -125,6 +125,8 @@ using them runs under `medaka test` (native by default), never `--engines eval`.
 | …whose diagnostic must say several things at once | `expectSpawnFailsAll` | one needle, which passes on a message that kept its headline and lost its location |
 | a spawn that must exit 0 and print an exact line | `expectSpawnOkLine` | a substring check, which accepts a longer or differently prefixed line |
 | the `*_test.mdk` stem of a file name | `testFileStem` | an inline `stripSuffix` |
+| the stem of any `.mdk` file name | `mdkModuleStem` | an inline `stripSuffix ".mdk"` per roster file |
+| a roster row: the suite ran at least N assertions | `expectFloor` | an inline `if ran >= floor then Pass … else Fail`, which drifts in wording per copy |
 | a suite's executed-assertion count | `testAssertionCount` | parsing the human transcript, which a formatting change silently zeroes |
 | a roster closed over a directory | `unrosteredUnits` / `unrosteredTestFiles` | assuming the roster is complete, so a new file joins nothing |
 | …its other half: roster rows naming nothing | `missingUnits` / `missingTestFiles` | a renamed or deleted file still reading as coverage |
