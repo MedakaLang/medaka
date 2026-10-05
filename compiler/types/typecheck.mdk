@@ -40873,6 +40873,12 @@ monoSameGiven a b = match peelQual a
   TAuth _ => match peelQual b
     TAuth _ => True
     _ => False
+  -- an effect row is erased the same way: coherence equates every row
+  -- (`cohEqR`, `cohStep`), so instance resolution cannot tell two rows apart
+  -- and a given must not either
+  TEff _ => match peelQual b
+    TEff _ => True
+    _ => False
   _ => False
 
 -- #1956: THE ANSWER TO "when are two predicate argument vectors the same predicate?" —
@@ -44942,13 +44948,12 @@ vecOblKey o =
 --   * `TApp`/`TFun` recurse structurally, so the key sees the SPINE, not just the head —
 --     `Ix (Pair a b) (Pair c d)` and `Ix (Pair a c) (Pair b d)` are now distinct, where a
 --     head-name-plus-flattened-ids encoding (`xmodOblArgId`'s shape) would tie.
--- ⚠️ TWO deliberate residual under-splits, both PRE-EXISTING and neither widened here:
---   * TYCON ORIGIN is dropped (name only, as `headTyconNameMono` always did).  It cannot
---     be folded into a key string at all: `sameTyConHead`'s absent-origin arm is
---     non-transitive, so no string equivalence can realise it.
---   * `TEff` (the only remaining arm) keys as "*", where `monoSameGiven` answers False
---     even against itself.  An effect row in a predicate-argument position keys exactly
---     as it did before this change.
+--   * `TEff` and `TAuth` (the remaining arms) key as the constant "*", realising
+--     `monoSameGiven`'s erasure: it equates any two effect rows, and any two authorities.
+-- One deliberate residual under-split: TYCON ORIGIN is dropped (name only, as
+-- `headTyconNameMono` always did).  It cannot be folded into a key string at all:
+-- `sameTyConHead`'s absent-origin arm is non-transitive, so no string equivalence can
+-- realise it.
 -- Injectivity: each arm emits a self-delimiting tag — "v"+digits+"." , "c"+`lenKey`, and
 -- the fixed-arity "a"/"f" — so a preorder walk parses back uniquely and the joined vector
 -- key is injective over the vector.

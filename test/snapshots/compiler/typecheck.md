@@ -1,5 +1,5 @@
 # META
-source_lines=54602
+source_lines=54607
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -40877,6 +40877,12 @@ monoSameGiven a b = match peelQual a
   TAuth _ => match peelQual b
     TAuth _ => True
     _ => False
+  -- an effect row is erased the same way: coherence equates every row
+  -- (`cohEqR`, `cohStep`), so instance resolution cannot tell two rows apart
+  -- and a given must not either
+  TEff _ => match peelQual b
+    TEff _ => True
+    _ => False
   _ => False
 
 -- #1956: THE ANSWER TO "when are two predicate argument vectors the same predicate?" —
@@ -44946,13 +44952,12 @@ vecOblKey o =
 --   * `TApp`/`TFun` recurse structurally, so the key sees the SPINE, not just the head —
 --     `Ix (Pair a b) (Pair c d)` and `Ix (Pair a c) (Pair b d)` are now distinct, where a
 --     head-name-plus-flattened-ids encoding (`xmodOblArgId`'s shape) would tie.
--- ⚠️ TWO deliberate residual under-splits, both PRE-EXISTING and neither widened here:
---   * TYCON ORIGIN is dropped (name only, as `headTyconNameMono` always did).  It cannot
---     be folded into a key string at all: `sameTyConHead`'s absent-origin arm is
---     non-transitive, so no string equivalence can realise it.
---   * `TEff` (the only remaining arm) keys as "*", where `monoSameGiven` answers False
---     even against itself.  An effect row in a predicate-argument position keys exactly
---     as it did before this change.
+--   * `TEff` and `TAuth` (the remaining arms) key as the constant "*", realising
+--     `monoSameGiven`'s erasure: it equates any two effect rows, and any two authorities.
+-- One deliberate residual under-split: TYCON ORIGIN is dropped (name only, as
+-- `headTyconNameMono` always did).  It cannot be folded into a key string at all:
+-- `sameTyConHead`'s absent-origin arm is non-transitive, so no string equivalence can
+-- realise it.
 -- Injectivity: each arm emits a self-delimiting tag — "v"+digits+"." , "c"+`lenKey`, and
 -- the fixed-arity "a"/"f" — so a preorder walk parses back uniquely and the joined vector
 -- key is injective over the vector.
@@ -61570,7 +61575,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "monoIsBareTyvar" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoIsBareTyvar" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "monoSameGiven" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "monoSameGiven" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "peelQual") (EVar "a")) (arm (PCon "TVar" (PVar "c1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TVar" (PVar "c2")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2")))) (arm PWild () (EVar "False")))) (arm (PCon "TCon" (PVar "x") (PVar "ox")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TCon" (PVar "y") (PVar "oy")) () (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "x")) (EVar "ox")) (EVar "y")) (EVar "oy"))) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TRigid" (PVar "x")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm (PCon "TCon" (PVar "y") PWild) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TApp" (PVar "a1") (PVar "b1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TApp" (PVar "a2") (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TAuth" PWild) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TAuth" PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
+(DFunDef false "monoSameGiven" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "peelQual") (EVar "a")) (arm (PCon "TVar" (PVar "c1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TVar" (PVar "c2")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2")))) (arm PWild () (EVar "False")))) (arm (PCon "TCon" (PVar "x") (PVar "ox")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TCon" (PVar "y") (PVar "oy")) () (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "x")) (EVar "ox")) (EVar "y")) (EVar "oy"))) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TRigid" (PVar "x")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm (PCon "TCon" (PVar "y") PWild) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TApp" (PVar "a1") (PVar "b1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TApp" (PVar "a2") (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TAuth" PWild) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TAuth" PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "TEff" PWild) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TEff" PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "monoVecSameGiven" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "monoVecSameGiven" ((PList) (PList)) (EVar "True"))
 (DFunDef false "monoVecSameGiven" ((PCons (PVar "a") (PVar "arest")) (PCons (PVar "b") (PVar "brest"))) (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a")) (EVar "b")) (EApp (EApp (EVar "monoVecSameGiven") (EVar "arest")) (EVar "brest"))))
@@ -70598,7 +70603,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "monoIsBareTyvar" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoIsBareTyvar" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "monoSameGiven" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "monoSameGiven" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "peelQual") (EVar "a")) (arm (PCon "TVar" (PVar "c1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TVar" (PVar "c2")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2")))) (arm PWild () (EVar "False")))) (arm (PCon "TCon" (PVar "x") (PVar "ox")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TCon" (PVar "y") (PVar "oy")) () (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "x")) (EVar "ox")) (EVar "y")) (EVar "oy"))) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TRigid" (PVar "x")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm (PCon "TCon" (PVar "y") PWild) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TApp" (PVar "a1") (PVar "b1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TApp" (PVar "a2") (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TAuth" PWild) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TAuth" PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
+(DFunDef false "monoSameGiven" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "peelQual") (EVar "a")) (arm (PCon "TVar" (PVar "c1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TVar" (PVar "c2")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2")))) (arm PWild () (EVar "False")))) (arm (PCon "TCon" (PVar "x") (PVar "ox")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TCon" (PVar "y") (PVar "oy")) () (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "x")) (EVar "ox")) (EVar "y")) (EVar "oy"))) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TRigid" (PVar "x")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm (PCon "TCon" (PVar "y") PWild) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TApp" (PVar "a1") (PVar "b1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TApp" (PVar "a2") (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TAuth" PWild) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TAuth" PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "TEff" PWild) () (EMatch (EApp (EVar "peelQual") (EVar "b")) (arm (PCon "TEff" PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "monoVecSameGiven" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "monoVecSameGiven" ((PList) (PList)) (EVar "True"))
 (DFunDef false "monoVecSameGiven" ((PCons (PVar "a") (PVar "arest")) (PCons (PVar "b") (PVar "brest"))) (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a")) (EVar "b")) (EApp (EApp (EVar "monoVecSameGiven") (EVar "arest")) (EVar "brest"))))

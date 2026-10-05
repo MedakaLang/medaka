@@ -1,3 +1,0 @@
-import async.{runAsyncMain, liftIO}
-
-main = runAsyncMain (liftIO (_ => println 1))
