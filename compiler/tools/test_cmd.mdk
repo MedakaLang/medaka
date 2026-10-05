@@ -108,6 +108,7 @@ import tools.doctest.{
 }
 import tools.native_doctest.{runNativeDoctests}
 import tools.native_test_decls.{runNativeTests}
+import tools.native_props.{runNativeProps}
 import tools.prop_runner.{
   runAllProps,
   hasProps,
@@ -118,6 +119,7 @@ import tools.prop_runner.{
   propResultName,
   propResultPassed,
   propResultDetail,
+  propResultEngine,
 }
 import tools.test_runner.{
   collectTests, exprLine, runOneTest, hasTests, uncapableExterns
@@ -822,7 +824,8 @@ driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt user
             userDecls
             examples
             synthResults
-        let propsOk = runProps pair target tsrc userDecls cases filterOpt
+        let propsOk =
+          runProps engines pair target tsrc userDecls cases filterOpt
         let testsOk =
           runTestDecls engines pair runtimeDecls target tsrc userDecls filterOpt
         doctestsOk && propsOk && testsOk
@@ -860,7 +863,7 @@ driveSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt use
         (buildSynthResults userDecls examples)
     if hasProps userDecls || hasTests userDecls then
       let pair = prepareSingle runtimeDecls coreDecls target roots userDecls
-      let propsOk = runProps pair target tsrc userDecls cases filterOpt
+      let propsOk = runProps engines pair target tsrc userDecls cases filterOpt
       let testsOk =
         runTestDecls engines pair runtimeDecls target tsrc userDecls filterOpt
       doctestsOk && propsOk && testsOk
@@ -1200,29 +1203,73 @@ elaborateModulesMangled runtimeDecls coreDecls modules =
 -- `fromList`/`wellFormed`) get their leading dict argument — raw bodies would
 -- under-apply the now-dict-passed call and `force` a partial closure, so every
 -- prop would "fail".
-runProps : TestPair ->
+runProps : List Engine ->
+  TestPair ->
   String ->
   String ->
   List Decl ->
   Int ->
   Option String ->
   <IO> Bool
-runProps pair target tsrc userDecls cases filterOpt
+runProps engines pair target tsrc userDecls cases filterOpt
   | not (hasProps userDecls) = True
   | otherwise = match pair
     TestPairErr e =>
       let _ = ePutStrLn e
       False
-    TestPair coreM modsM =>
-      let env = evalModulesRootEnvWith (testCapableExterns ()) coreM modsM
-      runAllProps
-        cases
-        filterOpt
-        target
-        (propLineTests tsrc)
-        env
-        (elaboratedRootProps modsM userDecls)
-        (coreM ++ flatMap snd modsM)
+    TestPair _ _ =>
+      propsHuman engines pair target tsrc userDecls cases filterOpt
+
+propsHuman : List Engine ->
+  TestPair ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  <IO> Bool
+propsHuman [] _ _ _ _ _ _ = True
+propsHuman (EngInterp :: rest) (TestPair coreM modsM) target tsrc userDecls cases filterOpt =
+  let env = evalModulesRootEnvWith (testCapableExterns ()) coreM modsM
+  let ok =
+    runAllProps
+      cases
+      filterOpt
+      target
+      (propLineTests tsrc)
+      env
+      (elaboratedRootProps modsM userDecls)
+      (coreM ++ flatMap snd modsM)
+  ok
+    && propsHuman
+      rest
+      (TestPair coreM modsM)
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+propsHuman (EngNative :: rest) (TestPair coreM modsM) target tsrc userDecls cases filterOpt =
+  let rows = runNativeProps target tsrc modsM cases filterOpt
+  let ok = printNativePropRows rows
+  ok
+    && propsHuman
+      rest
+      (TestPair coreM modsM)
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+propsHuman _ _ _ _ _ _ _ = False
+
+printNativePropRows : List PropResult -> <IO> Bool
+printNativePropRows [] = True
+printNativePropRows (p :: rest) =
+  let _ =
+    putStrLn
+      "Testing \"\{propResultName p}\" [native] ... \{if propResultPassed p then "OK" else "FAILED"} (\{propResultDetail p})"
+  propResultPassed p && printNativePropRows rest
 
 -- The root module's elaborated decls — the prop and `test "…"` bodies both come
 -- from here.  The root module is the LAST in the list (the loader returns
@@ -1666,7 +1713,7 @@ reportMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt inc
           userDecls
           examples
           synthResults,
-        propsReport pair target tsrc userDecls cases filterOpt,
+        propsReport engines pair target tsrc userDecls cases filterOpt,
         reportTestDecls
           includeTestDecls
           engines
@@ -1711,7 +1758,7 @@ reportSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt in
     (
       None,
       doctestRuns,
-      propsReport pair target tsrc userDecls cases filterOpt,
+      propsReport engines pair target tsrc userDecls cases filterOpt,
       reportTestDecls
         includeTestDecls
         engines
@@ -1785,25 +1832,51 @@ doctestReportGo (e :: rest) trees target tsrc userDecls examples synthResults =
 -- `cases`/`filterOpt` mirror `runProps`' own parameters (F1: `medaka test
 -- --json --cases`/`--filter` were silently ignored) — MCP's medaka_test still
 -- passes `(100, None)` (unchanged behavior, #2295 is scoped to the CLI).
-propsReport : TestPair ->
+propsReport : List Engine ->
+  TestPair ->
   String ->
   String ->
   List Decl ->
   Int ->
   Option String ->
   <IO> List PropResult
-propsReport pair target tsrc userDecls cases filterOpt
+propsReport engines pair target tsrc userDecls cases filterOpt
   | not (hasProps userDecls) = []
   | otherwise = match pair
     TestPairErr _ => []
     TestPair coreM modsM =>
-      runAllPropsResults
+      propsReportEngines
+        engines
+        coreM
+        modsM
+        target
+        tsrc
+        userDecls
         cases
         filterOpt
-        (propLineTests tsrc)
-        (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
-        (elaboratedRootProps modsM userDecls)
-        (coreM ++ flatMap snd modsM)
+
+propsReportEngines : List Engine ->
+  List Decl ->
+  List (String, List Decl) ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  <IO> List PropResult
+propsReportEngines [] _ _ _ _ _ _ _ = []
+propsReportEngines (EngInterp :: rest) coreM modsM target tsrc userDecls cases filterOpt =
+  runAllPropsResults
+      cases
+      filterOpt
+      (propLineTests tsrc)
+      (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
+      (elaboratedRootProps modsM userDecls)
+      (coreM ++ flatMap snd modsM)
+    ++ propsReportEngines rest coreM modsM target tsrc userDecls cases filterOpt
+propsReportEngines (EngNative :: rest) coreM modsM target tsrc userDecls cases filterOpt =
+  runNativeProps target tsrc modsM cases filterOpt
+    ++ propsReportEngines rest coreM modsM target tsrc userDecls cases filterOpt
 
 -- ── test-decl phase as pure data (#2295 (d)) ────────────────────────────────
 -- Symmetric with `propsReport` above: the same single-file/multi-module split
@@ -1936,12 +2009,12 @@ testHelpText = stringConcat [
   "medaka test — Run doctests + property tests\n", "\n", "Usage:\n",
   "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n",
   "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n", "\n",
-  "  --native            run doctests and `test \"…\"` decls through a\n",
+  "  --native            run doctests, properties and `test \"…\"` decls through a\n",
   "                      compiled native binary (the default; shorthand\n",
   "                      for --engines native)\n",
   "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n",
   "                      exit code is the AND across engines. `eval` is\n",
-  "                      the interpreter; property tests always use it\n",
+  "                      the interpreter; property tests follow this selection\n",
   "  --json               emit a {\"file\":...,\"engine\":...,\"doctests\":...,\n",
   "                      \"properties\":...,\"tests\":...,\"summary\":...} JSON\n",
   "                      object instead of human text (single file.mdk target\n",
@@ -2155,6 +2228,7 @@ cliPropJson : PropResult -> Json
 -- module for one 5-line function.
 -- lint-disable-next-line rule-duplicate-body
 cliPropJson p = jObject [
+  ("engine", JString (propResultEngine p)),
   ("name", JString (propResultName p)),
   ("status", JString (if propResultPassed p then "pass" else "fail")),
   ("detail", JString (propResultDetail p)),

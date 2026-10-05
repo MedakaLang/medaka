@@ -1173,20 +1173,27 @@ countTrue (False :: rest) = countTrue rest
 -- shrunk counterexample is RNG-dependent and diverges across the three runners
 -- (see the module header), so a consumer must treat the counterexample text as
 -- non-portable — do not bake a failing-prop counterexample into a golden.
-public export data PropResult = PropResult String Bool String
+-- The engine is data rather than an ambient CLI label: the JSON/MCP consumers
+-- must not silently present an interpreter result as a native result when a
+-- caller asks for both engines.
+public export data PropResult = PropResult String String Bool String
 --                                          name   ok   detail
 
 export
 propResultName : PropResult -> String
-propResultName (PropResult n _ _) = n
+propResultName (PropResult _ n _ _) = n
+
+export
+propResultEngine : PropResult -> String
+propResultEngine (PropResult e _ _ _) = e
 
 export
 propResultPassed : PropResult -> Bool
-propResultPassed (PropResult _ p _) = p
+propResultPassed (PropResult _ _ p _) = p
 
 export
 propResultDetail : PropResult -> String
-propResultDetail (PropResult _ _ d) = d
+propResultDetail (PropResult _ _ _ d) = d
 
 -- Run every prop and return one PropResult each, in source order.  No output.
 -- Same `cases`/`filterOpt` knobs as `runAllProps` (F-3: both hardcoded-100
@@ -1231,9 +1238,10 @@ runEachResult cases propLines genEnv evalEnv (_ :: rest) =
 
 propResultOf : Int -> Int -> String -> PropOutcome (Value e) -> PropResult
 propResultOf cases _line name PropPassed =
-  PropResult name True "\{intToString cases} tests passed"
+  PropResult "eval" name True "\{intToString cases} tests passed"
 propResultOf _cases line name (PropFailed run shrunk fuelExhausted) =
   PropResult
+    "eval"
     name
     False
     (stringConcat [

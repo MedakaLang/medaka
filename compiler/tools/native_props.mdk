@@ -1,0 +1,495 @@
+-- Native property runner.  It deliberately compiles one probe per target, then
+-- lets the driver (below) judge the printed Bool transcript.  A probe never
+-- prints a pass/fail label of its own.
+
+import frontend.ast.{
+  Decl(..), Expr, PropParam(..), Ty(..), Variant(..), Field(..), ConPayload(..),
+  Pat(..)
+}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import driver.build_cmd.{
+  ppBuildReport, makeTempDir, scratchProjectManifest, cleanupTempDir,
+  runBuildNativeRoots, envOr, defaultMedakaRoot
+}
+import driver.loader.{entrySearchRoots}
+import support.path.{joinPath, baseOf, dirOf}
+import support.util.{
+  joinNl, joinWith, splitNl, filterList, lookupAssoc, listLen, zipL
+}
+import tools.probe_transcript.{
+  Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, lookupChunk,
+  mintNonce, noncedPrefix, renameUserMain, sentinelLine, tagsInOrder,
+  valuePrintExpr
+}
+import tools.printer.{exprToString, ppTy}
+import tools.prop_runner.{PropResult(..), filterProps, filterPropsByName}
+
+sentinelBase : String
+sentinelBase = "@@__mdk_native_prop__@@"
+
+sentinelPrefix : String -> String
+sentinelPrefix nonce = noncedPrefix sentinelBase nonce
+
+sentinelFor : String -> String -> String
+sentinelFor nonce tag = sentinelLine (sentinelPrefix nonce) tag
+
+startTag : Int -> String
+startTag i = "\{intToString i}.start"
+
+boolTag : Int -> String
+boolTag i = "\{intToString i}.bool"
+
+detailTag : Int -> String
+detailTag i = "\{intToString i}.detail"
+
+expectedTags : Int -> List Decl -> List String
+expectedTags _ [] = [endTag]
+expectedTags i (_ :: rest) =
+  [startTag i, boolTag i, detailTag i] ++ expectedTags (i + 1) rest
+
+-- One native result for every selected property, preserving source order.
+export
+runNativeProps : String ->
+  String ->
+  List (String, List Decl) ->
+  Int ->
+  Option String ->
+  <IO> List PropResult
+runNativeProps target tsrc modules cases filterOpt =
+  let props = filterPropsByName filterOpt (filterProps (desugarProps tsrc))
+  match props
+    [] => []
+    _ => match nativeRendered target tsrc modules props cases
+      Err e => map (nativeError e) props
+      Ok rows => rows
+
+desugarProps : String -> List Decl
+desugarProps src = desugar (parse src)
+
+nativeError : String -> Decl -> PropResult
+nativeError e (DProp _ name _ _) = PropResult "native" name False e
+nativeError e _ = PropResult "native" "<invalid prop>" False e
+
+nativeRendered : String ->
+  String ->
+  List (String, List Decl) ->
+  List Decl ->
+  Int ->
+  <IO> Result String (List PropResult)
+nativeRendered target tsrc modules props cases = match makeTempDir ()
+  Err e =>
+    Err "native property runner: could not create a scratch directory: \{e}"
+  Ok tmp =>
+    let nonce = mintNonce ()
+    let rendered = runInTmp target tsrc modules props cases tmp nonce
+    let _ = cleanupTempDir tmp
+    rendered
+
+scratchEntryName : String -> String
+scratchEntryName target = "prop_" ++ baseOf target
+
+runInTmp : String ->
+  String ->
+  List (String, List Decl) ->
+  List Decl ->
+  Int ->
+  String ->
+  String ->
+  <IO> Result String (List PropResult)
+runInTmp target tsrc modules props cases tmp nonce =
+  let entry = joinPath tmp (scratchEntryName target)
+  let out = joinPath tmp "prop_probe"
+  let _ =
+    writeFile
+      (joinPath tmp "medaka.toml")
+      (scratchProjectManifest "medaka_native_props" target)
+  match writeFile entry (probeSource nonce tsrc modules props cases)
+    Err e =>
+      Err "native property runner: could not write the probe source: \{e}"
+    Ok _ => buildAndRun target entry out tmp props nonce
+
+buildAndRun : String ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  String ->
+  <IO> Result String (List PropResult)
+buildAndRun target entry out tmp props nonce =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let medaka = envOr "MEDAKA" "medaka"
+  let cc = envOr "CC" "clang"
+  match (runBuildNativeRoots
+    root
+    medaka
+    cc
+    entry
+    out
+    tmp
+    False
+    (entrySearchRoots (dirOf target))
+    True
+    False
+    False)
+    Err rep =>
+      Err
+        "native property runner: could not build \{target} natively\n\{ppBuildReport rep}"
+    Ok _ => match runCommand out []
+      Err e =>
+        Err "native property runner: could not run the compiled probe: \{e}"
+      Ok (code, stdout, stderr) =>
+        let chunks = chunksOf (sentinelPrefix nonce) (splitNl stdout)
+        if tagsInOrder (expectedTags 0 props) chunks then
+          Ok (renderAll chunks (abortNote code stderr) 0 props)
+        else
+          Err
+            "native property runner: the probe printed a forged or malformed transcript; no property result was trusted"
+
+abortNote : Int -> String -> String
+abortNote code stderr =
+  let first = firstNonEmptyLine (splitNl stderr)
+  "native property run ended (probe exit \{intToString code})\{if first == "" then "" else " — " ++ first}"
+
+complete : String -> List Chunk -> Option String
+complete tag chunks = match lookupChunk tag chunks
+  Some (Chunk _ ls True) => decodeValue ls
+  _ => None
+
+renderAll : List Chunk -> String -> Int -> List Decl -> List PropResult
+renderAll _ _ _ [] = []
+renderAll chunks note i ((DProp _ name _ _) :: rest) =
+  renderOne chunks note i name :: renderAll chunks note (i + 1) rest
+renderAll chunks note i (_ :: rest) = renderAll chunks note (i + 1) rest
+
+renderOne : List Chunk -> String -> Int -> String -> PropResult
+renderOne chunks note i name = match (
+  complete (boolTag i) chunks,
+  complete (detailTag i) chunks,
+)
+  (Some "True", Some detail) => PropResult "native" name True detail
+  (Some "False", Some detail) => PropResult "native" name False detail
+  _ =>
+    PropResult
+      "native"
+      name
+      False
+      "\{note}; this property was not fully reported"
+
+-- Probe source ---------------------------------------------------------------
+
+probeSource : String ->
+  String ->
+  List (String, List Decl) ->
+  List Decl ->
+  Int ->
+  String
+probeSource nonce tsrc modules props cases =
+  joinNl
+    (nativeImports modules props
+      ++ [
+        renameUserMain tsrc,
+        "",
+        "__np_state : Ref Int",
+        "__np_state = Ref 123456789",
+        "",
+        "__np_next _ =",
+        "  let s = (!__np_state * 1103515245 + 12345) % 2147483648",
+        "  __np_state := s",
+        "  s",
+        "",
+        "__np_int _ = (__np_next () / 65536) % 2001 - 1000",
+        "__np_bool _ = (__np_next () / 65536) % 2 == 0",
+        "",
+        "__np_choose n = if n <= 1 then 0 else (__np_next () / 65536) % n",
+        "",
+      ]
+      ++ propLines modules props cases 0
+      ++ ["main ="]
+      ++ mainLines nonce props cases 0
+      ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
+
+-- Imported ADT constructors are not necessarily in the target's explicit use
+-- list (`import trees.{Tree, mirror}` is intentionally abstract).  Add a
+-- constructor import for only parameter heads declared in a dependency.  The
+-- probe is a fresh module, so this is ordinary source-level visibility, not an
+-- evaluator backdoor.
+nativeImports : List (String, List Decl) -> List Decl -> List String
+nativeImports modules props =
+  filterList
+    (/= "")
+    (map (importLine (dropLastModule modules)) (uniqueHeads props))
+
+dropLastModule : List (String, List Decl) -> List (String, List Decl)
+dropLastModule [] = []
+dropLastModule [_] = []
+dropLastModule (x :: xs) = x :: dropLastModule xs
+
+importLine : List (String, List Decl) -> String -> String
+importLine modules head = match moduleForType modules head
+  Some mod => "import \{mod}.{\{head}(..)}"
+  None => ""
+
+moduleForType : List (String, List Decl) -> String -> Option String
+moduleForType [] _ = None
+moduleForType ((mod, ds) :: rest) n =
+  if declaresType ds n then Some mod else moduleForType rest n
+
+declaresType : List Decl -> String -> Bool
+declaresType [] _ = False
+declaresType ((DData { dataName = n }) :: _) wanted = n == wanted
+declaresType ((DNewtype { newtypeName = n }) :: _) wanted = n == wanted
+declaresType (_ :: rest) wanted = declaresType rest wanted
+
+uniqueHeads : List Decl -> List String
+uniqueHeads ds = nubStrings (flatMap propHeads ds)
+
+propHeads : Decl -> List String
+propHeads (DProp _ _ ps _) = flatMap paramHeads ps
+propHeads _ = []
+
+paramHeads : PropParam -> List String
+paramHeads (PropParam _ _ ty) = headsOf ty
+
+headsOf : Ty -> List String
+headsOf (TyCon { tyConName = n }) = [n]
+headsOf (TyApp a b) = headsOf a ++ headsOf b
+headsOf (TyTuple ts) = flatMap headsOf ts
+headsOf (TyEffect _ _ t) = headsOf t
+headsOf (TyNamed _ t _) = headsOf t
+headsOf (TyQual t _ _) = headsOf t
+headsOf (TyConstrained _ t) = headsOf t
+headsOf _ = []
+
+nubStrings : List String -> List String
+nubStrings [] = []
+nubStrings (x :: xs) = x :: nubStrings (filterList (/= x) xs)
+
+propLines : List (String, List Decl) -> List Decl -> Int -> Int -> List String
+propLines _ [] _ _ = []
+propLines modules ((DProp _ _ params body) :: rest) cases i =
+  fnLines i params body
+    ++ genLines modules i 0 params
+    ++ runLines modules i params cases
+    ++ propLines modules rest cases (i + 1)
+propLines modules (_ :: rest) cases i = propLines modules rest cases (i + 1)
+
+fnName : Int -> String
+fnName i = "__np_prop_\{intToString i}"
+
+genName : Int -> Int -> String
+genName i j = "__np_gen_\{intToString i}_\{intToString j}"
+
+runName : Int -> String
+runName i = "__np_run_\{intToString i}"
+
+fnLines : Int -> List PropParam -> Expr -> List String
+fnLines i ps body =
+  ["\{fnName i} \{joinWith " " (map paramName ps)} = \{exprToString body}", ""]
+
+paramName : PropParam -> String
+paramName (PropParam n _ _) = n
+
+genLines : List (String, List Decl) ->
+  Int ->
+  Int ->
+  List PropParam ->
+  List String
+genLines _ _ _ [] = []
+genLines modules i j ((PropParam _ _ ty) :: rest) =
+  [
+      "\{genName i j} : Unit -> \{ppTy ty}",
+      "\{genName i j} _ = \{genExpr modules ty 0}",
+      "",
+    ]
+    ++ genLines modules i (j + 1) rest
+
+-- Bounded structural generation.  Its source is shared by all native cases;
+-- values are generated at runtime, so this remains one clang build per file.
+genExpr : List (String, List Decl) -> Ty -> Int -> String
+genExpr _ (TyCon { tyConName = "Int" }) _ = "__np_int ()"
+genExpr _ (TyCon { tyConName = "Bool" }) _ = "__np_bool ()"
+genExpr _ (TyCon { tyConName = "Float" }) _ = "intToFloat (__np_int ())"
+genExpr _ (TyCon { tyConName = "Char" }) _ = "if __np_bool () then 'a' else 'b'"
+genExpr _ (TyCon { tyConName = "String" }) _ =
+  "if __np_bool () then \"\" else \"x\""
+genExpr _ (TyCon { tyConName = "Unit" }) _ = "()"
+genExpr modules (TyApp (TyCon { tyConName = "List" }) t) depth =
+  if depth >= 3 then
+    "[]"
+  else
+    "match __np_choose 3\n  0 => []\n  1 => [\{genExpr modules t (depth + 1)}]\n  _ => [\{genExpr modules t (depth + 1)}, \{genExpr modules t (depth + 1)}]"
+genExpr modules (TyApp (TyCon { tyConName = "Array" }) t) depth =
+  if depth >= 3 then
+    "[||]"
+  else
+    "if __np_bool () then [||] else [|\{genExpr modules t (depth + 1)}|]"
+genExpr modules (TyApp (TyCon { tyConName = "Option" }) t) depth =
+  "if __np_bool () then None else Some \{genExpr modules t (depth + 1)}"
+genExpr modules (TyApp (TyApp (TyCon { tyConName = "Result" }) a) b) depth =
+  "if __np_bool () then Ok \{genExpr modules a (depth + 1)} else Err \{genExpr modules b (depth + 1)}"
+genExpr modules (TyTuple ts) depth =
+  "(\{joinWith ", " (map (t => genExpr modules t (depth + 1)) ts)})"
+genExpr modules ty depth = userGen modules ty depth
+
+userGen : List (String, List Decl) -> Ty -> Int -> String
+userGen modules ty depth = match tyHeadArgs ty
+  None => "panic \"native property runner: unsupported parameter type\""
+  Some (name, args) => match lookupType modules name
+    None => "panic \"native property runner: no generator for \{name}\""
+    Some (params, variants) =>
+      if depth >= 4 then
+        variantExpr modules params args (firstTerminal variants) (depth + 1)
+      else
+        variantChoices modules params args variants (depth + 1) 0
+
+tyHeadArgs : Ty -> Option (String, List Ty)
+tyHeadArgs (TyCon { tyConName = n }) = Some (n, [])
+tyHeadArgs (TyApp f x) = map ((n, xs) => (n, xs ++ [x])) (tyHeadArgs f)
+tyHeadArgs _ = None
+
+lookupType : List (String, List Decl) ->
+  String ->
+  Option (List String, List Variant)
+lookupType [] _ = None
+lookupType ((_, ds) :: rest) name = match lookupTypeDecl ds name
+  Some x => Some x
+  None => lookupType rest name
+
+lookupTypeDecl : List Decl -> String -> Option (List String, List Variant)
+lookupTypeDecl [] _ = None
+lookupTypeDecl ((DData { dataName = n, dataParams = ps, dataCtors = vs }) :: _) wanted
+  | n == wanted = Some (ps, vs)
+lookupTypeDecl ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeCtor = c, newtypeFieldTy = t }) :: _) wanted
+  | n == wanted = Some (ps, [Variant c (ConPos [t])])
+lookupTypeDecl (_ :: rest) wanted = lookupTypeDecl rest wanted
+
+variantChoices : List (String, List Decl) ->
+  List String ->
+  List Ty ->
+  List Variant ->
+  Int ->
+  Int ->
+  String
+variantChoices _ _ _ [] _ _ =
+  "panic \"native property runner: data type has no constructors\""
+variantChoices modules ps args [v] depth _ = variantExpr modules ps args v depth
+variantChoices modules ps args (v :: rest) depth i =
+  "if __np_choose \{listLen (v :: rest)} == \{i} then \{variantExpr modules ps args v depth} else \{variantChoices modules ps args rest depth (i + 1)}"
+
+firstTerminal : List Variant -> Variant
+firstTerminal [] = panic "native property runner: data type has no constructors"
+firstTerminal ((v@(Variant _ (ConPos []))) :: _) = v
+firstTerminal (v :: rest) = match rest
+  [] => v
+  _ => firstTerminal rest
+
+variantExpr : List (String, List Decl) ->
+  List String ->
+  List Ty ->
+  Variant ->
+  Int ->
+  String
+variantExpr modules ps args (Variant ctor (ConPos fields)) depth =
+  "\{ctor}\{posFieldsExpr modules ps args fields depth}"
+variantExpr modules ps args (Variant ctor (ConNamed fields _)) depth =
+  "\{ctor} { \{joinWith ", " (map (field => fieldExpr modules ps args field depth) fields)} }"
+
+fieldExpr : List (String, List Decl) ->
+  List String ->
+  List Ty ->
+  Field ->
+  Int ->
+  String
+fieldExpr modules ps args (Field n t) depth =
+  "\{n} = \{genExpr modules (substTy (zipL ps args) t) depth}"
+
+posFieldsExpr : List (String, List Decl) ->
+  List String ->
+  List Ty ->
+  List Ty ->
+  Int ->
+  String
+posFieldsExpr _ _ _ [] _ = ""
+posFieldsExpr modules ps args fields depth =
+  " "
+    ++ joinWith
+      " "
+      (map (f => genExpr modules (substTy (zipL ps args) f) depth) fields)
+
+substTy : List (String, Ty) -> Ty -> Ty
+substTy sub (TyVar n) = match lookupAssoc n sub
+  Some t => t
+  None => TyVar n
+substTy sub (TyApp a b) = TyApp (substTy sub a) (substTy sub b)
+substTy sub (TyTuple ts) = TyTuple (map (substTy sub) ts)
+substTy sub (TyEffect e r t) = TyEffect e r (substTy sub t)
+substTy sub (TyNamed n t d) = TyNamed n (substTy sub t) d
+substTy sub (TyQual t q l) = TyQual (substTy sub t) q l
+substTy sub (TyConstrained c t) = TyConstrained c (substTy sub t)
+substTy _ t = t
+
+runLines : List (String, List Decl) ->
+  Int ->
+  List PropParam ->
+  Int ->
+  List String
+runLines modules i ps cases =
+  ["\{runName i} n =", "  if n <= 0 then (True, \"\") else"]
+    ++ runBindings i ps 0
+    ++ ["    let ok = \{fnName i} \{joinWith " " (map paramName ps)}"]
+    ++ failLines modules i ps
+    ++ [""]
+
+failLines : List (String, List Decl) -> Int -> List PropParam -> List String
+failLines modules i [p@(PropParam n _ ty)] =
+  if hasArbitrary modules ty then
+    [
+      "    if ok then \{runName i} (n - 1) else",
+      "      let smaller = match shrink \{n}",
+      "        x :: _ => x",
+      "        [] => \{n}",
+      "      if \{fnName i} smaller then (False, \"\{n} = \" ++ debug \{n}) else (False, \"\{n} = \" ++ debug smaller)",
+    ]
+  else
+    [
+      "    if ok then \{runName i} (n - 1) else (False, \"\{n} = \" ++ debug \{n})",
+    ]
+failLines _ i ps = [
+  "    if ok then \{runName i} (n - 1) else (False, debug \"\{joinWith ", " (map paramName ps)})",
+]
+
+hasArbitrary : List (String, List Decl) -> Ty -> Bool
+hasArbitrary modules ty = match tyHeadArgs ty
+  Some (name, []) => anyModuleArbitrary modules name
+  _ => False
+
+anyModuleArbitrary : List (String, List Decl) -> String -> Bool
+anyModuleArbitrary [] _ = False
+anyModuleArbitrary ((_, ds) :: rest) name =
+  hasArbitraryDecl ds name || anyModuleArbitrary rest name
+
+hasArbitraryDecl : List Decl -> String -> Bool
+hasArbitraryDecl [] _ = False
+hasArbitraryDecl ((DImpl { iface = "Arbitrary", tys = [TyCon { tyConName = n }], reqs = [] }) :: _) wanted =
+  n == wanted
+hasArbitraryDecl (_ :: rest) wanted = hasArbitraryDecl rest wanted
+
+runBindings : Int -> List PropParam -> Int -> List String
+runBindings _ [] _ = []
+runBindings i ((PropParam n _ _) :: rest) j =
+  ["    let \{n} = \{genName i j} ()"] ++ runBindings i rest (j + 1)
+
+mainLines : String -> List Decl -> Int -> Int -> List String
+mainLines _ [] _ _ = []
+mainLines nonce ((DProp _ _ _ _) :: rest) cases i =
+  [
+      "  let _ = putStrLn \"\{sentinelFor nonce (startTag i)}\"",
+      "  let (ok, detail) = \{runName i} \{intToString cases}",
+      "  let _ = putStrLn \"\{sentinelFor nonce (boolTag i)}\"",
+      "  let _ = \{valuePrintExpr "debug ok"}",
+      "  let _ = putStrLn \"\{sentinelFor nonce (detailTag i)}\"",
+      "  let _ = \{valuePrintExpr "detail"}",
+    ]
+    ++ mainLines nonce rest cases (i + 1)
+mainLines nonce (_ :: rest) cases i = mainLines nonce rest cases (i + 1)

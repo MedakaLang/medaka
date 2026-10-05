@@ -95,6 +95,7 @@ import tools.prop_runner.{
   propResultName,
   propResultPassed,
   propResultDetail,
+  propResultEngine,
 }
 import support.util.{joinWith}
 import regex.{Regex, Match, mustCompile, findAll}
@@ -1491,6 +1492,7 @@ propJson : PropResult -> Json
 -- module imports the other, so not worth a shared module for one 5-line fn.
 -- lint-disable-next-line rule-duplicate-body
 propJson p = jObject [
+  ("engine", JString (propResultEngine p)),
   ("name", JString (propResultName p)),
   ("status", JString (if propResultPassed p then "pass" else "fail")),
   ("detail", JString (propResultDetail p)),
