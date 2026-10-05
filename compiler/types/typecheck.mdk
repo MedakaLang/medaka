@@ -18510,7 +18510,9 @@ renameParam _ _ acc = acc
 -- One declared type, read the way a field's value is used: the same shape,
 -- the same declarations and variables (`monoSameGiven` at the leaves), and the
 -- same effect rows and authorities, since a function field read at another
--- constructor's row performs effects its type does not show.
+-- constructor's row performs effects its type does not show.  A qualifier on
+-- one side only is peeled here rather than in `monoSameGiven`, which erases
+-- rows and so is reached only once the left side is a leaf.
 fieldTypeSame : Mono -> Mono -> Bool
 fieldTypeSame x y = match (normalize x, normalize y)
   (TFun a1 r1 b1, TFun a2 r2 b2) =>
@@ -18523,6 +18525,8 @@ fieldTypeSame x y = match (normalize x, normalize y)
   (TApp _ _, _) => False
   (TEff _, _) => False
   (TAuth _, _) => False
+  (TQual t1 _, b) => fieldTypeSame t1 b
+  (a, TQual t2 _) => fieldTypeSame a t2
   (a, b) => monoSameGiven a b
 
 rowSame : EffRow -> EffRow -> Bool

@@ -1,0 +1,17 @@
+-- The data-only form of the row disagreement: no function is ever called, the
+-- two constructors just declare `f` at different effect rows, one side under
+-- an authority qualifier.
+-- Hand-derived: REJECT on all three verbs, `T-FIELD-TYPE-DIFFERS` at
+-- `start.f`.
+data Box (e : Effect) a = Box a
+
+data R (p : Authority FileRead) =
+  | A { f : Box <> Int @p }
+  | B { f : Box <Stdout> Int }
+
+start : R p
+start = B { f = Box 1 }
+
+main : Unit
+main = match start.f
+  Box n => println (debug n)
