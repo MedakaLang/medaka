@@ -130,6 +130,7 @@ test: medaka
 	./medaka test compiler/support/ordmap_test.mdk
 	./medaka test compiler/support/scc_test.mdk
 	./medaka test compiler/support/util_test.mdk
+	./medaka test compiler/ir/dce_test.mdk
 	./medaka test compiler/eval/eval_test.mdk
 	## The shared free-variable walker in trmc_analysis.mdk drives TRMC safety and
 	## LLVM closure capture. Its sibling is outside the test roster
@@ -154,6 +155,9 @@ test: medaka
 	./medaka test compiler/tools/doc_test.mdk
 	./medaka test compiler/tools/check_policy_test.mdk
 	./medaka test compiler/tools/doctest_test.mdk
+	./medaka test compiler/tools/native_props_acceptance_test.mdk
+	./medaka test compiler/tools/test_pins_test.mdk
+	./medaka test compiler/tools/test_pins_io_test.mdk
 	./medaka test compiler/tools/snapshot_test.mdk
 	## S-gate-registry (#2735): same reason, for gate_cmd.mdk's sibling. No
 	## gate script invokes `medaka test` on compiler/tools/gate_registry.mdk

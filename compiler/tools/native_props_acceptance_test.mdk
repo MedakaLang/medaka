@@ -300,3 +300,79 @@ gradeFailedInvocation needles (Ok (code, out, err)) = expectAll [
   expectNotEqual 0 code,
   expectTextContainsAll needles (out ++ err),
 ]
+
+unitPinEntry : String -> String
+unitPinEntry engine =
+  "[[pin]]\nfile = \"main.mdk\"\nkind = \"test\"\nname = \"known assertion\"\nengine = \"\{engine}\"\nissue = 1\ndetail_lines = [\"expected True but got False\"]\n"
+
+unitPinLedger : String
+unitPinLedger = "version = 1\n\{unitPinEntry "eval"}\{unitPinEntry "native"}"
+
+unitReportRows : Json -> List Json
+unitReportRows report = match flatMap asArray (get "tests" report)
+  None => []
+  Some rows => toList rows
+
+test "known-red unit pins retain the exact assertion in both engines" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "import test.{expectTrue}\ntest \"known assertion\" = expectTrue False\n",
+      ),
+      ("medaka-test-pins.toml", unitPinLedger),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        expectEqual 0 code,
+        expectEqual (Some 2) (knownRedCount report),
+        expectEqual
+          [
+            (Some "eval", Some "known-red", Some 1),
+            (Some "native", Some "known-red", Some 1),
+          ]
+          (map
+            (row => (
+              field "engine" row,
+              field "status" row,
+              flatMap asInt (get "issue" row),
+            ))
+            (unitReportRows report)),
+      ])
+
+test "a known-red unit passing drains its pin loudly" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "import test.{expectTrue}\ntest \"known assertion\" = expectTrue True\n",
+      ),
+      ("medaka-test-pins.toml", unitPinLedger),
+    ]
+    (target =>
+      gradeFailedInvocation
+        ["known assertion", "1", "unexpected"]
+        (runInvocation ["--engines", "eval,native"] target))
+
+test "a changed assertion cannot satisfy a known-red unit pin" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "import test.{expectFalse}\ntest \"known assertion\" = expectFalse True\n",
+      ),
+      ("medaka-test-pins.toml", unitPinLedger),
+    ]
+    (target =>
+      gradeFailedInvocation
+        ["known assertion", "1", "changed"]
+        (runInvocation ["--native"] target))
+
+test "property bodies must typecheck as Bool" =
+  withFixtures
+    [("main.mdk", "prop \"invalid result\" (n : Int) = n\n")]
+    (target =>
+      gradeFailedInvocation
+        ["Bool", "Int"]
+        (boundedVerbSeconds 120 medakaBin ["check", target]))
