@@ -2,6 +2,6 @@ main|local|go|3  DEF main.mdk:11:6  USES 2  main.mdk:11:39 main.mdk:12:2
 main|local|k|1  DEF main.mdk:7:3  USES 0  
 main|local|k|4  DEF main.mdk:11:9  USES 3  main.mdk:11:16 main.mdk:11:35 main.mdk:11:43
 main|local|n|2  DEF main.mdk:10:6  USES 1  main.mdk:12:5
-main|val|go  DEF main.mdk:7:0  USES 0  
+main|val|go  DEF main.mdk:7:0 main.mdk:6:0  USES 0  
 main|val|main  DEF main.mdk:14:0  USES 0  
-main|val|outer  DEF main.mdk:10:0  USES 1  main.mdk:14:16
+main|val|outer  DEF main.mdk:10:0 main.mdk:9:0  USES 1  main.mdk:14:16

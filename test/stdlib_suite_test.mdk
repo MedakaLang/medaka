@@ -41,10 +41,11 @@
 
 import io.{readLines}
 import list.{lookup}
-import string.{stripSuffix}
 import test.{Expectation(..)}
 import test_process.{
   disagreeingFloorBlocks,
+  expectFloor,
+  mdkModuleStem,
   missingUnits,
   testAssertionCount,
   underRoot,
@@ -207,7 +208,7 @@ suites = [
   -- doctests and props importing it never runs. Neither of the two vehicles
   -- named in the header reaches this module either.
   ("test", (72, NativeCapability)),
-  ("test_process", (21, NativeCapability)),
+  ("test_process", (27, NativeCapability)),
   ("time", (36, EvalAndNative)),
   ("toml", (56, EvalAndNative)),
   -- The fixed-width types' wrapping, conversions and bit operations. Native
@@ -350,16 +351,7 @@ results =
 floorExpectation : String -> <Exec, IO> Expectation
 floorExpectation name = match lookup name results
   None => Fail "stdlib/\{name}.mdk has no `results` entry" "" ""
-  Some (floor, Err e) =>
-    Fail e "\{intToString floor} assertions" "spawn/run error"
-  Some (floor, Ok ran) =>
-    if ran >= floor then
-      Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
-    else
-      Fail
-        "stdlib/\{name}.mdk — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
-        "\{intToString floor} assertions"
-        "\{intToString ran} assertions"
+  Some (floor, counted) => expectFloor "stdlib/\{name}.mdk" floor counted
 
 test "stdlib/args.mdk executed >= 44 assertions" = floorExpectation "args"
 
@@ -429,7 +421,7 @@ test "stdlib/set.mdk executed >= 64 assertions" = floorExpectation "set"
 
 test "stdlib/test.mdk executed >= 72 assertions" = floorExpectation "test"
 
-test "stdlib/test_process.mdk executed >= 21 assertions" =
+test "stdlib/test_process.mdk executed >= 27 assertions" =
   floorExpectation "test_process"
 
 test "stdlib/time.mdk executed >= 36 assertions" = floorExpectation "time"
@@ -504,7 +496,7 @@ test "stdlib in-language suite ran at least one assertion" =
    gate exists to close, and nothing anywhere would say so.
 
    The roster is over every `.mdk` file in `stdlib/`, a `*_test.mdk`
-   sibling included, so the unit namer is `stripSuffix ".mdk"` rather than
+   sibling included, so the unit namer is `mdkModuleStem` rather than
    `test_process.testFileStem`, and the two general helpers
    (`unrosteredUnits`/`missingUnits`) are called directly rather than
    through their `*TestFiles` wrappers. A sibling is named by its full stem
@@ -512,16 +504,6 @@ test "stdlib in-language suite ran at least one assertion" =
    own import surface. A directory entry that is not a
    Medaka module (`README.md`, the `.lextok.golden` and `.test.golden`
    files) names no unit and is skipped. -}
-
--- | The module name a `stdlib/` directory entry names, or `None` when the
--- entry is not a Medaka module.
---
--- > moduleStem "set.mdk"
--- Some "set"
--- > moduleStem "set.lextok.golden"
--- None
-moduleStem : String -> Option String
-moduleStem name = stripSuffix ".mdk" name
 
 -- Every `stdlib/` entry, with a subdirectory replaced by its own entries
 -- spelled `dir/name`, so `crypto/hmac.mdk` names the unit `crypto/hmac`.
@@ -537,7 +519,7 @@ subdirEntriesOrSelf name = match listDir (underRoot "stdlib/\{name}")
 
 unrosteredModules : <FileRead, IO> Result String (List String)
 unrosteredModules =
-  map (unrosteredUnits moduleStem (rosterNames ++ exemptNames)) stdlibEntries
+  map (unrosteredUnits mdkModuleStem (rosterNames ++ exemptNames)) stdlibEntries
 
 test "every stdlib/*.mdk module has a `suites` or `exempt` row" =
   match unrosteredModules
@@ -550,7 +532,7 @@ test "every stdlib/*.mdk module has a `suites` or `exempt` row" =
         "\{debug extras}"
 
 phantomExemptions : <FileRead, IO> Result String (List String)
-phantomExemptions = map (missingUnits moduleStem exemptNames) stdlibEntries
+phantomExemptions = map (missingUnits mdkModuleStem exemptNames) stdlibEntries
 
 test "every `exempt` row names a module that exists" = match phantomExemptions
   Err e => Fail e "no phantom exemptions" "listDir failed"

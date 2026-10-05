@@ -862,6 +862,107 @@ UPPER "None"
 NEWLINE
 DEDENT
 NEWLINE
+EXPORT
+NEWLINE
+IDENT "mdkModuleStem"
+COLON
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "String"
+NEWLINE
+IDENT "mdkModuleStem"
+IDENT "name"
+EQUAL
+IDENT "stripSuffix"
+STRING ".mdk"
+IDENT "name"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectFloor"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectFloor"
+IDENT "label"
+IDENT "floor"
+IDENT "counted"
+EQUAL
+INDENT
+LET
+IDENT "want"
+EQUAL
+INTERP_OPEN ">= "
+IDENT "intToString"
+IDENT "floor"
+INTERP_END " assertions"
+NEWLINE
+MATCH
+IDENT "counted"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Fail"
+IDENT "e"
+IDENT "want"
+STRING "spawn/run/parse error"
+NEWLINE
+UPPER "Ok"
+IDENT "ran"
+FAT_ARROW
+INDENT
+LET
+IDENT "got"
+EQUAL
+INTERP_OPEN ""
+IDENT "intToString"
+IDENT "ran"
+INTERP_END " assertions"
+NEWLINE
+IF
+IDENT "ran"
+GEQ
+IDENT "floor"
+THEN
+INDENT
+UPPER "Pass"
+IDENT "want"
+IDENT "got"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "Fail"
+INTERP_OPEN ""
+IDENT "label"
+INTERP_MID " — only "
+IDENT "intToString"
+IDENT "ran"
+INTERP_MID " assertions ran, expected >= "
+IDENT "intToString"
+IDENT "floor"
+INTERP_END " (vacuous-green guard: discovery may have silently stopped finding tests)"
+IDENT "want"
+IDENT "got"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "failureOutputTailChars"
 COLON
 UPPER "Int"

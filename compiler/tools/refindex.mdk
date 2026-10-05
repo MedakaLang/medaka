@@ -991,8 +991,18 @@ walkDecls _ [] = ()
 walkDecls w ((d, p) :: rest) =
   let loc = nameLocOf (uriOf w) p
   let _ = recordImplHeads w d loc p
+  let _ = recordSigName w d loc
   let _ = walkDeclBody w d loc
   walkDecls w rest
+
+-- A value signature's name token is a def site of the binding it types, under
+-- the SAME key as the binding's clause heads (#1025): rename must rewrite it,
+-- or the orphaned signature silently stops constraining the renamed binding.
+recordSigName : W -> Decl -> Loc -> Unit
+recordSigName (W ctx mid uri _ _) (DTypeSig _ n _) loc =
+  recordDef ctx (mkKey mid nsVal n) uri loc
+recordSigName w (DAttrib _ inner) loc = recordSigName w inner loc
+recordSigName _ _ _ = ()
 
 -- A decl's CHILD name-token `Loc`s (one per interface/impl method clause head,
 -- per data variant, …), re-based onto this module's uri.  `None` where the

@@ -43,7 +43,7 @@
      first of which is diffed against a golden.
    - `diff_compiler_references_correctness` dumps a whole 1-4-module
      project per fixture via `refindex_main --dump`, not a per-file corpus
-     loop, over eleven fixture directories.
+     loop, over twelve fixture directories.
    - `diff_compiler_effect_hole` / `diff_compiler_effect_param` spawn BOTH
      the native CLI (`./medaka check`) and `test/bin/check_main` over
      inline-heredoc fixtures, asserting on type-scheme substrings and
@@ -514,6 +514,7 @@ referencesFixtures = [
   "impl_method",
   "multiclause",
   "self_rec_local",
+  "sig_name",
 ]
 
 {- | Everything wrong with one `references_fixtures/<name>/` project: a
@@ -1596,7 +1597,7 @@ test "capture_goldens.sh iterates the same corpora this module grades" =
 test "reference-index dumps match binders, not strings" =
   report
     "references-correctness"
-    (countFloor "references_fixtures" 11 referencesFixtures
+    (countFloor "references_fixtures" 12 referencesFixtures
       ++ somes (map referencesFixtureFailure referencesFixtures))
 
 test "the parameterized effect surface typechecks through the real front-end" =

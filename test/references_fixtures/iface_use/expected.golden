@@ -5,4 +5,4 @@ a|ty|Box  DEF a.mdk:6:19  USES 1  a.mdk:8:18
 a|ty|Sized  DEF a.mdk:3:17  USES 2  a.mdk:8:12 main.mdk:7:5
 main|ctor|Sack  DEF main.mdk:5:5  USES 0  
 main|ty|Sack  DEF main.mdk:5:5  USES 1  main.mdk:7:11
-main|val|main  DEF main.mdk:11:0  USES 0  
+main|val|main  DEF main.mdk:11:0 main.mdk:10:0  USES 0  

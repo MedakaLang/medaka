@@ -1,5 +1,5 @@
 # META
-source_lines=1846
+source_lines=1856
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -995,8 +995,18 @@ walkDecls _ [] = ()
 walkDecls w ((d, p) :: rest) =
   let loc = nameLocOf (uriOf w) p
   let _ = recordImplHeads w d loc p
+  let _ = recordSigName w d loc
   let _ = walkDeclBody w d loc
   walkDecls w rest
+
+-- A value signature's name token is a def site of the binding it types, under
+-- the SAME key as the binding's clause heads (#1025): rename must rewrite it,
+-- or the orphaned signature silently stops constraining the renamed binding.
+recordSigName : W -> Decl -> Loc -> Unit
+recordSigName (W ctx mid uri _ _) (DTypeSig _ n _) loc =
+  recordDef ctx (mkKey mid nsVal n) uri loc
+recordSigName w (DAttrib _ inner) loc = recordSigName w inner loc
+recordSigName _ _ _ = ()
 
 -- A decl's CHILD name-token `Loc`s (one per interface/impl method clause head,
 -- per data variant, …), re-based onto this module's uri.  `None` where the
@@ -2122,7 +2132,11 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "ctorsPub" (PWild) (EVar "False"))
 (DTypeSig false "walkDecls" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyCon "Unit"))))
 (DFunDef false "walkDecls" (PWild (PList)) (ELit LUnit))
-(DFunDef false "walkDecls" ((PVar "w") (PCons (PTuple (PVar "d") (PVar "p")) (PVar "rest"))) (EBlock (DoLet false false (PVar "loc") (EApp (EApp (EVar "nameLocOf") (EApp (EVar "uriOf") (EVar "w"))) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHeads") (EVar "w")) (EVar "d")) (EVar "loc")) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkDeclBody") (EVar "w")) (EVar "d")) (EVar "loc"))) (DoExpr (EApp (EApp (EVar "walkDecls") (EVar "w")) (EVar "rest")))))
+(DFunDef false "walkDecls" ((PVar "w") (PCons (PTuple (PVar "d") (PVar "p")) (PVar "rest"))) (EBlock (DoLet false false (PVar "loc") (EApp (EApp (EVar "nameLocOf") (EApp (EVar "uriOf") (EVar "w"))) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHeads") (EVar "w")) (EVar "d")) (EVar "loc")) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordSigName") (EVar "w")) (EVar "d")) (EVar "loc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkDeclBody") (EVar "w")) (EVar "d")) (EVar "loc"))) (DoExpr (EApp (EApp (EVar "walkDecls") (EVar "w")) (EVar "rest")))))
+(DTypeSig false "recordSigName" (TyFun (TyCon "W") (TyFun (TyCon "Decl") (TyFun (TyCon "Loc") (TyCon "Unit")))))
+(DFunDef false "recordSigName" ((PCon "W" (PVar "ctx") (PVar "mid") (PVar "uri") PWild PWild) (PCon "DTypeSig" PWild (PVar "n") PWild) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "recordDef") (EVar "ctx")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n"))) (EVar "uri")) (EVar "loc")))
+(DFunDef false "recordSigName" ((PVar "w") (PCon "DAttrib" PWild (PVar "inner")) (PVar "loc")) (EApp (EApp (EApp (EVar "recordSigName") (EVar "w")) (EVar "inner")) (EVar "loc")))
+(DFunDef false "recordSigName" (PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "childLocsOf" (TyFun (TyCon "String") (TyFun (TyCon "DeclPos") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "childLocsOf" ((PVar "uri") (PVar "p")) (EApp (EApp (EVar "map") (EApp (EVar "mapChildLoc") (EVar "uri"))) (EApp (EVar "declPosChildLocs") (EVar "p"))))
 (DTypeSig false "mapChildLoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
@@ -2643,7 +2657,11 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "ctorsPub" (PWild) (EVar "False"))
 (DTypeSig false "walkDecls" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyCon "Unit"))))
 (DFunDef false "walkDecls" (PWild (PList)) (ELit LUnit))
-(DFunDef false "walkDecls" ((PVar "w") (PCons (PTuple (PVar "d") (PVar "p")) (PVar "rest"))) (EBlock (DoLet false false (PVar "loc") (EApp (EApp (EVar "nameLocOf") (EApp (EVar "uriOf") (EVar "w"))) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHeads") (EVar "w")) (EVar "d")) (EVar "loc")) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkDeclBody") (EVar "w")) (EVar "d")) (EVar "loc"))) (DoExpr (EApp (EApp (EVar "walkDecls") (EVar "w")) (EVar "rest")))))
+(DFunDef false "walkDecls" ((PVar "w") (PCons (PTuple (PVar "d") (PVar "p")) (PVar "rest"))) (EBlock (DoLet false false (PVar "loc") (EApp (EApp (EVar "nameLocOf") (EApp (EVar "uriOf") (EVar "w"))) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHeads") (EVar "w")) (EVar "d")) (EVar "loc")) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordSigName") (EVar "w")) (EVar "d")) (EVar "loc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkDeclBody") (EVar "w")) (EVar "d")) (EVar "loc"))) (DoExpr (EApp (EApp (EVar "walkDecls") (EVar "w")) (EVar "rest")))))
+(DTypeSig false "recordSigName" (TyFun (TyCon "W") (TyFun (TyCon "Decl") (TyFun (TyCon "Loc") (TyCon "Unit")))))
+(DFunDef false "recordSigName" ((PCon "W" (PVar "ctx") (PVar "mid") (PVar "uri") PWild PWild) (PCon "DTypeSig" PWild (PVar "n") PWild) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "recordDef") (EVar "ctx")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n"))) (EVar "uri")) (EVar "loc")))
+(DFunDef false "recordSigName" ((PVar "w") (PCon "DAttrib" PWild (PVar "inner")) (PVar "loc")) (EApp (EApp (EApp (EVar "recordSigName") (EVar "w")) (EVar "inner")) (EVar "loc")))
+(DFunDef false "recordSigName" (PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "childLocsOf" (TyFun (TyCon "String") (TyFun (TyCon "DeclPos") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "childLocsOf" ((PVar "uri") (PVar "p")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildLoc") (EVar "uri"))) (EApp (EVar "declPosChildLocs") (EVar "p"))))
 (DTypeSig false "mapChildLoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))

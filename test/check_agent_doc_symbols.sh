@@ -16,7 +16,9 @@
 # WHAT IT CHECKS (pure text analysis — no compiler build, no toolchain, safe
 # to run anywhere, always): every INLINE single-backtick span in the
 # agent-facing docs (AGENTS.md, .claude/skills/*/SKILL.md,
-# .claude/workstreams/*.md, .claude/ORCHESTRATING.md) that is SHAPED like a
+# .claude/workstreams/*.md, .claude/ORCHESTRATING.md; plus, source-path-gated
+# only, docs/spec, docs/stdlib and test/*.sh gate prose — see the SCOPED-tier
+# comment below for what test/*.sh coverage does and does not catch) that is SHAPED like a
 # Medaka code identifier — and requires it to appear somewhere in the actual
 # compiler/stdlib/runtime source.
 #
@@ -184,7 +186,29 @@ git ls-files 'AGENTS.md' '.claude/skills/*/SKILL.md' '.claude/workstreams/*.md' 
 # fence itself has no source-path citation on the same line, so it is inert
 # under this tier; the surrounding prose that DOES cite `stdlib/X.mdk` is
 # what gets checked).
-git ls-files 'docs/spec/*.md' 'docs/stdlib/*.md' > "$WORK/doc_files_scoped.txt"
+# test/*.sh (#1574) joins the SCOPED tier, as a PARTIAL cover only. Shell-gate
+# prose (allowlist rows, ledger entries, tripwire premises) cites symbols to
+# constrain a future edit. BROAD is the wrong tier for it: measured on
+# origin/main (f2010e3ad) it gave 176 dead findings, mostly legitimate history
+# ("this used to read X") and placeholder names, while SCOPED gave 7, all
+# triaged. SCOPED counts a symbol only when the SAME LINE also cites a
+# compiler/stdlib/runtime source path, so it does NOT catch: a path on the
+# next or previous line, a backticked symbol with no path on its line, an
+# unbackticked symbol, a backticked glob such as `obUniv*`, a short or
+# single-case name (under 3 characters, or lacking either an uppercase or a
+# lowercase letter), or a `name:LINE` citation (the colon fails the
+# bare-identifier shape, so the name is never extracted). Those are the
+# shapes #1574's own two motivating instances took, so #1574 stays open.
+# Not scanned at all: test/*.txt ledgers, test/gates.toml prose, test/*.mdk.
+# Grep the tree for every symbol a gate comment names.
+git ls-files 'docs/spec/*.md' 'docs/stdlib/*.md' 'test/*.sh' > "$WORK/doc_files_scoped.txt"
+
+# Coverage tripwire: fail loudly if the scoped list ever stops containing a
+# shell gate (the corpus would then silently hold none).
+if ! grep -q '^test/.*\.sh$' "$WORK/doc_files_scoped.txt"; then
+  echo "FAIL: the scoped doc corpus contains no test/*.sh gate (#1574 — gate prose is not scanned)"
+  exit 1
+fi
 
 # Basenames of the SAME three directories the resolution corpus (step 3)
 # reads from — used below so a bare `typecheck.mdk:11422` cite (no directory

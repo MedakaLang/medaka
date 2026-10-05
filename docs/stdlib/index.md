@@ -1089,6 +1089,8 @@ Assertions for a test that runs a program.
 - [`expectSpawnFailsAll`](test_process.md#expectspawnfailsall)
 - [`expectSpawnOkLine`](test_process.md#expectspawnokline)
 - [`testFileStem`](test_process.md#testfilestem)
+- [`mdkModuleStem`](test_process.md#mdkmodulestem)
+- [`expectFloor`](test_process.md#expectfloor)
 - [`testAssertionCount`](test_process.md#testassertioncount)
 - [`unrosteredUnits`](test_process.md#unrosteredunits)
 - [`missingUnits`](test_process.md#missingunits)

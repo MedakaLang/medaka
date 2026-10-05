@@ -18,10 +18,11 @@
 
 import io.{readLines}
 import list.{lookup, somes}
-import string.{stripSuffix}
 import test.{Expectation(..)}
 import test_process.{
   disagreeingFloorBlocks,
+  expectFloor,
+  mdkModuleStem,
   missingTestFiles,
   missingUnits,
   testAssertionCount,
@@ -350,11 +351,6 @@ libExemptNames = map fst libExempt
 libKnownNames : List String
 libKnownNames = libRosterNames ++ libExemptNames
 
--- | The module name a `pds/lib/` or `pds/shell/` directory entry names, or
--- `None` when the entry is not a Medaka module.
-libModuleStem : String -> Option String
-libModuleStem name = stripSuffix ".mdk" name
-
 -- Runs one `pds/lib/` or `pds/shell/` module under the eval engine and
 -- returns its executed-assertion count, or an error naming the file and what
 -- went wrong.
@@ -388,16 +384,7 @@ libResults =
 libFloorExpectation : String -> String -> <Exec, IO> Expectation
 libFloorExpectation dir name = match lookup (libKeyOf dir name) libResults
   None => Fail "pds/\{dir}/\{name}.mdk has no `libResults` entry" "" ""
-  Some (floor, Err e) =>
-    Fail e "\{intToString floor} assertions" "spawn/parse error"
-  Some (floor, Ok ran) =>
-    if ran >= floor then
-      Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
-    else
-      Fail
-        "pds/\{dir}/\{name}.mdk — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
-        "\{intToString floor} assertions"
-        "\{intToString ran} assertions"
+  Some (floor, counted) => expectFloor "pds/\{dir}/\{name}.mdk" floor counted
 
 test "pds/lib/accesslog.mdk executed >= 1 assertions" =
   libFloorExpectation "lib" "accesslog"
@@ -432,7 +419,7 @@ test "pds/shell/blobfile.mdk executed >= 1 assertions" =
 libUnrosteredLibFiles : <FileRead, IO> Result String (List String)
 libUnrosteredLibFiles = match listDir (underRoot "pds/lib")
   Err e => Err "could not list pds/lib: \{e}"
-  Ok names => Ok (unrosteredUnits libModuleStem libKnownNames names)
+  Ok names => Ok (unrosteredUnits mdkModuleStem libKnownNames names)
 
 test "every pds/lib/*.mdk module has a `libSuites` or `libExempt` row" =
   match libUnrosteredLibFiles
@@ -447,7 +434,7 @@ test "every pds/lib/*.mdk module has a `libSuites` or `libExempt` row" =
 libUnrosteredShellFiles : <FileRead, IO> Result String (List String)
 libUnrosteredShellFiles = match listDir (underRoot "pds/shell")
   Err e => Err "could not list pds/shell: \{e}"
-  Ok names => Ok (unrosteredUnits libModuleStem libKnownNames names)
+  Ok names => Ok (unrosteredUnits mdkModuleStem libKnownNames names)
 
 test "every pds/shell/*.mdk module has a `libSuites` or `libExempt` row" =
   match libUnrosteredShellFiles
@@ -465,7 +452,7 @@ libPhantomExemptions = match listDir (underRoot "pds/lib")
   Ok libNames => match listDir (underRoot "pds/shell")
     Err e => Err "could not list pds/shell: \{e}"
     Ok shellNames =>
-      Ok (missingUnits libModuleStem libExemptNames (libNames ++ shellNames))
+      Ok (missingUnits mdkModuleStem libExemptNames (libNames ++ shellNames))
 
 test "every `libExempt` row names a module that exists" =
   match libPhantomExemptions
@@ -514,16 +501,7 @@ floorExpectation name = match lookup name excluded
   Some reason => Pass "ledgered exclusion" "skipped: \{reason}"
   None => match lookup name results
     None => Fail "pds/test/\{name}.mdk has no `results` entry" "" ""
-    Some (floor, Err e) =>
-      Fail e "\{intToString floor} assertions" "spawn/run error"
-    Some (floor, Ok ran) =>
-      if ran >= floor then
-        Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
-      else
-        Fail
-          "pds/test/\{name}.mdk — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
-          "\{intToString floor} assertions"
-          "\{intToString ran} assertions"
+    Some (floor, counted) => expectFloor "pds/test/\{name}.mdk" floor counted
 
 test "pds/test/skeleton_test.mdk executed >= 2 assertions" =
   floorExpectation "skeleton_test"

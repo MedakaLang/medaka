@@ -11,8 +11,8 @@ main|local|b|1  DEF main.mdk:56:12  USES 1  main.mdk:56:23
 main|ty|Crate  DEF main.mdk:29:5  USES 1  main.mdk:31:11
 main|ty|Pallet  DEF main.mdk:38:5  USES 1  main.mdk:40:11
 main|ty|Tag  DEF main.mdk:46:5  USES 1  main.mdk:48:8
-main|val|describeBox  DEF main.mdk:56:0  USES 0  
-main|val|total  DEF main.mdk:60:0  USES 0  
+main|val|describeBox  DEF main.mdk:56:0 main.mdk:55:0  USES 0  
+main|val|total  DEF main.mdk:60:0 main.mdk:59:0  USES 0  
 noimport|ctor|Sack  DEF noimport.mdk:17:5  USES 0  
 noimport|ty|Sack  DEF noimport.mdk:17:5  USES 1  noimport.mdk:19:11
-noimport|val|aBox  DEF noimport.mdk:24:0  USES 0  
+noimport|val|aBox  DEF noimport.mdk:24:0 noimport.mdk:23:0  USES 0  

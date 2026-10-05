@@ -1,0 +1,7 @@
+main|val|bare  DEF main.mdk:24:0  USES 0  
+main|val|half  DEF main.mdk:12:0 main.mdk:11:7  USES 1  main.mdk:16:10
+main|val|main  DEF main.mdk:26:0  USES 0  
+main|val|orph  DEF main.mdk:29:0  USES 0  
+main|val|orphOut  DEF main.mdk:30:7  USES 0  
+main|val|pick  DEF main.mdk:20:0 main.mdk:21:0 main.mdk:19:7  USES 2  main.mdk:24:7 main.mdk:26:16
+main|val|quarter  DEF main.mdk:16:0 main.mdk:15:0  USES 0  
