@@ -4007,6 +4007,39 @@ table = [
     pinned = "",
     codes = [Present "T-NO-IMPL"],
   },
+  Row {
+    entry = "field-row-one-side-qualified-rejected.mdk",
+    label =
+      "the effect-row erasure in given matching must not reach the field-consistency check: `A { f : Act <> @p } | B { f : Act <Stdout> }` differ in their row, so T-FIELD-TYPE-DIFFERS. With the one-sided qualifier peeled by `monoSameGiven` the rows were erased, check passed and the pure `runIt` printed EFFECT-LEAKED on run and build",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-FIELD-TYPE-DIFFERS"],
+  },
+  Row {
+    entry = "field-row-one-side-qualified-box-rejected.mdk",
+    label =
+      "the row above without a function: `Box <> Int @p` vs `Box <Stdout> Int` is still two field types, T-FIELD-TYPE-DIFFERS",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-FIELD-TYPE-DIFFERS"],
+  },
+  Row {
+    entry = "field-row-one-side-qualified-same-row.mdk",
+    label =
+      "the positive half of the two rows above: the same one-sided qualifier at the SAME row `<Stdout>` is one field type and runs",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "CONTROL-OK\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -4018,7 +4051,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 352
+tableRows = 355
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
