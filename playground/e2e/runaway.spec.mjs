@@ -41,6 +41,25 @@ function probe(page) {
   ]);
 }
 
+const SPIN = 'spin : Int -> Int\nspin n = spin (n + 1)\n\n';
+const LINE20 = '0123456789012345678'; // 19 characters plus the newline
+const PRINT_N = (n, tail) =>
+  `go 0 = ()\ngo n =\n  println "${LINE20}"\n  go (n - 1)\n\nmain =\n  go ${n}\n${tail}`;
+
+// Runs `src` and returns the console text once Run is re-enabled.
+async function runToEnd(page, src, timeoutMs) {
+  await page.evaluate((s) => {
+    const v = window.__mdkView;
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: s } });
+  }, src);
+  await page.waitForSelector('#run-btn:not([disabled])', { timeout: 15000 });
+  await page.click('#run-btn');
+  await sleep(300);
+  await page.waitForSelector('#run-btn:not([disabled])', { timeout: timeoutMs });
+  await sleep(300);
+  return page.evaluate(() => document.querySelector('#console').textContent);
+}
+
 async function main() {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   const page = await browser.newPage();
@@ -79,6 +98,18 @@ async function main() {
     console.log(`  console span count after stop: ${lines}`);
     const enabled = await page.evaluate(() => !document.querySelector('#run-btn').disabled).catch(() => false);
     check('Run is re-enabled after the stop', enabled);
+
+    console.log('Test: output printed before a hang is shown');
+    const t = await runToEnd(page, SPIN + 'main =\n  println "a"\n  println "b"\n  println (spin 0)\n', 30000);
+    check('stdout lines before a spin are all shown', /a\nb\n/.test(t) && t.includes(STOP_MSG), JSON.stringify(t.slice(0, 120)));
+    const e = await runToEnd(page, SPIN + 'main =\n  println "a"\n  ePutStrLn "err-b"\n  println (spin 0)\n', 30000);
+    check('stderr line before a spin is shown', /a\nerr-b\n/.test(e) && e.includes(STOP_MSG), JSON.stringify(e.slice(0, 120)));
+
+    console.log('Test: console cap edge cases');
+    const big = await runToEnd(page, PRINT_N(60000, '  panic "boom-after-big"\n'), 60000);
+    check('panic after the cap is shown', big.includes('[output truncated') && big.includes('runtime error [E-PANIC]: boom-after-big'), JSON.stringify(big.slice(-200)));
+    const exact = await runToEnd(page, PRINT_N(50000, ''), 60000);
+    check('exactly the cap prints no truncation notice', !exact.includes('[output truncated') && exact.includes('compiled & ran'), JSON.stringify(exact.slice(-200)));
   } catch (e) {
     console.error('Harness error:', e.message);
     failures++;
