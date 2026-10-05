@@ -50,11 +50,13 @@ import types.registry.{
   mregKeys,
   mregLookup,
   mregMerge,
+  mregSize,
   regEmpty,
   regEntries,
   regInsert,
   regInsertChecked,
   regInsertK,
+  regDelete,
   regKeyAt,
   regKeyN,
   regKeyNAt,
@@ -72,6 +74,8 @@ import types.registry.{
   sregKeys,
   sregMember,
   sregMemberK,
+  sregSize,
+  SetRegistry,
   tabKeyRender,
   SpellingPop,
   spEmpty,
@@ -92,7 +96,7 @@ import frontend.ast.{
   tabHasName,
   tabKeyOf,
 }
-import support.util.{startsWith, listLen}
+import support.util.{filterList, startsWith, listLen}
 import support.ordmap.{omLookup}
 import list.{sort}
 
@@ -668,3 +672,334 @@ test "headKeyIdent discriminates two modules' same-named heads" =
       headKeyIdent (headKeyOfCon OriginBuiltin "Box")
         == Some (Ident NsType identOriginBuiltin "Box"),
     ]
+
+-- ── Script properties ────────────────────────────────────────────────────
+--
+-- The prop runner has structural generators only, so a `List Int` is the
+-- compact operation language here.  Every raw word is normalized into a tiny
+-- key pool and an insert/delete kind.  That deliberately makes collisions,
+-- overwrites, and repeated deletes common rather than leaving them to chance.
+
+bounded : Int -> Int -> Int
+bounded n width = (n % width + width) % width
+
+scriptIdent : Int -> Ident
+scriptIdent raw = match bounded raw 7
+  0 => identTypeFooM
+  1 => identIfaceFooM
+  2 => identTypeBarM
+  3 => identTypeFooBuiltin
+  4 => identShiftA
+  5 => identShiftB
+  _ => identIn NsType "other" "Foo"
+
+scriptIdents : List Ident
+scriptIdents = map scriptIdent [0, 1, 2, 3, 4, 5, 6]
+
+scriptValue : Int -> Int
+scriptValue raw = bounded (raw / 7) 17
+
+modelLookup : Ident -> List (Ident, Int) -> Option Int
+modelLookup _ [] = None
+modelLookup ident ((other, value) :: rest) =
+  if ident == other then Some value else modelLookup ident rest
+
+modelPut : Ident -> Int -> List (Ident, Int) -> List (Ident, Int)
+modelPut ident value [] = [(ident, value)]
+modelPut ident value ((other, prior) :: rest) =
+  if ident == other then
+    (ident, value) :: rest
+  else
+    (other, prior) :: modelPut ident value rest
+
+modelDelete : Ident -> List (Ident, Int) -> List (Ident, Int)
+modelDelete _ [] = []
+modelDelete ident ((other, value) :: rest) =
+  if ident == other then rest else (other, value) :: modelDelete ident rest
+
+registryMatchesModel : Registry Int -> List (Ident, Int) -> Bool
+registryMatchesModel registry model =
+  regSize registry == listLen model
+    && registryKeysMatch registry model scriptIdents
+
+registryKeysMatch : Registry Int -> List (Ident, Int) -> List Ident -> Bool
+registryKeysMatch _ _ [] = True
+registryKeysMatch registry model (ident :: rest) =
+  regLookupK (regKeyOf ident) registry == modelLookup ident model
+    && registryKeysMatch registry model rest
+
+-- Read the whole key pool before each mutation, then carry the resulting
+-- state to later words.  This is deliberately stronger than a final-state
+-- assertion: an implementation that caches a stale lookup, or mutates an old
+-- persistent value, is observed by a later read before the following write.
+registryTraceMatches : List Int -> Registry Int -> List (Ident, Int) -> Bool
+registryTraceMatches [] registry model = registryMatchesModel registry model
+registryTraceMatches (raw :: rest) registry model =
+  registryMatchesModel registry model
+    && registryTraceMatches
+      rest
+      (if bounded raw 3 == 0 then
+        regDelete (scriptIdent raw) registry
+      else
+        regInsert (scriptIdent raw) (scriptValue raw) registry)
+      (if bounded raw 3 == 0 then
+        modelDelete (scriptIdent raw) model
+      else
+        modelPut (scriptIdent raw) (scriptValue raw) model)
+
+registryScriptLaw : List Int -> Bool
+registryScriptLaw raw = registryTraceMatches raw regEmpty []
+
+-- `MultiRegistry` has no delete: the independent model keeps a per-key list
+-- in the same newest-first order promised by `mregAdd`.
+multiModelAdd : Ident -> Int -> List (Ident, List Int) -> List (Ident, List Int)
+multiModelAdd ident value [] = [(ident, [value])]
+multiModelAdd ident value ((other, values) :: rest) =
+  if ident == other then
+    (ident, value :: values) :: rest
+  else
+    (other, values) :: multiModelAdd ident value rest
+
+multiModelLookup : Ident -> List (Ident, List Int) -> List Int
+multiModelLookup _ [] = []
+multiModelLookup ident ((other, values) :: rest) =
+  if ident == other then values else multiModelLookup ident rest
+
+multiRun : List Int -> MultiRegistry Int
+multiRun raw = multiRunGo raw mregEmpty
+
+multiRunGo : List Int -> MultiRegistry Int -> MultiRegistry Int
+multiRunGo [] registry = registry
+multiRunGo (raw :: rest) registry =
+  multiRunGo rest (mregAdd (scriptIdent raw) (scriptValue raw) registry)
+
+multiModel : List Int -> List (Ident, List Int)
+multiModel raw = multiModelGo raw []
+
+multiModelGo : List Int -> List (Ident, List Int) -> List (Ident, List Int)
+multiModelGo [] model = model
+multiModelGo (raw :: rest) model =
+  multiModelGo rest (multiModelAdd (scriptIdent raw) (scriptValue raw) model)
+
+multiMatchesModel : MultiRegistry Int -> List (Ident, List Int) -> Bool
+multiMatchesModel registry model =
+  mregSize registry == listLen model
+    && multiKeysMatch registry model scriptIdents
+
+multiKeysMatch : MultiRegistry Int ->
+  List (Ident, List Int) ->
+  List Ident ->
+  Bool
+multiKeysMatch _ _ [] = True
+multiKeysMatch registry model (ident :: rest) =
+  mregLookup ident registry == multiModelLookup ident model
+    && multiKeysMatch registry model rest
+
+setModelAdd : Ident -> List Ident -> List Ident
+setModelAdd ident [] = [ident]
+setModelAdd ident (other :: rest) =
+  if ident == other then other :: rest else other :: setModelAdd ident rest
+
+setModelMember : Ident -> List Ident -> Bool
+setModelMember _ [] = False
+setModelMember ident (other :: rest) =
+  ident == other || setModelMember ident rest
+
+setRun : List Int -> SetRegistry
+setRun raw = setRunGo raw sregEmpty
+
+setRunGo : List Int -> SetRegistry -> SetRegistry
+setRunGo [] registry = registry
+setRunGo (raw :: rest) registry =
+  setRunGo rest (sregAdd (scriptIdent raw) registry)
+
+setModel : List Int -> List Ident
+setModel raw = setModelGo raw []
+
+setModelGo : List Int -> List Ident -> List Ident
+setModelGo [] model = model
+setModelGo (raw :: rest) model =
+  setModelGo rest (setModelAdd (scriptIdent raw) model)
+
+setMatchesModel : SetRegistry -> List Ident -> Bool
+setMatchesModel registry model =
+  sregSize registry == listLen model && setKeysMatch registry model scriptIdents
+
+setKeysMatch : SetRegistry -> List Ident -> List Ident -> Bool
+setKeysMatch _ _ [] = True
+setKeysMatch registry model (ident :: rest) =
+  sregMember ident registry == setModelMember ident model
+    && setKeysMatch registry model rest
+
+-- SpellingPop keeps a floor for every spelling plus identity-indexed rows. The
+-- model is intentionally just association lists; it does not reuse an OrdMap.
+scriptSpelling : Int -> String
+scriptSpelling raw = if bounded raw 2 == 0 then "same" else "other"
+
+scriptOwner : Int -> String
+scriptOwner raw = "owner-\{bounded (raw / 11) 3}"
+
+rowIdent : (Ident, String, Int) -> Ident
+rowIdent (ident, _, _) = ident
+
+modelRowsAt : String ->
+  List (String, List (Ident, String, Int)) ->
+  List (Ident, String, Int)
+modelRowsAt _ [] = []
+modelRowsAt spelling ((other, rows) :: rest) =
+  if spelling == other then rows else modelRowsAt spelling rest
+
+modelFloorAt : String -> List (String, Int) -> Option Int
+modelFloorAt _ [] = None
+modelFloorAt spelling ((other, value) :: rest) =
+  if spelling == other then Some value else modelFloorAt spelling rest
+
+modelReplaceRow : Ident ->
+  (Ident, String, Int) ->
+  List (Ident, String, Int) ->
+  List (Ident, String, Int)
+modelReplaceRow _ row [] = [row]
+modelReplaceRow ident row (prior :: rest) =
+  if rowIdent prior == ident then
+    modelReplaceRow ident row rest
+  else
+    prior :: modelReplaceRow ident row rest
+
+modelRowsPut : String ->
+  (Ident, String, Int) ->
+  List (String, List (Ident, String, Int)) ->
+  List (String, List (Ident, String, Int))
+modelRowsPut spelling row [] = [(spelling, [row])]
+modelRowsPut spelling row ((other, rows) :: rest) =
+  if spelling == other then
+    (other, modelReplaceRow (rowIdent row) row rows) :: rest
+  else
+    (other, rows) :: modelRowsPut spelling row rest
+
+modelFloorPut : String -> Int -> List (String, Int) -> List (String, Int)
+modelFloorPut spelling value [] = [(spelling, value)]
+modelFloorPut spelling value ((other, prior) :: rest) =
+  if spelling == other then
+    (other, value) :: rest
+  else
+    (other, prior) :: modelFloorPut spelling value rest
+
+spellingRun : List Int -> SpellingPop Int
+spellingRun raw = spellingRunGo raw spEmpty
+
+spellingRunGo : List Int -> SpellingPop Int -> SpellingPop Int
+spellingRunGo [] pop = pop
+spellingRunGo (raw :: rest) pop =
+  let spelling = scriptSpelling raw
+  let value = scriptValue raw
+  let next =
+    if bounded raw 3 == 0 then
+      spInsert (Some (scriptIdent raw)) spelling (scriptOwner raw) value pop
+    else
+      spInsert None spelling (scriptOwner raw) value pop
+  spellingRunGo rest next
+
+spellingModel : List Int ->
+  (List (String, List (Ident, String, Int)), List (String, Int))
+spellingModel raw = spellingModelGo raw ([], [])
+
+spellingModelGo : List Int ->
+  (List (String, List (Ident, String, Int)), List (String, Int)) ->
+  (List (String, List (Ident, String, Int)), List (String, Int))
+spellingModelGo [] model = model
+spellingModelGo (raw :: rest) (rows, floor) =
+  let spelling = scriptSpelling raw
+  let value = scriptValue raw
+  let nextRows =
+    if bounded raw 3 == 0 then
+      modelRowsPut spelling (scriptIdent raw, scriptOwner raw, value) rows
+    else
+      rows
+  spellingModelGo rest (nextRows, modelFloorPut spelling value floor)
+
+spellingMatchesModel : SpellingPop Int ->
+  (List (String, List (Ident, String, Int)), List (String, Int)) ->
+  Bool
+spellingMatchesModel pop (rows, floor) =
+  spellingAtMatches pop rows floor "same"
+    && spellingAtMatches pop rows floor "other"
+
+spellingAtMatches : SpellingPop Int ->
+  List (String, List (Ident, String, Int)) ->
+  List (String, Int) ->
+  String ->
+  Bool
+spellingAtMatches pop rows floor spelling =
+  spCandsOf spelling pop == modelRowsAt spelling rows
+    && omLookup spelling (spFloor pop) == modelFloorAt spelling floor
+    && collisionMatches pop rows spelling
+
+collisionMatches : SpellingPop Int ->
+  List (String, List (Ident, String, Int)) ->
+  String ->
+  Bool
+collisionMatches pop rows spelling =
+  let collided = listLen (modelRowsAt spelling rows) >= 2
+  listLen (filterList (== spelling) (spCollided pop)) == 1 == collided
+
+-- Composite keys cover singleton, tuples, ordinals, and shifting a position.
+-- Equality is derived independently of the opaque renderer, so this catches a
+-- renderer collision without parsing renderer bytes.
+scriptRegKey : Int -> RegKey
+scriptRegKey raw = match bounded raw 4
+  0 => regKeyNAt [scriptIdent raw] [bounded (raw / 5) 3]
+  1 => regKeyNAt [scriptIdent raw, scriptIdent (raw / 7)] [bounded (raw / 11) 3]
+  2 =>
+    regKeyNAt
+      [scriptIdent (raw / 13)]
+      [bounded (raw / 17) 3, bounded (raw / 19) 3]
+  _ =>
+    regKeyNAt
+      [scriptIdent raw, scriptIdent (raw / 23)]
+      [bounded (raw / 29) 3, bounded (raw / 31) 3]
+
+prop "registry operation script agrees with a list model" (raw : List Int) =
+  registryScriptLaw raw
+
+prop "multi-registry operation script agrees with a list model" (raw : List Int) =
+  multiMatchesModel (multiRun raw) (multiModel raw)
+
+prop "set-registry operation script agrees with a list model" (raw : List Int) =
+  setMatchesModel (setRun raw) (setModel raw)
+
+prop "spelling population operation script agrees with a list model" (raw : List Int) =
+  spellingMatchesModel (spellingRun raw) (spellingModel raw)
+
+prop "ident render equality is identity equality across namespace and origin" (left : Int) (right : Int) =
+  identKey (scriptIdent left)
+    == identKey (scriptIdent right)
+    == (scriptIdent left == scriptIdent right)
+
+prop "composite registry renderer is injective on bounded key shapes" (left : Int) (right : Int) =
+  regKeyRender (scriptRegKey left)
+    == regKeyRender (scriptRegKey right)
+    == (scriptRegKey left == scriptRegKey right)
+
+fixedScript : Int -> Int -> List Int
+fixedScript _ 0 = []
+fixedScript seed width =
+  seed * 37 + width * 11 - 19 :: fixedScript seed (width - 1)
+
+fixedScripts : Int -> Int -> List (List Int)
+fixedScripts _ 0 = []
+fixedScripts seed count =
+  fixedScript seed 32 :: fixedScripts (seed + 1) (count - 1)
+
+fixedCorpusMatches : List (List Int) -> Bool
+fixedCorpusMatches [] = True
+fixedCorpusMatches (raw :: rest) =
+  registryScriptLaw raw
+    && multiMatchesModel (multiRun raw) (multiModel raw)
+    && setMatchesModel (setRun raw) (setModel raw)
+    && spellingMatchesModel (spellingRun raw) (spellingModel raw)
+    && fixedCorpusMatches rest
+
+-- This runs under eval and native, covering a deterministic 16 × 32 operation
+-- corpus with the same independent models as the interpreter-only props.
+test "bounded registry script corpus agrees with independent models" =
+  expectTrue (fixedCorpusMatches (fixedScripts 0 16))

@@ -2,7 +2,7 @@
 -- frame types intentionally have no Eq/Debug instances, so assertions compare
 -- projected immutable views and booleans.
 
-import test.{expectEqual}
+import test.{expectEqual, expectTrue}
 import frontend.ast.{TyConOrigin(..)}
 import types.evidence.{ScopeId(..)}
 import types.repr.{IfaceRef(..)}
@@ -27,6 +27,7 @@ import types.scopes.{
   visibleChain,
   visibleOnChain,
 }
+import support.util.{listLen}
 
 data FrameView = FrameView {
   fvId : ScopeId,
@@ -287,3 +288,162 @@ test "cursor open capture and close restore the parent then closed" =
       map cursorView [atRoot, atChild, backAtRoot, backClosed],
       [captureScopeCursor atRoot, captureScopeCursor atChild],
     )
+
+-- ── Script properties ────────────────────────────────────────────────────
+--
+-- A prop parameter is structurally generated, so this turns `List Int` into a
+-- bounded parent-choice script.  The production store is compared with an
+-- independent association-list ancestry model; refs and frames are created in
+-- the property body rather than generated.
+
+boundedScope : Int -> Int -> Int
+boundedScope n width = (n % width + width) % width
+
+scopeInt : ScopeId -> Int
+scopeInt (ScopeId n) = n
+
+nthScope : List ScopeId -> Int -> ScopeId
+nthScope (sid :: _) 0 = sid
+nthScope (_ :: rest) n = nthScope rest (n - 1)
+nthScope [] _ = ScopeId 0
+
+scopeParentOf : Int -> List (Int, Option Int) -> Option Int
+scopeParentOf _ [] = None
+scopeParentOf sid ((other, parent) :: rest) =
+  if sid == other then parent else scopeParentOf sid rest
+
+modelVisible : List (Int, Option Int) -> Int -> Int -> Bool
+modelVisible _ use binder
+  | use == binder = True
+modelVisible parents use binder = match scopeParentOf use parents
+  None => False
+  Some parent => modelVisible parents parent binder
+
+buildScopeTree : ScopeStore ->
+  List Int ->
+  (List ScopeId, List (Int, Option Int))
+buildScopeTree store raw =
+  let root = freshScope store None 0 "property" ModuleOwner
+  buildScopeTreeGo store raw [root] [(scopeInt root, None)]
+
+buildScopeTreeGo : ScopeStore ->
+  List Int ->
+  List ScopeId ->
+  List (Int, Option Int) ->
+  (List ScopeId, List (Int, Option Int))
+buildScopeTreeGo _ [] ids parents = (ids, parents)
+buildScopeTreeGo store (raw :: rest) ids parents =
+  let parent = nthScope ids (boundedScope raw (listLen ids))
+  let sid =
+    freshScope
+      store
+      (Some parent)
+      (boundedScope (raw / 7) 4)
+      "property"
+      (BindingOwner "node")
+  buildScopeTreeGo
+    store
+    rest
+    (ids ++ [sid])
+    (parents ++ [(scopeInt sid, Some (scopeInt parent))])
+
+allScopePairsMatch : ScopeStore ->
+  List ScopeId ->
+  List (Int, Option Int) ->
+  Bool
+allScopePairsMatch store ids parents = allScopeUsesMatch store ids ids parents
+
+allScopeUsesMatch : ScopeStore ->
+  List ScopeId ->
+  List ScopeId ->
+  List (Int, Option Int) ->
+  Bool
+allScopeUsesMatch _ _ [] _ = True
+allScopeUsesMatch store allIds (use :: rest) parents =
+  allBindersMatch store use allIds parents
+    && allScopeUsesMatch store allIds rest parents
+
+allBindersMatch : ScopeStore ->
+  ScopeId ->
+  List ScopeId ->
+  List (Int, Option Int) ->
+  Bool
+allBindersMatch _ _ [] _ = True
+allBindersMatch store use (binder :: rest) parents =
+  givenVisibleFrom store use binder
+      == modelVisible parents (scopeInt use) (scopeInt binder)
+    && visibleOnChain (visibleChain store use) binder
+      == modelVisible parents (scopeInt use) (scopeInt binder)
+    && allBindersMatch store use rest parents
+
+scopeTreeLaw : List Int -> Bool
+scopeTreeLaw raw =
+  let store = freshScopeStore ()
+  let (ids, parents) = buildScopeTree store raw
+  allScopePairsMatch store ids parents
+
+framesFollowFreshOrder : ScopeStore -> List ScopeId -> Int -> Bool
+framesFollowFreshOrder _ [] _ = True
+framesFollowFreshOrder store (sid :: rest) expected =
+  let frame = scopeFrame store sid
+  frame.sfId == ScopeId expected
+    && scopeInt sid == expected
+    && framesFollowFreshOrder store rest (expected + 1)
+
+freshOrderLaw : List Int -> Bool
+freshOrderLaw raw =
+  let store = freshScopeStore ()
+  let (ids, _) = buildScopeTree store raw
+  let (count, _) = scopeFrameStats store
+  count == listLen ids && framesFollowFreshOrder store ids 0
+
+copyIsolationLaw : List Int -> Bool
+copyIsolationLaw raw =
+  let original = freshScopeStore ()
+  let (ids, _) = buildScopeTree original raw
+  let root = nthScope ids 0
+  let copied = copyScopeStore original
+  let originalFresh =
+    freshScope original (Some root) 1 "property" (BindingOwner "original")
+  let copiedFresh =
+    freshScope copied (Some root) 1 "property" (BindingOwner "copied")
+  let originalFrame = scopeFrame original originalFresh
+  let copiedFrame = scopeFrame copied copiedFresh
+  originalFresh == copiedFresh
+    && scopeOwnerLabel originalFrame.sfOwner == "binding:original"
+    && scopeOwnerLabel copiedFrame.sfOwner == "binding:copied"
+    && scopeFrameStats original == scopeFrameStats copied
+    && givenVisibleFrom original originalFresh root
+    && givenVisibleFrom copied copiedFresh root
+
+prop "scope visibility script agrees with an ancestor model" (raw : List Int) =
+  scopeTreeLaw raw
+
+prop "fresh scope ids are monotonic over a generated tree" (raw : List Int) =
+  freshOrderLaw raw
+
+prop "copied stores detach frames and counters over a generated tree" (raw : List Int) =
+  copyIsolationLaw raw
+
+fixedScopeScript : Int -> Int -> List Int
+fixedScopeScript _ 0 = []
+fixedScopeScript seed width =
+  seed * 41 + width * 13 - 23 :: fixedScopeScript seed (width - 1)
+
+fixedScopeScripts : Int -> Int -> List (List Int)
+fixedScopeScripts _ 0 = []
+fixedScopeScripts seed count =
+  fixedScopeScript seed 32 :: fixedScopeScripts (seed + 1) (count - 1)
+
+scopeCorpusMatches : List (List Int) -> Bool
+scopeCorpusMatches [] = True
+scopeCorpusMatches (raw :: rest) =
+  scopeTreeLaw raw
+    && freshOrderLaw raw
+    && copyIsolationLaw raw
+    && scopeCorpusMatches rest
+
+-- Native test coverage for the same fixed 16 × 32 parent-choice corpus. Props
+-- execute in eval only, while this test runs on both requested engines.
+test "bounded scope script corpus agrees with the ancestor model" =
+  expectTrue (scopeCorpusMatches (fixedScopeScripts 0 16))
