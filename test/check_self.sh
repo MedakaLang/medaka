@@ -13,7 +13,7 @@
 # This script answers ONLY "is the compiler source type-clean" by reusing the
 # `./medaka check` CLI's OWN exit-code contract (it already exits 1 on any
 # ERROR-severity diagnostic anywhere in the loaded project — see
-# `checkRoute`/`locatedProjectErrors` in compiler/driver/medaka_cli.mdk) — no
+# `checkRoute`/`locatedProjectDiags` in compiler/driver/medaka_cli.mdk) — no
 # awk/parsing needed, and nothing to build beyond `./medaka` itself.
 #
 # Scope (DERIVED from typecheck_compiler_source.sh, not invented): this is the

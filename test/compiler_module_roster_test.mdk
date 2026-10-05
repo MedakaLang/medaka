@@ -33,23 +33,15 @@
    through a `test/gates.toml` row. -}
 
 import test.{Expectation(..)}
-import test_process.{testAssertionCount, underRoot}
+import test_process.{expectFloor, testAssertionCount, underRoot}
 
 {- | Grades one module's floor: its executed-assertion count must be at
-   least the committed floor. A raw spawn/run error is reported by name
+   least the committed floor. A failed run is reported by its own text
    rather than folded into a generic failure, so a broken module and a
    count that merely fell short read differently. -}
 floorExpectation : String -> Int -> <Exec, IO> Expectation
-floorExpectation path floor = match testAssertionCount (underRoot path) []
-  Err e => Fail e "\{intToString floor} assertions" "spawn/run error"
-  Ok ran =>
-    if ran >= floor then
-      Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
-    else
-      Fail
-        "\{path} — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
-        "\{intToString floor} assertions"
-        "\{intToString ran} assertions"
+floorExpectation path floor =
+  expectFloor path floor (testAssertionCount (underRoot path) [])
 
 test "compiler/tools/gate_cost.mdk executed >= 20 assertions" =
   floorExpectation "compiler/tools/gate_cost.mdk" 20

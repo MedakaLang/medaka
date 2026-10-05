@@ -691,7 +691,7 @@ PY
       [ -x "$RX" ] || { echo "missing $RX — run: sh test/build_oracles.sh --build-one refindex_main"; exit 2; }
       for name in binder_loc correctness dup_field_def iface_collide \
         ctor_import iface_method_loc iface_ty_collide iface_use impl_method \
-        multiclause self_rec_local; do
+        multiclause self_rec_local sig_name; do
         only_match "$name" || continue
         fixdir="$ROOT/test/references_fixtures/$name"
         [ -d "$fixdir" ] || { echo "missing fixture dir $fixdir"; exit 2; }
