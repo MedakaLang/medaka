@@ -1,0 +1,5 @@
+import bytes.*
+-- S2 reaches Foldable's default: Ok folds once, Err zero times.
+main =
+  let _ = println (length (Ok 1 : Result String Int))
+  println (length (Err "bad" : Result String Int))

@@ -1,0 +1,3 @@
+import bytes.{length}
+-- S2-IMPORT-DIFFER warns; Foldable's default still folds Some once.
+main = println (length (Some 7))

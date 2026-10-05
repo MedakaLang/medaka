@@ -1,5 +1,5 @@
 # META
-source_lines=54611
+source_lines=54612
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -22463,8 +22463,9 @@ definerReceiverDispatches name xt
 -- flat single-file path `prog` is core ++ user, so a user `eq : Int -> Int -> Int`
 -- made core's `neq : Eq a => a -> a -> Bool` (`neq x y = not (eq x y)`) infer `eq x y :
 -- Int` and reject with `Type mismatch: Bool vs Int` at the top of the user's file.
+-- A higher-kinded receiver `t a` reads the written constraint on `t`.
 definerReceiverIsDictVar : String -> Mono -> Bool
-definerReceiverIsDictVar name xt = match normalize xt
+definerReceiverIsDictVar name xt = match headMonoNode xt
   TVar cell => match methodEntryHere name
     Some (mIface, _, _, _) =>
       dictVarSatisfiesIface
@@ -27895,8 +27896,8 @@ shadowIfaceLabel ir = match ir.irOrigin
 -- to disagree on ORIGIN per provenance.  `univReceiverTag tys` is the same head
 -- projection `ieFileRowByHead` files each row under, so the two sides of `headTabIs`
 -- are the partition, exactly as `ieCountHeadByIfaceGo` owes it.
--- The method table is `ImplRow`'s last field — payload, never a key component (§9.3) —
--- which is the same `methods` list `KeyEntry` carried and `keyEntryOfRow` copies out.
+-- The last field lists supplied methods only. An admitted interface's defaults
+-- answer too, through the same predicate used by instance selection.
 --
 -- #1351/#1664 Leg 3: the row's 3rd field, `IfaceRef`, was ALREADY THERE and was
 -- discarded by this pattern (`ImplRow _ _ _ tys _ ms`).  Nothing about `ImplRow`
@@ -27907,10 +27908,10 @@ ieImplExistsForHeadGo : List ImplRow ->
   Option (List IfaceRef) ->
   Bool
 ieImplExistsForHeadGo [] _ _ _ = False
-ieImplExistsForHeadGo ((ImplRow _ _ ir tys _ ms) :: rest) name goal admitted
+ieImplExistsForHeadGo ((r@(ImplRow _ _ ir tys _ ms)) :: rest) name goal admitted
   | headTabIs (univReceiverTag tys) goal
-    && contains name ms
-    && ieRowAdmittedBy ir admitted = True
+    && ieRowAdmittedBy ir admitted
+    && ieRowAnswersMethod r ms name admitted = True
   | otherwise = ieImplExistsForHeadGo rest name goal admitted
 
 -- Does this row's interface match the declaration the querying module admits?
@@ -58454,7 +58455,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "definerReceiverDispatches" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "definerReceiverDispatches" ((PVar "name") (PVar "xt")) (EIf (EApp (EVar "isDefinerShadow") (EVar "name")) (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "name")) (EVar "xt")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "headTyconMono") (EVar "xt")) (arm (PCon "Some" (PVar "head")) () (EApp (EApp (EApp (EVar "ieImplExistsForHead") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "name")) (EVar "head"))) (arm (PCon "None") () (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "name")) (EVar "xt")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "definerReceiverIsDictVar" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "definerReceiverIsDictVar" ((PVar "name") (PVar "xt")) (EMatch (EApp (EVar "normalize") (EVar "xt")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EApp (EVar "methodEntryHere") (EVar "name")) (arm (PCon "Some" (PTuple (PVar "mIface") PWild PWild PWild)) () (EApp (EApp (EApp (EVar "dictVarSatisfiesIface") (EFieldAccess (EVar "mIface") "irName")) (EApp (EVar "tyvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "groupConstraintMonosRef") "value"))) (arm (PCon "None") () (EVar "False")))) (arm PWild () (EVar "False"))))
+(DFunDef false "definerReceiverIsDictVar" ((PVar "name") (PVar "xt")) (EMatch (EApp (EVar "headMonoNode") (EVar "xt")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EApp (EVar "methodEntryHere") (EVar "name")) (arm (PCon "Some" (PTuple (PVar "mIface") PWild PWild PWild)) () (EApp (EApp (EApp (EVar "dictVarSatisfiesIface") (EFieldAccess (EVar "mIface") "irName")) (EApp (EVar "tyvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "groupConstraintMonosRef") "value"))) (arm (PCon "None") () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "dictVarSatisfiesIface" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Bool")))))
 (DFunDef false "dictVarSatisfiesIface" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "dictVarSatisfiesIface" ((PVar "mIface") (PVar "id") (PCons (PTuple (PVar "cIface") (PVar "cm")) (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "monoIsTyvarId") (EVar "cm")) (EVar "id")) (EApp (EApp (EVar "contains") (EVar "mIface")) (EApp (EVar "ifaceSelfAndSupers") (EVar "cIface")))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "dictVarSatisfiesIface") (EVar "mIface")) (EVar "id")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -59649,7 +59650,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "shadowIfaceLabel" ((PVar "ir")) (EMatch (EFieldAccess (EVar "ir") "irOrigin") (arm (PCon "OriginModule" (PVar "m")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EFieldAccess (EVar "ir") "irName"))) (ELit (LString "' (from '"))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "')")))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EFieldAccess (EVar "ir") "irName"))) (ELit (LString "'"))))))
 (DTypeSig false "ieImplExistsForHeadGo" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyCon "TabKey") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool"))))))
 (DFunDef false "ieImplExistsForHeadGo" ((PList) PWild PWild PWild) (EVar "False"))
-(DFunDef false "ieImplExistsForHeadGo" ((PCons (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms")) (PVar "rest")) (PVar "name") (PVar "goal") (PVar "admitted")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "headTabIs") (EApp (EVar "univReceiverTag") (EVar "tys"))) (EVar "goal")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms"))) (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "ieImplExistsForHeadGo") (EVar "rest")) (EVar "name")) (EVar "goal")) (EVar "admitted")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ieImplExistsForHeadGo" ((PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms"))) (PVar "rest")) (PVar "name") (PVar "goal") (PVar "admitted")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "headTabIs") (EApp (EVar "univReceiverTag") (EVar "tys"))) (EVar "goal")) (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted"))) (EApp (EApp (EApp (EApp (EVar "ieRowAnswersMethod") (EVar "r")) (EVar "ms")) (EVar "name")) (EVar "admitted"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "ieImplExistsForHeadGo") (EVar "rest")) (EVar "name")) (EVar "goal")) (EVar "admitted")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ieRowAdmittedBy" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool"))))
 (DFunDef false "ieRowAdmittedBy" (PWild (PCon "None")) (EVar "True"))
 (DFunDef false "ieRowAdmittedBy" ((PVar "ir") (PCon "Some" (PVar "ifaces"))) (EApp (EApp (EVar "anyList") (EApp (EVar "ieRowIfaceMatches") (EVar "ir"))) (EVar "ifaces")))
@@ -67482,7 +67483,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "definerReceiverDispatches" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "definerReceiverDispatches" ((PVar "name") (PVar "xt")) (EIf (EApp (EVar "isDefinerShadow") (EVar "name")) (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "name")) (EVar "xt")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "headTyconMono") (EVar "xt")) (arm (PCon "Some" (PVar "head")) () (EApp (EApp (EApp (EVar "ieImplExistsForHead") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "name")) (EVar "head"))) (arm (PCon "None") () (EApp (EApp (EVar "definerReceiverIsDictVar") (EVar "name")) (EVar "xt")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "definerReceiverIsDictVar" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "definerReceiverIsDictVar" ((PVar "name") (PVar "xt")) (EMatch (EApp (EVar "normalize") (EVar "xt")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EApp (EVar "methodEntryHere") (EVar "name")) (arm (PCon "Some" (PTuple (PVar "mIface") PWild PWild PWild)) () (EApp (EApp (EApp (EVar "dictVarSatisfiesIface") (EFieldAccess (EVar "mIface") "irName")) (EApp (EVar "tyvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "groupConstraintMonosRef") "value"))) (arm (PCon "None") () (EVar "False")))) (arm PWild () (EVar "False"))))
+(DFunDef false "definerReceiverIsDictVar" ((PVar "name") (PVar "xt")) (EMatch (EApp (EVar "headMonoNode") (EVar "xt")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EApp (EVar "methodEntryHere") (EVar "name")) (arm (PCon "Some" (PTuple (PVar "mIface") PWild PWild PWild)) () (EApp (EApp (EApp (EVar "dictVarSatisfiesIface") (EFieldAccess (EVar "mIface") "irName")) (EApp (EVar "tyvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "groupConstraintMonosRef") "value"))) (arm (PCon "None") () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "dictVarSatisfiesIface" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Bool")))))
 (DFunDef false "dictVarSatisfiesIface" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "dictVarSatisfiesIface" ((PVar "mIface") (PVar "id") (PCons (PTuple (PVar "cIface") (PVar "cm")) (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "monoIsTyvarId") (EVar "cm")) (EVar "id")) (EApp (EApp (EVar "contains") (EVar "mIface")) (EApp (EVar "ifaceSelfAndSupers") (EVar "cIface")))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "dictVarSatisfiesIface") (EVar "mIface")) (EVar "id")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -68677,7 +68678,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "shadowIfaceLabel" ((PVar "ir")) (EMatch (EFieldAccess (EVar "ir") "irOrigin") (arm (PCon "OriginModule" (PVar "m")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EFieldAccess (EVar "ir") "irName"))) (ELit (LString "' (from '"))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "')")))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EFieldAccess (EVar "ir") "irName"))) (ELit (LString "'"))))))
 (DTypeSig false "ieImplExistsForHeadGo" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyCon "TabKey") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool"))))))
 (DFunDef false "ieImplExistsForHeadGo" ((PList) PWild PWild PWild) (EVar "False"))
-(DFunDef false "ieImplExistsForHeadGo" ((PCons (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms")) (PVar "rest")) (PVar "name") (PVar "goal") (PVar "admitted")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "headTabIs") (EApp (EVar "univReceiverTag") (EVar "tys"))) (EVar "goal")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms"))) (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "ieImplExistsForHeadGo") (EVar "rest")) (EVar "name")) (EVar "goal")) (EVar "admitted")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ieImplExistsForHeadGo" ((PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms"))) (PVar "rest")) (PVar "name") (PVar "goal") (PVar "admitted")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "headTabIs") (EApp (EVar "univReceiverTag") (EVar "tys"))) (EVar "goal")) (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted"))) (EApp (EApp (EApp (EApp (EVar "ieRowAnswersMethod") (EVar "r")) (EVar "ms")) (EVar "name")) (EVar "admitted"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "ieImplExistsForHeadGo") (EVar "rest")) (EVar "name")) (EVar "goal")) (EVar "admitted")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ieRowAdmittedBy" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "IfaceRef"))) (TyCon "Bool"))))
 (DFunDef false "ieRowAdmittedBy" (PWild (PCon "None")) (EVar "True"))
 (DFunDef false "ieRowAdmittedBy" ((PVar "ir") (PCon "Some" (PVar "ifaces"))) (EApp (EApp (EVar "anyList") (EApp (EVar "ieRowIfaceMatches") (EVar "ir"))) (EVar "ifaces")))

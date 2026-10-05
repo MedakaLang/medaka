@@ -1,0 +1,5 @@
+-- #3285: a trailing `--` comment on the import line survives the widening.
+
+import test.{expectTrue, expectEqual} -- tests
+
+eqCase a = expectEqual a 1

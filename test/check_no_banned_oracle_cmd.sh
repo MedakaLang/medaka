@@ -26,7 +26,7 @@
 #
 # ⚠️ SCOPE: MESSAGES, not invocations. This flags a line that PRINTS the bare command
 # (echo/printf/log) — one that TELLS A READER to run it. It deliberately does NOT flag a
-# script that *invokes* build-all itself: ops/provision.sh and scripts/docker-dev.sh
+# script that *invokes* build-all itself: scripts/ops/provision.sh and scripts/docker-dev.sh
 # provision a fresh box, where building every oracle is the correct, documented job (no-args
 # build-all is supported on purpose — see #474). The hazard is a message a human or agent
 # COPIES, not a tool doing its own work.
