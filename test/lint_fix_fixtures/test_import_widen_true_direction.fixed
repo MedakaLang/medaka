@@ -1,0 +1,7 @@
+-- #3285: `expectEqual True x` rewrites to `expectTrue x`, which joins the
+-- selective import list; `expectEqual False x` likewise adds `expectFalse`.
+
+import test.{expectEqual, expectTrue, expectFalse}
+
+eqCase a = expectTrue (a == 1)
+neCase a = expectFalse (a == 2)

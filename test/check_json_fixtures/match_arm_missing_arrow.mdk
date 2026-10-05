@@ -1,0 +1,4 @@
+d : Option Int -> Int
+d x = match x
+  Some y
+b = z => z

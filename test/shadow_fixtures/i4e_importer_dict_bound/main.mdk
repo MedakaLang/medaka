@@ -1,0 +1,9 @@
+import bytes.*
+-- S5 preserves the written dictionary: fold counts 1, 0, 1 and 3 elements.
+count : Foldable t => t a -> Int
+count xs = length xs
+main =
+  let _ = println (count (Some 1))
+  let _ = println (count (None : Option Int))
+  let _ = println (count (Ok 1 : Result String Int))
+  println (count [1, 2, 3])

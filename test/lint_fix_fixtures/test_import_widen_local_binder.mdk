@@ -1,0 +1,8 @@
+-- #3285: a local binder anywhere in the file that shares the introduced verb's
+-- name blocks the rewrite, since the call would reach the local.
+
+import test.{expectEqual}
+
+eqCase a =
+  let expectTrue = b => b
+  expectEqual True (a == 1)
