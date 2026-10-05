@@ -177,7 +177,7 @@ function flushStderr() {
 }
 
 self.onmessage = function(e) {
-  const { wasm } = e.data;
+  const { wasm, isolated } = e.data;
 
   stdoutBuf.length = 0;
   stderrBuf.length = 0;
@@ -233,12 +233,19 @@ self.onmessage = function(e) {
     mdk_result_byte: capabilityStub('readFile/getEnv result'),
     // Clock host surface (design WA-1): reads in seconds, sleep in milliseconds.  A
     // non-positive sleep returns at once, as medaka_rt.c's mdk_sleep_ms does.  The wait
-    // cell is made on first sleep so a page without SharedArrayBuffer still loads.
+    // cell is made on first sleep so a page without SharedArrayBuffer still loads; there
+    // the sleep is a CapabilityError (main.js passes `crossOriginIsolated` in the run message).
     mdk_wall_time_sec: () => Date.now() / 1000,
     mdk_monotonic_sec: () => performance.now() / 1000,
     mdk_sleep_ms: (ms) => {
       ms = Number(ms);
       if (ms > 0) {
+        // Atomics.wait needs a SharedArrayBuffer, which exists only when the page is
+        // cross-origin isolated.  Without it a sleep fails by name; returning at once
+        // would be a silently wrong program.
+        if (!isolated || typeof SharedArrayBuffer === 'undefined')
+          throw new CapabilityError(
+            '`sleep` needs cross-origin isolation, which this deployment does not provide');
         waitCell = waitCell || new Int32Array(new SharedArrayBuffer(4));
         Atomics.wait(waitCell, 0, 0, ms);
       }

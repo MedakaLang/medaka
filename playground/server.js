@@ -41,6 +41,19 @@ if (!fs.existsSync(path.join(PLAYGROUND, 'index.html'))) {
   process.exit(1);
 }
 
+// ── `_headers` emulation ──────────────────────────────────────────────────────
+// The deployed origin applies `_headers` (COOP/COEP among them); apply the same
+// file here so a local run is cross-origin isolated like production.  NO_ISOLATION=1
+// drops the two isolation headers, which is how the e2e harness drives a
+// misconfigured deploy.
+const { loadRules, headersFor } = require('./headers_rules.cjs');
+const HEADER_RULES = loadRules(path.join(PLAYGROUND, '_headers'));
+const ISOLATION_HEADERS = /^cross-origin-(opener|embedder)-policy$/i;
+function extraHeaders(urlPath) {
+  return headersFor(HEADER_RULES, urlPath).filter(
+    ([k]) => !(process.env.NO_ISOLATION && ISOLATION_HEADERS.test(k)));
+}
+
 // ── MIME map ──────────────────────────────────────────────────────────────────
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -79,6 +92,7 @@ function handleStatic(req, res) {
     const ext = path.extname(filePath);
     res.writeHead(200, {
       'Content-Type': MIME[ext] || 'application/octet-stream',
+      ...Object.fromEntries(extraHeaders(req.url.split('?')[0])),
       'Content-Length': data.length,
       // Dev server: never let the browser serve a stale asset (edits to
       // main.js/editor.js/compile.mjs must take effect on the next reload, and the
