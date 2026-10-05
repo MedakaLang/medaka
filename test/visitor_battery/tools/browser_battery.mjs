@@ -37,6 +37,15 @@ await page.goto(baseUrl, { waitUntil: 'load' });
 await page.waitForSelector('.cm-editor .cm-content', { timeout: 30000 });
 await page.waitForSelector('#run-btn:not([disabled])', { timeout: 60000 });
 
+// Count the Run button's disabled -> enabled transitions: playground/main.js
+// disables it when a run starts and re-enables it on every way a run can end.
+await page.evaluate(() => {
+  window.__runsFinished = 0;
+  new MutationObserver((records) => {
+    for (const r of records) if (r.oldValue !== null) window.__runsFinished++;
+  }).observe(document.getElementById('run-btn'), { attributes: true, attributeFilter: ['disabled'], attributeOldValue: true });
+});
+
 const summary = [];
 for (const f of files) {
   const name = f.replace(/\.mdk$/, '');
@@ -47,16 +56,16 @@ for (const f of files) {
     v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: s } });
   }, src);
   await page.waitForSelector('#run-btn:not([disabled])', { timeout: 30000 });
-  const before = await page.$eval('#console', (el) => el.textContent);
+  const runsBefore = await page.evaluate(() => window.__runsFinished);
   const t0 = Date.now();
   await page.click('#run-btn');
-  // Done when the console changed AND the Run button is enabled again, or 45 s.
-  let text = before, done = false;
+  // Done when the Run button has been re-enabled since the click (every run, ok or
+  // not, ends that way), or 45 s. Console text is deliberately not part of the
+  // signal: a row whose output equals the previous row's must still complete.
+  let text = '', done = false;
   while (Date.now() - t0 < 45000) {
     await page.waitForTimeout(250);
-    text = await page.$eval('#console', (el) => el.textContent);
-    const enabled = await page.$eval('#run-btn', (el) => !el.disabled);
-    if (text !== before && enabled) { done = true; break; }
+    if (await page.evaluate((n) => window.__runsFinished > n, runsBefore)) { done = true; break; }
   }
   await page.waitForTimeout(300);
   text = await page.$eval('#console', (el) => el.textContent);
