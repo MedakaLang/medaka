@@ -400,6 +400,17 @@ jobs:
             google-chrome-stable --version
           fi
 
+      # playground/e2e/smoke.spec.mjs also runs under Playwright's bundled Firefox
+      # and WebKit (iPhone emulation): WebKit enforces COEP on a module worker's
+      # imports where Chrome does not, so a Chrome-only run cannot see an iOS-only
+      # dead Run button (#3881). --with-deps installs the system libraries those
+      # builds need; run.sh's own `playwright install` then finds them present.
+      - name: Install Playwright Firefox and WebKit (cross-engine smoke)
+        working-directory: playground/e2e
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps firefox webkit
+
       - name: Build medaka (cold bootstrap from seed)
         run: make medaka
 
@@ -453,7 +464,7 @@ jobs:
       # exports E2E_EXPECT_GUIDE=1 so the guide-route assertions are MANDATORY here
       # rather than skipped. A missing or guide-less site/ fails loud in run.sh — it
       # never silently falls back to the dev tree.
-      - name: playground e2e (Playwright vs system Chrome, deployed site layout)
+      - name: playground e2e (Playwright vs system Chrome, plus the Firefox and WebKit smoke; deployed site layout)
         run: SITE=1 bash playground/e2e/run.sh
 
       # Debug aid: the harness screenshots every check into playground/e2e/screenshots/

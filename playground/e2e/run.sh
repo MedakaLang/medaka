@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # shell-because: external-harness — subject is a shell/python/browser harness or live gh state; wrap gains nothing
 # playground/e2e/run.sh — run the Playwright e2e harness against the CM6
-# playground, driving the SYSTEM Google Chrome (no Playwright browser
-# download — TLS-blocked on this machine). See README.md for the full story.
+# playground. The full specs drive the SYSTEM Google Chrome; the cross-engine
+# smoke (smoke.spec.mjs) also drives Playwright's bundled Firefox and WebKit,
+# which this script downloads on first use. See README.md for the full story.
 #
 # Two modes:
 #   bash playground/e2e/run.sh            serve the DEV tree (playground/)
@@ -77,10 +78,21 @@ if [ -n "$SITE" ] && [ ! -d "$SERVE_ROOT/stdlib" ]; then
 fi
 
 # ── npm deps (playwright) ────────────────────────────────────────────────────
-if [ ! -d "$HERE/node_modules/playwright" ]; then
-  echo "Installing e2e devDependencies (playwright) ..."
-  (cd "$HERE" && npm install --no-audit --no-fund)
+# Reinstalled when the installed version differs from the pin, because each
+# Playwright release drives its own browser builds.
+WANT_PW="$(node -p 'require(process.argv[1]).devDependencies.playwright' "$HERE/package.json")"
+HAVE_PW="$(node -p 'require(process.argv[1]).version' "$HERE/node_modules/playwright/package.json" 2>/dev/null || echo none)"
+if [ "$HAVE_PW" != "$WANT_PW" ]; then
+  echo "Installing e2e devDependencies (playwright $WANT_PW, found $HAVE_PW) ..."
+  (cd "$HERE" && npm ci --no-audit --no-fund)
 fi
+
+# ── Playwright's Firefox and WebKit, for smoke.spec.mjs ──────────────────────
+# A no-op when this Playwright's builds are already downloaded. It does not
+# install the system libraries they need; CI runs `npx playwright install
+# --with-deps firefox webkit` first, and a machine missing them fails at launch
+# with Playwright's own message naming that command.
+(cd "$HERE" && npx playwright install firefox webkit)
 
 mkdir -p "$SCREENSHOT_DIR"
 rm -f "$SCREENSHOT_DIR"/*.png
