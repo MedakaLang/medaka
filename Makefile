@@ -163,6 +163,7 @@ test: medaka
 	./medaka test compiler/tools/test_pins_test.mdk
 	./medaka test compiler/tools/test_pins_io_test.mdk
 	./medaka test compiler/tools/test_pins_report_test.mdk
+	./medaka test compiler/tools/test_pins_report_io_test.mdk
 	./medaka test compiler/tools/snapshot_test.mdk
 	## S-gate-registry (#2735): same reason, for gate_cmd.mdk's sibling. No
 	## gate script invokes `medaka test` on compiler/tools/gate_registry.mdk

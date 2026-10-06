@@ -1,19 +1,7 @@
 -- The command report preserves the engine's raw result and grades a matching
 -- known-red pin separately. These tests exercise that boundary directly.
 
-import driver.build_cmd.{cleanupTempDir, makeTempDir}
-import test.{
-  Expectation,
-  expectAll,
-  expectEach,
-  expectEqual,
-  expectFalse,
-  expectTextContainsAll,
-  expectTrue,
-  fail,
-}
-import test_process.{boundedVerbSeconds, medakaBin}
-import tools.native_fixture_test_support_test.{writeFixtureFiles}
+import test.{expectEach, expectEqual, expectFalse, expectTrue}
 import tools.doctest.{Engine(..), ExResult(..)}
 import tools.test_cmd.{cliGradedTestReportJson}
 import json.{Json, asInt, get}
@@ -40,46 +28,6 @@ import tools.test_pins_report.{
   knownRedCountTests,
 }
 import support.ordmap.{omEmpty}
-
-withReportFixture : List (String, String) ->
-  (String -> <Exec, IO> Expectation) ->
-  <Exec, IO> Expectation
-withReportFixture files inspect = match makeTempDir ()
-  Err message => fail message
-  Ok dir =>
-    let result =
-      match (writeFixtureFiles
-        dir
-        (("medaka.toml", "[package]\nname = \"test_pins_human_report\"\n")
-          :: files))
-        Err message => fail message
-        Ok _ => inspect dir
-    let _ = cleanupTempDir dir
-    result
-
-runHumanReport : String ->
-  String ->
-  <Exec, IO> Result String (Int, String, String)
-runHumanReport dir file =
-  boundedVerbSeconds 120 medakaBin ["test", "--native", "\{dir}/\{file}"]
-
-humanReportLedger : String
-humanReportLedger =
-  "version = 1\n\n[[pin]]\nfile = \"held.mdk\"\nkind = \"test\"\nname = \"held unit\"\nengine = \"native\"\nissue = 73\ndetail_lines = [\"held detail\"]\nfailure = \"assertion\"\n\n[[pin]]\nfile = \"failures.mdk\"\nkind = \"test\"\nname = \"xpass\"\nengine = \"native\"\nissue = 73\ndetail_lines = [\"held detail\"]\nfailure = \"assertion\"\n\n[[pin]]\nfile = \"failures.mdk\"\nkind = \"test\"\nname = \"changed\"\nengine = \"native\"\nissue = 73\ndetail_lines = [\"held detail\"]\nfailure = \"assertion\"\n\n[[pin]]\nfile = \"law.mdk\"\nkind = \"prop\"\nname = \"held law\"\nengine = \"native\"\nissue = 73\nseed = 11\ncases = 2\nfailure = \"false\"\n"
-
-humanReportFixtures : List (String, String)
-humanReportFixtures = [
-  ("medaka-test-pins.toml", humanReportLedger),
-  (
-    "held.mdk",
-    "import test.{fail, pass}\n\ntest \"held unit\" = fail \"held detail\"\ntest \"ordinary pass\" = pass\n",
-  ),
-  (
-    "failures.mdk",
-    "import test.{fail, pass}\n\ntest \"xpass\" = pass\ntest \"changed\" = fail \"changed detail\"\n",
-  ),
-  ("law.mdk", "prop \"held law\" (n : Int) = False\n"),
-]
 
 pin : PinKind -> String -> String -> Option String -> TestPin
 pin kind name engine detail = Pin {
@@ -247,55 +195,6 @@ test "an exact native error pin retains the raw error outcome" =
       expectEqual 1 (knownRedCountTests held),
     ),
   ]
-
-test "human reports preserve known-red and changed-pin meanings" = withReportFixture
-  humanReportFixtures
-  (dir =>
-    let held = runHumanReport dir "held.mdk"
-    let failures = runHumanReport dir "failures.mdk"
-    let law = runHumanReport dir "law.mdk"
-    expectAll [
-      expectHeldUnitReport held,
-      expectChangedUnitReport failures,
-      expectHeldPropertyReport law,
-    ])
-
-expectHeldUnitReport : Result String (Int, String, String) -> Expectation
-expectHeldUnitReport (Err message) = fail message
-expectHeldUnitReport (Ok (code, out, _)) = expectAll [
-  expectEqual 0 code,
-  expectTextContainsAll
-    [
-      "known-red issue #73 still holds",
-      "held unit [native]",
-      "1/2 passed (0 failed, 0 errors, 1 known-red)",
-    ]
-    out,
-]
-
-expectChangedUnitReport : Result String (Int, String, String) -> Expectation
-expectChangedUnitReport (Err message) = fail message
-expectChangedUnitReport (Ok (code, out, _)) = expectAll [
-  expectEqual 1 code,
-  expectTextContainsAll
-    [
-      "known-red issue #73 unexpected pass; remove its pin",
-      "known-red issue #73 changed: assertion failure detail changed",
-    ]
-    out,
-]
-
-expectHeldPropertyReport : Result String (Int, String, String) -> Expectation
-expectHeldPropertyReport (Err message) = fail message
-expectHeldPropertyReport (Ok (code, out, _)) = expectAll [
-  expectEqual 0 code,
-  expectTextContainsAll
-    [
-      "Testing \"held law\" [native] ... KNOWN-RED",
-      "known-red issue #73 still holds",
-    ]
-    out,
-]
 
 onlyPropPassed : List GradedProp -> Bool
 onlyPropPassed [row] = gradedPropPassed row
