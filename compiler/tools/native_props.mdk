@@ -513,7 +513,7 @@ plannedProbeSource nonce target tsrc modules env jobs =
 -- Each imported module gets a probe-local alias. Constructor selection is by
 -- the TypeKey owner, never by a bare source spelling.
 coreAlias : String -> String
-coreAlias nonce = "__np_core_\{nonce}"
+coreAlias nonce = "NpCore_\{nonce}"
 
 plannedImports : String ->
   List PlanModule ->
@@ -725,7 +725,9 @@ graphChildren _ GChar _ graph = graph
 graphChildren _ GString _ graph = graph
 graphChildren _ GUnit _ graph = graph
 graphChildren env (GCustom custom) depth graph =
-  match customStructuralPlan env custom
+  if depth >= maxGenDepth then
+    graph
+  else match customStructuralPlan env custom
     None => graph
     Some (plan@(GNominal key _)) => match planDef env key
       Ok (PlanDef _ owner _ visibility ctors) =>

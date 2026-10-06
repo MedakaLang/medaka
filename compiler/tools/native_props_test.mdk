@@ -149,10 +149,13 @@ test "native source closes every recursive plan behind parameter-scoped helpers"
     "data Tree a = Leaf a | Fork (List (Tree a)) (Tree a)\nprop \"shape\" (left : List (Tree Int)) (right : Tree Int) = left == left && right == right\n"
   match rendered text
     Err message => fail message
-    Ok probe =>
-      expectTrue
-        (contains "__np_gen_0_0_node_" probe
-          && contains "__np_gen_0_1_node_" probe
-          && contains "__np_gen_0_0_shrink_" probe
-          && contains "__np_gen_0_1_display_" probe
-          && not (contains "__np_missing_plan" probe))
+    Ok probe => match parse probe
+      [] => fail "rendered probe did not parse"
+      _ =>
+        expectTrue
+          (contains "import core as NpCore_" probe
+            && contains "__np_gen_0_0_node_" probe
+            && contains "__np_gen_0_1_node_" probe
+            && contains "__np_gen_0_0_shrink_" probe
+            && contains "__np_gen_0_1_display_" probe
+            && not (contains "__np_missing_plan" probe))
