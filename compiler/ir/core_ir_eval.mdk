@@ -40,6 +40,7 @@ import ir.core_ir.{
   CTree(..),
   CTBranch(..),
   CHead(..),
+  FailSite(..),
 }
 import ir.core_ir_lower.{lowerGroups, lowerImplsWith, instanceReqCounts}
 import types.disposition.{DispositionTable, installedDispositionsOpt}
@@ -119,7 +120,7 @@ ceval env (CMatch scrut arms) = cevalMatch env (ceval env scrut) arms
 ceval env (CDecision scrut arms tree) =
   cevalDecision env (ceval env scrut) arms tree
 ceval env (CIf c t e) = cevalIf env (ceval env c) t e
-ceval env (CBinPrim op l r tag) =
+ceval env (CBinPrim op l r tag _) =
   cevalBinPrim op tag (ceval env l) (ceval env r)
 ceval env (CUnOp op e) = evalUnop op (ceval env e)
 ceval env (CTuple es) = VTuple (map (ceval env) es)
@@ -228,7 +229,9 @@ cevalTree : EvalEnv (Value e) ->
   List (Value e) ->
   CTree ->
   <e> Value e
-cevalTree _ _ _ _ CTFail = panic "no matching clause in match"
+-- a refutable `let` reaches here only through a lowering that keeps its decision
+cevalTree _ _ _ _ (CTFail (LetRefuted _)) = panic "let pattern match failure"
+cevalTree _ _ _ _ (CTFail (NoArm _)) = panic "no matching clause in match"
 cevalTree env root arms _ (CTLeaf i) = cevalArm env root arms i
 cevalTree env root arms occs (CTGuard i fail) =
   cevalGuardedArm env root arms occs i fail

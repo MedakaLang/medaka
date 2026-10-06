@@ -338,7 +338,9 @@ batchSection prefix key all = match dropWhile (/= "\{prefix}\{key}") (lines all)
    `Aborts code tail` is a clean diagnostic abort: exit 1, nothing on
    stdout, and `runtime error [code]: tail` on stderr — that whole line from
    a built binary, and the same line behind the `<file>:L:C: ` prefix only
-   `medaka run` emits. `Prints out` is the control an aborting corpus needs:
+   `medaka run` emits. `AbortsLocated code tail` is the same abort for a trap
+   the native backend locates: the built binary's stderr is the whole line
+   `medaka run` printed, its `<file>:L:C: ` prefix included. `Prints out` is the control an aborting corpus needs:
    exit 0 on both engines with exactly `out` on stdout, so that a guard
    "fixed" into rejecting everything cannot read as green.
 
@@ -360,6 +362,7 @@ batchSection prefix key all = match dropWhile (/= "\{prefix}\{key}") (lines all)
    had. -}
 public export data RuntimeOutcome =
   | Aborts String String
+  | AbortsLocated String String
   | Prints String
   | Dies EngineDeath EngineDeath String
 
@@ -389,11 +392,14 @@ observed : String -> Int -> String -> String -> String
 observed engine exitCode out err =
   "\{engine} exit=\{intToString exitCode} stdout=\{debug out} stderr=\{debug err}"
 
-abortFailure : String -> Agreement -> Option String
-abortFailure want a =
-  let suffix = ": \{want}"
+-- `line` is the unlocated runtime-error line; [located] asks the built binary
+-- for the run's own last stderr line, which ends in it, rather than for `line`.
+abortFailure : Bool -> String -> Agreement -> Option String
+abortFailure located line a =
+  let suffix = ": \{line}"
   let runOut = chompNewlines a.runOut
   let runErr = chompNewlines a.runErr
+  let want = if located then lastLine runErr else line
   let binOut = chompNewlines a.binOut
   let binErr = chompNewlines a.binErr
   if a.runCode /= 1 || runOut /= "" || not (endsWith suffix runErr) then
@@ -404,6 +410,11 @@ abortFailure want a =
       "\{observed "build+exec" a.binCode binOut binErr}; want exit=1, empty stdout, stderr \{debug want}"
   else
     None
+
+lastLine : String -> String
+lastLine s = match reverse (lines s)
+  l :: _ => l
+  [] => ""
 
 printsFailure : String -> Agreement -> Option String
 printsFailure want a =
@@ -477,7 +488,8 @@ runtimeOutcomeFailure want a =
     Some
       "`medaka build` produced no binary (exit \{intToString a.buildCode}): \{debug (chompNewlines a.buildLog)}"
   else match want
-    Aborts code tail => abortFailure (abortLine code tail) a
+    Aborts code tail => abortFailure False (abortLine code tail) a
+    AbortsLocated code tail => abortFailure True (abortLine code tail) a
     Prints out => printsFailure out a
     Dies wantRun wantBuilt out => diesFailure wantRun wantBuilt out a
 

@@ -119,7 +119,7 @@ cexprSexp m (CDecision scrut arms tree) = node "CDecision" [
 ]
 cexprSexp m (CIf c t e) =
   node "CIf" [cexprSexp m c, cexprSexp m t, cexprSexp m e]
-cexprSexp m (CBinPrim op l r tag) =
+cexprSexp m (CBinPrim op l r tag _) =
   if tag == "" then
     node "CBinPrim" [escStr op, cexprSexp m l, cexprSexp m r]
   else
@@ -198,7 +198,8 @@ cguardSexp m (CGBind pat e) = node "CGBind" [patSexp pat, cexprSexp m e]
 
 export
 ctreeSexp : CTree -> String
-ctreeSexp CTFail = "CTFail"
+-- the miss site is not printed: the dump shows the tree's shape only
+ctreeSexp (CTFail _) = "CTFail"
 ctreeSexp (CTLeaf i) = node "CTLeaf" [intToString i]
 ctreeSexp (CTGuard i fail) = node "CTGuard" [intToString i, ctreeSexp fail]
 ctreeSexp (CTSwitch branches dflt) =

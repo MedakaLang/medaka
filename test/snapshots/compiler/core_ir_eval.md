@@ -1,5 +1,5 @@
 # META
-source_lines=755
+source_lines=758
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -44,6 +44,7 @@ import ir.core_ir.{
   CTree(..),
   CTBranch(..),
   CHead(..),
+  FailSite(..),
 }
 import ir.core_ir_lower.{lowerGroups, lowerImplsWith, instanceReqCounts}
 import types.disposition.{DispositionTable, installedDispositionsOpt}
@@ -123,7 +124,7 @@ ceval env (CMatch scrut arms) = cevalMatch env (ceval env scrut) arms
 ceval env (CDecision scrut arms tree) =
   cevalDecision env (ceval env scrut) arms tree
 ceval env (CIf c t e) = cevalIf env (ceval env c) t e
-ceval env (CBinPrim op l r tag) =
+ceval env (CBinPrim op l r tag _) =
   cevalBinPrim op tag (ceval env l) (ceval env r)
 ceval env (CUnOp op e) = evalUnop op (ceval env e)
 ceval env (CTuple es) = VTuple (map (ceval env) es)
@@ -232,7 +233,9 @@ cevalTree : EvalEnv (Value e) ->
   List (Value e) ->
   CTree ->
   <e> Value e
-cevalTree _ _ _ _ CTFail = panic "no matching clause in match"
+-- a refutable `let` reaches here only through a lowering that keeps its decision
+cevalTree _ _ _ _ (CTFail (LetRefuted _)) = panic "let pattern match failure"
+cevalTree _ _ _ _ (CTFail (NoArm _)) = panic "no matching clause in match"
 cevalTree env root arms _ (CTLeaf i) = cevalArm env root arms i
 cevalTree env root arms occs (CTGuard i fail) =
   cevalGuardedArm env root arms occs i fail
@@ -759,7 +762,7 @@ cevalModulesOutput preludeDecls modules =
   !outputRef
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroups" false) (mem "lowerImplsWith" false) (mem "instanceReqCounts" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false) (mem "contains" false) (mem "filterList" false))))
@@ -777,7 +780,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "cevalMatch") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EApp (EVar "cevalDecision") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "scrut"))) (EVar "arms")) (EVar "tree")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "cevalIf") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "c"))) (EVar "t")) (EVar "e")))
-(DFunDef false "ceval" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "cevalBinPrim") (EVar "op")) (EVar "tag")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "r"))))
+(DFunDef false "ceval" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EApp (EApp (EApp (EApp (EVar "cevalBinPrim") (EVar "op")) (EVar "tag")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "r"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CUnOp" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "evalUnop") (EVar "op")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CTuple" (PVar "es"))) (EApp (EVar "VTuple") (EApp (EApp (EVar "map") (EApp (EVar "ceval") (EVar "env"))) (EVar "es"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CList" (PVar "es"))) (EApp (EVar "VList") (EApp (EApp (EVar "map") (EApp (EVar "ceval") (EVar "env"))) (EVar "es"))))
@@ -830,7 +833,8 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "cevalDecision" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalDecision" ((PVar "env") (PVar "root") (PVar "arms") (PVar "tree")) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EListLit (EVar "root"))) (EVar "tree")))
 (DTypeSig false "cevalTree" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "cevalTree" (PWild PWild PWild PWild (PCon "CTFail")) (EApp (EVar "panic") (ELit (LString "no matching clause in match"))))
+(DFunDef false "cevalTree" (PWild PWild PWild PWild (PCon "CTFail" (PCon "LetRefuted" PWild))) (EApp (EVar "panic") (ELit (LString "let pattern match failure"))))
+(DFunDef false "cevalTree" (PWild PWild PWild PWild (PCon "CTFail" (PCon "NoArm" PWild))) (EApp (EVar "panic") (ELit (LString "no matching clause in match"))))
 (DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") PWild (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "cevalArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "i")))
 (DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalGuardedArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "occs")) (EVar "i")) (EVar "fail")))
 (DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EApp (EVar "cOccsTail") (EVar "occs"))) (EVar "sub")))
@@ -956,7 +960,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "cevalModules") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroups" false) (mem "lowerImplsWith" false) (mem "instanceReqCounts" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false) (mem "contains" false) (mem "filterList" false))))
@@ -974,7 +978,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "cevalMatch") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EApp (EVar "cevalDecision") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "scrut"))) (EVar "arms")) (EVar "tree")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "cevalIf") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "c"))) (EVar "t")) (EVar "e")))
-(DFunDef false "ceval" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "cevalBinPrim") (EVar "op")) (EVar "tag")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "r"))))
+(DFunDef false "ceval" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EApp (EApp (EApp (EApp (EVar "cevalBinPrim") (EVar "op")) (EVar "tag")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "r"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CUnOp" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "evalUnop") (EVar "op")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CTuple" (PVar "es"))) (EApp (EVar "VTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "ceval") (EVar "env"))) (EVar "es"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CList" (PVar "es"))) (EApp (EVar "VList") (EApp (EApp (EMethodRef "map") (EApp (EVar "ceval") (EVar "env"))) (EVar "es"))))
@@ -1027,7 +1031,8 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "cevalDecision" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalDecision" ((PVar "env") (PVar "root") (PVar "arms") (PVar "tree")) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EListLit (EVar "root"))) (EVar "tree")))
 (DTypeSig false "cevalTree" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "cevalTree" (PWild PWild PWild PWild (PCon "CTFail")) (EApp (EVar "panic") (ELit (LString "no matching clause in match"))))
+(DFunDef false "cevalTree" (PWild PWild PWild PWild (PCon "CTFail" (PCon "LetRefuted" PWild))) (EApp (EVar "panic") (ELit (LString "let pattern match failure"))))
+(DFunDef false "cevalTree" (PWild PWild PWild PWild (PCon "CTFail" (PCon "NoArm" PWild))) (EApp (EVar "panic") (ELit (LString "no matching clause in match"))))
 (DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") PWild (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "cevalArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "i")))
 (DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalGuardedArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "occs")) (EVar "i")) (EVar "fail")))
 (DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EApp (EVar "cOccsTail") (EVar "occs"))) (EMethodRef "sub")))

@@ -78,7 +78,7 @@ eagerVars b (CLetGroup binds body) =
   eagerVarsBinds b2 binds ++ eagerVars b2 body
 eagerVars b (CBlock stmts) = eagerVarsStmts b stmts
 eagerVars b (CIf c t f) = eagerVars b c ++ eagerVars b t ++ eagerVars b f
-eagerVars b (CBinPrim _ l r _) = eagerVars b l ++ eagerVars b r
+eagerVars b (CBinPrim _ l r _ _) = eagerVars b l ++ eagerVars b r
 eagerVars b (CUnOp _ x) = eagerVars b x
 eagerVars b (CMatch scrut arms) = eagerVars b scrut ++ eagerVarsArms b arms
 eagerVars b (CDecision scrut arms _) = eagerVars b scrut ++ eagerVarsArms b arms
@@ -391,7 +391,7 @@ eagerHasMethod (CLetGroup binds body) =
 eagerHasMethod (CBlock stmts) = stmtsHaveMethod stmts
 eagerHasMethod (CIf c t f) =
   eagerHasMethod c || eagerHasMethod t || eagerHasMethod f
-eagerHasMethod (CBinPrim _ l r _) = eagerHasMethod l || eagerHasMethod r
+eagerHasMethod (CBinPrim _ l r _ _) = eagerHasMethod l || eagerHasMethod r
 eagerHasMethod (CUnOp _ x) = eagerHasMethod x
 eagerHasMethod (CMatch scrut arms) = eagerHasMethod scrut || armsHaveMethod arms
 eagerHasMethod (CDecision scrut arms _) =

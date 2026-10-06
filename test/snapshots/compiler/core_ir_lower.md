@@ -1,5 +1,5 @@
 # META
-source_lines=2678
+source_lines=2958
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -17,6 +17,7 @@ stages=DESUGAR,MARK
 import frontend.ast.{
   Lit(..),
   Loc(..),
+  noDeclLoc,
   Pat(..),
   RecPatField(..),
   Expr(..),
@@ -61,6 +62,7 @@ import ir.core_ir.{
   CTree(..),
   CTBranch(..),
   CHead(..),
+  FailSite(..),
 }
 import types.disposition.{
   DispositionTable,
@@ -76,6 +78,7 @@ import eval.eval.{
   lookupPositions,
   tyvarsInArgs,
   headTyconHead,
+  exprStartLoc,
 }
 import list.{replicate, take, drop, range}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey, omLookup}
@@ -126,9 +129,11 @@ lower (EVarId x _) = CVar x AGlobal
 lower (EVarAt x addr) = CVar x addr
 lower (EApp f x) = CApp (lower f) (lower x)
 lower (ELam pats body) = CLam pats (lower body)
+lower (ELet _ False pat e1 e2)
+  | patMayFail pat = letDecision noDeclLoc pat (lower e1) (lower e2)
 lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
 lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
-lower (EMatch scrut arms) = lowerMatch (lower scrut) arms
+lower (EMatch scrut arms) = lowerMatch noDeclLoc (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
 lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute !route)
 lower (EInfix op l r) = CApp (CApp (CVar op AGlobal) (lower l)) (lower r)
@@ -165,7 +170,7 @@ lower (ERecordUpdate base fields r) =
   CRecordUpdate !r (lower base) (map lowerField fields)
 lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
-lower (EBlock stmts) = CBlock (map lowerStmt stmts)
+lower (EBlock stmts) = CBlock (lowerStmts stmts)
 -- SHARED-FLOAT-RESIDUAL §3(C): dictPass wraps a scalar-tagged binop (arithmetic
 -- "Float" or comparison "Int") in `EAnnot (EBinOp …) (TyCon tag)` (the ref-cell
 -- route does not survive to here, a node does).  Read the tag into CBinPrim's
@@ -184,9 +189,13 @@ lower (EHeadAnnot e _) = lower e
 -- same seam `EDictAt` crosses on the next line.
 lower (EMethodAt name _ ev) = cmethodOf name (evMethodRoutes ev)
 lower (EDictAt name ev) = CDict name (evDictRoutes ev)
--- ELoc is STRIPPED here: no source-location wrapper reaches the Core IR, so the
--- emitted IR for any program is byte-identical to the un-wrapped tree.  This is
--- the fixpoint guarantee (the transparent strip that keeps the C3 IR stable).
+-- A located `match` or `let` keeps its keyword's span as the trap site of the
+-- decision it lowers to, the span the interpreter reports (`eval`'s
+-- `ELoc l (EMatch …)` and `ELoc l (ELet …)` arms).  Every other ELoc is stripped:
+-- no location wrapper reaches the Core IR, and only the trap fields carry one.
+lower (ELoc l (EMatch scrut arms)) = lowerMatch l (lower scrut) arms
+lower (ELoc l (ELet _ False pat e1 e2))
+  | patMayFail pat = letDecision l pat (lower e1) (lower e2)
 lower (ELoc _ e) = lower e
 lower (EDoOrigin _ e) = lower e
 lower other = panic ("core_ir lower: unsupported node " ++ nodeTag other)
@@ -207,7 +216,7 @@ lowerBinop "||" l r _ = CIf (lower l) (CLit (LBool True)) (lower r)
 lowerBinop "|>" l r _ = CApp (lower r) (lower l)
 lowerBinop ">>" l r _ = composeLam (lower l) (lower r)
 lowerBinop "<<" l r _ = composeLam (lower r) (lower l)
-lowerBinop op l r tag = CBinPrim op (lower l) (lower r) tag
+lowerBinop op l r tag = CBinPrim op (lower l) (lower r) tag (exprStartLoc l)
 
 -- (f >> g) ≡ \x -> g (f x).  composeLam first second ≡ \x -> second (first x).
 composeLam : CExpr -> CExpr -> CExpr
@@ -229,11 +238,43 @@ lowerGuard (GBind p e) = CGBind p (lower e)
 -- The fall-back keeps the proven ordered path for record/range patterns the
 -- tree compiler doesn't model — correctness first, the tree captures the win on
 -- the constructor/list/tuple/literal matches that dominate the lexer + parser.
-lowerMatch : CExpr -> List Arm -> CExpr
-lowerMatch cscrut arms
+-- [site] is the `match` keyword's span, which a miss reports.
+lowerMatch : Loc -> CExpr -> List Arm -> CExpr
+lowerMatch site cscrut arms
   | allList armTreeable arms =
-    CDecision cscrut (map lowerArm arms) (compileArms arms)
+    CDecision cscrut (map lowerArm arms) (compileArms (NoArm site) arms)
   | otherwise = CMatch cscrut (map lowerArm arms)
+
+-- A non-recursive `let` whose pattern can miss lowers to a one-arm decision whose
+-- miss is E-LET-REFUTE at [site], so a backend tests the whole pattern, nested
+-- fields included, through the match machinery.  `refoldLets` turns it back into
+-- the plain `CLet` for every lowering that does not use that check.
+letDecision : Loc -> Pat -> CExpr -> CExpr -> CExpr
+letDecision site pat scrut body =
+  let arms = [CArm pat [] body]
+  CDecision scrut arms (compileArmsC (LetRefuted site) arms)
+
+-- Whether a `let` pattern can fail to match, judged by its shape alone: any
+-- constructor, list or literal (other than `()`) in it.  A tuple of variables
+-- cannot, and keeps the plain `CLet`.
+patMayFail : Pat -> Bool
+patMayFail PWild = False
+patMayFail (PVar _ _) = False
+patMayFail (PLit LUnit) = False
+patMayFail (PAs _ _ p) = patMayFail p
+patMayFail (PTuple ps) = anyList patMayFail ps
+patMayFail _ = True
+
+-- A block's statements.  A refutable `let` takes the rest of the block as its
+-- decision's body, so the block ends with that decision; a refutable `let` that
+-- ends the block gets the empty block as its body, the Unit a last `let` yields
+-- (`refoldLets` reads both back).
+lowerStmts : List DoStmt -> List CStmt
+lowerStmts [] = []
+lowerStmts ((DoLet _ False pat e site) :: rest)
+  | patMayFail pat =
+    [CSExpr (letDecision site pat (lower e) (CBlock (lowerStmts rest)))]
+lowerStmts (s :: rest) = lowerStmt s :: lowerStmts rest
 
 armTreeable : Arm -> Bool
 armTreeable (Arm pat _ _) = treeablePat pat
@@ -256,8 +297,9 @@ treeablePat (PAs _ _ p) = treeablePat p
 treeablePat (PRng _ _ _) = True
 treeablePat (PRec _ _ _) = True
 
-compileArms : List Arm -> CTree
-compileArms arms = compileTree (map armHasGuard arms) (initialRows arms 0)
+compileArms : FailSite -> List Arm -> CTree
+compileArms site arms =
+  compileTree site (map armHasGuard arms) (initialRows arms 0)
 
 -- an arm whose pattern (recursively) contains PRng or PRec may not match the
 -- scrutinee at the leaf even though the matrix treated it as a wildcard — the
@@ -296,9 +338,45 @@ initialRows ((Arm pat _ _) :: rest) i =
 -- (`nthBool`; the second half of #408, see `guardSet`).  The exported entry
 -- keeps the caller-facing `List Bool` and converts it ONCE, at the top, into the
 -- membership set the recursion actually threads.
+-- [site] is what every miss leaf of the tree raises.
 export
-compileTree : List Bool -> List (List Pat, Int) -> CTree
-compileTree guards rows = compileTreeG (guardSet 0 guards omEmpty) rows
+compileTree : FailSite -> List Bool -> List (List Pat, Int) -> CTree
+compileTree site guards rows =
+  withFailSite site (compileTreeG (guardSet 0 guards omEmpty) rows)
+
+-- [t] with every miss leaf raising [site].
+withFailSite : FailSite -> CTree -> CTree
+withFailSite site (CTFail _) = CTFail site
+withFailSite _ (CTLeaf i) = CTLeaf i
+withFailSite site (CTGuard i t) = CTGuard i (withFailSite site t)
+withFailSite site (CTSwitch bs d) =
+  CTSwitch (map (failSiteBranch site) bs) (withFailSite site d)
+withFailSite site (CTDrop t) = CTDrop (withFailSite site t)
+
+failSiteBranch : FailSite -> CTBranch -> CTBranch
+failSiteBranch site (CTBranch h t) = CTBranch h (withFailSite site t)
+
+-- The site [t]'s misses raise (every miss leaf of one tree carries the same one);
+-- an unlocated `NoArm` when it has none.
+treeFailSite : CTree -> FailSite
+treeFailSite t = match treeFailSiteOpt t
+  Some s => s
+  None => NoArm noDeclLoc
+
+treeFailSiteOpt : CTree -> Option FailSite
+treeFailSiteOpt (CTFail s) = Some s
+treeFailSiteOpt (CTLeaf _) = None
+treeFailSiteOpt (CTGuard _ t) = treeFailSiteOpt t
+treeFailSiteOpt (CTSwitch bs d) = match firstBranchFailSite bs
+  Some s => Some s
+  None => treeFailSiteOpt d
+treeFailSiteOpt (CTDrop t) = treeFailSiteOpt t
+
+firstBranchFailSite : List CTBranch -> Option FailSite
+firstBranchFailSite [] = None
+firstBranchFailSite ((CTBranch _ t) :: rest) = match treeFailSiteOpt t
+  Some s => Some s
+  None => firstBranchFailSite rest
 
 -- Guarded ARM INDICES as an `OrdMap Unit` membership set: O(log N) per leaf
 -- lookup where the `List Bool` walk was O(arm index).  Built once per
@@ -312,7 +390,7 @@ guardSet i (True :: rest) acc =
 guardSet i (False :: rest) acc = guardSet (i + 1) rest acc
 
 compileTreeG : OrdMap Unit -> List (List Pat, Int) -> CTree
-compileTreeG _ [] = CTFail
+compileTreeG _ [] = CTFail (NoArm noDeclLoc)
 compileTreeG guards (row :: rest) = compileRows guards row rest (row :: rest)
 
 compileRows : OrdMap Unit ->
@@ -680,27 +758,203 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- driver that typechecks lowers through `lowerTypedProgram`.
 export
 lowerProgram : List Decl -> CProgram
-lowerProgram prog = lowerProgramWith None prog
+lowerProgram prog = refoldProgram noLetCheck (lowerProgramWith None prog)
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
 export
 lowerTypedProgram : List Decl -> CProgram
-lowerTypedProgram prog = lowerProgramWith (Some (installedDispositions ())) prog
+lowerTypedProgram prog =
+  refoldProgram
+    noLetCheck
+    (lowerProgramWith (Some (installedDispositions ())) prog)
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
--- probe; see `lowerProgram`).
+-- probe; see `lowerProgram`).  Refutable lets are still one-arm decisions here
+-- (`letDecision`); each public lowering decides which of them to keep.
 lowerProgramWith : Option DispositionTable -> List Decl -> CProgram
 lowerProgramWith dispositions prog =
   CProgram
-    (lowerGroups prog)
+    (lowerGroupsRaw prog)
     (ctorArities prog)
     (buildCtorToType prog)
-    (lowerImplsWith
+    (lowerImplsRaw
       (installDispatchTables prog)
       (instanceReqCounts prog)
       dispositions
       prog)
+
+-- ── which refutable lets keep their decision (see `letDecision`) ─────────────
+-- Only the native backend tests a refutable `let` through its decision; every
+-- other consumer gets the plain `CLet`/`CSLet` back, unchanged.  Native keeps the
+-- decision only where the pattern can really miss, by the program's constructor
+-- table, so a `let` on a single-constructor type keeps its unchecked destructure.
+
+-- A `let` pattern the decision is kept for; `noLetCheck` keeps none.
+noLetCheck : Pat -> Bool
+noLetCheck _ = False
+
+-- [p] can miss a value of its type: a constructor with a sibling (or one the table
+-- does not know), a list, or a literal other than `()`, anywhere in it.  A record
+-- pattern still unresolved after `rewriteProgramRecPats` keeps the plain `let`.
+patCanMiss : OrdMap Bool -> Pat -> Bool
+patCanMiss _ PWild = False
+patCanMiss _ (PVar _ _) = False
+patCanMiss _ (PLit LUnit) = False
+patCanMiss _ (PLit _) = True
+patCanMiss sib (PAs _ _ p) = patCanMiss sib p
+patCanMiss sib (PTuple ps) = anyList (patCanMiss sib) ps
+patCanMiss sib (PCon c ps) = ctorHasSibling sib c || anyList (patCanMiss sib) ps
+patCanMiss _ (PRec _ _ _) = False
+patCanMiss _ _ = True
+
+ctorHasSibling : OrdMap Bool -> String -> Bool
+ctorHasSibling sib c = match omLookup c sib
+  Some b => b
+  None => True
+
+-- constructor → whether its type declares another constructor, from a CProgram's
+-- (ctor, type) table; the first row for a constructor name wins, as the emitter's
+-- `ctorTypeOf` reads it.
+siblingTable : List (String, String) -> OrdMap Bool
+siblingTable t =
+  let counts = typeCtorCounts t omEmpty
+  siblingRows counts t omEmpty
+
+typeCtorCounts : List (String, String) -> OrdMap Int -> OrdMap Int
+typeCtorCounts [] acc = acc
+typeCtorCounts ((_, ty) :: rest) acc =
+  let n = match omLookup ty acc
+    Some k => k + 1
+    None => 1
+  typeCtorCounts rest (omInsert ty n acc)
+
+siblingRows : OrdMap Int -> List (String, String) -> OrdMap Bool -> OrdMap Bool
+siblingRows _ [] acc = acc
+siblingRows counts ((c, ty) :: rest) acc
+  | omHasKey c acc = siblingRows counts rest acc
+  | otherwise =
+    let many = match omLookup ty counts
+      Some k => k > 1
+      None => True
+    siblingRows counts rest (omInsert c many acc)
+
+-- the let-refute site of a one-arm decision `letDecision` built, else None.
+letDecisionSite : CTree -> Option Loc
+letDecisionSite t = match treeFailSiteOpt t
+  Some (LetRefuted l) => Some l
+  _ => None
+
+refoldProgram : (Pat -> Bool) -> CProgram -> CProgram
+refoldProgram keep (CProgram groups ctorArs ctorTypes implEntries) =
+  CProgram
+    (map (refoldBind keep) groups)
+    ctorArs
+    ctorTypes
+    (map (refoldImpl keep) implEntries)
+
+refoldBind : (Pat -> Bool) -> CBind -> CBind
+refoldBind keep (CBind n clauses) = CBind n (map (refoldClause keep) clauses)
+
+refoldClause : (Pat -> Bool) -> CClause -> CClause
+refoldClause keep (CClause pats body) = CClause pats (refoldExpr keep body)
+
+refoldImpl : (Pat -> Bool) -> CImplEntry -> CImplEntry
+refoldImpl keep (CImplEntry n s (CImplTagged tag key iface ps pats body)) =
+  CImplEntry n s (CImplTagged tag key iface ps pats (refoldExpr keep body))
+refoldImpl keep (CImplEntry n s (CImplDefault ifaceId tag key ps pats body)) =
+  CImplEntry n s (CImplDefault ifaceId tag key ps pats (refoldExpr keep body))
+
+refoldExpr : (Pat -> Bool) -> CExpr -> CExpr
+refoldExpr keep (CDecision scrut [CArm pat [] body] tree)
+  | isSomeLoc (letDecisionSite tree) && not (keep pat) =
+    CLet False pat (refoldExpr keep scrut) (refoldExpr keep body)
+refoldExpr keep (CDecision scrut arms tree) =
+  CDecision (refoldExpr keep scrut) (map (refoldArm keep) arms) tree
+refoldExpr _ (CLit l) = CLit l
+refoldExpr _ (CVar x addr) = CVar x addr
+refoldExpr keep (CApp f x) = CApp (refoldExpr keep f) (refoldExpr keep x)
+refoldExpr keep (CLam pats body) = CLam pats (refoldExpr keep body)
+refoldExpr keep (CLet r pat e1 e2) =
+  CLet r pat (refoldExpr keep e1) (refoldExpr keep e2)
+refoldExpr keep (CLetGroup binds body) =
+  CLetGroup (map (refoldBind keep) binds) (refoldExpr keep body)
+refoldExpr keep (CMatch scrut arms) =
+  CMatch (refoldExpr keep scrut) (map (refoldArm keep) arms)
+refoldExpr keep (CIf c t e) =
+  CIf (refoldExpr keep c) (refoldExpr keep t) (refoldExpr keep e)
+refoldExpr keep (CBinPrim op l r tag site) =
+  CBinPrim op (refoldExpr keep l) (refoldExpr keep r) tag site
+refoldExpr keep (CUnOp op x) = CUnOp op (refoldExpr keep x)
+refoldExpr keep (CTuple es) = CTuple (map (refoldExpr keep) es)
+refoldExpr keep (CList es) = CList (map (refoldExpr keep) es)
+refoldExpr keep (CRecord name fields) =
+  CRecord name (map (refoldField keep) fields)
+refoldExpr keep (CFieldAccess ex f n) = CFieldAccess (refoldExpr keep ex) f n
+refoldExpr keep (CRecordUpdate name base fields) =
+  CRecordUpdate name (refoldExpr keep base) (map (refoldField keep) fields)
+refoldExpr keep (CVariantUpdate con base fields) =
+  CVariantUpdate con (refoldExpr keep base) (map (refoldField keep) fields)
+refoldExpr keep (CArray es) = CArray (map (refoldExpr keep) es)
+refoldExpr keep (CRangeList lo hi incl) =
+  CRangeList (refoldExpr keep lo) (refoldExpr keep hi) incl
+refoldExpr keep (CRangeArray lo hi incl) =
+  CRangeArray (refoldExpr keep lo) (refoldExpr keep hi) incl
+refoldExpr keep (CIndex a i) = CIndex (refoldExpr keep a) (refoldExpr keep i)
+refoldExpr keep (CSlice a lo hi incl) =
+  CSlice (refoldExpr keep a) (refoldExpr keep lo) (refoldExpr keep hi) incl
+refoldExpr keep (CStringIndex a i) =
+  CStringIndex (refoldExpr keep a) (refoldExpr keep i)
+refoldExpr keep (CStringSlice a lo hi incl) =
+  CStringSlice
+    (refoldExpr keep a)
+    (refoldExpr keep lo)
+    (refoldExpr keep hi)
+    incl
+refoldExpr keep (CListIndex a i) =
+  CListIndex (refoldExpr keep a) (refoldExpr keep i)
+refoldExpr keep (CListSlice a lo hi incl) =
+  CListSlice (refoldExpr keep a) (refoldExpr keep lo) (refoldExpr keep hi) incl
+refoldExpr keep (CBlock stmts) = CBlock (refoldStmts keep stmts)
+refoldExpr _ (CMethod name iface arity r ir mr) =
+  CMethod name iface arity r ir mr
+refoldExpr _ (CDict name rs) = CDict name rs
+
+-- A block that ends with a `lowerStmts` let decision gets its `let` statement
+-- back, followed by the statements the decision took as its body.  A kept decision
+-- that ended the block takes Unit as its body in place of the empty block.
+refoldStmts : (Pat -> Bool) -> List CStmt -> List CStmt
+refoldStmts _ [] = []
+refoldStmts keep [CSExpr (CDecision scrut [CArm pat [] (CBlock rest)] tree)]
+  | isSomeLoc (letDecisionSite tree) =
+    let scrut2 = refoldExpr keep scrut
+    if keep pat then
+      let body =
+        if isEmptyL rest then CLit LUnit else CBlock (refoldStmts keep rest)
+      [CSExpr (CDecision scrut2 [CArm pat [] body] tree)]
+    else
+      CSLet False pat scrut2 :: refoldStmts keep rest
+refoldStmts keep (s :: rest) = refoldStmt keep s :: refoldStmts keep rest
+
+refoldStmt : (Pat -> Bool) -> CStmt -> CStmt
+refoldStmt keep (CSExpr e) = CSExpr (refoldExpr keep e)
+refoldStmt keep (CSLet r pat e) = CSLet r pat (refoldExpr keep e)
+refoldStmt keep (CSAssign x e) = CSAssign x (refoldExpr keep e)
+
+refoldArm : (Pat -> Bool) -> CArm -> CArm
+refoldArm keep (CArm pat guards body) =
+  CArm pat (map (refoldGuard keep) guards) (refoldExpr keep body)
+
+refoldGuard : (Pat -> Bool) -> CGuard -> CGuard
+refoldGuard keep (CGBool e) = CGBool (refoldExpr keep e)
+refoldGuard keep (CGBind p e) = CGBind p (refoldExpr keep e)
+
+refoldField : (Pat -> Bool) -> CField -> CField
+refoldField keep (CField k e) = CField k (refoldExpr keep e)
+
+isSomeLoc : Option Loc -> Bool
+isSomeLoc (Some _) = True
+isSomeLoc None = False
 
 -- #1970: which backend(s) a `lowerProgramEmit` caller is about to feed the result
 -- to — the discriminator `dictWitnessTagGuard` needs to narrow its wasm 30-bit
@@ -745,10 +999,21 @@ lowerProgramEmit target prog =
   -- either backend's tag width the caller's `target` cannot rule out.  Same seam,
   -- same reason.
   let _ = dictWitnessTagGuard target prog
+  let raw = lowerProgramWith (installedDispositionsOpt ()) prog
+  let fo = declaredRecordFieldOrders prog
   hoistNullaryMemo
-    (rewriteProgramRecPats
-      (declaredRecordFieldOrders prog)
-      (lowerProgramWith (installedDispositionsOpt ()) prog))
+    (match target
+      -- the let decisions are refolded after the record-pattern rewrite, which
+      -- resolves the record patterns `patCanMiss` reads
+      TargetNative =>
+        let rewritten = rewriteProgramRecPats fo raw
+        refoldProgram
+          (patCanMiss (siblingTable (cprogramCtorTypes raw)))
+          rewritten
+      _ => rewriteProgramRecPats fo (refoldProgram noLetCheck raw))
+
+cprogramCtorTypes : CProgram -> List (String, String)
+cprogramCtorTypes (CProgram _ _ ctorTypes _) = ctorTypes
 
 -- ── the ONE authority on a record's field order (#1513) ──────────────────────
 -- ctor name → [field label in declared order], from every DData named-field
@@ -882,13 +1147,16 @@ rewriteExprRP fo (CLetGroup binds body) =
   CLetGroup (map (rewriteBindRP fo) binds) (rewriteExprRP fo body)
 rewriteExprRP fo (CMatch scrut arms) =
   CMatch (rewriteExprRP fo scrut) (map (rewriteArmRP fo) arms)
-rewriteExprRP fo (CDecision scrut arms _) =
+rewriteExprRP fo (CDecision scrut arms tree) =
   let arms2 = map (rewriteArmRP fo) arms
-  CDecision (rewriteExprRP fo scrut) arms2 (compileArmsC arms2)
+  CDecision
+    (rewriteExprRP fo scrut)
+    arms2
+    (compileArmsC (treeFailSite tree) arms2)
 rewriteExprRP fo (CIf c t e) =
   CIf (rewriteExprRP fo c) (rewriteExprRP fo t) (rewriteExprRP fo e)
-rewriteExprRP fo (CBinPrim op l r tag) =
-  CBinPrim op (rewriteExprRP fo l) (rewriteExprRP fo r) tag
+rewriteExprRP fo (CBinPrim op l r tag site) =
+  CBinPrim op (rewriteExprRP fo l) (rewriteExprRP fo r) tag site
 rewriteExprRP fo (CUnOp op x) = CUnOp op (rewriteExprRP fo x)
 rewriteExprRP fo (CTuple es) = CTuple (map (rewriteExprRP fo) es)
 rewriteExprRP fo (CList es) = CList (map (rewriteExprRP fo) es)
@@ -1320,8 +1588,8 @@ hoistExpr st (CDecision scrut arms tree) =
   CDecision (hoistExpr st scrut) (map (hoistArm st) arms) tree
 hoistExpr st (CIf c t e) =
   CIf (hoistExpr st c) (hoistExpr st t) (hoistExpr st e)
-hoistExpr st (CBinPrim op l r tag) =
-  CBinPrim op (hoistExpr st l) (hoistExpr st r) tag
+hoistExpr st (CBinPrim op l r tag site) =
+  CBinPrim op (hoistExpr st l) (hoistExpr st r) tag site
 hoistExpr st (CUnOp op x) = CUnOp op (hoistExpr st x)
 hoistExpr st (CTuple es) = CTuple (map (hoistExpr st) es)
 hoistExpr st (CList es) = CList (map (hoistExpr st) es)
@@ -1365,8 +1633,9 @@ hoistField : LowerState -> CField -> CField
 hoistField st (CField k e) = CField k (hoistExpr st e)
 
 -- recompile a CDecision's tree from rewritten arms (same call lowerMatch makes).
-compileArmsC : List CArm -> CTree
-compileArmsC arms = compileTree (map carmHasGuard arms) (cInitialRows arms 0)
+compileArmsC : FailSite -> List CArm -> CTree
+compileArmsC site arms =
+  compileTree site (map carmHasGuard arms) (cInitialRows arms 0)
 
 carmHasGuard : CArm -> Bool
 carmHasGuard (CArm pat gs _) = isNonEmptyL gs || patNeedsGuard pat
@@ -1381,7 +1650,10 @@ cInitialRows ((CArm pat _ _) :: rest) i =
 -- (per-module local frames) rather than as one flat program.
 export
 lowerGroups : List Decl -> List CBind
-lowerGroups prog = lgGroup (funClausesOf prog)
+lowerGroups prog = map (refoldBind noLetCheck) (lowerGroupsRaw prog)
+
+lowerGroupsRaw : List Decl -> List CBind
+lowerGroupsRaw prog = lgGroup (funClausesOf prog)
 
 -- O(n log n) group-by-name, IDENTICAL output to
 -- `map (n => CBind n (clausesFor n clauses)) (groupNames clauses [])`: preserves
@@ -1860,6 +2132,14 @@ lowerImplsWith : List ((String, String, String), List Int) ->
   List Decl ->
   List CImplEntry
 lowerImplsWith disp reqCounts dispositions prog =
+  map (refoldImpl noLetCheck) (lowerImplsRaw disp reqCounts dispositions prog)
+
+lowerImplsRaw : List ((String, String, String), List Int) ->
+  OrdMap Int ->
+  Option DispositionTable ->
+  List Decl ->
+  List CImplEntry
+lowerImplsRaw disp reqCounts dispositions prog =
   flatMap (lowerDeclImpl disp reqCounts dispositions) prog
 
 lowerDeclImpl : List ((String, String, String), List Int) ->
@@ -2030,8 +2310,8 @@ specializeRow row (CDecision scrut arms tree) =
   CDecision (specializeRow row scrut) (map (specializeArm row) arms) tree
 specializeRow row (CIf c t e) =
   CIf (specializeRow row c) (specializeRow row t) (specializeRow row e)
-specializeRow row (CBinPrim op l r tag) =
-  CBinPrim op (specializeRow row l) (specializeRow row r) tag
+specializeRow row (CBinPrim op l r tag site) =
+  CBinPrim op (specializeRow row l) (specializeRow row r) tag site
 specializeRow row (CUnOp op x) = CUnOp op (specializeRow row x)
 specializeRow row (CTuple es) = CTuple (map (specializeRow row) es)
 specializeRow row (CList es) = CList (map (specializeRow row) es)
@@ -2681,11 +2961,11 @@ nodeTag (EMethodRef _) = "EMethodRef"
 nodeTag (EDictApp _) = "EDictApp"
 nodeTag _ = "?"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "ifaceSuperCount" false) (mem "inheritorsOf" false) (mem "installedDispositions" false) (mem "installedDispositionsOpt" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false) (mem "exprStartLoc" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false) (mem "range" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
@@ -2703,9 +2983,10 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "EVarAt" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
 (DFunDef false "lower" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "CApp") (EApp (EVar "lower") (EVar "f"))) (EApp (EVar "lower") (EVar "x"))))
 (DFunDef false "lower" ((PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))
+(DFunDef false "lower" ((PCon "ELet" PWild (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "noDeclLoc")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "lower" ((PCon "ELet" PWild (PVar "recFlag") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recFlag")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))))
 (DFunDef false "lower" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EVar "lowerBind")) (EVar "binds"))) (EApp (EVar "lower") (EVar "body"))))
-(DFunDef false "lower" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "lowerMatch") (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
+(DFunDef false "lower" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "lowerMatch") (EVar "noDeclLoc")) (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "lower" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "lower") (EVar "c"))) (EApp (EVar "lower") (EVar "t"))) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lower" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "route"))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "scalarTagOfRoute") (EUnOp "!" (EVar "route")))))
 (DFunDef false "lower" ((PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "CVar") (EVar "op")) (EVar "AGlobal"))) (EApp (EVar "lower") (EVar "l")))) (EApp (EVar "lower") (EVar "r"))))
@@ -2722,12 +3003,14 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "ERecordCreate" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "r"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EUnOp "!" (EVar "r"))) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "EVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
-(DFunDef false "lower" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "map") (EVar "lowerStmt")) (EVar "stmts"))))
+(DFunDef false "lower" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EVar "lowerStmts") (EVar "stmts"))))
 (DFunDef false "lower" ((PCon "EAnnot" (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") PWild) (PRec "TyCon" ((rf "tyConName" (PVar "tag"))) false))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")))
 (DFunDef false "lower" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EMethodAt" (PVar "name") PWild (PVar "ev"))) (EApp (EApp (EVar "cmethodOf") (EVar "name")) (EApp (EVar "evMethodRoutes") (EVar "ev"))))
 (DFunDef false "lower" ((PCon "EDictAt" (PVar "name") (PVar "ev"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EApp (EVar "evDictRoutes") (EVar "ev"))))
+(DFunDef false "lower" ((PCon "ELoc" (PVar "l") (PCon "EMatch" (PVar "scrut") (PVar "arms")))) (EApp (EApp (EApp (EVar "lowerMatch") (EVar "l")) (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
+(DFunDef false "lower" ((PCon "ELoc" (PVar "l") (PCon "ELet" PWild (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2")))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "l")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "lower" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir lower: unsupported node ")) (EApp (EVar "nodeTag") (EVar "other")))))
@@ -2740,7 +3023,7 @@ nodeTag _ = "?"
 (DFunDef false "lowerBinop" ((PLit (LString "|>")) (PVar "l") (PVar "r") PWild) (EApp (EApp (EVar "CApp") (EApp (EVar "lower") (EVar "r"))) (EApp (EVar "lower") (EVar "l"))))
 (DFunDef false "lowerBinop" ((PLit (LString ">>")) (PVar "l") (PVar "r") PWild) (EApp (EApp (EVar "composeLam") (EApp (EVar "lower") (EVar "l"))) (EApp (EVar "lower") (EVar "r"))))
 (DFunDef false "lowerBinop" ((PLit (LString "<<")) (PVar "l") (PVar "r") PWild) (EApp (EApp (EVar "composeLam") (EApp (EVar "lower") (EVar "r"))) (EApp (EVar "lower") (EVar "l"))))
-(DFunDef false "lowerBinop" ((PVar "op") (PVar "l") (PVar "r") (PVar "tag")) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EVar "lower") (EVar "l"))) (EApp (EVar "lower") (EVar "r"))) (EVar "tag")))
+(DFunDef false "lowerBinop" ((PVar "op") (PVar "l") (PVar "r") (PVar "tag")) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EVar "lower") (EVar "l"))) (EApp (EVar "lower") (EVar "r"))) (EVar "tag")) (EApp (EVar "exprStartLoc") (EVar "l"))))
 (DTypeSig false "composeLam" (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
 (DFunDef false "composeLam" ((PVar "first") (PVar "second")) (EApp (EApp (EVar "CLam") (EListLit (EApp (EApp (EVar "PVar") (EVar "composeVar")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EApp (EApp (EVar "CApp") (EVar "second")) (EApp (EApp (EVar "CApp") (EVar "first")) (EApp (EApp (EVar "CVar") (EVar "composeVar")) (EVar "AGlobal"))))))
 (DTypeSig false "lowerArm" (TyFun (TyCon "Arm") (TyCon "CArm")))
@@ -2748,8 +3031,21 @@ nodeTag _ = "?"
 (DTypeSig false "lowerGuard" (TyFun (TyCon "Guard") (TyCon "CGuard")))
 (DFunDef false "lowerGuard" ((PCon "GBool" (PVar "e"))) (EApp (EVar "CGBool") (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerGuard" ((PCon "GBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EVar "lower") (EVar "e"))))
-(DTypeSig false "lowerMatch" (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "CExpr"))))
-(DFunDef false "lowerMatch" ((PVar "cscrut") (PVar "arms")) (EIf (EApp (EApp (EVar "allList") (EVar "armTreeable")) (EVar "arms")) (EApp (EApp (EApp (EVar "CDecision") (EVar "cscrut")) (EApp (EApp (EVar "map") (EVar "lowerArm")) (EVar "arms"))) (EApp (EVar "compileArms") (EVar "arms"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "CMatch") (EVar "cscrut")) (EApp (EApp (EVar "map") (EVar "lowerArm")) (EVar "arms"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "lowerMatch" (TyFun (TyCon "Loc") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "CExpr")))))
+(DFunDef false "lowerMatch" ((PVar "site") (PVar "cscrut") (PVar "arms")) (EIf (EApp (EApp (EVar "allList") (EVar "armTreeable")) (EVar "arms")) (EApp (EApp (EApp (EVar "CDecision") (EVar "cscrut")) (EApp (EApp (EVar "map") (EVar "lowerArm")) (EVar "arms"))) (EApp (EApp (EVar "compileArms") (EApp (EVar "NoArm") (EVar "site"))) (EVar "arms"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "CMatch") (EVar "cscrut")) (EApp (EApp (EVar "map") (EVar "lowerArm")) (EVar "arms"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "letDecision" (TyFun (TyCon "Loc") (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))))
+(DFunDef false "letDecision" ((PVar "site") (PVar "pat") (PVar "scrut") (PVar "body")) (EBlock (DoLet false false (PVar "arms") (EListLit (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EListLit)) (EVar "body")))) (DoExpr (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EApp (EApp (EVar "compileArmsC") (EApp (EVar "LetRefuted") (EVar "site"))) (EVar "arms"))))))
+(DTypeSig false "patMayFail" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "patMayFail" ((PCon "PWild")) (EVar "False"))
+(DFunDef false "patMayFail" ((PCon "PVar" PWild PWild)) (EVar "False"))
+(DFunDef false "patMayFail" ((PCon "PLit" (PCon "LUnit"))) (EVar "False"))
+(DFunDef false "patMayFail" ((PCon "PAs" PWild PWild (PVar "p"))) (EApp (EVar "patMayFail") (EVar "p")))
+(DFunDef false "patMayFail" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "patMayFail")) (EVar "ps")))
+(DFunDef false "patMayFail" (PWild) (EVar "True"))
+(DTypeSig false "lowerStmts" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "CStmt"))))
+(DFunDef false "lowerStmts" ((PList)) (EListLit))
+(DFunDef false "lowerStmts" ((PCons (PCon "DoLet" PWild (PCon "False") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EListLit (EApp (EVar "CSExpr") (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "site")) (EVar "pat")) (EApp (EVar "lower") (EVar "e"))) (EApp (EVar "CBlock") (EApp (EVar "lowerStmts") (EVar "rest")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "lowerStmts" ((PCons (PVar "s") (PVar "rest"))) (EBinOp "::" (EApp (EVar "lowerStmt") (EVar "s")) (EApp (EVar "lowerStmts") (EVar "rest"))))
 (DTypeSig false "armTreeable" (TyFun (TyCon "Arm") (TyCon "Bool")))
 (DFunDef false "armTreeable" ((PCon "Arm" (PVar "pat") PWild PWild)) (EApp (EVar "treeablePat") (EVar "pat")))
 (DTypeSig false "treeablePat" (TyFun (TyCon "Pat") (TyCon "Bool")))
@@ -2763,8 +3059,8 @@ nodeTag _ = "?"
 (DFunDef false "treeablePat" ((PCon "PAs" PWild PWild (PVar "p"))) (EApp (EVar "treeablePat") (EVar "p")))
 (DFunDef false "treeablePat" ((PCon "PRng" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "treeablePat" ((PCon "PRec" PWild PWild PWild)) (EVar "True"))
-(DTypeSig false "compileArms" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "CTree")))
-(DFunDef false "compileArms" ((PVar "arms")) (EApp (EApp (EVar "compileTree") (EApp (EApp (EVar "map") (EVar "armHasGuard")) (EVar "arms"))) (EApp (EApp (EVar "initialRows") (EVar "arms")) (ELit (LInt 0)))))
+(DTypeSig false "compileArms" (TyFun (TyCon "FailSite") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "CTree"))))
+(DFunDef false "compileArms" ((PVar "site") (PVar "arms")) (EApp (EApp (EApp (EVar "compileTree") (EVar "site")) (EApp (EApp (EVar "map") (EVar "armHasGuard")) (EVar "arms"))) (EApp (EApp (EVar "initialRows") (EVar "arms")) (ELit (LInt 0)))))
 (DTypeSig false "armHasGuard" (TyFun (TyCon "Arm") (TyCon "Bool")))
 (DFunDef false "armHasGuard" ((PCon "Arm" (PVar "pat") (PVar "gs") PWild)) (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "gs")) (EApp (EVar "patNeedsGuard") (EVar "pat"))))
 (DTypeSig false "patNeedsGuard" (TyFun (TyCon "Pat") (TyCon "Bool")))
@@ -2779,14 +3075,33 @@ nodeTag _ = "?"
 (DTypeSig false "initialRows" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "initialRows" ((PList) PWild) (EListLit))
 (DFunDef false "initialRows" ((PCons (PCon "Arm" (PVar "pat") PWild PWild) (PVar "rest")) (PVar "i")) (EBinOp "::" (ETuple (EListLit (EApp (EVar "canonPat") (EVar "pat"))) (EVar "i")) (EApp (EApp (EVar "initialRows") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
-(DTypeSig true "compileTree" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
-(DFunDef false "compileTree" ((PVar "guards") (PVar "rows")) (EApp (EApp (EVar "compileTreeG") (EApp (EApp (EApp (EVar "guardSet") (ELit (LInt 0))) (EVar "guards")) (EVar "omEmpty"))) (EVar "rows")))
+(DTypeSig true "compileTree" (TyFun (TyCon "FailSite") (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree")))))
+(DFunDef false "compileTree" ((PVar "site") (PVar "guards") (PVar "rows")) (EApp (EApp (EVar "withFailSite") (EVar "site")) (EApp (EApp (EVar "compileTreeG") (EApp (EApp (EApp (EVar "guardSet") (ELit (LInt 0))) (EVar "guards")) (EVar "omEmpty"))) (EVar "rows"))))
+(DTypeSig false "withFailSite" (TyFun (TyCon "FailSite") (TyFun (TyCon "CTree") (TyCon "CTree"))))
+(DFunDef false "withFailSite" ((PVar "site") (PCon "CTFail" PWild)) (EApp (EVar "CTFail") (EVar "site")))
+(DFunDef false "withFailSite" (PWild (PCon "CTLeaf" (PVar "i"))) (EApp (EVar "CTLeaf") (EVar "i")))
+(DFunDef false "withFailSite" ((PVar "site") (PCon "CTGuard" (PVar "i") (PVar "t"))) (EApp (EApp (EVar "CTGuard") (EVar "i")) (EApp (EApp (EVar "withFailSite") (EVar "site")) (EVar "t"))))
+(DFunDef false "withFailSite" ((PVar "site") (PCon "CTSwitch" (PVar "bs") (PVar "d"))) (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EVar "map") (EApp (EVar "failSiteBranch") (EVar "site"))) (EVar "bs"))) (EApp (EApp (EVar "withFailSite") (EVar "site")) (EVar "d"))))
+(DFunDef false "withFailSite" ((PVar "site") (PCon "CTDrop" (PVar "t"))) (EApp (EVar "CTDrop") (EApp (EApp (EVar "withFailSite") (EVar "site")) (EVar "t"))))
+(DTypeSig false "failSiteBranch" (TyFun (TyCon "FailSite") (TyFun (TyCon "CTBranch") (TyCon "CTBranch"))))
+(DFunDef false "failSiteBranch" ((PVar "site") (PCon "CTBranch" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "CTBranch") (EVar "h")) (EApp (EApp (EVar "withFailSite") (EVar "site")) (EVar "t"))))
+(DTypeSig false "treeFailSite" (TyFun (TyCon "CTree") (TyCon "FailSite")))
+(DFunDef false "treeFailSite" ((PVar "t")) (EMatch (EApp (EVar "treeFailSiteOpt") (EVar "t")) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EApp (EVar "NoArm") (EVar "noDeclLoc")))))
+(DTypeSig false "treeFailSiteOpt" (TyFun (TyCon "CTree") (TyApp (TyCon "Option") (TyCon "FailSite"))))
+(DFunDef false "treeFailSiteOpt" ((PCon "CTFail" (PVar "s"))) (EApp (EVar "Some") (EVar "s")))
+(DFunDef false "treeFailSiteOpt" ((PCon "CTLeaf" PWild)) (EVar "None"))
+(DFunDef false "treeFailSiteOpt" ((PCon "CTGuard" PWild (PVar "t"))) (EApp (EVar "treeFailSiteOpt") (EVar "t")))
+(DFunDef false "treeFailSiteOpt" ((PCon "CTSwitch" (PVar "bs") (PVar "d"))) (EMatch (EApp (EVar "firstBranchFailSite") (EVar "bs")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "None") () (EApp (EVar "treeFailSiteOpt") (EVar "d")))))
+(DFunDef false "treeFailSiteOpt" ((PCon "CTDrop" (PVar "t"))) (EApp (EVar "treeFailSiteOpt") (EVar "t")))
+(DTypeSig false "firstBranchFailSite" (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyApp (TyCon "Option") (TyCon "FailSite"))))
+(DFunDef false "firstBranchFailSite" ((PList)) (EVar "None"))
+(DFunDef false "firstBranchFailSite" ((PCons (PCon "CTBranch" PWild (PVar "t")) (PVar "rest"))) (EMatch (EApp (EVar "treeFailSiteOpt") (EVar "t")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "None") () (EApp (EVar "firstBranchFailSite") (EVar "rest")))))
 (DTypeSig false "guardSet" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "guardSet" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "guardSet" ((PVar "i") (PCons (PCon "True") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "guardSet") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "i"))) (ELit LUnit)) (EVar "acc"))))
 (DFunDef false "guardSet" ((PVar "i") (PCons (PCon "False") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "guardSet") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc")))
 (DTypeSig false "compileTreeG" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
-(DFunDef false "compileTreeG" (PWild (PList)) (EVar "CTFail"))
+(DFunDef false "compileTreeG" (PWild (PList)) (EApp (EVar "CTFail") (EApp (EVar "NoArm") (EVar "noDeclLoc"))))
 (DFunDef false "compileTreeG" ((PVar "guards") (PCons (PVar "row") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "compileRows") (EVar "guards")) (EVar "row")) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "rest"))))
 (DTypeSig false "compileRows" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))))
 (DFunDef false "compileRows" ((PVar "guards") (PTuple (PVar "pats") (PVar "i")) (PVar "rest") (PVar "rows")) (EIf (EApp (EVar "allWild") (EVar "pats")) (EApp (EApp (EApp (EVar "leafOrGuard") (EVar "guards")) (EVar "i")) (EVar "rest")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasCon")) (EVar "rows")) (EApp (EApp (EVar "buildConSwitch") (EVar "guards")) (EVar "rows")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasLit")) (EVar "rows")) (EApp (EApp (EVar "buildLitSwitch") (EVar "guards")) (EVar "rows")) (EIf (EVar "otherwise") (EApp (EVar "CTDrop") (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EApp (EVar "map") (EVar "dropHead")) (EVar "rows")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
@@ -2917,14 +3232,98 @@ nodeTag _ = "?"
 (DFunDef false "lowerStmt" ((PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir lower: unsupported block statement"))))
 (DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgram" ((PVar "prog")) (EApp (EApp (EVar "lowerProgramWith") (EVar "None")) (EVar "prog")))
+(DFunDef false "lowerProgram" ((PVar "prog")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EVar "lowerProgramWith") (EVar "None")) (EVar "prog"))))
 (DTypeSig true "lowerTypedProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerTypedProgram" ((PVar "prog")) (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "Some") (EApp (EVar "installedDispositions") (ELit LUnit)))) (EVar "prog")))
+(DFunDef false "lowerTypedProgram" ((PVar "prog")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "Some") (EApp (EVar "installedDispositions") (ELit LUnit)))) (EVar "prog"))))
 (DTypeSig false "lowerProgramWith" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerProgramWith" ((PVar "dispositions") (PVar "prog")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EVar "lowerGroups") (EVar "prog"))) (EApp (EVar "ctorArities") (EVar "prog"))) (EApp (EVar "buildCtorToType") (EVar "prog"))) (EApp (EApp (EApp (EApp (EVar "lowerImplsWith") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EApp (EVar "instanceReqCounts") (EVar "prog"))) (EVar "dispositions")) (EVar "prog"))))
+(DFunDef false "lowerProgramWith" ((PVar "dispositions") (PVar "prog")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EVar "lowerGroupsRaw") (EVar "prog"))) (EApp (EVar "ctorArities") (EVar "prog"))) (EApp (EVar "buildCtorToType") (EVar "prog"))) (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EApp (EVar "instanceReqCounts") (EVar "prog"))) (EVar "dispositions")) (EVar "prog"))))
+(DTypeSig false "noLetCheck" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "noLetCheck" (PWild) (EVar "False"))
+(DTypeSig false "patCanMiss" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyCon "Pat") (TyCon "Bool"))))
+(DFunDef false "patCanMiss" (PWild (PCon "PWild")) (EVar "False"))
+(DFunDef false "patCanMiss" (PWild (PCon "PVar" PWild PWild)) (EVar "False"))
+(DFunDef false "patCanMiss" (PWild (PCon "PLit" (PCon "LUnit"))) (EVar "False"))
+(DFunDef false "patCanMiss" (PWild (PCon "PLit" PWild)) (EVar "True"))
+(DFunDef false "patCanMiss" ((PVar "sib") (PCon "PAs" PWild PWild (PVar "p"))) (EApp (EApp (EVar "patCanMiss") (EVar "sib")) (EVar "p")))
+(DFunDef false "patCanMiss" ((PVar "sib") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EApp (EVar "patCanMiss") (EVar "sib"))) (EVar "ps")))
+(DFunDef false "patCanMiss" ((PVar "sib") (PCon "PCon" (PVar "c") (PVar "ps"))) (EBinOp "||" (EApp (EApp (EVar "ctorHasSibling") (EVar "sib")) (EVar "c")) (EApp (EApp (EVar "anyList") (EApp (EVar "patCanMiss") (EVar "sib"))) (EVar "ps"))))
+(DFunDef false "patCanMiss" (PWild (PCon "PRec" PWild PWild PWild)) (EVar "False"))
+(DFunDef false "patCanMiss" (PWild PWild) (EVar "True"))
+(DTypeSig false "ctorHasSibling" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ctorHasSibling" ((PVar "sib") (PVar "c")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "c")) (EVar "sib")) (arm (PCon "Some" (PVar "b")) () (EVar "b")) (arm (PCon "None") () (EVar "True"))))
+(DTypeSig false "siblingTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Bool"))))
+(DFunDef false "siblingTable" ((PVar "t")) (EBlock (DoLet false false (PVar "counts") (EApp (EApp (EVar "typeCtorCounts") (EVar "t")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EVar "siblingRows") (EVar "counts")) (EVar "t")) (EVar "omEmpty")))))
+(DTypeSig false "typeCtorCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "typeCtorCounts" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "typeCtorCounts" ((PCons (PTuple PWild (PVar "ty")) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "n") (EMatch (EApp (EApp (EVar "omLookup") (EVar "ty")) (EVar "acc")) (arm (PCon "Some" (PVar "k")) () (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (arm (PCon "None") () (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "typeCtorCounts") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "ty")) (EVar "n")) (EVar "acc"))))))
+(DTypeSig false "siblingRows" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyApp (TyCon "OrdMap") (TyCon "Bool"))))))
+(DFunDef false "siblingRows" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "siblingRows" ((PVar "counts") (PCons (PTuple (PVar "c") (PVar "ty")) (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "c")) (EVar "acc")) (EApp (EApp (EApp (EVar "siblingRows") (EVar "counts")) (EVar "rest")) (EVar "acc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "many") (EMatch (EApp (EApp (EVar "omLookup") (EVar "ty")) (EVar "counts")) (arm (PCon "Some" (PVar "k")) () (EBinOp ">" (EVar "k") (ELit (LInt 1)))) (arm (PCon "None") () (EVar "True")))) (DoExpr (EApp (EApp (EApp (EVar "siblingRows") (EVar "counts")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (EVar "many")) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "letDecisionSite" (TyFun (TyCon "CTree") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "letDecisionSite" ((PVar "t")) (EMatch (EApp (EVar "treeFailSiteOpt") (EVar "t")) (arm (PCon "Some" (PCon "LetRefuted" (PVar "l"))) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "refoldProgram" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
+(DFunDef false "refoldProgram" ((PVar "keep") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EVar "refoldBind") (EVar "keep"))) (EVar "groups"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "map") (EApp (EVar "refoldImpl") (EVar "keep"))) (EVar "implEntries"))))
+(DTypeSig false "refoldBind" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CBind") (TyCon "CBind"))))
+(DFunDef false "refoldBind" ((PVar "keep") (PCon "CBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "refoldClause") (EVar "keep"))) (EVar "clauses"))))
+(DTypeSig false "refoldClause" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CClause") (TyCon "CClause"))))
+(DFunDef false "refoldClause" ((PVar "keep") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body"))))
+(DTypeSig false "refoldImpl" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
+(DFunDef false "refoldImpl" ((PVar "keep") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body")))))
+(DFunDef false "refoldImpl" ((PVar "keep") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body")))))
+(DTypeSig false "refoldExpr" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CDecision" (PVar "scrut") (PList (PCon "CArm" (PVar "pat") (PList) (PVar "body"))) (PVar "tree"))) (EIf (EBinOp "&&" (EApp (EVar "isSomeLoc") (EApp (EVar "letDecisionSite") (EVar "tree"))) (EApp (EVar "not") (EApp (EVar "keep") (EVar "pat")))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EVar "pat")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "scrut"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "refoldArm") (EVar "keep"))) (EVar "arms"))) (EVar "tree")))
+(DFunDef false "refoldExpr" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
+(DFunDef false "refoldExpr" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "f"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "x"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e1"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e2"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EApp (EVar "refoldBind") (EVar "keep"))) (EVar "binds"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "refoldArm") (EVar "keep"))) (EVar "arms"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "c"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "t"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "l"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "r"))) (EVar "tag")) (EVar "site")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "x"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EVar "map") (EApp (EVar "refoldExpr") (EVar "keep"))) (EVar "es"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EVar "map") (EApp (EVar "refoldExpr") (EVar "keep"))) (EVar "es"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EVar "refoldField") (EVar "keep"))) (EVar "fields"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CFieldAccess" (PVar "ex") (PVar "f") (PVar "n"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "ex"))) (EVar "f")) (EVar "n")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EVar "name")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "base"))) (EApp (EApp (EVar "map") (EApp (EVar "refoldField") (EVar "keep"))) (EVar "fields"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "base"))) (EApp (EApp (EVar "map") (EApp (EVar "refoldField") (EVar "keep"))) (EVar "fields"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EVar "map") (EApp (EVar "refoldExpr") (EVar "keep"))) (EVar "es"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "lo"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "lo"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "i"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "lo"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "i"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "lo"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "i"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "lo"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "refoldStmts") (EVar "keep")) (EVar "stmts"))))
+(DFunDef false "refoldExpr" (PWild (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "r")) (EVar "ir")) (EVar "mr")))
+(DFunDef false "refoldExpr" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
+(DTypeSig false "refoldStmts" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "CStmt")))))
+(DFunDef false "refoldStmts" (PWild (PList)) (EListLit))
+(DFunDef false "refoldStmts" ((PVar "keep") (PList (PCon "CSExpr" (PCon "CDecision" (PVar "scrut") (PList (PCon "CArm" (PVar "pat") (PList) (PCon "CBlock" (PVar "rest")))) (PVar "tree"))))) (EIf (EApp (EVar "isSomeLoc") (EApp (EVar "letDecisionSite") (EVar "tree"))) (EBlock (DoLet false false (PVar "scrut2") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "scrut"))) (DoExpr (EIf (EApp (EVar "keep") (EVar "pat")) (EBlock (DoLet false false (PVar "body") (EIf (EApp (EVar "isEmptyL") (EVar "rest")) (EApp (EVar "CLit") (EVar "LUnit")) (EApp (EVar "CBlock") (EApp (EApp (EVar "refoldStmts") (EVar "keep")) (EVar "rest"))))) (DoExpr (EListLit (EApp (EVar "CSExpr") (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut2")) (EListLit (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EListLit)) (EVar "body")))) (EVar "tree")))))) (EBinOp "::" (EApp (EApp (EApp (EVar "CSLet") (EVar "False")) (EVar "pat")) (EVar "scrut2")) (EApp (EApp (EVar "refoldStmts") (EVar "keep")) (EVar "rest")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "refoldStmts" ((PVar "keep") (PCons (PVar "s") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "refoldStmt") (EVar "keep")) (EVar "s")) (EApp (EApp (EVar "refoldStmts") (EVar "keep")) (EVar "rest"))))
+(DTypeSig false "refoldStmt" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CStmt") (TyCon "CStmt"))))
+(DFunDef false "refoldStmt" ((PVar "keep") (PCon "CSExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DFunDef false "refoldStmt" ((PVar "keep") (PCon "CSLet" (PVar "r") (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DFunDef false "refoldStmt" ((PVar "keep") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DTypeSig false "refoldArm" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CArm") (TyCon "CArm"))))
+(DFunDef false "refoldArm" ((PVar "keep") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EApp (EApp (EVar "map") (EApp (EVar "refoldGuard") (EVar "keep"))) (EVar "guards"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body"))))
+(DTypeSig false "refoldGuard" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CGuard") (TyCon "CGuard"))))
+(DFunDef false "refoldGuard" ((PVar "keep") (PCon "CGBool" (PVar "e"))) (EApp (EVar "CGBool") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DFunDef false "refoldGuard" ((PVar "keep") (PCon "CGBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DTypeSig false "refoldField" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CField") (TyCon "CField"))))
+(DFunDef false "refoldField" ((PVar "keep") (PCon "CField" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DTypeSig false "isSomeLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))
+(DFunDef false "isSomeLoc" ((PCon "Some" PWild)) (EVar "True"))
+(DFunDef false "isSomeLoc" ((PCon "None")) (EVar "False"))
 (DData Public "EmitTarget" () ((variant "TargetNative" (ConPos)) (variant "TargetWasm" (ConPos)) (variant "TargetBothUnknown" (ConPos))) ())
 (DTypeSig true "lowerProgramEmit" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerProgramEmit" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (EVar "prog")))))))
+(DFunDef false "lowerProgramEmit" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (EVar "prog"))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EMatch (EVar "target") (arm (PCon "TargetNative") () (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten"))))) (arm PWild () (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "raw")))))))))
+(DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild)) (EVar "ctorTypes"))
 (DTypeSig true "declaredRecordFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "declaredRecordFieldOrders" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -2969,9 +3368,9 @@ nodeTag _ = "?"
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "r")) (EApp (EApp (EVar "rewritePat") (EVar "fo")) (EVar "pat"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "e1"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "e2"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindRP") (EVar "fo"))) (EVar "binds"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "body"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "rewriteArmRP") (EVar "fo"))) (EVar "arms"))))
-(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBlock (DoLet false false (PVar "arms2") (EApp (EApp (EVar "map") (EApp (EVar "rewriteArmRP") (EVar "fo"))) (EVar "arms"))) (DoExpr (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "scrut"))) (EVar "arms2")) (EApp (EVar "compileArmsC") (EVar "arms2"))))))
+(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EBlock (DoLet false false (PVar "arms2") (EApp (EApp (EVar "map") (EApp (EVar "rewriteArmRP") (EVar "fo"))) (EVar "arms"))) (DoExpr (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "scrut"))) (EVar "arms2")) (EApp (EApp (EVar "compileArmsC") (EApp (EVar "treeFailSite") (EVar "tree"))) (EVar "arms2"))))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "c"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "t"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "e"))))
-(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "l"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "r"))) (EVar "tag")))
+(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "l"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "r"))) (EVar "tag")) (EVar "site")))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "x"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EVar "map") (EApp (EVar "rewriteExprRP") (EVar "fo"))) (EVar "es"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EVar "map") (EApp (EVar "rewriteExprRP") (EVar "fo"))) (EVar "es"))))
@@ -3087,7 +3486,7 @@ nodeTag _ = "?"
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "hoistArm") (EVar "st"))) (EVar "arms"))))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "hoistArm") (EVar "st"))) (EVar "arms"))) (EVar "tree")))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "c"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "t"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
-(DFunDef false "hoistExpr" ((PVar "st") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "l"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "r"))) (EVar "tag")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "l"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "r"))) (EVar "tag")) (EVar "site")))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "x"))))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EVar "map") (EApp (EVar "hoistExpr") (EVar "st"))) (EVar "es"))))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EVar "map") (EApp (EVar "hoistExpr") (EVar "st"))) (EVar "es"))))
@@ -3117,15 +3516,17 @@ nodeTag _ = "?"
 (DFunDef false "hoistStmt" ((PVar "st") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
 (DTypeSig false "hoistField" (TyFun (TyCon "LowerState") (TyFun (TyCon "CField") (TyCon "CField"))))
 (DFunDef false "hoistField" ((PVar "st") (PCon "CField" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
-(DTypeSig false "compileArmsC" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree")))
-(DFunDef false "compileArmsC" ((PVar "arms")) (EApp (EApp (EVar "compileTree") (EApp (EApp (EVar "map") (EVar "carmHasGuard")) (EVar "arms"))) (EApp (EApp (EVar "cInitialRows") (EVar "arms")) (ELit (LInt 0)))))
+(DTypeSig false "compileArmsC" (TyFun (TyCon "FailSite") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))))
+(DFunDef false "compileArmsC" ((PVar "site") (PVar "arms")) (EApp (EApp (EApp (EVar "compileTree") (EVar "site")) (EApp (EApp (EVar "map") (EVar "carmHasGuard")) (EVar "arms"))) (EApp (EApp (EVar "cInitialRows") (EVar "arms")) (ELit (LInt 0)))))
 (DTypeSig false "carmHasGuard" (TyFun (TyCon "CArm") (TyCon "Bool")))
 (DFunDef false "carmHasGuard" ((PCon "CArm" (PVar "pat") (PVar "gs") PWild)) (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "gs")) (EApp (EVar "patNeedsGuard") (EVar "pat"))))
 (DTypeSig false "cInitialRows" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "cInitialRows" ((PList) PWild) (EListLit))
 (DFunDef false "cInitialRows" ((PCons (PCon "CArm" (PVar "pat") PWild PWild) (PVar "rest")) (PVar "i")) (EBinOp "::" (ETuple (EListLit (EApp (EVar "canonPat") (EVar "pat"))) (EVar "i")) (EApp (EApp (EVar "cInitialRows") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DTypeSig true "lowerGroups" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind"))))
-(DFunDef false "lowerGroups" ((PVar "prog")) (EApp (EVar "lgGroup") (EApp (EVar "funClausesOf") (EVar "prog"))))
+(DFunDef false "lowerGroups" ((PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "refoldBind") (EVar "noLetCheck"))) (EApp (EVar "lowerGroupsRaw") (EVar "prog"))))
+(DTypeSig false "lowerGroupsRaw" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind"))))
+(DFunDef false "lowerGroupsRaw" ((PVar "prog")) (EApp (EVar "lgGroup") (EApp (EVar "funClausesOf") (EVar "prog"))))
 (DTypeSig false "lgGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "CClause"))) (TyApp (TyCon "List") (TyCon "CBind"))))
 (DFunDef false "lgGroup" ((PVar "clauses")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "lgRuns") (EApp (EVar "lgSortName") (EApp (EApp (EVar "lgTag") (EVar "clauses")) (ELit (LInt 0)))))) (DoExpr (EApp (EApp (EVar "map") (EVar "lgToBind")) (EApp (EVar "lgSortIdx") (EVar "groups"))))))
 (DTypeSig false "lgTag" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "CClause"))) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "CClause"))))))
@@ -3209,7 +3610,9 @@ nodeTag _ = "?"
 (DFunDef false "checkDictTagsInjective" (PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkDictTagsInjective" ((PVar "space") (PVar "hash") (PCons (PTuple (PVar "m") (PVar "w") (PVar "owner")) (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "intToString") (EApp (EVar "hash") (EVar "w")))) (DoLet false false (PVar "k") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "t"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "space")) (EVar "hash")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ETuple (EVar "w") (EVar "owner"))) (EVar "seen")))) (arm (PCon "Some" (PTuple (PVar "w0") (PVar "owner0"))) () (EIf (EBinOp "==" (EVar "owner0") (EVar "owner")) (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "space")) (EVar "hash")) (EVar "rest")) (EVar "seen")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted dict-witness tag collision: two DISTINCT impls of method `")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "` hash to one dispatch tag.\ntag space: "))) (EApp (EVar "display") (EVar "space"))) (ELit (LString "\ncollided tag: "))) (EApp (EVar "display") (EVar "t"))) (ELit (LString "\nroute word 1: "))) (EApp (EVar "display") (EVar "w0"))) (ELit (LString "\nroute word 2: "))) (EApp (EVar "display") (EVar "w"))) (ELit (LString "\nA dict witness carries this tag, and method `"))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "`'s shared dispatcher selects an impl by comparing it against every OTHER impl of that SAME method name -- these two words ARE compared against each other at that dispatcher, so this collision is live: whichever arm the emitter happened to emit FIRST wins every call through a dictionary, silently, at exit 0. The two words above are the impls' route words: either a bare head tycon or a canonical dispatch key spelled `<module>::<Interface>|<type arguments>|`. This is NOT a naming collision you can rename your way out of by making the names more different -- `hashName` is djb2, a radix-33 polynomial over a 74-code-point alphabet, so it is genuinely non-injective (`hashName \"Az\" == hashName \"BY\"`). One of the two words above may name a type or interface from the prelude or stdlib that you do not own -- rename the OTHER one, one of your own types or interfaces involved in this collision. Please also report this message, with both words above."))))))))))
 (DTypeSig true "lowerImplsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))))
-(DFunDef false "lowerImplsWith" ((PVar "disp") (PVar "reqCounts") (PVar "dispositions") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "lowerDeclImpl") (EVar "disp")) (EVar "reqCounts")) (EVar "dispositions"))) (EVar "prog")))
+(DFunDef false "lowerImplsWith" ((PVar "disp") (PVar "reqCounts") (PVar "dispositions") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "refoldImpl") (EVar "noLetCheck"))) (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EVar "disp")) (EVar "reqCounts")) (EVar "dispositions")) (EVar "prog"))))
+(DTypeSig false "lowerImplsRaw" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))))
+(DFunDef false "lowerImplsRaw" ((PVar "disp") (PVar "reqCounts") (PVar "dispositions") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "lowerDeclImpl") (EVar "disp")) (EVar "reqCounts")) (EVar "dispositions"))) (EVar "prog")))
 (DTypeSig false "lowerDeclImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "CImplEntry")))))))
 (DFunDef false "lowerDeclImpl" ((PVar "disp") (PVar "reqCounts") (PVar "dt") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "lowerDeclImpl") (EVar "disp")) (EVar "reqCounts")) (EVar "dt")) (EVar "d")))
 (DFunDef false "lowerDeclImpl" ((PVar "disp") PWild PWild (PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "lowerImplMethod") (EVar "disp")) (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs"))) (EVar "methods")))
@@ -3235,7 +3638,7 @@ nodeTag _ = "?"
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "specializeArm") (EVar "row"))) (EVar "arms"))))
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "specializeArm") (EVar "row"))) (EVar "arms"))) (EVar "tree")))
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "c"))) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "t"))) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "e"))))
-(DFunDef false "specializeRow" ((PVar "row") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "l"))) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "r"))) (EVar "tag")))
+(DFunDef false "specializeRow" ((PVar "row") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "l"))) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "r"))) (EVar "tag")) (EVar "site")))
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "x"))))
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EVar "map") (EApp (EVar "specializeRow") (EVar "row"))) (EVar "es"))))
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EVar "map") (EApp (EVar "specializeRow") (EVar "row"))) (EVar "es"))))
@@ -3479,11 +3882,11 @@ nodeTag _ = "?"
 (DFunDef false "nodeTag" ((PCon "EDictApp" PWild)) (ELit (LString "EDictApp")))
 (DFunDef false "nodeTag" (PWild) (ELit (LString "?")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "ifaceSuperCount" false) (mem "inheritorsOf" false) (mem "installedDispositions" false) (mem "installedDispositionsOpt" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false) (mem "exprStartLoc" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false) (mem "range" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
@@ -3501,9 +3904,10 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "EVarAt" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
 (DFunDef false "lower" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "CApp") (EApp (EVar "lower") (EVar "f"))) (EApp (EVar "lower") (EVar "x"))))
 (DFunDef false "lower" ((PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))
+(DFunDef false "lower" ((PCon "ELet" PWild (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "noDeclLoc")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "lower" ((PCon "ELet" PWild (PVar "recFlag") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recFlag")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))))
 (DFunDef false "lower" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EVar "lowerBind")) (EVar "binds"))) (EApp (EVar "lower") (EVar "body"))))
-(DFunDef false "lower" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "lowerMatch") (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
+(DFunDef false "lower" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "lowerMatch") (EVar "noDeclLoc")) (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "lower" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "lower") (EVar "c"))) (EApp (EVar "lower") (EVar "t"))) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lower" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "route"))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "scalarTagOfRoute") (EUnOp "!" (EVar "route")))))
 (DFunDef false "lower" ((PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "CVar") (EVar "op")) (EVar "AGlobal"))) (EApp (EVar "lower") (EVar "l")))) (EApp (EVar "lower") (EVar "r"))))
@@ -3520,12 +3924,14 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "ERecordCreate" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "r"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EUnOp "!" (EVar "r"))) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "EVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))
-(DFunDef false "lower" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EMethodRef "map") (EVar "lowerStmt")) (EVar "stmts"))))
+(DFunDef false "lower" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EVar "lowerStmts") (EVar "stmts"))))
 (DFunDef false "lower" ((PCon "EAnnot" (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") PWild) (PRec "TyCon" ((rf "tyConName" (PVar "tag"))) false))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")))
 (DFunDef false "lower" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EMethodAt" (PVar "name") PWild (PVar "ev"))) (EApp (EApp (EVar "cmethodOf") (EVar "name")) (EApp (EVar "evMethodRoutes") (EVar "ev"))))
 (DFunDef false "lower" ((PCon "EDictAt" (PVar "name") (PVar "ev"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EApp (EVar "evDictRoutes") (EVar "ev"))))
+(DFunDef false "lower" ((PCon "ELoc" (PVar "l") (PCon "EMatch" (PVar "scrut") (PVar "arms")))) (EApp (EApp (EApp (EVar "lowerMatch") (EVar "l")) (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
+(DFunDef false "lower" ((PCon "ELoc" (PVar "l") (PCon "ELet" PWild (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2")))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "l")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "lower" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir lower: unsupported node ")) (EApp (EVar "nodeTag") (EVar "other")))))
@@ -3538,7 +3944,7 @@ nodeTag _ = "?"
 (DFunDef false "lowerBinop" ((PLit (LString "|>")) (PVar "l") (PVar "r") PWild) (EApp (EApp (EVar "CApp") (EApp (EVar "lower") (EVar "r"))) (EApp (EVar "lower") (EVar "l"))))
 (DFunDef false "lowerBinop" ((PLit (LString ">>")) (PVar "l") (PVar "r") PWild) (EApp (EApp (EVar "composeLam") (EApp (EVar "lower") (EVar "l"))) (EApp (EVar "lower") (EVar "r"))))
 (DFunDef false "lowerBinop" ((PLit (LString "<<")) (PVar "l") (PVar "r") PWild) (EApp (EApp (EVar "composeLam") (EApp (EVar "lower") (EVar "r"))) (EApp (EVar "lower") (EVar "l"))))
-(DFunDef false "lowerBinop" ((PVar "op") (PVar "l") (PVar "r") (PVar "tag")) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EVar "lower") (EVar "l"))) (EApp (EVar "lower") (EVar "r"))) (EVar "tag")))
+(DFunDef false "lowerBinop" ((PVar "op") (PVar "l") (PVar "r") (PVar "tag")) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EVar "lower") (EVar "l"))) (EApp (EVar "lower") (EVar "r"))) (EVar "tag")) (EApp (EVar "exprStartLoc") (EVar "l"))))
 (DTypeSig false "composeLam" (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
 (DFunDef false "composeLam" ((PVar "first") (PVar "second")) (EApp (EApp (EVar "CLam") (EListLit (EApp (EApp (EVar "PVar") (EVar "composeVar")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EApp (EApp (EVar "CApp") (EVar "second")) (EApp (EApp (EVar "CApp") (EVar "first")) (EApp (EApp (EVar "CVar") (EVar "composeVar")) (EVar "AGlobal"))))))
 (DTypeSig false "lowerArm" (TyFun (TyCon "Arm") (TyCon "CArm")))
@@ -3546,8 +3952,21 @@ nodeTag _ = "?"
 (DTypeSig false "lowerGuard" (TyFun (TyCon "Guard") (TyCon "CGuard")))
 (DFunDef false "lowerGuard" ((PCon "GBool" (PVar "e"))) (EApp (EVar "CGBool") (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerGuard" ((PCon "GBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EVar "lower") (EVar "e"))))
-(DTypeSig false "lowerMatch" (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "CExpr"))))
-(DFunDef false "lowerMatch" ((PVar "cscrut") (PVar "arms")) (EIf (EApp (EApp (EVar "allList") (EVar "armTreeable")) (EVar "arms")) (EApp (EApp (EApp (EVar "CDecision") (EVar "cscrut")) (EApp (EApp (EMethodRef "map") (EVar "lowerArm")) (EVar "arms"))) (EApp (EVar "compileArms") (EVar "arms"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "CMatch") (EVar "cscrut")) (EApp (EApp (EMethodRef "map") (EVar "lowerArm")) (EVar "arms"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "lowerMatch" (TyFun (TyCon "Loc") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "CExpr")))))
+(DFunDef false "lowerMatch" ((PVar "site") (PVar "cscrut") (PVar "arms")) (EIf (EApp (EApp (EVar "allList") (EVar "armTreeable")) (EVar "arms")) (EApp (EApp (EApp (EVar "CDecision") (EVar "cscrut")) (EApp (EApp (EMethodRef "map") (EVar "lowerArm")) (EVar "arms"))) (EApp (EApp (EVar "compileArms") (EApp (EVar "NoArm") (EVar "site"))) (EVar "arms"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "CMatch") (EVar "cscrut")) (EApp (EApp (EMethodRef "map") (EVar "lowerArm")) (EVar "arms"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "letDecision" (TyFun (TyCon "Loc") (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))))
+(DFunDef false "letDecision" ((PVar "site") (PVar "pat") (PVar "scrut") (PVar "body")) (EBlock (DoLet false false (PVar "arms") (EListLit (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EListLit)) (EVar "body")))) (DoExpr (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EApp (EApp (EVar "compileArmsC") (EApp (EVar "LetRefuted") (EVar "site"))) (EVar "arms"))))))
+(DTypeSig false "patMayFail" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "patMayFail" ((PCon "PWild")) (EVar "False"))
+(DFunDef false "patMayFail" ((PCon "PVar" PWild PWild)) (EVar "False"))
+(DFunDef false "patMayFail" ((PCon "PLit" (PCon "LUnit"))) (EVar "False"))
+(DFunDef false "patMayFail" ((PCon "PAs" PWild PWild (PVar "p"))) (EApp (EVar "patMayFail") (EVar "p")))
+(DFunDef false "patMayFail" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "patMayFail")) (EVar "ps")))
+(DFunDef false "patMayFail" (PWild) (EVar "True"))
+(DTypeSig false "lowerStmts" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "CStmt"))))
+(DFunDef false "lowerStmts" ((PList)) (EListLit))
+(DFunDef false "lowerStmts" ((PCons (PCon "DoLet" PWild (PCon "False") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EListLit (EApp (EVar "CSExpr") (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "site")) (EVar "pat")) (EApp (EVar "lower") (EVar "e"))) (EApp (EVar "CBlock") (EApp (EVar "lowerStmts") (EVar "rest")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "lowerStmts" ((PCons (PVar "s") (PVar "rest"))) (EBinOp "::" (EApp (EVar "lowerStmt") (EVar "s")) (EApp (EVar "lowerStmts") (EVar "rest"))))
 (DTypeSig false "armTreeable" (TyFun (TyCon "Arm") (TyCon "Bool")))
 (DFunDef false "armTreeable" ((PCon "Arm" (PVar "pat") PWild PWild)) (EApp (EVar "treeablePat") (EVar "pat")))
 (DTypeSig false "treeablePat" (TyFun (TyCon "Pat") (TyCon "Bool")))
@@ -3561,8 +3980,8 @@ nodeTag _ = "?"
 (DFunDef false "treeablePat" ((PCon "PAs" PWild PWild (PVar "p"))) (EApp (EVar "treeablePat") (EVar "p")))
 (DFunDef false "treeablePat" ((PCon "PRng" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "treeablePat" ((PCon "PRec" PWild PWild PWild)) (EVar "True"))
-(DTypeSig false "compileArms" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "CTree")))
-(DFunDef false "compileArms" ((PVar "arms")) (EApp (EApp (EVar "compileTree") (EApp (EApp (EMethodRef "map") (EVar "armHasGuard")) (EVar "arms"))) (EApp (EApp (EVar "initialRows") (EVar "arms")) (ELit (LInt 0)))))
+(DTypeSig false "compileArms" (TyFun (TyCon "FailSite") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "CTree"))))
+(DFunDef false "compileArms" ((PVar "site") (PVar "arms")) (EApp (EApp (EApp (EVar "compileTree") (EVar "site")) (EApp (EApp (EMethodRef "map") (EVar "armHasGuard")) (EVar "arms"))) (EApp (EApp (EVar "initialRows") (EVar "arms")) (ELit (LInt 0)))))
 (DTypeSig false "armHasGuard" (TyFun (TyCon "Arm") (TyCon "Bool")))
 (DFunDef false "armHasGuard" ((PCon "Arm" (PVar "pat") (PVar "gs") PWild)) (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "gs")) (EApp (EVar "patNeedsGuard") (EVar "pat"))))
 (DTypeSig false "patNeedsGuard" (TyFun (TyCon "Pat") (TyCon "Bool")))
@@ -3577,14 +3996,33 @@ nodeTag _ = "?"
 (DTypeSig false "initialRows" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "initialRows" ((PList) PWild) (EListLit))
 (DFunDef false "initialRows" ((PCons (PCon "Arm" (PVar "pat") PWild PWild) (PVar "rest")) (PVar "i")) (EBinOp "::" (ETuple (EListLit (EApp (EVar "canonPat") (EVar "pat"))) (EVar "i")) (EApp (EApp (EVar "initialRows") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
-(DTypeSig true "compileTree" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
-(DFunDef false "compileTree" ((PVar "guards") (PVar "rows")) (EApp (EApp (EVar "compileTreeG") (EApp (EApp (EApp (EVar "guardSet") (ELit (LInt 0))) (EVar "guards")) (EVar "omEmpty"))) (EVar "rows")))
+(DTypeSig true "compileTree" (TyFun (TyCon "FailSite") (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree")))))
+(DFunDef false "compileTree" ((PVar "site") (PVar "guards") (PVar "rows")) (EApp (EApp (EVar "withFailSite") (EVar "site")) (EApp (EApp (EVar "compileTreeG") (EApp (EApp (EApp (EVar "guardSet") (ELit (LInt 0))) (EVar "guards")) (EVar "omEmpty"))) (EVar "rows"))))
+(DTypeSig false "withFailSite" (TyFun (TyCon "FailSite") (TyFun (TyCon "CTree") (TyCon "CTree"))))
+(DFunDef false "withFailSite" ((PVar "site") (PCon "CTFail" PWild)) (EApp (EVar "CTFail") (EVar "site")))
+(DFunDef false "withFailSite" (PWild (PCon "CTLeaf" (PVar "i"))) (EApp (EVar "CTLeaf") (EVar "i")))
+(DFunDef false "withFailSite" ((PVar "site") (PCon "CTGuard" (PVar "i") (PVar "t"))) (EApp (EApp (EVar "CTGuard") (EVar "i")) (EApp (EApp (EVar "withFailSite") (EVar "site")) (EVar "t"))))
+(DFunDef false "withFailSite" ((PVar "site") (PCon "CTSwitch" (PVar "bs") (PVar "d"))) (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EMethodRef "map") (EApp (EVar "failSiteBranch") (EVar "site"))) (EVar "bs"))) (EApp (EApp (EVar "withFailSite") (EVar "site")) (EVar "d"))))
+(DFunDef false "withFailSite" ((PVar "site") (PCon "CTDrop" (PVar "t"))) (EApp (EVar "CTDrop") (EApp (EApp (EVar "withFailSite") (EVar "site")) (EVar "t"))))
+(DTypeSig false "failSiteBranch" (TyFun (TyCon "FailSite") (TyFun (TyCon "CTBranch") (TyCon "CTBranch"))))
+(DFunDef false "failSiteBranch" ((PVar "site") (PCon "CTBranch" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "CTBranch") (EVar "h")) (EApp (EApp (EVar "withFailSite") (EVar "site")) (EVar "t"))))
+(DTypeSig false "treeFailSite" (TyFun (TyCon "CTree") (TyCon "FailSite")))
+(DFunDef false "treeFailSite" ((PVar "t")) (EMatch (EApp (EVar "treeFailSiteOpt") (EVar "t")) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EApp (EVar "NoArm") (EVar "noDeclLoc")))))
+(DTypeSig false "treeFailSiteOpt" (TyFun (TyCon "CTree") (TyApp (TyCon "Option") (TyCon "FailSite"))))
+(DFunDef false "treeFailSiteOpt" ((PCon "CTFail" (PVar "s"))) (EApp (EVar "Some") (EVar "s")))
+(DFunDef false "treeFailSiteOpt" ((PCon "CTLeaf" PWild)) (EVar "None"))
+(DFunDef false "treeFailSiteOpt" ((PCon "CTGuard" PWild (PVar "t"))) (EApp (EVar "treeFailSiteOpt") (EVar "t")))
+(DFunDef false "treeFailSiteOpt" ((PCon "CTSwitch" (PVar "bs") (PVar "d"))) (EMatch (EApp (EVar "firstBranchFailSite") (EVar "bs")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "None") () (EApp (EVar "treeFailSiteOpt") (EVar "d")))))
+(DFunDef false "treeFailSiteOpt" ((PCon "CTDrop" (PVar "t"))) (EApp (EVar "treeFailSiteOpt") (EVar "t")))
+(DTypeSig false "firstBranchFailSite" (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyApp (TyCon "Option") (TyCon "FailSite"))))
+(DFunDef false "firstBranchFailSite" ((PList)) (EVar "None"))
+(DFunDef false "firstBranchFailSite" ((PCons (PCon "CTBranch" PWild (PVar "t")) (PVar "rest"))) (EMatch (EApp (EVar "treeFailSiteOpt") (EVar "t")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "None") () (EApp (EVar "firstBranchFailSite") (EVar "rest")))))
 (DTypeSig false "guardSet" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "guardSet" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "guardSet" ((PVar "i") (PCons (PCon "True") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "guardSet") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "i"))) (ELit LUnit)) (EVar "acc"))))
 (DFunDef false "guardSet" ((PVar "i") (PCons (PCon "False") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "guardSet") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc")))
 (DTypeSig false "compileTreeG" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
-(DFunDef false "compileTreeG" (PWild (PList)) (EVar "CTFail"))
+(DFunDef false "compileTreeG" (PWild (PList)) (EApp (EVar "CTFail") (EApp (EVar "NoArm") (EVar "noDeclLoc"))))
 (DFunDef false "compileTreeG" ((PVar "guards") (PCons (PVar "row") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "compileRows") (EVar "guards")) (EVar "row")) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "rest"))))
 (DTypeSig false "compileRows" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))))
 (DFunDef false "compileRows" ((PVar "guards") (PTuple (PVar "pats") (PVar "i")) (PVar "rest") (PVar "rows")) (EIf (EApp (EVar "allWild") (EVar "pats")) (EApp (EApp (EApp (EVar "leafOrGuard") (EVar "guards")) (EVar "i")) (EVar "rest")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasCon")) (EVar "rows")) (EApp (EApp (EVar "buildConSwitch") (EVar "guards")) (EVar "rows")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasLit")) (EVar "rows")) (EApp (EApp (EVar "buildLitSwitch") (EVar "guards")) (EVar "rows")) (EIf (EVar "otherwise") (EApp (EVar "CTDrop") (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EApp (EMethodRef "map") (EVar "dropHead")) (EVar "rows")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
@@ -3715,14 +4153,98 @@ nodeTag _ = "?"
 (DFunDef false "lowerStmt" ((PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir lower: unsupported block statement"))))
 (DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgram" ((PVar "prog")) (EApp (EApp (EVar "lowerProgramWith") (EVar "None")) (EVar "prog")))
+(DFunDef false "lowerProgram" ((PVar "prog")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EVar "lowerProgramWith") (EVar "None")) (EVar "prog"))))
 (DTypeSig true "lowerTypedProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerTypedProgram" ((PVar "prog")) (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "Some") (EApp (EVar "installedDispositions") (ELit LUnit)))) (EVar "prog")))
+(DFunDef false "lowerTypedProgram" ((PVar "prog")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "Some") (EApp (EVar "installedDispositions") (ELit LUnit)))) (EVar "prog"))))
 (DTypeSig false "lowerProgramWith" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerProgramWith" ((PVar "dispositions") (PVar "prog")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EVar "lowerGroups") (EVar "prog"))) (EApp (EVar "ctorArities") (EVar "prog"))) (EApp (EVar "buildCtorToType") (EVar "prog"))) (EApp (EApp (EApp (EApp (EVar "lowerImplsWith") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EApp (EVar "instanceReqCounts") (EVar "prog"))) (EVar "dispositions")) (EVar "prog"))))
+(DFunDef false "lowerProgramWith" ((PVar "dispositions") (PVar "prog")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EVar "lowerGroupsRaw") (EVar "prog"))) (EApp (EVar "ctorArities") (EVar "prog"))) (EApp (EVar "buildCtorToType") (EVar "prog"))) (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EApp (EVar "instanceReqCounts") (EVar "prog"))) (EVar "dispositions")) (EVar "prog"))))
+(DTypeSig false "noLetCheck" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "noLetCheck" (PWild) (EVar "False"))
+(DTypeSig false "patCanMiss" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyCon "Pat") (TyCon "Bool"))))
+(DFunDef false "patCanMiss" (PWild (PCon "PWild")) (EVar "False"))
+(DFunDef false "patCanMiss" (PWild (PCon "PVar" PWild PWild)) (EVar "False"))
+(DFunDef false "patCanMiss" (PWild (PCon "PLit" (PCon "LUnit"))) (EVar "False"))
+(DFunDef false "patCanMiss" (PWild (PCon "PLit" PWild)) (EVar "True"))
+(DFunDef false "patCanMiss" ((PVar "sib") (PCon "PAs" PWild PWild (PVar "p"))) (EApp (EApp (EVar "patCanMiss") (EVar "sib")) (EVar "p")))
+(DFunDef false "patCanMiss" ((PVar "sib") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EApp (EVar "patCanMiss") (EVar "sib"))) (EVar "ps")))
+(DFunDef false "patCanMiss" ((PVar "sib") (PCon "PCon" (PVar "c") (PVar "ps"))) (EBinOp "||" (EApp (EApp (EVar "ctorHasSibling") (EVar "sib")) (EVar "c")) (EApp (EApp (EVar "anyList") (EApp (EVar "patCanMiss") (EVar "sib"))) (EVar "ps"))))
+(DFunDef false "patCanMiss" (PWild (PCon "PRec" PWild PWild PWild)) (EVar "False"))
+(DFunDef false "patCanMiss" (PWild PWild) (EVar "True"))
+(DTypeSig false "ctorHasSibling" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ctorHasSibling" ((PVar "sib") (PVar "c")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "c")) (EVar "sib")) (arm (PCon "Some" (PVar "b")) () (EVar "b")) (arm (PCon "None") () (EVar "True"))))
+(DTypeSig false "siblingTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Bool"))))
+(DFunDef false "siblingTable" ((PVar "t")) (EBlock (DoLet false false (PVar "counts") (EApp (EApp (EVar "typeCtorCounts") (EVar "t")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EVar "siblingRows") (EVar "counts")) (EVar "t")) (EVar "omEmpty")))))
+(DTypeSig false "typeCtorCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "typeCtorCounts" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "typeCtorCounts" ((PCons (PTuple PWild (PVar "ty")) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "n") (EMatch (EApp (EApp (EVar "omLookup") (EVar "ty")) (EVar "acc")) (arm (PCon "Some" (PVar "k")) () (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (arm (PCon "None") () (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "typeCtorCounts") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "ty")) (EVar "n")) (EVar "acc"))))))
+(DTypeSig false "siblingRows" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyApp (TyCon "OrdMap") (TyCon "Bool"))))))
+(DFunDef false "siblingRows" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "siblingRows" ((PVar "counts") (PCons (PTuple (PVar "c") (PVar "ty")) (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "c")) (EVar "acc")) (EApp (EApp (EApp (EVar "siblingRows") (EVar "counts")) (EVar "rest")) (EVar "acc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "many") (EMatch (EApp (EApp (EVar "omLookup") (EVar "ty")) (EVar "counts")) (arm (PCon "Some" (PVar "k")) () (EBinOp ">" (EVar "k") (ELit (LInt 1)))) (arm (PCon "None") () (EVar "True")))) (DoExpr (EApp (EApp (EApp (EVar "siblingRows") (EVar "counts")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (EVar "many")) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "letDecisionSite" (TyFun (TyCon "CTree") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "letDecisionSite" ((PVar "t")) (EMatch (EApp (EVar "treeFailSiteOpt") (EVar "t")) (arm (PCon "Some" (PCon "LetRefuted" (PVar "l"))) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "refoldProgram" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
+(DFunDef false "refoldProgram" ((PVar "keep") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldBind") (EVar "keep"))) (EVar "groups"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldImpl") (EVar "keep"))) (EVar "implEntries"))))
+(DTypeSig false "refoldBind" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CBind") (TyCon "CBind"))))
+(DFunDef false "refoldBind" ((PVar "keep") (PCon "CBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldClause") (EVar "keep"))) (EVar "clauses"))))
+(DTypeSig false "refoldClause" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CClause") (TyCon "CClause"))))
+(DFunDef false "refoldClause" ((PVar "keep") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body"))))
+(DTypeSig false "refoldImpl" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
+(DFunDef false "refoldImpl" ((PVar "keep") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body")))))
+(DFunDef false "refoldImpl" ((PVar "keep") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body")))))
+(DTypeSig false "refoldExpr" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CDecision" (PVar "scrut") (PList (PCon "CArm" (PVar "pat") (PList) (PVar "body"))) (PVar "tree"))) (EIf (EBinOp "&&" (EApp (EVar "isSomeLoc") (EApp (EVar "letDecisionSite") (EVar "tree"))) (EApp (EVar "not") (EApp (EVar "keep") (EVar "pat")))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EVar "pat")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "scrut"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldArm") (EVar "keep"))) (EVar "arms"))) (EVar "tree")))
+(DFunDef false "refoldExpr" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
+(DFunDef false "refoldExpr" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "f"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "x"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e1"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e2"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldBind") (EVar "keep"))) (EVar "binds"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldArm") (EVar "keep"))) (EVar "arms"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "c"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "t"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "l"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "r"))) (EVar "tag")) (EVar "site")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "x"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldExpr") (EVar "keep"))) (EVar "es"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldExpr") (EVar "keep"))) (EVar "es"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldField") (EVar "keep"))) (EVar "fields"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CFieldAccess" (PVar "ex") (PVar "f") (PVar "n"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "ex"))) (EVar "f")) (EVar "n")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EVar "name")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldField") (EVar "keep"))) (EVar "fields"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldField") (EVar "keep"))) (EVar "fields"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldExpr") (EVar "keep"))) (EVar "es"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "lo"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "lo"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "i"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "lo"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "i"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "lo"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "i"))))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "a"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "lo"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "refoldExpr" ((PVar "keep") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "refoldStmts") (EVar "keep")) (EVar "stmts"))))
+(DFunDef false "refoldExpr" (PWild (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "r")) (EVar "ir")) (EVar "mr")))
+(DFunDef false "refoldExpr" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
+(DTypeSig false "refoldStmts" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "CStmt")))))
+(DFunDef false "refoldStmts" (PWild (PList)) (EListLit))
+(DFunDef false "refoldStmts" ((PVar "keep") (PList (PCon "CSExpr" (PCon "CDecision" (PVar "scrut") (PList (PCon "CArm" (PVar "pat") (PList) (PCon "CBlock" (PVar "rest")))) (PVar "tree"))))) (EIf (EApp (EVar "isSomeLoc") (EApp (EVar "letDecisionSite") (EVar "tree"))) (EBlock (DoLet false false (PVar "scrut2") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "scrut"))) (DoExpr (EIf (EApp (EVar "keep") (EVar "pat")) (EBlock (DoLet false false (PVar "body") (EIf (EApp (EVar "isEmptyL") (EVar "rest")) (EApp (EVar "CLit") (EVar "LUnit")) (EApp (EVar "CBlock") (EApp (EApp (EVar "refoldStmts") (EVar "keep")) (EVar "rest"))))) (DoExpr (EListLit (EApp (EVar "CSExpr") (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut2")) (EListLit (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EListLit)) (EVar "body")))) (EVar "tree")))))) (EBinOp "::" (EApp (EApp (EApp (EVar "CSLet") (EVar "False")) (EVar "pat")) (EVar "scrut2")) (EApp (EApp (EVar "refoldStmts") (EVar "keep")) (EVar "rest")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "refoldStmts" ((PVar "keep") (PCons (PVar "s") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "refoldStmt") (EVar "keep")) (EVar "s")) (EApp (EApp (EVar "refoldStmts") (EVar "keep")) (EVar "rest"))))
+(DTypeSig false "refoldStmt" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CStmt") (TyCon "CStmt"))))
+(DFunDef false "refoldStmt" ((PVar "keep") (PCon "CSExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DFunDef false "refoldStmt" ((PVar "keep") (PCon "CSLet" (PVar "r") (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DFunDef false "refoldStmt" ((PVar "keep") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DTypeSig false "refoldArm" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CArm") (TyCon "CArm"))))
+(DFunDef false "refoldArm" ((PVar "keep") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldGuard") (EVar "keep"))) (EVar "guards"))) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "body"))))
+(DTypeSig false "refoldGuard" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CGuard") (TyCon "CGuard"))))
+(DFunDef false "refoldGuard" ((PVar "keep") (PCon "CGBool" (PVar "e"))) (EApp (EVar "CGBool") (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DFunDef false "refoldGuard" ((PVar "keep") (PCon "CGBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DTypeSig false "refoldField" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyCon "CField") (TyCon "CField"))))
+(DFunDef false "refoldField" ((PVar "keep") (PCon "CField" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EApp (EVar "refoldExpr") (EVar "keep")) (EVar "e"))))
+(DTypeSig false "isSomeLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))
+(DFunDef false "isSomeLoc" ((PCon "Some" PWild)) (EVar "True"))
+(DFunDef false "isSomeLoc" ((PCon "None")) (EVar "False"))
 (DData Public "EmitTarget" () ((variant "TargetNative" (ConPos)) (variant "TargetWasm" (ConPos)) (variant "TargetBothUnknown" (ConPos))) ())
 (DTypeSig true "lowerProgramEmit" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerProgramEmit" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (EVar "prog")))))))
+(DFunDef false "lowerProgramEmit" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (EVar "prog"))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EMatch (EVar "target") (arm (PCon "TargetNative") () (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten"))))) (arm PWild () (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "raw")))))))))
+(DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild)) (EVar "ctorTypes"))
 (DTypeSig true "declaredRecordFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "declaredRecordFieldOrders" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -3767,9 +4289,9 @@ nodeTag _ = "?"
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "r")) (EApp (EApp (EVar "rewritePat") (EVar "fo")) (EVar "pat"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "e1"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "e2"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindRP") (EVar "fo"))) (EVar "binds"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "body"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteArmRP") (EVar "fo"))) (EVar "arms"))))
-(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBlock (DoLet false false (PVar "arms2") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteArmRP") (EVar "fo"))) (EVar "arms"))) (DoExpr (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "scrut"))) (EVar "arms2")) (EApp (EVar "compileArmsC") (EVar "arms2"))))))
+(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EBlock (DoLet false false (PVar "arms2") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteArmRP") (EVar "fo"))) (EVar "arms"))) (DoExpr (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "scrut"))) (EVar "arms2")) (EApp (EApp (EVar "compileArmsC") (EApp (EVar "treeFailSite") (EVar "tree"))) (EVar "arms2"))))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "c"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "t"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "e"))))
-(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "l"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "r"))) (EVar "tag")))
+(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "l"))) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "r"))) (EVar "tag")) (EVar "site")))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "x"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteExprRP") (EVar "fo"))) (EVar "es"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteExprRP") (EVar "fo"))) (EVar "es"))))
@@ -3885,7 +4407,7 @@ nodeTag _ = "?"
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistArm") (EVar "st"))) (EVar "arms"))))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistArm") (EVar "st"))) (EVar "arms"))) (EVar "tree")))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "c"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "t"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
-(DFunDef false "hoistExpr" ((PVar "st") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "l"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "r"))) (EVar "tag")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "l"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "r"))) (EVar "tag")) (EVar "site")))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "x"))))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistExpr") (EVar "st"))) (EVar "es"))))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistExpr") (EVar "st"))) (EVar "es"))))
@@ -3915,15 +4437,17 @@ nodeTag _ = "?"
 (DFunDef false "hoistStmt" ((PVar "st") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
 (DTypeSig false "hoistField" (TyFun (TyCon "LowerState") (TyFun (TyCon "CField") (TyCon "CField"))))
 (DFunDef false "hoistField" ((PVar "st") (PCon "CField" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
-(DTypeSig false "compileArmsC" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree")))
-(DFunDef false "compileArmsC" ((PVar "arms")) (EApp (EApp (EVar "compileTree") (EApp (EApp (EMethodRef "map") (EVar "carmHasGuard")) (EVar "arms"))) (EApp (EApp (EVar "cInitialRows") (EVar "arms")) (ELit (LInt 0)))))
+(DTypeSig false "compileArmsC" (TyFun (TyCon "FailSite") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))))
+(DFunDef false "compileArmsC" ((PVar "site") (PVar "arms")) (EApp (EApp (EApp (EVar "compileTree") (EVar "site")) (EApp (EApp (EMethodRef "map") (EVar "carmHasGuard")) (EVar "arms"))) (EApp (EApp (EVar "cInitialRows") (EVar "arms")) (ELit (LInt 0)))))
 (DTypeSig false "carmHasGuard" (TyFun (TyCon "CArm") (TyCon "Bool")))
 (DFunDef false "carmHasGuard" ((PCon "CArm" (PVar "pat") (PVar "gs") PWild)) (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "gs")) (EApp (EVar "patNeedsGuard") (EVar "pat"))))
 (DTypeSig false "cInitialRows" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "cInitialRows" ((PList) PWild) (EListLit))
 (DFunDef false "cInitialRows" ((PCons (PCon "CArm" (PVar "pat") PWild PWild) (PVar "rest")) (PVar "i")) (EBinOp "::" (ETuple (EListLit (EApp (EVar "canonPat") (EVar "pat"))) (EVar "i")) (EApp (EApp (EVar "cInitialRows") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DTypeSig true "lowerGroups" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind"))))
-(DFunDef false "lowerGroups" ((PVar "prog")) (EApp (EVar "lgGroup") (EApp (EVar "funClausesOf") (EVar "prog"))))
+(DFunDef false "lowerGroups" ((PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldBind") (EVar "noLetCheck"))) (EApp (EVar "lowerGroupsRaw") (EVar "prog"))))
+(DTypeSig false "lowerGroupsRaw" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind"))))
+(DFunDef false "lowerGroupsRaw" ((PVar "prog")) (EApp (EVar "lgGroup") (EApp (EVar "funClausesOf") (EVar "prog"))))
 (DTypeSig false "lgGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "CClause"))) (TyApp (TyCon "List") (TyCon "CBind"))))
 (DFunDef false "lgGroup" ((PVar "clauses")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "lgRuns") (EApp (EVar "lgSortName") (EApp (EApp (EVar "lgTag") (EVar "clauses")) (ELit (LInt 0)))))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "lgToBind")) (EApp (EVar "lgSortIdx") (EVar "groups"))))))
 (DTypeSig false "lgTag" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "CClause"))) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "CClause"))))))
@@ -4007,7 +4531,9 @@ nodeTag _ = "?"
 (DFunDef false "checkDictTagsInjective" (PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkDictTagsInjective" ((PVar "space") (PVar "hash") (PCons (PTuple (PVar "m") (PVar "w") (PVar "owner")) (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "intToString") (EApp (EMethodRef "hash") (EVar "w")))) (DoLet false false (PVar "k") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "t"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "space")) (EMethodRef "hash")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ETuple (EVar "w") (EVar "owner"))) (EVar "seen")))) (arm (PCon "Some" (PTuple (PVar "w0") (PVar "owner0"))) () (EIf (EBinOp "==" (EVar "owner0") (EVar "owner")) (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "space")) (EMethodRef "hash")) (EVar "rest")) (EVar "seen")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted dict-witness tag collision: two DISTINCT impls of method `")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "` hash to one dispatch tag.\ntag space: "))) (EApp (EMethodRef "display") (EVar "space"))) (ELit (LString "\ncollided tag: "))) (EApp (EMethodRef "display") (EVar "t"))) (ELit (LString "\nroute word 1: "))) (EApp (EMethodRef "display") (EVar "w0"))) (ELit (LString "\nroute word 2: "))) (EApp (EMethodRef "display") (EVar "w"))) (ELit (LString "\nA dict witness carries this tag, and method `"))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "`'s shared dispatcher selects an impl by comparing it against every OTHER impl of that SAME method name -- these two words ARE compared against each other at that dispatcher, so this collision is live: whichever arm the emitter happened to emit FIRST wins every call through a dictionary, silently, at exit 0. The two words above are the impls' route words: either a bare head tycon or a canonical dispatch key spelled `<module>::<Interface>|<type arguments>|`. This is NOT a naming collision you can rename your way out of by making the names more different -- `hashName` is djb2, a radix-33 polynomial over a 74-code-point alphabet, so it is genuinely non-injective (`hashName \"Az\" == hashName \"BY\"`). One of the two words above may name a type or interface from the prelude or stdlib that you do not own -- rename the OTHER one, one of your own types or interfaces involved in this collision. Please also report this message, with both words above."))))))))))
 (DTypeSig true "lowerImplsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))))
-(DFunDef false "lowerImplsWith" ((PVar "disp") (PVar "reqCounts") (PVar "dispositions") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "lowerDeclImpl") (EVar "disp")) (EVar "reqCounts")) (EVar "dispositions"))) (EVar "prog")))
+(DFunDef false "lowerImplsWith" ((PVar "disp") (PVar "reqCounts") (PVar "dispositions") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "refoldImpl") (EVar "noLetCheck"))) (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EVar "disp")) (EVar "reqCounts")) (EVar "dispositions")) (EVar "prog"))))
+(DTypeSig false "lowerImplsRaw" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))))
+(DFunDef false "lowerImplsRaw" ((PVar "disp") (PVar "reqCounts") (PVar "dispositions") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "lowerDeclImpl") (EVar "disp")) (EVar "reqCounts")) (EVar "dispositions"))) (EVar "prog")))
 (DTypeSig false "lowerDeclImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "CImplEntry")))))))
 (DFunDef false "lowerDeclImpl" ((PVar "disp") (PVar "reqCounts") (PVar "dt") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "lowerDeclImpl") (EVar "disp")) (EVar "reqCounts")) (EVar "dt")) (EVar "d")))
 (DFunDef false "lowerDeclImpl" ((PVar "disp") PWild PWild (PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "lowerImplMethod") (EVar "disp")) (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs"))) (EVar "methods")))
@@ -4033,7 +4559,7 @@ nodeTag _ = "?"
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "specializeArm") (EVar "row"))) (EVar "arms"))))
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "specializeArm") (EVar "row"))) (EVar "arms"))) (EVar "tree")))
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "c"))) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "t"))) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "e"))))
-(DFunDef false "specializeRow" ((PVar "row") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "l"))) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "r"))) (EVar "tag")))
+(DFunDef false "specializeRow" ((PVar "row") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "l"))) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "r"))) (EVar "tag")) (EVar "site")))
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "specializeRow") (EVar "row")) (EVar "x"))))
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "specializeRow") (EVar "row"))) (EVar "es"))))
 (DFunDef false "specializeRow" ((PVar "row") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EMethodRef "map") (EApp (EVar "specializeRow") (EVar "row"))) (EVar "es"))))

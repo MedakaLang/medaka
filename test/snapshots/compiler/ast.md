@@ -1,5 +1,5 @@
 # META
-source_lines=2585
+source_lines=2589
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -39,8 +39,11 @@ public export data Lit =
 -- Carried by the transparent `ELoc` wrapper the parser puts on atom/leaf and
 -- statement-form expressions.  The `file` is filled by the caller (B.10.2b) —
 -- the parser leaves it "".  Transparent to all semantics: every stage either
--- recurses through `ELoc` or strips it (sexp/Core-IR lowering), so emitted IR
--- and structural dumps are byte-identical to the un-wrapped tree.
+-- recurses through `ELoc` or strips it, so structural dumps are byte-identical
+-- to the un-wrapped tree.  The one thing it changes is where a runtime error
+-- reports itself: the Core IR lowering copies the span of an arithmetic
+-- operand, a `match` or a refutable `let` onto that node's trap site, and the
+-- native emitter prints it.
 public export data Loc = Loc String Int Int Int Int
 
 -- The site a synthesized `DFunDef` or `DoLet` carries: the zero-width 1:0 span
@@ -1586,7 +1589,8 @@ public export data Expr =
   -- typecheck/resolve can attribute errors to a precise expression span via a
   -- `currentLoc` ref.  Semantically transparent: every stage either recurses
   -- through it or strips it.  sexp.mdk renders it transparently and core_ir_
-  -- lower.mdk strips it before Core IR, so all parse/sexp/IR gates stay
+  -- lower.mdk strips it before Core IR, keeping only the trap sites of the
+  -- nodes that can abort (`Loc` above), so the parse and sexp gates stay
   -- byte-identical.  The parser never builds nested binop/app wrappers (it
   -- wraps leaves + statement forms only, exactly like parser.mly).
   | ELoc Loc Expr

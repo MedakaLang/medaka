@@ -392,6 +392,15 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
         let (coreD, modules2) = mangleUnitsEv coreE modulesE
         emitTail runtimeDecls coreD modules2
 
+-- A whole multi-module emit driver, for a backend `emitTail` that also reads
+-- the loader's (module, path, decls): its `Async` main is run by
+-- `runAsyncMain`.
+export
+driveEmitLocated : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  <IO> Unit
+driveEmitLocated emitTail =
+  driveModulesLocated (mods => runEmitWith "runAsyncMain" (emitTail mods) mods)
+
 -- Elaborate + mangle + emit a (possibly wrapped) module list from scratch.
 export
 emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->

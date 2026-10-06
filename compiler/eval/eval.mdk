@@ -3148,7 +3148,9 @@ markTrapSite e = updateEvalLoc (exprStartLoc e)
 
 -- The first located node of an expression in source order.  The parser locates
 -- atoms and statement forms only, so a binary operator, an application or a
--- desugared index call starts where its leftmost located operand starts.
+-- desugared index call starts where its leftmost located operand starts.  The
+-- Core IR lowering reads it for the trap site it stores on an arithmetic node.
+export
 exprStartLoc : Expr -> Loc
 exprStartLoc (ELoc l _) = l
 exprStartLoc (EBinOp _ l _ _) = exprStartLoc l

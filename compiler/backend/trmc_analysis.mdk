@@ -87,7 +87,7 @@ freeVars b (CLetGroup binds body) =
   freeVarsBinds b2 binds ++ freeVars b2 body
 freeVars b (CBlock stmts) = freeVarsStmts b stmts
 freeVars b (CIf c t f) = freeVars b c ++ freeVars b t ++ freeVars b f
-freeVars b (CBinPrim _ l r _) = freeVars b l ++ freeVars b r
+freeVars b (CBinPrim _ l r _ _) = freeVars b l ++ freeVars b r
 freeVars b (CUnOp _ x) = freeVars b x
 freeVars b (CMatch scrut arms) = freeVars b scrut ++ freeVarsArms b arms
 freeVars b (CDecision scrut arms _) = freeVars b scrut ++ freeVarsArms b arms
@@ -377,7 +377,7 @@ isCtorTail : (String -> Bool) ->
   Int ->
   CExpr ->
   Bool
-isCtorTail _ _ self arity (CBinPrim "::" head tail _) =
+isCtorTail _ _ self arity (CBinPrim "::" head tail _ _) =
   selfFree self head && isSelfSatApp self arity tail
 isCtorTail ic ar self arity ex = match flattenApp ex []
   (CVar ctor _, fields) =>
@@ -520,7 +520,7 @@ mentionsSelfMethod method tag (CIf c t f) =
   mentionsSelfMethod method tag c
     || mentionsSelfMethod method tag t
     || mentionsSelfMethod method tag f
-mentionsSelfMethod method tag (CBinPrim _ l r _) =
+mentionsSelfMethod method tag (CBinPrim _ l r _ _) =
   mentionsSelfMethod method tag l || mentionsSelfMethod method tag r
 mentionsSelfMethod method tag (CUnOp _ x) = mentionsSelfMethod method tag x
 mentionsSelfMethod method tag (CMatch s arms) =
@@ -636,7 +636,7 @@ mentionsSelfDict self (CLetGroup binds b) =
 mentionsSelfDict self (CBlock stmts) = mentionsSelfDictStmts self stmts
 mentionsSelfDict self (CIf c t f) =
   mentionsSelfDict self c || mentionsSelfDict self t || mentionsSelfDict self f
-mentionsSelfDict self (CBinPrim _ l r _) =
+mentionsSelfDict self (CBinPrim _ l r _ _) =
   mentionsSelfDict self l || mentionsSelfDict self r
 mentionsSelfDict self (CUnOp _ x) = mentionsSelfDict self x
 mentionsSelfDict self (CMatch s arms) =
@@ -754,7 +754,7 @@ selfRefersToBindClauses self ((CClause _ body) :: rest) =
 -- ctor app: the last field is always the self-call.
 export
 consTailArgs : CExpr -> List CExpr
-consTailArgs (CBinPrim "::" _ tail _) = match flattenApp tail []
+consTailArgs (CBinPrim "::" _ tail _ _) = match flattenApp tail []
   (_, args) => args
 consTailArgs ex = match flattenApp ex []
   (_, fields) => match splitLastF fields
@@ -765,7 +765,7 @@ consTailArgs ex = match flattenApp ex []
 -- the ctor NAME of an eligible ctor-tail leaf (`Cons` for the `::` form).
 export
 ctorTailName : CExpr -> String
-ctorTailName (CBinPrim "::" _ _ _) = "Cons"
+ctorTailName (CBinPrim "::" _ _ _ _) = "Cons"
 ctorTailName ex = match flattenApp ex []
   (CVar ctor _, _) => ctor
   _ => ""
@@ -777,7 +777,7 @@ ctorTailName ex = match flattenApp ex []
 -- the cons-cell struct id off this, since the ctor name alone can't distinguish them.
 export
 ctorTailIsCons : CExpr -> Bool
-ctorTailIsCons (CBinPrim "::" _ _ _) = True
+ctorTailIsCons (CBinPrim "::" _ _ _ _) = True
 ctorTailIsCons _ = False
 
 -- the LEADING (non-last) field exprs of an eligible ctor-tail leaf — the fields
@@ -785,7 +785,7 @@ ctorTailIsCons _ = False
 -- stored).  For `::` this is `[head]`.
 export
 ctorTailLeadFields : CExpr -> List CExpr
-ctorTailLeadFields (CBinPrim "::" head _ _) = [head]
+ctorTailLeadFields (CBinPrim "::" head _ _ _) = [head]
 ctorTailLeadFields ex = match flattenApp ex []
   (_, fields) => match splitLastF fields
     Some (lead, _) => lead
@@ -797,7 +797,7 @@ ctorTailLeadFields ex = match flattenApp ex []
 -- detection patch — the emit already offsets by this index (TRMC-DESIGN F1(b) seam).
 export
 ctorTailSelfIdx : CExpr -> Int
-ctorTailSelfIdx (CBinPrim "::" _ _ _) = 1
+ctorTailSelfIdx (CBinPrim "::" _ _ _ _) = 1
 ctorTailSelfIdx ex = match flattenApp ex []
   (_, fields) => lengthS fields - 1
 
@@ -1211,7 +1211,7 @@ dispBfs headsIx (h :: rest) visited =
 -- peel a chain of conses `h1 :: h2 :: … :: bottom` → (heads, bottom).
 export
 dispPeelCons : CExpr -> (List CExpr, CExpr)
-dispPeelCons (CBinPrim "::" h t _) =
+dispPeelCons (CBinPrim "::" h t _ _) =
   let (hs, b) = dispPeelCons t
   (h :: hs, b)
 dispPeelCons e = ([], e)
@@ -1294,7 +1294,7 @@ allCallHeads cf (CLetGroup binds b) =
 allCallHeads cf (CBlock stmts) = flatMap (allCallHeadsStmt cf) stmts
 allCallHeads cf (CIf c t f) =
   allCallHeads cf c ++ allCallHeads cf t ++ allCallHeads cf f
-allCallHeads cf (CBinPrim _ l r _) = allCallHeads cf l ++ allCallHeads cf r
+allCallHeads cf (CBinPrim _ l r _ _) = allCallHeads cf l ++ allCallHeads cf r
 allCallHeads cf (CUnOp _ x) = allCallHeads cf x
 allCallHeads cf (CMatch s arms) =
   allCallHeads cf s ++ flatMap (allArmHeads cf) arms

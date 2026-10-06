@@ -26,7 +26,8 @@
 -- The keys ELABORATION itself uses are the author's spellings under that order, so
 -- this argument covers the emitted program and not elaboration's own tables.
 
-import frontend.ast.{Decl}
+import frontend.ast.{Decl, Expr(..), DoStmt(..), Loc(..)}
+import frontend.desugar.{mapProg}
 import types.typecheck.{
   constrainedSigNames,
   preludeReturnPosDictNames,
@@ -55,9 +56,10 @@ import backend.llvm_emit.{
   preludeImplSymbols,
 }
 import ir.dce.{dceFilter}
-import entries.entry_support.{driveModulesLocated, runEmitWith}
+import entries.entry_support.{driveEmitLocated}
 import support.timer.{statsEnabled, emitStats}
 import support.util.{endsWith, filterList}
+import support.ordmap.{OrdMap, omFromPairs, omLookup, omEmpty}
 import driver.main_autoprint.{autoPrintPinName}
 
 -- The entry-module path is argv[2] (`<runtime> <core> <entry> [root ...]`); hand it
@@ -67,7 +69,7 @@ srcNameFromArgs (_ :: _ :: entry :: _) = entry
 srcNameFromArgs _ = ""
 
 main : <IO> Unit
-main = driveModulesLocated (runEmitWith "runAsyncMain" emitTail)
+main = driveEmitLocated emitTail
 
 -- COMPOSITE-MAIN AUTO-PRINT: the shared elaborate+auto-print-wrap+mangle glue
 -- (design §10) lives once in entry_support.runEmitWith, parameterized by this
@@ -117,9 +119,17 @@ cbindNameOf : CBind -> String
 cbindNameOf (CBind n _) = n
 
 -- Install the emitter side-tables + emit, from an already-elaborated program.
-emitTail : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
-emitTail runtimeDecls coreD modules2 =
+-- [mods] is the loader's (module, path, decls), whose paths name each module's
+-- trap sites.
+emitTail : List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+emitTail mods runtimeDecls coreD modules1 =
   let half = emitHalfOfEnv
+  let paths = omFromPairs (map modulePath mods) omEmpty
+  let modules2 = map (stampModuleFile paths) modules1
   let allDecls0 = coreD ++ flatMap snd modules2
   -- SOURCE DCE IS OFF in the prelude-object modes.  It is per-program by
   -- construction, so it would (1) shrink prelude.o to whatever the stub entry
@@ -158,6 +168,32 @@ emitTail runtimeDecls coreD modules2 =
     putStr text
   else
     putStr (emitProgram input (lowerProgramEmit TargetNative allDecls))
+-- ── trap-site files ──────────────────────────────────────────────────────────
+-- The parser leaves a `Loc`'s file empty.  Each module's path goes into the
+-- spans its trap sites are read from (a located `ELoc`, a block `let`'s site)
+-- here, in the emitter only, so no diagnostic of the build sees a filled one.
+-- The path is the loader's, the spelling `medaka run` prints.
+modulePath : (String, String, List Decl) -> (String, String)
+modulePath (mid, path, _) = (mid, path)
+
+stampModuleFile : OrdMap String -> (String, List Decl) -> (String, List Decl)
+stampModuleFile paths (mid, decls) = match omLookup mid paths
+  Some path => (mid, mapProg (stampSiteFile path) decls)
+  None => (mid, decls)
+
+stampSiteFile : String -> Expr -> Expr
+stampSiteFile path (ELoc l e) = ELoc (withSiteFile path l) e
+stampSiteFile path (EBlock stmts) = EBlock (map (stampStmtFile path) stmts)
+stampSiteFile _ e = e
+
+stampStmtFile : String -> DoStmt -> DoStmt
+stampStmtFile path (DoLet m r p e site) = DoLet m r p e (withSiteFile path site)
+stampStmtFile _ s = s
+
+withSiteFile : String -> Loc -> Loc
+withSiteFile path (Loc "" sl sc el ec) = Loc path sl sc el ec
+withSiteFile _ l = l
+
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, AFTER elaborateModules and over its output (#2809) — same
 -- flat-emit @mdk_<name> collision risk the bootstrap driver fixes.  The gate

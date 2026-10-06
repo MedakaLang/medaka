@@ -82,7 +82,7 @@ eagerVars b (CLetGroup binds body) =
   eagerVarsBinds b2 binds ++ eagerVars b2 body
 eagerVars b (CBlock stmts) = eagerVarsStmts b stmts
 eagerVars b (CIf c t f) = eagerVars b c ++ eagerVars b t ++ eagerVars b f
-eagerVars b (CBinPrim _ l r _) = eagerVars b l ++ eagerVars b r
+eagerVars b (CBinPrim _ l r _ _) = eagerVars b l ++ eagerVars b r
 eagerVars b (CUnOp _ x) = eagerVars b x
 eagerVars b (CMatch scrut arms) = eagerVars b scrut ++ eagerVarsArms b arms
 eagerVars b (CDecision scrut arms _) = eagerVars b scrut ++ eagerVarsArms b arms
@@ -395,7 +395,7 @@ eagerHasMethod (CLetGroup binds body) =
 eagerHasMethod (CBlock stmts) = stmtsHaveMethod stmts
 eagerHasMethod (CIf c t f) =
   eagerHasMethod c || eagerHasMethod t || eagerHasMethod f
-eagerHasMethod (CBinPrim _ l r _) = eagerHasMethod l || eagerHasMethod r
+eagerHasMethod (CBinPrim _ l r _ _) = eagerHasMethod l || eagerHasMethod r
 eagerHasMethod (CUnOp _ x) = eagerHasMethod x
 eagerHasMethod (CMatch scrut arms) = eagerHasMethod scrut || armsHaveMethod arms
 eagerHasMethod (CDecision scrut arms _) =
@@ -672,7 +672,7 @@ rngBound _ = 0
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "eagerVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "body"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "stmts")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "r"))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "r"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "x")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "arms"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "arms"))))
@@ -774,7 +774,7 @@ rngBound _ = 0
 (DFunDef false "eagerHasMethod" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "||" (EApp (EVar "bindsHaveMethod") (EVar "binds")) (EApp (EVar "eagerHasMethod") (EVar "body"))))
 (DFunDef false "eagerHasMethod" ((PCon "CBlock" (PVar "stmts"))) (EApp (EVar "stmtsHaveMethod") (EVar "stmts")))
 (DFunDef false "eagerHasMethod" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "||" (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "c")) (EApp (EVar "eagerHasMethod") (EVar "t"))) (EApp (EVar "eagerHasMethod") (EVar "f"))))
-(DFunDef false "eagerHasMethod" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "l")) (EApp (EVar "eagerHasMethod") (EVar "r"))))
+(DFunDef false "eagerHasMethod" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "l")) (EApp (EVar "eagerHasMethod") (EVar "r"))))
 (DFunDef false "eagerHasMethod" ((PCon "CUnOp" PWild (PVar "x"))) (EApp (EVar "eagerHasMethod") (EVar "x")))
 (DFunDef false "eagerHasMethod" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "scrut")) (EApp (EVar "armsHaveMethod") (EVar "arms"))))
 (DFunDef false "eagerHasMethod" ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "scrut")) (EApp (EVar "armsHaveMethod") (EVar "arms"))))
@@ -891,7 +891,7 @@ rngBound _ = 0
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "eagerVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "body"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "stmts")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "r"))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "r"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "x")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "arms"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "arms"))))
@@ -993,7 +993,7 @@ rngBound _ = 0
 (DFunDef false "eagerHasMethod" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "||" (EApp (EVar "bindsHaveMethod") (EVar "binds")) (EApp (EVar "eagerHasMethod") (EVar "body"))))
 (DFunDef false "eagerHasMethod" ((PCon "CBlock" (PVar "stmts"))) (EApp (EVar "stmtsHaveMethod") (EVar "stmts")))
 (DFunDef false "eagerHasMethod" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "||" (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "c")) (EApp (EVar "eagerHasMethod") (EVar "t"))) (EApp (EVar "eagerHasMethod") (EVar "f"))))
-(DFunDef false "eagerHasMethod" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "l")) (EApp (EVar "eagerHasMethod") (EVar "r"))))
+(DFunDef false "eagerHasMethod" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "l")) (EApp (EVar "eagerHasMethod") (EVar "r"))))
 (DFunDef false "eagerHasMethod" ((PCon "CUnOp" PWild (PVar "x"))) (EApp (EVar "eagerHasMethod") (EVar "x")))
 (DFunDef false "eagerHasMethod" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "scrut")) (EApp (EVar "armsHaveMethod") (EVar "arms"))))
 (DFunDef false "eagerHasMethod" ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "scrut")) (EApp (EVar "armsHaveMethod") (EVar "arms"))))

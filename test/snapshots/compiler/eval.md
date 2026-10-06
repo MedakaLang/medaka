@@ -1,5 +1,5 @@
 # META
-source_lines=5254
+source_lines=5256
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -3152,7 +3152,9 @@ markTrapSite e = updateEvalLoc (exprStartLoc e)
 
 -- The first located node of an expression in source order.  The parser locates
 -- atoms and statement forms only, so a binary operator, an application or a
--- desugared index call starts where its leftmost located operand starts.
+-- desugared index call starts where its leftmost located operand starts.  The
+-- Core IR lowering reads it for the trap site it stores on an arithmetic node.
+export
 exprStartLoc : Expr -> Loc
 exprStartLoc (ELoc l _) = l
 exprStartLoc (EBinOp _ l _ _) = exprStartLoc l
@@ -6320,7 +6322,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "noTrapLoc" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))))
 (DTypeSig false "markTrapSite" (TyFun (TyCon "Expr") (TyCon "Unit")))
 (DFunDef false "markTrapSite" ((PVar "e")) (EApp (EVar "updateEvalLoc") (EApp (EVar "exprStartLoc") (EVar "e"))))
-(DTypeSig false "exprStartLoc" (TyFun (TyCon "Expr") (TyCon "Loc")))
+(DTypeSig true "exprStartLoc" (TyFun (TyCon "Expr") (TyCon "Loc")))
 (DFunDef false "exprStartLoc" ((PCon "ELoc" (PVar "l") PWild)) (EVar "l"))
 (DFunDef false "exprStartLoc" ((PCon "EBinOp" PWild (PVar "l") PWild PWild)) (EApp (EVar "exprStartLoc") (EVar "l")))
 (DFunDef false "exprStartLoc" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "startOrNext") (EApp (EVar "exprStartLoc") (EVar "f"))) (EVar "x")))
@@ -8054,7 +8056,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "noTrapLoc" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))))
 (DTypeSig false "markTrapSite" (TyFun (TyCon "Expr") (TyCon "Unit")))
 (DFunDef false "markTrapSite" ((PVar "e")) (EApp (EVar "updateEvalLoc") (EApp (EVar "exprStartLoc") (EVar "e"))))
-(DTypeSig false "exprStartLoc" (TyFun (TyCon "Expr") (TyCon "Loc")))
+(DTypeSig true "exprStartLoc" (TyFun (TyCon "Expr") (TyCon "Loc")))
 (DFunDef false "exprStartLoc" ((PCon "ELoc" (PVar "l") PWild)) (EVar "l"))
 (DFunDef false "exprStartLoc" ((PCon "EBinOp" PWild (PVar "l") PWild PWild)) (EApp (EVar "exprStartLoc") (EVar "l")))
 (DFunDef false "exprStartLoc" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "startOrNext") (EApp (EVar "exprStartLoc") (EVar "f"))) (EVar "x")))

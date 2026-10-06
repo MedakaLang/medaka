@@ -177,6 +177,7 @@ import frontend.ast.{
   Addr(..),
   Route(..),
   Loc(..),
+  noDeclLoc,
   ifaceIdMatches,
   isFixedWidthHead,
   fixedWidthMask,
@@ -201,6 +202,7 @@ import ir.core_ir.{
   CHead(..),
   CImplEntry(..),
   CImplBody(..),
+  FailSite(..),
 }
 import ir.core_ir_lower.{
   compileTree,
@@ -1001,6 +1003,13 @@ data Emit = Emit {
   inlineOpen : Ref Int,
   -- how many inlinings the current outermost inlining site has opened.
   inlineSpent : Ref Int,
+  -- the trap-site file table (`siteImm`): each located file's number, and the
+  -- files in reverse numbering order.
+  siteFileNums : Ref (OrdMap Int),
+  siteFiles : Ref (List String),
+  -- the trap entries called with a site (`emitTrapCall`), in first-call order,
+  -- reversed; each one's `_at` declare is emitted once.
+  siteTraps : Ref (List String),
 }
 
 -- a function's inferred signature: its parameter types (in order) and its return
@@ -2076,7 +2085,7 @@ unboxFloat e v =
 emitExpr : Emit -> OrdMap (String, LTy) -> CExpr -> (String, LTy)
 emitExpr e _ (CLit l) = emitLit e l
 emitExpr e env (CVar x _) = emitVar e env x
-emitExpr e env (CBinPrim op l r tag) = emitBin e env op l r tag
+emitExpr e env (CBinPrim op l r tag site) = emitBin e env op l r tag site
 emitExpr e env (CUnOp op x) = emitUn e env op x
 emitExpr e env (CIf c t f) = emitIf e env c t f
 emitExpr e env (CLet recF pat e1 e2) = emitLet e env recF pat e1 e2
@@ -3753,10 +3762,10 @@ emitU64Extern e env name args =
 -- result knows its type.  Anything else is emitted as usual and unboxed; a
 -- literal is a static cell, so that is a load.
 emitU64Raw : Emit -> OrdMap (String, LTy) -> CExpr -> String
-emitU64Raw e env (CBinPrim op l r tag)
+emitU64Raw e env (CBinPrim op l r tag site)
   | isBoxed64Head tag && isArithOp op =
-    emitU64RawArith e env (isI64Head tag) op l r
-  | otherwise = unboxU64 e (fst (emitExpr e env (CBinPrim op l r tag)))
+    emitU64RawArith e env (isI64Head tag) op l r site
+  | otherwise = unboxU64 e (fst (emitExpr e env (CBinPrim op l r tag site)))
 emitU64Raw e env (CVar x a) = match omLookup x env
   Some (reg, LTU64U) => reg
   Some _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
@@ -3992,7 +4001,7 @@ staticIsU64 _ env (CVar x _) = match omLookup x env
   Some (_, LTU64U) => True
   Some (_, LTU64) => True
   _ => False
-staticIsU64 _ _ (CBinPrim op _ _ tag) = isU64Head tag && isArithOp op
+staticIsU64 _ _ (CBinPrim op _ _ tag _) = isU64Head tag && isArithOp op
 staticIsU64 e env (CIf _ t f) = staticIsU64 e env t && staticIsU64 e env f
 staticIsU64 e env ex = match flattenApp ex []
   (CVar f _, args) =>
@@ -4055,9 +4064,10 @@ u32Const n =
 -- The `i32` of a U32- or I32-valued expression.
 emitU32Raw : Emit -> OrdMap (String, LTy) -> CExpr -> String
 emitU32Raw _ _ (CLit (LInt n)) = u32Const n
-emitU32Raw e env (CBinPrim op l r tag)
-  | isW32Head tag && isArithOp op = emitU32RawArith e env (isI32Head tag) op l r
-  | otherwise = untagU32 e (fst (emitExpr e env (CBinPrim op l r tag)))
+emitU32Raw e env (CBinPrim op l r tag site)
+  | isW32Head tag && isArithOp op =
+    emitU32RawArith e env (isI32Head tag) op l r site
+  | otherwise = untagU32 e (fst (emitExpr e env (CBinPrim op l r tag site)))
 emitU32Raw e env (CVar x a) = match omLookup x env
   Some (reg, LTU32U) => reg
   Some (reg, LTI32U) => reg
@@ -4127,14 +4137,15 @@ emitU32RawArith : Emit ->
   String ->
   CExpr ->
   CExpr ->
+  Loc ->
   String
-emitU32RawArith e env signed op l r =
+emitU32RawArith e env signed op l r site =
   let a = emitU32Raw e env l
   let b = emitU32Raw e env r
   if op == "/" || op == "%" then
     let wide = freshReg e
     let _ = emit e "  \{wide} = zext i32 \{b} to i64"
-    let _ = emitDivZeroGuard e op wide
+    let _ = emitDivZeroGuard e op wide site
     emitDivRem e signed "i32" op a b
   else
     let res = freshReg e
@@ -4245,7 +4256,7 @@ static32Kind _ env (CVar x _) = match omLookup x env
   Some (_, LTU32U) => RawU32
   Some (_, LTI32U) => RawI32
   _ => RawWord
-static32Kind _ _ (CBinPrim op _ _ tag) =
+static32Kind _ _ (CBinPrim op _ _ tag _) =
   if isArithOp op then rawKindOfHead32 tag else RawWord
 static32Kind e env (CIf _ t f) =
   let k = static32Kind e env t
@@ -4401,7 +4412,7 @@ coreChildren : CExpr -> Option (List CExpr)
 coreChildren (CLit _) = Some []
 coreChildren (CVar _ _) = Some []
 coreChildren (CApp f a) = Some [f, a]
-coreChildren (CBinPrim _ l r _) = Some [l, r]
+coreChildren (CBinPrim _ l r _ _) = Some [l, r]
 coreChildren (CUnOp _ x) = Some [x]
 coreChildren (CIf c t f) = Some [c, t, f]
 coreChildren (CLet _ _ e1 e2) = Some [e1, e2]
@@ -4428,7 +4439,7 @@ stmtExprs ((CSAssign _ x) :: rest) = x :: stmtExprs rest
 u64Escapes : Emit -> String -> Bool -> CExpr -> Int
 u64Escapes _ x raw (CVar y _) = if y == x && not raw then 1 else 0
 u64Escapes _ _ _ (CLit _) = 0
-u64Escapes e x _ (CBinPrim op l r tag) =
+u64Escapes e x _ (CBinPrim op l r tag _) =
   let inner = isBoxed64Head tag && (isArithOp op || isCmpOp op)
   u64Escapes e x inner l + u64Escapes e x inner r
 u64Escapes e x raw (CIf c t f) =
@@ -4524,7 +4535,7 @@ u64KernelArgRaw _ = [True, True]
 u64Shaped : Emit -> CExpr -> Bool
 u64Shaped _ (CLit (LU64 _ _)) = True
 u64Shaped _ (CVar _ _) = True
-u64Shaped _ (CBinPrim op _ _ tag) = isU64Head tag && isArithOp op
+u64Shaped _ (CBinPrim op _ _ tag _) = isU64Head tag && isArithOp op
 u64Shaped e (CIf _ t f) = u64Shaped e t && u64Shaped e f
 u64Shaped e ex = match flattenApp ex []
   (CVar f _, args) =>
@@ -4654,7 +4665,7 @@ paramNames ((PVar n _) :: rest) = map (n :: _) (paramNames rest)
 paramNames _ = None
 
 u64AliasBody : List String -> CExpr -> List CExpr -> Option String
-u64AliasBody ps (CIf (CBinPrim "<" (CVar k _) zero _) _ body) args = match (
+u64AliasBody ps (CIf (CBinPrim "<" (CVar k _) zero _ _) _ body) args = match (
   u64KernelApplied ps (skipOtherwise body),
   ps,
   args,
@@ -4724,17 +4735,18 @@ emitU64RawArith : Emit ->
   String ->
   CExpr ->
   CExpr ->
+  Loc ->
   String
-emitU64RawArith e env signed op l r =
+emitU64RawArith e env signed op l r site =
   let a = emitU64Raw e env l
   let b = emitU64Raw e env r
-  emitW64Op e signed op a b
+  emitW64Op e signed op a b site
 
--- the U64 or I64 operator on two payloads.
-emitW64Op : Emit -> Bool -> String -> String -> String -> String
-emitW64Op e signed op a b =
+-- the U64 or I64 operator on two payloads; [site] is a zero divisor's trap site.
+emitW64Op : Emit -> Bool -> String -> String -> String -> Loc -> String
+emitW64Op e signed op a b site =
   if op == "/" || op == "%" then
-    let _ = emitDivZeroGuard e op b
+    let _ = emitDivZeroGuard e op b site
     emitDivRem e signed "i64" op a b
   else
     let res = freshReg e
@@ -5448,10 +5460,11 @@ emitBin : Emit ->
   CExpr ->
   CExpr ->
   String ->
+  Loc ->
   (String, LTy)
-emitBin e env op l r tag
+emitBin e env op l r tag site
   | isCmpOp op = emitCmp e env op l r tag
-  | isArithOp op = emitArith e env op l r tag
+  | isArithOp op = emitArith e env op l r tag site
   | op == "::" =
     let (lv, _) = emitExpr e env l
     let (rv, _) = emitExpr e env r
@@ -5528,7 +5541,7 @@ varIsKnownFloat env x = match omLookup x env
 staticIsFloat : OrdMap (String, LTy) -> CExpr -> Bool
 staticIsFloat env (CLit (LFloat _)) = True
 staticIsFloat env (CVar x _) = varIsKnownFloat env x
-staticIsFloat env (CBinPrim op l _ _) = isArithOp op && staticIsFloat env l
+staticIsFloat env (CBinPrim op l _ _ _) = isArithOp op && staticIsFloat env l
 staticIsFloat env _ = False
 
 -- CONSERVATIVE "does this expression evidently evaluate to a Float?" check, used to
@@ -5540,7 +5553,7 @@ staticIsFloat env _ = False
 bodyFloatRet : OrdMap (String, LTy) -> CExpr -> Bool
 bodyFloatRet env (CLit (LFloat _)) = True
 bodyFloatRet env (CVar x _) = varIsKnownFloat env x
-bodyFloatRet env (CBinPrim op l r _) =
+bodyFloatRet env (CBinPrim op l r _ _) =
   isArithOp op && (bodyFloatRet env l || bodyFloatRet env r)
 bodyFloatRet env (CIf _ t f) = bodyFloatRet env t || bodyFloatRet env f
 bodyFloatRet env (CLet _ _ _ b) = bodyFloatRet env b
@@ -5583,7 +5596,10 @@ recordFloatRet e env w body =
 -- non-constant.  Uses the host's own hardware float ops (bit-identical to runtime).
 constFoldFloat : CExpr -> Option Float
 constFoldFloat (CLit (LFloat f)) = Some f
-constFoldFloat (CBinPrim op l r _) = match (constFoldFloat l, constFoldFloat r)
+constFoldFloat (CBinPrim op l r _ _) = match (
+  constFoldFloat l,
+  constFoldFloat r,
+)
   (Some a, Some b) => hostFloatOp op a b
   _ => None
 constFoldFloat _ = None
@@ -5672,7 +5688,7 @@ bytesHexBE arr i =
 -- the strength of the left's type).  Only called in statically-Float context.
 emitFloatD : Emit -> OrdMap (String, LTy) -> CExpr -> String
 emitFloatD e env (CLit (LFloat f)) = ensureFloatDot (floatToString f)
-emitFloatD e env (ex@(CBinPrim op l r _)) =
+emitFloatD e env (ex@(CBinPrim op l r _ _)) =
   if isArithOp op then match constNanFold op l r
     -- #672: a compile-time-constant NaN → the host's exact NaN bits (a valid
     -- `double` operand), so clang keeps −NaN instead of re-folding to +NaN.
@@ -5794,22 +5810,25 @@ scalarTagIsFloat tag = match fieldNameToLTy tag
 scalarTagIsInt : String -> Bool
 scalarTagIsInt tag = tag == "Int" || isTaggedFixedHead tag
 
+-- [site] is the node's trap site, the location an overflow or zero-divisor abort
+-- prints.
 emitArith : Emit ->
   OrdMap (String, LTy) ->
   String ->
   CExpr ->
   CExpr ->
   String ->
+  Loc ->
   (String, LTy)
-emitArith e env op l r tag =
+emitArith e env op l r tag site =
   if isBoxed64Head tag then
-    emitU64Arith e env (isI64Head tag) op l r
+    emitU64Arith e env (isI64Head tag) op l r site
   else if isW32Head tag then
     let k = rawKindOfHead tag
-    (tagW32 e k (emitU32RawArith e env (isI32Head tag) op l r), LTInt)
+    (tagW32 e k (emitU32RawArith e env (isI32Head tag) op l r site), LTInt)
   else match fixedWidthMask tag
-    Some mask => emitFixedWidthArith e env op l r mask
-    None => emitArithUnsized e env op l r tag
+    Some mask => emitFixedWidthArith e env op l r mask site
+    None => emitArithUnsized e env op l r tag site
 
 -- An arithmetic node typecheck stamped `U64` or `I64` (`signed`): both operands
 -- are boxed cells, so the stamp is tested before every Float or Int route (a
@@ -5822,16 +5841,23 @@ emitU64Arith : Emit ->
   String ->
   CExpr ->
   CExpr ->
+  Loc ->
   (String, LTy)
-emitU64Arith e env signed op l r =
-  (boxW64 e signed (emitU64RawArith e env signed op l r), w64LTy signed)
+emitU64Arith e env signed op l r site =
+  (boxW64 e signed (emitU64RawArith e env signed op l r site), w64LTy signed)
 
 -- the U64 or I64 operator on two already-emitted cell words.
-emitU64ArithW : Emit -> Bool -> String -> String -> String -> (String, LTy)
-emitU64ArithW e signed op lv rv =
+emitU64ArithW : Emit ->
+  Bool ->
+  String ->
+  String ->
+  String ->
+  Loc ->
+  (String, LTy)
+emitU64ArithW e signed op lv rv site =
   let a = unboxU64 e lv
   let b = unboxU64 e rv
-  (boxW64 e signed (emitW64Op e signed op a b), w64LTy signed)
+  (boxW64 e signed (emitW64Op e signed op a b site), w64LTy signed)
 
 -- the LLVM instruction for a U64 arithmetic operator: Int's for the ring
 -- operations, the unsigned forms for division and remainder.
@@ -5853,14 +5879,15 @@ emitFixedWidthArith : Emit ->
   CExpr ->
   CExpr ->
   Int ->
+  Loc ->
   (String, LTy)
-emitFixedWidthArith e env op l r mask =
+emitFixedWidthArith e env op l r mask site =
   let (lv, _) = emitExpr e env l
   let (rv, _) = emitExpr e env r
   let li = untagInt e lv
   let ri = untagInt e rv
   if op == "/" || op == "%" then
-    emitIntDivZeroChecked e op li ri
+    emitIntDivZeroChecked e op li ri site
   else
     let res = freshReg e
     let _ = emit e "  \{res} = \{intOp op} i64 \{li}, \{ri}"
@@ -5874,15 +5901,16 @@ emitArithUnsized : Emit ->
   CExpr ->
   CExpr ->
   String ->
+  Loc ->
   (String, LTy)
-emitArithUnsized e env op l r tag =
+emitArithUnsized e env op l r tag site =
   if scalarTagIsFloat tag
     || staticIsFloat env l
     || isFloatFieldAccess e l
     || isFloatFieldAccess e r then
     emitFloatArith e env op l r
   else
-    emitArithW e env op l r
+    emitArithW e env op l r site
 
 -- True when `ex` is a record field ACCESS of a declared-Float field.  Used ONLY to
 -- route arith to the float path (emitFloatArith unboxes the boxed-float field word
@@ -5949,15 +5977,16 @@ emitArithW : Emit ->
   String ->
   CExpr ->
   CExpr ->
+  Loc ->
   (String, LTy)
-emitArithW e env op l r =
+emitArithW e env op l r site =
   let (lv, lty) = emitExpr e env l
   let (rv, rty) = emitExpr e env r
   match lty
     -- An operand the emitter knows is a U64 or I64 cell, on a node that reached
     -- here without the stamp: its payload, never an Int untag.
-    LTU64 => emitU64ArithW e False op lv rv
-    LTI64 => emitU64ArithW e True op lv rv
+    LTU64 => emitU64ArithW e False op lv rv site
+    LTI64 => emitU64ArithW e True op lv rv site
     LTFloat =>
       let ld = unboxFloat e lv
       let rd = unboxFloat e rv
@@ -5970,8 +5999,8 @@ emitArithW e env op l r =
       let _ = emit e "  \{res} = call i64 @\{numOp op}(i64 \{lv}, i64 \{rv})"
       (res, LTNum)
     _ => match rty
-      LTU64 => emitU64ArithW e False op lv rv
-      LTI64 => emitU64ArithW e True op lv rv
+      LTU64 => emitU64ArithW e False op lv rv site
+      LTI64 => emitU64ArithW e True op lv rv site
       LTFloat =>
         let ld = unboxFloat e lv
         let rd = unboxFloat e rv
@@ -5983,7 +6012,7 @@ emitArithW e env op l r =
         let res = freshReg e
         let _ = emit e "  \{res} = call i64 @\{numOp op}(i64 \{lv}, i64 \{rv})"
         (res, LTNum)
-      _ => emitIntArithChecked e op lv rv
+      _ => emitIntArithChecked e op lv rv site
 
 -- `Int` arithmetic traps: a result outside -2^62 .. 2^62 - 1 calls
 -- @mdk_int_overflow (E-INT-OVERFLOW) instead of wrapping.  `+` and `-` work on
@@ -5991,27 +6020,27 @@ emitArithW e env op l r =
 -- when the 63-bit sum does and its result is already tagged; `*` multiplies the
 -- untagged a by 2b and sets the tag bit.  `/` overflows only at intMinBound / -1,
 -- caught by retagging the quotient with an overflow-checked add; `%` never does.
-emitIntArithChecked : Emit -> String -> String -> String -> (String, LTy)
-emitIntArithChecked e op lv rv =
+emitIntArithChecked : Emit -> String -> String -> String -> Loc -> (String, LTy)
+emitIntArithChecked e op lv rv site =
   if op == "/" || op == "%" then
     let li = untagInt e lv
     let ri = untagInt e rv
-    let _ = emitDivZeroGuard e op ri
+    let _ = emitDivZeroGuard e op ri site
     let q = freshReg e
     let _ = emit e "  \{q} = \{intOp op} i64 \{li}, \{ri}"
     if op == "%" then
       (tagInt e q, LTInt)
     else
-      (setTagBit e (emitOverflowChecked e "sadd" q q "3" lv rv), LTInt)
+      (setTagBit e (emitOverflowChecked e "sadd" q q "3" lv rv site), LTInt)
   else
     let r2 = freshReg e
     let _ = emit e "  \{r2} = sub i64 \{rv}, 1"
     match op
       "*" =>
         let li = untagInt e lv
-        (setTagBit e (emitOverflowChecked e "smul" li r2 "2" lv rv), LTInt)
-      "+" => (emitOverflowChecked e "sadd" lv r2 "0" lv rv, LTInt)
-      _ => (emitOverflowChecked e "ssub" lv r2 "1" lv rv, LTInt)
+        (setTagBit e (emitOverflowChecked e "smul" li r2 "2" lv rv site), LTInt)
+      "+" => (emitOverflowChecked e "sadd" lv r2 "0" lv rv site, LTInt)
+      _ => (emitOverflowChecked e "ssub" lv r2 "1" lv rv site, LTInt)
 
 -- an even word with the Int tag bit set: the product 2ab, or the doubled
 -- quotient, becomes the tagged 2ab+1.
@@ -6025,6 +6054,7 @@ setTagBit e w =
 -- the ok label.  On overflow the cold block calls @mdk_int_overflow with the
 -- operator code (0 `+`, 1 `-`, 2 `*`, 3 `/`, 4 negation) and the operands,
 -- untagged there from the TAGGED words `ta`/`tb` so the hot path pays nothing.
+-- [site] reaches only the cold block, as an immediate argument.
 emitOverflowChecked : Emit ->
   String ->
   String ->
@@ -6032,8 +6062,9 @@ emitOverflowChecked : Emit ->
   String ->
   String ->
   String ->
+  Loc ->
   String
-emitOverflowChecked e intrinsic a b code ta tb =
+emitOverflowChecked e intrinsic a b code ta tb site =
   let pair = freshReg e
   let _ =
     emit
@@ -6051,7 +6082,11 @@ emitOverflowChecked e intrinsic a b code ta tb =
   let ua = untagInt e ta
   let ub = untagInt e tb
   let _ =
-    emit e "  call void @mdk_int_overflow(i64 \{code}, i64 \{ua}, i64 \{ub})"
+    emitTrapCall
+      e
+      "mdk_int_overflow"
+      "i64 \{code}, i64 \{ua}, i64 \{ub}"
+      (siteImm e site)
   let _ = emit e "  unreachable"
   let _ = emit e (okL ++ ":")
   v
@@ -6061,22 +6096,25 @@ emitOverflowChecked e intrinsic a b code ta tb =
 -- and the program silently exits 0), so branch to a runtime abort
 -- (@mdk_div_zero / @mdk_mod_zero: prints `runtime error [E-DIV-ZERO]` /
 -- `[E-MOD-ZERO]` to stderr, exits nonzero), matching the interpreter's evalArith
--- guard.  No source location is baked in — Core IR carries none, so the native
--- trap is the interpreter's message MINUS `file:L:C:` (a located trap is a
--- follow-on).  On a nonzero divisor the ok-branch runs the original sdiv/srem
+-- guard, located at the node's trap site (`emitTrapCall`).  On a nonzero divisor the ok-branch runs the original sdiv/srem
 -- unchanged, so valid-division output is byte-identical.  The fixed-width types'
 -- `/` and `%` use it as is: two non-negative in-range operands never overflow.
-emitIntDivZeroChecked : Emit -> String -> String -> String -> (String, LTy)
-emitIntDivZeroChecked e op li ri =
-  let _ = emitDivZeroGuard e op ri
+emitIntDivZeroChecked : Emit ->
+  String ->
+  String ->
+  String ->
+  Loc ->
+  (String, LTy)
+emitIntDivZeroChecked e op li ri site =
+  let _ = emitDivZeroGuard e op ri site
   let res = freshReg e
   let _ = emit e "  \{res} = \{intOp op} i64 \{li}, \{ri}"
   (tagInt e res, LTInt)
 -- The zero-divisor branch of `/` or `%` on the raw divisor `ri`: the abort block,
 -- then the ok label the caller's instruction is emitted under.  Shared by Int's
 -- `sdiv`/`srem` and U64's `udiv`/`urem`, so both abort with the same message.
-emitDivZeroGuard : Emit -> String -> String -> Unit
-emitDivZeroGuard e op ri =
+emitDivZeroGuard : Emit -> String -> String -> Loc -> Unit
+emitDivZeroGuard e op ri site =
   let z = freshReg e
   let _ = emit e "  \{z} = icmp eq i64 \{ri}, 0"
   let n = intToString (freshLocal e)
@@ -6085,9 +6123,101 @@ emitDivZeroGuard e op ri =
   let _ = emit e "  br i1 \{z}, label %\{zeroL}, label %\{okL}"
   let _ = emit e (zeroL ++ ":")
   let abortFn = if op == "%" then "mdk_mod_zero" else "mdk_div_zero"
-  let _ = emit e "  call void @\{abortFn}()"
+  let _ = emitTrapCall e abortFn "" (siteImm e site)
   let _ = emit e "  unreachable"
   emit e (okL ++ ":")
+
+-- ── trap sites ──────────────────────────────────────────────────────────────
+-- A located trap calls the `_at` twin of its runtime abort with one more
+-- argument, the packed site `(file + 1) << 44 | line << 20 | col` (16, 24 and
+-- 20 bits), where `file` numbers the program's `@mdk_site_files` table.  The
+-- runtime prints `file:line:col: ` before the abort's own line.  A site of 0
+-- means no location and calls the plain abort, so an unlocated program's IR is
+-- what it was.
+
+-- The packed site of [l], or "0" when [l] names no file, is the placeholder span,
+-- or does not fit its fields.  The prelude half defines no table of its own.
+siteImm : Emit -> Loc -> String
+siteImm e (Loc f sl sc el ec)
+  | f == "" || sl == 1 && sc == 0 && el == 1 && ec == 0 = "0"
+  | e.input.emitHalf == emitHalfPrelude = "0"
+  | sl < 0 || sl >= 16777216 || sc < 0 || sc >= 1048576 = "0"
+  | otherwise = match siteFileNumber e f
+    Some n => intToString (n * 17592186044416 + sl * 1048576 + sc)
+    None => "0"
+
+-- [f]'s 1-based number in the site file table, assigned on first use; None once
+-- the 16-bit field is full.
+siteFileNumber : Emit -> String -> Option Int
+siteFileNumber e f = match omLookup f !e.siteFileNums
+  Some n => Some n
+  None =>
+    let n = omSize !e.siteFileNums + 1
+    if n >= 65536 then
+      None
+    else
+      e.siteFileNums := omInsert f n !e.siteFileNums
+      e.siteFiles := f :: !e.siteFiles
+      Some n
+
+-- `call void @<fn>(<args>)`, or its `_at` twin with the packed [site] appended
+-- when the site is located.
+emitTrapCall : Emit -> String -> String -> String -> Unit
+emitTrapCall e fn args site
+  | site == "0" = emit e "  call void @\{fn}(\{args})"
+  | otherwise =
+    let _ =
+      if contains fn !e.siteTraps then () else e.siteTraps := fn :: !e.siteTraps
+    let sep = if args == "" then "" else ", "
+    emit e "  call void @\{fn}_at(\{args}\{sep}i64 \{site})"
+
+-- The `declare` of each `_at` twin the program calls.  They go ahead of the
+-- preamble, so every partition sees them.
+siteTrapDeclares : Emit -> List String
+siteTrapDeclares e = map siteTrapDeclare (reverseL !e.siteTraps)
+
+siteTrapDeclare : String -> String
+siteTrapDeclare "mdk_int_overflow" =
+  "declare void @mdk_int_overflow_at(i64, i64, i64, i64) noreturn"
+siteTrapDeclare fn = "declare void @\{fn}_at(i64) noreturn"
+
+-- The site file table, a NULL-terminated array of the files' paths behind the
+-- `mdk_site_files` pointer the runtime reads (a weak null there when a program
+-- defines none).  Nothing when no located trap was emitted.
+siteFileTable : Emit -> List String
+siteFileTable e = match reverseL !e.siteFiles
+  [] => []
+  files =>
+    let n = listLen files
+    ["; mdk-module \{scopeProgram}"]
+      ++ siteFileStrings 0 files
+      ++ [
+        "@.sitefiles = private unnamed_addr constant [\{intToString (n + 1)} x ptr] [\{siteFileElems 0 n}ptr null]",
+        "@mdk_site_files = constant ptr @.sitefiles",
+      ]
+
+-- the table's first [n] elements, from [i], each followed by ", ".
+siteFileElems : Int -> Int -> String
+siteFileElems i n
+  | i >= n = ""
+  | otherwise = "ptr @.sitef.\{intToString i}, \{siteFileElems (i + 1) n}"
+
+siteFileStrings : Int -> List String -> List String
+siteFileStrings _ [] = []
+siteFileStrings i (f :: rest) =
+  let bytes = strBytes f
+  let line =
+    "@.sitef.\{intToString i} = private unnamed_addr constant [\{intToString (lengthS bytes + 1)} x i8] c\"\{escBytes bytes}\\00\""
+  line :: siteFileStrings (i + 1) rest
+
+-- A decision tree's miss: the abort its site names, then `unreachable`.
+emitFailTrap : Emit -> FailSite -> Unit
+emitFailTrap e (NoArm l) =
+  let _ = emitTrapCall e "mdk_nonexhaustive_match" "" (siteImm e l)
+  emit e "  unreachable"
+emitFailTrap e (LetRefuted l) =
+  let _ = emitTrapCall e "mdk_let_refute" "" (siteImm e l)
+  emit e "  unreachable"
 
 -- G3: a POLYMORPHIC Num operand (declared type-var param) — could be Int OR
 -- Float at runtime.  Route through the runtime tag-dispatched @mdk_num_* helper
@@ -6368,7 +6498,7 @@ emitUn e env "-" x =
     LTI64 => emitW64Neg e True v
     -- Int negation traps at intMinBound, whose negation is 2^62.  On the tagged
     -- word, 2 - (2a+1) = 2(-a)+1, which overflows exactly there.
-    _ => (emitOverflowChecked e "ssub" "2" v "4" v "1", LTInt)
+    _ => (emitOverflowChecked e "ssub" "2" v "4" v "1" noDeclLoc, LTInt)
 emitUn e _ op _ = gapE e ("unsupported unary op " ++ op)
 
 emitW64Neg : Emit -> Bool -> String -> (String, LTy)
@@ -6641,7 +6771,7 @@ satOnlyUses name arity (CIf c t f) =
   satOnlyUses name arity c
     && satOnlyUses name arity t
     && satOnlyUses name arity f
-satOnlyUses name arity (CBinPrim _ l r _) =
+satOnlyUses name arity (CBinPrim _ l r _ _) =
   satOnlyUses name arity l && satOnlyUses name arity r
 satOnlyUses name arity (CUnOp _ x) = satOnlyUses name arity x
 satOnlyUses name arity (CTuple es) = satOnlyList name arity es
@@ -9443,7 +9573,7 @@ emitClauseChain e env arity (c :: rest) roots slot endL rty outer =
   -- next clause.  (That Ref is gone as of issue #354; the label is now threaded.)
   let c2 = ftClause nextL c
   let arms = [clauseArm arity c2]
-  let tree = compileTree [False] (implRows [c2] 0)
+  let tree = compileTree (NoArm noDeclLoc) [False] (implRows [c2] 0)
   -- This tree is SINGLE-ROW (one clause), so its CTFail means "this clause's pattern
   -- missed" → resume at nextL.  Handed to emitTree as an argument (issue #354); it is
   -- the only emitTree entry point with a live fallthrough — the other three (a
@@ -10738,10 +10868,10 @@ emitTree : Emit ->
 -- clause via `ftL`, the fallthrough label THREADED IN by the caller; with no next
 -- clause (`""`) it is a genuine non-exhaustive-match abort.  A bare `unreachable`
 -- here was UB (LLVM `ud2` → a
--- silent SIGTRAP, no output); call the noreturn @mdk_nonexhaustive_match (prints
--- `runtime error [E-NONEXHAUSTIVE-MATCH]` to stderr, exits nonzero — the
--- interpreter's message MINUS `file:L:C:`, Core IR carrying no loc) before the
--- `unreachable`, mirroring the div-by-zero trap.  (The GUARD-chain half of "try the
+-- silent SIGTRAP, no output); call the noreturn abort the leaf's site names
+-- (`emitFailTrap`: E-NONEXHAUSTIVE-MATCH or E-LET-REFUTE, located as the
+-- interpreter's message is) before the `unreachable`, mirroring the div-by-zero
+-- trap.  (The GUARD-chain half of "try the
 -- next clause" is NOT this arm — that is the `__fallthrough__` sentinel, lowered by
 -- emitFallthrough from the label stamped into the node.)
 --
@@ -10752,10 +10882,8 @@ emitTree : Emit ->
 -- miscompile, fixed 2026-07-13 by moving THAT label into the node).  Threading it makes
 -- the answer local and the hazard structurally impossible: an entry point that means
 -- "a miss here is a genuine abort" passes "" and cannot forget to restore.
-emitTree e _ _ _ _ _ _ "" _ CTFail =
-  let _ = emit e "  call void @mdk_nonexhaustive_match()"
-  emit e "  unreachable"
-emitTree e _ _ _ _ _ _ lbl _ CTFail = emit e ("  br label %" ++ lbl)
+emitTree e _ _ _ _ _ _ "" _ (CTFail site) = emitFailTrap e site
+emitTree e _ _ _ _ _ _ lbl _ (CTFail _) = emit e ("  br label %" ++ lbl)
 emitTree e env roots arms _ slot endL _ rty (CTLeaf i) =
   emitLeaf e env roots arms i slot endL rty
 -- CTGuard i fail: arm i matched but is GUARDED.  Re-bind its pattern (like a
@@ -11611,9 +11739,7 @@ emitConChain : Emit ->
   Unit
 emitConChain e env roots arms _ rest _ _ [] dft slot endL ftL rty exh
   | exh && ftL == "" = match dft
-    CTFail =>
-      let _ = emit e "  call void @mdk_nonexhaustive_match()"
-      emit e "  unreachable"
+    CTFail site => emitFailTrap e site
     _ => emitTree e env roots arms rest slot endL ftL rty dft
   | otherwise = emitTree e env roots arms rest slot endL ftL rty dft
 emitConChain e env roots arms foc rest tagReg rep ((CTBranch h sub) :: more) dft slot endL ftL rty exh =
@@ -12822,7 +12948,7 @@ hasFloatPty (_ :: rest) = hasFloatPty rest
 -- is value-equality (emitCmp routes Int/Char/Bool/String), matching match semantics.
 decisionToIf : CExpr -> List CArm -> Option CExpr
 decisionToIf scrut ((CArm (PLit l) [] a) :: (CArm PWild [] b) :: []) =
-  Some (CIf (CBinPrim "==" scrut (CLit l) "") a b)
+  Some (CIf (CBinPrim "==" scrut (CLit l) "" noDeclLoc) a b)
 decisionToIf _ _ = None
 
 -- `self` does not occur free in `ex` (so the leaf is an ordinary value, safe to
@@ -13783,7 +13909,7 @@ typeOf _ env (CVar x _) = match lookupAssoc x env
   Some LTFloatU => LTFloat
   Some t => t
   None => LTInt
-typeOf sigs env (CBinPrim op l r tag)
+typeOf sigs env (CBinPrim op l r tag _)
   | isCmpOp op = LTBool
   | op == "::" = LTCon
   | isU64Head tag = LTU64
@@ -13918,7 +14044,7 @@ concreteNumTy _ env (CVar x _) = match lookupAssoc x env
   Some LTFloatU => Some LTFloat
   Some t => Some t
   None => None
-concreteNumTy sigs env (CBinPrim op l r tag) =
+concreteNumTy sigs env (CBinPrim op l r tag _) =
   if isArithOp op && isU64Head tag then
     Some LTU64
   else if isArithOp op && isI64Head tag then
@@ -13942,12 +14068,12 @@ paramUseTy sigs env p (CUnOp _ x) = paramUseTy sigs env p x
 -- LTCon (e.g. `acc :: …` in splitLines), routing its OTHER `++` use to
 -- mdk_list_append on a String → crash.  Skip the element side; a var on the
 -- right of `::` is a list (LTCon).
-paramUseTy sigs env p (CBinPrim "::" l r _) =
+paramUseTy sigs env p (CBinPrim "::" l r _ _) =
   if isVarNamed p r then
     Some LTCon
   else
     firstSome (paramUseTy sigs env p l) (paramUseTy sigs env p r)
-paramUseTy sigs env p (CBinPrim op l r _) =
+paramUseTy sigs env p (CBinPrim op l r _ _) =
   if isVarNamed p l then
     Some (binOperandTy sigs env op r)
   else if isVarNamed p r then
@@ -14192,7 +14318,7 @@ inferParamTys sigs (_ :: rest) body = LTInt :: inferParamTys sigs rest body
 -- an arith op over the two params in order, so only the genuine section lambda is
 -- affected — a lambda doing other work keeps its per-param inference.
 isArithSectionLam : List Pat -> CExpr -> Bool
-isArithSectionLam [PVar a _, PVar b _] (CBinPrim op (CVar la _) (CVar rb _) _) =
+isArithSectionLam [PVar a _, PVar b _] (CBinPrim op (CVar la _) (CVar rb _) _ _) =
   isArithOp op && la == a && rb == b
 isArithSectionLam _ _ = False
 
@@ -14285,7 +14411,7 @@ isLowerCode c = c >= 97 && c <= 122
 
 -- G3: True when `p` is an operand of an arithmetic binop anywhere in the body.
 paramUsedInArith : String -> CExpr -> Bool
-paramUsedInArith p (CBinPrim op l r _) =
+paramUsedInArith p (CBinPrim op l r _ _) =
   if isArithOp op && (isVarNamed p l || isVarNamed p r) then
     True
   else
@@ -14614,7 +14740,7 @@ scanExprRecords (CApp f a) = scanExprRecords f ++ scanExprRecords a
 scanExprRecords (CLam _ body) = scanExprRecords body
 scanExprRecords (CIf c t f) =
   scanExprRecords c ++ scanExprRecords t ++ scanExprRecords f
-scanExprRecords (CBinPrim _ l r _) = scanExprRecords l ++ scanExprRecords r
+scanExprRecords (CBinPrim _ l r _ _) = scanExprRecords l ++ scanExprRecords r
 scanExprRecords (CUnOp _ x) = scanExprRecords x
 scanExprRecords (CLet _ _ e1 e2) = scanExprRecords e1 ++ scanExprRecords e2
 scanExprRecords (CLetGroup binds body) =
@@ -15317,7 +15443,11 @@ runStrictEmission e input groups implEntries =
   let _ = emitFns e (fnBinds groups)
   let _ = emitImpls e implEntries
   let _ = preludeIdSpaceGuard e
-  joinNl (reverseL !e.buf ++ reverseL !e.lams)
+  joinNl
+    (siteTrapDeclares e
+      ++ reverseL !e.buf
+      ++ reverseL !e.lams
+      ++ siteFileTable e)
 
 -- Same emission as `emitProgram`, plus a pure table-cardinality snapshot (see
 -- the block comment above `tableStats`). Never used by the default `medaka
@@ -15499,6 +15629,9 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     constGlobals = Ref omEmpty,
     inlineOpen = Ref 0,
     inlineSpent = Ref 0,
+    siteFileNums = Ref omEmpty,
+    siteFiles = Ref [],
+    siteTraps = Ref [],
   }
   e.dictConstCache := []
   e.closConstCache := []

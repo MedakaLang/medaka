@@ -223,7 +223,7 @@ refsE (CLetGroup binds body) = flatMap refsBind binds ++ refsE body
 refsE (CMatch scrut arms) = refsE scrut ++ flatMap refsArm arms
 refsE (CDecision scrut arms _) = refsE scrut ++ flatMap refsArm arms
 refsE (CIf c t f) = refsE c ++ refsE t ++ refsE f
-refsE (CBinPrim _ l r _) = refsE l ++ refsE r
+refsE (CBinPrim _ l r _ _) = refsE l ++ refsE r
 refsE (CUnOp _ x) = refsE x
 refsE (CTuple es) = flatMap refsE es
 refsE (CList es) = flatMap refsE es
@@ -327,7 +327,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EVar "refsArm")) (EVar "arms"))))
 (DFunDef false "refsE" ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EVar "refsArm")) (EVar "arms"))))
 (DFunDef false "refsE" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "c")) (EApp (EVar "refsE") (EVar "t"))) (EApp (EVar "refsE") (EVar "f"))))
-(DFunDef false "refsE" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "l")) (EApp (EVar "refsE") (EVar "r"))))
+(DFunDef false "refsE" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "l")) (EApp (EVar "refsE") (EVar "r"))))
 (DFunDef false "refsE" ((PCon "CUnOp" PWild (PVar "x"))) (EApp (EVar "refsE") (EVar "x")))
 (DFunDef false "refsE" ((PCon "CTuple" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "refsE")) (EVar "es")))
 (DFunDef false "refsE" ((PCon "CList" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "refsE")) (EVar "es")))
@@ -416,7 +416,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EVar "refsArm")) (EVar "arms"))))
 (DFunDef false "refsE" ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EVar "refsArm")) (EVar "arms"))))
 (DFunDef false "refsE" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "c")) (EApp (EVar "refsE") (EVar "t"))) (EApp (EVar "refsE") (EVar "f"))))
-(DFunDef false "refsE" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "l")) (EApp (EVar "refsE") (EVar "r"))))
+(DFunDef false "refsE" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "l")) (EApp (EVar "refsE") (EVar "r"))))
 (DFunDef false "refsE" ((PCon "CUnOp" PWild (PVar "x"))) (EApp (EVar "refsE") (EVar "x")))
 (DFunDef false "refsE" ((PCon "CTuple" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsE")) (EVar "es")))
 (DFunDef false "refsE" ((PCon "CList" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsE")) (EVar "es")))

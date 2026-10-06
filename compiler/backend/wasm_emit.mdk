@@ -2351,7 +2351,7 @@ exprUsesStr (CApp f a) =
   let (hd, args) = flattenApp (CApp f a) []
   headUsesStr hd || anyList exprUsesStr args
 exprUsesStr (CLam _ b) = exprUsesStr b
-exprUsesStr (CBinPrim _ l r _) = exprUsesStr l || exprUsesStr r
+exprUsesStr (CBinPrim _ l r _ _) = exprUsesStr l || exprUsesStr r
 exprUsesStr (CUnOp _ x) = exprUsesStr x
 exprUsesStr (CIf c t f) = exprUsesStr c || exprUsesStr t || exprUsesStr f
 exprUsesStr (CLet _ _ a b) = exprUsesStr a || exprUsesStr b
@@ -2469,7 +2469,7 @@ scanExprW7 emit (CLit (LI64 _ _)) = setRef emit.useI64 True
 scanExprW7 emit (CLit (LString _)) = setRef emit.useStr True
 scanExprW7 emit (CLit (LChar _)) = setRef emit.useStr True
 scanExprW7 emit (CLam _ b) = scanExprW7 emit b
-scanExprW7 emit (CBinPrim op l r tag) =
+scanExprW7 emit (CBinPrim op l r tag _) =
   let _ = if tag == "U64" then setRef emit.useU64 True
   let _ = if tag == "I64" then setRef emit.useI64 True
   let _ = noteW8Binop emit op
@@ -2716,7 +2716,7 @@ scanPatW7 _ _ = ()
 
 -- a decision tree's match heads (the lowered shape of list/tuple patterns).
 scanTreeW7 : WasmEmit -> CTree -> Unit
-scanTreeW7 _ CTFail = ()
+scanTreeW7 _ (CTFail _) = ()
 scanTreeW7 _ (CTLeaf _) = ()
 scanTreeW7 emit (CTGuard _ fail) = scanTreeW7 emit fail
 scanTreeW7 emit (CTDrop sub) = scanTreeW7 emit sub
@@ -2773,7 +2773,7 @@ scanRecFields (CList es) = flatMap scanRecFields es
 scanRecFields (CArray es) = flatMap scanRecFields es
 scanRecFields (CApp f a) = scanRecFields f ++ scanRecFields a
 scanRecFields (CLam _ b) = scanRecFields b
-scanRecFields (CBinPrim _ l r _) = scanRecFields l ++ scanRecFields r
+scanRecFields (CBinPrim _ l r _ _) = scanRecFields l ++ scanRecFields r
 scanRecFields (CUnOp _ x) = scanRecFields x
 scanRecFields (CIf c t f) =
   scanRecFields c ++ scanRecFields t ++ scanRecFields f
@@ -2912,7 +2912,7 @@ scanExprValueUses fnNames fnArs ctorArs (CApp f a) =
   here ++ flatMap (scanExprValueUses fnNames fnArs ctorArs) args
 scanExprValueUses fnNames fnArs ctorArs (CLam _ b) =
   scanExprValueUses fnNames fnArs ctorArs b
-scanExprValueUses fnNames fnArs ctorArs (CBinPrim _ l r _) =
+scanExprValueUses fnNames fnArs ctorArs (CBinPrim _ l r _ _) =
   scanExprValueUses fnNames fnArs ctorArs l
     ++ scanExprValueUses fnNames fnArs ctorArs r
 scanExprValueUses fnNames fnArs ctorArs (CUnOp _ x) =
@@ -3028,7 +3028,7 @@ exprUsesClosures fnNames fnArs ctorArs locals (CApp f a) =
 exprUsesClosures fnNames fnArs ctorArs locals (CVar x _) =
   not (contains x locals) && fnMemberIndexW fnNames x
 exprUsesClosures fnNames fnArs ctorArs locals (CLit _) = False
-exprUsesClosures fnNames fnArs ctorArs locals (CBinPrim _ l r _) =
+exprUsesClosures fnNames fnArs ctorArs locals (CBinPrim _ l r _ _) =
   exprUsesClosures fnNames fnArs ctorArs locals l
     || exprUsesClosures fnNames fnArs ctorArs locals r
 exprUsesClosures fnNames fnArs ctorArs locals (CUnOp _ x) =
@@ -3120,7 +3120,7 @@ exprHasDecision (CMatch _ _) = True
 exprHasDecision (CIf c t f) =
   exprHasDecision c || exprHasDecision t || exprHasDecision f
 exprHasDecision (CLet _ _ a b) = exprHasDecision a || exprHasDecision b
-exprHasDecision (CBinPrim _ a b _) = exprHasDecision a || exprHasDecision b
+exprHasDecision (CBinPrim _ a b _ _) = exprHasDecision a || exprHasDecision b
 exprHasDecision (CUnOp _ a) = exprHasDecision a
 exprHasDecision (CApp f a) = exprHasDecision f || exprHasDecision a
 exprHasDecision (CBlock stmts) = anyList stmtHasDecision stmts
@@ -3343,7 +3343,7 @@ emitScalarExpr : WasmEmit ->
 emitScalarExpr emit fnNames valNames env (CLit l) = emitLitI32 emit l
 emitScalarExpr emit fnNames valNames env (CVar x _) =
   emitVarI32 emit fnNames valNames env x
-emitScalarExpr emit fnNames valNames env (CBinPrim op l r tag) =
+emitScalarExpr emit fnNames valNames env (CBinPrim op l r tag _) =
   emitBinI32 emit fnNames valNames env op l r tag
 emitScalarExpr emit fnNames valNames env (CUnOp op x) =
   emitUnI32 emit fnNames valNames env op x
@@ -4484,7 +4484,7 @@ refMainKind prog (CVar "pi" _) = WFloat
 refMainKind prog (CVar "e" _) = WFloat
 -- W8b: a Float arith binop (recovered structurally) auto-prints as a Float; otherwise
 -- the op's kind (arith→Int, compare→Bool, ++→Str).
-refMainKind prog (CBinPrim op l r _) =
+refMainKind prog (CBinPrim op l r _ _) =
   if isArithOp op && (cexprIsFloat prog [] l || cexprIsFloat prog [] r) then
     WFloat
   else
@@ -6369,7 +6369,7 @@ isVarNamed _ _ = False
 -- anywhere in `body` (peer of native's paramUsedInArith, extended to `Ord` compares so
 -- the poly-`Ord`-on-Float sibling `myMax a b = if a > b …` is seeded).  Structural walk.
 paramUsedInNumBinop : String -> CExpr -> Bool
-paramUsedInNumBinop p (CBinPrim op l r _) =
+paramUsedInNumBinop p (CBinPrim op l r _ _) =
   if (isArithOp op || isCmpOp op) && (isVarNamed p l || isVarNamed p r) then
     True
   else
@@ -6536,7 +6536,8 @@ findByKeyW method tag (entry :: rest)
 emitRefExpr : Prog -> List String -> Int -> CExpr -> List String
 emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l
 emitRefExpr prog env d (CVar x _) = emitVarRef prog env d x
-emitRefExpr prog env d (CBinPrim op l r tag) = emitBinRef prog env d op l r tag
+emitRefExpr prog env d (CBinPrim op l r tag _) =
+  emitBinRef prog env d op l r tag
 emitRefExpr prog env d (CUnOp op x) = emitUnRef prog env d op x
 emitRefExpr prog env d (CIf c t f) = emitIfRef prog env d c t f
 emitRefExpr prog env d (CLet recF pat e1 e2) =
@@ -7389,7 +7390,7 @@ cexprIsFloat prog env (CVar x _) =
     || not (contains x env) && contains x (progEmit prog).floatGlobals.value
 -- C3: also True when the binop itself carries an "Float" scalar-tag (e.g. a nested
 -- Float binop whose operands are type-lost but the typecheck stamped the node).
-cexprIsFloat prog env (CBinPrim op l r tag) =
+cexprIsFloat prog env (CBinPrim op l r tag _) =
   isArithOp op
     && not (isTaggedFixedHead tag)
     && tag /= "U64"
@@ -8848,7 +8849,7 @@ emitWDispLeaf : Prog ->
   List String ->
   CExpr ->
   List String
-emitWDispLeaf prog env root loopLbl rootArity members (e@(CBinPrim "::" _ _ _)) =
+emitWDispLeaf prog env root loopLbl rootArity members (e@(CBinPrim "::" _ _ _ _)) =
   match wDispSpineParts prog (f => contains f members) e
     Some (heads, f, args) =>
       emitWDispSpineCons
@@ -9984,7 +9985,7 @@ emitTreeTail : Prog ->
   List CArm ->
   CTree ->
   List String
-emitTreeTail prog env arity d root occs arms CTFail =
+emitTreeTail prog env arity d root occs arms (CTFail _) =
   wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
 emitTreeTail prog env arity d root occs arms (CTLeaf i) =
   emitLeafTail prog env arity root arms i
@@ -10701,7 +10702,7 @@ freeVarsExpr bound (CApp f a) = freeVarsExpr bound f ++ freeVarsExpr bound a
 freeVarsExpr bound (CLam pats b) =
   freeVarsExpr (flatMap patVars pats ++ bound) b
 freeVarsExpr bound (CLit _) = []
-freeVarsExpr bound (CBinPrim _ l r _) =
+freeVarsExpr bound (CBinPrim _ l r _ _) =
   freeVarsExpr bound l ++ freeVarsExpr bound r
 freeVarsExpr bound (CUnOp _ x) = freeVarsExpr bound x
 freeVarsExpr bound (CIf c t f) =
@@ -11378,7 +11379,7 @@ emitTreeRef : Prog ->
   List CArm ->
   CTree ->
   List String
-emitTreeRef prog env d decLabel root occs arms CTFail =
+emitTreeRef prog env d decLabel root occs arms (CTFail _) =
   wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
 emitTreeRef prog env d decLabel root occs arms (CTLeaf i) =
   emitLeafRef prog env d decLabel root arms i
@@ -12037,7 +12038,7 @@ collectExprLocals (CLet _ (PVar x _) e1 e2) =
   x :: collectExprLocals e1 ++ collectExprLocals e2
 collectExprLocals (CLet _ pat e1 e2) =
   patVars pat ++ (collectExprLocals e1 ++ collectExprLocals e2)
-collectExprLocals (CBinPrim _ l r _) =
+collectExprLocals (CBinPrim _ l r _ _) =
   collectExprLocals l ++ collectExprLocals r
 collectExprLocals (CUnOp _ x) = collectExprLocals x
 collectExprLocals (CIf c t f) =
@@ -12640,7 +12641,7 @@ maxIndexAt (CLet _ pat a b) d =
 -- a `/` or `%` stashes its divisor in `$__divr<d>` (emitDivZeroGuard), so like the
 -- four nodes below it counts `d` even over leaf operands, or an Int or `U64`
 -- division nested two matches deep names an undeclared `$__divr2`.
-maxIndexAt (CBinPrim op a b _) d =
+maxIndexAt (CBinPrim op a b _ _) d =
   let sub = maxI (maxIndexAt a d) (maxIndexAt b d)
   if op == "/" || op == "%" then maxI d sub else sub
 maxIndexAt (CUnOp _ a) d = maxIndexAt a d
@@ -12696,7 +12697,7 @@ maxIndexAt _ d = d - 1
 -- branches, one level deeper (`emitBrTableTower` at d+1); a literal switch emits
 -- both at its own depth, so counting the default one level deeper covers both.
 treeSwitchNesting : CTree -> Int
-treeSwitchNesting CTFail = 0
+treeSwitchNesting (CTFail _) = 0
 treeSwitchNesting (CTLeaf _) = 0
 treeSwitchNesting (CTGuard _ fail) = treeSwitchNesting fail
 treeSwitchNesting (CTDrop sub) = treeSwitchNesting sub
@@ -12730,7 +12731,7 @@ letStashIndex _ e d = maxIndexAt e d + 1
 -- leaves/guards re-emit arm bodies via emitTreeRef at the same depth, accounted by the
 -- arm walk above).
 maxIndexTree : CTree -> Int -> Int
-maxIndexTree CTFail d = d - 1
+maxIndexTree (CTFail _) d = d - 1
 maxIndexTree (CTLeaf _) d = d - 1
 maxIndexTree (CTGuard _ fail) d = maxIndexTree fail d
 maxIndexTree (CTDrop sub) d = maxIndexTree sub d

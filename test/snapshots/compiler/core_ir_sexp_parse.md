@@ -1,5 +1,5 @@
 # META
-source_lines=436
+source_lines=438
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -18,6 +18,7 @@ import frontend.ast.{
   Addr(..),
   Route(..),
   Loc(..),
+  noDeclLoc,
 }
 import ir.core_ir.{
   CExpr(..),
@@ -33,6 +34,7 @@ import ir.core_ir.{
   CTree(..),
   CTBranch(..),
   CHead(..),
+  FailSite(..),
 }
 import support.util.{reverseL}
 
@@ -294,7 +296,7 @@ toCHead (SList ((SAtom "HLit") :: [l])) = HLit (toLit l)
 toCHead other = panic ("core_ir_sexp_parse: bad CHead: " ++ sexprToStr other)
 
 toCTree : SExp -> CTree
-toCTree (SAtom "CTFail") = CTFail
+toCTree (SAtom "CTFail") = CTFail (NoArm noDeclLoc)
 toCTree (SList ((SAtom "CTLeaf") :: [i])) = CTLeaf (toInt i)
 toCTree (SList ((SAtom "CTGuard") :: [i, fail])) =
   CTGuard (toInt i) (toCTree fail)
@@ -327,9 +329,9 @@ toCExpr (SList ((SAtom "CDecision") :: [scrut, SList arms, tree])) =
 toCExpr (SList ((SAtom "CIf") :: [c, t, e])) =
   CIf (toCExpr c) (toCExpr t) (toCExpr e)
 toCExpr (SList ((SAtom "CBinPrim") :: [op, l, r])) =
-  CBinPrim (toStr op) (toCExpr l) (toCExpr r) ""
+  CBinPrim (toStr op) (toCExpr l) (toCExpr r) "" noDeclLoc
 toCExpr (SList ((SAtom "CBinPrim") :: [op, l, r, tag])) =
-  CBinPrim (toStr op) (toCExpr l) (toCExpr r) (toStr tag)
+  CBinPrim (toStr op) (toCExpr l) (toCExpr r) (toStr tag) noDeclLoc
 toCExpr (SList ((SAtom "CUnOp") :: [op, e])) = CUnOp (toStr op) (toCExpr e)
 toCExpr (SList ((SAtom "CTuple") :: es)) = CTuple (map toCExpr es)
 toCExpr (SList ((SAtom "CList") :: es)) = CList (map toCExpr es)
@@ -439,8 +441,8 @@ joinSexps [] = ""
 joinSexps [x] = sexprToStr x
 joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "SToken" () ((variant "TOpen" (ConPos)) (variant "TClose" (ConPos)) (variant "TAtom" (ConPos (TyCon "String")))) ())
 (DTypeSig false "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "SToken"))))
@@ -568,7 +570,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCHead" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "HLit"))) (PList (PVar "l"))))) (EApp (EVar "HLit") (EApp (EVar "toLit") (EVar "l"))))
 (DFunDef false "toCHead" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CHead: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCTree" (TyFun (TyCon "SExp") (TyCon "CTree")))
-(DFunDef false "toCTree" ((PCon "SAtom" (PLit (LString "CTFail")))) (EVar "CTFail"))
+(DFunDef false "toCTree" ((PCon "SAtom" (PLit (LString "CTFail")))) (EApp (EVar "CTFail") (EApp (EVar "NoArm") (EVar "noDeclLoc"))))
 (DFunDef false "toCTree" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CTLeaf"))) (PList (PVar "i"))))) (EApp (EVar "CTLeaf") (EApp (EVar "toInt") (EVar "i"))))
 (DFunDef false "toCTree" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CTGuard"))) (PList (PVar "i") (PVar "fail"))))) (EApp (EApp (EVar "CTGuard") (EApp (EVar "toInt") (EVar "i"))) (EApp (EVar "toCTree") (EVar "fail"))))
 (DFunDef false "toCTree" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CTSwitch"))) (PList (PCon "SList" (PVar "branches")) (PVar "dflt"))))) (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EVar "map") (EVar "toCTBranch")) (EVar "branches"))) (EApp (EVar "toCTree") (EVar "dflt"))))
@@ -587,8 +589,8 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CMatch"))) (PCons (PVar "scrut") (PVar "arms"))))) (EApp (EApp (EVar "CMatch") (EApp (EVar "toCExpr") (EVar "scrut"))) (EApp (EApp (EVar "map") (EVar "toArm")) (EVar "arms"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CDecision"))) (PList (PVar "scrut") (PCon "SList" (PVar "arms")) (PVar "tree"))))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EVar "toCExpr") (EVar "scrut"))) (EApp (EApp (EVar "map") (EVar "toArm")) (EVar "arms"))) (EApp (EVar "toCTree") (EVar "tree"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CIf"))) (PList (PVar "c") (PVar "t") (PVar "e"))))) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "toCExpr") (EVar "c"))) (EApp (EVar "toCExpr") (EVar "t"))) (EApp (EVar "toCExpr") (EVar "e"))))
-(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBinPrim"))) (PList (PVar "op") (PVar "l") (PVar "r"))))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EApp (EVar "toStr") (EVar "op"))) (EApp (EVar "toCExpr") (EVar "l"))) (EApp (EVar "toCExpr") (EVar "r"))) (ELit (LString ""))))
-(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBinPrim"))) (PList (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EApp (EVar "toStr") (EVar "op"))) (EApp (EVar "toCExpr") (EVar "l"))) (EApp (EVar "toCExpr") (EVar "r"))) (EApp (EVar "toStr") (EVar "tag"))))
+(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBinPrim"))) (PList (PVar "op") (PVar "l") (PVar "r"))))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EApp (EVar "toStr") (EVar "op"))) (EApp (EVar "toCExpr") (EVar "l"))) (EApp (EVar "toCExpr") (EVar "r"))) (ELit (LString ""))) (EVar "noDeclLoc")))
+(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBinPrim"))) (PList (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EApp (EVar "toStr") (EVar "op"))) (EApp (EVar "toCExpr") (EVar "l"))) (EApp (EVar "toCExpr") (EVar "r"))) (EApp (EVar "toStr") (EVar "tag"))) (EVar "noDeclLoc")))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CUnOp"))) (PList (PVar "op") (PVar "e"))))) (EApp (EApp (EVar "CUnOp") (EApp (EVar "toStr") (EVar "op"))) (EApp (EVar "toCExpr") (EVar "e"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CTuple"))) (PVar "es")))) (EApp (EVar "CTuple") (EApp (EApp (EVar "map") (EVar "toCExpr")) (EVar "es"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CList"))) (PVar "es")))) (EApp (EVar "CList") (EApp (EApp (EVar "map") (EVar "toCExpr")) (EVar "es"))))
@@ -638,8 +640,8 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "joinSexps" ((PList (PVar "x"))) (EApp (EVar "sexprToStr") (EVar "x")))
 (DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "SToken" () ((variant "TOpen" (ConPos)) (variant "TClose" (ConPos)) (variant "TAtom" (ConPos (TyCon "String")))) ())
 (DTypeSig false "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "SToken"))))
@@ -767,7 +769,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCHead" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "HLit"))) (PList (PVar "l"))))) (EApp (EVar "HLit") (EApp (EVar "toLit") (EVar "l"))))
 (DFunDef false "toCHead" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CHead: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCTree" (TyFun (TyCon "SExp") (TyCon "CTree")))
-(DFunDef false "toCTree" ((PCon "SAtom" (PLit (LString "CTFail")))) (EVar "CTFail"))
+(DFunDef false "toCTree" ((PCon "SAtom" (PLit (LString "CTFail")))) (EApp (EVar "CTFail") (EApp (EVar "NoArm") (EVar "noDeclLoc"))))
 (DFunDef false "toCTree" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CTLeaf"))) (PList (PVar "i"))))) (EApp (EVar "CTLeaf") (EApp (EVar "toInt") (EVar "i"))))
 (DFunDef false "toCTree" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CTGuard"))) (PList (PVar "i") (PVar "fail"))))) (EApp (EApp (EVar "CTGuard") (EApp (EVar "toInt") (EVar "i"))) (EApp (EVar "toCTree") (EVar "fail"))))
 (DFunDef false "toCTree" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CTSwitch"))) (PList (PCon "SList" (PVar "branches")) (PVar "dflt"))))) (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EMethodRef "map") (EVar "toCTBranch")) (EVar "branches"))) (EApp (EVar "toCTree") (EVar "dflt"))))
@@ -786,8 +788,8 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CMatch"))) (PCons (PVar "scrut") (PVar "arms"))))) (EApp (EApp (EVar "CMatch") (EApp (EVar "toCExpr") (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EVar "toArm")) (EVar "arms"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CDecision"))) (PList (PVar "scrut") (PCon "SList" (PVar "arms")) (PVar "tree"))))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EVar "toCExpr") (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EVar "toArm")) (EVar "arms"))) (EApp (EVar "toCTree") (EVar "tree"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CIf"))) (PList (PVar "c") (PVar "t") (PVar "e"))))) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "toCExpr") (EVar "c"))) (EApp (EVar "toCExpr") (EVar "t"))) (EApp (EVar "toCExpr") (EVar "e"))))
-(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBinPrim"))) (PList (PVar "op") (PVar "l") (PVar "r"))))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EApp (EVar "toStr") (EVar "op"))) (EApp (EVar "toCExpr") (EVar "l"))) (EApp (EVar "toCExpr") (EVar "r"))) (ELit (LString ""))))
-(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBinPrim"))) (PList (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EApp (EVar "toStr") (EVar "op"))) (EApp (EVar "toCExpr") (EVar "l"))) (EApp (EVar "toCExpr") (EVar "r"))) (EApp (EVar "toStr") (EVar "tag"))))
+(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBinPrim"))) (PList (PVar "op") (PVar "l") (PVar "r"))))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EApp (EVar "toStr") (EVar "op"))) (EApp (EVar "toCExpr") (EVar "l"))) (EApp (EVar "toCExpr") (EVar "r"))) (ELit (LString ""))) (EVar "noDeclLoc")))
+(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBinPrim"))) (PList (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EApp (EVar "toStr") (EVar "op"))) (EApp (EVar "toCExpr") (EVar "l"))) (EApp (EVar "toCExpr") (EVar "r"))) (EApp (EVar "toStr") (EVar "tag"))) (EVar "noDeclLoc")))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CUnOp"))) (PList (PVar "op") (PVar "e"))))) (EApp (EApp (EVar "CUnOp") (EApp (EVar "toStr") (EVar "op"))) (EApp (EVar "toCExpr") (EVar "e"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CTuple"))) (PVar "es")))) (EApp (EVar "CTuple") (EApp (EApp (EMethodRef "map") (EVar "toCExpr")) (EVar "es"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CList"))) (PVar "es")))) (EApp (EVar "CList") (EApp (EApp (EMethodRef "map") (EVar "toCExpr")) (EVar "es"))))
