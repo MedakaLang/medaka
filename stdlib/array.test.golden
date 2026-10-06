@@ -44,15 +44,13 @@ running doctests in stdlib/array.mdk
   ok   stdlib/array.mdk:672: length (empty : Array Int)
 
 stdlib/array.mdk: 43/43 passed
-stdlib/array.mdk:695: Testing "sortBy ascending and length-preserving" ... OK (100 tests)
-stdlib/array.mdk:700: Testing "sortBy idempotent" ... OK (100 tests)
-stdlib/array.mdk:705: Testing "sortBy stable: equal keys preserve original order" ... OK (100 tests)
-stdlib/array.mdk:710: Testing "makeWith length" ... OK (100 tests)
-stdlib/array.mdk:714: Testing "makeWith element at index 0" ... OK (100 tests)
-stdlib/array.mdk:723: Testing "foldWithIndex matches fold over zip with range" ... OK (100 tests)
-stdlib/array.mdk:730: Testing "forEachWithIndex visits every index once, in order, matching zip with range" ... OK (100 tests)
-stdlib/array.mdk:743: Testing "mapWithIndex with an index-ignoring callback is map" ... OK (100 tests)
-stdlib/array.mdk:747: Testing "mapWithIndex hands the callback 0..n-1 in order" ... OK (100 tests)
-stdlib/array.mdk:751: Testing "mapWithIndex agrees with zipWith over range" ... OK (100 tests)
-
-10 passed, 0 failed
+Testing "sortBy ascending and length-preserving" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "sortBy idempotent" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "sortBy stable: equal keys preserve original order" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "makeWith length" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "makeWith element at index 0" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "foldWithIndex matches fold over zip with range" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "forEachWithIndex visits every index once, in order, matching zip with range" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "mapWithIndex with an index-ignoring callback is map" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "mapWithIndex hands the callback 0..n-1 in order" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "mapWithIndex agrees with zipWith over range" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))

@@ -6,6 +6,4 @@ running doctests in test/compiler_test_fixtures/mixed.mdk
   ok   test/compiler_test_fixtures/mixed.mdk:16: addOne 4
 
 test/compiler_test_fixtures/mixed.mdk: 2/3 passed (1 failed, 0 errors)
-test/compiler_test_fixtures/mixed.mdk:22: Testing "double is add-to-self" ... OK (100 tests)
-
-1 passed, 0 failed
+Testing "double is add-to-self" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))

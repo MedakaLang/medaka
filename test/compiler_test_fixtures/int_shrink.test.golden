@@ -1,8 +1,3 @@
 running doctests in test/compiler_test_fixtures/int_shrink.mdk
   (no doctests found)
-test/compiler_test_fixtures/int_shrink.mdk:20: Testing "int_shrink: deliberately false over Int (#1307)" ... FAILED after 1 test
-  Seed: 123456789 (rerun with: medaka test --seed 123456789 --filter "int_shrink: deliberately false over Int (#1307)" <file>)
-  Counterexample:
-    a = 0
-
-0 passed, 1 failed
+Testing "int_shrink: deliberately false over Int (#1307)" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))

@@ -49,13 +49,11 @@ running doctests in stdlib/toml.mdk
   ok   stdlib/toml.mdk:692: display (Toml [])
 
 stdlib/toml.mdk: 48/48 passed
-stdlib/toml.mdk:709: Testing "a section key round-trips an Int-derived value" ... OK (100 tests)
-stdlib/toml.mdk:713: Testing "a sibling key is stable regardless of the varying value" ... OK (100 tests)
-stdlib/toml.mdk:716: Testing "parse is deterministic" ... OK (100 tests)
-stdlib/toml.mdk:723: Testing "an unquoted integer round-trips as TInt" ... OK (100 tests)
-stdlib/toml.mdk:737: Testing "array-of-tables entries stay separate" ... OK (100 tests)
-stdlib/toml.mdk:750: Testing "Display TomlValue separates the four variants" ... OK (100 tests)
-stdlib/toml.mdk:762: Testing "Display Toml agrees with Eq Toml" ... OK (100 tests)
-stdlib/toml.mdk:774: Testing "Display Toml renders every entry" ... OK (100 tests)
-
-8 passed, 0 failed
+Testing "a section key round-trips an Int-derived value" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "a sibling key is stable regardless of the varying value" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "parse is deterministic" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "an unquoted integer round-trips as TInt" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "array-of-tables entries stay separate" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "Display TomlValue separates the four variants" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "Display Toml agrees with Eq Toml" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "Display Toml renders every entry" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
