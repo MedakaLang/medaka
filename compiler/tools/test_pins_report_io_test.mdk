@@ -91,6 +91,36 @@ expectHeldPropertyReport (Ok (code, out, _)) = expectAll [
     [
       "Testing \"held law\" [native] ... KNOWN-RED",
       "known-red issue #73 still holds",
+      "Seed: 11; Cases: 2",
     ]
     out,
 ]
+
+replayFailureFixtures : List (String, String)
+replayFailureFixtures = [("law.mdk", "prop \"replay law\" (n : Int) = False\n")]
+
+test "human property failures retain replay metadata for each selected engine" =
+  withReportFixture replayFailureFixtures replayFailureReport
+
+replayFailureReport : String -> <Exec, IO> Expectation
+replayFailureReport dir = match boundedVerbSeconds 120 medakaBin [
+  "test",
+  "--engines",
+  "eval,native",
+  "--seed",
+  "-17",
+  "--cases",
+  "3",
+  "\{dir}/law.mdk",
+]
+  Err message => fail message
+  Ok (code, out, _) => expectAll [
+    expectEqual 1 code,
+    expectTextContainsAll
+      [
+        "Testing \"replay law\" [eval] ... FAILED",
+        "Testing \"replay law\" [native] ... FAILED",
+        "Seed: -17; Cases: 3",
+      ]
+      out,
+  ]

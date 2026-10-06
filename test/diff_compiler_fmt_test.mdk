@@ -1530,6 +1530,9 @@ seedDirectoryReport seed file dir =
           "seed directory replay: direct and directory property results differ: \{diffNote directProp dirProp}"
       else if not (contains "FAILED" directProp) then
         Err "seed directory replay: expected a failing property result"
+      else if not (contains "Seed: \{intToString seed}; Cases: 100" directText)
+        || not (contains "Seed: \{intToString seed}; Cases: 100" dirOut) then
+        Err "seed directory replay: missing the requested seed and case budget"
       else
         Ok directProp
     (Err e, _) =>

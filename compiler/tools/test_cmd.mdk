@@ -1431,6 +1431,12 @@ printGradedPropRows (row :: rest) =
   let _ =
     putStrLn
       "Testing \"\{propResultName raw}\" [\{propResultEngine raw}] ... \{gradedPropHumanStatus row} (\{detail})"
+  let _ =
+    if gradedPropStatus row == "pass" then
+      ()
+    else
+      putStrLn
+        "  Seed: \{intToString (propResultSeed raw)}; Cases: \{intToString (propResultCases raw)}"
   let restPassed = printGradedPropRows rest
   gradedPropPassed row && restPassed
 

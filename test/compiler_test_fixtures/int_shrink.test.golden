@@ -1,3 +1,4 @@
 running doctests in test/compiler_test_fixtures/int_shrink.mdk
   (no doctests found)
-Testing "int_shrink: deliberately false over Int (#1307)" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "int_shrink: deliberately false over Int (#1307)" [eval] ... FAILED (line 20: failed after 1 test; counterexample: a = 0)
+  Seed: 123456789; Cases: 100

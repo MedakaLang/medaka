@@ -12,5 +12,5 @@ running doctests in stdlib/hash_set.mdk
   ok   stdlib/hash_set.mdk:263: display (new () : HashSet Int)
 
 stdlib/hash_set.mdk: 11/11 passed
-Testing "Display HashSet is layout-independent" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "Display HashSet agrees with Eq and lists elements ascending" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "Display HashSet is layout-independent" [eval] ... OK (100 tests passed)
+Testing "Display HashSet agrees with Eq and lists elements ascending" [eval] ... OK (100 tests passed)

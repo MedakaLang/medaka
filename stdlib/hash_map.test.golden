@@ -22,6 +22,6 @@ running doctests in stdlib/hash_map.mdk
   ok   stdlib/hash_map.mdk:351: (fromList [(1, 10), (2, 20)])[2]
 
 stdlib/hash_map.mdk: 21/21 passed
-Testing "Display HashMap is layout-independent" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "Display HashMap agrees with Eq and lists keys ascending" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "Index HashMap agrees with get on present keys" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "Display HashMap is layout-independent" [eval] ... OK (100 tests passed)
+Testing "Display HashMap agrees with Eq and lists keys ascending" [eval] ... OK (100 tests passed)
+Testing "Index HashMap agrees with get on present keys" [eval] ... OK (100 tests passed)

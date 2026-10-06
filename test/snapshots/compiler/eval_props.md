@@ -8,7 +8,7 @@ stages=DESUGAR,MARK
 -- A property body, generator, or shrinker may panic. Panics are not catchable
 -- in Medaka, so test_cmd runs interpreter properties in one child per target.
 -- This module owns the narrow stdout protocol between that child and its
--- parent. A fresh nonce prevents target output from forging a row.
+-- parent. A fresh nonce separates ordinary target output from runner rows.
 
 import json.{Json(..), jObject, parse, stringify, get, asInt, asString}
 import support.util.{splitNl, joinNl, startsWith, anyList}
@@ -40,9 +40,9 @@ startEvalPropWorker _ =
   let _ = flushStdout ()
   nonce
 
--- The bootstrap is deliberately emitted before target source is loaded. A
--- target cannot learn this nonce through argv or the environment, so its own
--- stdout cannot forge the row framing that follows.
+-- Emit the bootstrap before loading the target, and keep the nonce out of
+-- argv and the environment. Framing avoids accidental output collisions;
+-- property programs with OS effects remain trusted code.
 export
 takeEvalPropBootstrap : String -> Result String (String, String)
 takeEvalPropBootstrap stdout = match splitNl stdout

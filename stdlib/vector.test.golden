@@ -27,9 +27,9 @@ running doctests in stdlib/vector.mdk
   ok   stdlib/vector.mdk:371: display (fromList ["a", "b"])
 
 stdlib/vector.mdk: 26/26 passed
-Testing "sortInPlace agrees with an independent insertion sortInPlace" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "sortInPlace is idempotent" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "sortInPlaceBy is stable on ties" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "removeAtInPlace out of range is a no-op" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "Display Vector shows only the live range and agrees with Eq" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "sortInPlace agrees with an independent insertion sortInPlace" [eval] ... OK (100 tests passed)
+Testing "sortInPlace is idempotent" [eval] ... OK (100 tests passed)
+Testing "sortInPlaceBy is stable on ties" [eval] ... OK (100 tests passed)
+Testing "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" [eval] ... OK (100 tests passed)
+Testing "removeAtInPlace out of range is a no-op" [eval] ... OK (100 tests passed)
+Testing "Display Vector shows only the live range and agrees with Eq" [eval] ... OK (100 tests passed)

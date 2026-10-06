@@ -63,6 +63,8 @@ are preserved rather than rewritten after rendering.
 Reports retain the exact requested integer seed, including negative and wide
 seeds. Normalizing a structural generator's internal state does not normalize
 its replay metadata.
+Human failure and known-red property rows print the seed and requested case
+budget so the reported witness can be replayed with the same CLI options.
 
 Evaluator properties run in one supervised process per target, sharing their
 original module cells within that process. A panic in a body, generator or
@@ -71,6 +73,8 @@ the other selected engine still runs. An aborted evaluator batch reports all
 of its selected laws as runtime errors; it does not claim a partial pass. The
 parent accepts only a complete transcript matching its requested law names,
 engines, seeds and case budgets.
+The worker uses the compiler associated with the caller's concrete prelude
+path, including when the testing library is called by a standalone entry.
 
 ## Initial algorithm coverage
 

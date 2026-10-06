@@ -42,6 +42,6 @@ running doctests in stdlib/args.mdk
   ok   stdlib/args.mdk:599: map (a => flagValues "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
 
 stdlib/args.mdk: 41/41 passed
-Testing "Eq Args discriminates every field" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "Eq ArgSpec reaches through FlagSpec and Arity" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "Debug ArgSpec agrees with Eq" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "Eq Args discriminates every field" [eval] ... OK (100 tests passed)
+Testing "Eq ArgSpec reaches through FlagSpec and Arity" [eval] ... OK (100 tests passed)
+Testing "Debug ArgSpec agrees with Eq" [eval] ... OK (100 tests passed)

@@ -5,5 +5,5 @@ running doctests in test/compiler_test_fixtures/user_arbitrary.mdk
   ok   test/compiler_test_fixtures/user_arbitrary.mdk:33: wrapIsRed (Wrap Green)
 
 test/compiler_test_fixtures/user_arbitrary.mdk: 4/4 passed
-Testing "user generator is honored" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "user generator is honored at a nested field" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "user generator is honored" [eval] ... OK (100 tests passed)
+Testing "user generator is honored at a nested field" [eval] ... OK (100 tests passed)

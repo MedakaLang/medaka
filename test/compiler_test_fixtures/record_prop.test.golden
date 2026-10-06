@@ -1,4 +1,4 @@
 running doctests in test/compiler_test_fixtures/record_prop.mdk
   (no doctests found)
-Testing "positional ADT generates" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
-Testing "record generates and round-trips through field access" [eval] ... FAILED (interpreter property worker batch aborted (exit 1) — error: cannot read the stdlib prelude at "test" (Is a directory))
+Testing "positional ADT generates" [eval] ... OK (100 tests passed)
+Testing "record generates and round-trips through field access" [eval] ... OK (100 tests passed)
