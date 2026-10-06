@@ -167,7 +167,7 @@ scanOrdinaryGrantSites : Reach ->
   Expr ->
   List Expr ->
   Expr
-scanOrdinaryGrantSites reach sites around bound _ head args =
+scanOrdinaryGrantSites reach sites around bound spine head args =
   let _ =
     if mayReachFile reach bound head (listLen args) then
       let path = leafPath head args
@@ -186,7 +186,7 @@ scanOrdinaryGrantSites reach sites around bound _ head args =
       []
   let f = scanGrantSites reach sites around bound head
   let xs = map (scanGrantSites reach sites around bound) args
-  fold EApp f xs
+  fold EApp (keepSpineLoc spine f) xs
 -- ── which callees can reach a file extern ────────────────────────────────────
 -- Global bindings and methods sharing an unmangled spelling are combined:
 -- every impl/default contributes edges, so that union only checks more. Local
@@ -893,6 +893,18 @@ collectRefs returns refs bound e = match headRawName e
     let _ = if not (omHasKey n bound) then refs := unmangled n :: refs.value
     e
   None => mapScopedChildren bound (collectRefs returns refs) e
+
+-- The location the call's spine started with, which `appSpine` drops, put back
+-- on the rebuilt head: a trap site reads the start of a call.
+keepSpineLoc : Expr -> Expr -> Expr
+keepSpineLoc spine head = match spineLoc spine
+  Some l => ELoc l head
+  None => head
+
+spineLoc : Expr -> Option Loc
+spineLoc (EApp f _) = spineLoc f
+spineLoc (ELoc l _) = Some l
+spineLoc _ = None
 
 appSpine : Expr -> List Expr -> (Expr, List Expr)
 appSpine (EApp f x) args = appSpine f (x :: args)

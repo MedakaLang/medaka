@@ -3036,7 +3036,7 @@ migration = "native-rewrite"
 run = "test/wasm/diff_wasm_modules.sh"
 oracles = []
 sources = []
-corpus = ["test/wasm/fixtures_modules"]
+corpus = ["test/wasm/fixtures_modules", "test/trap_site_fixtures"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
 [[gate]]

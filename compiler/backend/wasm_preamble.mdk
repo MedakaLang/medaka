@@ -366,6 +366,61 @@ trapIntRuntimeLines = [
   "      (else (call $mdk_write_err_digits (local.get $n)))))"
 ]
 
+{- | The located half of the coded-trap stderr seam.  A located trap writes
+   `<file>:<line>:<col>: ` before its own line, from one packed i64,
+   `(file + 1) << 44 | line << 20 | col`, the word the native backend packs;
+   0 writes nothing.  `files` holds each numbered file's path as UTF-8 bytes, in
+   number order, so a program pays for each path once and a trap for one i64.
+   `nonexh` adds the whole non-exhaustive-match trap as one helper, which is
+   what every located match miss calls.  Needs `trapIntRuntimeLines`. -}
+export
+siteRuntimeLines : List (List Int) -> Bool -> List String
+siteRuntimeLines files nonexh =
+  [
+      "  ;; -- located traps: `<file>:<line>:<col>: ` ahead of a trap line --",
+      "  (func $mdk_write_err_loc (param $s i64)",
+      "    (local $f i32)",
+      "    (if (i64.ne (local.get $s) (i64.const 0))",
+      "      (then",
+      "        (local.set $f (i32.wrap_i64 (i64.shr_u (local.get $s) (i64.const 44))))",
+    ]
+    ++ flatMap siteFileArmW (zipFilesW files 1)
+    ++ [
+      "        (call $mdk_write_err_byte (i32.const 58))",
+      "        (call $mdk_write_err_int (i64.and (i64.shr_u (local.get $s) (i64.const 20)) (i64.const 16777215)))",
+      "        (call $mdk_write_err_byte (i32.const 58))",
+      "        (call $mdk_write_err_int (i64.and (local.get $s) (i64.const 1048575)))",
+      "        (call $mdk_write_err_byte (i32.const 58))",
+      "        (call $mdk_write_err_byte (i32.const 32))))",
+      "  )",
+    ]
+    ++ (if nonexh then
+      [
+          "  (func $mdk_trap_nonexh (param $s i64)",
+          "    (call $mdk_write_err_loc (local.get $s))",
+        ]
+        ++ asciiTrapBytesW
+          "runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match\n"
+        ++ ["    unreachable)"]
+    else
+      [])
+
+zipFilesW : List (List Int) -> Int -> List (Int, List Int)
+zipFilesW [] _ = []
+zipFilesW (f :: fs) n = (n, f) :: zipFilesW fs (n + 1)
+
+siteFileArmW : (Int, List Int) -> List String
+siteFileArmW (n, bytes) =
+  [
+      "        (if (i32.eq (local.get $f) (i32.const \{intToString n}))",
+      "          (then",
+    ]
+    ++ map
+      (b =>
+        "            (call $mdk_write_err_byte (i32.const \{intToString b}))")
+      bytes
+    ++ ["          ))"]
+
 {- | Checked `Int` arithmetic and `Int` shifts (#3377), one function per helper
    a program demands.  `used` names them: `add`, `sub`, `mul`, `div`, `neg` for
    `$mdk_int_<name>`, and `left`, `right` for `$mdk_shift_<name>`.  Operands and
@@ -431,7 +486,8 @@ intOverflowLines =
       "        (call $mdk_write_err_int (local.get $v))",
       "        (call $mdk_write_err_byte (i32.const 41)))",
       "      (else (call $mdk_write_err_int (local.get $v)))))",
-      "  (func $mdk_int_overflow (param $op i32) (param $a i64) (param $b i64)",
+      "  (func $mdk_int_overflow (param $op i32) (param $a i64) (param $b i64) (param $s i64)",
+      "    (call $mdk_write_err_loc (local.get $s))",
     ]
     ++ asciiTrapBytesW "runtime error [E-INT-OVERFLOW]: "
     ++ [
@@ -457,7 +513,7 @@ outOfIntRangeW =
 -- the call that reports `a <op> b` (op byte `code`) as an overflow.
 overflowCallW : String -> String
 overflowCallW code =
-  "(call $mdk_int_overflow (i32.const \{code}) (local.get $a) (local.get $b))"
+  "(call $mdk_int_overflow (i32.const \{code}) (local.get $a) (local.get $b) (local.get $s))"
 
 checkedIntOpW : String -> List String
 checkedIntOpW "neg" = [
@@ -465,11 +521,11 @@ checkedIntOpW "neg" = [
   "    (local $r i64)",
   "    (local.set $r (i64.sub (i64.const 0) (local.get $a)))",
   "    (if \{outOfIntRangeW}",
-  "      (then (call $mdk_int_overflow (i32.const 0) (local.get $a) (i64.const 0))))",
+  "      (then (call $mdk_int_overflow (i32.const 0) (local.get $a) (i64.const 0) (i64.const 0))))",
   "    (local.get $r))",
 ]
 checkedIntOpW "mul" = [
-  "  (func $mdk_int_mul (param $a i64) (param $b i64) (result i64)",
+  "  (func $mdk_int_mul (param $a i64) (param $b i64) (param $s i64) (result i64)",
   "    (local $r i64)",
   "    (local.set $r (i64.mul (local.get $a) (local.get $b)))",
   "    (if \{outOfIntRangeW} (then \{overflowCallW "42"}))",
@@ -488,7 +544,7 @@ checkedIntOpW op = panic ("wasm: no checked Int operator '" ++ op ++ "'")
 -- range test on its result is the whole check.
 checkedBinOpLinesW : String -> String -> String -> List String
 checkedBinOpLinesW name instr code = [
-  "  (func $mdk_int_\{name} (param $a i64) (param $b i64) (result i64)",
+  "  (func $mdk_int_\{name} (param $a i64) (param $b i64) (param $s i64) (result i64)",
   "    (local $r i64)",
   "    (local.set $r (\{instr} (local.get $a) (local.get $b)))",
   "    (if \{outOfIntRangeW} (then \{overflowCallW code}))",
@@ -1126,7 +1182,7 @@ valueAddRuntimeLines w =
       "      (then (struct.new $float (f64.add",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-      "      (else (call $mdk_box_int (call $mdk_int_add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+      "      (else (call $mdk_box_int (call $mdk_int_add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)) (i64.const 0))))))",
     ]
 
 export
@@ -1141,7 +1197,7 @@ valueSubRuntimeLines w =
       "      (then (struct.new $float (f64.sub",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-      "      (else (call $mdk_box_int (call $mdk_int_sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+      "      (else (call $mdk_box_int (call $mdk_int_sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)) (i64.const 0))))))",
     ]
 
 export
@@ -1156,7 +1212,7 @@ valueMulRuntimeLines w =
       "      (then (struct.new $float (f64.mul",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-      "      (else (call $mdk_box_int (call $mdk_int_mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+      "      (else (call $mdk_box_int (call $mdk_int_mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)) (i64.const 0))))))",
     ]
 
 export
@@ -1182,7 +1238,7 @@ valueDivRuntimeLines w =
     ++ valueDivZeroTrapW
     ++ [
       "        ))",
-      "        (call $mdk_box_int (call $mdk_int_div (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))",
+      "        (call $mdk_box_int (call $mdk_int_div (call $mdk_unbox_int (local.get $a)) (local.get $vdr) (i64.const 0))))))",
     ]
 
 export

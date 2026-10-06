@@ -209,6 +209,8 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   CField(..),
+  FailSite(..),
+  siteSentinelName,
 }
 import list.{replicate, take, drop}
 import support.ordmap.{
@@ -221,6 +223,7 @@ import support.ordmap.{
   omMapValues,
   omEmpty,
   omDelete,
+  omSize,
 }
 import support.util.{
   joinNl,
@@ -292,6 +295,7 @@ import backend.wasm_preamble.{
   stderrRuntimeLines,
   trapIntRuntimeLines,
   intRuntimeLines,
+  siteRuntimeLines,
   strLeafRuntimeLines,
   strConcatRuntimeLines,
   appendRuntimeLines,
@@ -378,6 +382,15 @@ data WasmEmit = WasmEmit {
   functionReferenceNames : Ref (OrdMap Unit),
   trapImportNeeded : Ref Bool,
   trapIntNeeded : Ref Bool,
+  -- located traps: the files a trap site names, in reverse number order, and
+  -- their 1-based numbers; whether the located-trap runtime and the shared
+  -- non-exhaustive-match trap are called.
+  siteFiles : Ref (List String),
+  siteFileNums : Ref (OrdMap Int),
+  siteRtUsed : Ref Bool,
+  siteNonexhUsed : Ref Bool,
+  -- the first-clause site of the function whose clauses are being emitted
+  clauseSite : Ref Int,
   -- the checked `Int` operators and `Int` shifts this emission called, by helper
   -- name (`add`, `left`, ...), for `intRuntimeLines` (wasm_preamble.mdk).
   intRtUsed : Ref (List String),
@@ -452,6 +465,11 @@ freshWasmEmit mode = WasmEmit {
   functionReferenceNames = Ref omEmpty,
   trapImportNeeded = Ref False,
   trapIntNeeded = Ref False,
+  siteFiles = Ref [],
+  siteFileNums = Ref omEmpty,
+  siteRtUsed = Ref False,
+  siteNonexhUsed = Ref False,
+  clauseSite = Ref 0,
   intRtUsed = Ref [],
   useEPut = Ref False,
   useDivGuard = Ref False,
@@ -1822,9 +1840,11 @@ isLeafExternW name = contains
     -- offending index, which the trap formats (wasmTrapNum; native @mdk_oob_at).
     "indexErrorAt",
     -- `indexErrorAtSite site idx` and `panicAt site msg`: indexErrorAt and panic
-    -- with a native build's packed source site, which this backend drops.
+    -- reporting the packed source site of the call; `__site__ file line col` is
+    -- that site as an Int literal.
     "indexErrorAtSite",
     "panicAt",
+    siteSentinelName,
     -- #670: `sliceError : Int -> Int -> a` -- the coded-OOB abort the Slice impl
     -- raises; lowers to a fixed E-SLICE-OOB trap the built-in slice path also emits,
     -- with both bound args dropped.
@@ -2173,6 +2193,7 @@ externArityW name =
       "byteBlockSetUnsafe",
       "writeFileBytes",
       "ioPoll",
+      siteSentinelName,
     ] then
     -- writeFileBytes: its path, its bytes and the path's grant
     3
@@ -3190,6 +3211,7 @@ emitScalarProgram emit fnNames valNames groups =
   let trapImport = if !emit.trapImportNeeded then stderrByteImportLines else []
   let trapIntRt = if !emit.trapIntNeeded then trapIntRuntimeLines else []
   let intRt = intRuntimeLines !emit.intRtUsed
+  let siteRt = siteRuntimeOf emit
   joinNl
     (header
       ++ trapImport
@@ -3198,6 +3220,7 @@ emitScalarProgram emit fnNames valNames groups =
       ++ ioRuntimeLines
       ++ trapIntRt
       ++ intRt
+      ++ siteRt
       ++ initLines
       ++ [")"])
 
@@ -3373,8 +3396,8 @@ emitScalarExpr : WasmEmit ->
 emitScalarExpr emit fnNames valNames env (CLit l) = emitLitI32 emit l
 emitScalarExpr emit fnNames valNames env (CVar x _) =
   emitVarI32 emit fnNames valNames env x
-emitScalarExpr emit fnNames valNames env (CBinPrim op l r tag _) =
-  emitBinI32 emit fnNames valNames env op l r tag
+emitScalarExpr emit fnNames valNames env (CBinPrim op l r tag loc) =
+  emitBinI32 emit fnNames valNames env op l r tag (sitePackedW emit loc)
 emitScalarExpr emit fnNames valNames env (CUnOp op x) =
   emitUnI32 emit fnNames valNames env op x
 emitScalarExpr emit fnNames valNames env (CIf c t f) =
@@ -3445,10 +3468,10 @@ intOpCanOverflow op = contains op ["+", "-", "*", "/"]
 -- program with E-INT-OVERFLOW.  Operands and result are raw 63-bit i64s, so the
 -- same call serves scalar and ref mode (ref mode reboxes after it).  Demands the
 -- runtime block and the stderr/decimal trap seam its trap path writes through.
-intChkCall : WasmEmit -> String -> List String
-intChkCall emit op =
+intChkCall : WasmEmit -> String -> Int -> List String
+intChkCall emit op site =
   let _ = noteIntRt emit (intChkName op)
-  ["call $mdk_int_" ++ intChkName op]
+  ["i64.const " ++ intToString site, "call $mdk_int_" ++ intChkName op]
 
 -- demand the `intRuntimeLines` helper `name`, and the stderr/decimal trap seam
 -- every one of them writes through.
@@ -3457,8 +3480,7 @@ noteIntRt emit name =
   let used = !emit.intRtUsed
   let _ =
     if contains name used then () else setRef emit.intRtUsed (name :: used)
-  let _ = setRef emit.trapImportNeeded True
-  setRef emit.trapIntNeeded True
+  noteSiteRt emit
 
 -- `Int` negation, checked the same way (`$mdk_int_neg`).
 intChkNegCall : WasmEmit -> List String
@@ -3522,8 +3544,9 @@ emitBinI32 : WasmEmit ->
   CExpr ->
   CExpr ->
   String ->
+  Int ->
   (List String, WTy)
-emitBinI32 emit fnNames valNames env op l r tag =
+emitBinI32 emit fnNames valNames env op l r tag site =
   let (li, _) = emitScalarExpr emit fnNames valNames env l
   let (ri, _) = emitScalarExpr emit fnNames valNames env r
   -- An `Int` operator that can leave the 63-bit range calls its checked helper
@@ -3535,7 +3558,7 @@ emitBinI32 emit fnNames valNames env op l r tag =
         ++ (if intOpCanOverflow op then normInt64 else [])
         ++ fixedWidthWrapW tag op
     else if intOpCanOverflow op then
-      intChkCall emit op
+      intChkCall emit op site
     else
       [wasmBinOp64 emit op]
   -- layer-17 §2.1: i64 arithmetic.  A comparison yields wasm i32 0/1, so extend it
@@ -3546,7 +3569,10 @@ emitBinI32 emit fnNames valNames env op l r tag =
     -- B5: scalar-mode concrete-Int `/`/`%` get the same coded divisor-zero guard as
     -- ref mode (single function-scope $__sdivr i64 scratch; reuse across nested divs is
     -- safe — each store-then-immediately-use completes before the next).
-    (li ++ ri ++ emitDivZeroGuard emit op "$__sdivr" ++ opInstrs, binOpTy op)
+    (
+      li ++ ri ++ emitDivZeroGuard emit op "$__sdivr" site ++ opInstrs,
+      binOpTy op,
+    )
   else
     (li ++ ri ++ opInstrs, binOpTy op)
 
@@ -3887,6 +3913,7 @@ emitRefProgram prog groups =
   -- N4 (#3377): the checked `Int` operators and the `Int` shifts, each set by
   -- emitting a site that calls them (and each forcing the two trap flags above).
   let intRt = intRuntimeLines (progEmit prog).intRtUsed.value
+  let siteRt = siteRuntimeOf (progEmit prog)
   -- S-4: the capture-free closure globals (wConstClos), accumulated during fn / impl /
   -- default / init body emission.  Bound HERE, after every body-emit binding above, for
   -- the same reason `trapImport` and `dataSegs` are; their LINES are placed with the
@@ -3937,6 +3964,7 @@ emitRefProgram prog groups =
       ++ floatStrRt
       ++ trapIntRt
       ++ intRt
+      ++ siteRt
       ++ dataSegs
       ++ forceFns
       ++ initLines
@@ -4716,8 +4744,10 @@ refPrintFor prog WRef =
 -- applied), also emit a closure wrapper `$name__clos` (a $clos with arity = param
 -- count, code = a thunk that unpacks the args array + calls $name).
 emitRefFnBind : Prog -> CBind -> List String
-emitRefFnBind prog (CBind name clauses0 _) =
+emitRefFnBind prog (CBind name clauses0 bindLoc) =
   let _ = setCurrentBindingOfW (progEmit prog) name
+  let _ =
+    setRef (progEmit prog).clauseSite (sitePackedW (progEmit prog) bindLoc)
   -- W9b: a single-clause point-free constrained fn (`elem a = fold g False`) whose
   -- body is an under-applied CMethod gets eta-saturated to the method's full arity
   -- so the emitted dispatch call pushes every operand (else a validate underflow).
@@ -4893,7 +4923,15 @@ emitClauseChainRefEnv : Prog ->
   List CClause ->
   List String
 emitClauseChainRefEnv prog baseEnv name params arity clauses =
-  emitClauseChainGo prog baseEnv name params arity clauses 0
+  emitClauseChainGo
+    prog
+    baseEnv
+    name
+    params
+    arity
+    clauses
+    0
+    (progEmit prog).clauseSite.value
 
 emitClauseChainGo : Prog ->
   List String ->
@@ -4902,11 +4940,11 @@ emitClauseChainGo : Prog ->
   Int ->
   List CClause ->
   Int ->
+  Int ->
   List String
 -- B5: the last clause fell through (non-exhaustive function) → coded trap.
-emitClauseChainGo prog _ _ _ _ [] _ =
-  wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
-emitClauseChainGo prog baseEnv name params arity ((CClause pats body) :: rest) i =
+emitClauseChainGo prog _ _ _ _ [] _ site = wasmNonexhTrap (progEmit prog) site
+emitClauseChainGo prog baseEnv name params arity ((CClause pats body) :: rest) i site =
   let clLabel = "$cl_\{name}_\{intToString i}"
   let (tests, binds, env) = clausePatCodeEnv prog baseEnv pats params clLabel
   -- A guard chain inside this clause's body desugars to `__fallthrough__` (the
@@ -4922,7 +4960,7 @@ emitClauseChainGo prog baseEnv name params arity ((CClause pats body) :: rest) i
   ["block " ++ clLabel]
     ++ indent (tests ++ binds ++ emitRefTail prog env arity body2)
     ++ ["end"]
-    ++ emitClauseChainGo prog baseEnv name params arity rest (i + 1)
+    ++ emitClauseChainGo prog baseEnv name params arity rest (i + 1) site
 
 -- `ftPrefix` / `labelFallthrough` are the BACKEND-NEUTRAL sentinel-labelling pass —
 -- they now live in `backend/emit_support.mdk` and are shared with the LLVM emitter,
@@ -6268,6 +6306,8 @@ implGroupArity [] = 0
 
 emitImplGroup : Prog -> ImplG -> List String
 emitImplGroup prog (ImplG method headTag key arity clauses fnName) =
+  -- an impl method has no first-clause site of its own
+  let _ = setRef (progEmit prog).clauseSite 0
   let params = synthParams arity
   -- Phase 2 B-dispatch (TRMC-DESIGN §"Phase 2"): a DISPATCHED self-recursive cons/ctor-tail
   -- impl (the `List map`: self-call is a `CMethod method (RKey tag)`) is emitted as a
@@ -6581,8 +6621,8 @@ findByKeyW method tag (entry :: rest)
 emitRefExpr : Prog -> List String -> Int -> CExpr -> List String
 emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l
 emitRefExpr prog env d (CVar x _) = emitVarRef prog env d x
-emitRefExpr prog env d (CBinPrim op l r tag _) =
-  emitBinRef prog env d op l r tag
+emitRefExpr prog env d (CBinPrim op l r tag loc) =
+  emitBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
 emitRefExpr prog env d (CUnOp op x) = emitUnRef prog env d op x
 emitRefExpr prog env d (CIf c t f) = emitIfRef prog env d c t f
 emitRefExpr prog env d (CLet recF pat e1 e2) =
@@ -6978,17 +7018,18 @@ emitBinRef : Prog ->
   CExpr ->
   CExpr ->
   String ->
+  Int ->
   List String
 -- W13: `++` is runtime-dispatched (Core IR is type-erased, so we can't tell a
 -- String `++` from a List `++` statically).  Both operands stay (ref eq) and
 -- $mdk_append inspects the left operand's shape ($str → string concat; i31/$C_Cons
 -- → list append), mirroring the LLVM backend's @mdk_append.
-emitBinRef prog env d "++" l r _ =
+emitBinRef prog env d "++" l r _ _ =
   emitRefExpr prog env d l ++ emitRefExpr prog env d r ++ ["call $mdk_append"]
 -- W9: `::` is cons — build a $C_Cons cell {tag=0, head=l, tail=r} (same rep the W7
 -- list-literal / Cons match machinery uses).  Reached from prelude fns that cons in
 -- expression position (e.g. `gen () :: acc` in arbitraryList's where-go).
-emitBinRef prog env d "::" l r _ =
+emitBinRef prog env d "::" l r _ _ =
   ["i32.const 0"]
     ++ emitRefExpr prog env d l
     ++ emitRefExpr prog env d r
@@ -6999,17 +7040,17 @@ emitBinRef prog env d "::" l r _ =
 -- the typecheck-stamped scalar-type tag (CBinPrim's 4th field, "Float" when the
 -- operands ground to concrete Float) provides a direct route — additive over the
 -- structural check, so an absent/non-Float tag falls back to today's path.
-emitBinRef prog env d op l r tag =
+emitBinRef prog env d op l r tag site =
   -- a fixed-width tag is the typechecker's grounded operand type, so it outranks
   -- the structural Float test and the poly-`Num` value dispatch below: an impl
   -- method's unsigned params (`add a b = a + b`) look poly to the emitter, and
   -- `$mdk_value_add` would not wrap.
   if isArithOp op && isTaggedFixedHead tag then
-    emitIntBinRef prog env d op l r tag
+    emitIntBinRef prog env d op l r tag site
   else if isArithOrCmp op && tag == "U64" then
-    emitU64BinRef prog env d op l r
+    emitU64BinRef prog env d op l r site
   else if isArithOrCmp op && tag == "I64" then
-    emitI64BinRef prog env d op l r
+    emitI64BinRef prog env d op l r site
   else if isArithOrCmp op
     && (tag == "Float"
       || cexprIsFloat prog env l
@@ -7066,7 +7107,7 @@ emitBinRef prog env d op l r tag =
       ++ emitRefExpr prog env d r
       ++ ["call $mdk_value_" ++ valueArithName op]
   else
-    emitIntBinRef prog env d op l r tag
+    emitIntBinRef prog env d op l r tag site
 
 -- layer-17 §2.1: Int arithmetic/comparison computes in i64 over the box/unbox
 -- seam ($mdk_unbox_int / $mdk_box_int), so values outside ±2^30 no longer
@@ -7080,8 +7121,9 @@ emitIntBinRef : Prog ->
   CExpr ->
   CExpr ->
   String ->
+  Int ->
   List String
-emitIntBinRef prog env d op l r tag =
+emitIntBinRef prog env d op l r tag site =
   let li = emitRefExpr prog env d l ++ ["call $mdk_unbox_int"]
   let ri = emitRefExpr prog env d r ++ ["call $mdk_unbox_int"]
   -- N4 (#3377): an `Int` `+ - * /` runs its checked operator BEFORE the rebox, so an
@@ -7090,7 +7132,7 @@ emitIntBinRef prog env d op l r tag =
   -- its wrap (`fixedWidthWrapW`): the fixed-width types wrap.
   let opInstrs =
     if intOpCanOverflow op && not (isTaggedFixedHead tag) then
-      intChkCall (progEmit prog) op
+      intChkCall (progEmit prog) op site
     else
       [wasmBinOp64 (progEmit prog) op]
   -- B5: concrete-Int `/`/`%` get a divisor-zero guard emitting the coded trap line
@@ -7098,7 +7140,7 @@ emitIntBinRef prog env d op l r tag =
   if op == "/" || op == "%" then
     li
       ++ ri
-      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
+      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d) site
       ++ opInstrs
       ++ fixedWidthWrapW tag op
       ++ ["call $mdk_box_int"]
@@ -7117,14 +7159,15 @@ emitU64BinRef : Prog ->
   String ->
   CExpr ->
   CExpr ->
+  Int ->
   List String
-emitU64BinRef prog env d op l r =
+emitU64BinRef prog env d op l r site =
   let li = emitRefExpr prog env d l ++ unboxU64W
   let ri = emitRefExpr prog env d r ++ unboxU64W
   if op == "/" || op == "%" then
     li
       ++ ri
-      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
+      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d) site
       ++ [wasmU64Op op, "struct.new $u64"]
   else if isCmpOp op then
     li ++ ri ++ [wasmU64Op op, "ref.i31"]
@@ -7144,8 +7187,9 @@ emitI64BinRef : Prog ->
   String ->
   CExpr ->
   CExpr ->
+  Int ->
   List String
-emitI64BinRef prog env d op l r =
+emitI64BinRef prog env d op l r site =
   let li = emitRefExpr prog env d l ++ unboxI64W
   let ri = emitRefExpr prog env d r ++ unboxI64W
   let instr =
@@ -7153,7 +7197,7 @@ emitI64BinRef prog env d op l r =
   if op == "/" || op == "%" then
     li
       ++ ri
-      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
+      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d) site
       ++ [instr, "struct.new $i64"]
   else if isCmpOp op then
     li ++ ri ++ [instr, "ref.i31"]
@@ -7243,6 +7287,103 @@ setValueArithFlagOnly emit "%" = setRef emit.useValueMod True
 setValueArithFlagOnly _ op =
   panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
 
+-- ── located traps ────────────────────────────────────────────────────────────
+-- A located trap writes `<file>:<line>:<col>: ` ahead of its line, from one packed
+-- i64 `(file + 1) << 44 | line << 20 | col` (the word the native backend packs),
+-- where `file` numbers the program's site files in order of first use.  0 means
+-- no location: the trap is the unlocated line, byte for byte.
+
+-- The packed site of [l], 0 when [l] names no file, is the placeholder span, or
+-- does not fit its fields.
+sitePackedW : WasmEmit -> Loc -> Int
+sitePackedW emit (Loc f sl sc el ec)
+  | f == "" || sl == 1 && sc == 0 && el == 1 && ec == 0 = 0
+  | sl < 0 || sl >= 16777216 || sc < 0 || sc >= 1048576 = 0
+  | otherwise = match siteFileNumW emit f
+    Some n => n * 17592186044416 + sl * 1048576 + sc
+    None => 0
+
+siteFileNumW : WasmEmit -> String -> Option Int
+siteFileNumW emit f = match omLookup f !emit.siteFileNums
+  Some n => Some n
+  None =>
+    let n = omSize !emit.siteFileNums + 1
+    if n >= 65536 then
+      None
+    else
+      let _ = setRef emit.siteFileNums (omInsert f n !emit.siteFileNums)
+      let _ = setRef emit.siteFiles (f :: !emit.siteFiles)
+      Some n
+
+-- demand the located-trap runtime and the stderr/decimal seam it writes through.
+noteSiteRt : WasmEmit -> Unit
+noteSiteRt emit =
+  let _ = setRef emit.siteRtUsed True
+  let _ = setRef emit.trapImportNeeded True
+  setRef emit.trapIntNeeded True
+
+-- `<file>:<line>:<col>: ` for [site], nothing for 0.
+siteLocInstrs : WasmEmit -> Int -> List String
+siteLocInstrs _ 0 = []
+siteLocInstrs emit site =
+  let _ = noteSiteRt emit
+  ["i64.const " ++ intToString site, "call $mdk_write_err_loc"]
+
+-- the located-trap runtime of the module: the table of site files, the location
+-- writer, and the shared non-exhaustive-match trap if one is called.
+siteRuntimeOf : WasmEmit -> List String
+siteRuntimeOf emit =
+  if !emit.siteRtUsed then
+    siteRuntimeLines
+      (map strBytesW (reverseL !emit.siteFiles))
+      !emit.siteNonexhUsed
+  else
+    []
+
+-- Write the location a trap-site argument names: a `__site__` literal, 0 for none,
+-- or any Int expression that carries a site in (the `Index` twins' parameter).
+siteExprInstrs : Prog -> List String -> Int -> CExpr -> List String
+siteExprInstrs prog env d (CLit (LInt 0)) = []
+siteExprInstrs prog env d (e@(CApp _ _)) = match flattenApp e []
+  (CVar v _, [CLit (LString f), CLit (LInt line), CLit (LInt col)]) =>
+    if v == siteSentinelName then
+      siteLocInstrs
+        (progEmit prog)
+        (sitePackedW (progEmit prog) (Loc f line col line (col + 1)))
+    else
+      siteDynInstrs prog env d e
+  _ => siteDynInstrs prog env d e
+siteExprInstrs prog env d e = siteDynInstrs prog env d e
+
+siteDynInstrs : Prog -> List String -> Int -> CExpr -> List String
+siteDynInstrs prog env d e =
+  let _ = noteSiteRt (progEmit prog)
+  emitRefExpr prog env d e ++ ["call $mdk_unbox_int", "call $mdk_write_err_loc"]
+
+-- the non-exhaustive-match trap at [site]: one call of the shared helper when
+-- located, today's unrolled line when not.
+wasmNonexhTrap : WasmEmit -> Int -> List String
+wasmNonexhTrap emit 0 =
+  wasmTrap emit "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+wasmNonexhTrap emit site =
+  let _ = noteSiteRt emit
+  let _ = setRef emit.siteNonexhUsed True
+  ["i64.const " ++ intToString site, "call $mdk_trap_nonexh", "unreachable"]
+
+-- the site a decision tree's miss reports.
+failSiteW : WasmEmit -> FailSite -> Int
+failSiteW emit (NoArm l) = sitePackedW emit l
+failSiteW emit (LetRefuted l) = sitePackedW emit l
+
+-- the trap a decision tree's miss raises: no arm matched, or a `let` pattern
+-- did not match.
+wasmFailTrap : WasmEmit -> FailSite -> List String
+wasmFailTrap emit (LetRefuted l) =
+  let site = sitePackedW emit l
+  siteLocInstrs emit site
+    ++ wasmTrap emit "E-LET-REFUTE" "let pattern match failed"
+wasmFailTrap emit fs = wasmNonexhTrap emit (failSiteW emit fs)
+
 -- ── B5: coded runtime-trap helpers (RUNTIME-TRAP-UNIFY-DESIGN §3 (5), §7 forks 1-2) ──
 -- The WasmGC peer of the native traps: emit the same coded stderr line the interpreter
 -- and medaka_rt.c produce — `runtime error [E-CODE]: <message>\n` — then `unreachable`.
@@ -7290,12 +7431,12 @@ wasmTrapNum emit code before valIns after =
 -- it is zero, then restores `[dividend, divisor]` for the following i64.div_s/rem_s.
 -- (The `if` has empty block type; the dividend rests untouched beneath it, and the
 -- then-branch ends in `unreachable` so the branch is stack-polymorphic.)
-emitDivZeroGuard : WasmEmit -> String -> String -> List String
-emitDivZeroGuard emit op dloc =
+emitDivZeroGuard : WasmEmit -> String -> String -> Int -> List String
+emitDivZeroGuard emit op dloc site =
   let code = if op == "/" then "E-DIV-ZERO" else "E-MOD-ZERO"
   let msg = if op == "/" then "division by zero" else "modulo by zero"
   ["local.set " ++ dloc, "local.get " ++ dloc, "i64.eqz", "if"]
-    ++ indent (wasmTrap emit code msg)
+    ++ indent (siteLocInstrs emit site ++ wasmTrap emit code msg)
     ++ ["end", "local.get " ++ dloc]
 
 -- layer-9: emit a runtime-shape-dispatched comparison.  `==`/`/=` go through
@@ -8184,12 +8325,19 @@ emitLeafExternRef prog env d "indexErrorAt" [idx] =
     " out of bounds"
 emitLeafExternRef prog env d "indexErrorAt" _ =
   gapLP prog "wasm #1787: indexErrorAt takes exactly one argument"
-emitLeafExternRef prog env d "indexErrorAtSite" [_, idx] =
-  emitLeafExternRef prog env d "indexErrorAt" [idx]
+emitLeafExternRef prog env d "indexErrorAtSite" [site, idx] =
+  siteExprInstrs prog env d site
+    ++ emitLeafExternRef prog env d "indexErrorAt" [idx]
 emitLeafExternRef prog env d "indexErrorAtSite" _ =
   gapLP prog "wasm: indexErrorAtSite takes exactly two arguments"
-emitLeafExternRef prog env d "panicAt" [_, msg] =
-  emitLeafExternRef prog env d "panic" [msg]
+emitLeafExternRef prog env d "panicAt" [site, msg] =
+  siteExprInstrs prog env d site ++ emitLeafExternRef prog env d "panic" [msg]
+emitLeafExternRef prog env d "__site__" [CLit (LString f), CLit (LInt line), CLit (LInt col)] =
+  emitLitRef
+    (progEmit prog)
+    (LInt (sitePackedW (progEmit prog) (Loc f line col line (col + 1))))
+emitLeafExternRef prog env d "__site__" _ =
+  gapLP prog "wasm: a trap-site literal takes a file, a line and a column"
 emitLeafExternRef prog env d "panicAt" _ =
   gapLP prog "wasm: panicAt takes exactly two arguments"
 -- #670: `sliceError lo hiIncl` reuses the existing coded E-SLICE-OOB trap (the
@@ -9481,8 +9629,25 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
         bindParamAliases prog ps params
           ++ emitRefTail prog (map (patName (progEmit prog)) ps) arity b
       else
-        emitClauseChainGo prog [] lblRoot params arity clauses 0
-    _ => emitClauseChainGo prog [] lblRoot params arity clauses 0
+        emitClauseChainGo
+          prog
+          []
+          lblRoot
+          params
+          arity
+          clauses
+          0
+          (progEmit prog).clauseSite.value
+    _ =>
+      emitClauseChainGo
+        prog
+        []
+        lblRoot
+        params
+        arity
+        clauses
+        0
+        (progEmit prog).clauseSite.value
   let _ = setRef (progEmit prog).trmcCtx saved
   let loopShell =
     ["i32.const 1", "local.set " ++ wTrmcFirstL]
@@ -10074,8 +10239,8 @@ emitTreeTail : Prog ->
   List CArm ->
   CTree ->
   List String
-emitTreeTail prog env arity d root occs arms (CTFail _) =
-  wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+emitTreeTail prog env arity d root occs arms (CTFail fs) =
+  wasmFailTrap (progEmit prog) fs
 emitTreeTail prog env arity d root occs arms (CTLeaf i) =
   emitLeafTail prog env arity root arms i
 emitTreeTail prog env arity d root occs arms (CTGuard i fail) =
@@ -10710,8 +10875,11 @@ emitLgLifted : Prog ->
   List CBind ->
   CBind ->
   Unit
-emitLgLifted prog gid names groupCaps binds (CBind name clauses _) =
+emitLgLifted prog gid names groupCaps binds (CBind name clauses bindLoc) =
   let _ = setCurrentBindingOfW (progEmit prog) ("lg:" ++ name)
+  let savedSite = (progEmit prog).clauseSite.value
+  let _ =
+    setRef (progEmit prog).clauseSite (sitePackedW (progEmit prog) bindLoc)
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
   let _ = noteFuncRef (progEmit prog) lamName
   let arity = clauseArityOf clauses
@@ -10730,6 +10898,7 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses _) =
     emitClausesRefEnv prog (names ++ groupCaps) name params arity clauses
   let _ = setRef (progEmit prog).trmcCtx savedTrmc
   let _ = setRef (progEmit prog).wDispCtx savedDisp
+  let _ = setRef (progEmit prog).clauseSite savedSite
   let memberLocals = names
   let bodyLocals =
     filterList
@@ -11469,8 +11638,8 @@ emitTreeRef : Prog ->
   List CArm ->
   CTree ->
   List String
-emitTreeRef prog env d decLabel root occs arms (CTFail _) =
-  wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+emitTreeRef prog env d decLabel root occs arms (CTFail fs) =
+  wasmFailTrap (progEmit prog) fs
 emitTreeRef prog env d decLabel root occs arms (CTLeaf i) =
   emitLeafRef prog env d decLabel root arms i
 emitTreeRef prog env d decLabel root occs arms (CTGuard i fail) =
