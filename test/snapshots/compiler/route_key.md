@@ -1,5 +1,5 @@
 # META
-source_lines=609
+source_lines=620
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -154,6 +154,17 @@ installedEvidenceEntries : Unit -> List EvEntry
 installedEvidenceEntries _ = match !evidenceRef
   None => []
   Some arr => evidenceEntriesFrom arr (arrayLength arr - 1) []
+
+-- Helper elaboration temporarily replaces the process-global evidence table.
+-- Restore the complete installed table afterward, including method-occurrence
+-- entries that an elaborateModules return value does not carry.
+export
+withEvidencePreserved : (Unit -> <e> a) -> <e> a
+withEvidencePreserved action =
+  let before = installedEvidenceEntries ()
+  let result = action ()
+  let _ = installEvidence before
+  result
 
 evidenceEntriesFrom : Array (Option EvEntry) ->
   Int ->
@@ -624,6 +635,8 @@ rkTyList =
 (DFunDef false "remapEvidenceGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "e")))) (EVar "arr"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "installedEvidenceEntries" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "EvEntry"))))
 (DFunDef false "installedEvidenceEntries" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit)))))
+(DTypeSig true "withEvidencePreserved" (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a"))))
+(DFunDef false "withEvidencePreserved" ((PVar "action")) (EBlock (DoLet false false (PVar "before") (EApp (EVar "installedEvidenceEntries") (ELit LUnit))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "installEvidence") (EVar "before"))) (DoExpr (EVar "result"))))
 (DTypeSig false "evidenceEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyApp (TyCon "List") (TyCon "EvEntry"))))))
 (DFunDef false "evidenceEntriesFrom" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "e") (EVar "acc")))))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -711,6 +724,8 @@ rkTyList =
 (DFunDef false "remapEvidenceGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "e")))) (EVar "arr"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "installedEvidenceEntries" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "EvEntry"))))
 (DFunDef false "installedEvidenceEntries" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit)))))
+(DTypeSig true "withEvidencePreserved" (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a"))))
+(DFunDef false "withEvidencePreserved" ((PVar "action")) (EBlock (DoLet false false (PVar "before") (EApp (EVar "installedEvidenceEntries") (ELit LUnit))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "installEvidence") (EVar "before"))) (DoExpr (EVar "result"))))
 (DTypeSig false "evidenceEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyApp (TyCon "List") (TyCon "EvEntry"))))))
 (DFunDef false "evidenceEntriesFrom" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "e") (EVar "acc")))))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))

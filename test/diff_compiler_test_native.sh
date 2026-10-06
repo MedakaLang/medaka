@@ -318,8 +318,8 @@ elif ! grep -qF "ok   $ab:13: runs before the abort" "$ab_out"; then
   bad "native_test_abort.mdk: test 1 (before the abort) did not report ok — see $ab_out"
 elif grep -qE "^  ok   $ab:(15|17|19):" "$ab_out"; then
   bad "native_test_abort.mdk: a test at or after the abort reported ok — the abort rule was not enforced. See $ab_out"
-elif ! grep -qF "$ab: 1/4 passed (0 failed, 3 errors)" "$ab_out"; then
-  bad "native_test_abort.mdk: expected summary '1/4 passed (0 failed, 3 errors)' (tests 2-4 named as errors, never passes or silent drops) — see $ab_out"
+elif ! grep -qF "$ab: 1/4 passed (0 failed, 3 errors, 0 known-red)" "$ab_out"; then
+  bad "native_test_abort.mdk: expected summary '1/4 passed (0 failed, 3 errors, 0 known-red)' (tests 2-4 named as errors, never passes or silent drops) — see $ab_out"
 else
   note "ok   native_test_abort.mdk: abort rule holds — test 1 ok, tests 2-4 reported as errors, never dropped"
 fi
@@ -428,8 +428,8 @@ elif grep -qE "^  ok   $fs:26:" "$fs_out"; then
   bad "native_test_forged_sentinel.mdk: test 2 (the forged operand) reported ok — the sentinel forgery was not caught. See $fs_out"
 elif grep -qE "^  ok   $fs:49:" "$fs_out"; then
   bad "native_test_forged_sentinel.mdk: test 7 (differs only by an escaped byte) reported ok — a byte was lost or mangled in the round trip. See $fs_out"
-elif ! grep -qF "$fs: 5/7 passed (2 failed, 0 errors)" "$fs_out"; then
-  bad "native_test_forged_sentinel.mdk: expected summary '5/7 passed (2 failed, 0 errors)' — see $fs_out"
+elif ! grep -qF "$fs: 5/7 passed (2 failed, 0 errors, 0 known-red)" "$fs_out"; then
+  bad "native_test_forged_sentinel.mdk: expected summary '5/7 passed (2 failed, 0 errors, 0 known-red)' — see $fs_out"
 else
   note "ok   native_test_forged_sentinel.mdk: forged sentinel lines never decide the verdict, and the rest of the escape class round-trips"
 fi
@@ -455,8 +455,8 @@ elif ! grep -qF "ok   $ft:53: test 0 runs for real and passes" "$ft_out"; then
   bad "native_test_forge_then_abort.mdk: test 0 (genuine) did not report ok — see $ft_out"
 elif grep -qE "^  ok   $ft:56:" "$ft_out"; then
   bad "native_test_forge_then_abort.mdk: test 1 (the forge-then-abort attempt) reported ok — the sentinel forgery was not caught. See $ft_out"
-elif ! grep -qF "$ft: 1/2 passed (0 failed, 1 errors)" "$ft_out"; then
-  bad "native_test_forge_then_abort.mdk: expected summary '1/2 passed (0 failed, 1 errors)' (test 1 named as an error, never a pass or a silent drop) — see $ft_out"
+elif ! grep -qF "$ft: 1/2 passed (0 failed, 1 errors, 0 known-red)" "$ft_out"; then
+  bad "native_test_forge_then_abort.mdk: expected summary '1/2 passed (0 failed, 1 errors, 0 known-red)' (test 1 named as an error, never a pass or a silent drop) — see $ft_out"
 else
   note "ok   native_test_forge_then_abort.mdk: forge-then-abort is reported as an error, never a pass (#S0 fix holds)"
 fi

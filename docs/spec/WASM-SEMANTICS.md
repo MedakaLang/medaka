@@ -149,7 +149,7 @@ above Core IR; these laws are the wasm peers of EMITTER-SEMANTICS §2 (V1–V6).
   |---|---|
   | eval | `7` ✅ |
   | **native** | **SIGSEGV — exit 139** |
-  | **wasm** | `instantiate failed: dereferencing a null pointer` |
+  | **wasm** | `runtime error: dereferencing a null pointer` |
 
   **Only eval is correct.** So native is not merely *exposed* — it is
   **EXPLOITABLE from user code**, and it fails as a **segfault or a silent zero**
@@ -450,7 +450,7 @@ dead until #543 completed it and made the gate derive its host set) (leading-ws-
   emitter produced an invalid module instead of a named `gapL` rejection.
   The `wasm-tools validate` step is the backstop that makes it loud, but the
   diagnostic names no construct — triage by minimizing the fixture.
-- **"instantiate failed: <engine text>"** with no `runtime error [E-*]` line
+- **"runtime error: <engine text>"** (no `[E-*]` code; `instantiate failed:` instead means the module never started) with no coded `runtime error [E-*]` line
   → WP8/T1: a raw engine trap on a path that never streamed its coded line —
   or WH3: a LinkError from a shim missing an import.
 - **A large wrong number, no error** → WP2/N1 (an unnormalized `$boxint` —

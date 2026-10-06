@@ -1,5 +1,5 @@
 # META
-source_lines=1887
+source_lines=1917
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -268,12 +268,42 @@ export
 scratchProjectManifest : String -> String -> <IO> String
 scratchProjectManifest projectName target =
   let root = canonicalizePath (findProjectRootOrSelf (dirOf target))
-  stringConcat [
-    "[project]\nname = \"",
-    projectName,
-    "\"\n",
-    renderScratchDeps (readDeps root),
-  ]
+  scratchManifestText projectName (readDeps root)
+
+-- A native probe needs the target's declared dependencies AND one private path
+-- to the installed stdlib runtime catalog.  The generated dependency name is
+-- nonce-qualified by its caller, so it cannot redirect an ordinary target
+-- import.  A target that already claims that exact name is an error: replacing
+-- it would make a valid project silently compile against another package.
+export
+scratchProbeManifest : String -> String -> String -> <IO> Result String String
+scratchProbeManifest projectName target runtimeDepName =
+  let targetRoot = canonicalizePath (findProjectRootOrSelf (dirOf target))
+  let deps = readDeps targetRoot
+  if scratchDepExists runtimeDepName deps then
+    Err
+      ("native probe scratch manifest: target dependency name "
+        ++ runtimeDepName
+        ++ " is already declared")
+  else
+    let medakaRoot = canonicalizePath (envOr "MEDAKA_ROOT" defaultMedakaRoot)
+    Ok
+      (scratchManifestText
+        projectName
+        (deps ++ [(runtimeDepName, joinPath medakaRoot "stdlib")]))
+
+scratchDepExists : String -> List (String, String) -> Bool
+scratchDepExists _ [] = False
+scratchDepExists wanted ((name, _) :: rest) =
+  name == wanted || scratchDepExists wanted rest
+
+scratchManifestText : String -> List (String, String) -> String
+scratchManifestText projectName deps = stringConcat [
+  "[project]\nname = \"",
+  projectName,
+  "\"\n",
+  renderScratchDeps deps,
+]
 
 renderScratchDeps : List (String, String) -> String
 renderScratchDeps [] = ""
@@ -1925,7 +1955,14 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "makeTempDir" (PWild) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (ELit (LString "/tmp/medaka_build_XXXXXX")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir"))))))))
 (DTypeSig true "scratchProjectManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "scratchProjectManifest" ((PVar "projectName") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "[project]\nname = \"")) (EVar "projectName") (ELit (LString "\"\n")) (EApp (EVar "renderScratchDeps") (EApp (EVar "readDeps") (EVar "root"))))))))
+(DFunDef false "scratchProjectManifest" ((PVar "projectName") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoExpr (EApp (EApp (EVar "scratchManifestText") (EVar "projectName")) (EApp (EVar "readDeps") (EVar "root"))))))
+(DTypeSig true "scratchProbeManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "scratchProbeManifest" ((PVar "projectName") (PVar "target") (PVar "runtimeDepName")) (EBlock (DoLet false false (PVar "targetRoot") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "targetRoot"))) (DoExpr (EIf (EApp (EApp (EVar "scratchDepExists") (EVar "runtimeDepName")) (EVar "deps")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native probe scratch manifest: target dependency name ")) (EVar "runtimeDepName")) (ELit (LString " is already declared")))) (EBlock (DoLet false false (PVar "medakaRoot") (EApp (EVar "canonicalizePath") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot")))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "scratchManifestText") (EVar "projectName")) (EBinOp "++" (EVar "deps") (EListLit (ETuple (EVar "runtimeDepName") (EApp (EApp (EVar "joinPath") (EVar "medakaRoot")) (ELit (LString "stdlib"))))))))))))))
+(DTypeSig false "scratchDepExists" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "scratchDepExists" (PWild (PList)) (EVar "False"))
+(DFunDef false "scratchDepExists" ((PVar "wanted") (PCons (PTuple (PVar "name") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "name") (EVar "wanted")) (EApp (EApp (EVar "scratchDepExists") (EVar "wanted")) (EVar "rest"))))
+(DTypeSig false "scratchManifestText" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String"))))
+(DFunDef false "scratchManifestText" ((PVar "projectName") (PVar "deps")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[project]\nname = \"")) (EVar "projectName") (ELit (LString "\"\n")) (EApp (EVar "renderScratchDeps") (EVar "deps")))))
 (DTypeSig false "renderScratchDeps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderScratchDeps" ((PList)) (ELit (LString "")))
 (DFunDef false "renderScratchDeps" ((PVar "deps")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "\n[dependencies]\n")) (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "renderScratchDep")) (EVar "deps"))) (ELit (LString "\n")))))
@@ -2100,7 +2137,14 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "makeTempDir" (PWild) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (ELit (LString "/tmp/medaka_build_XXXXXX")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir"))))))))
 (DTypeSig true "scratchProjectManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "scratchProjectManifest" ((PVar "projectName") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "[project]\nname = \"")) (EVar "projectName") (ELit (LString "\"\n")) (EApp (EVar "renderScratchDeps") (EApp (EVar "readDeps") (EVar "root"))))))))
+(DFunDef false "scratchProjectManifest" ((PVar "projectName") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoExpr (EApp (EApp (EVar "scratchManifestText") (EVar "projectName")) (EApp (EVar "readDeps") (EVar "root"))))))
+(DTypeSig true "scratchProbeManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "scratchProbeManifest" ((PVar "projectName") (PVar "target") (PVar "runtimeDepName")) (EBlock (DoLet false false (PVar "targetRoot") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "targetRoot"))) (DoExpr (EIf (EApp (EApp (EVar "scratchDepExists") (EVar "runtimeDepName")) (EVar "deps")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native probe scratch manifest: target dependency name ")) (EVar "runtimeDepName")) (ELit (LString " is already declared")))) (EBlock (DoLet false false (PVar "medakaRoot") (EApp (EVar "canonicalizePath") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot")))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "scratchManifestText") (EVar "projectName")) (EBinOp "++" (EVar "deps") (EListLit (ETuple (EVar "runtimeDepName") (EApp (EApp (EVar "joinPath") (EVar "medakaRoot")) (ELit (LString "stdlib"))))))))))))))
+(DTypeSig false "scratchDepExists" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "scratchDepExists" (PWild (PList)) (EVar "False"))
+(DFunDef false "scratchDepExists" ((PVar "wanted") (PCons (PTuple (PVar "name") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "name") (EVar "wanted")) (EApp (EApp (EVar "scratchDepExists") (EVar "wanted")) (EVar "rest"))))
+(DTypeSig false "scratchManifestText" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String"))))
+(DFunDef false "scratchManifestText" ((PVar "projectName") (PVar "deps")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[project]\nname = \"")) (EVar "projectName") (ELit (LString "\"\n")) (EApp (EVar "renderScratchDeps") (EVar "deps")))))
 (DTypeSig false "renderScratchDeps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderScratchDeps" ((PList)) (ELit (LString "")))
 (DFunDef false "renderScratchDeps" ((PVar "deps")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "\n[dependencies]\n")) (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "renderScratchDep")) (EVar "deps"))) (ELit (LString "\n")))))

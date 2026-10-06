@@ -203,6 +203,8 @@ const imports = { env: {
 // with `main` inside its start function: instantiating it runs the program, and
 // calling `mdk_main` would run it again.  It is refused before instantiation.
 class OldEntryShape extends Error {}
+// Set once mdk_main runs: a failure after that is the program's, not the instantiation's.
+let inProgram = false;
 WebAssembly.compile(bytes)
   .then((module) => {
     const names = WebAssembly.Module.exports(module).map((e) => e.name);
@@ -211,6 +213,7 @@ WebAssembly.compile(bytes)
     return WebAssembly.instantiate(module, imports);
   })
   .then((instance) => {
+    inProgram = true;
     if (typeof instance.exports.mdk_main === 'function') instance.exports.mdk_main();
     process.stdout.write(Buffer.from(acc).toString('utf8'));
     if (eacc.length) process.stderr.write(Buffer.from(eacc).toString('utf8'));
@@ -223,6 +226,6 @@ WebAssembly.compile(bytes)
     // then surface the captured coded stderr instead of the engine's generic message.
     if (acc.length) process.stdout.write(Buffer.from(acc).toString('utf8'));
     if (eacc.length) process.stderr.write(Buffer.from(eacc).toString('utf8'));
-    else process.stderr.write('instantiate failed: ' + (e && e.message ? e.message : String(e)) + '\n');
+    else process.stderr.write((inProgram ? 'runtime error: ' : 'instantiate failed: ') + (e && e.message ? e.message : String(e)) + '\n');
     process.exit(1);
   });

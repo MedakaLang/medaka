@@ -81,7 +81,9 @@ import support.util.{
   endsWith,
   zipL,
 }
-import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
+import support.ordmap.{
+  OrdMap, omEmpty, omFromPairs, omHasKey, omInsert, omLookup
+}
 import list.{drop}
 import eval.u64_halves as H
 import u64 as U64
@@ -700,6 +702,27 @@ tyMentions (TyAuth _ _) _ = False
 export
 lookupEnv : EvalEnv (Value e) -> String -> <e> Value e
 lookupEnv (EvalEnv frames) name = lookupFrames frames name
+
+-- Runtime externs have their own final frame. A module environment also carries
+-- nearer local/import frames and a mutable global dispatcher frame, where a user
+-- interface method may share an extern's spelling. Normal lexical lookup keeps
+-- that method behavior; this lookup reaches the retained primitive cell instead.
+export
+lookupRuntimeBinding : EvalEnv (Value e) -> String -> <e> Value e
+lookupRuntimeBinding (EvalEnv frames) name =
+  lookupRuntimeBindingFrames frames name None
+
+lookupRuntimeBindingFrames : List (List (String, Ref (Value e))) ->
+  String ->
+  Option (Ref (Value e)) ->
+  <e> Value e
+lookupRuntimeBindingFrames [] name None =
+  panic ("property runner: missing canonical runtime binding '" ++ name ++ "'")
+lookupRuntimeBindingFrames [] name (Some cell) = forceCell cell name
+lookupRuntimeBindingFrames (frame :: rest) name found =
+  match lookupFrameCell frame name
+    Some cell => lookupRuntimeBindingFrames rest name (Some cell)
+    None => lookupRuntimeBindingFrames rest name found
 
 -- The non-panicking form.  `lookupEnv` on a missing name is a hard panic, which is
 -- right for a program identifier (resolve already proved it bound) and wrong for a
@@ -3264,6 +3287,19 @@ pSetSeed (VInt seed) =
   VUnit
 pSetSeed _ = panic "setSeed: expected Int"
 
+pRandomState : Value e -> <e> Value e
+pRandomState _ =
+  let state = !rngU64Ref
+  VU64
+    (U64.toIntTruncating (U64.shiftRight state 32))
+    (U64.toIntTruncating (U64.bitAnd state 0xFFFFFFFF))
+
+pRestoreRandomState : Value e -> <e> Value e
+pRestoreRandomState (VU64 hi lo) =
+  rngU64Ref := U64.bitOr (U64.shiftLeft (U64.truncate hi) 32) (U64.truncate lo)
+  VUnit
+pRestoreRandomState _ = panic "restoreRandomState: expected U64"
+
 -- ORACLE-ONLY frozen constants for the clock/GC externs.  These are the
 -- DIFFERENTIAL-ORACLE bindings: the oracle drivers diff captured stdout, so a
 -- real clock would make every golden nondeterministic.  They live in the pure
@@ -3309,6 +3345,8 @@ externBindings _ = [
   ("randomFloat", prim1M pRandomFloat),
   ("randomChar", prim1M pRandomChar),
   ("setSeed", prim1M pSetSeed),
+  ("randomState", prim1M pRandomState),
+  ("restoreRandomState", prim1M pRestoreRandomState),
   ("wallTimeSec", prim1M pWallTimeSec),
   ("monotonicSec", prim1M pMonotonicSec),
   ("sleepMs", prim1M pSleepMs),
@@ -3980,6 +4018,16 @@ installConsts cells ((n, v) :: rest) =
   findCell cells n := v
   installConsts cells rest
 
+-- Keep one cell set for the installed primitives, apart from the global cells
+-- that receive interface dispatchers. Duplicate extra extern rows preserve the
+-- ordinary install order: the later row replaces the first matching cell.
+export
+runtimeCellsOf : List (String, Value e) -> <e> List (String, Ref (Value e))
+runtimeCellsOf externs =
+  let cells = map (n => (n, Ref VUnit)) (map fst externs)
+  let _ = installConsts cells externs
+  cells
+
 installGroups : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List (String, List (List Pat, Expr)) ->
@@ -4211,11 +4259,14 @@ evalModulesWith extraExterns preludeDecls0 modules0 =
       ++ implMethodNames allDecls
       ++ map fst preludeShared
   let globalCells = map (n => (n, Ref VUnit)) globalNames
+  let runtimeCells = runtimeCellsOf externs
   let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
-  let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
+  let globalEnv =
+    EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
   let mods =
     buildModInfos
       globalCells
+      runtimeCells
       (coreImportExports privateCells globalCells preludeDecls)
       []
       modules
@@ -4242,12 +4293,13 @@ evalModulesWith extraExterns preludeDecls0 modules0 =
 -- One list cannot answer both — a single frame is first-match, so whichever cell
 -- it holds is the only one either consumer can see.
 buildModInfos : List (String, Ref (Value e)) ->
+  List (String, Ref (Value e)) ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (ModInfo (Value e))
-buildModInfos _ _ _ [] = []
-buildModInfos globalCells coreExports exportsMap ((mid, decls) :: rest) =
+buildModInfos _ _ _ _ [] = []
+buildModInfos globalCells runtimeCells coreExports exportsMap ((mid, decls) :: rest) =
   let grps = groupsOf decls
   -- P0-9: each module's OWN constructors ALSO live in its LOCAL frame (they stay
   -- in the shared global too — see evalModules — for by-name / `Type(..)`
@@ -4264,15 +4316,54 @@ buildModInfos globalCells coreExports exportsMap ((mid, decls) :: rest) =
   -- almost always) never reaches it — only the once-per-call lookup in
   -- applyClosure/applyClosureF (below) ever searches this far.
   let fileTagFrame = [(evalFileTagName, Ref (VString (moduleFileOf mid)))]
-  let menv = EvalEnv [localCells, imports, globalCells, fileTagFrame]
+  let menv =
+    EvalEnv [localCells, imports, globalCells, fileTagFrame, runtimeCells]
   let exports =
     ModExports
       (localCells
+        ++ publicExternCells runtimeCells decls
         ++ methodCellsOf globalCells decls
         ++ pubReexports coreExports exportsMap decls)
       (ctorsByTypeOf decls)
   ModInfo mid decls grps localCells menv
-    :: buildModInfos globalCells coreExports ((mid, exports) :: exportsMap) rest
+    :: buildModInfos
+      globalCells
+      runtimeCells
+      coreExports
+      ((mid, exports) :: exportsMap)
+      rest
+
+-- Runtime externs likewise retain one canonical cell. A public extern export
+-- must expose that cell under an import spelling, rather than allocate a
+-- module-local placeholder that would never receive the primitive value.
+export
+publicExternCells : List (String, Ref (Value e)) ->
+  List Decl ->
+  List (String, Ref (Value e))
+publicExternCells globalCells decls =
+  let names = publicExternNames decls
+  match names
+    [] => []
+    _ => publicExternCellsGo (omFromPairs (reverseL globalCells) omEmpty) names
+
+publicExternCellsGo : OrdMap (Ref (Value e)) ->
+  List String ->
+  List (String, Ref (Value e))
+publicExternCellsGo _ [] = []
+publicExternCellsGo cells (n :: rest) = match omLookup n cells
+  Some cell => (n, cell) :: publicExternCellsGo cells rest
+  None => publicExternCellsGo cells rest
+
+publicExternNames : List Decl -> List String
+publicExternNames decls = reverseL (publicExternNamesRev decls [])
+
+publicExternNamesRev : List Decl -> List String -> List String
+publicExternNamesRev [] names = names
+publicExternNamesRev ((DExtern True n _) :: rest) names =
+  publicExternNamesRev rest (n :: names)
+publicExternNamesRev ((DAttrib _ decl) :: rest) names =
+  publicExternNamesRev rest (publicExternNamesRev [decl] names)
+publicExternNamesRev (_ :: rest) names = publicExternNamesRev rest names
 
 -- IMPORT ALIASING: a module must ALSO export the interface/impl METHODS it declares.
 --
@@ -4363,7 +4454,26 @@ evalModulesRootEnvWith : List (String, Value e) ->
   List Decl ->
   List (String, List Decl) ->
   <e> List (String, Value e)
-evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
+evalModulesRootEnvWith extraExterns preludeDecls modules =
+  let (mods, globalCells) =
+    buildRootModuleStateWith extraExterns preludeDecls modules
+  rootFullEnv mods globalCells
+
+export
+evalModulesRootEvalEnvWith : List (String, Value e) ->
+  List Decl ->
+  List (String, List Decl) ->
+  <e> EvalEnv (Value e)
+evalModulesRootEvalEnvWith extraExterns preludeDecls modules =
+  let (mods, globalCells) =
+    buildRootModuleStateWith extraExterns preludeDecls modules
+  rootFullEvalEnv mods globalCells
+
+buildRootModuleStateWith : List (String, Value e) ->
+  List Decl ->
+  List (String, List Decl) ->
+  <e> (List (ModInfo (Value e)), List (String, Ref (Value e)))
+buildRootModuleStateWith extraExterns preludeDecls0 modules0 =
   -- [T-EVAL-LOCKSTEP] third driver: same rename, same reason as evalModulesWith.
   let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
   let externs = externBindings () ++ extraExterns
@@ -4385,11 +4495,14 @@ evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
       ++ implMethodNames allDecls
       ++ map fst preludeShared
   let globalCells = map (n => (n, Ref VUnit)) globalNames
+  let runtimeCells = runtimeCellsOf externs
   let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
-  let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
+  let globalEnv =
+    EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
   let mods =
     buildModInfos
       globalCells
+      runtimeCells
       (coreImportExports privateCells globalCells preludeDecls)
       []
       modules
@@ -4403,7 +4516,7 @@ evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
   let _ = installGroups globalEnv globalCells preludeShared
   let _ = installGroups globalEnv privateCells preludePrivate
   let _ = installModGroups mods
-  rootFullEnv mods globalCells
+  (mods, globalCells)
 
 -- Flatten the root module's frame stack (locals first, then imports, then
 -- globals) to an assoc list — local names shadow imports shadow globals, which
@@ -4411,9 +4524,14 @@ evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
 rootFullEnv : List (ModInfo (Value e)) ->
   List (String, Ref (Value e)) ->
   <e> List (String, Value e)
-rootFullEnv [] globalCells = map cellResult globalCells
-rootFullEnv [ModInfo _ _ _ cells menv] globalCells = flattenEnv menv
-rootFullEnv (_ :: rest) globalCells = rootFullEnv rest globalCells
+rootFullEnv mods globalCells = flattenEnv (rootFullEvalEnv mods globalCells)
+
+rootFullEvalEnv : List (ModInfo (Value e)) ->
+  List (String, Ref (Value e)) ->
+  EvalEnv (Value e)
+rootFullEvalEnv [] globalCells = EvalEnv [globalCells]
+rootFullEvalEnv [ModInfo _ _ _ _ menv] _ = menv
+rootFullEvalEnv (_ :: rest) globalCells = rootFullEvalEnv rest globalCells
 
 flattenEnv : EvalEnv (Value e) -> <e> List (String, Value e)
 flattenEnv (EvalEnv frames) = map cellResult (concatList frames)

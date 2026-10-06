@@ -1,0 +1,129 @@
+import support.ordmap.{
+  OrdMap,
+  omEmpty,
+  omSize,
+  omInsert,
+  omLookup,
+  omHasKey,
+  omDelete,
+  omKeys,
+  omFromNames,
+  omMapValues,
+  omFromPairs,
+}
+import map.{wellFormed}
+import list.{sort, reverse}
+import test.{expectAll, expectEqual, expectNone, expectTrue}
+
+-- The small list model deliberately shares no tree operations with OrdMap.
+modelGet : String -> List (String, Int) -> Option Int
+modelGet _ [] = None
+modelGet k ((key, value) :: rest) =
+  if k == key then Some value else modelGet k rest
+
+modelDelete : String -> List (String, Int) -> List (String, Int)
+modelDelete _ [] = []
+modelDelete k ((key, value) :: rest) =
+  if k == key then modelDelete k rest else (key, value) :: modelDelete k rest
+
+modelKeys : List (String, Int) -> List String
+modelKeys rows = sort (map fst rows)
+
+agrees : OrdMap Int -> List (String, Int) -> Bool
+agrees tree rows =
+  omSize tree == length rows
+    && omKeys tree == modelKeys rows
+    && all ((k, v) => omLookup k tree == Some v && omHasKey k tree) rows
+    && wellFormed tree
+
+-- A small key space forces overwrites, absent deletes and reinsertion.
+operationKey : Int -> String
+operationKey n = intToString n
+
+runOperations : List (Int, Int, Bool) ->
+  OrdMap Int ->
+  List (String, Int) ->
+  Bool
+runOperations [] tree rows = agrees tree rows
+runOperations ((raw, value, insert) :: rest) tree rows =
+  let key = operationKey raw
+  let nextRows =
+    if insert then
+      (key, value) :: modelDelete key rows
+    else
+      modelDelete key rows
+  let nextTree = if insert then omInsert key value tree else omDelete key tree
+  agrees nextTree nextRows
+    && agrees tree rows
+    && omLookup key nextTree == modelGet key nextRows
+    && runOperations rest nextTree nextRows
+
+prop "OrdMap mixed operations match a list model at every prefix and preserve old versions" (ops : List (Int, Int, Bool)) =
+  runOperations (map ((n, v, put) => ((n % 7 + 7) % 7, v, put)) ops) omEmpty []
+
+prop "OrdMap insertion overwrites only its key" (rows : List (String, Int)) (key : String) (value : Int) =
+  let before = omFromPairs rows omEmpty
+  let after = omInsert key value before
+  omLookup key after == Some value
+    && omSize after == omSize before + (if omHasKey key before then 0 else 1)
+    && all
+      (k => k == key || omLookup k after == omLookup k before)
+      (omKeys before)
+    && wellFormed after
+
+prop "OrdMap deletion is idempotent and preserves every other binding" (rows : List (String, Int)) (key : String) =
+  let before = omFromPairs rows omEmpty
+  let after = omDelete key before
+  not (omHasKey key after)
+    && omLookup key after == None
+    && omKeys (omDelete key after) == omKeys after
+    && omSize after == omSize before - (if omHasKey key before then 1 else 0)
+    && all
+      (k => k == key || omLookup k after == omLookup k before)
+      (omKeys before)
+    && wellFormed after
+
+prop "OrdMap pair construction uses the last duplicate value" (rows : List (String, Int)) =
+  let bounded = map ((k, v) => (intToString (stringLength k % 4), v)) rows
+  let tree = omFromPairs bounded omEmpty
+  all ((k, _) => omLookup k tree == modelGet k (reverse bounded)) bounded
+    && wellFormed tree
+
+prop "OrdMap value mapping preserves keys and commutes with lookup" (rows : List (String, Int)) (key : String) =
+  let before = omFromPairs rows omEmpty
+  let after = omMapValues (+ 1) before
+  omKeys after == omKeys before
+    && omSize after == omSize before
+    && omLookup key after == map (+ 1) (omLookup key before)
+    && wellFormed after
+
+prop "OrdMap membership-set construction preserves initial names and ignores multiplicity" (initial : List String) (added : List String) =
+  let before = omFromNames initial omEmpty
+  let after = omFromNames added before
+  all (k => omHasKey k after) (initial ++ added)
+    && omKeys after == omKeys (omFromNames (initial ++ added ++ added) omEmpty)
+    && wellFormed after
+
+test "OrdMap distinguishes empty, delimiter-bearing and Unicode keys" =
+  let tree =
+    omFromPairs [("", 1), ("a:b", 2), ("a|b", 3), ("λ", 4), ("a:b", 5)] omEmpty
+  let removed = omDelete "a:b" tree
+  expectAll [
+    expectEqual (Some 1) (omLookup "" tree),
+    expectEqual (Some 5) (omLookup "a:b" tree),
+    expectEqual (Some 3) (omLookup "a|b" removed),
+    expectEqual (Some 4) (omLookup "λ" removed),
+    expectNone (omLookup "a:b" removed),
+    expectEqual 4 (omSize tree),
+    expectEqual 3 (omSize removed),
+    expectTrue (wellFormed removed),
+  ]
+
+test "OrdMap pair construction overwrites duplicate keys from left to right" =
+  expectEqual (Some 2) (omLookup "k" (omFromPairs [("k", 1), ("k", 2)] omEmpty))
+
+test "OrdMap long insert-delete-reinsert traces preserve balance and contents" =
+  let insertions = map (n => (n, n * 3, True)) [0..=127]
+  let deletions = map (n => (n, 0, False)) [0..=127]
+  expectTrue
+    (runOperations (insertions ++ deletions ++ reverse insertions) omEmpty [])

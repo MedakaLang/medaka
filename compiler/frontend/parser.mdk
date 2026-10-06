@@ -2928,7 +2928,9 @@ afterPublicFor pubPos _ =
 
 parseFunOrSig : Bool -> Parser Decl
 parseFunOrSig pub = defer
+  s <- getPos
   name <- identNameP
+  let site = locOfSpan s (s + 1)
   params <- many parseParamPat
   t <- peekP
   match t
@@ -2936,7 +2938,7 @@ parseFunOrSig pub = defer
       advance
       ty <- parseTy
       skipNewlines
-      deferPure (DTypeSig pub name ty)
+      deferPure (DTypeSig pub name ty site)
     TEqual => defer
       advance
       body <- parseBody
@@ -4902,7 +4904,7 @@ declNameTokIdxAt toks (DAttrib _ inner) i =
     else
       i2
   declNameTokIdx toks inner i3
-declNameTokIdxAt toks (DTypeSig _ _ _) i = tokIdxOrNone toks i
+declNameTokIdxAt toks (DTypeSig _ _ _ _) i = tokIdxOrNone toks i
 declNameTokIdxAt toks (DFunDef _ _ _ _) i = tokIdxOrNone toks i
 declNameTokIdxAt toks (DExtern _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))

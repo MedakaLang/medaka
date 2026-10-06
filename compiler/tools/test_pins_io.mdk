@@ -1,0 +1,101 @@
+-- Filesystem context for the typed known-red ledger. The pure schema lives in
+-- tools.test_pins; this module chooses one project, canonicalizes both sides
+-- of every path comparison, and refuses rows whose file no longer exists.
+
+import driver.loader.{findProjectRoot}
+import fs.{isFile}
+import support.path.{dirOf, joinPath}
+import support.util.{contains, filterList}
+import tools.test_pins.{TestPin, parsePins}
+import string.{drop, startsWith}
+
+public export data PinContext = PinContext {
+  contextRoot : String,
+  contextFile : String,
+  contextPins : List TestPin,
+}
+
+ledgerName : String
+ledgerName = "medaka-test-pins.toml"
+
+-- Load the one ledger governing a target. The nearest project manifest wins;
+-- without one, the target's directory is an explicit standalone root. A missing
+-- ledger means no pins, while any existing malformed or unreadable ledger is an
+-- error. contextFile is the canonical root-relative selector.
+export
+loadPinContext : String -> <IO> Result String PinContext
+loadPinContext target =
+  let targetPath = canonicalizePath target
+  let targetDir = dirOf targetPath
+  match findProjectRoot targetDir
+    Some root => loadAtRoot (canonicalizePath root) targetPath
+    None => loadAtRoot (canonicalizePath targetDir) targetPath
+
+loadAtRoot : String -> String -> <IO> Result String PinContext
+loadAtRoot root target = do
+  file <- relativeToRoot root target
+  let ledger = joinPath root ledgerName
+  match ledgerPresent root ledger
+    Err err => Err err
+    Ok False =>
+      Ok PinContext { contextRoot = root, contextFile = file, contextPins = [] }
+    Ok True => do
+      _ <- relativeToRoot root (canonicalizePath ledger)
+      match readFile ledger
+        Err err => Err "\{ledger}: cannot read known-red ledger: \{err}"
+        Ok src => do
+          pins <- parsePins src
+          _ <- validatePinFiles root pins
+          Ok PinContext {
+            contextRoot = root,
+            contextFile = file,
+            contextPins = filterList (pin => pin.pinFile == file) pins,
+          }
+
+-- `fileExists` follows a symlink, so a dangling ledger link reads False. The
+-- parent directory still contains its name: distinguish that broken ledger from
+-- a genuinely absent optional ledger and fail loudly for the former.
+ledgerPresent : String -> String -> <FileRead> Result String Bool
+ledgerPresent root ledger =
+  if fileExists ledger then
+    Ok True
+  else match listDir root
+    Err err => Err "\{root}: cannot inspect known-red ledger: \{err}"
+    Ok names =>
+      if contains ledgerName names then
+        Err "\{ledger}: cannot read known-red ledger"
+      else
+        Ok False
+
+-- Paths are only compared after canonicalizePath. The slash in the prefix is
+-- load-bearing: /tmp/app2 must never count as being under /tmp/app.
+relativeToRoot : String -> String -> Result String String
+relativeToRoot root path =
+  let prefix = if root == "/" then "/" else root ++ "/"
+  if startsWith prefix path then
+    let n = if root == "/" then 1 else stringLength root + 1
+    let rel = drop n path
+    if rel == "" then
+      Err "known-red ledger target '\{path}' is not a file below '\{root}'"
+    else
+      Ok rel
+  else
+    Err "known-red ledger target '\{path}' escapes selected root '\{root}'"
+
+validatePinFiles : String -> List TestPin -> <FileRead> Result String Unit
+validatePinFiles _ [] = Ok ()
+validatePinFiles root (pin :: rest) = do
+  let raw = joinPath root pin.pinFile
+  let resolved = canonicalizePath raw
+  canonicalFile <- relativeToRoot root resolved
+  if canonicalFile /= pin.pinFile then
+    Err
+      "medaka-test-pins.toml: referenced file '\{pin.pinFile}' is not its canonical project-relative path ('\{canonicalFile}')"
+  else match isFile resolved
+    Err _ =>
+      Err
+        "medaka-test-pins.toml: referenced file '\{pin.pinFile}' does not exist"
+    Ok False =>
+      Err
+        "medaka-test-pins.toml: referenced file '\{pin.pinFile}' is not a regular file"
+    Ok True => validatePinFiles root rest

@@ -1149,9 +1149,9 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 -- scoping — but clearing per define costs nothing on that subset and is load-
 -- bearing on the `%tN`-keyed one, so all three tables are scoped uniformly.
 --
--- It also fixes a latent leak — both tables previously grew for the whole program.
+-- Tail contexts contain labels and slots belonging to their own define.
 data DefScope =
-  | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int)))
+  | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx
 
 -- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 --
@@ -1164,22 +1164,32 @@ data DefScope =
 beginDefine : Emit -> DefScope
 beginDefine e =
   let saved =
-    DefScope !e.defineCounter !e.closureArity !e.closureRetTy !e.directFn
+    DefScope
+      !e.defineCounter
+      !e.closureArity
+      !e.closureRetTy
+      !e.directFn
+      !e.trmcCtx
+      !e.gDispCtx
   let _ = markScope e
   e.defineCounter := 0
   e.closureArity := []
   e.closureRetTy := []
   e.directFn := []
+  e.trmcCtx := TrmcOff
+  e.gDispCtx := GDispOff
   saved
 
 -- restore the enclosing `define` scope (only needed where a define NESTS inside
 -- another's emission, i.e. at each bufRef save/restore swap).
 endDefine : Emit -> DefScope -> Unit
-endDefine e (DefScope n ar rt df) =
+endDefine e (DefScope n ar rt df trmc gd) =
   e.defineCounter := n
   e.closureArity := ar
   e.closureRetTy := rt
   e.directFn := df
+  e.trmcCtx := trmc
+  e.gDispCtx := gd
 
 emit : Emit -> String -> Unit
 emit e line = let buf = e.buf in buf := line :: !buf
@@ -3519,6 +3529,8 @@ isRngExtern name = contains name [
   "randomFloat",
   "randomChar",
   "setSeed",
+  "randomState",
+  "restoreRandomState",
   "osEntropyBytes",
 ]
 
@@ -3556,6 +3568,17 @@ emitRngExtern e env "setSeed" args = match emitArgs e env args
     let _ = emit e ("  call void @mdk_set_seed(i64 " ++ n ++ ")")
     ("1", LTUnit)
   _ => panic "llvm: setSeed takes one argument"
+emitRngExtern e env "randomState" args = match emitArgs e env args
+  [u] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_random_state(i64 \{u})"
+    (r, LTU64)
+  _ => panic "llvm: randomState takes one (Unit) argument"
+emitRngExtern e env "restoreRandomState" args = match emitArgs e env args
+  [state] =>
+    let _ = emit e "  call void @mdk_restore_random_state(i64 \{state})"
+    ("1", LTUnit)
+  _ => panic "llvm: restoreRandomState takes one argument"
 emitRngExtern e env "osEntropyBytes" args = match emitArgs e env args
   [n] =>
     let r = freshReg e

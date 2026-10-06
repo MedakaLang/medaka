@@ -1,0 +1,194 @@
+import frontend.ast.{
+  Decl(..), Ty(..), TyConOrigin(..), Variant(..), ConPayload(..), mapTyInDecl
+}
+import frontend.parser.{parse}
+import tools.prop_plan.{
+  PlanEnv,
+  PlanError,
+  PlanModule(..),
+  TypeKey(..),
+  PlanDef(..),
+  PlanCtor(..),
+  GenPlan(..),
+  buildPlanEnvModules,
+  planDef,
+  planFor,
+  instantiateCtor,
+  planErrorText,
+  ctorWeights,
+  maxGenDepth,
+}
+import test.{expectAll, expectEqual, expectNotEqual}
+
+runtimeTypes : String -> Ty -> (Ty, Bool)
+runtimeTypes _ (t@(TyCon { tyConName = n }))
+  | n == "Int" || n == "Bool" =
+    (TyCon { t | tyConOrigin = OriginBuiltin }, True)
+runtimeTypes owner (t@(TyCon {  })) =
+  (TyCon { t | tyConOrigin = OriginModule owner }, True)
+runtimeTypes _ t = (t, False)
+
+runtimeDecl : String -> Decl -> Decl
+runtimeDecl owner (DAttrib a d) = DAttrib a (runtimeDecl owner d)
+runtimeDecl owner (d@(DData {  })) =
+  let (typed, _) = mapTyInDecl (runtimeTypes owner) d
+  match typed
+    typedData@(DData { dataCtors }) => DData { typedData |
+      dataOrigin = OriginModule owner,
+      dataCtors = map (renameCtor owner) dataCtors,
+    }
+    _ => typed
+runtimeDecl _ d = d
+
+renameCtor : String -> Variant -> Variant
+renameCtor owner (Variant name payload) =
+  Variant "\{owner}_runtime_\{name}" payload
+
+rawNumbers : List Decl
+rawNumbers =
+  parse
+    "public export data Box = Box Int\npublic export data Tail = Tail Bool\n"
+
+rawFlags : List Decl
+rawFlags = parse "public export data Box = Box Bool\n"
+
+planned : Result PlanError PlanEnv
+planned = buildPlanEnvModules "numbers" [
+  PlanModule
+    "numbers"
+    rawNumbers
+    (parse "inserted = 0\n" ++ map (runtimeDecl "numbers") rawNumbers),
+  PlanModule "flags" rawFlags (map (runtimeDecl "flags") rawFlags),
+]
+
+planName : GenPlan -> String
+planName GInt = "Int"
+planName GBool = "Bool"
+planName _ = "unexpected plan"
+
+summary : String -> String -> Result String (String, String, List String)
+summary owner name = match planned
+  Err e => Err (planErrorText e)
+  Ok env => summarize env owner name
+
+summarize : PlanEnv ->
+  String ->
+  String ->
+  Result String (String, String, List String)
+summarize env owner name =
+  let key = TypeKey name (OriginModule owner)
+  match (
+    planFor env "nominal plan" "value" TyCon {
+      tyConName = name,
+      tyConOrigin = OriginModule owner,
+      tyConLoc = None,
+    },
+    planDef env key,
+  )
+    (Ok generation, Ok (PlanDef _ _ _ _ [ctor@(PlanCtor source runtime _)])) =>
+      match instantiateCtor env generation ctor
+        Ok fields =>
+          Ok (source, runtime, map (field => planName (snd field)) fields)
+        Err e => Err (planErrorText e)
+    (Err e, _) => Err (planErrorText e)
+    (_, Err e) => Err (planErrorText e)
+    _ => Err "expected exactly one constructor"
+
+test "paired nominal plans preserve source names when elaboration inserts declarations" = expectAll
+  [
+    expectEqual
+      (Ok ("Box", "numbers_runtime_Box", ["Int"]))
+      (summary "numbers" "Box"),
+    expectEqual
+      (Ok ("Tail", "numbers_runtime_Tail", ["Bool"]))
+      (summary "numbers" "Tail"),
+  ]
+
+test "same-spelled nominal plans retain different origins and field types" = expectAll
+  [
+    expectEqual
+      (Ok ("Box", "numbers_runtime_Box", ["Int"]))
+      (summary "numbers" "Box"),
+    expectEqual
+      (Ok ("Box", "flags_runtime_Box", ["Bool"]))
+      (summary "flags" "Box"),
+  ]
+
+pairingError : List Decl -> List Decl -> Option String
+pairingError raw runtime =
+  match buildPlanEnvModules "numbers" [PlanModule "numbers" raw runtime]
+    Ok _ => None
+    Err e => Some (planErrorText e)
+
+test "nominal pairing rejects missing declarations in either stream" = expectAll
+  [
+    expectNotEqual
+      None
+      (pairingError rawNumbers (map (runtimeDecl "numbers") rawFlags)),
+    expectNotEqual
+      None
+      (pairingError rawFlags (map (runtimeDecl "numbers") rawNumbers)),
+  ]
+
+test "nominal pairing rejects constructor count and field identity changes" = expectAll
+  [
+    expectNotEqual
+      None
+      (pairingError
+        (parse "public export data Box = One Int | Two Bool\n")
+        (map
+          (runtimeDecl "numbers")
+          (parse "public export data Box = One Int\n"))),
+    expectNotEqual
+      None
+      (pairingError
+        (parse "public export data Box = Box { left : Int }\n")
+        (map
+          (runtimeDecl "numbers")
+          (parse "public export data Box = Box { right : Int }\n"))),
+  ]
+
+mutualBoundWeights : Result String (List Int)
+mutualBoundWeights =
+  let raw =
+    parse
+      "public export data A = AB B | AL Int\npublic export data B = BA A | BC C\npublic export data C = Next D\npublic export data D = End Int\n"
+  match (buildPlanEnvModules "numbers" [
+    PlanModule "numbers" raw (map (runtimeDecl "numbers") raw),
+  ])
+    Err e => Err (planErrorText e)
+    Ok env => match planFor env "finite bound" "value" TyCon {
+      tyConName = "B",
+      tyConOrigin = OriginModule "numbers",
+      tyConLoc = None,
+    }
+      Err e => Err (planErrorText e)
+      Ok p => Ok (ctorWeights env p maxGenDepth)
+
+test "mutually recursive bound choices use the minimum finite witness" =
+  expectEqual (Ok [1, 0]) mutualBoundWeights
+
+appliedBoundWeights : Result String (List Int)
+appliedBoundWeights =
+  let raw = parse "public export data Box a = Box a\n"
+  let box = TyCon {
+    tyConName = "Box",
+    tyConOrigin = OriginModule "numbers",
+    tyConLoc = None,
+  }
+  let intTy = TyCon {
+    tyConName = "Int",
+    tyConOrigin = OriginBuiltin,
+    tyConLoc = None,
+  }
+  let nested = TyApp box (TyApp box (TyApp box intTy))
+  match (buildPlanEnvModules "numbers" [
+    PlanModule "numbers" raw (map (runtimeDecl "numbers") raw),
+  ])
+    Err e => Err (planErrorText e)
+    Ok env => match planFor env "nested applications" "value" nested
+      Err e => Err (planErrorText e)
+      Ok p => Ok (ctorWeights env p maxGenDepth)
+
+test "finite witnesses distinguish repeated applied nominal carriers" =
+  expectEqual (Ok [1]) appliedBoundWeights

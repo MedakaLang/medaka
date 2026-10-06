@@ -12,9 +12,44 @@
 -- (`seedPropRng`/`randBoolL`), independent of any `prop`'s randomized-length
 -- `List Bool` generation.
 
-import test.{expectEach, expectTrue}
-import tools.prop_runner.{seedPropRng, randBoolL}
+import test.{expectEach, expectEqual, expectNotEqual, expectTrue}
+import tools.prop_runner.{
+  seedPropRng,
+  randBoolL,
+  PropHelper(..),
+  PropRequest(..),
+  PropResult(..),
+  PropStatus(..),
+  PropFailureKind(..),
+  PreparedPropRequest(..),
+  runPreparedPropRequestsResults,
+}
+import eval.eval.{
+  EvalEnv(..), Value(..), lookupEnv, lookupRuntimeBinding, runtimeCellsOf
+}
 import list.{nub}
+import frontend.ast.{
+  Decl(..),
+  mapTyInDecl,
+  Require(..),
+  Ty(..),
+  TyConOrigin(..),
+  tyConUnresolved,
+}
+import frontend.parser.{parse}
+import tools.prop_plan.{
+  CustomPlan(..),
+  GenPlan(..),
+  PlanError,
+  PlanModule(..),
+  TypeKey(..),
+  buildPlanEnv,
+  buildPlanEnvModules,
+  customPlansReachable,
+  ctorWeights,
+  planFor,
+  planErrorText,
+}
 
 drawBools : Int -> List Bool
 drawBools 0 = []
@@ -66,3 +101,368 @@ test "8-tuples of raw draws reach far more than 62/256 distinct assignments" =
   let _ = seedPropRng 123456789
   let tuples = drawTuples 625  -- 625 * 8 = 5000 raw draws
   expectTrue (length (nub tuples) >= 200)
+
+namedTy : String -> Ty
+namedTy name = tyConUnresolved name None
+
+intTy : Ty
+intTy =
+  TyCon { tyConName = "Int", tyConLoc = None, tyConOrigin = OriginBuiltin }
+
+boolTy : Ty
+boolTy =
+  TyCon { tyConName = "Bool", tyConLoc = None, tyConOrigin = OriginBuiltin }
+
+tupleHead : Ty
+tupleHead = TyCon {
+  tyConName = "__tuple2__",
+  tyConLoc = None,
+  tyConOrigin = OriginBuiltin,
+}
+
+tupleIntBool : Ty
+tupleIntBool = TyApp (TyApp tupleHead intTy) boolTy
+
+boxThreeInt : Ty
+boxThreeInt =
+  TyApp (namedTy "Box") (TyApp (namedTy "Box") (TyApp (namedTy "Box") intTy))
+
+rotateLoop : Ty
+rotateLoop =
+  TyApp
+    (TyApp (TyApp (namedTy "Rotate") (namedTy "Loop")) (namedTy "Loop"))
+    (namedTy "Loop")
+
+planned : String -> Ty -> Result PlanError GenPlan
+planned source ty = planFor (buildPlanEnv (parse source)) "policy" "value" ty
+
+genericTreeArbitrary : Decl
+genericTreeArbitrary = DImpl {
+  pub = False,
+  iface = "Arbitrary",
+  tys = [TyApp (namedTy "Tree") (TyVar "a")],
+  reqs = [
+    Require {
+      requireHead = "Arbitrary",
+      requireArgs = [TyVar "a"],
+      requireOrigin = OriginModule "core",
+    },
+  ],
+  methods = [],
+  implOrigin = OriginModule "core",
+  implIfaceLoc = None,
+}
+
+boxArbitrary : Decl
+boxArbitrary = DImpl {
+  pub = False,
+  iface = "Arbitrary",
+  tys = [namedTy "Box"],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginModule "core",
+  implIfaceLoc = None,
+}
+
+plannedWithGenericTree : Ty -> Result PlanError GenPlan
+plannedWithGenericTree ty =
+  let decls =
+    parse "data Tree a = Leaf | Node a (Tree a)\n" ++ [genericTreeArbitrary]
+  planFor (buildPlanEnv decls) "policy" "value" ty
+
+weightsAt : Int -> String -> Ty -> List Int
+weightsAt depth source ty =
+  let env = buildPlanEnv (parse source)
+  match planFor env "policy" "value" ty
+    Ok plan => ctorWeights env plan depth
+    Err _ => []
+
+test "recursive plans retain Fork before the bound and select Leaf at it" = expectEach
+  [
+    (
+      "Tree is generatable",
+      expectTrue
+        (match planned "data Tree = Leaf | Fork Tree Tree\n" (namedTy "Tree")
+          Ok _ => True
+          Err _ => False),
+    ),
+    (
+      "Fork remains reachable below the bound",
+      expectNotEqual (weightsAt
+        0
+        "data Tree = Leaf | Fork Tree Tree\n"
+        (namedTy "Tree")) [
+        1, 0
+      ],
+    ),
+    (
+      "only Leaf is selected at the bound",
+      expectEqual (weightsAt
+        24
+        "data Tree = Leaf | Fork Tree Tree\n"
+        (namedTy "Tree")) [
+        1, 0
+      ],
+    ),
+  ]
+
+test "finite planning uses instantiated generic arguments and rejects empty recursive sums" = expectEach
+  [
+    (
+      "Leaf Int has a finite witness",
+      expectTrue (match (planned
+        "data Leaf a = Leaf a\n"
+        (TyApp (namedTy "Leaf") TyCon {
+          tyConName = "Int",
+          tyConLoc = None,
+          tyConOrigin = OriginBuiltin,
+        }))
+        Ok _ => True
+        Err _ => False),
+    ),
+    (
+      "Result Loop Loop has no generated finite value",
+      expectTrue
+        (match (planned
+          "data Loop = Loop Loop\ndata Bad = Bad (Result Loop Loop)\n"
+          (namedTy "Bad"))
+          Ok _ => False
+          Err _ => True),
+    ),
+    (
+      "nested generic carriers keep their finite argument route",
+      expectEqual (weightsAt 24 "data Box a = Box a\n" boxThreeInt) [1],
+    ),
+    (
+      "a resolved tuple spine plans each component",
+      expectTrue (match planned "" tupleIntBool
+        Ok (GTuple [GInt, GBool]) => True
+        _ => False),
+    ),
+    (
+      "mutual recursion chooses the shortest finite bound route",
+      expectEqual (weightsAt
+        24
+        "data A = AB B | AL\ndata B = BA A | BC C\ndata C = Next D\ndata D = End\n"
+        (namedTy "B")) [
+        1, 0
+      ],
+    ),
+    (
+      "nonregular recursion reaches a container's empty witness",
+      expectTrue
+        (match (planned
+          "data Loop = Again Loop\ndata Empty a = Empty\ndata Rotate a b c = RotateNext (Rotate b c (Empty a)) | RotateEnd a\n"
+          rotateLoop)
+          Ok _ => True
+          Err _ => False),
+    ),
+    (
+      "the rotating wrapper is finite on its own",
+      expectTrue
+        (match (planned
+          "data Loop = Again Loop\ndata Empty a = Empty\n"
+          (TyApp (namedTy "Empty") (namedTy "Loop")))
+          Ok _ => True
+          Err _ => False),
+    ),
+    (
+      "a direct finite rotating exit is recognized",
+      expectTrue
+        (match (planned
+          "data Loop = Again Loop\ndata Empty a = Empty\ndata Rotate a b c = RotateNext (Rotate b c (Empty a)) | RotateEnd (Empty a)\n"
+          rotateLoop)
+          Ok _ => True
+          Err _ => False),
+    ),
+    (
+      "mutually applied recursion without a base stays uninhabited",
+      expectTrue
+        (match planned "data A = Wrap (B A)\ndata B a = Pack a\n" (namedTy "A")
+          Ok _ => False
+          Err _ => True),
+    ),
+    (
+      "mutually applied recursion with a base has a finite witness",
+      expectTrue
+        (match (planned
+          "data A = Base | Wrap (B A)\ndata B a = Pack a\n"
+          (namedTy "A"))
+          Ok _ => True
+          Err _ => False),
+    ),
+    (
+      "a reachable unsupported constructor is a planning error",
+      expectTrue
+        (match (planned
+          "data Choice = Number Int | Function (Int -> Int)\n"
+          (namedTy "Choice"))
+          Ok _ => False
+          Err _ => True),
+    ),
+  ]
+
+genericTreeCustom : Ty -> Bool
+genericTreeCustom ty = match plannedWithGenericTree ty
+  Ok (GCustom (CustomPlan _ (TyApp (TyCon { tyConName = "Tree" }) _) _)) => True
+  _ => False
+
+test "a constrained generic Arbitrary carrier selects full applied custom plans" =
+  expectTrue
+    (genericTreeCustom (TyApp (namedTy "Tree") intTy)
+      && genericTreeCustom (TyApp (namedTy "Tree") (namedTy "Token")))
+
+test "custom helper discovery follows instantiated nominal fields" =
+  let env =
+    buildPlanEnv
+      (parse "data Box = Box Int\ndata Outer = Outer Box\n" ++ [boxArbitrary])
+  match planFor env "policy" "value" (namedTy "Outer")
+    Ok outer => expectTrue (match customPlansReachable env [outer]
+      [CustomPlan (TypeKey "Box" _) _ _] => True
+      _ => False)
+    Err _ => expectTrue False
+
+missingHelperProp : Decl
+missingHelperProp =
+  match parse "prop \"helper availability\" (value : Box) = True\n"
+    [decl] => decl
+    _ => panic "test fixture property did not parse"
+
+missingHelperPlan : Result PlanError GenPlan
+missingHelperPlan =
+  planFor
+    (buildPlanEnv (parse "data Box = Box Int\n" ++ [boxArbitrary]))
+    "policy"
+    "value"
+    (namedTy "Box")
+
+missingHelperResults : CustomPlan -> List PropResult
+missingHelperResults (CustomPlan key carrier word) =
+  let env = buildPlanEnv (parse "data Box = Box Int\n" ++ [boxArbitrary])
+  let rows = [
+    PreparedRun (PropRequest "helper availability" 17 1) missingHelperProp [
+      GCustom (CustomPlan key carrier word),
+    ],
+  ]
+  runPreparedPropRequestsResults
+    env
+    [PropHelper word "__missing_prop_generator" "__missing_prop_shrinker"]
+    rows
+    []
+    (EvalEnv [[]])
+    []
+
+missingHelperIsRuntimeResult : Bool
+missingHelperIsRuntimeResult = match missingHelperPlan
+  Ok (GCustom custom) => match missingHelperResults custom
+    [PropResult _ _ PropErroredResult (Some PropRuntimeError) detail _ _] =>
+      detail == "selected typed custom helper binding is unavailable"
+    _ => False
+  _ => False
+
+test "a missing selected helper binding is a runtime result" =
+  expectTrue missingHelperIsRuntimeResult
+
+runtimeShadowResults : ((Int, Int, Int), (Int, Int, Int))
+runtimeShadowResults =
+  let canonical = runtimeCellsOf [
+    ("randomState", VInt 19),
+    ("restoreRandomState", VInt 23),
+    ("setSeed", VInt 29),
+  ]
+  let env = EvalEnv [
+    [
+      ("randomState", Ref (VInt 7)),
+      ("restoreRandomState", Ref (VInt 11)),
+      ("setSeed", Ref (VInt 13)),
+    ],
+    canonical,
+  ]
+  let local = (
+    match lookupEnv env "randomState"
+      VInt n => n
+      _ => -1,
+    match lookupEnv env "restoreRandomState"
+      VInt n => n
+      _ => -1,
+    match lookupEnv env "setSeed"
+      VInt n => n
+      _ => -1,
+  )
+  let runtime = (
+    match lookupRuntimeBinding env "randomState"
+      VInt n => n
+      _ => -1,
+    match lookupRuntimeBinding env "restoreRandomState"
+      VInt n => n
+      _ => -1,
+    match lookupRuntimeBinding env "setSeed"
+      VInt n => n
+      _ => -1,
+  )
+  (local, runtime)
+
+test "canonical runtime lookup ignores method-frame shadows for every RNG primitive" = expectEach
+  [
+    (
+      "ordinary lookup retains the method frame",
+      expectEqual (7, 11, 13) (fst runtimeShadowResults),
+    ),
+    (
+      "runtime lookup reaches canonical primitives",
+      expectEqual (19, 23, 29) (snd runtimeShadowResults),
+    ),
+  ]
+
+wrappedTy : Ty
+wrappedTy = TyCon {
+  tyConName = "Wrapped",
+  tyConLoc = None,
+  tyConOrigin = OriginModule "owner",
+}
+
+runtimeTy : String -> Ty -> (Ty, Bool)
+runtimeTy _ (t@(TyCon { tyConName = "Int" })) =
+  (TyCon { t | tyConOrigin = OriginBuiltin }, True)
+runtimeTy owner (t@(TyCon {  })) =
+  (TyCon { t | tyConOrigin = OriginModule owner }, True)
+runtimeTy _ t = (t, False)
+
+runtimeNewtype : String -> Decl -> Decl
+runtimeNewtype owner (DAttrib attrs decl) =
+  DAttrib attrs (runtimeNewtype owner decl)
+runtimeNewtype owner (d@(DNewtype {  })) =
+  let (typed, _) = mapTyInDecl (runtimeTy owner) d
+  match typed
+    typedNewtype@(DNewtype {  }) =>
+      DNewtype { typedNewtype | newtypeOrigin = OriginModule owner }
+    _ => typed
+runtimeNewtype _ decl = decl
+
+wrappedPlan : String -> Result PlanError GenPlan
+wrappedPlan root =
+  let raw = parse "export newtype Wrapped = Wrapped Int\n"
+  match (buildPlanEnvModules root [
+    PlanModule "owner" raw (map (runtimeNewtype "owner") raw),
+  ])
+    Ok env => planFor env "policy" "value" wrappedTy
+    Err e => Err e
+
+wrappedDetail : String -> String
+wrappedDetail root = match wrappedPlan root
+  Ok _ => "ok"
+  Err e => planErrorText e
+
+test "newtype constructors are available only to their owner module" = expectEach
+  [
+    (
+      "owner can plan Wrapped",
+      expectEqual "ok" (wrappedDetail "owner"),
+    ),
+    (
+      "consumer cannot plan Wrapped",
+      expectTrue (match wrappedPlan "consumer"
+        Ok _ => False
+        Err _ => True),
+    ),
+  ]

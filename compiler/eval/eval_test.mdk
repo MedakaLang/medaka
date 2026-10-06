@@ -7,12 +7,14 @@ import frontend.ast.{
   Expr(..),
   Ty(..),
   TyConOrigin(..),
+  UsePath(..),
   ImplMethod(..),
   Decl(..),
   Loc(..),
 }
 import types.route_key.{implRouteKeyWord}
-import eval.eval.{buildMethodReqCounts, Value(..), ppValue}
+import eval.eval.{buildMethodReqCounts, Value(..), evalModulesOutput, ppValue}
+import ir.core_ir_eval.{cevalModulesOutput}
 
 testLoc : Loc
 testLoc = Loc "" 1 0 1 0
@@ -88,3 +90,21 @@ test "ppValue parenthesizes nested negative and compound payloads" = expectAll [
   expectEqual "Some (1, 2)" (ppValue (VCon "Some" [VTuple [VInt 1, VInt 2]])),
   expectEqual "Some [1, 2]" (ppValue (VCon "Some" [VList [VInt 1, VInt 2]])),
 ]
+
+runtimeAliasModules : List (String, List Decl)
+runtimeAliasModules = [
+  ("runtime", [DExtern True "Ref" (TyVar "a")]),
+  (
+    "root",
+    [
+      DUse False (UseAlias ["runtime"] "R") testLoc,
+      DFunDef False "main" [] (EApp (EVar "R.Ref") (ELit LUnit)),
+    ],
+  ),
+]
+
+test "public runtime extern aliases share their primitive cell in both evaluators" = expectAll
+  [
+    expectEqual "" (evalModulesOutput [] runtimeAliasModules),
+    expectEqual "" (cevalModulesOutput [] runtimeAliasModules),
+  ]

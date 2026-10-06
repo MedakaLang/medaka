@@ -1,13 +1,10 @@
 -- compiler/tools/native_doctest.mdk — the NATIVE doctest execution engine
 -- (Stage 2 of "make `medaka test` run natively", issue #81).
 --
--- `medaka test` runs every doctest under the tree-walking INTERPRETER, so a
--- native-only miscompile is invisible to it — `compiler/tools/test_cmd.mdk`
--- says so in its own comment.  That hole let a SQL expression parser ship
--- 32/32 green while every arithmetic operator in its grammar was broken in the
--- native binary.  This module closes it for doctests: it compiles the module
--- under test — with its doctest bindings appended — to a real native binary,
--- runs it, and reports one rendered actual per example.
+-- This native engine compiles the module under test — with its doctest bindings
+-- appended — to a real native binary, runs it, and reports one rendered actual
+-- per example. `test_cmd.mdk` selects it when native doctest execution is
+-- requested.
 --
 -- ── the contract ────────────────────────────────────────────────────────────
 -- This is an ENGINE behind `doctest.mdk`'s `buildDetailsFrom` seam (Stage 1),
@@ -46,19 +43,11 @@
 -- dropped, never counted as passing.  "This didn't run" must never look like
 -- "this passed"; that is the failure mode the whole suite exists to prevent.
 --
--- ── NOT wired to any CLI surface ────────────────────────────────────────────
--- Stage 2 delivers the engine only.  `medaka test` still runs the interpreter
--- arm, byte-for-byte unchanged.  Wiring (and the two-engine differential) is
--- Stage 3.  `compiler/entries/native_doctest_probe_main.mdk` drives this module
--- so it is exercised — and typechecked by `typecheck_compiler_source.sh`, which
--- covers `compiler/entries/*` but NOT a `compiler/tools/` module that nothing
--- imports.
-
 import frontend.ast.{Decl(..)}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,
-  scratchProjectManifest,
+  scratchProbeManifest,
   cleanupTempDir,
   runBuildNativeRoots,
   envOr,
@@ -67,27 +56,30 @@ import driver.build_cmd.{
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
+import string.{replaceAll}
 import tools.probe_transcript.{
   Chunk(..),
   chunksOf,
   decodeValue,
   endTag,
+  freshProbeNonce,
   firstNonEmptyLine,
   lookupChunk,
   mintNonce,
   noncedPrefix,
   renameUserMain,
+  runtimeDependencyName,
+  runtimeDependencyPrefix,
   sentinelLine,
   tagsInOrder,
-  valuePrintExpr,
+  valuePrintExprWith,
 }
 import tools.doctest.{
   Example,
   RunResult,
   buildDetailsFrom,
   exampleExpected,
-  synthName,
-  synthSrc,
+  synthSrcNamed,
 }
 
 -- ── sentinels ───────────────────────────────────────────────────────────────
@@ -200,7 +192,7 @@ nativeRendered target tsrc userDecls examples synthResults =
         -- The nonce is drawn HERE, before the probe source is written, so it
         -- reaches `runInTmp` in time to land in the generated code the target's
         -- own (already-fixed) source cannot see or influence.
-        let nonce = mintNonce ()
+        let nonce = freshProbeNonce (mintNonce ()) probeNamespacePrefixes tsrc
         -- `rendered` is bound (and so fully forced — Medaka is strict) BEFORE the
         -- teardown, so the probe binary still exists while it runs.  Same shape as
         -- `build_cmd.mdk`'s `runBuildNative`.
@@ -236,10 +228,8 @@ nativeRendered target tsrc userDecls examples synthResults =
 --
 -- The manifest also carries the TARGET project's own `[dependencies]`, without
 -- which the probe cannot resolve a cross-project import the interpreter arm
--- resolves fine — see `scratchProjectManifest`.  That is content, not trust:
+-- resolves fine — see `scratchProbeManifest`.  That is content, not trust:
 -- the trust argument above is unchanged by it.
-scratchManifest : String -> <IO> String
-scratchManifest target = scratchProjectManifest "medaka_native_doctest" target
 
 -- The copy is named `dt_<basename>` rather than `<basename>`.  A module id
 -- collision is otherwise reachable: a copy of `stdlib/string.mdk` in the scratch
@@ -258,11 +248,28 @@ runInTmp : String ->
 runInTmp target tsrc examples synthResults tmpDir nonce =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "dt_probe"
-  let _ = writeFile (joinPath tmpDir "medaka.toml") (scratchManifest target)
-  match writeFile entryPath (probeSource nonce tsrc examples synthResults)
-    Err e => Err "native doctest runner: could not write the probe source: \{e}"
-    Ok _ =>
-      buildAndRun target entryPath outPath tmpDir examples synthResults nonce
+  match (scratchProbeManifest
+    "medaka_native_doctest"
+    target
+    (runtimeDependencyName nonce))
+    Err e =>
+      Err "native doctest runner: could not create the scratch manifest: \{e}"
+    Ok manifest => match writeFile (joinPath tmpDir "medaka.toml") manifest
+      Err e =>
+        Err "native doctest runner: could not write the scratch manifest: \{e}"
+      Ok _ =>
+        match writeFile entryPath (probeSource nonce tsrc examples synthResults)
+          Err e =>
+            Err "native doctest runner: could not write the probe source: \{e}"
+          Ok _ =>
+            buildAndRun
+              target
+              entryPath
+              outPath
+              tmpDir
+              examples
+              synthResults
+              nonce
 
 buildAndRun : String ->
   String ->
@@ -332,25 +339,48 @@ probeSource : String ->
   String
 probeSource nonce tsrc examples synthResults =
   joinNl
-    ([renameUserMain tsrc, ""]
-      ++ synthLines 0 examples synthResults
+    ([
+        "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}",
+        "",
+        renameUserMain tsrc,
+        "",
+      ]
+      ++ synthLines nonce 0 examples synthResults
       ++ ["", "main ="]
       ++ mainLines nonce 0 examples synthResults
-      ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
+      ++ [
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce endTag}\"",
+        "",
+      ])
+
+runtimeAlias : String -> String
+runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
+
+probeNameNonce : String -> String
+probeNameNonce nonce = replaceAll "-" "_" nonce
+
+probeNamespacePrefixes : List String
+probeNamespacePrefixes = ["__ndt_", "NpRuntime_", runtimeDependencyPrefix]
+
+probeBindingName : String -> Int -> String
+probeBindingName nonce i = "__ndt_\{probeNameNonce nonce}_\{intToString i}__"
 
 -- One synth binding per example whose synth PARSED.  An example whose synth
 -- failed to parse contributes no binding (mirroring `buildSynthDecls`) — its
 -- outcome is reported from `synthResults` by `buildDetailsFrom` and never
 -- consults the rendered value.
-synthLines : Int ->
+synthLines : String ->
+  Int ->
   List Example ->
   List (Result String (List Decl)) ->
   List String
-synthLines _ [] _ = []
-synthLines _ (_ :: _) [] = []
-synthLines i (ex :: rest) ((Ok _) :: srRest) =
-  synthSrc i ex :: synthLines (i + 1) rest srRest
-synthLines i (_ :: rest) ((Err _) :: srRest) = synthLines (i + 1) rest srRest
+synthLines _ _ [] _ = []
+synthLines _ _ (_ :: _) [] = []
+synthLines nonce i (ex :: rest) ((Ok _) :: srRest) =
+  synthSrcNamed (probeBindingName nonce i) ex
+    :: synthLines nonce (i + 1) rest srRest
+synthLines nonce i (_ :: rest) ((Err _) :: srRest) =
+  synthLines nonce (i + 1) rest srRest
 
 -- Per example: the sentinel, then the value.
 --
@@ -371,15 +401,16 @@ mainLines nonce i (_ :: rest) ((Err _) :: srRest) =
   mainLines nonce (i + 1) rest srRest
 mainLines nonce i (ex :: rest) ((Ok _) :: srRest) =
   [
-      "  let _ = putStrLn \"\{sentinelFor nonce (intToString i)}\"",
-      valueLine i ex,
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (intToString i)}\"",
+      valueLine nonce i ex,
     ]
     ++ mainLines nonce (i + 1) rest srRest
 
-valueLine : Int -> Example -> String
-valueLine i ex = match exampleExpected ex
-  Some _ => "  let _ = \{valuePrintExpr (synthName i)}"
-  None => "  let _ = \{synthName i}"
+valueLine : String -> Int -> Example -> String
+valueLine nonce i ex = match exampleExpected ex
+  Some _ =>
+    "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") (probeBindingName nonce i)}"
+  None => "  let _ = \{probeBindingName nonce i}"
 
 -- ── reading the probe's stdout back ─────────────────────────────────────────
 

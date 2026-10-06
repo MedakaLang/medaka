@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"R-DUPLICATE-SIGNATURE","kind":"resolve","message":"duplicate definition of `greet`, first defined at line 12; rename or remove this one","range":{"end":{"character":5,"line":14},"start":{"character":0,"line":14}},"severity":1,"source":"medaka"}]}]}

@@ -264,12 +264,42 @@ export
 scratchProjectManifest : String -> String -> <IO> String
 scratchProjectManifest projectName target =
   let root = canonicalizePath (findProjectRootOrSelf (dirOf target))
-  stringConcat [
-    "[project]\nname = \"",
-    projectName,
-    "\"\n",
-    renderScratchDeps (readDeps root),
-  ]
+  scratchManifestText projectName (readDeps root)
+
+-- A native probe needs the target's declared dependencies AND one private path
+-- to the installed stdlib runtime catalog.  The generated dependency name is
+-- nonce-qualified by its caller, so it cannot redirect an ordinary target
+-- import.  A target that already claims that exact name is an error: replacing
+-- it would make a valid project silently compile against another package.
+export
+scratchProbeManifest : String -> String -> String -> <IO> Result String String
+scratchProbeManifest projectName target runtimeDepName =
+  let targetRoot = canonicalizePath (findProjectRootOrSelf (dirOf target))
+  let deps = readDeps targetRoot
+  if scratchDepExists runtimeDepName deps then
+    Err
+      ("native probe scratch manifest: target dependency name "
+        ++ runtimeDepName
+        ++ " is already declared")
+  else
+    let medakaRoot = canonicalizePath (envOr "MEDAKA_ROOT" defaultMedakaRoot)
+    Ok
+      (scratchManifestText
+        projectName
+        (deps ++ [(runtimeDepName, joinPath medakaRoot "stdlib")]))
+
+scratchDepExists : String -> List (String, String) -> Bool
+scratchDepExists _ [] = False
+scratchDepExists wanted ((name, _) :: rest) =
+  name == wanted || scratchDepExists wanted rest
+
+scratchManifestText : String -> List (String, String) -> String
+scratchManifestText projectName deps = stringConcat [
+  "[project]\nname = \"",
+  projectName,
+  "\"\n",
+  renderScratchDeps deps,
+]
 
 renderScratchDeps : List (String, String) -> String
 renderScratchDeps [] = ""

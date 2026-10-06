@@ -151,6 +151,17 @@ installedEvidenceEntries _ = match !evidenceRef
   None => []
   Some arr => evidenceEntriesFrom arr (arrayLength arr - 1) []
 
+-- Helper elaboration temporarily replaces the process-global evidence table.
+-- Restore the complete installed table afterward, including method-occurrence
+-- entries that an elaborateModules return value does not carry.
+export
+withEvidencePreserved : (Unit -> <e> a) -> <e> a
+withEvidencePreserved action =
+  let before = installedEvidenceEntries ()
+  let result = action ()
+  let _ = installEvidence before
+  result
+
 evidenceEntriesFrom : Array (Option EvEntry) ->
   Int ->
   List EvEntry ->

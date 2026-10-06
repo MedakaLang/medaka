@@ -88,6 +88,8 @@ import eval.eval.{
   installDispatchTables,
   implMethodNames,
   methodCellsOf,
+  publicExternCells,
+  runtimeCellsOf,
   importFrameOf,
   narrowToIface,
   pubReexports,
@@ -623,6 +625,7 @@ cevalModules preludeDecls0 modules0 =
   ffiExternNamesRef := externDeclNamesOfDecls allDecls
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
+  let externs = externBindings ()
   let reqCounts = instanceReqCounts allDecls
   let preludeGroups = lowerGroups preludeDecls
   let dispositions = installedDispositionsOpt ()
@@ -637,19 +640,22 @@ cevalModules preludeDecls0 modules0 =
     filterList (b => contains (cBindName b) shadowNames) preludeGroups
   let globalNames =
     map fst boolSeeds
-      ++ map fst (externBindings ())
+      ++ map fst externs
       ++ map fst ctors
       ++ implMethodNames allDecls
       ++ map cBindName preludeShared
   let globalCells = map (n => (n, Ref VUnit)) globalNames
+  let runtimeCells = runtimeCellsOf externs
   let privateCells = map (n => (n, Ref VUnit)) (map cBindName preludePrivate)
-  let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
+  let globalEnv =
+    EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
   let mods =
     cBuildModInfos
       disp
       reqCounts
       dispositions
       globalCells
+      runtimeCells
       (coreImportExports privateCells globalCells preludeDecls)
       []
       modules
@@ -657,7 +663,7 @@ cevalModules preludeDecls0 modules0 =
     flatMap (cImplEntryValues globalEnv) preludeImpls
       ++ flatMap cModImplValues mods
   let _ = installConsts globalCells boolSeeds
-  let _ = installConsts globalCells (externBindings ())
+  let _ = installConsts globalCells externs
   let _ = installConsts globalCells ctors
   let _ = installConsts globalCells (coalesceImpls implEntries)
   let _ = cInstallTopGroups globalEnv globalCells preludeShared
@@ -674,12 +680,13 @@ cBuildModInfos : List ((String, String, String), List Int) ->
   OrdMap Int ->
   Option DispositionTable ->
   List (String, Ref (Value e)) ->
+  List (String, Ref (Value e)) ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (CModInfo (Value e))
-cBuildModInfos _ _ _ _ _ _ [] = []
-cBuildModInfos disp reqCounts dispositions globalCells coreExports exportsMap ((mid, decls) :: rest) =
+cBuildModInfos _ _ _ _ _ _ _ [] = []
+cBuildModInfos disp reqCounts dispositions globalCells runtimeCells coreExports exportsMap ((mid, decls) :: rest) =
   let cbinds = lowerGroups decls
   let cimpls = lowerImplsWith disp reqCounts dispositions decls
   -- P0-9 (Core-IR port of the eval.mdk fix): each module's OWN constructors ALSO
@@ -694,7 +701,7 @@ cBuildModInfos disp reqCounts dispositions globalCells coreExports exportsMap ((
   let localCells =
     map (n => (n, Ref VUnit)) (map cBindName cbinds ++ map fst modCtors)
   let imports = importFrameOf coreExports exportsMap decls
-  let menv = EvalEnv [localCells, imports, globalCells]
+  let menv = EvalEnv [localCells, imports, globalCells, runtimeCells]
   -- IMPORT ALIASING (Core-IR port of the eval.mdk fix — these two module drivers are
   -- parallel and their frame semantics MUST move in lockstep): a module also exports the
   -- interface/impl METHODS it declares, bound to the SAME global (coalesced-dispatcher)
@@ -708,6 +715,7 @@ cBuildModInfos disp reqCounts dispositions globalCells coreExports exportsMap ((
   let exports =
     ModExports
       (localCells
+        ++ publicExternCells runtimeCells decls
         ++ methodCellsOf globalCells decls
         ++ pubReexports coreExports exportsMap decls)
       (ctorsByTypeOf decls)
@@ -717,6 +725,7 @@ cBuildModInfos disp reqCounts dispositions globalCells coreExports exportsMap ((
       reqCounts
       dispositions
       globalCells
+      runtimeCells
       coreExports
       ((mid, exports) :: exportsMap)
       rest

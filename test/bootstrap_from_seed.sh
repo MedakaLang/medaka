@@ -1,6 +1,6 @@
 #!/bin/sh
-# OCAML-FREE BOOTSTRAP / SEED-CURRENCY GATE — rebuild the native Medaka emitter from
-# the checked-in gzipped IR seed (compiler/seed/emitter.ll.gz), NO `medaka run`/OCaml.
+# BOOTSTRAP / SEED-CURRENCY GATE — rebuild the native Medaka emitter from the
+# checked-in gzipped IR seed (compiler/seed/emitter.ll.gz), with no `medaka run`.
 #
 # Two roles:
 #   • `make bootstrap` (strict, default): release/CI gate that the committed seed is
@@ -108,7 +108,7 @@ trim_unit() {
   fi
 }
 
-# ---- STEP 1: clang the SEED into a native emitter (NO OCaml) ----------------
+# ---- STEP 1: clang the SEED into a native emitter ---------------------------
 SEED_EMITTER="$WORK/seed_emitter"
 echo "step 1: clang(seed) -> seed_emitter (stack $STACK_SIZE) ..."
 if ! "$CC" -pthread $GC_CFLAGS "$SEED" "$RT" $GC_LIBS -lm -o "$SEED_EMITTER" 2>"$WORK/cc1.err"; then
@@ -148,4 +148,4 @@ if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_CFLAGS "$EMITTER2" "$RT" $GC_LIBS 
 fi
 
 echo
-echo "BOOTSTRAP-FROM-SEED PASS: built $OUT OCaml-free from the gzipped seed."
+echo "BOOTSTRAP-FROM-SEED PASS: built $OUT from the gzipped seed."

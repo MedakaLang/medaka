@@ -1,0 +1,343 @@
+-- Sibling tests for the pure known-red ledger. They exercise the parser and
+-- classifier directly so the eventual CLI integration cannot make malformed
+-- ledger rows, XPASSes, or a differently-shaped failure look healthy.
+
+import test.{expectEach, expectEqual, expectFalse, expectOk, expectTrue}
+import tools.test_pins.{
+  PinKind(..),
+  PinObservation(..),
+  PinVerdict(..),
+  TestExpectedFailure(..),
+  TestPin(..),
+  classifyPin,
+  parsePins,
+  pinFor,
+  pinVerdictDetail,
+  pinVerdictPassed,
+  validatePinNames,
+}
+import string.{replace}
+
+propRow : String
+propRow =
+  "version = 1\n\n[[pin]]\nfile = \"compiler/types/example.mdk\"\nkind = \"prop\"\nname = \"a law\"\nengine = \"native\"\nissue = 42\nseed = -7\ncases = 30\nfailure = \"false\"\n"
+
+testRow : String
+testRow =
+  "version = 1\n\n[[pin]]\nfile = \"compiler/tools/example.mdk\"\nkind = \"test\"\nname = \"a check\"\nengine = \"eval\"\nissue = 99\ndetail_lines = [\"first line\", \"second line\"]\nfailure = \"assertion\"\n"
+
+errorTestRow : String
+errorTestRow =
+  replace
+    "failure = \"assertion\""
+    "failure = \"error\""
+    (replace
+      "engine = \"eval\""
+      "engine = \"native\""
+      (replace
+        "detail_lines = [\"first line\", \"second line\"]"
+        "detail_lines = [\"native error\"]"
+        testRow))
+
+onePin : String -> TestPin
+onePin src = match parsePins src
+  Ok [pin] => pin
+  _ => Pin {
+    pinFile = "unreachable.mdk",
+    pinKind = TestPin,
+    pinName = "unreachable",
+    pinEngine = "eval",
+    pinIssue = 1,
+    pinSeed = None,
+    pinCases = None,
+    pinDetail = None,
+    pinExpected = None,
+  }
+
+test "property pins retain negative seeds and require the exact law failure" =
+  let pin = onePin propRow
+  expectEach [
+    (
+      "the negative seed survives parsing",
+      expectEqual (Some (0 - 7)) pin.pinSeed,
+    ),
+    (
+      "the configured case count survives parsing",
+      expectEqual (Some 30) pin.pinCases,
+    ),
+    (
+      "a law failure holds",
+      expectEqual (PinHeld 42) (classifyPin pin PinLawFailure),
+    ),
+    ("a pass drains", expectEqual (PinDrained 42) (classifyPin pin PinPassed)),
+    (
+      "an assertion failure cannot satisfy a property pin",
+      expectFalse
+        (pinVerdictPassed (classifyPin pin (PinAssertionFailure "wrong shape"))),
+    ),
+    (
+      "a runtime error cannot satisfy a property pin",
+      expectFalse (pinVerdictPassed (classifyPin pin (PinRuntimeError "trap"))),
+    ),
+  ]
+
+test "test pins match their complete assertion detail and only that detail" =
+  let pin = onePin testRow
+  expectEach [
+    (
+      "joined lines are the expected detail",
+      expectEqual (Some "first line\nsecond line") pin.pinDetail,
+    ),
+    (
+      "the assertion expectation is typed",
+      expectEqual
+        (Some (ExpectAssertion "first line\nsecond line"))
+        pin.pinExpected,
+    ),
+    (
+      "the exact assertion failure holds",
+      expectEqual
+        (PinHeld 99)
+        (classifyPin pin (PinAssertionFailure "first line\nsecond line")),
+    ),
+    (
+      "a changed assertion failure is not healthy",
+      expectFalse
+        (pinVerdictPassed (classifyPin pin (PinAssertionFailure "first line"))),
+    ),
+    (
+      "a law failure cannot satisfy a test pin",
+      expectFalse (pinVerdictPassed (classifyPin pin PinLawFailure)),
+    ),
+    (
+      "a runtime error cannot satisfy a test pin",
+      expectFalse (pinVerdictPassed (classifyPin pin (PinRuntimeError "panic"))),
+    ),
+  ]
+
+test "native error pins hold only their exact declared error" =
+  let pin = onePin errorTestRow
+  expectEach [
+    (
+      "the expected native error is typed",
+      expectEqual (Some (ExpectError "native error")) pin.pinExpected,
+    ),
+    (
+      "the exact native error holds",
+      expectEqual
+        (PinHeld 99)
+        (classifyPin pin (PinRuntimeError "native error")),
+    ),
+    (
+      "a changed native error remains red",
+      expectFalse
+        (pinVerdictPassed
+          (classifyPin pin (PinRuntimeError "different native error"))),
+    ),
+    (
+      "an assertion cannot satisfy an error pin",
+      expectFalse
+        (pinVerdictPassed
+          (classifyPin pin (PinAssertionFailure "native error"))),
+    ),
+    (
+      "an XPASS drains an error pin",
+      expectFalse (pinVerdictPassed (classifyPin pin PinPassed)),
+    ),
+  ]
+
+test "pins remain separate by file kind name and engine" =
+  let propPin = onePin propRow
+  let testPin = onePin testRow
+  let pins = [propPin, testPin]
+  expectEach [
+    (
+      "full selector finds the property pin",
+      expectEqual
+        (Some propPin)
+        (pinFor pins "compiler/types/example.mdk" PropPin "a law" "native"),
+    ),
+    (
+      "a different engine does not match",
+      expectEqual
+        None
+        (pinFor pins "compiler/types/example.mdk" PropPin "a law" "eval"),
+    ),
+    (
+      "a different kind does not match",
+      expectEqual
+        None
+        (pinFor pins "compiler/types/example.mdk" TestPin "a law" "native"),
+    ),
+    (
+      "a different file does not match",
+      expectEqual
+        None
+        (pinFor pins "compiler/tools/example.mdk" PropPin "a law" "native"),
+    ),
+  ]
+
+test "schema errors fail closed for unknown duplicate and mismatched fields" = expectEach
+  [
+    (
+      "version one permits an explicit empty ledger",
+      expectEqual (Ok []) (parsePins "version = 1\n"),
+    ),
+    (
+      "an empty document is not an implicit ledger",
+      expectTrue (match parsePins ""
+        Err _ => True
+        Ok _ => False),
+    ),
+    (
+      "a different version is rejected",
+      expectTrue (match parsePins "version = 2\n"
+        Err _ => True
+        Ok _ => False),
+    ),
+    (
+      "an unknown row field is rejected",
+      expectTrue (match parsePins (propRow ++ "extra = 1\n")
+        Err _ => True
+        Ok _ => False),
+    ),
+    (
+      "an unknown table is rejected",
+      expectTrue (match parsePins "version = 1\n[other]\nx = 1\n"
+        Err _ => True
+        Ok _ => False),
+    ),
+    (
+      "two selectors cannot name one result",
+      expectTrue
+        (match (parsePins
+          (propRow
+            ++ "\n[[pin]]\nfile = \"compiler/types/example.mdk\"\nkind = \"prop\"\nname = \"a law\"\nengine = \"native\"\nissue = 43\nseed = 1\ncases = 1\nfailure = \"false\"\n"))
+          Err _ => True
+          Ok _ => False),
+    ),
+    (
+      "a test row cannot carry property controls",
+      expectTrue (match parsePins (testRow ++ "seed = 1\n")
+        Err _ => True
+        Ok _ => False),
+    ),
+    (
+      "test rows require an explicit failure shape",
+      expectTrue
+        (match parsePins (replace "failure = \"assertion\"\n" "" testRow)
+          Err _ => True
+          Ok _ => False),
+    ),
+    (
+      "error pins reject the eval engine",
+      expectTrue
+        (match (parsePins
+          (replace "engine = \"native\"" "engine = \"eval\"" errorTestRow))
+          Err _ => True
+          Ok _ => False),
+    ),
+    (
+      "a property row cannot carry unit detail lines",
+      expectTrue (match parsePins (propRow ++ "detail_lines = [\"x\"]\n")
+        Err _ => True
+        Ok _ => False),
+    ),
+  ]
+
+test "paths and positive fields are validated rather than normalized" = expectEach
+  [
+    (
+      "path climbs are rejected",
+      expectTrue (match parsePins (replacePinFile "../outside.mdk" propRow)
+        Err _ => True
+        Ok _ => False),
+    ),
+    (
+      "repeated slashes are rejected",
+      expectTrue (match parsePins (replacePinFile "compiler//x.mdk" propRow)
+        Err _ => True
+        Ok _ => False),
+    ),
+    (
+      "a nonpositive issue is rejected",
+      expectTrue (match parsePins (replace "issue = 42" "issue = 0" propRow)
+        Err _ => True
+        Ok _ => False),
+    ),
+    (
+      "a nonpositive case count is rejected",
+      expectTrue (match parsePins (replace "cases = 30" "cases = 0" propRow)
+        Err _ => True
+        Ok _ => False),
+    ),
+  ]
+
+replacePinFile : String -> String -> String
+replacePinFile file src = replace "compiler/types/example.mdk" file src
+
+test "a pin whose declaration vanished makes the selected file red" = expectEach
+  [
+    (
+      "present declarations validate",
+      expectOk
+        (validatePinNames
+          [onePin propRow]
+          "compiler/types/example.mdk"
+          ["a law"]
+          []),
+    ),
+    (
+      "a missing property declaration is an error",
+      expectTrue
+        (match (validatePinNames
+          [onePin propRow]
+          "compiler/types/example.mdk"
+          []
+          [])
+          Err _ => True
+          Ok _ => False),
+    ),
+    (
+      "duplicate property names are ambiguous",
+      expectTrue
+        (match (validatePinNames
+          [onePin propRow]
+          "compiler/types/example.mdk"
+          ["a law", "a law"]
+          [])
+          Err _ => True
+          Ok _ => False),
+    ),
+    (
+      "duplicate test names are ambiguous",
+      expectTrue
+        (match (validatePinNames
+          [onePin testRow]
+          "compiler/tools/example.mdk"
+          []
+          ["a check", "a check"])
+          Err _ => True
+          Ok _ => False),
+    ),
+    (
+      "a different selected file does not hide or drain another file's pin",
+      expectOk
+        (validatePinNames [onePin propRow] "compiler/tools/other.mdk" [] []),
+    ),
+  ]
+
+test "verdict text names the owning issue" = expectEach [
+  (
+    "held pins are explicitly known red",
+    expectEqual
+      "known-red issue #42 still holds"
+      (pinVerdictDetail (PinHeld 42)),
+  ),
+  (
+    "drained pins direct removal",
+    expectEqual
+      "known-red issue #42 unexpected pass; remove its pin"
+      (pinVerdictDetail (PinDrained 42)),
+  ),
+]

@@ -194,6 +194,13 @@ public export data ResError =
   -- distinct, out-of-scope feature (redundant-clause/exhaustiveness
   -- analysis, not name resolution).
   | DuplicateSignature String (Option Loc) (Option Loc)
+  -- A top-level type signature whose name no declaration in the same module
+  -- binds (`total : List Int -> Int` beside `totl xs = …`).  Fields: the
+  -- signature's name, the span of that name, and the nearest same-module
+  -- binding that has no signature of its own, when one is close enough to be
+  -- the other half of a misspelling.  That binding is the did-you-mean, whose
+  -- fix renames the signature.
+  | OrphanSignature String (Option Loc) (Option String)
   -- a variable bound more than once among binders introduced TOGETHER: a
   -- non-linear pattern (`(x, x)`, `Pair x x`) or a repeated parameter (`f x x`,
   -- `x x => …`).  The binder is non-linear → all but one occurrence is silently
@@ -280,6 +287,7 @@ resErrorDidYouMean (UnboundVariable n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (PrivateNameAccess n _ _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownConstructor n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownType n _ (Some sug)) = Some (n, sug)
+resErrorDidYouMean (OrphanSignature n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean _ = None
 
 -- True for a PrivateNameAccess, the one did-you-mean error whose location can
@@ -318,6 +326,7 @@ resErrorLoc (NonRecursiveValueLet _ l) = l
 resErrorLoc (DuplicateBinding _ l) = l
 resErrorLoc (DuplicateValueBinding _ l) = l
 resErrorLoc (DuplicateSignature _ l _) = l
+resErrorLoc (OrphanSignature _ l _) = l
 resErrorLoc (DuplicateBinder _ _ l) = l
 resErrorLoc (AsPatternMisplaced l) = l
 resErrorLoc (AmbiguousOccurrence _ _ l) = l
@@ -1835,7 +1844,7 @@ checkDecl env (DLetGroup _ binds) =
   -- top-level where-group: all group names are in scope for every clause body
   -- (mutual recursion).
   flatMap (checkLetBind None env (mkScope (map letBindName binds))) binds
-checkDecl env (DTypeSig _ _ t) = checkType None env t
+checkDecl env (DTypeSig _ _ t _) = checkType None env t
 checkDecl env (DExtern _ _ t) = checkType None env t
 checkDecl env (DData { dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs }) =
   checkKindLabels env ks
@@ -2078,7 +2087,7 @@ interfaceList (_ :: rest) = interfaceList rest
 preludeValueNames : List Decl -> List String
 preludeValueNames [] = []
 preludeValueNames ((DFunDef _ n _ _) :: rest) = n :: preludeValueNames rest
-preludeValueNames ((DTypeSig _ n _) :: rest) = n :: preludeValueNames rest
+preludeValueNames ((DTypeSig _ n _ _) :: rest) = n :: preludeValueNames rest
 preludeValueNames ((DImpl { methods, ... }) :: rest) =
   map implMethodNm methods ++ preludeValueNames rest
 preludeValueNames ((DInterface { methods, ... }) :: rest) =
@@ -2090,7 +2099,7 @@ preludeValueNames (_ :: rest) = preludeValueNames rest
 userValueNames : List Decl -> List String
 userValueNames [] = []
 userValueNames ((DFunDef _ n _ _) :: rest) = n :: userValueNames rest
-userValueNames ((DTypeSig _ n _) :: rest) = n :: userValueNames rest
+userValueNames ((DTypeSig _ n _ _) :: rest) = n :: userValueNames rest
 userValueNames ((DExtern _ n _) :: rest) = n :: userValueNames rest
 userValueNames ((DLetGroup _ bs) :: rest) =
   map letBindName bs ++ userValueNames rest
@@ -2287,6 +2296,7 @@ buildErrors preludeDecls prog =
     ++ duplicateErrors preludeDecls prog
     ++ coreUseErrors preludeDecls prog
     ++ sigDups
+    ++ orphanSignatureErrors prog
     ++ contigErrs
     ++ dupValErrs
 
@@ -2371,8 +2381,40 @@ dupSigGo (d :: rest) seen = match dupSigOf d
 -- (name, loc) for a top-level DTypeSig; None for any other decl.
 dupSigOf : Decl -> Option (String, Option Loc)
 dupSigOf (DAttrib _ d) = dupSigOf d
-dupSigOf (DTypeSig _ n ty) = Some (n, firstTyLoc ty)
+dupSigOf (DTypeSig _ n _ site) = Some (n, Some site)
 dupSigOf _ = None
+
+-- A top-level signature must name a value the same module binds: a clause run,
+-- a `let rec` group member, or an extern.  Interface and impl member
+-- signatures live inside their `DInterface`/`DImpl` and are never seen here.
+-- The did-you-mean candidates are the module's bindings that carry no
+-- signature, since a misspelling leaves exactly one such name on each side.
+orphanSignatureErrors : List Decl -> List ResError
+orphanSignatureErrors prog =
+  let sigs = flatMap sigEntryOf prog
+  let bound = omFromNames (flatMap valueBinderNames prog) omEmpty
+  let signed = omFromNames (map fst sigs) omEmpty
+  let unsigned = filter (n => not (omHasKey n signed)) (omKeys bound)
+  flatMap (orphanSigError bound unsigned) sigs
+
+sigEntryOf : Decl -> List (String, Option Loc)
+sigEntryOf d = match dupSigOf d
+  Some entry => [entry]
+  None => []
+
+valueBinderNames : Decl -> List String
+valueBinderNames (DAttrib _ d) = valueBinderNames d
+valueBinderNames (DExtern _ n _) = [n]
+valueBinderNames d = declBindNames d
+
+orphanSigError : OrdMap Unit ->
+  List String ->
+  (String, Option Loc) ->
+  List ResError
+orphanSigError bound unsigned (n, loc)
+  | omHasKey n bound = []
+  | stringLength n < 3 = [OrphanSignature n loc None]
+  | otherwise = [OrphanSignature n loc (bestOfNames (sugQueryOf n) unsigned)]
 
 -- A nullary top-level VALUE binding (`x = e`, zero params) admits EXACTLY ONE
 -- clause: there is no argument to discriminate on, so a second same-named
@@ -2430,7 +2472,7 @@ declBindNames _ = []
 -- a transparent decl (DTypeSig) is skipped entirely by the contiguity walk
 isTransparentDecl : Decl -> Bool
 isTransparentDecl (DAttrib _ d) = isTransparentDecl d
-isTransparentDecl (DTypeSig _ _ _) = True
+isTransparentDecl (DTypeSig _ _ _ _) = True
 isTransparentDecl _ = False
 
 contiguityErrors : List Decl -> List ResError
@@ -2791,6 +2833,7 @@ resErrorSexp (DuplicateValueBinding n _) =
   "(DuplicateValueBinding " ++ escStr n ++ ")"
 resErrorSexp (DuplicateSignature n _ _) =
   "(DuplicateSignature " ++ escStr n ++ ")"
+resErrorSexp (OrphanSignature n _ _) = "(OrphanSignature " ++ escStr n ++ ")"
 resErrorSexp (DuplicateBinder k n _) =
   "(DuplicateBinder \{escStr k} \{escStr n})"
 resErrorSexp (AsPatternMisplaced _) = "AsPatternMisplaced"
@@ -2953,6 +2996,10 @@ ppResError (DuplicateSignature n _ (Some (Loc _ l _ _ _))) =
   "duplicate definition of `\{n}`, first defined at line \{intToString l}; rename or remove this one"
 ppResError (DuplicateSignature n _ None) =
   "duplicate definition of `\{n}`, first defined earlier in this file; rename or remove this one"
+ppResError (OrphanSignature n _ (Some sug)) =
+  "type signature for `\{n}` has no binding in this module; did you mean `\{sug}`?"
+ppResError (OrphanSignature n _ None) =
+  "type signature for `\{n}` has no binding in this module; define `\{n}` or remove the signature"
 ppResError (DuplicateBinder k n _) =
   "`\{n}` is bound more than once in this \{k}; rename one occurrence"
 -- `mods` holds one importing module per distinct declaration, so a module
@@ -3044,6 +3091,7 @@ resErrorCode (NonRecursiveValueLet _ _) = "R-NONREC-VALUE-LET"
 resErrorCode (DuplicateBinding _ _) = "R-DUPLICATE-BINDING"
 resErrorCode (DuplicateValueBinding _ _) = "R-DUP-BINDING"
 resErrorCode (DuplicateSignature _ _ _) = "R-DUPLICATE-SIGNATURE"
+resErrorCode (OrphanSignature _ _ _) = "R-ORPHAN-SIGNATURE"
 resErrorCode (DuplicateBinder _ _ _) = "R-DUP-BINDER"
 resErrorCode (AsPatternMisplaced _) = "R-AS-PATTERN-MISPLACED"
 resErrorCode (AmbiguousOccurrence _ _ _) = "R-AMBIGUOUS-OCCURRENCE"
@@ -4479,7 +4527,7 @@ nsValues = ExpNs {
   nsGet = exp => exp.expValues,
   nsDirectOf =
     d => match d
-      DTypeSig True n _ => [n]
+      DTypeSig True n _ _ => [n]
       DExtern True n _ => [n]
       DFunDef True n _ _ => [n]
       _ => [],

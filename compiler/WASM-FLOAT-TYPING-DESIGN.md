@@ -26,7 +26,7 @@ uses). wasm = `medaka build --target wasm <f>` â†’ `wasm-tools parse/validate` â
 
 | # | case | probe body | native cbin | wasm | verdict |
 |---|------|-----------|-------------|------|---------|
-| a | Float **fn param** arith, no co-located literal | `f x = x + x` (`f : Float -> Float`); `main = f 2.5` | `5.0` | **TRAP** `instantiate failed: illegal cast` | wasm-only BUG |
+| a | Float **fn param** arith, no co-located literal | `f x = x + x` (`f : Float -> Float`); `main = f 2.5` | `5.0` | **TRAP** `runtime error: illegal cast` | wasm-only BUG |
 | b | Float-returning fn **with a literal in every binop** | `g x = x * 2.0`; `main = (g 3.0) + 1.0` | `7.0` | `7.0` | WORKS (literal anchors detection) |
 | c | **tuple-destructured** Floats | `addPair p = match p ((a,b) => a + b)` (`(Float,Float)->Float`); `main = addPair (1.5,2.5)` | `4.0` | **TRAP** illegal cast | wasm-only BUG |
 | d | **record-field** Floats | `data R = R {u:Float,v:Float}`; `sumR r = r.u + r.v`; `main = sumR (R{u=1.5,v=2.5})` | `4.0` | **TRAP** illegal cast | wasm-only BUG |

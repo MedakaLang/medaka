@@ -102,7 +102,7 @@ shouldAutoPrintMain coreDecls modules =
 -- non-Unit-ness that fires the wrap in the first place).
 isMainTypeSig : Decl -> Bool
 isMainTypeSig (DAttrib _ d) = isMainTypeSig d
-isMainTypeSig (DTypeSig _ "main" _) = True
+isMainTypeSig (DTypeSig _ "main" _ _) = True
 isMainTypeSig _ = False
 
 -- Rewrite the entry module's `main = <e>` decl to `main = 0autoprintln <e>`, and
@@ -188,9 +188,9 @@ pinnedCopies : String -> String -> List Decl -> List Decl
 pinnedCopies _ _ [] = []
 pinnedCopies origin pin ((DAttrib _ d) :: rest) =
   pinnedCopies origin pin (d :: rest)
-pinnedCopies origin pin ((DTypeSig _ n ty) :: rest) =
+pinnedCopies origin pin ((DTypeSig _ n ty site) :: rest) =
   if n == origin then
-    DTypeSig True pin ty :: pinnedCopies origin pin rest
+    DTypeSig True pin ty site :: pinnedCopies origin pin rest
   else
     pinnedCopies origin pin rest
 pinnedCopies origin pin ((DFunDef _ n ps body) :: rest) =

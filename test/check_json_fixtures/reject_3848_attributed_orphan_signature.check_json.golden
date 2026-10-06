@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"R-ORPHAN-SIGNATURE","kind":"resolve","message":"type signature for `orph` has no binding in this module; define `orph` or remove the signature","range":{"end":{"character":4,"line":3},"start":{"character":0,"line":3}},"severity":1,"source":"medaka"}]}]}

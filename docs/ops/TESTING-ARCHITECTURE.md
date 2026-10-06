@@ -8,6 +8,12 @@ after an independent review (§12). Tracked by the testing-architecture epic #26
 (2026-07-13) keeps its §0–§3 as the diagnosis history and its §4–§7 are superseded here.
 The per-gate survey table lives in `docs/ops/TESTING-INVENTORY.md`.
 
+The runner has since gained native `test` and property execution. Both default
+to native and support `--engines eval,native`; native tests can use file IO and
+subprocesses. Shared property plans and the project-local known-red ledger are
+described in [Compiler property testing](COMPILER-PROPERTY-TESTING.md). The
+diagnosis and migration costs below remain the dated survey.
+
 The numbers in §1 are dated. Re-derive before quoting them as current; the epic's
 registry slice (§5, wave 0) turns the classification into data `medaka gate verify`
 checks, after which the inventory file is history.
@@ -100,7 +106,7 @@ Every check has exactly one home. The rungs, top to bottom:
 | Rung | Construct | Engine | Subject | Verdict rendered by | Lives |
 |---|---|---|---|---|---|
 | **Doctest** | `-- > expr` | eval + native (`--engines`) | an exported function's value, for a reader | driver compares rendered value | in the doc comment |
-| **Property** | `prop "…" (x : T) = Bool` | eval (native later) | a law over generated inputs | driver | in-file |
+| **Property** | `prop "…" (x : T) = Bool` | native by default; eval/native via `--engines` | a law over generated inputs | driver | in-file |
 | **Unit** | `test "…" = Expectation` | eval, and native via `--engines` | pure library/compiler-internal computation | driver | `<module>_test.mdk` sibling |
 | **Gate-test** (new rung) | `test "…" = Expectation` with IO | **native** (`medaka test --native`) | the compiler binary: a verb over fixtures, a golden, a CLI contract, a cross-engine diff | driver compares the operands the probe prints | `test/<area>/<name>_test.mdk`, registered `kind = "native"` |
 | **Trust anchor** | shell | — | the machinery the rungs above run inside | external `diff`/`cmp` | `test/*.sh` with a `shell-because:` header line |
