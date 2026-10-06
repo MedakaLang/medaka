@@ -8,6 +8,23 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
+
+# Every `--keep-ir` build goes through here: the kept module is rewritten by
+# pds/tools/ct_ir_canonical.awk, so a located array read audits as the plain
+# Index impl call (its site literal stripped), and a site that is anything
+# but a literal on the trap path fails the build.
+ct_build_ir() {
+  "$MEDAKA" "$@" || return
+  ct_out=
+  ct_prev=
+  for ct_arg in "$@"; do
+    [ "$ct_prev" = -o ] && ct_out=$ct_arg
+    ct_prev=$ct_arg
+  done
+  [ -n "$ct_out" ] && [ -s "$ct_out.ll" ] || { echo "ct_build_ir: no kept IR for -o '$ct_out'" >&2; return 1; }
+  awk -f "$ROOT/pds/tools/ct_ir_canonical.awk" "$ct_out.ll" > "$ct_out.ll.canon" || return 1
+  mv "$ct_out.ll.canon" "$ct_out.ll"
+}
 FIELD="$ROOT/pds/lib/field.mdk"
 SCALAR="$ROOT/pds/lib/scalar.mdk"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/medaka-ct-reductions.XXXXXX")
@@ -1574,7 +1591,7 @@ run_probe_red "$WORK/scalar_no_subtract.mdk" 'scalar dropped-subtraction mutatio
 # moduli must add control and red independently of the source checker.
 cp "$FIELD" "$WORK/field_emit.mdk"
 append_field_probe "$WORK/field_emit.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_emit.mdk" -o "$WORK/field_emit" --keep-ir > "$WORK/build.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/field_emit.mdk" -o "$WORK/field_emit" --keep-ir > "$WORK/build.log" 2>&1
 # Spec: name:branches:comparisons:indices:writes:makes:copies:calls:allocs:
 # public-counter-args. Re-derived for the field's 5x52 layout (N5): every field
 # helper is straight-line, so every field row has no branch, no comparison, no
@@ -1611,7 +1628,7 @@ pass 'complete field reducer IR matches the approved helper control shape'
 
 cp "$WORK/field_zero_sentinel_mutant.mdk" "$WORK/field_zero_sentinel_emit.mdk"
 append_field_probe "$WORK/field_zero_sentinel_emit.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_zero_sentinel_emit.mdk" -o "$WORK/field_zero_sentinel_emit" --keep-ir > "$WORK/build-field-zero-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/field_zero_sentinel_emit.mdk" -o "$WORK/field_zero_sentinel_emit" --keep-ir > "$WORK/build-field-zero-mutant.log" 2>&1
 extract_function feZeroBit "$WORK/field_zero_sentinel_emit.ll" "$WORK/field-zero-mutant.ll"
 grep -F -q 'mdk_hash_bool' "$WORK/field-zero-mutant.ll" || fail 'field sentinel/Bool zero mutation reaches native IR'
 grep -F -q '__feEqual' "$WORK/field-zero-mutant.ll" || fail 'field sentinel zero mutation calls branch-bearing equality'
@@ -1619,7 +1636,7 @@ pass 'field sentinel/Bool zero mutation is rejected by native IR closure'
 
 cp "$WORK/field_helper_select_mutant.mdk" "$WORK/field_helper_select_emit.mdk"
 append_field_probe "$WORK/field_helper_select_emit.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_helper_select_emit.mdk" -o "$WORK/field_helper_select_emit" --keep-ir > "$WORK/build-field-helper-select-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/field_helper_select_emit.mdk" -o "$WORK/field_helper_select_emit" --keep-ir > "$WORK/build-field-helper-select-mutant.log" 2>&1
 extract_function feSelect "$WORK/field_helper_select_emit.ll" "$WORK/field-helper-select-mutant.ll"
 emitted_comparison_present "$WORK/field-helper-select-mutant.ll" || fail 'field helper conditional-select mutation reaches native IR'
 [ "$(grep -c 'br i1' "$WORK/field-helper-select-mutant.ll" || true)" -gt 0 ] || fail 'field helper conditional-select mutation adds secret IR control'
@@ -1627,7 +1644,7 @@ pass 'field helper conditional-select mutation is rejected by native IR control'
 
 cp "$WORK/field_borrow_source_mutant.mdk" "$WORK/field_borrow_branch_mutant.mdk"
 append_field_probe "$WORK/field_borrow_branch_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_borrow_branch_mutant.mdk" -o "$WORK/field_borrow_branch_mutant" --keep-ir > "$WORK/build-borrow-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/field_borrow_branch_mutant.mdk" -o "$WORK/field_borrow_branch_mutant" --keep-ir > "$WORK/build-borrow-mutant.log" 2>&1
 extract_function subPSelect__rw "$WORK/field_borrow_branch_mutant.ll" "$WORK/borrow-mutant.ll"
 borrow_mutant_ir_branches=$(grep -c 'br i1' "$WORK/borrow-mutant.ll" || true)
 [ "$borrow_mutant_ir_branches" -gt "$field_borrow_ir_branches" ] || fail 'field borrow mutation is rejected by native IR control'
@@ -1642,7 +1659,7 @@ mutate_line "$FIELD" subPSelect \
   '  let o0 = U64.toIntTruncating n0 + U64.toIntTruncating (keep * (d0 - n0))' \
   "$WORK/field_int_arith_mutant.mdk" || fail 'field secret Int-arithmetic mutation was constructed'
 append_field_probe "$WORK/field_int_arith_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_int_arith_mutant.mdk" -o "$WORK/field_int_arith_mutant" --keep-ir > "$WORK/build-field-int-arith-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/field_int_arith_mutant.mdk" -o "$WORK/field_int_arith_mutant" --keep-ir > "$WORK/build-field-int-arith-mutant.log" 2>&1
 extract_function subPSelect__rw "$WORK/field_int_arith_mutant.ll" "$WORK/field-int-arith-mutant.ll"
 if ovf_operands_public "$WORK/field-int-arith-mutant.ll" -; then
   fail 'field secret Int-arithmetic mutation is rejected by the overflow-operand audit'
@@ -1654,7 +1671,7 @@ mutate_line "$FIELD" subPSelect \
   '  let o0 = if keep == 1 then U64.toIntTruncating d0 else U64.toIntTruncating n0' \
   "$WORK/field_branch_mutant.mdk" || fail 'field conditional-select mutation was constructed'
 append_field_probe "$WORK/field_branch_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_branch_mutant.mdk" -o "$WORK/field_branch_mutant" --keep-ir > "$WORK/build-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/field_branch_mutant.mdk" -o "$WORK/field_branch_mutant" --keep-ir > "$WORK/build-mutant.log" 2>&1
 extract_function subPSelect__rw "$WORK/field_branch_mutant.ll" "$WORK/select-mutant.ll"
 mutant_ir_branches=$(grep -c 'br i1' "$WORK/select-mutant.ll" || true)
 [ "$mutant_ir_branches" -gt "$current_ir_branches" ] || fail 'conditional-select mutation is rejected by native IR control'
@@ -1662,7 +1679,7 @@ pass 'conditional-select mutation is rejected by native IR control'
 
 cp "$SCALAR" "$WORK/scalar_emit.mdk"
 append_scalar_probe "$WORK/scalar_emit.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" --keep-ir > "$WORK/build-scalar.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" --keep-ir > "$WORK/build-scalar.log" 2>&1
 # Re-derived for the 8 x 32 straight-line scalar (N5). Every audited scalar
 # helper has no branch, no comparison, no write, no array_make or copy, and no
 # cell allocation: its only calls are literal-index reads, the rawSc accessor
@@ -1704,7 +1721,7 @@ pass 'complete scalar reducer IR matches the approved helper control shape'
 
 cp "$WORK/scalar_high_bool_mutant.mdk" "$WORK/scalar_high_bool_emit.mdk"
 append_scalar_probe "$WORK/scalar_high_bool_emit.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_high_bool_emit.mdk" -o "$WORK/scalar_high_bool_emit" --keep-ir > "$WORK/build-scalar-high-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_high_bool_emit.mdk" -o "$WORK/scalar_high_bool_emit" --keep-ir > "$WORK/build-scalar-high-mutant.log" 2>&1
 extract_function scHighBit "$WORK/scalar_high_bool_emit.ll" "$WORK/scalar-high-mutant.ll"
 grep -F -q 'mdk_hash_bool' "$WORK/scalar-high-mutant.ll" || fail 'scalar Bool high mutation reaches native IR'
 grep -F -q '__scIsHigh' "$WORK/scalar-high-mutant.ll" || fail 'scalar high mutation calls branch-bearing predicate'
@@ -1712,7 +1729,7 @@ pass 'scalar Bool high mutation is rejected by native IR closure'
 
 cp "$WORK/scalar_high_branch_mutant.mdk" "$WORK/scalar_high_branch_emit.mdk"
 append_scalar_probe "$WORK/scalar_high_branch_emit.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_high_branch_emit.mdk" -o "$WORK/scalar_high_branch_emit" --keep-ir > "$WORK/build-scalar-high-branch-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_high_branch_emit.mdk" -o "$WORK/scalar_high_branch_emit" --keep-ir > "$WORK/build-scalar-high-branch-mutant.log" 2>&1
 extract_function scHighBit "$WORK/scalar_high_branch_emit.ll" "$WORK/scalar-high-branch-mutant.ll"
 emitted_comparison_present "$WORK/scalar-high-branch-mutant.ll" || fail 'scalar high-bit secret-branch mutation reaches native IR'
 [ "$(grep -c 'br i1' "$WORK/scalar-high-branch-mutant.ll" || true)" -gt 0 ] || fail 'scalar high-bit mutation adds secret IR control'
@@ -1720,7 +1737,7 @@ pass 'scalar high-bit secret-branch mutation is rejected by native IR control'
 
 cp "$WORK/scalar_select_source_mutant.mdk" "$WORK/scalar_branch_mutant.mdk"
 append_scalar_probe "$WORK/scalar_branch_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_branch_mutant.mdk" -o "$WORK/scalar_branch_mutant" --keep-ir > "$WORK/build-scalar-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_branch_mutant.mdk" -o "$WORK/scalar_branch_mutant" --keep-ir > "$WORK/build-scalar-mutant.log" 2>&1
 extract_function subNSelect__rw "$WORK/scalar_branch_mutant.ll" "$WORK/scalar-select-mutant.ll"
 [ "$(grep -c 'br i1' "$WORK/scalar-select-mutant.ll" || true)" -gt 0 ] || fail 'scalar conditional-select mutation is rejected by native IR control'
 emitted_comparison_present "$WORK/scalar-select-mutant.ll" || fail 'scalar conditional-select mutation exposes equality in native IR'
@@ -1728,7 +1745,7 @@ pass 'scalar conditional-select mutation is rejected by native IR control'
 
 cp "$WORK/scalar_hash_source_mutant.mdk" "$WORK/scalar_hash_mutant.mdk"
 append_scalar_probe "$WORK/scalar_hash_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_hash_mutant.mdk" -o "$WORK/scalar_hash_mutant" --keep-ir > "$WORK/build-scalar-hash-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_hash_mutant.mdk" -o "$WORK/scalar_hash_mutant" --keep-ir > "$WORK/build-scalar-hash-mutant.log" 2>&1
 extract_function subNSelect__rw "$WORK/scalar_hash_mutant.ll" "$WORK/scalar-hash-mutant.ll"
 if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 0 0 0 0 0 0 0 0; then
   fail 'scalar comparison/hashBool mutation is rejected by native IR operation allowlist'
@@ -1738,7 +1755,7 @@ pass 'scalar comparison/hashBool mutation is rejected by native IR operation all
 
 cp "$WORK/scalar_index_source_mutant.mdk" "$WORK/scalar_index_mutant.mdk"
 append_scalar_probe "$WORK/scalar_index_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_index_mutant.mdk" -o "$WORK/scalar_index_mutant" --keep-ir > "$WORK/build-scalar-index-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_index_mutant.mdk" -o "$WORK/scalar_index_mutant" --keep-ir > "$WORK/build-scalar-index-mutant.log" 2>&1
 extract_function scSelect "$WORK/scalar_index_mutant.ll" "$WORK/scalar-index-mutant.ll"
 if scalar_indices_literal "$WORK/scalar-index-mutant.ll"; then
   fail 'scalar secret-index mutation is rejected by the literal-index check'
@@ -1747,7 +1764,7 @@ pass 'scalar secret-index mutation is rejected by the literal-index check'
 
 cp "$WORK/scalar_write_source_mutant.mdk" "$WORK/scalar_write_mutant.mdk"
 append_scalar_probe "$WORK/scalar_write_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_write_mutant.mdk" -o "$WORK/scalar_write_mutant" --keep-ir > "$WORK/build-scalar-write-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_write_mutant.mdk" -o "$WORK/scalar_write_mutant" --keep-ir > "$WORK/build-scalar-write-mutant.log" 2>&1
 extract_function scSelect "$WORK/scalar_write_mutant.ll" "$WORK/scalar-write-mutant.ll"
 if helper_ir_ok "$WORK/scalar-write-mutant.ll" 0 0 16 0 0 0 18 0; then
   fail 'scalar secret-write mutation is rejected by native IR call multiset'
@@ -1759,7 +1776,7 @@ pass 'scalar secret-write mutation is rejected by native IR call multiset'
 
 cp "$WORK/scalar_rebound_index_source_mutant.mdk" "$WORK/scalar_rebound_index_mutant.mdk"
 append_scalar_probe "$WORK/scalar_rebound_index_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_rebound_index_mutant.mdk" -o "$WORK/scalar_rebound_index_mutant" --keep-ir > "$WORK/build-scalar-rebound-index-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_rebound_index_mutant.mdk" -o "$WORK/scalar_rebound_index_mutant" --keep-ir > "$WORK/build-scalar-rebound-index-mutant.log" 2>&1
 extract_function scSelect "$WORK/scalar_rebound_index_mutant.ll" "$WORK/scalar-rebound-index-mutant.ll"
 if scalar_indices_literal "$WORK/scalar-rebound-index-mutant.ll"; then
   fail 'scalar rebound secret-index mutation is rejected by the literal-index check'
@@ -1768,7 +1785,7 @@ pass 'scalar rebound secret-index mutation is rejected by the literal-index chec
 
 cp "$WORK/scalar_wrapper_source_mutant.mdk" "$WORK/scalar_wrapper_mutant.mdk"
 append_scalar_probe "$WORK/scalar_wrapper_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_wrapper_mutant.mdk" -o "$WORK/scalar_wrapper_mutant" --keep-ir > "$WORK/build-scalar-wrapper-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_wrapper_mutant.mdk" -o "$WORK/scalar_wrapper_mutant" --keep-ir > "$WORK/build-scalar-wrapper-mutant.log" 2>&1
 extract_function subNSelect__rw "$WORK/scalar_wrapper_mutant.ll" "$WORK/scalar-wrapper-subn.ll"
 if ir_call_shape_ok subNSelect__rw "$WORK/scalar-wrapper-subn.ll"; then
   fail 'scalar leaky-wrapper mutation is rejected by native IR callee graph'
@@ -1778,7 +1795,7 @@ pass 'scalar leaky-wrapper mutation is rejected by native IR callee graph'
 
 cp "$WORK/scalar_copy_source_mutant.mdk" "$WORK/scalar_copy_mutant.mdk"
 append_scalar_probe "$WORK/scalar_copy_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_copy_mutant.mdk" -o "$WORK/scalar_copy_mutant" --keep-ir > "$WORK/build-scalar-copy-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_copy_mutant.mdk" -o "$WORK/scalar_copy_mutant" --keep-ir > "$WORK/build-scalar-copy-mutant.log" 2>&1
 extract_function reduce256 "$WORK/scalar_copy_mutant.ll" "$WORK/scalar-copy-mutant.ll"
 if helper_ir_ok "$WORK/scalar-copy-mutant.ll" 0 0 8 0 0 0 9 0 && ir_call_shape_ok reduce256 "$WORK/scalar-copy-mutant.ll"; then
   fail 'scalar transitive reducer mutation is rejected by emitted helper shape'
@@ -1798,7 +1815,7 @@ if source_helpers_ok "$FIELD" "$WORK/scalar_shift_amount_mutant.mdk" "$WORK/sour
   fail 'scalar secret shift-amount mutation is rejected by source structure'
 fi
 append_scalar_probe "$WORK/scalar_shift_amount_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_shift_amount_mutant.mdk" -o "$WORK/scalar_shift_amount_mutant" --keep-ir > "$WORK/build-scalar-shift-amount-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_shift_amount_mutant.mdk" -o "$WORK/scalar_shift_amount_mutant" --keep-ir > "$WORK/build-scalar-shift-amount-mutant.log" 2>&1
 mkdir -p "$WORK/scalar-shift-amount-ir"
 extract_function subNSelect__rw "$WORK/scalar_shift_amount_mutant.ll" "$WORK/scalar-shift-amount-ir/subNSelect__rw.ll"
 if u64_callees_ok "$WORK/scalar_shift_amount_mutant.ll" "$WORK/scalar-shift-amount-ir"; then
@@ -1813,7 +1830,7 @@ mutate_line "$SCALAR" subNSelect \
   '  let o0 = U64.toIntTruncating r0 + U64.toIntTruncating (keep * (d0 - r0))' \
   "$WORK/scalar_int_arith_mutant.mdk" || fail 'scalar secret Int-arithmetic mutation was constructed'
 append_scalar_probe "$WORK/scalar_int_arith_mutant.mdk"
-MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_int_arith_mutant.mdk" -o "$WORK/scalar_int_arith_mutant" --keep-ir > "$WORK/build-scalar-int-arith-mutant.log" 2>&1
+MEDAKA_STRICT=1 ct_build_ir build "$WORK/scalar_int_arith_mutant.mdk" -o "$WORK/scalar_int_arith_mutant" --keep-ir > "$WORK/build-scalar-int-arith-mutant.log" 2>&1
 extract_function subNSelect__rw "$WORK/scalar_int_arith_mutant.ll" "$WORK/scalar-int-arith-mutant.ll"
 if ovf_operands_public "$WORK/scalar-int-arith-mutant.ll" -; then
   fail 'scalar secret Int-arithmetic mutation is rejected by the overflow-operand audit'
@@ -1918,7 +1935,7 @@ check_bit_witness() {
     'applyWitness (f :: rest) acc b = applyWitness rest (f acc b) b' \
     '' \
     'main = println (applyWitness [ctBitWitness] 12345 678)' > "$src"
-  MEDAKA_STRICT=1 "$MEDAKA" build "$src" -o "$bin" --keep-ir > "$WORK/bit-witness-build.log" 2>&1 || {
+  MEDAKA_STRICT=1 ct_build_ir build "$src" -o "$bin" --keep-ir > "$WORK/bit-witness-build.log" 2>&1 || {
     cat "$WORK/bit-witness-build.log" >&2
     fail 'bit-helper witness builds'
   }

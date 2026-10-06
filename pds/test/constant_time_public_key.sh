@@ -5,6 +5,23 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
+
+# Every `--keep-ir` build goes through here: the kept module is rewritten by
+# pds/tools/ct_ir_canonical.awk, so a located array read audits as the plain
+# Index impl call (its site literal stripped), and a site that is anything
+# but a literal on the trap path fails the build.
+ct_build_ir() {
+  "$MEDAKA" "$@" || return
+  ct_out=
+  ct_prev=
+  for ct_arg in "$@"; do
+    [ "$ct_prev" = -o ] && ct_out=$ct_arg
+    ct_prev=$ct_arg
+  done
+  [ -n "$ct_out" ] && [ -s "$ct_out.ll" ] || { echo "ct_build_ir: no kept IR for -o '$ct_out'" >&2; return 1; }
+  awk -f "$ROOT/pds/tools/ct_ir_canonical.awk" "$ct_out.ll" > "$ct_out.ll.canon" || return 1
+  mv "$ct_out.ll.canon" "$ct_out.ll"
+}
 SOURCE="$ROOT/pds/test/constant_time_public_key_main.mdk"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/medaka-ct-public-key.XXXXXX")
 cleanup() {
@@ -228,7 +245,7 @@ cmp "$ROOT/pds/lib/scalar.mdk" "$WORK/pds/lib/scalar.mdk"
 cmp "$ROOT/pds/lib/field.mdk" "$WORK/pds/lib/field.mdk"
 pass 'all mutations restored exact baseline bytes and task-owned crypto source is clean'
 
-MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SOURCE" -o "$WORK/public-key" --keep-ir > "$WORK/build.log" 2>&1 || { cat "$WORK/build.log" >&2; fail 'native public-key closure probe builds'; }
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 ct_build_ir build "$SOURCE" -o "$WORK/public-key" --keep-ir > "$WORK/build.log" 2>&1 || { cat "$WORK/build.log" >&2; fail 'native public-key closure probe builds'; }
 BIN="$WORK/public-key"
 IR="$WORK/public-key.ll"
 "$BIN" > "$WORK/run.out" 2>&1 || { cat "$WORK/run.out" >&2; fail 'native composed public-key probe runs'; }
@@ -453,7 +470,7 @@ check_bit_witness() {
     'applyWitness (f :: rest) acc b = applyWitness rest (f acc b) b' \
     '' \
     'main = println (applyWitness [ctBitWitness] 12345 678)' > "$src"
-  MEDAKA_STRICT=1 "$MEDAKA" build "$src" -o "$bin" --keep-ir > "$WORK/bit-witness-build.log" 2>&1 || {
+  MEDAKA_STRICT=1 ct_build_ir build "$src" -o "$bin" --keep-ir > "$WORK/bit-witness-build.log" 2>&1 || {
     cat "$WORK/bit-witness-build.log" >&2
     fail 'bit-helper witness builds'
   }

@@ -96,8 +96,17 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    location writer (`$mdk_write_err_loc`, one function) plus, once it has a
 #    located match, the shared non-exhaustive-match trap: about +0.5 KB and
 #    +1 function per program, +0.8% bytes over the modules corpus.
-MODULES_BYTES_CEIL=3525633
-MODULES_FUNCS_CEIL=5562
+#    Re-baselined to the measured 3612764 B / 5716 funcs (F1-floor ratio 3765),
+#    with no headroom.  The Mappable/Foldable/Semigroup/Monoid impls for Array
+#    live in core.mdk, so every modules program carries them: with the emitter
+#    held fixed, that core.mdk measures about +71 KB and +130 funcs over the
+#    previous one.  The other ~16 KB / 24 funcs were not attributed separately.
+#    The bytes include each program's trap-site file table, which spells the
+#    fixture and core.mdk paths as given, i.e. absolute: they were measured
+#    from a 55-character checkout root, and a shorter root measures less (CI's
+#    /home/runner/work/medaka/medaka: 3606836 B).
+MODULES_BYTES_CEIL=3612764
+MODULES_FUNCS_CEIL=5716
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
@@ -126,7 +135,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=3664   # emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
+MODULES_F1_RATIO_CEIL_X1000=3765  # emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node

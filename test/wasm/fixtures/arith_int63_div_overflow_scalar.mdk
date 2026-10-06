@@ -3,5 +3,5 @@
 -- so `i64.div_s` itself never engine-traps here; the coded trap is the check on its
 -- quotient.  (Prelude-free corpus, and the literal 2^62 lexes as intMinBound, so
 -- intMinBound is built by subtraction.)
--- expect-stderr: runtime error [E-INT-OVERFLOW]: (-4611686018427387904) / (-1) overflows Int
+-- expect-stderr: <fixture>:7:7: runtime error [E-INT-OVERFLOW]: (-4611686018427387904) / (-1) overflows Int
 main = (0 - 4611686018427387903 - 1) / (0 - 1)

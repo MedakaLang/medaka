@@ -6556,10 +6556,10 @@ instRefSeq (InstRef _ _ s) = s
 -- identity and the scope its visibility is filtered on.
 --
 -- ⚠️ NO `ieLoc` FIELD, and that is a DEPARTURE from the §9.4 data shape with a
--- derived reason rather than an omission: `Decl` carries no source location at all
--- (`compiler/frontend/ast.mdk` has no `declLoc`/`dLoc`; `DImpl`'s six labels are
--- `pub`/`iface`/`tys`/`reqs`/`methods`/`implOrigin`), so an `ieLoc : Option Loc`
--- here could only ever be `None`.  A field that is structurally always-`None` is
+-- derived reason rather than an omission: `DImpl` carries no source location
+-- (`compiler/frontend/ast.mdk` has no `declLoc`/`dLoc`; only `DFunDef`, `DTypeSig`
+-- and `DUse` carry a `Loc`, and `DImpl`'s labels are `pub`/`iface`/`tys`/`reqs`/
+-- `methods`/`implOrigin`), so an `ieLoc : Option Loc` here could only be `None`.  A field that is structurally always-`None` is
 -- worse than an absent one — it reads as available to A-3.7 and is not.  Whoever
 -- needs it must first give `DImpl` a location (or derive one from a method body's
 -- `Expr`), which is its own unit.
@@ -6600,10 +6600,10 @@ instRefSeq (InstRef _ _ s) = s
 -- after exact row selection it also supplies the method route-word collision set.
 --
 -- ⚠️ NO `Loc`, and that is a second DEPARTURE from the §9.4 data shape with a
--- derived reason rather than an omission: `Decl` carries no source location at all
--- (`compiler/frontend/ast.mdk` has no `declLoc`/`dLoc`; `DImpl`'s six labels are
--- `pub`/`iface`/`tys`/`reqs`/`methods`/`implOrigin`), so an `Option Loc` here could
--- only ever be `None`.  A field that is structurally always-`None` is worse than an
+-- derived reason rather than an omission: `DImpl` carries no source location
+-- (`compiler/frontend/ast.mdk` has no `declLoc`/`dLoc`; only `DFunDef`, `DTypeSig`
+-- and `DUse` carry a `Loc`, and `DImpl`'s labels are `pub`/`iface`/`tys`/`reqs`/
+-- `methods`/`implOrigin`), so an `Option Loc` here could only ever be `None`.  A field that is structurally always-`None` is worse than an
 -- absent one — it reads as available to A-3.7 and is not.  Whoever needs it must
 -- first give `DImpl` a location (or derive one from a method body's `Expr`), which
 -- is its own unit.

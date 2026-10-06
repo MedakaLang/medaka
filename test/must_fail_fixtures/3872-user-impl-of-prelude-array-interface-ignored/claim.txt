@@ -1,0 +1,14 @@
+issue: 3872
+what: a program's own `impl Foldable Array` (`length _ = 99`), with no `import array`,
+what: passes `check` at exit 0, then `run` prints the prelude's answer `1` for
+what: `length [|1|]`. The program's impl is silently not the code that runs.
+cmd: run main.mdk
+exit: 0
+stdout: 1
+control: run control.mdk
+why-verb: `run`, because the defect is a silent wrong answer at exit 0. Either resolution
+why-verb: drains this row: rejecting the impl as overlapping the prelude's makes `run` exit 1,
+why-verb: and letting it win prints `99`.
+why-control: control.mdk gives a program-local type the same Foldable impl and asks its
+why-control: length; it must print `99` at exit 0. A red control means user Foldable
+why-control: dispatch broke, never that #3872 drained.
