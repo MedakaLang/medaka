@@ -23,7 +23,8 @@ import frontend.ast.{
 }
 import u32 as U32
 import eval.eval.{
-  Value(..), EvalEnv(..), apply, eval, extendEnv, force, lookupEnv, ppValue
+  Value(..), EvalEnv(..), apply, eval, extendEnv, force, lookupEnv,
+  lookupRuntimeBinding, ppValue
 }
 import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
@@ -486,17 +487,19 @@ ensureCustomRandomState env =
     customRngReadyRef := True
 
 readRandomState : EvalEnv (Value e) -> <e> Value e
-readRandomState env = force (apply (force (lookupEnv env "randomState")) VUnit)
+readRandomState env =
+  force (apply (force (lookupRuntimeBinding env "randomState")) VUnit)
 
 restoreRandomStateValue : EvalEnv (Value e) -> Value e -> <e> Unit
 restoreRandomStateValue env state =
-  match force (apply (force (lookupEnv env "restoreRandomState")) state)
+  match (force
+    (apply (force (lookupRuntimeBinding env "restoreRandomState")) state))
     VUnit => ()
     _ => panic "property runner: restoreRandomState returned a non-Unit value"
 
 callRandomSetSeed : EvalEnv (Value e) -> Int -> <e> Unit
 callRandomSetSeed env seed =
-  match force (apply (force (lookupEnv env "setSeed")) (VInt seed))
+  match force (apply (force (lookupRuntimeBinding env "setSeed")) (VInt seed))
     VUnit => ()
     _ => panic "property runner: setSeed returned a non-Unit value"
 
@@ -1481,6 +1484,8 @@ renderCounterexample env [] ((name, _) :: rest) =
 
 renderPlanValue : PlanEnv -> GenPlan -> Value e -> String
 renderPlanValue _ GInt value = ppValue value
+renderPlanValue _ GBool (VBool True) = "True"
+renderPlanValue _ GBool (VBool False) = "False"
 renderPlanValue _ GBool value = ppValue value
 renderPlanValue _ GFloat value = ppValue value
 renderPlanValue _ GChar value = ppValue value

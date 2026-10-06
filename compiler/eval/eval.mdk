@@ -701,6 +701,28 @@ export
 lookupEnv : EvalEnv (Value e) -> String -> <e> Value e
 lookupEnv (EvalEnv frames) name = lookupFrames frames name
 
+-- Runtime externs live in the shared global frame. A module environment also
+-- carries nearer local/import frames (and a trailing file-tag frame), so a
+-- normal lexical lookup may resolve a user declaration with the same spelling.
+-- Walk all frames and retain the final cell, which is the global extern cell
+-- for the runtime names installed by `externBindings`.
+export
+lookupRuntimeBinding : EvalEnv (Value e) -> String -> <e> Value e
+lookupRuntimeBinding (EvalEnv frames) name =
+  lookupRuntimeBindingFrames frames name None
+
+lookupRuntimeBindingFrames : List (List (String, Ref (Value e))) ->
+  String ->
+  Option (Ref (Value e)) ->
+  <e> Value e
+lookupRuntimeBindingFrames [] name None =
+  panic ("property runner: missing canonical runtime binding '" ++ name ++ "'")
+lookupRuntimeBindingFrames [] name (Some cell) = forceCell cell name
+lookupRuntimeBindingFrames (frame :: rest) name found =
+  match lookupFrameCell frame name
+    Some cell => lookupRuntimeBindingFrames rest name (Some cell)
+    None => lookupRuntimeBindingFrames rest name found
+
 -- The non-panicking form.  `lookupEnv` on a missing name is a hard panic, which is
 -- right for a program identifier (resolve already proved it bound) and wrong for a
 -- synthetic cell whose absence is a normal answer (`withCallFile`'s file tag).

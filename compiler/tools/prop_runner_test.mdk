@@ -24,7 +24,7 @@ import tools.prop_runner.{
   PreparedPropRequest(..),
   runPreparedPropRequestsResults,
 }
-import eval.eval.{EvalEnv(..)}
+import eval.eval.{EvalEnv(..), Value(..), lookupRuntimeBinding}
 import list.{nub}
 import frontend.ast.{
   Decl(..),
@@ -360,6 +360,19 @@ missingHelperIsRuntimeResult = match missingHelperPlan
 
 test "a missing selected helper binding is a runtime result" =
   expectTrue missingHelperIsRuntimeResult
+
+runtimeShadowValue : Int -> Int -> Int
+runtimeShadowValue local global =
+  let env = EvalEnv [
+    [("randomState", Ref (VInt local))],
+    [("randomState", Ref (VInt global))],
+  ]
+  match lookupRuntimeBinding env "randomState"
+    VInt n => n
+    _ => -1
+
+test "canonical runtime lookup ignores a nearer user shadow" =
+  expectEqual 19 (runtimeShadowValue 7 19)
 
 wrappedTy : Ty
 wrappedTy = TyCon {
