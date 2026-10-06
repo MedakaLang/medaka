@@ -503,7 +503,7 @@ Like `map`, with `f` also receiving each element's index.
 
 ## Instances
 
-- `Array`: [`Filterable`](#filterable-array), `Mappable`, `Foldable`, `Semigroup`, [`Monoid`](#monoid-array-a), [`Debug`](#debug-array-a), `Eq`, [`Ord`](#ord-array-a), [`Display`](#display-array-a), `Hashable`, [`Index`](#index-array-a-int-a), [`IndexMut`](#indexmut-array-a-int-a), [`Slice`](#slice-array-a)
+- `Array`: [`Filterable`](#filterable-array), [`Debug`](#debug-array-a), `Eq`, [`Ord`](#ord-array-a), `Mappable`, `Foldable`, `Semigroup`, [`Monoid`](#monoid-array-a), [`Display`](#display-array-a), `Hashable`, [`Index`](#index-array-a-int-a), [`IndexMut`](#indexmut-array-a-int-a), [`Slice`](#slice-array-a)
 
 ### `Filterable Array`
 
@@ -517,19 +517,6 @@ survive.
 ```medaka
 > toList (filter isEven (fromList [1, 2, 3, 4]))
 [2, 4]
-```
-
-### `Monoid (Array a)`
-
-```
-impl Monoid (Array a)
-```
-
-The empty array.
-
-```medaka
-> length (empty : Array Int)
-0
 ```
 
 ### `Debug (Array a)`
@@ -553,6 +540,19 @@ impl Ord (Array a) requires Ord a
 
 Arrays compare lexicographically, exactly as the lists of their
 elements would.
+
+### `Monoid (Array a)`
+
+```
+impl Monoid (Array a)
+```
+
+The empty array.
+
+```medaka
+> length (empty : Array Int)
+0
+```
 
 ### `Display (Array a)`
 
