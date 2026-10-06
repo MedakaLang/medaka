@@ -36,6 +36,31 @@ instead of relying only on headless-logic tests
    that document their output with a `medaka-expect` fence actually print it
    when Run in the browser.
 
+### Cross-engine smoke (`smoke.spec.mjs`)
+
+The checks above drive Chrome only. `smoke.spec.mjs` runs a short smoke under
+three engines: the system Chrome, Playwright's bundled **Firefox**, and its
+bundled **WebKit** emulating an iPhone 15 (`devices['iPhone 15']`, so the phone
+layout is exercised). WebKit applies the page's `Cross-Origin-Embedder-Policy:
+require-corp` to every module a module worker imports, where Chrome checks only
+the worker script, so a missing `_headers` rule kills Run on every iOS browser
+while every Chrome check stays green (#3881). Per engine it asserts:
+
+1. the page is `crossOriginIsolated`;
+2. the default program prints `areas: [3.14159, 12.0]` and the `✓ compiled &
+   ran` line (`compiler-worker.js`);
+3. a type error gets an inline squiggle without clicking Run
+   (`language-worker.js`, the other module worker);
+4. `test/async_fixtures/overlap_sleeps.mdk` prints `overlapped`;
+5. no page error, and no `Cross-Origin-Embedder-Policy` refusal in the console
+   of the page or its workers.
+
+`EXPECTED_FAIL` at the top of the spec lists a check known to fail on one
+engine: it prints `XFAIL` while it fails, and FAILS the run once it passes, which
+is the cue to delete the entry. Check 4 is listed for Firefox (#3882: compiling
+any program that imports `async`, `time`, `regex`, `toml`, `i64` or `byteparser`
+traps with `compiler trap: too much recursion`).
+
 A screenshot is captured after each test into `screenshots/` (gitignored) for
 human eyeballing: `01_loaded.png`, `02_highlighting.png`, `03_run_output.png`,
 `04_squiggle.png`, `05_hover.png`, `06_completion.png`, `07_examples.png`,
@@ -101,12 +126,16 @@ server: `node tests/playground.spec.mjs http://localhost:8099/ ./screenshots`.
 
 ## Gotchas (read before "fixing" something that isn't broken)
 
-- **No Playwright browser download.** `npx playwright install chromium` fails
-  with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` on this machine (TLS interception).
-  Do **not** try to work around this by disabling TLS verification. Instead
-  every test launches `chromium.launch({ channel: 'chrome' })`, i.e. the
-  **system Google Chrome** — `npm install playwright` itself (just the JS
-  driver, no browser binary) works fine over the network.
+- **Chrome is the system Google Chrome; Firefox and WebKit are Playwright's.**
+  Every Chrome launch is `chromium.launch({ channel: 'chrome' })`. `run.sh`
+  runs `npx playwright install firefox webkit` (a no-op once downloaded); it
+  does not install their system libraries, so on a fresh machine run
+  `npx playwright install --with-deps firefox webkit` once (CI does). Playwright
+  1.48's WebKit does not run on Debian 13; 1.63 does, which is why the pin moved.
+  Browser downloads used to be TLS-blocked on the dev box; they no longer are.
+- **The Playwright pin and its browser builds move together.** `run.sh`
+  reinstalls `node_modules` whenever the installed Playwright differs from
+  `package.json`.
 - **node v20 (the system default on some shells) can't run the playground** —
   it doesn't support finalized WasmGC. You need **node v24+**.
 - **`dist/` is gitignored.** A fresh worktree/clone has no
@@ -119,6 +148,6 @@ server: `node tests/playground.spec.mjs http://localhost:8099/ ./screenshots`.
   `playground/main.js` exposes `window.__mdkView` (the CM6 `EditorView`);
   tests set the buffer with
   `v.dispatch({changes:{from:0,to:v.state.doc.length,insert:'...'}})`.
-- Single-threaded WasmGC needs no COOP/COEP headers, so the plain
-  `playground/server.js` static server is sufficient — no special dev server
-  required.
+- `playground/server.js` applies `playground/_headers` (COOP/COEP included),
+  so a local run is cross-origin isolated the way the deploy is, and a missing
+  header rule fails here as it would on medaka-lang.dev.
