@@ -114,9 +114,6 @@ classified chunks =
     "probe stopped"
     (PropRequest "shape" (0 - 91) 23)
     0
-    "shape"
-    (0 - 91)
-    23
 
 goodTranscript : List Chunk
 goodTranscript = [
@@ -125,14 +122,33 @@ goodTranscript = [
   Chunk "0.detail" ["\"ok\""] True,
 ]
 
-hasKind : PropFailureKind -> PropResult -> Bool
-hasKind kind row = match propResultFailureKind row
-  Some actual => actual == kind
-  None => False
+failureCategory : PropResult -> String
+failureCategory row = match propResultFailureKind row
+  Some PropProtocolError => "protocol"
+  Some PropRuntimeError => "runtime"
+  Some PropBuildError => "build"
+  Some PropLawFalse => "law-false"
+  _ => "other"
+
+replayMetadata : PropResult -> (String, Int, Int)
+replayMetadata row =
+  (propResultName row, propResultSeed row, propResultCases row)
 
 test "completed malformed transcript fields are protocol errors before truncation" =
-  let malformedSeed =
-    classified (Chunk "0.seed" ["unterminated"] True :: goodTranscript)
+  let protocolRows = map classified [
+    [Chunk "0.seed" ["unterminated"] True, Chunk "0.bool" [] False],
+    [
+      Chunk "0.seed" ["\"-91\""] True,
+      Chunk "0.bool" ["unterminated"] True,
+      Chunk "0.detail" [] False,
+    ],
+    [
+      Chunk "0.seed" ["\"-91\""] True,
+      Chunk "0.bool" ["\"not a Bool\""] True,
+      Chunk "0.detail" [] False,
+    ],
+    [Chunk "0.seed" ["\"92\""] True, Chunk "0.bool" [] False],
+  ]
   let malformedDetail = classified [
     Chunk "0.seed" ["\"-91\""] True,
     Chunk "0.bool" ["\"True\""] True,
@@ -144,13 +160,57 @@ test "completed malformed transcript fields are protocol errors before truncatio
     Chunk "0.detail" [] False,
   ]
   expectAll [
-    expectTrue (hasKind PropProtocolError malformedSeed),
-    expectTrue (hasKind PropProtocolError malformedDetail),
-    expectTrue (hasKind PropRuntimeError incomplete),
     expectEqual
-      (0 - 91, 23)
-      (propResultSeed malformedDetail, propResultCases malformedDetail),
+      ["protocol", "protocol", "protocol", "protocol"]
+      (map failureCategory protocolRows),
+    expectEqual "protocol" (failureCategory malformedDetail),
+    expectEqual "runtime" (failureCategory incomplete),
+    expectEqual
+      (map (_ => ("shape", -91, 23)) [0..=5])
+      (map replayMetadata (protocolRows ++ [malformedDetail, incomplete])),
   ]
+
+test "native transcripts distinguish successful laws and false laws at wide seeds" =
+  let seed = 1152921504606846975
+  let request = PropRequest "wide law" seed 31
+  let prefix = [Chunk "0.seed" ["\"1152921504606846975\""] True]
+  let passed =
+    classifyNativeTranscript
+      goodTranscript
+      "unused"
+      (PropRequest "shape" (-91) 23)
+      0
+  let failed =
+    classifyNativeTranscript
+      (prefix
+        ++ [
+          Chunk "0.bool" ["\"False\""] True,
+          Chunk "0.detail" ["\"counterexample\""] True,
+        ])
+      "unused"
+      request
+      0
+  expectAll [
+    expectTrue (propResultPassed passed),
+    expectEqual "law-false" (failureCategory failed),
+    expectEqual "counterexample" (propResultDetail failed),
+    expectEqual ("wide law", seed, 31) (replayMetadata failed),
+  ]
+
+test "native compiler failures retain their build classification and replay metadata" = withTarget
+  (target =>
+    let text = "prop \"unresolved body\" (n : Int) = missingNativeProof n\n"
+    match writeFile target text
+      Err message => fail message
+      Ok _ =>
+        match (runNativePlannedPropRequests target text (nativeModules text) [
+          PropRequest "unresolved body" (-91) 23,
+        ])
+          [row] => expectAll [
+            expectEqual "build" (failureCategory row),
+            expectEqual ("unresolved body", -91, 23) (replayMetadata row),
+          ]
+          _ => fail "expected one native build failure")
 
 test "native runtime failures retain the requested replay seed and budget" = withTarget
   (target =>

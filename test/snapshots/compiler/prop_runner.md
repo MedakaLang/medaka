@@ -101,15 +101,15 @@ customSeedRef : Ref Int
 customSeedRef = Ref 123456789
 
 -- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
--- `rngStateRef`.  The seed is reduced into the state's range, `0 .. 2^31 - 1`,
--- so any `Int` seeds it and `rngNextLocal`'s multiply cannot overflow; a seed
--- already in that range is used as given.
+-- `rngStateRef`. Only the draw state is reduced into `0 .. 2^31 - 1`, so
+-- `rngNextLocal`'s multiply cannot overflow. Replay metadata retains the
+-- original integer seed.
 export
 seedPropRng : Int -> Unit
 seedPropRng n =
   let normalized = (n % 2147483648 + 2147483648) % 2147483648
   propRngStateRef := normalized
-  propSeedRef := normalized
+  propSeedRef := n
   customSeedRef := normalized
   customRngReadyRef := False
 
@@ -1672,7 +1672,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "customSeedRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "customSeedRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
 (DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
-(DFunDef false "seedPropRng" ((PVar "n")) (EBlock (DoLet false false (PVar "normalized") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 2147483648))) (ELit (LInt 2147483648))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propSeedRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
+(DFunDef false "seedPropRng" ((PVar "n")) (EBlock (DoLet false false (PVar "normalized") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 2147483648))) (ELit (LInt 2147483648))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propSeedRef")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
 (DTypeSig false "beginCustomPropStream" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DFunDef false "beginCustomPropStream" ((PVar "seed")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "seed"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
 (DTypeSig true "propSeedValue" (TyFun (TyCon "Unit") (TyCon "Int")))
@@ -2111,7 +2111,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "customSeedRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "customSeedRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
 (DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
-(DFunDef false "seedPropRng" ((PVar "n")) (EBlock (DoLet false false (PVar "normalized") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 2147483648))) (ELit (LInt 2147483648))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propSeedRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
+(DFunDef false "seedPropRng" ((PVar "n")) (EBlock (DoLet false false (PVar "normalized") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 2147483648))) (ELit (LInt 2147483648))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propSeedRef")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
 (DTypeSig false "beginCustomPropStream" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DFunDef false "beginCustomPropStream" ((PVar "seed")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "seed"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
 (DTypeSig true "propSeedValue" (TyFun (TyCon "Unit") (TyCon "Int")))

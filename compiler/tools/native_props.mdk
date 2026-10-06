@@ -21,9 +21,9 @@ import support.util.{
 import string.{replaceAll}
 import string.{toInt}
 import tools.probe_transcript.{
-  Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, lookupChunk,
-  mintNonce, freshProbeNonce, noncedPrefix, renameUserMain, sentinelLine,
-  tagsInOrder, valuePrintExprWith
+  Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, mintNonce,
+  freshProbeNonce, noncedPrefix, renameUserMain, sentinelLine, tagsInOrder,
+  valuePrintExprWith
 }
 import tools.printer.{exprToString, ppTy}
 import tools.prop_plan.{
@@ -437,8 +437,8 @@ data TranscriptField =
   | FieldMalformed
   | FieldDecoded String
 
-transcriptField : String -> List Chunk -> TranscriptField
-transcriptField tag chunks = match lookupChunk tag chunks
+transcriptField : String -> OrdMap Chunk -> TranscriptField
+transcriptField tag chunks = match omLookup tag chunks
   None => FieldMissing
   Some (Chunk _ _ False) => FieldIncomplete
   Some (Chunk _ lines True) => match decodeValue lines
@@ -450,80 +450,79 @@ renderAll : List Chunk ->
   Int ->
   List (Decl, PropRequest) ->
   List PropResult
-renderAll _ _ _ [] = []
-renderAll chunks note i ((DProp _ name _ _, r) :: rest) =
-  renderOne chunks note r i name :: renderAll chunks note (i + 1) rest
-renderAll chunks note i (_ :: rest) = renderAll chunks note (i + 1) rest
+renderAll chunks note i requests =
+  renderIndexed (indexNativeChunks chunks omEmpty) note i requests
 
-renderOne : List Chunk -> String -> PropRequest -> Int -> String -> PropResult
-renderOne chunks note request i name =
-  let seed = propRequestSeed request
-  let cases = propRequestCases request
-  classifyNativeTranscript chunks note request i name seed cases
+indexNativeChunks : List Chunk -> OrdMap Chunk -> OrdMap Chunk
+indexNativeChunks [] index = index
+indexNativeChunks ((chunk@(Chunk tag _ _)) :: rest) index =
+  let next = if omHasKey tag index then index else omInsert tag chunk index
+  indexNativeChunks rest next
+
+renderIndexed : OrdMap Chunk ->
+  String ->
+  Int ->
+  List (Decl, PropRequest) ->
+  List PropResult
+renderIndexed _ _ _ [] = []
+renderIndexed chunks note i ((_, request) :: rest) =
+  classifyNativeFields chunks note request i
+    :: renderIndexed chunks note (i + 1) rest
 
 export
 classifyNativeTranscript : List Chunk ->
   String ->
   PropRequest ->
   Int ->
-  String ->
-  Int ->
-  Int ->
   PropResult
-classifyNativeTranscript chunks note request i name seed cases = match (
-  transcriptField (seedTag i) chunks,
-  transcriptField (boolTag i) chunks,
-  transcriptField (detailTag i) chunks,
-)
-  (FieldMalformed, _, _) =>
-    nativeProtocolError "malformed replay seed in native transcript" request
-  (_, FieldMalformed, _) =>
-    nativeProtocolError "malformed result value in native transcript" request
-  (_, _, FieldMalformed) =>
-    nativeProtocolError "malformed detail in native transcript" request
-  (FieldDecoded seedText, _, _) if toInt seedText /= Some seed =>
-    nativeProtocolError "invalid replay seed in native transcript" request
-  (_, FieldDecoded boolText, _) if boolText /= "True" && boolText /= "False" =>
-    nativeProtocolError "invalid result value in native transcript" request
-  (FieldDecoded _, FieldDecoded _, FieldDecoded _) =>
-    renderReportedOutcome chunks note request i name seed cases
-  _ =>
-    PropResult
-      "native"
-      name
-      PropErroredResult
-      (Some PropRuntimeError)
-      "\{note}; this property was not fully reported"
-      seed
-      cases
+classifyNativeTranscript chunks note request i =
+  classifyNativeFields (indexNativeChunks chunks omEmpty) note request i
 
-renderReportedOutcome : List Chunk ->
+classifyNativeFields : OrdMap Chunk ->
   String ->
   PropRequest ->
   Int ->
-  String ->
-  Int ->
-  Int ->
   PropResult
-renderReportedOutcome chunks _ request i name seed cases = match (
-  transcriptField (boolTag i) chunks,
-  transcriptField (detailTag i) chunks,
-)
-  (FieldDecoded "True", FieldDecoded detail) =>
-    PropResult "native" name PropPassedResult None detail seed cases
-  (FieldDecoded "False", FieldDecoded detail) =>
-    PropResult
-      "native"
-      name
-      PropFailedResult
-      (Some PropLawFalse)
-      detail
-      seed
-      cases
-  _ =>
-    nativeProtocolError
-      "invalid result or replay seed in native transcript"
-      request
+classifyNativeFields chunks note request i =
+  let name = propRequestName request
+  let seed = propRequestSeed request
+  let cases = propRequestCases request
+  match (
+    transcriptField (seedTag i) chunks,
+    transcriptField (boolTag i) chunks,
+    transcriptField (detailTag i) chunks,
+  )
+    (FieldMalformed, _, _) =>
+      nativeProtocolError "malformed replay seed in native transcript" request
+    (_, FieldMalformed, _) =>
+      nativeProtocolError "malformed result value in native transcript" request
+    (_, _, FieldMalformed) =>
+      nativeProtocolError "malformed detail in native transcript" request
+    (FieldDecoded seedText, _, _) if toInt seedText /= Some seed =>
+      nativeProtocolError "invalid replay seed in native transcript" request
+    (_, FieldDecoded boolText, _) if boolText /= "True"
+      && boolText /= "False" =>
+      nativeProtocolError "invalid result value in native transcript" request
+    (FieldDecoded _, FieldDecoded "True", FieldDecoded detail) =>
+      PropResult "native" name PropPassedResult None detail seed cases
+    (FieldDecoded _, FieldDecoded "False", FieldDecoded detail) =>
+      PropResult
+        "native"
+        name
+        PropFailedResult
+        (Some PropLawFalse)
+        detail
+        seed
+        cases
+    _ =>
+      PropResult
+        "native"
+        name
+        PropErroredResult
+        (Some PropRuntimeError)
+        "\{note}; this property was not fully reported"
+        seed
+        cases
 
 -- Probe source ---------------------------------------------------------------
 
