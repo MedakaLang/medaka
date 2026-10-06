@@ -688,22 +688,18 @@ test "imported abstract constructors cannot leak through structural generation" 
         "hidden constructors"
         (runReport ["--engines", "eval,native"] target))
 
-test "exported newtype constructors remain structurally generatable" =
+test "exported newtypes keep their constructors private during structural generation" =
   withFixtures
     [
       ("wrapped.mdk", "export newtype Wrapped = Wrapped Int\n"),
       (
         "main.mdk",
-        "import wrapped.{Wrapped}\nprop \"exported newtype\" (x : Wrapped) = True\n",
+        "import wrapped.{Wrapped}\nprop \"private newtype constructor\" (x : Wrapped) = True\nprop \"neighbor\" (n : Int) = n == n\n",
       ),
     ]
     (target =>
-      gradeReport
-        0
-        [
-          ("eval", "exported newtype", "pass"),
-          ("native", "exported newtype", "pass"),
-        ]
+      gradeCapabilityNeighbor
+        "private newtype constructor"
         (runReport ["--engines", "eval,native"] target))
 
 gradeMinimized : String ->
@@ -1222,3 +1218,38 @@ test "native runner globals and helper functions preserve identically spelled us
           ("native", "user helper bindings", "pass"),
         ]
         (runReport ["--engines", "eval,native"] target))
+
+test "imported newtypes use exported custom generators while keeping counterexamples opaque" =
+  withFixtures
+    [
+      (
+        "wrapped.mdk",
+        "export newtype Wrapped = Wrapped Int\nexport impl Arbitrary Wrapped where\n  arbitrary () = Wrapped 500000\n  shrink _ = []\n",
+      ),
+      (
+        "main.mdk",
+        "import wrapped.{Wrapped}\nprop \"custom newtype\" (value : Wrapped) = True\nprop \"private newtype value\" (value : Wrapped) = False\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        gradeReport
+          1
+          [
+            ("eval", "custom newtype", "pass"),
+            ("eval", "private newtype value", "fail"),
+            ("native", "custom newtype", "pass"),
+            ("native", "private newtype value", "fail"),
+          ]
+          (Ok (code, report)),
+        expectTrue
+          (all
+            (row => match field "detail" row
+              Some detail =>
+                contains "<Wrapped>" detail && not (contains "500000" detail)
+              None => False)
+            (filter
+              (row => field "name" row == Some "private newtype value")
+              (propertyReports report))),
+      ])
