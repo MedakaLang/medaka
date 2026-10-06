@@ -974,3 +974,70 @@ test "applied mutual recursion without a base remains a bounded capability error
       gradeCapabilityNeighbor
         "no finite value"
         (runReport ["--engines", "eval,native"] target))
+
+test "custom generators and shrinkers select the complete applied carrier" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Box a = Box a\nimpl Arbitrary (Box Int) where\n  arbitrary () = Box 500000\n  shrink (Box 0) = []\n  shrink _ = [Box 0]\nimpl Arbitrary (Box String) where\n  arbitrary () = Box \"custom string\"\n  shrink (Box \"\") = []\n  shrink _ = [Box \"\"]\nprop \"applied integer generator\" (value : Box Int) = match value\n  Box n => n == 500000\nprop \"applied string generator\" (value : Box String) = match value\n  Box text => text == \"custom string\"\nprop \"applied integer shrink\" (value : Box Int) = False\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        gradeReport
+          1
+          [
+            ("eval", "applied integer generator", "pass"),
+            ("eval", "applied string generator", "pass"),
+            ("eval", "applied integer shrink", "fail"),
+            ("native", "applied integer generator", "pass"),
+            ("native", "applied string generator", "pass"),
+            ("native", "applied integer shrink", "fail"),
+          ]
+          (Ok (code, report)),
+        expectTrue
+          (all
+            (row => match field "detail" row
+              Some detail =>
+                contains "value = Box (0)" detail
+                  || contains "value = Box 0" detail
+              None => False)
+            (filter
+              (row => field "name" row == Some "applied integer shrink")
+              (propertyReports report))),
+      ])
+
+test "abstract custom counterexamples preserve module privacy on both engines" =
+  withFixtures
+    [
+      (
+        "hidden.mdk",
+        "export data Hidden = Secret Int\nexport impl Arbitrary Hidden where\n  arbitrary () = Secret 500000\n  shrink _ = []\n",
+      ),
+      (
+        "main.mdk",
+        "import hidden.{Hidden}\nprop \"private counterexample\" (value : Hidden) = False\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        gradeReport
+          1
+          [
+            ("eval", "private counterexample", "fail"),
+            ("native", "private counterexample", "fail"),
+          ]
+          (Ok (code, report)),
+        expectTrue
+          (all
+            (row => match field "detail" row
+              Some detail =>
+                contains "<Hidden>" detail
+                  && not (contains "Secret" detail)
+                  && not (contains "500000" detail)
+              None => False)
+            (propertyReports report)),
+      ])
