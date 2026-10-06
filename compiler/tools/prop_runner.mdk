@@ -387,6 +387,28 @@ findFailure genEnv evalEnv params body maxTests run
       inputs
       (checkProp evalEnv body inputs)
 
+findFailurePlanned : GenEnv ->
+  List (String, Value e) ->
+  List PropParam ->
+  List GenPlan ->
+  Expr ->
+  Int ->
+  Int ->
+  <e> PropOutcome (Value e)
+findFailurePlanned genEnv evalEnv params plans body maxTests run
+  | run > maxTests = PropPassed
+  | otherwise =
+    let inputs = genInputsPlanned genEnv evalEnv params plans
+    findFailureStep
+      genEnv
+      evalEnv
+      params
+      body
+      maxTests
+      run
+      inputs
+      (checkProp evalEnv body inputs)
+
 findFailureStep : GenEnv ->
   List (String, Value e) ->
   List PropParam ->
@@ -409,6 +431,18 @@ genInputs : GenEnv ->
 genInputs _ _ [] = []
 genInputs genEnv evalEnv ((PropParam x _ ty) :: rest) =
   (x, genParam genEnv evalEnv ty) :: genInputs genEnv evalEnv rest
+
+genInputsPlanned : GenEnv ->
+  List (String, Value e) ->
+  List PropParam ->
+  List GenPlan ->
+  <e> List (String, Value e)
+genInputsPlanned _ _ [] [] = []
+genInputsPlanned genEnv evalEnv ((PropParam x _ _) :: rest) (plan :: plans) =
+  (x, genFromPlan genEnv evalEnv 0 plan)
+    :: genInputsPlanned genEnv evalEnv rest plans
+genInputsPlanned _ _ _ _ =
+  panic "property runner: prepared parameter plan mismatch"
 
 genParam : GenEnv -> List (String, Value e) -> Ty -> <e> Value e
 genParam (ge@(GenEnv _ planEnv _)) evalEnv ty =
@@ -1098,6 +1132,10 @@ public export data PropResult =
   | PropResult String String PropStatus (Option PropFailureKind) String Int Int
 --                                          name   ok   detail
 
+public export data PreparedPropRequest =
+  | PreparedRun PropRequest Decl (List GenPlan)
+  | PreparedResult PropResult
+
 export
 propResultName : PropResult -> String
 propResultName (PropResult _ n _ _ _ _ _) = n
@@ -1197,6 +1235,91 @@ runAllPlannedPropRequestsResults root modules requests propLines evalEnv program
         evalEnv
         (filterProps program)
     Err err => map (requestPlanError err) requests
+
+export
+preparePlannedPropRequests : String ->
+  List PlanModule ->
+  List PropRequest ->
+  List Decl ->
+  Result PlanError (PlanEnv, List PreparedPropRequest)
+preparePlannedPropRequests root modules requests rootProps =
+  map
+    (env =>
+      (env, prepareRequests env requests requests (filterProps rootProps)))
+    (buildPlanEnvModules root modules)
+
+prepareRequests : PlanEnv ->
+  List PropRequest ->
+  List PropRequest ->
+  List Decl ->
+  List PreparedPropRequest
+prepareRequests _ _ [] _ = []
+prepareRequests env all ((request@(PropRequest name seed cases)) :: rest) props =
+  let row =
+    if requestNameRepeated name all then
+      PreparedResult (duplicateRequest name seed cases)
+    else if cases <= 0 then
+      PreparedResult
+        (PropResult
+          "eval"
+          name
+          PropErroredResult
+          (Some PropProtocolError)
+          "property request has a non-positive case count"
+          seed
+          cases)
+    else match propsNamed name props
+      [decl@(DProp _ _ params _)] => match planPropParams env name params
+        Ok plans => PreparedRun request decl plans
+        Err e => PreparedResult (capabilityResult name seed cases e)
+      [] => PreparedResult (missingRequest request)
+      _ =>
+        PreparedResult
+          (PropResult
+            "eval"
+            name
+            PropErroredResult
+            (Some PropProtocolError)
+            "property request is ambiguous: the root module declares '{name}' more than once"
+            seed
+            cases)
+  row :: prepareRequests env all rest props
+
+export
+runPreparedPropRequestsResults : PlanEnv ->
+  List PropHelper ->
+  List PreparedPropRequest ->
+  List (String, Int) ->
+  List (String, Value e) ->
+  List Decl ->
+  <e> List PropResult
+runPreparedPropRequestsResults planEnv helpers rows propLines evalEnv runtimeDecls =
+  runPreparedRows
+    (buildGenEnvWithHelpers runtimeDecls planEnv helpers)
+    rows
+    propLines
+    evalEnv
+
+runPreparedRows : GenEnv ->
+  List PreparedPropRequest ->
+  List (String, Int) ->
+  List (String, Value e) ->
+  <e> List PropResult
+runPreparedRows _ [] _ _ = []
+runPreparedRows genEnv ((PreparedResult result) :: rest) propLines evalEnv =
+  result :: runPreparedRows genEnv rest propLines evalEnv
+runPreparedRows genEnv ((PreparedRun (PropRequest name seed cases) (DProp _ _ params body) plans) :: rest) propLines evalEnv =
+  let _ = seedPropRng seed
+  let _ = beginCustomPropStream seed
+  propResultOf
+      cases
+      seed
+      (lineOfPropName name propLines)
+      name
+      (findFailurePlanned genEnv evalEnv params plans body cases 1)
+    :: runPreparedRows genEnv rest propLines evalEnv
+runPreparedRows genEnv (_ :: rest) propLines evalEnv =
+  runPreparedRows genEnv rest propLines evalEnv
 
 export
 runAllPlannedPropRequestsWithHelpersResults : String ->
