@@ -4,7 +4,7 @@
 
 import frontend.ast.{
   Decl(..), Expr, PropParam(..), Ty(..), TyConOrigin(..), Variant(..),
-  Field(..), ConPayload(..), Pat(..)
+  Field(..), ConPayload(..), Pat(..), mapTyFull
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
@@ -26,7 +26,7 @@ import tools.probe_transcript.{
 }
 import tools.printer.{exprToString, ppTy}
 import tools.prop_plan.{
-  PlanModule(..), TypeKey(..), CustomPlan(..), PlanEnv, GenPlan(..),
+  PlanModule(..), TypeKey(..), CustomPlan(..), PlanEnv(..), GenPlan(..),
   PlanDef(..), PlanCtor(..), PlanField(..), PlanError(..), PlanErrorReason(..),
   PlanVisibility(..), planErrorText, buildPlanEnvModules, planFor, planDef,
   instantiateCtor, planTy, typeKeyWord, ctorWeights, listLengthBound,
@@ -471,7 +471,7 @@ plannedProbeSource : String ->
   String
 plannedProbeSource nonce target tsrc modules env jobs =
   joinNl
-    (plannedImports modules jobs env
+    (plannedImports nonce modules jobs env
       ++ [
         probeTargetSource target tsrc,
         "",
@@ -505,19 +505,24 @@ plannedProbeSource nonce target tsrc modules env jobs =
         "__np_replace_each f (x :: xs) = map (ys => ys :: xs) (f x) ++ map (ys => x :: ys) (__np_replace_each f xs)",
         "",
       ]
-      ++ plannedPropLines modules env jobs 0
+      ++ plannedPropLines modules env (coreAlias nonce) jobs 0
       ++ ["main ="]
       ++ plannedMainLines nonce jobs 0
       ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
 
 -- Each imported module gets a probe-local alias. Constructor selection is by
 -- the TypeKey owner, never by a bare source spelling.
-plannedImports : List PlanModule ->
+coreAlias : String -> String
+coreAlias nonce = "__np_core_\{nonce}"
+
+plannedImports : String ->
+  List PlanModule ->
   List NativePlanOutcome ->
   PlanEnv ->
   List String
-plannedImports modules jobs env =
-  map (importLine modules) (omKeys (importOwners jobs env omEmpty))
+plannedImports nonce modules jobs env =
+  "import core as \{coreAlias nonce}"
+    :: map (importLine modules) (omKeys (importOwners jobs env omEmpty))
 
 importOwners : List NativePlanOutcome -> PlanEnv -> OrdMap Unit -> OrdMap Unit
 importOwners [] _ owners = owners
@@ -547,9 +552,31 @@ graphImportOwnersGo nodes (word :: rest) owners = match omLookup word nodes
 planImportOwner : GenPlan -> OrdMap Unit -> OrdMap Unit
 planImportOwner (GNominal (TypeKey _ (OriginModule owner)) _) owners =
   omInsert owner () owners
-planImportOwner (GCustom (CustomPlan (TypeKey _ (OriginModule owner)) _)) owners =
-  omInsert owner () owners
+planImportOwner (GCustom (CustomPlan _ carrier _)) owners =
+  carrierImportOwners carrier owners
 planImportOwner _ owners = owners
+
+carrierImportOwners : Ty -> OrdMap Unit -> OrdMap Unit
+carrierImportOwners (TyCon { tyConOrigin = (OriginModule owner) }) owners =
+  omInsert owner () owners
+carrierImportOwners (TyCon {  }) owners = owners
+carrierImportOwners (TyVar _) owners = owners
+carrierImportOwners (TyApp left right) owners =
+  carrierImportOwners right (carrierImportOwners left owners)
+carrierImportOwners (TyFun left right) owners =
+  carrierImportOwners right (carrierImportOwners left owners)
+carrierImportOwners (TyTuple tys) owners = carrierImportOwnersMany tys owners
+carrierImportOwners (TyEffect _ _ ty) owners = carrierImportOwners ty owners
+carrierImportOwners (TyConstrained _ ty) owners = carrierImportOwners ty owners
+carrierImportOwners (TyNamed _ ty _) owners = carrierImportOwners ty owners
+carrierImportOwners (TyQual ty _ _) owners = carrierImportOwners ty owners
+carrierImportOwners (TyRow _ _ _) owners = owners
+carrierImportOwners (TyAuth _ _) owners = owners
+
+carrierImportOwnersMany : List Ty -> OrdMap Unit -> OrdMap Unit
+carrierImportOwnersMany [] owners = owners
+carrierImportOwnersMany (ty :: rest) owners =
+  carrierImportOwnersMany rest (carrierImportOwners ty owners)
 
 importLine : List PlanModule -> String -> String
 importLine modules owner = match moduleAlias modules owner
@@ -587,8 +614,19 @@ planSourceTy modules (GResult err ok) =
 planSourceTy modules (GTuple plans) =
   "(\{joinWith ", " (map (planSourceTy modules) plans)})"
 planSourceTy modules (GNominal key plans) = nominalSourceTy modules key plans
-planSourceTy modules (GCustom (CustomPlan key _)) =
-  nominalSourceTy modules key []
+planSourceTy modules (GCustom (CustomPlan _ carrier _)) =
+  carrierSourceTy modules carrier
+
+carrierSourceTy : List PlanModule -> Ty -> String
+carrierSourceTy modules carrier =
+  ppTy (fst (mapTyFull (qualifyCarrierTy modules) carrier))
+
+qualifyCarrierTy : List PlanModule -> Ty -> (Ty, Bool)
+qualifyCarrierTy modules (ty@(TyCon { tyConName, tyConOrigin = (OriginModule owner) })) =
+  match moduleAlias modules owner
+    Some alias => (TyCon { ty | tyConName = "\{alias}.\{tyConName}" }, True)
+    None => (ty, False)
+qualifyCarrierTy _ ty = (ty, False)
 
 nominalSourceTy : List PlanModule -> TypeKey -> List GenPlan -> String
 nominalSourceTy modules (TypeKey name (OriginModule owner)) plans =
@@ -603,37 +641,43 @@ nominalSourceTy _ (TypeKey name _) [] = name
 nominalSourceTy modules (TypeKey name _) plans =
   "\{name} \{joinWith " " (map (plan => paren (planSourceTy modules plan)) plans)}"
 
+typeKeyName : TypeKey -> String
+typeKeyName (TypeKey name _) = name
+
 plannedPropLines : List PlanModule ->
   PlanEnv ->
+  String ->
   List NativePlanOutcome ->
   Int ->
   List String
-plannedPropLines _ _ [] _ = []
-plannedPropLines modules env ((NativeRunnable (DProp _ _ params body) r plans) :: rest) i =
+plannedPropLines _ _ _ [] _ = []
+plannedPropLines modules env core ((NativeRunnable (DProp _ _ params body) r plans) :: rest) i =
   fnLines i params body
-    ++ plannedGenLines modules env i 0 params plans
+    ++ plannedGenLines modules env core i 0 params plans
     ++ plannedRunLines modules env i params plans (propRequestCases r)
     ++ plannedShrinkLines modules env i params plans
-    ++ plannedPropLines modules env rest (i + 1)
-plannedPropLines modules env (_ :: rest) i = plannedPropLines modules env rest i
+    ++ plannedPropLines modules env core rest (i + 1)
+plannedPropLines modules env core (_ :: rest) i =
+  plannedPropLines modules env core rest i
 
 plannedGenLines : List PlanModule ->
   PlanEnv ->
+  String ->
   Int ->
   Int ->
   List PropParam ->
   List GenPlan ->
   List String
-plannedGenLines _ _ _ _ [] [] = []
-plannedGenLines modules env i j ((PropParam _ _ ty) :: rest) (p :: plans) =
+plannedGenLines _ _ _ _ _ [] [] = []
+plannedGenLines modules env core i j ((PropParam _ _ ty) :: rest) (p :: plans) =
   let graph = buildGraph env p
   let prefix = genNodePrefix i j
   let root = graphRef graph prefix p "depth"
   ["\{genName i j} : Int -> \{ppTy ty}", "\{genName i j} depth = \{root}", ""]
-    ++ graphLines modules env prefix graph
-    ++ graphAuxLines modules env prefix graph
-    ++ plannedGenLines modules env i (j + 1) rest plans
-plannedGenLines _ _ _ _ _ _ = []
+    ++ graphLines modules env core prefix graph
+    ++ graphAuxLines modules env core prefix graph
+    ++ plannedGenLines modules env core i (j + 1) rest plans
+plannedGenLines _ _ _ _ _ _ _ = []
 
 -- Every closed plan, including containers and primitives, gets one helper.
 -- The map is the registry; the reverse discovery list only preserves stable
@@ -680,7 +724,17 @@ graphChildren _ GFloat _ graph = graph
 graphChildren _ GChar _ graph = graph
 graphChildren _ GString _ graph = graph
 graphChildren _ GUnit _ graph = graph
-graphChildren _ (GCustom _) _ graph = graph
+graphChildren env (GCustom custom) depth graph =
+  match customStructuralPlan env custom
+    None => graph
+    Some (plan@(GNominal key _)) => match planDef env key
+      Ok (PlanDef _ owner _ visibility ctors) =>
+        if nominalCtorsVisible env owner visibility then
+          graphDisplayCtorChildren env plan ctors depth graph
+        else
+          graph
+      Err _ => graph
+    Some _ => graph
 graphChildren env (GList p) depth graph =
   if listLengthBound env depth p <= 0 then
     graph
@@ -705,8 +759,33 @@ graphChildren env (GResult err ok) depth graph =
 graphChildren env (GTuple ps) depth graph = graphExploreMany env ps depth graph
 graphChildren env (plan@(GNominal key _)) depth graph = match planDef env key
   Err _ => graph
-  Ok (PlanDef _ _ _ _ ctors) =>
-    graphCtorChildren env plan ctors (ctorWeights env plan depth) depth graph
+  Ok (PlanDef _ owner _ visibility ctors) =>
+    if nominalCtorsVisible env owner visibility then
+      graphCtorChildren env plan ctors (ctorWeights env plan depth) depth graph
+    else
+      graph
+
+nominalCtorsVisible : PlanEnv -> String -> PlanVisibility -> Bool
+nominalCtorsVisible _ _ PlanAbstract = False
+nominalCtorsVisible _ _ PlanPublicCtors = True
+nominalCtorsVisible (PlanEnv root _ _ _ _) owner PlanLocal = owner == root
+
+customStructuralPlan : PlanEnv -> CustomPlan -> Option GenPlan
+customStructuralPlan env (CustomPlan key carrier _) =
+  map (GNominal key) (customPlanArgs env (carrierArgs carrier))
+
+carrierArgs : Ty -> List Ty
+carrierArgs (TyApp head arg) = carrierArgs head ++ [arg]
+carrierArgs _ = []
+
+customPlanArgs : PlanEnv -> List Ty -> Option (List GenPlan)
+customPlanArgs _ [] = Some []
+customPlanArgs env (ty :: rest) = match (
+  planFor env "custom display" "value" ty,
+  customPlanArgs env rest,
+)
+  (Ok plan, Some plans) => Some (plan :: plans)
+  _ => None
 
 graphExploreMany : PlanEnv -> List GenPlan -> Int -> NativeGraph -> NativeGraph
 graphExploreMany _ [] _ graph = graph
@@ -731,6 +810,19 @@ graphCtorChildren env plan (ctor :: rest) (weight :: weights) depth graph =
   graphCtorChildren env plan rest weights depth next
 graphCtorChildren _ _ _ _ _ graph = graph
 
+graphDisplayCtorChildren : PlanEnv ->
+  GenPlan ->
+  List PlanCtor ->
+  Int ->
+  NativeGraph ->
+  NativeGraph
+graphDisplayCtorChildren _ _ [] _ graph = graph
+graphDisplayCtorChildren env plan (ctor :: rest) depth graph =
+  let next = match instantiateCtor env plan ctor
+    Err _ => graph
+    Ok fields => graphExploreMany env (map snd fields) (depth + 1) graph
+  graphDisplayCtorChildren env plan rest depth next
+
 genPlanWord : GenPlan -> String
 genPlanWord GInt = "int"
 genPlanWord GBool = "bool"
@@ -745,7 +837,7 @@ genPlanWord (GResult err ok) = "result(\{genPlanWord err},\{genPlanWord ok})"
 genPlanWord (GTuple ps) = "tuple(" ++ joinWith "," (map genPlanWord ps) ++ ")"
 genPlanWord (GNominal key ps) =
   "nominal(\{typeKeyWord key};\{joinWith "," (map genPlanWord ps)})"
-genPlanWord (GCustom (CustomPlan key _)) = "custom(" ++ typeKeyWord key ++ ")"
+genPlanWord (GCustom (CustomPlan _ _ route)) = "custom(" ++ route ++ ")"
 
 genNodePrefix : Int -> Int -> String
 genNodePrefix i j = "__np_gen_\{intToString i}_\{intToString j}"
@@ -759,26 +851,33 @@ graphRef (NativeGraph nodes _ _) prefix plan depth =
     Some (GraphNode ident _ _) => "\{graphNodeName prefix ident} \{depth}"
     None => "panic \"native property runner: missing closed generator plan\""
 
-graphLines : List PlanModule -> PlanEnv -> String -> NativeGraph -> List String
-graphLines modules env prefix (NativeGraph nodes order _) =
-  graphLinesGo modules env prefix nodes (reverseL order)
+graphLines : List PlanModule ->
+  PlanEnv ->
+  String ->
+  String ->
+  NativeGraph ->
+  List String
+graphLines modules env core prefix (NativeGraph nodes order _) =
+  graphLinesGo modules env core prefix nodes (reverseL order)
 
 graphLinesGo : List PlanModule ->
   PlanEnv ->
   String ->
+  String ->
   OrdMap GraphNode ->
   List String ->
   List String
-graphLinesGo _ _ _ _ [] = []
-graphLinesGo modules env prefix nodes (word :: rest) = match omLookup word nodes
-  None => graphLinesGo modules env prefix nodes rest
-  Some (GraphNode ident plan _) =>
-    [
-        "\{graphNodeName prefix ident} : Int -> \{planSourceTy modules plan}",
-        "\{graphNodeName prefix ident} depth = \{graphNodeBody modules env (NativeGraph nodes [] 0) prefix plan}",
-        "",
-      ]
-      ++ graphLinesGo modules env prefix nodes rest
+graphLinesGo _ _ _ _ _ [] = []
+graphLinesGo modules env core prefix nodes (word :: rest) =
+  match omLookup word nodes
+    None => graphLinesGo modules env core prefix nodes rest
+    Some (GraphNode ident plan _) =>
+      [
+          "\{graphNodeName prefix ident} : Int -> \{planSourceTy modules plan}",
+          "\{graphNodeName prefix ident} depth = \{graphNodeBody modules env core (NativeGraph nodes [] 0) prefix plan}",
+          "",
+        ]
+        ++ graphLinesGo modules env core prefix nodes rest
 
 graphDraw : List PlanModule ->
   PlanEnv ->
@@ -798,25 +897,26 @@ graphCtorDraw _ _ graph prefix plan = graphRef graph prefix plan "(depth + 1)"
 
 graphNodeBody : List PlanModule ->
   PlanEnv ->
+  String ->
   NativeGraph ->
   String ->
   GenPlan ->
   String
-graphNodeBody _ _ _ _ GInt = "__np_int ()"
-graphNodeBody _ _ _ _ GBool = "__np_bool ()"
-graphNodeBody _ _ _ _ GFloat =
+graphNodeBody _ _ _ _ _ GInt = "__np_int ()"
+graphNodeBody _ _ _ _ _ GBool = "__np_bool ()"
+graphNodeBody _ _ _ _ _ GFloat =
   "intToFloat ((__np_next ()) % 2000001) * (1.0 / 1000000.0) - 1.0"
-graphNodeBody _ _ _ _ GChar = "__np_char ()"
-graphNodeBody _ _ _ _ GString = stringExpr 0
-graphNodeBody _ _ _ _ GUnit = "()"
-graphNodeBody _ _ _ _ (GCustom _) = customDrawExpr
-graphNodeBody modules env graph prefix (GList p) =
+graphNodeBody _ _ _ _ _ GChar = "__np_char ()"
+graphNodeBody _ _ _ _ _ GString = stringExpr 0
+graphNodeBody _ _ _ _ _ GUnit = "()"
+graphNodeBody _ _ core _ _ (GCustom _) = customDrawExpr core
+graphNodeBody modules env core graph prefix (GList p) =
   renderListAtDepth "[" "]" env p (graphDraw modules env graph prefix p) 0
-graphNodeBody modules env graph prefix (GArray p) =
+graphNodeBody modules env core graph prefix (GArray p) =
   renderListAtDepth "[|" "|]" env p (graphDraw modules env graph prefix p) 0
-graphNodeBody modules env graph prefix (GOption p) =
+graphNodeBody modules env core graph prefix (GOption p) =
   renderOptionAtDepth env p (graphDraw modules env graph prefix p) 0
-graphNodeBody modules env graph prefix (GResult err ok) =
+graphNodeBody modules env core graph prefix (GResult err ok) =
   renderResultAtDepth
     env
     err
@@ -824,13 +924,16 @@ graphNodeBody modules env graph prefix (GResult err ok) =
     (graphDraw modules env graph prefix err)
     (graphDraw modules env graph prefix ok)
     0
-graphNodeBody modules env graph prefix (GTuple ps) =
+graphNodeBody modules env core graph prefix (GTuple ps) =
   "(\{joinWith ", " (map (graphDraw modules env graph prefix) ps)})"
-graphNodeBody modules env graph prefix (plan@(GNominal key _)) =
+graphNodeBody modules env core graph prefix (plan@(GNominal key _)) =
   match planDef env key
     Err _ => "panic \"native property runner: missing planned constructor\""
-    Ok (PlanDef _ owner _ _ ctors) =>
-      graphCtorAtDepth modules env graph prefix plan owner ctors 0
+    Ok (PlanDef _ owner _ visibility ctors) =>
+      if nominalCtorsVisible env owner visibility then
+        graphCtorAtDepth modules env graph prefix plan owner ctors 0
+      else
+        "panic \"native property runner: inaccessible constructor\""
 
 graphCtorAtDepth : List PlanModule ->
   PlanEnv ->
@@ -948,9 +1051,9 @@ renderResultAtDepth env err ok error okExpr level =
   else
     "if depth <= \{intToString level} then \{here} else \{renderResultAtDepth env err ok error okExpr (level + 1)}"
 
-customDrawExpr : String
-customDrawExpr =
-  "\n  let caller = randomState ()\n  let _ = restoreRandomState (!__np_custom_state)\n  let x = arbitrary ()\n  let next = randomState ()\n  let _ = __np_custom_state := next\n  let _ = restoreRandomState caller\n  x"
+customDrawExpr : String -> String
+customDrawExpr core =
+  "\n  let caller = randomState ()\n  let _ = restoreRandomState (!__np_custom_state)\n  let x = \{core}.arbitrary ()\n  let next = randomState ()\n  let _ = __np_custom_state := next\n  let _ = restoreRandomState caller\n  x"
 
 stringExpr : Int -> String
 stringExpr _ =
@@ -1029,61 +1132,64 @@ graphDisplayRef (NativeGraph nodes _ _) prefix plan name =
 graphAuxLines : List PlanModule ->
   PlanEnv ->
   String ->
+  String ->
   NativeGraph ->
   List String
-graphAuxLines modules env prefix (NativeGraph nodes order _) =
-  graphAuxLinesGo modules env prefix nodes (reverseL order)
+graphAuxLines modules env core prefix (NativeGraph nodes order _) =
+  graphAuxLinesGo modules env core prefix nodes (reverseL order)
 
 graphAuxLinesGo : List PlanModule ->
   PlanEnv ->
   String ->
+  String ->
   OrdMap GraphNode ->
   List String ->
   List String
-graphAuxLinesGo _ _ _ _ [] = []
-graphAuxLinesGo modules env prefix nodes (word :: rest) =
+graphAuxLinesGo _ _ _ _ _ [] = []
+graphAuxLinesGo modules env core prefix nodes (word :: rest) =
   match omLookup word nodes
-    None => graphAuxLinesGo modules env prefix nodes rest
+    None => graphAuxLinesGo modules env core prefix nodes rest
     Some (GraphNode ident plan _) =>
       let graph = NativeGraph nodes [] 0
       [
           "\{shrinkNodeName prefix ident} : \{planSourceTy modules plan} -> List (\{planSourceTy modules plan})",
-          "\{shrinkNodeName prefix ident} value = \{candidateNodeBody modules env graph prefix plan "value"}",
+          "\{shrinkNodeName prefix ident} value = \{candidateNodeBody modules env core graph prefix plan "value"}",
           "",
           "\{displayNodeName prefix ident} : \{planSourceTy modules plan} -> String",
           "\{displayNodeName prefix ident} value = \{displayNodeBody modules env graph prefix plan "value"}",
           "",
         ]
-        ++ graphAuxLinesGo modules env prefix nodes rest
+        ++ graphAuxLinesGo modules env core prefix nodes rest
 
 candidateNodeBody : List PlanModule ->
   PlanEnv ->
+  String ->
   NativeGraph ->
   String ->
   GenPlan ->
   String ->
   String
-candidateNodeBody _ _ _ _ GInt name =
+candidateNodeBody _ _ _ _ _ GInt name =
   "if \{name} == 0 then [] else [0, \{name} / 2]"
-candidateNodeBody _ _ _ _ GBool name = "if \{name} then [False] else []"
-candidateNodeBody _ _ _ _ GFloat name =
+candidateNodeBody _ _ _ _ _ GBool name = "if \{name} then [False] else []"
+candidateNodeBody _ _ _ _ _ GFloat name =
   "if \{name} == 0.0 then [] else [0.0, \{name} / 2.0]"
-candidateNodeBody _ _ _ _ GChar _ = "[]"
-candidateNodeBody _ _ _ _ GString name =
+candidateNodeBody _ _ _ _ _ GChar _ = "[]"
+candidateNodeBody _ _ _ _ _ GString name =
   "if \{name} == \"\" then [] else [stringSlice 0 (stringLength \{name} / 2) \{name}]"
-candidateNodeBody _ _ _ _ GUnit _ = "[]"
-candidateNodeBody _ _ _ _ (GCustom _) name = "shrink \{name}"
-candidateNodeBody modules env graph prefix (GList p) name =
+candidateNodeBody _ _ _ _ _ GUnit _ = "[]"
+candidateNodeBody _ _ core _ _ (GCustom _) name = "\{core}.shrink \{name}"
+candidateNodeBody modules env _ graph prefix (GList p) name =
   "__np_delete_each \{name} ++ __np_replace_each (x => \{graphShrinkRef graph prefix p "x"}) \{name}"
-candidateNodeBody modules env graph prefix (GArray p) name =
+candidateNodeBody modules env _ graph prefix (GArray p) name =
   "map arrayFromList (__np_delete_each (__np_array_to_list \{name})) ++ map arrayFromList (__np_replace_each (x => \{graphShrinkRef graph prefix p "x"}) (__np_array_to_list \{name}))"
-candidateNodeBody modules env graph prefix (GOption p) name =
+candidateNodeBody modules env _ graph prefix (GOption p) name =
   "match \{name}\n  None => []\n  Some x => None :: map Some (\{graphShrinkRef graph prefix p "x"})"
-candidateNodeBody modules env graph prefix (GResult err ok) name =
+candidateNodeBody modules env _ graph prefix (GResult err ok) name =
   "match \{name}\n  Err x => map Err (\{graphShrinkRef graph prefix err "x"})\n  Ok x => map Ok (\{graphShrinkRef graph prefix ok "x"})"
-candidateNodeBody _ _ graph prefix (GTuple ps) name =
+candidateNodeBody _ _ _ graph prefix (GTuple ps) name =
   graphTupleCandidates graph prefix ps name
-candidateNodeBody modules env graph prefix (plan@(GNominal key _)) name =
+candidateNodeBody modules env _ graph prefix (plan@(GNominal key _)) name =
   graphNominalCandidates modules env graph prefix plan key name
 
 displayNodeBody : List PlanModule ->
@@ -1099,8 +1205,10 @@ displayNodeBody _ _ _ _ GFloat name = "debug \{name}"
 displayNodeBody _ _ _ _ GChar name = "debug \{name}"
 displayNodeBody _ _ _ _ GString name = "debug \{name}"
 displayNodeBody _ _ _ _ GUnit _ = "\"()\""
-displayNodeBody modules env graph prefix (GCustom (CustomPlan key _)) name =
-  graphNominalDisplay modules env graph prefix (GNominal key []) key name
+displayNodeBody modules env graph prefix (GCustom (custom@(CustomPlan key _ _))) name =
+  match customStructuralPlan env custom
+    Some plan => graphNominalDisplay modules env graph prefix plan key name
+    None => "\"<\{typeKeyName key}>\""
 displayNodeBody _ _ graph prefix (GList p) name =
   "\"[\" ++ __np_join_strings \", \" (map (x => \{graphDisplayRef graph prefix p "x"}) \{name}) ++ \"]\""
 displayNodeBody _ _ graph prefix (GArray p) name =
@@ -1144,8 +1252,11 @@ graphNominalCandidates modules env graph prefix plan key name =
   match planDef env key
     Err _ => "[]"
     Ok (PlanDef _ _ _ PlanAbstract _) => "[]"
-    Ok (PlanDef _ owner _ _ ctors) =>
-      "match \{name}\n\{joinNl (map (graphNominalCandidateArm modules env graph prefix plan owner) ctors)}"
+    Ok (PlanDef _ owner _ visibility ctors) =>
+      if nominalCtorsVisible env owner visibility then
+        "match \{name}\n\{joinNl (map (graphNominalCandidateArm modules env graph prefix plan owner) ctors)}"
+      else
+        "[]"
 
 graphNominalCandidateArm : List PlanModule ->
   PlanEnv ->
@@ -1215,11 +1326,11 @@ graphNominalDisplay : List PlanModule ->
 graphNominalDisplay modules env graph prefix plan (TypeKey typeName origin) name =
   match planDef env (TypeKey typeName origin)
     Err _ => "\"<unavailable>\""
-    Ok (PlanDef _ _ _ PlanAbstract _) => "\"<\{typeName}>\""
-    Ok (PlanDef _ owner _ PlanLocal _) if owner /= plannedRoot modules =>
-      "\"<\{typeName}>\""
-    Ok (PlanDef _ owner _ _ ctors) =>
-      "match \{name}\n\{joinNl (map (graphNominalDisplayArm modules env graph prefix plan owner) ctors)}"
+    Ok (PlanDef _ owner _ visibility ctors) =>
+      if nominalCtorsVisible env owner visibility then
+        "match \{name}\n\{joinNl (map (graphNominalDisplayArm modules env graph prefix plan owner) ctors)}"
+      else
+        "\"<\{typeName}>\""
 
 graphNominalDisplayArm : List PlanModule ->
   PlanEnv ->
