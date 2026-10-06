@@ -9,7 +9,7 @@ import frontend.ast.{
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.build_cmd.{
-  ppBuildReport, makeTempDir, scratchProjectManifest, cleanupTempDir,
+  ppBuildReport, makeTempDir, scratchProbeManifest, cleanupTempDir,
   runBuildNativeRoots, envOr, defaultMedakaRoot
 }
 import driver.loader.{entrySearchRoots}
@@ -22,8 +22,8 @@ import string.{replaceAll}
 import string.{toInt}
 import tools.probe_transcript.{
   Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, mintNonce,
-  freshProbeNonce, noncedPrefix, renameUserMain, sentinelLine, tagsInOrder,
-  valuePrintExprWith
+  freshProbeNonce, noncedPrefix, renameUserMain, runtimeDependencyName,
+  runtimeDependencyPrefix, sentinelLine, tagsInOrder, valuePrintExprWith
 }
 import tools.printer.{exprToString, ppTy}
 import tools.prop_plan.{
@@ -358,16 +358,28 @@ runInTmpPlanned : String ->
 runInTmpPlanned target tsrc modules env jobs tmp nonce =
   let entry = joinPath tmp (scratchEntryName target)
   let out = joinPath tmp "prop_probe"
-  let _ =
-    writeFile
-      (joinPath tmp "medaka.toml")
-      (scratchProjectManifest "medaka_native_props" target)
-  match writeFile entry (plannedProbeSource nonce target tsrc modules env jobs)
+  match (scratchProbeManifest
+    "medaka_native_props"
+    target
+    (runtimeDependencyName nonce))
     Err e =>
       Err
         (NativeBuildFailure
-          "native property runner: could not write the probe source: \{e}")
-    Ok _ => buildAndRunPlanned target entry out tmp jobs nonce
+          "native property runner: could not create the scratch manifest: \{e}")
+    Ok manifest => match writeFile (joinPath tmp "medaka.toml") manifest
+      Err e =>
+        Err
+          (NativeBuildFailure
+            "native property runner: could not write the scratch manifest: \{e}")
+      Ok _ =>
+        match (writeFile
+          entry
+          (plannedProbeSource nonce target tsrc modules env jobs))
+          Err e =>
+            Err
+              (NativeBuildFailure
+                "native property runner: could not write the probe source: \{e}")
+          Ok _ => buildAndRunPlanned target entry out tmp jobs nonce
 
 buildAndRunPlanned : String ->
   String ->
@@ -527,7 +539,13 @@ classifyNativeFields chunks note request i =
 -- Probe source ---------------------------------------------------------------
 
 probeNamespacePrefixes : List String
-probeNamespacePrefixes = ["__np_", "NpCore_", "NpRuntime_", "NpModule_"]
+probeNamespacePrefixes = [
+  "__np_",
+  "NpCore_",
+  "NpRuntime_",
+  "NpModule_",
+  runtimeDependencyPrefix,
+]
 
 plannedProbeSource : String ->
   String ->
@@ -603,7 +621,7 @@ plannedImports : String ->
   List String
 plannedImports nonce modules jobs env =
   "import core as \{coreAlias nonce}"
-    :: "import runtime as \{runtimeAlias nonce}"
+    :: "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}"
     :: map (importLine nonce modules) (omKeys (importOwners jobs env omEmpty))
 
 importOwners : List NativePlanOutcome -> PlanEnv -> OrdMap Unit -> OrdMap Unit

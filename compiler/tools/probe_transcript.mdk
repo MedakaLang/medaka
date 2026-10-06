@@ -66,7 +66,7 @@ import frontend.lexer.{
 }
 import support.util.{joinNl, reverseL, splitNl, startsWith, stringTrim}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
-import string.{toInt}
+import string.{replaceAll, toInt}
 
 -- The tag of a sentinel line under `prefix`, or None for an ordinary output
 -- line.
@@ -87,6 +87,19 @@ sentinelLine prefix tag = prefix ++ tag
 export
 noncedPrefix : String -> String -> String
 noncedPrefix base nonce = "\{base}\{nonce}@@ "
+
+-- A scratch probe imports the runtime catalog through this generated dependency
+-- name.  It is deliberately separate from the probe's aliases: dependency
+-- resolution happens before ordinary module search roots, so a target sibling
+-- named `runtime.mdk` cannot supply the probe's printing or RNG externs.
+export
+runtimeDependencyPrefix : String
+runtimeDependencyPrefix = "np_runtime_dep_"
+
+export
+runtimeDependencyName : String -> String
+runtimeDependencyName nonce =
+  runtimeDependencyPrefix ++ replaceAll "-" "_" nonce
 
 -- A fresh per-invocation token, drawn at driver time.
 -- OS entropy keeps protocol tags independent of the program's deterministic

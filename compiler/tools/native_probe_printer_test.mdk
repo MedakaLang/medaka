@@ -46,3 +46,31 @@ test "native probes preserve canonical printers and fresh generated names" =
           ]
           out,
       ])
+
+siblingRuntimeSource : String
+siblingRuntimeSource = "export\nmarker = 41\n"
+
+siblingRuntimeMain : String
+siblingRuntimeMain =
+  "import runtime as R\nimport test.{expectEqual}\n\ntest \"sibling runtime ordinary test\" = expectEqual 41 R.marker\n\n-- > R.marker + 1\n-- 42\n\nprop \"sibling runtime property\" (n : Int) = R.marker == 41 && n == n\n"
+
+-- The generated runtime import must bypass this ordinary sibling while the
+-- target's own import still resolves it. One native test run covers all three
+-- probe engines: declarations, doctests, and properties.
+test "native probes isolate their runtime catalog from a sibling runtime module" =
+  withFixtures
+    [("runtime.mdk", siblingRuntimeSource), ("main.mdk", siblingRuntimeMain)]
+    (target => match runNative target
+      Err message => fail message
+      Ok (code, out, err) => expectAll [
+        expectEqual 0 code,
+        expectEqual "" err,
+        expectTextContainsAll
+          [
+            "sibling runtime ordinary test [native]",
+            "R.marker + 1",
+            "Testing \"sibling runtime property\" [native] ... OK (100 tests passed)",
+            "1/1 passed",
+          ]
+          out,
+      ])

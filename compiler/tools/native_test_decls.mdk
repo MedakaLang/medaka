@@ -44,7 +44,7 @@ import frontend.ast.{Decl(..), Expr, Pat(..)}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,
-  scratchProjectManifest,
+  scratchProbeManifest,
   cleanupTempDir,
   runBuildNativeRoots,
   envOr,
@@ -66,6 +66,8 @@ import tools.probe_transcript.{
   mintNonce,
   noncedPrefix,
   renameUserMain,
+  runtimeDependencyName,
+  runtimeDependencyPrefix,
   sentinelLine,
   tagsInOrder,
   valuePrintExprWith,
@@ -152,9 +154,7 @@ nativeRendered target tsrc tests = match makeTempDir ()
 -- documents the measurement behind that rule.  It also carries the target
 -- project's own `[dependencies]`, without which the probe cannot resolve a
 -- cross-project import the interpreter arm resolves fine — see
--- `scratchProjectManifest`.
-scratchManifest : String -> <IO> String
-scratchManifest target = scratchProjectManifest "medaka_native_test" target
+-- `scratchProbeManifest`.
 
 -- Named `ts_<basename>` so the copy cannot claim the same module id as the
 -- original (which the loader would then have to choose between).
@@ -170,10 +170,19 @@ runInTmp : String ->
 runInTmp target tsrc tests tmpDir nonce =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "ts_probe"
-  let _ = writeFile (joinPath tmpDir "medaka.toml") (scratchManifest target)
-  match writeFile entryPath (probeSource nonce tsrc tests)
-    Err e => Err "native test runner: could not write the probe source: \{e}"
-    Ok _ => buildAndRun target entryPath outPath tmpDir tests nonce
+  match (scratchProbeManifest
+    "medaka_native_test"
+    target
+    (runtimeDependencyName nonce))
+    Err e =>
+      Err "native test runner: could not create the scratch manifest: \{e}"
+    Ok manifest => match writeFile (joinPath tmpDir "medaka.toml") manifest
+      Err e =>
+        Err "native test runner: could not write the scratch manifest: \{e}"
+      Ok _ => match writeFile entryPath (probeSource nonce tsrc tests)
+        Err e =>
+          Err "native test runner: could not write the probe source: \{e}"
+        Ok _ => buildAndRun target entryPath outPath tmpDir tests nonce
 
 buildAndRun : String ->
   String ->
@@ -254,14 +263,21 @@ probeNameNonce : String -> String
 probeNameNonce nonce = replaceAll "-" "_" nonce
 
 probeNamespacePrefixes : List String
-probeNamespacePrefixes = ["__ts_", "__tse_", "__tsv_", "NpTest_", "NpRuntime_"]
+probeNamespacePrefixes = [
+  "__ts_",
+  "__tse_",
+  "__tsv_",
+  "NpTest_",
+  "NpRuntime_",
+  runtimeDependencyPrefix,
+]
 
 probeSource : String -> String -> List (String, Int, Expr) -> String
 probeSource nonce tsrc tests =
   joinNl
     ([
         "import test as \{expectationAlias nonce}",
-        "import runtime as \{runtimeAlias nonce}",
+        "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}",
         "",
         renameUserMain tsrc,
         "",
