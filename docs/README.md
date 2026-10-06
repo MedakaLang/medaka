@@ -114,6 +114,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 |-----|------------|--------|
 | [`CI-ARCHITECTURE.md`](ops/CI-ARCHITECTURE.md) | CI-ARCHITECTURE.md — target architecture for Medaka's CI | PARTLY BUILT |
 | [`CLI-CONFORMANCE.md`](ops/CLI-CONFORMANCE.md) | CLI-CONFORMANCE.md — the ratified `medaka` command-line contract | RATIFIED |
+| [`COMPILER-PROPERTY-TESTING.md`](ops/COMPILER-PROPERTY-TESTING.md) | Compiler property testing | — |
 | [`DISTRIBUTION-DESIGN.md`](ops/DISTRIBUTION-DESIGN.md) | DISTRIBUTION-DESIGN.md — shipping a native `medaka` binary to strangers | PARTIAL |
 | [`EFFECTS-REARCHITECTURE-HANDOFF.md`](ops/EFFECTS-REARCHITECTURE-HANDOFF.md) | Effects rearchitecture session handoff | The arrow half |
 | [`GATE-REGISTRY-DESIGN.md`](ops/GATE-REGISTRY-DESIGN.md) | GATE-REGISTRY-DESIGN.md — the gate registry format and `medaka gate` driver | LANDED |

@@ -111,7 +111,7 @@ import string.{
   toInt, toLower, trim, unlines
 }
 import test_process.{
-  boundedVerb, boundedVerbSeconds, medakaRoot, scratchDir, underRoot
+  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
 }
 
 -- | The stdlib modules `diff_compiler_lex_files` lexed, in its own order.
@@ -1332,21 +1332,46 @@ testContentFailure : String ->
   List String ->
   <Exec, IO> Option String
 testContentFailure label rel roots wantZero wanted unwanted =
-  match testSpawn rel roots
-    Err e => Some "\{label}: \{e}"
-    Ok (code, out, err) =>
-      let text = "\{out}\n\{err}"
-      let missing = filter (n => not (contains n text)) wanted
-      let present = filter (n => contains n text) unwanted
-      if code == 0 /= wantZero then
-        Some
-          "\{label}: exited \{intToString code}, expected \{wantedExit wantZero}"
-      else if missing /= [] then
-        Some "\{label}: report is missing \{debug missing}"
-      else if present /= [] then
-        Some "\{label}: report contains \{debug present}"
-      else
-        None
+  testContentResult label wantZero wanted unwanted (testSpawn rel roots)
+
+testContentFailureWithoutMedakaEnv : String ->
+  String ->
+  List String ->
+  Bool ->
+  List String ->
+  List String ->
+  <Exec, IO> Option String
+testContentFailureWithoutMedakaEnv label rel roots wantZero wanted unwanted =
+  let bin = underRoot "test/bin/test_main"
+  let rt = underRoot "stdlib/runtime.mdk"
+  let core = underRoot "stdlib/core.mdk"
+  let args =
+    ["-u", "MEDAKA", "-u", "MEDAKA_ROOT", bin, rt, core, underRoot rel]
+      ++ map underRoot roots
+  let spawned = match boundedVerbSeconds testReportSeconds "env" args
+    Err e => Err "could not spawn environment-clean test_main: \{e}"
+    Ok (code, out, err) => Ok (code, testRelative out, testRelative err)
+  testContentResult label wantZero wanted unwanted spawned
+
+testContentResult : String ->
+  Bool ->
+  List String ->
+  List String ->
+  Result String (Int, String, String) ->
+  Option String
+testContentResult label _ _ _ (Err e) = Some "\{label}: \{e}"
+testContentResult label wantZero wanted unwanted (Ok (code, out, err)) =
+  let text = "\{out}\n\{err}"
+  let missing = filter (n => not (contains n text)) wanted
+  let present = filter (n => contains n text) unwanted
+  if code == 0 /= wantZero then
+    Some "\{label}: exited \{intToString code}, expected \{wantedExit wantZero}"
+  else if missing /= [] then
+    Some "\{label}: report is missing \{debug missing}"
+  else if present /= [] then
+    Some "\{label}: report contains \{debug present}"
+  else
+    None
 
 {- | One fixture whose WHOLE report is pinned inline rather than as a
    capturable golden, because capturing at the buggy base would have
@@ -1373,19 +1398,18 @@ testDeclsReport : String
 testDeclsReport = join "\n" [
   "running doctests in test/compiler_test_fixtures/test_decls.mdk",
   "  (no doctests found)",
-  "running tests in test/compiler_test_fixtures/test_decls.mdk",
-  "  running test/compiler_test_fixtures/test_decls.mdk:8: passing assertion",
-  "  ok   test/compiler_test_fixtures/test_decls.mdk:8: passing assertion",
-  "  running test/compiler_test_fixtures/test_decls.mdk:9: failing assertion",
-  "  FAIL test/compiler_test_fixtures/test_decls.mdk:9: failing assertion",
+  "  running test/compiler_test_fixtures/test_decls.mdk:8: passing assertion [eval]",
+  "  ok   test/compiler_test_fixtures/test_decls.mdk:8: passing assertion [eval]",
+  "  running test/compiler_test_fixtures/test_decls.mdk:9: failing assertion [eval]",
+  "  FAIL test/compiler_test_fixtures/test_decls.mdk:9: failing assertion [eval]",
   "       expected 1 but got 2",
-  "  running test/compiler_test_fixtures/test_decls.mdk:10: explicit fail",
-  "  FAIL test/compiler_test_fixtures/test_decls.mdk:10: explicit fail",
+  "  running test/compiler_test_fixtures/test_decls.mdk:10: explicit fail [eval]",
+  "  FAIL test/compiler_test_fixtures/test_decls.mdk:10: explicit fail [eval]",
   "       boom",
-  "  running test/compiler_test_fixtures/test_decls.mdk:16: block body",
-  "  ok   test/compiler_test_fixtures/test_decls.mdk:16: block body",
+  "  running test/compiler_test_fixtures/test_decls.mdk:16: block body [eval]",
+  "  ok   test/compiler_test_fixtures/test_decls.mdk:16: block body [eval]",
   "",
-  "test/compiler_test_fixtures/test_decls.mdk: 2/4 passed (2 failed, 0 errors)",
+  "test/compiler_test_fixtures/test_decls.mdk: 2/4 passed (2 failed, 0 errors, 0 known-red)",
 ]
 
 {- | #416 (S1): a NEGATIVE hash from a contract-compliant `Hashable` impl —
@@ -1397,15 +1421,14 @@ hashNegativeHashReport : String
 hashNegativeHashReport = join "\n" [
   "running doctests in test/compiler_test_fixtures/hash_negative_hash.mdk",
   "  (no doctests found)",
-  "running tests in test/compiler_test_fixtures/hash_negative_hash.mdk",
-  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:32: hash_map: negative hash finds its key (#416)",
-  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:32: hash_map: negative hash finds its key (#416)",
-  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:35: hash_set: negative hash finds its element (#416)",
-  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:35: hash_set: negative hash finds its element (#416)",
-  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:38: hash_map: intMinBound hash (#416)",
-  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:38: hash_map: intMinBound hash (#416)",
-  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:40: hash_set: intMinBound hash (#416)",
-  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:40: hash_set: intMinBound hash (#416)",
+  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:32: hash_map: negative hash finds its key (#416) [eval]",
+  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:32: hash_map: negative hash finds its key (#416) [eval]",
+  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:35: hash_set: negative hash finds its element (#416) [eval]",
+  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:35: hash_set: negative hash finds its element (#416) [eval]",
+  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:38: hash_map: intMinBound hash (#416) [eval]",
+  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:38: hash_map: intMinBound hash (#416) [eval]",
+  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:40: hash_set: intMinBound hash (#416) [eval]",
+  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:40: hash_set: intMinBound hash (#416) [eval]",
   "",
   "test/compiler_test_fixtures/hash_negative_hash.mdk: 4/4 passed",
 ]
@@ -1427,13 +1450,12 @@ ctorCollisionReport : String
 ctorCollisionReport = join "\n" [
   "running doctests in test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk",
   "  (no doctests found)",
-  "running tests in test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk",
-  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:25: amod's own Box tags TA",
-  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:25: amod's own Box tags TA",
-  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB",
-  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB",
-  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:30: a Pass/Fail collision does not break the test runner",
-  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:30: a Pass/Fail collision does not break the test runner",
+  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:25: amod's own Box tags TA [eval]",
+  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:25: amod's own Box tags TA [eval]",
+  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB [eval]",
+  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB [eval]",
+  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:30: a Pass/Fail collision does not break the test runner [eval]",
+  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:30: a Pass/Fail collision does not break the test runner [eval]",
   "",
   "test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk: 3/3 passed",
 ]
@@ -1462,8 +1484,65 @@ twoModuleCollisionFailure (entry, want) =
     "\{dir}/\{entry}.mdk"
     [dir]
     True
-    ["Testing \{debug want} ... OK (100 tests)", "1 passed, 0 failed"]
+    ["Testing \{debug want} [eval] ... OK (100 tests passed)"]
     []
+
+{- | Directory testing runs each file in a fresh child process. An explicit
+   prop seed must follow that boundary: otherwise the parent accepts `--seed`
+   but every child silently reverts to the default stream, so the failure's
+   advertised replay command does not replay the directory run. Compare each
+   direct-file and directory report, then confirm two requested seeds produce
+   distinct reports without pinning an RNG draw or a shrink result. -}
+seedDirectoryReport : Int -> String -> String -> <Exec, IO> Result String String
+seedDirectoryReport seed file dir =
+  let args target =
+    ["test", "--engines", "eval", "--seed", intToString seed, target]
+  match (
+    boundedVerbSeconds testReportSeconds medakaBin (args file),
+    boundedVerbSeconds testReportSeconds medakaBin (args dir),
+  )
+    (Ok (directCode, directOut, directErr), Ok (dirCode, dirOut, dirErr)) =>
+      let directText = testRelative "\{directOut}\n\{directErr}"
+      let directProp = seedDirectoryPropertyLine directText
+      let dirProp =
+        seedDirectoryPropertyLine (testRelative "\{dirOut}\n\{dirErr}")
+      if directCode == 0 || dirCode == 0 then
+        Err
+          "seed directory replay: the deliberately failing property unexpectedly exited 0"
+      else if directProp == "" || dirProp == "" then
+        Err "seed directory replay: missing the property result"
+      else if directProp /= dirProp then
+        Err
+          "seed directory replay: direct and directory property results differ: \{diffNote directProp dirProp}"
+      else if not (contains "FAILED" directProp) then
+        Err "seed directory replay: expected a failing property result"
+      else if not (contains "Seed: \{intToString seed}; Cases: 100" directText)
+        || not (contains "Seed: \{intToString seed}; Cases: 100" dirOut) then
+        Err "seed directory replay: missing the requested seed and case budget"
+      else
+        Ok directProp
+    (Err e, _) =>
+      Err "seed directory replay: direct invocation failed to start: \{e}"
+    (_, Err e) =>
+      Err "seed directory replay: directory invocation failed to start: \{e}"
+
+seedDirectoryPropertyLine : String -> String
+seedDirectoryPropertyLine text =
+  join "\n" (filter (contains "Testing \"seed directory replay\"") (lines text))
+
+seedDirectoryReplayFailure : <Exec, IO> Option String
+seedDirectoryReplayFailure =
+  let dir = underRoot "test/compiler_test_fixtures/seed_directory_replay"
+  let file = "\{dir}/case.mdk"
+  match (seedDirectoryReport 1 file dir, seedDirectoryReport 2 file dir)
+    (Ok seed1, Ok seed2) =>
+      if seed1 == seed2 then
+        Some
+          "seed directory replay: --seed 1 and --seed 2 produced the same report"
+      else
+        None
+    (Err e, _) => Some e
+    (_, Err e) => Some e
 
 {- | The regression battery the retired script ran UNCONDITIONALLY beside its
    corpus loop: fixtures whose claim is an exit code, a whole hand-derived
@@ -1505,23 +1584,26 @@ testBatteryFailures =
       "arbitrary_name_collision"
       "\{fix}/arbitrary_name_collision/main.mdk"
       ["\{fix}/arbitrary_name_collision", stdlib]
-      False
-      ["prop_runner: no generator for type 'Color'"]
-      ["E-NONEXHAUSTIVE-MATCH", "no matching impl for dispatch"],
+      True
+      ["Testing \"payload is an Int, always\" [eval] ... OK (100 tests passed)"]
+      [],
     testContentFailure
       "arbitrary_constrained_instance (#2813)"
       "\{fix}/arbitrary_constrained_instance.mdk"
       [fix]
-      False
-      ["the 'Arbitrary' instance for 'Tree' cannot be drawn from"]
-      ["Counterexample"],
+      True
+      [
+        "Testing \"constrained instance is reported, not ignored\" [eval] ... OK (100 tests passed)",
+      ]
+      [],
     testContentFailure
       "shrink_not_called (#2812)"
       "\{fix}/shrink_not_called.mdk"
       [fix]
       False
-      ["w = Wrap 500", "0 passed, 1 failed"]
-      ["w = Wrap 0"],
+      ["counterexample: w = Wrap(0)"]
+      [],
+    seedDirectoryReplayFailure,
     testContentFailure
       "parse_error.mdk (#892)"
       "\{fix}/parse_error.mdk"
@@ -1530,10 +1612,38 @@ testBatteryFailures =
       ["test/compiler_test_fixtures/parse_error.mdk:1:0:"]
       ["E-PANIC"],
   ]
-  countFloor "test-battery cases" 11 battery
+  countFloor "test-battery cases" 12 battery
     ++ countFloor "two-module collision entries" 4 twoModuleCollisionEntries
     ++ somes battery
     ++ somes (map twoModuleCollisionFailure twoModuleCollisionEntries)
+
+{- | `test_main` launches evaluator properties in a child process. These are
+   deliberately nongolden controls: a stale launcher can make a whole corpus
+   look capture-ready while neither a passing nor a failing law actually ran.
+   The passing fixture reaches custom generators at both its root and nested
+   field, while the false law independently retains a minimized witness. -}
+evalPropertyWorkerFailures : <Exec, IO> List String
+evalPropertyWorkerFailures = somes [
+  testContentFailureWithoutMedakaEnv
+    "eval property worker: passing custom laws"
+    "\{testFixturesDir}/user_arbitrary.mdk"
+    [testFixturesDir]
+    True
+    [
+      "Testing \"user generator is honored\" [eval] ... OK (100 tests passed)",
+      "Testing \"user generator is honored at a nested field\" [eval] ... OK (100 tests passed)",
+    ]
+    ["interpreter property worker batch aborted"],
+  testContentFailureWithoutMedakaEnv
+    "eval property worker: false law reports minimized witness"
+    "\{testFixturesDir}/int_shrink.mdk"
+    [testFixturesDir]
+    False
+    [
+      "Testing \"int_shrink: deliberately false over Int (#1307)\" [eval] ... FAILED (line 20: failed after 1 test; counterexample: a = 0)",
+    ]
+    ["interpreter property worker batch aborted"],
+]
 
 test "draft-semantic transport survives every current emitter input" = report
   "draft-semantic"
@@ -1631,3 +1741,6 @@ test "`medaka test`'s corpus reproduces its committed reports" =
 
 test "`medaka test`'s exit code and its pinned reports still discriminate" =
   report "test-battery" testBatteryFailures
+
+test "the standalone evaluator property worker runs laws before reports are captured" =
+  report "eval-property-worker" evalPropertyWorkerFailures

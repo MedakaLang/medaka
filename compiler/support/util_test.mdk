@@ -1,0 +1,125 @@
+import support.util.{
+  dedup,
+  dedupBy,
+  lenKey,
+  editDistance,
+  matchingStepPrefix,
+  splitNl,
+  joinNl,
+  parseDecChecked,
+  compareDecMag,
+}
+import list.{take}
+import array
+import test.{expectAll, expectEqual, expectNotEqual}
+
+firstByKey : List (String, Int) -> List (String, Int)
+firstByKey [] = []
+firstByKey ((key, value) :: rest) =
+  (key, value) :: firstByKey (filter ((k, _) => k /= key) rest)
+
+prop "dedupBy preserves the first representative and input order" (rows : List (String, Int)) =
+  let bounded = map ((k, v) => (intToString (stringLength k % 4), v)) rows
+  dedupBy fst bounded == firstByKey bounded
+
+prop "dedup is idempotent and duplicate concatenation changes nothing" (names : List String) =
+  dedup (dedup names) == dedup names && dedup (names ++ names) == dedup names
+
+prop "length-prefixed composite keys are injective" (a : String) (b : String) (c : String) (d : String) =
+  lenKey a ++ lenKey b == lenKey c ++ lenKey d == (a == c && b == d)
+
+prop "composite keys distinguish equivalent raw concatenations split at different boundaries" (a : String) (b : String) (c : String) =
+  let middle = "|" ++ b
+  lenKey (a ++ middle) ++ lenKey c /= lenKey a ++ lenKey (middle ++ c)
+
+prop "composite keys distinguish delimiter-collision pairs by construction" (a : String) (b : String) (c : String) =
+  lenKey (a ++ "|" ++ b) ++ lenKey c /= lenKey a ++ lenKey (b ++ "|" ++ c)
+
+prop "line split and join round-trip arbitrary text including final newlines" (text : String) =
+  joinNl (splitNl text) == text
+
+-- Exhaustive edit scripts provide an oracle independent of the rolling DP rows.
+scriptDistance : List Char -> List Char -> Int
+scriptDistance [] ys = length ys
+scriptDistance xs [] = length xs
+scriptDistance (x :: xs) (y :: ys) =
+  let replace = (if x == y then 0 else 1) + scriptDistance xs ys
+  let delete = 1 + scriptDistance xs (y :: ys)
+  let insert = 1 + scriptDistance (x :: xs) ys
+  min replace (min delete insert)
+
+shortChars : String -> List Char
+shortChars text = take 4 (toList (stringToChars text))
+
+prop "edit distance equals the minimum cost of independent edit scripts" (a : String) (b : String) =
+  let xs = shortChars a
+  let ys = shortChars b
+  editDistance
+      (stringFromChars (arrayFromList xs))
+      (stringFromChars (arrayFromList ys))
+    == scriptDistance xs ys
+
+prop "edit distance is symmetric, bounded and satisfies the triangle inequality" (a : String) (b : String) (c : String) =
+  let ab = editDistance a b
+  ab == editDistance b a
+    && ab >= abs (stringLength a - stringLength b)
+    && ab <= max (stringLength a) (stringLength b)
+    && ab <= editDistance a c + editDistance c b
+    && editDistance a a == 0
+
+-- The replayable prefix is bounded by total - 1 and stops at the first gap.
+prefixModel : List String -> List (Option String) -> Int -> List String
+prefixModel _ _ limit
+  | limit <= 0 = []
+prefixModel [] _ _ = []
+prefixModel _ [] _ = []
+prefixModel (step :: steps) (key :: keys) limit = match key
+  Some k => if step == k then step :: prefixModel steps keys (limit - 1) else []
+  None => []
+
+lastModel : List String -> Option String
+lastModel [] = None
+lastModel [x] = Some x
+lastModel (_ :: xs) = lastModel xs
+
+prop "memo prefix restoration equals the positional model" (steps : List String) (keys : List (Option String)) (total : Int) =
+  let wanted = prefixModel steps keys (total - 1)
+  matchingStepPrefix identity steps keys total == (wanted, lastModel wanted)
+
+prop "memo prefix restoration never replays the final item" (steps : List String) (raw : Int) =
+  let total = (raw % 15 + 15) % 15
+  let wanted = take (max 0 (total - 1)) steps
+  matchingStepPrefix identity steps (map Some steps) total
+    == (wanted, lastModel wanted)
+
+prop "decimal parsing round-trips nonnegative integers with zeros and separators" (raw : Int) =
+  let n = abs raw
+  let digits = intToString n
+  parseDecChecked digits == Some n
+    && parseDecChecked ("000_" ++ digits) == Some n
+    && compareDecMag ("000" ++ digits) digits == Eq
+
+test "edit scripts and composite keys cover Unicode and embedded delimiters" = expectAll
+  [
+    expectEqual 1 (editDistance "λ魚" "λ猫"),
+    expectEqual 2 (editDistance "" "λ魚"),
+    expectEqual 3 (editDistance "kitten" "sitting"),
+    expectNotEqual (lenKey "ab" ++ lenKey "c") (lenKey "a" ++ lenKey "bc"),
+    expectNotEqual (lenKey "a|b" ++ lenKey "c") (lenKey "a" ++ lenKey "b|c"),
+    expectEqual "2:λ魚" (lenKey "λ魚"),
+    expectEqual "a\n\n" (joinNl (splitNl "a\n\n")),
+    expectEqual "λ\n魚\n" (joinNl (splitNl "λ\n魚\n")),
+    expectEqual
+      [("x", 1), ("y", 2)]
+      (dedupBy fst [("x", 1), ("y", 2), ("x", 3)]),
+  ]
+
+test "decimal parsing checks the tagged-Int boundary before accumulation" = expectAll
+  [
+    expectEqual
+      (Some 4611686018427387903)
+      (parseDecChecked "4611686018427387903"),
+    expectEqual None (parseDecChecked "4611686018427387904"),
+    expectEqual None (parseDecChecked "9999999999999999999999999999999999999"),
+    expectEqual (Some 7) (parseDecChecked "000_000_7"),
+  ]

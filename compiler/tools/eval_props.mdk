@@ -1,0 +1,234 @@
+-- compiler/tools/eval_props.mdk — nonce-framed property rows for the isolated
+-- interpreter-property worker.
+--
+-- A property body, generator, or shrinker may panic. Panics are not catchable
+-- in Medaka, so test_cmd runs interpreter properties in one child per target.
+-- This module owns the narrow stdout protocol between that child and its
+-- parent. A fresh nonce separates ordinary target output from runner rows.
+
+import json.{Json(..), jObject, parse, stringify, get, asInt, asString}
+import support.util.{splitNl, joinNl, startsWith, anyList}
+import tools.probe_transcript.{
+  Chunk(..),
+  chunksOf,
+  mintNonce,
+  noncedPrefix,
+  sentinelLine,
+}
+import tools.prop_runner.{
+  PropResult(..),
+  PropStatus(..),
+  PropFailureKind(..),
+  PropRequest,
+  propRequestName,
+  propRequestSeed,
+  propRequestCases,
+}
+
+bootstrapBase : String
+bootstrapBase = "@@__mdk_eval_props_bootstrap__@@ "
+
+export
+startEvalPropWorker : Unit -> <IO> String
+startEvalPropWorker _ =
+  let nonce = mintNonce ()
+  let _ = putStrLn "\{bootstrapBase}\{nonce}"
+  let _ = flushStdout ()
+  nonce
+
+-- Emit the bootstrap before loading the target, and keep the nonce out of
+-- argv and the environment. Framing avoids accidental output collisions;
+-- property programs with OS effects remain trusted code.
+export
+takeEvalPropBootstrap : String -> Result String (String, String)
+takeEvalPropBootstrap stdout = match splitNl stdout
+  [] => Err "interpreter property worker omitted its bootstrap header"
+  header :: rest =>
+    if not (startsWith bootstrapBase header) then
+      Err "interpreter property worker emitted a malformed bootstrap header"
+    else
+      let nonce =
+        stringSlice (stringLength bootstrapBase) (stringLength header) header
+      if nonce == "" then
+        Err "interpreter property worker emitted an empty bootstrap nonce"
+      else if anyList (startsWith bootstrapBase) rest then
+        Err "interpreter property worker emitted a duplicate bootstrap header"
+      else
+        Ok (nonce, joinNl rest)
+
+sentinelBase : String
+sentinelBase = "@@__mdk_eval_props__@@"
+
+export
+sentinelPrefix : String -> String
+sentinelPrefix nonce = noncedPrefix sentinelBase nonce
+
+rowTag : Int -> String
+rowTag i = "row-\{intToString i}"
+
+endTag : String
+endTag = "END"
+
+export
+emitEvalPropRows : String -> List PropResult -> <IO> Unit
+emitEvalPropRows nonce rows = do
+  let _ = emitRows nonce 0 rows
+  let _ = putStrLn (sentinelLine (sentinelPrefix nonce) endTag)
+  flushStdout ()
+
+emitRows : String -> Int -> List PropResult -> <IO> Unit
+emitRows _ _ [] = ()
+emitRows nonce i (row :: rest) = do
+  let _ = putStrLn (sentinelLine (sentinelPrefix nonce) (rowTag i))
+  let _ = putStrLn (stringify (propResultJson row))
+  let _ = flushStdout ()
+  emitRows nonce (i + 1) rest
+
+export
+propResultJson : PropResult -> Json
+propResultJson (PropResult engine name status failure detail seed cases) = jObject
+  [
+    ("engine", JString engine),
+    ("name", JString name),
+    ("status", JString (propStatusText status)),
+    ("failureKind", propFailureKindJson failure),
+    ("detail", JString detail),
+    ("seed", JInt seed),
+    ("cases", JInt cases),
+  ]
+
+export
+propStatusText : PropStatus -> String
+propStatusText PropPassedResult = "pass"
+propStatusText PropFailedResult = "fail"
+propStatusText PropErroredResult = "error"
+
+export
+propFailureKindJson : Option PropFailureKind -> Json
+propFailureKindJson None = JNull
+propFailureKindJson (Some kind) = JString (propFailureKindText kind)
+
+export
+propFailureKindText : PropFailureKind -> String
+propFailureKindText PropLawFalse = "law-false"
+propFailureKindText PropCapabilityError = "capability"
+propFailureKindText PropBuildError = "build"
+propFailureKindText PropRuntimeError = "runtime"
+propFailureKindText PropProtocolError = "protocol"
+propFailureKindText PropTypeError = "type"
+
+-- Decode only an exact complete inventory. The parent knows every requested
+-- name, seed and case budget before it starts the child, so accepting a
+-- prefix or an unexpected row would turn a child abort into a false pass.
+export
+decodeEvalPropRows : String ->
+  List PropRequest ->
+  String ->
+  Result String (List PropResult)
+decodeEvalPropRows nonce requests stdout =
+  let chunks = chunksOf (sentinelPrefix nonce) (splitNl stdout)
+  if exactTags (expectedTags 0 requests) chunks then
+    decodeRows requests chunks 0
+  else
+    Err
+      "interpreter property worker emitted an incomplete or malformed transcript"
+
+expectedTags : Int -> List PropRequest -> List String
+expectedTags _ [] = [endTag]
+expectedTags i (_ :: rest) = rowTag i :: expectedTags (i + 1) rest
+
+exactTags : List String -> List Chunk -> Bool
+exactTags [] [] = True
+exactTags (expected :: rest) ((Chunk actual lines terminated) :: chunks) =
+  expected == actual
+    && (if expected == endTag then
+      not terminated && lines == [""]
+    else
+      terminated)
+    && exactTags rest chunks
+exactTags _ _ = False
+
+decodeRows : List PropRequest ->
+  List Chunk ->
+  Int ->
+  Result String (List PropResult)
+decodeRows [] [Chunk tag _ _] _
+  | tag == endTag = Ok []
+decodeRows [] _ _ = Err "interpreter property worker omitted its terminator"
+decodeRows (request :: rest) ((Chunk tag lines _) :: chunks) i
+  | tag /= rowTag i = Err "interpreter property worker row order changed"
+  | otherwise = do
+    row <- decodeRow request lines
+    rows <- decodeRows rest chunks (i + 1)
+    Ok (row :: rows)
+decodeRows _ _ _ = Err "interpreter property worker omitted a requested row"
+
+decodeRow : PropRequest -> List String -> Result String PropResult
+decodeRow request [line] = do
+  json <- parse line
+  decodeResult request json
+decodeRow _ _ = Err "interpreter property worker row was not one JSON value"
+
+decodeResult : PropRequest -> Json -> Result String PropResult
+decodeResult request json = do
+  engine <- requiredString "engine" json
+  name <- requiredString "name" json
+  status <- requiredString "status" json
+  failure <- requiredFailure json
+  detail <- requiredString "detail" json
+  seed <- requiredInt "seed" json
+  cases <- requiredInt "cases" json
+  if engine /= "eval" then
+    Err "interpreter property worker changed a row engine"
+  else if name /= propRequestName request then
+    Err "interpreter property worker changed a row name"
+  else if seed /= propRequestSeed request
+    || cases /= propRequestCases request then
+    Err "interpreter property worker changed a row replay request"
+  else do
+    parsedStatus <- parseStatus status
+    checkedFailure <- validateFailure parsedStatus failure
+    Ok (PropResult engine name parsedStatus checkedFailure detail seed cases)
+
+requiredString : String -> Json -> Result String String
+requiredString name json = match flatMap asString (get name json)
+  Some value => Ok value
+  None => Err "interpreter property worker row has no string \{debug name}"
+
+requiredInt : String -> Json -> Result String Int
+requiredInt name json = match flatMap asInt (get name json)
+  Some value => Ok value
+  None => Err "interpreter property worker row has no integer \{debug name}"
+
+requiredFailure : Json -> Result String (Option PropFailureKind)
+requiredFailure json = match get "failureKind" json
+  Some JNull => Ok None
+  Some (JString text) => map Some (parseFailure text)
+  _ => Err "interpreter property worker row has an invalid failureKind"
+
+parseStatus : String -> Result String PropStatus
+parseStatus "pass" = Ok PropPassedResult
+parseStatus "fail" = Ok PropFailedResult
+parseStatus "error" = Ok PropErroredResult
+parseStatus _ = Err "interpreter property worker row has an invalid status"
+
+parseFailure : String -> Result String PropFailureKind
+parseFailure "law-false" = Ok PropLawFalse
+parseFailure "capability" = Ok PropCapabilityError
+parseFailure "build" = Ok PropBuildError
+parseFailure "runtime" = Ok PropRuntimeError
+parseFailure "protocol" = Ok PropProtocolError
+parseFailure "type" = Ok PropTypeError
+parseFailure _ =
+  Err "interpreter property worker row has an invalid failureKind"
+
+validateFailure : PropStatus ->
+  Option PropFailureKind ->
+  Result String (Option PropFailureKind)
+validateFailure PropPassedResult None = Ok None
+validateFailure PropFailedResult (Some PropLawFalse) = Ok (Some PropLawFalse)
+validateFailure PropErroredResult (Some PropLawFalse) =
+  Err "interpreter property worker row has an invalid status/failureKind pair"
+validateFailure PropErroredResult (Some kind) = Ok (Some kind)
+validateFailure _ _ =
+  Err "interpreter property worker row has an invalid status/failureKind pair"

@@ -153,6 +153,7 @@ import support.ordmap.{
   OrdMap,
   omInsert,
   omLookup,
+  omKeys,
   omFromPairs,
   omFromNames,
   omHasKey,
@@ -179,10 +180,17 @@ mangleUnits coreDecls modules =
       (dedup (unitDefNames ("", coreDecls)))
       (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
-  let coreOut =
-    mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
+  let externExports = buildExternExports omEmpty allUnits
+  let coreOut = mangleUnitU
+    entryMid
+    exportsPerUnit
+    ctorExportsPerUnit
+    externExports
+    ("core", coreDecls)
   let modsOut =
-    map (mangleModule entryMid exportsPerUnit ctorExportsPerUnit) modules
+    map
+      (mangleModule entryMid exportsPerUnit ctorExportsPerUnit externExports)
+      modules
   (coreOut, modsOut)
 
 -- The entry unit is the LAST one: the loader hands modules dependency-first (the
@@ -215,11 +223,18 @@ mangleUnitsEv coreDecls modules =
       (dedup (unitDefNames ("", coreDecls)))
       (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
+  let externExports = buildExternExports omEmpty allUnits
   -- ONE map per unit, threaded to both readers: the decl rename and the evidence
   -- remap name the same symbols, and building the map twice was measured at +0.99%
   -- Ir on the emitter child over the compiler's own graph.
   let units =
-    map (unitRenameMapEntry entryMid exportsPerUnit ctorExportsPerUnit) allUnits
+    map
+      (unitRenameMapEntry
+        entryMid
+        exportsPerUnit
+        ctorExportsPerUnit
+        externExports)
+      allUnits
   let renamed = map renameUnitEntry units
   let coreOut = match renamed
     [] => coreDecls
@@ -238,11 +253,12 @@ mangleUnitsEv coreDecls modules =
 unitRenameMapEntry : String ->
   List (String, List (String, String)) ->
   List (String, List (String, String, List String)) ->
+  OrdMap (OrdMap String) ->
   (String, List Decl) ->
   (String, (OrdMap String, Bool, List Decl))
-unitRenameMapEntry entryMid exportsPerUnit ctorExportsPerUnit (mid, decls) =
+unitRenameMapEntry entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls) =
   let rmList =
-    buildUnitRenameMap entryMid mid exportsPerUnit decls
+    buildUnitRenameMap entryMid mid exportsPerUnit externExports decls
       ++ buildUnitCtorRenameMap mid ctorExportsPerUnit decls
   (mid, (omFromPairs (reverseL rmList) omEmpty, isEmptyL rmList, decls))
 
@@ -928,10 +944,16 @@ lookupCtorExports k ((m, es) :: rest) =
 mangleModule : String ->
   List (String, List (String, String)) ->
   List (String, List (String, String, List String)) ->
+  OrdMap (OrdMap String) ->
   (String, List Decl) ->
   (String, List Decl)
-mangleModule entryMid exportsPerUnit ctorExportsPerUnit (mid, decls) =
-  (mid, mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit (mid, decls))
+mangleModule entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls) = (
+  mid,
+  mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit externExports (
+    mid,
+    decls,
+  ),
+)
 
 -- ── per-unit universal rename ────────────────────────────────────────────────
 -- For one unit: build the combined rename map (own top-level fns → `<mid>__<name>`,
@@ -940,10 +962,11 @@ mangleModule entryMid exportsPerUnit ctorExportsPerUnit (mid, decls) =
 mangleUnitU : String ->
   List (String, List (String, String)) ->
   List (String, List (String, String, List String)) ->
+  OrdMap (OrdMap String) ->
   (String, List Decl) ->
   List Decl
-mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit (mid, decls) =
-  let rmFn = buildUnitRenameMap entryMid mid exportsPerUnit decls
+mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls) =
+  let rmFn = buildUnitRenameMap entryMid mid exportsPerUnit externExports decls
   let rmCtor = buildUnitCtorRenameMap mid ctorExportsPerUnit decls
   let rmList = rmFn ++ rmCtor
   -- omFromPairs over the REVERSED list so the FIRST list entry wins on a duplicate
@@ -963,18 +986,88 @@ mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit (mid, decls) =
 buildUnitRenameMap : String ->
   String ->
   List (String, List (String, String)) ->
+  OrdMap (OrdMap String) ->
   List Decl ->
   List (String, String)
-buildUnitRenameMap entryMid mid exportsPerUnit decls =
+buildUnitRenameMap entryMid mid exportsPerUnit externExports decls =
   let localFns = dedup (unitDefNames (mid, decls))
-  let localEntries = map (n => (n, mangledName mid n)) localFns
+  let localEntries =
+    map (n => (n, mangledName mid n)) localFns ++ externDeclEntries False decls
   let importEntries = importRenameEntries mid exportsPerUnit decls
-  let entries = localEntries ++ importEntries
+  let entries =
+    localEntries
+      ++ importEntries
+      ++ flatMap (externImportEntries externExports False) decls
   if mid == entryMid then
     filterList (e => not (isEntryMainKey entryMid mid (fst e))) entries
   else
     entries
 -- local first ⇒ shadows any imported entry with the same key under lookupAssoc.
+
+-- Extern declarations name host symbols. Their imported spellings must be
+-- erased without adding a module prefix, including through re-export chains.
+buildExternExports : OrdMap (OrdMap String) ->
+  List (String, List Decl) ->
+  OrdMap (OrdMap String)
+buildExternExports exports [] = exports
+buildExternExports exports ((mid, decls) :: rest) =
+  let entries =
+    externDeclEntries True decls
+      ++ flatMap (externImportEntries exports True) decls
+  buildExternExports
+    (omInsert mid (omFromPairs (reverseL entries) omEmpty) exports)
+    rest
+
+externDeclEntries : Bool -> List Decl -> List (String, String)
+externDeclEntries _ [] = []
+externDeclEntries publicOnly ((DExtern pub name _) :: rest) =
+  if pub || not publicOnly then
+    (name, name) :: externDeclEntries publicOnly rest
+  else
+    externDeclEntries publicOnly rest
+externDeclEntries publicOnly ((DAttrib _ decl) :: rest) =
+  externDeclEntries publicOnly [decl] ++ externDeclEntries publicOnly rest
+externDeclEntries publicOnly (_ :: rest) = externDeclEntries publicOnly rest
+
+externImportEntries : OrdMap (OrdMap String) ->
+  Bool ->
+  Decl ->
+  List (String, String)
+externImportEntries exports publicOnly (DUse pub path _) =
+  if pub || not publicOnly then match omLookup (useModIdU path) exports
+    Some names => externPathEntries publicOnly names path
+    None => []
+  else
+    []
+externImportEntries exports publicOnly (DAttrib _ decl) =
+  externImportEntries exports publicOnly decl
+externImportEntries _ _ _ = []
+
+externPathEntries : Bool -> OrdMap String -> UsePath -> List (String, String)
+externPathEntries _ names (UseGroup _ members) =
+  flatMap
+    (member =>
+      externMemberEntry names (useMemberOrigin member) (useMemberLocal member))
+    members
+externPathEntries _ names (UseWild _) =
+  flatMap (name => externMemberEntry names name name) (omKeys names)
+externPathEntries _ names (UseName parts) =
+  if lenGt1 parts then
+    externMemberEntry names (lastOfPM parts) (lastOfPM parts)
+  else
+    []
+externPathEntries publicOnly names (UseAlias _ alias) =
+  if publicOnly then
+    []
+  else
+    flatMap
+      (name => externMemberEntry names name (qualifiedLocal alias name))
+      (omKeys names)
+
+externMemberEntry : OrdMap String -> String -> String -> List (String, String)
+externMemberEntry names origin local = match omLookup origin names
+  Some symbol => [(local, symbol)]
+  None => []
 
 -- ── a locally declared interface method un-claims its IMPLICIT-PRELUDE entry ──
 -- S1-PRELUDE (a) (`docs/spec/SHADOW-SEMANTICS.md`, fixtures `x4_*`/`x5_*`): the

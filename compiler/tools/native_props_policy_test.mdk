@@ -1,0 +1,199 @@
+-- Cross-engine regressions for the shared structural shrink policy. These
+-- invoke the public test command so the evaluator interpreter and emitted
+-- native probe consume exactly the same candidate order.
+
+import driver.build_cmd.{cleanupTempDir, makeTempDir}
+import json.{Json, asArray, asInt, asString, get, parse, stringify}
+import string.{contains, endsWith}
+import support.util.{listLen}
+import test.{Expectation, expectAll, expectEqual, expectTrue, fail, labelFail}
+import test_process.{boundedVerbSeconds, medakaBin}
+import tools.native_fixture_test_support_test.{writeFixtureFiles}
+
+withFixture : String ->
+  (String -> <Exec, IO> Expectation) ->
+  <Exec, IO> Expectation
+withFixture source inspect = match makeTempDir ()
+  Err message => fail message
+  Ok dir =>
+    let files = [
+      ("medaka.toml", "[package]\nname = \"native_props_policy\"\n"),
+      ("main.mdk", source),
+    ]
+    let result = match writeFixtureFiles dir files
+      Err message => fail message
+      Ok _ => inspect "\{dir}/main.mdk"
+    let _ = cleanupTempDir dir
+    result
+
+runReport : String -> <Exec, IO> Result String (Int, Json)
+runReport target =
+  match (boundedVerbSeconds 120 medakaBin [
+    "test", "--json", "--engines", "eval,native", "--seed", "1", "--cases",
+    "20", target
+  ])
+    Err message => Err message
+    Ok (code, out, err) =>
+      if err /= "" then
+        Err "unexpected runner stderr: \{err}"
+      else
+        map (report => (code, report)) (parse out)
+
+propertyRows : Json -> List Json
+propertyRows report = propertyRowsValue (get "properties" report)
+
+propertyRowsValue : Option Json -> List Json
+propertyRowsValue None = []
+propertyRowsValue (Some value) = match asArray value
+  None => []
+  Some rows => toList rows
+
+field : String -> Json -> Option String
+field name row = flatMap asString (get name row)
+
+intField : String -> Json -> Option Int
+intField name row = flatMap asInt (get name row)
+
+propertyRow : String -> String -> List Json -> Option Json
+propertyRow _ _ [] = None
+propertyRow engine name (row :: rows) =
+  if field "engine" row == Some engine && field "name" row == Some name then
+    Some row
+  else
+    propertyRow engine name rows
+
+warningText : String
+warningText =
+  "WARNING: shrink fuel exhausted, counterexample may not be minimal"
+
+hasExpectedDetail : String -> Bool -> Json -> Bool
+hasExpectedDetail expectedDetail expectsWarning row = match field "detail" row
+  None => False
+  Some detail =>
+    endsWith expectedDetail detail
+      && contains warningText detail == expectsWarning
+
+lawFailureDetail : String -> String -> String -> Bool -> List Json -> Bool
+lawFailureDetail engine name expectedDetail expectsWarning rows =
+  match propertyRow engine name rows
+    None => False
+    Some row =>
+      field "status" row == Some "fail"
+        && field "rawStatus" row == Some "fail"
+        && field "failureKind" row == Some "law-false"
+        && intField "seed" row == Some 1
+        && intField "cases" row == Some 20
+        && hasExpectedDetail expectedDetail expectsWarning row
+
+policyFixture : String
+policyFixture =
+  "data One = One deriving (Eq)\ndata Many = First | Second deriving (Eq)\ndata Wrap = Wrap Int deriving (Eq)\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 1\n  shrink value = [value]\nprop \"negative integer floor\" (n : Int) = n > (0 - 11)\nprop \"positive integer floor\" (n : Int) = n < 11\nprop \"list integer floor\" (xs : List Int) = match xs\n  [] => True\n  n :: _ => n > (0 - 11)\nprop \"array integer floor\" (xs : Array Int) = if arrayLength xs == 0 then True else xs[0] > (0 - 11)\nprop \"single nullary terminates\" (value : One) = False\nprop \"multiple nullaries terminate\" (value : Many) = False\nprop \"custom self cycle warns\" (value : Wrap) = False\n"
+
+test "eval and native consume the shared structural shrink policy" = withFixture
+  policyFixture
+  (target => match runReport target
+    Err message => fail message
+    Ok (code, report) =>
+      let rows = propertyRows report
+      expectAll [
+        labelFail (stringify report) (expectEqual 1 code),
+        labelFail (stringify report) (expectEqual 14 (listLen rows)),
+        expectTrue
+          (lawFailureDetail
+            "eval"
+            "negative integer floor"
+            "n = -11"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "native"
+            "negative integer floor"
+            "n = -11"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "eval"
+            "positive integer floor"
+            "n = 11"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "native"
+            "positive integer floor"
+            "n = 11"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "eval"
+            "list integer floor"
+            "xs = [-11]"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "native"
+            "list integer floor"
+            "xs = [-11]"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "eval"
+            "array integer floor"
+            "xs = [-11]"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "native"
+            "array integer floor"
+            "xs = [|-11|]"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "eval"
+            "single nullary terminates"
+            "value = One()"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "native"
+            "single nullary terminates"
+            "value = One"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "eval"
+            "multiple nullaries terminate"
+            "value = First()"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "native"
+            "multiple nullaries terminate"
+            "value = First"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "eval"
+            "custom self cycle warns"
+            "value = Wrap(1) (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
+            True
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "native"
+            "custom self cycle warns"
+            "value = Wrap (1) (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
+            True
+            rows),
+      ])

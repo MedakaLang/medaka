@@ -44,7 +44,7 @@ import frontend.ast.{Decl(..), Expr, Pat(..), noDeclLoc}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,
-  scratchProjectManifest,
+  scratchProbeManifest,
   cleanupTempDir,
   runBuildNativeRoots,
   envOr,
@@ -53,20 +53,24 @@ import driver.build_cmd.{
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
+import string.{replaceAll}
 import tools.doctest.{ExResult(..)}
 import tools.probe_transcript.{
   Chunk(..),
   chunksOf,
   decodeValue,
   endTag,
+  freshProbeNonce,
   firstNonEmptyLine,
   lookupChunk,
   mintNonce,
   noncedPrefix,
   renameUserMain,
+  runtimeDependencyName,
+  runtimeDependencyPrefix,
   sentinelLine,
   tagsInOrder,
-  valuePrintExpr,
+  valuePrintExprWith,
 }
 import tools.printer.{declToString}
 
@@ -137,7 +141,7 @@ nativeRendered target tsrc tests = match makeTempDir ()
     -- The nonce is drawn HERE, before the probe source is written, so it
     -- reaches `runInTmp` in time to land in the generated code the target's
     -- own (already-fixed) source cannot see or influence.
-    let nonce = mintNonce ()
+    let nonce = freshProbeNonce (mintNonce ()) probeNamespacePrefixes tsrc
     -- `results` is bound (and so fully forced — Medaka is strict) BEFORE the
     -- teardown, so the probe binary still exists while it runs.
     let results = runInTmp target tsrc tests tmpDir nonce
@@ -150,9 +154,7 @@ nativeRendered target tsrc tests = match makeTempDir ()
 -- documents the measurement behind that rule.  It also carries the target
 -- project's own `[dependencies]`, without which the probe cannot resolve a
 -- cross-project import the interpreter arm resolves fine — see
--- `scratchProjectManifest`.
-scratchManifest : String -> <IO> String
-scratchManifest target = scratchProjectManifest "medaka_native_test" target
+-- `scratchProbeManifest`.
 
 -- Named `ts_<basename>` so the copy cannot claim the same module id as the
 -- original (which the loader would then have to choose between).
@@ -168,10 +170,19 @@ runInTmp : String ->
 runInTmp target tsrc tests tmpDir nonce =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "ts_probe"
-  let _ = writeFile (joinPath tmpDir "medaka.toml") (scratchManifest target)
-  match writeFile entryPath (probeSource nonce tsrc tests)
-    Err e => Err "native test runner: could not write the probe source: \{e}"
-    Ok _ => buildAndRun target entryPath outPath tmpDir tests nonce
+  match (scratchProbeManifest
+    "medaka_native_test"
+    target
+    (runtimeDependencyName nonce))
+    Err e =>
+      Err "native test runner: could not create the scratch manifest: \{e}"
+    Ok manifest => match writeFile (joinPath tmpDir "medaka.toml") manifest
+      Err e =>
+        Err "native test runner: could not write the scratch manifest: \{e}"
+      Ok _ => match writeFile entryPath (probeSource nonce tsrc tests)
+        Err e =>
+          Err "native test runner: could not write the probe source: \{e}"
+        Ok _ => buildAndRun target entryPath outPath tmpDir tests nonce
 
 buildAndRun : String ->
   String ->
@@ -182,7 +193,8 @@ buildAndRun : String ->
   <IO> Result String (List ExResult)
 buildAndRun target entryPath outPath tmpDir tests nonce =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let medaka = envOr "MEDAKA" "medaka"
+  let medaka = envOr "MEDAKA" (joinPath root "medaka")
+  let emitter = envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter")
   let cc = envOr "CC" "clang"
   -- The scratch entry sits in a `mktemp -d`, so its own search roots resolve
   -- nothing; the target's real roots are passed as extraRoots.
@@ -206,7 +218,12 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
     Err rep =>
       Err
         "native test runner: could not build \{target} natively\n\{ppBuildReport rep}"
-    Ok _ => match runCommand outPath []
+    Ok _ => match runCommand "env" [
+      "MEDAKA_ROOT=" ++ root,
+      "MEDAKA=" ++ medaka,
+      "MEDAKA_EMITTER=" ++ emitter,
+      outPath,
+    ]
       Err e => Err "native test runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>
         let chunks = chunksOf (sentinelPrefix nonce) (splitNl out)
@@ -236,26 +253,51 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
 -- ([T-MAIN-ZERO-ARG]), which here would present as every test aborting.
 -- Referencing every `__tse_i__` from `main` is also what keeps `dceFilter` from
 -- dropping them.
-expectationAlias : String
-expectationAlias = "MdkProbeTest__"
+expectationAlias : String -> String
+expectationAlias nonce = "NpTest_\{probeNameNonce nonce}"
+
+runtimeAlias : String -> String
+runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
+
+probeNameNonce : String -> String
+probeNameNonce nonce = replaceAll "-" "_" nonce
+
+probeNamespacePrefixes : List String
+probeNamespacePrefixes = [
+  "__ts_",
+  "__tse_",
+  "__tsv_",
+  "NpTest_",
+  "NpRuntime_",
+  runtimeDependencyPrefix,
+]
 
 probeSource : String -> String -> List (String, Int, Expr) -> String
 probeSource nonce tsrc tests =
   joinNl
-    (["import test as \{expectationAlias}", "", renameUserMain tsrc, ""]
+    ([
+        "import test as \{expectationAlias nonce}",
+        "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}",
+        "",
+        renameUserMain tsrc,
+        "",
+      ]
       ++ testBindings nonce 0 tests
       ++ ["main ="]
       ++ mainLines nonce 0 tests
-      ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
+      ++ [
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce endTag}\"",
+        "",
+      ])
 
-bindingName : Int -> String
-bindingName i = "__ts_\{intToString i}__"
+bindingName : String -> Int -> String
+bindingName nonce i = "__ts_\{probeNameNonce nonce}_\{intToString i}__"
 
-printerName : Int -> String
-printerName i = "__tse_\{intToString i}__"
+printerName : String -> Int -> String
+printerName nonce i = "__tse_\{probeNameNonce nonce}_\{intToString i}__"
 
-valueName : Int -> String
-valueName i = "__tsv_\{intToString i}__"
+valueName : String -> Int -> String
+valueName nonce i = "__tsv_\{probeNameNonce nonce}_\{intToString i}__"
 
 -- Per test: the body as a binding, plus a printer that emits the constructor
 -- tag and the three rendered fields between sentinels.
@@ -272,7 +314,10 @@ valueName i = "__tsv_\{intToString i}__"
 testBindings : String -> Int -> List (String, Int, Expr) -> List String
 testBindings _ _ [] = []
 testBindings nonce i ((_, _, body) :: rest) =
-  [declToString (DFunDef False (bindingName i) [PWild] body noDeclLoc), ""]
+  [
+      declToString (DFunDef False (bindingName nonce i) [PWild] body noDeclLoc),
+      "",
+    ]
     ++ printerDecl nonce i
     ++ testBindings nonce (i + 1) rest
 
@@ -282,34 +327,37 @@ testBindings nonce i ((_, _, body) :: rest) =
 -- account lands in that chunk rather than inside a field.
 printerDecl : String -> Int -> List String
 printerDecl nonce i =
-  ["\{printerName i} _ =", "  let \{valueName i} = \{bindingName i} ()"]
-    ++ emit nonce i "tag" (accessor "expectationTag" i)
-    ++ emit nonce i "msg" (accessor "expectationMessage" i)
-    ++ emit nonce i "exp" (accessor "expectationExpected" i)
-    ++ lastEmit nonce i "act" (accessor "expectationActual" i)
+  [
+      "\{printerName nonce i} _ =",
+      "  let \{valueName nonce i} = \{bindingName nonce i} ()",
+    ]
+    ++ emit nonce i "tag" (accessor nonce "expectationTag" i)
+    ++ emit nonce i "msg" (accessor nonce "expectationMessage" i)
+    ++ emit nonce i "exp" (accessor nonce "expectationExpected" i)
+    ++ lastEmit nonce i "act" (accessor nonce "expectationActual" i)
     ++ [""]
 
-accessor : String -> Int -> String
-accessor f i = "\{expectationAlias}.\{f} \{valueName i}"
+accessor : String -> String -> Int -> String
+accessor nonce f i = "\{expectationAlias nonce}.\{f} \{valueName nonce i}"
 
 emit : String -> Int -> String -> String -> List String
 emit nonce i f expr = [
-  "  let _ = putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
-  "  let _ = \{valuePrintExpr expr}",
+  "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
+  "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") expr}",
 ]
 
 lastEmit : String -> Int -> String -> String -> List String
 lastEmit nonce i f expr = [
-  "  let _ = putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
-  "  \{valuePrintExpr expr}",
+  "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
+  "  \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") expr}",
 ]
 
 mainLines : String -> Int -> List (String, Int, Expr) -> List String
 mainLines _ _ [] = []
 mainLines nonce i (_ :: rest) =
   [
-      "  let _ = putStrLn \"\{sentinelFor nonce (startTag i)}\"",
-      "  let _ = \{printerName i} ()",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (startTag i)}\"",
+      "  let _ = \{printerName nonce i} ()",
     ]
     ++ mainLines nonce (i + 1) rest
 

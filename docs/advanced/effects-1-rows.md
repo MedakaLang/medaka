@@ -149,7 +149,7 @@ vocabulary:
 | `Exec` | `runCommand` |
 | `Net` | `netResolve`, `netTcpConnect`, `netTcpListen`, `netSend`, `netRecv`, … |
 | `Clock` | `wallTimeSec`, `monotonicSec`, `sleepMs` |
-| `Rand` | `randomInt`, `randomBool`, `randomFloat`, `randomChar`, `setSeed`, `osEntropyBytes` |
+| `Rand` | `randomInt`, `randomBool`, `randomFloat`, `randomChar`, `setSeed`, `randomState`, `restoreRandomState`, `osEntropyBytes` |
 | `Signal` | `pdsSignalStart`, `pdsSignalRequested` |
 | `FFI` | any `extern` you declare yourself |
 

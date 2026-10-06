@@ -1,0 +1,136 @@
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{
+  Atom,
+  EffRow(..),
+  Effvar(..),
+  atomBuiltin,
+  atomLabel,
+  atomsNorm,
+  renderAtoms,
+  rowFlat,
+  joinRows,
+  effvarId,
+  effrowNorm,
+  linkRow,
+}
+import list.{sort, nub, reverse}
+import test.{expectTrue, expectAll, expectEqual}
+
+labelOfInt : Int -> String
+labelOfInt n = "E\{intToString ((n % 4 + 4) % 4)}"
+
+unitAtoms : List Int -> List Atom
+unitAtoms xs = map (n => atomBuiltin (labelOfInt n) PUnit) xs
+
+closedRow : List Int -> EffRow
+closedRow xs = EffRow (canonicalAtoms xs) None
+
+modelLabels : List Int -> List String
+modelLabels xs = sort (nub (map labelOfInt xs))
+
+-- Row constructors require a canonical finite map; normalization itself is
+-- tested separately on unordered atoms, without using it to build this input.
+canonicalAtoms : List Int -> List Atom
+canonicalAtoms xs = map (label => atomBuiltin label PUnit) (modelLabels xs)
+
+observedLabels : EffRow -> List String
+observedLabels row = sort (map atomLabel (fst (rowFlat row)))
+
+closedJoin : EffRow -> EffRow -> EffRow
+closedJoin left right = joinRows (cells => Ref (EJoin 100 0 cells)) left right
+
+-- EFFECTS-SEMANTICS §2.2: Unit labels are finite maps, independent of order.
+prop "atomic row normalization equals a finite-set model" (xs : List Int) =
+  sort (map atomLabel (atomsNorm (unitAtoms xs))) == modelLabels xs
+
+prop "atomic row normal form is independent of ordering and multiplicity" (xs : List Int) =
+  let atoms = unitAtoms xs
+  renderAtoms (atomsNorm atoms)
+    == renderAtoms (atomsNorm (reverse atoms ++ atoms))
+
+-- EFFECTS-SEMANTICS §6.8: join is associative, commutative and idempotent.
+prop "closed grade joins satisfy the semilattice laws with empty-row identity" (xs : List Int) (ys : List Int) (zs : List Int) =
+  let a = closedRow xs
+  let b = closedRow ys
+  let c = closedRow zs
+  let empty = EffRow [] None
+  observedLabels (closedJoin a b) == modelLabels (xs ++ ys)
+    && observedLabels (closedJoin a b) == observedLabels (closedJoin b a)
+    && observedLabels (closedJoin a a) == modelLabels xs
+    && observedLabels (closedJoin a empty) == modelLabels xs
+    && observedLabels (closedJoin empty a) == modelLabels xs
+    && observedLabels (closedJoin (closedJoin a b) c)
+      == observedLabels (closedJoin a (closedJoin b c))
+    && observedLabels (closedJoin (closedJoin a b) c)
+      == modelLabels (xs ++ ys ++ zs)
+
+unboundAt : Int -> Ref Effvar -> Bool
+unboundAt expected cell = match !cell
+  EUnbound id _ => id == expected
+  _ => False
+
+-- EFFECTS-SEMANTICS §6.8: sequencing never equates independent callbacks.
+prop "joining open grades preserves both independent unsolved input identities" (xs : List Int) (ys : List Int) =
+  let left = Ref (EUnbound 1 0)
+  let right = Ref (EUnbound 2 0)
+  let joined =
+    joinRows
+      (cells => Ref (EJoin 3 0 cells))
+      (EffRow (canonicalAtoms xs) (Some left))
+      (EffRow (canonicalAtoms ys) (Some right))
+  let (atoms, tails) = rowFlat joined
+  sort (map atomLabel atoms) == modelLabels (xs ++ ys)
+    && sort (map effvarId tails) == [1, 2]
+    && unboundAt 1 left
+    && unboundAt 2 right
+
+prop "solving a shared row member after a warm normalization retains every produced effect" (xs : List Int) (ys : List Int) (prefix : List Int) =
+  let left = Ref (EUnbound 1 0)
+  let right = Ref (EUnbound 2 0)
+  let root =
+    EffRow (canonicalAtoms prefix) (Some (Ref (EJoin 3 0 [left, right, left])))
+  let warm = effrowNorm root
+  let before = sort (map effvarId (snd (rowFlat warm)))
+  linkRow left (closedRow xs)
+  let partial = observedLabels warm
+  let stillOpen = sort (map effvarId (snd (rowFlat warm)))
+  linkRow right (closedRow ys)
+  before == [1, 2]
+    && partial == modelLabels (prefix ++ xs)
+    && stillOpen == [2]
+    && observedLabels warm == modelLabels (prefix ++ xs ++ ys)
+    && length (snd (rowFlat warm)) == 0
+
+rowFromBits : Int -> EffRow
+rowFromBits bits = closedRow (filter (n => bits / pow2 n % 2 == 1) [0..=2])
+
+pow2 : Int -> Int
+pow2 0 = 1
+pow2 n = 2 * pow2 (n - 1)
+
+allClosedTriples : Int -> Bool
+allClosedTriples 512 = True
+allClosedTriples code =
+  let a = rowFromBits (code % 8)
+  let b = rowFromBits (code / 8 % 8)
+  let c = rowFromBits (code / 64)
+  let ab = observedLabels (closedJoin a b)
+  ab == sort (nub (observedLabels a ++ observedLabels b))
+    && ab == observedLabels (closedJoin b a)
+    && observedLabels (closedJoin (closedJoin a b) c)
+      == observedLabels (closedJoin a (closedJoin b c))
+    && allClosedTriples (code + 1)
+
+test "closed grade joins obey the model and algebra on all three-label row triples" =
+  expectTrue (allClosedTriples 0)
+
+test "joining an open row cannot solve its callback from a neighbouring closed row" =
+  let tail = Ref (EUnbound 7 0)
+  let open = EffRow [] (Some tail)
+  let joined = closedJoin (closedRow [0, 1]) open
+  let _ = observedLabels joined
+  expectAll [
+    expectTrue (unboundAt 7 tail),
+    expectEqual [7] (map effvarId (snd (rowFlat joined))),
+    expectEqual ["E0", "E1"] (observedLabels joined),
+  ]

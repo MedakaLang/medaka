@@ -31,6 +31,7 @@
 extern putStr : String -> <Stdout> Unit
 
 -- | Writes a string and a newline to standard output.
+export
 extern putStrLn : String -> <Stdout> Unit
 
 -- | Writes a string to standard error.
@@ -66,6 +67,7 @@ extern readExactly : Int -> <Stdin> Option String
 
 -- | A new mutable cell holding a value. Read it with `!r` and write it
 -- with `r := v`.
+export
 extern Ref : a -> Ref a
 
 -- The primitive behind `r := v`; the operator is the surface form and this
@@ -464,7 +466,17 @@ extern randomChar : Unit -> <Rand> Char
 
 -- | Seeds the random number generator, making the following draws
 -- repeatable.
+export
 extern setSeed : Int -> <Rand> Unit
+
+-- | The complete deterministic RNG state, for replay or an isolated stream.
+-- Capturing it does not draw a value. OS entropy is a separate source.
+export
+extern randomState : Unit -> <Rand> U64
+
+-- | Restores a state captured by `randomState`, including all 64 bits.
+export
+extern restoreRandomState : U64 -> <Rand> Unit
 
 -- | Exactly the given number of bytes from the operating system's entropy
 -- source.
@@ -516,6 +528,7 @@ extern charMinBound : Char
 extern charMaxBound : Char
 
 -- | An integer as a float.
+export
 extern intToFloat : Int -> Float
 
 -- | A float truncated towards zero as an integer.
@@ -536,6 +549,7 @@ extern bitAnd : Int -> Int -> Int
 extern bitOr : Int -> Int -> Int
 
 -- | Bitwise exclusive or.
+export
 extern bitXor : Int -> Int -> Int
 
 -- | The first argument shifted left by the second, in bits. The bits shifted
@@ -546,6 +560,7 @@ extern shiftLeft : Int -> Int -> Int
 -- | The first argument shifted right by the second, in bits, each vacated bit
 -- a copy of the sign. An amount of 63 or more gives `0`, or `-1` for a
 -- negative value. A negative amount panics.
+export
 extern shiftRight : Int -> Int -> Int
 
 -- | Bitwise complement.
@@ -646,12 +661,14 @@ extern floatToBytes64 : Float -> Array Int
 -- `Display` path uses, so `debug` agrees with `println` on numbers.
 
 -- | An integer in decimal.
+export
 extern intToString : Int -> String
 
 -- | A float in decimal.
 extern floatToString : Float -> String
 
 -- | A string as a quoted, escaped Medaka literal.
+export
 extern debugStringLit : String -> String
 
 -- | A character as a quoted, escaped Medaka literal.
@@ -665,6 +682,7 @@ extern debugCharLit : Char -> String
 -- bounds-checked indexing goes through `arr[i]` (panics on OOB).
 
 -- | The number of elements.
+export
 extern arrayLength : Array a -> Int
 
 -- | A new array of the given length, every element a copy of the value.
@@ -693,6 +711,7 @@ extern arrayBlit : Array a -> Int -> Array a -> Int -> Int -> Unit
 extern arrayFill : a -> Array a -> Unit
 
 -- | A new array holding the elements of a list.
+export
 extern arrayFromList : List a -> Array a
 
 -- Fixed-width integers.  Every extern in this group is internal, so the group
@@ -884,6 +903,7 @@ extern stringToUtf8Bytes : String -> Array Int
 extern stringFromUtf8Bytes : Array Int -> String
 
 -- | A one-character string.
+export
 extern charToStr : Char -> String
 
 -- | A character's codepoint.
@@ -891,12 +911,15 @@ extern charCode : Char -> Int
 
 -- | The character with a codepoint, or `None` when the codepoint is not a
 -- Unicode scalar value.
+export
 extern charFromCode : Int -> Option Char
 
 -- | The number of codepoints in a string.
+export
 extern stringLength : String -> Int
 
 -- | The characters at positions `[lo, hi)`, clamped to the string.
+export
 extern stringSlice : Int -> Int -> String -> String
 
 -- | The strings joined end to end.

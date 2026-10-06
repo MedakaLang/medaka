@@ -1,0 +1,237 @@
+-- End-to-end coverage for the isolated evaluator property worker. Each fixture
+-- asks for both engines: the evaluator must report a typed runtime row when a
+-- property path panics, and the native result must still be present.
+
+import driver.build_cmd.{makeTempDir, cleanupTempDir}
+import json.{Json, parse, get, asArray, asInt, asString, stringify}
+import test.{Expectation, expectAll, expectEqual, expectTrue, fail, labelFail}
+import test_process.{boundedVerbSeconds, medakaBin}
+import tools.native_fixture_test_support_test.{writeFixtureFiles}
+import tools.eval_props.{
+  decodeEvalPropRows, sentinelPrefix, takeEvalPropBootstrap
+}
+import tools.prop_runner.{
+  PropResult(..), PropStatus(..), PropFailureKind(..), PropRequest(..)
+}
+
+request : PropRequest
+request = PropRequest "law" 7 3
+
+completeWire : String -> String -> String
+completeWire nonce row =
+  "\{sentinelPrefix nonce}row-0\n\{row}\n\{sentinelPrefix nonce}END\n"
+
+runtimeRow : String
+runtimeRow =
+  "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}"
+
+decodesExpectedRuntime : Bool
+decodesExpectedRuntime =
+  match decodeEvalPropRows "nonce" [request] (completeWire "nonce" runtimeRow)
+    Ok [PropResult "eval" "law" PropErroredResult (Some PropRuntimeError) "boom" 7 3] =>
+      True
+    _ => False
+
+decodeRejects : String -> Bool
+decodeRejects text = match decodeEvalPropRows "nonce" [request] text
+  Err _ => True
+  Ok _ => False
+
+bootstrapPrefix : String
+bootstrapPrefix = "@@__mdk_eval_props_bootstrap__@@ "
+
+bootstrapRejects : String -> Bool
+bootstrapRejects text = match takeEvalPropBootstrap text
+  Err _ => True
+  Ok _ => False
+
+test "eval property worker decoder accepts one complete typed row" =
+  expectTrue decodesExpectedRuntime
+
+test "eval property worker decoder rejects truncated, mismatched, and contradictory rows" = expectAll
+  [
+    expectTrue
+      (decodeRejects "\{sentinelPrefix "nonce"}row-0\n\{runtimeRow}\n"),
+    expectTrue
+      (decodeRejects
+        (completeWire
+          "nonce"
+          "{\"engine\":\"native\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}")),
+    expectTrue
+      (decodeRejects
+        (completeWire
+          "nonce"
+          "{\"engine\":\"eval\",\"name\":\"other\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}")),
+    expectTrue
+      (decodeRejects
+        (completeWire
+          "nonce"
+          "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":8,\"cases\":3}")),
+    expectTrue
+      (decodeRejects
+        (completeWire
+          "nonce"
+          "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":4}")),
+    expectTrue
+      (decodeRejects
+        (completeWire
+          "nonce"
+          "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"law-false\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}")),
+    expectTrue (decodeRejects (completeWire "nonce" runtimeRow ++ "garbage\n")),
+    expectTrue (bootstrapRejects "missing\n"),
+    expectTrue
+      (bootstrapRejects "\{bootstrapPrefix}nonce\n\{bootstrapPrefix}again\n"),
+  ]
+
+withFixture : String ->
+  (String -> <Exec, IO> Expectation) ->
+  <Exec, IO> Expectation
+withFixture source inspect = match makeTempDir ()
+  Err message => fail message
+  Ok dir =>
+    let result = match writeFixtureFiles dir [
+      ("medaka.toml", "[package]\nname = \"eval_props_boundary\"\n"),
+      ("main.mdk", source),
+    ]
+      Err message => fail message
+      Ok _ => inspect "\{dir}/main.mdk"
+    let _ = cleanupTempDir dir
+    result
+
+runReport : String -> <Exec, IO> Result String (Int, Json)
+runReport target = match boundedVerbSeconds 120 "env" [
+  medakaBin,
+  "test",
+  "--json",
+  "--engines",
+  "eval,native",
+  "--seed",
+  "91",
+  "--cases",
+  "20",
+  target,
+]
+  Err message => Err message
+  Ok (code, stdout, stderr) =>
+    if stderr == "" then
+      map (report => (code, report)) (parse stdout)
+    else
+      Err "unexpected stderr: \{stderr}"
+
+runReversedReport : String -> <Exec, IO> Result String (Int, Json)
+runReversedReport target = match boundedVerbSeconds 120 "env" [
+  medakaBin,
+  "test",
+  "--json",
+  "--engines",
+  "native,eval",
+  "--seed",
+  "91",
+  "--cases",
+  "20",
+  target,
+]
+  Err message => Err message
+  Ok (code, stdout, stderr) =>
+    if stderr == "" then
+      map (report => (code, report)) (parse stdout)
+    else
+      Err "unexpected stderr: \{stderr}"
+
+propertyRows : Json -> List Json
+propertyRows report = match flatMap asArray (get "properties" report)
+  Some rows => toList rows
+  None => []
+
+textField : String -> Json -> Option String
+textField name row = flatMap asString (get name row)
+
+intField : String -> Json -> Option Int
+intField name row = flatMap asInt (get name row)
+
+rowShape : Json -> String
+rowShape row =
+  "\{textOr "" (textField "engine" row)}|\{textOr "" (textField "name" row)}|\{textOr "" (textField "status" row)}|\{textOr "" (textField "failureKind" row)}|\{intToString (intOr 0 (intField "seed" row))}|\{intToString (intOr 0 (intField "cases" row))}"
+
+textOr : String -> Option String -> String
+textOr fallback None = fallback
+textOr _ (Some text) = text
+
+intOr : Int -> Option Int -> Int
+intOr fallback None = fallback
+intOr _ (Some number) = number
+
+expectPanicBoundary : String -> Result String (Int, Json) -> Expectation
+expectPanicBoundary _ (Err message) = fail message
+expectPanicBoundary name (Ok (code, report)) =
+  let actual = map rowShape (propertyRows report)
+  let expected = [
+    "eval|\{name}|error|runtime|91|20",
+    "native|\{name}|error|runtime|91|20",
+  ]
+  expectAll [
+    labelFail (stringify report) (expectEqual 1 code),
+    labelFail (stringify report) (expectEqual expected actual),
+  ]
+
+test "a panicking property body is contained and native still reports" = withFixture
+  "prop \"body panic\" (n : Int) = panic \"body boundary proof\"\n"
+  (target => expectPanicBoundary "body panic" (runReport target))
+
+test "a panicking custom generator is contained and native still reports" = withFixture
+  "data Boom = Boom Int\nimpl Arbitrary Boom where\n  arbitrary () = panic \"generator boundary proof\"\n  shrink _ = []\nprop \"generator panic\" (value : Boom) = True\n"
+  (target => expectPanicBoundary "generator panic" (runReport target))
+
+test "a panicking custom shrinker is contained and native still reports" = withFixture
+  "data Boom = Boom Int\nimpl Arbitrary Boom where\n  arbitrary () = Boom 1\n  shrink _ = panic \"shrink boundary proof\"\nprop \"shrink panic\" (value : Boom) = False\n"
+  (target => expectPanicBoundary "shrink panic" (runReport target))
+
+test "the evaluator worker preserves one root environment across property laws" = withFixture
+  "calls : Ref Int\ncalls = Ref 0\nprop \"increment\" (n : Int) =\n  let prior = !calls\n  let _ = calls := prior + 1\n  !calls == prior + 1 && n == n\nprop \"observe\" (n : Int) = !calls == 20 && n == n\n"
+  (target => match runReport target
+    Err message => fail message
+    Ok (code, report) =>
+      let actual = map rowShape (propertyRows report)
+      let expected = [
+        "eval|increment|pass||91|20",
+        "eval|observe|pass||91|20",
+        "native|increment|pass||91|20",
+        "native|observe|pass||91|20",
+      ]
+      expectAll [
+        labelFail (stringify report) (expectEqual 0 code),
+        labelFail (stringify report) (expectEqual expected actual),
+      ])
+
+test "a target cannot forge static worker rows without the child nonce" = withFixture
+  "prop \"forged transcript\" (n : Int) =\n  let _ = putStrLn \"@@__mdk_eval_props__@@nonce@@ row-0\"\n  let _ = putStrLn \"{\\\"engine\\\":\\\"eval\\\",\\\"name\\\":\\\"forged transcript\\\",\\\"status\\\":\\\"pass\\\",\\\"failureKind\\\":null,\\\"detail\\\":\\\",\\\"seed\\\":91,\\\"cases\\\":20}\"\n  let _ = putStrLn \"@@__mdk_eval_props__@@nonce@@ END\"\n  False\n"
+  (target => match runReport target
+    Err message => fail message
+    Ok (code, report) =>
+      let actual = map rowShape (propertyRows report)
+      expectAll [
+        labelFail (stringify report) (expectEqual 1 code),
+        labelFail
+          (stringify report)
+          (expectEqual
+            [
+              "eval|forged transcript|fail|law-false|91|20",
+              "native|forged transcript|error|protocol|91|20",
+            ]
+            actual),
+      ])
+
+test "reversed engine order retains native before isolated evaluator rows" = withFixture
+  "prop \"order law\" (n : Int) = n == n\n"
+  (target => match runReversedReport target
+    Err message => fail message
+    Ok (code, report) =>
+      let actual = map rowShape (propertyRows report)
+      expectAll [
+        labelFail (stringify report) (expectEqual 0 code),
+        labelFail
+          (stringify report)
+          (expectEqual
+            ["native|order law|pass||91|20", "eval|order law|pass||91|20"]
+            actual),
+      ])

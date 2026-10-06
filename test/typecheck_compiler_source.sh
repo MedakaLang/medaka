@@ -267,7 +267,8 @@ echo "checking #1110 OriginUnresolved producer set ..."
 tyconun_allowed="compiler/entries/fuzz_gen_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/desugar.mdk
-compiler/frontend/parser.mdk"
+compiler/frontend/parser.mdk
+compiler/tools/prop_runner_test.mdk"
 # ⚠️ THIS LIST IS FILENAMES, so it cannot tell CONSTRUCTION from a PATTERN, and a
 # ⚠️ types/typecheck.mdk IS on this list as of #1110 unit D, and it is the one entry
 # that mints the sentinel at a layer this ratchet's prose was not written for. Its
@@ -305,6 +306,8 @@ compiler/frontend/parser.mdk"
 # new constructor mint.
 originun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
+compiler/tools/native_props_test.mdk
+compiler/tools/prop_plan.mdk
 compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
 compiler/types/typecheck.mdk"
@@ -338,9 +341,12 @@ echo "  ok: $(printf '%s\n' "$tyconun_actual" | grep -c .) pre-resolve producer 
 # is stripped — so the origin of that node is unobservable by construction, and the
 # node itself is discarded in the same expression. It is listed with that reasoning
 # rather than silently tolerated; a NEW entry needs its own.
+# ir/dce_test.mdk constructs fresh synthetic input for the reachability tests;
+# these declarations have never acquired a resolver identity.
 declun_allowed="compiler/entries/fuzz_gen_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/parser.mdk
+compiler/ir/dce_test.mdk
 compiler/tools/printer.mdk"
 declun_actual=$(ratchet_producer_files 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved')
 if [ "$declun_actual" != "$declun_allowed" ]; then
@@ -387,9 +393,11 @@ echo "  ok: $(printf '%s\n' "$declun_actual" | grep -c .) decl-layer producer fi
 # a whole-file exemption now covers a module the pipeline calls. Pinned to that one
 # line by the companion check `rk_occun_allowed` (below the `tc_originun` one), the
 # same way `typecheck.mdk`'s filename entry is.
+# ir/dce_test.mdk also constructs a fresh synthetic impl to test method roots.
 occun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/desugar.mdk
 compiler/frontend/parser.mdk
+compiler/ir/dce_test.mdk
 compiler/types/route_key.mdk"
 occun_actual=$(ratchet_producer_files 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved')
 if [ "$occun_actual" != "$occun_allowed" ]; then
@@ -446,6 +454,25 @@ if [ "$scopetest_originun_actual" != "$scopetest_originun_allowed" ]; then
   exit 1
 fi
 echo "  ok: scopes_test.mdk only observes OriginUnresolved"
+
+# Planner ambiguity and synthetic-fixture stamping only inspect the sentinel.
+# Pin their exact pattern lines so their file entries permit no new mint.
+check_origin_observers() {
+  originobs_actual=$(grep -w 'OriginUnresolved' "$ROOT/$1" \
+    | sed 's/^[[:space:]]*//' | grep -vE '^--' | LC_ALL=C sort)
+  if [ "$originobs_actual" != "$2" ]; then
+    echo "FAIL: the OriginUnresolved observer lines of $1 changed."
+    printf '%s\n' "$originobs_actual" | sed 's/^/    /'
+    return 1
+  fi
+  echo "  ok: $1 only observes OriginUnresolved"
+}
+check_origin_observers compiler/tools/prop_plan.mdk \
+  'hasAmbiguousUnresolved (TypeKey n OriginUnresolved) defs = listLength defs > 1' || exit 1
+check_origin_observers compiler/tools/native_props_test.mdk \
+  'stampDeclOwner (decl@(DData { dataOrigin = OriginUnresolved })) =
+stampDeclOwner (decl@(DNewtype { newtypeOrigin = OriginUnresolved })) =
+stampTy names (ty@(TyCon { tyConName, tyConOrigin = OriginUnresolved })) =' || exit 1
 
 # The LINE-GRAINED half of the typecheck.mdk entry above (see its comment). The
 # filename allow-list cannot tell the `Mono` layer from the `Ty` layer inside one

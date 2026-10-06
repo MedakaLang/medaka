@@ -205,6 +205,7 @@ suites = [
   ("net", (3, EvalAndNative)),
   ("nonempty", (15, EvalAndNative)),
   ("path", (34, EvalAndNative)),
+  ("random_state_test", (3, EvalAndNative)),
   ("regex", (94, EvalAndNative)),
   ("set", (64, EvalAndNative)),
   -- The assertion library every `*_test.mdk` in the tree imports, whose own
@@ -417,6 +418,9 @@ test "stdlib/nonempty.mdk executed >= 15 assertions" =
   floorExpectation "nonempty"
 
 test "stdlib/path.mdk executed >= 34 assertions" = floorExpectation "path"
+
+test "stdlib/random_state_test.mdk executed >= 3 assertions" =
+  floorExpectation "random_state_test"
 
 test "stdlib/regex.mdk executed >= 94 assertions" = floorExpectation "regex"
 

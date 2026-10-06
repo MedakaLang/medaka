@@ -63,8 +63,15 @@ operandText v = match force v
 -- that genuinely panics is unrecoverable and aborts the whole run.
 export
 runOneTest : List (String, Value e) -> Expr -> <e> ExResult
-runOneTest evalEnv body =
-  let env = extendEnv (EvalEnv [[]]) evalEnv
+runOneTest evalEnv body = runOneTestEnv (extendEnv (EvalEnv [[]]) evalEnv) body
+
+-- The command path already owns an evaluated root module graph.  Reuse that
+-- graph's cells so a captured Ref in a global function stays identical to the
+-- cell a test body sees.
+export
+runOneTestEnv : EvalEnv (Value e) -> Expr -> <e> ExResult
+runOneTestEnv evalEnv body =
+  let env = extendEnv evalEnv []
   match force (eval env body)
     VCon "Pass" [e, a] => Pass (operandText e) (operandText a)
     VCon "Fail" [m, e, a] =>
@@ -103,7 +110,24 @@ uncapableExterns : List Decl ->
   List (String, Int, Expr) ->
   List String
 uncapableExterns corpus env tests =
-  let unbound = unboundExternNames corpus (boundNameSet env)
+  uncapableExternNames corpus (boundNameSet env) tests
+
+-- Capability prechecking needs only names.  Reading the environment frame
+-- shape avoids flattening or forcing the values in the root evaluator cells.
+export
+uncapableExternsEnv : List Decl ->
+  EvalEnv (Value e) ->
+  List (String, Int, Expr) ->
+  List String
+uncapableExternsEnv corpus env tests = match env
+  EvalEnv frames => uncapableExternNames corpus (boundFrameNameSet frames) tests
+
+uncapableExternNames : List Decl ->
+  HashMap String Unit ->
+  List (String, Int, Expr) ->
+  List String
+uncapableExternNames corpus bound tests =
+  let unbound = unboundExternNames corpus bound
   match unbound
     [] => []
     _ =>
@@ -125,6 +149,20 @@ boundNameSet env =
   let s = new ()
   let _ = insertNames (map fst env) s
   s
+
+boundFrameNameSet : List (List (String, Ref (Value e))) -> HashMap String Unit
+boundFrameNameSet frames =
+  let s = new ()
+  let _ = insertFrameNames frames s
+  s
+
+insertFrameNames : List (List (String, Ref (Value e))) ->
+  HashMap String Unit ->
+  Unit
+insertFrameNames [] _ = ()
+insertFrameNames (frame :: rest) names =
+  let _ = insertNames (map fst frame) names
+  insertFrameNames rest names
 
 insertNames : List String -> HashMap String Unit -> Unit
 insertNames [] _ = ()

@@ -6,6 +6,7 @@
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{Decl(..), Expr(..), Pat(..), Variant(..)}
 import frontend.parser.{parse}
+import frontend.desugar.{desugar}
 import backend.private_mangle.{
   isReservedCtor,
   mangleCtorCollisions,
@@ -16,7 +17,7 @@ import backend.private_mangle.{
 
 -- (module id, source) units in dependency order; the last one is the entry.
 parseUnits : List (String, String) -> List (String, List Decl)
-parseUnits units = map (u => (fst u, parse (snd u))) units
+parseUnits units = map (u => (fst u, desugar (parse (snd u)))) units
 
 mangled : List (String, String) -> List (String, List Decl)
 mangled units = snd (mangleUnits [] (parseUnits units))
@@ -67,6 +68,60 @@ lastUnit : List (String, String) -> (String, String)
 lastUnit [] = ("", "")
 lastUnit [u] = u
 lastUnit (_ :: rest) = lastUnit rest
+
+test "extern imports erase their spelling to the canonical host symbol" =
+  let catalog = "export\nextern intToString : Int -> String\n"
+  expectAll [
+    expectEqual
+      (Some "intToString")
+      (refIn [
+        ("runtime", catalog),
+        ("app", "import runtime as R\nmain = R.intToString\n"),
+      ]),
+    expectEqual
+      (Some "intToString")
+      (refIn [
+        ("runtime", catalog),
+        ("app", "import runtime.{intToString as render}\nmain = render\n"),
+      ]),
+    expectEqual
+      (Some "intToString")
+      (refIn [
+        ("runtime", catalog),
+        ("app", "import runtime.*\nmain = intToString\n"),
+      ]),
+    expectEqual
+      (Some "intToString")
+      (refIn [
+        ("runtime", catalog),
+        ("relay", "export import runtime.{intToString}\n"),
+        ("relay2", "export import relay.*\n"),
+        ("app", "import relay2 as R\nmain = R.intToString\n"),
+      ]),
+  ]
+
+test "canonical extern imports and same-spelled local functions remain distinct" =
+  let result = mangled [
+    ("runtime", "export\nextern intToString : Int -> String\n"),
+    (
+      "app",
+      "import runtime as R\nintToString n = n\nexport local = intToString\nmain = R.intToString\n",
+    ),
+  ]
+  expectAll [
+    expectEqual (Some "intToString") (refName "main" (declsOf "app" result)),
+    expectEqual
+      (Some "app__intToString")
+      (refName "app__local" (declsOf "app" result)),
+  ]
+
+test "private externs do not acquire an imported alias route" =
+  expectEqual
+    (Some "R.hidden")
+    (refIn [
+      ("runtime", "extern hidden : Int -> Int\n"),
+      ("app", "import runtime as R\nmain = R.hidden\n"),
+    ])
 
 test "plain import maps a ctor to its declaring module" =
   expectEqual

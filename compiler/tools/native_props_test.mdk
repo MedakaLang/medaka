@@ -1,0 +1,345 @@
+import driver.build_cmd.{makeTempDir, cleanupTempDir}
+import test.{Expectation, expectAll, expectEqual, expectTrue, fail}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..), mapTyInDecl}
+import string.{contains}
+import tools.native_props.{
+  runNativePlannedPropRequests, renderNativePlannedProbe,
+  classifyNativeTranscript
+}
+import tools.prop_plan.{PlanModule(..)}
+import tools.probe_transcript.{freshProbeNonce, Chunk(..)}
+import tools.prop_runner.{
+  PropRequest(..), propResultName, propResultSeed, propResultCases,
+  propResultDetail, propResultPassed, propResultStatus, propResultFailureKind,
+  PropResult, PropStatus(..), PropFailureKind(..)
+}
+
+test "probe namespaces avoid occupied bindings and aliases without rewriting source" = expectAll
+  [
+    expectEqual
+      "123_3"
+      (freshProbeNonce
+        "123"
+        ["__np_", "NpCore_"]
+        "__np_123_state = 0\nimport core as NpCore_123_1\n__np_123_2_state = 0\n"),
+    expectEqual
+      "123"
+      (freshProbeNonce
+        "123"
+        ["__np_", "NpCore_"]
+        "-- __np_123_state\nmessage = \"NpCore_123\"\n__np_1234_state = 0\n"),
+    expectEqual
+      "123_1"
+      (freshProbeNonce
+        "123"
+        ["__np_"]
+        "__np_123_9999999999999999999999999999999_state = 0\n"),
+  ]
+
+source : String
+source =
+  "counterA : Ref Int\ncounterA = Ref 0\ncounterB : Ref Int\ncounterB = Ref 0\nprop \"first\" (n : Int) =\n  let prior = !counterA\n  let _ = counterA := prior + 1\n  !counterA == prior + 1 && n == n\nprop \"second\" (n : Int) =\n  let prior = !counterB\n  let _ = counterB := prior + 1\n  !counterB == prior + 1 && n == n\nprop \"observer\" (n : Int) = !counterA == 3 && !counterB == 7 && n == n\n"
+
+withTarget : (String -> <Exec, IO> Expectation) -> <Exec, IO> Expectation
+withTarget inspect = match makeTempDir ()
+  Err message => fail message
+  Ok dir =>
+    let target = "\{dir}/main.mdk"
+    let written = do
+      _ <- writeFile
+        "\{dir}/medaka.toml"
+        "[package]\nname = \"native_prop_requests\"\n"
+      writeFile target source
+    let result = match written
+      Err message => fail message
+      Ok _ => inspect target
+    let _ = cleanupTempDir dir
+    result
+
+rows : String -> <Exec, IO> List (String, Int, Int, Bool, String)
+rows target =
+  map
+    (r => (
+      propResultName r,
+      propResultSeed r,
+      propResultCases r,
+      propResultPassed r,
+      propResultDetail r,
+    ))
+    (runNativePlannedPropRequests target source (nativeModules source) [
+      PropRequest "first" 1 3,
+      PropRequest "second" 2 7,
+      PropRequest "observer" 99 1,
+    ])
+
+test "native requests isolate per-law seeds and budgets in one probe" = withTarget
+  (target =>
+    expectEqual
+      [
+        ("first", 1, 3, True, ""),
+        ("second", 2, 7, True, ""),
+        ("observer", 99, 1, True, ""),
+      ]
+      (rows target))
+
+nonPositiveBudget : String -> <Exec, IO> Expectation
+nonPositiveBudget target =
+  match (runNativePlannedPropRequests target source (nativeModules source) [
+    PropRequest "first" 5 0,
+  ])
+    [r] =>
+      let status = match propResultStatus r
+        PropErroredResult => True
+        _ => False
+      let kind = match propResultFailureKind r
+        Some PropProtocolError => True
+        _ => False
+      expectTrue
+        (propResultName r == "first"
+          && propResultSeed r == 5
+          && propResultCases r == 0
+          && status
+          && kind)
+    _ => fail "expected one protocol error"
+
+test "native requests reject a non-positive case budget" =
+  withTarget nonPositiveBudget
+
+classified : List Chunk -> PropResult
+classified chunks =
+  classifyNativeTranscript
+    chunks
+    "probe stopped"
+    (PropRequest "shape" (0 - 91) 23)
+    0
+
+goodTranscript : List Chunk
+goodTranscript = [
+  Chunk "0.seed" ["\"-91\""] True,
+  Chunk "0.bool" ["\"True\""] True,
+  Chunk "0.detail" ["\"ok\""] True,
+]
+
+failureCategory : PropResult -> String
+failureCategory row = match propResultFailureKind row
+  Some PropProtocolError => "protocol"
+  Some PropRuntimeError => "runtime"
+  Some PropBuildError => "build"
+  Some PropLawFalse => "law-false"
+  _ => "other"
+
+replayMetadata : PropResult -> (String, Int, Int)
+replayMetadata row =
+  (propResultName row, propResultSeed row, propResultCases row)
+
+test "completed malformed transcript fields are protocol errors before truncation" =
+  let protocolRows = map classified [
+    [Chunk "0.seed" ["unterminated"] True, Chunk "0.bool" [] False],
+    [
+      Chunk "0.seed" ["\"-91\""] True,
+      Chunk "0.bool" ["unterminated"] True,
+      Chunk "0.detail" [] False,
+    ],
+    [
+      Chunk "0.seed" ["\"-91\""] True,
+      Chunk "0.bool" ["\"not a Bool\""] True,
+      Chunk "0.detail" [] False,
+    ],
+    [Chunk "0.seed" ["\"92\""] True, Chunk "0.bool" [] False],
+  ]
+  let malformedDetail = classified [
+    Chunk "0.seed" ["\"-91\""] True,
+    Chunk "0.bool" ["\"True\""] True,
+    Chunk "0.detail" ["unterminated"] True,
+  ]
+  let incomplete = classified [
+    Chunk "0.seed" ["\"-91\""] True,
+    Chunk "0.bool" ["\"True\""] True,
+    Chunk "0.detail" [] False,
+  ]
+  expectAll [
+    expectEqual
+      ["protocol", "protocol", "protocol", "protocol"]
+      (map failureCategory protocolRows),
+    expectEqual "protocol" (failureCategory malformedDetail),
+    expectEqual "runtime" (failureCategory incomplete),
+    expectEqual
+      (map (_ => ("shape", -91, 23)) [0..=5])
+      (map replayMetadata (protocolRows ++ [malformedDetail, incomplete])),
+  ]
+
+test "native transcripts distinguish successful laws and false laws at wide seeds" =
+  let seed = 1152921504606846975
+  let request = PropRequest "wide law" seed 31
+  let prefix = [Chunk "0.seed" ["\"1152921504606846975\""] True]
+  let passed =
+    classifyNativeTranscript
+      goodTranscript
+      "unused"
+      (PropRequest "shape" (-91) 23)
+      0
+  let failed =
+    classifyNativeTranscript
+      (prefix
+        ++ [
+          Chunk "0.bool" ["\"False\""] True,
+          Chunk "0.detail" ["\"counterexample\""] True,
+        ])
+      "unused"
+      request
+      0
+  expectAll [
+    expectTrue (propResultPassed passed),
+    expectEqual "law-false" (failureCategory failed),
+    expectEqual "counterexample" (propResultDetail failed),
+    expectEqual ("wide law", seed, 31) (replayMetadata failed),
+  ]
+
+test "native compiler failures retain their build classification and replay metadata" = withTarget
+  (target =>
+    let text = "prop \"unresolved body\" (n : Int) = missingNativeProof n\n"
+    match writeFile target text
+      Err message => fail message
+      Ok _ =>
+        match (runNativePlannedPropRequests target text (nativeModules text) [
+          PropRequest "unresolved body" (-91) 23,
+        ])
+          [row] => expectAll [
+            expectEqual "build" (failureCategory row),
+            expectEqual ("unresolved body", -91, 23) (replayMetadata row),
+          ]
+          _ => fail "expected one native build failure")
+
+test "native runtime failures retain the requested replay seed and budget" = withTarget
+  (target =>
+    let text = "prop \"trapped\" (n : Int) = panic \"trap proof\"\n"
+    match writeFile target text
+      Err message => fail message
+      Ok _ =>
+        match (runNativePlannedPropRequests target text (nativeModules text) [
+          PropRequest "trapped" (0 - 20261005) 7,
+        ])
+          [result] => expectAll [
+            expectEqual
+              ("trapped", 0 - 20261005, 7)
+              (
+                propResultName result,
+                propResultSeed result,
+                propResultCases result,
+              ),
+            expectEqual
+              (True, True, True)
+              (
+                match propResultStatus result
+                  PropErroredResult => True
+                  _ => False,
+                match propResultFailureKind result
+                  Some PropRuntimeError => True
+                  _ => False,
+                contains "trap proof" (propResultDetail result),
+              ),
+          ]
+          _ => fail "expected one native runtime failure")
+
+rendered : String -> Result String String
+rendered text = renderNativePlannedProbe
+  "/tmp/native_props_render.mdk"
+  text
+  (nativeModules text)
+  [PropRequest "shape" 1 1]
+
+nativeModules : String -> List PlanModule
+nativeModules text =
+  let parsed = parse text
+  let names = localNominalNames parsed
+  let raw = map (stampDecl names) parsed
+  [PlanModule "main" raw (desugar raw)]
+
+localNominalNames : List Decl -> List String
+localNominalNames [] = []
+localNominalNames ((DData { dataName }) :: rest) =
+  dataName :: localNominalNames rest
+localNominalNames ((DNewtype { newtypeName }) :: rest) =
+  newtypeName :: localNominalNames rest
+localNominalNames ((DAttrib _ decl) :: rest) = localNominalNames (decl :: rest)
+localNominalNames (_ :: rest) = localNominalNames rest
+
+stampDecl : List String -> Decl -> Decl
+stampDecl names decl = fst (mapTyInDecl (stampTy names) (stampDeclOwner decl))
+
+stampDeclOwner : Decl -> Decl
+stampDeclOwner (decl@(DData { dataOrigin = OriginUnresolved })) =
+  DData { decl | dataOrigin = OriginModule "main" }
+stampDeclOwner (decl@(DNewtype { newtypeOrigin = OriginUnresolved })) =
+  DNewtype { decl | newtypeOrigin = OriginModule "main" }
+stampDeclOwner (DAttrib attrs decl) = DAttrib attrs (stampDeclOwner decl)
+stampDeclOwner decl = decl
+
+stampTy : List String -> Ty -> (Ty, Bool)
+stampTy names (ty@(TyCon { tyConName, tyConOrigin = OriginUnresolved })) =
+  if builtinName tyConName then
+    (TyCon { ty | tyConOrigin = OriginBuiltin }, True)
+  else if hasName tyConName names then
+    (TyCon { ty | tyConOrigin = OriginModule "main" }, True)
+  else
+    (ty, False)
+stampTy _ ty = (ty, False)
+
+builtinName : String -> Bool
+builtinName name =
+  name == "Int"
+    || name == "Bool"
+    || name == "Float"
+    || name == "Char"
+    || name == "String"
+    || name == "Unit"
+    || name == "List"
+    || name == "Array"
+    || name == "Option"
+    || name == "Result"
+
+hasName : String -> List String -> Bool
+hasName _ [] = False
+hasName name (current :: rest) = name == current || hasName name rest
+
+test "native source closes every recursive plan behind parameter-scoped helpers" =
+  let text =
+    "data Tree a = Leaf a | Fork (List (Tree a)) (Tree a)\nprop \"shape\" (left : List (Tree Int)) (right : Tree Int) = left == left && right == right\n"
+  match rendered text
+    Err message => fail message
+    Ok probe => match parse probe
+      [] => fail "rendered probe did not parse"
+      _ =>
+        expectTrue
+          (contains "import core as NpCore_" probe
+            && contains "__np_source_check_gen_0_0_node_" probe
+            && contains "__np_source_check_gen_0_1_node_" probe
+            && contains "__np_source_check_gen_0_0_shrink_" probe
+            && contains "__np_source_check_gen_0_1_display_" probe
+            && not (contains "__np_missing_plan" probe))
+
+test "native source salts helper globals without rewriting user globals" =
+  let text =
+    "__np_state : Int\n__np_state = 77\nprop \"shape\" (n : Int) = __np_state == 77 && n == n\n"
+  match rendered text
+    Err message => fail message
+    Ok probe => match parse probe
+      [] => fail "rendered probe with a user helper-shaped global did not parse"
+      _ =>
+        expectTrue
+          (contains "__np_state = 77" probe
+            && contains "__np_source_check_state : Ref Int" probe)
+
+test "native source renders named fields as one string expression" =
+  let text =
+    "data Sample = Sample { __np_field : Int, ready : Bool }\nprop \"shape\" (__np_value : Sample) = __np_value == __np_value\n"
+  match rendered text
+    Err message => fail message
+    Ok probe => match parse probe
+      [] => fail "rendered probe with named fields did not parse"
+      _ =>
+        expectTrue
+          (contains "\"__np_field = \"" probe
+            && contains "\"__np_value = \"" probe)

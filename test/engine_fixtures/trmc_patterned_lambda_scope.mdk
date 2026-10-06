@@ -1,0 +1,6 @@
+firstByKey : List (String, Int) -> List (String, Int)
+firstByKey [] = []
+firstByKey ((key, value) :: rest) =
+  (key, value) :: firstByKey (filter ((k, _) => k /= key) rest)
+
+main = firstByKey [("a", 1), ("a", 2), ("b", 3)] == [("a", 1), ("b", 3)]

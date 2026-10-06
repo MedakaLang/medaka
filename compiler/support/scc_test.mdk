@@ -1,0 +1,253 @@
+-- Independent, bounded graph laws for Tarjan's SCC implementation.  The
+-- generated pairs are projected onto five fixed names, which permits
+-- self-loops, duplicate edges, disconnected vertices, and arbitrary cycles
+-- without needing a custom Arbitrary instance.
+
+import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import list.{reverse}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.scc.{tarjanSCCs}
+import support.util.{contains}
+
+nodes : List String
+nodes = ["a", "b", "c", "d", "e"]
+
+nodeAt : Int -> String
+nodeAt n = nodeAtFrom (abs n % 5) nodes
+
+nodeAtFrom : Int -> List String -> String
+nodeAtFrom 0 (x :: _) = x
+nodeAtFrom n (_ :: xs) = nodeAtFrom (n - 1) xs
+nodeAtFrom _ [] = "a"
+
+emptyGraph : List String -> OrdMap (List String)
+emptyGraph [] = omEmpty
+emptyGraph (n :: ns) = omInsert n [] (emptyGraph ns)
+
+addEdge : (Int, Int) -> OrdMap (List String) -> OrdMap (List String)
+addEdge (fromRaw, toRaw) graph =
+  let from = nodeAt fromRaw
+  let to = nodeAt toRaw
+  let old = optionOr [] (omLookup from graph)
+  omInsert from (to :: old) graph
+
+graphFromPairs : List (Int, Int) -> OrdMap (List String)
+graphFromPairs pairs = graphFromPairsGo pairs (emptyGraph nodes)
+
+graphFromPairsGo : List (Int, Int) ->
+  OrdMap (List String) ->
+  OrdMap (List String)
+graphFromPairsGo [] graph = graph
+graphFromPairsGo (edge :: rest) graph =
+  graphFromPairsGo rest (addEdge edge graph)
+
+namedGraph : List String -> List (String, String) -> OrdMap (List String)
+namedGraph names edges = namedGraphGo edges (emptyGraph names)
+
+namedGraphGo : List (String, String) ->
+  OrdMap (List String) ->
+  OrdMap (List String)
+namedGraphGo [] graph = graph
+namedGraphGo ((from, to) :: rest) graph =
+  let old = optionOr [] (omLookup from graph)
+  namedGraphGo rest (omInsert from (to :: old) graph)
+
+reachable : OrdMap (List String) -> String -> String -> Bool
+reachable graph start goal = reachWalk graph goal [start] []
+
+reachWalk : OrdMap (List String) -> String -> List String -> List String -> Bool
+reachWalk _ _ [] _ = False
+reachWalk graph goal (here :: todo) seen
+  | here == goal = True
+  | contains here seen = reachWalk graph goal todo seen
+  | otherwise =
+    let next = optionOr [] (omLookup here graph)
+    reachWalk graph goal (next ++ todo) (here :: seen)
+
+inSameOutputGroup : List (List String) -> String -> String -> Bool
+inSameOutputGroup [] _ _ = False
+inSameOutputGroup (group :: rest) x y =
+  contains x group && contains y group || inSameOutputGroup rest x y
+
+allPairs : List String -> (String -> String -> Bool) -> Bool
+allPairs [] _ = True
+allPairs (x :: xs) p = allWith x (x :: xs) p && allPairs xs p
+
+allWith : String -> List String -> (String -> String -> Bool) -> Bool
+allWith _ [] _ = True
+allWith x (y :: ys) p = p x y && allWith x ys p
+
+namesAppearOnce : List String -> List (List String) -> Bool
+namesAppearOnce [] _ = True
+namesAppearOnce (name :: rest) groups =
+  countName name groups == 1 && namesAppearOnce rest groups
+
+countName : String -> List (List String) -> Int
+countName _ [] = 0
+countName name (group :: rest) = countInGroup name group + countName name rest
+
+countInGroup : String -> List String -> Int
+countInGroup _ [] = 0
+countInGroup name (member :: rest) =
+  (if name == member then 1 else 0) + countInGroup name rest
+
+nonEmptyGroups : List (List String) -> Bool
+nonEmptyGroups [] = True
+nonEmptyGroups ([] :: _) = False
+nonEmptyGroups (_ :: rest) = nonEmptyGroups rest
+
+onlyKnownNames : List String -> List (List String) -> Bool
+onlyKnownNames _ [] = True
+onlyKnownNames names (group :: rest) =
+  allKnown names group && onlyKnownNames names rest
+
+allKnown : List String -> List String -> Bool
+allKnown _ [] = True
+allKnown names (name :: rest) = contains name names && allKnown names rest
+
+exactPartition : List String ->
+  OrdMap (List String) ->
+  List (List String) ->
+  Bool
+exactPartition names graph groups =
+  namesAppearOnce names groups
+    && onlyKnownNames names groups
+    && nonEmptyGroups groups
+    && allPairs names (x =>
+      y =>
+        inSameOutputGroup groups x y
+          == (reachable graph x y && reachable graph y x))
+
+groupIndex : List (List String) -> String -> Int
+groupIndex groups name = groupIndexFrom groups name 0
+
+groupIndexFrom : List (List String) -> String -> Int -> Int
+groupIndexFrom [] _ index = index
+groupIndexFrom (group :: rest) name index
+  | contains name group = index
+  | otherwise = groupIndexFrom rest name (index + 1)
+
+dependencyOrder : List String ->
+  OrdMap (List String) ->
+  List (List String) ->
+  Bool
+dependencyOrder [] _ _ = True
+dependencyOrder (from :: rest) graph groups =
+  outgoingOrder from (optionOr [] (omLookup from graph)) groups
+    && dependencyOrder rest graph groups
+
+outgoingOrder : String -> List String -> List (List String) -> Bool
+outgoingOrder _ [] _ = True
+outgoingOrder from (to :: rest) groups =
+  let same = groupIndex groups from == groupIndex groups to
+  (same || groupIndex groups to < groupIndex groups from)
+    && outgoingOrder from rest groups
+
+samePartition : List String -> List (List String) -> List (List String) -> Bool
+samePartition names left right = allPairs names (x =>
+  y => inSameOutputGroup left x y == inSameOutputGroup right x y)
+
+bitAt : Int -> Int -> Int
+bitAt n 0 = n % 2
+bitAt n place = bitAt (n / 2) (place - 1)
+
+matrixEdges : List String -> Int -> List (String, String)
+matrixEdges names bits = matrixRows names names bits 0
+
+matrixRows : List String -> List String -> Int -> Int -> List (String, String)
+matrixRows [] _ _ _ = []
+matrixRows (from :: rest) names bits place =
+  matrixRow from names bits place
+    ++ matrixRows rest names bits (place + length names)
+
+matrixRow : String -> List String -> Int -> Int -> List (String, String)
+matrixRow _ [] _ _ = []
+matrixRow from (to :: rest) bits place =
+  let tail = matrixRow from rest bits (place + 1)
+  if bitAt bits place == 1 then (from, to) :: tail else tail
+
+allThreeNodeGraphsSatisfy : Int -> Bool
+allThreeNodeGraphsSatisfy 512 = True
+allThreeNodeGraphsSatisfy bits =
+  let names = ["a", "b", "c"]
+  let graph = namedGraph names (matrixEdges names bits)
+  let groups = tarjanSCCs names graph
+  exactPartition names graph groups
+    && dependencyOrder names graph groups
+    && allThreeNodeGraphsSatisfy (bits + 1)
+
+sccLaw : List (Int, Int) -> Bool
+sccLaw pairs =
+  let graph = graphFromPairs pairs
+  let groups = tarjanSCCs nodes graph
+  exactPartition nodes graph groups && dependencyOrder nodes graph groups
+
+prop "Tarjan partitions a generated bounded graph by independent mutual reachability" (pairs : List (Int, Int)) =
+  sccLaw pairs
+
+prop "Tarjan output puts every cross-component dependency before its caller" (pairs : List (Int, Int)) =
+  let graph = graphFromPairs pairs
+  dependencyOrder nodes graph (tarjanSCCs nodes graph)
+
+prop "Tarjan's partition is invariant under names and edge visitation permutations" (pairs : List (Int, Int)) =
+  let graph = graphFromPairs pairs
+  let first = tarjanSCCs nodes graph
+  let permuted = tarjanSCCs (reverse nodes) graph
+  let reversedEdges = graphFromPairs (reverse pairs)
+  let reversed = tarjanSCCs nodes reversedEdges
+  exactPartition nodes graph first
+    && exactPartition nodes graph permuted
+    && samePartition nodes first permuted
+    && exactPartition nodes reversedEdges reversed
+
+prop "Tarjan resets its scratch state across an intervening unrelated graph" (pairs : List (Int, Int)) =
+  let graph = graphFromPairs pairs
+  let first = tarjanSCCs nodes graph
+  let _ = tarjanSCCs ["x", "y", "z"] (namedGraph ["x", "y", "z"] [("x", "y")])
+  let again = tarjanSCCs nodes graph
+  exactPartition nodes graph first
+    && exactPartition nodes graph again
+    && samePartition nodes first again
+
+test "Tarjan keeps a duplicate self-loop, a two-node cycle, and an isolated vertex distinct" =
+  let names = ["a", "b", "c", "d"]
+  let graph = namedGraph names [
+    ("a", "a"),
+    ("a", "b"),
+    ("a", "b"),
+    ("b", "c"),
+    ("c", "b"),
+  ]
+  let groups = tarjanSCCs names graph
+  expectAll [
+    expectEqual [["b", "c"], ["a"], ["d"]] groups,
+    expectTrue (exactPartition names graph groups),
+    expectTrue (dependencyOrder names graph groups),
+  ]
+
+test "Tarjan returns singleton components in supplied order for an edgeless graph" =
+  expectEqual
+    [["a"], ["b"], ["c"]]
+    (tarjanSCCs ["a", "b", "c"] (namedGraph ["a", "b", "c"] []))
+
+test "the independent partition oracle rejects duplicated members and empty components" =
+  let graph = namedGraph ["a"] []
+  expectAll [
+    expectFalse (exactPartition ["a"] graph [["a", "a"]]),
+    expectFalse (exactPartition ["a"] graph [["a"], []]),
+  ]
+
+-- This is a small exhaustive corpus that runs through `test`'s native engine:
+-- all 2^(3*3) directed adjacency matrices, including loops and disconnected
+-- vertices, checked against the same independently-written reachability law.
+test "Tarjan satisfies the reachability partition and dependency laws on every three-node graph" =
+  expectTrue (allThreeNodeGraphsSatisfy 0)
+
+test "Tarjan coalesces a cycle even when its input names start in the middle" =
+  let names = ["b", "c", "a"]
+  let graph = namedGraph names [("a", "b"), ("b", "c"), ("c", "a")]
+  let groups = tarjanSCCs names graph
+  expectAll [
+    expectEqual [["b", "c", "a"]] groups,
+    expectTrue (exactPartition names graph groups),
+  ]

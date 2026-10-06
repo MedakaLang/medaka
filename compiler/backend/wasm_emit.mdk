@@ -1786,6 +1786,8 @@ isLeafExternW name = contains
     "randomBool",
     "randomChar",
     "setSeed",
+    "randomState",
+    "restoreRandomState",
     "hashInt",
     "hashChar",
     "hashBool",
@@ -2041,6 +2043,8 @@ externArityW name =
       "hashString",
       "stringConcat",
       "setSeed",
+      "randomState",
+      "restoreRandomState",
       "randomChar",
       "hashInt",
       "hashChar",
@@ -2551,7 +2555,16 @@ noteW8Extern emit name =
       setRef emit.useStrLeaf True
   let _ =
     if isLeafExternW name
-      && contains name ["randomInt", "randomBool", "randomChar", "setSeed"] then
+      && contains
+        name
+        [
+          "randomInt",
+          "randomBool",
+          "randomChar",
+          "setSeed",
+          "randomState",
+          "restoreRandomState",
+        ] then
       setRef emit.useRng True
   -- a Char main from randomChar is auto-printed by encoding the codepoint to a $str
   -- ($mdk_char_to_str → $mdk_print_strln), so randomChar needs the $str rep + the
@@ -2578,6 +2591,9 @@ noteW8Extern emit name =
   -- (ref-mode + floatRuntimeLines carries $mdk_round; $mdk_float_rem is floatRemRuntimeLines).
   let _ = if isFloatMathExternW name then setRef emit.useFloat True
   let _ = if isU64ExternW name then setRef emit.useU64 True
+  let _ =
+    if contains name ["randomState", "restoreRandomState"] then
+      setRef emit.useU64 True
   let _ =
     if isI64ExternW name then
       let _ = setRef emit.useU64 True in setRef emit.useI64 True
@@ -8091,6 +8107,17 @@ emitLeafExternRef prog env d "setSeed" [n] =
     ]
 emitLeafExternRef prog env d "setSeed" _ =
   gapLP prog "wasm W8: setSeed takes exactly one argument"
+emitLeafExternRef prog env d "randomState" [u] =
+  emitRefExpr prog env d u
+    ++ ["drop", "global.get $mdk_rng_state", "struct.new $u64"]
+emitLeafExternRef prog env d "randomState" _ =
+  gapLP prog "wasm W8: randomState takes exactly one (Unit) argument"
+emitLeafExternRef prog env d "restoreRandomState" [state] =
+  emitRefExpr prog env d state
+    ++ unboxU64W
+    ++ ["global.set $mdk_rng_state", "i32.const 0", "ref.i31"]
+emitLeafExternRef prog env d "restoreRandomState" _ =
+  gapLP prog "wasm W8: restoreRandomState takes exactly one argument"
 -- #199: hashInt unboxes the FULL-WIDTH Int (via $mdk_unbox_int → i64) so an Int key
 -- outside ±2^30 (e.g. a HashMap Int) hashes correctly instead of trapping the i31 cast;
 -- $mdk_hash_int now takes i64.  hashChar's codepoint fits i32 → sign-extend to i64.

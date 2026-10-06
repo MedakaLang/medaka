@@ -2843,6 +2843,13 @@ static unsigned long long mdk_next_u64(void) {
 void mdk_set_seed(long long tagged) {        /* setSeed : Int -> Unit */
   mdk_rng_state = (unsigned long long)(tagged >> 1);
 }
+long long mdk_random_state(long long unit) {
+  (void)unit;
+  return mdk_box_u64(mdk_rng_state);
+}
+void mdk_restore_random_state(long long state) {
+  mdk_rng_state = mdk_u64_payload(state);
+}
 /* randomInt : Int -> Int -> Int (INCLUSIVE).  Returns a RAW int — the emitter tags it. */
 /* The span hi - lo + 1 is computed unsigned: for the full Int range it is
    2^63, which a signed subtraction overflows (#3451).  lo > hi answers lo; every
