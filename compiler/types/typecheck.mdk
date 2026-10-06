@@ -10150,6 +10150,7 @@ stickyTypeErrorDiagsSince before =
     tcDiagGoalKey
     (reverseL (takeFirst (listLen now - listLen before) now))
 
+export
 tcDiagGoalKey : (String, TcDiag) -> String
 tcDiagGoalKey (mid, TcDiag code _ loc msg _ _) =
   "\{mid}|\{code}|\{locGoalKey loc}|\{msg}"

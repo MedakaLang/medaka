@@ -50,7 +50,7 @@
 -- Previously this was the synthetic literal `"__user__"`, hardcoded at every
 -- single-file call site below.
 
-import frontend.ast.{Decl(..), Expr}
+import frontend.ast.{Decl(..), Expr, Loc(..), Ty}
 import frontend.parser.{parse, parseLocated, parseResult}
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
@@ -67,7 +67,10 @@ import driver.loader.{
   readSource,
 }
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
-import types.typecheck.{elaborateOne, elaborateModules, TcDiag}
+import types.typecheck.{
+  elaborateOne, elaborateModules, TcDiag(..), tcDiagGoalKey
+}
+import types.route_key.{withEvidencePreserved}
 import backend.private_mangle.{mangleCtorCollisionsPair}
 import frontend.marker.{declRefs}
 import frontend.lexer.{collectComments}
@@ -109,11 +112,24 @@ import tools.doctest.{
 import tools.native_doctest.{runNativeDoctests}
 import tools.native_test_decls.{runNativeTests}
 import tools.native_props.{runNativePlannedPropRequests}
-import tools.prop_plan.{PlanModule(..)}
+import tools.prop_plan.{
+  PlanModule(..),
+  CustomPlan(..),
+  GenPlan,
+  PlanEnv,
+  PlanError(..),
+  PlanErrorReason(..),
+  customPlansReachable,
+  planErrorText,
+}
 import tools.prop_runner.{
   hasProps,
   runAllPlannedPropRequestsResults,
-  PropResult,
+  preparePlannedPropRequests,
+  runPreparedPropRequestsResults,
+  PreparedPropRequest(..),
+  PropHelper(..),
+  PropResult(..),
   PropStatus(..),
   PropFailureKind(..),
   PropRequest(..),
@@ -129,6 +145,7 @@ import tools.prop_runner.{
   propResultFailureKind,
   propSeedValue,
 }
+import tools.prop_helpers.{PropHelpers(..), propHelpersForPlans}
 import tools.test_pins.{
   PinIndex,
   PinKind(..),
@@ -161,7 +178,7 @@ import tools.test_pins_report.{
   gradedTestIssue,
   gradedTestPinDetail,
 }
-import support.ordmap.{omEmpty}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup}
 import tools.test_runner.{
   collectTests, exprLine, runOneTest, hasTests, uncapableExterns
 }
@@ -195,6 +212,8 @@ import support.util.{
   splitNl,
   startsWith,
   stringTrim,
+  reverseL,
+  anyList,
 }
 import support.path.{dirOf, baseOf, joinPath}
 import args.{
@@ -631,14 +650,20 @@ filterMatchedNothing (Some sub) tsrc userDecls =
 -- root module, so sharing the injected trees with them is inert; the injection
 -- is empty for a module with no doctests.
 --
---   TestPair rawCore core raw mods  loaded source declarations paired with the
+--   TestPair runtime rawCore core raw mods  loaded source declarations paired with the
 --                                   elaborated, ctor-mangled graph every phase
 --                                   evaluates
 --   TestPairErr msg     a loader failure standing in for it, so each phase
 --                       reports it exactly as it always has
 data TestPair =
-  | TestPair (List Decl) (List Decl) (List (String, List Decl)) (List (String, List Decl))
+  | TestPair (List Decl) (List Decl) (List Decl) (List (String, List Decl)) (List (String, List Decl))
   | TestPairErr String
+
+-- Helper elaboration is a second, temporary graph elaboration used only by
+-- custom Arbitrary property parameters.  It carries the reduced helper graph
+-- and the route words whose helpers the typechecker rejected.
+data HelperValidation =
+  | HelperValidation TestPair (List PropHelper) (OrdMap String) (Option String)
 
 -- What the DOCTEST phase's interpreter arm evaluates.  The two shapes are NOT
 -- interchangeable, which is why this is a separate type rather than a third
@@ -735,6 +760,7 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
       gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
       PreparedPair
         (uncurryPair
+          runtimeDecls
           coreDecls
           rawModules
           (mangleCtorCollisionsPair (coreE, modulesE))),
@@ -757,6 +783,7 @@ forcePrepared rsrc csrc (PreparedInject mods synthDecls) =
     injected)
     (coreE, modulesE, _, _, _, _) =>
       uncurryPair
+        (desugaredPrelude rsrc)
         (desugaredPrelude csrc)
         injected
         (mangleCtorCollisionsPair (coreE, modulesE))
@@ -785,11 +812,12 @@ gateOfCheck False rsrc csrc target roots mods =
       mods)
 
 uncurryPair : List Decl ->
+  List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl)) ->
   TestPair
-uncurryPair rawCore rawModules (core, mods) =
-  TestPair rawCore core rawModules mods
+uncurryPair runtimeDecls rawCore rawModules (core, mods) =
+  TestPair runtimeDecls rawCore core rawModules mods
 
 -- The single-file prop/`test "…"` arm's elaboration: the degenerate 1-module
 -- list over the shadow-dropped prelude (`programIsCore` ⇒ [], so `medaka test
@@ -810,6 +838,7 @@ prepareSingle runtimeDecls coreDecls target roots userDecls =
   let rootId = singleRootId roots target
   modulePathMap := [(rootId, target)]
   uncurryPair
+    runtimeDecls
     livePrelude
     [(rootId, userDecls)]
     (elaborateModulesMangled runtimeDecls livePrelude [(rootId, userDecls)])
@@ -1108,7 +1137,7 @@ runChosen : DoctestTrees ->
   <IO> RunResult
 runChosen (DtPair (TestPairErr e)) examples synthResults =
   buildDetailsFrom (Err e) synthResults examples
-runChosen (DtPair (TestPair _rawCoreM coreM _rawM modsM)) examples synthResults =
+runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM)) examples synthResults =
   -- Root-FULL env (locals ∪ imports ∪ globals), not `evalModulesWith`'s
   -- locals-only `rootLocals`: `firstUnresolvedDottedRef` below needs the
   -- import frame visible to find (or fail to find) an alias-qualified name
@@ -1346,13 +1375,14 @@ runPropsPinned engines pair target tsrc userDecls cases filterOpt file index
     TestPairErr err =>
       let _ = ePutStrLn err
       False
-    TestPair rawCoreM coreM rawM modsM =>
+    TestPair runtimeM rawCoreM coreM rawM modsM => withEvidencePreserved (_ =>
       printGradedPropRows
         (gradeProps
           index
           file
           (propsReportEngines
             engines
+            runtimeM
             rawCoreM
             coreM
             rawM
@@ -1363,15 +1393,20 @@ runPropsPinned engines pair target tsrc userDecls cases filterOpt file index
             cases
             filterOpt
             file
-            index))
+            index)))
 
 printGradedPropRows : List GradedProp -> <IO> Bool
 printGradedPropRows [] = True
 printGradedPropRows (row :: rest) =
   let raw = gradedPropRaw row
-  let detail = match gradedPropPinDetail row
+  let rawDetail = match gradedPropPinDetail row
     Some pin => "\{propResultDetail raw}; \{pin}"
     None => propResultDetail raw
+  let detail =
+    if propResultPassed raw && rawDetail == "" then
+      "\{intToString (propResultCases raw)} tests passed"
+    else
+      rawDetail
   let _ =
     putStrLn
       "Testing \"\{propResultName raw}\" [\{propResultEngine raw}] ... \{if gradedPropPassed row then "OK" else "FAILED"} (\{detail})"
@@ -1984,9 +2019,10 @@ propsReportPinned engines pair target tsrc userDecls cases filterOpt file index
   | not (hasProps userDecls) = []
   | otherwise = match pair
     TestPairErr _ => []
-    TestPair rawCoreM coreM rawM modsM =>
+    TestPair runtimeM rawCoreM coreM rawM modsM => withEvidencePreserved (_ =>
       propsReportEngines
         engines
+        runtimeM
         rawCoreM
         coreM
         rawM
@@ -1997,9 +2033,10 @@ propsReportPinned engines pair target tsrc userDecls cases filterOpt file index
         cases
         filterOpt
         file
-        index
+        index)
 
 propsReportEngines : List Engine ->
+  List Decl ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
@@ -2012,8 +2049,78 @@ propsReportEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ = []
-propsReportEngines (EngInterp :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEngines engines runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+  let modules = planModules rawCoreM coreM rawM modsM
+  let root = rootPlanModuleId rawM target
+  let planningRequests =
+    propRequestsFor index file "eval" userDecls cases filterOpt
+  match (preparePlannedPropRequests
+    root
+    modules
+    planningRequests
+    (elaboratedRootProps modsM userDecls))
+    Err _ =>
+      propsReportEnginesPlain
+        engines
+        rawCoreM
+        coreM
+        rawM
+        modsM
+        target
+        tsrc
+        userDecls
+        cases
+        filterOpt
+        file
+        index
+    Ok (planEnv, planningRows) =>
+      let plans = preparedPlans planningRows
+      match customPlansReachable planEnv plans
+        [] =>
+          propsReportEnginesPlain
+            engines
+            rawCoreM
+            coreM
+            rawM
+            modsM
+            target
+            tsrc
+            userDecls
+            cases
+            filterOpt
+            file
+            index
+        _ =>
+          let validation =
+            validateHelperPlans planEnv runtimeM rawCoreM rawM plans
+          runValidatedPropEngines
+            engines
+            validation
+            target
+            tsrc
+            userDecls
+            cases
+            filterOpt
+            file
+            index
+
+-- The structural-only path keeps the established engine behavior unchanged.
+propsReportEnginesPlain : List Engine ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, List Decl) ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> List PropResult
+propsReportEnginesPlain [] _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEnginesPlain (EngInterp :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   runAllPlannedPropRequestsResults
       (rootPlanModuleId rawM target)
       (planModules rawCoreM coreM rawM modsM)
@@ -2021,7 +2128,7 @@ propsReportEngines (EngInterp :: rest) rawCoreM coreM rawM modsM target tsrc use
       (propLineTests tsrc)
       (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
       (elaboratedRootProps modsM userDecls)
-    ++ propsReportEngines
+    ++ propsReportEnginesPlain
       rest
       rawCoreM
       coreM
@@ -2034,13 +2141,13 @@ propsReportEngines (EngInterp :: rest) rawCoreM coreM rawM modsM target tsrc use
       filterOpt
       file
       index
-propsReportEngines (EngNative :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEnginesPlain (EngNative :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   runNativePlannedPropRequests
       target
       tsrc
       (planModules rawCoreM coreM rawM modsM)
       (propRequestsFor index file "native" userDecls cases filterOpt)
-    ++ propsReportEngines
+    ++ propsReportEnginesPlain
       rest
       rawCoreM
       coreM
@@ -2053,6 +2160,566 @@ propsReportEngines (EngNative :: rest) rawCoreM coreM rawM modsM target tsrc use
       filterOpt
       file
       index
+
+preparedPlans : List PreparedPropRequest -> List GenPlan
+preparedPlans rows = preparedPlansGo rows []
+
+preparedPlansGo : List PreparedPropRequest -> List GenPlan -> List GenPlan
+preparedPlansGo [] acc = reverseL acc
+preparedPlansGo ((PreparedRun _ _ plans) :: rest) acc =
+  preparedPlansGo rest (prependPlans plans acc)
+preparedPlansGo (_ :: rest) acc = preparedPlansGo rest acc
+
+prependPlans : List GenPlan -> List GenPlan -> List GenPlan
+prependPlans [] acc = acc
+prependPlans (plan :: rest) acc = prependPlans rest (plan :: acc)
+
+-- Baseline diagnostics are keyed by their complete typecheck goal.  A helper
+-- pass is allowed to add only diagnostics located in a synthetic helper body.
+validateHelperPlans : PlanEnv ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List GenPlan ->
+  HelperValidation
+validateHelperPlans planEnv runtimeM rawCoreM rawM plans =
+  let baseline = helperDiagIndex (helperElabDiags runtimeM rawCoreM rawM)
+  validateHelperPlansGo planEnv runtimeM rawCoreM rawM plans baseline omEmpty
+
+validateHelperPlansGo : PlanEnv ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List GenPlan ->
+  OrdMap Unit ->
+  OrdMap String ->
+  HelperValidation
+validateHelperPlansGo planEnv runtimeM rawCoreM rawM plans baseline rejected =
+  let (PropHelpers helpers decls) = propHelpersForPlans planEnv plans
+  match helpers
+    [] =>
+      HelperValidation (helperPair runtimeM rawCoreM rawM []) [] rejected None
+    _ =>
+      let candidate = helperPair runtimeM rawCoreM rawM decls
+      let delta =
+        helperDiagDelta
+          baseline
+          (helperElabDiagsWith runtimeM rawCoreM rawM decls)
+      let helperFiles = helperFileIndex helpers 0 omEmpty
+      let (bad, unexpected) = helperDiagFailures helperFiles delta omEmpty False
+      if omKeys bad == [] then
+        if unexpected then
+          HelperValidation
+            (helperPair runtimeM rawCoreM rawM [])
+            []
+            rejected
+            (Some
+              "property helper elaboration produced an unattributed diagnostic")
+        else
+          HelperValidation candidate helpers rejected None
+      else
+        let merged = mergeHelperFailures rejected bad
+        let kept = filterHelperPlans planEnv merged plans
+        validateHelperPlansGo
+          planEnv
+          runtimeM
+          rawCoreM
+          rawM
+          kept
+          baseline
+          merged
+
+helperPair : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List Decl ->
+  TestPair
+helperPair runtimeM rawCoreM rawM decls =
+  let injected = injectIntoLast decls rawM
+  match elaborateModules runtimeM rawCoreM injected
+    (coreE, modulesE, _, _, _, _) =>
+      let (coreM, modsM) = mangleCtorCollisionsPair (coreE, modulesE)
+      TestPair runtimeM rawCoreM coreM injected modsM
+
+helperElabDiags : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, TcDiag)
+helperElabDiags runtimeM rawCoreM rawM =
+  helperElabDiagsWith runtimeM rawCoreM rawM []
+
+helperElabDiagsWith : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List Decl ->
+  List (String, TcDiag)
+helperElabDiagsWith runtimeM rawCoreM rawM decls =
+  match elaborateModules runtimeM rawCoreM (injectIntoLast decls rawM)
+    (_, _, perModule, residual, _, _) =>
+      residual ++ perModuleErrors perModule []
+
+perModuleErrors : List (String, (List TcDiag, List TcDiag)) ->
+  List (String, TcDiag) ->
+  List (String, TcDiag)
+perModuleErrors [] acc = acc
+perModuleErrors ((mid, (errors, _)) :: rest) acc =
+  perModuleErrors rest (prependTcRows mid errors acc)
+
+prependTcRows : String ->
+  List TcDiag ->
+  List (String, TcDiag) ->
+  List (String, TcDiag)
+prependTcRows _ [] acc = acc
+prependTcRows mid (diag :: rest) acc =
+  prependTcRows mid rest ((mid, diag) :: acc)
+
+helperDiagIndex : List (String, TcDiag) -> OrdMap Unit
+helperDiagIndex [] = omEmpty
+helperDiagIndex (diag :: rest) =
+  omInsert (tcDiagGoalKey diag) () (helperDiagIndex rest)
+
+helperDiagDelta : OrdMap Unit -> List (String, TcDiag) -> List (String, TcDiag)
+helperDiagDelta _ [] = []
+helperDiagDelta baseline (diag :: rest)
+  | omHasKey (tcDiagGoalKey diag) baseline = helperDiagDelta baseline rest
+  | otherwise = diag :: helperDiagDelta baseline rest
+
+helperFileIndex : List PropHelper -> Int -> OrdMap String -> OrdMap String
+helperFileIndex [] _ acc = acc
+helperFileIndex ((PropHelper word _ _) :: rest) i acc =
+  helperFileIndex
+    rest
+    (i + 1)
+    (omInsert "<property-helper:\{intToString i}>" word acc)
+
+helperDiagFailures : OrdMap String ->
+  List (String, TcDiag) ->
+  OrdMap String ->
+  Bool ->
+  (OrdMap String, Bool)
+helperDiagFailures _ [] bad unexpected = (bad, unexpected)
+helperDiagFailures files ((_, TcDiag _ _ loc message _ _) :: rest) bad unexpected =
+  match loc
+    Some (Loc file _ _ _ _) => match omLookup file files
+      Some word =>
+        helperDiagFailures files rest (omInsert word message bad) unexpected
+      None => helperDiagFailures files rest bad True
+    None => helperDiagFailures files rest bad True
+
+mergeHelperFailures : OrdMap String -> OrdMap String -> OrdMap String
+mergeHelperFailures prior next = mergeHelperFailureKeys (omKeys next) prior next
+
+mergeHelperFailureKeys : List String ->
+  OrdMap String ->
+  OrdMap String ->
+  OrdMap String
+mergeHelperFailureKeys [] acc _ = acc
+mergeHelperFailureKeys (word :: rest) acc next = match omLookup word next
+  None => mergeHelperFailureKeys rest acc next
+  Some message => mergeHelperFailureKeys rest (omInsert word message acc) next
+
+filterHelperPlans : PlanEnv -> OrdMap String -> List GenPlan -> List GenPlan
+filterHelperPlans env rejected =
+  filterList (planHasNoRejectedCarrier env rejected)
+
+planHasNoRejectedCarrier : PlanEnv -> OrdMap String -> GenPlan -> Bool
+planHasNoRejectedCarrier env rejected plan =
+  not (anyList (customRejected rejected) (customPlansReachable env [plan]))
+
+plansHaveNoRejectedCarrier : PlanEnv -> OrdMap String -> List GenPlan -> Bool
+plansHaveNoRejectedCarrier env rejected plans =
+  not (anyList (customRejected rejected) (customPlansReachable env plans))
+
+customRejected : OrdMap String -> CustomPlan -> Bool
+customRejected rejected (CustomPlan _ _ word) = omHasKey word rejected
+
+runValidatedPropEngines : List Engine ->
+  HelperValidation ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> List PropResult
+runValidatedPropEngines [] _ _ _ _ _ _ _ _ = []
+runValidatedPropEngines engines (HelperValidation pair helpers rejected protocol) target tsrc userDecls cases filterOpt file index =
+  match protocol
+    Some message =>
+      runProtocolHelperEngines
+        engines
+        pair
+        message
+        target
+        tsrc
+        userDecls
+        cases
+        filterOpt
+        file
+        index
+    None => match pair
+      TestPairErr message =>
+        protocolPropResults engines message userDecls cases filterOpt
+      TestPair _runtimeM rawCoreM coreM rawM modsM =>
+        runValidatedPropEnginesGo
+          engines
+          helpers
+          rejected
+          rawCoreM
+          coreM
+          rawM
+          modsM
+          target
+          tsrc
+          userDecls
+          cases
+          filterOpt
+          file
+          index
+
+-- If elaborating a generated bridge changes diagnostics outside its synthetic
+-- source location, only properties which need a bridge become protocol rows.
+-- Structural properties continue against the original graph.
+runProtocolHelperEngines : List Engine ->
+  TestPair ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> List PropResult
+runProtocolHelperEngines [] _ _ _ _ _ _ _ _ _ = []
+runProtocolHelperEngines engines (TestPairErr err) _ _ _ userDecls cases filterOpt _ _ =
+  protocolPropResults engines err userDecls cases filterOpt
+runProtocolHelperEngines engines (TestPair _runtimeM rawCoreM coreM rawM modsM) message target tsrc userDecls cases filterOpt file index =
+  runProtocolHelperEnginesGo
+    engines
+    message
+    rawCoreM
+    coreM
+    rawM
+    modsM
+    target
+    tsrc
+    userDecls
+    cases
+    filterOpt
+    file
+    index
+
+runProtocolHelperEnginesGo : List Engine ->
+  String ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, List Decl) ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> List PropResult
+runProtocolHelperEnginesGo [] _ _ _ _ _ _ _ _ _ _ _ _ = []
+runProtocolHelperEnginesGo (engine :: rest) message rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+  let engineText = engineName engine
+  let requests = propRequestsFor index file engineText userDecls cases filterOpt
+  let root = rootPlanModuleId rawM target
+  let modules = planModules rawCoreM coreM rawM modsM
+  let next =
+    runProtocolHelperEnginesGo
+      rest
+      message
+      rawCoreM
+      coreM
+      rawM
+      modsM
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+      file
+      index
+  match (preparePlannedPropRequests
+    root
+    modules
+    requests
+    (elaboratedRootProps modsM userDecls))
+    Err err =>
+      preparedResults (map (preparedPlanError engineText err) requests) ++ next
+    Ok (env, prepared) =>
+      let rows = rejectPreparedProtocolCustom env engineText message prepared
+      let here = match engine
+        EngInterp =>
+          runPreparedPropRequestsResults
+            env
+            []
+            rows
+            (propLineTests tsrc)
+            (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
+            (coreM ++ flatMap snd modsM)
+        EngNative => runPreparedNativeRows rows target tsrc modules
+      here ++ next
+
+runValidatedPropEnginesGo : List Engine ->
+  List PropHelper ->
+  OrdMap String ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, List Decl) ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> List PropResult
+runValidatedPropEnginesGo [] _helpers _rejected _rawCoreM _coreM _rawM _modsM _target _tsrc _userDecls _cases _filterOpt _file _index =
+  []
+runValidatedPropEnginesGo (engine :: rest) helpers rejected rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+  let engineText = engineName engine
+  let requests = propRequestsFor index file engineText userDecls cases filterOpt
+  let root = rootPlanModuleId rawM target
+  let modules = planModules rawCoreM coreM rawM modsM
+  match (preparePlannedPropRequests
+    root
+    modules
+    requests
+    (elaboratedRootProps modsM userDecls))
+    Err err =>
+      preparedResults (map (preparedPlanError engineText err) requests)
+        ++ runValidatedPropEnginesGo
+          rest
+          helpers
+          rejected
+          rawCoreM
+          coreM
+          rawM
+          modsM
+          target
+          tsrc
+          userDecls
+          cases
+          filterOpt
+          file
+          index
+    Ok (env, prepared) =>
+      let rows = rejectPreparedHelpers env engineText rejected prepared
+      let here = match engine
+        EngInterp =>
+          runPreparedPropRequestsResults
+            env
+            helpers
+            rows
+            (propLineTests tsrc)
+            (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
+            (coreM ++ flatMap snd modsM)
+        EngNative => runPreparedNativeRows rows target tsrc modules
+      here
+        ++ runValidatedPropEnginesGo
+          rest
+          helpers
+          rejected
+          rawCoreM
+          coreM
+          rawM
+          modsM
+          target
+          tsrc
+          userDecls
+          cases
+          filterOpt
+          file
+          index
+
+runPreparedNativeRows : List PreparedPropRequest ->
+  String ->
+  String ->
+  List PlanModule ->
+  <IO> List PropResult
+runPreparedNativeRows rows target tsrc modules =
+  mergeNativePreparedRows
+    rows
+    (runNativePlannedPropRequests target tsrc modules (preparedRequests rows))
+
+preparedRequests : List PreparedPropRequest -> List PropRequest
+preparedRequests [] = []
+preparedRequests ((PreparedRun request _ _) :: rest) =
+  request :: preparedRequests rest
+preparedRequests (_ :: rest) = preparedRequests rest
+
+preparedResults : List PreparedPropRequest -> List PropResult
+preparedResults [] = []
+preparedResults ((PreparedResult result) :: rest) =
+  result :: preparedResults rest
+preparedResults (_ :: rest) = preparedResults rest
+
+mergeNativePreparedRows : List PreparedPropRequest ->
+  List PropResult ->
+  List PropResult
+mergeNativePreparedRows [] [] = []
+mergeNativePreparedRows [] (_ :: _) = [unexpectedNativeProtocolResult]
+mergeNativePreparedRows ((PreparedResult result) :: rest) native =
+  propResultForEngine "native" result :: mergeNativePreparedRows rest native
+mergeNativePreparedRows ((PreparedRun request _ _) :: rest) [] =
+  nativeProtocolResult request :: mergeNativePreparedRows rest []
+mergeNativePreparedRows ((PreparedRun _ _ _) :: rest) (native :: nativeRest) =
+  native :: mergeNativePreparedRows rest nativeRest
+
+preparedPlanError : String -> PlanError -> PropRequest -> PreparedPropRequest
+preparedPlanError engine err (PropRequest name seed cases) =
+  PreparedResult
+    (PropResult
+      engine
+      name
+      PropErroredResult
+      (Some PropCapabilityError)
+      (planErrorText err)
+      seed
+      cases)
+
+rejectPreparedHelpers : PlanEnv ->
+  String ->
+  OrdMap String ->
+  List PreparedPropRequest ->
+  List PreparedPropRequest
+rejectPreparedHelpers _ _ _ [] = []
+rejectPreparedHelpers env engine rejected ((row@(PreparedResult _)) :: rest) =
+  row :: rejectPreparedHelpers env engine rejected rest
+rejectPreparedHelpers env engine rejected ((row@(PreparedRun request _ plans)) :: rest) =
+  let next = rejectPreparedHelpers env engine rejected rest
+  if plansHaveNoRejectedCarrier env rejected plans then
+    row :: next
+  else
+    PreparedResult (helperCapabilityResult env engine request rejected plans)
+      :: next
+
+rejectPreparedProtocolCustom : PlanEnv ->
+  String ->
+  String ->
+  List PreparedPropRequest ->
+  List PreparedPropRequest
+rejectPreparedProtocolCustom _ _ _ [] = []
+rejectPreparedProtocolCustom env engine message ((row@(PreparedResult _)) :: rest) =
+  row :: rejectPreparedProtocolCustom env engine message rest
+rejectPreparedProtocolCustom env engine message ((row@(PreparedRun request _ plans)) :: rest) =
+  let next = rejectPreparedProtocolCustom env engine message rest
+  match customPlansReachable env plans
+    [] => row :: next
+    _ => PreparedResult (helperProtocolResult engine message request) :: next
+
+helperProtocolResult : String -> String -> PropRequest -> PropResult
+helperProtocolResult engine message (PropRequest name seed cases) =
+  PropResult
+    engine
+    name
+    PropErroredResult
+    (Some PropProtocolError)
+    message
+    seed
+    cases
+
+helperCapabilityResult : PlanEnv ->
+  String ->
+  PropRequest ->
+  OrdMap String ->
+  List GenPlan ->
+  PropResult
+helperCapabilityResult env engine (PropRequest name seed cases) rejected plans =
+  match firstRejectedCarrier rejected (customPlansReachable env plans)
+    Some (CustomPlan _ carrier word) =>
+      let detail = match omLookup word rejected
+        Some message => message
+        None => "typed helper could not be elaborated"
+      let err =
+        PlanError name "$property-helper" carrier PEUnusableArbitrary detail
+      PropResult
+        engine
+        name
+        PropErroredResult
+        (Some PropCapabilityError)
+        (planErrorText err)
+        seed
+        cases
+    None =>
+      PropResult
+        engine
+        name
+        PropErroredResult
+        (Some PropProtocolError)
+        "property helper rejection lost its carrier"
+        seed
+        cases
+
+firstRejectedCarrier : OrdMap String -> List CustomPlan -> Option CustomPlan
+firstRejectedCarrier _ [] = None
+firstRejectedCarrier rejected ((custom@(CustomPlan _ _ word)) :: rest)
+  | omHasKey word rejected = Some custom
+  | otherwise = firstRejectedCarrier rejected rest
+
+nativeProtocolResult : PropRequest -> PropResult
+nativeProtocolResult (PropRequest name seed cases) =
+  PropResult
+    "native"
+    name
+    PropErroredResult
+    (Some PropProtocolError)
+    "native property runner returned no selected result"
+    seed
+    cases
+
+unexpectedNativeProtocolResult : PropResult
+unexpectedNativeProtocolResult =
+  PropResult
+    "native"
+    "<native property runner>"
+    PropErroredResult
+    (Some PropProtocolError)
+    "native property runner returned an unexpected selected result"
+    0
+    0
+
+propResultForEngine : String -> PropResult -> PropResult
+propResultForEngine engine (PropResult _ name status kind detail seed cases) =
+  PropResult engine name status kind detail seed cases
+
+protocolPropResults : List Engine ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  List PropResult
+protocolPropResults [] _ _ _ _ = []
+protocolPropResults (engine :: rest) message userDecls cases filterOpt =
+  protocolPropsForEngine
+      (engineName engine)
+      message
+      (filterPropsByName filterOpt (filterProps userDecls))
+      cases
+    ++ protocolPropResults rest message userDecls cases filterOpt
+
+protocolPropsForEngine : String -> String -> List Decl -> Int -> List PropResult
+protocolPropsForEngine _ _ [] _ = []
+protocolPropsForEngine engine message ((DProp _ name _ _) :: rest) cases =
+  PropResult
+      engine
+      name
+      PropErroredResult
+      (Some PropProtocolError)
+      message
+      (propSeedValue ())
+      cases
+    :: protocolPropsForEngine engine message rest cases
+protocolPropsForEngine engine message (_ :: rest) cases =
+  protocolPropsForEngine engine message rest cases
 
 -- The loader and elaborator produce these graphs in the same dependency-first
 -- order. Keep the source declarations beside their elaborated counterparts so
@@ -2213,7 +2880,7 @@ testDeclsReportOn : Engine ->
   <IO> List (String, Int, ExResult)
 testDeclsReportOn EngInterp (TestPairErr _) _runtimeDecls _target _tsrc _userDecls _filterOpt _file _index =
   []
-testDeclsReportOn EngInterp (TestPair _rawCoreM coreM _rawM modsM) runtimeDecls target tsrc userDecls filterOpt _file _index =
+testDeclsReportOn EngInterp (TestPair _runtimeM _rawCoreM coreM _rawM modsM) runtimeDecls target tsrc userDecls filterOpt _file _index =
   gatedTestsCollect
     target
     (runtimeDecls ++ coreM ++ flatMap snd modsM)

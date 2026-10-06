@@ -1,0 +1,114 @@
+-- Typed bridge bindings for custom `Arbitrary` property parameters.
+--
+-- Property plans retain a resolved carrier type and canonical instance-route
+-- word.  The command layer elaborates these declarations with the program so
+-- the ordinary typechecker chooses the matching Arbitrary dictionary; the
+-- property runner then invokes the resulting bindings by their exact names.
+
+import frontend.ast.{
+  Decl(..),
+  Expr(..),
+  Pat(..),
+  Lit(..),
+  Ty(..),
+  Loc(..),
+  UsePath(..),
+  tyConBuiltin,
+  effAtomBare,
+}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup}
+import support.util.{reverseL}
+import tools.prop_plan.{CustomPlan(..), GenPlan, PlanEnv, customPlansReachable}
+import tools.prop_runner.{PropHelper(..)}
+
+public export data PropHelpers = PropHelpers (List PropHelper) (List Decl)
+
+-- One custom route may occur in several parameters and laws.  Index it once
+-- by the canonical route word; `omKeys` gives a deterministic helper order.
+export
+propHelpersForPlans : PlanEnv -> List GenPlan -> PropHelpers
+propHelpersForPlans env plans =
+  let carriers = customCarrierMap (customPlansReachable env plans) omEmpty
+  propHelpersFromWords (omKeys carriers) carriers 0 [] []
+
+-- An alias-qualified method spelling is the ordinary typechecker route that
+-- preserves the declaring interface identity.  In particular, it cannot be
+-- redirected by a root-level standalone `arbitrary` or `shrink` binding.
+coreAliasDecl : Decl
+coreAliasDecl =
+  DUse
+    False
+    (UseAlias ["core"] "$prop_core")
+    (Loc "<property-helper:core>" 1 1 1 1)
+
+customCarrierMap : List CustomPlan -> OrdMap CustomPlan -> OrdMap CustomPlan
+customCarrierMap [] acc = acc
+customCarrierMap ((custom@(CustomPlan _ _ word)) :: rest) acc
+  | omHasKey word acc = customCarrierMap rest acc
+  | otherwise = customCarrierMap rest (omInsert word custom acc)
+customCarrierMap _ acc = acc
+
+propHelpersFromWords : List String ->
+  OrdMap CustomPlan ->
+  Int ->
+  List PropHelper ->
+  List Decl ->
+  PropHelpers
+propHelpersFromWords [] _ _ [] _ = PropHelpers [] []
+propHelpersFromWords [] _ _ helpers decls =
+  PropHelpers (reverseL helpers) (coreAliasDecl :: reverseL decls)
+propHelpersFromWords (word :: rest) carriers i helpers decls =
+  match omLookup word carriers
+    None => propHelpersFromWords rest carriers (i + 1) helpers decls
+    Some custom =>
+      propHelpersFromWords
+        rest
+        carriers
+        (i + 1)
+        (helperForCustom i custom :: helpers)
+        (prependDecls (helperDecls i custom) decls)
+propHelpersFromWords _ _ _ helpers decls =
+  PropHelpers (reverseL helpers) (coreAliasDecl :: reverseL decls)
+
+helperForCustom : Int -> CustomPlan -> PropHelper
+helperForCustom i (CustomPlan _ _ word) =
+  PropHelper word (generatorName i) (shrinkerName i)
+
+helperDecls : Int -> CustomPlan -> List Decl
+helperDecls i (CustomPlan _ carrier _) =
+  let loc = helperLoc i
+  let generator = generatorName i
+  let shrinker = shrinkerName i
+  let unitTy = tyConBuiltin "Unit" (Some loc)
+  let listTy = tyConBuiltin "List" (Some loc)
+  [
+    DTypeSig
+      False
+      generator
+      (TyFun unitTy (TyEffect [effAtomBare "Rand"] [] carrier)),
+    DFunDef
+      False
+      generator
+      [PLit LUnit]
+      (ELoc loc (EApp (EVar "$prop_core.arbitrary") (ELit LUnit))),
+    DTypeSig False shrinker (TyFun carrier (TyApp listTy carrier)),
+    DFunDef
+      False
+      shrinker
+      [PVar "$prop_value" loc]
+      (ELoc loc (EApp (EVar "$prop_core.shrink") (EVar "$prop_value"))),
+  ]
+
+prependDecls : List Decl -> List Decl -> List Decl
+prependDecls [] acc = acc
+prependDecls (decl :: rest) acc = prependDecls rest (decl :: acc)
+prependDecls _ acc = acc
+
+helperLoc : Int -> Loc
+helperLoc i = Loc "<property-helper:\{intToString i}>" 1 1 1 1
+
+generatorName : Int -> String
+generatorName i = "$prop_gen_\{intToString i}"
+
+shrinkerName : Int -> String
+shrinkerName i = "$prop_shrink_\{intToString i}"
