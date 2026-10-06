@@ -2,9 +2,9 @@ import driver.build_cmd.{makeTempDir, cleanupTempDir}
 import test_process.{medakaBin, medakaRoot, boundedVerbSeconds}
 import test.{
   Expectation, expectAll, expectEqual, expectTrue, expectNotEqual,
-  expectTextContainsAll, fail
+  expectTextContainsAll, labelFail, fail
 }
-import json.{Json, parse, get, asArray, asString, asInt}
+import json.{Json, parse, stringify, get, asArray, asString, asInt}
 import string.{contains, lines}
 
 writeFixtures : String -> List (String, String) -> <IO> Result String Unit
@@ -68,12 +68,14 @@ gradeReport expectedCode expected (Ok (code, report)) =
       (row => (field "engine" row, field "name" row, field "status" row))
       (propertyReports report)
   expectAll [
-    expectEqual expectedCode code,
-    expectEqual
-      (map
-        ((engine, name, status) => (Some engine, Some name, Some status))
-        expected)
-      actual,
+    labelFail (stringify report) (expectEqual expectedCode code),
+    labelFail
+      (stringify report)
+      (expectEqual
+        (map
+          ((engine, name, status) => (Some engine, Some name, Some status))
+          expected)
+        actual),
   ]
 
 nativeOnlySource : String
