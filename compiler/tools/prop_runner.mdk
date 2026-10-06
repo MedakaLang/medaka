@@ -19,15 +19,11 @@ import frontend.ast.{
   Decl(..),
   Expr,
   PropParam,
-  ImplMethod(..),
   Ty(..),
-  TyConOrigin(..),
-  sameTyConHead,
 }
-import types.route_key.{implRouteKeyWord}
 import u32 as U32
 import eval.eval.{
-  Value(..), EvalEnv(..), apply, eval, extendEnv, force, hasKey, ppValue
+  Value(..), EvalEnv(..), apply, eval, extendEnv, force, ppValue
 }
 import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
@@ -48,7 +44,6 @@ import tools.prop_plan.{
   planErrorText,
   planDef,
   instantiateCtor,
-  planTy,
   buildPlanEnv,
   buildPlanEnvModules,
   listLengthBound,
@@ -158,114 +153,25 @@ randBoolL _ = rngNextLocal () % 2 == 1
 
 -- ── what a draw may consult ─────────────────────────────────────────────────
 -- The shared PlanEnv makes every structural and capability decision. GenEnv
--- only retains evaluator routes for a selected custom Arbitrary implementation.
+-- maps a selected custom carrier to compiler-typed helper bindings.
 public export data PropHelper = PropHelper String String String
-public export data GenEnv = GenEnv (List ArbImpl) PlanEnv (OrdMap PropHelper)
-
--- Where a chosen declaration's runtime `arbitrary` value is to be found: the
--- canonical impl route word its methods are tagged with at install time, this
--- declaration's position among the same-worded declarations, and how many of
--- those there are.
---
--- The word alone is not an address.  `implRouteKeyWord` renders each type
--- argument by its type word (`route_key.typeTagOf`), so two modules' `impl
--- Arbitrary Color` mint two words; declarations that still share one word are
--- told apart by position: eval installs impl methods by walking the
--- same `prelude ++ modules` decl list this module walks (`evalModulesWith`'s
--- `allDecls` and `implEntries` are built from it in that order), and
--- `coalesceImpls`' score sort is stable and scores same-worded impls equally
--- (one word means one type-argument spelling, hence one tyvar count) — so the
--- Nth same-worded declaration is the Nth same-worded candidate.  The total is
--- what makes that correspondence CHECKED rather than assumed: see
--- `drawArbitrary`.
-public export data ArbRoute = ArbRoute String Int Int
-
--- An argument-free `Arbitrary` instance, recorded as the IDENTITY of the type
--- it is declared at (`sameTyConHead`'s pair: head name + declaring module) plus
--- the route to its runtime value.
---
--- The identity is why this type exists.  A bare head SPELLING is not a type:
--- two modules may each declare a `Color`, and picking an instance by spelling
--- hands one module's value to a prop declared over the other's.  So the
--- spelling-blind half of the decision is made HERE, on the declaration, and the
--- route is used only to reach the matching runtime candidate once a declaration
--- has been chosen.
-public export data ArbImpl = ArbImpl String TyConOrigin ArbRoute
-
--- [rootDecls] is the root module's, [allDecls] every loaded module's (prelude
--- included).
+public export data GenEnv = GenEnv PlanEnv (OrdMap PropHelper)
 export
 buildGenEnv : List Decl -> List Decl -> GenEnv
-buildGenEnv _ allDecls =
-  GenEnv (arbImplsOf allDecls) (buildPlanEnv allDecls) omEmpty
+buildGenEnv _ allDecls = GenEnv (buildPlanEnv allDecls) omEmpty
 
 buildGenEnvWithPlan : List Decl -> PlanEnv -> GenEnv
-buildGenEnvWithPlan allDecls planEnv =
-  GenEnv (arbImplsOf allDecls) planEnv omEmpty
+buildGenEnvWithPlan _ planEnv = GenEnv planEnv omEmpty
 
 export
 buildGenEnvWithHelpers : List Decl -> PlanEnv -> List PropHelper -> GenEnv
-buildGenEnvWithHelpers allDecls planEnv helpers =
-  GenEnv (arbImplsOf allDecls) planEnv (helperMap helpers omEmpty)
+buildGenEnvWithHelpers _ planEnv helpers =
+  GenEnv planEnv (helperMap helpers omEmpty)
 
 helperMap : List PropHelper -> OrdMap PropHelper -> OrdMap PropHelper
 helperMap [] acc = acc
 helperMap ((helper@(PropHelper word _ _)) :: rest) acc =
   helperMap rest (omInsert word helper acc)
-
-arbImplsOf : List Decl -> List ArbImpl
-arbImplsOf decls = arbImplsGo decls [] (filterMap arbCandidateWord decls)
-
--- [before] is every candidate-minting route word already walked and [words]
--- every one in the whole decl list, which between them give each eligible
--- declaration its position and its word's total.  A declaration that mints a
--- candidate without being eligible itself (constrained, or at an applied head)
--- still advances the position: eval installs ITS candidate under the same word,
--- so the runtime list counts it too.
-arbImplsGo : List Decl -> List String -> List String -> List ArbImpl
-arbImplsGo [] _ _ = []
-arbImplsGo (d :: rest) before words = match arbCandidateWord d
-  None => arbImplsGo rest before words
-  Some w => match arbImplOf d
-    None => arbImplsGo rest (w :: before) words
-    Some (n, to) =>
-      let route = ArbRoute w (count (== w) before) (count (== w) words)
-      ArbImpl n to route :: arbImplsGo rest (w :: before) words
-
--- The route word of the `arbitrary` candidate this declaration installs, if it
--- installs one.  Every `impl` spelling a method `arbitrary` does, eligible for
--- the draw or not and whatever interface it belongs to — the word carries the
--- interface's identity, so another interface's `arbitrary` mints a different
--- word and never shares a candidate list with this one.  An impl that spells no
--- `arbitrary` leans on the interface default, which installs untagged and so is
--- never in a candidate list either.
-arbCandidateWord : Decl -> Option String
-arbCandidateWord (DAttrib _ d) = arbCandidateWord d
-arbCandidateWord (DImpl { iface = ifaceName, tys = tys, implOrigin = o, methods }) =
-  if anyList isArbitraryMethod methods then
-    Some (implRouteKeyWord o ifaceName tys None)
-  else
-    None
-arbCandidateWord _ = None
-
-isArbitraryMethod : ImplMethod -> Bool
-isArbitraryMethod (ImplMethod n _ _) = n == "arbitrary"
-
--- Only an instance at a BARE head with no `requires` is eligible: a constrained
--- instance is dict-passed, so `apply c VUnit` would feed VUnit where the leading
--- dictionary belongs (see `userArbitrary`).
-arbImplOf : Decl -> Option (String, TyConOrigin)
-arbImplOf (DAttrib _ d) = arbImplOf d
-arbImplOf (DImpl { iface = ifaceName, implOrigin = (OriginModule "core"), tys = tys, reqs = reqs }) =
-  match (
-    ifaceName,
-    tys,
-    reqs,
-  )
-    ("Arbitrary", [TyCon { tyConName = n, tyConOrigin = to }], []) =>
-      Some (n, to)
-    _ => None
-arbImplOf _ = None
 
 genFloat : Unit -> <e> Value e
 genFloat _ =
@@ -345,25 +251,34 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
   -- value via `--seed` reproduces this prop's draws byte-for-byte regardless
   -- of what ran before it, so it is the number to print on failure.
   let seedAtStart = !propRngStateRef
-  let _ = beginCustomPropStream seedAtStart
-  match findFailure genEnv evalEnv params body maxTests 1
-    PropPassed =>
-      let _ = putStrLn ("OK (" ++ intToString maxTests ++ " tests)")
-      True
-    PropFailed run shrunk fuelExhausted =>
-      let _ =
-        putStrLn
-          "FAILED after \{intToString run}\{if run == 1 then " test" else " tests"}"
-      let _ =
-        if fuelExhausted then
-          putStrLn
-            "  WARNING: shrink fuel exhausted after \{intToString shrinkFuel} steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307)."
-      let _ =
-        putStrLn
-          "  Seed: \{intToString seedAtStart} (rerun with: medaka test --seed \{intToString seedAtStart} --filter \{escStrLocal name} <file>)"
-      let _ = putStrLn "  Counterexample:"
-      let _ = printCounterexample shrunk
+  match planPropParams (genEnvPlan genEnv) name params
+    Err e =>
+      let _ = putStrLn ("ERROR: " ++ planErrorText e)
       False
+    Ok plans => match helperFailure genEnv evalEnv plans
+      Some detail =>
+        let _ = putStrLn ("ERROR: " ++ detail)
+        False
+      None =>
+        let _ = beginCustomPropStream seedAtStart
+        match findFailure genEnv evalEnv params body maxTests 1
+          PropPassed =>
+            let _ = putStrLn ("OK (" ++ intToString maxTests ++ " tests)")
+            True
+          PropFailed run shrunk fuelExhausted =>
+            let _ =
+              putStrLn
+                "FAILED after \{intToString run}\{if run == 1 then " test" else " tests"}"
+            let _ =
+              if fuelExhausted then
+                putStrLn
+                  "  WARNING: shrink fuel exhausted after \{intToString shrinkFuel} steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307)."
+            let _ =
+              putStrLn
+                "  Seed: \{intToString seedAtStart} (rerun with: medaka test --seed \{intToString seedAtStart} --filter \{escStrLocal name} <file>)"
+            let _ = putStrLn "  Counterexample:"
+            let _ = printCounterexample shrunk
+            False
 runProp _genEnv _evalEnv _decl _maxTests _target _propLines = True
 
 findFailure : GenEnv ->
@@ -445,7 +360,7 @@ genInputsPlanned _ _ _ _ =
   panic "property runner: prepared parameter plan mismatch"
 
 genParam : GenEnv -> List (String, Value e) -> Ty -> <e> Value e
-genParam (ge@(GenEnv _ planEnv _)) evalEnv ty =
+genParam (ge@(GenEnv planEnv _)) evalEnv ty =
   match planFor planEnv "" "property parameter" ty
     Ok plan => genFromPlan ge evalEnv 0 plan
     Err e => panic (planErrorText e)
@@ -495,7 +410,7 @@ genFromPlan ge env depth (nominal@(GNominal key _)) =
 genFromPlan ge env _ (custom@(GCustom _)) = drawCustomArbitrary ge env custom
 
 genEnvPlan : GenEnv -> PlanEnv
-genEnvPlan (GenEnv _ planEnv _) = planEnv
+genEnvPlan (GenEnv planEnv _) = planEnv
 
 -- Swap the evaluated program's complete U64 RNG state around one custom draw.
 -- `randomState`/`restoreRandomState` are invoked through the same evaluator
@@ -510,22 +425,49 @@ drawCustomArbitrary ge env custom =
   let value = match customHelper ge custom
     Some (PropHelper _ genName _) => match lookupAssoc genName env
       Some gen => force (apply (force gen) VUnit)
-      None =>
-        panic "property runner: selected typed generator helper is unavailable"
-    None => match userArbitrary ge env (planTy custom)
-      Some v => v
-      None =>
-        panic
-          "property runner: planned Arbitrary instance was not available in the evaluator environment"
+      None => panic "property runner: missing selected typed generator helper"
+    None => panic "property runner: missing selected typed custom helper"
   let customState = readRandomState env
   customRngStateRef := u64Pair customState
   let _ = restoreRandomStateValue env programState
   value
 
 customHelper : GenEnv -> GenPlan -> Option PropHelper
-customHelper (GenEnv _ _ helpers) (GCustom (CustomPlan _ _ word)) =
+customHelper (GenEnv _ helpers) (GCustom (CustomPlan _ _ word)) =
   omLookup word helpers
 customHelper _ _ = None
+
+-- Before a property starts, validate every helper the selected plans can call.
+-- A caller may therefore return a normal protocol/runtime result rather than
+-- entering generation and tripping an evaluator panic for an absent helper.
+helperFailure : GenEnv ->
+  List (String, Value e) ->
+  List GenPlan ->
+  Option String
+helperFailure _ _ [] = None
+helperFailure ge env (plan :: rest) = match helperFailurePlan ge env plan
+  Some detail => Some detail
+  None => helperFailure ge env rest
+
+helperFailurePlan : GenEnv -> List (String, Value e) -> GenPlan -> Option String
+helperFailurePlan ge env (GCustom custom) =
+  match customHelper ge (GCustom custom)
+    None => Some "selected typed custom helper is unavailable"
+    Some (PropHelper _ genName shrinkName) =>
+      if isSome (lookupAssoc genName env)
+        && isSome (lookupAssoc shrinkName env) then
+        None
+      else
+        Some "selected typed custom helper binding is unavailable"
+helperFailurePlan ge env (GList plan) = helperFailurePlan ge env plan
+helperFailurePlan ge env (GArray plan) = helperFailurePlan ge env plan
+helperFailurePlan ge env (GOption plan) = helperFailurePlan ge env plan
+helperFailurePlan ge env (GResult err ok) = match helperFailurePlan ge env err
+  Some detail => Some detail
+  None => helperFailurePlan ge env ok
+helperFailurePlan ge env (GTuple plans) = helperFailure ge env plans
+helperFailurePlan ge env (GNominal _ plans) = helperFailure ge env plans
+helperFailurePlan _ _ _ = None
 
 ensureCustomRandomState : List (String, Value e) -> <e> Unit
 ensureCustomRandomState env =
@@ -684,66 +626,6 @@ positionalPlanFields ((None, value) :: rest) =
 positionalPlanFields ((Some _, _) :: _) =
   panic "property runner: mixed positional and named constructor fields"
 
--- A selected custom plan is drawn through one declared, argument-free
--- Arbitrary instance. Only an
--- ARGUMENT-FREE head is eligible: a constrained instance (`impl Arbitrary
--- (List a) requires Arbitrary a`) is dict-passed, so `apply c VUnit` would feed
--- VUnit where the leading dictionary belongs, and building that dictionary
--- needs constraint entailment the runner has no access to. An explicitly
--- selected `shrink` method follows the same route in `shrinkForParam`.
---
--- The decision is made on the DECLARATION, not on the candidate set.  A
--- filter over the runtime candidates can only see a head SPELLING, and one
--- matching candidate is not evidence that it is the right one: with two modules
--- each declaring a `Color` and only one of them carrying an instance, the
--- spelling filter yields exactly one candidate and it belongs to the other type.
--- `arbImplKeyFor` therefore asks `sameTyConHead` — name AND declaring module —
--- of the DECLARED instances first, and only then looks for the runtime value
--- the chosen declaration's `ArbRoute` addresses: its route word, and its
--- position among the declarations sharing that word when the word alone leaves
--- more than one candidate.
-userArbitrary : GenEnv -> List (String, Value e) -> Ty -> <e> Option (Value e)
-userArbitrary (GenEnv arbs _ _) evalEnv (TyCon { tyConName = n, tyConOrigin = o }) =
-  match arbImplKeyFor arbs n o
-    Some route => match lookupAssoc "arbitrary" evalEnv
-      Some m => userArbitraryAt route (force m)
-      None => None
-    None => None
-userArbitrary _ _ _ = None
-
--- Two instances answering to one identity do not describe a route the runner
--- may invent. A selected custom plan therefore fails rather than falling back
--- to structural generation.
-arbImplKeyFor : List ArbImpl -> String -> TyConOrigin -> Option ArbRoute
-arbImplKeyFor arbs n o = match filterList (arbImplAt n o) arbs
-  [ArbImpl _ _ route] => Some route
-  _ => None
-
-arbImplAt : String -> TyConOrigin -> ArbImpl -> Bool
-arbImplAt n o (ArbImpl n2 o2 _) = sameTyConHead n o n2 o2
-
--- The route's word is an impl's canonical key, matched exactly (`hasKey`).
-userArbitraryAt : ArbRoute -> Value e -> <e> Option (Value e)
-userArbitraryAt (route@(ArbRoute key _ _)) (VMulti vs) =
-  drawArbitrary route (filterList (hasKey key) vs)
-userArbitraryAt (route@(ArbRoute key _ _)) v =
-  drawArbitrary route (filterList (hasKey key) [v])
-
--- Two same-spelled types that BOTH carry an instance produce two candidates
--- under one route word, so the word is not enough to choose between them; the
--- position the declaration walk assigned is (#2820, `ArbRoute`).  The total
--- guards it: a candidate list of a different length is one the decl walk did
--- not describe, so the correspondence the position rests on does not hold and
--- the caller reports the unavailable selected route rather than guessing.
-drawArbitrary : ArbRoute -> List (Value e) -> <e> Option (Value e)
-drawArbitrary (ArbRoute _ i total) cands
-  | listLen cands /= total = None
-  | otherwise = map (c => force (apply c VUnit)) (candAt i cands)
-
--- An explicitly supplied shrink method is part of the same selected
--- Arbitrary declaration as arbitrary: route word and candidate ordinal are
--- reused, so a same-spelled type from another module cannot lend its shrinker.
--- Default `shrink` leaves structural shrinking in charge.
 shrinkForParam : GenEnv ->
   List (String, Value e) ->
   Ty ->
@@ -751,55 +633,17 @@ shrinkForParam : GenEnv ->
   <e> List (Value e)
 shrinkForParam ge env ty value =
   match planFor (genEnvPlan ge) "" "property parameter" ty
-    Ok (custom@(GCustom (CustomPlan (TypeKey n o) _ _))) =>
-      match customHelper ge custom
-        Some (PropHelper _ _ shrinkName) => match lookupAssoc shrinkName env
-          Some shrink => match force (apply (force shrink) value)
-            VList smaller => smaller
-            _ =>
-              panic
-                "property runner: typed custom shrink returned a non-List value"
-          None =>
-            panic "property runner: selected typed shrink helper is unavailable"
-        None => match userShrinkAt ge env n o value
-          Some smaller => smaller
-          None =>
+    Ok (custom@(GCustom _)) => match customHelper ge custom
+      Some (PropHelper _ _ shrinkName) => match lookupAssoc shrinkName env
+        Some shrink => match force (apply (force shrink) value)
+          VList smaller => smaller
+          _ =>
             panic
-              "property runner: planned custom shrink was not available in the evaluator environment"
+              "property runner: typed custom shrink returned a non-List value"
+        None => panic "property runner: missing selected typed shrink helper"
+      None => panic "property runner: missing selected typed custom helper"
     Ok plan => structuralShrink ge plan value
     Err e => panic (planErrorText e)
-
-userShrinkAt : GenEnv ->
-  List (String, Value e) ->
-  String ->
-  TyConOrigin ->
-  Value e ->
-  <e> Option (List (Value e))
-userShrinkAt (GenEnv arbs _ _) env n o value = match (
-  arbImplKeyFor arbs n o,
-  lookupAssoc "shrink" env,
-)
-  (Some route, Some methods) => shrinkAt route (force methods) value
-  _ => None
-
-shrinkAt : ArbRoute -> Value e -> Value e -> <e> Option (List (Value e))
-shrinkAt (ArbRoute key i total) (VMulti vs) value =
-  shrinkCandidate i total (filterList (hasKey key) vs) value
-shrinkAt (ArbRoute key i total) v value =
-  shrinkCandidate i total (filterList (hasKey key) [v]) value
-
-shrinkCandidate : Int ->
-  Int ->
-  List (Value e) ->
-  Value e ->
-  <e> Option (List (Value e))
-shrinkCandidate i total cands value
-  | listLen cands /= total = None
-  | otherwise = match candAt i cands
-    Some method => match force (apply method value)
-      VList smaller => Some smaller
-      _ => panic "property runner: custom shrink returned a non-List value"
-    None => None
 
 -- Interpret the planner's structural order for evaluator values.  The action
 -- algebra supplies deletion/child ordering; constructor replacement is kept
@@ -907,14 +751,6 @@ zipNames [] _ = []
 zipNames _ [] = []
 zipNames (name :: names) (value :: values) =
   (name, value) :: zipNames names values
-
--- The [i]th element; the stdlib has no `nth` (`take`/`drop`/`indexed`/
--- `elemIndex` are its nearest neighbors).
-candAt : Int -> List (Value e) -> Option (Value e)
-candAt _ [] = None
-candAt i (v :: rest)
-  | i <= 0 = Some v
-  | otherwise = candAt (i - 1) rest
 
 printCounterexample : List (String, Value e) -> <IO> Unit
 printCounterexample [] = ()
@@ -1310,13 +1146,16 @@ runPreparedRows genEnv ((PreparedResult result) :: rest) propLines evalEnv =
   result :: runPreparedRows genEnv rest propLines evalEnv
 runPreparedRows genEnv ((PreparedRun (PropRequest name seed cases) (DProp _ _ params body) plans) :: rest) propLines evalEnv =
   let _ = seedPropRng seed
-  let _ = beginCustomPropStream seed
-  propResultOf
-      cases
-      seed
-      (lineOfPropName name propLines)
-      name
-      (findFailurePlanned genEnv evalEnv params plans body cases 1)
+  (match helperFailure genEnv evalEnv plans
+      Some detail => runtimeResult name seed cases detail
+      None =>
+        let _ = beginCustomPropStream seed
+        propResultOf
+          cases
+          seed
+          (lineOfPropName name propLines)
+          name
+          (findFailurePlanned genEnv evalEnv params plans body cases 1))
     :: runPreparedRows genEnv rest propLines evalEnv
 runPreparedRows genEnv (_ :: rest) propLines evalEnv =
   runPreparedRows genEnv rest propLines evalEnv
@@ -1417,14 +1256,16 @@ runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv 
       [DProp _ _ params body] =>
         match planPropParams (genEnvPlan genEnv) name params
           Err e => capabilityResult name seed cases e
-          Ok _ =>
-            let _ = beginCustomPropStream seed
-            propResultOf
-              cases
-              seed
-              (lineOfPropName name propLines)
-              name
-              (findFailure genEnv evalEnv params body cases 1)
+          Ok plans => match helperFailure genEnv evalEnv plans
+            Some detail => runtimeResult name seed cases detail
+            None =>
+              let _ = beginCustomPropStream seed
+              propResultOf
+                cases
+                seed
+                (lineOfPropName name propLines)
+                name
+                (findFailure genEnv evalEnv params body cases 1)
       _ => missingRequest request
   else if listLen matches == 0 then
     missingRequest request
@@ -1467,14 +1308,16 @@ runEachResult cases propLines genEnv evalEnv ((DProp _ name params body) :: rest
   let seedAtStart = !propRngStateRef
   (match planPropParams (genEnvPlan genEnv) name params
       Err e => capabilityResult name seedAtStart cases e
-      Ok _ =>
-        let _ = beginCustomPropStream seedAtStart
-        propResultOf
-          cases
-          seedAtStart
-          (lineOfPropName name propLines)
-          name
-          (findFailure genEnv evalEnv params body cases 1))
+      Ok plans => match helperFailure genEnv evalEnv plans
+        Some detail => runtimeResult name seedAtStart cases detail
+        None =>
+          let _ = beginCustomPropStream seedAtStart
+          propResultOf
+            cases
+            seedAtStart
+            (lineOfPropName name propLines)
+            name
+            (findFailure genEnv evalEnv params body cases 1))
     :: runEachResult cases propLines genEnv evalEnv rest
 runEachResult cases propLines genEnv evalEnv (_ :: rest) =
   runEachResult cases propLines genEnv evalEnv rest
@@ -1500,6 +1343,17 @@ capabilityResult name seed cases err =
     PropErroredResult
     (Some PropCapabilityError)
     (planErrorText err)
+    seed
+    cases
+
+runtimeResult : String -> Int -> Int -> String -> PropResult
+runtimeResult name seed cases detail =
+  PropResult
+    "eval"
+    name
+    PropErroredResult
+    (Some PropRuntimeError)
+    detail
     seed
     cases
 propResultOf : Int ->

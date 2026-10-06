@@ -15,12 +15,15 @@
 import test.{expectEach, expectEqual, expectNotEqual, expectTrue}
 import tools.prop_runner.{seedPropRng, randBoolL}
 import list.{nub}
-import frontend.ast.{Ty(..), TyConOrigin(..)}
+import frontend.ast.{Decl(..), Require(..), Ty(..), TyConOrigin(..)}
 import frontend.parser.{parse}
 import tools.prop_plan.{
+  CustomPlan(..),
   GenPlan(..),
   PlanError,
+  TypeKey(..),
   buildPlanEnv,
+  customPlansReachable,
   ctorWeights,
   planFor,
 }
@@ -110,6 +113,40 @@ rotateLoop =
 
 planned : String -> Ty -> Result PlanError GenPlan
 planned source ty = planFor (buildPlanEnv (parse source)) "policy" "value" ty
+
+genericTreeArbitrary : Decl
+genericTreeArbitrary = DImpl {
+  pub = False,
+  iface = "Arbitrary",
+  tys = [TyApp (namedTy "Tree") (TyVar "a")],
+  reqs = [
+    Require {
+      requireHead = "Arbitrary",
+      requireArgs = [TyVar "a"],
+      requireOrigin = OriginModule "core",
+    },
+  ],
+  methods = [],
+  implOrigin = OriginModule "core",
+  implIfaceLoc = None,
+}
+
+boxArbitrary : Decl
+boxArbitrary = DImpl {
+  pub = False,
+  iface = "Arbitrary",
+  tys = [namedTy "Box"],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginModule "core",
+  implIfaceLoc = None,
+}
+
+plannedWithGenericTree : Ty -> Result PlanError GenPlan
+plannedWithGenericTree ty =
+  let decls =
+    parse "data Tree a = Leaf | Node a (Tree a)\n" ++ [genericTreeArbitrary]
+  planFor (buildPlanEnv decls) "policy" "value" ty
 
 weightsAt : Int -> String -> Ty -> List Int
 weightsAt depth source ty =
@@ -242,3 +279,23 @@ test "finite planning uses instantiated generic arguments and rejects empty recu
           Err _ => True),
     ),
   ]
+
+genericTreeCustom : Ty -> Bool
+genericTreeCustom ty = match plannedWithGenericTree ty
+  Ok (GCustom (CustomPlan _ (TyApp (TyCon { tyConName = "Tree" }) _) _)) => True
+  _ => False
+
+test "a constrained generic Arbitrary carrier selects full applied custom plans" =
+  expectTrue
+    (genericTreeCustom (TyApp (namedTy "Tree") intTy)
+      && genericTreeCustom (TyApp (namedTy "Tree") (namedTy "Token")))
+
+test "custom helper discovery follows instantiated nominal fields" =
+  let env =
+    buildPlanEnv
+      (parse "data Box = Box Int\ndata Outer = Outer Box\n" ++ [boxArbitrary])
+  match planFor env "policy" "value" (namedTy "Outer")
+    Ok outer => expectTrue (match customPlansReachable env [outer]
+      [CustomPlan (TypeKey "Box" _) _ _] => True
+      _ => False)
+    Err _ => expectTrue False

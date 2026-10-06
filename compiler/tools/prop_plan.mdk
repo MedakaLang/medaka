@@ -83,22 +83,6 @@ public export data GenPlan =
   | GNominal TypeKey (List GenPlan)
   | GCustom CustomPlan
 
-export
-customPlansReachable : List GenPlan -> List CustomPlan
-customPlansReachable [] = []
-customPlansReachable (plan :: rest) =
-  customPlansIn plan ++ customPlansReachable rest
-
-customPlansIn : GenPlan -> List CustomPlan
-customPlansIn (GList plan) = customPlansIn plan
-customPlansIn (GArray plan) = customPlansIn plan
-customPlansIn (GOption plan) = customPlansIn plan
-customPlansIn (GResult err ok) = customPlansIn err ++ customPlansIn ok
-customPlansIn (GTuple plans) = customPlansReachable plans
-customPlansIn (GNominal _ plans) = customPlansReachable plans
-customPlansIn (GCustom custom) = [custom]
-customPlansIn _ = []
-
 public export data PlanErrorReason =
   | PEUnboundTyVar
   | PETypeAlias
@@ -128,7 +112,7 @@ reasonText PEOpaqueNominal = "opaque nominal type"
 reasonText PEAmbiguousNominal = "ambiguous unresolved nominal type"
 reasonText PENoFiniteValue = "recursive type has no finite constructor"
 reasonText PEUnusableArbitrary =
-  "Arbitrary instance requires a dictionary or an applied head"
+  "Arbitrary instance cannot be selected for this carrier"
 reasonText PEInaccessibleConstructors =
   "constructors are not visible to this property"
 
@@ -344,15 +328,9 @@ namedField (Field n t) = PlanField (Some n) t
 
 addArbitrary : Decl -> PlanEnv -> PlanEnv
 addArbitrary (DAttrib _ d) env = addArbitrary d env
-addArbitrary (DImpl { iface = "Arbitrary", implOrigin = (OriginModule "core"), tys = [carrier], reqs = [] }) env =
+addArbitrary (DImpl { iface = "Arbitrary", implOrigin = (OriginModule "core"), tys = [carrier] }) env =
   insertArb (ArbPlan carrier (arbCarrierWord carrier)) env
-addArbitrary (DImpl { iface = "Arbitrary", implOrigin = (OriginModule "core"), tys = [t] }) env =
-  markUnusable t env
 addArbitrary _ env = env
-
-markUnusable : Ty -> PlanEnv -> PlanEnv
-markUnusable ty (PlanEnv root defs arbs bad aliases) =
-  PlanEnv root defs arbs (omInsert (arbCarrierWord ty) () bad) aliases
 
 arbCarrierWord : Ty -> String
 arbCarrierWord ty = implRouteKeyWord (OriginModule "core") "Arbitrary" [ty] None
@@ -364,9 +342,13 @@ insertDef (def@(PlanDef key _ _ _ _)) (PlanEnv root defs arbs bad aliases) =
   PlanEnv root (omInsert word (def :: prior) defs) arbs bad aliases
 
 insertArb : ArbPlan -> PlanEnv -> PlanEnv
-insertArb (arb@(ArbPlan _ word)) (PlanEnv root defs arbs bad aliases) =
-  let prior = optionList (omLookup word arbs)
-  PlanEnv root defs (omInsert word (arb :: prior) arbs) bad aliases
+insertArb (arb@(ArbPlan carrier _)) (PlanEnv root defs arbs bad aliases) =
+  match headKey carrier
+    Some key =>
+      let word = typeKeyWord key
+      let prior = optionList (omLookup word arbs)
+      PlanEnv root defs (omInsert word (arb :: prior) arbs) bad aliases
+    None => PlanEnv root defs arbs bad aliases
 
 optionList : Option (List a) -> List a
 optionList None = []
@@ -452,50 +434,122 @@ planNominal : PlanEnv ->
   Result PlanError GenPlan
 planNominal (PlanEnv root defs arbs bad aliases) propName param key args =
   let carrier = rebuildTy key args
-  let word = arbCarrierWord carrier
-  match optionList (omLookup word arbs)
-    [ArbPlan actual route] => Ok (GCustom (CustomPlan key actual route))
-    _ :: _ :: _ => Err (PlanError propName param carrier PEUnusableArbitrary "")
-    _ if isSome (omLookup word bad) =>
-      Err (PlanError propName param (rebuildTy key args) PEUnusableArbitrary "")
-    _ => match matchingDef key (optionList (omLookup (typeKeyWord key) defs))
-      None if isSome (omLookup (typeKeyWord key) aliases) =>
-        Err (PlanError propName param (rebuildTy key args) PETypeAlias "")
-      None if hasAmbiguousUnresolved
-        key
-        (optionList (omLookup (typeKeyWord key) defs)) =>
-        Err
-          (PlanError propName param (rebuildTy key args) PEAmbiguousNominal "")
-      None =>
-        Err
-          (PlanError
-            propName
-            param
-            (rebuildTy key args)
-            PEOpaqueNominal
-            "no visible data declaration")
-      Some (PlanDef _ _ _ PlanAbstract _) =>
-        Err (PlanError propName param (rebuildTy key args) PEOpaqueNominal "")
-      Some (PlanDef _ owner _ PlanLocal _) if owner /= root =>
-        Err
-          (PlanError
-            propName
-            param
-            (rebuildTy key args)
-            PEInaccessibleConstructors
-            "")
-      Some (PlanDef _ _ _ _ []) =>
-        Err
-          (PlanError
-            propName
-            param
-            (rebuildTy key args)
-            PENoFiniteValue
-            "no constructors")
-      Some (PlanDef _ _ _ _ _) =>
-        map
-          (GNominal key)
-          (planMany (PlanEnv root defs arbs bad aliases) propName param args)
+  match (selectedCustom
+    key
+    carrier
+    (optionList (omLookup (typeKeyWord key) arbs)))
+    Err detail =>
+      Err (PlanError propName param carrier PEUnusableArbitrary detail)
+    Ok (Some custom) => Ok (GCustom custom)
+    Ok None =>
+      match matchingDef key (optionList (omLookup (typeKeyWord key) defs))
+        None if isSome (omLookup (typeKeyWord key) aliases) =>
+          Err (PlanError propName param (rebuildTy key args) PETypeAlias "")
+        None if hasAmbiguousUnresolved
+          key
+          (optionList (omLookup (typeKeyWord key) defs)) =>
+          Err
+            (PlanError
+              propName
+              param
+              (rebuildTy key args)
+              PEAmbiguousNominal
+              "")
+        None =>
+          Err
+            (PlanError
+              propName
+              param
+              (rebuildTy key args)
+              PEOpaqueNominal
+              "no visible data declaration")
+        Some (PlanDef _ _ _ PlanAbstract _) =>
+          Err (PlanError propName param (rebuildTy key args) PEOpaqueNominal "")
+        Some (PlanDef _ owner _ PlanLocal _) if owner /= root =>
+          Err
+            (PlanError
+              propName
+              param
+              (rebuildTy key args)
+              PEInaccessibleConstructors
+              "")
+        Some (PlanDef _ _ _ _ []) =>
+          Err
+            (PlanError
+              propName
+              param
+              (rebuildTy key args)
+              PENoFiniteValue
+              "no constructors")
+        Some (PlanDef _ _ _ _ _) =>
+          map
+            (GNominal key)
+            (planMany (PlanEnv root defs arbs bad aliases) propName param args)
+
+-- A concrete carrier must win over a generic one.  Generic rows are only a
+-- selection hint here: the typed helper binding performs ordinary instance
+-- resolution (including required dictionaries) before the evaluator runs it.
+-- That keeps planner matching identity-aware without duplicating typeclass
+-- entailment or choosing a method by declaration order.
+selectedCustom : TypeKey ->
+  Ty ->
+  List ArbPlan ->
+  Result String (Option CustomPlan)
+selectedCustom key carrier candidates = match exactArbs carrier candidates
+  [] => match matchingArbs carrier candidates
+    [] => Ok None
+    _ => Ok (Some (CustomPlan key carrier (arbCarrierWord carrier)))
+  [_] => Ok (Some (CustomPlan key carrier (arbCarrierWord carrier)))
+  _ => Err "multiple exact Arbitrary instances select this carrier"
+
+exactArbs : Ty -> List ArbPlan -> List ArbPlan
+exactArbs _ [] = []
+exactArbs carrier ((arb@(ArbPlan pattern _)) :: rest)
+  | arbCarrierWord pattern == arbCarrierWord carrier =
+    arb :: exactArbs carrier rest
+  | otherwise = exactArbs carrier rest
+
+matchingArbs : Ty -> List ArbPlan -> List ArbPlan
+matchingArbs _ [] = []
+matchingArbs carrier ((arb@(ArbPlan pattern _)) :: rest) =
+  match matchArbCarrier pattern carrier []
+    Some _ => arb :: matchingArbs carrier rest
+    None => matchingArbs carrier rest
+
+-- Bind each pattern variable once and compare every concrete head through the
+-- compiler's canonical route word.  This accepts `Tree a` for `Tree Int` and
+-- rejects `Pair a a` for `Pair Int Bool`; it never confuses same-spelled
+-- nominal heads from separate modules.
+matchArbCarrier : Ty -> Ty -> List (String, Ty) -> Option (List (String, Ty))
+matchArbCarrier (TyVar name) actual bindings = match lookupAssoc name bindings
+  Some bound =>
+    if arbCarrierWord bound == arbCarrierWord actual then
+      Some bindings
+    else
+      None
+  None => Some ((name, actual) :: bindings)
+matchArbCarrier (TyApp pf pa) (TyApp af aa) bindings =
+  match matchArbCarrier pf af bindings
+    Some next => matchArbCarrier pa aa next
+    None => None
+matchArbCarrier (TyTuple ps) (TyTuple actuals) bindings =
+  matchArbCarriers ps actuals bindings
+matchArbCarrier pattern actual bindings =
+  if arbCarrierWord pattern == arbCarrierWord actual then
+    Some bindings
+  else
+    None
+
+matchArbCarriers : List Ty ->
+  List Ty ->
+  List (String, Ty) ->
+  Option (List (String, Ty))
+matchArbCarriers [] [] bindings = Some bindings
+matchArbCarriers (p :: ps) (a :: restActuals) bindings =
+  match matchArbCarrier p a bindings
+    Some next => matchArbCarriers ps restActuals next
+    None => None
+matchArbCarriers _ _ _ = None
 
 matchingDef : TypeKey -> List PlanDef -> Option PlanDef
 matchingDef _ [] = None
@@ -555,6 +609,109 @@ instantiateCtor _ p _ =
       (TyVar "")
       PEUnsupportedType
       ("not nominal: " ++ planKind p))
+
+-- A property can reach a custom carrier through fields of a structural nominal
+-- plan.  Walk those instantiated fields as well as explicit parameter plans,
+-- stopping at the full carrier identity so recursive declarations remain
+-- finite.  The identity includes every applied argument and nominal origin;
+-- it is the same route word used for the typed helper registry.
+export
+customPlansReachable : PlanEnv -> List GenPlan -> List CustomPlan
+customPlansReachable env plans =
+  reverseCustomPlans (customPlansGo env plans omEmpty [])
+
+reverseCustomPlans : List CustomPlan -> List CustomPlan
+reverseCustomPlans plans = reverseCustomPlansGo plans []
+
+reverseCustomPlansGo : List CustomPlan -> List CustomPlan -> List CustomPlan
+reverseCustomPlansGo [] acc = acc
+reverseCustomPlansGo (plan :: rest) acc =
+  reverseCustomPlansGo rest (plan :: acc)
+
+customPlansGo : PlanEnv ->
+  List GenPlan ->
+  OrdMap Unit ->
+  List CustomPlan ->
+  List CustomPlan
+customPlansGo _ [] _ found = found
+customPlansGo env (plan :: rest) seen found =
+  let (seen2, found2) = customPlansIn env 0 plan seen found
+  customPlansGo env rest seen2 found2
+
+customPlansIn : PlanEnv ->
+  Int ->
+  GenPlan ->
+  OrdMap Unit ->
+  List CustomPlan ->
+  (OrdMap Unit, List CustomPlan)
+customPlansIn env depth plan seen found =
+  let word = arbCarrierWord (planTy plan)
+  if omHasKey word seen then
+    (seen, found)
+  else
+    let visited = omInsert word () seen
+    match plan
+      GCustom custom => (visited, custom :: found)
+      GList item => customPlansIn env depth item visited found
+      GArray item => customPlansIn env depth item visited found
+      GOption item => customPlansIn env depth item visited found
+      GResult err ok =>
+        let (afterErr, foundErr) = customPlansIn env depth err visited found
+        customPlansIn env depth ok afterErr foundErr
+      GTuple items => customPlansState env depth items visited found
+      nominal@(GNominal key _) => match planDef env key
+        Ok (PlanDef _ _ _ _ ctors) =>
+          customPlansCtors
+            env
+            (depth + 1)
+            nominal
+            ctors
+            (ctorWeights env nominal depth)
+            visited
+            found
+        Err _ => (visited, found)
+      _ => (visited, found)
+
+customPlansState : PlanEnv ->
+  Int ->
+  List GenPlan ->
+  OrdMap Unit ->
+  List CustomPlan ->
+  (OrdMap Unit, List CustomPlan)
+customPlansState _ _ [] seen found = (seen, found)
+customPlansState env depth (plan :: rest) seen found =
+  let (seen2, found2) = customPlansIn env depth plan seen found
+  customPlansState env depth rest seen2 found2
+
+customPlansCtors : PlanEnv ->
+  Int ->
+  GenPlan ->
+  List PlanCtor ->
+  List Int ->
+  OrdMap Unit ->
+  List CustomPlan ->
+  (OrdMap Unit, List CustomPlan)
+customPlansCtors _ _ _ [] _ seen found = (seen, found)
+customPlansCtors _ _ _ _ [] seen found = (seen, found)
+customPlansCtors env depth nominal (ctor :: rest) (weight :: weights) seen found =
+  if weight <= 0 then
+    customPlansCtors env depth nominal rest weights seen found
+  else match instantiateCtor env nominal ctor
+    Ok fields =>
+      let (seen2, found2) = customPlansFields env depth fields seen found
+      customPlansCtors env depth nominal rest weights seen2 found2
+    Err _ => customPlansCtors env depth nominal rest weights seen found
+
+customPlansFields : PlanEnv ->
+  Int ->
+  List (Option String, GenPlan) ->
+  OrdMap Unit ->
+  List CustomPlan ->
+  (OrdMap Unit, List CustomPlan)
+customPlansFields _ _ [] seen found = (seen, found)
+customPlansFields env depth ((_, plan) :: rest) seen found =
+  let (seen2, found2) = customPlansIn env depth plan seen found
+  customPlansFields env depth rest seen2 found2
 
 planKind : GenPlan -> String
 planKind GInt = "Int"
