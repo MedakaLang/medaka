@@ -2259,7 +2259,8 @@ propsReportEngines (EngNative :: rest) runtimeM rawCoreM coreM rawM modsM target
 superviseEvalProps : String -> List PropRequest -> <IO> List PropResult
 superviseEvalProps _ [] = []
 superviseEvalProps target requests =
-  let medaka = envOr "MEDAKA" (executablePath ())
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let medaka = envOr "MEDAKA" (joinPath root "medaka")
   let argv = ["test", "--props-worker"] ++ workerPositionals target requests
   match runCommand medaka argv
     Err message =>
