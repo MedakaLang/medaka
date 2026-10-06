@@ -6,14 +6,13 @@
 -- max_tests draws.  On the first failing draw, greedily shrink the
 -- counterexample and report it.
 --
--- Generation draws from this module's own private LCG (`rngNextLocal`), seeded
--- by `--seed`/`seedPropRng` and isolated from the program under test — it does
+-- Generation draws from the shared structural RNG policy, seeded by
+-- `--seed`/`seedPropRng` and isolated from the program under test — it does
 -- NOT go through eval.mdk's `randomInt`/`randomBool` externs, which use a
 -- separate SplitMix64 generator for the program's own `random*` calls.  A
--- PASSING prop's output (`OK (100 tests)`) is RNG-independent, so it matches
--- `medaka test`.  A FAILING prop's shrunk counterexample is RNG-dependent and
--- diverges across all three runners — see the report in
--- test/diff_compiler_fmt_test.mdk's `testGoldenFailure`.
+-- Structural draws and structural shrink candidates use the same policy as the
+-- native property probe. Custom Arbitrary methods remain program code and may
+-- consume their own program RNG state.
 
 import frontend.ast.{
   Decl(..),
@@ -21,7 +20,6 @@ import frontend.ast.{
   PropParam,
   Ty(..),
 }
-import u32 as U32
 import eval.eval.{
   Value(..), EvalEnv(..), apply, eval, extendEnv, force, lookupEnv,
   lookupRuntimeBinding, ppValue
@@ -53,6 +51,11 @@ import tools.prop_plan.{
   resultWeights,
   intMin,
   intMax,
+  structuralRngSeed,
+  structuralRngAdvance,
+  structuralRngMix,
+  structuralRngRange,
+  structuralRngChoose,
   customPlansReachable,
 }
 
@@ -97,13 +100,12 @@ customSeedRef : Ref Int
 customSeedRef = Ref 123456789
 
 -- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
--- `rngStateRef`. Only the draw state is reduced into `0 .. 2^31 - 1`, so
--- `rngNextLocal`'s multiply cannot overflow. Replay metadata retains the
--- original integer seed.
+-- `rngStateRef`. The shared policy reduces the draw state into its safe
+-- 31-bit range; replay metadata retains the original integer seed.
 export
 seedPropRng : Int -> Unit
 seedPropRng n =
-  let normalized = (n % 2147483648 + 2147483648) % 2147483648
+  let normalized = structuralRngSeed n
   propRngStateRef := normalized
   propSeedRef := n
   customSeedRef := normalized
@@ -119,39 +121,20 @@ propSeedValue : Unit -> Int
 propSeedValue _ = !propSeedRef
 
 rngNextLocal : Unit -> Int
--- Odd multiplier and odd increment make bit `i` of consecutive `s` values
--- have period <= 2^(i+1) (Knuth), so ANY contiguous bit-window read straight
--- off `s` — including a shifted/truncated one — inherits a short period at
--- its own low end. A caller drawing many values (an 8-parameter prop can
--- draw hundreds) can exhaust a short-period window's whole range and still
--- silently miss most of the assignment space.
---
--- Run the raw state through a Murmur3-style `fmix32` finalizer instead: two
--- multiply/xor-shift rounds so every output bit depends nonlinearly on many
--- state bits (full avalanche), leaving no short-period window for a caller
--- to extract. The finalizer's words are `U32`, so each multiply wraps
--- modulo 2^32 as `fmix32` requires. The state stays an `Int` below 2^31, so
--- its advancement cannot overflow and `--seed` reproducibility is unaffected.
 rngNextLocal _ =
-  let s = (!propRngStateRef * 1103515245 + 12345) % 2147483648
+  let s = structuralRngAdvance !propRngStateRef
   propRngStateRef := s
-  let h1 = fromInt (bitXor s (shiftRight s 16)) : U32
-  let h2 = h1 * 2246822507
-  let h3 = U32.bitXor h2 (U32.shiftRight h2 13)
-  let h4 = h3 * 3266489909
-  U32.toInt (U32.bitXor h4 (U32.shiftRight h4 16))
+  structuralRngMix s
 
 randIntRange : Int -> Int -> Int
-randIntRange lo hi =
-  let range = hi - lo + 1
-  if range <= 0 then lo else lo + rngNextLocal () % range
+randIntRange lo hi = structuralRngRange (rngNextLocal ()) lo hi
 
 -- Exported so a distribution regression test can seed the runner's private
 -- RNG (`seedPropRng`) and draw a raw sequence directly, without going through
 -- a `prop`'s randomized-length `List Bool` generation.
 export
 randBoolL : Unit -> Bool
-randBoolL _ = rngNextLocal () % 2 == 1
+randBoolL _ = structuralRngChoose (rngNextLocal ()) 2 == 1
 
 -- ── what a draw may consult ─────────────────────────────────────────────────
 -- The shared PlanEnv makes every structural and capability decision. GenEnv
@@ -177,13 +160,14 @@ helperMap ((helper@(PropHelper word _ _)) :: rest) acc =
 
 genFloat : Unit -> <e> Value e
 genFloat _ =
-  let r = rngNextLocal () % 2000001
+  let r = structuralRngChoose (rngNextLocal ()) 2000001
   VFloat (intToFloat r * (1.0 / 1000000.0) - 1.0)
 
 genCharStr : Unit -> String
-genCharStr _ = match charFromCode (32 + rngNextLocal () % 95)
-  Some c => charToStr c
-  None => " "
+genCharStr _ =
+  match charFromCode (32 + structuralRngChoose (rngNextLocal ()) 95)
+    Some c => charToStr c
+    None => " "
 
 -- random String of printable ASCII, length 0..10
 genString : Unit -> String

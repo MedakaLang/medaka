@@ -31,7 +31,9 @@ import tools.prop_plan.{
   PlanDef(..), PlanCtor(..), PlanField(..), PlanError(..), PlanErrorReason(..),
   PlanVisibility(..), planErrorText, buildPlanEnvModules, planFor, planDef,
   instantiateCtor, planTy, typeKeyWord, ctorWeights, listLengthBound,
-  optionWeights, resultWeights, maxGenDepth
+  optionWeights, resultWeights, maxGenDepth, intMin, intMax,
+  structuralRngModulus, structuralRngMultiplier, structuralRngIncrement,
+  structuralRngMixMultiplier1, structuralRngMixMultiplier2
 }
 import tools.prop_runner.{
   PropResult(..), PropStatus(..), PropFailureKind(..), filterProps,
@@ -543,6 +545,7 @@ probeNamespacePrefixes = [
   "__np_",
   "NpCore_",
   "NpRuntime_",
+  "NpU32_",
   "NpModule_",
   runtimeDependencyPrefix,
 ]
@@ -566,13 +569,20 @@ plannedProbeSource nonce target tsrc modules env jobs =
         "\{generatedPrefix nonce}custom_state = \{runtimeAlias nonce}.Ref 0",
         "",
         "\{generatedPrefix nonce}next _ =",
-        "  let s = (!\{generatedPrefix nonce}state * 1103515245 + 12345) % 2147483648",
+        "  let s = (!\{generatedPrefix nonce}state * \{intToString structuralRngMultiplier} + \{intToString structuralRngIncrement}) % \{intToString structuralRngModulus}",
         "  \{generatedPrefix nonce}state := s",
-        "  s",
+        "  let word = \{u32Alias nonce}.truncate s",
+        "  let h1 = \{u32Alias nonce}.bitXor word (\{u32Alias nonce}.shiftRight word 16)",
+        "  let h2 = h1 * \{u32Alias nonce}.truncate \{intToString structuralRngMixMultiplier1}",
+        "  let h3 = \{u32Alias nonce}.bitXor h2 (\{u32Alias nonce}.shiftRight h2 13)",
+        "  let h4 = h3 * \{u32Alias nonce}.truncate \{intToString structuralRngMixMultiplier2}",
+        "  \{u32Alias nonce}.toInt (\{u32Alias nonce}.bitXor h4 (\{u32Alias nonce}.shiftRight h4 16))",
         "",
-        "\{generatedPrefix nonce}int _ = (\{generatedPrefix nonce}next () / 65536) % 2001 - 1000",
-        "\{generatedPrefix nonce}bool _ = (\{generatedPrefix nonce}next () / 65536) % 2 == 0",
-        "\{generatedPrefix nonce}choose n = if n <= 1 then 0 else (\{generatedPrefix nonce}next () / 65536) % n",
+        "\{generatedPrefix nonce}int _ = \{generatedPrefix nonce}choose \{intToString (intMax - intMin + 1)} + \{intToString intMin}",
+        "\{generatedPrefix nonce}bool _ = \{generatedPrefix nonce}choose 2 == 1",
+        "\{generatedPrefix nonce}choose n =",
+        "  let word = \{generatedPrefix nonce}next ()",
+        "  if n <= 0 then 0 else word % n",
         "\{generatedPrefix nonce}char _ = \{coreAlias nonce}.optionOr ' ' (\{runtimeAlias nonce}.charFromCode (32 + \{generatedPrefix nonce}choose 95))",
         "\{generatedPrefix nonce}string n = if n <= 0 then \"\" else \{runtimeAlias nonce}.charToStr (\{generatedPrefix nonce}char ()) ++ \{generatedPrefix nonce}string (n - 1)",
         "",
@@ -605,6 +615,9 @@ coreAlias nonce = "NpCore_\{probeNameNonce nonce}"
 runtimeAlias : String -> String
 runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
 
+u32Alias : String -> String
+u32Alias nonce = "NpU32_\{probeNameNonce nonce}"
+
 probeNameNonce : String -> String
 probeNameNonce nonce = replaceAll "-" "_" nonce
 
@@ -622,6 +635,7 @@ plannedImports : String ->
 plannedImports nonce modules jobs env =
   "import core as \{coreAlias nonce}"
     :: "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}"
+    :: "import \{runtimeDependencyName nonce}.u32 as \{u32Alias nonce}"
     :: map (importLine nonce modules) (omKeys (importOwners jobs env omEmpty))
 
 importOwners : List NativePlanOutcome -> PlanEnv -> OrdMap Unit -> OrdMap Unit
@@ -1026,7 +1040,7 @@ graphNodeBody : String ->
 graphNodeBody nonce _ _ _ _ _ GInt = "\{generatedPrefix nonce}int ()"
 graphNodeBody nonce _ _ _ _ _ GBool = "\{generatedPrefix nonce}bool ()"
 graphNodeBody nonce _ _ _ _ _ GFloat =
-  "\{runtimeAlias nonce}.intToFloat ((\{generatedPrefix nonce}next ()) % 2000001) * (1.0 / 1000000.0) - 1.0"
+  "\{runtimeAlias nonce}.intToFloat (\{generatedPrefix nonce}choose 2000001) * (1.0 / 1000000.0) - 1.0"
 graphNodeBody nonce _ _ _ _ _ GChar = "\{generatedPrefix nonce}char ()"
 graphNodeBody nonce _ _ _ _ _ GString = stringExpr nonce 0
 graphNodeBody _ _ _ _ _ _ GUnit = "()"
@@ -1103,18 +1117,59 @@ graphCtorChoice : String ->
   String
 graphCtorChoice _ _ _ _ _ _ _ [] _ =
   "panic \"native property runner: no finite constructor\""
-graphCtorChoice nonce modules env graph prefix plan owner (ctor :: rest) (weight :: weights) =
+graphCtorChoice nonce modules env graph prefix plan owner ctors weights =
+  let total = sumInts weights
+  if total <= 0 then
+    "panic \"native property runner: no finite constructor\""
+  else
+    let picked = generatedName nonce "ctor_choice"
+    "(let \{picked} = \{generatedPrefix nonce}choose \{intToString total} in \{graphCtorChoiceAt nonce modules env graph prefix plan owner ctors weights picked})"
+
+graphCtorChoiceAt : String ->
+  List PlanModule ->
+  PlanEnv ->
+  NativeGraph ->
+  String ->
+  GenPlan ->
+  String ->
+  List PlanCtor ->
+  List Int ->
+  String ->
+  String
+graphCtorChoiceAt _ _ _ _ _ _ _ [] _ _ =
+  "panic \"native property runner: no finite constructor\""
+graphCtorChoiceAt nonce modules env graph prefix plan owner (ctor :: rest) (weight :: weights) picked =
   if weight <= 0 then
-    graphCtorChoice nonce modules env graph prefix plan owner rest weights
+    graphCtorChoiceAt
+      nonce
+      modules
+      env
+      graph
+      prefix
+      plan
+      owner
+      rest
+      weights
+      picked
   else
     let here = graphCtorValue nonce modules env graph prefix plan owner ctor
     let tail =
-      graphCtorChoice nonce modules env graph prefix plan owner rest weights
+      graphCtorChoiceAt
+        nonce
+        modules
+        env
+        graph
+        prefix
+        plan
+        owner
+        rest
+        weights
+        "(\{picked} - \{intToString weight})"
     if sumInts weights == 0 then
       here
     else
-      "if \{generatedPrefix nonce}choose \{intToString (weight + sumInts weights)} < \{intToString weight} then \{here} else \{tail}"
-graphCtorChoice _ _ _ _ _ _ _ _ _ =
+      "if \{picked} < \{intToString weight} then \{here} else \{tail}"
+graphCtorChoiceAt _ _ _ _ _ _ _ _ _ _ =
   "panic \"native property runner: no finite constructor\""
 
 sumInts : List Int -> Int
@@ -1145,12 +1200,7 @@ graphCtorValue nonce modules env graph prefix plan owner (ctor@(PlanCtor source 
 
 renderOptionChoice : String -> List Int -> String -> String
 renderOptionChoice nonce [noneWeight, someWeight] child =
-  if noneWeight <= 0 then
-    "Some (\{child})"
-  else if someWeight <= 0 then
-    "None"
-  else
-    "if \{generatedPrefix nonce}choose \{noneWeight + someWeight} < \{noneWeight} then None else Some (\{child})"
+  "if \{generatedPrefix nonce}choose \{noneWeight + someWeight} < \{noneWeight} then None else Some (\{child})"
 renderOptionChoice _ _ child = "Some (\{child})"
 
 renderOptionAtDepth : String -> PlanEnv -> GenPlan -> String -> Int -> String
@@ -1163,12 +1213,7 @@ renderOptionAtDepth nonce env p child level =
 
 renderResultChoice : String -> List Int -> String -> String -> String
 renderResultChoice nonce [errWeight, okWeight] error ok =
-  if errWeight <= 0 then
-    "Ok (\{ok})"
-  else if okWeight <= 0 then
-    "Err (\{error})"
-  else
-    "if \{generatedPrefix nonce}choose \{errWeight + okWeight} < \{errWeight} then Err (\{error}) else Ok (\{ok})"
+  "if \{generatedPrefix nonce}choose \{errWeight + okWeight} < \{errWeight} then Err (\{error}) else Ok (\{ok})"
 renderResultChoice _ _ error _ = "Err (\{error})"
 
 renderResultAtDepth : String ->
@@ -1754,7 +1799,7 @@ plannedMainLines _ [] _ = []
 plannedMainLines nonce ((NativeRunnable (DProp _ _ params _) r plans) :: rest) i =
   [
       "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (startTag i)}\"",
-      "  let _ = \{generatedPrefix nonce}state := ((\{intToString (propRequestSeed r)} % 2147483648) + 2147483648) % 2147483648",
+      "  let _ = \{generatedPrefix nonce}state := ((\{intToString (propRequestSeed r)} % \{intToString structuralRngModulus}) + \{intToString structuralRngModulus}) % \{intToString structuralRngModulus}",
       "  let caller = \{runtimeAlias nonce}.randomState ()",
       "  let _ = \{runtimeAlias nonce}.setSeed \{intToString (propRequestSeed r)}",
       "  let _ = \{generatedPrefix nonce}custom_state := \{runtimeAlias nonce}.randomState ()",

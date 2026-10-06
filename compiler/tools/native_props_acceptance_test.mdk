@@ -511,6 +511,31 @@ runSeededReport seed target = match boundedVerbSeconds 120 medakaBin [
     else
       map (report => (code, report)) (parse out)
 
+runSingleSeededReport : Int ->
+  String ->
+  String ->
+  <Exec, IO> Result String (Int, Json)
+runSingleSeededReport seed filter target =
+  match boundedVerbSeconds 120 medakaBin [
+    "test",
+    "--json",
+    "--engines",
+    "eval,native",
+    "--cases",
+    "1",
+    "--seed",
+    intToString seed,
+    "--filter",
+    filter,
+    target,
+  ]
+    Err message => Err message
+    Ok (code, out, err) =>
+      if err /= "" then
+        Err "unexpected runner stderr: \{err}"
+      else
+        map (report => (code, report)) (parse out)
+
 exactSeedReport : String -> Int -> <Exec, IO> Expectation
 exactSeedReport target seed = match runSeededReport seed target
   Err message => fail message
@@ -538,6 +563,103 @@ test "both engines report negative and wide replay seeds without normalization" 
         (map (exactSeedReport target) [
           -20261005, 2147483665, 1152921504606846975
         ]))
+
+gradeStructuralWitness : Int ->
+  String ->
+  String ->
+  Result String (Int, Json) ->
+  Expectation
+gradeStructuralWitness seed name fragment (result@(Ok (_, report))) = expectAll
+  [
+    gradeReport 1 [("eval", name, "fail"), ("native", name, "fail")] result,
+    expectEqual
+      [(Some seed, Some 1), (Some seed, Some 1)]
+      (map
+        (row =>
+          (flatMap asInt (get "seed" row), flatMap asInt (get "cases" row)))
+        (propertyReports report)),
+    expectAll
+      (map
+        (row => match field "detail" row
+          Some detail => expectTextContainsAll [fragment] detail
+          None => fail "missing structural counterexample detail")
+        (propertyReports report)),
+  ]
+gradeStructuralWitness _ _ _ (Err message) = fail message
+
+gradeStructuralTrace : Int -> String -> Result String (Int, Json) -> Expectation
+gradeStructuralTrace seed name (result@(Ok (_, report))) = expectAll [
+  gradeReport 0 [("eval", name, "pass"), ("native", name, "pass")] result,
+  expectEqual
+    [(Some seed, Some 1), (Some seed, Some 1)]
+    (map
+      (row => (flatMap asInt (get "seed" row), flatMap asInt (get "cases" row)))
+      (propertyReports report)),
+]
+gradeStructuralTrace _ _ (Err message) = fail message
+
+structuralRngWitnessSource : String
+structuralRngWitnessSource =
+  "data Choice = First | Second Bool deriving (Eq, Debug)\nprop \"structural rng word trace\" (a : Int) (b : Int) (c : Int) (d : Int) = a == (0 - 153) && b == (0 - 482) && c == (0 - 584) && d == 207\nprop \"structural rng int\" (n : Int) = n /= (0 - 153)\nprop \"structural rng bool\" (b : Bool) = b /= True\nprop \"structural rng list\" (xs : List Int) = length xs /= 1\nprop \"structural rng constructor\" (choice : Choice) = match choice\n  First => False\n  Second _ => True\nprop \"negative rng bool\" (b : Bool) = b /= True\nprop \"wide rng bool\" (b : Bool) = b /= True\n"
+
+test "both engines share structural fmix draws for scalars containers and constructors" =
+  withFixtures
+    [("main.mdk", structuralRngWitnessSource)]
+    (target => expectAll [
+      gradeStructuralTrace
+        1
+        "structural rng word trace"
+        (runSingleSeededReport 1 "structural rng word trace" target),
+      gradeStructuralWitness
+        1
+        "structural rng int"
+        "n = -153"
+        (runSingleSeededReport 1 "structural rng int" target),
+      gradeStructuralWitness
+        1
+        "structural rng bool"
+        "b = True"
+        (runSingleSeededReport 1 "structural rng bool" target),
+      gradeStructuralWitness
+        1
+        "structural rng list"
+        "xs = [0]"
+        (runSingleSeededReport 1 "structural rng list" target),
+      gradeStructuralWitness
+        1
+        "structural rng constructor"
+        "choice = First"
+        (runSingleSeededReport 1 "structural rng constructor" target),
+      gradeStructuralWitness
+        (-9)
+        "negative rng bool"
+        "b = True"
+        (runSingleSeededReport (-9) "negative rng bool" target),
+      gradeStructuralWitness
+        2147483665
+        "wide rng bool"
+        "b = True"
+        (runSingleSeededReport 2147483665 "wide rng bool" target),
+    ])
+
+test "native structural RNG imports canonical u32 beside a user u32 module" =
+  withFixtures
+    [
+      (
+        "u32.mdk",
+        "export\nmarker : Int\nmarker = 7\n",
+      ),
+      (
+        "main.mdk",
+        "import u32.{marker}\nprop \"user u32 stays local\" (n : Int) = marker == 7 && n /= (0 - 153)\n",
+      ),
+    ]
+    (target =>
+      gradeStructuralWitness
+        1
+        "user u32 stays local"
+        "n = -153"
+        (runSingleSeededReport 1 "user u32 stays local" target))
 
 drawCounterexamples : Result String (Int, Json) -> List (List String)
 drawCounterexamples (Err _) = []
