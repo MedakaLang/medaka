@@ -1205,3 +1205,20 @@ test "finite nonregular carriers can grow their arguments without expanding help
           ("native", "increasing recursion is reachable", "fail"),
         ]
         (runReport ["--engines", "eval,native"] target))
+
+test "native runner globals and helper functions preserve identically spelled user bindings" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "__np_state : Int\n__np_state = 77\n__np_int : Unit -> Int\n__np_int () = 999999\n__np_prop_0 : Int -> Bool\n__np_prop_0 _ = False\n__np_shrink_0 : Int -> Int\n__np_shrink_0 _ = 88\nprop \"user helper bindings\" (n : Int) = __np_state == 77 && __np_int () == 999999 && not (__np_prop_0 n) && __np_shrink_0 n == 88\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "user helper bindings", "pass"),
+          ("native", "user helper bindings", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
