@@ -841,3 +841,100 @@ test "an expected native abort pin preserves later ordinary test execution" =
             ))
             (unitReportRows report)),
       ])
+
+test "unsupported fields remain capability errors when another constructor is finite" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Choice = Number Int | Function (Int -> Int)\nprop \"unsupported constructor field\" (value : Choice) = True\nprop \"neighbor\" (n : Int) = n == n\n",
+      ),
+    ]
+    (target =>
+      gradeCapabilityNeighbor
+        "unsupported constructor field"
+        (runReport ["--engines", "eval,native"] target))
+
+test "abstract imported types can use their custom generators without exposing constructors" =
+  withFixtures
+    [
+      (
+        "hidden.mdk",
+        "export data Hidden = Secret Int\nexport impl Arbitrary Hidden where\n  arbitrary () = Secret 500\n  shrink _ = []\nexport\nisValid : Hidden -> Bool\nisValid (Secret n) = n == 500\n",
+      ),
+      (
+        "main.mdk",
+        "import hidden.{Hidden, isValid}\nprop \"abstract custom value\" (value : Hidden) = isValid value\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "abstract custom value", "pass"),
+          ("native", "abstract custom value", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
+
+negativeReplayPin : String -> String -> String
+negativeReplayPin engine name =
+  "[[pin]]\nfile = \"main.mdk\"\nkind = \"prop\"\nname = \"\{name}\"\nengine = \"\{engine}\"\nissue = 1\nseed = -9\ncases = 20\nfailure = \"false\"\n"
+
+negativeReplayLedger : String
+negativeReplayLedger =
+  "version = 1\n\{negativeReplayPin "eval" "negative structural seed"}\{negativeReplayPin "eval" "negative custom seed"}\{negativeReplayPin "native" "negative structural seed"}\{negativeReplayPin "native" "negative custom seed"}"
+
+test "signed request seeds preserve the structural domain and complete custom RNG state" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "import u64 as U\ndata SeedCheck = SeedCheck Bool\nimpl Arbitrary SeedCheck where\n  arbitrary () = SeedCheck (randomState () == U.truncate (0 - 9))\n  shrink _ = []\nprop \"negative structural seed\" (n : Int) = n >= (0 - 1000) && n <= 1000\nprop \"negative custom seed\" (value : SeedCheck) = match value\n  SeedCheck correct => correct\n",
+      ),
+      ("medaka-test-pins.toml", negativeReplayLedger),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        expectEqual 1 code,
+        expectEqual (Some 0) (knownRedCount report),
+        expectEqual (Some 4) (summaryCount "failed" report),
+        expectEqual
+          [Some "pass", Some "pass", Some "pass", Some "pass"]
+          (map (field "rawStatus") (propertyReports report)),
+        expectEqual
+          [Some (0 - 9), Some (0 - 9), Some (0 - 9), Some (0 - 9)]
+          (map (row => flatMap asInt (get "seed" row)) (propertyReports report)),
+      ])
+
+test "user parameter names cannot shadow native runner counters and shrink locals" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "calls : Ref Int\ncalls = Ref 0\nprop \"runner local names\" (remaining : Int) (fuel : Int) (candidate : Int) =\n  let prior = !calls\n  let _ = calls := prior + 1\n  remaining == remaining && fuel == fuel && candidate == candidate\nprop \"budget observer\" (n : Int) = !calls == 20 && n == n\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "runner local names", "pass"),
+          ("eval", "budget observer", "pass"),
+          ("native", "runner local names", "pass"),
+          ("native", "budget observer", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
+
+test "unrelated generic declarations cannot change finite capability planning" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Loop = Again Loop\ndata Unused a b c d e f g h i j k l m n o p q r s t u v w x y = UnusedInt Int\nprop \"no finite value\" (value : Loop) = True\nprop \"neighbor\" (n : Int) = n == n\n",
+      ),
+    ]
+    (target =>
+      gradeCapabilityNeighbor
+        "no finite value"
+        (runReport ["--engines", "eval,native"] target))

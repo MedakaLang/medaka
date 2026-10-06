@@ -110,7 +110,7 @@ issue number and existing project-relative source path):
 version = 1
 
 [[pin]]
-file = "test/laws_test.mdk"
+file = "<existing project-relative source path>"
 kind = "prop"
 name = "join preserves authority"
 engine = "native"
