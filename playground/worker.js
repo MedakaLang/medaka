@@ -300,7 +300,9 @@ self.onmessage = function(e) {
       const isPanic = /unreachable|trap|RuntimeError/i.test(engineMsg);
       // A coded trap already reached the console through the stderr stream above, so
       // the error message is withheld (shown: true) instead of printing it twice.
-      const overflow = /call stack|stack overflow/i.test(engineMsg);
+      // V8 and JavaScriptCore: "Maximum call stack size exceeded"; Firefox: "too
+      // much recursion".
+      const overflow = /call stack|stack overflow|too much recursion/i.test(engineMsg);
       const named = err instanceof CapabilityError || err instanceof OldEntryShape;
       const message = named ? engineMsg
         : overflow ? STACK_OVERFLOW_MSG

@@ -389,9 +389,11 @@ function trapDiagnostic(e) {
 // overflow sooner; a retry re-runs against the tiered-up (TurboFan) module,
 // which reaches about 2.6x deeper.  A retry cannot rescue unbounded recursion,
 // which overflows the same way on every attempt.  See runGuestRetry.
+// The wording is per engine: V8 and JavaScriptCore say "Maximum call stack size
+// exceeded", Firefox says "too much recursion".
 function isStackOverflow(e) {
   const m = (e && (e.message || String(e))) || '';
-  return /call stack|Maximum call stack|stack (?:size|overflow)/i.test(m);
+  return /call stack|stack (?:size|overflow)|too much recursion/i.test(m);
 }
 
 // Run the guest, transparently retrying a first-call stack overflow (see above).

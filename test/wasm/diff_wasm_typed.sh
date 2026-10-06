@@ -226,7 +226,7 @@ for required in \
   'let _ = setRef (progEmit prog).trapImportNeeded True' \
   'emitDivZeroGuard : WasmEmit -> String -> String -> Int -> List String' \
   'emitDivZeroGuard emit op "$__sdivr"' \
-  'emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)' \
+  'emitDivZeroGuard (progEmit prog) op (divrLocal prog d) site' \
   'wasmTrap emit "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"' \
   'wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "'; do
   has_wasm_pin "$required" || {
@@ -278,9 +278,16 @@ if grep -E '^_?useHashRef[[:space:]]*[:=]|setRef (_?useHashRef)' "$WASM_SRC" >/d
   echo "FAIL H2B9-HASH-AUTHORITY: retired ambient hash authority remains"
   exit 1
 fi
+# The W7 scratch locals ($__rub<d>, $__divr<d>, ...) are declared per function from
+# the names its body recorded through w7Local (#3882), not from a per-program flag.
 for required in \
-  'useRecUpdate : Ref Bool' \
-  'useRecUpdate = Ref'; do
+  'w7Used : Ref (OrdMap Unit)' \
+  'w7Used = Ref omEmpty' \
+  'w7Local : WasmEmit -> String -> String -> String' \
+  'w7ScopeOpen : WasmEmit -> OrdMap Unit' \
+  'w7ScopeClose : WasmEmit -> OrdMap Unit -> OrdMap Unit' \
+  'divrLocal prog d = w7Local (progEmit prog) "__divr" (intToString d)' \
+  'let bL = w7Local (progEmit prog) "__rub" sfx'; do
   has_wasm_pin "$required" || {
     echo "FAIL H2B9-RECUPDATE-AUTHORITY: missing $required"
     exit 1
@@ -305,8 +312,8 @@ for required in \
   'scanTreeW7 : WasmEmit -> CTree -> Unit' \
   'scanBranchW7 : WasmEmit -> CTBranch -> Unit' \
   'scanHeadW7 : WasmEmit -> CHead -> Unit' \
-  'w7LocalDecls : WasmEmit -> Int -> List String' \
-  'w7LocalsAtDepth : WasmEmit -> Int -> List String' \
+  'w7LocalDecls : OrdMap Unit -> Int -> List String' \
+  'w7LocalsAtDepth : OrdMap Unit -> Int -> List String' \
   'noteW8Binop emit "/" = setRef emit.useDivGuard True' \
   'noteW8Binop emit "%" = setRef emit.useDivGuard True' \
   'let dv = if !emit.useDivGuard then ["    (local $__sdivr i64)"] else []' \
@@ -316,12 +323,9 @@ for required in \
     exit 1
   }
 done
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'w7LocalDecls (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 8 ] || {
-  echo "FAIL H2B9-DIV-AUTHORITY: expected eight ref-local declaration callers"
-  exit 1
-}
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useRecUpdate True' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-  echo "FAIL H2B9-RECUPDATE-AUTHORITY: expected two update scan writers"
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'w7ScopeOpen (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 10 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'w7ScopeClose (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 10 ] || {
+  echo "FAIL H2B9-DIV-AUTHORITY: expected ten W7 scope brackets (one per function emitter)"
   exit 1
 }
 has_wasm_pin 'scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex' &&
@@ -1205,6 +1209,29 @@ feature_exact_capture() {
   [ "$begins" -eq 1 ] && [ "$ends" -eq 1 ] || return 1
   feature_capture "$begin" "$end" "$file"
 }
+# Prints each W7 scratch local ($__divr0, $__rub1, ...) that a function declares
+# without referencing, or references without declaring. A function declares exactly
+# the W7 locals its body names (#3882), so the output is empty.
+w7_decl_mismatches() {
+  awk '
+    function flush(   n) {
+      for (n in decl) if (!(n in used)) print fn ": declared, unused: " n
+      for (n in used) if (!(n in decl)) print fn ": used, undeclared: " n
+      split("", decl); split("", used)
+    }
+    /^  \(func / { flush(); fn = $2; next }
+    {
+      line = $0
+      isDecl = (line ~ /^ *\(local \$__/)
+      while (match(line, /\$__(rlacc|rli|rllo|raarr|rai|ralo|racnt|ixarr|ixi|slsrc|sldst|sllo|sllen|aexi|aexn|aexarr|aexlst|aexf|aexv|aexbits|rub|divr)[0-9]+/)) {
+        name = substr(line, RSTART, RLENGTH)
+        if (isDecl) decl[name] = 1; else used[name] = 1
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+    END { flush() }
+  ' "$1"
+}
 
 # LR0 ownership evidence runs before legacy feature-state assertions. A reader
 # mutant must fail at its leaf field, even when its U shape also changes a
@@ -1479,9 +1506,10 @@ for feature_file in feature-p1.wat feature-hash-int-only.wat feature-float-div.w
     exit 1
   }
 done
-for feature_p in feature-p1.wat feature-p2.wat; do
-  grep -F '(local $__divr0 i64)' "$INPUT_WORK/$feature_p" >/dev/null || {
-    echo "FAIL H2B9-DIV-LOCAL: missing ref divisor local in $feature_p"
+for feature_p in feature-p1.wat feature-p2.wat feature-u.wat feature-float-div.wat feature-hash-int-only.wat; do
+  w7_mismatch="$(w7_decl_mismatches "$INPUT_WORK/$feature_p")"
+  [ -z "$w7_mismatch" ] || {
+    echo "FAIL H2B9-W7-PER-FUNCTION: $feature_p: $w7_mismatch"
     exit 1
   }
 done
@@ -1542,10 +1570,10 @@ if grep -F '$mdk_hash_mix64' "$INPUT_WORK/feature-u.wat" >/dev/null ||
   echo "FAIL H2B9-HASH-U-ABSENCE: inert control emitted hash runtime"
   exit 1
 fi
-grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
+! grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
   grep -F '(func $featureFloatDiv (param $u____wparg0 (ref eq)) (result (ref eq))' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
   grep -F 'f64.div' "$INPUT_WORK/feature-float-div.wat" >/dev/null || {
-  echo "FAIL H2B9-DIV-FLOAT: Float-only division lost ref divisor-local shape"
+  echo "FAIL H2B9-DIV-FLOAT: Float-only division declared the Int divisor local, or lost its f64.div shape"
   exit 1
 }
 cmp -s "$INPUT_WORK/feature-p1.wat" "$INPUT_WORK/feature-p2.wat" || {
