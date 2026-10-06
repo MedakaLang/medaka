@@ -511,6 +511,34 @@ runSeededReport seed target = match boundedVerbSeconds 120 medakaBin [
     else
       map (report => (code, report)) (parse out)
 
+exactSeedReport : String -> Int -> <Exec, IO> Expectation
+exactSeedReport target seed = match runSeededReport seed target
+  Err message => fail message
+  Ok (code, report) => expectAll [
+    gradeReport
+      0
+      [
+        ("eval", "exact replay seed", "pass"),
+        ("native", "exact replay seed", "pass"),
+      ]
+      (Ok (code, report)),
+    expectEqual
+      [(Some seed, Some 20), (Some seed, Some 20)]
+      (map
+        (row =>
+          (flatMap asInt (get "seed" row), flatMap asInt (get "cases" row)))
+        (propertyReports report)),
+  ]
+
+test "both engines report negative and wide replay seeds without normalization" =
+  withFixtures
+    [("main.mdk", "prop \"exact replay seed\" (n : Int) = n == n\n")]
+    (target =>
+      expectAll
+        (map (exactSeedReport target) [
+          -20261005, 2147483665, 1152921504606846975
+        ]))
+
 drawCounterexamples : Result String (Int, Json) -> List (List String)
 drawCounterexamples (Err _) = []
 drawCounterexamples (Ok (_, report)) =

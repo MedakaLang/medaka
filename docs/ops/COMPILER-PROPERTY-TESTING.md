@@ -47,12 +47,18 @@ tuples and nominal constructor fields. Constructor privacy is checked relative
 to the owning module: abstract exports and newtypes can generate structurally
 there, while importers need an eligible custom generator.
 
-Generated probe bindings and import aliases carry a per-probe nonce. Generated
+Generated probe bindings and import aliases carry a per-probe nonce drawn from
+OS entropy, with occupied source namespaces excluded before rendering. Generated
 core calls and runtime primitive calls use canonical module aliases, so a valid
 user declaration named `map`, `debug` or `randomState` keeps its own meaning
 without capturing runner machinery. The evaluator likewise selects runtime RNG
-bindings from the original global frame. User bodies, labels and field names
+bindings from a preserved primitive frame, separately from method dispatch cells.
+User bodies, labels and field names
 are preserved rather than rewritten after rendering.
+
+Reports retain the exact requested integer seed, including negative and wide
+seeds. Normalizing a structural generator's internal state does not normalize
+its replay metadata.
 
 ## Initial algorithm coverage
 

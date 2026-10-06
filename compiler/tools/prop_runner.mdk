@@ -97,15 +97,15 @@ customSeedRef : Ref Int
 customSeedRef = Ref 123456789
 
 -- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
--- `rngStateRef`.  The seed is reduced into the state's range, `0 .. 2^31 - 1`,
--- so any `Int` seeds it and `rngNextLocal`'s multiply cannot overflow; a seed
--- already in that range is used as given.
+-- `rngStateRef`. Only the draw state is reduced into `0 .. 2^31 - 1`, so
+-- `rngNextLocal`'s multiply cannot overflow. Replay metadata retains the
+-- original integer seed.
 export
 seedPropRng : Int -> Unit
 seedPropRng n =
   let normalized = (n % 2147483648 + 2147483648) % 2147483648
   propRngStateRef := normalized
-  propSeedRef := normalized
+  propSeedRef := n
   customSeedRef := normalized
   customRngReadyRef := False
 
