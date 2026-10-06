@@ -1,4 +1,5 @@
 import driver.build_cmd.{makeTempDir, cleanupTempDir}
+import tools.native_fixture_test_support_test.{writeFixtureFiles}
 import test_process.{medakaBin, medakaRoot, boundedVerbSeconds}
 import test.{
   Expectation, expectAll, expectEqual, expectTrue, expectNotEqual,
@@ -6,12 +7,6 @@ import test.{
 }
 import json.{Json, parse, stringify, get, asArray, asString, asInt}
 import string.{contains, lines, replaceAll}
-
-writeFixtures : String -> List (String, String) -> <IO> Result String Unit
-writeFixtures _ [] = Ok ()
-writeFixtures dir ((name, source) :: rest) = do
-  _ <- writeFile "\{dir}/\{name}" source
-  writeFixtures dir rest
 
 withFixtures : List (String, String) ->
   (String -> <Exec, IO> Expectation) ->
@@ -21,7 +16,7 @@ withFixtures files inspect = match makeTempDir ()
   Ok dir =>
     let manifest =
       ("medaka.toml", "[package]\nname = \"native_prop_acceptance\"\n")
-    let result = match writeFixtures dir (manifest :: files)
+    let result = match writeFixtureFiles dir (manifest :: files)
       Err message => fail message
       Ok _ => inspect "\{dir}/main.mdk"
     let _ = cleanupTempDir dir

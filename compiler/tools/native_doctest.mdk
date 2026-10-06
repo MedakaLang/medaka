@@ -67,11 +67,13 @@ import driver.build_cmd.{
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
+import string.{replaceAll}
 import tools.probe_transcript.{
   Chunk(..),
   chunksOf,
   decodeValue,
   endTag,
+  freshProbeNonce,
   firstNonEmptyLine,
   lookupChunk,
   mintNonce,
@@ -79,15 +81,14 @@ import tools.probe_transcript.{
   renameUserMain,
   sentinelLine,
   tagsInOrder,
-  valuePrintExpr,
+  valuePrintExprWith,
 }
 import tools.doctest.{
   Example,
   RunResult,
   buildDetailsFrom,
   exampleExpected,
-  synthName,
-  synthSrc,
+  synthSrcNamed,
 }
 
 -- ── sentinels ───────────────────────────────────────────────────────────────
@@ -200,7 +201,7 @@ nativeRendered target tsrc userDecls examples synthResults =
         -- The nonce is drawn HERE, before the probe source is written, so it
         -- reaches `runInTmp` in time to land in the generated code the target's
         -- own (already-fixed) source cannot see or influence.
-        let nonce = mintNonce ()
+        let nonce = freshProbeNonce (mintNonce ()) probeNamespacePrefixes tsrc
         -- `rendered` is bound (and so fully forced — Medaka is strict) BEFORE the
         -- teardown, so the probe binary still exists while it runs.  Same shape as
         -- `build_cmd.mdk`'s `runBuildNative`.
@@ -332,25 +333,43 @@ probeSource : String ->
   String
 probeSource nonce tsrc examples synthResults =
   joinNl
-    ([renameUserMain tsrc, ""]
-      ++ synthLines 0 examples synthResults
+    (["import runtime as \{runtimeAlias nonce}", "", renameUserMain tsrc, ""]
+      ++ synthLines nonce 0 examples synthResults
       ++ ["", "main ="]
       ++ mainLines nonce 0 examples synthResults
-      ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
+      ++ [
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce endTag}\"",
+        "",
+      ])
+
+runtimeAlias : String -> String
+runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
+
+probeNameNonce : String -> String
+probeNameNonce nonce = replaceAll "-" "_" nonce
+
+probeNamespacePrefixes : List String
+probeNamespacePrefixes = ["__ndt_", "NpRuntime_"]
+
+probeBindingName : String -> Int -> String
+probeBindingName nonce i = "__ndt_\{probeNameNonce nonce}_\{intToString i}__"
 
 -- One synth binding per example whose synth PARSED.  An example whose synth
 -- failed to parse contributes no binding (mirroring `buildSynthDecls`) — its
 -- outcome is reported from `synthResults` by `buildDetailsFrom` and never
 -- consults the rendered value.
-synthLines : Int ->
+synthLines : String ->
+  Int ->
   List Example ->
   List (Result String (List Decl)) ->
   List String
-synthLines _ [] _ = []
-synthLines _ (_ :: _) [] = []
-synthLines i (ex :: rest) ((Ok _) :: srRest) =
-  synthSrc i ex :: synthLines (i + 1) rest srRest
-synthLines i (_ :: rest) ((Err _) :: srRest) = synthLines (i + 1) rest srRest
+synthLines _ _ [] _ = []
+synthLines _ _ (_ :: _) [] = []
+synthLines nonce i (ex :: rest) ((Ok _) :: srRest) =
+  synthSrcNamed (probeBindingName nonce i) ex
+    :: synthLines nonce (i + 1) rest srRest
+synthLines nonce i (_ :: rest) ((Err _) :: srRest) =
+  synthLines nonce (i + 1) rest srRest
 
 -- Per example: the sentinel, then the value.
 --
@@ -371,15 +390,16 @@ mainLines nonce i (_ :: rest) ((Err _) :: srRest) =
   mainLines nonce (i + 1) rest srRest
 mainLines nonce i (ex :: rest) ((Ok _) :: srRest) =
   [
-      "  let _ = putStrLn \"\{sentinelFor nonce (intToString i)}\"",
-      valueLine i ex,
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (intToString i)}\"",
+      valueLine nonce i ex,
     ]
     ++ mainLines nonce (i + 1) rest srRest
 
-valueLine : Int -> Example -> String
-valueLine i ex = match exampleExpected ex
-  Some _ => "  let _ = \{valuePrintExpr (synthName i)}"
-  None => "  let _ = \{synthName i}"
+valueLine : String -> Int -> Example -> String
+valueLine nonce i ex = match exampleExpected ex
+  Some _ =>
+    "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") (probeBindingName nonce i)}"
+  None => "  let _ = \{probeBindingName nonce i}"
 
 -- ── reading the probe's stdout back ─────────────────────────────────────────
 

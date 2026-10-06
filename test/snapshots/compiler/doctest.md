@@ -1,5 +1,5 @@
 # META
-source_lines=510
+source_lines=517
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running.
@@ -318,11 +318,18 @@ synthName i = "__dt_" ++ intToString i ++ "__"
 -- Build the synthetic source line for example i.
 export
 synthSrc : Int -> Example -> String
-synthSrc i ex =
+synthSrc i ex = synthSrcNamed (synthName i) ex
+
+-- Native probes give synthesized bindings a per-run name so target source
+-- cannot capture them. The evaluator keeps `synthName` as its stable lookup
+-- convention through the adapter above.
+export
+synthSrcNamed : String -> Example -> String
+synthSrcNamed name ex =
   let rhs = match exampleExpected ex
     Some _ => "debug (" ++ exampleInput ex ++ ")"
     None => exampleInput ex
-  "\{synthName i} = \{rhs}"
+  "\{name} = \{rhs}"
 
 -- Per-example synth outcome (issue #55): the compiler's panicking `parse`
 -- would abort every doctest in the file the moment ONE example is malformed
@@ -605,7 +612,9 @@ isUse _ = False
 (DTypeSig true "synthName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "synthName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__dt_")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "__"))))
 (DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
-(DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString " = "))) (EApp (EVar "display") (EVar "rhs"))) (ELit (LString ""))))))
+(DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EApp (EApp (EVar "synthSrcNamed") (EApp (EVar "synthName") (EVar "i"))) (EVar "ex")))
+(DTypeSig true "synthSrcNamed" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyCon "String"))))
+(DFunDef false "synthSrcNamed" ((PVar "name") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString " = "))) (EApp (EVar "display") (EVar "rhs"))) (ELit (LString ""))))))
 (DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "buildSynthResults" ((PVar "targetDecls") (PVar "examples")) (EApp (EApp (EApp (EVar "buildSynthResultsGo") (EApp (EVar "moduleAliases") (EVar "targetDecls"))) (ELit (LInt 0))) (EVar "examples")))
 (DTypeSig false "buildSynthResultsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -759,7 +768,9 @@ isUse _ = False
 (DTypeSig true "synthName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "synthName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__dt_")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "__"))))
 (DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
-(DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EVar "rhs"))) (ELit (LString ""))))))
+(DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EApp (EApp (EVar "synthSrcNamed") (EApp (EVar "synthName") (EVar "i"))) (EVar "ex")))
+(DTypeSig true "synthSrcNamed" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyCon "String"))))
+(DFunDef false "synthSrcNamed" ((PVar "name") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EVar "rhs"))) (ELit (LString ""))))))
 (DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "buildSynthResults" ((PVar "targetDecls") (PVar "examples")) (EApp (EApp (EApp (EVar "buildSynthResultsGo") (EApp (EVar "moduleAliases") (EVar "targetDecls"))) (ELit (LInt 0))) (EVar "examples")))
 (DTypeSig false "buildSynthResultsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
