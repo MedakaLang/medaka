@@ -1186,3 +1186,22 @@ test "typed custom helpers close over nominal fields and isolate missing prerequ
               (row => field "name" row == Some "nested missing prerequisite")
               (propertyReports report))),
       ])
+
+test "finite nonregular carriers can grow their arguments without expanding helper closure forever" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Nest a = Empty | Step (Nest (List a))\nprop \"finite increasing carrier\" (value : Nest Int) = True\nprop \"increasing recursion is reachable\" (value : Nest Int) = match value\n  Empty => True\n  Step _ => False\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        1
+        [
+          ("eval", "finite increasing carrier", "pass"),
+          ("eval", "increasing recursion is reachable", "fail"),
+          ("native", "finite increasing carrier", "pass"),
+          ("native", "increasing recursion is reachable", "fail"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
