@@ -81,7 +81,9 @@ import support.util.{
   endsWith,
   zipL,
 }
-import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
+import support.ordmap.{
+  OrdMap, omEmpty, omFromPairs, omHasKey, omInsert, omLookup
+}
 import list.{drop}
 import eval.u64_halves as H
 import u64 as U64
@@ -4305,6 +4307,7 @@ buildModInfos globalCells coreExports exportsMap ((mid, decls) :: rest) =
   let exports =
     ModExports
       (localCells
+        ++ publicExternCells globalCells decls
         ++ methodCellsOf globalCells decls
         ++ pubReexports coreExports exportsMap decls)
       (ctorsByTypeOf decls)
@@ -4324,6 +4327,28 @@ buildModInfos globalCells coreExports exportsMap ((mid, decls) :: rest) =
 -- The exported entry is the SAME global cell, never a copy: that cell holds the
 -- coalesced dispatcher, so an alias is a second name for one dispatcher and impl
 -- coalescing is untouched.
+--
+-- Runtime externs likewise already have one shared global cell.  A public extern
+-- export must expose that cell under an import spelling, rather than allocate a
+-- module-local placeholder that would never receive the primitive value.
+export
+publicExternCells : List (String, Ref (Value e)) ->
+  List Decl ->
+  List (String, Ref (Value e))
+publicExternCells globalCells decls =
+  publicExternCellsGo (omFromPairs (reverseL globalCells) omEmpty) decls
+
+publicExternCellsGo : OrdMap (Ref (Value e)) ->
+  List Decl ->
+  List (String, Ref (Value e))
+publicExternCellsGo _ [] = []
+publicExternCellsGo cells ((DExtern True n _) :: rest) = match omLookup n cells
+  Some cell => (n, cell) :: publicExternCellsGo cells rest
+  None => publicExternCellsGo cells rest
+publicExternCellsGo cells ((DAttrib _ decl) :: rest) =
+  publicExternCellsGo cells [decl] ++ publicExternCellsGo cells rest
+publicExternCellsGo cells (_ :: rest) = publicExternCellsGo cells rest
+
 export
 methodCellsOf : List (String, Ref (Value e)) ->
   List Decl ->
