@@ -1,0 +1,30 @@
+-- Issue 3848 controls: every signature here has a binding, so none is an
+-- orphan.  Interface and impl member signatures, an extern, a multi-clause
+-- function, a binding written before its signature, and a mutually
+-- recursive pair whose signatures both come first.
+interface Size a where
+  size : a -> Int
+
+impl Size Bool where
+  size b = if b then 1 else 0
+
+extern stringLength : String -> Int
+
+fact : Int -> Int
+fact 0 = 1
+fact n = n * fact (n - 1)
+
+twice x = x * 2
+twice : Int -> Int
+
+isEven : Int -> Bool
+isOdd : Int -> Bool
+isEven 0 = True
+isEven n = isOdd (n - 1)
+isOdd 0 = False
+isOdd n = isEven (n - 1)
+
+main : <Stdout> Unit
+main =
+  println (size True + stringLength "abc" + fact 4 + twice 5)
+  println (isEven 10)

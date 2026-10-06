@@ -1,0 +1,7 @@
+-- Issue 3848: the binding's name is a misspelling of the signature's, so the
+-- signature binds nothing and `totl` is inferred without it.  Rejected with
+-- R-ORPHAN-SIGNATURE, whose message names `totl` as the likely match.
+total : List Int -> Int
+totl xs = fold (+) 0 xs
+
+main = println (totl [1, 2, 3])
