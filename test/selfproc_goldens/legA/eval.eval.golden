@@ -33,7 +33,8 @@ buildCtorFieldOrders : List Decl -> List (String, List String)
 buildCtorToType : List Decl -> List (String, String)
 buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
-buildModInfos : List (String, Ref (Value a)) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildModInfos : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildRootModuleStateWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> (List (ModInfo (Value a)), List (String, Ref (Value a)))
 buildStampExterns : Unit -> List (String, Value a)
 buildWith : Value a -> Int -> Int -> <a> List (Value a)
 bytesBEGo : Array Int -> Int -> U64 -> U64
@@ -122,6 +123,7 @@ evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
 evalModulesRootEnv : List Decl -> List (String, List Decl) -> <a> List (String, Value a)
 evalModulesRootEnvWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)
+evalModulesRootEvalEnvWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> EvalEnv (Value a)
 evalModulesWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)
 evalOne : List Decl -> (String, List Decl) -> <a> List (String, Value a)
 evalOneOutput : List Decl -> (String, List Decl) -> String
@@ -239,6 +241,8 @@ lookupMethod : EvalEnv (Value a) -> String -> <a> Value a
 lookupMethodFrames : List (List (String, Ref (Value a))) -> List (List (String, Ref (Value a))) -> String -> <a> Value a
 lookupMethodReqCountOpt : String -> String -> Option Int
 lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
+lookupRuntimeBinding : EvalEnv (Value a) -> String -> <a> Value a
+lookupRuntimeBindingFrames : List (List (String, Ref (Value a))) -> String -> Option (Ref (Value a)) -> <a> Value a
 lowByte : Int -> Int
 makeCtor : String -> Int -> Value a
 makeCtorGo : String -> Int -> List (Value a) -> Value a
@@ -449,6 +453,10 @@ prim5M : (Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a) ->
 progArgsRef : Ref (List String)
 projectDict : Value a -> List Int -> Value a
 pubReexports : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
+publicExternCells : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (Value a))
+publicExternCellsGo : Map String (Ref (Value a)) -> List String -> List (String, Ref (Value a))
+publicExternNames : List Decl -> List String
+publicExternNamesRev : List Decl -> List String -> List String
 pushFrame : EvalEnv (Value a) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
 qualifyCell : String -> (String, Ref (Value a)) -> (String, Ref (Value a))
 rangeArrayMk : List Int -> Value a
@@ -466,11 +474,13 @@ rngDraw : Unit -> U64
 rngStateRef : Ref Int
 rngU64Ref : Ref U64
 rootFullEnv : List (ModInfo (Value a)) -> List (String, Ref (Value a)) -> <a> List (String, Value a)
+rootFullEvalEnv : List (ModInfo (Value a)) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
 rootLocals : List (ModInfo (Value a)) -> <a> List (String, Value a)
 routeTag : EvalEnv (Value a) -> Route -> <a> String
 runGuards : EvalEnv (Value a) -> List Guard -> <a> Option (EvalEnv (Value a))
 runJsonMode : Ref Bool
 runMainForEffect : List (String, Value a) -> <a> Value a
+runtimeCellsOf : List (String, Value a) -> <a> List (String, Ref (Value a))
 runtimePanic : String -> String -> a
 runtimeTypeTag : Value a -> Option String
 scopedFileBound : Bool -> Value a

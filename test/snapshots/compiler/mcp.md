@@ -1,5 +1,5 @@
 # META
-source_lines=1872
+source_lines=1860
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -95,7 +95,6 @@ import tools.doctest.{
   runDetails,
 }
 import tools.prop_runner.{
-  PropFailureKind(..),
   propResultName,
   propResultPassed,
   propResultDetail,
@@ -104,6 +103,7 @@ import tools.prop_runner.{
   propResultCases,
   propResultFailureKind,
 }
+import tools.eval_props.{propFailureKindJson}
 import tools.test_pins_report.{
   GradedProp,
   gradedPropRaw,
@@ -1532,18 +1532,6 @@ pinField : Option String -> List (String, Json)
 pinField None = []
 pinField (Some detail) = [("pin", JString detail)]
 
-propFailureKindJson : Option PropFailureKind -> Json
-propFailureKindJson None = JNull
-propFailureKindJson (Some kind) = JString (propFailureKindText kind)
-
-propFailureKindText : PropFailureKind -> String
-propFailureKindText PropLawFalse = "law-false"
-propFailureKindText PropCapabilityError = "capability"
-propFailureKindText PropBuildError = "build"
-propFailureKindText PropRuntimeError = "runtime"
-propFailureKindText PropProtocolError = "protocol"
-propFailureKindText PropTypeError = "type"
-
 allPropsPass : List GradedProp -> Bool
 allPropsPass [] = True
 allPropsPass (p :: rest) = gradedPropPassed p && allPropsPass rest
@@ -1885,7 +1873,8 @@ unit = ()
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" false) (mem "lintFileDiagTripleParsed" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "applySuppressionsMulti" false) (mem "applyFindingDeny" false) (mem "splitLintNames" false) (mem "buildStdlibIndex" false) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeeded" false) (mem "StdlibIndex" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestGradedReport" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "exResultJsonFields" false) (mem "RunResult" false) (mem "Engine" true) (mem "engineName" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "PropFailureKind" true) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false))))
+(DUse false (UseGroup ("tools" "eval_props") ((mem "propFailureKindJson" false))))
 (DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "gradedPropRaw" false) (mem "gradedPropPassed" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "knownRedCountProps" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "findAll" false))))
@@ -2076,16 +2065,6 @@ unit = ()
 (DTypeSig false "pinField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
 (DFunDef false "pinField" ((PCon "None")) (EListLit))
 (DFunDef false "pinField" ((PCon "Some" (PVar "detail"))) (EListLit (ETuple (ELit (LString "pin")) (EApp (EVar "JString") (EVar "detail")))))
-(DTypeSig false "propFailureKindJson" (TyFun (TyApp (TyCon "Option") (TyCon "PropFailureKind")) (TyCon "Json")))
-(DFunDef false "propFailureKindJson" ((PCon "None")) (EVar "JNull"))
-(DFunDef false "propFailureKindJson" ((PCon "Some" (PVar "kind"))) (EApp (EVar "JString") (EApp (EVar "propFailureKindText") (EVar "kind"))))
-(DTypeSig false "propFailureKindText" (TyFun (TyCon "PropFailureKind") (TyCon "String")))
-(DFunDef false "propFailureKindText" ((PCon "PropLawFalse")) (ELit (LString "law-false")))
-(DFunDef false "propFailureKindText" ((PCon "PropCapabilityError")) (ELit (LString "capability")))
-(DFunDef false "propFailureKindText" ((PCon "PropBuildError")) (ELit (LString "build")))
-(DFunDef false "propFailureKindText" ((PCon "PropRuntimeError")) (ELit (LString "runtime")))
-(DFunDef false "propFailureKindText" ((PCon "PropProtocolError")) (ELit (LString "protocol")))
-(DFunDef false "propFailureKindText" ((PCon "PropTypeError")) (ELit (LString "type")))
 (DTypeSig false "allPropsPass" (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyCon "Bool")))
 (DFunDef false "allPropsPass" ((PList)) (EVar "True"))
 (DFunDef false "allPropsPass" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "gradedPropPassed") (EVar "p")) (EApp (EVar "allPropsPass") (EVar "rest"))))
@@ -2144,7 +2123,8 @@ unit = ()
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" false) (mem "lintFileDiagTripleParsed" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "applySuppressionsMulti" false) (mem "applyFindingDeny" false) (mem "splitLintNames" false) (mem "buildStdlibIndex" false) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeeded" false) (mem "StdlibIndex" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestGradedReport" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "exResultJsonFields" false) (mem "RunResult" false) (mem "Engine" true) (mem "engineName" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "PropFailureKind" true) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false))))
+(DUse false (UseGroup ("tools" "eval_props") ((mem "propFailureKindJson" false))))
 (DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "gradedPropRaw" false) (mem "gradedPropPassed" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "knownRedCountProps" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "findAll" false))))
@@ -2335,16 +2315,6 @@ unit = ()
 (DTypeSig false "pinField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
 (DFunDef false "pinField" ((PCon "None")) (EListLit))
 (DFunDef false "pinField" ((PCon "Some" (PVar "detail"))) (EListLit (ETuple (ELit (LString "pin")) (EApp (EVar "JString") (EVar "detail")))))
-(DTypeSig false "propFailureKindJson" (TyFun (TyApp (TyCon "Option") (TyCon "PropFailureKind")) (TyCon "Json")))
-(DFunDef false "propFailureKindJson" ((PCon "None")) (EVar "JNull"))
-(DFunDef false "propFailureKindJson" ((PCon "Some" (PVar "kind"))) (EApp (EVar "JString") (EApp (EVar "propFailureKindText") (EVar "kind"))))
-(DTypeSig false "propFailureKindText" (TyFun (TyCon "PropFailureKind") (TyCon "String")))
-(DFunDef false "propFailureKindText" ((PCon "PropLawFalse")) (ELit (LString "law-false")))
-(DFunDef false "propFailureKindText" ((PCon "PropCapabilityError")) (ELit (LString "capability")))
-(DFunDef false "propFailureKindText" ((PCon "PropBuildError")) (ELit (LString "build")))
-(DFunDef false "propFailureKindText" ((PCon "PropRuntimeError")) (ELit (LString "runtime")))
-(DFunDef false "propFailureKindText" ((PCon "PropProtocolError")) (ELit (LString "protocol")))
-(DFunDef false "propFailureKindText" ((PCon "PropTypeError")) (ELit (LString "type")))
 (DTypeSig false "allPropsPass" (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyCon "Bool")))
 (DFunDef false "allPropsPass" ((PList)) (EVar "True"))
 (DFunDef false "allPropsPass" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "gradedPropPassed") (EVar "p")) (EApp (EVar "allPropsPass") (EVar "rest"))))

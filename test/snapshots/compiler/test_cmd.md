@@ -1,5 +1,5 @@
 # META
-source_lines=3625
+source_lines=3941
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -152,6 +152,15 @@ import tools.prop_runner.{
   propSeedValue,
 }
 import tools.prop_helpers.{PropHelpers(..), propHelpersForPlans}
+import tools.eval_props.{
+  emitEvalPropRows,
+  decodeEvalPropRows,
+  propResultJson,
+  propFailureKindJson,
+  startEvalPropWorker,
+  takeEvalPropBootstrap,
+}
+import tools.probe_transcript.{firstNonEmptyLine}
 import tools.test_pins.{
   PinIndex,
   PinKind(..),
@@ -223,9 +232,9 @@ import support.util.{
 }
 import support.path.{dirOf, baseOf, joinPath}
 import args.{
-  ArgSpec, Args, spec, switch, value, flag, flagValue, withStrictDash
+  ArgSpec, Args, spec, switch, value, internal, flag, flagValue, withStrictDash
 }
-import json.{Json(..), jObject, jArray}
+import json.{Json(..), jObject, jArray, stringify}
 import tools.lint.{splitLintNames}
 import string.{toInt}
 
@@ -2041,7 +2050,7 @@ propsReportPinned engines pair target tsrc userDecls cases filterOpt file index
         file
         index)
 
-propsReportEngines : List Engine ->
+propsReportEnginesInProcess : List Engine ->
   List Decl ->
   List Decl ->
   List Decl ->
@@ -2055,8 +2064,8 @@ propsReportEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ = []
-propsReportEngines engines runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEnginesInProcess [] _ _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEnginesInProcess engines runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   let modules = planModules rawCoreM coreM rawM modsM
   let root = rootPlanModuleId rawM target
   let planningRequests =
@@ -2110,6 +2119,339 @@ propsReportEngines engines runtimeM rawCoreM coreM rawM modsM target tsrc userDe
             filterOpt
             file
             index
+
+-- The parent keeps the native engine in-process, but isolates every interpreter
+-- property batch. A language panic cannot cross this process boundary, so native
+-- results still arrive after a panicking generator, shrinker, or property body.
+propsReportEngines : List Engine ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, List Decl) ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> List PropResult
+propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEngines (EngInterp :: rest) runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+  superviseEvalProps
+      target
+      (propRequestsFor index file "eval" userDecls cases filterOpt)
+    ++ propsReportEngines
+      rest
+      runtimeM
+      rawCoreM
+      coreM
+      rawM
+      modsM
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+      file
+      index
+propsReportEngines (EngNative :: rest) runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+  propsReportEnginesInProcess
+      [EngNative]
+      runtimeM
+      rawCoreM
+      coreM
+      rawM
+      modsM
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+      file
+      index
+    ++ propsReportEngines
+      rest
+      runtimeM
+      rawCoreM
+      coreM
+      rawM
+      modsM
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+      file
+      index
+
+-- The evaluator child is deliberately one process per target, not per property:
+-- refs and memoized globals remain shared between every selected law and case.
+superviseEvalProps : String -> List PropRequest -> <IO> List PropResult
+superviseEvalProps _ [] = []
+superviseEvalProps target requests =
+  let medaka = envOr "MEDAKA" (executablePath ())
+  let argv = ["test", "--props-worker"] ++ workerPositionals target requests
+  match runCommand medaka argv
+    Err message =>
+      workerRuntimeRows
+        requests
+        "could not start interpreter property worker: \{message}"
+    Ok (code, stdout, stderr) => match takeEvalPropBootstrap stdout
+      Err message =>
+        if code == 0 then
+          workerProtocolRows requests message
+        else
+          workerRuntimeRows requests (workerAbortDetail code stderr)
+      Ok (nonce, transcript) =>
+        match decodeEvalPropRows nonce requests transcript
+          Ok rows =>
+            if code == 0 then
+              rows
+            else
+              workerRuntimeRows requests (workerAbortDetail code stderr)
+          Err message =>
+            if code == 0 then
+              workerProtocolRows requests message
+            else
+              workerRuntimeRows requests (workerAbortDetail code stderr)
+
+workerAbortDetail : Int -> String -> String
+workerAbortDetail code stderr =
+  let first = firstNonEmptyLine (splitNl stderr)
+  "interpreter property worker batch aborted (exit \{intToString code})"
+    ++ (if first == "" then "" else " — \{first}")
+
+workerPositionals : String -> List PropRequest -> List String
+workerPositionals target requests = target :: workerRequestPositionals requests
+
+workerRequestPositionals : List PropRequest -> List String
+workerRequestPositionals [] = []
+workerRequestPositionals ((PropRequest name seed cases) :: rest) =
+  stringify (JString name)
+    :: stringify (JString (intToString seed))
+    :: stringify (JString (intToString cases))
+    :: workerRequestPositionals rest
+
+workerRuntimeRows : List PropRequest -> String -> List PropResult
+workerRuntimeRows [] _ = []
+workerRuntimeRows ((PropRequest name seed cases) :: rest) message =
+  PropResult
+      "eval"
+      name
+      PropErroredResult
+      (Some PropRuntimeError)
+      message
+      seed
+      cases
+    :: workerRuntimeRows rest message
+
+workerProtocolRows : List PropRequest -> String -> List PropResult
+workerProtocolRows [] _ = []
+workerProtocolRows ((PropRequest name seed cases) :: rest) message =
+  PropResult
+      "eval"
+      name
+      PropErroredResult
+      (Some PropProtocolError)
+      message
+      seed
+      cases
+    :: workerProtocolRows rest message
+
+-- The internal worker reuses the normal loading, elaboration, helper injection,
+-- and actual-root-environment paths. It deliberately runs no doctests or test
+-- declarations: this child exists solely to contain property evaluation panics.
+export
+runEvalPropsWorker : String -> List PropRequest -> <IO> Unit
+runEvalPropsWorker target requests =
+  let nonce = startEvalPropWorker ()
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let runtimePath = joinPath root "stdlib/runtime.mdk"
+  let corePath = joinPath root "stdlib/core.mdk"
+  let stdlibDir = joinPath root "stdlib"
+  match readPreludeFile runtimePath
+    Err message => evalWorkerDie "could not read runtime prelude: \{message}"
+    Ok runtimeSrc => match readPreludeFile corePath
+      Err message => evalWorkerDie "could not read core prelude: \{message}"
+      Ok coreSrc => match readSource target
+        Err message =>
+          evalWorkerDie "could not read property target: \{message}"
+        Ok tsrc => match parseResult tsrc
+          Err _ => evalWorkerDie "could not parse property target"
+          Ok parsed =>
+            runEvalPropsWorkerSource
+              target
+              nonce
+              requests
+              runtimeSrc
+              coreSrc
+              stdlibDir
+              tsrc
+              (desugar parsed)
+
+evalWorkerDie : String -> <IO> Unit
+evalWorkerDie message = do
+  let _ = ePutStrLn "medaka test --props-worker: \{message}"
+  exit 1
+
+runEvalPropsWorkerSource : String ->
+  String ->
+  List PropRequest ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  <IO> Unit
+runEvalPropsWorkerSource target nonce requests runtimeSrc coreSrc stdlibDir tsrc userDecls =
+  let runtimeDecls = desugaredPrelude runtimeSrc
+  let coreDecls = desugaredPrelude coreSrc
+  let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
+  let exempt = typecheckExempt target userDecls tsrc
+  currentEvalFile := target
+  if hasUseDecls userDecls then
+    let prepared = prepareMulti runtimeSrc coreSrc target roots exempt False []
+    match prepared
+      (Some message, _) => evalWorkerDie (typecheckGateFail target message)
+      (None, work) =>
+        let rows = withEvidencePreserved (_ =>
+          runEvalRequestRows
+            (forcePrepared runtimeSrc coreSrc work)
+            target
+            tsrc
+            userDecls
+            requests)
+        emitEvalPropRows nonce rows
+  else match (if exempt then
+    None
+  else
+    singleFileTypeErrors target tsrc runtimeSrc coreSrc)
+    Some message => evalWorkerDie (typecheckGateFail target message)
+    None =>
+      let rows = withEvidencePreserved (_ =>
+        runEvalRequestRows
+          (prepareSingle runtimeDecls coreDecls target roots userDecls)
+          target
+          tsrc
+          userDecls
+          requests)
+      emitEvalPropRows nonce rows
+
+runEvalRequestRows : TestPair ->
+  String ->
+  String ->
+  List Decl ->
+  List PropRequest ->
+  <IO> List PropResult
+runEvalRequestRows (TestPairErr message) _ _ _ requests =
+  workerRuntimeRows
+    requests
+    "interpreter property worker could not prepare properties: \{message}"
+runEvalRequestRows (TestPair runtimeM rawCoreM coreM rawM modsM) target tsrc userDecls requests =
+  let root = rootPlanModuleId rawM target
+  let modules = planModules rawCoreM coreM rawM modsM
+  match (preparePlannedPropRequests
+    root
+    modules
+    requests
+    (elaboratedRootProps modsM userDecls))
+    Err err => preparedResults (map (preparedPlanError "eval" err) requests)
+    Ok (planEnv, rows) =>
+      match customPlansReachable planEnv (preparedPlans rows)
+        [] => runEvalPreparedRows planEnv [] rows tsrc coreM modsM
+        _ =>
+          runValidatedEvalRequests
+            (validateHelperPlans
+              planEnv
+              runtimeM
+              rawCoreM
+              rawM
+              (preparedPlans rows))
+            target
+            tsrc
+            userDecls
+            requests
+
+runValidatedEvalRequests : HelperValidation ->
+  String ->
+  String ->
+  List Decl ->
+  List PropRequest ->
+  <IO> List PropResult
+runValidatedEvalRequests (HelperValidation pair helpers rejected protocol) target tsrc userDecls requests =
+  match protocol
+    Some message =>
+      runEvalProtocolRequests pair message target tsrc userDecls requests
+    None => match pair
+      TestPairErr message =>
+        workerRuntimeRows
+          requests
+          "interpreter property helpers could not prepare: \{message}"
+      TestPair _runtimeM rawCoreM coreM rawM modsM =>
+        let root = rootPlanModuleId rawM target
+        let modules = planModules rawCoreM coreM rawM modsM
+        match (preparePlannedPropRequests
+          root
+          modules
+          requests
+          (elaboratedRootProps modsM userDecls))
+          Err err =>
+            preparedResults (map (preparedPlanError "eval" err) requests)
+          Ok (planEnv, rows) =>
+            runEvalPreparedRows
+              planEnv
+              helpers
+              (rejectPreparedHelpers planEnv "eval" rejected rows)
+              tsrc
+              coreM
+              modsM
+
+runEvalProtocolRequests : TestPair ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  List PropRequest ->
+  <IO> List PropResult
+runEvalProtocolRequests (TestPairErr message) _ _ _ _ requests =
+  workerRuntimeRows
+    requests
+    "interpreter property helpers could not prepare: \{message}"
+runEvalProtocolRequests (TestPair _runtimeM rawCoreM coreM rawM modsM) message target tsrc userDecls requests =
+  let root = rootPlanModuleId rawM target
+  let modules = planModules rawCoreM coreM rawM modsM
+  match (preparePlannedPropRequests
+    root
+    modules
+    requests
+    (elaboratedRootProps modsM userDecls))
+    Err err => preparedResults (map (preparedPlanError "eval" err) requests)
+    Ok (planEnv, rows) =>
+      runEvalPreparedRows
+        planEnv
+        []
+        (rejectPreparedProtocolCustom planEnv "eval" message rows)
+        tsrc
+        coreM
+        modsM
+
+runEvalPreparedRows : PlanEnv ->
+  List PropHelper ->
+  List PreparedPropRequest ->
+  String ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> List PropResult
+runEvalPreparedRows env helpers rows tsrc coreM modsM =
+  runPreparedPropRequestsResults
+    env
+    helpers
+    rows
+    (propLineTests tsrc)
+    (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
+    (coreM ++ flatMap snd modsM)
 
 -- The structural-only path keeps the established engine behavior unchanged.
 propsReportEnginesPlain : List Engine ->
@@ -3040,6 +3382,10 @@ testArgSpec =
       value ["--filter"] "SUBSTRING" "run only matching examples",
       value ["--seed"] "N" "seed the property RNG",
       value ["--cases"] "N" "property cases per test",
+      internal
+        (switch
+          ["--props-worker"]
+          "INTERNAL: run isolated interpreter properties"),
     ])
 
 -- `--cases <n>`/`--seed <n>` must parse as integers — same "named + located"
@@ -3199,37 +3545,7 @@ cliDoctestsJson run = jObject [
 ]
 
 cliPropJson : PropResult -> Json
--- Structurally identical to mcp.mdk's `propJson` — both render the same
--- `PropResult` shape for their own JSON envelope, and neither module imports
--- the other (mcp.mdk is a CLI-independent server surface); not worth a shared
--- module for one 5-line function.
--- lint-disable-next-line rule-duplicate-body
-cliPropJson p = jObject [
-  ("engine", JString (propResultEngine p)),
-  ("name", JString (propResultName p)),
-  ("status", JString (propStatusText (propResultStatus p))),
-  ("detail", JString (propResultDetail p)),
-  ("failureKind", propFailureKindJson (propResultFailureKind p)),
-  ("seed", JInt (propResultSeed p)),
-  ("cases", JInt (propResultCases p)),
-]
-
-propStatusText : PropStatus -> String
-propStatusText PropPassedResult = "pass"
-propStatusText PropFailedResult = "fail"
-propStatusText PropErroredResult = "error"
-
-propFailureKindJson : Option PropFailureKind -> Json
-propFailureKindJson None = JNull
-propFailureKindJson (Some kind) = JString (propFailureKindText kind)
-
-propFailureKindText : PropFailureKind -> String
-propFailureKindText PropLawFalse = "law-false"
-propFailureKindText PropCapabilityError = "capability"
-propFailureKindText PropBuildError = "build"
-propFailureKindText PropRuntimeError = "runtime"
-propFailureKindText PropProtocolError = "protocol"
-propFailureKindText PropTypeError = "type"
+cliPropJson = propResultJson
 
 -- #2588: every `test "…"` result names the engine that produced it. Under
 -- `--engines eval,native` the same test appears twice, once per engine, and the
@@ -3647,6 +3963,8 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "CustomPlan" true) (mem "GenPlan" false) (mem "PlanEnv" false) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "customPlansReachable" false) (mem "planErrorText" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "hasProps" false) (mem "runAllPlannedPropRequestsResults" false) (mem "preparePlannedPropRequests" false) (mem "runPreparedPropRequestsResults" false) (mem "PreparedPropRequest" true) (mem "PropHelper" true) (mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "PropRequest" true) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultStatus" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false) (mem "propSeedValue" false))))
 (DUse false (UseGroup ("tools" "prop_helpers") ((mem "PropHelpers" true) (mem "propHelpersForPlans" false))))
+(DUse false (UseGroup ("tools" "eval_props") ((mem "emitEvalPropRows" false) (mem "decodeEvalPropRows" false) (mem "propResultJson" false) (mem "propFailureKindJson" false) (mem "startEvalPropWorker" false) (mem "takeEvalPropBootstrap" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "firstNonEmptyLine" false))))
 (DUse false (UseGroup ("tools" "test_pins") ((mem "PinIndex" false) (mem "PinKind" true) (mem "TestExpectedFailure" true) (mem "TestPin" false) (mem "buildPinIndex" false) (mem "pinFromIndex" false) (mem "validatePinNames" false))))
 (DUse false (UseGroup ("tools" "test_pins_io") ((mem "loadPinContext" false))))
 (DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "GradedTest" false) (mem "gradeProps" false) (mem "gradeTests" false) (mem "gradedPropPassed" false) (mem "gradedTestPassed" false) (mem "gradedPropRaw" false) (mem "gradedTestRaw" false) (mem "gradedPropVerdict" false) (mem "gradedTestVerdict" false) (mem "knownRedCountProps" false) (mem "knownRedCountTests" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "gradedTestStatus" false) (mem "gradedTestRawStatus" false) (mem "gradedTestIssue" false) (mem "gradedTestPinDetail" false))))
@@ -3656,8 +3974,8 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
-(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
-(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
+(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -3874,9 +4192,45 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DFunDef false "doctestReportGo" ((PCons (PVar "e") (PVar "rest")) (PVar "trees") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "examples") (PVar "synthResults")) (EBinOp "::" (ETuple (EVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runChosenOn") (EVar "e")) (EVar "trees")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "examples")) (EVar "synthResults"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "doctestReportGo") (EVar "rest")) (EVar "trees")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "examples")) (EVar "synthResults"))))
 (DTypeSig false "propsReportPinned" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "PinIndex") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))))))))
 (DFunDef false "propsReportPinned" ((PVar "engines") (PVar "pair") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "pair") (arm (PCon "TestPairErr" PWild) () (EListLit)) (arm (PCon "TestPair" (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM")) () (EApp (EVar "withEvidencePreserved") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEngines") (EVar "engines")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "propsReportEnginesInProcess" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "PinIndex") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))))))))))))
+(DFunDef false "propsReportEnginesInProcess" ((PList) PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EListLit))
+(DFunDef false "propsReportEnginesInProcess" ((PVar "engines") (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EBlock (DoLet false false (PVar "modules") (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (DoLet false false (PVar "root") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (DoLet false false (PVar "planningRequests") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propRequestsFor") (EVar "index")) (EVar "file")) (ELit (LString "eval"))) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "preparePlannedPropRequests") (EVar "root")) (EVar "modules")) (EVar "planningRequests")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesPlain") (EVar "engines")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index"))) (arm (PCon "Ok" (PTuple (PVar "planEnv") (PVar "planningRows"))) () (EBlock (DoLet false false (PVar "plans") (EApp (EVar "preparedPlans") (EVar "planningRows"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "planEnv")) (EVar "plans")) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesPlain") (EVar "engines")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index"))) (arm PWild () (EBlock (DoLet false false (PVar "validation") (EApp (EApp (EApp (EApp (EApp (EVar "validateHelperPlans") (EVar "planEnv")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "rawM")) (EVar "plans"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runValidatedPropEngines") (EVar "engines")) (EVar "validation")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index")))))))))))))
 (DTypeSig false "propsReportEngines" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "PinIndex") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))))))))))))
 (DFunDef false "propsReportEngines" ((PList) PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EListLit))
-(DFunDef false "propsReportEngines" ((PVar "engines") (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EBlock (DoLet false false (PVar "modules") (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (DoLet false false (PVar "root") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (DoLet false false (PVar "planningRequests") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propRequestsFor") (EVar "index")) (EVar "file")) (ELit (LString "eval"))) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "preparePlannedPropRequests") (EVar "root")) (EVar "modules")) (EVar "planningRequests")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesPlain") (EVar "engines")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index"))) (arm (PCon "Ok" (PTuple (PVar "planEnv") (PVar "planningRows"))) () (EBlock (DoLet false false (PVar "plans") (EApp (EVar "preparedPlans") (EVar "planningRows"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "planEnv")) (EVar "plans")) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesPlain") (EVar "engines")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index"))) (arm PWild () (EBlock (DoLet false false (PVar "validation") (EApp (EApp (EApp (EApp (EApp (EVar "validateHelperPlans") (EVar "planEnv")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "rawM")) (EVar "plans"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runValidatedPropEngines") (EVar "engines")) (EVar "validation")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index")))))))))))))
+(DFunDef false "propsReportEngines" ((PCons (PCon "EngInterp") (PVar "rest")) (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EBinOp "++" (EApp (EApp (EVar "superviseEvalProps") (EVar "target")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propRequestsFor") (EVar "index")) (EVar "file")) (ELit (LString "eval"))) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEngines") (EVar "rest")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index"))))
+(DFunDef false "propsReportEngines" ((PCons (PCon "EngNative") (PVar "rest")) (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesInProcess") (EListLit (EVar "EngNative"))) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEngines") (EVar "rest")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index"))))
+(DTypeSig false "superviseEvalProps" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))
+(DFunDef false "superviseEvalProps" (PWild (PList)) (EListLit))
+(DFunDef false "superviseEvalProps" ((PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "argv") (EBinOp "++" (EListLit (ELit (LString "test")) (ELit (LString "--props-worker"))) (EApp (EApp (EVar "workerPositionals") (EVar "target")) (EVar "requests")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "argv")) (arm (PCon "Err" (PVar "message")) () (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not start interpreter property worker: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "stdout") (PVar "stderr"))) () (EMatch (EApp (EVar "takeEvalPropBootstrap") (EVar "stdout")) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Ok" (PTuple (PVar "nonce") (PVar "transcript"))) () (EMatch (EApp (EApp (EApp (EVar "decodeEvalPropRows") (EVar "nonce")) (EVar "requests")) (EVar "transcript")) (arm (PCon "Ok" (PVar "rows")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "rows") (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr")))))))))))))
+(DTypeSig false "workerAbortDetail" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "workerAbortDetail" ((PVar "code") (PVar "stderr")) (EBlock (DoLet false false (PVar "first") (EApp (EVar "firstNonEmptyLine") (EApp (EVar "splitNl") (EVar "stderr")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "interpreter property worker batch aborted (exit ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))) (EIf (EBinOp "==" (EVar "first") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString " — ")) (EApp (EVar "display") (EVar "first"))) (ELit (LString ""))))))))
+(DTypeSig false "workerPositionals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "workerPositionals" ((PVar "target") (PVar "requests")) (EBinOp "::" (EVar "target") (EApp (EVar "workerRequestPositionals") (EVar "requests"))))
+(DTypeSig false "workerRequestPositionals" (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "workerRequestPositionals" ((PList)) (EListLit))
+(DFunDef false "workerRequestPositionals" ((PCons (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases")) (PVar "rest"))) (EBinOp "::" (EApp (EVar "stringify") (EApp (EVar "JString") (EVar "name"))) (EBinOp "::" (EApp (EVar "stringify") (EApp (EVar "JString") (EApp (EVar "intToString") (EVar "seed")))) (EBinOp "::" (EApp (EVar "stringify") (EApp (EVar "JString") (EApp (EVar "intToString") (EVar "cases")))) (EApp (EVar "workerRequestPositionals") (EVar "rest"))))))
+(DTypeSig false "workerRuntimeRows" (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "PropResult")))))
+(DFunDef false "workerRuntimeRows" ((PList) PWild) (EListLit))
+(DFunDef false "workerRuntimeRows" ((PCons (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases")) (PVar "rest")) (PVar "message")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "eval"))) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropRuntimeError"))) (EVar "message")) (EVar "seed")) (EVar "cases")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "rest")) (EVar "message"))))
+(DTypeSig false "workerProtocolRows" (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "PropResult")))))
+(DFunDef false "workerProtocolRows" ((PList) PWild) (EListLit))
+(DFunDef false "workerProtocolRows" ((PCons (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases")) (PVar "rest")) (PVar "message")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "eval"))) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EVar "message")) (EVar "seed")) (EVar "cases")) (EApp (EApp (EVar "workerProtocolRows") (EVar "rest")) (EVar "message"))))
+(DTypeSig true "runEvalPropsWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "runEvalPropsWorker" ((PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "startEvalPropWorker") (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "runtimePath") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "runtimePath")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read runtime prelude: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "runtimeSrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read core prelude: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "coreSrc")) () (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read property target: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" PWild) () (EApp (EVar "evalWorkerDie") (ELit (LString "could not parse property target")))) (arm (PCon "Ok" (PVar "parsed")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPropsWorkerSource") (EVar "target")) (EVar "nonce")) (EVar "requests")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "tsrc")) (EApp (EVar "desugar") (EVar "parsed"))))))))))))))
+(DTypeSig false "evalWorkerDie" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "evalWorkerDie" ((PVar "message")) (ELet false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test --props-worker: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString "")))) (EApp (EVar "exit") (ELit (LInt 1)))))
+(DTypeSig false "runEvalPropsWorkerSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit")))))))))))
+(DFunDef false "runEvalPropsWorkerSource" ((PVar "target") (PVar "nonce") (PVar "requests") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "tsrc") (PVar "userDecls")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "exempt") (EApp (EApp (EApp (EVar "typecheckExempt") (EVar "target")) (EVar "userDecls")) (EVar "tsrc"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentEvalFile")) (EVar "target"))) (DoExpr (EIf (EApp (EVar "hasUseDecls") (EVar "userDecls")) (EBlock (DoLet false false (PVar "prepared") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "prepareMulti") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "target")) (EVar "roots")) (EVar "exempt")) (EVar "False")) (EListLit))) (DoExpr (EMatch (EVar "prepared") (arm (PTuple (PCon "Some" (PVar "message")) PWild) () (EApp (EVar "evalWorkerDie") (EApp (EApp (EVar "typecheckGateFail") (EVar "target")) (EVar "message")))) (arm (PTuple (PCon "None") (PVar "work")) () (EBlock (DoLet false false (PVar "rows") (EApp (EVar "withEvidencePreserved") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "runEvalRequestRows") (EApp (EApp (EApp (EVar "forcePrepared") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "work"))) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "requests"))))) (DoExpr (EApp (EApp (EVar "emitEvalPropRows") (EVar "nonce")) (EVar "rows")))))))) (EMatch (EIf (EVar "exempt") (EVar "None") (EApp (EApp (EApp (EApp (EVar "singleFileTypeErrors") (EVar "target")) (EVar "tsrc")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EApp (EApp (EVar "typecheckGateFail") (EVar "target")) (EVar "message")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "rows") (EApp (EVar "withEvidencePreserved") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "runEvalRequestRows") (EApp (EApp (EApp (EApp (EApp (EVar "prepareSingle") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls"))) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "requests"))))) (DoExpr (EApp (EApp (EVar "emitEvalPropRows") (EVar "nonce")) (EVar "rows"))))))))))
+(DTypeSig false "runEvalRequestRows" (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))))
+(DFunDef false "runEvalRequestRows" ((PCon "TestPairErr" (PVar "message")) PWild PWild PWild (PVar "requests")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "interpreter property worker could not prepare properties: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString "")))))
+(DFunDef false "runEvalRequestRows" ((PCon "TestPair" (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM")) (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "requests")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (DoLet false false (PVar "modules") (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "preparePlannedPropRequests") (EVar "root")) (EVar "modules")) (EVar "requests")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "preparedResults") (EApp (EApp (EVar "map") (EApp (EApp (EVar "preparedPlanError") (ELit (LString "eval"))) (EVar "err"))) (EVar "requests")))) (arm (PCon "Ok" (PTuple (PVar "planEnv") (PVar "rows"))) () (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "planEnv")) (EApp (EVar "preparedPlans") (EVar "rows"))) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPreparedRows") (EVar "planEnv")) (EListLit)) (EVar "rows")) (EVar "tsrc")) (EVar "coreM")) (EVar "modsM"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "runValidatedEvalRequests") (EApp (EApp (EApp (EApp (EApp (EVar "validateHelperPlans") (EVar "planEnv")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "rawM")) (EApp (EVar "preparedPlans") (EVar "rows")))) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "requests")))))))))
+(DTypeSig false "runValidatedEvalRequests" (TyFun (TyCon "HelperValidation") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))))
+(DFunDef false "runValidatedEvalRequests" ((PCon "HelperValidation" (PVar "pair") (PVar "helpers") (PVar "rejected") (PVar "protocol")) (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "requests")) (EMatch (EVar "protocol") (arm (PCon "Some" (PVar "message")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalProtocolRequests") (EVar "pair")) (EVar "message")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "requests"))) (arm (PCon "None") () (EMatch (EVar "pair") (arm (PCon "TestPairErr" (PVar "message")) () (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "interpreter property helpers could not prepare: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "TestPair" (PVar "_runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (DoLet false false (PVar "modules") (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "preparePlannedPropRequests") (EVar "root")) (EVar "modules")) (EVar "requests")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "preparedResults") (EApp (EApp (EVar "map") (EApp (EApp (EVar "preparedPlanError") (ELit (LString "eval"))) (EVar "err"))) (EVar "requests")))) (arm (PCon "Ok" (PTuple (PVar "planEnv") (PVar "rows"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPreparedRows") (EVar "planEnv")) (EVar "helpers")) (EApp (EApp (EApp (EApp (EVar "rejectPreparedHelpers") (EVar "planEnv")) (ELit (LString "eval"))) (EVar "rejected")) (EVar "rows"))) (EVar "tsrc")) (EVar "coreM")) (EVar "modsM")))))))))))
+(DTypeSig false "runEvalProtocolRequests" (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))))
+(DFunDef false "runEvalProtocolRequests" ((PCon "TestPairErr" (PVar "message")) PWild PWild PWild PWild (PVar "requests")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "interpreter property helpers could not prepare: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString "")))))
+(DFunDef false "runEvalProtocolRequests" ((PCon "TestPair" (PVar "_runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM")) (PVar "message") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "requests")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (DoLet false false (PVar "modules") (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "preparePlannedPropRequests") (EVar "root")) (EVar "modules")) (EVar "requests")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "preparedResults") (EApp (EApp (EVar "map") (EApp (EApp (EVar "preparedPlanError") (ELit (LString "eval"))) (EVar "err"))) (EVar "requests")))) (arm (PCon "Ok" (PTuple (PVar "planEnv") (PVar "rows"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPreparedRows") (EVar "planEnv")) (EListLit)) (EApp (EApp (EApp (EApp (EVar "rejectPreparedProtocolCustom") (EVar "planEnv")) (ELit (LString "eval"))) (EVar "message")) (EVar "rows"))) (EVar "tsrc")) (EVar "coreM")) (EVar "modsM")))))))
+(DTypeSig false "runEvalPreparedRows" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "List") (TyCon "PropHelper")) (TyFun (TyApp (TyCon "List") (TyCon "PreparedPropRequest")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))))
+(DFunDef false "runEvalPreparedRows" ((PVar "env") (PVar "helpers") (PVar "rows") (PVar "tsrc") (PVar "coreM") (PVar "modsM")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runPreparedPropRequestsResults") (EVar "env")) (EVar "helpers")) (EVar "rows")) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EApp (EApp (EApp (EVar "evalModulesRootEvalEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EBinOp "++" (EVar "coreM") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modsM")))))
 (DTypeSig false "propsReportEnginesPlain" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "PinIndex") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))))))))))
 (DFunDef false "propsReportEnginesPlain" ((PList) PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EListLit))
 (DFunDef false "propsReportEnginesPlain" ((PCons (PCon "EngInterp") (PVar "rest")) (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runAllPlannedPropRequestsResults") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propRequestsFor") (EVar "index")) (EVar "file")) (ELit (LString "eval"))) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt"))) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EApp (EApp (EApp (EVar "evalModulesRootEvalEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesPlain") (EVar "rest")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EVar "index"))))
@@ -4038,7 +4392,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DTypeSig true "testHelpText" (TyCon "String"))
 (DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n")) (ELit (LString "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests, properties and `test \"…\"` decls through a\n")) (ELit (LString "                      compiled native binary (the default; shorthand\n")) (ELit (LString "                      for --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines. `eval` is\n")) (ELit (LString "                      the interpreter; property tests follow this selection\n")) (ELit (LString "  --json               emit a {\"file\":...,\"engine\":...,\"doctests\":...,\n")) (ELit (LString "                      \"properties\":...,\"tests\":...,\"summary\":...} JSON\n")) (ELit (LString "                      object instead of human text (single file.mdk target\n")) (ELit (LString "                      only; agrees with the human report's pass/fail counts\n")) (ELit (LString "                      on all three phases)\n")) (ELit (LString "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n")) (ELit (LString "                      name (or, for a doctest, input expression) contains\n")) (ELit (LString "                      <substring>\n")) (ELit (LString "  --seed <n>           seed the property-test RNG (printed on every prop\n")) (ELit (LString "                      failure so the counterexample is replayable); never\n")) (ELit (LString "                      affects a program under test's own random draws\n")) (ELit (LString "  --cases <n>           run each property with <n> generated cases\n")) (ELit (LString "                      instead of the default 100\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the native backend alone.\n")) (ELit (LString "\n")) (ELit (LString "With no target, tests the project containing the current directory: the\n")) (ELit (LString "nearest directory at or above it with a medaka.toml, walked like a dir\n")) (ELit (LString "target. Outside any project, pass a file.mdk or dir target.\n")))))
 (DTypeSig true "testArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "testArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "test"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--native")))) (ELit (LString "shorthand for --engines native"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--engines")))) (ELit (LString "eval,native"))) (ELit (LString "engines to run each example under"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--filter")))) (ELit (LString "SUBSTRING"))) (ELit (LString "run only matching examples"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--seed")))) (ELit (LString "N"))) (ELit (LString "seed the property RNG"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--cases")))) (ELit (LString "N"))) (ELit (LString "property cases per test")))))))
+(DFunDef false "testArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "test"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--native")))) (ELit (LString "shorthand for --engines native"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--engines")))) (ELit (LString "eval,native"))) (ELit (LString "engines to run each example under"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--filter")))) (ELit (LString "SUBSTRING"))) (ELit (LString "run only matching examples"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--seed")))) (ELit (LString "N"))) (ELit (LString "seed the property RNG"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--cases")))) (ELit (LString "N"))) (ELit (LString "property cases per test"))) (EApp (EVar "internal") (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--props-worker")))) (ELit (LString "INTERNAL: run isolated interpreter properties"))))))))
 (DTypeSig true "parseTestIntFlag" (TyFun (TyCon "String") (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "parseTestIntFlag" ((PVar "nm") (PVar "a")) (EMatch (EApp (EApp (EVar "flagValue") (EVar "nm")) (EVar "a")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "s")) () (EMatch (EApp (EVar "toInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "nm"))) (ELit (LString " requires an integer value, got '"))) (EApp (EVar "display") (EVar "s"))) (ELit (LString "'")))))))))
 (DTypeSig true "parseTestCasesFlag" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))
@@ -4090,21 +4444,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DTypeSig false "cliDoctestsJson" (TyFun (TyCon "RunResult") (TyCon "Json")))
 (DFunDef false "cliDoctestsJson" ((PVar "run")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "total")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "run")) (EApp (EVar "runFailed") (EVar "run"))) (EApp (EVar "runErrors") (EVar "run"))))) (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EApp (EVar "runPassed") (EVar "run")))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EApp (EVar "runFailed") (EVar "run")))) (ETuple (ELit (LString "errors")) (EApp (EVar "JInt") (EApp (EVar "runErrors") (EVar "run")))) (ETuple (ELit (LString "examples")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "cliExampleJson")) (EApp (EVar "runDetails") (EVar "run"))))))))
 (DTypeSig false "cliPropJson" (TyFun (TyCon "PropResult") (TyCon "Json")))
-(DFunDef false "cliPropJson" ((PVar "p")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "propResultEngine") (EVar "p")))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EApp (EVar "propResultName") (EVar "p")))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EApp (EVar "propStatusText") (EApp (EVar "propResultStatus") (EVar "p"))))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EApp (EVar "propResultDetail") (EVar "p")))) (ETuple (ELit (LString "failureKind")) (EApp (EVar "propFailureKindJson") (EApp (EVar "propResultFailureKind") (EVar "p")))) (ETuple (ELit (LString "seed")) (EApp (EVar "JInt") (EApp (EVar "propResultSeed") (EVar "p")))) (ETuple (ELit (LString "cases")) (EApp (EVar "JInt") (EApp (EVar "propResultCases") (EVar "p")))))))
-(DTypeSig false "propStatusText" (TyFun (TyCon "PropStatus") (TyCon "String")))
-(DFunDef false "propStatusText" ((PCon "PropPassedResult")) (ELit (LString "pass")))
-(DFunDef false "propStatusText" ((PCon "PropFailedResult")) (ELit (LString "fail")))
-(DFunDef false "propStatusText" ((PCon "PropErroredResult")) (ELit (LString "error")))
-(DTypeSig false "propFailureKindJson" (TyFun (TyApp (TyCon "Option") (TyCon "PropFailureKind")) (TyCon "Json")))
-(DFunDef false "propFailureKindJson" ((PCon "None")) (EVar "JNull"))
-(DFunDef false "propFailureKindJson" ((PCon "Some" (PVar "kind"))) (EApp (EVar "JString") (EApp (EVar "propFailureKindText") (EVar "kind"))))
-(DTypeSig false "propFailureKindText" (TyFun (TyCon "PropFailureKind") (TyCon "String")))
-(DFunDef false "propFailureKindText" ((PCon "PropLawFalse")) (ELit (LString "law-false")))
-(DFunDef false "propFailureKindText" ((PCon "PropCapabilityError")) (ELit (LString "capability")))
-(DFunDef false "propFailureKindText" ((PCon "PropBuildError")) (ELit (LString "build")))
-(DFunDef false "propFailureKindText" ((PCon "PropRuntimeError")) (ELit (LString "runtime")))
-(DFunDef false "propFailureKindText" ((PCon "PropProtocolError")) (ELit (LString "protocol")))
-(DFunDef false "propFailureKindText" ((PCon "PropTypeError")) (ELit (LString "type")))
+(DFunDef false "cliPropJson" () (EVar "propResultJson"))
 (DTypeSig false "cliTestJson" (TyFun (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult")) (TyCon "Json")))
 (DFunDef false "cliTestJson" ((PTuple (PVar "engine") (PVar "name") (PVar "line") (PVar "result"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "engineName") (EVar "engine"))))) (EApp (EVar "exResultJsonFields") (EVar "result")))))
 (DTypeSig false "cliTypeErrorField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
@@ -4189,6 +4529,8 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "CustomPlan" true) (mem "GenPlan" false) (mem "PlanEnv" false) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "customPlansReachable" false) (mem "planErrorText" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "hasProps" false) (mem "runAllPlannedPropRequestsResults" false) (mem "preparePlannedPropRequests" false) (mem "runPreparedPropRequestsResults" false) (mem "PreparedPropRequest" true) (mem "PropHelper" true) (mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "PropRequest" true) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultStatus" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false) (mem "propSeedValue" false))))
 (DUse false (UseGroup ("tools" "prop_helpers") ((mem "PropHelpers" true) (mem "propHelpersForPlans" false))))
+(DUse false (UseGroup ("tools" "eval_props") ((mem "emitEvalPropRows" false) (mem "decodeEvalPropRows" false) (mem "propResultJson" false) (mem "propFailureKindJson" false) (mem "startEvalPropWorker" false) (mem "takeEvalPropBootstrap" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "firstNonEmptyLine" false))))
 (DUse false (UseGroup ("tools" "test_pins") ((mem "PinIndex" false) (mem "PinKind" true) (mem "TestExpectedFailure" true) (mem "TestPin" false) (mem "buildPinIndex" false) (mem "pinFromIndex" false) (mem "validatePinNames" false))))
 (DUse false (UseGroup ("tools" "test_pins_io") ((mem "loadPinContext" false))))
 (DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "GradedTest" false) (mem "gradeProps" false) (mem "gradeTests" false) (mem "gradedPropPassed" false) (mem "gradedTestPassed" false) (mem "gradedPropRaw" false) (mem "gradedTestRaw" false) (mem "gradedPropVerdict" false) (mem "gradedTestVerdict" false) (mem "knownRedCountProps" false) (mem "knownRedCountTests" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "gradedTestStatus" false) (mem "gradedTestRawStatus" false) (mem "gradedTestIssue" false) (mem "gradedTestPinDetail" false))))
@@ -4198,8 +4540,8 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
-(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
-(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
+(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -4416,9 +4758,45 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DFunDef false "doctestReportGo" ((PCons (PVar "e") (PVar "rest")) (PVar "trees") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "examples") (PVar "synthResults")) (EBinOp "::" (ETuple (EVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runChosenOn") (EVar "e")) (EVar "trees")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "examples")) (EVar "synthResults"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "doctestReportGo") (EVar "rest")) (EVar "trees")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "examples")) (EVar "synthResults"))))
 (DTypeSig false "propsReportPinned" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "PinIndex") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))))))))
 (DFunDef false "propsReportPinned" ((PVar "engines") (PVar "pair") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "pair") (arm (PCon "TestPairErr" PWild) () (EListLit)) (arm (PCon "TestPair" (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM")) () (EApp (EVar "withEvidencePreserved") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEngines") (EVar "engines")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "propsReportEnginesInProcess" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "PinIndex") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))))))))))))
+(DFunDef false "propsReportEnginesInProcess" ((PList) PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EListLit))
+(DFunDef false "propsReportEnginesInProcess" ((PVar "engines") (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EBlock (DoLet false false (PVar "modules") (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (DoLet false false (PVar "root") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (DoLet false false (PVar "planningRequests") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propRequestsFor") (EMethodRef "index")) (EVar "file")) (ELit (LString "eval"))) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "preparePlannedPropRequests") (EVar "root")) (EVar "modules")) (EVar "planningRequests")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesPlain") (EVar "engines")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index"))) (arm (PCon "Ok" (PTuple (PVar "planEnv") (PVar "planningRows"))) () (EBlock (DoLet false false (PVar "plans") (EApp (EVar "preparedPlans") (EVar "planningRows"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "planEnv")) (EVar "plans")) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesPlain") (EVar "engines")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index"))) (arm PWild () (EBlock (DoLet false false (PVar "validation") (EApp (EApp (EApp (EApp (EApp (EVar "validateHelperPlans") (EVar "planEnv")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "rawM")) (EVar "plans"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runValidatedPropEngines") (EVar "engines")) (EVar "validation")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index")))))))))))))
 (DTypeSig false "propsReportEngines" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "PinIndex") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))))))))))))
 (DFunDef false "propsReportEngines" ((PList) PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EListLit))
-(DFunDef false "propsReportEngines" ((PVar "engines") (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EBlock (DoLet false false (PVar "modules") (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (DoLet false false (PVar "root") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (DoLet false false (PVar "planningRequests") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propRequestsFor") (EMethodRef "index")) (EVar "file")) (ELit (LString "eval"))) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "preparePlannedPropRequests") (EVar "root")) (EVar "modules")) (EVar "planningRequests")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesPlain") (EVar "engines")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index"))) (arm (PCon "Ok" (PTuple (PVar "planEnv") (PVar "planningRows"))) () (EBlock (DoLet false false (PVar "plans") (EApp (EVar "preparedPlans") (EVar "planningRows"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "planEnv")) (EVar "plans")) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesPlain") (EVar "engines")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index"))) (arm PWild () (EBlock (DoLet false false (PVar "validation") (EApp (EApp (EApp (EApp (EApp (EVar "validateHelperPlans") (EVar "planEnv")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "rawM")) (EVar "plans"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runValidatedPropEngines") (EVar "engines")) (EVar "validation")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index")))))))))))))
+(DFunDef false "propsReportEngines" ((PCons (PCon "EngInterp") (PVar "rest")) (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EBinOp "++" (EApp (EApp (EVar "superviseEvalProps") (EVar "target")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propRequestsFor") (EMethodRef "index")) (EVar "file")) (ELit (LString "eval"))) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEngines") (EVar "rest")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index"))))
+(DFunDef false "propsReportEngines" ((PCons (PCon "EngNative") (PVar "rest")) (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesInProcess") (EListLit (EVar "EngNative"))) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEngines") (EVar "rest")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index"))))
+(DTypeSig false "superviseEvalProps" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))
+(DFunDef false "superviseEvalProps" (PWild (PList)) (EListLit))
+(DFunDef false "superviseEvalProps" ((PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "argv") (EBinOp "++" (EListLit (ELit (LString "test")) (ELit (LString "--props-worker"))) (EApp (EApp (EVar "workerPositionals") (EVar "target")) (EVar "requests")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "argv")) (arm (PCon "Err" (PVar "message")) () (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not start interpreter property worker: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "stdout") (PVar "stderr"))) () (EMatch (EApp (EVar "takeEvalPropBootstrap") (EVar "stdout")) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Ok" (PTuple (PVar "nonce") (PVar "transcript"))) () (EMatch (EApp (EApp (EApp (EVar "decodeEvalPropRows") (EVar "nonce")) (EVar "requests")) (EVar "transcript")) (arm (PCon "Ok" (PVar "rows")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "rows") (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr")))))))))))))
+(DTypeSig false "workerAbortDetail" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "workerAbortDetail" ((PVar "code") (PVar "stderr")) (EBlock (DoLet false false (PVar "first") (EApp (EVar "firstNonEmptyLine") (EApp (EVar "splitNl") (EVar "stderr")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "interpreter property worker batch aborted (exit ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))) (EIf (EBinOp "==" (EVar "first") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString " — ")) (EApp (EMethodRef "display") (EVar "first"))) (ELit (LString ""))))))))
+(DTypeSig false "workerPositionals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "workerPositionals" ((PVar "target") (PVar "requests")) (EBinOp "::" (EVar "target") (EApp (EVar "workerRequestPositionals") (EVar "requests"))))
+(DTypeSig false "workerRequestPositionals" (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "workerRequestPositionals" ((PList)) (EListLit))
+(DFunDef false "workerRequestPositionals" ((PCons (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases")) (PVar "rest"))) (EBinOp "::" (EApp (EVar "stringify") (EApp (EVar "JString") (EVar "name"))) (EBinOp "::" (EApp (EVar "stringify") (EApp (EVar "JString") (EApp (EVar "intToString") (EVar "seed")))) (EBinOp "::" (EApp (EVar "stringify") (EApp (EVar "JString") (EApp (EVar "intToString") (EVar "cases")))) (EApp (EVar "workerRequestPositionals") (EVar "rest"))))))
+(DTypeSig false "workerRuntimeRows" (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "PropResult")))))
+(DFunDef false "workerRuntimeRows" ((PList) PWild) (EListLit))
+(DFunDef false "workerRuntimeRows" ((PCons (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases")) (PVar "rest")) (PVar "message")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "eval"))) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropRuntimeError"))) (EVar "message")) (EVar "seed")) (EVar "cases")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "rest")) (EVar "message"))))
+(DTypeSig false "workerProtocolRows" (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "PropResult")))))
+(DFunDef false "workerProtocolRows" ((PList) PWild) (EListLit))
+(DFunDef false "workerProtocolRows" ((PCons (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases")) (PVar "rest")) (PVar "message")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "eval"))) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EVar "message")) (EVar "seed")) (EVar "cases")) (EApp (EApp (EVar "workerProtocolRows") (EVar "rest")) (EVar "message"))))
+(DTypeSig true "runEvalPropsWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "runEvalPropsWorker" ((PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "startEvalPropWorker") (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "runtimePath") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "runtimePath")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read runtime prelude: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "runtimeSrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read core prelude: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "coreSrc")) () (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EBinOp "++" (EBinOp "++" (ELit (LString "could not read property target: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" PWild) () (EApp (EVar "evalWorkerDie") (ELit (LString "could not parse property target")))) (arm (PCon "Ok" (PVar "parsed")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPropsWorkerSource") (EVar "target")) (EVar "nonce")) (EVar "requests")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "tsrc")) (EApp (EVar "desugar") (EVar "parsed"))))))))))))))
+(DTypeSig false "evalWorkerDie" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "evalWorkerDie" ((PVar "message")) (ELet false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test --props-worker: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString "")))) (EApp (EVar "exit") (ELit (LInt 1)))))
+(DTypeSig false "runEvalPropsWorkerSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit")))))))))))
+(DFunDef false "runEvalPropsWorkerSource" ((PVar "target") (PVar "nonce") (PVar "requests") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "tsrc") (PVar "userDecls")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "exempt") (EApp (EApp (EApp (EVar "typecheckExempt") (EVar "target")) (EVar "userDecls")) (EVar "tsrc"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentEvalFile")) (EVar "target"))) (DoExpr (EIf (EApp (EVar "hasUseDecls") (EVar "userDecls")) (EBlock (DoLet false false (PVar "prepared") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "prepareMulti") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "target")) (EVar "roots")) (EVar "exempt")) (EVar "False")) (EListLit))) (DoExpr (EMatch (EVar "prepared") (arm (PTuple (PCon "Some" (PVar "message")) PWild) () (EApp (EVar "evalWorkerDie") (EApp (EApp (EVar "typecheckGateFail") (EVar "target")) (EVar "message")))) (arm (PTuple (PCon "None") (PVar "work")) () (EBlock (DoLet false false (PVar "rows") (EApp (EVar "withEvidencePreserved") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "runEvalRequestRows") (EApp (EApp (EApp (EVar "forcePrepared") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "work"))) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "requests"))))) (DoExpr (EApp (EApp (EVar "emitEvalPropRows") (EVar "nonce")) (EVar "rows")))))))) (EMatch (EIf (EVar "exempt") (EVar "None") (EApp (EApp (EApp (EApp (EVar "singleFileTypeErrors") (EVar "target")) (EVar "tsrc")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "evalWorkerDie") (EApp (EApp (EVar "typecheckGateFail") (EVar "target")) (EVar "message")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "rows") (EApp (EVar "withEvidencePreserved") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "runEvalRequestRows") (EApp (EApp (EApp (EApp (EApp (EVar "prepareSingle") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls"))) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "requests"))))) (DoExpr (EApp (EApp (EVar "emitEvalPropRows") (EVar "nonce")) (EVar "rows"))))))))))
+(DTypeSig false "runEvalRequestRows" (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))))
+(DFunDef false "runEvalRequestRows" ((PCon "TestPairErr" (PVar "message")) PWild PWild PWild (PVar "requests")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "interpreter property worker could not prepare properties: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString "")))))
+(DFunDef false "runEvalRequestRows" ((PCon "TestPair" (PVar "runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM")) (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "requests")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (DoLet false false (PVar "modules") (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "preparePlannedPropRequests") (EVar "root")) (EVar "modules")) (EVar "requests")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "preparedResults") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "preparedPlanError") (ELit (LString "eval"))) (EVar "err"))) (EVar "requests")))) (arm (PCon "Ok" (PTuple (PVar "planEnv") (PVar "rows"))) () (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "planEnv")) (EApp (EVar "preparedPlans") (EVar "rows"))) (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPreparedRows") (EVar "planEnv")) (EListLit)) (EVar "rows")) (EVar "tsrc")) (EVar "coreM")) (EVar "modsM"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "runValidatedEvalRequests") (EApp (EApp (EApp (EApp (EApp (EVar "validateHelperPlans") (EVar "planEnv")) (EVar "runtimeM")) (EVar "rawCoreM")) (EVar "rawM")) (EApp (EVar "preparedPlans") (EVar "rows")))) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "requests")))))))))
+(DTypeSig false "runValidatedEvalRequests" (TyFun (TyCon "HelperValidation") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))))
+(DFunDef false "runValidatedEvalRequests" ((PCon "HelperValidation" (PVar "pair") (PVar "helpers") (PVar "rejected") (PVar "protocol")) (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "requests")) (EMatch (EVar "protocol") (arm (PCon "Some" (PVar "message")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalProtocolRequests") (EVar "pair")) (EVar "message")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "requests"))) (arm (PCon "None") () (EMatch (EVar "pair") (arm (PCon "TestPairErr" (PVar "message")) () (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "interpreter property helpers could not prepare: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "TestPair" (PVar "_runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (DoLet false false (PVar "modules") (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "preparePlannedPropRequests") (EVar "root")) (EVar "modules")) (EVar "requests")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "preparedResults") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "preparedPlanError") (ELit (LString "eval"))) (EVar "err"))) (EVar "requests")))) (arm (PCon "Ok" (PTuple (PVar "planEnv") (PVar "rows"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPreparedRows") (EVar "planEnv")) (EVar "helpers")) (EApp (EApp (EApp (EApp (EVar "rejectPreparedHelpers") (EVar "planEnv")) (ELit (LString "eval"))) (EVar "rejected")) (EVar "rows"))) (EVar "tsrc")) (EVar "coreM")) (EVar "modsM")))))))))))
+(DTypeSig false "runEvalProtocolRequests" (TyFun (TyCon "TestPair") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))))
+(DFunDef false "runEvalProtocolRequests" ((PCon "TestPairErr" (PVar "message")) PWild PWild PWild PWild (PVar "requests")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "interpreter property helpers could not prepare: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString "")))))
+(DFunDef false "runEvalProtocolRequests" ((PCon "TestPair" (PVar "_runtimeM") (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM")) (PVar "message") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "requests")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (DoLet false false (PVar "modules") (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "preparePlannedPropRequests") (EVar "root")) (EVar "modules")) (EVar "requests")) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "preparedResults") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "preparedPlanError") (ELit (LString "eval"))) (EVar "err"))) (EVar "requests")))) (arm (PCon "Ok" (PTuple (PVar "planEnv") (PVar "rows"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runEvalPreparedRows") (EVar "planEnv")) (EListLit)) (EApp (EApp (EApp (EApp (EVar "rejectPreparedProtocolCustom") (EVar "planEnv")) (ELit (LString "eval"))) (EVar "message")) (EVar "rows"))) (EVar "tsrc")) (EVar "coreM")) (EVar "modsM")))))))
+(DTypeSig false "runEvalPreparedRows" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "List") (TyCon "PropHelper")) (TyFun (TyApp (TyCon "List") (TyCon "PreparedPropRequest")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))))
+(DFunDef false "runEvalPreparedRows" ((PVar "env") (PVar "helpers") (PVar "rows") (PVar "tsrc") (PVar "coreM") (PVar "modsM")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runPreparedPropRequestsResults") (EVar "env")) (EVar "helpers")) (EVar "rows")) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EApp (EApp (EApp (EVar "evalModulesRootEvalEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EBinOp "++" (EVar "coreM") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modsM")))))
 (DTypeSig false "propsReportEnginesPlain" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "PinIndex") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))))))))))
 (DFunDef false "propsReportEnginesPlain" ((PList) PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EListLit))
 (DFunDef false "propsReportEnginesPlain" ((PCons (PCon "EngInterp") (PVar "rest")) (PVar "rawCoreM") (PVar "coreM") (PVar "rawM") (PVar "modsM") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "cases") (PVar "filterOpt") (PVar "file") (PVar "index")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runAllPlannedPropRequestsResults") (EApp (EApp (EVar "rootPlanModuleId") (EVar "rawM")) (EVar "target"))) (EApp (EApp (EApp (EApp (EVar "planModules") (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propRequestsFor") (EMethodRef "index")) (EVar "file")) (ELit (LString "eval"))) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt"))) (EApp (EVar "propLineTests") (EVar "tsrc"))) (EApp (EApp (EApp (EVar "evalModulesRootEvalEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "propsReportEnginesPlain") (EVar "rest")) (EVar "rawCoreM")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt")) (EVar "file")) (EMethodRef "index"))))
@@ -4580,7 +4958,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DTypeSig true "testHelpText" (TyCon "String"))
 (DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n")) (ELit (LString "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests, properties and `test \"…\"` decls through a\n")) (ELit (LString "                      compiled native binary (the default; shorthand\n")) (ELit (LString "                      for --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines. `eval` is\n")) (ELit (LString "                      the interpreter; property tests follow this selection\n")) (ELit (LString "  --json               emit a {\"file\":...,\"engine\":...,\"doctests\":...,\n")) (ELit (LString "                      \"properties\":...,\"tests\":...,\"summary\":...} JSON\n")) (ELit (LString "                      object instead of human text (single file.mdk target\n")) (ELit (LString "                      only; agrees with the human report's pass/fail counts\n")) (ELit (LString "                      on all three phases)\n")) (ELit (LString "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n")) (ELit (LString "                      name (or, for a doctest, input expression) contains\n")) (ELit (LString "                      <substring>\n")) (ELit (LString "  --seed <n>           seed the property-test RNG (printed on every prop\n")) (ELit (LString "                      failure so the counterexample is replayable); never\n")) (ELit (LString "                      affects a program under test's own random draws\n")) (ELit (LString "  --cases <n>           run each property with <n> generated cases\n")) (ELit (LString "                      instead of the default 100\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the native backend alone.\n")) (ELit (LString "\n")) (ELit (LString "With no target, tests the project containing the current directory: the\n")) (ELit (LString "nearest directory at or above it with a medaka.toml, walked like a dir\n")) (ELit (LString "target. Outside any project, pass a file.mdk or dir target.\n")))))
 (DTypeSig true "testArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "testArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "test"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--native")))) (ELit (LString "shorthand for --engines native"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--engines")))) (ELit (LString "eval,native"))) (ELit (LString "engines to run each example under"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--filter")))) (ELit (LString "SUBSTRING"))) (ELit (LString "run only matching examples"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--seed")))) (ELit (LString "N"))) (ELit (LString "seed the property RNG"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--cases")))) (ELit (LString "N"))) (ELit (LString "property cases per test")))))))
+(DFunDef false "testArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "test"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--native")))) (ELit (LString "shorthand for --engines native"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--engines")))) (ELit (LString "eval,native"))) (ELit (LString "engines to run each example under"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--filter")))) (ELit (LString "SUBSTRING"))) (ELit (LString "run only matching examples"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--seed")))) (ELit (LString "N"))) (ELit (LString "seed the property RNG"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--cases")))) (ELit (LString "N"))) (ELit (LString "property cases per test"))) (EApp (EVar "internal") (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--props-worker")))) (ELit (LString "INTERNAL: run isolated interpreter properties"))))))))
 (DTypeSig true "parseTestIntFlag" (TyFun (TyCon "String") (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "parseTestIntFlag" ((PVar "nm") (PVar "a")) (EMatch (EApp (EApp (EVar "flagValue") (EVar "nm")) (EVar "a")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "s")) () (EMatch (EApp (EVar "toInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "nm"))) (ELit (LString " requires an integer value, got '"))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "'")))))))))
 (DTypeSig true "parseTestCasesFlag" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))
@@ -4632,21 +5010,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DTypeSig false "cliDoctestsJson" (TyFun (TyCon "RunResult") (TyCon "Json")))
 (DFunDef false "cliDoctestsJson" ((PVar "run")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "total")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "run")) (EApp (EVar "runFailed") (EVar "run"))) (EApp (EVar "runErrors") (EVar "run"))))) (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EApp (EVar "runPassed") (EVar "run")))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EApp (EVar "runFailed") (EVar "run")))) (ETuple (ELit (LString "errors")) (EApp (EVar "JInt") (EApp (EVar "runErrors") (EVar "run")))) (ETuple (ELit (LString "examples")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "cliExampleJson")) (EApp (EVar "runDetails") (EVar "run"))))))))
 (DTypeSig false "cliPropJson" (TyFun (TyCon "PropResult") (TyCon "Json")))
-(DFunDef false "cliPropJson" ((PVar "p")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "propResultEngine") (EVar "p")))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EApp (EVar "propResultName") (EVar "p")))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EApp (EVar "propStatusText") (EApp (EVar "propResultStatus") (EVar "p"))))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EApp (EVar "propResultDetail") (EVar "p")))) (ETuple (ELit (LString "failureKind")) (EApp (EVar "propFailureKindJson") (EApp (EVar "propResultFailureKind") (EVar "p")))) (ETuple (ELit (LString "seed")) (EApp (EVar "JInt") (EApp (EVar "propResultSeed") (EVar "p")))) (ETuple (ELit (LString "cases")) (EApp (EVar "JInt") (EApp (EVar "propResultCases") (EVar "p")))))))
-(DTypeSig false "propStatusText" (TyFun (TyCon "PropStatus") (TyCon "String")))
-(DFunDef false "propStatusText" ((PCon "PropPassedResult")) (ELit (LString "pass")))
-(DFunDef false "propStatusText" ((PCon "PropFailedResult")) (ELit (LString "fail")))
-(DFunDef false "propStatusText" ((PCon "PropErroredResult")) (ELit (LString "error")))
-(DTypeSig false "propFailureKindJson" (TyFun (TyApp (TyCon "Option") (TyCon "PropFailureKind")) (TyCon "Json")))
-(DFunDef false "propFailureKindJson" ((PCon "None")) (EVar "JNull"))
-(DFunDef false "propFailureKindJson" ((PCon "Some" (PVar "kind"))) (EApp (EVar "JString") (EApp (EVar "propFailureKindText") (EVar "kind"))))
-(DTypeSig false "propFailureKindText" (TyFun (TyCon "PropFailureKind") (TyCon "String")))
-(DFunDef false "propFailureKindText" ((PCon "PropLawFalse")) (ELit (LString "law-false")))
-(DFunDef false "propFailureKindText" ((PCon "PropCapabilityError")) (ELit (LString "capability")))
-(DFunDef false "propFailureKindText" ((PCon "PropBuildError")) (ELit (LString "build")))
-(DFunDef false "propFailureKindText" ((PCon "PropRuntimeError")) (ELit (LString "runtime")))
-(DFunDef false "propFailureKindText" ((PCon "PropProtocolError")) (ELit (LString "protocol")))
-(DFunDef false "propFailureKindText" ((PCon "PropTypeError")) (ELit (LString "type")))
+(DFunDef false "cliPropJson" () (EVar "propResultJson"))
 (DTypeSig false "cliTestJson" (TyFun (TyTuple (TyCon "Engine") (TyCon "String") (TyCon "Int") (TyCon "ExResult")) (TyCon "Json")))
 (DFunDef false "cliTestJson" ((PTuple (PVar "engine") (PVar "name") (PVar "line") (PVar "result"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EVar "line"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "engineName") (EVar "engine"))))) (EApp (EVar "exResultJsonFields") (EVar "result")))))
 (DTypeSig false "cliTypeErrorField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))

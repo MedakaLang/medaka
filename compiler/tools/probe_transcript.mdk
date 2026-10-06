@@ -21,24 +21,11 @@
 -- mistaken for the other's) and therefore a parameter here, not a constant.
 --
 -- ── the nonce ────────────────────────────────────────────────────────────────
--- `tagsInOrder` proves the observed tag sequence is a prefix of the tags the
--- probe was GENERATED to print — but a probe that prints the ENTIRE expected
--- sequence (forged `Pass`/fields, in order) and then dies satisfies that
--- check completely: a full sequence is trivially a prefix of itself, and the
--- exit code is never consulted once every chunk decodes. Tag TEXT alone can
--- never distinguish "the driver's generated code printed this" from "the
--- target's own source printed this", because the tag text is exactly the
--- fixed, publicly-readable constant a forger's SOURCE — written before any
--- given run — can also spell.
---
--- The fix is a per-run token neither engine's tag vocabulary needs, but the
--- PREFIX does: `mintNonce` draws it from OS entropy at driver time, strictly
--- after the target's source was already committed to disk, so no source
--- written before this invocation can contain it. Folded into the prefix via
--- `noncedPrefix` and embedded as a literal in the generated probe's own
--- sentinel-printing code (never exposed to the target's spliced-in source),
--- it turns "spell the sentinel text" from copying a public constant into
--- guessing a value that did not exist when the forger's source was written.
+-- Each probe uses OS entropy in its prefix so fixed target output cannot
+-- accidentally match another run's tags. Native probes embed that token in
+-- generated source; it is not a security boundary against a target that reads
+-- its process or build files. Test programs retain their ordinary OS effects.
+-- Completeness, value decoding and exit checks still belong to each runner.
 --
 -- ── why a value is printed QUOTED ───────────────────────────────────────────
 -- A value's own text is chosen by the program under test, so an unescaped
@@ -58,9 +45,8 @@
 -- prints on its own account (a `println` inside a test body lands in the
 -- transcript unescaped), so `tagsInOrder` is the second half: the driver knows
 -- the exact tag sequence its probe emits, and a transcript that is not that
--- sequence is rejected whole rather than read.  Between them, no text a
--- program can produce turns into a verdict it did not earn — at worst it turns
--- into a loud error.
+-- sequence is rejected whole rather than read. These checks prevent ordinary
+-- target output and quoted operands from being mistaken for result fields.
 --
 -- ── the target's own `main` ─────────────────────────────────────────────────
 -- Both probes append a synthesized `main` to the target's VERBATIM source, so

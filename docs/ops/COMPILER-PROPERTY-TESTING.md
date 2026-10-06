@@ -60,6 +60,14 @@ Reports retain the exact requested integer seed, including negative and wide
 seeds. Normalizing a structural generator's internal state does not normalize
 its replay metadata.
 
+Evaluator properties run in one supervised process per target, sharing their
+original module cells within that process. A panic in a body, generator or
+shrinker produces runtime-error rows with the requested replay metadata, and
+the other selected engine still runs. An aborted evaluator batch reports all
+of its selected laws as runtime errors; it does not claim a partial pass. The
+parent accepts only a complete transcript matching its requested law names,
+engines, seeds and case budgets.
+
 ## Initial algorithm coverage
 
 The first added siblings keep test-only models out of compiler source
