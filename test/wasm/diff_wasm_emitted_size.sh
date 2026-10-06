@@ -90,12 +90,20 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    with no headroom.  The `mdk_entry_split` export marker costs one function
 #    and about 35 B in every modules program; the cost is intentional, since it
 #    stops an old-shape module from running `main` twice under a new host.
-#    Re-baselined to the measured 3021731 B (funcs unchanged), with no headroom.
-#    A function declares only the W7 scratch locals its own body references
-#    (#3882); every function used to declare all of them, about 22 per match
-#    depth, so the modules corpus drops about 14% of its bytes.
-MODULES_BYTES_CEIL=3021731
-MODULES_FUNCS_CEIL=5504
+#    Re-baselined to the measured values below, with no headroom.  Three
+#    causes stack.  Located traps: every Int arithmetic call carries its site
+#    as one more i64 argument, and a module that can trap carries the location
+#    writer (`$mdk_write_err_loc`, one function) plus, once it has a located
+#    match, the shared non-exhaustive-match trap: about +0.5 KB and +1 function
+#    per program.  The Mappable/Foldable/Semigroup/Monoid impls for Array live
+#    in core.mdk, so every modules program carries them (about +71 KB and +130
+#    funcs over the modules corpus).  A function declares only the W7 scratch
+#    locals its own body references (#3882), which removes about 14% of the
+#    bytes.  The bytes include each program's trap-site file table, which
+#    spells the fixture and core.mdk paths as given, i.e. absolute, so they
+#    depend on the checkout root (#3879).
+MODULES_BYTES_CEIL=3105616
+MODULES_FUNCS_CEIL=5716
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
@@ -124,7 +132,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=3625   # emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
+MODULES_F1_RATIO_CEIL_X1000=3765  # emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node

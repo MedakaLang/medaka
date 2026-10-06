@@ -115,7 +115,7 @@ forEachU _ [] = ()
 forEachU f (x :: xs) = let _ = f x in forEachU f xs
 
 bindKey : CBind -> String
-bindKey (CBind name _) = name
+bindKey (CBind name _ _) = name
 
 implKey : CImplEntry -> String
 implKey (CImplEntry method _ _) = method
@@ -174,7 +174,7 @@ addBindEdges : HashMap String Unit ->
   HashMap String (List String) ->
   CBind ->
   Unit
-addBindEdges defined g (CBind name clauses) =
+addBindEdges defined g (CBind name clauses _) =
   addEdges defined g name (flatMap refsClause clauses)
 
 addImplEdges : HashMap String Unit ->
@@ -219,7 +219,7 @@ refsE (CLetGroup binds body) = flatMap refsBind binds ++ refsE body
 refsE (CMatch scrut arms) = refsE scrut ++ flatMap refsArm arms
 refsE (CDecision scrut arms _) = refsE scrut ++ flatMap refsArm arms
 refsE (CIf c t f) = refsE c ++ refsE t ++ refsE f
-refsE (CBinPrim _ l r _) = refsE l ++ refsE r
+refsE (CBinPrim _ l r _ _) = refsE l ++ refsE r
 refsE (CUnOp _ x) = refsE x
 refsE (CTuple es) = flatMap refsE es
 refsE (CList es) = flatMap refsE es
@@ -257,7 +257,7 @@ refsRoute (RScalar _) = []
 refsRoute (RProj r _) = refsRoute r
 
 refsBind : CBind -> List String
-refsBind (CBind _ clauses) = flatMap refsClause clauses
+refsBind (CBind _ clauses _) = flatMap refsClause clauses
 
 refsClause : CClause -> List String
 refsClause (CClause _ body) = refsE body

@@ -26,7 +26,7 @@
 -- The keys ELABORATION itself uses are the author's spellings under that order, so
 -- this argument covers the emitted program and not elaboration's own tables.
 
-import frontend.ast.{Decl}
+import frontend.ast.{Decl(..)}
 import types.typecheck.{
   constrainedSigNames,
   preludeReturnPosDictNames,
@@ -55,7 +55,7 @@ import backend.llvm_emit.{
   preludeImplSymbols,
 }
 import ir.dce.{dceFilter}
-import entries.entry_support.{driveModulesLocated, runEmitWith}
+import entries.entry_support.{driveEmitLocated, stampSiteFiles}
 import support.timer.{statsEnabled, emitStats}
 import support.util.{endsWith, filterList}
 import driver.main_autoprint.{autoPrintPinName}
@@ -67,7 +67,7 @@ srcNameFromArgs (_ :: _ :: entry :: _) = entry
 srcNameFromArgs _ = ""
 
 main : <IO> Unit
-main = driveModulesLocated (runEmitWith "runAsyncMain" emitTail)
+main = driveEmitLocated emitTail
 
 -- COMPOSITE-MAIN AUTO-PRINT: the shared elaborate+auto-print-wrap+mangle glue
 -- (design §10) lives once in entry_support.runEmitWith, parameterized by this
@@ -114,12 +114,19 @@ preludeSymsOf coreD = match lowerProgramEmit TargetNative coreD
   )
 
 cbindNameOf : CBind -> String
-cbindNameOf (CBind n _) = n
+cbindNameOf (CBind n _ _) = n
 
 -- Install the emitter side-tables + emit, from an already-elaborated program.
-emitTail : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
-emitTail runtimeDecls coreD modules2 =
+-- [mods] is the loader's (module, path, decls), whose paths name each module's
+-- trap sites.
+emitTail : List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+emitTail mods runtimeDecls coreD modules1 =
   let half = emitHalfOfEnv
+  let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
   -- SOURCE DCE IS OFF in the prelude-object modes.  It is per-program by
   -- construction, so it would (1) shrink prelude.o to whatever the stub entry

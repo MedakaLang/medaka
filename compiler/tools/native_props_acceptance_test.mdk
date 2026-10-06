@@ -35,6 +35,27 @@ runInvocation options target =
       ++ [target]
   boundedVerbSeconds 120 "env" args
 
+-- Runs from the fixture directory with a relative target, so a located native
+-- abort prints a path that does not depend on the temp directory's name.
+runReportIn : List String -> String -> <Exec, IO> Result String (Int, Json)
+runReportIn options target =
+  let dir = replaceAll "/main.mdk" "" target
+  let args =
+    [
+        "-c", "cd \"$0\" && exec \"$@\"", dir, "env",
+        "MEDAKA_NATIVE_PROP_PROOF=compiled", medakaBin, "test", "--json",
+        "--cases", "20", "--seed", "20261005"
+      ]
+      ++ options
+      ++ ["main.mdk"]
+  match boundedVerbSeconds 120 "sh" args
+    Err message => Err message
+    Ok (code, out, err) =>
+      if err /= "" then
+        Err "unexpected runner stderr: \{err}"
+      else
+        map (report => (code, report)) (parse out)
+
 runReport : List String -> String -> <Exec, IO> Result String (Int, Json)
 runReport options target = match runInvocation options target
   Err message => Err message
@@ -961,10 +982,10 @@ test "an expected native abort pin preserves later ordinary test execution" =
       ),
       (
         "medaka-test-pins.toml",
-        "version = 1\n[[pin]]\nfile = \"main.mdk\"\nkind = \"test\"\nname = \"known native abort\"\nengine = \"native\"\nissue = 3857\nfailure = \"error\"\ndetail_lines = [\"native test run ended (probe exit 1) — runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running\"]\n",
+        "version = 1\n[[pin]]\nfile = \"main.mdk\"\nkind = \"test\"\nname = \"known native abort\"\nengine = \"native\"\nissue = 3857\nfailure = \"error\"\ndetail_lines = [\"native test run ended (probe exit 1) — ./verdict.mdk:4:0: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running\"]\n",
       ),
     ]
-    (target => match runReport ["--engines", "eval,native"] target
+    (target => match runReportIn ["--engines", "eval,native"] target
       Err message => fail message
       Ok (code, report) => expectAll [
         expectEqual 0 code,

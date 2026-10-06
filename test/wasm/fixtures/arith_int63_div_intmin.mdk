@@ -3,5 +3,5 @@
 -- that overflows to exactly -2^63: `intMinBound + intMinBound`.  Since #3377 that add
 -- is itself the coded E-INT-OVERFLOW trap, so the divide is never reached and no
 -- uncoded engine trap ("divide result unrepresentable") can occur.
--- expect-stderr: runtime error [E-INT-OVERFLOW]: (-4611686018427387904) + (-4611686018427387904) overflows Int
+-- expect-stderr: <fixture>:7:8: runtime error [E-INT-OVERFLOW]: (-4611686018427387904) + (-4611686018427387904) overflows Int
 main = (0 - 4611686018427387903 - 1 + (0 - 4611686018427387903 - 1)) / (0 - 1)

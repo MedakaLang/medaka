@@ -34,7 +34,7 @@ lookupUnit k ((m, ds) :: rest) = if k == m then Some ds else lookupUnit k rest
 -- the name a zero-argument binding `fname = <var>` refers to, after the rewrite
 refName : String -> List Decl -> Option String
 refName _ [] = None
-refName fname ((DFunDef _ n [] e) :: rest) =
+refName fname ((DFunDef _ n [] e _) :: rest) =
   if n == fname then varOf e else refName fname rest
 refName fname (_ :: rest) = refName fname rest
 

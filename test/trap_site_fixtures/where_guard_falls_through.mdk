@@ -1,0 +1,6 @@
+w : Int -> Int
+w n = sgn n
+  where
+    sgn x
+      | x > 0 = 1
+main = println (w 0)

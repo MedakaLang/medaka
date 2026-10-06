@@ -114,9 +114,9 @@ engineLabel EvalAndNative = "eval+native"
    a tautology.
 
    The floors are `summary.passed` counts, not source-text sums of
-   `prop`/`test`/doctest declarations. The two differ: `core` runs 123
-   assertions from 29 `prop` declarations and 94 doctest lines, and reading
-   the declarations alone commits a floor five times too low.
+   `prop`/`test`/doctest declarations. The two differ: `core` runs 138
+   assertions from 32 `prop` declarations and 106 doctest lines, and reading
+   the declarations alone commits a floor four times too low.
 
    `EvalAndNative` is the column every row carries unless something stops
    it, and the two arms must agree before the floor is graded at all. The
@@ -133,10 +133,10 @@ engineLabel EvalAndNative = "eval+native"
 
    `core` is `Eval` and must stay `Eval`: `medaka test --native
    stdlib/core.mdk` skips its DOCTESTS with a loud named skip citing #1334,
-   which `test/diff_compiler_test_native.sh` asserts on. Its 29 `prop`
-   declarations do run under the native arm, and only its 94 doctest lines
-   are interpreter-only; the row is `Eval` because a native arm that ran 29
-   of the module's 123 assertions could not be compared with the eval arm's
+   which `test/diff_compiler_test_native.sh` asserts on. Its 32 `prop`
+   declarations do run under the native arm, and only its 106 doctest lines
+   are interpreter-only; the row is `Eval` because a native arm that ran 32
+   of the module's 138 assertions could not be compared with the eval arm's
    count at all.
 
    `async` is `Eval` for a reason that is a bug rather than a policy: its
@@ -157,7 +157,10 @@ engineLabel EvalAndNative = "eval+native"
 suites : List (String, (Int, Engine))
 suites = [
   ("args", (44, EvalAndNative)),
-  ("array", (53, EvalAndNative)),
+  -- The Array interface impls and their doctest live in `core`, so their
+  -- assertions count there: array 53 + core 135 = 188 before the move,
+  -- array 52 + core 138 = 190 after it (one doctest moved, two props added).
+  ("array", (52, EvalAndNative)),
   ("async", (10, Eval)),
   -- The RFC 4648 vectors and the canonical-rejection checks. Neither of the
   -- two vehicles named in the header reaches this module, so without this
@@ -175,7 +178,7 @@ suites = [
   -- reference reading, and the overrun and overlong cases. A sibling, so
   -- importing `bytes` does not import `test` with it.
   ("bytes_test", (5, EvalAndNative)),
-  ("core", (123, Eval)),
+  ("core", (138, Eval)),
   ("crypto/hmac", (12, EvalAndNative)),
   ("fs", (8, NativeCapability)),
   -- `readFile` of a file that is not UTF-8. Writes a scratch file, so it is
@@ -356,7 +359,7 @@ floorExpectation name = match lookup name results
 
 test "stdlib/args.mdk executed >= 44 assertions" = floorExpectation "args"
 
-test "stdlib/array.mdk executed >= 53 assertions" = floorExpectation "array"
+test "stdlib/array.mdk executed >= 52 assertions" = floorExpectation "array"
 
 test "stdlib/async.mdk executed >= 10 assertions" = floorExpectation "async"
 
@@ -375,7 +378,7 @@ test "stdlib/bytes.mdk executed >= 87 assertions" = floorExpectation "bytes"
 test "stdlib/bytes_test.mdk executed >= 5 assertions" =
   floorExpectation "bytes_test"
 
-test "stdlib/core.mdk executed >= 123 assertions" = floorExpectation "core"
+test "stdlib/core.mdk executed >= 138 assertions" = floorExpectation "core"
 
 test "stdlib/crypto/hmac.mdk executed >= 12 assertions" =
   floorExpectation "crypto/hmac"

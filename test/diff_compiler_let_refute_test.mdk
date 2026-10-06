@@ -10,9 +10,10 @@
    cannot tell those apart: stdout is empty for a trap and for a segfault
    alike, which is how the bug hid. The exit code and the stderr line are the
    observables that differ, so both are pinned, and pinned exactly — `1`
-   rather than "nonzero", and the whole `runtime error [E-LET-REFUTE]: let
-   pattern match failed` line rather than the code alone, which the shell
-   gate this module replaces graded only loosely.
+   rather than "nonzero", and the whole `<file>:L:C: runtime error
+   [E-LET-REFUTE]: let pattern match failed` line `medaka run` prints, at the
+   `let`, rather than the code alone, which the shell gate this module
+   replaces graded only loosely.
 
    `p0_2c_refutable_let_ok` is the control: a matching scrutinee takes the
    fast path through the same tag check and must still print 7 on both
@@ -32,7 +33,7 @@ corpus : <IO> String
 corpus = "\{medakaRoot}/test/let_refute_fixtures"
 
 refutes : RuntimeOutcome
-refutes = Aborts "E-LET-REFUTE" "let pattern match failed"
+refutes = AbortsLocated "E-LET-REFUTE" "let pattern match failed"
 
 -- | The size of the corpus, written down so that a corpus which silently
 -- shrank is red. Growing it is expected: add the row and raise this.

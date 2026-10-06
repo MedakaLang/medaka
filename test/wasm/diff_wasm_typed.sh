@@ -224,10 +224,10 @@ for required in \
   'let trapImport = if !emit.trapImportNeeded then stderrByteImportLines else []' \
   'let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []' \
   'let _ = setRef (progEmit prog).trapImportNeeded True' \
-  'emitDivZeroGuard : WasmEmit -> String -> String -> List String' \
+  'emitDivZeroGuard : WasmEmit -> String -> String -> Int -> List String' \
   'emitDivZeroGuard emit op "$__sdivr"' \
-  'emitDivZeroGuard (progEmit prog) op (divrLocal prog d)' \
-  'wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"' \
+  'emitDivZeroGuard (progEmit prog) op (divrLocal prog d) site' \
+  'wasmTrap emit "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"' \
   'wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "'; do
   has_wasm_pin "$required" || {
     echo "FAIL H2B8-CARRIER: missing $required"
@@ -819,7 +819,7 @@ for required in \
   'let censusEvents = emitProgramGaps trmcStateInput trmcStateCensusProgram' \
   '"TRMC_P2"' \
   '(emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17))' \
-  'CBind "trmcIntentionalGap" [CClause [] (CVar "missingTrmcCensus" AGlobal)]' \
+  'synthBind "trmcIntentionalGap" [CClause [] (CVar "missingTrmcCensus" AGlobal)]' \
   '"--reemit-impl-self-state" :: _' \
   'reemitImplSelfState : Unit -> <IO> Unit' \
   'let p1 = emitProgram implSelfInput pProgram' \
@@ -1095,7 +1095,7 @@ done
 }
 for required in \
   'stringCensusProgram : CProgram' \
-  'CBind "censusString" [CClause [] (CLit (LString "census-string"))]' \
+  'synthBind "censusString" [CClause [] (CLit (LString "census-string"))]' \
   'let censusEvents = emitProgramGaps gapStateInput stringCensusProgram'; do
   has_typed_pin "$required" || {
     echo "FAIL wasm typed string-state ratchet: dedicated string census is absent"
@@ -1112,13 +1112,13 @@ for required in \
   '(emitProgram defaultStateInputP defaultStateProgramP)' \
   'defaultStateProgramP = defaultStateProgram "PDefault" 17' \
   'defaultStateProgramU = defaultStateProgram "UDefault" 29' \
-  'CBind "defaultRequestOne"' \
-  'CBind "defaultRequestTwo"' \
+  'synthBind "defaultRequestOne"' \
+  'synthBind "defaultRequestTwo"' \
   'defaultStateCensusProgramU : CProgram' \
-  'CBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault")]' \
-  'CBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault")]' \
-  'CBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)]' \
-  'CBind "main" [CClause [] (CLit (LInt 0))]' \
+  'synthBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault")]' \
+  'synthBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault")]' \
+  'synthBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)]' \
+  'synthBind "main" [CClause [] (CLit (LInt 0))]' \
   'CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" "UDefault" "DefaultFace|UDefault|" [] [PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
   has_typed_pin "$required" || {
     echo "FAIL H2B4-DEFAULT-DEFS: default-state harness is missing $required"
@@ -1134,8 +1134,8 @@ for required in \
   '"LAMBDA_P2"' \
   '(emitProgram lambdaStateInput (lambdaStateProgram 17))' \
   'lambdaStateProgram : Int -> CProgram' \
-  'CBind "lambdaCensus"' \
-  'CBind "lambdaIntentionalGap"'; do
+  'synthBind "lambdaCensus"' \
+  'synthBind "lambdaIntentionalGap"'; do
   has_typed_pin "$required" || {
     echo "FAIL H2B7-LAMBDA-HARNESS: missing $required"
     exit 1
@@ -1989,7 +1989,7 @@ $marker"
     exit 1
   }
   [ "$(wc -l < "$INPUT_WORK/cbind-$row.err")" -eq 1 ] &&
-    [ "$(cat "$INPUT_WORK/cbind-$row.err")" = "runtime error [E-PANIC]: $(cbind_unbound "$binding")" ] || {
+    [ "$(cbind_panic_line "$INPUT_WORK/cbind-$row.err")" = "runtime error [E-PANIC]: $(cbind_unbound "$binding")" ] || {
     echo "FAIL $rule: strict stderr was not the exact unbound panic"
     exit 1
   }
@@ -1999,6 +1999,13 @@ $marker"
   }
 }
 
+# The strict emitter's `panic` names its own site in compiler/backend/wasm_emit.mdk.
+# The site prefix is required but only its shape is pinned, so an edit above that
+# line does not move this gate; the banner after it is compared exactly.
+cbind_panic_line() {
+  grep -q -E '^compiler/backend/wasm_emit\.mdk:[0-9]+:[0-9]+: ' "$1" &&
+    sed -E 's/^compiler\/backend\/wasm_emit\.mdk:[0-9]+:[0-9]+: //' "$1"
+}
 cbind_unbound() {
   printf "unbound variable 'missingCurrentBinding' (not a local, global value, constructor, or known function) [in %s]" "$1"
 }
@@ -2352,7 +2359,7 @@ for required in \
   'let censusEvents = emitProgramGaps trapStateInput trapStateCensusProgram' \
   '"TRAP_P2"' \
   'trapStateAbortProgram : CProgram' \
-  'CBind "trapIntentionalGap"'; do
+  'synthBind "trapIntentionalGap"'; do
   has_typed_pin "$required" || {
     echo "FAIL H2B8-TRAP-HARNESS: missing $required"
     exit 1

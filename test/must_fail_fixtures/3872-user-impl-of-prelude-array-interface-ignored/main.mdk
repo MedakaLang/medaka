@@ -1,0 +1,7 @@
+impl Foldable Array where
+  fold _ z _ = z
+  foldRight _ z _ = z
+  toList _ = []
+  length _ = 99
+
+main = println (length [|1|])

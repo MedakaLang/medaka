@@ -409,7 +409,7 @@ stampInterp : Map String Int -> InterpPart -> InterpPart
 stampKind : Map String TyConOrigin -> KindAnn -> KindAnn
 stampKindOpt : Map String TyConOrigin -> Option KindAnn -> Option KindAnn
 stampKv : Map String Int -> (Expr, Expr) -> (Expr, Expr)
-stampLet : Map String Int -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
+stampLet : Map String Int -> Loc -> Bool -> Pat -> Expr -> Expr -> Expr
 stampLetBind : Map String Int -> LetBind -> LetBind
 stampLetGroup : Map String Int -> List LetBind -> Expr -> Expr
 stampModulesGo : List (String, String) -> Map String (List (String, String)) -> List (String, List Decl) -> List (String, List Decl)

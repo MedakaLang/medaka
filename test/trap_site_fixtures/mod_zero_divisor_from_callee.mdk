@@ -1,0 +1,3 @@
+z : Int -> Int
+z x = 0
+main = println (7 % z 1)

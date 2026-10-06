@@ -1,5 +1,5 @@
 # META
-source_lines=961
+source_lines=972
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -227,6 +227,17 @@ extern indexError : String -> a
 -- | Aborts the program with an index error naming the offending index. For
 -- a container's own `Index` instance.
 extern indexErrorAt : Int -> a
+
+-- Internal: `indexErrorAt` reporting where the read was written.  The first
+-- argument is a packed source site (0 for none), which a native build's
+-- `Index` impl twins (`arrayIndexAt` and its siblings in core.mdk) carry in
+-- from the caller's `xs[i]`; every other engine ignores it.
+extern indexErrorAtSite : Int -> Int -> a
+
+-- Internal: `panic` reporting where it was called.  The native lowering writes
+-- a located `panic m` as `panicAt <site> m`, the site packed into an Int;
+-- every other engine ignores the site.
+extern panicAt : Int -> String -> a
 
 -- Args are `(lo, hiIncl)`, the original low bound and the INCLUSIVE upper
 -- bound (adjusted end - 1), so the message reads `slice [lo..hiIncl] out of
@@ -1002,6 +1013,8 @@ extern stringToLower : String -> String
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexError" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexErrorAt" (TyFun (TyCon "Int") (TyVar "a")))
+(DExtern false "indexErrorAtSite" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a"))))
+(DExtern false "panicAt" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyVar "a"))))
 (DExtern false "sliceError" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a"))))
 (DExtern false "stashRunStdout" (TyFun (TyCon "String") (TyCon "Unit")))
 (DExtern false "enableRunStdoutFlush" (TyFun (TyCon "Unit") (TyCon "Unit")))
@@ -1201,6 +1214,8 @@ extern stringToLower : String -> String
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexError" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexErrorAt" (TyFun (TyCon "Int") (TyVar "a")))
+(DExtern false "indexErrorAtSite" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a"))))
+(DExtern false "panicAt" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyVar "a"))))
 (DExtern false "sliceError" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a"))))
 (DExtern false "stashRunStdout" (TyFun (TyCon "String") (TyCon "Unit")))
 (DExtern false "enableRunStdoutFlush" (TyFun (TyCon "Unit") (TyCon "Unit")))

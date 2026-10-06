@@ -44,6 +44,7 @@
 import frontend.ast.{
   Lit(..),
   Loc(..),
+  noDeclLoc,
   Ty(..),
   Pat(..),
   Arm(..),
@@ -382,7 +383,7 @@ genLet ctx t depth =
   let _ = setScope ctx ((name, bt) :: saved)
   let body = genExpr ctx t (depth - 1)
   let _ = setScope ctx saved
-  ELet False False (PVar name (Loc "" 0 0 0 0)) rhs body
+  ELet noDeclLoc False (PVar name (Loc "" 0 0 0 0)) rhs body
 
 -- construct an ADT value: pick a variant, fill positional fields.
 applyFields : Ctx -> Int -> Expr -> List Gty -> <Rand> Expr
@@ -482,7 +483,7 @@ genFunDecl ctx =
   let _ = setScope ctx [(pname, pt)]
   let body = genExpr ctx rt 3
   let _ = setScope ctx saved
-  DFunDef False fname [PVar pname (Loc "" 0 0 0 0)] body
+  DFunDef False fname [PVar pname (Loc "" 0 0 0 0)] body noDeclLoc
 
 -- ── invariant assertions (Tier-A) — each MUST evaluate True by construction ──
 invArith : Ctx -> <Rand> List Expr
@@ -557,13 +558,13 @@ genValDecl ctx i =
   let name = freshName ctx "g"
   let e = genExpr ctx t 3
   let _ = setScope ctx ((name, t) :: ctxScope ctx)
-  DFunDef False name [] e
+  DFunDef False name [] e noDeclLoc
 
 -- hoist an expr into a fresh top-level binding `oN = e`, recording (name, decl, isInv)
 hoistOut : Ctx -> Ref (List Out) -> Bool -> Expr -> Unit
 hoistOut ctx outsRef isInv e =
   let name = freshName ctx "o"
-  outsRef := !outsRef ++ [Out name (DFunDef False name [] e) isInv]
+  outsRef := !outsRef ++ [Out name (DFunDef False name [] e noDeclLoc) isInv]
 
 -- emit Eq + Ord invariants for one derived ADT (no-op for non-derived)
 hoistAdtInvs : Ctx -> Ref (List Out) -> Gadt -> <Rand> Unit
@@ -647,7 +648,7 @@ genProgram ctx nblocks =
   let allDeclsRef = Ref []
   let allBodyRef = Ref []
   let _ = times nblocks (appendBlock ctx allDeclsRef allBodyRef)
-  let mainDecl = DFunDef False "main" [] (EBlock !allBodyRef)
+  let mainDecl = DFunDef False "main" [] (EBlock !allBodyRef) noDeclLoc
   !allDeclsRef ++ [mainDecl]
 
 -- ── CLI ──────────────────────────────────────────────────────────────────────

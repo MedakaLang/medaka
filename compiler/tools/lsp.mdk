@@ -441,7 +441,7 @@ implMethodName : ImplMethod -> String
 implMethodName (ImplMethod n _ _) = n
 
 letBindName : LetBind -> String
-letBindName (LetBind n _) = n
+letBindName (LetBind n _ _) = n
 
 -- The outline (name, kind, clauseLike, children) for a decl, given its
 -- precomputed decl-level `range` (used for the child symbols' spans), or None for
@@ -464,10 +464,10 @@ symbolPartsOfDecl : Decl ->
 symbolPartsOfDecl d range childLocs = match innerDecl d
   DTypeSig _ name _ _ => Some (name, 13, True, [])
   DExtern _ name _ => Some (name, 12, False, [])
-  DFunDef _ name _ _ => Some (name, 12, True, [])
+  DFunDef _ name _ _ _ => Some (name, 12, True, [])
   DLetGroup _ binds => match binds
     [] => None
-    (LetBind n0 _) :: _ =>
+    (LetBind n0 _ _) :: _ =>
       let kids = zipKids range 12 childLocs (map letBindName binds)
       Some (n0, 12, True, kids)
   DData { dataName = name, dataCtors = variants } =>
@@ -595,7 +595,7 @@ declOwnNameMatches : Decl -> String -> Bool
 declOwnNameMatches d name = match innerDecl d
   DTypeSig _ n _ _ => n == name
   DExtern _ n _ => n == name
-  DFunDef _ n _ _ => n == name
+  DFunDef _ n _ _ _ => n == name
   DLetGroup _ binds => anyName (map letBindName binds) name
   DData { dataName = n } => n == name
   DInterface { name = n, ... } => n == name
@@ -1139,9 +1139,9 @@ handleCompletion runtimeSrc coreSrc idJson params docs =
 -- decl_binding_name: only DFunDef + DLetGroup-first).
 declBindingName : Decl -> Option String
 declBindingName d = match innerDecl d
-  DFunDef _ n _ _ => Some n
+  DFunDef _ n _ _ _ => Some n
   DLetGroup _ binds => match binds
-    (LetBind n _) :: _ => Some n
+    (LetBind n _ _) :: _ => Some n
     [] => None
   _ => None
 

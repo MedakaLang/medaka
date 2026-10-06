@@ -57,7 +57,7 @@ import backend.wasm_emit.{
   makeWasmEmitInputFull,
 }
 import backend.wasm_reach.{wasmReachFilter}
-import entries.entry_support.{driveModulesLocated, runEmitWith}
+import entries.entry_support.{driveEmitLocated, stampSiteFiles}
 import support.timer.{statsEnabled, emitStats}
 import support.util.{listLen}
 
@@ -66,8 +66,7 @@ main : <IO> Unit
 -- rows), so an `Async` main is driven by the sequential `runAsync` here.  The
 -- `*Main` variant declares a `Unit` result, which is how the emitter's
 -- `mainBodyIsUnit` knows not to auto-print it.
-main =
-  driveModulesLocated (mods => runEmitWith "runAsyncMain" (emitTail mods) mods)
+main = driveEmitLocated emitTail
 
 -- COMPOSITE-MAIN AUTO-PRINT (design §10, WasmGC peer of llvm_emit_modules_main):
 -- the shared mangle+elaborate+auto-print-wrap glue lives once in
@@ -83,7 +82,8 @@ emitTail : List (String, String, List Decl) ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitTail mods runtimeDecls coreD modules2 =
+emitTail mods runtimeDecls coreD modules1 =
+  let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
   let kept = dceFilter allDecls0
   let allDecls = refuseNarrowFileGrants mods runtimeDecls kept modules2

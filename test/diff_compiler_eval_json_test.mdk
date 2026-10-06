@@ -28,15 +28,36 @@
    relative, so this only fires when `MEDAKA_ROOT` is exported absolute (as
    `medaka gate run` does).
 
+   `test/trap_site_fixtures` pins WHERE the text channel says a runtime error
+   happened: the start of the trapping expression (`a op b`, `xs[i]`, the
+   `panic` application, the `match` keyword, the `let` whose pattern did
+   not match, the first clause of a function whose clauses and guards all
+   fall through), never the last atom the interpreter entered. Every
+   fixture puts an operand on another line or inside a callee, the shape
+   where the two answers differ. `xmod_guard/` holds a module one fixture
+   imports, kept out of the roster the same way `xmod1542/` is. These rows
+   are the oracle the native and wasm backends' located runtime errors
+   match: each fixture the native backend locates is also built and run,
+   and the binary must exit and print to stdout as `medaka run` does, with
+   the run row's line as its whole stderr. `no_trap/` holds a program that
+   must not trap at all, kept out of the roster the same way.
+
    Runs under `medaka test --native`: it spawns subprocesses and reads
    source files and goldens, none of which the interpreter binds. -}
 
 import compiler_cli_test_support.{chompNewlines, fixtureStems}
 import fs.{expectUnitCount}
-import list.{somes}
+import list.{somes, sort}
 import string.{contains, lines, replaceAll, split, startsWith, trim, unlines}
-import test.{fail, pass}
-import test_process.{boundedVerb, medakaBin, medakaRoot}
+import test.{Expectation, expectEach, expectEqual, fail, pass}
+import test_process.{
+  boundedVerb,
+  boundedVerbSeconds,
+  expectSpawnFails,
+  medakaBin,
+  medakaRoot,
+  scratchDir,
+}
 
 corpus : <IO> String
 corpus = "\{medakaRoot}/test/error_quality_fixtures/eval"
@@ -123,3 +144,213 @@ test "eval_json: `medaka run --json` agrees with the committed goldens, byte for
         _ =>
           fail
             "\{intToString (length failures)} of \{intToString (length names)} fixtures under \{corpus} disagreed with their committed golden:\n\{unlines failures}"
+
+trapSites : <IO> String
+trapSites = "\{medakaRoot}/test/trap_site_fixtures"
+
+-- (fixture stem, `line:col` of the trapping expression's start, the rest of
+-- the runtime-error line). Columns are 0-based.
+trapSiteRows : List (String, String, String)
+trapSiteRows = [
+  (
+    "overflow_operand_on_another_line",
+    "5:16",
+    "[E-INT-OVERFLOW]: 4611686018427387903 + 1 overflows Int",
+  ),
+  (
+    "overflow_inner_operand_of_a_sum",
+    "4:6",
+    "[E-INT-OVERFLOW]: 3 * 4611686018427387903 overflows Int",
+  ),
+  (
+    "overflow_in_recursive_product",
+    "2:31",
+    "[E-INT-OVERFLOW]: 21 * 2432902008176640000 overflows Int",
+  ),
+  ("div_zero_divisor_from_callee", "3:16", "[E-DIV-ZERO]: division by zero"),
+  ("div_zero_parameter_divisor", "2:6", "[E-DIV-ZERO]: division by zero"),
+  ("mod_zero_divisor_from_callee", "3:16", "[E-MOD-ZERO]: modulo by zero"),
+  ("panic_message_from_another_line", "4:6", "[E-PANIC]: boom"),
+  ("panic_inside_wrapper", "2:11", "[E-PANIC]: wrapped"),
+  ("index_inside_callee", "2:7", "[E-INDEX-OOB]: index 9 out of bounds"),
+  ("index_through_dictionary", "2:9", "[E-INDEX-OOB]: index 7 out of bounds"),
+  (
+    "match_falls_through_arms",
+    "3:9",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+  ("let_pattern_refuted", "3:2", "[E-LET-REFUTE]: let pattern match failed"),
+  ("let_in_pattern_refuted", "3:2", "[E-LET-REFUTE]: let pattern match failed"),
+  ("do_let_pattern_refuted", "3:2", "[E-LET-REFUTE]: let pattern match failed"),
+  (
+    "guard_falls_through",
+    "2:0",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+  (
+    "later_clause_guard_falls_through",
+    "2:0",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+  (
+    "clauses_fall_through",
+    "2:0",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+  (
+    "clauses_fall_through_on_second_argument",
+    "2:0",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+  (
+    "where_guard_falls_through",
+    "4:4",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+]
+
+-- Fixtures whose trap is raised inside a module they import: (fixture stem,
+-- the raising module's path under the corpus, `line:col`, the rest of the
+-- line). The line names the raising module, not the entry.
+trapSiteImportedRows : List (String, String, String, String)
+trapSiteImportedRows = [
+  (
+    "imported_guard_falls_through",
+    "xmod_guard/lib.mdk",
+    "3:0",
+    "[E-NONEXHAUSTIVE-MATCH]: non-exhaustive match",
+  ),
+]
+
+trapSiteRow : (String, String, String) -> <Exec, IO> (String, Expectation)
+trapSiteRow (name, site, rest) =
+  trapSiteImportedRow (name, "\{name}.mdk", site, rest)
+
+trapSiteImportedRow : (String, String, String, String) ->
+  <Exec, IO> (String, Expectation)
+trapSiteImportedRow (name, raiser, site, rest) = (
+  name,
+  expectSpawnFails
+    medakaBin
+    ["run", "\{trapSites}/\{name}.mdk"]
+    "\{trapSites}/\{raiser}:\{site}: runtime error \{rest}",
+)
+
+test "trap_site: every fixture on disk has a row" = match fixtureStems trapSites
+  Err e => fail "\{trapSites}: \{e}"
+  Ok names =>
+    expectEqual
+      (sort
+        (map ((n, _, _) => n) trapSiteRows
+          ++ map ((n, _, _, _) => n) trapSiteImportedRows))
+      (sort names)
+
+test "trap_site: `medaka run` names the start of the trapping expression" =
+  expectEach
+    (map trapSiteRow trapSiteRows
+      ++ map trapSiteImportedRow trapSiteImportedRows)
+
+-- The fixtures whose trap a built binary still prints unlocated.  Reading
+-- `c[i]` on a constrained parameter calls the `Index` impl through its
+-- dictionary, and the impl passes its out-of-range error no site; a native
+-- build locates only an `xs[i]` whose impl is known where it is written.
+nativeUnlocatedStems : List String
+nativeUnlocatedStems = ["index_through_dictionary"]
+
+-- `medaka build` of [entry], run once: (exit code, stdout, stderr), compared
+-- with `medaka run`'s exit code and stdout and [line] as the whole stderr.
+nativeAgreement : String -> String -> String -> String -> <Exec, IO> Expectation
+nativeAgreement scratch name entry line =
+  let bin = "\{scratch}/\{name}"
+  match boundedVerb medakaBin ["run", entry]
+    Err e => fail "could not run `medaka run`: \{e}"
+    Ok (runCode, runOut, _) =>
+      match boundedVerbSeconds 120 medakaBin ["build", entry, "-o", bin]
+        Err e => fail "could not run `medaka build`: \{e}"
+        Ok (0, _, _) => match boundedVerb bin []
+          Err e => fail "could not run the built binary: \{e}"
+          Ok got => expectEqual (runCode, runOut, line) got
+        Ok (code, out, err) =>
+          fail "`medaka build` exited \{intToString code}: \{out}\{err}"
+
+nativeTrapSiteRow : String ->
+  (String, String, String, String) ->
+  <Exec, IO> (String, Expectation)
+nativeTrapSiteRow scratch (name, raiser, site, rest) = (
+  name,
+  nativeAgreement
+    scratch
+    name
+    "\{trapSites}/\{name}.mdk"
+    "\{trapSites}/\{raiser}:\{site}: runtime error \{rest}\n",
+)
+
+-- [grade] run against a fresh directory [tag] under the scratch directory,
+-- removed afterwards.  `scratchDir` is one value for the whole run, so each
+-- test takes its own subdirectory and the last one out removes the root.
+inScratch : String ->
+  (String -> <Exec, IO> Expectation) ->
+  <Exec, IO> Expectation
+inScratch tag grade = match scratchDir
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok scratch =>
+    let dir = "\{scratch}/\{tag}"
+    let _ = boundedVerbSeconds 10 "mkdir" ["-p", dir]
+    let graded = grade dir
+    let _ = boundedVerbSeconds 10 "rm" ["-rf", dir]
+    let _ = boundedVerbSeconds 10 "rmdir" [scratch]
+    graded
+
+locatedRows : List (String, String, String, String)
+locatedRows =
+  map
+      ((n, site, rest) => (n, "\{n}.mdk", site, rest))
+      (filter ((n, _, _) => not (elem n nativeUnlocatedStems)) trapSiteRows)
+    ++ trapSiteImportedRows
+
+test "trap_site: a built binary reports the trap where `medaka run` does" = inScratch
+  "located"
+  (scratch => expectEach (map (nativeTrapSiteRow scratch) locatedRows))
+
+-- The unlocated rows print `medaka run`'s line without its location.  A
+-- change that locates one moves it out of `nativeUnlocatedStems`.
+test "trap_site: a read through a dictionary is unlocated in a built binary" =
+  let rows = filter ((n, _, _) => elem n nativeUnlocatedStems) trapSiteRows
+  inScratch "unlocated" (scratch =>
+    expectEach
+      (map
+        ((name, _, rest) => (
+          name,
+          nativeAgreement
+            scratch
+            name
+            "\{trapSites}/\{name}.mdk"
+            "runtime error \{rest}\n",
+        ))
+        rows))
+
+-- `panic` bound as a parameter is that parameter, not the extern: the call
+-- applies it and prints 42, in a built binary as in `medaka run`.
+test "trap_site: a parameter named `panic` shadows the extern in a built binary" =
+  let entry = "\{trapSites}/no_trap/panic_parameter_shadows_extern.mdk"
+  inScratch "shadow" (scratch =>
+    let bin = "\{scratch}/shadow"
+    let want = (0, "42\n", "")
+    expectEach [
+      (
+        "run",
+        match boundedVerb medakaBin ["run", entry]
+          Err e => fail "could not run `medaka run`: \{e}"
+          Ok got => expectEqual want got,
+      ),
+      (
+        "built",
+        match boundedVerbSeconds 120 medakaBin ["build", entry, "-o", bin]
+          Err e => fail "could not run `medaka build`: \{e}"
+          Ok (0, _, _) => match boundedVerb bin []
+            Err e => fail "could not run the built binary: \{e}"
+            Ok got => expectEqual want got
+          Ok (code, out, err) =>
+            fail "`medaka build` exited \{intToString code}: \{out}\{err}",
+      ),
+    ])

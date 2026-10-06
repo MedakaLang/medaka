@@ -2,8 +2,8 @@
 -- analysis and LLVM closure capture.
 
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
-import frontend.ast.{Addr(..), Lit(..), Loc(..), Pat(..), Route(..)}
-import ir.core_ir.{CBind(..), CClause(..), CExpr(..)}
+import frontend.ast.{Addr(..), Lit(..), Loc(..), Pat(..), Route(..), noDeclLoc}
+import ir.core_ir.{CBind(..), CClause(..), CExpr(..), synthBind}
 import backend.trmc_analysis.{SelfRef(..), freeVars, trmcEligible}
 
 loc : Loc
@@ -13,7 +13,7 @@ multiClauseGroup : CExpr
 multiClauseGroup =
   CLetGroup
     [
-      CBind "g" [
+      synthBind "g" [
         CClause
           [PVar "p" loc]
           (CTuple [
@@ -45,11 +45,11 @@ test "freeVars visits every let-group clause with lexical subtraction" = expectA
   ]
 
 helperBind : CExpr -> CBind
-helperBind innerBody = CBind "helper" [
+helperBind innerBody = synthBind "helper" [
   CClause
     [PWild]
     (CLetGroup
-      [CBind "inner" [CClause [PWild] innerBody]]
+      [synthBind "inner" [CClause [PWild] innerBody]]
       (CApp (CVar "inner" AGlobal) (CLit LUnit))),
 ]
 
@@ -61,7 +61,8 @@ trmcBody innerBody =
       "::"
       (CLit (LInt 1))
       (CApp (CVar "loop" AGlobal) (CVar "xs" AGlobal))
-      "")
+      ""
+      noDeclLoc)
 
 trmcEligibleWith : CExpr -> Bool
 trmcEligibleWith innerBody =

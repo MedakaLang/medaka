@@ -18,7 +18,7 @@
 -- `llvm_emit.recordByName` degrades to a bare-label first-match guess (the
 -- wrong-slot behaviour issue #38 closed).  Elaborate, mangle, then key every
 -- table off the mangled decls — the order `entry_support.emitModulesWith` runs.
-import frontend.ast.{Decl, Lit(..)}
+import frontend.ast.{Decl, Lit(..), noDeclLoc}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{
@@ -84,7 +84,11 @@ emitGapIsolation : <IO> Unit
 emitGapIsolation =
   let input = makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] []
   let cp =
-    CProgram [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])]] [] [] []
+    CProgram
+      [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])] noDeclLoc]
+      []
+      []
+      []
   let (_, gaps) = emitProgramRecord input cp
   if contains "?\tunsupported Core IR node CMatch" gaps then
     let _ = putStr "LLVM_GAP_RECORD_OK\n"

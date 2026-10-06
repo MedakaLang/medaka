@@ -647,7 +647,7 @@ walkStmts w scope curLoc ((DoBind p e) :: rest) =
   let _ = walkExpr w scope curLoc e
   let frame = mkNamedFrame w (patBinders curLoc p)
   walkStmts w (frame :: scope) curLoc rest
-walkStmts w scope curLoc ((DoLet _ isRec p e) :: rest) =
+walkStmts w scope curLoc ((DoLet _ isRec p e _) :: rest) =
   let frame = mkNamedFrame w (patBinders curLoc p)
   let rhsScope = if isRec then frame :: scope else scope
   let _ = walkExpr w rhsScope curLoc e
@@ -696,7 +696,7 @@ walkGuards w scope curLoc ((GBind p e) :: rest) =
 
 walkBinds : W -> List (List (String, String)) -> Loc -> List LetBind -> Unit
 walkBinds _ _ _ [] = ()
-walkBinds w scope curLoc ((LetBind _ clauses) :: rest) =
+walkBinds w scope curLoc ((LetBind _ clauses _) :: rest) =
   let _ = walkClauses w scope curLoc clauses
   walkBinds w scope curLoc rest
 
@@ -760,7 +760,7 @@ locWithUriOf : W -> Loc -> Loc
 locWithUriOf w l = withUri (uriOf w) l
 
 letBindName : LetBind -> String
-letBindName (LetBind n _) = n
+letBindName (LetBind n _ _) = n
 
 -- a prop param paired with its OWN name-token `Loc` (#913 Inc 2b): renaming a
 -- prop param must land on its token, not the prop's DProp decl loc.
@@ -807,7 +807,7 @@ collectExpValGo _ _ [] = ()
 collectExpValGo ctx s ((DTypeSig True n _ _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
-collectExpValGo ctx s ((DFunDef True n _ _) :: rest) =
+collectExpValGo ctx s ((DFunDef True n _ _ _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
 collectExpValGo ctx s ((DExtern True n _) :: rest) =
@@ -822,7 +822,7 @@ collectExpValGo ctx s (_ :: rest) = collectExpValGo ctx s rest
 
 collectLetNames : Ctx -> HashMap String Unit -> List LetBind -> Unit
 collectLetNames _ _ [] = ()
-collectLetNames ctx s ((LetBind n _) :: rest) =
+collectLetNames ctx s ((LetBind n _ _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectLetNames ctx s rest
 
@@ -850,7 +850,7 @@ defsOfDecl : Ctx ->
   Loc ->
   DeclPos ->
   List DefEntry
-defsOfDecl ctx expSet mid uri (DFunDef pub n _ _) loc _ = [
+defsOfDecl ctx expSet mid uri (DFunDef pub n _ _ _) loc _ = [
   emitDef
     ctx
     uri
@@ -898,7 +898,7 @@ letGroupDef : Ctx ->
   Bool ->
   LetBind ->
   DefEntry
-letGroupDef ctx expSet mid uri loc pub (LetBind n _) =
+letGroupDef ctx expSet mid uri loc pub (LetBind n _ _) =
   emitDef
     ctx
     uri
@@ -1098,7 +1098,7 @@ recordImplHead w ifaceMid n loc =
   recordDef (ctxOf w) (mkKey ifaceMid nsMethod n) (uriOf w) loc
 
 walkDeclBody : W -> Decl -> Loc -> Unit
-walkDeclBody w (DFunDef _ _ pats body) loc =
+walkDeclBody w (DFunDef _ _ pats body _) loc =
   let frame = mkNamedFrame w (flatMap (patBinders loc) pats)
   walkExpr w [frame] loc body
 walkDeclBody w (DTypeSig _ _ ty _) loc = walkTy w loc ty
@@ -1376,7 +1376,7 @@ preludeDefsOfDecl : HashMap String Unit ->
   String ->
   Decl ->
   List (String, String, String)
-preludeDefsOfDecl expSet mid (DFunDef pub n _ _) = valEntry expSet mid pub n
+preludeDefsOfDecl expSet mid (DFunDef pub n _ _ _) = valEntry expSet mid pub n
 preludeDefsOfDecl expSet mid (DExtern pub n _) = valEntry expSet mid pub n
 preludeDefsOfDecl _ mid (DData { dataVis = vis, dataName = n, dataCtors = variants }) =
   consIf

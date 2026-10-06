@@ -16,7 +16,8 @@
 #
 # A fixture that must stop with a coded runtime error (the Int overflow traps,
 # arith_int63_*) pins its exact stderr line in a `-- expect-stderr: <line>` comment;
-# both engines must exit 1 with exactly that line.  Every other fixture must exit 0
+# both engines must exit 1 with exactly that line (a `<fixture>:LINE:COL: ` prefix
+# pins the native trap site, see the worker).  Every other fixture must exit 0
 # with empty stderr (w8_stderr_write excepted).
 #
 # Reports N/M passing; non-zero exit if any fixture diverges.  Opt-in skip (exit 2)
@@ -51,13 +52,24 @@ if [ "${1:-}" = "--one" ]; then
   # A fixture that is MEANT to stop with a coded runtime error declares the exact
   # stderr line in a `-- expect-stderr: <line>` comment: both engines must then exit
   # 1 with exactly that stderr.  Every other fixture must exit 0 with empty stderr.
-  exp_err="$(sed -n 's/^-- expect-stderr: //p' "$f")"
+  # A located trap writes the line as `<fixture>:LINE:COL: <banner>`: the native
+  # oracle expects the fixture's own path there, while this gate's prelude-free
+  # wasm driver parses without a file name, has no site table and prints the
+  # banner alone.
+  exp_line="$(sed -n 's/^-- expect-stderr: //p' "$f")"
+  case "$exp_line" in
+    '<fixture>:'*)
+      exp_nat="$f:${exp_line#<fixture>:}"
+      exp_wasm="$(printf '%s\n' "$exp_line" | sed 's/^<fixture>:[0-9]*:[0-9]*: //')" ;;
+    *) exp_nat="$exp_line"; exp_wasm="$exp_line" ;;
+  esac
+  exp_err="$exp_line"
   if ! MEDAKA_CLANG_OPT="${WASM_ORACLE_OPT:--O2}" "$MEDAKA" build --allow-internal "$f" -o "$obin" >"$WORKDIR/$name.build.err" 2>&1; then
     msg="$(printf 'FAIL %s (oracle build)\n%s' "$name" "$(cat "$WORKDIR/$name.build.err")")"; st=1
   else
     "$obin" >"$native_out" 2>"$native_err"; nrc=$?
-    if [ -n "$exp_err" ] && { [ "$nrc" -ne 1 ] || ! printf '%s\n' "$exp_err" | cmp -s - "$native_err"; }; then
-      msg="$(printf 'FAIL %s (native trap contract: exit %s)\n  want: %s\n  got : %s' "$name" "$nrc" "$exp_err" "$(cat "$native_err")")"; st=1
+    if [ -n "$exp_err" ] && { [ "$nrc" -ne 1 ] || ! printf '%s\n' "$exp_nat" | cmp -s - "$native_err"; }; then
+      msg="$(printf 'FAIL %s (native trap contract: exit %s)\n  want: %s\n  got : %s' "$name" "$nrc" "$exp_nat" "$(cat "$native_err")")"; st=1
     elif [ -z "$exp_err" ] && [ "$nrc" -ne 0 ]; then
       msg="$(printf 'FAIL %s (native oracle run)\n%s' "$name" "$(cat "$native_err")")"; st=1
     elif [ -z "$exp_err" ] && [ "$name" = "w8_stderr_write.mdk" ] && ! printf 'diagnostic to stderr\n' | cmp -s - "$native_err"; then
@@ -76,8 +88,8 @@ if [ "${1:-}" = "--one" ]; then
       msg="$(printf 'FAIL %s (wasm-tools validate)\n%s' "$name" "$(cat "$WORKDIR/$name.val.err")")"; st=1
     else
       "$NODE" "$RUNJS" "$wasm" >"$node_out" 2>"$node_err"; wrc=$?
-      if [ -n "$exp_err" ] && { [ "$wrc" -ne 1 ] || ! printf '%s\n' "$exp_err" | cmp -s - "$node_err"; }; then
-        msg="$(printf 'FAIL %s (wasm trap contract: exit %s)\n  want: %s\n  got : %s' "$name" "$wrc" "$exp_err" "$(cat "$node_err")")"; st=1
+      if [ -n "$exp_err" ] && { [ "$wrc" -ne 1 ] || ! printf '%s\n' "$exp_wasm" | cmp -s - "$node_err"; }; then
+        msg="$(printf 'FAIL %s (wasm trap contract: exit %s)\n  want: %s\n  got : %s' "$name" "$wrc" "$exp_wasm" "$(cat "$node_err")")"; st=1
       elif [ -z "$exp_err" ] && [ "$wrc" -ne 0 ]; then
         msg="$(printf 'FAIL %s (wasm run)\n%s' "$name" "$(cat "$node_err")")"; st=1
       elif [ -n "$exp_err" ]; then

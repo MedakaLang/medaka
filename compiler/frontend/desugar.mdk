@@ -130,7 +130,8 @@ mapGuardArm : (Expr -> Expr) -> GuardArm -> GuardArm
 mapGuardArm g (GuardArm gs b) = GuardArm (map (mapGuard g) gs) (g b)
 
 mapLetBind : (Expr -> Expr) -> LetBind -> LetBind
-mapLetBind g (LetBind n clauses) = LetBind n (map (mapFunClause g) clauses)
+mapLetBind g (LetBind n clauses site) =
+  LetBind n (map (mapFunClause g) clauses) site
 
 mapFunClause : (Expr -> Expr) -> FunClause -> FunClause
 mapFunClause g (FunClause ps b) = FunClause ps (g b)
@@ -141,7 +142,7 @@ mapFieldAssign g (FieldAssign n v) = FieldAssign n (g v)
 mapDoStmt : (Expr -> Expr) -> DoStmt -> DoStmt
 mapDoStmt g (DoExpr e) = DoExpr (g e)
 mapDoStmt g (DoBind p e) = DoBind p (g e)
-mapDoStmt g (DoLet m r p e) = DoLet m r p (g e)
+mapDoStmt g (DoLet m r p e site) = DoLet m r p (g e) site
 mapDoStmt g (DoAssign x e) = DoAssign x (g e)
 mapDoStmt g (DoFieldAssign x fs e) = DoFieldAssign x fs (g e)
 
@@ -151,7 +152,7 @@ mapInterp g (InterpExpr e) = InterpExpr (g e)
 
 export
 mapDecl : (Expr -> Expr) -> Decl -> Decl
-mapDecl f (DFunDef pub n ps e) = DFunDef pub n ps (mapExpr f e)
+mapDecl f (DFunDef pub n ps e site) = DFunDef pub n ps (mapExpr f e) site
 mapDecl f (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (mapIfaceMethod f) methods }
 mapDecl f (d@(DImpl { methods, ... })) =
@@ -334,7 +335,7 @@ firstDoStmtLoc (s :: rest) = match doStmtLoc s
 doStmtLoc : DoStmt -> Option Loc
 doStmtLoc (DoExpr e) = exprLoc e
 doStmtLoc (DoBind _ e) = exprLoc e
-doStmtLoc (DoLet _ _ _ e) = exprLoc e
+doStmtLoc (DoLet _ _ _ e _) = exprLoc e
 doStmtLoc (DoAssign _ e) = exprLoc e
 doStmtLoc (DoFieldAssign _ _ e) = exprLoc e
 
@@ -350,8 +351,8 @@ lowerDo d [DoBind pat e] =
 lowerDo d ((DoExpr e) :: rest) = callAndThen d e (ELam [PWild] (lowerDo d rest))
 lowerDo d ((DoBind pat e) :: rest) =
   callAndThen d e (doCont pat (lowerDo d rest))
-lowerDo d ((DoLet _ isFun pat e) :: rest) =
-  ELet False isFun pat e (lowerDo d rest)
+lowerDo d ((DoLet _ isFun pat e site) :: rest) =
+  ELet site isFun pat e (lowerDo d rest)
 lowerDo _ _ = fallthrough
 
 -- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes

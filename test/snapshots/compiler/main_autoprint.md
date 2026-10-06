@@ -66,7 +66,7 @@ entryPair (_ :: rest) = entryPair rest
 findMainParams : List Decl -> Option (List Pat)
 findMainParams [] = None
 findMainParams ((DAttrib _ d) :: rest) = findMainParams (d :: rest)
-findMainParams ((DFunDef _ "main" ps _) :: _) = Some ps
+findMainParams ((DFunDef _ "main" ps _ _) :: _) = Some ps
 findMainParams (_ :: rest) = findMainParams rest
 
 -- True iff a top-level `println` binding is in scope (defined by the prelude).
@@ -78,7 +78,7 @@ findMainParams (_ :: rest) = findMainParams rest
 definesPrintln : List Decl -> Bool
 definesPrintln [] = False
 definesPrintln ((DAttrib _ d) :: rest) = definesPrintln (d :: rest)
-definesPrintln ((DFunDef _ "println" _ _) :: _) = True
+definesPrintln ((DFunDef _ "println" _ _ _) :: _) = True
 definesPrintln (_ :: rest) = definesPrintln rest
 
 -- Auto-print fires iff main's inferred type is neither Unit-shaped (`Unit`, or
@@ -120,8 +120,8 @@ autoPrintWrapModules [(mid, decls)] =
 autoPrintWrapModules (p :: rest) = p :: autoPrintWrapModules rest
 
 wrapMainDecl : Decl -> Decl
-wrapMainDecl (DFunDef vis "main" [] body) =
-  DFunDef vis "main" [] (wrapPrintln body)
+wrapMainDecl (DFunDef vis "main" [] body site) =
+  DFunDef vis "main" [] (wrapPrintln body) site
 wrapMainDecl (DAttrib a d) = DAttrib a (wrapMainDecl d)
 wrapMainDecl d = d
 
@@ -197,9 +197,9 @@ pinnedCopies origin pin ((DTypeSig _ n ty site) :: rest) =
     DTypeSig True pin ty site :: pinnedCopies origin pin rest
   else
     pinnedCopies origin pin rest
-pinnedCopies origin pin ((DFunDef _ n ps body) :: rest) =
+pinnedCopies origin pin ((DFunDef _ n ps body site) :: rest) =
   if n == origin then
-    DFunDef True pin ps body :: pinnedCopies origin pin rest
+    DFunDef True pin ps body site :: pinnedCopies origin pin rest
   else
     pinnedCopies origin pin rest
 pinnedCopies origin pin (_ :: rest) = pinnedCopies origin pin rest
@@ -315,7 +315,7 @@ asyncMainShapeError modules =
 definesFun : String -> List Decl -> Bool
 definesFun _ [] = False
 definesFun n ((DAttrib _ d) :: rest) = definesFun n (d :: rest)
-definesFun n ((DFunDef _ m _ _) :: rest) =
+definesFun n ((DFunDef _ m _ _ _) :: rest) =
   if m == n then True else definesFun n rest
 definesFun n (_ :: rest) = definesFun n rest
 
@@ -359,8 +359,8 @@ asyncPinImport =
     synthLoc
 
 wrapAsyncMainDecl : Decl -> Decl
-wrapAsyncMainDecl (DFunDef vis "main" [] body) =
-  DFunDef vis "main" [] (wrapCall asyncMainPinName body)
+wrapAsyncMainDecl (DFunDef vis "main" [] body site) =
+  DFunDef vis "main" [] (wrapCall asyncMainPinName body) site
 wrapAsyncMainDecl (DAttrib a d) = DAttrib a (wrapAsyncMainDecl d)
 wrapAsyncMainDecl d = d
 # DESUGAR
@@ -373,12 +373,12 @@ wrapAsyncMainDecl d = d
 (DTypeSig false "findMainParams" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "findMainParams" ((PList)) (EVar "None"))
 (DFunDef false "findMainParams" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "findMainParams") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "findMainParams" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PVar "ps") PWild) PWild)) (EApp (EVar "Some") (EVar "ps")))
+(DFunDef false "findMainParams" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PVar "ps") PWild PWild) PWild)) (EApp (EVar "Some") (EVar "ps")))
 (DFunDef false "findMainParams" ((PCons PWild (PVar "rest"))) (EApp (EVar "findMainParams") (EVar "rest")))
 (DTypeSig false "definesPrintln" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "definesPrintln" ((PList)) (EVar "False"))
 (DFunDef false "definesPrintln" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "definesPrintln") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "definesPrintln" ((PCons (PCon "DFunDef" PWild (PLit (LString "println")) PWild PWild) PWild)) (EVar "True"))
+(DFunDef false "definesPrintln" ((PCons (PCon "DFunDef" PWild (PLit (LString "println")) PWild PWild PWild) PWild)) (EVar "True"))
 (DFunDef false "definesPrintln" ((PCons PWild (PVar "rest"))) (EApp (EVar "definesPrintln") (EVar "rest")))
 (DTypeSig true "shouldAutoPrintMain" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool"))))
 (DFunDef false "shouldAutoPrintMain" ((PVar "coreDecls") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "mainTypeIsUnit") (ELit LUnit)) (EApp (EVar "mainTypeIsAsync") (ELit LUnit))) (EVar "False") (EIf (EApp (EVar "not") (EApp (EVar "definesPrintln") (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EVar "True")) (arm PWild () (EVar "False"))))))))
@@ -391,7 +391,7 @@ wrapAsyncMainDecl d = d
 (DFunDef false "autoPrintWrapModules" ((PList (PTuple (PVar "mid") (PVar "decls")))) (EListLit (ETuple (EVar "mid") (EApp (EApp (EVar "map") (EVar "wrapMainDecl")) (EApp (EApp (EVar "filter") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EVar "isMainTypeSig") (EVar "d"))))) (EVar "decls"))))))
 (DFunDef false "autoPrintWrapModules" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EVar "p") (EApp (EVar "autoPrintWrapModules") (EVar "rest"))))
 (DTypeSig false "wrapMainDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
-(DFunDef false "wrapMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EVar "wrapPrintln") (EVar "body"))))
+(DFunDef false "wrapMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EVar "wrapPrintln") (EVar "body"))) (EVar "site")))
 (DFunDef false "wrapMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapMainDecl") (EVar "d"))))
 (DFunDef false "wrapMainDecl" ((PVar "d")) (EVar "d"))
 (DTypeSig true "autoPrintPinName" (TyCon "String"))
@@ -404,7 +404,7 @@ wrapAsyncMainDecl d = d
 (DFunDef false "pinnedCopies" (PWild PWild (PList)) (EListLit))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DTypeSig" PWild (PVar "n") (PVar "ty") (PVar "site")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "True")) (EVar "pin")) (EVar "ty")) (EVar "site")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
-(DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (EVar "pin")) (EVar "ps")) (EVar "body")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
+(DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (EVar "pin")) (EVar "ps")) (EVar "body")) (EVar "site")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest")))
 (DTypeSig false "wrapPrintln" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "wrapCall") (EVar "autoPrintPinName")) (EVar "body")))
@@ -424,7 +424,7 @@ wrapAsyncMainDecl d = d
 (DTypeSig false "definesFun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "definesFun" (PWild (PList)) (EVar "False"))
 (DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "definesFun") (EVar "n")) (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DFunDef" PWild (PVar "m") PWild PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "n")) (EVar "True") (EApp (EApp (EVar "definesFun") (EVar "n")) (EVar "rest"))))
+(DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DFunDef" PWild (PVar "m") PWild PWild PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "n")) (EVar "True") (EApp (EApp (EVar "definesFun") (EVar "n")) (EVar "rest"))))
 (DFunDef false "definesFun" ((PVar "n") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "definesFun") (EVar "n")) (EVar "rest")))
 (DTypeSig true "asyncWrapModules" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "asyncWrapModules" ((PVar "driver") (PVar "modules")) (EApp (EVar "wrapAsyncEntry") (EApp (EApp (EVar "map") (EApp (EVar "pinAsyncDriver") (EVar "driver"))) (EVar "modules"))))
@@ -439,7 +439,7 @@ wrapAsyncMainDecl d = d
 (DTypeSig false "asyncPinImport" (TyCon "Decl"))
 (DFunDef false "asyncPinImport" () (EApp (EApp (EApp (EVar "DUse") (EVar "False")) (EApp (EApp (EVar "UseGroup") (EListLit (EVar "asyncModuleId"))) (EListLit (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "asyncMainPinName")) (EVar "False")) (EVar "synthLoc")) (EVar "None"))))) (EVar "synthLoc")))
 (DTypeSig false "wrapAsyncMainDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
-(DFunDef false "wrapAsyncMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EVar "wrapCall") (EVar "asyncMainPinName")) (EVar "body"))))
+(DFunDef false "wrapAsyncMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EVar "wrapCall") (EVar "asyncMainPinName")) (EVar "body"))) (EVar "site")))
 (DFunDef false "wrapAsyncMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapAsyncMainDecl") (EVar "d"))))
 (DFunDef false "wrapAsyncMainDecl" ((PVar "d")) (EVar "d"))
 # MARK
@@ -452,12 +452,12 @@ wrapAsyncMainDecl d = d
 (DTypeSig false "findMainParams" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "findMainParams" ((PList)) (EVar "None"))
 (DFunDef false "findMainParams" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "findMainParams") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "findMainParams" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PVar "ps") PWild) PWild)) (EApp (EVar "Some") (EVar "ps")))
+(DFunDef false "findMainParams" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PVar "ps") PWild PWild) PWild)) (EApp (EVar "Some") (EVar "ps")))
 (DFunDef false "findMainParams" ((PCons PWild (PVar "rest"))) (EApp (EVar "findMainParams") (EVar "rest")))
 (DTypeSig false "definesPrintln" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "definesPrintln" ((PList)) (EVar "False"))
 (DFunDef false "definesPrintln" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "definesPrintln") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "definesPrintln" ((PCons (PCon "DFunDef" PWild (PLit (LString "println")) PWild PWild) PWild)) (EVar "True"))
+(DFunDef false "definesPrintln" ((PCons (PCon "DFunDef" PWild (PLit (LString "println")) PWild PWild PWild) PWild)) (EVar "True"))
 (DFunDef false "definesPrintln" ((PCons PWild (PVar "rest"))) (EApp (EVar "definesPrintln") (EVar "rest")))
 (DTypeSig true "shouldAutoPrintMain" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool"))))
 (DFunDef false "shouldAutoPrintMain" ((PVar "coreDecls") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "mainTypeIsUnit") (ELit LUnit)) (EApp (EVar "mainTypeIsAsync") (ELit LUnit))) (EVar "False") (EIf (EApp (EVar "not") (EApp (EVar "definesPrintln") (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EVar "True")) (arm PWild () (EVar "False"))))))))
@@ -470,7 +470,7 @@ wrapAsyncMainDecl d = d
 (DFunDef false "autoPrintWrapModules" ((PList (PTuple (PVar "mid") (PVar "decls")))) (EListLit (ETuple (EVar "mid") (EApp (EApp (EMethodRef "map") (EVar "wrapMainDecl")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EVar "isMainTypeSig") (EVar "d"))))) (EVar "decls"))))))
 (DFunDef false "autoPrintWrapModules" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EVar "p") (EApp (EVar "autoPrintWrapModules") (EVar "rest"))))
 (DTypeSig false "wrapMainDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
-(DFunDef false "wrapMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EVar "wrapPrintln") (EVar "body"))))
+(DFunDef false "wrapMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EVar "wrapPrintln") (EVar "body"))) (EVar "site")))
 (DFunDef false "wrapMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapMainDecl") (EVar "d"))))
 (DFunDef false "wrapMainDecl" ((PVar "d")) (EVar "d"))
 (DTypeSig true "autoPrintPinName" (TyCon "String"))
@@ -483,7 +483,7 @@ wrapAsyncMainDecl d = d
 (DFunDef false "pinnedCopies" (PWild PWild (PList)) (EListLit))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DTypeSig" PWild (PVar "n") (PVar "ty") (PVar "site")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "True")) (EVar "pin")) (EVar "ty")) (EVar "site")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
-(DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (EVar "pin")) (EVar "ps")) (EVar "body")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
+(DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (EVar "pin")) (EVar "ps")) (EVar "body")) (EVar "site")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest")))
 (DTypeSig false "wrapPrintln" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "wrapCall") (EVar "autoPrintPinName")) (EVar "body")))
@@ -503,7 +503,7 @@ wrapAsyncMainDecl d = d
 (DTypeSig false "definesFun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "definesFun" (PWild (PList)) (EVar "False"))
 (DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "definesFun") (EVar "n")) (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DFunDef" PWild (PVar "m") PWild PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "n")) (EVar "True") (EApp (EApp (EVar "definesFun") (EVar "n")) (EVar "rest"))))
+(DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DFunDef" PWild (PVar "m") PWild PWild PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "n")) (EVar "True") (EApp (EApp (EVar "definesFun") (EVar "n")) (EVar "rest"))))
 (DFunDef false "definesFun" ((PVar "n") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "definesFun") (EVar "n")) (EVar "rest")))
 (DTypeSig true "asyncWrapModules" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "asyncWrapModules" ((PVar "driver") (PVar "modules")) (EApp (EVar "wrapAsyncEntry") (EApp (EApp (EMethodRef "map") (EApp (EVar "pinAsyncDriver") (EVar "driver"))) (EVar "modules"))))
@@ -518,6 +518,6 @@ wrapAsyncMainDecl d = d
 (DTypeSig false "asyncPinImport" (TyCon "Decl"))
 (DFunDef false "asyncPinImport" () (EApp (EApp (EApp (EVar "DUse") (EVar "False")) (EApp (EApp (EVar "UseGroup") (EListLit (EVar "asyncModuleId"))) (EListLit (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "asyncMainPinName")) (EVar "False")) (EVar "synthLoc")) (EVar "None"))))) (EVar "synthLoc")))
 (DTypeSig false "wrapAsyncMainDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
-(DFunDef false "wrapAsyncMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EVar "wrapCall") (EVar "asyncMainPinName")) (EVar "body"))))
+(DFunDef false "wrapAsyncMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EVar "wrapCall") (EVar "asyncMainPinName")) (EVar "body"))) (EVar "site")))
 (DFunDef false "wrapAsyncMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapAsyncMainDecl") (EVar "d"))))
 (DFunDef false "wrapAsyncMainDecl" ((PVar "d")) (EVar "d"))

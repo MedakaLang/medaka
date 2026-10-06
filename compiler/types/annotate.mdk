@@ -47,6 +47,7 @@ import frontend.ast.{
   FunClause(..),
   LetBind(..),
   Expr(..),
+  Loc,
   UseMember(..),
   UsePath(..),
   PropParam(..),
@@ -94,7 +95,7 @@ isHint : String -> Bool
 isHint n = startsWithAt (stringToChars n)
 
 letBindName : LetBind -> String
-letBindName (LetBind n _) = n
+letBindName (LetBind n _ _) = n
 
 propParamName : PropParam -> String
 propParamName (PropParam x _ _) = x
@@ -183,7 +184,7 @@ annotateExpr fr (EDoOrigin l e) = EDoOrigin l (annotateExpr fr e)
 -- let-rec `let f = …` binds f in a fresh frame over BOTH the RHS and the body
 -- (eval's evalRecLet pushFrame [f]); any other let evaluates the RHS in the
 -- OUTER scope and pushes the pattern's bindings for the body only (evalLet).
-annotateLet : List (List String) -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
+annotateLet : List (List String) -> Loc -> Bool -> Pat -> Expr -> Expr -> Expr
 annotateLet fr m True (PVar f fl) e1 e2 =
   let inner = [f] :: fr
   ELet m True (PVar f fl) (annotateExpr inner e1) (annotateExpr inner e2)
@@ -205,8 +206,8 @@ annotateLetGroup fr binds body =
     (annotateExpr groupScope body)
 
 annotateLetBind : List (List String) -> LetBind -> LetBind
-annotateLetBind groupScope (LetBind name clauses) =
-  LetBind name (map (annotateClause groupScope) clauses)
+annotateLetBind groupScope (LetBind name clauses site) =
+  LetBind name (map (annotateClause groupScope) clauses) site
 
 annotateClause : List (List String) -> FunClause -> FunClause
 annotateClause groupScope (FunClause pats body) =
@@ -244,8 +245,9 @@ annotateStmts : List (List String) -> List DoStmt -> List DoStmt
 annotateStmts _ [] = []
 annotateStmts fr ((DoExpr e) :: rest) =
   DoExpr (annotateExpr fr e) :: annotateStmts fr rest
-annotateStmts fr ((DoLet m r p e) :: rest) =
-  DoLet m r p (annotateExpr fr e) :: annotateStmts (patBindings p :: fr) rest
+annotateStmts fr ((DoLet m r p e site) :: rest) =
+  DoLet m r p (annotateExpr fr e) site
+    :: annotateStmts (patBindings p :: fr) rest
 annotateStmts fr ((DoBind p e) :: rest) =
   DoBind p (annotateExpr fr e) :: annotateStmts (patBindings p :: fr) rest
 annotateStmts fr ((DoAssign x e) :: rest) =
@@ -272,8 +274,8 @@ annotateSection fr (SecLeft e op) = SecLeft (annotateExpr fr e) op
 -- a top-level function's params become per-parameter frames (the only local
 -- scope; sibling top-level names resolve to AGlobal by-name)
 annotateDecl : Decl -> Decl
-annotateDecl (DFunDef p n pats body) =
-  DFunDef p n pats (annotateExpr (paramFrames pats) body)
+annotateDecl (DFunDef p n pats body site) =
+  DFunDef p n pats (annotateExpr (paramFrames pats) body) site
 annotateDecl (DProp p n params body) =
   DProp p n params (annotateExpr [map propParamName params] body)
 annotateDecl (DTest p n body) = DTest p n (annotateExpr [] body)

@@ -65,6 +65,7 @@ import support.util.{
   listLen,
   reverseL,
   anyList,
+  allList,
   lookupAssoc,
   joinWith,
   fallthroughName,
@@ -140,7 +141,10 @@ public export data Value (e : Effect) =
   | VCon String (List (Value e))
   | VRecord String (List (String, Value e))
   | VRef (Ref (Value e))
-  | VClosure (EvalEnv (Value e)) (List Pat) Expr
+  -- env params body site.  The site is the first clause of the function the
+  -- closure belongs to, where a call whose clauses all fall through is
+  -- reported; `noTrapLoc` for a lambda or an impl method.
+  | VClosure (EvalEnv (Value e)) (List Pat) Expr Loc
   -- like VClosure, but the body is an opaque host function over the fully-
   -- extended env rather than an AST `Expr` — the closure form the Core IR
   -- evaluator (core_ir_eval.mdk) builds, so it can reuse this runtime's apply /
@@ -203,7 +207,7 @@ ppValue (VCon name vs) =
 ppValue (VRecord name fields) =
   "\{displayCtorName name} { \{joinWith ", " (map ppField fields)} }"
 ppValue (VRef cell) = "Ref(" ++ ppValue !cell ++ ")"
-ppValue (VClosure _ _ _) = "<closure>"
+ppValue (VClosure _ _ _ _) = "<closure>"
 ppValue (VClosureF _ _ _) = "<closure>"
 ppValue (VPrim _) = "<prim>"
 ppValue (VMulti vs) = "<dispatch/" ++ intToString (listLen vs) ++ ">"
@@ -1143,19 +1147,57 @@ apply f x =
 applyDispatch : Value e -> Value e -> <e> Value e
 applyDispatch f x = match applyOpt f x
   Some v => v
-  None => runtimePanic "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+  None =>
+    let _ = markFunSite f
+    runtimePanic "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
 
 applyOpt : Value e -> Value e -> <e> Option (Value e)
-applyOpt (VClosure env pats body) arg = applyClosure env pats body arg
+applyOpt (VClosure env pats body site) arg = applyClosure env pats body site arg
 applyOpt (VClosureF env pats f) arg = applyClosureF env pats f arg
 applyOpt (VPrim f) arg = Some (f arg)
 applyOpt (VTypedImpl t key pos seen inner) arg =
   applyTyped t key pos seen inner arg
 applyOpt (VMulti vs) arg =
   let _ = checkArgTagDecidable vs arg in
-    collectPartials [] (filterByTag vs arg) arg
+    match collectPartials [] (filterByTag vs arg) arg
+      Some r => Some r
+      None => noCandidateMatched vs
 applyOpt other _ =
   runtimePanic "E-NOT-A-FUNCTION" ("applied non-function: " ++ ppValue other)
+
+-- Every candidate refused the argument.  The clauses of one user function
+-- fall through like a `match` (applyDispatch raises at the function's site);
+-- any other dispatch set has no impl for it.
+noCandidateMatched : List (Value e) -> Option (Value e)
+noCandidateMatched vs
+  | isClauseGroup vs = None
+  | otherwise = panic "no matching impl for dispatch"
+
+isClauseGroup : List (Value e) -> Bool
+isClauseGroup [] = False
+isClauseGroup vs = allList hasFunSite vs
+
+hasFunSite : Value e -> Bool
+hasFunSite (VClosure _ _ _ site) = not (isNoLoc site)
+hasFunSite _ = False
+
+-- Point the evaluator at the first clause of the function [f] whose clauses all
+-- refused an argument, in the file the function was defined in (a cross-module
+-- callee's body has already restored the caller's file).
+markFunSite : Value e -> <e> Unit
+markFunSite (VClosure env _ _ site)
+  | isNoLoc site = ()
+  | otherwise =
+    let _ = stampDefiningFile env
+    currentEvalLoc := site
+markFunSite (VMulti (v :: _)) = markFunSite v
+markFunSite _ = ()
+
+-- the file a closure's module was loaded from, as `withCallFile` stamps it
+stampDefiningFile : EvalEnv (Value e) -> <e> Unit
+stampDefiningFile env = match lookupEnvOpt env evalFileTagName
+  Some (VString file) => currentEvalFile := file
+  _ => ()
 
 -- pass the arg to the impl's inner value, preserving the dispatch tag across
 -- partial applications (so later args still route to the same impl)
@@ -1347,7 +1389,7 @@ stripBody wrapper (VTypedImpl _ _ _ _ inner) = stripBody wrapper inner
 stripBody wrapper v = if awaitsArgs v then wrapper else v
 
 awaitsArgs : Value e -> Bool
-awaitsArgs (VClosure _ _ _) = True
+awaitsArgs (VClosure _ _ _ _) = True
 awaitsArgs (VClosureF _ _ _) = True
 awaitsArgs (VPrim _) = True
 awaitsArgs (VMulti _) = True
@@ -1516,15 +1558,16 @@ withCallFile env thunk = match lookupEnvOpt env evalFileTagName
 applyClosure : EvalEnv (Value e) ->
   List Pat ->
   Expr ->
+  Loc ->
   Value e ->
   <e> Option (Value e)
-applyClosure _ [] _ _ = panic "applied closure with no parameters"
-applyClosure env [p] body arg = match matchPat p arg
+applyClosure _ [] _ _ _ = panic "applied closure with no parameters"
+applyClosure env [p] body _ arg = match matchPat p arg
   None => None
   Some binds =>
     fallthroughToNone (withCallFile env (() => eval (extendEnv env binds) body))
-applyClosure env (p :: ps) body arg =
-  map (binds => VClosure (extendEnv env binds) ps body) (matchPat p arg)
+applyClosure env (p :: ps) body site arg =
+  map (binds => VClosure (extendEnv env binds) ps body site) (matchPat p arg)
 
 -- VClosureF analog of applyClosure: the body is a host fn run on the fully-
 -- extended env once the last param binds; partial application keeps the same
@@ -1552,7 +1595,7 @@ collectPartials : List (Value e) ->
   List (Value e) ->
   Value e ->
   <e> Option (Value e)
-collectPartials [] [] _ = panic "no matching impl for dispatch"
+collectPartials [] [] _ = None
 collectPartials [v] [] _ = Some v
 collectPartials many [] _ = Some (VMulti (reverseL many))
 collectPartials acc (v :: rest) arg = match applyOpt v arg
@@ -1560,7 +1603,7 @@ collectPartials acc (v :: rest) arg = match applyOpt v arg
   Some r => if isPartial r then collectPartials (r :: acc) rest arg else Some r
 
 isPartial : Value e -> Bool
-isPartial (VClosure _ _ _) = True
+isPartial (VClosure _ _ _ _) = True
 isPartial (VClosureF _ _ _) = True
 isPartial (VPrim _) = True
 isPartial (VMulti _) = True
@@ -1606,12 +1649,19 @@ eval env (EMethodAt name _ ev) = evalMethodAtEv env name (evMethodRoutes ev)
 
 eval env (EDictAt name ev) =
   applyDicts env (lookupEnv env name) (evDictRoutes ev)
-eval env (EApp f x) = apply (eval env f) (eval env x)
-eval env (ELam pats body) = VClosure env pats body
+-- The application's own start is marked after its operands ran, so a trap raised
+-- by a primitive callee (`panic`, an index bound check reached through a prelude
+-- impl, whose locations are placeholders) names this call site.
+eval env (app@(EApp f x)) =
+  let fv = eval env f
+  let xv = eval env x
+  let _ = markTrapSite app
+  apply fv xv
+eval env (ELam pats body) = VClosure env pats body noTrapLoc
 eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2
-eval env (ELet _ _ pat e1 e2) = evalLet env pat e1 e2
+eval env (ELet site _ pat e1 e2) = evalLet site env pat e1 e2
 eval env (ELetGroup binds body) = evalLetGroup env binds body
-eval env (EMatch scrut arms) = evalMatch env (eval env scrut) arms
+eval env (EMatch scrut arms) = evalMatch noTrapLoc env (eval env scrut) arms
 eval env (EIf c t e) = evalIf env (eval env c) t e
 eval env (EBinOp op l r _) = evalBinop env op l r
 eval env (EInfix op l r) =
@@ -1634,7 +1684,11 @@ eval env (EFieldAccess e field _) = evalField (eval env e) field
 -- a tagged fixed-width arithmetic operator: typecheck stamped the operand's head,
 -- and the `Int` result is reduced modulo 2^n (see `evalArithAt`).
 eval env (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag }))
-  | isTaggedFixedHead tag = evalArithAt tag op (eval env l) (eval env r)
+  | isTaggedFixedHead tag =
+    let lv = eval env l
+    let rv = eval env r
+    let _ = markTrapSite l
+    evalArithAt tag op lv rv
 eval env (EAnnot e _) = eval env e
 eval env (EHeadAnnot e _) = eval env e
 eval env (EBlock stmts) = evalBlock env stmts
@@ -1650,6 +1704,9 @@ eval env (ERangeArray lo hi incl) =
 -- currentEvalLoc so a runtime error carries file:L:C.  Purely a side channel
 -- for diagnostics: on a successful eval nothing reads it, so valid-program
 -- output is byte-identical.
+eval env (ELoc l (EMatch scrut arms)) =
+  let _ = updateEvalLoc l
+  evalMatch l env (eval env scrut) arms
 eval env (ELoc l e) =
   let _ = updateEvalLoc l
   eval env e
@@ -1942,12 +1999,12 @@ fieldOr fields field = match lookupAssoc field fields
 evalBlock : EvalEnv (Value e) -> List DoStmt -> <e> Value e
 evalBlock _ [] = VUnit
 evalBlock env [DoExpr e] = eval env e
-evalBlock env [DoLet _ _ pat e] = blockLetLast env pat e
+evalBlock env [DoLet _ _ pat e site] = blockLetLast site env pat e
 evalBlock env ((DoExpr e) :: rest) =
   let _ = eval env e
   evalBlock env rest
-evalBlock env ((DoLet _ True (PVar f _) e) :: rest) = blockRecLet env f e rest
-evalBlock env ((DoLet _ _ pat e) :: rest) = blockLet env pat e rest
+evalBlock env ((DoLet _ True (PVar f _) e _) :: rest) = blockRecLet env f e rest
+evalBlock env ((DoLet _ _ pat e site) :: rest) = blockLet site env pat e rest
 evalBlock env [DoAssign _ e] =
   let _ = eval env e
   VUnit
@@ -1955,10 +2012,17 @@ evalBlock env ((DoAssign x e) :: rest) =
   evalBlock (extendEnv env [(x, eval env e)]) rest
 evalBlock _ (_ :: _) = panic "eval: unsupported block statement"
 
-blockLetLast : EvalEnv (Value e) -> Pat -> Expr -> <e> Value e
-blockLetLast env pat e = match matchPat pat (eval env e)
-  None => runtimePanic "E-LET-REFUTE" "let pattern match failed"
+blockLetLast : Loc -> EvalEnv (Value e) -> Pat -> Expr -> <e> Value e
+blockLetLast site env pat e = match matchPat pat (eval env e)
+  None => letRefuted site
   Some _ => VUnit
+
+-- A `let` pattern that did not match, reported at the `let` keyword [site]
+-- (`noTrapLoc` leaves the evaluator where the right-hand side left it).
+letRefuted : Loc -> a
+letRefuted site =
+  let _ = updateEvalLoc site
+  runtimePanic "E-LET-REFUTE" "let pattern match failed"
 
 blockRecLet : EvalEnv (Value e) -> String -> Expr -> List DoStmt -> <e> Value e
 blockRecLet env f e rest =
@@ -1968,9 +2032,9 @@ blockRecLet env f e rest =
   cell := v
   evalBlock recEnv rest
 
-blockLet : EvalEnv (Value e) -> Pat -> Expr -> List DoStmt -> <e> Value e
-blockLet env pat e rest = match matchPat pat (eval env e)
-  None => runtimePanic "E-LET-REFUTE" "let pattern match failed"
+blockLet : Loc -> EvalEnv (Value e) -> Pat -> Expr -> List DoStmt -> <e> Value e
+blockLet site env pat e rest = match matchPat pat (eval env e)
+  None => letRefuted site
   Some binds => evalBlock (extendEnv env binds) rest
 
 evalRecLet : EvalEnv (Value e) -> String -> Expr -> Expr -> <e> Value e
@@ -1981,9 +2045,9 @@ evalRecLet env f e1 e2 =
   cell := v
   eval recEnv e2
 
-evalLet : EvalEnv (Value e) -> Pat -> Expr -> Expr -> <e> Value e
-evalLet env pat e1 e2 = match matchPat pat (eval env e1)
-  None => runtimePanic "E-LET-REFUTE" "let pattern match failed"
+evalLet : Loc -> EvalEnv (Value e) -> Pat -> Expr -> Expr -> <e> Value e
+evalLet site env pat e1 e2 = match matchPat pat (eval env e1)
+  None => letRefuted site
   Some binds => eval (extendEnv env binds) e2
 
 evalLetGroup : EvalEnv (Value e) -> List LetBind -> Expr -> <e> Value e
@@ -1994,49 +2058,63 @@ evalLetGroup env binds body =
   eval env2 body
 
 letBindCell : LetBind -> (String, Ref (Value e))
-letBindCell (LetBind name _) = (name, Ref VUnit)
+letBindCell (LetBind name _ _) = (name, Ref VUnit)
 
 installGroup : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List LetBind ->
   <e> Unit
 installGroup _ _ [] = ()
-installGroup env cells ((LetBind name clauses) :: rest) =
-  findCell cells name := groupValue env (map funClauseToClause clauses)
+installGroup env cells ((LetBind name clauses site) :: rest) =
+  findCell cells name := groupValue env (map (funClauseToClause site) clauses)
   installGroup env cells rest
 
-funClauseToClause : FunClause -> (List Pat, Expr)
-funClauseToClause (FunClause pats body) = (pats, body)
+funClauseToClause : Loc -> FunClause -> (List Pat, Expr, Loc)
+funClauseToClause site (FunClause pats body) = (pats, body, site)
 
-groupValue : EvalEnv (Value e) -> List (List Pat, Expr) -> <e> Value e
-groupValue env [(pats, body)]
+-- A function's clauses, each (params, body, site).  Every closure of the group
+-- carries the FIRST clause's site, so a partial application that has already
+-- dropped clause 1 still reports the function where it starts.
+groupValue : EvalEnv (Value e) -> List (List Pat, Expr, Loc) -> <e> Value e
+groupValue env [(pats, body, site)]
   | isNullary pats = eval env body
-  | otherwise = VClosure env pats body
-groupValue env clauses = VMulti (map (clauseClosure env) clauses)
+  | otherwise = VClosure env pats body site
+groupValue env clauses =
+  VMulti (map (clauseClosure env (groupSite clauses)) clauses)
 
 -- top-level variant: a nullary binding becomes a deferred VThunk (forced on
 -- first lookup) so point-free defs can reference values/impls installed later
-topGroupValue : EvalEnv (Value e) -> List (List Pat, Expr) -> Value e
-topGroupValue env [(pats, body)]
+topGroupValue : EvalEnv (Value e) -> List (List Pat, Expr, Loc) -> Value e
+topGroupValue env [(pats, body, site)]
   | isNullary pats = VThunk (_ => eval env body)
-  | otherwise = VClosure env pats body
-topGroupValue env clauses = VMulti (map (clauseClosure env) clauses)
+  | otherwise = VClosure env pats body site
+topGroupValue env clauses =
+  VMulti (map (clauseClosure env (groupSite clauses)) clauses)
 
-clauseClosure : EvalEnv (Value e) -> (List Pat, Expr) -> Value e
-clauseClosure env (pats, body) = VClosure env pats body
+groupSite : List (List Pat, Expr, Loc) -> Loc
+groupSite ((_, _, site) :: _) = site
+groupSite [] = noTrapLoc
+
+clauseClosure : EvalEnv (Value e) -> Loc -> (List Pat, Expr, Loc) -> Value e
+clauseClosure env site (pats, body, _) = VClosure env pats body site
 
 export
 isNullary : List Pat -> Bool
 isNullary [] = True
 isNullary _ = False
 
-evalMatch : EvalEnv (Value e) -> Value e -> List Arm -> <e> Value e
-evalMatch _ _ [] = runtimePanic "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
-evalMatch env sv ((Arm pat guards body) :: rest) = match matchPat pat sv
-  None => evalMatch env sv rest
+-- [site] is the `match` keyword's span (`noTrapLoc` for an unlocated match); the
+-- arms' patterns and guards move the evaluator's location, so a fall-through
+-- re-points it before raising.
+evalMatch : Loc -> EvalEnv (Value e) -> Value e -> List Arm -> <e> Value e
+evalMatch site _ _ [] =
+  let _ = updateEvalLoc site
+  runtimePanic "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+evalMatch site env sv ((Arm pat guards body) :: rest) = match matchPat pat sv
+  None => evalMatch site env sv rest
   Some binds => match runGuards (extendEnv env binds) guards
     Some env2 => eval env2 body
-    None => evalMatch env sv rest
+    None => evalMatch site env sv rest
 
 runGuards : EvalEnv (Value e) -> List Guard -> <e> Option (EvalEnv (Value e))
 runGuards env [] = Some env
@@ -2090,7 +2168,11 @@ evalBinop env "&&" l r = evalAnd env (eval env l) r
 evalBinop env "||" l r = evalOr env (eval env l) r
 evalBinop env "::" l r = consVal (eval env l) (eval env r)
 evalBinop env "++" l r = appendVal (eval env l) (eval env r)
-evalBinop env op l r = evalArith op (eval env l) (eval env r)
+evalBinop env op l r =
+  let lv = eval env l
+  let rv = eval env r
+  let _ = markTrapSite l
+  evalArith op lv rv
 
 composeFwd : Value e -> Value e -> Value e
 composeFwd fv gv = VPrim (x => apply gv (apply fv x))
@@ -2302,38 +2384,41 @@ payloadArity : ConPayload -> Int
 payloadArity (ConPos tys) = listLen tys
 payloadArity (ConNamed fs _) = listLen fs
 
-funDefs : List Decl -> List (String, (List Pat, Expr))
--- Intentional cross-file duplicate of typecheck.mdk's copy. The interpreter must
--- run with no typechecker in its import closure — untyped eval is a real path
--- ([T-PRELUDE-DICT]) and the typed pipeline differences against it — so eval.mdk
--- may not import types/, and this decl-flattening is small enough to restate.
--- lint-disable-next-line rule-duplicate-body
+funDefs : List Decl -> List (String, (List Pat, Expr, Loc))
+-- The interpreter keeps its own copy of typecheck.mdk's decl flattening: it
+-- must run with no typechecker in its import closure — untyped eval is a real
+-- path ([T-PRELUDE-DICT]) and the typed pipeline differences against it — and
+-- this copy also keeps each clause's site.
 funDefs [] = []
-funDefs ((DFunDef _ n pats body) :: rest) = (n, (pats, body)) :: funDefs rest
+funDefs ((DFunDef _ n pats body site) :: rest) =
+  (n, (pats, body, site)) :: funDefs rest
 -- Top-level `let rec … with …` (DLetGroup): each binding behaves exactly like a
--- multi-clause DFunDef — flatten to (name, (pats, body)) entries so installGroups
--- coalesces its clauses into a VMulti and the names enter the eval frame.
+-- multi-clause DFunDef — flatten to (name, (pats, body, site)) entries so
+-- installGroups coalesces its clauses into a VMulti and the names enter the
+-- eval frame.
 funDefs ((DLetGroup _ binds) :: rest) = letGroupDefs binds ++ funDefs rest
 funDefs ((DAttrib _ d) :: rest) = funDefs (d :: rest)
 funDefs (_ :: rest) = funDefs rest
 
-letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
+letGroupDefs : List LetBind -> List (String, (List Pat, Expr, Loc))
 letGroupDefs [] = []
-letGroupDefs ((LetBind n clauses) :: rest) =
-  map (clauseDef n) clauses ++ letGroupDefs rest
+letGroupDefs ((LetBind n clauses site) :: rest) =
+  map (clauseDef n site) clauses ++ letGroupDefs rest
 
-clauseDef : String -> FunClause -> (String, (List Pat, Expr))
-clauseDef n (FunClause pats body) = (n, (pats, body))
+clauseDef : String -> Loc -> FunClause -> (String, (List Pat, Expr, Loc))
+clauseDef n site clause = (n, funClauseToClause site clause)
 
-funGroupNames : List (String, (List Pat, Expr)) -> List String -> List String
+funGroupNames : List (String, (List Pat, Expr, Loc)) ->
+  List String ->
+  List String
 funGroupNames [] _ = []
 funGroupNames ((n, _) :: rest) seen
   | contains n seen = funGroupNames rest seen
   | otherwise = n :: funGroupNames rest (n :: seen)
 
 clausesForName : String ->
-  List (String, (List Pat, Expr)) ->
-  List (List Pat, Expr)
+  List (String, (List Pat, Expr, Loc)) ->
+  List (List Pat, Expr, Loc)
 clausesForName _ [] = []
 clausesForName name ((n, c) :: rest)
   | n == name = c :: clausesForName name rest
@@ -2506,8 +2591,12 @@ implMethodValue : EvalEnv (Value e) -> List Int -> List Pat -> Expr -> Value e
 implMethodValue env positions [] body
   | isEmptyL positions = memoThunk env body
   | otherwise =
-    VClosure env [PVar "$eta" (Loc "" 0 0 0 0)] (EApp body (EVar "$eta"))
-implMethodValue env _ pats body = VClosure env pats body
+    VClosure
+      env
+      [PVar "$eta" (Loc "" 0 0 0 0)]
+      (EApp body (EVar "$eta"))
+      noTrapLoc
+implMethodValue env _ pats body = VClosure env pats body noTrapLoc
 
 -- A VThunk whose body evaluates at most once: the first force writes the result
 -- into a private Ref, later forces read it back (no re-evaluation of `body`).
@@ -3061,9 +3150,39 @@ pendingRunDiags = Ref []
 -- otherwise clobber the real user-code span.  A real located atom always has a
 -- positive-width span, so this sentinel is unambiguous.
 updateEvalLoc : Loc -> Unit
-updateEvalLoc (Loc f sl sc el ec)
-  | sl == 1 && sc == 0 && el == 1 && ec == 0 = ()
-  | otherwise = currentEvalLoc := Loc f sl sc el ec
+updateEvalLoc l = if isNoLoc l then () else currentEvalLoc := l
+
+isNoLoc : Loc -> Bool
+isNoLoc (Loc _ sl sc el ec) = sl == 1 && sc == 0 && el == 1 && ec == 0
+
+-- The placeholder span `updateEvalLoc` ignores: "no location known".
+noTrapLoc : Loc
+noTrapLoc = Loc "" 1 0 1 0
+
+-- Point currentEvalLoc at the start of a trapping expression (convention: a
+-- runtime error names the expression that trapped, not the last atom entered).
+-- Called after the expression's operands are evaluated, immediately before the
+-- operation that may raise.
+markTrapSite : Expr -> Unit
+markTrapSite e = updateEvalLoc (exprStartLoc e)
+
+-- The first located node of an expression in source order.  The parser locates
+-- atoms and statement forms only, so a binary operator, an application or a
+-- desugared index call starts where its leftmost located operand starts.  The
+-- Core IR lowering reads it for the trap site it stores on an arithmetic node.
+export
+exprStartLoc : Expr -> Loc
+exprStartLoc (ELoc l _) = l
+exprStartLoc (EBinOp _ l _ _) = exprStartLoc l
+exprStartLoc (EApp f x) = startOrNext (exprStartLoc f) x
+exprStartLoc (EAnnot e _) = exprStartLoc e
+exprStartLoc (EHeadAnnot e _) = exprStartLoc e
+exprStartLoc _ = noTrapLoc
+
+-- [l] when it is a real location, else the start of [next] (an unlocated head,
+-- such as the `index` method a desugared `xs[i]` applies).
+startOrNext : Loc -> Expr -> Loc
+startOrNext l next = if isNoLoc l then exprStartLoc next else l
 
 -- Chokepoint for user-facing runtime errors.  `panic` is a noreturn C-abort
 -- that never returns to Medaka, so the located, coded diagnostic must be
@@ -3456,6 +3575,8 @@ externBindings _ = [
   ("panic", prim1 pPanic),
   ("indexError", prim1 (s => runtimePanic "E-INDEX-OOB" (unString s))),
   ("indexErrorAt", prim1 pIndexErrorAt),
+  ("indexErrorAtSite", prim2 pIndexErrorAtSite),
+  ("panicAt", prim2 pPanicAt),
   ("sliceError", prim2 pSliceError),
   ("debugStringLit", prim1 pDebugStringLit),
   ("debugCharLit", prim1 pDebugCharLit),
@@ -3847,6 +3968,16 @@ pIndexErrorAt (VInt i) =
   runtimePanic "E-INDEX-OOB" "index \{intToString i} out of bounds"
 pIndexErrorAt _ = panic "indexErrorAt: bad operand"
 
+-- indexErrorAtSite site idx: indexErrorAt for a native build's located read.
+-- The interpreter reports its own site, so the packed one is ignored.
+pIndexErrorAtSite : Value e -> Value e -> <e> Value e
+pIndexErrorAtSite _ i = pIndexErrorAt i
+
+-- panicAt site msg: `panic` with a native build's packed site, ignored here
+-- for the same reason.
+pPanicAt : Value e -> Value e -> <e> a
+pPanicAt _ v = pPanic v
+
 -- sliceError (lo, hiIncl): the coded E-SLICE-OOB abort the Slice impl raises;
 -- prints `slice [lo..hiIncl] out of bounds`, byte-identical to sliceArray's abort.
 pSliceError : Value e -> Value e -> <e> Value e
@@ -4004,9 +4135,9 @@ buildWith : Value e -> Int -> Int -> <e> List (Value e)
 buildWith f i n =
   if i >= n then [] else apply f (VInt i) :: buildWith f (i + 1) n
 
-mkGroup : List (String, (List Pat, Expr)) ->
+mkGroup : List (String, (List Pat, Expr, Loc)) ->
   String ->
-  (String, List (List Pat, Expr))
+  (String, List (List Pat, Expr, Loc))
 mkGroup defs name = (name, clausesForName name defs)
 
 export
@@ -4030,7 +4161,7 @@ runtimeCellsOf externs =
 
 installGroups : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
-  List (String, List (List Pat, Expr)) ->
+  List (String, List (List Pat, Expr, Loc)) ->
   <e> Unit
 installGroups _ _ [] = ()
 installGroups env cells ((n, clauses) :: rest) =
@@ -4091,7 +4222,7 @@ dropShadowed names (d :: rest)
   | otherwise = d :: dropShadowed names rest
 
 shadowedFun : List String -> Decl -> Bool
-shadowedFun names (DFunDef _ n _ _) = contains n names
+shadowedFun names (DFunDef _ n _ _ _) = contains n names
 shadowedFun _ _ = False
 
 runMainForEffect : List (String, Value e) -> <e> Value e
@@ -4120,7 +4251,7 @@ runMainForEffect binds = match lookupBinding "main" binds
 -- parameterized over the value type (v := Value e), like EvalEnv — see the
 -- kind-inference note on `Value`
 data ModInfo v =
-  | ModInfo String (List Decl) (List (String, List (List Pat, Expr))) (List (String, Ref v)) (EvalEnv v)
+  | ModInfo String (List Decl) (List (String, List (List Pat, Expr, Loc))) (List (String, Ref v)) (EvalEnv v)
 
 export
 evalModules : List Decl ->
@@ -4184,13 +4315,13 @@ preludeShadowNames : List Decl -> List String
 preludeShadowNames moduleDecls = implMethodNames moduleDecls
 
 groupsNamedIn : List String ->
-  List (String, List (List Pat, Expr)) ->
-  List (String, List (List Pat, Expr))
+  List (String, List (List Pat, Expr, Loc)) ->
+  List (String, List (List Pat, Expr, Loc))
 groupsNamedIn names gs = filterList (g => contains (fst g) names) gs
 
 groupsNotNamedIn : List String ->
-  List (String, List (List Pat, Expr)) ->
-  List (String, List (List Pat, Expr))
+  List (String, List (List Pat, Expr, Loc)) ->
+  List (String, List (List Pat, Expr, Loc))
 groupsNotNamedIn names gs = filterList (g => not (contains (fst g) names)) gs
 
 -- the frame list `globalEnv` is built from: the private prelude frame first when it is
@@ -4540,7 +4671,7 @@ concatList : List (List a) -> List a
 concatList [] = []
 concatList (x :: xs) = x ++ concatList xs
 
-groupsOf : List Decl -> List (String, List (List Pat, Expr))
+groupsOf : List Decl -> List (String, List (List Pat, Expr, Loc))
 groupsOf decls =
   let defs = funDefs decls
   map (mkGroup defs) (funGroupNames defs [])

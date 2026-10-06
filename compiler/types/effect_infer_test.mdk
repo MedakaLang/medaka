@@ -62,7 +62,7 @@ test "a block is abstracted as its last expression in the scope its lets build" 
     "\"cfg/app\""
     (alphaPrefix
       (EBlock [
-        DoLet False False (PVar "p" at) (ELit (LString "cfg/app")),
+        DoLet False False (PVar "p" at) (ELit (LString "cfg/app")) at,
         DoExpr (EVar "p"),
       ]))
 
@@ -71,8 +71,8 @@ test "a patterned let in a block hides the names it binds" =
     "top"
     (alphaPrefix
       (EBlock [
-        DoLet False False (PVar "p" at) (ELit (LString "cfg/app")),
-        DoLet False False (PTuple [PVar "p" at, PWild]) (EVar "pair"),
+        DoLet False False (PVar "p" at) (ELit (LString "cfg/app")) at,
+        DoLet False False (PTuple [PVar "p" at, PWild]) (EVar "pair") at,
         DoExpr (EVar "p"),
       ]))
 
@@ -113,7 +113,7 @@ test "an interpolated part is top unless display is the prelude method" =
       (alphaPrefixWith
         True
         qualifiedNames
-        (ELet False False (PVar "display" at) (EVar "f") dirPath)),
+        (ELet at False (PVar "display" at) (EVar "f") dirPath)),
   ]
 
 test "an interpolated part keeps a qualifier only on a String operand" = expectAll

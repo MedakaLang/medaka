@@ -78,13 +78,13 @@ prepareWasmFileGrants runtimeDecls kept modules =
 
 keptFunNames : List Decl -> List String -> List String
 keptFunNames [] acc = acc
-keptFunNames ((DFunDef _ n _ _) :: rest) acc = keptFunNames rest (n :: acc)
+keptFunNames ((DFunDef _ n _ _ _) :: rest) acc = keptFunNames rest (n :: acc)
 keptFunNames ((DAttrib _ d) :: rest) acc = keptFunNames (d :: rest) acc
 keptFunNames (_ :: rest) acc = keptFunNames rest acc
 
 -- DCE drops only plain functions, so every other declaration is read.
 isLiveDecl : OrdMap Unit -> Decl -> Bool
-isLiveDecl live (DFunDef _ n _ _) = omHasKey n live
+isLiveDecl live (DFunDef _ n _ _ _) = omHasKey n live
 isLiveDecl live (DAttrib _ d) = isLiveDecl live d
 isLiveDecl _ _ = True
 
@@ -149,13 +149,13 @@ scanGrantSites reach sites around bound (e@(EApp _ _)) =
 
 -- A partial use is saturated under `let`s binding the arguments it was given, so
 -- the call inside reads as fresh names: locate it at the first bound argument.
-scanGrantSites reach sites around bound (ELet mutable recursive pat rhs body) =
-  let after = letScope mutable recursive pat rhs bound
+scanGrantSites reach sites around bound (ELet site recursive pat rhs body) =
+  let after = letScope False recursive pat rhs bound
   let rhs2 =
     scanGrantSites reach sites around (if recursive then after else bound) rhs
   let body2 =
     scanGrantSites reach sites (orElse (leftLoc rhs) around) after body
-  ELet mutable recursive pat rhs2 body2
+  ELet site recursive pat rhs2 body2
 scanGrantSites reach sites around bound e =
   mapScopedChildren bound (scanGrantSites reach sites around) e
 
@@ -167,7 +167,7 @@ scanOrdinaryGrantSites : Reach ->
   Expr ->
   List Expr ->
   Expr
-scanOrdinaryGrantSites reach sites around bound _ head args =
+scanOrdinaryGrantSites reach sites around bound spine head args =
   let _ =
     if mayReachFile reach bound head (listLen args) then
       let path = leafPath head args
@@ -186,7 +186,7 @@ scanOrdinaryGrantSites reach sites around bound _ head args =
       []
   let f = scanGrantSites reach sites around bound head
   let xs = map (scanGrantSites reach sites around bound) args
-  fold EApp f xs
+  fold EApp (keepSpineLoc spine f) xs
 -- ── which callees can reach a file extern ────────────────────────────────────
 -- Global bindings and methods sharing an unmangled spelling are combined:
 -- every impl/default contributes edges, so that union only checks more. Local
@@ -341,7 +341,7 @@ localFunction : Scope -> Expr -> Option LocalBinding
 localFunction bound (ELoc _ e) = localFunction bound e
 localFunction bound (EAnnot e _) = localFunction bound e
 localFunction bound (EHeadAnnot e _) = localFunction bound e
-localFunction bound (ELet False False pat rhs body) =
+localFunction bound (ELet _ False pat rhs body) =
   -- Grant saturation evaluates supplied arguments before constructing its eta
   -- closure. Keep those binders in the closure's scope; the caller also scans
   -- the construction RHS, including any eager file operations.
@@ -355,20 +355,20 @@ localGroupScope binds bound =
     addNamesScope
       (map
         (b => match b
-          LetBind n _ => n)
+          LetBind n _ _ => n)
         binds)
       bound
   fold
     (m b => match b
-      LetBind n [FunClause ps body] =>
+      LetBind n [FunClause ps body] _ =>
         omInsert n (localBinding ps body captured) m
-      LetBind _ _ => m)
+      LetBind _ _ _ => m)
     captured
     binds
 
 mapScopedDeclBodies : (Scope -> Expr -> Expr) -> Decl -> Decl
-mapScopedDeclBodies f (DFunDef pub n ps body) =
-  DFunDef pub n ps (f (addPatScope ps omEmpty) body)
+mapScopedDeclBodies f (DFunDef pub n ps body site) =
+  DFunDef pub n ps (f (addPatScope ps omEmpty) body) site
 mapScopedDeclBodies f (DLetGroup pub binds) =
   DLetGroup pub (map (mapScopedLetBind f omEmpty) binds)
 mapScopedDeclBodies f (d@(DImpl { methods, ... })) = DImpl { d |
@@ -410,21 +410,22 @@ mapScopedDeclBodies f (DAttrib attrs d) =
 mapScopedDeclBodies _ d = d
 
 mapScopedLetBind : (Scope -> Expr -> Expr) -> Scope -> LetBind -> LetBind
-mapScopedLetBind f bound (LetBind n clauses) =
+mapScopedLetBind f bound (LetBind n clauses site) =
   LetBind
     n
     (map
       (c => match c
         FunClause ps body => FunClause ps (f (addPatScope ps bound) body))
       clauses)
+    site
 
 mapScopedChildren : Scope -> (Scope -> Expr -> Expr) -> Expr -> Expr
 mapScopedChildren bound f (ELam ps body) =
   ELam ps (f (addPatScope ps bound) body)
-mapScopedChildren bound f (ELet mutable recursive pat rhs body) =
-  let after = letScope mutable recursive pat rhs bound
+mapScopedChildren bound f (ELet site recursive pat rhs body) =
+  let after = letScope False recursive pat rhs bound
   ELet
-    mutable
+    site
     recursive
     pat
     (f (if recursive then after else bound) rhs)
@@ -475,9 +476,9 @@ mapScopedStmts f bound ((DoExpr e) :: rest) =
   DoExpr (f bound e) :: mapScopedStmts f bound rest
 mapScopedStmts f bound ((DoBind pat e) :: rest) =
   DoBind pat (f bound e) :: mapScopedStmts f (addPatScope [pat] bound) rest
-mapScopedStmts f bound ((DoLet mutable recursive pat e) :: rest) =
+mapScopedStmts f bound ((DoLet mutable recursive pat e site) :: rest) =
   let after = letScope mutable recursive pat e bound
-  DoLet mutable recursive pat (f (if recursive then after else bound) e)
+  DoLet mutable recursive pat (f (if recursive then after else bound) e) site
     :: mapScopedStmts f after rest
 mapScopedStmts f bound ((DoAssign n e) :: rest) =
   DoAssign n (f bound e) :: mapScopedStmts f bound rest
@@ -532,7 +533,7 @@ valueParamCount ((PVar n _) :: rest)
 valueParamCount ps = listLen ps
 
 declBindingBodies : Decl -> List (String, List Pat, Expr)
-declBindingBodies (DFunDef _ n ps body) = [(n, ps, body)]
+declBindingBodies (DFunDef _ n ps body _) = [(n, ps, body)]
 declBindingBodies (DLetGroup _ binds) = flatMap letBindBodies binds
 declBindingBodies (DImpl { methods, ... }) =
   map
@@ -549,7 +550,7 @@ declBindingBodies (DAttrib _ d) = declBindingBodies d
 declBindingBodies _ = []
 
 letBindBodies : LetBind -> List (String, List Pat, Expr)
-letBindBodies (LetBind n clauses) =
+letBindBodies (LetBind n clauses _) =
   map
     (c => match c
       FunClause ps body => (n, ps, body))
@@ -625,7 +626,7 @@ tailReturns seeds deps owner base bound (ELetGroup binds body) =
     addNamesScope
       (map
         (b => match b
-          LetBind n _ => n)
+          LetBind n _ _ => n)
         binds)
       bound
   tailReturns seeds deps owner base after body
@@ -700,7 +701,7 @@ tailStmtReturns seeds deps owner base bound [DoExpr e] =
   tailReturns seeds deps owner base bound e
 tailStmtReturns seeds deps owner base bound ((DoBind pat _) :: rest) =
   tailStmtReturns seeds deps owner base (addPatScope [pat] bound) rest
-tailStmtReturns seeds deps owner base bound ((DoLet _ _ pat _) :: rest) =
+tailStmtReturns seeds deps owner base bound ((DoLet _ _ pat _ _) :: rest) =
   tailStmtReturns seeds deps owner base (addPatScope [pat] bound) rest
 tailStmtReturns seeds deps owner base bound (_ :: rest) =
   tailStmtReturns seeds deps owner base bound rest
@@ -756,14 +757,14 @@ methodNoFile aliases write m (DAttrib _ d) = methodNoFile aliases write m d
 methodNoFile _ _ m _ = m
 
 bindingNoFile : OrdMap Bool -> OrdMap Bool -> Ref (OrdMap Bool) -> Decl -> Unit
-bindingNoFile ordinary _ results (DFunDef _ n _ _) =
+bindingNoFile ordinary _ results (DFunDef _ n _ _ _) =
   results :=
     putNoFile (unmangled n) (optionOr False (omLookup n ordinary)) results.value
 bindingNoFile ordinary _ results (DLetGroup _ binds) =
   let _ =
     map
       (b => match b
-        LetBind n _ =>
+        LetBind n _ _ =>
           results :=
             putNoFile
               (unmangled n)
@@ -892,6 +893,18 @@ collectRefs returns refs bound e = match headRawName e
     let _ = if not (omHasKey n bound) then refs := unmangled n :: refs.value
     e
   None => mapScopedChildren bound (collectRefs returns refs) e
+
+-- The location the call's spine started with, which `appSpine` drops, put back
+-- on the rebuilt head: a trap site reads the start of a call.
+keepSpineLoc : Expr -> Expr -> Expr
+keepSpineLoc spine head = match spineLoc spine
+  Some l => ELoc l head
+  None => head
+
+spineLoc : Expr -> Option Loc
+spineLoc (EApp f _) = spineLoc f
+spineLoc (ELoc l _) = Some l
+spineLoc _ = None
 
 appSpine : Expr -> List Expr -> (Expr, List Expr)
 appSpine (EApp f x) args = appSpine f (x :: args)

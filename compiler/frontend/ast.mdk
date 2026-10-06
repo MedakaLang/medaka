@@ -35,9 +35,19 @@ public export data Lit =
 -- Carried by the transparent `ELoc` wrapper the parser puts on atom/leaf and
 -- statement-form expressions.  The `file` is filled by the caller (B.10.2b) —
 -- the parser leaves it "".  Transparent to all semantics: every stage either
--- recurses through `ELoc` or strips it (sexp/Core-IR lowering), so emitted IR
--- and structural dumps are byte-identical to the un-wrapped tree.
+-- recurses through `ELoc` or strips it, so structural dumps are byte-identical
+-- to the un-wrapped tree.  The one thing it changes is where a runtime error
+-- reports itself: the Core IR lowering copies the span of an arithmetic
+-- operand, a `match` or a refutable `let` onto that node's trap site, and the
+-- native and WasmGC emitters print it.
 public export data Loc = Loc String Int Int Int Int
+
+-- The site a synthesized `DFunDef`, `DoLet` or `ELet` carries: the zero-width
+-- 1:0 span the unlocated `parse` path gives every token, which the evaluator's
+-- trap-site tracking reads as "no location".
+export
+noDeclLoc : Loc
+noDeclLoc = Loc "" 1 0 1 0
 
 -- ── Type-constructor identity (#1110, A-1 carrier) ────────────────────────
 -- WHERE a type-constructor head was declared.  `DICT-SEMANTICS.md` §8 I4 says
@@ -1370,8 +1380,10 @@ public export data DoStmt =
   -- is rejected at the parser (`letKind TMut = failP letMutRemovedMsg`, beta
   -- immutability model), so no `mut`-flag logic remains anywhere downstream.
   -- The field is retained (vs. dropped) only to avoid an ~87-site arity churn
-  -- across every pass + the s-expr round-trip.
-  | DoLet Bool Bool Pat Expr
+  -- across every pass + the s-expr round-trip.  The Loc is the `let` keyword's
+  -- span, where a pattern that fails to match is reported.  No printer or dump
+  -- renders it, and a synthesized statement carries `noDeclLoc`.
+  | DoLet Bool Bool Pat Expr Loc
   | DoAssign String Expr
   | DoFieldAssign String (List String) Expr
 
@@ -1394,17 +1406,23 @@ public export data Section =
 -- one clause of a `where`/let-group binding: parameter patterns + body
 public export data FunClause = FunClause (List Pat) Expr
 
--- a `where`/let-group binding: a name with one or more (coalesced) clauses
-public export data LetBind = LetBind String (List FunClause)
+-- a `where`/let-group binding: a name with one or more (coalesced) clauses.
+-- The Loc is the first clause's name token, where a call whose clauses and
+-- guards all fall through is reported.  Like `DFunDef`'s site it is never
+-- rendered, and a synthesized binding carries `noDeclLoc`.
+public export data LetBind = LetBind String (List FunClause) Loc
 
 public export data Expr =
   | ELit Lit
   | EVar String
   | EApp Expr Expr
   | ELam (List Pat) Expr
-  -- ELet <mut> <rec> pat rhs body. The `mut` Bool is ALWAYS False (see DoLet
-  -- above): `let mut` is a parser error, so no mut-flag logic exists downstream.
-  | ELet Bool Bool Pat Expr Expr
+  -- ELet <site> <rec> pat rhs body.  The site is the `let` keyword's span,
+  -- where a pattern that fails to match is reported; a synthesized `let`
+  -- carries `noDeclLoc`.  It is a field rather than an `ELoc` around the node
+  -- because the typechecker reads every `ELoc` as the span of the expression
+  -- it wraps.  No printer or dump renders it.
+  | ELet Loc Bool Pat Expr Expr
   | EMatch Expr (List Arm)
   | EIf Expr Expr Expr
   -- Phase 151 / Gap G: the trailing route ref is filled by the typed pipeline
@@ -1559,7 +1577,8 @@ public export data Expr =
   -- typecheck/resolve can attribute errors to a precise expression span via a
   -- `currentLoc` ref.  Semantically transparent: every stage either recurses
   -- through it or strips it.  sexp.mdk renders it transparently and core_ir_
-  -- lower.mdk strips it before Core IR, so all parse/sexp/IR gates stay
+  -- lower.mdk strips it before Core IR, keeping only the trap sites of the
+  -- nodes that can abort (`Loc` above), so the parse and sexp gates stay
   -- byte-identical.  The parser never builds nested binop/app wrappers (it
   -- wraps leaves + statement forms only, exactly like parser.mly).
   | ELoc Loc Expr
@@ -1739,7 +1758,12 @@ public export data Decl =
   -- dump renders it.
   | DTypeSig Bool String Ty Loc
   | DExtern Bool String Ty
-  | DFunDef Bool String (List Pat) Expr
+  -- pub? name params body site.  One clause; a multi-clause function is a run
+  -- of same-named DFunDefs.  The site is the clause's name token, so a call
+  -- whose clauses and guards all fall through is reported at the function's
+  -- first clause.  No printer or dump renders it, it takes no part in clause
+  -- grouping, and a synthesized clause carries `noDeclLoc`.
+  | DFunDef Bool String (List Pat) Expr Loc
   -- ── the four TYPE-DECLARATION forms carry module identity (#1110) ────────
   -- `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each gained a `…Origin` field,
   -- stamped by resolve (`stampGraphTyOrigins`, `frontend/resolve.mdk`) with the
@@ -2189,9 +2213,9 @@ mapTyInDecl f (DTypeSig pub n t site) =
 mapTyInDecl f (DExtern pub n t) =
   let (t2, c) = mapTyFull f t
   (DExtern pub n t2, c)
-mapTyInDecl f (DFunDef pub n ps e) =
+mapTyInDecl f (DFunDef pub n ps e site) =
   let (e2, c) = mapTyInExpr f e
-  (DFunDef pub n ps e2, c)
+  (DFunDef pub n ps e2 site, c)
 -- ⚠️ Record UPDATE, not re-construction: rebuilding from the projected fields
 -- would DROP an already-acquired `dataOrigin`, which is exactly the identity-
 -- destroying shape #1219 found in `substTyVars`.  Every rebuild arm below follows
@@ -2317,10 +2341,10 @@ mapImplMethodsB f ((ImplMethod n ps e) :: rest) =
 
 mapLetBindsB : (Ty -> (Ty, Bool)) -> List LetBind -> (List LetBind, Bool)
 mapLetBindsB _ [] = ([], False)
-mapLetBindsB f ((LetBind n clauses) :: rest) =
+mapLetBindsB f ((LetBind n clauses site) :: rest) =
   let (cs2, c1) = mapFunClausesB f clauses
   let (rest2, c2) = mapLetBindsB f rest
-  (LetBind n cs2 :: rest2, c1 || c2)
+  (LetBind n cs2 site :: rest2, c1 || c2)
 
 mapFunClausesB : (Ty -> (Ty, Bool)) -> List FunClause -> (List FunClause, Bool)
 mapFunClausesB _ [] = ([], False)
@@ -2521,9 +2545,9 @@ mapDoStmtB f (DoExpr e) =
 mapDoStmtB f (DoBind p e) =
   let (e2, c) = mapTyInExpr f e
   (DoBind p e2, c)
-mapDoStmtB f (DoLet m r p e) =
+mapDoStmtB f (DoLet m r p e site) =
   let (e2, c) = mapTyInExpr f e
-  (DoLet m r p e2, c)
+  (DoLet m r p e2 site, c)
 mapDoStmtB f (DoAssign x e) =
   let (e2, c) = mapTyInExpr f e
   (DoAssign x e2, c)

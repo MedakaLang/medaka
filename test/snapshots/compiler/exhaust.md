@@ -1025,7 +1025,7 @@ letGroupWarnings oracle body =
   flatMap (checkLetBind oracle) (collectLetBinds body)
 
 checkLetBind : Oracle -> LetBind -> List (String, Option Loc)
-checkLetBind oracle (LetBind name funclauses) =
+checkLetBind oracle (LetBind name funclauses _) =
   checkGroup oracle name (map funClauseToClause funclauses)
 
 funClauseToClause : FunClause -> (List Pat, Expr)
@@ -1072,7 +1072,7 @@ collectLetBinds (EDoOrigin _ e) = collectLetBinds e
 collectLetBinds _ = []
 
 collectLetBindInner : LetBind -> List LetBind
-collectLetBindInner (LetBind _ funclauses) = flatMap funClauseBinds funclauses
+collectLetBindInner (LetBind _ funclauses _) = flatMap funClauseBinds funclauses
 
 funClauseBinds : FunClause -> List LetBind
 funClauseBinds (FunClause _ body) = collectLetBinds body
@@ -1093,7 +1093,7 @@ fieldAssignBinds (FieldAssign _ e) = collectLetBinds e
 doStmtBinds : DoStmt -> List LetBind
 doStmtBinds (DoExpr e) = collectLetBinds e
 doStmtBinds (DoBind _ e) = collectLetBinds e
-doStmtBinds (DoLet _ _ _ e) = collectLetBinds e
+doStmtBinds (DoLet _ _ _ e _) = collectLetBinds e
 doStmtBinds (DoAssign _ e) = collectLetBinds e
 doStmtBinds (DoFieldAssign _ _ e) = collectLetBinds e
 
@@ -1142,12 +1142,12 @@ checkGuardExhaustiveness prog = map fst (checkGuardExhaustivenessWith prog prog)
 
 topFunDefClauses : List Decl -> List (String, (List Pat, Expr))
 topFunDefClauses [] = []
-topFunDefClauses ((DFunDef _ n pats body) :: rest) =
+topFunDefClauses ((DFunDef _ n pats body _) :: rest) =
   (n, (pats, body)) :: topFunDefClauses rest
 topFunDefClauses (_ :: rest) = topFunDefClauses rest
 
 declBodyWarnings : Oracle -> Decl -> List (String, Option Loc)
-declBodyWarnings oracle (DFunDef _ _ _ body) = letGroupWarnings oracle body
+declBodyWarnings oracle (DFunDef _ _ _ body _) = letGroupWarnings oracle body
 declBodyWarnings oracle (DImpl { methods, ... }) =
   flatMap (checkNamedGroup oracle) (groupByName (implClauses methods))
     ++ flatMap (implMethodBodyWarnings oracle) methods
@@ -1507,7 +1507,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "letGroupWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "letGroupWarnings" ((PVar "oracle") (PVar "body")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkLetBind") (EVar "oracle"))) (EApp (EVar "collectLetBinds") (EVar "body"))))
 (DTypeSig false "checkLetBind" (TyFun (TyCon "Oracle") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "checkLetBind" ((PVar "oracle") (PCon "LetBind" (PVar "name") (PVar "funclauses"))) (EApp (EApp (EApp (EVar "checkGroup") (EVar "oracle")) (EVar "name")) (EApp (EApp (EVar "map") (EVar "funClauseToClause")) (EVar "funclauses"))))
+(DFunDef false "checkLetBind" ((PVar "oracle") (PCon "LetBind" (PVar "name") (PVar "funclauses") PWild)) (EApp (EApp (EApp (EVar "checkGroup") (EVar "oracle")) (EVar "name")) (EApp (EApp (EVar "map") (EVar "funClauseToClause")) (EVar "funclauses"))))
 (DTypeSig false "funClauseToClause" (TyFun (TyCon "FunClause") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))
 (DFunDef false "funClauseToClause" ((PCon "FunClause" (PVar "pats") (PVar "body"))) (ETuple (EVar "pats") (EVar "body")))
 (DTypeSig false "collectLetBinds" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "LetBind"))))
@@ -1542,7 +1542,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "collectLetBinds" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "collectLetBinds" (PWild) (EListLit))
 (DTypeSig false "collectLetBindInner" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "LetBind"))))
-(DFunDef false "collectLetBindInner" ((PCon "LetBind" PWild (PVar "funclauses"))) (EApp (EApp (EVar "flatMap") (EVar "funClauseBinds")) (EVar "funclauses")))
+(DFunDef false "collectLetBindInner" ((PCon "LetBind" PWild (PVar "funclauses") PWild)) (EApp (EApp (EVar "flatMap") (EVar "funClauseBinds")) (EVar "funclauses")))
 (DTypeSig false "funClauseBinds" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "LetBind"))))
 (DFunDef false "funClauseBinds" ((PCon "FunClause" PWild (PVar "body"))) (EApp (EVar "collectLetBinds") (EVar "body")))
 (DTypeSig false "collectArmBinds" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "LetBind"))))
@@ -1557,7 +1557,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "doStmtBinds" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "LetBind"))))
 (DFunDef false "doStmtBinds" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "doStmtBinds" ((PCon "DoBind" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
-(DFunDef false "doStmtBinds" ((PCon "DoLet" PWild PWild PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
+(DFunDef false "doStmtBinds" ((PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "doStmtBinds" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "doStmtBinds" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DTypeSig false "interpBinds" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "LetBind"))))
@@ -1571,10 +1571,10 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "checkGuardExhaustiveness" ((PVar "prog")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "prog")) (EVar "prog"))))
 (DTypeSig false "topFunDefClauses" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "topFunDefClauses" ((PList)) (EListLit))
-(DFunDef false "topFunDefClauses" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "topFunDefClauses") (EVar "rest"))))
+(DFunDef false "topFunDefClauses" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "pats") (PVar "body") PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "topFunDefClauses") (EVar "rest"))))
 (DFunDef false "topFunDefClauses" ((PCons PWild (PVar "rest"))) (EApp (EVar "topFunDefClauses") (EVar "rest")))
 (DTypeSig false "declBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DFunDef" PWild PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
+(DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DFunDef" PWild PWild PWild (PVar "body") PWild)) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DImpl" ((rf "methods" None)) true)) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "implClauses") (EVar "methods")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "implMethodBodyWarnings") (EVar "oracle"))) (EVar "methods"))))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EApp (EVar "ifaceMethodWarnings") (EVar "oracle"))) (EVar "methods")))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DProp" PWild PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
@@ -1918,7 +1918,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "letGroupWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "letGroupWarnings" ((PVar "oracle") (PVar "body")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkLetBind") (EVar "oracle"))) (EApp (EVar "collectLetBinds") (EVar "body"))))
 (DTypeSig false "checkLetBind" (TyFun (TyCon "Oracle") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "checkLetBind" ((PVar "oracle") (PCon "LetBind" (PVar "name") (PVar "funclauses"))) (EApp (EApp (EApp (EVar "checkGroup") (EVar "oracle")) (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "funClauseToClause")) (EVar "funclauses"))))
+(DFunDef false "checkLetBind" ((PVar "oracle") (PCon "LetBind" (PVar "name") (PVar "funclauses") PWild)) (EApp (EApp (EApp (EVar "checkGroup") (EVar "oracle")) (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "funClauseToClause")) (EVar "funclauses"))))
 (DTypeSig false "funClauseToClause" (TyFun (TyCon "FunClause") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))
 (DFunDef false "funClauseToClause" ((PCon "FunClause" (PVar "pats") (PVar "body"))) (ETuple (EVar "pats") (EVar "body")))
 (DTypeSig false "collectLetBinds" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "LetBind"))))
@@ -1953,7 +1953,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "collectLetBinds" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "collectLetBinds" (PWild) (EListLit))
 (DTypeSig false "collectLetBindInner" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "LetBind"))))
-(DFunDef false "collectLetBindInner" ((PCon "LetBind" PWild (PVar "funclauses"))) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseBinds")) (EVar "funclauses")))
+(DFunDef false "collectLetBindInner" ((PCon "LetBind" PWild (PVar "funclauses") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseBinds")) (EVar "funclauses")))
 (DTypeSig false "funClauseBinds" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "LetBind"))))
 (DFunDef false "funClauseBinds" ((PCon "FunClause" PWild (PVar "body"))) (EApp (EVar "collectLetBinds") (EVar "body")))
 (DTypeSig false "collectArmBinds" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "LetBind"))))
@@ -1968,7 +1968,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "doStmtBinds" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "LetBind"))))
 (DFunDef false "doStmtBinds" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "doStmtBinds" ((PCon "DoBind" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
-(DFunDef false "doStmtBinds" ((PCon "DoLet" PWild PWild PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
+(DFunDef false "doStmtBinds" ((PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "doStmtBinds" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "doStmtBinds" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DTypeSig false "interpBinds" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "LetBind"))))
@@ -1982,10 +1982,10 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "checkGuardExhaustiveness" ((PVar "prog")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "prog")) (EVar "prog"))))
 (DTypeSig false "topFunDefClauses" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "topFunDefClauses" ((PList)) (EListLit))
-(DFunDef false "topFunDefClauses" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "topFunDefClauses") (EVar "rest"))))
+(DFunDef false "topFunDefClauses" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "pats") (PVar "body") PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (ETuple (EVar "pats") (EVar "body"))) (EApp (EVar "topFunDefClauses") (EVar "rest"))))
 (DFunDef false "topFunDefClauses" ((PCons PWild (PVar "rest"))) (EApp (EVar "topFunDefClauses") (EVar "rest")))
 (DTypeSig false "declBodyWarnings" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DFunDef" PWild PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
+(DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DFunDef" PWild PWild PWild (PVar "body") PWild)) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DImpl" ((rf "methods" None)) true)) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "implClauses") (EVar "methods")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implMethodBodyWarnings") (EVar "oracle"))) (EVar "methods"))))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "ifaceMethodWarnings") (EVar "oracle"))) (EVar "methods")))
 (DFunDef false "declBodyWarnings" ((PVar "oracle") (PCon "DProp" PWild PWild PWild (PVar "body"))) (EApp (EApp (EVar "letGroupWarnings") (EVar "oracle")) (EVar "body")))

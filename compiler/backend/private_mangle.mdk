@@ -48,7 +48,7 @@
 --
 -- EXCLUDED (never mangled):
 --   • the ENTRY unit's `main` — the emitter emits it as `@main`, the program entry
---     point (llvm_emit.mdk `isFnBind (CBind "main" _) = False`); renaming it would
+--     point (llvm_emit.mdk `isFnBind (CBind "main" _ _) = False`); renaming it would
 --     lose the entry.  Only the entry unit (the LAST unit: the loader hands modules
 --     dependency-first) keeps the key `main` unrenamed (`isEntryMainKey`).  Any other
 --     unit's `main` is an ordinary top-level name and mangles to `<mid>__main`, so it
@@ -1326,7 +1326,7 @@ pubFnNames decls =
 -- names whose DFunDef / DLetGroup binder is itself `pub = True`.
 pubDefNames : List Decl -> List String
 pubDefNames [] = []
-pubDefNames ((DFunDef True n _ _) :: rest) = n :: pubDefNames rest
+pubDefNames ((DFunDef True n _ _ _) :: rest) = n :: pubDefNames rest
 pubDefNames ((DLetGroup True binds) :: rest) =
   map letBindName binds ++ pubDefNames rest
 pubDefNames ((DAttrib _ d) :: rest) = pubDefNames [d] ++ pubDefNames rest
@@ -1339,13 +1339,13 @@ unitDefNames : (String, List Decl) -> List String
 unitDefNames (_, decls) = flatMap declDefNames decls
 
 declDefNames : Decl -> List String
-declDefNames (DFunDef _ n _ _) = [n]
+declDefNames (DFunDef _ n _ _ _) = [n]
 declDefNames (DLetGroup _ binds) = map letBindName binds
 declDefNames (DAttrib _ d) = declDefNames d
 declDefNames _ = []
 
 letBindName : LetBind -> String
-letBindName (LetBind n _) = n
+letBindName (LetBind n _ _) = n
 
 -- names exported via a `pub` DTypeSig/DExtern in this unit (so their DFunDef
 -- clauses, which parse private, still count as exported function symbols).
@@ -1530,12 +1530,13 @@ posMod n m = (n % m + m) % m
 
 -- ── decl rewrite (rename both the DEFINITION name and all references) ─────────
 renameDecl : OrdMap String -> Decl -> Decl
-renameDecl rm (DFunDef pub n ps e) =
+renameDecl rm (DFunDef pub n ps e site) =
   DFunDef
     pub
     (renameDefName rm n)
     (renamePatsPM rm ps)
     (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)
+    site
 -- a top-level signature (`f : …` / `export f : …`) shares the function's name; it
 -- MUST be renamed in lockstep with its DFunDef so the typechecker keys f's scheme
 -- under the SAME mangled name the call sites + def now use (else dictPass /
@@ -1598,8 +1599,8 @@ renameVariant rm (Variant n payload) = Variant (renameDefName rm n) payload
 -- top-level LetBind in a DLetGroup: rename the binder name (if in map) AND its
 -- clause bodies.  The group's own names are in scope across all clauses.
 renameLetBindDef : OrdMap String -> LetBind -> LetBind
-renameLetBindDef rm (LetBind n clauses) =
-  LetBind (renameDefName rm n) (map (renameFunClause rm omEmpty) clauses)
+renameLetBindDef rm (LetBind n clauses site) =
+  LetBind (renameDefName rm n) (map (renameFunClause rm omEmpty) clauses) site
 
 renameDefName : OrdMap String -> String -> String
 renameDefName rm n = match omLookup n rm
@@ -1819,8 +1820,8 @@ renameInterp rm bound (InterpExpr e) = InterpExpr (renameScoped rm bound e)
 -- the binder would point every use at the module-level definition (#3519:
 -- `where result = 5` bound as the prelude's `core__result`).
 renameLetBind : OrdMap String -> OrdMap Unit -> LetBind -> LetBind
-renameLetBind rm bound (LetBind n clauses) =
-  LetBind n (map (renameFunClause rm bound) clauses)
+renameLetBind rm bound (LetBind n clauses site) =
+  LetBind n (map (renameFunClause rm bound) clauses) site
 
 renameFunClause : OrdMap String -> OrdMap Unit -> FunClause -> FunClause
 renameFunClause rm bound (FunClause ps body) =
@@ -1860,9 +1861,9 @@ renameStmts rm bound ((DoExpr e) :: rest) =
 renameStmts rm bound ((DoBind p e) :: rest) =
   DoBind (renamePat rm p) (renameScoped rm bound e)
     :: renameStmts rm (boundInsertPM (patVarsPM p) bound) rest
-renameStmts rm bound ((DoLet m r p e) :: rest) =
+renameStmts rm bound ((DoLet m r p e site) :: rest) =
   let b1 = if r then boundInsertPM (patVarsPM p) bound else bound
-  DoLet m r (renamePat rm p) (renameScoped rm b1 e)
+  DoLet m r (renamePat rm p) (renameScoped rm b1 e) site
     :: renameStmts rm (boundInsertPM (patVarsPM p) bound) rest
 renameStmts rm bound ((DoAssign x e) :: rest) =
   DoAssign x (renameScoped rm bound e) :: renameStmts rm bound rest

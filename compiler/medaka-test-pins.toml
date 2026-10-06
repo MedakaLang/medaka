@@ -6,7 +6,7 @@ kind = "test"
 name = "unit pins require their exact assertion message"
 engine = "native"
 issue = 3857
-detail_lines = ["native test run ended (probe exit 1) — runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running"]
+detail_lines = ["native test run ended (probe exit 1) — compiler/tools/test_pins_report.mdk:73:0: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running"]
 failure = "error"
 
 [[pin]]
@@ -15,5 +15,5 @@ kind = "test"
 name = "held drained and changed unit pins retain their human details"
 engine = "native"
 issue = 3857
-detail_lines = ["native test run ended (probe exit 1) — runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running"]
+detail_lines = ["native test run ended (probe exit 1) — compiler/tools/test_pins_report.mdk:73:0: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running"]
 failure = "error"

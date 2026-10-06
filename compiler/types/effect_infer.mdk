@@ -185,8 +185,8 @@ blockAuthority top env lets (s :: rest@(_ :: _)) =
 blockAuthority _ _ _ _ = None
 
 stmtScope : DoStmt -> List (String, AlphaBinder) -> List (String, AlphaBinder)
-stmtScope (DoLet _ _ (PVar x _) e) lets = (x, ALet e) :: lets
-stmtScope (DoLet _ _ pat _) lets = shadowed (patBoundNames pat) lets
+stmtScope (DoLet _ _ (PVar x _) e _) lets = (x, ALet e) :: lets
+stmtScope (DoLet _ _ pat _ _) lets = shadowed (patBoundNames pat) lets
 stmtScope (DoBind pat _) lets = shadowed (patBoundNames pat) lets
 stmtScope (DoAssign x _) lets = shadowed [x] lets
 stmtScope (DoExpr _) lets = lets
@@ -223,7 +223,7 @@ shadowed : List String ->
 shadowed names lets = map (n => (n, AOpaque)) names ++ lets
 
 letBindName : LetBind -> List String
-letBindName (LetBind n _) = [n]
+letBindName (LetBind n _ _) = [n]
 
 -- A domain element from a literal: a Prefix pattern, a singleton Set, or a
 -- product's primary axis; an atomic label abstracts every value to its top.
@@ -327,6 +327,6 @@ collectBinds : List LetBind ->
   List (String, AlphaBinder) ->
   List (String, AlphaBinder)
 collectBinds [] acc = acc
-collectBinds ((LetBind n clauses) :: rest) acc = match clauses
+collectBinds ((LetBind n clauses _) :: rest) acc = match clauses
   [FunClause [] rhs] => collectBinds rest ((n, ALet rhs) :: acc)
   _ => collectBinds rest acc

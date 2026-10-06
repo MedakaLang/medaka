@@ -1,5 +1,5 @@
 # META
-source_lines=1142
+source_lines=1143
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -134,7 +134,8 @@ mapGuardArm : (Expr -> Expr) -> GuardArm -> GuardArm
 mapGuardArm g (GuardArm gs b) = GuardArm (map (mapGuard g) gs) (g b)
 
 mapLetBind : (Expr -> Expr) -> LetBind -> LetBind
-mapLetBind g (LetBind n clauses) = LetBind n (map (mapFunClause g) clauses)
+mapLetBind g (LetBind n clauses site) =
+  LetBind n (map (mapFunClause g) clauses) site
 
 mapFunClause : (Expr -> Expr) -> FunClause -> FunClause
 mapFunClause g (FunClause ps b) = FunClause ps (g b)
@@ -145,7 +146,7 @@ mapFieldAssign g (FieldAssign n v) = FieldAssign n (g v)
 mapDoStmt : (Expr -> Expr) -> DoStmt -> DoStmt
 mapDoStmt g (DoExpr e) = DoExpr (g e)
 mapDoStmt g (DoBind p e) = DoBind p (g e)
-mapDoStmt g (DoLet m r p e) = DoLet m r p (g e)
+mapDoStmt g (DoLet m r p e site) = DoLet m r p (g e) site
 mapDoStmt g (DoAssign x e) = DoAssign x (g e)
 mapDoStmt g (DoFieldAssign x fs e) = DoFieldAssign x fs (g e)
 
@@ -155,7 +156,7 @@ mapInterp g (InterpExpr e) = InterpExpr (g e)
 
 export
 mapDecl : (Expr -> Expr) -> Decl -> Decl
-mapDecl f (DFunDef pub n ps e) = DFunDef pub n ps (mapExpr f e)
+mapDecl f (DFunDef pub n ps e site) = DFunDef pub n ps (mapExpr f e) site
 mapDecl f (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (mapIfaceMethod f) methods }
 mapDecl f (d@(DImpl { methods, ... })) =
@@ -338,7 +339,7 @@ firstDoStmtLoc (s :: rest) = match doStmtLoc s
 doStmtLoc : DoStmt -> Option Loc
 doStmtLoc (DoExpr e) = exprLoc e
 doStmtLoc (DoBind _ e) = exprLoc e
-doStmtLoc (DoLet _ _ _ e) = exprLoc e
+doStmtLoc (DoLet _ _ _ e _) = exprLoc e
 doStmtLoc (DoAssign _ e) = exprLoc e
 doStmtLoc (DoFieldAssign _ _ e) = exprLoc e
 
@@ -354,8 +355,8 @@ lowerDo d [DoBind pat e] =
 lowerDo d ((DoExpr e) :: rest) = callAndThen d e (ELam [PWild] (lowerDo d rest))
 lowerDo d ((DoBind pat e) :: rest) =
   callAndThen d e (doCont pat (lowerDo d rest))
-lowerDo d ((DoLet _ isFun pat e) :: rest) =
-  ELet False isFun pat e (lowerDo d rest)
+lowerDo d ((DoLet _ isFun pat e site) :: rest) =
+  ELet site isFun pat e (lowerDo d rest)
 lowerDo _ _ = fallthrough
 
 -- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes
@@ -1196,7 +1197,7 @@ desugar prog =
 (DTypeSig false "mapGuardArm" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm"))))
 (DFunDef false "mapGuardArm" ((PVar "g") (PCon "GuardArm" (PVar "gs") (PVar "b"))) (EApp (EApp (EVar "GuardArm") (EApp (EApp (EVar "map") (EApp (EVar "mapGuard") (EVar "g"))) (EVar "gs"))) (EApp (EVar "g") (EVar "b"))))
 (DTypeSig false "mapLetBind" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
-(DFunDef false "mapLetBind" ((PVar "g") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "mapFunClause") (EVar "g"))) (EVar "clauses"))))
+(DFunDef false "mapLetBind" ((PVar "g") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site"))) (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "mapFunClause") (EVar "g"))) (EVar "clauses"))) (EVar "site")))
 (DTypeSig false "mapFunClause" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "FunClause") (TyCon "FunClause"))))
 (DFunDef false "mapFunClause" ((PVar "g") (PCon "FunClause" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EVar "g") (EVar "b"))))
 (DTypeSig false "mapFieldAssign" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign"))))
@@ -1204,14 +1205,14 @@ desugar prog =
 (DTypeSig false "mapDoStmt" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "DoStmt") (TyCon "DoStmt"))))
 (DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EVar "g") (EVar "e"))))
 (DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EVar "g") (EVar "e"))))
+(DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EVar "g") (EVar "e"))) (EVar "site")))
 (DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EVar "g") (EVar "e"))))
 (DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EVar "g") (EVar "e"))))
 (DTypeSig false "mapInterp" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart"))))
 (DFunDef false "mapInterp" (PWild (PCon "InterpStr" (PVar "s"))) (EApp (EVar "InterpStr") (EVar "s")))
 (DFunDef false "mapInterp" ((PVar "g") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EVar "g") (EVar "e"))))
 (DTypeSig true "mapDecl" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "mapDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "e"))))
+(DFunDef false "mapDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "e"))) (EVar "site")))
 (DFunDef false "mapDecl" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "mapIfaceMethod") (EVar "f"))) (EVar "methods"))))))
 (DFunDef false "mapDecl" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "mapImplMethod") (EVar "f"))) (EVar "methods"))))))
 (DFunDef false "mapDecl" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "body"))))
@@ -1295,7 +1296,7 @@ desugar prog =
 (DTypeSig false "doStmtLoc" (TyFun (TyCon "DoStmt") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "doStmtLoc" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "exprLoc") (EVar "e")))
 (DFunDef false "doStmtLoc" ((PCon "DoBind" PWild (PVar "e"))) (EApp (EVar "exprLoc") (EVar "e")))
-(DFunDef false "doStmtLoc" ((PCon "DoLet" PWild PWild PWild (PVar "e"))) (EApp (EVar "exprLoc") (EVar "e")))
+(DFunDef false "doStmtLoc" ((PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EVar "exprLoc") (EVar "e")))
 (DFunDef false "doStmtLoc" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "exprLoc") (EVar "e")))
 (DFunDef false "doStmtLoc" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "exprLoc") (EVar "e")))
 (DTypeSig false "exprLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -1307,7 +1308,7 @@ desugar prog =
 (DFunDef false "lowerDo" ((PVar "d") (PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EApp (EVar "pureMethodName") (EVar "d")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
-(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "False")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest"))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "site")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest"))))
 (DFunDef false "lowerDo" (PWild PWild) (EVar "fallthrough"))
 (DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont")))))
@@ -1614,7 +1615,7 @@ desugar prog =
 (DTypeSig false "mapGuardArm" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm"))))
 (DFunDef false "mapGuardArm" ((PVar "g") (PCon "GuardArm" (PVar "gs") (PVar "b"))) (EApp (EApp (EVar "GuardArm") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapGuard") (EVar "g"))) (EVar "gs"))) (EApp (EVar "g") (EVar "b"))))
 (DTypeSig false "mapLetBind" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
-(DFunDef false "mapLetBind" ((PVar "g") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapFunClause") (EVar "g"))) (EVar "clauses"))))
+(DFunDef false "mapLetBind" ((PVar "g") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site"))) (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapFunClause") (EVar "g"))) (EVar "clauses"))) (EVar "site")))
 (DTypeSig false "mapFunClause" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "FunClause") (TyCon "FunClause"))))
 (DFunDef false "mapFunClause" ((PVar "g") (PCon "FunClause" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EVar "g") (EVar "b"))))
 (DTypeSig false "mapFieldAssign" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign"))))
@@ -1622,14 +1623,14 @@ desugar prog =
 (DTypeSig false "mapDoStmt" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "DoStmt") (TyCon "DoStmt"))))
 (DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EVar "g") (EVar "e"))))
 (DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EVar "g") (EVar "e"))))
-(DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EVar "g") (EVar "e"))))
+(DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EVar "g") (EVar "e"))) (EVar "site")))
 (DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EVar "g") (EVar "e"))))
 (DFunDef false "mapDoStmt" ((PVar "g") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EVar "g") (EVar "e"))))
 (DTypeSig false "mapInterp" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart"))))
 (DFunDef false "mapInterp" (PWild (PCon "InterpStr" (PVar "s"))) (EApp (EVar "InterpStr") (EVar "s")))
 (DFunDef false "mapInterp" ((PVar "g") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EVar "g") (EVar "e"))))
 (DTypeSig true "mapDecl" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "mapDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "e"))))
+(DFunDef false "mapDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "e"))) (EVar "site")))
 (DFunDef false "mapDecl" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "mapIfaceMethod") (EVar "f"))) (EVar "methods"))))))
 (DFunDef false "mapDecl" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "mapImplMethod") (EVar "f"))) (EVar "methods"))))))
 (DFunDef false "mapDecl" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "body"))))
@@ -1713,7 +1714,7 @@ desugar prog =
 (DTypeSig false "doStmtLoc" (TyFun (TyCon "DoStmt") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "doStmtLoc" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "exprLoc") (EVar "e")))
 (DFunDef false "doStmtLoc" ((PCon "DoBind" PWild (PVar "e"))) (EApp (EVar "exprLoc") (EVar "e")))
-(DFunDef false "doStmtLoc" ((PCon "DoLet" PWild PWild PWild (PVar "e"))) (EApp (EVar "exprLoc") (EVar "e")))
+(DFunDef false "doStmtLoc" ((PCon "DoLet" PWild PWild PWild (PVar "e") PWild)) (EApp (EVar "exprLoc") (EVar "e")))
 (DFunDef false "doStmtLoc" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "exprLoc") (EVar "e")))
 (DFunDef false "doStmtLoc" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "exprLoc") (EVar "e")))
 (DTypeSig false "exprLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -1725,7 +1726,7 @@ desugar prog =
 (DFunDef false "lowerDo" ((PVar "d") (PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EApp (EVar "pureMethodName") (EVar "d")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
-(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "False")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest"))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "site")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest"))))
 (DFunDef false "lowerDo" (PWild PWild) (EVar "fallthrough"))
 (DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont")))))

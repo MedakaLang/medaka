@@ -13,7 +13,7 @@
 -- prop_runner, results are printed AS each test is evaluated, so a body that
 -- aborts the run does not mask the tests that already passed.
 
-import frontend.ast.{Decl(..), Expr(..), Loc(..)}
+import frontend.ast.{Decl(..), Expr(..), Loc(..), noDeclLoc}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.resolve.{firstExprLoc}
 import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
@@ -136,7 +136,9 @@ uncapableExternNames corpus bound tests =
         closureOver
           (refGraph corpus)
           seen
-          (flatMap (t => freeRefsOf (DFunDef False "" [] (thd3 t))) tests)
+          (flatMap
+            (t => freeRefsOf (DFunDef False "" [] (thd3 t) noDeclLoc))
+            tests)
       filterList (n => has n seen) unbound
 
 thd3 : (a, b, c) -> c
@@ -208,11 +210,11 @@ refGraph decls =
 refGraphInto : List Decl -> HashMap String (List String) -> Unit
 refGraphInto [] _ = ()
 refGraphInto ((DAttrib _ d) :: rest) g = refGraphInto (d :: rest) g
-refGraphInto ((DFunDef _ n ps body) :: rest) g =
+refGraphInto ((DFunDef _ n ps body site) :: rest) g =
   let _ =
     setInPlace
       n
-      (freeRefsOf (DFunDef False n ps body) ++ findWithDefault [] n g)
+      (freeRefsOf (DFunDef False n ps body site) ++ findWithDefault [] n g)
       g
   refGraphInto rest g
 -- A non-function body (impl method, interface default, let group) has no single

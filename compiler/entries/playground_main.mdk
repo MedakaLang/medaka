@@ -127,7 +127,11 @@ import json.{
 }
 import support.path.{dirOf}
 import support.char.{isIdentChar, isDigit}
-import entries.entry_support.{rootsOrDefault, desugarPair}
+import entries.entry_support.{
+  rootsOrDefault,
+  desugarPair,
+  stampModulePaths,
+}
 import support.util.{startsWith, lookupAssoc, splitOnChar, filterList}
 import types.repr.{Scheme}
 import types.typecheck.{
@@ -430,7 +434,7 @@ guardedEmit emit rsrc csrc tsrc entry paths mods warnTriples =
 findMainFunDef : List Decl -> Option (List Pat, Expr)
 findMainFunDef [] = None
 findMainFunDef ((DAttrib _ d) :: rest) = findMainFunDef (d :: rest)
-findMainFunDef ((DFunDef _ "main" ps body) :: _) = Some (ps, body)
+findMainFunDef ((DFunDef _ "main" ps body _) :: _) = Some (ps, body)
 findMainFunDef (_ :: rest) = findMainFunDef rest
 
 -- Best-effort location: the first ELoc span walking the outermost EApp spine.
@@ -626,7 +630,8 @@ runEmit paths warnTriples runtimeDecls coreDecls modules =
   -- #2809: elaborate the program as written, then mangle its elaborated trees.
   let (coreE, modulesE, _, _, _, _) =
     elaborateModules runtimeDecls coreDecls modules
-  let (coreD, modules2) = mangleUnitsEv coreE modulesE
+  let (coreD, modulesM) = mangleUnitsEv coreE modulesE
+  let modules2 = stampModulePaths paths modulesM
   let allDecls0 = coreD ++ flatMap snd modules2
   match prepareWasmFileGrants runtimeDecls (dceFilter allDecls0) modules2
     Err diags =>

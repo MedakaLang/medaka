@@ -2922,6 +2922,28 @@ table = [
     codes = [],
   },
   Row {
+    entry = "impl-head-effect-indexed.mdk",
+    label =
+      "§3 W3-inst over an `Effect`-kinded head variable: `impl Mappable (Box e)` and `impl Applicative (Box e)` construct `Box`, which relates `e` to a row that stays a variable, so both hold for every `e` (#3826, #3788). Drained from the must-fail pin 3826-effect-indexed-impl-head-too-specific: every verb refused it with a false T-IMPL-TOO-SPECIFIC while `data Box e a` checked. Hand-derived: `pure 41` at `Box <Stdout> Int`, unboxed plus 1, 42",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [Absent "T-IMPL-TOO-SPECIFIC"],
+  },
+  Row {
+    entry = "impl-head-effect-row-fixed.mdk",
+    label =
+      "§3 W3-inst over an `Effect`-kinded head variable, the negative half: `impl Mappable (Box e)` whose body returns `Box <Stdout> b` holds only for `impl Mappable (Box <Stdout>)`, so it is refused at the body as the ordinary-variable head of impl-head-pinned-by-body is",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-TOO-SPECIFIC"],
+  },
+  Row {
     entry = "impl-head-missing-requires.mdk",
     label =
       "§3 W3-inst: `impl Show2 (Pair a)` whose body calls `show2 x` at the head's `a` with no `requires Show2 a` is refused at the call (#2721). Drained from the must-fail pin 2721-impl-body-dispatches-on-own-tyvar-no-requires: `check` accepted, and run and the binary died with E-NONEXHAUSTIVE-MATCH",
@@ -4051,7 +4073,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 355
+tableRows = 357
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

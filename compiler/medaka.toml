@@ -5,3 +5,8 @@ name = "compiler"
 # privilege rather than inheriting it from merely having a manifest (#1713).
 # Read by projectTrustedMods in compiler/driver/loader.mdk.
 allow-internal = true
+
+# A native build of the compiler names its trap sites relative to the
+# repository root, so the seed and a shipped binary are the same bytes in
+# every checkout. Read by manifestSiteRoot in compiler/driver/loader.mdk.
+site-root = ".."

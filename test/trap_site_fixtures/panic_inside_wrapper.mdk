@@ -1,0 +1,3 @@
+fail : String -> Int
+fail msg = panic msg
+main = println (fail "wrapped")

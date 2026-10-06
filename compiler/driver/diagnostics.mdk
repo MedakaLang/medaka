@@ -2615,7 +2615,7 @@ findMainFunDef : List Decl -> Option (List Pat, Expr)
 -- lint-disable-next-line rule-duplicate-body
 findMainFunDef [] = None
 findMainFunDef ((DAttrib _ d) :: rest) = findMainFunDef (d :: rest)
-findMainFunDef ((DFunDef _ "main" ps body) :: _) = Some (ps, body)
+findMainFunDef ((DFunDef _ "main" ps body _) :: _) = Some (ps, body)
 findMainFunDef (_ :: rest) = findMainFunDef rest
 
 -- Best-effort location: the first ELoc span walking the outermost expr spine

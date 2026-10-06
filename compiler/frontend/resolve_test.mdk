@@ -61,7 +61,7 @@ fieldName (Field n _) = n
 -- parameters, so every descriptor is in here.
 topLevelFunNames : List Decl -> List String
 topLevelFunNames [] = []
-topLevelFunNames ((DFunDef _ n _ _) :: rest) = n :: topLevelFunNames rest
+topLevelFunNames ((DFunDef _ n _ _ _) :: rest) = n :: topLevelFunNames rest
 topLevelFunNames ((DAttrib _ d) :: rest) = topLevelFunNames (d :: rest)
 topLevelFunNames (_ :: rest) = topLevelFunNames rest
 

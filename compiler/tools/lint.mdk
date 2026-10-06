@@ -27,6 +27,7 @@ import frontend.ast.{
   TabKey(..),
   tabKeyOf,
   Loc(..),
+  noDeclLoc,
   Lit(..),
   Ty(..),
   EffAtomTy(..),
@@ -1074,7 +1075,7 @@ testVerbScope prog declPos =
   (blocked, resolved)
 
 topLevelBinders : Decl -> List String
-topLevelBinders (DFunDef _ n _ _) = [n]
+topLevelBinders (DFunDef _ n _ _ _) = [n]
 topLevelBinders (DExtern _ n _) = [n]
 topLevelBinders (DLetGroup _ binds) = map letBindName binds
 topLevelBinders (DInterface { methods, ... }) = map ifaceMethodNameOf methods
@@ -1082,7 +1083,7 @@ topLevelBinders (DAttrib _ d) = topLevelBinders d
 topLevelBinders _ = []
 
 letBindName : LetBind -> String
-letBindName (LetBind n _) = n
+letBindName (LetBind n _ _) = n
 
 ifaceMethodNameOf : IfaceMethod -> String
 ifaceMethodNameOf (IfaceMethod n _ _ _) = n
@@ -1692,7 +1693,7 @@ matchParamDeclL : (Decl, Option Loc) -> List Finding
 matchParamDeclL (d, loc) = matchParamDecl loc d
 
 matchParamDecl : Option Loc -> Decl -> List Finding
-matchParamDecl loc (DFunDef _ name pats body) =
+matchParamDecl loc (DFunDef _ name pats body _) =
   matchParamFinding loc name pats body
 matchParamDecl loc (DImpl { methods, ... }) =
   flatMap (matchParamMethod loc) methods
@@ -1755,7 +1756,7 @@ isBareParam _ _ = False
 --     as the token `p`, so a real reference is never missed (the scan can only
 --     over-bail, which is safe).
 matchParamFix : Oracle -> Decl -> Option (List Decl)
-matchParamFix _ (DFunDef vis name pats body) =
+matchParamFix _ (DFunDef vis name pats body _) =
   match matchBodyOnBareParam pats body
     Some (p, k, arms) => matchParamFixArms vis name pats p k arms
     None => None
@@ -1832,7 +1833,7 @@ armToClause vis name p pats k (Arm pat _ body) =
       PVar p (Loc "" 0 0 0 0)
     else
       pat
-  DFunDef vis name (replaceAt k cpat pats) body
+  DFunDef vis name (replaceAt k cpat pats) body noDeclLoc
 
 replaceAt : Int -> a -> List a -> List a
 replaceAt _ _ [] = []
@@ -1883,7 +1884,7 @@ ruleDestructureInParam _ _ _ pos prog =
 
 destructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
 destructureDeclL orc (d, loc) = match d
-  DFunDef _ name pats body => destructureFinding orc loc name pats body
+  DFunDef _ name pats body _ => destructureFinding orc loc name pats body
   _ => []
 
 destructureFinding : Oracle ->
@@ -1973,7 +1974,7 @@ ctorIsSingle orc c = match oGetCtorSiblings orc c
 -- already proved the pattern irrefutable and the param unreferenced, so
 -- `armToClause`'s PWild re-bind special-case never triggers here.
 destructureInParamFix : Oracle -> Decl -> Option (List Decl)
-destructureInParamFix orc (DFunDef vis name pats body) =
+destructureInParamFix orc (DFunDef vis name pats body _) =
   match matchBodyOnBareParam pats body
     Some (p, k, arms) => destructureInParamFixArms orc vis name pats p k arms
     None => None
@@ -2214,7 +2215,7 @@ mentionsLocalTy : HashMap String Unit -> Ty -> Bool
 mentionsLocalTy locals ty = anyList (n => has n locals) (tyNamesOf ty)
 
 topDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
-topDefNameL (DFunDef _ name _ _, loc) = [(name, loc)]
+topDefNameL (DFunDef _ name _ _ _, loc) = [(name, loc)]
 topDefNameL (DAttrib _ d, loc) = topDefNameL (d, loc)
 topDefNameL _ = []
 
@@ -2288,7 +2289,7 @@ soleClauseOf name prog = match clausesOf name prog
 clausesOf : String -> List Decl -> List (List Pat, Expr)
 clausesOf _ [] = []
 clausesOf name ((DAttrib _ d) :: rest) = clausesOf name (d :: rest)
-clausesOf name ((DFunDef _ n ps body) :: rest)
+clausesOf name ((DFunDef _ n ps body _) :: rest)
   | n == name = (ps, body) :: clausesOf name rest
   | otherwise = clausesOf name rest
 clausesOf name (_ :: rest) = clausesOf name rest
@@ -2675,7 +2676,7 @@ selfShadowFindings clauses =
 -- one (name, params, body, loc) tuple per top-level DFunDef (through DAttrib)
 selfShadowClauseL : (Decl, Option Loc) ->
   List (String, List Pat, Expr, Option Loc)
-selfShadowClauseL (DFunDef _ name pats body, loc) = [(name, pats, body, loc)]
+selfShadowClauseL (DFunDef _ name pats body _, loc) = [(name, pats, body, loc)]
 selfShadowClauseL (DAttrib _ d, loc) = selfShadowClauseL (d, loc)
 selfShadowClauseL _ = []
 
@@ -2818,7 +2819,7 @@ bindDestructureDeclL orc (d, loc) =
   map (bindDestructureFinding loc) (declBindHits orc d)
 
 declBindHits : Oracle -> Decl -> List String
-declBindHits orc (DFunDef _ _ _ body) = collectBindHits orc body
+declBindHits orc (DFunDef _ _ _ body _) = collectBindHits orc body
 declBindHits orc (DAttrib _ d) = declBindHits orc d
 declBindHits _ _ = []
 
@@ -2894,12 +2895,12 @@ guardExprs (GBind _ e) = [e]
 stmtExprs : DoStmt -> List Expr
 stmtExprs (DoExpr e) = [e]
 stmtExprs (DoBind _ e) = [e]
-stmtExprs (DoLet _ _ _ e) = [e]
+stmtExprs (DoLet _ _ _ e _) = [e]
 stmtExprs (DoAssign _ e) = [e]
 stmtExprs (DoFieldAssign _ _ e) = [e]
 
 letBindExprs : LetBind -> List Expr
-letBindExprs (LetBind _ clauses) = flatMap funClauseExprs clauses
+letBindExprs (LetBind _ clauses _) = flatMap funClauseExprs clauses
 
 funClauseExprs : FunClause -> List Expr
 funClauseExprs (FunClause _ body) = [body]
@@ -2928,12 +2929,12 @@ kvExprs (k, v) = [k, v]
 -- change" by comparing the location-stripped sexp of the old vs new body — only
 -- then do we return `Some [newDecl]` (the printer re-renders it).
 bindThenDestructureFix : Oracle -> Decl -> Option (List Decl)
-bindThenDestructureFix orc (DFunDef vis name pats body) =
+bindThenDestructureFix orc (DFunDef vis name pats body site) =
   let body2 = rewriteBindExpr orc body
   if exprSexp body2 == exprSexp body then
     None
   else
-    Some [DFunDef vis name pats body2]
+    Some [DFunDef vis name pats body2 site]
 bindThenDestructureFix orc (DAttrib a d) = match bindThenDestructureFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
@@ -3027,7 +3028,8 @@ whenSameHerald host d stmts e
 rewriteBindStmt : Oracle -> DoStmt -> DoStmt
 rewriteBindStmt orc (DoExpr e) = DoExpr (rewriteBindExpr orc e)
 rewriteBindStmt orc (DoBind p e) = DoBind p (rewriteBindExpr orc e)
-rewriteBindStmt orc (DoLet m r p e) = DoLet m r p (rewriteBindExpr orc e)
+rewriteBindStmt orc (DoLet m r p e site) =
+  DoLet m r p (rewriteBindExpr orc e) site
 rewriteBindStmt orc (DoAssign x e) = DoAssign x (rewriteBindExpr orc e)
 rewriteBindStmt orc (DoFieldAssign x fs e) =
   DoFieldAssign x fs (rewriteBindExpr orc e)
@@ -3041,8 +3043,8 @@ rewriteBindGuard orc (GBool e) = GBool (rewriteBindExpr orc e)
 rewriteBindGuard orc (GBind p e) = GBind p (rewriteBindExpr orc e)
 
 rewriteBindLet : Oracle -> LetBind -> LetBind
-rewriteBindLet orc (LetBind n clauses) =
-  LetBind n (map (rewriteBindClause orc) clauses)
+rewriteBindLet orc (LetBind n clauses site) =
+  LetBind n (map (rewriteBindClause orc) clauses) site
 
 rewriteBindClause : Oracle -> FunClause -> FunClause
 rewriteBindClause orc (FunClause ps body) =
@@ -3171,7 +3173,7 @@ lambdaSectionDeclL : (Decl, Option Loc) -> List Finding
 lambdaSectionDeclL (d, loc) = map (lambdaSectionFinding loc) (declLamSections d)
 
 declLamSections : Decl -> List Section
-declLamSections (DFunDef _ _ _ body) = collectLamSections body
+declLamSections (DFunDef _ _ _ body _) = collectLamSections body
 declLamSections (DImpl { methods, ... }) = flatMap implMethodLamSections methods
 declLamSections (DAttrib _ d) = declLamSections d
 declLamSections _ = []
@@ -3206,12 +3208,12 @@ lambdaSectionFinding loc s = Finding {
 -- Rebuild the decl body converting every eligible lambda to `ESection`.  Detects
 -- "did anything change" by comparing the location-stripped sexp of old vs new.
 lambdaSectionFix : Oracle -> Decl -> Option (List Decl)
-lambdaSectionFix _ (DFunDef vis name pats body) =
+lambdaSectionFix _ (DFunDef vis name pats body site) =
   let body2 = rewriteLamExpr body
   if exprSexp body2 == exprSexp body then
     None
   else
-    Some [DFunDef vis name pats body2]
+    Some [DFunDef vis name pats body2 site]
 lambdaSectionFix orc (DAttrib a d) = match lambdaSectionFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
@@ -3289,7 +3291,7 @@ rewriteLamExpr e = e
 rewriteLamStmt : DoStmt -> DoStmt
 rewriteLamStmt (DoExpr e) = DoExpr (rewriteLamExpr e)
 rewriteLamStmt (DoBind p e) = DoBind p (rewriteLamExpr e)
-rewriteLamStmt (DoLet m r p e) = DoLet m r p (rewriteLamExpr e)
+rewriteLamStmt (DoLet m r p e site) = DoLet m r p (rewriteLamExpr e) site
 rewriteLamStmt (DoAssign x e) = DoAssign x (rewriteLamExpr e)
 rewriteLamStmt (DoFieldAssign x fs e) = DoFieldAssign x fs (rewriteLamExpr e)
 
@@ -3302,7 +3304,8 @@ rewriteLamGuard (GBool e) = GBool (rewriteLamExpr e)
 rewriteLamGuard (GBind p e) = GBind p (rewriteLamExpr e)
 
 rewriteLamLet : LetBind -> LetBind
-rewriteLamLet (LetBind n clauses) = LetBind n (map rewriteLamClause clauses)
+rewriteLamLet (LetBind n clauses site) =
+  LetBind n (map rewriteLamClause clauses) site
 
 rewriteLamClause : FunClause -> FunClause
 rewriteLamClause (FunClause ps body) = FunClause ps (rewriteLamExpr body)
@@ -3409,7 +3412,7 @@ ifMaxMinDeclL : (Decl, Option Loc) -> List Finding
 ifMaxMinDeclL (d, loc) = map (ifMaxMinFinding loc) (declIfMaxMinHits d)
 
 declIfMaxMinHits : Decl -> List (String, Expr, Expr)
-declIfMaxMinHits (DFunDef _ _ _ body) = collectIfMaxMinHits body
+declIfMaxMinHits (DFunDef _ _ _ body _) = collectIfMaxMinHits body
 declIfMaxMinHits (DImpl { methods, ... }) =
   flatMap implMethodIfMaxMinHits methods
 declIfMaxMinHits (DAttrib _ d) = declIfMaxMinHits d
@@ -3445,12 +3448,12 @@ ifMaxMinFinding loc (fn, a, b) = Finding {
 -- Detects "did anything change" by comparing the location-stripped sexp of old
 -- vs new (same technique `lambdaSectionFix` uses).
 ifMaxMinFix : Oracle -> Decl -> Option (List Decl)
-ifMaxMinFix _ (DFunDef vis name pats body) =
+ifMaxMinFix _ (DFunDef vis name pats body site) =
   let body2 = rewriteIfMaxMinExpr body
   if exprSexp body2 == exprSexp body then
     None
   else
-    Some [DFunDef vis name pats body2]
+    Some [DFunDef vis name pats body2 site]
 ifMaxMinFix orc (DAttrib a d) = match ifMaxMinFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
@@ -3536,7 +3539,8 @@ rewriteIfMaxMinExpr e = e
 rewriteIfMaxMinStmt : DoStmt -> DoStmt
 rewriteIfMaxMinStmt (DoExpr e) = DoExpr (rewriteIfMaxMinExpr e)
 rewriteIfMaxMinStmt (DoBind p e) = DoBind p (rewriteIfMaxMinExpr e)
-rewriteIfMaxMinStmt (DoLet m r p e) = DoLet m r p (rewriteIfMaxMinExpr e)
+rewriteIfMaxMinStmt (DoLet m r p e site) =
+  DoLet m r p (rewriteIfMaxMinExpr e) site
 rewriteIfMaxMinStmt (DoAssign x e) = DoAssign x (rewriteIfMaxMinExpr e)
 rewriteIfMaxMinStmt (DoFieldAssign x fs e) =
   DoFieldAssign x fs (rewriteIfMaxMinExpr e)
@@ -3550,8 +3554,8 @@ rewriteIfMaxMinGuard (GBool e) = GBool (rewriteIfMaxMinExpr e)
 rewriteIfMaxMinGuard (GBind p e) = GBind p (rewriteIfMaxMinExpr e)
 
 rewriteIfMaxMinLet : LetBind -> LetBind
-rewriteIfMaxMinLet (LetBind n clauses) =
-  LetBind n (map rewriteIfMaxMinClause clauses)
+rewriteIfMaxMinLet (LetBind n clauses site) =
+  LetBind n (map rewriteIfMaxMinClause clauses) site
 
 rewriteIfMaxMinClause : FunClause -> FunClause
 rewriteIfMaxMinClause (FunClause ps body) =
@@ -3665,7 +3669,7 @@ andThenPureMapDeclL (d, loc) =
   map (andThenPureMapFinding loc) (declAndThenPureMapHits d)
 
 declAndThenPureMapHits : Decl -> List Expr
-declAndThenPureMapHits (DFunDef _ _ _ body) = collectAndThenPureMapHits body
+declAndThenPureMapHits (DFunDef _ _ _ body _) = collectAndThenPureMapHits body
 declAndThenPureMapHits (DImpl { methods, ... }) =
   flatMap implMethodAndThenPureMapHits methods
 declAndThenPureMapHits (DAttrib _ d) = declAndThenPureMapHits d
@@ -3708,12 +3712,12 @@ andThenPureMapFinding loc rewritten = Finding {
 -- "did anything change" by comparing the location-stripped sexp of old vs new
 -- (same technique `lambdaSectionFix` / `ifMaxMinFix` use).
 andThenPureMapFix : Oracle -> Decl -> Option (List Decl)
-andThenPureMapFix _ (DFunDef vis name pats body) =
+andThenPureMapFix _ (DFunDef vis name pats body site) =
   let body2 = rewriteAndThenPureMapExpr body
   if exprSexp body2 == exprSexp body then
     None
   else
-    Some [DFunDef vis name pats body2]
+    Some [DFunDef vis name pats body2 site]
 andThenPureMapFix orc (DAttrib a d) = match andThenPureMapFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
@@ -3820,8 +3824,8 @@ rewriteAndThenPureMapExpr e = e
 rewriteAndThenPureMapStmt : DoStmt -> DoStmt
 rewriteAndThenPureMapStmt (DoExpr e) = DoExpr (rewriteAndThenPureMapExpr e)
 rewriteAndThenPureMapStmt (DoBind p e) = DoBind p (rewriteAndThenPureMapExpr e)
-rewriteAndThenPureMapStmt (DoLet m r p e) =
-  DoLet m r p (rewriteAndThenPureMapExpr e)
+rewriteAndThenPureMapStmt (DoLet m r p e site) =
+  DoLet m r p (rewriteAndThenPureMapExpr e) site
 rewriteAndThenPureMapStmt (DoAssign x e) =
   DoAssign x (rewriteAndThenPureMapExpr e)
 rewriteAndThenPureMapStmt (DoFieldAssign x fs e) =
@@ -3836,8 +3840,8 @@ rewriteAndThenPureMapGuard (GBool e) = GBool (rewriteAndThenPureMapExpr e)
 rewriteAndThenPureMapGuard (GBind p e) = GBind p (rewriteAndThenPureMapExpr e)
 
 rewriteAndThenPureMapLet : LetBind -> LetBind
-rewriteAndThenPureMapLet (LetBind n clauses) =
-  LetBind n (map rewriteAndThenPureMapClause clauses)
+rewriteAndThenPureMapLet (LetBind n clauses site) =
+  LetBind n (map rewriteAndThenPureMapClause clauses) site
 
 rewriteAndThenPureMapClause : FunClause -> FunClause
 rewriteAndThenPureMapClause (FunClause ps body) =
@@ -3935,7 +3939,7 @@ declRewriteHits : (String -> Bool) ->
   Option Loc ->
   Decl ->
   List (Option Loc, Expr)
-declRewriteHits excl det loc (DFunDef _ name _ body)
+declRewriteHits excl det loc (DFunDef _ name _ body _)
   | excl name = []
   | otherwise = collectRewrites loc det body
 declRewriteHits _ det loc (DImpl { methods, ... }) =
@@ -3976,14 +3980,14 @@ optExprToLocList loc (Some x) = [(loc, x)]
 -- the location-stripped sexp changed (same change-detection the other fixers use).
 -- Honors the excluded-decl-name predicate.
 exprRuleFix : (String -> Bool) -> (Expr -> Expr) -> Decl -> Option (List Decl)
-exprRuleFix excl f (DFunDef vis name pats body)
+exprRuleFix excl f (DFunDef vis name pats body site)
   | excl name = None
   | otherwise =
     let body2 = rewriteExprBU f body
     if exprSexp body2 == exprSexp body then
       None
     else
-      Some [DFunDef vis name pats body2]
+      Some [DFunDef vis name pats body2 site]
 exprRuleFix excl f (DAttrib a d) = match exprRuleFix excl f d
   Some [d2] => Some [DAttrib a d2]
   _ => None
@@ -4242,7 +4246,7 @@ concatToInterpDeclL (d, loc) =
   map (concatToInterpFinding loc) (declConcatHits d)
 
 declConcatHits : Decl -> List Expr
-declConcatHits (DFunDef _ _ _ body) = collectConcatHits body
+declConcatHits (DFunDef _ _ _ body _) = collectConcatHits body
 declConcatHits (DImpl { methods, ... }) = flatMap implMethodConcatHits methods
 declConcatHits (DAttrib _ d) = declConcatHits d
 declConcatHits _ = []
@@ -4262,12 +4266,12 @@ concatToInterpFinding loc rewritten = Finding {
 }
 
 concatToInterpFix : Oracle -> Decl -> Option (List Decl)
-concatToInterpFix _ (DFunDef vis name pats body) =
+concatToInterpFix _ (DFunDef vis name pats body site) =
   let body2 = rewriteConcatExpr body
   if exprSexp body2 == exprSexp body then
     None
   else
-    Some [DFunDef vis name pats body2]
+    Some [DFunDef vis name pats body2 site]
 concatToInterpFix orc (DAttrib a d) = match concatToInterpFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
@@ -4524,7 +4528,7 @@ collapsedBlockOf stmts =
     Some (EBlock stmts2)
 
 collapseWildWrite : DoStmt -> DoStmt
-collapseWildWrite (s@(DoLet _ _ PWild e)) =
+collapseWildWrite (s@(DoLet _ _ PWild e _)) =
   if isAssignWrite (unwrapLoc e) then DoExpr e else s
 collapseWildWrite s = s
 
@@ -5082,7 +5086,7 @@ bindChainHeads e =
     flatMap bindChainHeads (childExprs e)
 
 bindChainDeclHeads : Decl -> List Expr
-bindChainDeclHeads (DFunDef _ _ _ body) = bindChainHeads body
+bindChainDeclHeads (DFunDef _ _ _ body _) = bindChainHeads body
 bindChainDeclHeads (DImpl { methods, ... }) = flatMap bindChainImplHeads methods
 bindChainDeclHeads (DAttrib _ d) = bindChainDeclHeads d
 bindChainDeclHeads _ = []
@@ -5207,7 +5211,7 @@ orElseHeads e =
     flatMap orElseHeads (childExprs e)
 
 orElseDeclHeads : Decl -> List (Bool, Expr)
-orElseDeclHeads (DFunDef _ _ _ body) = orElseHeads body
+orElseDeclHeads (DFunDef _ _ _ body _) = orElseHeads body
 orElseDeclHeads (DImpl { methods, ... }) = flatMap orElseImplHeads methods
 orElseDeclHeads (DAttrib _ d) = orElseDeclHeads d
 orElseDeclHeads _ = []
@@ -5761,7 +5765,7 @@ nameSetInto (n :: rest) s =
   nameSetInto rest s
 
 allDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
-allDefNameL (DFunDef _ name _ _, loc) = [(name, loc)]
+allDefNameL (DFunDef _ name _ _ _, loc) = [(name, loc)]
 allDefNameL (DAttrib _ d, loc) = allDefNameL (d, loc)
 allDefNameL _ = []
 
@@ -5801,7 +5805,7 @@ defRefPair d = match defNameOf d
   None => []
 
 defNameOf : Decl -> Option String
-defNameOf (DFunDef _ name _ _) = Some name
+defNameOf (DFunDef _ name _ _ _) = Some name
 defNameOf (DAttrib _ d) = defNameOf d
 defNameOf _ = None
 
@@ -5813,7 +5817,7 @@ exportedNames : List Decl -> List String
 exportedNames prog = flatMap exportedNameL prog
 
 exportedNameL : Decl -> List String
-exportedNameL (DFunDef True name _ _) = [name]
+exportedNameL (DFunDef True name _ _ _) = [name]
 exportedNameL (DTypeSig True name _ _) = [name]
 exportedNameL (DAttrib _ d) = exportedNameL d
 exportedNameL _ = []
@@ -5827,7 +5831,7 @@ exportedNameL _ = []
 -- DInterface/DImpl/DLetGroup) is a body-bearing root.
 nonDefRefL : Decl -> List String
 nonDefRefL (DAttrib _ dd) = nonDefRefL dd
-nonDefRefL (DFunDef _ _ _ _) = []
+nonDefRefL (DFunDef _ _ _ _ _) = []
 nonDefRefL (DTypeSig _ _ _ _) = []
 nonDefRefL (DExtern _ _ _) = []
 nonDefRefL (DData { dataOrigin = _ }) = []
@@ -6370,7 +6374,7 @@ fileDupOccs (path, pos, decls) =
 
 dupClauseOfDecl : (Decl, Option Loc) -> List DupClause
 dupClauseOfDecl (d, loc) = match d
-  DFunDef _ name pats body => [
+  DFunDef _ name pats body _ => [
     DupClause {
       dcName = name,
       dcLine = locLineOf loc,
@@ -6540,7 +6544,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 -- widening this half needs an over-fire budget of its own.
 sameFileOccOfDecl : (Decl, Option Loc) -> List (String, Int, String)
 sameFileOccOfDecl (d, loc) = match d
-  DFunDef _ name pats body =>
+  DFunDef _ name pats body _ =>
     if dupEligibleSameFile body then
       [(name, locLineOf loc, structuralKey pats body)]
     else
@@ -6776,7 +6780,7 @@ declZipContainsLine line (_, dp) =
 
 declBridgeName : Decl -> Option String
 declBridgeName (DTypeSig _ n _ _) = Some n
-declBridgeName (DFunDef _ n _ _) = Some n
+declBridgeName (DFunDef _ n _ _ _) = Some n
 declBridgeName _ = None
 
 declGapNameMatches : Option String -> Decl -> Bool

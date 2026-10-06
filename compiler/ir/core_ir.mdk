@@ -49,7 +49,7 @@
 -- AST tree-walker over the whole fixture corpus.  Core IR is correct iff
 -- evaluating it matches evaluating the AST.
 
-import frontend.ast.{Lit, Pat, Addr, Route}
+import frontend.ast.{Lit, Loc, Pat, Addr, Route, noDeclLoc}
 
 -- ── expressions ────────────────────────────────────────────────────────────
 public export data CExpr =
@@ -84,7 +84,10 @@ public export data CExpr =
   -- type-lost `staticIsFloat` blind spot (SHARED-FLOAT-RESIDUAL-DESIGN §3(C)).
   -- A fixed-width tag ("U8"/"U16"/"U32", `ast.fixedWidthMask`) is not only a hint:
   -- every engine MUST reduce an arithmetic result modulo 2^n on it.
-  | CBinPrim String CExpr CExpr String
+  -- The 5th field is the trap site of an overflow or zero-divisor abort: the start
+  -- of the left operand, the span the interpreter's `exprStartLoc` names.  An
+  -- engine that cannot print a location ignores it.
+  | CBinPrim String CExpr CExpr String Loc
   | CUnOp String CExpr
   | CTuple (List CExpr)
   | CList (List CExpr)
@@ -158,8 +161,9 @@ public export data CGuard = CGBool CExpr | CGBind Pat CExpr
 -- below the guarded clause (its `fail` subtree, compiled at the same column
 -- context, so it reads the same live sub-values).
 public export data CTree =
-  -- no arm matches → runtime error (mirrors falling off the ordered arms)
-  | CTFail
+  -- no arm matches → runtime error (mirrors falling off the ordered arms), raised
+  -- as the site says
+  | CTFail FailSite
   -- arm i matched unconditionally → re-match it for bindings, eval its body
   | CTLeaf Int
   -- arm i matched but is guarded → eval its guards; on guard failure → CTree
@@ -169,6 +173,14 @@ public export data CTree =
   | CTSwitch (List CTBranch) CTree
   -- the focus column is all-wildcard (nothing to test) → discard it, continue
   | CTDrop CTree
+
+-- Which runtime error a decision tree's miss raises, and where.  `NoArm` is an
+-- explicit `match` falling off its arms (E-NONEXHAUSTIVE-MATCH, at the `match`
+-- keyword); `LetRefuted` is a refutable `let` whose pattern missed (E-LET-REFUTE,
+-- at the `let` keyword).  The placeholder span `noDeclLoc` means no location.
+-- Two kinds of miss, not a success and a failure, so not a `Result`.
+-- lint-disable-next-line rule-clone-type
+public export data FailSite = NoArm Loc | LetRefuted Loc
 
 -- one switch branch: the head to test the focus value against, and the subtree
 -- taken when it matches (the head's fields become the new leading columns).
@@ -202,7 +214,23 @@ public export data CStmt =
 -- a let-group / top-level function binding: a name with one or more coalesced
 -- clauses (multi-clause dispatch + guard fall-through stay structural — the
 -- decision-tree compilation of these into a single match is a later 2.1 step).
-public export data CBind = CBind String (List CClause)
+-- The `Loc` is the first clause's site, which a call that no clause or guard
+-- accepts reports; a synthesized binding carries `noDeclLoc`.
+public export data CBind = CBind String (List CClause) Loc
+
+-- a binding the compiler makes up, which has no source site.
+export
+synthBind : String -> List CClause -> CBind
+synthBind name clauses = CBind name clauses noDeclLoc
+
+-- The head of a trap-site literal: `CApp (CApp (CApp (CVar siteSentinelName _)
+-- (CLit (LString file))) (CLit (LInt line))) (CLit (LInt col))` is the Int a
+-- native build packs that site into.  Only the native lowering writes one (as
+-- the site argument of `panicAt` and of an `Index` impl's site-carrying twin),
+-- because the packing numbers the files of the one program being emitted.
+export
+siteSentinelName : String
+siteSentinelName = "__site__"
 public export data CClause = CClause (List Pat) CExpr
 
 -- ── typeclass impls (slice 5) ───────────────────────────────────────────────

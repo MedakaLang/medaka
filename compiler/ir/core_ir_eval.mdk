@@ -40,6 +40,7 @@ import ir.core_ir.{
   CTree(..),
   CTBranch(..),
   CHead(..),
+  FailSite(..),
 }
 import ir.core_ir_lower.{lowerGroups, lowerImplsWith, instanceReqCounts}
 import types.disposition.{DispositionTable, installedDispositionsOpt}
@@ -121,7 +122,7 @@ ceval env (CMatch scrut arms) = cevalMatch env (ceval env scrut) arms
 ceval env (CDecision scrut arms tree) =
   cevalDecision env (ceval env scrut) arms tree
 ceval env (CIf c t e) = cevalIf env (ceval env c) t e
-ceval env (CBinPrim op l r tag) =
+ceval env (CBinPrim op l r tag _) =
   cevalBinPrim op tag (ceval env l) (ceval env r)
 ceval env (CUnOp op e) = evalUnop op (ceval env e)
 ceval env (CTuple es) = VTuple (map (ceval env) es)
@@ -230,7 +231,9 @@ cevalTree : EvalEnv (Value e) ->
   List (Value e) ->
   CTree ->
   <e> Value e
-cevalTree _ _ _ _ CTFail = panic "no matching clause in match"
+-- a refutable `let` reaches here only through a lowering that keeps its decision
+cevalTree _ _ _ _ (CTFail (LetRefuted _)) = panic "let pattern match failure"
+cevalTree _ _ _ _ (CTFail (NoArm _)) = panic "no matching clause in match"
 cevalTree env root arms _ (CTLeaf i) = cevalArm env root arms i
 cevalTree env root arms occs (CTGuard i fail) =
   cevalGuardedArm env root arms occs i fail
@@ -426,14 +429,14 @@ cevalLetGroup env binds body =
   ceval env2 body
 
 cBindCell : CBind -> (String, Ref (Value e))
-cBindCell (CBind name _) = (name, Ref VUnit)
+cBindCell (CBind name _ _) = (name, Ref VUnit)
 
 cInstallGroup : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List CBind ->
   <e> Unit
 cInstallGroup _ _ [] = ()
-cInstallGroup env cells ((CBind name clauses) :: rest) =
+cInstallGroup env cells ((CBind name clauses _) :: rest) =
   findCell cells name := cGroupValue env clauses
   cInstallGroup env cells rest
 
@@ -523,14 +526,14 @@ cImplMethodValue env positions [] body
 cImplMethodValue env _ pats body = VClosureF env pats (e => ceval e body)
 
 cBindName : CBind -> String
-cBindName (CBind n _) = n
+cBindName (CBind n _ _) = n
 
 cInstallTopGroups : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List CBind ->
   <e> Unit
 cInstallTopGroups _ _ [] = ()
-cInstallTopGroups env cells ((CBind n clauses) :: rest) =
+cInstallTopGroups env cells ((CBind n clauses _) :: rest) =
   findCell cells n := cTopGroupValue env clauses
   cInstallTopGroups env cells rest
 

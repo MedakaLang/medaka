@@ -185,8 +185,10 @@ exprSexp (EDictAt _ _) =
     "unreachable: programToSexp serializes pre-annotate ASTs; EDictAt is introduced by typecheck elaboration"
 exprSexp (EApp f x) = node "EApp" [exprSexp f, exprSexp x]
 exprSexp (ELam ps b) = node "ELam" [slist (map patSexp ps), exprSexp b]
-exprSexp (ELet m _isf p e1 e2) =
-  node "ELet" [boolStr m, patSexp p, exprSexp e1, exprSexp e2]
+-- The leading "false" is the slot the retired `let mut` flag printed in; the
+-- site that replaced it is not rendered.
+exprSexp (ELet _ _isf p e1 e2) =
+  node "ELet" [boolStr False, patSexp p, exprSexp e1, exprSexp e2]
 exprSexp (EMatch s arms) = node "EMatch" (exprSexp s :: map armSexp arms)
 exprSexp (EIf c t el) = node "EIf" [exprSexp c, exprSexp t, exprSexp el]
 exprSexp (EBinOp op a b _) = node "EBinOp" [escStr op, exprSexp a, exprSexp b]
@@ -244,7 +246,7 @@ kvSexp : (Expr, Expr) -> String
 kvSexp (k, v) = node "kv" [exprSexp k, exprSexp v]
 
 letBindSexp : LetBind -> String
-letBindSexp (LetBind name clauses) =
+letBindSexp (LetBind name clauses _) =
   node "lgb" (escStr name :: map funClauseSexp clauses)
 
 funClauseSexp : FunClause -> String
@@ -254,7 +256,7 @@ funClauseSexp (FunClause pats body) =
 doStmtSexp : DoStmt -> String
 doStmtSexp (DoExpr e) = node "DoExpr" [exprSexp e]
 doStmtSexp (DoBind p e) = node "DoBind" [patSexp p, exprSexp e]
-doStmtSexp (DoLet m r p e) =
+doStmtSexp (DoLet m r p e _) =
   node "DoLet" [boolStr m, boolStr r, patSexp p, exprSexp e]
 doStmtSexp (DoAssign x e) = node "DoAssign" [escStr x, exprSexp e]
 doStmtSexp (DoFieldAssign x fs e) =
@@ -278,7 +280,7 @@ variantSexp (Variant n pl) = node "variant" [escStr n, payloadSexp pl]
 declSexp : Decl -> String
 declSexp (DTypeSig p n t _) = node "DTypeSig" [boolStr p, escStr n, tySexp t]
 declSexp (DExtern p n t) = node "DExtern" [boolStr p, escStr n, tySexp t]
-declSexp (DFunDef p n ps b) =
+declSexp (DFunDef p n ps b _) =
   node "DFunDef" [boolStr p, escStr n, slist (map patSexp ps), exprSexp b]
 declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataExtern = True }) =
   node "DExternData" [visSexp vis, escStr n, slist (map escStr ps)]

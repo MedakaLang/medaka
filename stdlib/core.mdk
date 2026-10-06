@@ -447,6 +447,49 @@ arrItems : Array a -> Int -> Int -> List a
 arrItems arr i n =
   if i >= n then [] else arrayGetUnsafe i arr :: arrItems arr (i + 1) n
 
+-- Tail-recursive walks backing the `Foldable (Array a)` impl below.
+arrToListGo : Array a -> Int -> List a -> List a
+arrToListGo arr i acc =
+  if i < 0 then acc else arrToListGo arr (i - 1) (arrayGetUnsafe i arr :: acc)
+
+arrFoldGo : (b -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
+arrFoldGo f arr i n acc =
+  if i >= n then
+    acc
+  else
+    arrFoldGo f arr (i + 1) n (f acc (arrayGetUnsafe i arr))
+
+arrFoldRightGo : (a -> b -> <e> b) -> Array a -> Int -> b -> <e> b
+arrFoldRightGo f arr i acc =
+  if i < 0 then
+    acc
+  else
+    arrFoldRightGo f arr (i - 1) (f (arrayGetUnsafe i arr) acc)
+
+export impl Mappable Array where
+  map f arr = arrayMakeWith (arrayLength arr) (i => f (arrayGetUnsafe i arr))
+
+export impl Foldable Array where
+  fold f z arr = arrFoldGo f arr 0 (arrayLength arr) z
+  foldRight f z arr = arrFoldRightGo f arr (arrayLength arr - 1) z
+  toList arr = arrToListGo arr (arrayLength arr - 1) []
+  isEmpty arr = arrayLength arr == 0
+  length arr = arrayLength arr
+
+export impl Semigroup (Array a) where
+  append a b = arrayMakeWith (arrayLength a + arrayLength b) (i =>
+    if i < arrayLength a then
+      arrayGetUnsafe i a
+    else
+      arrayGetUnsafe (i - arrayLength a) b)
+
+{- | The empty array.
+
+   > length (empty : Array Int)
+   0 -}
+export impl Monoid (Array a) where
+  empty = [||]
+
 export impl Debug (Option a) requires Debug a where
   debug None = "None"
   debug (Some x) = "Some " ++ derivedShowWrap (debug x)
@@ -1344,11 +1387,18 @@ export interface IndexMut c k v requires Index c k v where
    Panics with an index error when `i` is out of range; `array.get` is the
    `Option`-returning form. -}
 export impl Index (Array a) Int a where
-  index arr i =
-    if i < 0 || i >= arrayLength arr then
-      indexErrorAt i
-    else
-      arrayGetUnsafe i arr
+  index arr i = arrayIndexAt 0 arr i
+
+-- The `Index` impls' bodies, with the packed source site of the read their
+-- out-of-range error reports (0 for none).  A native build calls one straight
+-- from a located `xs[i]` with that site (`core_ir_lower.siteTrapCalls`); the
+-- impls pass 0.
+arrayIndexAt : Int -> Array a -> Int -> a
+arrayIndexAt site arr i =
+  if i < 0 || i >= arrayLength arr then
+    indexErrorAtSite site i
+  else
+    arrayGetUnsafe i arr
 
 {- | Writes the element at `i` in place, in `O(1)`.
 
@@ -1367,23 +1417,33 @@ export impl IndexMut (Array a) Int a where
    `Option`-returning form. Lists are immutable, so there is no `IndexMut`
    instance. -}
 export impl Index (List a) Int a where
-  index xs i = if i < 0 then indexErrorAt i else indexGo xs i i
+  index xs i = listIndexAt 0 xs i
+
+listIndexAt : Int -> List a -> Int -> a
+listIndexAt site xs i =
+  if i < 0 then indexErrorAtSite site i else indexGo site xs i i
 
 -- Threads the caller's ORIGINAL index alongside the one being decremented down
 -- to the base case, so the out-of-bounds message can name the index the caller
 -- passed rather than the leftover 0 from the recursion.
-indexGo : List a -> Int -> Int -> a
-indexGo [] i0 _ = indexError "index \{intToString i0} out of bounds"
-indexGo (h :: t) i0 i = if i <= 0 then h else indexGo t i0 (i - 1)
+indexGo : Int -> List a -> Int -> Int -> a
+indexGo site [] i0 _ = indexErrorAtSite site i0
+indexGo site (h :: t) i0 i = if i <= 0 then h else indexGo site t i0 (i - 1)
 
 {- | The character at a codepoint position: `s[i]`.
 
    Panics with an index error when the position is out of range. Positions
    count codepoints, matching `string.toChars`. -}
 export impl Index String Int Char where
-  index s i =
-    let cs = stringToChars s
-    if i < 0 || i >= arrayLength cs then indexErrorAt i else arrayGetUnsafe i cs
+  index s i = stringIndexAt 0 s i
+
+stringIndexAt : Int -> String -> Int -> Char
+stringIndexAt site s i =
+  let cs = stringToChars s
+  if i < 0 || i >= arrayLength cs then
+    indexErrorAtSite site i
+  else
+    arrayGetUnsafe i cs
 
 {- | Containers that can be sliced by a half-open index range.
 
@@ -2240,3 +2300,20 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
   let xs = map (i => bitXor i x) [1..1000]
   eq (hash xs) (hash (arrayFromList xs))
     && eq (hash xs) (fold derivedHashStep 0 (map hash xs))
+
+-- LAW: the Array `Mappable`/`Foldable`/`Semigroup` impls are prelude impls,
+-- so this module (which imports nothing) can use them; each agrees with the
+-- List meaning of the same call.
+prop "Array Foldable agrees with List Foldable" (xs : List Int) =
+  let arr = arrayFromList xs
+  eq (length arr) (length xs)
+    && eq (toList arr) xs
+    && eq
+      (fold (acc x => acc * 31 + x) 7 arr)
+      (fold (acc x => acc * 31 + x) 7 xs)
+    && eq (foldRight (x acc => x :: acc) [] arr) xs
+
+prop "Array Mappable and Semigroup agree with List" (xs : List Int) (ys : List Int) =
+  eq
+    (toList (append (map (x => x + 1) (arrayFromList xs)) (arrayFromList ys)))
+    (map (x => x + 1) xs ++ ys)

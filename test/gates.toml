@@ -1676,8 +1676,8 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_eval_json_test.mdk"
 oracles = []
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/driver/*", "test/compiler_cli_test_support.mdk"]
-corpus = ["test/error_quality_fixtures"]
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/driver/*", "test/compiler_cli_test_support.mdk", "compiler/ir/core_ir_lower.mdk", "compiler/backend/llvm_emit.mdk", "compiler/entries/llvm_emit_modules_main.mdk", "runtime/medaka_rt.c"]
+corpus = ["test/error_quality_fixtures", "test/trap_site_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -3036,7 +3036,7 @@ migration = "native-rewrite"
 run = "test/wasm/diff_wasm_modules.sh"
 oracles = []
 sources = []
-corpus = ["test/wasm/fixtures_modules"]
+corpus = ["test/wasm/fixtures_modules", "test/trap_site_fixtures"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
 [[gate]]

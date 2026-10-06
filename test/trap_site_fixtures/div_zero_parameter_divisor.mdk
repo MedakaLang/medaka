@@ -1,0 +1,3 @@
+d : Int -> Int
+d x = 10 / x
+main = println (d 0)

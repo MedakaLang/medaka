@@ -33,6 +33,7 @@ arrayRest : Expr -> Token -> ParserE <> Expr
 assignFromLhs : Int -> Expr -> Expr -> ParserE <> DoStmt
 assignTail : Expr -> ParserE <> Expr
 assignTailRaw : Expr -> ParserE <> Expr
+atLetSite : Loc -> Expr -> Expr
 attrArg : String -> Token -> ParserE <> Attr
 authJoinTail : ParserE <> (List EffParamTy)
 authJoinTailFor : Token -> ParserE <> (List EffParamTy)
@@ -77,9 +78,9 @@ charPatRest : Lit -> ParserE <> Pat
 choice : List (ParserE <> a) -> ParserE <> a
 classifyBrace : String -> List KvItem -> Expr
 cmpOp : ParserE <> (Expr -> Expr -> Expr)
-coalesceClauses : List (String, List Pat, Expr) -> List LetBind
-coalesceGo : String -> List FunClause -> List (String, List Pat, Expr) -> List LetBind
-coalesceStep : String -> List FunClause -> String -> List Pat -> Expr -> List (String, List Pat, Expr) -> List LetBind
+coalesceClauses : List (String, List Pat, Expr, Loc) -> List LetBind
+coalesceGo : String -> Loc -> List FunClause -> List (String, List Pat, Expr, Loc) -> List LetBind
+coalesceStep : String -> Loc -> List FunClause -> String -> List Pat -> Expr -> Loc -> List (String, List Pat, Expr, Loc) -> List LetBind
 combineDerives : List DeriveRef -> List DeriveRef -> List DeriveRef
 concatMapC : List Ty -> List Constraint
 consField : RecPatField -> (List RecPatField, Bool) -> (List RecPatField, Bool)
@@ -325,11 +326,12 @@ letKind : Token -> ParserE <> DoStmt
 letMutRemovedMsg : String
 letPat : ParserE <> DoStmt
 letPatExpr : ParserE <> Expr
-letRecDeclClause : ParserE <> (String, List Pat, Expr)
+letRecDeclClause : ParserE <> (String, List Pat, Expr, Loc)
 letRecExpr : ParserE <> Expr
-letRecInlineClause : ParserE <> (String, List Pat, Expr)
+letRecInlineClause : ParserE <> (String, List Pat, Expr, Loc)
 letRecStmt : ParserE <> DoStmt
 letRecWithRemovedMsg : String
+letStmtAt : Loc -> DoStmt -> DoStmt
 letTailFor : Pat -> Expr -> Token -> ParserE <> DoStmt
 lineAt : Array Int -> Int -> Int
 lineHasFatArrow : Array Token -> Int -> Bool
@@ -526,8 +528,8 @@ parseTypeAlias : Bool -> ParserE <> Decl
 parseUnary : ParserE <> Expr
 parseUpperAtom : String -> ParserE <> Expr
 parseVariant : ParserE <> (Variant, List (String, KindAnn))
-parseWhereBinding : ParserE <> (String, List Pat, Expr)
-parseWhereBindings : ParserE <> (List (String, List Pat, Expr))
+parseWhereBinding : ParserE <> (String, List Pat, Expr, Loc)
+parseWhereBindings : ParserE <> (List (String, List Pat, Expr, Loc))
 parseWithPositions : String -> (List Decl, Positions)
 parseWithPositionsLocated : String -> (List Decl, Positions)
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
@@ -667,12 +669,13 @@ variantUpdateTail : String -> ParserE <> Expr
 variantsRest : ParserE <> (List (Variant, List (String, KindAnn)))
 variantsRestFor : Token -> ParserE <> (List (Variant, List (String, KindAnn)))
 whereBindRest : String -> List Pat -> Token -> ParserE <> (String, List Pat, Expr)
-whereBindingsCons : ParserE <> (List (String, List Pat, Expr))
-whereBindingsLoop : ParserE <> (List (String, List Pat, Expr))
+whereBindingsCons : ParserE <> (List (String, List Pat, Expr, Loc))
+whereBindingsLoop : ParserE <> (List (String, List Pat, Expr, Loc))
 whereEol : Expr -> ParserE <> Expr
 whereTail : Expr -> ParserE <> Expr
 widePatMsg : String -> String
 withAllFor : Int -> String -> Token -> ParserE <> UseMember
 withAllOrNot : Int -> String -> ParserE <> UseMember
+withBindSite : Loc -> (String, List Pat, Expr) -> (String, List Pat, Expr, Loc)
 zipFieldIdxs : List Field -> List Int -> List (Option Int)
 zipVariantIdxs : Array Token -> Int -> List Variant -> List Int -> List (Option Int)
