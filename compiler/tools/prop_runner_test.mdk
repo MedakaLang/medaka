@@ -34,6 +34,7 @@ import frontend.ast.{
   Require(..),
   Ty(..),
   TyConOrigin(..),
+  tyConUnresolved,
 }
 import frontend.parser.{parse}
 import tools.prop_plan.{
@@ -102,8 +103,7 @@ test "8-tuples of raw draws reach far more than 62/256 distinct assignments" =
   expectTrue (length (nub tuples) >= 200)
 
 namedTy : String -> Ty
-namedTy name =
-  TyCon { tyConName = name, tyConLoc = None, tyConOrigin = OriginUnresolved }
+namedTy name = tyConUnresolved name None
 
 intTy : Ty
 intTy =

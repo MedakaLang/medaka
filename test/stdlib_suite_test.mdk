@@ -416,6 +416,9 @@ test "stdlib/nonempty.mdk executed >= 15 assertions" =
 
 test "stdlib/path.mdk executed >= 34 assertions" = floorExpectation "path"
 
+test "stdlib/random_state_test.mdk executed >= 3 assertions" =
+  floorExpectation "random_state_test"
+
 test "stdlib/regex.mdk executed >= 94 assertions" = floorExpectation "regex"
 
 test "stdlib/set.mdk executed >= 64 assertions" = floorExpectation "set"
