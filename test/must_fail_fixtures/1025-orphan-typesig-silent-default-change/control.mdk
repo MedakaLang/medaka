@@ -1,5 +1,0 @@
-export halfRenamed : Float
-
-halfRenamed = 1 / 2
-
-main = println halfRenamed

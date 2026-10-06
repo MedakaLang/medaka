@@ -22,7 +22,7 @@
 --   medaka build entry.mdk -o /tmp/o && /tmp/o           -> exit 0, stdout "t=1,3"
 --   medaka build --target wasm entry.mdk -o /tmp/o.wasm  -> exit 0 (emits+validates)
 --   node test/wasm/run.js /tmp/o.wasm                    -> exit 1, stderr
---     "instantiate failed: illegal cast"
+--     "runtime error: illegal cast"
 --
 -- This pin was originally found and written on PR #1455's branch, which measured the
 -- same divergence on cold builds of BOTH the merge base `bfcd4ea7` and that branch, so

@@ -58,7 +58,7 @@ first-position-only `--help`/`-h` interception, #1348, stays where it is); anyth
 
 ## 3. The API
 
-```medaka
+```medaka-nocheck: the args API as data declarations and bare signatures; the bindings live in stdlib/args.mdk, so the signatures stand alone here
 data Arity =
   | Switch
   | Value String

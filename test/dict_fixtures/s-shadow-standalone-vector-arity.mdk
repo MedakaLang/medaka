@@ -10,7 +10,7 @@
 -- and collapsed the two back into ONE. A 1-dict call against a 2-dict definition:
 -- measured at sprint head `e19298f5`, `check` exit 0, `run` E-PANIC "intToString: not an
 -- Int", `build` exit 0 printing a DIFFERENT heap pointer on every execution, wasm
--- "instantiate failed: illegal cast" -- three engines disagreeing three ways.
+-- "runtime error: illegal cast" -- three engines disagreeing three ways.
 --
 -- ⚠️ THE SHADOW IS THE FIXTURE. `test/dict_fixtures/s-cardinality-same-iface2.mdk` is this
 -- program with the standalone renamed to `useIx` and the `Sizeable` interface removed --
