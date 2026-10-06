@@ -23,7 +23,7 @@ import string.{toInt}
 import tools.probe_transcript.{
   Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, lookupChunk,
   mintNonce, noncedPrefix, renameUserMain, sentinelLine, tagsInOrder,
-  valuePrintExpr
+  valuePrintExprWith
 }
 import tools.printer.{exprToString, ppTy}
 import tools.prop_plan.{
@@ -485,10 +485,10 @@ plannedProbeSource nonce target tsrc modules env jobs =
       ++ [probeTargetSource target tsrc, ""]
       ++ [
         "\{generatedPrefix nonce}state : Ref Int",
-        "\{generatedPrefix nonce}state = Ref 0",
+        "\{generatedPrefix nonce}state = \{runtimeAlias nonce}.Ref 0",
         "",
         "\{generatedPrefix nonce}custom_state : Ref U64",
-        "\{generatedPrefix nonce}custom_state = Ref 0",
+        "\{generatedPrefix nonce}custom_state = \{runtimeAlias nonce}.Ref 0",
         "",
         "\{generatedPrefix nonce}next _ =",
         "  let s = (!\{generatedPrefix nonce}state * 1103515245 + 12345) % 2147483648",
@@ -498,31 +498,37 @@ plannedProbeSource nonce target tsrc modules env jobs =
         "\{generatedPrefix nonce}int _ = (\{generatedPrefix nonce}next () / 65536) % 2001 - 1000",
         "\{generatedPrefix nonce}bool _ = (\{generatedPrefix nonce}next () / 65536) % 2 == 0",
         "\{generatedPrefix nonce}choose n = if n <= 1 then 0 else (\{generatedPrefix nonce}next () / 65536) % n",
-        "\{generatedPrefix nonce}char _ = optionOr ' ' (charFromCode (32 + \{generatedPrefix nonce}choose 95))",
-        "\{generatedPrefix nonce}string n = if n <= 0 then \"\" else charToStr (\{generatedPrefix nonce}char ()) ++ \{generatedPrefix nonce}string (n - 1)",
+        "\{generatedPrefix nonce}char _ = \{coreAlias nonce}.optionOr ' ' (\{runtimeAlias nonce}.charFromCode (32 + \{generatedPrefix nonce}choose 95))",
+        "\{generatedPrefix nonce}string n = if n <= 0 then \"\" else \{runtimeAlias nonce}.charToStr (\{generatedPrefix nonce}char ()) ++ \{generatedPrefix nonce}string (n - 1)",
         "",
         "\{generatedPrefix nonce}join_strings _ [] = \"\"",
         "\{generatedPrefix nonce}join_strings _ (x :: []) = x",
         "\{generatedPrefix nonce}join_strings sep (x :: xs) = x ++ sep ++ \{generatedPrefix nonce}join_strings sep xs",
         "",
         "\{generatedPrefix nonce}array_to_list arr = \{generatedPrefix nonce}array_to_list_go arr 0",
-        "\{generatedPrefix nonce}array_to_list_go arr i = if i >= arrayLength arr then [] else arrayGetUnsafe i arr :: \{generatedPrefix nonce}array_to_list_go arr (i + 1)",
+        "\{generatedPrefix nonce}array_to_list_go arr i = if i >= \{runtimeAlias nonce}.arrayLength arr then [] else arr[i] :: \{generatedPrefix nonce}array_to_list_go arr (i + 1)",
         "",
         "\{generatedPrefix nonce}delete_each [] = []",
-        "\{generatedPrefix nonce}delete_each (x :: xs) = xs :: map (ys => x :: ys) (\{generatedPrefix nonce}delete_each xs)",
+        "\{generatedPrefix nonce}delete_each (x :: xs) = xs :: \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}delete_each xs)",
         "\{generatedPrefix nonce}replace_each f [] = []",
-        "\{generatedPrefix nonce}replace_each f (x :: xs) = map (ys => ys :: xs) (f x) ++ map (ys => x :: ys) (\{generatedPrefix nonce}replace_each f xs)",
+        "\{generatedPrefix nonce}replace_each f (x :: xs) = \{coreAlias nonce}.map (ys => ys :: xs) (f x) ++ \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}replace_each f xs)",
         "",
       ]
       ++ plannedPropLines nonce modules env (coreAlias nonce) jobs 0
       ++ ["main ="]
       ++ plannedMainLines nonce jobs 0
-      ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
+      ++ [
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce endTag}\"",
+        "",
+      ])
 
 -- Each imported module gets a probe-local alias. Constructor selection is by
 -- the TypeKey owner, never by a bare source spelling.
 coreAlias : String -> String
 coreAlias nonce = "NpCore_\{probeNameNonce nonce}"
+
+runtimeAlias : String -> String
+runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
 
 probeNameNonce : String -> String
 probeNameNonce nonce = replaceAll "-" "_" nonce
@@ -540,6 +546,7 @@ plannedImports : String ->
   List String
 plannedImports nonce modules jobs env =
   "import core as \{coreAlias nonce}"
+    :: "import runtime as \{runtimeAlias nonce}"
     :: map (importLine nonce modules) (omKeys (importOwners jobs env omEmpty))
 
 importOwners : List NativePlanOutcome -> PlanEnv -> OrdMap Unit -> OrdMap Unit
@@ -944,7 +951,7 @@ graphNodeBody : String ->
 graphNodeBody nonce _ _ _ _ _ GInt = "\{generatedPrefix nonce}int ()"
 graphNodeBody nonce _ _ _ _ _ GBool = "\{generatedPrefix nonce}bool ()"
 graphNodeBody nonce _ _ _ _ _ GFloat =
-  "intToFloat ((\{generatedPrefix nonce}next ()) % 2000001) * (1.0 / 1000000.0) - 1.0"
+  "\{runtimeAlias nonce}.intToFloat ((\{generatedPrefix nonce}next ()) % 2000001) * (1.0 / 1000000.0) - 1.0"
 graphNodeBody nonce _ _ _ _ _ GChar = "\{generatedPrefix nonce}char ()"
 graphNodeBody nonce _ _ _ _ _ GString = stringExpr nonce 0
 graphNodeBody _ _ _ _ _ _ GUnit = "()"
@@ -1107,7 +1114,7 @@ renderResultAtDepth nonce env err ok error okExpr level =
 
 customDrawExpr : String -> String -> String
 customDrawExpr nonce core =
-  "\n  let caller = randomState ()\n  let _ = restoreRandomState (!\{generatedPrefix nonce}custom_state)\n  let x = \{core}.arbitrary ()\n  let next = randomState ()\n  let _ = \{generatedPrefix nonce}custom_state := next\n  let _ = restoreRandomState caller\n  x"
+  "\n  let caller = \{runtimeAlias nonce}.randomState ()\n  let _ = \{runtimeAlias nonce}.restoreRandomState (!\{generatedPrefix nonce}custom_state)\n  let x = \{core}.arbitrary ()\n  let next = \{runtimeAlias nonce}.randomState ()\n  let _ = \{generatedPrefix nonce}custom_state := next\n  let _ = \{runtimeAlias nonce}.restoreRandomState caller\n  x"
 
 stringExpr : String -> Int -> String
 stringExpr nonce _ =
@@ -1234,20 +1241,20 @@ candidateNodeBody _ _ _ _ _ _ GBool name = "if \{name} then [False] else []"
 candidateNodeBody _ _ _ _ _ _ GFloat name =
   "if \{name} == 0.0 then [] else [0.0, \{name} / 2.0]"
 candidateNodeBody _ _ _ _ _ _ GChar _ = "[]"
-candidateNodeBody _ _ _ _ _ _ GString name =
-  "if \{name} == \"\" then [] else [stringSlice 0 (stringLength \{name} / 2) \{name}]"
+candidateNodeBody nonce _ _ _ _ _ GString name =
+  "if \{name} == \"\" then [] else [\{runtimeAlias nonce}.stringSlice 0 (\{runtimeAlias nonce}.stringLength \{name} / 2) \{name}]"
 candidateNodeBody _ _ _ _ _ _ GUnit _ = "[]"
 candidateNodeBody _ _ _ core _ _ (GCustom _) name = "\{core}.shrink \{name}"
 candidateNodeBody nonce modules env _ graph prefix (GList p) name =
   "\{generatedPrefix nonce}delete_each \{name} ++ \{generatedPrefix nonce}replace_each (x => \{graphShrinkRef graph prefix p "x"}) \{name}"
 candidateNodeBody nonce modules env _ graph prefix (GArray p) name =
-  "map arrayFromList (\{generatedPrefix nonce}delete_each (\{generatedPrefix nonce}array_to_list \{name})) ++ map arrayFromList (\{generatedPrefix nonce}replace_each (x => \{graphShrinkRef graph prefix p "x"}) (\{generatedPrefix nonce}array_to_list \{name}))"
-candidateNodeBody _ modules env _ graph prefix (GOption p) name =
-  "match \{name}\n  None => []\n  Some x => None :: map Some (\{graphShrinkRef graph prefix p "x"})"
-candidateNodeBody _ modules env _ graph prefix (GResult err ok) name =
-  "match \{name}\n  Err x => map Err (\{graphShrinkRef graph prefix err "x"})\n  Ok x => map Ok (\{graphShrinkRef graph prefix ok "x"})"
-candidateNodeBody _ _ _ _ graph prefix (GTuple ps) name =
-  graphTupleCandidates graph prefix ps name
+  "\{coreAlias nonce}.map \{runtimeAlias nonce}.arrayFromList (\{generatedPrefix nonce}delete_each (\{generatedPrefix nonce}array_to_list \{name})) ++ \{coreAlias nonce}.map \{runtimeAlias nonce}.arrayFromList (\{generatedPrefix nonce}replace_each (x => \{graphShrinkRef graph prefix p "x"}) (\{generatedPrefix nonce}array_to_list \{name}))"
+candidateNodeBody nonce modules env _ graph prefix (GOption p) name =
+  "match \{name}\n  None => []\n  Some x => None :: \{coreAlias nonce}.map Some (\{graphShrinkRef graph prefix p "x"})"
+candidateNodeBody nonce modules env _ graph prefix (GResult err ok) name =
+  "match \{name}\n  Err x => \{coreAlias nonce}.map Err (\{graphShrinkRef graph prefix err "x"})\n  Ok x => \{coreAlias nonce}.map Ok (\{graphShrinkRef graph prefix ok "x"})"
+candidateNodeBody nonce _ _ _ graph prefix (GTuple ps) name =
+  graphTupleCandidates nonce graph prefix ps name
 candidateNodeBody nonce modules env _ graph prefix (plan@(GNominal key _)) name =
   graphNominalCandidates nonce modules env graph prefix plan key name
 
@@ -1259,11 +1266,12 @@ displayNodeBody : String ->
   GenPlan ->
   String ->
   String
-displayNodeBody _ _ _ _ _ GInt name = "intToString \{name}"
+displayNodeBody nonce _ _ _ _ GInt name =
+  "\{runtimeAlias nonce}.intToString \{name}"
 displayNodeBody _ _ _ _ _ GBool name = "if \{name} then \"True\" else \"False\""
-displayNodeBody _ _ _ _ _ GFloat name = "debug \{name}"
-displayNodeBody _ _ _ _ _ GChar name = "debug \{name}"
-displayNodeBody _ _ _ _ _ GString name = "debug \{name}"
+displayNodeBody nonce _ _ _ _ GFloat name = "\{coreAlias nonce}.debug \{name}"
+displayNodeBody nonce _ _ _ _ GChar name = "\{coreAlias nonce}.debug \{name}"
+displayNodeBody nonce _ _ _ _ GString name = "\{coreAlias nonce}.debug \{name}"
 displayNodeBody _ _ _ _ _ GUnit _ = "\"()\""
 displayNodeBody nonce modules env graph prefix (GCustom (custom@(CustomPlan key _ _))) name =
   match customStructuralPlan env custom
@@ -1271,9 +1279,9 @@ displayNodeBody nonce modules env graph prefix (GCustom (custom@(CustomPlan key 
       graphNominalDisplay nonce modules env graph prefix plan key name
     None => "\"<\{typeKeyName key}>\""
 displayNodeBody nonce _ _ graph prefix (GList p) name =
-  "\"[\" ++ \{generatedPrefix nonce}join_strings \", \" (map (x => \{graphDisplayRef graph prefix p "x"}) \{name}) ++ \"]\""
+  "\"[\" ++ \{generatedPrefix nonce}join_strings \", \" (\{coreAlias nonce}.map (x => \{graphDisplayRef graph prefix p "x"}) \{name}) ++ \"]\""
 displayNodeBody nonce _ _ graph prefix (GArray p) name =
-  "\"[|\" ++ \{generatedPrefix nonce}join_strings \", \" (map (x => \{graphDisplayRef graph prefix p "x"}) (\{generatedPrefix nonce}array_to_list \{name})) ++ \"|]\""
+  "\"[|\" ++ \{generatedPrefix nonce}join_strings \", \" (\{coreAlias nonce}.map (x => \{graphDisplayRef graph prefix p "x"}) (\{generatedPrefix nonce}array_to_list \{name})) ++ \"|]\""
 displayNodeBody _ _ _ graph prefix (GOption p) name =
   "match \{name}\n  None => \"None\"\n  Some x => \"Some (\" ++ \{graphDisplayRef graph prefix p "x"} ++ \")\""
 displayNodeBody _ _ _ graph prefix (GResult err ok) name =
@@ -1284,22 +1292,28 @@ displayNodeBody _ _ _ graph prefix (GTuple ps) name =
 displayNodeBody nonce modules env graph prefix (plan@(GNominal key _)) name =
   graphNominalDisplay nonce modules env graph prefix plan key name
 
-graphTupleCandidates : NativeGraph -> String -> List GenPlan -> String -> String
-graphTupleCandidates graph prefix plans name =
+graphTupleCandidates : String ->
+  NativeGraph ->
+  String ->
+  List GenPlan ->
+  String ->
+  String
+graphTupleCandidates nonce graph prefix plans name =
   let values = tupleVars (listLen plans)
-  "match \{name}\n  (\{joinWith ", " values}) => \{graphTupleCandidateLists graph prefix plans values values 0}"
+  "match \{name}\n  (\{joinWith ", " values}) => \{graphTupleCandidateLists nonce graph prefix plans values values 0}"
 
-graphTupleCandidateLists : NativeGraph ->
+graphTupleCandidateLists : String ->
+  NativeGraph ->
   String ->
   List GenPlan ->
   List String ->
   List String ->
   Int ->
   String
-graphTupleCandidateLists _ _ [] _ _ _ = "[]"
-graphTupleCandidateLists graph prefix (plan :: plans) all (value :: values) index =
-  "map (candidate => (\{joinWith ", " (replaceName index "candidate" all)})) (\{graphShrinkRef graph prefix plan value}) ++ \{graphTupleCandidateLists graph prefix plans all values (index + 1)}"
-graphTupleCandidateLists _ _ _ _ _ _ = "[]"
+graphTupleCandidateLists nonce _ _ [] _ _ _ = "[]"
+graphTupleCandidateLists nonce graph prefix (plan :: plans) all (value :: values) index =
+  "\{coreAlias nonce}.map (candidate => (\{joinWith ", " (replaceName index "candidate" all)})) (\{graphShrinkRef graph prefix plan value}) ++ \{graphTupleCandidateLists nonce graph prefix plans all values (index + 1)}"
+graphTupleCandidateLists nonce _ _ _ _ _ _ = "[]"
 
 graphNominalCandidates : String ->
   List PlanModule ->
@@ -1335,13 +1349,14 @@ graphNominalCandidateArm nonce modules env graph prefix plan owner (ctor@(PlanCt
       let values = tupleVars (listLen fields)
       let ref = qualifiedCtor nonce modules owner source
       if hasNamedField fields then
-        "  \{ref} { \{joinWith ", " (namedAssignments fields values)} } => \{graphNominalFieldCandidates graph prefix ref fields fields values values True 0}"
+        "  \{ref} { \{joinWith ", " (namedAssignments fields values)} } => \{graphNominalFieldCandidates nonce graph prefix ref fields fields values values True 0}"
       else if listLen values == 0 then
         "  \{ref} => []"
       else
-        "  \{ref} \{joinWith " " values} => \{graphNominalFieldCandidates graph prefix ref fields fields values values False 0}"
+        "  \{ref} \{joinWith " " values} => \{graphNominalFieldCandidates nonce graph prefix ref fields fields values values False 0}"
 
-graphNominalFieldCandidates : NativeGraph ->
+graphNominalFieldCandidates : String ->
+  NativeGraph ->
   String ->
   String ->
   List (Option String, GenPlan) ->
@@ -1351,10 +1366,10 @@ graphNominalFieldCandidates : NativeGraph ->
   Bool ->
   Int ->
   String
-graphNominalFieldCandidates _ _ _ _ [] _ _ _ _ = "[]"
-graphNominalFieldCandidates graph prefix ref all ((_, plan) :: rest) allValues (value :: values) named index =
-  "map (candidate => \{rebuildCtor ref all (replaceName index "candidate" allValues) named}) (\{graphShrinkRef graph prefix plan value}) ++ \{graphNominalFieldCandidates graph prefix ref all rest allValues values named (index + 1)}"
-graphNominalFieldCandidates _ _ _ _ _ _ _ _ _ = "[]"
+graphNominalFieldCandidates nonce _ _ _ _ [] _ _ _ _ = "[]"
+graphNominalFieldCandidates nonce graph prefix ref all ((_, plan) :: rest) allValues (value :: values) named index =
+  "\{coreAlias nonce}.map (candidate => \{rebuildCtor ref all (replaceName index "candidate" allValues) named}) (\{graphShrinkRef graph prefix plan value}) ++ \{graphNominalFieldCandidates nonce graph prefix ref all rest allValues values named (index + 1)}"
+graphNominalFieldCandidates nonce _ _ _ _ _ _ _ _ _ = "[]"
 
 graphJoinDisplays : NativeGraph ->
   String ->
@@ -1663,20 +1678,20 @@ plannedMainLines : String -> List NativePlanOutcome -> Int -> List String
 plannedMainLines _ [] _ = []
 plannedMainLines nonce ((NativeRunnable (DProp _ _ params _) r plans) :: rest) i =
   [
-      "  let _ = putStrLn \"\{sentinelFor nonce (startTag i)}\"",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (startTag i)}\"",
       "  let _ = \{generatedPrefix nonce}state := ((\{intToString (propRequestSeed r)} % 2147483648) + 2147483648) % 2147483648",
-      "  let caller = randomState ()",
-      "  let _ = setSeed \{intToString (propRequestSeed r)}",
-      "  let _ = \{generatedPrefix nonce}custom_state := randomState ()",
-      "  let _ = restoreRandomState caller",
+      "  let caller = \{runtimeAlias nonce}.randomState ()",
+      "  let _ = \{runtimeAlias nonce}.setSeed \{intToString (propRequestSeed r)}",
+      "  let _ = \{generatedPrefix nonce}custom_state := \{runtimeAlias nonce}.randomState ()",
+      "  let _ = \{runtimeAlias nonce}.restoreRandomState caller",
       "  let seed = \{intToString (propRequestSeed r)}",
-      "  let _ = putStrLn \"\{sentinelFor nonce (seedTag i)}\"",
-      "  let _ = \{valuePrintExpr "intToString seed"}",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (seedTag i)}\"",
+      "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") (runtimeAlias nonce ++ ".intToString seed")}",
       "  let (ok, detail) = \{runName nonce i} \{intToString (propRequestCases r)}",
-      "  let _ = putStrLn \"\{sentinelFor nonce (boolTag i)}\"",
-      "  let _ = \{valuePrintExpr "debug ok"}",
-      "  let _ = putStrLn \"\{sentinelFor nonce (detailTag i)}\"",
-      "  let _ = \{valuePrintExpr "detail"}",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (boolTag i)}\"",
+      "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") (coreAlias nonce ++ ".debug ok")}",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (detailTag i)}\"",
+      "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") "detail"}",
     ]
     ++ plannedMainLines nonce rest (i + 1)
 plannedMainLines nonce (_ :: rest) i = plannedMainLines nonce rest i

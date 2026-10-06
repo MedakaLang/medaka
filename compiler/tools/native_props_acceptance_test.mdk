@@ -143,7 +143,9 @@ test "custom shrinking runs on both property engines" =
         Ok (_, report) =>
           all
             (row => match field "detail" row
-              Some detail => contains "w = Wrap 0" detail
+              Some detail =>
+                let compact = replaceAll " " "" detail
+                contains "w=Wrap(0)" compact || contains "w=Wrap0" compact
               None => False)
             (propertyReports report)
       expectAll [
@@ -608,8 +610,11 @@ test "both engines shrink later candidates and every parameter repeatedly" =
           all
             (row => match field "detail" row
               Some detail =>
-                contains "left = Wrap 5" detail
-                  && contains "right = Wrap 5" detail
+                let compact = replaceAll " " "" detail
+                (contains "left=Wrap(5)" compact
+                    || contains "left=Wrap5" compact)
+                  && (contains "right=Wrap(5)" compact
+                    || contains "right=Wrap5" compact)
               None => False)
             (propertyReports report)
       expectAll [
@@ -759,7 +764,7 @@ test "recursive plans inside containers terminate and reach recursive constructo
     [
       (
         "main.mdk",
-        "data Tree a = Leaf a | Fork (List (Tree a)) deriving Eq\nleafOnly : Tree a -> Bool\nleafOnly (Leaf _) = True\nleafOnly (Fork _) = False\nprop \"nested recursion\" (trees : List (Tree Int)) = trees == trees\nprop \"recursive branch reached\" (trees : List (Tree Int)) = all leafOnly trees\n",
+        "data Tree a = Leaf a | Fork (List (Tree a)) deriving (Eq)\nleafOnly : Tree a -> Bool\nleafOnly (Leaf _) = True\nleafOnly (Fork _) = False\nprop \"nested recursion\" (trees : List (Tree Int)) = trees == trees\nprop \"recursive branch reached\" (trees : List (Tree Int)) = all leafOnly trees\n",
       ),
     ]
     (target =>
@@ -997,13 +1002,49 @@ test "custom generators and shrinkers select the complete applied carrier" =
           (all
             (row => match field "detail" row
               Some detail =>
-                contains "value = Box (0)" detail
-                  || contains "value = Box 0" detail
+                let compact = replaceAll " " "" detail
+                contains "value=Box(0)" compact || contains "value=Box0" compact
               None => False)
             (filter
               (row => field "name" row == Some "applied integer shrink")
               (propertyReports report))),
       ])
+
+test "user prelude names preserve their meaning without capturing native helpers" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "map () = 99\noptionOr () = 99\ndebug () = 99\nintToString () = 99\nputStrLn () = 99\ndebugStringLit () = 99\ncharFromCode () = 99\ncharToStr () = 99\narrayLength () = 99\narrayGetUnsafe () = 99\narrayFromList () = 99\nstringLength () = 99\nstringSlice () = 99\nintToFloat () = 99\nprop \"shadowed helpers\" (n : Int) (text : String) (values : Array Int) (pair : (Int, Bool)) = map () == 99 && optionOr () == 99 && debug () == 99 && intToString () == 99 && putStrLn () == 99 && debugStringLit () == 99 && charFromCode () == 99 && charToStr () == 99 && arrayLength () == 99 && arrayGetUnsafe () == 99 && arrayFromList () == 99 && stringLength () == 99 && stringSlice () == 99 && intToFloat () == 99 && n == n && text == text && values == values && pair == pair\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "shadowed helpers", "pass"),
+          ("native", "shadowed helpers", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
+
+test "custom property RNG guards use canonical primitives under user shadows" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "randomState () = 99\nrestoreRandomState n = n\nsetSeed n = n\ndata Wrap = Wrap Int\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 500000\n  shrink (Wrap 0) = []\n  shrink _ = [Wrap 0]\nprop \"shadowed RNG guards\" (value : Wrap) = match value\n  Wrap n => n == 500000 && randomState () == 99 && restoreRandomState 9 == 9 && setSeed 8 == 8\nprop \"shadowed RNG shrink\" (value : Wrap) = False\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        1
+        [
+          ("eval", "shadowed RNG guards", "pass"),
+          ("eval", "shadowed RNG shrink", "fail"),
+          ("native", "shadowed RNG guards", "pass"),
+          ("native", "shadowed RNG shrink", "fail"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
 
 test "abstract custom counterexamples preserve module privacy on both engines" =
   withFixtures

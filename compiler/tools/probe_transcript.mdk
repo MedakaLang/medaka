@@ -163,7 +163,11 @@ tagsInOrder (e :: es) ((Chunk t _ _) :: cs) = e == t && tagsInOrder es cs
 -- either alone silently corrupts every value the driver reads.
 export
 valuePrintExpr : String -> String
-valuePrintExpr expr = "putStrLn (debugStringLit (\{expr}))"
+valuePrintExpr expr = valuePrintExprWith "putStrLn" "debugStringLit" expr
+
+export
+valuePrintExprWith : String -> String -> String -> String
+valuePrintExprWith printer encoder expr = "\{printer} (\{encoder} (\{expr}))"
 
 -- A chunk's lines back to the value that was printed.  Zero lines is the empty
 -- value (a doctest smoke example prints nothing but still evaluates); one line

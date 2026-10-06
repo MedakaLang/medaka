@@ -47,6 +47,13 @@ tuples and nominal constructor fields. Constructor privacy is checked relative
 to the owning module: abstract exports and newtypes can generate structurally
 there, while importers need an eligible custom generator.
 
+Generated probe bindings and import aliases carry a per-probe nonce. Generated
+core calls and runtime primitive calls use canonical module aliases, so a valid
+user declaration named `map`, `debug` or `randomState` keeps its own meaning
+without capturing runner machinery. The evaluator likewise selects runtime RNG
+bindings from the original global frame. User bodies, labels and field names
+are preserved rather than rewritten after rendering.
+
 ## Initial algorithm coverage
 
 The first added siblings keep test-only models out of compiler source

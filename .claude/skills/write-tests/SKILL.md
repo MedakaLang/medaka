@@ -195,15 +195,16 @@ measured, per-corpus decisions, not defaults.
   True`, `trustedMods = []` — *"`medaka test` is not the internal-extern
   enforcement surface (`check`/`--json` is)"*). So a check that passes under
   `medaka test` can still be rejected by `medaka check`; run both.
-- **Custom prop generators have a restricted domain.** The runner consults
-  an in-scope `Arbitrary` instance for an argument-free nominal type. Built-in
-  types use structural draws, as do applied heads without a selected custom
-  instance. A selected instance requiring type arguments or dictionaries
-  produces a capability error; it cannot silently fall back to structural
-  generation. Aliases cannot supply a draw. There is no automatic `Arbitrary` deriver,
-  recursive structural generation is depth-capped. Eligible custom
-  generators and shrinkers run in both engines. Custom random draws use
-  the requested seed while preserving the program's random stream. See
+- **Custom prop generators follow normal instance resolution.** The runner
+  consults an in-scope `Arbitrary` instance at the complete nominal carrier,
+  including applied and generic carriers and their `requires` obligations.
+  Built-in types use structural draws, as do nominal carriers without a
+  selected custom instance. An unusable selected instance produces a capability
+  error; it cannot silently fall back to structural generation. There is no
+  automatic `Arbitrary` deriver; recursive structural generation is depth-capped.
+  Eligible custom generators and shrinkers run in both engines, including
+  shrinkers nested in containers and constructor fields. Custom random draws
+  use the requested seed while preserving the program's random stream. See
   `compiler/tools/prop_plan.mdk` for the shared generation policy.
 - **Replay a failure with its seed, budget, engine and source revision.**
   Decide the correct answer independently before recording a regression.
