@@ -1,5 +1,5 @@
 # META
-source_lines=3125
+source_lines=3124
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -132,8 +132,8 @@ lower (EVarId x _) = CVar x AGlobal
 lower (EVarAt x addr) = CVar x addr
 lower (EApp f x) = CApp (lower f) (lower x)
 lower (ELam pats body) = CLam pats (lower body)
-lower (ELet _ False pat e1 e2)
-  | patMayFail pat = letDecision noDeclLoc pat (lower e1) (lower e2)
+lower (ELet site False pat e1 e2)
+  | patMayFail pat = letDecision site pat (lower e1) (lower e2)
 lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
 lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
 lower (EMatch scrut arms) = lowerMatch noDeclLoc (lower scrut) arms
@@ -192,13 +192,12 @@ lower (EHeadAnnot e _) = lower e
 -- same seam `EDictAt` crosses on the next line.
 lower (EMethodAt name _ ev) = cmethodOf name (evMethodRoutes ev)
 lower (EDictAt name ev) = CDict name (evDictRoutes ev)
--- A located `match` or `let` keeps its keyword's span as the trap site of the
--- decision it lowers to, the span the interpreter reports (`eval`'s
--- `ELoc l (EMatch …)` and `ELoc l (ELet …)` arms).  Every other ELoc is stripped:
--- no location wrapper reaches the Core IR, and only the trap fields carry one.
+-- A located `match` keeps its keyword's span as the trap site of the decision
+-- it lowers to, the span the interpreter reports (`eval`'s `ELoc l (EMatch …)`
+-- arm); a refutable `let` takes its own site field (the `ELet` arm above).
+-- Every other ELoc is stripped: no location wrapper reaches the Core IR, and
+-- only the trap fields carry one.
 lower (ELoc l (EMatch scrut arms)) = lowerMatch l (lower scrut) arms
-lower (ELoc l (ELet _ False pat e1 e2))
-  | patMayFail pat = letDecision l pat (lower e1) (lower e2)
 lower (ELoc _ e) = lower e
 lower (EDoOrigin _ e) = lower e
 lower other = panic ("core_ir lower: unsupported node " ++ nodeTag other)
@@ -3152,7 +3151,7 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "EVarAt" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
 (DFunDef false "lower" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "CApp") (EApp (EVar "lower") (EVar "f"))) (EApp (EVar "lower") (EVar "x"))))
 (DFunDef false "lower" ((PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))
-(DFunDef false "lower" ((PCon "ELet" PWild (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "noDeclLoc")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "lower" ((PCon "ELet" (PVar "site") (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "site")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "lower" ((PCon "ELet" PWild (PVar "recFlag") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recFlag")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))))
 (DFunDef false "lower" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EVar "lowerBind")) (EVar "binds"))) (EApp (EVar "lower") (EVar "body"))))
 (DFunDef false "lower" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "lowerMatch") (EVar "noDeclLoc")) (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
@@ -3179,7 +3178,6 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "EMethodAt" (PVar "name") PWild (PVar "ev"))) (EApp (EApp (EVar "cmethodOf") (EVar "name")) (EApp (EVar "evMethodRoutes") (EVar "ev"))))
 (DFunDef false "lower" ((PCon "EDictAt" (PVar "name") (PVar "ev"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EApp (EVar "evDictRoutes") (EVar "ev"))))
 (DFunDef false "lower" ((PCon "ELoc" (PVar "l") (PCon "EMatch" (PVar "scrut") (PVar "arms")))) (EApp (EApp (EApp (EVar "lowerMatch") (EVar "l")) (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
-(DFunDef false "lower" ((PCon "ELoc" (PVar "l") (PCon "ELet" PWild (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2")))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "l")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "lower" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir lower: unsupported node ")) (EApp (EVar "nodeTag") (EVar "other")))))
@@ -4142,7 +4140,7 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "EVarAt" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
 (DFunDef false "lower" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "CApp") (EApp (EVar "lower") (EVar "f"))) (EApp (EVar "lower") (EVar "x"))))
 (DFunDef false "lower" ((PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))
-(DFunDef false "lower" ((PCon "ELet" PWild (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "noDeclLoc")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "lower" ((PCon "ELet" (PVar "site") (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "site")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "lower" ((PCon "ELet" PWild (PVar "recFlag") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recFlag")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))))
 (DFunDef false "lower" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EVar "lowerBind")) (EVar "binds"))) (EApp (EVar "lower") (EVar "body"))))
 (DFunDef false "lower" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "lowerMatch") (EVar "noDeclLoc")) (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
@@ -4169,7 +4167,6 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "EMethodAt" (PVar "name") PWild (PVar "ev"))) (EApp (EApp (EVar "cmethodOf") (EVar "name")) (EApp (EVar "evMethodRoutes") (EVar "ev"))))
 (DFunDef false "lower" ((PCon "EDictAt" (PVar "name") (PVar "ev"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EApp (EVar "evDictRoutes") (EVar "ev"))))
 (DFunDef false "lower" ((PCon "ELoc" (PVar "l") (PCon "EMatch" (PVar "scrut") (PVar "arms")))) (EApp (EApp (EApp (EVar "lowerMatch") (EVar "l")) (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
-(DFunDef false "lower" ((PCon "ELoc" (PVar "l") (PCon "ELet" PWild (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2")))) (EIf (EApp (EVar "patMayFail") (EVar "pat")) (EApp (EApp (EApp (EApp (EVar "letDecision") (EVar "l")) (EVar "pat")) (EApp (EVar "lower") (EVar "e1"))) (EApp (EVar "lower") (EVar "e2"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "lower" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir lower: unsupported node ")) (EApp (EVar "nodeTag") (EVar "other")))))

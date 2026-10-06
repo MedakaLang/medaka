@@ -11,7 +11,7 @@ annotateIfaceMethod : IfaceMethod -> IfaceMethod
 annotateImplMethod : ImplMethod -> ImplMethod
 annotateInterp : List (List String) -> InterpPart -> InterpPart
 annotateKv : List (List String) -> (Expr, Expr) -> (Expr, Expr)
-annotateLet : List (List String) -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
+annotateLet : List (List String) -> Loc -> Bool -> Pat -> Expr -> Expr -> Expr
 annotateLetBind : List (List String) -> LetBind -> LetBind
 annotateLetGroup : List (List String) -> List LetBind -> Expr -> Expr
 annotateProgram : List Decl -> List Decl

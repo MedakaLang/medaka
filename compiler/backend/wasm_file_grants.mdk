@@ -149,13 +149,13 @@ scanGrantSites reach sites around bound (e@(EApp _ _)) =
 
 -- A partial use is saturated under `let`s binding the arguments it was given, so
 -- the call inside reads as fresh names: locate it at the first bound argument.
-scanGrantSites reach sites around bound (ELet mutable recursive pat rhs body) =
-  let after = letScope mutable recursive pat rhs bound
+scanGrantSites reach sites around bound (ELet site recursive pat rhs body) =
+  let after = letScope False recursive pat rhs bound
   let rhs2 =
     scanGrantSites reach sites around (if recursive then after else bound) rhs
   let body2 =
     scanGrantSites reach sites (orElse (leftLoc rhs) around) after body
-  ELet mutable recursive pat rhs2 body2
+  ELet site recursive pat rhs2 body2
 scanGrantSites reach sites around bound e =
   mapScopedChildren bound (scanGrantSites reach sites around) e
 
@@ -341,7 +341,7 @@ localFunction : Scope -> Expr -> Option LocalBinding
 localFunction bound (ELoc _ e) = localFunction bound e
 localFunction bound (EAnnot e _) = localFunction bound e
 localFunction bound (EHeadAnnot e _) = localFunction bound e
-localFunction bound (ELet False False pat rhs body) =
+localFunction bound (ELet _ False pat rhs body) =
   -- Grant saturation evaluates supplied arguments before constructing its eta
   -- closure. Keep those binders in the closure's scope; the caller also scans
   -- the construction RHS, including any eager file operations.
@@ -422,10 +422,10 @@ mapScopedLetBind f bound (LetBind n clauses site) =
 mapScopedChildren : Scope -> (Scope -> Expr -> Expr) -> Expr -> Expr
 mapScopedChildren bound f (ELam ps body) =
   ELam ps (f (addPatScope ps bound) body)
-mapScopedChildren bound f (ELet mutable recursive pat rhs body) =
-  let after = letScope mutable recursive pat rhs bound
+mapScopedChildren bound f (ELet site recursive pat rhs body) =
+  let after = letScope False recursive pat rhs bound
   ELet
-    mutable
+    site
     recursive
     pat
     (f (if recursive then after else bound) rhs)

@@ -15793,7 +15793,7 @@ infer env (EVar x) = inferVar env x
 infer env (EVarId x id) = inferVarId env x id
 infer env (EApp f x) = inferAppExpr env f x
 infer env (ELam pats body) = inferLam env pats body
-infer env (ELet isMut isFun pat e1 e2) = inferLet env isMut isFun pat e1 e2
+infer env (ELet _ isFun pat e1 e2) = inferLet env isFun pat e1 e2
 infer env (ELetGroup binds body) = inferLetGroup env binds body
 infer env (EIf c t e) = inferIf env c t e
 infer env (EMatch scrut arms) = inferMatch env (infer env scrut) arms
@@ -23749,10 +23749,8 @@ inferLam env pats body =
     None => ()
   inferLamChecked env None pats body
 
--- The first Bool (`mut`) is always False — `let mut` is a parser error (beta
--- mutability model), so no inline mut-let path remains here.
-inferLet : TcEnv -> Bool -> Bool -> Pat -> Expr -> Expr -> Mono
-inferLet env _ isFun pat e1 e2
+inferLet : TcEnv -> Bool -> Pat -> Expr -> Expr -> Mono
+inferLet env isFun pat e1 e2
   | isFun = match pat
     PVar x xloc => inferRecLet env x (Some xloc) e1 e2  -- #866: binder loc for the pin note
     _ => inferLetSimple env pat e1 e2
@@ -34243,7 +34241,8 @@ saturateGrants head arity grants args =
         head
         (map (b => EVar (fst b)) bound ++ map EVar missing ++ grants)
     fold
-      (body b => ELet False False (PVar (fst b) (Loc "" 0 0 0 0)) (snd b) body)
+      (body b =>
+        ELet noDeclLoc False (PVar (fst b) (Loc "" 0 0 0 0)) (snd b) body)
       (ELam (map (x => PVar x (Loc "" 0 0 0 0)) missing) call)
       (reverseL bound)
 
@@ -34431,7 +34430,7 @@ fileBoundValue chain ty e =
       let fn = freshGrantName ()
       let arg = freshGrantName ()
       ELet
-        False
+        noDeclLoc
         False
         (PVar fn (Loc "" 0 0 0 0))
         e

@@ -33,6 +33,7 @@ arrayRest : Expr -> Token -> ParserE <> Expr
 assignFromLhs : Int -> Expr -> Expr -> ParserE <> DoStmt
 assignTail : Expr -> ParserE <> Expr
 assignTailRaw : Expr -> ParserE <> Expr
+atLetSite : Loc -> Expr -> Expr
 attrArg : String -> Token -> ParserE <> Attr
 authJoinTail : ParserE <> (List EffParamTy)
 authJoinTailFor : Token -> ParserE <> (List EffParamTy)

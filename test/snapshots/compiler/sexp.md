@@ -1,5 +1,5 @@
 # META
-source_lines=403
+source_lines=405
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -189,8 +189,10 @@ exprSexp (EDictAt _ _) =
     "unreachable: programToSexp serializes pre-annotate ASTs; EDictAt is introduced by typecheck elaboration"
 exprSexp (EApp f x) = node "EApp" [exprSexp f, exprSexp x]
 exprSexp (ELam ps b) = node "ELam" [slist (map patSexp ps), exprSexp b]
-exprSexp (ELet m _isf p e1 e2) =
-  node "ELet" [boolStr m, patSexp p, exprSexp e1, exprSexp e2]
+-- The leading "false" is the slot the retired `let mut` flag printed in; the
+-- site that replaced it is not rendered.
+exprSexp (ELet _ _isf p e1 e2) =
+  node "ELet" [boolStr False, patSexp p, exprSexp e1, exprSexp e2]
 exprSexp (EMatch s arms) = node "EMatch" (exprSexp s :: map armSexp arms)
 exprSexp (EIf c t el) = node "EIf" [exprSexp c, exprSexp t, exprSexp el]
 exprSexp (EBinOp op a b _) = node "EBinOp" [escStr op, exprSexp a, exprSexp b]
@@ -492,7 +494,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "exprSexp" ((PCon "EDictAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EDictAt is introduced by typecheck elaboration"))))
 (DFunDef false "exprSexp" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "node") (ELit (LString "EApp"))) (EListLit (EApp (EVar "exprSexp") (EVar "f")) (EApp (EVar "exprSexp") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "ELam" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "ELam"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "ps"))) (EApp (EVar "exprSexp") (EVar "b")))))
-(DFunDef false "exprSexp" ((PCon "ELet" (PVar "m") (PVar "_isf") (PVar "p") (PVar "e1") (PVar "e2"))) (EApp (EApp (EVar "node") (ELit (LString "ELet"))) (EListLit (EApp (EVar "boolStr") (EVar "m")) (EApp (EVar "patSexp") (EVar "p")) (EApp (EVar "exprSexp") (EVar "e1")) (EApp (EVar "exprSexp") (EVar "e2")))))
+(DFunDef false "exprSexp" ((PCon "ELet" PWild (PVar "_isf") (PVar "p") (PVar "e1") (PVar "e2"))) (EApp (EApp (EVar "node") (ELit (LString "ELet"))) (EListLit (EApp (EVar "boolStr") (EVar "False")) (EApp (EVar "patSexp") (EVar "p")) (EApp (EVar "exprSexp") (EVar "e1")) (EApp (EVar "exprSexp") (EVar "e2")))))
 (DFunDef false "exprSexp" ((PCon "EMatch" (PVar "s") (PVar "arms"))) (EApp (EApp (EVar "node") (ELit (LString "EMatch"))) (EBinOp "::" (EApp (EVar "exprSexp") (EVar "s")) (EApp (EApp (EVar "map") (EVar "armSexp")) (EVar "arms")))))
 (DFunDef false "exprSexp" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EVar "node") (ELit (LString "EIf"))) (EListLit (EApp (EVar "exprSexp") (EVar "c")) (EApp (EVar "exprSexp") (EVar "t")) (EApp (EVar "exprSexp") (EVar "el")))))
 (DFunDef false "exprSexp" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "node") (ELit (LString "EBinOp"))) (EListLit (EApp (EVar "escStr") (EVar "op")) (EApp (EVar "exprSexp") (EVar "a")) (EApp (EVar "exprSexp") (EVar "b")))))
@@ -690,7 +692,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "exprSexp" ((PCon "EDictAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EDictAt is introduced by typecheck elaboration"))))
 (DFunDef false "exprSexp" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "node") (ELit (LString "EApp"))) (EListLit (EApp (EVar "exprSexp") (EVar "f")) (EApp (EVar "exprSexp") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "ELam" (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "ELam"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "ps"))) (EApp (EVar "exprSexp") (EVar "b")))))
-(DFunDef false "exprSexp" ((PCon "ELet" (PVar "m") (PVar "_isf") (PVar "p") (PVar "e1") (PVar "e2"))) (EApp (EApp (EVar "node") (ELit (LString "ELet"))) (EListLit (EApp (EVar "boolStr") (EVar "m")) (EApp (EVar "patSexp") (EVar "p")) (EApp (EVar "exprSexp") (EVar "e1")) (EApp (EVar "exprSexp") (EVar "e2")))))
+(DFunDef false "exprSexp" ((PCon "ELet" PWild (PVar "_isf") (PVar "p") (PVar "e1") (PVar "e2"))) (EApp (EApp (EVar "node") (ELit (LString "ELet"))) (EListLit (EApp (EVar "boolStr") (EVar "False")) (EApp (EVar "patSexp") (EVar "p")) (EApp (EVar "exprSexp") (EVar "e1")) (EApp (EVar "exprSexp") (EVar "e2")))))
 (DFunDef false "exprSexp" ((PCon "EMatch" (PVar "s") (PVar "arms"))) (EApp (EApp (EVar "node") (ELit (LString "EMatch"))) (EBinOp "::" (EApp (EVar "exprSexp") (EVar "s")) (EApp (EApp (EMethodRef "map") (EVar "armSexp")) (EVar "arms")))))
 (DFunDef false "exprSexp" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EVar "node") (ELit (LString "EIf"))) (EListLit (EApp (EVar "exprSexp") (EVar "c")) (EApp (EVar "exprSexp") (EVar "t")) (EApp (EVar "exprSexp") (EVar "el")))))
 (DFunDef false "exprSexp" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "node") (ELit (LString "EBinOp"))) (EListLit (EApp (EVar "escStr") (EVar "op")) (EApp (EVar "exprSexp") (EVar "a")) (EApp (EVar "exprSexp") (EVar "b")))))

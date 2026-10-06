@@ -1619,7 +1619,7 @@ inferIntRange : TcEnv -> Expr -> Expr -> Mono -> Mono
 inferLam : TcEnv -> List Pat -> Expr -> Mono
 inferLamChecked : TcEnv -> Option Mono -> List Pat -> Expr -> Mono
 inferLastStmt : TcEnv -> DoStmt -> Mono
-inferLet : TcEnv -> Bool -> Bool -> Pat -> Expr -> Expr -> Mono
+inferLet : TcEnv -> Bool -> Pat -> Expr -> Expr -> Mono
 inferLetBinds : TcEnv -> List (LetBind, (String, BindingSummary)) -> List (Option ScopeId)
 inferLetBody : TcEnv -> Pat -> Mono -> List (Int, AuthResidual) -> Expr -> Expr -> Int -> Int -> Int -> Option ScopeId -> Mono
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono

@@ -5369,7 +5369,7 @@ stampExpr env (ESection s) = ESection (stampSection env s)
 stampExpr env (ELoc l e) = ELoc l (stampExpr env e)
 stampExpr env (EDoOrigin l e) = EDoOrigin l (stampExpr env e)
 
-stampLet : OrdMap Int -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
+stampLet : OrdMap Int -> Loc -> Bool -> Pat -> Expr -> Expr -> Expr
 stampLet env m True (PVar f fl) e1 e2 =
   let inner = insertZero [f] env
   ELet m True (PVar f fl) (stampExpr inner e1) (stampExpr inner e2)

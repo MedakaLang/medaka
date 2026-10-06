@@ -19,7 +19,6 @@ import frontend.ast.{
   Arm(..),
   DoStmt(..),
   Loc(..),
-  atDeclSite,
   InterpPart(..),
   GuardArm(..),
   FieldAssign(..),
@@ -353,7 +352,7 @@ lowerDo d ((DoExpr e) :: rest) = callAndThen d e (ELam [PWild] (lowerDo d rest))
 lowerDo d ((DoBind pat e) :: rest) =
   callAndThen d e (doCont pat (lowerDo d rest))
 lowerDo d ((DoLet _ isFun pat e site) :: rest) =
-  atDeclSite site (ELet False isFun pat e (lowerDo d rest))
+  ELet site isFun pat e (lowerDo d rest)
 lowerDo _ _ = fallthrough
 
 -- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes

@@ -1,5 +1,5 @@
 # META
-source_lines=1144
+source_lines=1143
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -23,7 +23,6 @@ import frontend.ast.{
   Arm(..),
   DoStmt(..),
   Loc(..),
-  atDeclSite,
   InterpPart(..),
   GuardArm(..),
   FieldAssign(..),
@@ -357,7 +356,7 @@ lowerDo d ((DoExpr e) :: rest) = callAndThen d e (ELam [PWild] (lowerDo d rest))
 lowerDo d ((DoBind pat e) :: rest) =
   callAndThen d e (doCont pat (lowerDo d rest))
 lowerDo d ((DoLet _ isFun pat e site) :: rest) =
-  atDeclSite site (ELet False isFun pat e (lowerDo d rest))
+  ELet site isFun pat e (lowerDo d rest)
 lowerDo _ _ = fallthrough
 
 -- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes
@@ -1147,7 +1146,7 @@ desugar prog =
     |> mapProg rewriteAssignIndex
     |> mapProg rewriteSugar
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "atDeclSite" false) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -1309,7 +1308,7 @@ desugar prog =
 (DFunDef false "lowerDo" ((PVar "d") (PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EApp (EVar "pureMethodName") (EVar "d")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
-(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EApp (EApp (EVar "atDeclSite") (EVar "site")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "False")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "site")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest"))))
 (DFunDef false "lowerDo" (PWild PWild) (EVar "fallthrough"))
 (DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont")))))
@@ -1565,7 +1564,7 @@ desugar prog =
 (DTypeSig true "desugar" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "desugar" ((PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "atDeclSite" false) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -1727,7 +1726,7 @@ desugar prog =
 (DFunDef false "lowerDo" ((PVar "d") (PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EApp (EVar "pureMethodName") (EVar "d")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
 (DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
-(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EApp (EApp (EVar "atDeclSite") (EVar "site")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "False")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e") (PVar "site")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "site")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest"))))
 (DFunDef false "lowerDo" (PWild PWild) (EVar "fallthrough"))
 (DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont")))))

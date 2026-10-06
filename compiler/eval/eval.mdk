@@ -1636,7 +1636,7 @@ eval env (app@(EApp f x)) =
   apply fv xv
 eval env (ELam pats body) = VClosure env pats body noTrapLoc
 eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2
-eval env (ELet _ _ pat e1 e2) = evalLet noTrapLoc env pat e1 e2
+eval env (ELet site _ pat e1 e2) = evalLet site env pat e1 e2
 eval env (ELetGroup binds body) = evalLetGroup env binds body
 eval env (EMatch scrut arms) = evalMatch noTrapLoc env (eval env scrut) arms
 eval env (EIf c t e) = evalIf env (eval env c) t e
@@ -1684,9 +1684,6 @@ eval env (ERangeArray lo hi incl) =
 eval env (ELoc l (EMatch scrut arms)) =
   let _ = updateEvalLoc l
   evalMatch l env (eval env scrut) arms
-eval env (ELoc l (ELet _ False pat e1 e2)) =
-  let _ = updateEvalLoc l
-  evalLet l env pat e1 e2
 eval env (ELoc l e) =
   let _ = updateEvalLoc l
   eval env e

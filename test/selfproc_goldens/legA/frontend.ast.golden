@@ -1,4 +1,3 @@
-atDeclSite : Loc -> Expr -> Expr
 authTermNames : List EffParamTy -> List String
 authTermSurface : (String -> String) -> EffParamTy -> String
 authTermsSurface : (String -> String) -> List EffParamTy -> String
