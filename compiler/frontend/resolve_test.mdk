@@ -20,8 +20,9 @@
 -- `readFile` call in a `test "…"` body fails to build under the eval
 -- engine and succeeds under `medaka test --native`.
 
-import test.{expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectTrue}
 import frontend.parser.{parse}
+import frontend.resolve.{ppResError, resErrorCode, resolveProgram}
 import frontend.ast.{Decl(..), Variant(..), ConPayload(..), Field(..)}
 import support.util.{contains, filterList}
 import string.{stripPrefix}
@@ -95,3 +96,70 @@ test "every ModuleExports export-namespace field has an ns* descriptor, derived 
       let fields = moduleExportsFields decls
       let funNames = topLevelFunNames decls
       expectEqual [] (missingNsValues fields funNames)
+
+-- #3848: a top-level type signature that no declaration in its module binds
+-- is rejected as `R-ORPHAN-SIGNATURE`.  Each source is resolved on its own,
+-- with no runtime or prelude decls, so only this rule's messages are kept.
+orphanMessages : String -> List String
+orphanMessages src =
+  let errs = resolveProgram [] [] (parse src)
+  map ppResError (filterList (e => resErrorCode e == "R-ORPHAN-SIGNATURE") errs)
+
+orphanMessage : String -> String
+orphanMessage n =
+  "Type signature for '\{n}' has no binding in this module. Define '\{n}' below its signature, or remove the signature"
+
+test "a signature with no binding is an orphan, bare, under an attribute, or exported" = expectEach
+  [
+    (
+      "bare",
+      expectEqual
+        [orphanMessage "orph"]
+        (orphanMessages "orph : Int\nmain = 1\n"),
+    ),
+    (
+      "attribute",
+      expectEqual
+        [orphanMessage "orph"]
+        (orphanMessages "@inline\norph : Int -> Int\nmain = 1\n"),
+    ),
+    (
+      "exported",
+      expectEqual
+        [orphanMessage "orph"]
+        (orphanMessages "export orph : Int\nmain = 1\n"),
+    ),
+  ]
+
+test "a misspelled binding is named in the orphan signature's message" =
+  expectEqual
+    [
+      "Type signature for 'total' has no binding in this module. Did you mean 'totl'? Rename the signature or the binding so the two names match",
+    ]
+    (orphanMessages "total : List Int -> Int\ntotl xs = 0\n")
+
+test "a signature whose name is bound is never an orphan" = expectEach [
+  (
+    "clauses",
+    expectEqual [] (orphanMessages "f : Int -> Int\nf 0 = 1\nf n = n\n"),
+  ),
+  (
+    "binding before signature",
+    expectEqual [] (orphanMessages "g x = x\ng : Int -> Int\n"),
+  ),
+  (
+    "mutual group",
+    expectEqual
+      []
+      (orphanMessages
+        "ev : Int -> Bool\nod : Int -> Bool\nev n = od n\nod n = ev n\n"),
+  ),
+  (
+    "interface and impl members",
+    expectEqual
+      []
+      (orphanMessages
+        "interface Sz a where\n  sz : a -> Int\nimpl Sz Int where\n  sz x = x\n"),
+  ),
+  ("extern", expectEqual [] (orphanMessages "extern panic : String -> a\n")),
+]

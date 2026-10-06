@@ -1,0 +1,7 @@
+-- Issue 3848: an exported signature whose binding was renamed.  `export`
+-- lives on the signature, so the rename also made the value private, and
+-- the declared `Float` no longer reached `1 / 2`.
+export half : Float
+halfRenamed = 1 / 2
+
+main = println halfRenamed
