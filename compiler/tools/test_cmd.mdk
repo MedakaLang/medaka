@@ -307,6 +307,7 @@ runTest engines runtimeP coreP target roots cases filterOpt =
                   (desugaredPrelude csrc)
                   rsrc
                   csrc
+                  (dirOf runtimeP)
                   target
                   tsrc
                   roots
@@ -861,6 +862,7 @@ driveAll : List Engine ->
   String ->
   String ->
   String ->
+  String ->
   List String ->
   Int ->
   Option String ->
@@ -869,13 +871,14 @@ driveAll : List Engine ->
   String ->
   PinIndex ->
   <IO> Bool
-driveAll engines runtimeDecls coreDecls rsrc csrc target tsrc roots cases filterOpt userDecls exempt file index
+driveAll engines runtimeDecls coreDecls rsrc csrc stdlibDir target tsrc roots cases filterOpt userDecls exempt file index
   | hasUseDecls userDecls =
     driveMulti
       engines
       runtimeDecls
       rsrc
       csrc
+      stdlibDir
       target
       tsrc
       roots
@@ -895,6 +898,7 @@ driveAll engines runtimeDecls coreDecls rsrc csrc target tsrc roots cases filter
           engines
           runtimeDecls
           coreDecls
+          stdlibDir
           target
           tsrc
           roots
@@ -910,6 +914,7 @@ driveMulti : List Engine ->
   String ->
   String ->
   String ->
+  String ->
   List String ->
   Int ->
   Option String ->
@@ -918,7 +923,7 @@ driveMulti : List Engine ->
   String ->
   PinIndex ->
   <IO> Bool
-driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt userDecls exempt file index =
+driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filterOpt userDecls exempt file index =
   currentEvalFile := target
   let allExamples = extractExamples (collectComments tsrc)
   let examples = filterExamplesByName filterOpt allExamples
@@ -956,6 +961,7 @@ driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt user
           runPropsPinned
             engines
             pair
+            stdlibDir
             target
             tsrc
             userDecls
@@ -985,6 +991,7 @@ driveSingle : List Engine ->
   List Decl ->
   String ->
   String ->
+  String ->
   List String ->
   Int ->
   Option String ->
@@ -992,7 +999,7 @@ driveSingle : List Engine ->
   String ->
   PinIndex ->
   <IO> Bool
-driveSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt userDecls file index =
+driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases filterOpt userDecls file index =
   currentEvalFile := target
   let examples =
     filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
@@ -1015,6 +1022,7 @@ driveSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt use
         runPropsPinned
           engines
           pair
+          stdlibDir
           target
           tsrc
           userDecls
@@ -1374,13 +1382,14 @@ runPropsPinned : List Engine ->
   TestPair ->
   String ->
   String ->
+  String ->
   List Decl ->
   Int ->
   Option String ->
   String ->
   PinIndex ->
   <IO> Bool
-runPropsPinned engines pair target tsrc userDecls cases filterOpt file index
+runPropsPinned engines pair stdlibDir target tsrc userDecls cases filterOpt file index
   | not (hasProps userDecls) = True
   | otherwise = match pair
     TestPairErr err =>
@@ -1393,6 +1402,7 @@ runPropsPinned engines pair target tsrc userDecls cases filterOpt file index
           file
           (propsReportEngines
             engines
+            stdlibDir
             runtimeM
             rawCoreM
             coreM
@@ -1794,6 +1804,7 @@ runTestReportPinned engines runtimeSrc coreSrc target tsrc stdlibDir cases filte
       runtimeDecls
       runtimeSrc
       coreSrc
+      stdlibDir
       target
       tsrc
       roots
@@ -1814,6 +1825,7 @@ runTestReportPinned engines runtimeSrc coreSrc target tsrc stdlibDir cases filte
         engines
         runtimeDecls
         coreDecls
+        stdlibDir
         target
         tsrc
         roots
@@ -1895,6 +1907,7 @@ reportMulti : List Engine ->
   String ->
   String ->
   String ->
+  String ->
   List String ->
   Int ->
   Option String ->
@@ -1904,7 +1917,7 @@ reportMulti : List Engine ->
   String ->
   PinIndex ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
-reportMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
+reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
   let allExamples = extractExamples (collectComments tsrc)
   let examples = filterExamplesByName filterOpt allExamples
   let synthResults = buildSynthResults userDecls examples
@@ -1934,6 +1947,7 @@ reportMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt inc
         propsReportPinned
           engines
           pair
+          stdlibDir
           target
           tsrc
           userDecls
@@ -1963,6 +1977,7 @@ reportSingle : List Engine ->
   List Decl ->
   String ->
   String ->
+  String ->
   List String ->
   Int ->
   Option String ->
@@ -1972,7 +1987,7 @@ reportSingle : List Engine ->
   String ->
   PinIndex ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
-reportSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
+reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
   let examples =
     filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
   let doctestRuns =
@@ -1992,6 +2007,7 @@ reportSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt in
       propsReportPinned
         engines
         pair
+        stdlibDir
         target
         tsrc
         userDecls
@@ -2092,19 +2108,21 @@ propsReportPinned : List Engine ->
   TestPair ->
   String ->
   String ->
+  String ->
   List Decl ->
   Int ->
   Option String ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportPinned engines pair target tsrc userDecls cases filterOpt file index
+propsReportPinned engines pair stdlibDir target tsrc userDecls cases filterOpt file index
   | not (hasProps userDecls) = []
   | otherwise = match pair
     TestPairErr _ => []
     TestPair runtimeM rawCoreM coreM rawM modsM => withEvidencePreserved (_ =>
       propsReportEngines
         engines
+        stdlibDir
         runtimeM
         rawCoreM
         coreM
@@ -2192,6 +2210,7 @@ propsReportEnginesInProcess engines runtimeM rawCoreM coreM rawM modsM target ts
 -- property batch. A language panic cannot cross this process boundary, so native
 -- results still arrive after a panicking generator, shrinker, or property body.
 propsReportEngines : List Engine ->
+  String ->
   List Decl ->
   List Decl ->
   List Decl ->
@@ -2205,13 +2224,15 @@ propsReportEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ = []
-propsReportEngines (EngInterp :: rest) runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEngines (EngInterp :: rest) stdlibDir runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   superviseEvalProps
+      (propWorkerCli stdlibDir)
       target
       (propRequestsFor index file "eval" userDecls cases filterOpt)
     ++ propsReportEngines
       rest
+      stdlibDir
       runtimeM
       rawCoreM
       coreM
@@ -2224,7 +2245,7 @@ propsReportEngines (EngInterp :: rest) runtimeM rawCoreM coreM rawM modsM target
       filterOpt
       file
       index
-propsReportEngines (EngNative :: rest) runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEngines (EngNative :: rest) stdlibDir runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   propsReportEnginesInProcess
       [EngNative]
       runtimeM
@@ -2241,6 +2262,7 @@ propsReportEngines (EngNative :: rest) runtimeM rawCoreM coreM rawM modsM target
       index
     ++ propsReportEngines
       rest
+      stdlibDir
       runtimeM
       rawCoreM
       coreM
@@ -2256,11 +2278,18 @@ propsReportEngines (EngNative :: rest) runtimeM rawCoreM coreM rawM modsM target
 
 -- The evaluator child is deliberately one process per target, not per property:
 -- refs and memoized globals remain shared between every selected law and case.
-superviseEvalProps : String -> List PropRequest -> <IO> List PropResult
-superviseEvalProps _ [] = []
-superviseEvalProps target requests =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let medaka = envOr "MEDAKA" (joinPath root "medaka")
+-- Its executable must be the compiler CLI, not whichever native entry called
+-- this shared library. The caller's concrete stdlib path identifies that CLI's
+-- install root even when a frozen test entry runs with no MEDAKA_ROOT.
+propWorkerCli : String -> <IO> String
+propWorkerCli stdlibDir = envOr "MEDAKA" (joinPath (dirOf stdlibDir) "medaka")
+
+superviseEvalProps : String ->
+  String ->
+  List PropRequest ->
+  <IO> List PropResult
+superviseEvalProps _ _ [] = []
+superviseEvalProps medaka target requests =
   let argv = ["test", "--props-worker"] ++ workerPositionals target requests
   match runCommand medaka argv
     Err message =>
