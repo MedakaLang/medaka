@@ -8,7 +8,7 @@ ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
 
 # Every `--keep-ir` build goes through here: the kept module is rewritten by
-# pds/test/ct_ir_canonical.awk, so a located array read audits as the plain
+# pds/tools/ct_ir_canonical.awk, so a located array read audits as the plain
 # Index impl call (its site literal stripped), and a site that is anything
 # but a literal on the trap path fails the build.
 ct_build_ir() {
@@ -20,7 +20,7 @@ ct_build_ir() {
     ct_prev=$ct_arg
   done
   [ -n "$ct_out" ] && [ -s "$ct_out.ll" ] || { echo "ct_build_ir: no kept IR for -o '$ct_out'" >&2; return 1; }
-  awk -f "$ROOT/pds/test/ct_ir_canonical.awk" "$ct_out.ll" > "$ct_out.ll.canon" || return 1
+  awk -f "$ROOT/pds/tools/ct_ir_canonical.awk" "$ct_out.ll" > "$ct_out.ll.canon" || return 1
   mv "$ct_out.ll.canon" "$ct_out.ll"
 }
 INTERNAL_SOURCE="$ROOT/pds/test/constant_time_signing_main.mdk"
