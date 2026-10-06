@@ -1,15 +1,15 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_slot.mdk:4:32: Type mismatch: a Unit vs Unit — `a Unit` is a value of a type that implements Thenable (`a` stands for that type), and a plain Unit is not one
+error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_slot.mdk:4:32: type mismatch: a Unit vs Unit; `a Unit` is a value whose type implements `Thenable`, and `Unit` is not
   |
 4 | main = println (f (x => forEach (y => println y) [x]))
   |                                 ^
-error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_slot.mdk:4:18: Type mismatch: Unit vs a Unit — `a Unit` is a value of a type that implements Thenable (`a` stands for that type), and a plain Unit is not one
+error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_slot.mdk:4:18: type mismatch: Unit vs a Unit; `a Unit` is a value whose type implements `Thenable`, and `Unit` is not
   |
 4 | main = println (f (x => forEach (y => println y) [x]))
   |                   ^
-error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_slot.mdk:4:46: Effectful value used where <> is allowed, but it performs <Stdout>
+error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_slot.mdk:4:46: performs <Stdout> where only <> is allowed
   |
 4 | main = println (f (x => forEach (y => println y) [x]))
   |                                               ^

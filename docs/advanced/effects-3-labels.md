@@ -41,7 +41,7 @@ that. `Audit` above is pure Medaka, and it still tracks: a function that calls
 `audit` without declaring `Audit` is refused,
 
 ```
-error: labels.mdk:8:18: Effectful value used where <Stdout> is allowed, but it performs <Audit>
+error: labels.mdk:8:18: performs <Audit> where only <Stdout> is allowed
   |
 8 |   audit "transfer \{amount}"
   |                   ^
@@ -50,7 +50,7 @@ error: labels.mdk:8:18: Effectful value used where <Stdout> is allowed, but it p
 and so is a row that mentions a label nobody declared:
 
 ```
-error: labels.mdk:1:19: Unknown effect: Audit
+error: labels.mdk:1:19: unknown effect `Audit`
   |
 1 | audit : String -> <Audit> Unit
   |                    ^
@@ -61,7 +61,7 @@ labels and nothing else, so a function that calls `audit` under an `<IO>` bound 
 refused the same way:
 
 ```
-error: labels.mdk:8:8: Effectful value used where <IO> is allowed, but it performs <Audit>
+error: labels.mdk:8:8: performs <Audit> where only <IO> is allowed
   |
 8 |   audit "x"
   |         ^
@@ -104,7 +104,7 @@ declare an `Audit` have declared two different labels. Import both and a row tha
 says `<Audit>` is refused rather than guessed at:
 
 ```
-error: labels.mdk:4:18: Ambiguous effect label: 'Audit' is declared by both `a` and `b`, and both declarations are in scope. A label is identified by the module that declares it, so these are two different effects and a row cannot tell them apart by spelling. Import only one of those modules here, or rename one of the declarations
+error: labels.mdk:4:18: ambiguous effect label: `Audit` is declared by both `a` and `b`, and both are in scope; import only one of those modules here
   |
 4 | both : String -> <Audit> Unit
   |                   ^
@@ -248,7 +248,7 @@ An `extern` you declare yourself is a call into C, and the compiler makes you sa
 so. The row must name `FFI`:
 
 ```
-error: ffi.mdk:1:14: Foreign declaration 'cAbs' does not name the 'FFI' effect in its result row. Every user-declared 'extern' is a foreign call, so its declared row must say so: write '<FFI>' (or '<FFI "libname">' to name the library), joined with whatever else the row already names — 'String -> <Net "a.com/*"> String' becomes 'String -> <FFI, Net "a.com/*"> String'. The compiler does not add the label for you: a row it rewrote would no longer be the row you read
+error: ffi.mdk:1:14: foreign declaration `cAbs` does not name the `FFI` effect in its result row; write `<FFI>` joined with whatever else the row names, such as `<FFI, Net "a.com/*">`
   |
 1 | extern cAbs : Int -> Int
   |               ^
@@ -269,7 +269,7 @@ root x = cSqrt x
 function:
 
 ```
-error: ffi.mdk:4:17: Effectful value used where <IO> is allowed, but it performs <FFI>
+error: ffi.mdk:4:17: performs <FFI> where only <IO> is allowed
   |
 4 | wrapped n = cAbs n
   |                  ^
@@ -288,7 +288,7 @@ could detect. That is also why redeclaring a catalog name with a narrower row is
 refused:
 
 ```
-error: ffi.mdk:1:18: Foreign declaration 'putStrLn' redeclares a built-in runtime name with a NARROWER effect row: the built-in performs <Stdout>, this declaration claims <>, which does not cover <Stdout>. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so 'putStrLn' really does perform <Stdout>, and every caller typechecked against this declaration would be told it does not. Declare the built-in's own row `<Stdout>` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define
+error: ffi.mdk:1:18: foreign declaration `putStrLn` redeclares a built-in with a narrower effect row: the built-in performs <Stdout>, which this row does not cover at <Stdout>; declare `<Stdout>` or wider, or rename the extern
   |
 1 | extern putStrLn : String -> <> Unit
   |                   ^

@@ -1,1 +1,1 @@
-{"files":[{"file":"<fixture>","diagnostics":[{"code":"R-FILE-NOT-UTF8","kind":"resolve","message":"<fixture>: not valid UTF-8. Medaka source files must be UTF-8 text; re-save this file as UTF-8","range":null,"severity":1,"source":"medaka"}]}]}
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"R-FILE-NOT-UTF8","kind":"resolve","message":"<fixture>: not valid UTF-8; re-save the file as UTF-8","range":null,"severity":1,"source":"medaka"}]}]}

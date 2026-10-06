@@ -123,7 +123,7 @@ main = println (runQuietly (() => 1))
 ```
 
 ```
-error: poly.mdk:3:11: Binding 'runQuietly' performs <Stdout>, but the row it must fit, <a>, is chosen by its caller: a caller may instantiate that row to <> and would then run <Stdout> from a value typed pure. Declare <Stdout> in that row (write `<Stdout | a>` where the signature writes `<a>`), or perform it only through an argument whose row the caller sees.
+error: poly.mdk:3:11: `runQuietly` performs <Stdout> on a caller-chosen row <a>; declare it, `<Stdout | a>`, or perform it through an argument
   |
 3 |   putStrLn "running"
   |            ^
@@ -161,7 +161,7 @@ its own arrow. Declare `callIt : (Unit -> <e> Unit) -> Unit` instead and the
 compiler points at the application:
 
 ```
-error: poly.mdk:2:13: Binding 'callIt' runs the effect row <a>, which its caller chooses (an argument's or a callback's row), but only <> is allowed there: a caller may instantiate <a> to an effectful row and would then run it from a position typed <>. Declare that row at the arrow that runs it (write `-> <a> …`), or defer the value instead of running it.
+error: poly.mdk:2:13: `callIt` runs the caller-chosen row <a> where only <> is allowed; declare it on the arrow that runs it, `-> <a> ...`
   |
 2 | callIt f = f ()
   |              ^
@@ -315,7 +315,7 @@ main =
 ```
 
 ```
-error: poly.mdk:3:25: Effectful value used where <> is allowed, but it performs <Stdout>
+error: poly.mdk:3:25: performs <Stdout> where only <> is allowed
   |
 3 |   slot := () => putStrLn "smuggled"
   |                          ^

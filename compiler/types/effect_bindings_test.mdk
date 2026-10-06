@@ -1385,14 +1385,14 @@ test "a function-type alias signature declares the alias's row" = expectAll [
       (functionAliasSource
         ++ "d : Tick\nd u = emitAudit u\ne : Signed\ne x = signAny x\nf : Commit\nf x = sign \"commit\" x\nt : Twice\nt _ u = emitAudit u\np : Tick\np _ = ()\nw : Wide <Other>\nw u =\n  let _ = emitOther u\n  emitAudit u\nopen : Wide r\nopen u = emitAudit u\n")),
   expectEqual
-    ["Effectful value used where <Audit> is allowed, but it performs <Other>"]
+    ["performs <Other> where only <Audit> is allowed"]
     (messagesFor (functionAliasSource ++ "bad : Tick\nbad u = emitOther u\n")),
   expectEqual
-    ["Effectful value used where <Audit> is allowed, but it performs <Other>"]
+    ["performs <Other> where only <Audit> is allowed"]
     (messagesFor
       (functionAliasSource ++ "bad : Twice\nbad _ u = emitOther u\n")),
   expectEqual
-    ["Effectful value used where <Audit> is allowed, but it performs <Other>"]
+    ["performs <Other> where only <Audit> is allowed"]
     (messagesFor
       (functionAliasSource ++ "bad : Wide <>\nbad u = emitOther u\n")),
 ]
@@ -1484,7 +1484,7 @@ test "an Effect-parameter alias types a recursion group with two back edges" = e
           ++ "type S (e : Effect) a = Box <Clock | e> a\nf : Int -> S e Int\nf n = if n > 3 then g (n - 1) else boxPure n\ng : Int -> S e Int\ng n = f n\n")),
     expectEqual
       [
-        "Binding 'f' performs <Audit>, but the row it must fit, <Clock | a>, is chosen by its caller: a caller may instantiate that row to <> and would then run <Audit> from a value typed pure. Declare <Audit> among that row's labels, or perform it only through an argument whose row the caller sees.",
+        "`f` performs <Audit> on a caller-chosen row <Clock | a>; declare <Audit> in that row, or perform it through an argument",
       ]
       (messagesFor
         (rowAliasGroupSource
@@ -1506,7 +1506,7 @@ test "a row-wrapped alias contributes its row where it is written" = expectAll [
       (rowWrappedAliasSource
         ++ "v : SS\nv = emitSign ()\nw : SE <Audit>\nw =\n  let _ = emitAudit ()\n  emitSign ()\nf : Int -> SS\nf n = n\n")),
   expectEqual
-    ["Effectful value used where <Sign> is allowed, but it performs <Audit>"]
+    ["performs <Audit> where only <Sign> is allowed"]
     (messagesFor
       (rowWrappedAliasSource ++ "v : SS\nv =\n  let _ = emitAudit ()\n  1\n")),
   expectEqual
@@ -1519,12 +1519,12 @@ test "a row-wrapped alias contributes its row where it is written" = expectAll [
     "Int -> <Sign | a> Int"
     (renderedFor (rowWrappedAliasSource ++ "g : Int -> SE e\ng n = n\n") "g"),
   expectEqual
-    ["Effectful value used where <> is allowed, but it performs <Sign>"]
+    ["performs <Sign> where only <> is allowed"]
     (messagesFor
       (rowWrappedAliasSource
         ++ "f : Int -> SS\nf n = n\ncaller : Int -> <> Int\ncaller n = f n\n")),
   expectEqual
-    ["Effectful value used where <Sign> is allowed, but it performs <Audit>"]
+    ["performs <Audit> where only <Sign> is allowed"]
     (messagesFor
       (rowWrappedAliasSource
         ++ "k : Int -> SE <>\nk n =\n  let _ = emitAudit ()\n  n\n")),

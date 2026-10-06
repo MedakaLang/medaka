@@ -1,1 +1,1 @@
-error: Unknown type: Foo
+error: unknown type `Foo`

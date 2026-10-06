@@ -14,4 +14,4 @@ main = println (colorName Red)
 # TYPES_USER
 colorName : Color -> String
 main : <Stdout> Unit
-Warning: non-exhaustive match of 'Color'. Missing case: 'Blue'; add a 'Blue => …' arm, or a '_' wildcard arm to catch the rest.
+Warning: non-exhaustive match on `Color`: missing `Blue`; add a `Blue => ...` arm or a `_` wildcard

@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/typecheck/thenable_param_receives_plain.mdk:7:18: Type mismatch: Unit vs a Unit — `a Unit` is a value of a type that implements Thenable (`a` stands for that type), and a plain Unit is not one
+error: test/error_quality_fixtures/typecheck/thenable_param_receives_plain.mdk:7:18: type mismatch: Unit vs a Unit; `a Unit` is a value whose type implements `Thenable`, and `Unit` is not
   |
 7 | main = println (g discard)
   |                   ^

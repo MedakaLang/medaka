@@ -43,7 +43,7 @@ run, and only then.
 Leave the kind off and the compiler asks for it:
 
 ```
-error: indexed.mdk:3:11: Type parameter `e` of `Job` is used as an effect row (in an effect tail or an Effect-kinded argument slot), but its head does not declare it one. A parameter is Effect-kinded only when written so: declare the head as `Job (e : Effect) …`.
+error: indexed.mdk:3:11: type parameter `e` of `Job` is used as an effect row, but its head does not declare it one; declare the head as `Job (e : Effect) ...`
   |
 3 |   | Later (Unit -> <e> Job e a)
   |            ^
@@ -89,7 +89,7 @@ not a `Job <> Unit`, and a function that only accepts the latter refuses the
 former where it is built:
 
 ```
-error: indexed.mdk:13:47: Effectful value used where <> is allowed, but it performs <Stdout>
+error: indexed.mdk:13:47: performs <Stdout> where only <> is allowed
   |
 13 | main = println (runPure (delay (() => putStrLn "sneaky")))
   |                                                ^
@@ -102,7 +102,7 @@ fixed and reports the callback that does not fit. When the two indices are both
 already written, the message names the invariance directly:
 
 ```
-error: indexed.mdk:4:10: Effect index mismatch: <Stdout> vs <>. An effect row written as a type argument is invariant — the two rows must be EQUAL, not merely compatible, so no sub-effecting step is allowed here (unlike a function's own effect row). Write the same row on both sides, or make the type row-polymorphic there (e.g. `<Stdout | e>`) if it really should accept more.
+error: indexed.mdk:4:10: effect index mismatch: <Stdout> vs <>; an effect row in a type argument is invariant, so write the same row on both sides or use a row variable, `<Stdout | e>`
   |
 4 | widen j = j
   |           ^

@@ -1,1 +1,1 @@
-TYPE ERROR: Ambiguous instance for `Thing`. Cannot determine which impl; add a type annotation
+TYPE ERROR: ambiguous instance for `Thing`: the type here does not determine which impl applies; add a type annotation

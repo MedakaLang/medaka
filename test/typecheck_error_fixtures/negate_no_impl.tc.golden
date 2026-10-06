@@ -1,1 +1,1 @@
-TYPE ERROR: No impl of Num for Box; write an 'impl Num Box'.
+TYPE ERROR: no impl of Num for Box; write `impl Num Box`

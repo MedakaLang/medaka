@@ -1,1 +1,1 @@
-{"files":[{"file":"<fixture>","diagnostics":[{"code":"P-PARSE","kind":"parse","message":"unexpected a number; expected a dedent","range":{"end":{"character":3,"line":2},"start":{"character":2,"line":2}},"severity":1,"source":"medaka"}]}]}
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"P-PARSE","kind":"parse","message":"unexpected number; expected the end of the block","range":{"end":{"character":3,"line":2},"start":{"character":2,"line":2}},"severity":1,"source":"medaka"}]}]}

@@ -1,1 +1,1 @@
-TYPE ERROR: No impl of Debug for Color; add 'deriving Debug' to the 'Color' type, or write an 'impl Debug Color'.
+TYPE ERROR: no impl of Debug for Color; add `deriving Debug` to `Color` or write `impl Debug Color`

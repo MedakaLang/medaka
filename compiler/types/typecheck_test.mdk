@@ -200,14 +200,14 @@ test "a fromInt collision cannot hide an invalid Num constructor argument" =
   let collision = numericCheckObserved (numericBodySource True "N \"wrong\"")
   let control = numericCheckObserved (numericBodySource False "N \"wrong\"")
   expectEqual
-    (["Type mismatch: Int vs String"], ["Type mismatch: Int vs String"])
+    (["type mismatch: Int vs String"], ["type mismatch: Int vs String"])
     (fst collision, fst control)
 
 test "a fromInt collision cannot hide an invalid Num method result" =
   let collision = numericCheckObserved (numericBodySource True "\"wrong\"")
   let control = numericCheckObserved (numericBodySource False "\"wrong\"")
   expectEqual
-    (["Type mismatch: N vs String"], ["Type mismatch: N vs String"])
+    (["type mismatch: N vs String"], ["type mismatch: N vs String"])
     (fst collision, fst control)
 
 numericNestedBodySource : String
@@ -251,12 +251,12 @@ test "numeric impl-head roots require an explicit prerequisite at nullary and re
   expectAll [
     expectEqual
       [
-        "Impl of 'make' for interface 'Make' requires 'Num' on the instance-head type variable 'b', but the impl does not declare that prerequisite. Add `requires Num b` to the impl.",
+        "impl of `make` for `Make` requires `Num` on the instance-head type variable `b`, which the impl does not declare; add `requires Num b` to the impl",
       ]
       nullary,
     expectEqual
       [
-        "Impl of 'make' for interface 'Make' requires 'Num' on the instance-head type variable 'b', but the impl does not declare that prerequisite. Add `requires Num b` to the impl.",
+        "impl of `make` for `Make` requires `Num` on the instance-head type variable `b`, which the impl does not declare; add `requires Num b` to the impl",
       ]
       returns,
     expectEqual [] (fst (numericCheckObserved declared)),
@@ -477,7 +477,7 @@ test "prelude-free split graphs retain every builtin class identity" =
     "main = (Box 1) == (Box 2)",
   ]
   let expected =
-    "TYPE ERROR: No impl of Eq for Box; add 'deriving Eq' to the 'Box' type, or write an 'impl Eq Box'."
+    "TYPE ERROR: no impl of Eq for Box; add `deriving Eq` to `Box` or write `impl Eq Box`"
   expectEqual
     (expected, expected)
     (
@@ -518,8 +518,8 @@ test "no-impl hint is dropped for a stdlib-owned type" =
   let _ = setStdlibOwnership False []
   expectEqual
     (
-      "TYPE ERROR: No impl of Eq for Box",
-      "TYPE ERROR: No impl of Eq for Box; add 'deriving Eq' to the 'Box' type, or write an 'impl Eq Box'.",
+      "TYPE ERROR: no impl of Eq for Box",
+      "TYPE ERROR: no impl of Eq for Box; add `deriving Eq` to `Box` or write `impl Eq Box`",
     )
     (ownedReport, userReport)
 
@@ -1370,8 +1370,8 @@ test "wrapped return checking rejects an instance for only the result wrapper" =
   let (moduleErrors, _) = checkOneDiags [] core ("wrapped_return", program)
   let (flatErrors, _) = checkOneDiags [] core ("__user__", program)
   expectAll [
-    expectTrue (contains "No impl of Seed for Int" (map tcMsg moduleErrors)),
-    expectTrue (contains "No impl of Seed for Int" (map tcMsg flatErrors)),
+    expectTrue (contains "no impl of Seed for Int" (map tcMsg moduleErrors)),
+    expectTrue (contains "no impl of Seed for Int" (map tcMsg flatErrors)),
   ]
 
 test "wrapped return routes use the specific instance's empty context" =
@@ -2946,8 +2946,8 @@ flatMessages source =
 test "attributed-direct Num declarations reject mismatches without cross-pairing rows" =
   expectEqual
     (
-      ["Type mismatch: String vs Int"],
-      ["Type mismatch: String vs Int"],
+      ["type mismatch: String vs Int"],
+      ["type mismatch: String vs Int"],
     )
     (flatMessages mixedAttrFirstSource, flatMessages mixedDirectFirstSource)
 
@@ -2955,9 +2955,9 @@ test "an else-less if names its missing branch and a written else does not" =
   expectEqual
     (
       [
-        "Type mismatch: String vs Unit — an `if` without `else` has type Unit, so its `then` branch must be Unit too; add an `else` branch",
+        "type mismatch: String vs Unit; an `if` without `else` has type Unit, so add an `else` branch or make the `then` branch Unit",
       ],
-      ["Type mismatch: String vs Bool"],
+      ["type mismatch: String vs Bool"],
     )
     (
       flatMessages "f n = if n > 0 then \"pos\"",

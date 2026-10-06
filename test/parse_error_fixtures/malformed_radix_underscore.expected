@@ -1,1 +1,1 @@
-malformed radix literal `0x_FF`: '_' cannot immediately follow the radix prefix — write `0xFF`
+malformed radix literal `0x_FF`: an underscore cannot follow the 0x prefix; write `0xFF`

@@ -70,7 +70,7 @@ bad() {
 # #2: located error at the `!=` column with the hint.
 out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/bangeq_error.mdk" 2>&1)"
 case "$out" in
-  *":7: unexpected '!='. (Did you mean '/='?)"*)
+  *':7: unexpected `!=`; did you mean `/=`?'*)
     ok bangeq_error ;;
   *) bad bangeq_error "got [$out]" ;;
 esac
@@ -120,7 +120,7 @@ esac
 # Before the fix, native reported 2:0 ("if" line) with no hint.
 out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/inline_let_missing_in.mdk" 2>&1)"
 case "$out" in
-  *"inline 'let' requires 'in'"*)
+  *'inline `let` requires `in`'*)
     ok inline_let_missing_in ;;
   *) bad inline_let_missing_in "got [$out]" ;;
 esac
@@ -141,7 +141,7 @@ esac
 # AND the Stage-1 caret block (the `^` line proves the snippet renderer fired).
 out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/brace_block_if.mdk" 2>&1)"
 case "$out" in
-  *":1:15: unexpected '{'"*"Medaka has no brace blocks"*"^"*)
+  *':1:15: Medaka has no `{ ... }` blocks'*'^'*)
     ok brace_block_if ;;
   *) bad brace_block_if "got [$out]" ;;
 esac
@@ -149,21 +149,21 @@ esac
 # Stage 2: `for` loop — located at the `for` keyword with the recursion hint.
 out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/for_loop.mdk" 2>&1)"
 case "$out" in
-  *"Medaka has no 'for' loops"*) ok for_loop ;;
+  *'Medaka has no `for` loops'*) ok for_loop ;;
   *) bad for_loop "got [$out]" ;;
 esac
 
 # Stage 2: `def` function header — located at the `def` keyword with the hint.
 out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/def_keyword.mdk" 2>&1)"
 case "$out" in
-  *":1:0: Medaka has no 'def'"*) ok def_keyword ;;
+  *':1:0: Medaka has no `def`'*) ok def_keyword ;;
   *) bad def_keyword "got [$out]" ;;
 esac
 
 # Stage 2: `/* … */` block comment — located at the `/` with the `{- -}`/`--` hint.
 out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/block_comment.mdk" 2>&1)"
 case "$out" in
-  *"Medaka has no '/* … */' block comments"*)
+  *'Medaka has no `/* ... */` comments'*)
     ok block_comment ;;
   *) bad block_comment "got [$out]" ;;
 esac
@@ -171,7 +171,7 @@ esac
 # Stage 2: trailing `;` statement terminator — located at the `;` with the hint.
 out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/semicolon_stmt.mdk" 2>&1)"
 case "$out" in
-  *"Medaka has no statement terminator ';'"*)
+  *'Medaka has no statement terminator `;`'*)
     ok semicolon_stmt ;;
   *) bad semicolon_stmt "got [$out]" ;;
 esac
@@ -401,7 +401,7 @@ out: Err data/../pwned.txt $outside [\"data/*\"]"
 out="$(perl -e 'alarm 60; exec @ARGV' -- "$M" check "$CONFINE/constant_dotdot.mdk" 2>&1)"
 status=$?
 case "$status:$out" in
-  1:*'where <FileWrite "data/*"> is allowed, but it performs <FileWrite "data/../*">'*)
+  1:*'performs <FileWrite "data/../*"> where only <FileWrite "data/*"> is allowed'*)
     ok confine_constant_dotdot ;;
   *) bad confine_constant_dotdot "exit $status, got [$out]" ;;
 esac

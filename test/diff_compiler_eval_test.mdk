@@ -584,7 +584,7 @@ pureSrc = "main = println 9\n"
 wallNeedles : List String
 wallNeedles = [
   "user-declared FFI extern",
-  "tree-walking interpreter cannot make a foreign C call",
+  "cannot make a foreign C call",
 ]
 
 {- | Runs `cmd` under `MEDAKA_STRICT=1`, so a `medaka` built from older

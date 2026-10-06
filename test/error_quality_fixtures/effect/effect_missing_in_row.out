@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/effect/effect_missing_in_row.mdk:2:21: Effectful value used where <Stderr> is allowed, but it performs <Stdout>
+error: test/error_quality_fixtures/effect/effect_missing_in_row.mdk:2:21: performs <Stdout> where only <Stderr> is allowed
   |
 2 | greet name = println name
   |                      ^

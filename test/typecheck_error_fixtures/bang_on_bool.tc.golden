@@ -1,1 +1,1 @@
-TYPE ERROR: `!` is dereference (Ref), not boolean negation — use `not x`
+TYPE ERROR: `!` dereferences a `Ref` and does not negate a `Bool`; use `not x`

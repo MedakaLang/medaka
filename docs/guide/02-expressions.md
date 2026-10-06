@@ -52,7 +52,7 @@ without `else` is for side effects only. Dropping the `else` in the program abov
 a type error:
 
 ```
-error: probe.mdk:3:28: Type mismatch: String vs Unit
+error: probe.mdk:3:28: type mismatch: String vs Unit
   |
 3 |   let label = if n > 5 then "big"
   |                             ^

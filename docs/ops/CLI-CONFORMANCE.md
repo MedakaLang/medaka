@@ -265,7 +265,7 @@ $ MEDAKA_PERF=1 medaka run --json panic2.mdk 2>&1 >/dev/null
 
 $ MEDAKA_ROOT=/var/tmp/fakeroot medaka run --json panic2.mdk 2>&1 >/dev/null
 warning: this ./medaka was built from compiler source that differs from
-/var/tmp/fakeroot/compiler — it may be stale; rebuild with 'make medaka'.
+/var/tmp/fakeroot/compiler; rebuild with `make medaka`
 {"files":[{"file":"panic2.mdk","diagnostics":[{"code":"E-DIV-ZERO", … }]}]}
 ```
 
@@ -282,7 +282,7 @@ $ MEDAKA_PERF=1 medaka run --json panic2.mdk 2>&1 >/dev/null
 {"files":[{"file":"panic2.mdk","diagnostics":[{"code":"E-DIV-ZERO", …}]}],"perf":["[perf] load\t0.036s\tpanic2.mdk","[perf] check\t0.065s\tpanic2.mdk"]}
 
 $ MEDAKA_ROOT=/tmp/fakeroot medaka run --json panic2.mdk 2>&1 >/dev/null
-{"files":[{"file":"panic2.mdk","diagnostics":[{"code":"E-DIV-ZERO", …}]}],"staleBinary":"warning: this ./medaka was built from compiler source that differs from /tmp/fakeroot/compiler — it may be stale; rebuild with 'make medaka'."}
+{"files":[{"file":"panic2.mdk","diagnostics":[{"code":"E-DIV-ZERO", …}]}],"staleBinary":"warning: this ./medaka was built from compiler source that differs from /tmp/fakeroot/compiler; rebuild with `make medaka`"}
 ```
 
 stderr now carries exactly one JSON document on both paths. (`MEDAKA_STRICT=1` combined with
@@ -401,7 +401,7 @@ census confirms the drain from the outside.
 envelope as without `--types`, no message, no note in `checkHelpText`. The envelope has no
 field for a human-text scheme dump, so composing the two was a bigger design decision than
 this residual warranted — instead the no-op is now EXPLICIT: `medaka check --json --types
-ok.mdk` writes `medaka check: --types has no effect under --json (envelope has no scheme-dump
+ok.mdk` writes `medaka check: --types has no effect under --json; the envelope carries no scheme dump
 field)` to stderr before the (byte-identical) JSON envelope on stdout, and `checkHelpText`
 documents it under `--types`.
 
@@ -440,13 +440,13 @@ build                --release              NOT-PARSED     error: medaka build t
 
 | Site | Behaviour | Disposition |
 |---|---|---|
-| `notYet` (`medaka_cli.mdk`) | `medaka: subcommand 'X' not yet in native CLI` | ✅ **DRAINED by S-help-truthfulness** — renamed `unknownSubcommand`; now `medaka: unknown subcommand 'X'` + `run \`medaka help\` for the list of subcommands`, rc 1. Derivation of reach: `dispatch` matches every verb by literal, so this arm receives exactly the NON-verbs — for every input it can get, "not yet" was false. |
+| `notYet` (`medaka_cli.mdk`) | `medaka: subcommand 'X' not yet in native CLI` | ✅ **DRAINED by S-help-truthfulness** — renamed `unknownSubcommand`; now `medaka: unknown subcommand \`X\`; run \`medaka help\` for the list of subcommands`, rc 1. Derivation of reach: `dispatch` matches every verb by literal, so this arm receives exactly the NON-verbs — for every input it can get, "not yet" was false. |
 | `snapshot --root`, `snapshot --worker` | parsed, absent from `snapshotHelpText` entirely | ✅ **DRAINED by S-help-truthfulness** — both now documented; `--worker` is marked INTERNAL (the supervisor re-spawns this binary with it) rather than presented as user-facing. Now GATED, property C of `test/diff_compiler_cli_help_conformance.sh`. |
 | top-level `usage` vs `checkHelpText` | usage advertised `medaka check [--json]`; the verb also parses `--types` and `--allow-internal` | ✅ **DRAINED by S-help-truthfulness** — usage now reads `medaka check [--json] [--types] [--allow-internal] <file.mdk>`. The `run` line had the same shape (it advertised ONLY the no-op `--release`) and was fixed with it. **NOT gated**: under-documentation in the top-level block is invisible to properties A/B/C — see §5g. |
 | top-level `usage` vs `docHelpText` | usage said `medaka doc [file.mdk]` (optional); help says `medaka doc <file.mdk>`; the binary **requires** it | ✅ **DRAINED by S-help-truthfulness** — usage now reads `medaka doc <file.mdk>`, and `runDocTargets`'s own empty-argv usage line (which said `[file.mdk]` too, contradicting its sibling arm) with it. **NOT gated**: positional arity is not a flag, so no property sees it — §5g. |
 | `doc <a> <b>` | second and later positionals silently ignored, exit 0 | ✅ **DRAINED by S-unknown-flag-floor** — `medaka doc a.mdk b.mdk` now answers `usage: medaka doc <file.mdk> (doc takes exactly one file)`, rc 1. |
 | `lint --only=nosuchrule` / `--disable=nosuchrule` | unknown rule name silently accepted, exit 0 | ✅ **DRAINED by S-unknown-flag-floor** — both now answer `medaka lint: unknown rule <name> (known: …)`, rc 1. |
-| `fmt --write --stdout` | mutually exclusive modes both accepted; `--stdout` wins, no write, exit 0 | ✅ **DRAINED by S-unknown-flag-floor** — now `medaka fmt: --stdout --write are mutually exclusive — pick one.`, rc 1 (`snapshot`'s own mode-conflict rejection was already the right model, now mirrored here). |
+| `fmt --write --stdout` | mutually exclusive modes both accepted; `--stdout` wins, no write, exit 0 | ✅ **DRAINED by S-unknown-flag-floor** — now `medaka fmt: --stdout --write are mutually exclusive; pass one`, rc 1 (`snapshot`'s own mode-conflict rejection was already the right model, now mirrored here). |
 | `gate run --jobs <n>` | accepted, ignored, **documented as such** | ✅ conforming dead surface (E6) |
 
 ### 5g. What is now GATED, and what still is not

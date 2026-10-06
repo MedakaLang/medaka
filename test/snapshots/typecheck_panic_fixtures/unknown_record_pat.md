@@ -6,4 +6,4 @@ diagnostics=TYPES
 f r = match r
   Nope { a = x } => x
 # TYPES
-TYPE ERROR: Unknown record type: Nope
+TYPE ERROR: unknown record type `Nope`

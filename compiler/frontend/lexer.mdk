@@ -823,11 +823,11 @@ malformedRadixErr pos bad prefix digits
   | stringLength digits == 0 =
     lexErrorTok
       pos
-      "malformed radix literal `\{bad}`: '_' cannot immediately follow the radix prefix '\{prefix}', and no digit follows it either"
+      "malformed radix literal `\{bad}`: no digits follow the \{prefix} prefix; an underscore may only separate digits"
   | otherwise =
     lexErrorTok
       pos
-      "malformed radix literal `\{bad}`: '_' cannot immediately follow the radix prefix — write `\{prefix}\{digits}`"
+      "malformed radix literal `\{bad}`: an underscore cannot follow the \{prefix} prefix; write `\{prefix}\{digits}`"
 
 isFloatAt : Array Char -> Int -> Int -> Bool
 isFloatAt src len e1 =
@@ -882,7 +882,7 @@ malformedExpDotTok src len pos e1 =
   let good = "\{substr src pos (e1 + 1)}0\{substr src (e1 + 1) expE}"
   lexErrorTok
     pos
-    "malformed float literal `\{bad}`: a float needs a digit after the decimal point — write `\{good}`"
+    "malformed float literal `\{bad}`: a digit must follow the decimal point; write `\{good}`"
 
 -- `<digits>.`-shaped (#677, e.g. `5.`): a bare `.` right after a just-scanned
 -- digit run with nothing after it that could continue a (possibly ill-typed
@@ -913,7 +913,7 @@ malformedTrailingDotTok src pos e1 =
   let bad = substr src pos (e1 + 1)
   lexErrorTok
     pos
-    "malformed float literal `\{bad}`: a float needs a digit after the decimal point — write `\{bad}0`"
+    "malformed float literal `\{bad}`: a digit must follow the decimal point; write `\{bad}0`"
 
 floatTok : Array Char -> Int -> Int -> Int -> Int -> Int -> List RawTok
 floatTok src len pos e1 depth id =
@@ -995,7 +995,7 @@ scanStrEsc src len p startQ depth id acc e
     None =>
       lexErrorTok
         p
-        "invalid escape sequence '\\\{charToStr e}' — Medaka's string escapes are \\n \\t \\r \\0 \\\\ \\\" and \\u{...}"
+        "invalid escape sequence `\\\{charToStr e}`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}"
 
 -- string part after an interpolation's `}` closes (`\{`→INTERP_MID, `"`→INTERP_END)
 scanInterpCont : Array Char -> Int -> Int -> Int -> String -> List RawTok
@@ -1473,12 +1473,11 @@ readChar src len p depth id
   | isApos (at src p) =
     lexErrorTok
       (p - 1)
-      "character literal is empty. A character is exactly one codepoint — write `'\\0'` for the NUL character, or use a `\"\"` string for an empty value"
+      "character literal is empty; a character is exactly one codepoint, such as `'a'`"
   | otherwise = rawChar src len p depth id
 
 charUntermMsg : String
-charUntermMsg =
-  "character literal is not terminated. A character is one codepoint between single quotes, as in `'a'` or `'\\n'`"
+charUntermMsg = "unterminated character literal"
 
 -- `\<e>'` escape forms: three source chars (`\`, e, `'`), so advance by 3.
 -- The closing quote at `p + 2` is REQUIRED — a valid escape followed by more
@@ -1491,7 +1490,7 @@ escChar src len p depth id e
     None =>
       lexErrorTok
         p
-        "invalid escape sequence '\\\{charToStr e}' — Medaka's character escapes are \\n \\t \\r \\0 \\\\ \\' and \\u{...}"
+        "invalid escape sequence `\\\{charToStr e}`; valid escapes are \\n \\t \\r \\0 \\\\ \\' \\u{...}"
     Some s =>
       if p + 2 < len && isApos (at src (p + 2)) then
         RTok (TChar s) p (p + 3) :: scan src len (p + 3) depth id
@@ -1513,7 +1512,7 @@ rawChar src len p depth id
     else
       lexErrorTok
         (p - 1)
-        "character literal must be a single codepoint, but `'\{substr src p e}'` has more than one. Use a `\"...\"` string for text, or `'\\u{...}'` for one codepoint by its hex value"
+        "character literal `'\{substr src p e}'` has more than one codepoint; write a `\"...\"` string for text"
 
 charClose : Array Char -> Int -> Int -> Int
 charClose src len p
@@ -1626,15 +1625,15 @@ uniIsSurrogate cp = cp >= 55296 && cp <= 57343
 uniEscTermErr : Array Char -> Int -> Int -> Int -> String
 uniEscTermErr src len s he
   | he >= len =
-    "unicode escape is not terminated. Expected one to six hex digits (0-9, a-f, A-F) then `}`, but the file ended"
+    "unicode escape is not terminated; the file ends before its closing `}`"
   | at src he == '_' =
-    "unicode escape uses a `_` separator, which is not allowed here. `_` groups digits in integer literals (`1_000`, `0xD_EAD`), but a `\\u{...}` codepoint must be an unbroken run of hex digits — write the digits unbroken, as in `\\u{41}` rather than `\\u{4_1}`"
+    "unicode escape cannot contain `_`; write the hex digits unbroken, as in `\\u{41}`"
   | he == s && at src he == '}' =
-    "unicode escape `\\u{}` has no digits. A codepoint needs at least one hex digit — `\\u{41}` is 'A' and `\\u{0}` is NUL"
+    "unicode escape `\\u{}` has no digits; write at least one hex digit, as in `\\u{41}`"
   | he == s =
-    "unicode escape is not terminated. Expected one to six hex digits (0-9, a-f, A-F) then `}`, but found `\{charToStr (at src he)}`"
+    "unicode escape expects a hex digit after `\\u{` but found `\{charToStr (at src he)}`"
   | otherwise =
-    "unicode escape is not terminated. Expected `}` after the hex digits, but found `\{charToStr (at src he)}`"
+    "unicode escape expects `}` after its hex digits but found `\{charToStr (at src he)}`"
 
 uniEscErr : Array Char -> Int -> Int -> String
 uniEscErr src len p
@@ -1642,9 +1641,9 @@ uniEscErr src len p
     uniEscTermErr src len (p + 3) (uHexEnd src len (p + 3))
   | otherwise = match uniEscCode src len p
     Some cp if uniIsSurrogate cp =>
-      "unicode escape '\{uniEscText src len p}' is a UTF-16 surrogate, not a character. Codepoints D800-DFFF only ever encode one half of a surrogate pair and are never valid on their own"
+      "unicode escape `\{uniEscText src len p}` is a UTF-16 surrogate, not a character; codepoints D800-DFFF are not valid on their own"
     _ =>
-      "unicode escape '\{uniEscText src len p}' is out of range. A codepoint must be at most 10FFFF"
+      "unicode escape `\{uniEscText src len p}` is out of range; a codepoint is at most 10FFFF"
 
 -- `\u{HEX}'` : the hex codepoint, then `}` (`he`), then the closing `'` (`he + 1`).
 -- The closing quote is REQUIRED, exactly as in `escChar`/`rawChar`: a `\u{…}` escape
@@ -1719,15 +1718,15 @@ bareUnicodeEscSuggested : Array Char -> Int -> Int -> String
 bareUnicodeEscSuggested src len p =
   "\\u{\{substr src (p + 2) (uHexEnd src len (p + 2))}}"
 
--- String-literal context: `\"` is one of the supported escapes (not `\'`).
+-- The written spelling comes first and the braced one second: `parseErrHelpFix`
+-- reads the first two backtick pairs as the (old, new) of its `fix`.
 bareUnicodeEscMsgStr : Array Char -> Int -> Int -> String
 bareUnicodeEscMsgStr src len p =
-  "bare unicode escape `\{bareUnicodeEscWritten src len p}` is not valid Medaka syntax. Medaka's unicode escape is braced — did you mean `\{bareUnicodeEscSuggested src len p}`? Supported string escapes: \\n \\t \\r \\0 \\\\ \\\" and \\u{...}"
+  "bare unicode escape `\{bareUnicodeEscWritten src len p}` is not valid; did you mean `\{bareUnicodeEscSuggested src len p}`?"
 
--- Char-literal context: `\'` is one of the supported escapes (not `\"`).
+-- The same message in a character literal.
 bareUnicodeEscMsgChar : Array Char -> Int -> Int -> String
-bareUnicodeEscMsgChar src len p =
-  "bare unicode escape `\{bareUnicodeEscWritten src len p}` is not valid Medaka syntax. Medaka's unicode escape is braced — did you mean `\{bareUnicodeEscSuggested src len p}`? Supported character escapes: \\n \\t \\r \\0 \\\\ \\' and \\u{...}"
+bareUnicodeEscMsgChar src len p = bareUnicodeEscMsgStr src len p
 
 -- ── `\u{HEX}` unicode escapes inside *strings* (the
 -- `\u{hex}` escape, handled across the plain-string, triple-string, and
@@ -1822,18 +1821,14 @@ singleOp src len pos depth id '@' =
 -- before `singleOp` ever sees a bare `\`) — a stray top-level `\` is always a
 -- Haskell lambda (`\x -> e`) written by reflex. Zero false-positive risk.
 singleOp src len pos depth id '\\' =
-  lexErrorTok
-    pos
-    "unexpected '\\'. Medaka lambdas are written 'x => e' (not '\\x -> e')"
+  lexErrorTok pos "Medaka has no `\\x -> e` lambdas; write `x => e`"
 -- `$` is likewise never a valid Medaka character — Haskell's low-precedence
 -- application operator has no Medaka equivalent; direct application, parens,
 -- or `|>` all cover it. Zero false-positive risk.
 singleOp src len pos depth id '$' =
-  lexErrorTok
-    pos
-    "Medaka has no '$'. Apply directly 'f x', parenthesize '(f x)', or pipe with '|>'"
+  lexErrorTok pos "Medaka has no `$`; write `f (g x)`"
 singleOp src len pos depth id c =
-  lexErrorTok pos "unexpected character '\{charToStr c}'"
+  lexErrorTok pos "unexpected character `\{charToStr c}`"
 
 -- A `[` lexes as TLBracketTight (postfix indexing, `a[i]`) when it
 -- immediately follows an expr-ender (alnum/`_`/`)`/`]`/`"`) with no
@@ -1869,7 +1864,7 @@ malformedLeadingDotTok src len pos =
   let bad = substr src pos e
   lexErrorTok
     pos
-    "malformed float literal `\{bad}`: a float needs a digit before the decimal point — write `0\{bad}`"
+    "malformed float literal `\{bad}`: a digit must precede the decimal point; write `0\{bad}`"
 
 -- `@` is the adjacent operator (AS_AT) when it immediately follows an
 -- identifier character, whatever its case — the as-pattern `x@(…)`, and the
@@ -2331,8 +2326,8 @@ dropFrame ((BracketFrame f s) :: fs) = BracketFrame (f - 1) s :: fs
 -- RNewline that ended the PREVIOUS line, the convention every other
 -- INDENT/DEDENT/NEWLINE synthetic token uses, per the note on `layout` above).
 -- This is the one INDENT that a parse error routinely blames directly
--- (`expectTok TDedent` failing on it, "unexpected an indent; expected a
--- dedent") because it fires when the deeper line DOESN'T look like an
+-- (`expectTok TDedent` failing on it, "unexpected indentation; expected the
+-- end of the block") because it fires when the deeper line DOESN'T look like an
 -- application continuation, so misattributing it to the tail of the prior
 -- line sends the reader to a line that is fine.
 resolveCont : Int ->

@@ -1,1 +1,1 @@
-TYPE ERROR: Method 'name' in interface 'Phantom' does not mention interface parameter(s) 'a'; cannot dispatch
+TYPE ERROR: method `name` of interface `Phantom` does not mention the interface parameter '`a`', so it cannot be dispatched

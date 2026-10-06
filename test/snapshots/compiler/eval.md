@@ -746,9 +746,9 @@ lookupFrames : List (List (String, Ref (Value e))) -> String -> <e> Value e
 lookupFrames [] name =
   if contains name !ffiExternNamesRef then
     panic
-      ("capability error: '"
+      ("capability error: `"
         ++ name
-        ++ "' is a user-declared FFI extern — `medaka run` has no FFI capability (the tree-walking interpreter cannot make a foreign C call). Build a native binary with `medaka build` instead.")
+        ++ "` is a user-declared FFI extern and `medaka run` cannot make a foreign C call; build a native binary with `medaka build`")
   else
     panic ("unbound identifier: " ++ name)
 lookupFrames (frame :: rest) name = match lookupFrameCell frame name
@@ -823,7 +823,7 @@ blackholeCell : String -> Unit -> <e> Value e
 blackholeCell name _ =
   runtimePanic
     "E-CYCLIC-VALUE"
-    "\{name} refers to itself during initialization (non-productive cyclic value)"
+    "`\{name}` refers to itself during its own initialization; a value cannot be defined in terms of itself"
 
 export
 force : Value e -> <e> Value e
@@ -1139,7 +1139,7 @@ apply f x =
     if d > evalDepthLimit then
       runtimePanic
         "E-STACK-OVERFLOW"
-        "recursion too deep (evaluator call depth exceeded \{intToString evalDepthLimit}); the tree-walking interpreter has no tail-call optimisation"
+        "recursion too deep: evaluator call depth exceeded \{intToString evalDepthLimit}; `medaka run` has no tail-call optimisation, so build a native binary with `medaka build`"
   let r = applyDispatch f x
   evalDepthRef := d - 1
   r
@@ -1256,7 +1256,7 @@ reportIfUndecidable tag cands
   | twoDistinctKeys cands [] =
     runtimePanic
       "E-AMBIGUOUS-DISPATCH"
-      "arg-tag dispatch on a receiver of type '\{typeTagName tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
+      "dispatch on a receiver of type `\{typeTagName tag}` is undecidable: more than one impl is declared at that type head"
   | otherwise = ()
 
 -- ⚠️ TWO IMPLS COLLIDE ONLY WITHIN ONE INTERFACE (#2445 fix round, F-2).  The
@@ -2126,7 +2126,7 @@ appendVal : Value e -> Value e -> Value e
 appendVal (VList a) (VList b) = VList (a ++ b)
 appendVal (VString a) (VString b) = VString (a ++ b)
 appendVal _ _ =
-  panic "'++' requires Semigroup (List, String, or a type with append)"
+  panic "`++` requires Semigroup: a List, a String or a type with `append`"
 
 export
 evalArith : String -> Value e -> Value e -> Value e
@@ -4057,7 +4057,7 @@ lookupBinding name ((n, v) :: rest)
 -- inline at each (lazy) match arm.
 export
 noMainMsg : String
-noMainMsg = "program has no 'main' binding"
+noMainMsg = "no `main` in this file; add `main = ...`"
 
 export
 evalMain : List Decl -> String
@@ -5484,7 +5484,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupFramesOpt" ((PList) PWild) (EVar "None"))
 (DFunDef false "lookupFramesOpt" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EVar "Some") (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name")))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFramesOpt") (EVar "rest")) (EVar "name")))))
 (DTypeSig false "lookupFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "lookupFrames" ((PList) (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EUnOp "!" (EVar "ffiExternNamesRef"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "capability error: '")) (EVar "name")) (ELit (LString "' is a user-declared FFI extern — `medaka run` has no FFI capability (the tree-walking interpreter cannot make a foreign C call). Build a native binary with `medaka build` instead.")))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound identifier: ")) (EVar "name")))))
+(DFunDef false "lookupFrames" ((PList) (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EUnOp "!" (EVar "ffiExternNamesRef"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "capability error: `")) (EVar "name")) (ELit (LString "` is a user-declared FFI extern and `medaka run` cannot make a foreign C call; build a native binary with `medaka build`")))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound identifier: ")) (EVar "name")))))
 (DFunDef false "lookupFrames" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFrames") (EVar "rest")) (EVar "name")))))
 (DTypeSig true "lookupMethod" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupMethod" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EApp (EVar "lookupMethodFrames") (EVar "frames")) (EVar "frames")) (EVar "name")))
@@ -5504,7 +5504,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "forceMemo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "forceMemo" ((PVar "cell") (PVar "name") (PVar "f")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "VThunk") (EApp (EVar "blackholeCell") (EVar "name"))))) (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EVar "v"))) (DoExpr (EVar "v"))))
 (DTypeSig false "blackholeCell" (TyFun (TyCon "String") (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "blackholeCell" ((PVar "name") PWild) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-CYCLIC-VALUE"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString " refers to itself during initialization (non-productive cyclic value)")))))
+(DFunDef false "blackholeCell" ((PVar "name") PWild) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-CYCLIC-VALUE"))) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` refers to itself during its own initialization; a value cannot be defined in terms of itself")))))
 (DTypeSig true "force" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "force" ((PCon "VThunk" (PVar "f"))) (EApp (EVar "f") (ELit LUnit)))
 (DFunDef false "force" ((PVar "v")) (EVar "v"))
@@ -5668,7 +5668,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "applyValue" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "applyValue" ((PVar "f") (PVar "x")) (EApp (EApp (EVar "apply") (EVar "f")) (EVar "x")))
 (DTypeSig true "apply" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "apply" ((PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "d") (EBinOp "+" (EUnOp "!" (EVar "evalDepthRef")) (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evalDepthRef")) (EVar "d"))) (DoLet false false PWild (EIf (EBinOp ">" (EVar "d") (EVar "evalDepthLimit")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-STACK-OVERFLOW"))) (EBinOp "++" (EBinOp "++" (ELit (LString "recursion too deep (evaluator call depth exceeded ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "evalDepthLimit")))) (ELit (LString "); the tree-walking interpreter has no tail-call optimisation")))) (ELit LUnit))) (DoLet false false (PVar "r") (EApp (EApp (EVar "applyDispatch") (EVar "f")) (EVar "x"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evalDepthRef")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))) (DoExpr (EVar "r"))))
+(DFunDef false "apply" ((PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "d") (EBinOp "+" (EUnOp "!" (EVar "evalDepthRef")) (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evalDepthRef")) (EVar "d"))) (DoLet false false PWild (EIf (EBinOp ">" (EVar "d") (EVar "evalDepthLimit")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-STACK-OVERFLOW"))) (EBinOp "++" (EBinOp "++" (ELit (LString "recursion too deep: evaluator call depth exceeded ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "evalDepthLimit")))) (ELit (LString "; `medaka run` has no tail-call optimisation, so build a native binary with `medaka build`")))) (ELit LUnit))) (DoLet false false (PVar "r") (EApp (EApp (EVar "applyDispatch") (EVar "f")) (EVar "x"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evalDepthRef")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))) (DoExpr (EVar "r"))))
 (DTypeSig false "applyDispatch" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "applyDispatch" ((PVar "f") (PVar "x")) (EMatch (EApp (EApp (EVar "applyOpt") (EVar "f")) (EVar "x")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NONEXHAUSTIVE-MATCH"))) (ELit (LString "non-exhaustive match"))))))
 (DTypeSig false "applyOpt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -5703,7 +5703,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "hasLaterSlot" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "seen")))) (EVar "pos")))
 (DFunDef false "hasLaterSlot" (PWild) (EVar "False"))
 (DTypeSig false "reportIfUndecidable" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Unit"))))
-(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EVar "display") (EApp (EVar "typeTagName") (EVar "tag")))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "dispatch on a receiver of type `")) (EApp (EVar "display") (EApp (EVar "typeTagName") (EVar "tag")))) (ELit (LString "` is undecidable: more than one impl is declared at that type head")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "twoDistinctKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "twoDistinctKeys" ((PList) PWild) (EVar "False"))
 (DFunDef false "twoDistinctKeys" ((PCons (PVar "v") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "ifaceRivalSeen") (EApp (EVar "candIfaceKey") (EVar "v"))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EBinOp "::" (EApp (EVar "candIfaceKey") (EVar "v")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -6029,7 +6029,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "appendVal" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "appendVal" ((PCon "VList" (PVar "a")) (PCon "VList" (PVar "b"))) (EApp (EVar "VList") (EBinOp "++" (EVar "a") (EVar "b"))))
 (DFunDef false "appendVal" ((PCon "VString" (PVar "a")) (PCon "VString" (PVar "b"))) (EApp (EVar "VString") (EBinOp "++" (EVar "a") (EVar "b"))))
-(DFunDef false "appendVal" (PWild PWild) (EApp (EVar "panic") (ELit (LString "'++' requires Semigroup (List, String, or a type with append)"))))
+(DFunDef false "appendVal" (PWild PWild) (EApp (EVar "panic") (ELit (LString "`++` requires Semigroup: a List, a String or a type with `append`"))))
 (DTypeSig true "evalArith" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "evalArith" ((PLit (LString "+")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "-" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "-" (EVar "intMinBound") (EVar "b"))))) (EApp (EVar "intOverflow") (EApp (EApp (EApp (EVar "overflowOperands") (ELit (LString "+"))) (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "+" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "evalArith" ((PLit (LString "-")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "+" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "+" (EVar "intMinBound") (EVar "b"))))) (EApp (EVar "intOverflow") (EApp (EApp (EApp (EVar "overflowOperands") (ELit (LString "-"))) (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "-" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -6702,7 +6702,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupBinding" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupBinding" ((PVar "name") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupBinding") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "noMainMsg" (TyCon "String"))
-(DFunDef false "noMainMsg" () (ELit (LString "program has no 'main' binding")))
+(DFunDef false "noMainMsg" () (ELit (LString "no `main` in this file; add `main = ...`")))
 (DTypeSig true "evalMain" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "evalMain" ((PVar "prog")) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EApp (EApp (EVar "evalOne") (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "prog")))) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-MAIN"))) (EVar "noMainMsg")))))
 (DTypeSig true "evalOutputWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
@@ -7213,7 +7213,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupFramesOpt" ((PList) PWild) (EVar "None"))
 (DFunDef false "lookupFramesOpt" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EVar "Some") (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name")))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFramesOpt") (EVar "rest")) (EVar "name")))))
 (DTypeSig false "lookupFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "lookupFrames" ((PList) (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EUnOp "!" (EVar "ffiExternNamesRef"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "capability error: '")) (EVar "name")) (ELit (LString "' is a user-declared FFI extern — `medaka run` has no FFI capability (the tree-walking interpreter cannot make a foreign C call). Build a native binary with `medaka build` instead.")))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound identifier: ")) (EVar "name")))))
+(DFunDef false "lookupFrames" ((PList) (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EUnOp "!" (EVar "ffiExternNamesRef"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "capability error: `")) (EVar "name")) (ELit (LString "` is a user-declared FFI extern and `medaka run` cannot make a foreign C call; build a native binary with `medaka build`")))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound identifier: ")) (EVar "name")))))
 (DFunDef false "lookupFrames" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFrames") (EVar "rest")) (EVar "name")))))
 (DTypeSig true "lookupMethod" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupMethod" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EApp (EVar "lookupMethodFrames") (EVar "frames")) (EVar "frames")) (EVar "name")))
@@ -7233,7 +7233,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "forceMemo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "forceMemo" ((PVar "cell") (PVar "name") (PVar "f")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "VThunk") (EApp (EVar "blackholeCell") (EVar "name"))))) (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EVar "v"))) (DoExpr (EVar "v"))))
 (DTypeSig false "blackholeCell" (TyFun (TyCon "String") (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "blackholeCell" ((PVar "name") PWild) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-CYCLIC-VALUE"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " refers to itself during initialization (non-productive cyclic value)")))))
+(DFunDef false "blackholeCell" ((PVar "name") PWild) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-CYCLIC-VALUE"))) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` refers to itself during its own initialization; a value cannot be defined in terms of itself")))))
 (DTypeSig true "force" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "force" ((PCon "VThunk" (PVar "f"))) (EApp (EVar "f") (ELit LUnit)))
 (DFunDef false "force" ((PVar "v")) (EVar "v"))
@@ -7397,7 +7397,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "applyValue" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "applyValue" ((PVar "f") (PVar "x")) (EApp (EApp (EVar "apply") (EVar "f")) (EVar "x")))
 (DTypeSig true "apply" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "apply" ((PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "d") (EBinOp "+" (EUnOp "!" (EVar "evalDepthRef")) (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evalDepthRef")) (EVar "d"))) (DoLet false false PWild (EIf (EBinOp ">" (EVar "d") (EVar "evalDepthLimit")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-STACK-OVERFLOW"))) (EBinOp "++" (EBinOp "++" (ELit (LString "recursion too deep (evaluator call depth exceeded ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "evalDepthLimit")))) (ELit (LString "); the tree-walking interpreter has no tail-call optimisation")))) (ELit LUnit))) (DoLet false false (PVar "r") (EApp (EApp (EVar "applyDispatch") (EVar "f")) (EVar "x"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evalDepthRef")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))) (DoExpr (EVar "r"))))
+(DFunDef false "apply" ((PVar "f") (PVar "x")) (EBlock (DoLet false false (PVar "d") (EBinOp "+" (EUnOp "!" (EVar "evalDepthRef")) (ELit (LInt 1)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evalDepthRef")) (EVar "d"))) (DoLet false false PWild (EIf (EBinOp ">" (EVar "d") (EVar "evalDepthLimit")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-STACK-OVERFLOW"))) (EBinOp "++" (EBinOp "++" (ELit (LString "recursion too deep: evaluator call depth exceeded ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "evalDepthLimit")))) (ELit (LString "; `medaka run` has no tail-call optimisation, so build a native binary with `medaka build`")))) (ELit LUnit))) (DoLet false false (PVar "r") (EApp (EApp (EVar "applyDispatch") (EVar "f")) (EVar "x"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evalDepthRef")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))) (DoExpr (EVar "r"))))
 (DTypeSig false "applyDispatch" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "applyDispatch" ((PVar "f") (PVar "x")) (EMatch (EApp (EApp (EVar "applyOpt") (EVar "f")) (EVar "x")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NONEXHAUSTIVE-MATCH"))) (ELit (LString "non-exhaustive match"))))))
 (DTypeSig false "applyOpt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -7432,7 +7432,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "hasLaterSlot" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "seen")))) (EVar "pos")))
 (DFunDef false "hasLaterSlot" (PWild) (EVar "False"))
 (DTypeSig false "reportIfUndecidable" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Unit"))))
-(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EMethodRef "display") (EApp (EVar "typeTagName") (EVar "tag")))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "dispatch on a receiver of type `")) (EApp (EMethodRef "display") (EApp (EVar "typeTagName") (EVar "tag")))) (ELit (LString "` is undecidable: more than one impl is declared at that type head")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "twoDistinctKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "twoDistinctKeys" ((PList) PWild) (EVar "False"))
 (DFunDef false "twoDistinctKeys" ((PCons (PVar "v") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "ifaceRivalSeen") (EApp (EVar "candIfaceKey") (EVar "v"))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EBinOp "::" (EApp (EVar "candIfaceKey") (EVar "v")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -7758,7 +7758,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "appendVal" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "appendVal" ((PCon "VList" (PVar "a")) (PCon "VList" (PVar "b"))) (EApp (EVar "VList") (EBinOp "++" (EVar "a") (EVar "b"))))
 (DFunDef false "appendVal" ((PCon "VString" (PVar "a")) (PCon "VString" (PVar "b"))) (EApp (EVar "VString") (EBinOp "++" (EVar "a") (EVar "b"))))
-(DFunDef false "appendVal" (PWild PWild) (EApp (EVar "panic") (ELit (LString "'++' requires Semigroup (List, String, or a type with append)"))))
+(DFunDef false "appendVal" (PWild PWild) (EApp (EVar "panic") (ELit (LString "`++` requires Semigroup: a List, a String or a type with `append`"))))
 (DTypeSig true "evalArith" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "evalArith" ((PLit (LString "+")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "-" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "-" (EVar "intMinBound") (EVar "b"))))) (EApp (EVar "intOverflow") (EApp (EApp (EApp (EVar "overflowOperands") (ELit (LString "+"))) (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "+" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "evalArith" ((PLit (LString "-")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "+" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "+" (EVar "intMinBound") (EVar "b"))))) (EApp (EVar "intOverflow") (EApp (EApp (EApp (EVar "overflowOperands") (ELit (LString "-"))) (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "-" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -8431,7 +8431,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupBinding" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupBinding" ((PVar "name") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupBinding") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "noMainMsg" (TyCon "String"))
-(DFunDef false "noMainMsg" () (ELit (LString "program has no 'main' binding")))
+(DFunDef false "noMainMsg" () (ELit (LString "no `main` in this file; add `main = ...`")))
 (DTypeSig true "evalMain" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "evalMain" ((PVar "prog")) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EApp (EApp (EVar "evalOne") (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "prog")))) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-MAIN"))) (EVar "noMainMsg")))))
 (DTypeSig true "evalOutputWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))

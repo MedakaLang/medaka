@@ -23,7 +23,7 @@ instead of relying only on headless-logic tests
 5. Injecting a type-error buffer (`main = println (1 + "hello")`) produces an
    inline squiggle (`.cm-lintRange-error`), a gutter marker
    (`.cm-lint-marker-error`), and the right message rendered as a problem line
-   inside `#console` ("No impl of Num for String").
+   inside `#console` ("no impl of Num for String").
 6. Hover-type and autocomplete (unchanged data path via `window.__mdkLang`).
 7. The Examples picker (`#example-select`) swaps in the `hello` sample, which
    then runs and prints its greeting.

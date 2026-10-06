@@ -1,1 +1,1 @@
-TYPE ERROR: No impl of Ord for (Int -> Int)
+TYPE ERROR: no impl of Ord for (Int -> Int)

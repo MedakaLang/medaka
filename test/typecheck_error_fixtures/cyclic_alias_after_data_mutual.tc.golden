@@ -1,2 +1,2 @@
-TYPE ERROR: Recursive type alias `A`. Type aliases cannot be recursive or cyclic
-TYPE ERROR: Recursive type alias `B`. Type aliases cannot be recursive or cyclic
+TYPE ERROR: type alias `A` is recursive; a type alias cannot refer to itself, so declare a `data` type instead
+TYPE ERROR: type alias `B` is recursive; a type alias cannot refer to itself, so declare a `data` type instead

@@ -1,11 +1,11 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/typecheck/if_without_else.mdk:1:23: Type mismatch: String vs Unit — an `if` without `else` has type Unit, so its `then` branch must be Unit too; add an `else` branch
+error: test/error_quality_fixtures/typecheck/if_without_else.mdk:1:23: type mismatch: String vs Unit; an `if` without `else` has type Unit, so add an `else` branch or make the `then` branch Unit
   |
 1 | sign n = if n > 0 then "pos"
   |                        ^
-error: test/error_quality_fixtures/typecheck/if_without_else.mdk:3:24: Type mismatch: Int literal vs Unit — an `if` without `else` has type Unit, so its `then` branch must be Unit too; add an `else` branch
+error: test/error_quality_fixtures/typecheck/if_without_else.mdk:3:24: type mismatch: Int literal vs Unit; an `if` without `else` has type Unit, so add an `else` branch or make the `then` branch Unit
   |
 3 | count n = if n > 0 then 1
   |                         ^

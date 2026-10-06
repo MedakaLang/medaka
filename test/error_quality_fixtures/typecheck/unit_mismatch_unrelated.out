@@ -1,15 +1,15 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/typecheck/unit_mismatch_unrelated.mdk:7:27: Type mismatch: String vs Unit
+error: test/error_quality_fixtures/typecheck/unit_mismatch_unrelated.mdk:7:27: type mismatch: String vs Unit
   |
 7 | j b = if b then "yes" else ()
   |                            ^
-error: test/error_quality_fixtures/typecheck/unit_mismatch_unrelated.mdk:9:18: Type mismatch: Int vs Unit
+error: test/error_quality_fixtures/typecheck/unit_mismatch_unrelated.mdk:9:18: type mismatch: Int vs Unit
   |
 9 | main = println (h ())
   |                   ^
-error: test/error_quality_fixtures/typecheck/unit_mismatch_unrelated.mdk:4:16: 'if' branches have different types: Int vs Unit. Both branches must have the same type; change the else branch to Int, or the then branch to Unit.
+error: test/error_quality_fixtures/typecheck/unit_mismatch_unrelated.mdk:4:16: `if` branches have different types: Int vs Unit
   |
 4 | k b = if b then 1 else ()
   |                 ^

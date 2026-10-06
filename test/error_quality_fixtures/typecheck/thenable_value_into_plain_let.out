@@ -1,11 +1,11 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_let.mdk:2:24: Type mismatch: a Unit vs Unit — `a Unit` is a value of a type that implements Thenable (`a` stands for that type), and a plain Unit is not one
+error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_let.mdk:2:24: type mismatch: a Unit vs Unit; `a Unit` is a value whose type implements `Thenable`, and `Unit` is not
   |
 2 |   let r : Int = forEach (x => println x) [1]
   |                         ^
-error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_let.mdk:2:41: Type mismatch: a Unit vs Int — `a Unit` is a value of a type that implements Thenable (`a` stands for that type), and a plain Int is not one
+error: test/error_quality_fixtures/typecheck/thenable_value_into_plain_let.mdk:2:41: type mismatch: a Unit vs Int; `a Unit` is a value whose type implements `Thenable`, and `Int` is not
   |
 2 |   let r : Int = forEach (x => println x) [1]
   |                                          ^

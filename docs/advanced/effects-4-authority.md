@@ -51,7 +51,7 @@ Reading a path the bound does not admit is refused with the same message as any
 other escape, now with parameters in it:
 
 ```
-error: authority.mdk:7:21: Effectful value used where <Store "cfg/*"> is allowed, but it performs <Store "secrets/key">
+error: authority.mdk:7:21: performs <Store "secrets/key"> where only <Store "cfg/*"> is allowed
   |
 7 | readConfig () = load "secrets/key"
   |                      ^
@@ -127,7 +127,7 @@ substituted its literal for the name, so the row `main` is charged with is exact
 And the compiler holds the body of `under` to its promise:
 
 ```
-error: authority.mdk:7:18: Binding 'sneaky' reaches "secrets/key" where only dir is admitted: dir is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare
+error: authority.mdk:7:18: `sneaky` reaches "secrets/key" where only dir is admitted, an authority the caller chooses; perform the operation on the named argument, or widen the declared row to the label bare
   |
 7 | sneaky dir = load "secrets/key"
   |                   ^
@@ -245,7 +245,7 @@ The last rule is the one that matters for security. A path that arrives at
 runtime abstracts to the whole domain, and the whole domain does not fit a bound:
 
 ```
-error: authority.mdk:7:23: Effectful value used where <Store "cfg/*"> is allowed, but it performs <Store>
+error: authority.mdk:7:23: performs <Store> where only <Store "cfg/*"> is allowed
   |
 7 | readConfig name = load name
   |                        ^
@@ -311,7 +311,7 @@ Bounding `readBeside` to `"cfg/*"`, or even to `"./*"`, is refused before
 anything runs:
 
 ```
-error: authority.mdk:5:27: Effectful value used where <FileRead "cfg/*"> is allowed, but it performs <FileRead "cfg/../*">
+error: authority.mdk:5:27: performs <FileRead "cfg/../*"> where only <FileRead "cfg/*"> is allowed
   |
 5 | readBeside name = readFile ("cfg/../" ++ name)
   |                            ^
@@ -366,7 +366,7 @@ A set bound admits exactly its members, and the same message reports a name that
 is not one of them:
 
 ```
-error: authority.mdk:7:44: Effectful value used where <Var {"HOME", "PATH"}> is allowed, but it performs <Var {"HOME", "SECRET"}>
+error: authority.mdk:7:44: performs <Var {"HOME", "SECRET"}> where only <Var {"HOME", "PATH"}> is allowed
   |
 7 | paths () = readVar "HOME" ++ ":" ++ readVar "SECRET"
   |                                             ^
@@ -430,7 +430,7 @@ is the whole `Method` axis, and it does not fit. Here `getAny` has the bound
 `getItems` has, and takes its method as a `String` argument `m`:
 
 ```
-error: method.mdk:7:46: Effectful value used where <Http Host="api.example.com/*" Method={"GET"}> is allowed, but it performs <Http Host="api.example.com/v1/items">
+error: method.mdk:7:46: performs <Http Host="api.example.com/v1/items"> where only <Http Host="api.example.com/*" Method={"GET"}> is allowed
   |
 7 | getAny m = request "api.example.com/v1/items" m
   |                                               ^
@@ -467,7 +467,7 @@ elements of one label, and a set literal at most 16 members. Inferred rows,
 policies, and manifests have no cap.
 
 ```
-error: authority.mdk:6:16: Invalid effect parameter on <Var>: a set holds at most 16 members, and this one has 17
+error: authority.mdk:6:16: invalid effect parameter on <Var>: a set holds at most 16 members, and this one has 17
   |
 6 | many : Unit -> <Var {"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10", "a11", "a12", "a13", "a14", "a15", "a16", "a17"}> String
   |                 ^
@@ -519,7 +519,7 @@ domain too, and a binder may have several of these as long as they agree.
 With none of them the compiler explains:
 
 ```
-error: authority.mdk:6:32: The qualifier names 'dir', but no binder domain, effect atom or index in this signature names 'dir', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Write the domain on the binder, `(dir : String @FileRead)`, name the label it bounds, `<FileRead dir>`, or index a handle by it, `Handle dir`, or drop the qualifier
+error: authority.mdk:6:32: the qualifier names `dir`, but no binder domain, effect atom or index in this signature gives it a domain; write one on the binder, `(dir : String @FileRead)`, or name the label it bounds, `<FileRead dir>`
   |
 6 | same : (dir : String) -> String @dir
   |                                 ^
@@ -567,7 +567,7 @@ reach: an exported `loopback : String @"127.0.0.1"` passed to
 body outside the bound is refused where it is written:
 
 ```
-error: authority.mdk:7:13: Binding 'configFile' reaches "secrets/key" where its declared bound admits only "cfg/*". Stay within the declared bound, or widen it to cover what the body reaches
+error: authority.mdk:7:13: `configFile` reaches "secrets/key" where its declared bound admits only "cfg/*"; stay within the bound, or widen it
   |
 7 | configFile = "secrets/key"
   |              ^
@@ -665,7 +665,7 @@ records `a <= d` between them. `inCfg` fixes one side to `"cfg/*"`. A use that
 violates the relation is refused at the use, naming the binding that carries it:
 
 ```
-error: authority.mdk:14:6: 'inCfg' needs "data/x" to lie within "cfg/*" here: its inferred type relates those authorities (a `<=` in its context), and this use does not satisfy the relation. Pass values whose authorities satisfy it
+error: authority.mdk:14:6: `inCfg` needs "data/x" to lie within "cfg/*" here, but this use does not satisfy it; pass values whose authorities do
   |
 14 | bad = inCfg (Dir "data/x")
   |       ^

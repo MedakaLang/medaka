@@ -203,12 +203,12 @@ refuse_case() {
 
 echo ""
 echo "-- fail-closed analysis, entry, and evaluation --"
-refuse_case "analysis-type-error" "test/check_policy_fixtures/type_error_plugin.mdk" "Panic" transform "rejected. compiler analysis failed" "type_error_plugin.mdk:5:14: No impl of Num for String"
+refuse_case "analysis-type-error" "test/check_policy_fixtures/type_error_plugin.mdk" "Panic" transform "rejected. compiler analysis failed" "type_error_plugin.mdk:5:14: no impl of Num for String"
 refuse_case "analysis-unlabelled-ffi" "test/check_policy_fixtures/ffi_unlabelled_plugin.mdk" "FFI,Net" transform "rejected. compiler analysis failed"
 # #3331: the refusal carries `check`'s diagnostics, located in the file that
 # failed — here an imported sibling, and an unresolvable import.
-refuse_case "analysis-import-type-error" "test/check_policy_fixtures/policy_xmod_bad_main.mdk" "Stdout" transform "rejected. compiler analysis failed" "policy_xmod_bad_helper.mdk:4:10: No impl of Num for String"
-refuse_case "analysis-unresolvable" "test/check_policy_fixtures/manifest_unresolvable_plugin.mdk" "Stdout" transform "rejected. compiler analysis failed" "has no exported name 'noSuchExport'"
+refuse_case "analysis-import-type-error" "test/check_policy_fixtures/policy_xmod_bad_main.mdk" "Stdout" transform "rejected. compiler analysis failed" "policy_xmod_bad_helper.mdk:4:10: no impl of Num for String"
+refuse_case "analysis-unresolvable" "test/check_policy_fixtures/manifest_unresolvable_plugin.mdk" "Stdout" transform "rejected. compiler analysis failed" 'has no export `noSuchExport`'
 refuse_case "missing-entry-2047" "test/check_policy_fixtures/missing_entry_plugin.mdk" "Cache,Log" transform "rejected. no 'transform' entry found"
 refuse_case "io-join-without-net" "test/check_policy_fixtures/io_join_plugin.mdk" "Clock,Env,Exec,FileRead,FileWrite,Rand,Signal,Stderr,Stdin,Stdout" transform "rejected. transform requires <IO>"
 refuse_case "io-join-without-signal" "test/check_policy_fixtures/io_join_plugin.mdk" "Clock,Env,Exec,FileRead,FileWrite,Net,Rand,Stderr,Stdin,Stdout" transform "rejected. transform requires <IO>"

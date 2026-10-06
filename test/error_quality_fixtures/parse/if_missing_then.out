@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/parse/if_missing_then.mdk:2:2: unexpected `if`; expected a dedent
+error: test/error_quality_fixtures/parse/if_missing_then.mdk:2:2: unexpected `if`; expected the end of the block
   |
 2 |   if True
   |   ^

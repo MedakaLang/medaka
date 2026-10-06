@@ -2,6 +2,11 @@
 
 **Status:** LIVE. One row per gated fixture in test/error_quality_fixtures.
 
+> **2026-10-05:** every message was re-worded to the copy standard in
+> `compiler/ERROR-QUALITY.md` § 0 (lowercase heads, backticked code, one remedy, no
+> em-dashes). The **Message** excerpts below predate that sweep; the `.out` goldens
+> beside each fixture are the current text. The **Observation** column still holds.
+
 One row per fixture. **Message** is a 1-line excerpt of the current stderr (or
 stdout warning) captured in the `.out` golden. **Observation** is a *neutral*
 note about the message as-is — NOT a grade. Captured against `./medaka` built

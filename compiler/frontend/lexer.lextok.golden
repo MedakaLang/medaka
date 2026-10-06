@@ -4223,9 +4223,9 @@ IDENT "lexErrorTok"
 IDENT "pos"
 INTERP_OPEN "malformed radix literal `"
 IDENT "bad"
-INTERP_MID "`: '_' cannot immediately follow the radix prefix '"
+INTERP_MID "`: no digits follow the "
 IDENT "prefix"
-INTERP_END "', and no digit follows it either"
+INTERP_END " prefix; an underscore may only separate digits"
 NEWLINE
 DEDENT
 NEWLINE
@@ -4237,7 +4237,9 @@ IDENT "lexErrorTok"
 IDENT "pos"
 INTERP_OPEN "malformed radix literal `"
 IDENT "bad"
-INTERP_MID "`: '_' cannot immediately follow the radix prefix — write `"
+INTERP_MID "`: an underscore cannot follow the "
+IDENT "prefix"
+INTERP_MID " prefix; write `"
 IDENT "prefix"
 INTERP_MID ""
 IDENT "digits"
@@ -4671,7 +4673,7 @@ IDENT "lexErrorTok"
 IDENT "pos"
 INTERP_OPEN "malformed float literal `"
 IDENT "bad"
-INTERP_MID "`: a float needs a digit after the decimal point — write `"
+INTERP_MID "`: a digit must follow the decimal point; write `"
 IDENT "good"
 INTERP_END "`"
 NEWLINE
@@ -4847,7 +4849,7 @@ IDENT "lexErrorTok"
 IDENT "pos"
 INTERP_OPEN "malformed float literal `"
 IDENT "bad"
-INTERP_MID "`: a float needs a digit after the decimal point — write `"
+INTERP_MID "`: a digit must follow the decimal point; write `"
 IDENT "bad"
 INTERP_END "0`"
 NEWLINE
@@ -5389,10 +5391,10 @@ FAT_ARROW
 INDENT
 IDENT "lexErrorTok"
 IDENT "p"
-INTERP_OPEN "invalid escape sequence '\\"
+INTERP_OPEN "invalid escape sequence `\\"
 IDENT "charToStr"
 IDENT "e"
-INTERP_END "' — Medaka's string escapes are \\n \\t \\r \\0 \\\\ \\\" and \\u{...}"
+INTERP_END "`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}"
 NEWLINE
 DEDENT
 NEWLINE
@@ -8547,7 +8549,7 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
-STRING "character literal is empty. A character is exactly one codepoint — write `'\\0'` for the NUL character, or use a `\"\"` string for an empty value"
+STRING "character literal is empty; a character is exactly one codepoint, such as `'a'`"
 NEWLINE
 DEDENT
 NEWLINE
@@ -8569,10 +8571,7 @@ UPPER "String"
 NEWLINE
 IDENT "charUntermMsg"
 EQUAL
-INDENT
-STRING "character literal is not terminated. A character is one codepoint between single quotes, as in `'a'` or `'\\n'`"
-NEWLINE
-DEDENT
+STRING "unterminated character literal"
 NEWLINE
 IDENT "escChar"
 COLON
@@ -8631,10 +8630,10 @@ FAT_ARROW
 INDENT
 IDENT "lexErrorTok"
 IDENT "p"
-INTERP_OPEN "invalid escape sequence '\\"
+INTERP_OPEN "invalid escape sequence `\\"
 IDENT "charToStr"
 IDENT "e"
-INTERP_END "' — Medaka's character escapes are \\n \\t \\r \\0 \\\\ \\' and \\u{...}"
+INTERP_END "`; valid escapes are \\n \\t \\r \\0 \\\\ \\' \\u{...}"
 NEWLINE
 DEDENT
 NEWLINE
@@ -8812,12 +8811,12 @@ IDENT "p"
 MINUS
 INT 1
 RPAREN
-INTERP_OPEN "character literal must be a single codepoint, but `'"
+INTERP_OPEN "character literal `'"
 IDENT "substr"
 IDENT "src"
 IDENT "p"
 IDENT "e"
-INTERP_END "'` has more than one. Use a `\"...\"` string for text, or `'\\u{...}'` for one codepoint by its hex value"
+INTERP_END "'` has more than one codepoint; write a `\"...\"` string for text"
 NEWLINE
 DEDENT
 NEWLINE
@@ -9148,7 +9147,7 @@ GEQ
 IDENT "len"
 EQUAL
 INDENT
-STRING "unicode escape is not terminated. Expected one to six hex digits (0-9, a-f, A-F) then `}`, but the file ended"
+STRING "unicode escape is not terminated; the file ends before its closing `}`"
 NEWLINE
 DEDENT
 NEWLINE
@@ -9160,7 +9159,7 @@ EQ_EQ
 CHAR "_"
 EQUAL
 INDENT
-STRING "unicode escape uses a `_` separator, which is not allowed here. `_` groups digits in integer literals (`1_000`, `0xD_EAD`), but a `\\u{...}` codepoint must be an unbroken run of hex digits — write the digits unbroken, as in `\\u{41}` rather than `\\u{4_1}`"
+STRING "unicode escape cannot contain `_`; write the hex digits unbroken, as in `\\u{41}`"
 NEWLINE
 DEDENT
 NEWLINE
@@ -9176,7 +9175,7 @@ EQ_EQ
 CHAR "}"
 EQUAL
 INDENT
-STRING "unicode escape `\\u{}` has no digits. A codepoint needs at least one hex digit — `\\u{41}` is 'A' and `\\u{0}` is NUL"
+STRING "unicode escape `\\u{}` has no digits; write at least one hex digit, as in `\\u{41}`"
 NEWLINE
 DEDENT
 NEWLINE
@@ -9186,7 +9185,7 @@ EQ_EQ
 IDENT "s"
 EQUAL
 INDENT
-INTERP_OPEN "unicode escape is not terminated. Expected one to six hex digits (0-9, a-f, A-F) then `}`, but found `"
+INTERP_OPEN "unicode escape expects a hex digit after `\\u{` but found `"
 IDENT "charToStr"
 LPAREN
 IDENT "at"
@@ -9201,7 +9200,7 @@ PIPE
 IDENT "otherwise"
 EQUAL
 INDENT
-INTERP_OPEN "unicode escape is not terminated. Expected `}` after the hex digits, but found `"
+INTERP_OPEN "unicode escape expects `}` after its hex digits but found `"
 IDENT "charToStr"
 LPAREN
 IDENT "at"
@@ -9277,24 +9276,24 @@ IDENT "uniIsSurrogate"
 IDENT "cp"
 FAT_ARROW
 INDENT
-INTERP_OPEN "unicode escape '"
+INTERP_OPEN "unicode escape `"
 IDENT "uniEscText"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_END "' is a UTF-16 surrogate, not a character. Codepoints D800-DFFF only ever encode one half of a surrogate pair and are never valid on their own"
+INTERP_END "` is a UTF-16 surrogate, not a character; codepoints D800-DFFF are not valid on their own"
 NEWLINE
 DEDENT
 NEWLINE
 UNDERSCORE
 FAT_ARROW
 INDENT
-INTERP_OPEN "unicode escape '"
+INTERP_OPEN "unicode escape `"
 IDENT "uniEscText"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_END "' is out of range. A codepoint must be at most 10FFFF"
+INTERP_END "` is out of range; a codepoint is at most 10FFFF"
 NEWLINE
 DEDENT
 NEWLINE
@@ -9615,12 +9614,12 @@ IDENT "bareUnicodeEscWritten"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_MID "` is not valid Medaka syntax. Medaka's unicode escape is braced — did you mean `"
+INTERP_MID "` is not valid; did you mean `"
 IDENT "bareUnicodeEscSuggested"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_END "`? Supported string escapes: \\n \\t \\r \\0 \\\\ \\\" and \\u{...}"
+INTERP_END "`?"
 NEWLINE
 DEDENT
 NEWLINE
@@ -9640,20 +9639,10 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 EQUAL
-INDENT
-INTERP_OPEN "bare unicode escape `"
-IDENT "bareUnicodeEscWritten"
+IDENT "bareUnicodeEscMsgStr"
 IDENT "src"
 IDENT "len"
 IDENT "p"
-INTERP_MID "` is not valid Medaka syntax. Medaka's unicode escape is braced — did you mean `"
-IDENT "bareUnicodeEscSuggested"
-IDENT "src"
-IDENT "len"
-IDENT "p"
-INTERP_END "`? Supported character escapes: \\n \\t \\r \\0 \\\\ \\' and \\u{...}"
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "isUnicodeEsc"
 COLON
@@ -10681,7 +10670,7 @@ EQUAL
 INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "unexpected '\\'. Medaka lambdas are written 'x => e' (not '\\x -> e')"
+STRING "Medaka has no `\\x -> e` lambdas; write `x => e`"
 NEWLINE
 DEDENT
 NEWLINE
@@ -10696,7 +10685,7 @@ EQUAL
 INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-STRING "Medaka has no '$'. Apply directly 'f x', parenthesize '(f x)', or pipe with '|>'"
+STRING "Medaka has no `$`; write `f (g x)`"
 NEWLINE
 DEDENT
 NEWLINE
@@ -10711,10 +10700,10 @@ EQUAL
 INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
-INTERP_OPEN "unexpected character '"
+INTERP_OPEN "unexpected character `"
 IDENT "charToStr"
 IDENT "c"
-INTERP_END "'"
+INTERP_END "`"
 NEWLINE
 DEDENT
 NEWLINE
@@ -10886,7 +10875,7 @@ IDENT "lexErrorTok"
 IDENT "pos"
 INTERP_OPEN "malformed float literal `"
 IDENT "bad"
-INTERP_MID "`: a float needs a digit before the decimal point — write `0"
+INTERP_MID "`: a digit must precede the decimal point; write `0"
 IDENT "bad"
 INTERP_END "`"
 NEWLINE

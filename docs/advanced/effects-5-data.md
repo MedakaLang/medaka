@@ -66,7 +66,7 @@ What keeps a `Handle "cfg/*"` honest is that applying `Handle` checks its
 argument against the field's qualifier. There is no other way to make one:
 
 ```
-error: data.mdk:9:19: Binding 'forged' reaches "secrets/key" where its declared bound admits only "cfg/*". Stay within the declared bound, or widen it to cover what the body reaches
+error: data.mdk:9:19: `forged` reaches "secrets/key" where its declared bound admits only "cfg/*"; stay within the bound, or widen it
   |
 9 | forged () = Handle "secrets/key"
   |                    ^
@@ -106,7 +106,7 @@ A `Handle "cfg/app.toml"` is not a `Handle "cfg/*"`, even though the first
 authority lies within the second. Index arguments have to be equal:
 
 ```
-error: data.mdk:6:10: Authority index mismatch: "cfg/*" vs "cfg/app.toml". An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle "cfg/app"` is not a `Handle "cfg/*"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant
+error: data.mdk:6:10: authority index mismatch: "cfg/*" vs "cfg/app.toml"; an authority in a type argument is invariant, so write the same index on both sides or name it, `Handle p`
   |
 6 | widen h = h
   |           ^
@@ -238,7 +238,7 @@ clause or arm. Inside, `h` is a `Handle p` for that `p`, and `read h` is charged
 it is the bare label, and `readAny` says `<Store>`. Anything narrower is refused:
 
 ```
-error: data.mdk:14:29: Binding 'readAny' reaches p where its declared bound admits only "cfg/*". Stay within the declared bound, or widen it to cover what the body reaches
+error: data.mdk:14:29: `readAny` reaches p where its declared bound admits only "cfg/*"; stay within the bound, or widen it
   |
 14 | readAny (AnyHandle h) = read h
   |                              ^
@@ -248,7 +248,7 @@ Only a clause or an arm can open an existential, because those have an end, and
 the opened authority may not be used past it. A `let` pattern has no such end:
 
 ```
-error: data.mdk:15:22: This pattern opens the existential authority 'p', which only a `match` arm or a function clause can scope: the arm or clause ends where the authority's uses must end. Match on the value, or take it as a clause parameter, and use it inside
+error: data.mdk:15:22: this pattern opens the existential authority `p`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter
   |
 15 |   let (AnyHandle h) = any
   |                       ^
@@ -262,7 +262,7 @@ and the compiler requires that every such constructor carry its authority
 parameter in some field:
 
 ```
-error: data.mdk:3:55: Constructor 'Token' of public type 'Token' carries its authority parameter 'p' in no field, so applying it from another module would invent an authority nothing proves. Export 'Token' abstractly (`export data`, constructing it only here), or give 'Token' a field that carries 'p': a qualifier (`String @p`), a tuple holding one, or an index of a type whose every constructor carries it (`Handle p`; not `List (Handle p)`, whose empty list carries nothing, and not a closure)
+error: data.mdk:3:55: constructor `Token` of public type `Token` carries its authority parameter `p` in no field, so another module could invent an authority; export `Token` abstractly with `export data`, or give `Token` a field that carries `p`
   |
 3 | public export data Token (p : Authority Store) = Token Int
   |                                                        ^

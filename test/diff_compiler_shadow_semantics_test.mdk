@@ -1246,12 +1246,12 @@ warnChecks = [
   WarnCheck {
     entry = "i28_importer_two_admitted_agree/main.mdk",
     mustFire = True,
-    needle = "by interface method 'IA.mth : a -> Int -> Int'",
+    needle = "by interface method `IA.mth : a -> Int -> Int`",
   },
   WarnCheck {
     entry = "i28_importer_two_admitted_agree/order-swapped.mdk",
     mustFire = True,
-    needle = "by interface method 'IA.mth : a -> Int -> Int'",
+    needle = "by interface method `IA.mth : a -> Int -> Int`",
   },
   WarnCheck {
     entry = "i29_importer_selective_import_displaced/main.mdk",
@@ -1527,11 +1527,11 @@ test "S4 imported length rejects at the user source line on every verb" =
               "--json",
               "\{corpus}/i4f_importer_value_position_reject/main.mdk",
             ]
-            ["T-TYPE-MISMATCH", "Type mismatch: Bytes vs List", "\"line\":1"],
+            ["T-TYPE-MISMATCH", "type mismatch: Bytes vs List", "\"line\":1"],
           expectLineContainsAll
-            ["main.mdk:2:", "Type mismatch: Bytes vs List"]
+            ["main.mdk:2:", "type mismatch: Bytes vs List"]
             a.runErr,
           expectLineContainsAll
-            ["main.mdk:2:", "Type mismatch: Bytes vs List"]
+            ["main.mdk:2:", "type mismatch: Bytes vs List"]
             a.buildLog,
         ]

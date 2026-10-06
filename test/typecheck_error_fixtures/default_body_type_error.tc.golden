@@ -1,1 +1,1 @@
-TYPE ERROR: Method 'greetDefault': expected type Int but got Bool
+TYPE ERROR: method `greetDefault` has type Bool but its interface declares Int

@@ -5,4 +5,4 @@ diagnostics=TYPES
 # SOURCE
 f x = x + nope
 # TYPES
-TYPE ERROR: Unbound variable: nope
+TYPE ERROR: unbound variable `nope`

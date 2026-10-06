@@ -742,9 +742,9 @@ lookupFrames : List (List (String, Ref (Value e))) -> String -> <e> Value e
 lookupFrames [] name =
   if contains name !ffiExternNamesRef then
     panic
-      ("capability error: '"
+      ("capability error: `"
         ++ name
-        ++ "' is a user-declared FFI extern — `medaka run` has no FFI capability (the tree-walking interpreter cannot make a foreign C call). Build a native binary with `medaka build` instead.")
+        ++ "` is a user-declared FFI extern and `medaka run` cannot make a foreign C call; build a native binary with `medaka build`")
   else
     panic ("unbound identifier: " ++ name)
 lookupFrames (frame :: rest) name = match lookupFrameCell frame name
@@ -819,7 +819,7 @@ blackholeCell : String -> Unit -> <e> Value e
 blackholeCell name _ =
   runtimePanic
     "E-CYCLIC-VALUE"
-    "\{name} refers to itself during initialization (non-productive cyclic value)"
+    "`\{name}` refers to itself during its own initialization; a value cannot be defined in terms of itself"
 
 export
 force : Value e -> <e> Value e
@@ -1135,7 +1135,7 @@ apply f x =
     if d > evalDepthLimit then
       runtimePanic
         "E-STACK-OVERFLOW"
-        "recursion too deep (evaluator call depth exceeded \{intToString evalDepthLimit}); the tree-walking interpreter has no tail-call optimisation"
+        "recursion too deep: evaluator call depth exceeded \{intToString evalDepthLimit}; `medaka run` has no tail-call optimisation, so build a native binary with `medaka build`"
   let r = applyDispatch f x
   evalDepthRef := d - 1
   r
@@ -1252,7 +1252,7 @@ reportIfUndecidable tag cands
   | twoDistinctKeys cands [] =
     runtimePanic
       "E-AMBIGUOUS-DISPATCH"
-      "arg-tag dispatch on a receiver of type '\{typeTagName tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
+      "dispatch on a receiver of type `\{typeTagName tag}` is undecidable: more than one impl is declared at that type head"
   | otherwise = ()
 
 -- ⚠️ TWO IMPLS COLLIDE ONLY WITHIN ONE INTERFACE (#2445 fix round, F-2).  The
@@ -2122,7 +2122,7 @@ appendVal : Value e -> Value e -> Value e
 appendVal (VList a) (VList b) = VList (a ++ b)
 appendVal (VString a) (VString b) = VString (a ++ b)
 appendVal _ _ =
-  panic "'++' requires Semigroup (List, String, or a type with append)"
+  panic "`++` requires Semigroup: a List, a String or a type with `append`"
 
 export
 evalArith : String -> Value e -> Value e -> Value e
@@ -4053,7 +4053,7 @@ lookupBinding name ((n, v) :: rest)
 -- inline at each (lazy) match arm.
 export
 noMainMsg : String
-noMainMsg = "program has no 'main' binding"
+noMainMsg = "no `main` in this file; add `main = ...`"
 
 export
 evalMain : List Decl -> String

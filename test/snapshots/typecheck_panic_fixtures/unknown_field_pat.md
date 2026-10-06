@@ -8,4 +8,4 @@ data Pt = { x : Int }
 f r = match r
   Pt { x = a, y = b } => a + b
 # TYPES
-TYPE ERROR: Field 'y' does not belong to record 'Pt'
+TYPE ERROR: no field `y` in `Pt`

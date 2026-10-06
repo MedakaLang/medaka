@@ -141,7 +141,7 @@ readFileNotUtf8Suffix = ": not valid UTF-8 (use readFileBytes for raw bytes)"
 export
 sourceNotUtf8Message : String -> String
 sourceNotUtf8Message path =
-  "\{path}: not valid UTF-8. Medaka source files must be UTF-8 text; re-save this file as UTF-8"
+  "\{path}: not valid UTF-8; re-save the file as UTF-8"
 
 -- `readSourceE` with the failure as the line a verb prints: the encoding
 -- refusal as an `Error:` naming the path, any other failure `readFile`'s own
@@ -521,14 +521,14 @@ availableModulesText stdlibDir = match availableModuleIds stdlibDir
   ids => stringConcat ["available modules: ", joinWith ", " ids]
 
 -- Render the hint SUFFIX appended to an `unknown module: <id>` CLI-text
--- message, e.g. " — available modules: array, list, map, string".  `[]` (no
+-- message, e.g. "; available modules: array, list, map, string".  `[]` (no
 -- stdlib dir readable) yields "" so callers can unconditionally append without
 -- a conditional.
 export
 availableModulesHint : String -> <IO> String
 availableModulesHint stdlibDir = match availableModulesText stdlibDir
   "" => ""
-  txt => " — " ++ txt
+  txt => "; " ++ txt
 
 -- ── file resolution + parsing ──
 

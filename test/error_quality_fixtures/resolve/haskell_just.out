@@ -1,11 +1,11 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/resolve/haskell_just.mdk:1:6: Unknown constructor: Just. Did you mean 'Some' ('Just' is Haskell; Medaka uses 'Some')
+error: test/error_quality_fixtures/resolve/haskell_just.mdk:1:6: unknown constructor `Just`; did you mean `Some`? (Haskell's `Just` is `Some` in Medaka)
   |
 1 | f x = match x
   |       ^
-error: test/error_quality_fixtures/resolve/haskell_just.mdk:1:6: Unknown constructor: Nothing. Did you mean 'None' ('Nothing' is Haskell; Medaka uses 'None')
+error: test/error_quality_fixtures/resolve/haskell_just.mdk:1:6: unknown constructor `Nothing`; did you mean `None`? (Haskell's `Nothing` is `None` in Medaka)
   |
 1 | f x = match x
   |       ^
