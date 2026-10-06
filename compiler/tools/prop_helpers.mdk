@@ -91,13 +91,15 @@ helperDecls i (CustomPlan _ carrier _) =
       False
       generator
       [PLit LUnit]
-      (ELoc loc (EApp (EVar "$prop_core.arbitrary") (ELit LUnit))),
+      (ELoc loc (EApp (EVar "$prop_core.arbitrary") (ELit LUnit)))
+      loc,
     DTypeSig False shrinker (TyFun carrier (TyApp listTy carrier)) loc,
     DFunDef
       False
       shrinker
       [PVar "$prop_value" loc]
-      (ELoc loc (EApp (EVar "$prop_core.shrink") (EVar "$prop_value"))),
+      (ELoc loc (EApp (EVar "$prop_core.shrink") (EVar "$prop_value")))
+      loc,
   ]
 
 prependDecls : List Decl -> List Decl -> List Decl
