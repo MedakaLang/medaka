@@ -1,0 +1,3 @@
+at : Index c Int v => c -> Int -> v
+at c i = c[i]
+main = println (at [|1, 2|] 7)

@@ -49,7 +49,7 @@
 -- AST tree-walker over the whole fixture corpus.  Core IR is correct iff
 -- evaluating it matches evaluating the AST.
 
-import frontend.ast.{Lit, Loc, Pat, Addr, Route}
+import frontend.ast.{Lit, Loc, Pat, Addr, Route, noDeclLoc}
 
 -- ── expressions ────────────────────────────────────────────────────────────
 public export data CExpr =
@@ -214,7 +214,23 @@ public export data CStmt =
 -- a let-group / top-level function binding: a name with one or more coalesced
 -- clauses (multi-clause dispatch + guard fall-through stay structural — the
 -- decision-tree compilation of these into a single match is a later 2.1 step).
-public export data CBind = CBind String (List CClause)
+-- The `Loc` is the first clause's site, which a call that no clause or guard
+-- accepts reports; a synthesized binding carries `noDeclLoc`.
+public export data CBind = CBind String (List CClause) Loc
+
+-- a binding the compiler makes up, which has no source site.
+export
+synthBind : String -> List CClause -> CBind
+synthBind name clauses = CBind name clauses noDeclLoc
+
+-- The head of a trap-site literal: `CApp (CApp (CApp (CVar siteSentinelName _)
+-- (CLit (LString file))) (CLit (LInt line))) (CLit (LInt col))` is the Int a
+-- native build packs that site into.  Only the native lowering writes one (as
+-- the site argument of `panicAt` and of an `Index` impl's site-carrying twin),
+-- because the packing numbers the files of the one program being emitted.
+export
+siteSentinelName : String
+siteSentinelName = "__site__"
 public export data CClause = CClause (List Pat) CExpr
 
 -- ── typeclass impls (slice 5) ───────────────────────────────────────────────

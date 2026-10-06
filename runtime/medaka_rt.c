@@ -1116,6 +1116,26 @@ noreturn void mdk_let_refute_at(unsigned long long site) {
   fputs("runtime error [E-LET-REFUTE]: let pattern match failed\n", stderr);
   exit(1);
 }
+noreturn void mdk_oob_at_at(long long idx, unsigned long long site) {
+  mdk_flush_run_stdout_on_abort();
+  mdk_put_site(site);
+  fprintf(stderr, "runtime error [E-INDEX-OOB]: index %lld out of bounds\n", idx);
+  exit(1);
+}
+/* A pre-formatted message (the 0x01 sentinel, see mdk_panic) already carries
+   its own location, so it prints verbatim. */
+noreturn void mdk_panic_at(long long w, unsigned long long site) {
+  const char *cell = (const char *)w;
+  long long byte_len = ((const long long *)cell)[1];
+  const char *bytes = cell + 24;
+  if (byte_len > 0 && bytes[0] == '\x01') mdk_panic(w);
+  mdk_flush_run_stdout_on_abort();
+  mdk_put_site(site);
+  fputs("runtime error [E-PANIC]: ", stderr);
+  fwrite(bytes, 1, (size_t)byte_len, stderr);
+  fputc('\n', stderr);
+  exit(1);
+}
 /* User `exit n`. Unlike the other abort paths above this carries no diagnostic
    -- it is a silent, coded-free process termination -- but it still needs the
    SAME mdk_flush_run_stdout_on_abort() call they all make: under `medaka run`

@@ -947,7 +947,7 @@ parseErrorFixtures =
 
 {- | The first non-empty line of `err`, with any `…panic: ` prefix (up to and
    including the LAST such occurrence) and the `runtime error [E-PANIC]: `
-   banner (`mdk_panic`, RUNTIME-TRAP-UNIFY) stripped — the parser/lexer
+   banner, with any `file:line:col: ` site before it, (`mdk_panic`, RUNTIME-TRAP-UNIFY) stripped — the parser/lexer
    MESSAGE the retired script's `norm_self` isolated, not the runtime's
    framing around it.
 
@@ -955,7 +955,12 @@ parseErrorFixtures =
    "unexpected token"
 
    > normalizeParseErrorMessage "runtime error [E-PANIC]: bad indent\n"
-   "bad indent" -}
+   "bad indent"
+
+   A native trap names its site before the banner; that is framing too.
+
+   > normalizeParseErrorMessage "p.mdk:3:4: runtime error [E-PANIC]: parse error\n"
+   "parse error" -}
 normalizeParseErrorMessage : String -> String
 -- `rule-stdlib-reimpl` matches on the declared signature alone (`String ->
 -- String`), which `path.normalize` shares; the bodies are unrelated — this
@@ -967,8 +972,8 @@ normalizeParseErrorMessage err = match firstNonBlank (lines (chompNewlines err))
     let stripped = match lastIndexOf "panic: " line
       Some i => drop (i + 7) line
       None => line
-    match stripPrefix "runtime error [E-PANIC]: " stripped
-      Some rest => rest
+    match lastIndexOf "runtime error [E-PANIC]: " stripped
+      Some i => drop (i + 25) stripped
       None => stripped
 
 firstNonBlank : List String -> Option String

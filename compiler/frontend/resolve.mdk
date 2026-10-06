@@ -397,7 +397,7 @@ internalExterns = [
   "intBitOr", "intBitXor", "intBitNot", "intShiftLeft", "intShiftRight",
   "u64Truncate", "u64TruncateToInt", "u64BitAnd", "u64BitOr", "u64BitXor",
   "u64ShiftLeft", "u64ShiftRight", "u64MulHigh", "i32Truncate", "i32ToInt",
-  "i64FromBits", "i64ToBits"
+  "i64FromBits", "i64ToBits", "indexErrorAtSite", "panicAt"
 ]
 
 -- The internal-extern guard list for a module given whether internal access is

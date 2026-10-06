@@ -233,7 +233,7 @@ cstmtSexp m (CSAssign x e) = node "CSAssign" [escStr x, cexprSexp m e]
 
 export
 cbindSexp : SexpMode -> CBind -> String
-cbindSexp m (CBind name clauses) =
+cbindSexp m (CBind name clauses _) =
   node "CBind" (escStr name :: map (cclauseSexp m) clauses)
 
 export

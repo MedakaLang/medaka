@@ -376,7 +376,7 @@ toCClause other =
 
 toCBind : SExp -> CBind
 toCBind (SList ((SAtom "CBind") :: name :: clauses)) =
-  CBind (toStr name) (map toCClause clauses)
+  CBind (toStr name) (map toCClause clauses) noDeclLoc
 toCBind other = panic ("core_ir_sexp_parse: bad CBind: " ++ sexprToStr other)
 
 toCImplBody : SExp -> CImplBody

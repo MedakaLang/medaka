@@ -3540,6 +3540,8 @@ externBindings _ = [
   ("panic", prim1 pPanic),
   ("indexError", prim1 (s => runtimePanic "E-INDEX-OOB" (unString s))),
   ("indexErrorAt", prim1 pIndexErrorAt),
+  ("indexErrorAtSite", prim2 pIndexErrorAtSite),
+  ("panicAt", prim2 pPanicAt),
   ("sliceError", prim2 pSliceError),
   ("debugStringLit", prim1 pDebugStringLit),
   ("debugCharLit", prim1 pDebugCharLit),
@@ -3930,6 +3932,16 @@ pIndexErrorAt : Value e -> <e> Value e
 pIndexErrorAt (VInt i) =
   runtimePanic "E-INDEX-OOB" "index \{intToString i} out of bounds"
 pIndexErrorAt _ = panic "indexErrorAt: bad operand"
+
+-- indexErrorAtSite site idx: indexErrorAt for a native build's located read.
+-- The interpreter reports its own site, so the packed one is ignored.
+pIndexErrorAtSite : Value e -> Value e -> <e> Value e
+pIndexErrorAtSite _ i = pIndexErrorAt i
+
+-- panicAt site msg: `panic` with a native build's packed site, ignored here
+-- for the same reason.
+pPanicAt : Value e -> Value e -> <e> a
+pPanicAt _ v = pPanic v
 
 -- sliceError (lo, hiIncl): the coded E-SLICE-OOB abort the Slice impl raises;
 -- prints `slice [lo..hiIncl] out of bounds`, byte-identical to sliceArray's abort.
