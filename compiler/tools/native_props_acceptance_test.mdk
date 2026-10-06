@@ -938,3 +938,37 @@ test "unrelated generic declarations cannot change finite capability planning" =
       gradeCapabilityNeighbor
         "no finite value"
         (runReport ["--engines", "eval,native"] target))
+
+test "structural floats stay bounded and reach fractional values on both sides of zero" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "extern floor : Float -> Float\nprop \"float domain\" (value : Float) = value >= (0.0 - 1.0) && value <= 1.0\nprop \"only integral floats\" (value : Float) = value == floor value\nprop \"only nonpositive floats\" (value : Float) = value <= 0.0\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        1
+        [
+          ("eval", "float domain", "pass"),
+          ("eval", "only integral floats", "fail"),
+          ("eval", "only nonpositive floats", "fail"),
+          ("native", "float domain", "pass"),
+          ("native", "only integral floats", "fail"),
+          ("native", "only nonpositive floats", "fail"),
+        ]
+        (runReport ["--engines", "eval,native", "--cases", "100"] target))
+
+test "applied mutual recursion without a base remains a bounded capability error" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data A = Wrap (B A)\ndata B a = Pack a\nprop \"no finite value\" (value : A) = True\nprop \"neighbor\" (n : Int) = n == n\n",
+      ),
+    ]
+    (target =>
+      gradeCapabilityNeighbor
+        "no finite value"
+        (runReport ["--engines", "eval,native"] target))
