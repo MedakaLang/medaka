@@ -98,7 +98,7 @@ runtimeAliasModules = [
     "root",
     [
       DUse False (UseAlias ["runtime"] "R") testLoc,
-      DFunDef False "main" [] (EApp (EVar "R.Ref") (ELit LUnit)),
+      DFunDef False "main" [] (EApp (EVar "R.Ref") (ELit LUnit)) testLoc,
     ],
   ),
 ]
