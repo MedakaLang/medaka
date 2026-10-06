@@ -997,7 +997,7 @@ stampModule modName pairs = map (p => (modName, fst p, snd p)) pairs
 -- bare (prelude-global, not `export`-marked), so that arm matches nothing yet;
 -- it is here so the index does not silently need a second edit if that changes.
 exportedSigPair : Decl -> List (String, Ty)
-exportedSigPair (DTypeSig True name ty) = [(name, ty)]
+exportedSigPair (DTypeSig True name ty _) = [(name, ty)]
 exportedSigPair (DExtern True name ty) = [(name, ty)]
 exportedSigPair (DAttrib _ d) = exportedSigPair d
 exportedSigPair _ = []
@@ -2472,7 +2472,7 @@ sigTyInto ((n, t) :: rest) m =
   sigTyInto rest m
 
 topSigPairL : Decl -> List (String, Ty)
-topSigPairL (DTypeSig _ name ty) = [(name, ty)]
+topSigPairL (DTypeSig _ name ty _) = [(name, ty)]
 topSigPairL (DAttrib _ d) = topSigPairL d
 topSigPairL _ = []
 
@@ -2618,7 +2618,7 @@ ruleMissingSignature _ _ _ pos prog =
       (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog))))
 
 topSigNameL : Decl -> List String
-topSigNameL (DTypeSig _ name _) = [name]
+topSigNameL (DTypeSig _ name _ _) = [name]
 topSigNameL (DAttrib _ d) = topSigNameL d
 topSigNameL _ = []
 
@@ -5822,7 +5822,7 @@ exportedNames prog = flatMap exportedNameL prog
 
 exportedNameL : Decl -> List String
 exportedNameL (DFunDef True name _ _ _) = [name]
-exportedNameL (DTypeSig True name _) = [name]
+exportedNameL (DTypeSig True name _ _) = [name]
 exportedNameL (DAttrib _ d) = exportedNameL d
 exportedNameL _ = []
 
@@ -5836,7 +5836,7 @@ exportedNameL _ = []
 nonDefRefL : Decl -> List String
 nonDefRefL (DAttrib _ dd) = nonDefRefL dd
 nonDefRefL (DFunDef _ _ _ _ _) = []
-nonDefRefL (DTypeSig _ _ _) = []
+nonDefRefL (DTypeSig _ _ _ _) = []
 nonDefRefL (DExtern _ _ _) = []
 nonDefRefL (DData { dataOrigin = _ }) = []
 nonDefRefL (DUse _ _ _) = []
@@ -6783,7 +6783,7 @@ declZipContainsLine line (_, dp) =
   declPosLine dp <= line && declPosEndLine dp >= line
 
 declBridgeName : Decl -> Option String
-declBridgeName (DTypeSig _ n _) = Some n
+declBridgeName (DTypeSig _ n _ _) = Some n
 declBridgeName (DFunDef _ n _ _ _) = Some n
 declBridgeName _ = None
 
@@ -7347,7 +7347,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "stampModule" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))))))
 (DFunDef false "stampModule" ((PVar "modName") (PVar "pairs")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EVar "modName") (EApp (EVar "fst") (EVar "p")) (EApp (EVar "snd") (EVar "p"))))) (EVar "pairs")))
 (DTypeSig false "exportedSigPair" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
-(DFunDef false "exportedSigPair" ((PCon "DTypeSig" (PCon "True") (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
+(DFunDef false "exportedSigPair" ((PCon "DTypeSig" (PCon "True") (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "exportedSigPair" ((PCon "DExtern" (PCon "True") (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "exportedSigPair" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "exportedSigPair") (EVar "d")))
 (DFunDef false "exportedSigPair" (PWild) (EListLit))
@@ -7749,7 +7749,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "sigTyInto" ((PList) PWild) (ELit LUnit))
 (DFunDef false "sigTyInto" ((PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EVar "t")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EVar "rest")) (EVar "m")))))
 (DTypeSig false "topSigPairL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
-(DFunDef false "topSigPairL" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
+(DFunDef false "topSigPairL" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "topSigPairL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigPairL") (EVar "d")))
 (DFunDef false "topSigPairL" (PWild) (EListLit))
 (DTypeSig false "stdlibFinding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))))
@@ -7812,7 +7812,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "ruleMissingSignature" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleMissingSignature" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "map") (EVar "missingSigFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "missingSigPair") (EApp (EVar "nameSetOf") (EApp (EApp (EVar "flatMap") (EVar "topSigNameL")) (EVar "prog"))))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))))
 (DTypeSig false "topSigNameL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "topSigNameL" ((PCon "DTypeSig" PWild (PVar "name") PWild)) (EListLit (EVar "name")))
+(DFunDef false "topSigNameL" ((PCon "DTypeSig" PWild (PVar "name") PWild PWild)) (EListLit (EVar "name")))
 (DFunDef false "topSigNameL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigNameL") (EVar "d")))
 (DFunDef false "topSigNameL" (PWild) (EListLit))
 (DTypeSig false "missingSigPair" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
@@ -8870,13 +8870,13 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "exportedNames" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "exportedNameL")) (EVar "prog")))
 (DTypeSig false "exportedNameL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "exportedNameL" ((PCon "DFunDef" (PCon "True") (PVar "name") PWild PWild PWild)) (EListLit (EVar "name")))
-(DFunDef false "exportedNameL" ((PCon "DTypeSig" (PCon "True") (PVar "name") PWild)) (EListLit (EVar "name")))
+(DFunDef false "exportedNameL" ((PCon "DTypeSig" (PCon "True") (PVar "name") PWild PWild)) (EListLit (EVar "name")))
 (DFunDef false "exportedNameL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "exportedNameL") (EVar "d")))
 (DFunDef false "exportedNameL" (PWild) (EListLit))
 (DTypeSig false "nonDefRefL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "nonDefRefL" ((PCon "DAttrib" PWild (PVar "dd"))) (EApp (EVar "nonDefRefL") (EVar "dd")))
 (DFunDef false "nonDefRefL" ((PCon "DFunDef" PWild PWild PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DTypeSig" PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PCon "DTypeSig" PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DExtern" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DUse" PWild PWild PWild)) (EListLit))
@@ -9085,7 +9085,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "declZipContainsLine" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Decl") (TyCon "DeclPos")) (TyCon "Bool"))))
 (DFunDef false "declZipContainsLine" ((PVar "line") (PTuple PWild (PVar "dp"))) (EBinOp "&&" (EBinOp "<=" (EApp (EVar "declPosLine") (EVar "dp")) (EVar "line")) (EBinOp ">=" (EApp (EVar "declPosEndLine") (EVar "dp")) (EVar "line"))))
 (DTypeSig false "declBridgeName" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "declBridgeName" ((PCon "DTypeSig" PWild (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "declBridgeName" ((PCon "DTypeSig" PWild (PVar "n") PWild PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "declBridgeName" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "declBridgeName" (PWild) (EVar "None"))
 (DTypeSig false "declGapNameMatches" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
@@ -9406,7 +9406,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "stampModule" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))))))
 (DFunDef false "stampModule" ((PVar "modName") (PVar "pairs")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EVar "modName") (EApp (EVar "fst") (EVar "p")) (EApp (EVar "snd") (EVar "p"))))) (EVar "pairs")))
 (DTypeSig false "exportedSigPair" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
-(DFunDef false "exportedSigPair" ((PCon "DTypeSig" (PCon "True") (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
+(DFunDef false "exportedSigPair" ((PCon "DTypeSig" (PCon "True") (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "exportedSigPair" ((PCon "DExtern" (PCon "True") (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "exportedSigPair" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "exportedSigPair") (EVar "d")))
 (DFunDef false "exportedSigPair" (PWild) (EListLit))
@@ -9808,7 +9808,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "sigTyInto" ((PList) PWild) (ELit LUnit))
 (DFunDef false "sigTyInto" ((PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EVar "t")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EVar "rest")) (EVar "m")))))
 (DTypeSig false "topSigPairL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
-(DFunDef false "topSigPairL" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
+(DFunDef false "topSigPairL" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "topSigPairL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigPairL") (EVar "d")))
 (DFunDef false "topSigPairL" (PWild) (EListLit))
 (DTypeSig false "stdlibFinding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))))
@@ -9871,7 +9871,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "ruleMissingSignature" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleMissingSignature" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EVar "missingSigFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "missingSigPair") (EApp (EVar "nameSetOf") (EApp (EApp (EDictApp "flatMap") (EVar "topSigNameL")) (EVar "prog"))))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))))
 (DTypeSig false "topSigNameL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "topSigNameL" ((PCon "DTypeSig" PWild (PVar "name") PWild)) (EListLit (EVar "name")))
+(DFunDef false "topSigNameL" ((PCon "DTypeSig" PWild (PVar "name") PWild PWild)) (EListLit (EVar "name")))
 (DFunDef false "topSigNameL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigNameL") (EVar "d")))
 (DFunDef false "topSigNameL" (PWild) (EListLit))
 (DTypeSig false "missingSigPair" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
@@ -10929,13 +10929,13 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "exportedNames" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "exportedNameL")) (EVar "prog")))
 (DTypeSig false "exportedNameL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "exportedNameL" ((PCon "DFunDef" (PCon "True") (PVar "name") PWild PWild PWild)) (EListLit (EVar "name")))
-(DFunDef false "exportedNameL" ((PCon "DTypeSig" (PCon "True") (PVar "name") PWild)) (EListLit (EVar "name")))
+(DFunDef false "exportedNameL" ((PCon "DTypeSig" (PCon "True") (PVar "name") PWild PWild)) (EListLit (EVar "name")))
 (DFunDef false "exportedNameL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "exportedNameL") (EVar "d")))
 (DFunDef false "exportedNameL" (PWild) (EListLit))
 (DTypeSig false "nonDefRefL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "nonDefRefL" ((PCon "DAttrib" PWild (PVar "dd"))) (EApp (EVar "nonDefRefL") (EVar "dd")))
 (DFunDef false "nonDefRefL" ((PCon "DFunDef" PWild PWild PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DTypeSig" PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PCon "DTypeSig" PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DExtern" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DUse" PWild PWild PWild)) (EListLit))
@@ -11144,7 +11144,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "declZipContainsLine" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Decl") (TyCon "DeclPos")) (TyCon "Bool"))))
 (DFunDef false "declZipContainsLine" ((PVar "line") (PTuple PWild (PVar "dp"))) (EBinOp "&&" (EBinOp "<=" (EApp (EVar "declPosLine") (EVar "dp")) (EVar "line")) (EBinOp ">=" (EApp (EVar "declPosEndLine") (EVar "dp")) (EVar "line"))))
 (DTypeSig false "declBridgeName" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "declBridgeName" ((PCon "DTypeSig" PWild (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "declBridgeName" ((PCon "DTypeSig" PWild (PVar "n") PWild PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "declBridgeName" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "declBridgeName" (PWild) (EVar "None"))
 (DTypeSig false "declGapNameMatches" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Bool"))))

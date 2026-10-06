@@ -1,5 +1,5 @@
 # META
-source_lines=585
+source_lines=586
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted method_marker stage.
@@ -68,7 +68,7 @@ ifaceMethodName (IfaceMethod n _ _ _) = n
 -- Names of functions whose declared signature carries a constraint (`Foo a =>`).
 constrainedFnNames : List Decl -> List String
 constrainedFnNames [] = []
-constrainedFnNames ((DTypeSig _ name ty) :: rest) =
+constrainedFnNames ((DTypeSig _ name ty _) :: rest) =
   constrainedAdd name ty (constrainedFnNames rest)
 constrainedFnNames (_ :: rest) = constrainedFnNames rest
 
@@ -167,7 +167,8 @@ applyRenames renames prog = map (renameDecl renames) prog
 renameDecl : List String -> Decl -> Decl
 renameDecl renames (DFunDef pub n ps body site) =
   DFunDef pub (subName renames n) ps (mapExpr (renameVar renames) body) site
-renameDecl renames (DTypeSig pub n t) = DTypeSig pub (subName renames n) t
+renameDecl renames (DTypeSig pub n t site) =
+  DTypeSig pub (subName renames n) t site
 renameDecl renames d = mapDecl (renameVar renames) d
 
 renameVar : List String -> Expr -> Expr
@@ -600,7 +601,7 @@ markerFor preludeProg =
 (DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "constrainedFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrainedFnNames" ((PList)) (EListLit))
-(DFunDef false "constrainedFnNames" ((PCons (PCon "DTypeSig" PWild (PVar "name") (PVar "ty")) (PVar "rest"))) (EApp (EApp (EApp (EVar "constrainedAdd") (EVar "name")) (EVar "ty")) (EApp (EVar "constrainedFnNames") (EVar "rest"))))
+(DFunDef false "constrainedFnNames" ((PCons (PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "constrainedAdd") (EVar "name")) (EVar "ty")) (EApp (EVar "constrainedFnNames") (EVar "rest"))))
 (DFunDef false "constrainedFnNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "constrainedFnNames") (EVar "rest")))
 (DTypeSig false "constrainedAdd" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "constrainedAdd" ((PVar "name") (PCon "TyConstrained" PWild PWild) (PVar "acc")) (EBinOp "::" (EVar "name") (EVar "acc")))
@@ -639,7 +640,7 @@ markerFor preludeProg =
 (DFunDef false "applyRenames" ((PVar "renames") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "renameDecl") (EVar "renames"))) (EVar "prog")))
 (DTypeSig false "renameDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "renameDecl" ((PVar "renames") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "ps")) (EApp (EApp (EVar "mapExpr") (EApp (EVar "renameVar") (EVar "renames"))) (EVar "body"))) (EVar "site")))
-(DFunDef false "renameDecl" ((PVar "renames") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "t")))
+(DFunDef false "renameDecl" ((PVar "renames") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t") (PVar "site"))) (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "t")) (EVar "site")))
 (DFunDef false "renameDecl" ((PVar "renames") (PVar "d")) (EApp (EApp (EVar "mapDecl") (EApp (EVar "renameVar") (EVar "renames"))) (EVar "d")))
 (DTypeSig false "renameVar" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "renameVar" ((PVar "renames") (PCon "EVar" (PVar "x"))) (EApp (EVar "EVar") (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "x"))))
@@ -867,7 +868,7 @@ markerFor preludeProg =
 (DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "constrainedFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrainedFnNames" ((PList)) (EListLit))
-(DFunDef false "constrainedFnNames" ((PCons (PCon "DTypeSig" PWild (PVar "name") (PVar "ty")) (PVar "rest"))) (EApp (EApp (EApp (EVar "constrainedAdd") (EVar "name")) (EVar "ty")) (EApp (EVar "constrainedFnNames") (EVar "rest"))))
+(DFunDef false "constrainedFnNames" ((PCons (PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "constrainedAdd") (EVar "name")) (EVar "ty")) (EApp (EVar "constrainedFnNames") (EVar "rest"))))
 (DFunDef false "constrainedFnNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "constrainedFnNames") (EVar "rest")))
 (DTypeSig false "constrainedAdd" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "constrainedAdd" ((PVar "name") (PCon "TyConstrained" PWild PWild) (PVar "acc")) (EBinOp "::" (EVar "name") (EVar "acc")))
@@ -906,7 +907,7 @@ markerFor preludeProg =
 (DFunDef false "applyRenames" ((PVar "renames") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "renameDecl") (EVar "renames"))) (EVar "prog")))
 (DTypeSig false "renameDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "renameDecl" ((PVar "renames") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "ps")) (EApp (EApp (EVar "mapExpr") (EApp (EVar "renameVar") (EVar "renames"))) (EVar "body"))) (EVar "site")))
-(DFunDef false "renameDecl" ((PVar "renames") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "t")))
+(DFunDef false "renameDecl" ((PVar "renames") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t") (PVar "site"))) (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "n"))) (EVar "t")) (EVar "site")))
 (DFunDef false "renameDecl" ((PVar "renames") (PVar "d")) (EApp (EApp (EVar "mapDecl") (EApp (EVar "renameVar") (EVar "renames"))) (EVar "d")))
 (DTypeSig false "renameVar" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "renameVar" ((PVar "renames") (PCon "EVar" (PVar "x"))) (EApp (EVar "EVar") (EApp (EApp (EVar "subName") (EVar "renames")) (EVar "x"))))
